@@ -105,6 +105,90 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     errors.push('channels.telegram.botToken is required when Telegram is enabled');
   }
 
+  const assistant = config.assistant;
+  if (!assistant.identity.primaryUserId?.trim()) {
+    errors.push('assistant.identity.primaryUserId is required');
+  }
+
+  if (!['single_user', 'channel_user'].includes(assistant.identity.mode)) {
+    errors.push("assistant.identity.mode must be 'single_user' or 'channel_user'");
+  }
+
+  if (assistant.memory.maxTurns < 1) {
+    errors.push('assistant.memory.maxTurns must be >= 1');
+  }
+  if (assistant.memory.maxMessageChars < 1) {
+    errors.push('assistant.memory.maxMessageChars must be >= 1');
+  }
+  if (assistant.memory.maxContextChars < 1) {
+    errors.push('assistant.memory.maxContextChars must be >= 1');
+  }
+  if (assistant.memory.retentionDays < 1) {
+    errors.push('assistant.memory.retentionDays must be >= 1');
+  }
+  if (assistant.analytics.retentionDays < 1) {
+    errors.push('assistant.analytics.retentionDays must be >= 1');
+  }
+
+  if (assistant.quickActions.enabled && Object.keys(assistant.quickActions.templates).length === 0) {
+    errors.push('assistant.quickActions.templates must contain at least one template when enabled');
+  }
+
+  const threatIntel = assistant.threatIntel;
+  if (!['manual', 'assisted', 'autonomous'].includes(threatIntel.responseMode)) {
+    errors.push("assistant.threatIntel.responseMode must be 'manual', 'assisted', or 'autonomous'");
+  }
+  if (threatIntel.autoScanIntervalMinutes < 0) {
+    errors.push('assistant.threatIntel.autoScanIntervalMinutes must be >= 0');
+  }
+  if (threatIntel.autoScanIntervalMinutes > 0 && threatIntel.autoScanIntervalMinutes < 5) {
+    errors.push('assistant.threatIntel.autoScanIntervalMinutes must be >= 5 when enabled');
+  }
+  for (const target of threatIntel.watchlist) {
+    if (!target.trim()) {
+      errors.push('assistant.threatIntel.watchlist entries cannot be empty strings');
+      break;
+    }
+  }
+
+  const moltbook = threatIntel.moltbook;
+  if (!['mock', 'api'].includes(moltbook.mode)) {
+    errors.push("assistant.threatIntel.moltbook.mode must be 'mock' or 'api'");
+  }
+  if (moltbook.requestTimeoutMs < 500) {
+    errors.push('assistant.threatIntel.moltbook.requestTimeoutMs must be >= 500');
+  }
+  if (moltbook.maxPostsPerQuery < 1) {
+    errors.push('assistant.threatIntel.moltbook.maxPostsPerQuery must be >= 1');
+  }
+  if (moltbook.maxResponseBytes < 4096) {
+    errors.push('assistant.threatIntel.moltbook.maxResponseBytes must be >= 4096');
+  }
+  if (moltbook.allowedHosts.length === 0) {
+    errors.push('assistant.threatIntel.moltbook.allowedHosts must include at least one host');
+  }
+  if (moltbook.mode === 'api' && moltbook.enabled) {
+    if (!moltbook.baseUrl?.trim()) {
+      errors.push('assistant.threatIntel.moltbook.baseUrl is required when Moltbook api mode is enabled');
+    } else {
+      try {
+        const parsed = new URL(moltbook.baseUrl);
+        const host = parsed.hostname.toLowerCase();
+        const allowedHosts = moltbook.allowedHosts.map((value) => value.trim().toLowerCase());
+        if (!allowedHosts.includes(host)) {
+          errors.push(`assistant.threatIntel.moltbook.baseUrl host '${host}' is not in allowedHosts`);
+        }
+        const insecure = parsed.protocol !== 'https:' &&
+          !(parsed.protocol === 'http:' && (host === 'localhost' || host === '127.0.0.1'));
+        if (insecure) {
+          errors.push('assistant.threatIntel.moltbook.baseUrl must use https (or http for localhost)');
+        }
+      } catch {
+        errors.push('assistant.threatIntel.moltbook.baseUrl must be a valid URL');
+      }
+    }
+  }
+
   return errors;
 }
 

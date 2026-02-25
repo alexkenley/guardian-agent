@@ -5,21 +5,28 @@
 
 import { api } from '../api.js';
 
-let chatHistory = [];
+const chatHistoryByAgent = new Map();
+const ACTIVE_AGENT_KEY = 'guardianagent_active_agent';
+const WEB_USER_KEY = 'guardianagent_web_user';
 
 export async function renderChat(container) {
   container.innerHTML = '<h2 class="page-title">Chat</h2><div class="loading">Loading...</div>';
 
   let agents = [];
   let providers = [];
+  let quickActions = [];
   try {
-    [agents, providers] = await Promise.all([
+    [agents, providers, quickActions] = await Promise.all([
       api.agents().catch(() => []),
       api.providersStatus().catch(() => api.providers().catch(() => [])),
+      api.quickActions().catch(() => []),
     ]);
   } catch {
     // Continue with empty lists
   }
+
+  const chatAgents = agents.filter((a) => a.canChat !== false);
+  const webUserId = resolveWebUserId();
 
   container.innerHTML = '';
 
@@ -58,15 +65,21 @@ export async function renderChat(container) {
 
   const select = document.createElement('select');
   select.id = 'chat-agent-select';
-  if (agents.length === 0) {
+  if (chatAgents.length === 0) {
     select.innerHTML = '<option value="">No agents available</option>';
   } else {
-    select.innerHTML = agents.map(a =>
+    select.innerHTML = chatAgents.map(a =>
       `<option value="${esc(a.id)}">${esc(a.name)} (${esc(a.id)})${a.provider ? ' - ' + esc(a.provider) : ''}</option>`
     ).join('');
   }
 
-  toolbar.append(label, select);
+  const resetBtn = document.createElement('button');
+  resetBtn.className = 'btn btn-secondary';
+  resetBtn.textContent = 'New Conversation';
+  resetBtn.style.padding = '0.45rem 0.7rem';
+  resetBtn.style.fontSize = '0.75rem';
+
+  toolbar.append(label, select, resetBtn);
   wrapper.appendChild(toolbar);
 
   // Chat history
@@ -74,12 +87,27 @@ export async function renderChat(container) {
   history.className = 'chat-history';
   history.id = 'chat-history';
 
-  // Render previous messages
-  for (const msg of chatHistory) {
-    history.appendChild(createMessageEl(msg.role, msg.content));
-  }
-
   wrapper.appendChild(history);
+
+  let quickActionSelect = null;
+  let quickActionInput = null;
+  let quickActionBtn = null;
+  if (quickActions.length > 0) {
+    const quickArea = document.createElement('div');
+    quickArea.className = 'chat-quick-actions';
+    quickArea.innerHTML = `
+      <span class="quick-label">Quick actions:</span>
+      <select id="quick-action-select">
+        ${quickActions.map((action) => `<option value="${esc(action.id)}">${esc(action.label)}</option>`).join('')}
+      </select>
+      <input id="quick-action-input" type="text" placeholder="Add details for the selected quick action">
+      <button class="btn btn-secondary" id="quick-action-run">Run</button>
+    `;
+    wrapper.appendChild(quickArea);
+    quickActionSelect = quickArea.querySelector('#quick-action-select');
+    quickActionInput = quickArea.querySelector('#quick-action-input');
+    quickActionBtn = quickArea.querySelector('#quick-action-run');
+  }
 
   // Input area
   const inputArea = document.createElement('div');
@@ -94,12 +122,45 @@ export async function renderChat(container) {
   sendBtn.className = 'btn btn-primary';
   sendBtn.textContent = 'Send';
 
+  const initialAgent = resolveInitialAgent(select, chatAgents);
+  renderHistory(history, initialAgent);
+
+  select.addEventListener('change', () => {
+    const selected = select.value;
+    if (selected) {
+      sessionStorage.setItem(ACTIVE_AGENT_KEY, selected);
+    }
+    renderHistory(history, selected);
+  });
+
+  resetBtn.addEventListener('click', async () => {
+    const agentId = select.value;
+    if (!agentId) return;
+
+    resetBtn.disabled = true;
+    const previousLabel = resetBtn.textContent;
+    resetBtn.textContent = 'Resetting...';
+
+    try {
+      await api.resetConversation(agentId, webUserId, 'web');
+      chatHistoryByAgent.delete(agentId);
+      renderHistory(history, agentId);
+    } catch {
+      // Keep local history if reset failed.
+    } finally {
+      resetBtn.disabled = false;
+      resetBtn.textContent = previousLabel;
+    }
+  });
+
   const send = async () => {
     const text = input.value.trim();
     if (!text) return;
 
     const agentId = select.value;
     if (!agentId) return;
+
+    const chatHistory = getHistory(agentId);
 
     input.value = '';
     input.disabled = true;
@@ -116,7 +177,7 @@ export async function renderChat(container) {
     history.scrollTop = history.scrollHeight;
 
     try {
-      const response = await api.sendMessage(text, agentId);
+      const response = await api.sendMessage(text, agentId, webUserId, 'web');
       // Remove thinking indicator
       thinkingEl.remove();
       chatHistory.push({ role: 'agent', content: response.content });
@@ -137,9 +198,61 @@ export async function renderChat(container) {
     input.focus();
   };
 
+  const runQuickAction = async () => {
+    if (!quickActionSelect || !quickActionInput || !quickActionBtn) return;
+    const details = quickActionInput.value.trim();
+    if (!details) return;
+    const actionId = quickActionSelect.value;
+    const agentId = select.value;
+    if (!agentId) return;
+
+    const chatHistory = getHistory(agentId);
+    const localPrompt = `[Quick:${actionId}] ${details}`;
+    chatHistory.push({ role: 'user', content: localPrompt });
+    history.appendChild(createMessageEl('user', localPrompt));
+    history.scrollTop = history.scrollHeight;
+
+    quickActionInput.value = '';
+    quickActionInput.disabled = true;
+    quickActionBtn.disabled = true;
+    quickActionBtn.textContent = 'Running...';
+
+    const thinkingEl = createThinkingEl();
+    history.appendChild(thinkingEl);
+    history.scrollTop = history.scrollHeight;
+
+    try {
+      const response = await api.runQuickAction({
+        actionId,
+        details,
+        agentId,
+        userId: webUserId,
+        channel: 'web',
+      });
+      thinkingEl.remove();
+      chatHistory.push({ role: 'agent', content: response.content });
+      history.appendChild(createMessageEl('agent', response.content));
+    } catch (err) {
+      thinkingEl.remove();
+      const errorMsg = err.message || 'Quick action failed';
+      chatHistory.push({ role: 'agent', content: `Error: ${errorMsg}` });
+      history.appendChild(createMessageEl('error', `Error: ${errorMsg}`));
+    }
+
+    history.scrollTop = history.scrollHeight;
+    quickActionInput.disabled = false;
+    quickActionBtn.disabled = false;
+    quickActionBtn.textContent = 'Run';
+    quickActionInput.focus();
+  };
+
   sendBtn.addEventListener('click', send);
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') send();
+  });
+  quickActionBtn?.addEventListener('click', runQuickAction);
+  quickActionInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') runQuickAction();
   });
 
   inputArea.append(input, sendBtn);
@@ -147,6 +260,41 @@ export async function renderChat(container) {
 
   container.appendChild(wrapper);
   input.focus();
+}
+
+function resolveInitialAgent(select, chatAgents) {
+  const remembered = sessionStorage.getItem(ACTIVE_AGENT_KEY);
+  const hasRemembered = remembered && chatAgents.some(a => a.id === remembered);
+  const selected = hasRemembered ? remembered : (chatAgents[0]?.id || '');
+  if (selected) {
+    select.value = selected;
+    sessionStorage.setItem(ACTIVE_AGENT_KEY, selected);
+  }
+  return selected;
+}
+
+function resolveWebUserId() {
+  const current = sessionStorage.getItem(WEB_USER_KEY);
+  const resolved = (current || 'web-user').trim();
+  sessionStorage.setItem(WEB_USER_KEY, resolved);
+  return resolved;
+}
+
+function getHistory(agentId) {
+  if (!chatHistoryByAgent.has(agentId)) {
+    chatHistoryByAgent.set(agentId, []);
+  }
+  return chatHistoryByAgent.get(agentId);
+}
+
+function renderHistory(historyEl, agentId) {
+  historyEl.innerHTML = '';
+  if (!agentId) return;
+  const chatHistory = getHistory(agentId);
+  for (const msg of chatHistory) {
+    historyEl.appendChild(createMessageEl(msg.role, msg.content));
+  }
+  historyEl.scrollTop = historyEl.scrollHeight;
 }
 
 function createThinkingEl() {

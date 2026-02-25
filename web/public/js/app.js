@@ -2,12 +2,15 @@
  * Main application — hash-based router + SSE connection manager.
  */
 
-import { api, setToken, hasToken } from './api.js';
+import { api, setToken } from './api.js';
 import { renderDashboard, updateDashboard } from './pages/dashboard.js';
 import { renderChat } from './pages/chat.js';
 import { renderSecurity, updateSecurity } from './pages/security.js';
 import { renderMonitoring, updateMonitoring } from './pages/monitoring.js';
 import { renderConfig } from './pages/config.js';
+import { renderReference } from './pages/reference.js';
+import { renderSetup } from './pages/setup.js';
+import { renderIntel } from './pages/intel.js';
 
 const content = document.getElementById('content');
 const authModal = document.getElementById('auth-modal');
@@ -139,7 +142,10 @@ const routes = {
   '/chat': { render: renderChat, name: 'chat' },
   '/security': { render: renderSecurity, update: updateSecurity, name: 'security' },
   '/monitoring': { render: renderMonitoring, update: updateMonitoring, name: 'monitoring' },
+  '/intel': { render: renderIntel, name: 'intel' },
   '/config': { render: renderConfig, name: 'config' },
+  '/setup': { render: renderSetup, name: 'setup' },
+  '/reference': { render: renderReference, name: 'reference' },
 };
 
 function navigate() {

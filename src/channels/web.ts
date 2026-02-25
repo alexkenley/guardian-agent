@@ -133,6 +133,11 @@ export class WebChannel implements ChannelAdapter {
 
     return new Promise((resolve) => {
       if (this.server) {
+        // Node's keep-alive sockets can keep server.close() pending for ~5s.
+        // Close idle sockets first so stop() returns promptly in tests and shutdown.
+        const closable = this.server as Server & { closeIdleConnections?: () => void };
+        closable.closeIdleConnections?.();
+
         this.server.close(() => {
           this.server = null;
           this.onMessage = null;
@@ -292,6 +297,36 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // GET /api/reference — Usage/reference guide
+      if (req.method === 'GET' && url.pathname === '/api/reference') {
+        if (!this.dashboard.onReferenceGuide) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onReferenceGuide());
+        return;
+      }
+
+      // GET /api/setup/status — setup wizard completion + diagnostics
+      if (req.method === 'GET' && url.pathname === '/api/setup/status') {
+        if (!this.dashboard.onSetupStatus) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, await this.dashboard.onSetupStatus());
+        return;
+      }
+
+      // GET /api/quick-actions — quick action definitions
+      if (req.method === 'GET' && url.pathname === '/api/quick-actions') {
+        if (!this.dashboard.onQuickActions) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onQuickActions());
+        return;
+      }
+
       // POST /api/config — Update config
       if (req.method === 'POST' && url.pathname === '/api/config') {
         if (!this.dashboard.onConfigUpdate) {
@@ -323,6 +358,34 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // POST /api/setup/apply — apply setup wizard selections
+      if (req.method === 'POST' && url.pathname === '/api/setup/apply') {
+        if (!this.dashboard.onSetupApply) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(body);
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+
+        const result = await this.dashboard.onSetupApply(parsed as Parameters<NonNullable<DashboardCallbacks['onSetupApply']>>[0]);
+        sendJSON(res, 200, result);
+        return;
+      }
+
       // GET /api/budget — Budget/resource metrics
       if (req.method === 'GET' && url.pathname === '/api/budget') {
         if (!this.dashboard.onBudget) {
@@ -330,6 +393,264 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
         sendJSON(res, 200, this.dashboard.onBudget());
+        return;
+      }
+
+      // GET /api/analytics/summary — assistant interaction analytics
+      if (req.method === 'GET' && url.pathname === '/api/analytics/summary') {
+        if (!this.dashboard.onAnalyticsSummary) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const windowMs = parseInt(url.searchParams.get('windowMs') ?? '3600000', 10);
+        sendJSON(res, 200, this.dashboard.onAnalyticsSummary(windowMs));
+        return;
+      }
+
+      // GET /api/threat-intel/summary — threat-intel high-level summary
+      if (req.method === 'GET' && url.pathname === '/api/threat-intel/summary') {
+        if (!this.dashboard.onThreatIntelSummary) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onThreatIntelSummary());
+        return;
+      }
+
+      // GET /api/threat-intel/plan — phased operating plan
+      if (req.method === 'GET' && url.pathname === '/api/threat-intel/plan') {
+        if (!this.dashboard.onThreatIntelPlan) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onThreatIntelPlan());
+        return;
+      }
+
+      // GET /api/threat-intel/watchlist — configured watch targets
+      if (req.method === 'GET' && url.pathname === '/api/threat-intel/watchlist') {
+        if (!this.dashboard.onThreatIntelWatchlist) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, { targets: this.dashboard.onThreatIntelWatchlist() });
+        return;
+      }
+
+      // POST /api/threat-intel/watchlist — add/remove target
+      if (req.method === 'POST' && url.pathname === '/api/threat-intel/watchlist') {
+        if (!this.dashboard.onThreatIntelWatchAdd || !this.dashboard.onThreatIntelWatchRemove) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          const status = message.includes('too large') ? 413 : 400;
+          sendJSON(res, status, { error: message });
+          return;
+        }
+
+        let parsed: { action?: 'add' | 'remove'; target?: string };
+        try {
+          parsed = JSON.parse(body) as { action?: 'add' | 'remove'; target?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+
+        if (!parsed.target?.trim()) {
+          sendJSON(res, 400, { error: 'target is required' });
+          return;
+        }
+        const action = parsed.action ?? 'add';
+        if (action !== 'add' && action !== 'remove') {
+          sendJSON(res, 400, { error: "action must be 'add' or 'remove'" });
+          return;
+        }
+
+        const result = action === 'add'
+          ? this.dashboard.onThreatIntelWatchAdd(parsed.target)
+          : this.dashboard.onThreatIntelWatchRemove(parsed.target);
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      // POST /api/threat-intel/scan — run intel scan
+      if (req.method === 'POST' && url.pathname === '/api/threat-intel/scan') {
+        if (!this.dashboard.onThreatIntelScan) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          const status = message.includes('too large') ? 413 : 400;
+          sendJSON(res, status, { error: message });
+          return;
+        }
+
+        let parsed: { query?: string; includeDarkWeb?: boolean; sources?: string[] };
+        try {
+          parsed = body.trim()
+            ? (JSON.parse(body) as { query?: string; includeDarkWeb?: boolean; sources?: string[] })
+            : {};
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+
+        const result = await this.dashboard.onThreatIntelScan({
+          query: parsed.query,
+          includeDarkWeb: parsed.includeDarkWeb,
+          sources: parsed.sources as Parameters<NonNullable<DashboardCallbacks['onThreatIntelScan']>>[0]['sources'],
+        });
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      // GET /api/threat-intel/findings — list findings
+      if (req.method === 'GET' && url.pathname === '/api/threat-intel/findings') {
+        if (!this.dashboard.onThreatIntelFindings) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+
+        const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
+        const status = url.searchParams.get('status') ?? undefined;
+        const findings = this.dashboard.onThreatIntelFindings({
+          limit: Number.isFinite(limit) ? limit : 50,
+          status: status as Parameters<NonNullable<DashboardCallbacks['onThreatIntelFindings']>>[0]['status'],
+        });
+        sendJSON(res, 200, findings);
+        return;
+      }
+
+      // POST /api/threat-intel/findings/status — set finding status
+      if (req.method === 'POST' && url.pathname === '/api/threat-intel/findings/status') {
+        if (!this.dashboard.onThreatIntelUpdateFindingStatus) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          const statusCode = message.includes('too large') ? 413 : 400;
+          sendJSON(res, statusCode, { error: message });
+          return;
+        }
+
+        let parsed: { findingId?: string; status?: string };
+        try {
+          parsed = JSON.parse(body) as { findingId?: string; status?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+
+        if (!parsed.findingId || !parsed.status) {
+          sendJSON(res, 400, { error: 'findingId and status are required' });
+          return;
+        }
+
+        const result = this.dashboard.onThreatIntelUpdateFindingStatus({
+          findingId: parsed.findingId,
+          status: parsed.status as Parameters<NonNullable<DashboardCallbacks['onThreatIntelUpdateFindingStatus']>>[0]['status'],
+        });
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      // GET /api/threat-intel/actions — list drafted actions
+      if (req.method === 'GET' && url.pathname === '/api/threat-intel/actions') {
+        if (!this.dashboard.onThreatIntelActions) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
+        sendJSON(res, 200, this.dashboard.onThreatIntelActions(Number.isFinite(limit) ? limit : 50));
+        return;
+      }
+
+      // POST /api/threat-intel/actions/draft — draft an action for finding
+      if (req.method === 'POST' && url.pathname === '/api/threat-intel/actions/draft') {
+        if (!this.dashboard.onThreatIntelDraftAction) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          const status = message.includes('too large') ? 413 : 400;
+          sendJSON(res, status, { error: message });
+          return;
+        }
+
+        let parsed: { findingId?: string; type?: string };
+        try {
+          parsed = JSON.parse(body) as { findingId?: string; type?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+
+        if (!parsed.findingId || !parsed.type) {
+          sendJSON(res, 400, { error: 'findingId and type are required' });
+          return;
+        }
+
+        const result = this.dashboard.onThreatIntelDraftAction({
+          findingId: parsed.findingId,
+          type: parsed.type as Parameters<NonNullable<DashboardCallbacks['onThreatIntelDraftAction']>>[0]['type'],
+        });
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      // POST /api/threat-intel/response-mode — set response mode
+      if (req.method === 'POST' && url.pathname === '/api/threat-intel/response-mode') {
+        if (!this.dashboard.onThreatIntelSetResponseMode) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          const status = message.includes('too large') ? 413 : 400;
+          sendJSON(res, status, { error: message });
+          return;
+        }
+
+        let parsed: { mode?: string };
+        try {
+          parsed = JSON.parse(body) as { mode?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+
+        if (!parsed.mode) {
+          sendJSON(res, 400, { error: 'mode is required' });
+          return;
+        }
+        const result = this.dashboard.onThreatIntelSetResponseMode(
+          parsed.mode as Parameters<NonNullable<DashboardCallbacks['onThreatIntelSetResponseMode']>>[0],
+        );
+        sendJSON(res, 200, result);
         return;
       }
 
@@ -375,9 +696,9 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
 
-        let parsed: { content?: string; userId?: string; agentId?: string };
+        let parsed: { content?: string; userId?: string; agentId?: string; channel?: string };
         try {
-          parsed = JSON.parse(body) as { content?: string; userId?: string; agentId?: string };
+          parsed = JSON.parse(body) as { content?: string; userId?: string; agentId?: string; channel?: string };
         } catch {
           sendJSON(res, 400, { error: 'Invalid JSON' });
           return;
@@ -394,6 +715,7 @@ export class WebChannel implements ChannelAdapter {
             const response = await this.dashboard.onDispatch(parsed.agentId, {
               content: parsed.content,
               userId: parsed.userId,
+              channel: parsed.channel ?? 'web',
             });
             sendJSON(res, 200, response);
           } catch (err) {
@@ -418,6 +740,151 @@ export class WebChannel implements ChannelAdapter {
         });
 
         sendJSON(res, 200, response);
+        return;
+      }
+
+      // POST /api/conversations/reset — Reset conversation memory
+      if (req.method === 'POST' && url.pathname === '/api/conversations/reset') {
+        if (!this.dashboard.onConversationReset) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          const status = message.includes('too large') ? 413 : 400;
+          sendJSON(res, status, { error: message });
+          return;
+        }
+
+        let parsed: { agentId?: string; userId?: string; channel?: string };
+        try {
+          parsed = JSON.parse(body) as { agentId?: string; userId?: string; channel?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+
+        if (!parsed.agentId) {
+          sendJSON(res, 400, { error: 'agentId is required' });
+          return;
+        }
+
+        try {
+          const result = await this.dashboard.onConversationReset({
+            agentId: parsed.agentId,
+            userId: parsed.userId ?? 'web-user',
+            channel: parsed.channel ?? 'web',
+          });
+          sendJSON(res, 200, result);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Reset failed';
+          sendJSON(res, 500, { error: message });
+        }
+        return;
+      }
+
+      // GET /api/conversations/sessions — list user sessions
+      if (req.method === 'GET' && url.pathname === '/api/conversations/sessions') {
+        if (!this.dashboard.onConversationSessions) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+
+        const userId = url.searchParams.get('userId') ?? 'web-user';
+        const channel = url.searchParams.get('channel') ?? 'web';
+        const agentId = url.searchParams.get('agentId') ?? undefined;
+
+        sendJSON(res, 200, this.dashboard.onConversationSessions({ userId, channel, agentId }));
+        return;
+      }
+
+      // POST /api/conversations/session — switch active session
+      if (req.method === 'POST' && url.pathname === '/api/conversations/session') {
+        if (!this.dashboard.onConversationUseSession) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          const status = message.includes('too large') ? 413 : 400;
+          sendJSON(res, status, { error: message });
+          return;
+        }
+
+        let parsed: { agentId?: string; userId?: string; channel?: string; sessionId?: string };
+        try {
+          parsed = JSON.parse(body) as { agentId?: string; userId?: string; channel?: string; sessionId?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+
+        if (!parsed.agentId || !parsed.sessionId) {
+          sendJSON(res, 400, { error: 'agentId and sessionId are required' });
+          return;
+        }
+
+        const result = this.dashboard.onConversationUseSession({
+          agentId: parsed.agentId,
+          userId: parsed.userId ?? 'web-user',
+          channel: parsed.channel ?? 'web',
+          sessionId: parsed.sessionId,
+        });
+        sendJSON(res, 200, result);
+        return;
+      }
+
+      // POST /api/quick-actions/run — execute structured assistant action
+      if (req.method === 'POST' && url.pathname === '/api/quick-actions/run') {
+        if (!this.dashboard.onQuickActionRun) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          const status = message.includes('too large') ? 413 : 400;
+          sendJSON(res, status, { error: message });
+          return;
+        }
+
+        let parsed: { actionId?: string; details?: string; agentId?: string; userId?: string; channel?: string };
+        try {
+          parsed = JSON.parse(body) as { actionId?: string; details?: string; agentId?: string; userId?: string; channel?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+
+        if (!parsed.actionId || !parsed.agentId) {
+          sendJSON(res, 400, { error: 'actionId and agentId are required' });
+          return;
+        }
+
+        try {
+          const result = await this.dashboard.onQuickActionRun({
+            actionId: parsed.actionId,
+            details: parsed.details ?? '',
+            agentId: parsed.agentId,
+            userId: parsed.userId ?? 'web-user',
+            channel: parsed.channel ?? 'web',
+          });
+          sendJSON(res, 200, result);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Quick action failed';
+          sendJSON(res, 500, { error: message });
+        }
         return;
       }
 

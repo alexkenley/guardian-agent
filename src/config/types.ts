@@ -19,6 +19,8 @@ export interface GuardianAgentConfig {
   guardian: GuardianConfig;
   /** Runtime configuration. */
   runtime: RuntimeConfig;
+  /** Personal assistant UX and persistence features. */
+  assistant: AssistantConfig;
 }
 
 /** Configuration for a single LLM provider. */
@@ -173,6 +175,112 @@ export interface RuntimeConfig {
   logLevel: string;
 }
 
+/** Optional setup wizard state and preferences. */
+export interface AssistantSetupConfig {
+  /** Whether initial setup has been completed by the user. */
+  completed: boolean;
+}
+
+/** User identity strategy across channels. */
+export interface AssistantIdentityConfig {
+  /**
+   * single_user: all channels map to one canonical identity.
+   * channel_user: each channel user is unique unless alias-mapped.
+   */
+  mode: 'single_user' | 'channel_user';
+  /** Canonical user ID used in single_user mode. */
+  primaryUserId: string;
+  /** Optional map: "<channel>:<channelUserId>" -> canonical user ID. */
+  aliases?: Record<string, string>;
+}
+
+/** Conversation memory persistence settings. */
+export interface AssistantMemoryConfig {
+  /** Enable conversation memory. */
+  enabled: boolean;
+  /** SQLite database path for memory persistence. */
+  sqlitePath?: string;
+  /** Maximum user+assistant turns per session. */
+  maxTurns: number;
+  /** Maximum chars for one persisted message. */
+  maxMessageChars: number;
+  /** Maximum chars included in LLM context history. */
+  maxContextChars: number;
+  /** Remove records older than this many days. */
+  retentionDays: number;
+}
+
+/** Analytics storage and retention settings. */
+export interface AssistantAnalyticsConfig {
+  /** Enable analytics collection. */
+  enabled: boolean;
+  /** SQLite database path for analytics events. */
+  sqlitePath?: string;
+  /** Remove analytics older than this many days. */
+  retentionDays: number;
+}
+
+/** Quick action templates for structured assistant workflows. */
+export interface AssistantQuickActionsConfig {
+  /** Enable quick actions. */
+  enabled: boolean;
+  /**
+   * Prompt templates by action id.
+   * Must include "{details}" placeholder for injected user input.
+   */
+  templates: Record<string, string>;
+}
+
+/** Threat-intel monitoring and response settings. */
+export interface AssistantThreatIntelConfig {
+  /** Enable threat-intel monitoring features. */
+  enabled: boolean;
+  /** Allow darkweb source category in scan requests. */
+  allowDarkWeb: boolean;
+  /** Response automation level. */
+  responseMode: 'manual' | 'assisted' | 'autonomous';
+  /** Default watchlist entries (names, handles, brands, domains, etc.). */
+  watchlist: string[];
+  /** Background scan cadence in minutes (0 disables interval scan). */
+  autoScanIntervalMinutes: number;
+  /** Moltbook hostile-forum connector configuration. */
+  moltbook: AssistantThreatIntelMoltbookConfig;
+}
+
+/** Hostile forum connector settings for Moltbook. */
+export interface AssistantThreatIntelMoltbookConfig {
+  /** Enable Moltbook ingestion. */
+  enabled: boolean;
+  /** mock = synthetic feed, api = live API requests. */
+  mode: 'mock' | 'api';
+  /** API base URL (required for api mode). */
+  baseUrl?: string;
+  /** Optional bearer token for Moltbook API. */
+  apiKey?: string;
+  /** Search endpoint path relative to baseUrl. */
+  searchPath: string;
+  /** Request timeout per query in milliseconds. */
+  requestTimeoutMs: number;
+  /** Maximum posts to request per target query. */
+  maxPostsPerQuery: number;
+  /** Maximum response size accepted from site. */
+  maxResponseBytes: number;
+  /** Allowed hosts for hostile-site guardrail enforcement. */
+  allowedHosts: string[];
+  /** Allow active publish responses to Moltbook (disabled by default). */
+  allowActiveResponse: boolean;
+}
+
+/** Personal assistant feature configuration. */
+export interface AssistantConfig {
+  setup: AssistantSetupConfig;
+  identity: AssistantIdentityConfig;
+  memory: AssistantMemoryConfig;
+  analytics: AssistantAnalyticsConfig;
+  quickActions: AssistantQuickActionsConfig;
+  threatIntel: AssistantThreatIntelConfig;
+}
+
 /** Default configuration values. */
 export const DEFAULT_CONFIG: GuardianAgentConfig = {
   llm: {
@@ -227,5 +335,52 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
     maxStallDurationMs: 60_000,
     watchdogIntervalMs: 10_000,
     logLevel: 'info',
+  },
+  assistant: {
+    setup: {
+      completed: false,
+    },
+    identity: {
+      mode: 'single_user',
+      primaryUserId: 'owner',
+      aliases: {},
+    },
+    memory: {
+      enabled: true,
+      maxTurns: 12,
+      maxMessageChars: 4000,
+      maxContextChars: 12000,
+      retentionDays: 30,
+    },
+    analytics: {
+      enabled: true,
+      retentionDays: 30,
+    },
+    quickActions: {
+      enabled: true,
+      templates: {
+        email: 'Draft a concise, professional email based on these details:\n{details}\n\nInclude: subject, greeting, body, and sign-off.',
+        task: 'Turn this into a clear prioritized task list with owner/time suggestions:\n{details}',
+        calendar: 'Create a calendar-ready event plan from these details:\n{details}\n\nInclude: title, agenda, time estimate, and follow-ups.',
+      },
+    },
+    threatIntel: {
+      enabled: true,
+      allowDarkWeb: false,
+      responseMode: 'assisted',
+      watchlist: [],
+      autoScanIntervalMinutes: 180,
+      moltbook: {
+        enabled: false,
+        mode: 'mock',
+        baseUrl: 'https://moltbook.com',
+        searchPath: '/api/v1/posts/search',
+        requestTimeoutMs: 8_000,
+        maxPostsPerQuery: 20,
+        maxResponseBytes: 262_144,
+        allowedHosts: ['moltbook.com', 'api.moltbook.com'],
+        allowActiveResponse: false,
+      },
+    },
   },
 };

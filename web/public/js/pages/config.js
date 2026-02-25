@@ -22,6 +22,7 @@ export async function renderConfig(container) {
     container.appendChild(createSection('Channels', config.channels));
     container.appendChild(createSection('Guardian', config.guardian));
     container.appendChild(createSection('Runtime', config.runtime));
+    container.appendChild(createSection('Assistant', config.assistant));
 
   } catch (err) {
     container.innerHTML = `<h2 class="page-title">Configuration</h2><div class="loading">Error: ${esc(err.message)}</div>`;

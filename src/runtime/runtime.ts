@@ -455,6 +455,35 @@ export class Runtime {
     return this.providers.get(this.config.defaultProvider);
   }
 
+  /**
+   * Apply updated LLM/default-provider configuration at runtime.
+   *
+   * Rebuilds provider clients and rebinds providers on all registered agents.
+   */
+  applyLLMConfiguration(config: Pick<GuardianAgentConfig, 'llm' | 'defaultProvider'>): void {
+    this.config = {
+      ...this.config,
+      llm: config.llm,
+      defaultProvider: config.defaultProvider,
+    };
+
+    this.providers.clear();
+    const rebuilt = createProviders(config.llm);
+    for (const [name, provider] of rebuilt) {
+      this.providers.set(name, provider);
+    }
+
+    for (const instance of this.registry.getAll()) {
+      const providerName = instance.definition.providerName ?? this.config.defaultProvider;
+      instance.provider = this.providers.get(providerName);
+    }
+
+    log.info(
+      { providerCount: this.providers.size, defaultProvider: this.config.defaultProvider },
+      'Applied updated LLM configuration',
+    );
+  }
+
   // ─── Internals ──────────────────────────────────────────────
 
   private createAgentContext(agentId: string): AgentContext {

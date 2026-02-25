@@ -77,6 +77,12 @@ Runtime (src/runtime/runtime.ts)
 ├── LLM Providers (src/llm/)            — Ollama, Anthropic, OpenAI
 ├── Registry (src/agent/registry.ts)    — agent registration/discovery
 ├── EventBus (src/queue/event-bus.ts)   — inter-agent events (immediate dispatch)
+├── Identity (src/runtime/identity.ts)  — channel user → canonical identity mapping
+├── Memory (src/runtime/conversation.ts) — SQLite-backed conversation/session persistence
+├── Analytics (src/runtime/analytics.ts) — SQLite-backed channel interaction telemetry
+├── Quick Actions (src/quick-actions.ts) — structured assistant workflows
+├── Threat Intel (src/runtime/threat-intel.ts) — watchlist scans, findings triage, response drafting
+│   └── Moltbook Connector (src/runtime/moltbook-connector.ts) — hostile-site constrained forum ingestion
 ├── Guardian (src/guardian/)             — three-layer defense system
 │   ├── guardian.ts                     — admission controller pipeline
 │   ├── input-sanitizer.ts             — prompt injection detection (Layer 1)
@@ -227,3 +233,5 @@ Unified `LLMProvider` interface for **Ollama**, **Anthropic**, and **OpenAI**:
 - **CLI**: Interactive readline prompt with `/help`, `/agents`, `/status`, `/quit`
 - **Telegram**: grammy framework, polling mode, `allowed_chat_ids` filtering
 - **Web**: Node.js HTTP server with REST API (`/health`, `/api/status`, `/api/message`)
+- **Setup Wizard**: web `#/setup` and CLI `/setup` onboarding flow
+- **Threat Intel**: web `#/intel`, CLI `/intel`, Telegram `/intel` command surfaces

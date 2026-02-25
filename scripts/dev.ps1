@@ -18,6 +18,107 @@ $Root = Split-Path -Parent $PSScriptRoot
 $OriginalDir = Get-Location
 Set-Location $Root
 
+function Write-WaitLine {
+    param(
+        [string]$Message
+    )
+    Write-Host "  Please wait — $Message" -ForegroundColor DarkGray
+}
+
+function Wait-ForProcessWithMessages {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Diagnostics.Process]$Process,
+        [string[]]$Messages = @("Working..."),
+        [int]$IntervalSeconds = 4
+    )
+
+    $intervalMs = [Math]::Max(250, $IntervalSeconds * 1000)
+    $index = 0
+    while (-not $Process.HasExited) {
+        if (-not $Process.HasExited -and $Messages.Count -gt 0) {
+            $message = $Messages[$index % $Messages.Count]
+            Write-WaitLine $message
+            $index++
+        }
+        $null = $Process.WaitForExit($intervalMs)
+        $Process.Refresh()
+    }
+
+    $Process.WaitForExit()
+    $Process.Refresh()
+    return [int]$Process.ExitCode
+}
+
+function Get-TestWaitMessages {
+    return @(
+        "Reticulating Splines...",
+        "Correlating failing dimensions...",
+        "Reindexing assertion nebulae...",
+        "Consulting the flake detector...",
+        "Probing CLI command routing...",
+        "Verifying web channel auth paths...",
+        "Exercising CORS guardrails...",
+        "Stressing request body limits...",
+        "Validating SSE stream handling...",
+        "Auditing static path traversal blocks...",
+        "Checking runtime watchdog behavior...",
+        "Scanning for secret redaction leaks...",
+        "Simulating prompt-injection defenses...",
+        "Evaluating rate limiter thresholds...",
+        "Replaying anomaly detection events...",
+        "Exercising budget timeout controls...",
+        "Verifying provider failover logic...",
+        "Inspecting threat-intel workflows...",
+        "Cross-checking moltbook connector safety...",
+        "Synchronizing audit event timelines...",
+        "Rebuilding provider capability map...",
+        "Sampling conversation memory paths...",
+        "Validating analytics persistence...",
+        "Confirming sqlite fallback behavior...",
+        "Exercising config loader validation...",
+        "Traversing integration edge cases...",
+        "Polishing response schema checks...",
+        "Rehearsing incident response hooks...",
+        "Watching for race-condition ghosts...",
+        "Rehydrating test doubles...",
+        "Inspecting guardian policy gates...",
+        "Verifying denied-path enforcement...",
+        "Red-teaming output scanners...",
+        "Comparing state machine transitions...",
+        "Sweeping telemetry breadcrumbs...",
+        "Containing socket chaos...",
+        "Tightening endpoint contracts...",
+        "Testing dashboard callback paths...",
+        "Verifying quick-actions metadata...",
+        "Exercising reference-guide APIs...",
+        "Aligning threat-label taxonomy...",
+        "Diffing audit summaries...",
+        "Rechecking provider connectivity probes...",
+        "Validating agent lifecycle transitions...",
+        "Measuring event-bus backpressure...",
+        "Ensuring queue ordering invariants...",
+        "Stress-testing concurrent dispatch...",
+        "Reheating cold-start assumptions...",
+        "Checking stale-session cleanup...",
+        "Revisiting malformed payload handling...",
+        "Reconciling SSE auth tokens...",
+        "Confirming static MIME mapping...",
+        "Sandboxing hostile forum connectors...",
+        "Verifying defensive defaults...",
+        "Running adversarial content heuristics...",
+        "Replaying watchdog recovery paths...",
+        "Shaping deterministic test outputs...",
+        "Aligning structured log contracts...",
+        "Resolving synthetic network hops...",
+        "Finalizing assertion matrix...",
+        "Verifying cross-platform paths...",
+        "Checking Node runtime compatibility...",
+        "Confirming process shutdown hygiene...",
+        "Almost there, stitching final reports..."
+    )
+}
+
 try {
 
 # --- ASCII Art Banner ---
@@ -49,6 +150,7 @@ Write-Host ""
 
 # --- Step 1: Check Node.js ---
 Write-Host "[1/6] Checking Node.js..." -ForegroundColor DarkCyan
+Write-WaitLine "Waking the runtime engines..."
 try {
     $nodeVersion = node --version
     $major = [int]($nodeVersion -replace 'v(\d+)\..*', '$1')
@@ -57,6 +159,9 @@ try {
         exit 1
     }
     Write-Host "  Node.js: $nodeVersion" -ForegroundColor Green
+    if ($major -lt 20) {
+        Write-Host "  WARNING: Node.js 20+ is recommended for full compatibility (e.g. node:sqlite tests)." -ForegroundColor DarkCyan
+    }
 } catch {
     Write-Host "  ERROR: Node.js not found. Install from https://nodejs.org" -ForegroundColor Red
     exit 1
@@ -64,6 +169,7 @@ try {
 
 # --- Step 2: Install dependencies ---
 Write-Host "[2/6] Checking dependencies..." -ForegroundColor DarkCyan
+Write-WaitLine "Reticulating Splines..."
 $needsInstall = $false
 
 if (-not (Test-Path (Join-Path $Root "node_modules"))) {
@@ -89,6 +195,7 @@ if ($needsInstall) {
 if (-not $StartOnly) {
     # --- Step 3: Build ---
     Write-Host "[3/6] Building TypeScript..." -ForegroundColor DarkCyan
+    Write-WaitLine "Forging TypeScript into JavaScript..."
     $distPath = Join-Path $Root "dist"
     if (Test-Path $distPath) {
         Remove-Item -Recurse -Force $distPath
@@ -110,13 +217,31 @@ if (-not $StartOnly) {
     # --- Step 4: Tests ---
     if (-not $SkipTests) {
         Write-Host "[4/6] Running tests..." -ForegroundColor DarkCyan
+        Write-WaitLine "Interrogating the test matrix..."
         $vitestPath = Join-Path $Root "node_modules\vitest\vitest.mjs"
-        node $vitestPath run
-        if ($LASTEXITCODE -ne 0) {
+        $testStart = Get-Date
+        $testProc = Start-Process `
+            -FilePath "node" `
+            -ArgumentList @($vitestPath, "run", "--reporter=dot") `
+            -WorkingDirectory $Root `
+            -NoNewWindow `
+            -PassThru
+
+        $testExitCode = Wait-ForProcessWithMessages `
+            -Process $testProc `
+            -Messages (Get-TestWaitMessages) `
+            -IntervalSeconds 4
+        $testDuration = (Get-Date) - $testStart
+
+        if ($testExitCode -ne 0) {
+            Write-Host "  Test runner exit code: $testExitCode" -ForegroundColor DarkCyan
             Write-Host "  ERROR: Tests failed" -ForegroundColor Red
             exit 1
         }
-        Write-Host "  Tests: PASSED" -ForegroundColor Green
+        Write-Host ("  Tests: PASSED ({0:N1}s)" -f $testDuration.TotalSeconds) -ForegroundColor Green
+        if ($testDuration.TotalSeconds -gt 90) {
+            Write-Host "  Tip: use -SkipTests for faster local startup when iterating." -ForegroundColor DarkCyan
+        }
     } else {
         Write-Host "[4/6] Tests: SKIPPED" -ForegroundColor DarkCyan
     }
@@ -144,6 +269,7 @@ if ($BuildOnly) {
 
 # --- Step 5: Check Ollama (default LLM provider) ---
 Write-Host "[5/6] Checking Ollama..." -ForegroundColor DarkCyan
+Write-WaitLine "Calibrating local model links..."
 $ollamaRunning = $false
 try {
     $response = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -TimeoutSec 3 -ErrorAction Stop
@@ -266,6 +392,7 @@ if (Test-Path $configFile) {
 # --- Start ---
 Write-Host ""
 Write-Host "[6/6] Starting GuardianAgent..." -ForegroundColor DarkCyan
+Write-WaitLine "Engaging Guardian protocols..."
 Write-Host ""
 Write-Host "  ┌──────────────────────────────────────────────┐" -ForegroundColor DarkGreen
 Write-Host "  │" -NoNewline -ForegroundColor DarkGreen; Write-Host "         SYSTEM STATUS                    " -NoNewline -ForegroundColor Green; Write-Host "│" -ForegroundColor DarkGreen

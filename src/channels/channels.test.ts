@@ -7,6 +7,7 @@ import type { AgentInfo, RuntimeStatus } from './cli.js';
 import { WebChannel } from './web.js';
 import type { DashboardCallbacks, DashboardAgentInfo, DashboardAgentDetail } from './web-types.js';
 import type { UserMessage, AgentResponse } from '../agent/types.js';
+import { randomUUID } from 'node:crypto';
 
 describe('CLIChannel', () => {
   it('should start and stop without errors', async () => {
@@ -190,6 +191,25 @@ describe('CLIChannel with DashboardCallbacks', () => {
         sentinel: { enabled: true, schedule: '*/5 * * * *' },
       },
       runtime: { maxStallDurationMs: 60000, watchdogIntervalMs: 10000, logLevel: 'info' },
+      assistant: {
+        setupCompleted: false,
+        identity: { mode: 'single_user', primaryUserId: 'owner' },
+        memory: { enabled: true, retentionDays: 30 },
+        analytics: { enabled: true, retentionDays: 30 },
+        quickActions: { enabled: true },
+        threatIntel: {
+          enabled: true,
+          allowDarkWeb: false,
+          responseMode: 'assisted',
+          watchlistCount: 0,
+          autoScanIntervalMinutes: 180,
+          moltbook: {
+            enabled: false,
+            mode: 'mock',
+            allowActiveResponse: false,
+          },
+        },
+      },
     }),
     onBudget: () => ({
       agents: [
@@ -212,6 +232,82 @@ describe('CLIChannel with DashboardCallbacks', () => {
     ],
     onDispatch: async (agentId, msg) => ({ content: `Reply from ${agentId}: ${msg.content}` }),
     onConfigUpdate: async (updates) => ({ success: true, message: 'Config saved. Restart to apply changes.' }),
+    onThreatIntelSummary: () => ({
+      enabled: true,
+      lastScanAt: Date.now(),
+      watchlistCount: 1,
+      darkwebEnabled: false,
+      responseMode: 'assisted',
+      forumConnectors: [
+        { id: 'moltbook', enabled: true, hostile: true, mode: 'mock' },
+      ],
+      findings: { total: 2, new: 1, highOrCritical: 1 },
+    }),
+    onThreatIntelPlan: () => ({
+      title: 'Threat Intel Plan',
+      principles: [],
+      phases: [
+        { phase: 'Phase 1', objective: 'Discover', deliverables: ['watchlist scans'] },
+      ],
+    }),
+    onThreatIntelWatchlist: () => ['alexkenley'],
+    onThreatIntelWatchAdd: (target) => ({ success: true, message: `Added ${target}` }),
+    onThreatIntelWatchRemove: (target) => ({ success: true, message: `Removed ${target}` }),
+    onThreatIntelScan: () => ({
+      success: true,
+      message: 'Scan completed',
+      findings: [{
+        id: randomUUID(),
+        createdAt: Date.now(),
+        target: 'alexkenley',
+        sourceType: 'social',
+        contentType: 'text',
+        severity: 'high',
+        confidence: 0.82,
+        summary: 'Potential impersonation post',
+        status: 'new',
+        labels: ['social', 'impersonation'],
+      }],
+    }),
+    onThreatIntelFindings: () => [{
+      id: 'finding-1',
+      createdAt: Date.now(),
+      target: 'alexkenley',
+      sourceType: 'social',
+      contentType: 'text',
+      severity: 'high',
+      confidence: 0.8,
+      summary: 'Potential impersonation',
+      status: 'new',
+      labels: ['impersonation'],
+    }],
+    onThreatIntelUpdateFindingStatus: ({ findingId, status }) => ({
+      success: true,
+      message: `${findingId} -> ${status}`,
+    }),
+    onThreatIntelActions: () => [{
+      id: 'action-1',
+      findingId: 'finding-1',
+      createdAt: Date.now(),
+      type: 'report',
+      status: 'proposed',
+      requiresApproval: true,
+      rationale: 'Potential abuse',
+    }],
+    onThreatIntelDraftAction: ({ findingId, type }) => ({
+      success: true,
+      message: `Drafted ${type} for ${findingId}`,
+      action: {
+        id: 'action-2',
+        findingId,
+        createdAt: Date.now(),
+        type,
+        status: 'proposed',
+        requiresApproval: true,
+        rationale: 'Drafted in test',
+      },
+    }),
+    onThreatIntelSetResponseMode: (mode) => ({ success: true, message: `mode=${mode}` }),
   };
 
   const makeCli = (dashboardOverride?: Partial<DashboardCallbacks>) => {
@@ -746,6 +842,47 @@ describe('CLIChannel with DashboardCallbacks', () => {
     await cli.stop();
   });
 
+  // ─── /intel ───────────────────────────────────────────
+
+  it('/intel should show threat-intel summary', async () => {
+    const { input, output, cli } = makeCli();
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/intel');
+    const text = readOutput(output);
+
+    expect(text).toContain('Threat Intel Summary');
+    expect(text).toContain('enabled');
+    expect(text).toContain('high/critical');
+
+    await cli.stop();
+  });
+
+  it('/intel watch add should update watchlist', async () => {
+    const { input, output, cli } = makeCli();
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/intel watch add guardian-agent');
+    const text = readOutput(output);
+
+    expect(text).toContain('Added guardian-agent');
+
+    await cli.stop();
+  });
+
+  it('/intel scan should show findings', async () => {
+    const { input, output, cli } = makeCli();
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/intel scan');
+    const text = readOutput(output);
+
+    expect(text).toContain('Scan completed');
+    expect(text).toContain('New findings');
+
+    await cli.stop();
+  });
+
   // ─── /clear ───────────────────────────────────────────
 
   it('/clear should write ANSI clear sequence', async () => {
@@ -1053,13 +1190,93 @@ describe('WebChannel', () => {
         channels: { cli: { enabled: true }, web: { enabled: true, port: 3000 } },
         guardian: { enabled: true },
         runtime: { maxStallDurationMs: 60000, watchdogIntervalMs: 10000, logLevel: 'info' },
+        assistant: {
+          setupCompleted: false,
+          identity: { mode: 'single_user', primaryUserId: 'owner' },
+          memory: { enabled: true, retentionDays: 30 },
+          analytics: { enabled: true, retentionDays: 30 },
+          quickActions: { enabled: true },
+          threatIntel: {
+            enabled: true,
+            allowDarkWeb: false,
+            responseMode: 'assisted',
+            watchlistCount: 0,
+            autoScanIntervalMinutes: 180,
+            moltbook: {
+              enabled: false,
+              mode: 'mock',
+              allowActiveResponse: false,
+            },
+          },
+        },
       }),
       onBudget: () => ({
         agents: [{ agentId: 'agent-1', tokensPerMinute: 100, concurrentInvocations: 1, overrunCount: 0 }],
         recentOverruns: [],
       }),
       onWatchdog: () => [{ agentId: 'agent-1', action: 'ok' as const }],
-      onProviders: () => [{ name: 'ollama', type: 'ollama' }],
+      onProviders: () => [{ name: 'ollama', type: 'ollama', model: 'llama3.2', locality: 'local' as const, connected: true }],
+      onThreatIntelSummary: () => ({
+        enabled: true,
+        watchlistCount: 1,
+        darkwebEnabled: false,
+        responseMode: 'assisted',
+        forumConnectors: [
+          { id: 'moltbook', enabled: true, hostile: true, mode: 'mock' },
+        ],
+        findings: { total: 1, new: 1, highOrCritical: 1 },
+      }),
+      onThreatIntelPlan: () => ({
+        title: 'Threat Plan',
+        principles: ['Protect users'],
+        phases: [{ phase: 'Phase 1', objective: 'Discover', deliverables: ['watchlist scans'] }],
+      }),
+      onThreatIntelWatchlist: () => ['target-a'],
+      onThreatIntelWatchAdd: (target) => ({ success: true, message: `added:${target}` }),
+      onThreatIntelWatchRemove: (target) => ({ success: true, message: `removed:${target}` }),
+      onThreatIntelScan: () => ({
+        success: true,
+        message: 'scan complete',
+        findings: [{
+          id: 'finding-1',
+          createdAt: Date.now(),
+          target: 'target-a',
+          sourceType: 'social',
+          contentType: 'text',
+          severity: 'high',
+          confidence: 0.8,
+          summary: 'Potential impersonation',
+          status: 'new',
+          labels: ['impersonation'],
+        }],
+      }),
+      onThreatIntelFindings: () => [{
+        id: 'finding-1',
+        createdAt: Date.now(),
+        target: 'target-a',
+        sourceType: 'social',
+        contentType: 'text',
+        severity: 'high',
+        confidence: 0.8,
+        summary: 'Potential impersonation',
+        status: 'new',
+        labels: ['impersonation'],
+      }],
+      onThreatIntelUpdateFindingStatus: ({ findingId, status }) => ({ success: true, message: `${findingId}:${status}` }),
+      onThreatIntelActions: () => [{
+        id: 'action-1',
+        findingId: 'finding-1',
+        createdAt: Date.now(),
+        type: 'report',
+        status: 'proposed',
+        requiresApproval: true,
+        rationale: 'Test action',
+      }],
+      onThreatIntelDraftAction: ({ findingId, type }) => ({
+        success: true,
+        message: `drafted:${findingId}:${type}`,
+      }),
+      onThreatIntelSetResponseMode: (mode) => ({ success: true, message: `mode:${mode}` }),
     };
 
     it('GET /api/agents should return agent list', async () => {
@@ -1155,6 +1372,32 @@ describe('WebChannel', () => {
       expect(res.status).toBe(200);
       const body = await res.json() as Array<{ name: string; type: string }>;
       expect(body[0].name).toBe('ollama');
+    });
+
+    it('GET /api/threat-intel/summary should return threat summary', async () => {
+      web = new WebChannel({ port: 18958, dashboard: mockDashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18958/api/threat-intel/summary');
+      expect(res.status).toBe(200);
+      const body = await res.json() as { enabled: boolean; findings: { highOrCritical: number } };
+      expect(body.enabled).toBe(true);
+      expect(body.findings.highOrCritical).toBe(1);
+    });
+
+    it('POST /api/threat-intel/scan should run scan callback', async () => {
+      web = new WebChannel({ port: 18959, dashboard: mockDashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18959/api/threat-intel/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: 'target-a' }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json() as { success: boolean; findings: unknown[] };
+      expect(body.success).toBe(true);
+      expect(body.findings.length).toBeGreaterThan(0);
     });
 
     it('should return 404 when dashboard callback is not set', async () => {

@@ -9,6 +9,8 @@ import { Bot, type Context } from 'grammy';
 import { randomUUID } from 'node:crypto';
 import type { ChannelAdapter, MessageCallback } from './types.js';
 import { createLogger } from '../util/logging.js';
+import type { AnalyticsEventInput } from '../runtime/analytics.js';
+import type { ThreatIntelSummary, ThreatIntelScanInput, ThreatIntelFinding, IntelStatus } from '../runtime/threat-intel.js';
 
 const log = createLogger('channel:telegram');
 
@@ -19,6 +21,39 @@ export interface TelegramChannelOptions {
   allowedChatIds?: number[];
   /** Default agent to route messages to. */
   defaultAgent?: string;
+  /** Reference guide/help text shown for /guide and /help. */
+  guideText?: string;
+  /** Reset conversation callback for /reset command. */
+  onResetConversation?: (args: {
+    userId: string;
+    agentId?: string;
+  }) => Promise<{ success: boolean; message: string }> | { success: boolean; message: string };
+  /** Resolve Telegram user/chat identity to canonical cross-channel user ID. */
+  resolveCanonicalUserId?: (channelUserId: string) => string;
+  /** Execute quick actions. */
+  onQuickAction?: (args: {
+    actionId: string;
+    details: string;
+    agentId: string;
+    userId: string;
+    channel: string;
+  }) => Promise<{ content: string }>;
+  /** Threat-intel summary callback for /intel status. */
+  onThreatIntelSummary?: () => ThreatIntelSummary;
+  /** Run threat-intel scan for /intel scan. */
+  onThreatIntelScan?: (input: ThreatIntelScanInput) => {
+    success: boolean;
+    message: string;
+    findings: ThreatIntelFinding[];
+  } | Promise<{
+    success: boolean;
+    message: string;
+    findings: ThreatIntelFinding[];
+  }>;
+  /** List threat-intel findings for /intel findings. */
+  onThreatIntelFindings?: (args: { limit?: number; status?: IntelStatus }) => ThreatIntelFinding[];
+  /** Analytics tracking callback. */
+  onAnalyticsTrack?: (event: AnalyticsEventInput) => void;
 }
 
 export class TelegramChannel implements ChannelAdapter {
@@ -26,10 +61,28 @@ export class TelegramChannel implements ChannelAdapter {
   private bot: Bot;
   private onMessage: MessageCallback | null = null;
   private allowedChatIds: Set<number>;
+  private defaultAgent: string;
+  private guideText: string;
+  private onResetConversation?: TelegramChannelOptions['onResetConversation'];
+  private resolveCanonicalUserId?: TelegramChannelOptions['resolveCanonicalUserId'];
+  private onQuickAction?: TelegramChannelOptions['onQuickAction'];
+  private onThreatIntelSummary?: TelegramChannelOptions['onThreatIntelSummary'];
+  private onThreatIntelScan?: TelegramChannelOptions['onThreatIntelScan'];
+  private onThreatIntelFindings?: TelegramChannelOptions['onThreatIntelFindings'];
+  private onAnalyticsTrack?: TelegramChannelOptions['onAnalyticsTrack'];
 
   constructor(options: TelegramChannelOptions) {
     this.bot = new Bot(options.botToken);
     this.allowedChatIds = new Set(options.allowedChatIds ?? []);
+    this.defaultAgent = options.defaultAgent ?? 'default';
+    this.guideText = options.guideText ?? 'Reference guide is not configured.';
+    this.onResetConversation = options.onResetConversation;
+    this.resolveCanonicalUserId = options.resolveCanonicalUserId;
+    this.onQuickAction = options.onQuickAction;
+    this.onThreatIntelSummary = options.onThreatIntelSummary;
+    this.onThreatIntelScan = options.onThreatIntelScan;
+    this.onThreatIntelFindings = options.onThreatIntelFindings;
+    this.onAnalyticsTrack = options.onAnalyticsTrack;
   }
 
   async start(onMessage: MessageCallback): Promise<void> {
@@ -37,10 +90,97 @@ export class TelegramChannel implements ChannelAdapter {
 
     this.bot.on('message:text', async (ctx: Context) => {
       if (!ctx.message?.text || !ctx.chat) return;
+      const text = ctx.message.text.trim();
+      const lower = text.toLowerCase();
+      const channelUserId = String(ctx.from?.id ?? ctx.chat.id);
+      const canonicalUserId = this.resolveCanonicalUserId
+        ? this.resolveCanonicalUserId(channelUserId)
+        : channelUserId;
 
       // Filter by allowed chat IDs
       if (this.allowedChatIds.size > 0 && !this.allowedChatIds.has(ctx.chat.id)) {
         log.warn({ chatId: ctx.chat.id }, 'Message from unauthorized chat');
+        this.trackAnalytics({
+          type: 'message_denied',
+          channel: 'telegram',
+          canonicalUserId,
+          channelUserId,
+          metadata: { reason: 'unauthorized_chat' },
+        });
+        await ctx.reply('Unauthorized chat.');
+        return;
+      }
+
+      if (text.startsWith('/')) {
+        const command = text.split(/\s+/)[0]?.slice(1).toLowerCase() ?? 'unknown';
+        this.trackAnalytics({
+          type: 'command_used',
+          channel: 'telegram',
+          canonicalUserId,
+          channelUserId,
+          agentId: this.defaultAgent,
+          metadata: { command },
+        });
+      }
+
+      if (lower === '/start' || lower === '/help') {
+        await ctx.reply(this.buildHelpText());
+        return;
+      }
+
+      if (lower === '/guide') {
+        await ctx.reply(this.guideText);
+        return;
+      }
+
+      if (lower.startsWith('/intel')) {
+        await this.handleIntelCommand(ctx, text);
+        return;
+      }
+
+      if (lower.startsWith('/reset')) {
+        if (!this.onResetConversation) {
+          await ctx.reply('Conversation reset is not available.');
+          return;
+        }
+
+        const parts = text.split(/\s+/);
+        const agentId = parts[1] || this.defaultAgent;
+        const result = await this.onResetConversation({
+          userId: channelUserId,
+          agentId,
+        });
+        await ctx.reply(result.message);
+        return;
+      }
+
+      if (lower.startsWith('/quick')) {
+        if (!this.onQuickAction) {
+          await ctx.reply('Quick actions are not available.');
+          return;
+        }
+
+        const parts = text.split(/\s+/);
+        const actionId = parts[1]?.toLowerCase();
+        const details = parts.slice(2).join(' ').trim();
+        if (!actionId || !details) {
+          await ctx.reply('Usage: /quick <email|task|calendar> <details>');
+          return;
+        }
+
+        try {
+          const response = await this.onQuickAction({
+            actionId,
+            details,
+            agentId: this.defaultAgent,
+            userId: channelUserId,
+            channel: 'telegram',
+          });
+          await ctx.reply(response.content);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          await ctx.reply(`Quick action failed: ${message}`);
+        }
         return;
       }
 
@@ -50,17 +190,39 @@ export class TelegramChannel implements ChannelAdapter {
       await ctx.replyWithChatAction('typing');
 
       try {
+        this.trackAnalytics({
+          type: 'message_sent',
+          channel: 'telegram',
+          canonicalUserId,
+          channelUserId,
+          agentId: this.defaultAgent,
+        });
         const response = await this.onMessage({
           id: randomUUID(),
-          userId: String(ctx.from?.id ?? ctx.chat.id),
+          userId: channelUserId,
           channel: 'telegram',
-          content: ctx.message.text,
+          content: text,
           timestamp: Date.now(),
         });
 
+        this.trackAnalytics({
+          type: 'message_success',
+          channel: 'telegram',
+          canonicalUserId,
+          channelUserId,
+          agentId: this.defaultAgent,
+        });
         await ctx.reply(response.content);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        this.trackAnalytics({
+          type: 'message_error',
+          channel: 'telegram',
+          canonicalUserId,
+          channelUserId,
+          agentId: this.defaultAgent,
+          metadata: { error: msg },
+        });
         log.error({ chatId: ctx.chat.id, err: msg }, 'Error handling Telegram message');
         await ctx.reply('Sorry, an error occurred processing your message.');
       }
@@ -87,5 +249,101 @@ export class TelegramChannel implements ChannelAdapter {
       return;
     }
     await this.bot.api.sendMessage(chatId, text);
+  }
+
+  private async handleIntelCommand(ctx: Context, text: string): Promise<void> {
+    if (!this.onThreatIntelSummary) {
+      await ctx.reply('Threat intel is not available.');
+      return;
+    }
+
+    const parts = text.trim().split(/\s+/);
+    const sub = (parts[1] ?? 'status').toLowerCase();
+
+    if (sub === 'status') {
+      const summary = this.onThreatIntelSummary();
+      const lines = [
+        'Threat Intel',
+        `Monitoring: ${summary.enabled ? 'enabled' : 'disabled'}`,
+        `Mode: ${summary.responseMode}`,
+        `Watchlist: ${summary.watchlistCount}`,
+        `Darkweb: ${summary.darkwebEnabled ? 'enabled' : 'disabled'}`,
+        `Findings: ${summary.findings.total} total, ${summary.findings.new} new, ${summary.findings.highOrCritical} high/critical`,
+      ];
+      if (summary.lastScanAt) {
+        lines.push(`Last scan: ${new Date(summary.lastScanAt).toLocaleString()}`);
+      }
+      await ctx.reply(lines.join('\n'));
+      return;
+    }
+
+    if (sub === 'scan') {
+      if (!this.onThreatIntelScan) {
+        await ctx.reply('Threat intel scan is not available.');
+        return;
+      }
+      const includeDarkWeb = parts.includes('--darkweb');
+      const query = parts
+        .slice(2)
+        .filter((part) => part !== '--darkweb')
+        .join(' ')
+        .trim();
+      const result = await this.onThreatIntelScan({
+        query: query || undefined,
+        includeDarkWeb,
+      });
+      const preview = result.findings.slice(0, 4)
+        .map((finding) => `- ${finding.severity} ${finding.sourceType}: ${finding.target}`)
+        .join('\n');
+      await ctx.reply(
+        `${result.message}${preview ? `\n\n${preview}` : ''}`,
+      );
+      return;
+    }
+
+    if (sub === 'findings') {
+      if (!this.onThreatIntelFindings) {
+        await ctx.reply('Threat intel findings are not available.');
+        return;
+      }
+      const findings = this.onThreatIntelFindings({ limit: 5, status: 'new' });
+      if (findings.length === 0) {
+        await ctx.reply('No new findings.');
+        return;
+      }
+      const lines = ['Top findings:'];
+      for (const finding of findings) {
+        lines.push(`- ${finding.id.slice(0, 8)} ${finding.severity} ${finding.sourceType} ${finding.target}`);
+      }
+      await ctx.reply(lines.join('\n'));
+      return;
+    }
+
+    await ctx.reply('Usage: /intel [status|scan|findings]\nExamples:\n/intel status\n/intel scan your-name --darkweb\n/intel findings');
+  }
+
+  private buildHelpText(): string {
+    return [
+      'GuardianAgent Telegram',
+      '',
+      `Default agent: ${this.defaultAgent}`,
+      '',
+      'Commands:',
+      '/help - Show this help',
+      '/guide - Open reference guide',
+      '/reset [agentId] - Reset conversation memory',
+      '/quick <action> <details> - Run quick action (email/task/calendar)',
+      '/intel [status|scan|findings] - Threat intel status + quick scan',
+      '',
+      'Or just send a normal message to chat with the assistant.',
+    ].join('\n');
+  }
+
+  private trackAnalytics(event: AnalyticsEventInput): void {
+    try {
+      this.onAnalyticsTrack?.(event);
+    } catch {
+      // ignore
+    }
   }
 }

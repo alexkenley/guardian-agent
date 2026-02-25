@@ -1,5 +1,28 @@
 # GuardianAgent
 
+```
+  ██████╗ ██╗   ██╗ █████╗ ██████╗ ██████╗ ██╗ █████╗ ███╗   ██╗
+  ██╔════╝ ██║   ██║██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗████╗  ██║
+  ██║  ███╗██║   ██║███████║██████╔╝██║  ██║██║███████║██╔██╗ ██║
+  ██║   ██║██║   ██║██╔══██║██╔══██╗██║  ██║██║██╔══██║██║╚██╗██║
+  ╚██████╔╝╚██████╔╝██║  ██║██║  ██║██████╔╝██║██║  ██║██║ ╚████║
+   ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝
+
+       █████╗  ██████╗ ███████╗███╗   ██╗████████╗
+      ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝
+      ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║
+      ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║
+      ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║
+      ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝
+  ═══════════════════════════════════════════════════════════════════
+       ─────────────────────────────────────────────────────────
+            ═══════════════════════════════════════════════
+                  ─────────────────────────────────────
+                        ═════════════════════════
+
+        Three-Layer Defense  |  Real-Time Dashboard
+```
+
 Security-first AI agent orchestration system. Built-in agents with predefined capabilities, strict guardrails on what they can and cannot do, and a three-layer defense system that enforces security at every stage of the message lifecycle.
 
 ## What This Is
@@ -49,24 +72,8 @@ There is no `ctx.fs`, `ctx.http`, or `ctx.exec`. The agent's only interaction po
 npm install guardianagent
 ```
 
-Create `~/.guardianagent/config.yaml`:
-
-```yaml
-llm:
-  ollama:
-    provider: ollama
-    model: llama3.2
-
-defaultProvider: ollama
-
-channels:
-  cli:
-    enabled: true
-
-guardian:
-  enabled: true
-  logDenials: true
-```
+Requires Node.js `>=20.0.0`.
+SQLite persistence/security monitoring is enabled when the Node build includes `node:sqlite`; otherwise assistant memory/analytics automatically run in-memory.
 
 Run:
 
@@ -76,7 +83,16 @@ npx guardianagent
 guardianagent              # if installed globally
 ```
 
+Then run setup (no manual YAML editing required):
+- Web: open `#/setup` tab
+- CLI: run `/setup`
+
+This configures Ollama/external LLM, optional Telegram, and marks setup completion.
+
 ## Configuration
+
+Most users should configure the assistant via the web Setup/Config pages or CLI `/setup` and `/config` commands.
+Direct `config.yaml` editing is optional for advanced/manual workflows.
 
 ```yaml
 llm:
@@ -101,6 +117,43 @@ channels:
     enabled: true
     port: 3000
     authToken: ${WEB_AUTH_TOKEN}
+
+assistant:
+  setup:
+    completed: false
+  identity:
+    mode: single_user
+    primaryUserId: owner
+  memory:
+    enabled: true
+    sqlitePath: ~/.guardianagent/assistant-memory.sqlite
+    retentionDays: 30
+  analytics:
+    enabled: true
+    sqlitePath: ~/.guardianagent/assistant-analytics.sqlite
+    retentionDays: 30
+  quickActions:
+    enabled: true
+    templates:
+      email: "Draft a concise, professional email based on these details:\n{details}"
+      task: "Turn this into a clear prioritized task list:\n{details}"
+      calendar: "Create a calendar-ready event plan from these details:\n{details}"
+  threatIntel:
+    enabled: true
+    allowDarkWeb: false
+    responseMode: assisted
+    watchlist: []
+    autoScanIntervalMinutes: 180
+    moltbook:
+      enabled: false
+      mode: mock
+      baseUrl: https://moltbook.com
+      searchPath: /api/v1/posts/search
+      requestTimeoutMs: 8000
+      maxPostsPerQuery: 20
+      maxResponseBytes: 262144
+      allowedHosts: [moltbook.com, api.moltbook.com]
+      allowActiveResponse: false
 
 guardian:
   enabled: true
@@ -134,6 +187,23 @@ guardian:
 - **Telegram** — grammy bot framework with chat ID filtering
 - **Web** — HTTP REST API with bearer token auth
 
+## Personal Assistant UX Features
+
+- Setup wizard in web (`#/setup`) and CLI (`/setup`)
+- Cross-channel identity mapping (`single_user` or `channel_user` + aliases)
+- SQLite-persisted conversation memory with sessions
+- SQLite DB hardening + monitoring (permission enforcement + integrity quick checks)
+- Quick actions for `email`, `task`, and `calendar` workflows
+- Threat-intel workflow for watchlist scans, findings triage, and response action drafts (human approval-gated publishing)
+- Moltbook connector with hostile-site guardrails (strict host allowlist, timeout/size limits, payload sanitization)
+- Channel analytics summary in web Monitoring and CLI (`/analytics`)
+
+### Key Commands
+
+- CLI: `/setup`, `/quick`, `/session`, `/analytics`, `/intel`, `/guide`
+- Telegram: `/help`, `/guide`, `/reset`, `/quick`, `/intel`
+- Web: Setup tab, Chat quick-actions bar, Threat Intel tab, Reference Guide tab
+
 ## Development
 
 ```bash
@@ -150,6 +220,15 @@ Full documentation in `docs/architecture/`:
 - [Security](docs/architecture/SECURITY.md) — three-layer defense system details
 - [Guardian API](docs/architecture/GUARDIAN-API.md) — complete API reference
 - [Decisions](docs/architecture/DECISIONS.md) — architecture decision records
+
+Implementation specs in `docs/specs/`:
+- [Setup Wizard](docs/specs/SETUP-WIZARD-SPEC.md)
+- [Identity & Memory](docs/specs/IDENTITY-MEMORY-SPEC.md)
+- [Analytics](docs/specs/ANALYTICS-SPEC.md)
+- [Quick Actions](docs/specs/QUICK-ACTIONS-SPEC.md)
+- [Threat Intel](docs/specs/THREAT-INTEL-SPEC.md)
+- [Threat Intel Research](docs/specs/THREAT-INTEL-RESEARCH.md)
+- [Hostile Forum Connectors](docs/specs/HOSTILE-FORUM-CONNECTORS-SPEC.md)
 
 ## Disclaimer
 

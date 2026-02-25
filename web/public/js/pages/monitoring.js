@@ -21,9 +21,10 @@ export async function renderMonitoring(container) {
   if (metricsHandler) { offSSE('metrics', metricsHandler); metricsHandler = null; }
 
   try {
-    const [agents, budget] = await Promise.all([
+    const [agents, budget, analytics] = await Promise.all([
       api.agents().catch(() => []),
       api.budget().catch(() => ({ agents: [], recentOverruns: [] })),
+      api.analyticsSummary(3600000).catch(() => null),
     ]);
 
     container.innerHTML = '<h2 class="page-title">Monitoring</h2>';
@@ -71,6 +72,24 @@ export async function renderMonitoring(container) {
     budgetTableBody = budgetContainer.querySelector('#budget-table-body');
     pendingCountEl = budgetContainer.querySelector('#pending-count');
     renderBudgetTable(budget.agents);
+
+    if (analytics) {
+      const analyticsSection = document.createElement('div');
+      analyticsSection.className = 'table-container';
+      analyticsSection.innerHTML = `
+        <div class="table-header"><h3>Interaction Analytics (60m)</h3></div>
+        <table>
+          <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td>Total events</td><td>${analytics.totalEvents}</td></tr>
+            <tr><td>Channels</td><td>${Object.entries(analytics.byChannel).map(([name, count]) => `${esc(name)}: ${count}`).join(', ') || '-'}</td></tr>
+            <tr><td>Top agents</td><td>${analytics.topAgents.map((a) => `${esc(a.agentId)} (${a.count})`).join(', ') || '-'}</td></tr>
+            <tr><td>Top commands</td><td>${analytics.commandUsage.map((c) => `/${esc(c.command)} (${c.count})`).join(', ') || '-'}</td></tr>
+          </tbody>
+        </table>
+      `;
+      container.appendChild(analyticsSection);
+    }
 
     // Overruns
     if (budget.recentOverruns.length > 0) {

@@ -3,7 +3,7 @@
  *
  * Interactive readline prompt with full dashboard parity.
  * Commands: /chat, /agents, /agent, /status, /providers, /budget, /watchdog,
- * /config, /audit, /security, /models, /clear, /help, /quit, /exit.
+ * /config, /audit, /security, /models, /intel, /clear, /help, /quit, /exit.
  *
  * Accepts the same DashboardCallbacks interface as the web channel for
  * instant feature parity with zero duplication.
@@ -14,6 +14,9 @@ import { randomUUID } from 'node:crypto';
 import type { ChannelAdapter, MessageCallback } from './types.js';
 import type { DashboardCallbacks } from './web-types.js';
 import { createLogger } from '../util/logging.js';
+import { formatGuideForCLI } from '../reference-guide.js';
+import type { SetupApplyInput } from '../runtime/setup.js';
+import { parseAllowedChatIds } from '../runtime/setup.js';
 
 const log = createLogger('channel:cli');
 
@@ -48,6 +51,8 @@ export interface CLIChannelOptions {
   onStatus?: () => RuntimeStatus;
   /** Dashboard callbacks — provides full feature parity with web UI. */
   dashboard?: DashboardCallbacks;
+  /** Canonical user identity for CLI channel. */
+  defaultUserId?: string;
 }
 
 export class CLIChannel implements ChannelAdapter {
@@ -62,6 +67,7 @@ export class CLIChannel implements ChannelAdapter {
   private dashboard?: DashboardCallbacks;
   private activeAgentId: string | undefined;
   private defaultAgentId: string | undefined;
+  private defaultUserId: string;
   private useColor: boolean;
 
   constructor(options: CLIChannelOptions = {}) {
@@ -72,6 +78,7 @@ export class CLIChannel implements ChannelAdapter {
     this.onStatus = options.onStatus;
     this.dashboard = options.dashboard;
     this.defaultAgentId = options.defaultAgent;
+    this.defaultUserId = options.defaultUserId ?? 'owner';
     this.useColor = !!(this.output as NodeJS.WriteStream).isTTY;
   }
 
@@ -86,6 +93,11 @@ export class CLIChannel implements ChannelAdapter {
 
     this.write('\nGuardianAgent CLI — Type a message or /help for commands.\n\n');
     this.rl.prompt();
+    this.maybeRunFirstTimeSetup().catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.write(`\n${this.yellow('[setup]')} ${msg}\n\n`);
+      this.rl?.prompt();
+    });
 
     this.rl.on('line', async (line) => {
       const trimmed = line.trim();
@@ -130,16 +142,41 @@ export class CLIChannel implements ChannelAdapter {
   // ─── Message handling ────────────────────────────────────────
 
   private async handleUserMessage(text: string): Promise<void> {
+    const agentIdForEvent = this.activeAgentId ?? this.defaultAgentId;
+    this.trackAnalytics({
+      type: 'message_sent',
+      channel: 'cli',
+      canonicalUserId: this.defaultUserId,
+      channelUserId: 'cli',
+      agentId: agentIdForEvent,
+    });
+
     // If active agent is set and dashboard dispatch is available, use it
     if (this.activeAgentId && this.dashboard?.onDispatch) {
       try {
         const response = await this.dashboard.onDispatch(this.activeAgentId, {
           content: text,
-          userId: 'cli-user',
+          userId: this.defaultUserId,
+          channel: 'cli',
+        });
+        this.trackAnalytics({
+          type: 'message_success',
+          channel: 'cli',
+          canonicalUserId: this.defaultUserId,
+          channelUserId: 'cli',
+          agentId: this.activeAgentId,
         });
         this.write(`\nassistant> ${response.content}\n\n`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        this.trackAnalytics({
+          type: 'message_error',
+          channel: 'cli',
+          canonicalUserId: this.defaultUserId,
+          channelUserId: 'cli',
+          agentId: this.activeAgentId,
+          metadata: { error: msg },
+        });
         this.write(`\n${this.red('[error]')} ${msg}\n\n`);
       }
       return;
@@ -151,14 +188,29 @@ export class CLIChannel implements ChannelAdapter {
     try {
       const response = await this.onMessage({
         id: randomUUID(),
-        userId: 'cli-user',
+        userId: this.defaultUserId,
         channel: 'cli',
         content: text,
         timestamp: Date.now(),
       });
+      this.trackAnalytics({
+        type: 'message_success',
+        channel: 'cli',
+        canonicalUserId: this.defaultUserId,
+        channelUserId: 'cli',
+        agentId: agentIdForEvent,
+      });
       this.write(`\nassistant> ${response.content}\n\n`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      this.trackAnalytics({
+        type: 'message_error',
+        channel: 'cli',
+        canonicalUserId: this.defaultUserId,
+        channelUserId: 'cli',
+        agentId: agentIdForEvent,
+        metadata: { error: msg },
+      });
       this.write(`\n${this.red('[error]')} ${msg}\n\n`);
     }
   }
@@ -169,6 +221,15 @@ export class CLIChannel implements ChannelAdapter {
     const parts = commandLine.slice(1).split(/\s+/);
     const cmd = parts[0].toLowerCase();
     const args = parts.slice(1);
+
+    this.trackAnalytics({
+      type: 'command_used',
+      channel: 'cli',
+      canonicalUserId: this.defaultUserId,
+      channelUserId: 'cli',
+      agentId: this.activeAgentId ?? this.defaultAgentId,
+      metadata: { command: cmd },
+    });
 
     switch (cmd) {
       case 'help':
@@ -206,6 +267,27 @@ export class CLIChannel implements ChannelAdapter {
         break;
       case 'models':
         await this.handleModels(args);
+        break;
+      case 'reset':
+        await this.handleReset(args);
+        break;
+      case 'guide':
+        this.handleGuide();
+        break;
+      case 'setup':
+        await this.handleSetup(args);
+        break;
+      case 'session':
+        await this.handleSession(args);
+        break;
+      case 'quick':
+        await this.handleQuick(args);
+        break;
+      case 'analytics':
+        this.handleAnalytics(args);
+        break;
+      case 'intel':
+        await this.handleIntel(args);
         break;
       case 'clear':
         this.handleClear();
@@ -250,8 +332,24 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /audit summary [windowMs]              Audit stats summary\n');
     this.write('  /security                              Security overview\n');
     this.write('\n');
+    this.write(this.bold('Threat Intel\n'));
+    this.write('  /intel [status]                        Threat-intel summary\n');
+    this.write('  /intel watch [list|add|remove] ...     Manage watchlist targets\n');
+    this.write('  /intel scan [query] [--darkweb]        Run intel scan\n');
+    this.write('  /intel findings [limit] [status]       List findings\n');
+    this.write('  /intel finding <id> status <status>    Update finding status\n');
+    this.write('  /intel actions [limit]                 List drafted response actions\n');
+    this.write('  /intel action draft <id> <type>        Draft report/takedown/response action\n');
+    this.write('  /intel mode [manual|assisted|autonomous] Set response mode\n');
+    this.write('\n');
     this.write(this.bold('Models & General\n'));
     this.write('  /models [provider]                     List available models\n');
+    this.write('  /reset [agentId]                       Reset conversation memory\n');
+    this.write('  /session [list|use|new] ...            Session controls\n');
+    this.write('  /quick <email|task|calendar> <details> Run quick action workflow\n');
+    this.write('  /analytics [minutes]                   Interaction analytics summary\n');
+    this.write('  /setup [run|status]                    First-run setup wizard/status\n');
+    this.write('  /guide                                 Show reference guide\n');
     this.write('  /clear                                 Clear screen\n');
     this.write('  /help                                  Show this help\n');
     this.write('  /quit, /exit                           Exit\n');
@@ -269,7 +367,8 @@ export class CLIChannel implements ChannelAdapter {
       const agents = this.dashboard?.onAgents?.() ?? this.onAgents?.();
       if (agents && agents.length > 0) {
         this.write('Available agents:\n');
-        for (const a of agents) {
+        const visibleAgents = agents.filter(a => 'canChat' in a ? (a as { canChat?: boolean }).canChat !== false : true);
+        for (const a of visibleAgents) {
           const marker = a.id === (this.activeAgentId ?? this.defaultAgentId) ? ' (active)' : '';
           this.write(`  ${a.id} — ${a.name}${marker}\n`);
         }
@@ -285,6 +384,10 @@ export class CLIChannel implements ChannelAdapter {
       const detail = this.dashboard.onAgentDetail(agentId);
       if (!detail) {
         this.write(`\n${this.red('Error:')} Agent "${agentId}" not found.\n\n`);
+        return;
+      }
+      if (detail.canChat === false) {
+        this.write(`\n${this.red('Error:')} Agent "${agentId}" does not handle chat messages.\n\n`);
         return;
       }
     }
@@ -614,6 +717,16 @@ export class CLIChannel implements ChannelAdapter {
     this.write(`  Max stall:         ${config.runtime.maxStallDurationMs}ms\n`);
     this.write(`  Watchdog interval: ${config.runtime.watchdogIntervalMs}ms\n`);
     this.write(`  Log level:         ${config.runtime.logLevel}\n`);
+
+    this.write('\n');
+    this.write(this.bold('Assistant\n'));
+    this.write(`  Setup completed: ${config.assistant.setupCompleted ? this.green('yes') : this.yellow('no')}\n`);
+    this.write(`  Identity mode:   ${config.assistant.identity.mode}\n`);
+    this.write(`  Memory:          ${config.assistant.memory.enabled ? 'enabled' : 'disabled'} (${config.assistant.memory.retentionDays}d retention)\n`);
+    this.write(`  Analytics:       ${config.assistant.analytics.enabled ? 'enabled' : 'disabled'} (${config.assistant.analytics.retentionDays}d retention)\n`);
+    this.write(`  Quick actions:   ${config.assistant.quickActions.enabled ? 'enabled' : 'disabled'}\n`);
+    this.write(`  Threat intel:    ${config.assistant.threatIntel.enabled ? 'enabled' : 'disabled'} (mode ${config.assistant.threatIntel.responseMode}, watchlist ${config.assistant.threatIntel.watchlistCount})\n`);
+    this.write(`  Moltbook:        ${config.assistant.threatIntel.moltbook.enabled ? 'enabled' : 'disabled'} (${config.assistant.threatIntel.moltbook.mode}, active-response ${config.assistant.threatIntel.moltbook.allowActiveResponse ? 'on' : 'off'})\n`);
     this.write('\n');
   }
 
@@ -951,6 +1064,623 @@ export class CLIChannel implements ChannelAdapter {
     this.write('\n');
   }
 
+  // ─── /reset ──────────────────────────────────────────────────
+
+  private async handleReset(args: string[]): Promise<void> {
+    if (!this.dashboard?.onConversationReset) {
+      this.write('\nConversation reset is not available.\n\n');
+      return;
+    }
+
+    const agentId = args[0] ?? this.activeAgentId ?? this.defaultAgentId ?? 'default';
+    const result = await this.dashboard.onConversationReset({
+      agentId,
+      userId: this.defaultUserId,
+      channel: 'cli',
+    });
+    this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+  }
+
+  // ─── /guide ──────────────────────────────────────────────────
+
+  private handleGuide(): void {
+    const lines = formatGuideForCLI();
+    if (lines.length === 0) {
+      this.write('\nGuide is not available.\n\n');
+      return;
+    }
+
+    this.write('\n');
+    this.write(this.bold(`${lines[0]}\n`));
+    for (let i = 1; i < lines.length; i++) {
+      this.write(`${lines[i]}\n`);
+    }
+    this.write('\n');
+  }
+
+  // ─── /session ────────────────────────────────────────────────
+
+  private async handleSession(args: string[]): Promise<void> {
+    if (!this.dashboard?.onConversationSessions) {
+      this.write('\nSession controls are not available.\n\n');
+      return;
+    }
+
+    const sub = (args[0] ?? 'list').toLowerCase();
+    const agentId = args.length > 1
+      ? args[1]
+      : (this.activeAgentId ?? this.defaultAgentId ?? 'default');
+
+    if (sub === 'list' || args.length === 0) {
+      const sessions = this.dashboard.onConversationSessions({
+        userId: this.defaultUserId,
+        channel: 'cli',
+        agentId,
+      });
+      if (sessions.length === 0) {
+        this.write('\nNo stored sessions.\n\n');
+        return;
+      }
+
+      this.write(`\nSessions for ${this.cyan(agentId)}:\n`);
+      for (const session of sessions) {
+        const marker = session.isActive ? this.green(' (active)') : '';
+        this.write(
+          `  ${session.sessionId}${marker} — ${session.messageCount} messages, ${this.formatTimeAgo(session.lastMessageAt)}\n`,
+        );
+      }
+      this.write('\n');
+      return;
+    }
+
+    if (sub === 'use') {
+      if (!this.dashboard.onConversationUseSession) {
+        this.write('\nSession switch is not available.\n\n');
+        return;
+      }
+      if (!args[1]) {
+        this.write('\nUsage: /session use <sessionId> [agentId]\n\n');
+        return;
+      }
+      const sessionId = args[1];
+      const targetAgent = args[2] ?? (this.activeAgentId ?? this.defaultAgentId ?? 'default');
+      const result = this.dashboard.onConversationUseSession({
+        agentId: targetAgent,
+        userId: this.defaultUserId,
+        channel: 'cli',
+        sessionId,
+      });
+      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+      return;
+    }
+
+    if (sub === 'new') {
+      if (!this.dashboard.onConversationReset) {
+        this.write('\nNew session is not available.\n\n');
+        return;
+      }
+      const targetAgent = args[1] ?? (this.activeAgentId ?? this.defaultAgentId ?? 'default');
+      const result = await this.dashboard.onConversationReset({
+        agentId: targetAgent,
+        userId: this.defaultUserId,
+        channel: 'cli',
+      });
+      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+      return;
+    }
+
+    this.write('\nUsage: /session [list|use|new] ...\n\n');
+  }
+
+  // ─── /quick ──────────────────────────────────────────────────
+
+  private async handleQuick(args: string[]): Promise<void> {
+    if (!this.dashboard?.onQuickActionRun) {
+      this.write('\nQuick actions are not available.\n\n');
+      return;
+    }
+
+    if (args.length < 2) {
+      this.write('\nUsage: /quick <email|task|calendar> <details>\n\n');
+      return;
+    }
+
+    const actionId = args[0].toLowerCase();
+    const details = args.slice(1).join(' ').trim();
+    const agentId = this.activeAgentId ?? this.defaultAgentId ?? 'default';
+
+    this.write('\nRunning quick action...\n');
+    try {
+      const response = await this.dashboard.onQuickActionRun({
+        actionId,
+        details,
+        agentId,
+        userId: this.defaultUserId,
+        channel: 'cli',
+      });
+      this.write(`\nassistant> ${response.content}\n\n`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.write(`\n${this.red('[error]')} ${msg}\n\n`);
+    }
+  }
+
+  // ─── /analytics ──────────────────────────────────────────────
+
+  private handleAnalytics(args: string[]): void {
+    if (!this.dashboard?.onAnalyticsSummary) {
+      this.write('\nAnalytics are not available.\n\n');
+      return;
+    }
+
+    const minutes = args[0] ? Number.parseInt(args[0], 10) : 60;
+    const safeMinutes = Number.isFinite(minutes) && minutes > 0 ? minutes : 60;
+    const summary = this.dashboard.onAnalyticsSummary(safeMinutes * 60_000);
+
+    this.write('\n');
+    this.write(this.bold(`Analytics (${safeMinutes}m)\n`));
+    this.write(`  Total events: ${summary.totalEvents}\n`);
+
+    if (Object.keys(summary.byType).length > 0) {
+      this.write('  By type:\n');
+      for (const [type, count] of Object.entries(summary.byType)) {
+        this.write(`    ${type}: ${count}\n`);
+      }
+    }
+
+    if (summary.commandUsage.length > 0) {
+      this.write('  Top commands:\n');
+      for (const entry of summary.commandUsage.slice(0, 5)) {
+        this.write(`    /${entry.command}: ${entry.count}\n`);
+      }
+    }
+    this.write('\n');
+  }
+
+  // ─── /intel ──────────────────────────────────────────────────
+
+  private async handleIntel(args: string[]): Promise<void> {
+    if (!this.dashboard?.onThreatIntelSummary) {
+      this.write('\nThreat intel is not available.\n\n');
+      return;
+    }
+
+    const sub = (args[0] ?? 'status').toLowerCase();
+    const rest = args.slice(1);
+
+    switch (sub) {
+      case 'status':
+        this.handleIntelStatus();
+        return;
+      case 'plan':
+        this.handleIntelPlan();
+        return;
+      case 'watch':
+        this.handleIntelWatch(rest);
+        return;
+      case 'scan':
+        await this.handleIntelScan(rest);
+        return;
+      case 'findings':
+        this.handleIntelFindings(rest);
+        return;
+      case 'finding':
+        this.handleIntelFinding(rest);
+        return;
+      case 'actions':
+        this.handleIntelActions(rest);
+        return;
+      case 'action':
+        this.handleIntelAction(rest);
+        return;
+      case 'mode':
+        this.handleIntelMode(rest);
+        return;
+      default:
+        this.writeIntelUsage();
+    }
+  }
+
+  private handleIntelStatus(): void {
+    const summary = this.dashboard?.onThreatIntelSummary?.();
+    if (!summary) {
+      this.write('\nThreat intel is not available.\n\n');
+      return;
+    }
+
+    this.write('\n');
+    this.write(this.bold('Threat Intel Summary\n'));
+    this.write(`  Monitoring:   ${summary.enabled ? this.green('enabled') : this.red('disabled')}\n`);
+    this.write(`  Response mode: ${this.cyan(summary.responseMode)}\n`);
+    this.write(`  Watchlist:    ${summary.watchlistCount}\n`);
+    this.write(`  Darkweb:      ${summary.darkwebEnabled ? this.yellow('enabled') : this.dim('disabled')}\n`);
+    this.write(`  Findings:     ${summary.findings.total} total, ${summary.findings.new} new, ${summary.findings.highOrCritical} high/critical\n`);
+    if (summary.forumConnectors.length > 0) {
+      this.write('  Forum connectors:\n');
+      for (const connector of summary.forumConnectors) {
+        const state = connector.enabled ? this.green('enabled') : this.dim('disabled');
+        const hostile = connector.hostile ? this.red('hostile') : this.dim('normal');
+        this.write(`    - ${connector.id}: ${state}, ${connector.mode}, ${hostile}\n`);
+      }
+    }
+    if (summary.lastScanAt) {
+      this.write(`  Last scan:    ${this.formatTimeAgo(summary.lastScanAt)}\n`);
+    }
+    this.write('\n');
+  }
+
+  private handleIntelPlan(): void {
+    if (!this.dashboard?.onThreatIntelPlan) {
+      this.write('\nThreat intel plan is not available.\n\n');
+      return;
+    }
+    const plan = this.dashboard.onThreatIntelPlan();
+    this.write('\n');
+    this.write(this.bold(`${plan.title}\n`));
+    for (const phase of plan.phases) {
+      this.write(`  ${this.cyan(phase.phase)}\n`);
+      this.write(`    ${phase.objective}\n`);
+      for (const deliverable of phase.deliverables) {
+        this.write(`    - ${deliverable}\n`);
+      }
+    }
+    this.write('\n');
+  }
+
+  private handleIntelWatch(args: string[]): void {
+    if (!this.dashboard?.onThreatIntelWatchlist) {
+      this.write('\nThreat intel watchlist is not available.\n\n');
+      return;
+    }
+
+    const action = (args[0] ?? 'list').toLowerCase();
+    if (action === 'list') {
+      const watchlist = this.dashboard.onThreatIntelWatchlist();
+      if (watchlist.length === 0) {
+        this.write('\nNo watchlist targets configured.\n\n');
+        return;
+      }
+      this.write('\nWatchlist targets:\n');
+      for (const target of watchlist) {
+        this.write(`  - ${target}\n`);
+      }
+      this.write('\n');
+      return;
+    }
+
+    if (action !== 'add' && action !== 'remove') {
+      this.write('\nUsage: /intel watch [list|add|remove] <target>\n\n');
+      return;
+    }
+
+    const target = args.slice(1).join(' ').trim();
+    if (!target) {
+      this.write('\nUsage: /intel watch [add|remove] <target>\n\n');
+      return;
+    }
+
+    const callback = action === 'add'
+      ? this.dashboard.onThreatIntelWatchAdd
+      : this.dashboard.onThreatIntelWatchRemove;
+    if (!callback) {
+      this.write('\nThreat intel watchlist update is not available.\n\n');
+      return;
+    }
+
+    const result = callback(target);
+    this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+  }
+
+  private async handleIntelScan(args: string[]): Promise<void> {
+    if (!this.dashboard?.onThreatIntelScan) {
+      this.write('\nThreat intel scan is not available.\n\n');
+      return;
+    }
+
+    const includeDarkWeb = args.includes('--darkweb');
+    const sourcesArg = args.find((arg) => arg.startsWith('--sources='));
+    const queryTokens = args.filter((arg) => arg !== '--darkweb' && !arg.startsWith('--sources='));
+    const query = queryTokens.join(' ').trim() || undefined;
+    const sources = sourcesArg
+      ? sourcesArg.slice('--sources='.length)
+          .split(',')
+          .map((part) => part.trim())
+          .filter(Boolean)
+      : undefined;
+
+    this.write('\nRunning threat-intel scan...\n');
+    const result = await this.dashboard.onThreatIntelScan({
+      query,
+      includeDarkWeb,
+      sources: sources as Parameters<NonNullable<DashboardCallbacks['onThreatIntelScan']>>[0]['sources'],
+    });
+
+    const status = result.success ? this.green('OK') : this.yellow('WARN');
+    this.write(`${status}: ${result.message}\n`);
+    if (result.findings.length > 0) {
+      this.write(`\nNew findings (${result.findings.length}):\n`);
+      for (const finding of result.findings.slice(0, 8)) {
+        this.write(
+          `  ${finding.id.slice(0, 8)} ${this.colorIntelSeverity(finding.severity)} ${finding.sourceType} ${finding.target} (${Math.round(finding.confidence * 100)}%)\n`,
+        );
+      }
+      if (result.findings.length > 8) {
+        this.write(`  ...and ${result.findings.length - 8} more\n`);
+      }
+    }
+    this.write('\n');
+  }
+
+  private handleIntelFindings(args: string[]): void {
+    if (!this.dashboard?.onThreatIntelFindings) {
+      this.write('\nThreat intel findings are not available.\n\n');
+      return;
+    }
+
+    let limit = 12;
+    let statusArg: string | undefined;
+    if (args[0]) {
+      const parsed = Number.parseInt(args[0], 10);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        limit = parsed;
+        statusArg = args[1];
+      } else {
+        statusArg = args[0];
+      }
+    }
+
+    const findings = this.dashboard.onThreatIntelFindings({
+      limit,
+      status: statusArg as Parameters<NonNullable<DashboardCallbacks['onThreatIntelFindings']>>[0]['status'],
+    });
+
+    if (findings.length === 0) {
+      this.write('\nNo findings.\n\n');
+      return;
+    }
+
+    const headers = ['ID', 'Target', 'Source', 'Severity', 'Conf', 'Status'];
+    const rows = findings.map((finding) => [
+      finding.id.slice(0, 8),
+      finding.target,
+      finding.sourceType,
+      this.colorIntelSeverity(finding.severity),
+      `${Math.round(finding.confidence * 100)}%`,
+      finding.status,
+    ]);
+
+    this.write('\n');
+    this.writeTable(headers, rows);
+    this.write('\n');
+  }
+
+  private handleIntelFinding(args: string[]): void {
+    if (!this.dashboard?.onThreatIntelUpdateFindingStatus) {
+      this.write('\nThreat intel finding updates are not available.\n\n');
+      return;
+    }
+
+    if (args.length < 3 || args[1].toLowerCase() !== 'status') {
+      this.write('\nUsage: /intel finding <findingId> status <new|triaged|actioned|dismissed>\n\n');
+      return;
+    }
+
+    const findingId = args[0];
+    const status = args[2].toLowerCase();
+    if (!['new', 'triaged', 'actioned', 'dismissed'].includes(status)) {
+      this.write('\nInvalid status. Use new, triaged, actioned, or dismissed.\n\n');
+      return;
+    }
+
+    const result = this.dashboard.onThreatIntelUpdateFindingStatus({
+      findingId,
+      status: status as Parameters<NonNullable<DashboardCallbacks['onThreatIntelUpdateFindingStatus']>>[0]['status'],
+    });
+    this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+  }
+
+  private handleIntelActions(args: string[]): void {
+    if (!this.dashboard?.onThreatIntelActions) {
+      this.write('\nThreat intel actions are not available.\n\n');
+      return;
+    }
+    const parsed = args[0] ? Number.parseInt(args[0], 10) : 12;
+    const limit = Number.isFinite(parsed) && parsed > 0 ? parsed : 12;
+    const actions = this.dashboard.onThreatIntelActions(limit);
+    if (actions.length === 0) {
+      this.write('\nNo drafted actions.\n\n');
+      return;
+    }
+
+    const headers = ['ID', 'Finding', 'Type', 'Status', 'Approval'];
+    const rows = actions.map((action) => [
+      action.id.slice(0, 8),
+      action.findingId.slice(0, 8),
+      action.type,
+      action.status,
+      action.requiresApproval ? 'required' : 'optional',
+    ]);
+
+    this.write('\n');
+    this.writeTable(headers, rows);
+    this.write('\n');
+  }
+
+  private handleIntelAction(args: string[]): void {
+    if (!this.dashboard?.onThreatIntelDraftAction) {
+      this.write('\nThreat intel action drafting is not available.\n\n');
+      return;
+    }
+
+    if (args.length < 3 || args[0].toLowerCase() !== 'draft') {
+      this.write('\nUsage: /intel action draft <findingId> <report|request_takedown|draft_response|publish_response>\n\n');
+      return;
+    }
+
+    const findingId = args[1];
+    const type = args[2].toLowerCase();
+    if (!['report', 'request_takedown', 'draft_response', 'publish_response'].includes(type)) {
+      this.write('\nInvalid action type. Use report, request_takedown, draft_response, or publish_response.\n\n');
+      return;
+    }
+
+    const result = this.dashboard.onThreatIntelDraftAction({
+      findingId,
+      type: type as Parameters<NonNullable<DashboardCallbacks['onThreatIntelDraftAction']>>[0]['type'],
+    });
+    this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+  }
+
+  private handleIntelMode(args: string[]): void {
+    if (!this.dashboard?.onThreatIntelSummary) {
+      this.write('\nThreat intel is not available.\n\n');
+      return;
+    }
+
+    if (args.length === 0) {
+      const mode = this.dashboard.onThreatIntelSummary().responseMode;
+      this.write(`\nCurrent response mode: ${this.cyan(mode)}\n\n`);
+      return;
+    }
+
+    if (!this.dashboard.onThreatIntelSetResponseMode) {
+      this.write('\nThreat intel response mode updates are not available.\n\n');
+      return;
+    }
+
+    const mode = args[0].toLowerCase();
+    if (!['manual', 'assisted', 'autonomous'].includes(mode)) {
+      this.write('\nUsage: /intel mode <manual|assisted|autonomous>\n\n');
+      return;
+    }
+
+    const result = this.dashboard.onThreatIntelSetResponseMode(
+      mode as Parameters<NonNullable<DashboardCallbacks['onThreatIntelSetResponseMode']>>[0],
+    );
+    this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+  }
+
+  private writeIntelUsage(): void {
+    this.write('\nThreat Intel usage:\n');
+    this.write('  /intel [status]\n');
+    this.write('  /intel plan\n');
+    this.write('  /intel watch [list|add|remove] <target>\n');
+    this.write('  /intel scan [query] [--darkweb] [--sources=web,news,social,forum]\n');
+    this.write('  /intel findings [limit] [status]\n');
+    this.write('  /intel finding <id> status <new|triaged|actioned|dismissed>\n');
+    this.write('  /intel actions [limit]\n');
+    this.write('  /intel action draft <findingId> <report|request_takedown|draft_response|publish_response>\n');
+    this.write('  /intel mode <manual|assisted|autonomous>\n\n');
+  }
+
+  // ─── /setup ──────────────────────────────────────────────────
+
+  private async handleSetup(args: string[]): Promise<void> {
+    const sub = (args[0] ?? 'run').toLowerCase();
+
+    if (!this.dashboard?.onSetupStatus) {
+      this.write('\nSetup wizard is not available.\n\n');
+      return;
+    }
+
+    if (sub === 'status') {
+      const status = await this.dashboard.onSetupStatus();
+      this.write('\n');
+      this.write(this.bold('Setup Status\n'));
+      this.write(`  Completed: ${status.completed ? this.green('yes') : this.yellow('no')}\n`);
+      this.write(`  Ready: ${status.ready ? this.green('yes') : this.yellow('no')}\n`);
+      for (const step of status.steps) {
+        const color = step.status === 'complete'
+          ? this.green
+          : step.status === 'warning'
+          ? this.yellow
+          : this.red;
+        this.write(`  ${color(step.status.toUpperCase())} ${step.title}: ${step.detail}\n`);
+      }
+      this.write('\n');
+      return;
+    }
+
+    await this.runSetupWizard();
+  }
+
+  private async runSetupWizard(): Promise<void> {
+    if (!this.dashboard?.onSetupApply) {
+      this.write('\nSetup updates are not available.\n\n');
+      return;
+    }
+
+    this.write('\nSetup Wizard\n');
+    this.write('Press Enter to accept defaults shown in [brackets].\n\n');
+
+    const modeInput = (await this.ask('LLM mode [ollama/external] (ollama): ')).trim().toLowerCase();
+    const llmMode = modeInput === 'external' ? 'external' : 'ollama';
+
+    const update: SetupApplyInput = {
+      llmMode,
+      setupCompleted: true,
+      setDefaultProvider: true,
+    };
+
+    if (llmMode === 'ollama') {
+      const providerName = (await this.ask('Provider name [ollama]: ')).trim() || 'ollama';
+      const model = (await this.ask('Model [llama3.2]: ')).trim() || 'llama3.2';
+      const baseUrl = (await this.ask('Base URL [http://127.0.0.1:11434]: ')).trim() || 'http://127.0.0.1:11434';
+      update.providerName = providerName;
+      update.providerType = 'ollama';
+      update.model = model;
+      update.baseUrl = baseUrl;
+    } else {
+      const providerName = (await this.ask('Provider name [primary]: ')).trim() || 'primary';
+      const providerTypeInput = (await this.ask('Provider type [openai/anthropic] (openai): ')).trim().toLowerCase();
+      const providerType = providerTypeInput === 'anthropic' ? 'anthropic' : 'openai';
+      const modelDefault = providerType === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4.1-mini';
+      const model = (await this.ask(`Model [${modelDefault}]: `)).trim() || modelDefault;
+      const apiKey = (await this.ask('API key: ')).trim();
+      const baseUrl = (await this.ask('Base URL (optional): ')).trim();
+
+      update.providerName = providerName;
+      update.providerType = providerType;
+      update.model = model;
+      update.apiKey = apiKey;
+      if (baseUrl) update.baseUrl = baseUrl;
+    }
+
+    const tgEnabledInput = (await this.ask('Enable Telegram? [y/N]: ')).trim().toLowerCase();
+    const telegramEnabled = tgEnabledInput === 'y' || tgEnabledInput === 'yes';
+    update.telegramEnabled = telegramEnabled;
+    if (telegramEnabled) {
+      const botToken = (await this.ask('Telegram bot token: ')).trim();
+      const allowedInput = (await this.ask('Allowed chat IDs (comma-separated, optional): ')).trim();
+      update.telegramBotToken = botToken;
+      if (allowedInput) {
+        update.telegramAllowedChatIds = parseAllowedChatIds(allowedInput);
+      }
+    }
+
+    this.write('\nApplying setup...\n');
+    const result = await this.dashboard.onSetupApply(update);
+    this.write(`${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+  }
+
+  private async maybeRunFirstTimeSetup(): Promise<void> {
+    if (!this.dashboard?.onSetupStatus) return;
+    const status = await this.dashboard.onSetupStatus();
+    if (status.completed) return;
+
+    this.write(`${this.yellow('[setup]')} First-run setup is incomplete. Run ${this.cyan('/setup')} to configure Ollama/API + Telegram.\n\n`);
+  }
+
+  private ask(question: string): Promise<string> {
+    return new Promise((resolve) => {
+      if (!this.rl) {
+        resolve('');
+        return;
+      }
+      this.rl.question(question, (answer) => resolve(answer));
+    });
+  }
+
   // ─── /clear ──────────────────────────────────────────────────
 
   private handleClear(): void {
@@ -958,6 +1688,14 @@ export class CLIChannel implements ChannelAdapter {
   }
 
   // ─── Formatting helpers ──────────────────────────────────────
+
+  private trackAnalytics(event: Parameters<NonNullable<DashboardCallbacks['onAnalyticsTrack']>>[0]): void {
+    try {
+      this.dashboard?.onAnalyticsTrack?.(event);
+    } catch {
+      // Ignore analytics failures in user-facing channel flow.
+    }
+  }
 
   private write(text: string): void {
     this.output.write(text);
@@ -1014,6 +1752,21 @@ export class CLIChannel implements ChannelAdapter {
       case 'warn': return this.yellow(severity);
       case 'info': return this.dim(severity);
       default: return severity;
+    }
+  }
+
+  private colorIntelSeverity(severity: string): string {
+    switch (severity) {
+      case 'critical':
+        return this.red(severity);
+      case 'high':
+        return this.red(severity);
+      case 'medium':
+        return this.yellow(severity);
+      case 'low':
+        return this.dim(severity);
+      default:
+        return severity;
     }
   }
 
