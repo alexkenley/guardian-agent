@@ -22,7 +22,7 @@ export function getReferenceGuide(): ReferenceGuide {
         title: 'Quick Start',
         items: [
           'Run: npx guardianagent',
-          'Complete first-run setup in web Setup tab or CLI /setup (config is created/updated automatically)',
+          'Complete first-run setup in web Config Center or CLI /setup (config is created/updated automatically)',
           'Open web dashboard at http://localhost:3000 (if web channel enabled)',
           'Verify provider connectivity: web Config page or CLI /providers',
           'In CLI, type /help for commands and /guide for this reference',
@@ -43,7 +43,7 @@ export function getReferenceGuide(): ReferenceGuide {
         items: [
           'Install and run Ollama locally',
           'Pull a model first, for example: ollama pull llama3.2',
-          'Run setup: choose Local Ollama, provider name, and model in web Setup or CLI /setup',
+          'Run setup: choose Local Ollama, provider name, and model in web Config Center or CLI /setup',
           'Use CLI /providers or web Config to verify connectivity',
         ],
       },
@@ -51,7 +51,7 @@ export function getReferenceGuide(): ReferenceGuide {
         title: 'Connect OpenAI or Anthropic',
         items: [
           'Run setup: choose External API and select openai or anthropic',
-          'Enter API key and model in web Setup or CLI /setup',
+          'Enter API key and model in web Config Center or CLI /setup',
           'Switch default provider via CLI /config set default <name> or web Config page',
           'Optional advanced path: use CLI /config add and /config set for provider fine-tuning',
         ],
@@ -60,9 +60,9 @@ export function getReferenceGuide(): ReferenceGuide {
         title: 'Connect Telegram',
         items: [
           'Create a bot via @BotFather and get BOT_TOKEN',
-          'Enable Telegram in web Setup or CLI /setup and paste the bot token',
+          'Enable Telegram in web Config Center or CLI /setup and paste the bot token',
           'Set allowed chat IDs during setup to restrict access',
-          'Check setup status in web Setup tab or CLI /setup status',
+          'Check setup status in web Config Center or CLI /setup status',
           'Useful commands in Telegram: /help, /guide, /reset [agentId], /quick <action> <details>',
         ],
       },

@@ -9,7 +9,6 @@ import { renderSecurity, updateSecurity } from './pages/security.js';
 import { renderMonitoring, updateMonitoring } from './pages/monitoring.js';
 import { renderConfig } from './pages/config.js';
 import { renderReference } from './pages/reference.js';
-import { renderSetup } from './pages/setup.js';
 import { renderIntel } from './pages/intel.js';
 
 const content = document.getElementById('content');
@@ -144,7 +143,6 @@ const routes = {
   '/monitoring': { render: renderMonitoring, update: updateMonitoring, name: 'monitoring' },
   '/intel': { render: renderIntel, name: 'intel' },
   '/config': { render: renderConfig, name: 'config' },
-  '/setup': { render: renderSetup, name: 'setup' },
   '/reference': { render: renderReference, name: 'reference' },
 };
 

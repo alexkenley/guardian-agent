@@ -307,7 +307,7 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
-      // GET /api/setup/status — setup wizard completion + diagnostics
+      // GET /api/setup/status — setup/config completion + diagnostics
       if (req.method === 'GET' && url.pathname === '/api/setup/status') {
         if (!this.dashboard.onSetupStatus) {
           sendJSON(res, 404, { error: 'Not available' });
@@ -358,7 +358,7 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
-      // POST /api/setup/apply — apply setup wizard selections
+      // POST /api/setup/apply — apply setup/config selections
       if (req.method === 'POST' && url.pathname === '/api/setup/apply') {
         if (!this.dashboard.onSetupApply) {
           sendJSON(res, 404, { error: 'Not available' });

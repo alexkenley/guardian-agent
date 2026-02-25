@@ -83,16 +83,17 @@ npx guardianagent
 guardianagent              # if installed globally
 ```
 
-Then run setup (no manual YAML editing required):
-- Web: open `#/setup` tab
+Then run setup from UI/CLI (no manual YAML editing required):
+- Web: open `#/config` (Configuration Center)
 - CLI: run `/setup`
 
 This configures Ollama/external LLM, optional Telegram, and marks setup completion.
 
 ## Configuration
 
-Most users should configure the assistant via the web Setup/Config pages or CLI `/setup` and `/config` commands.
-Direct `config.yaml` editing is optional for advanced/manual workflows.
+Most users should configure the assistant via the web Config Center or CLI `/setup` and `/config` commands.
+`config.yaml` is created/updated automatically by those flows.
+Manual editing is optional and intended only for advanced troubleshooting.
 
 ```yaml
 llm:
@@ -189,7 +190,7 @@ guardian:
 
 ## Personal Assistant UX Features
 
-- Setup wizard in web (`#/setup`) and CLI (`/setup`)
+- Unified configuration center in web (`#/config`) and CLI (`/setup`, `/config`)
 - Cross-channel identity mapping (`single_user` or `channel_user` + aliases)
 - SQLite-persisted conversation memory with sessions
 - SQLite DB hardening + monitoring (permission enforcement + integrity quick checks)
@@ -202,7 +203,7 @@ guardian:
 
 - CLI: `/setup`, `/quick`, `/session`, `/analytics`, `/intel`, `/guide`
 - Telegram: `/help`, `/guide`, `/reset`, `/quick`, `/intel`
-- Web: Setup tab, Chat quick-actions bar, Threat Intel tab, Reference Guide tab
+- Web: Config Center, Chat quick-actions bar, Threat Intel tab, Reference Guide tab
 
 ## Development
 
@@ -222,7 +223,7 @@ Full documentation in `docs/architecture/`:
 - [Decisions](docs/architecture/DECISIONS.md) — architecture decision records
 
 Implementation specs in `docs/specs/`:
-- [Setup Wizard](docs/specs/SETUP-WIZARD-SPEC.md)
+- [Setup And Config Flow](docs/specs/SETUP-WIZARD-SPEC.md)
 - [Identity & Memory](docs/specs/IDENTITY-MEMORY-SPEC.md)
 - [Analytics](docs/specs/ANALYTICS-SPEC.md)
 - [Quick Actions](docs/specs/QUICK-ACTIONS-SPEC.md)

@@ -287,7 +287,7 @@ try {
     Write-Host "  Ollama: Not running" -ForegroundColor DarkCyan
     Write-Host "  The CLI will start but LLM responses will fail without a provider." -ForegroundColor DarkCyan
     Write-Host "  To fix: Start Ollama and run 'ollama pull llama3.2'" -ForegroundColor DarkCyan
-    Write-Host "  Or: Configure an API provider (Anthropic/OpenAI) in config.yaml" -ForegroundColor DarkCyan
+    Write-Host "  Or: Configure an API provider (Anthropic/OpenAI) via the web Config Center or CLI /setup" -ForegroundColor DarkCyan
 }
 
 # --- Check config file ---

@@ -348,7 +348,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /session [list|use|new] ...            Session controls\n');
     this.write('  /quick <email|task|calendar> <details> Run quick action workflow\n');
     this.write('  /analytics [minutes]                   Interaction analytics summary\n');
-    this.write('  /setup [run|status]                    First-run setup wizard/status\n');
+    this.write('  /setup [run|status]                    First-run setup/status\n');
     this.write('  /guide                                 Show reference guide\n');
     this.write('  /clear                                 Clear screen\n');
     this.write('  /help                                  Show this help\n');
@@ -1579,7 +1579,7 @@ export class CLIChannel implements ChannelAdapter {
     const sub = (args[0] ?? 'run').toLowerCase();
 
     if (!this.dashboard?.onSetupStatus) {
-      this.write('\nSetup wizard is not available.\n\n');
+      this.write('\nSetup flow is not available.\n\n');
       return;
     }
 
@@ -1610,7 +1610,7 @@ export class CLIChannel implements ChannelAdapter {
       return;
     }
 
-    this.write('\nSetup Wizard\n');
+    this.write('\nSetup\n');
     this.write('Press Enter to accept defaults shown in [brackets].\n\n');
 
     const modeInput = (await this.ask('LLM mode [ollama/external] (ollama): ')).trim().toLowerCase();

@@ -51,7 +51,7 @@ export async function renderDashboard(container) {
     cards.setup = createStatusCard(
       'Setup',
       setupStatus?.completed ? 'Complete' : 'Pending',
-      setupStatus?.ready ? 'Ready for daily use' : 'Run Setup Wizard',
+      setupStatus?.ready ? 'Ready for daily use' : 'Review Config Center',
       setupStatus?.completed ? 'success' : 'warning',
     );
 

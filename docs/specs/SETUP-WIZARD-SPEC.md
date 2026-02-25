@@ -1,14 +1,14 @@
-# Setup Wizard Spec
+# Setup And Config Center Spec
 
 ## Goal
-Provide a first-run onboarding flow that gets a personal assistant usable in one pass:
+Provide a first-run onboarding flow and ongoing configuration surface that gets a personal assistant usable in one pass:
 - Configure local Ollama or external API provider
 - Apply default provider immediately (no restart for LLM changes)
 - Optionally configure Telegram bot token + allowed chat IDs
 - Mark setup completion state and expose diagnostics
 
 ## Scope
-- Web: `#/setup` page with status panel and apply form
+- Web: `#/config` Configuration Center with readiness panel and unified apply form
 - CLI: `/setup` command with interactive prompts
 - Backend API:
   - `GET /api/setup/status`
@@ -30,7 +30,6 @@ Provide a first-run onboarding flow that gets a personal assistant usable in one
 - Config is validated through `validateConfig()` before persistence
 
 ## UX Requirements
-- Setup status includes step-by-step readiness state
+- Config Center includes step-by-step readiness state
 - CLI setup supports defaults for fast local onboarding
-- Web setup supports both fresh values and quick-fill from detected providers
-
+- Web config supports both fresh values and quick-fill from detected providers

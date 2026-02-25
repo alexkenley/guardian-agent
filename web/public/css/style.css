@@ -570,6 +570,147 @@ tr:hover td {
 .config-boolean { color: var(--warning); }
 .config-null { color: var(--text-muted); }
 
+.config-intro {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  margin-bottom: 1rem;
+}
+
+.cfg-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.cfg-checklist-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.cfg-check-item {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+}
+
+.cfg-check-item.complete {
+  border-color: rgba(76, 175, 80, 0.4);
+}
+
+.cfg-check-item.warning {
+  border-color: rgba(255, 152, 0, 0.4);
+}
+
+.cfg-check-item.incomplete {
+  border-color: rgba(244, 67, 54, 0.45);
+}
+
+.cfg-check-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.cfg-check-title {
+  color: var(--text-primary);
+  font-size: 0.78rem;
+}
+
+.cfg-check-detail {
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.cfg-center-body {
+  padding: 1rem;
+}
+
+.cfg-header-note {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.cfg-mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 1rem;
+}
+
+.cfg-mode-btn {
+  border: none;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  padding: 0.45rem 0.95rem;
+  cursor: pointer;
+}
+
+.cfg-mode-btn:hover {
+  background: var(--bg-elevated);
+}
+
+.cfg-mode-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.cfg-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.cfg-field {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.cfg-field label {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.cfg-field input,
+.cfg-field select {
+  width: 100%;
+  padding: 0.52rem 0.6rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.cfg-divider {
+  border-top: 1px solid var(--border);
+  margin: 0.95rem 0;
+}
+
+.cfg-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-top: 0.9rem;
+  flex-wrap: wrap;
+}
+
+.cfg-save-status {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
 /* ─── Agent Grid (Monitoring) ────────────────────────────── */
 
 .agent-grid {
@@ -658,7 +799,7 @@ tr:hover td {
   line-height: 1.35;
 }
 
-/* ─── Setup Wizard ───────────────────────────────────────── */
+/* ─── Setup Status Widgets ───────────────────────────────── */
 
 .setup-status-grid {
   display: grid;
@@ -955,6 +1096,10 @@ tr:hover td {
   .setup-row {
     grid-template-columns: 1fr;
     gap: 0.4rem;
+  }
+
+  .cfg-form-grid {
+    grid-template-columns: 1fr;
   }
 
   .intel-control-row {

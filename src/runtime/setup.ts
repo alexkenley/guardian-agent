@@ -1,5 +1,5 @@
 /**
- * Setup wizard shared types + status evaluation.
+ * Setup/config shared types + status evaluation.
  */
 
 import type { GuardianAgentConfig } from '../config/types.js';

@@ -233,5 +233,5 @@ Unified `LLMProvider` interface for **Ollama**, **Anthropic**, and **OpenAI**:
 - **CLI**: Interactive readline prompt with `/help`, `/agents`, `/status`, `/quit`
 - **Telegram**: grammy framework, polling mode, `allowed_chat_ids` filtering
 - **Web**: Node.js HTTP server with REST API (`/health`, `/api/status`, `/api/message`)
-- **Setup Wizard**: web `#/setup` and CLI `/setup` onboarding flow
+- **Configuration Center**: web `#/config` and CLI `/setup` onboarding + provider/channel setup flow
 - **Threat Intel**: web `#/intel`, CLI `/intel`, Telegram `/intel` command surfaces

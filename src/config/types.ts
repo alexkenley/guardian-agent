@@ -175,7 +175,7 @@ export interface RuntimeConfig {
   logLevel: string;
 }
 
-/** Optional setup wizard state and preferences. */
+/** Optional setup/config state and preferences. */
 export interface AssistantSetupConfig {
   /** Whether initial setup has been completed by the user. */
   completed: boolean;
