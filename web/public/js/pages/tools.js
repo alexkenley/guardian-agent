@@ -5,9 +5,6 @@
 import { api } from '../api.js';
 import { applyInputTooltips } from '../tooltip.js';
 
-let lastRunNotice = null;
-let lastPolicyNotice = null;
-
 export async function renderTools(container) {
   container.innerHTML = '<h2 class="page-title">Tools</h2><div class="loading">Loading...</div>';
 
@@ -45,62 +42,32 @@ export async function renderTools(container) {
       </div>
 
       <div class="table-container">
-        <div class="table-header">
-          <h3>Run Tool</h3>
-          <button class="btn btn-secondary" id="tools-refresh" style="font-size:0.75rem;padding:0.35rem 0.65rem;">Refresh</button>
-        </div>
-        <div class="intel-controls">
-          <div class="intel-control-row">
-            <label>Tool</label>
-            <select id="tools-run-name">
-              ${tools.map((tool) => `<option value="${esc(tool.name)}">${esc(tool.name)} (${esc(tool.risk)})</option>`).join('')}
-            </select>
-            <label>Origin</label>
-            <select id="tools-run-origin">
-              <option value="web" selected>web</option>
-              <option value="cli">cli</option>
-              <option value="assistant">assistant</option>
-            </select>
-            <button class="btn btn-primary" id="tools-run-btn">Run</button>
-          </div>
-          <div class="intel-control-row">
-            <label>Arguments JSON</label>
-            <textarea id="tools-run-args" rows="5" style="flex:1;min-height:96px;" placeholder='{"path":"docs"}'></textarea>
-          </div>
-          <div id="tools-run-status" class="intel-status">Ready.</div>
-        </div>
-      </div>
-
-      <div class="table-container">
-        <div class="table-header"><h3>Policy & Sandbox</h3></div>
-        <div class="intel-controls">
+        <div class="table-header"><h3>Policy & Sandbox Register</h3></div>
+        <div class="intel-controls" style="pointer-events: none; opacity: 0.8;">
           <div class="intel-control-row">
             <label>Mode</label>
-            <select id="tools-policy-mode">
-              <option value="approve_each" ${policy.mode === 'approve_each' ? 'selected' : ''}>approve_each</option>
-              <option value="approve_by_policy" ${policy.mode === 'approve_by_policy' ? 'selected' : ''}>approve_by_policy</option>
-              <option value="autonomous" ${policy.mode === 'autonomous' ? 'selected' : ''}>autonomous</option>
-            </select>
-            <button class="btn btn-secondary" id="tools-policy-save">Save Policy</button>
+            <span class="intel-inline">${esc(policy.mode)}</span>
           </div>
           <div class="intel-control-row">
-            <label>Allowed Paths (comma-separated)</label>
-            <input id="tools-policy-paths" type="text" value="${esc((policy.sandbox?.allowedPaths || []).join(', '))}">
+            <label>Allowed Paths</label>
+            <span class="intel-inline">${esc((policy.sandbox?.allowedPaths || []).join(', ') || 'None')}</span>
           </div>
           <div class="intel-control-row">
-            <label>Allowed Commands (comma-separated prefixes)</label>
-            <input id="tools-policy-commands" type="text" value="${esc((policy.sandbox?.allowedCommands || []).join(', '))}">
+            <label>Allowed Commands</label>
+            <span class="intel-inline">${esc((policy.sandbox?.allowedCommands || []).join(', ') || 'None')}</span>
           </div>
           <div class="intel-control-row">
-            <label>Allowed Domains (comma-separated)</label>
-            <input id="tools-policy-domains" type="text" value="${esc((policy.sandbox?.allowedDomains || []).join(', '))}">
+            <label>Allowed Domains</label>
+            <span class="intel-inline">${esc((policy.sandbox?.allowedDomains || []).join(', ') || 'None')}</span>
           </div>
-          <div id="tools-policy-status" class="intel-status">Policy loaded.</div>
         </div>
       </div>
 
       <div class="table-container">
-        <div class="table-header"><h3>Tool Catalog</h3></div>
+        <div class="table-header">
+          <h3>Tool Catalog</h3>
+          <button class="btn btn-secondary" id="tools-refresh" style="font-size:0.75rem;padding:0.35rem 0.65rem;">Refresh</button>
+        </div>
         <table>
           <thead>
             <tr>
@@ -191,79 +158,7 @@ export async function renderTools(container) {
       </div>
     `;
 
-    const runStatus = container.querySelector('#tools-run-status');
-    const policyStatus = container.querySelector('#tools-policy-status');
-    const setRunStatus = (text, color = 'var(--text-muted)') => {
-      runStatus.textContent = text;
-      runStatus.style.color = color;
-    };
-    const setPolicyStatus = (text, color = 'var(--text-muted)') => {
-      policyStatus.textContent = text;
-      policyStatus.style.color = color;
-    };
-
-    if (lastRunNotice) {
-      setRunStatus(lastRunNotice.text, lastRunNotice.color);
-    }
-    if (lastPolicyNotice) {
-      setPolicyStatus(lastPolicyNotice.text, lastPolicyNotice.color);
-    }
-
     container.querySelector('#tools-refresh')?.addEventListener('click', () => renderTools(container));
-
-    container.querySelector('#tools-run-btn')?.addEventListener('click', async () => {
-      const toolName = container.querySelector('#tools-run-name').value;
-      const origin = container.querySelector('#tools-run-origin').value;
-      const argsRaw = container.querySelector('#tools-run-args').value.trim();
-      let args = {};
-      if (argsRaw) {
-        try {
-          args = JSON.parse(argsRaw);
-        } catch {
-          setRunStatus('Invalid JSON in tool arguments.', 'var(--error)');
-          return;
-        }
-      }
-      setRunStatus('Running tool...', 'var(--text-muted)');
-      try {
-        const result = await api.runTool({ toolName, args, origin, channel: 'web', userId: 'web-user' });
-        const statusColor = result.success ? 'var(--success)' : (result.status === 'pending_approval' ? 'var(--warning)' : 'var(--error)');
-        const extra = result.approvalId ? ` (approval ${result.approvalId.slice(0, 8)})` : '';
-        setRunStatus(`${result.message}${extra}`, statusColor);
-        lastRunNotice = { text: `${result.message}${extra}`, color: statusColor };
-        await renderTools(container);
-      } catch (err) {
-        lastRunNotice = null;
-        setRunStatus(err.message || 'Tool run failed.', 'var(--error)');
-      }
-    });
-
-    container.querySelector('#tools-policy-save')?.addEventListener('click', async () => {
-      const mode = container.querySelector('#tools-policy-mode').value;
-      const allowedPaths = splitCsv(container.querySelector('#tools-policy-paths').value);
-      const allowedCommands = splitCsv(container.querySelector('#tools-policy-commands').value);
-      const allowedDomains = splitCsv(container.querySelector('#tools-policy-domains').value);
-      try {
-        const result = await api.updateToolPolicy({
-          mode,
-          sandbox: { allowedPaths, allowedCommands, allowedDomains },
-        });
-        if (!result.success) {
-          lastPolicyNotice = null;
-          setPolicyStatus(result.message || 'Policy update failed.', 'var(--error)');
-          return;
-        }
-        const pathCount = result.policy?.sandbox?.allowedPaths?.length;
-        const suffix = Number.isFinite(pathCount) ? ` (${pathCount} allowed path${pathCount === 1 ? '' : 's'})` : '';
-        const text = `${result.message || 'Policy updated.'}${suffix}`;
-        setPolicyStatus(text, 'var(--success)');
-        lastPolicyNotice = { text, color: 'var(--success)' };
-        await renderTools(container);
-      } catch (err) {
-        lastPolicyNotice = null;
-        setPolicyStatus(err.message || 'Policy update failed.', 'var(--error)');
-      }
-    });
 
     container.querySelectorAll('.tool-approve').forEach((button) => {
       button.addEventListener('click', async () => {
@@ -276,10 +171,12 @@ export async function renderTools(container) {
             decision,
             actor: 'web-user',
           });
-          setRunStatus(result.message || 'Decision recorded.', result.success ? 'var(--success)' : 'var(--error)');
+          if (!result.success) {
+            alert(result.message || 'Failed to update approval.');
+          }
           await renderTools(container);
         } catch (err) {
-          setRunStatus(err.message || 'Failed to update approval.', 'var(--error)');
+          alert(err.message || 'Failed to update approval.');
         }
       });
     });

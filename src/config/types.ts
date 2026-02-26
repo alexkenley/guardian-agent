@@ -374,7 +374,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
   runtime: {
     maxStallDurationMs: 60_000,
     watchdogIntervalMs: 10_000,
-    logLevel: 'info',
+    logLevel: 'warn',
   },
   assistant: {
     setup: {

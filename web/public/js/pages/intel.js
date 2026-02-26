@@ -50,59 +50,28 @@ export async function renderIntel(container) {
 
       <div class="table-container">
         <div class="table-header">
-          <h3>Operations</h3>
+          <h3>Operations Configuration</h3>
           <button class="btn btn-secondary" id="intel-refresh" style="font-size:0.75rem;padding:0.35rem 0.65rem;">Refresh</button>
         </div>
-        <div class="intel-controls">
+        <div class="intel-controls" style="pointer-events: none; opacity: 0.8;">
           <div class="intel-control-row">
             <label>Response Mode</label>
-            <select id="intel-mode">
-              <option value="manual" ${summary.responseMode === 'manual' ? 'selected' : ''}>manual</option>
-              <option value="assisted" ${summary.responseMode === 'assisted' ? 'selected' : ''}>assisted</option>
-              <option value="autonomous" ${summary.responseMode === 'autonomous' ? 'selected' : ''}>autonomous</option>
-            </select>
+            <span class="intel-inline">${esc(summary.responseMode)}</span>
             <span class="intel-muted">Darkweb scans: ${summary.darkwebEnabled ? 'enabled' : 'disabled'}</span>
             <span class="intel-muted">Forum connectors: ${esc(connectorText || 'none')}</span>
           </div>
-
-          <div class="intel-control-row">
-            <label>Scan Query</label>
-            <input id="intel-scan-query" type="text" placeholder="Optional: run one-off query instead of full watchlist">
-            <label class="intel-inline">
-              <input id="intel-scan-darkweb" type="checkbox" ${summary.darkwebEnabled ? '' : 'disabled'}>
-              Include darkweb
-            </label>
-            <button class="btn btn-primary" id="intel-scan-btn">Run Scan</button>
-          </div>
-
-          <div class="intel-source-row">
-            <span>Sources:</span>
-            ${['web', 'news', 'social', 'forum', 'darkweb'].map((source) => `
-              <label class="intel-inline">
-                <input class="intel-source" type="checkbox" value="${source}" ${source === 'web' || source === 'news' || source === 'social' || source === 'forum' ? 'checked' : ''} ${source === 'darkweb' && !summary.darkwebEnabled ? 'disabled' : ''}>
-                ${source}
-              </label>
-            `).join('')}
-          </div>
-
-          <div id="intel-status" class="intel-status">Ready.</div>
         </div>
       </div>
 
       <div class="table-container">
         <div class="table-header"><h3>Watchlist</h3></div>
         <div class="intel-watchlist-panel">
-          <div class="intel-watch-add">
-            <input id="intel-watch-target" type="text" placeholder="Add name, username, domain, brand, or phrase">
-            <button class="btn btn-primary" id="intel-watch-add-btn">Add Target</button>
-          </div>
           <div class="intel-watch-items">
             ${watchlist.length === 0
               ? '<span class="intel-muted">No watch targets configured.</span>'
               : watchlist.map((target) => `
                 <span class="intel-chip">
                   ${esc(target)}
-                  <button data-watch-remove="${escAttr(target)}" title="Remove target">&times;</button>
                 </span>
               `).join('')}
           </div>
@@ -204,75 +173,7 @@ export async function renderIntel(container) {
       </div>
     `;
 
-    const statusEl = container.querySelector('#intel-status');
-    const setStatus = (text, color = 'var(--text-muted)') => {
-      statusEl.textContent = text;
-      statusEl.style.color = color;
-    };
-
     container.querySelector('#intel-refresh')?.addEventListener('click', () => renderIntel(container));
-
-    container.querySelector('#intel-mode')?.addEventListener('change', async (event) => {
-      const mode = event.target.value;
-      try {
-        const result = await api.threatIntelSetResponseMode(mode);
-        setStatus(result.message, result.success ? 'var(--success)' : 'var(--warning)');
-      } catch (err) {
-        setStatus((err.message || 'Failed to update response mode.'), 'var(--error)');
-      }
-    });
-
-    container.querySelector('#intel-watch-add-btn')?.addEventListener('click', async () => {
-      const targetInput = container.querySelector('#intel-watch-target');
-      const target = targetInput.value.trim();
-      if (!target) {
-        setStatus('Target is required.', 'var(--warning)');
-        return;
-      }
-      try {
-        const result = await api.threatIntelWatch(target, 'add');
-        setStatus(result.message, result.success ? 'var(--success)' : 'var(--warning)');
-        if (result.success) await renderIntel(container);
-      } catch (err) {
-        setStatus((err.message || 'Failed to add watch target.'), 'var(--error)');
-      }
-    });
-
-    container.querySelectorAll('[data-watch-remove]').forEach((button) => {
-      button.addEventListener('click', async () => {
-        const target = button.getAttribute('data-watch-remove');
-        if (!target) return;
-        try {
-          const result = await api.threatIntelWatch(target, 'remove');
-          setStatus(result.message, result.success ? 'var(--success)' : 'var(--warning)');
-          if (result.success) await renderIntel(container);
-        } catch (err) {
-          setStatus((err.message || 'Failed to remove watch target.'), 'var(--error)');
-        }
-      });
-    });
-
-    container.querySelector('#intel-scan-btn')?.addEventListener('click', async () => {
-      const query = container.querySelector('#intel-scan-query').value.trim();
-      const includeDarkWeb = !!container.querySelector('#intel-scan-darkweb').checked;
-      const sources = Array.from(container.querySelectorAll('.intel-source:checked'))
-        .map((input) => input.value);
-
-      setStatus('Running scan...', 'var(--text-muted)');
-      try {
-        const result = await api.threatIntelScan({
-          query: query || undefined,
-          includeDarkWeb,
-          sources,
-        });
-        const color = result.success ? 'var(--success)' : 'var(--warning)';
-        const suffix = result.findings?.length ? ` (${result.findings.length} findings)` : '';
-        setStatus(`${result.message}${suffix}`, color);
-        await renderIntel(container);
-      } catch (err) {
-        setStatus((err.message || 'Threat-intel scan failed.'), 'var(--error)');
-      }
-    });
 
     container.querySelectorAll('[data-finding-status]').forEach((select) => {
       select.addEventListener('change', async () => {

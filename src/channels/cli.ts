@@ -51,6 +51,16 @@ export interface CLIChannelOptions {
   dashboard?: DashboardCallbacks;
   /** Canonical user identity for CLI channel. */
   defaultUserId?: string;
+  /** Package version for /version command. */
+  version?: string;
+  /** Config file path for /diag command. */
+  configPath?: string;
+  /** Startup status hints displayed in banner. */
+  startupStatus?: {
+    guardianEnabled?: boolean;
+    providerName?: string;
+    channels?: string[];
+  };
 }
 
 export class CLIChannel implements ChannelAdapter {
@@ -67,6 +77,9 @@ export class CLIChannel implements ChannelAdapter {
   private defaultAgentId: string | undefined;
   private defaultUserId: string;
   private useColor: boolean;
+  private version: string;
+  private configPath: string;
+  private startupStatus?: CLIChannelOptions['startupStatus'];
 
   constructor(options: CLIChannelOptions = {}) {
     this.prompt = options.prompt ?? 'you> ';
@@ -78,6 +91,9 @@ export class CLIChannel implements ChannelAdapter {
     this.defaultAgentId = options.defaultAgent;
     this.defaultUserId = options.defaultUserId ?? 'owner';
     this.useColor = !!(this.output as NodeJS.WriteStream).isTTY;
+    this.version = options.version ?? '1.0.0';
+    this.configPath = options.configPath ?? '';
+    this.startupStatus = options.startupStatus;
   }
 
   async start(onMessage: MessageCallback): Promise<void> {
@@ -89,7 +105,11 @@ export class CLIChannel implements ChannelAdapter {
       prompt: this.prompt,
     });
 
-    this.write('\nGuardian Agent CLI — Type a message or /help for commands.\n\n');
+    if (this.useColor) {
+      this.writeBanner();
+    } else {
+      this.write('\nGuardian Agent CLI — Type a message or /help for commands.\n\n');
+    }
     this.rl.prompt();
 
     this.rl.on('line', async (line) => {
@@ -291,6 +311,12 @@ export class CLIChannel implements ChannelAdapter {
       case 'intel':
         await this.handleIntel(args);
         break;
+      case 'version':
+        this.handleVersion();
+        break;
+      case 'diag':
+        await this.handleDiag();
+        break;
       case 'clear':
         this.handleClear();
         break;
@@ -363,6 +389,8 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /quick <email|task|calendar> <details> Run quick action workflow\n');
     this.write('  /analytics [minutes]                   Interaction analytics summary\n');
     this.write('  /guide                                 Show reference guide\n');
+    this.write('  /version                               Show version\n');
+    this.write('  /diag                                  Run system diagnostics\n');
     this.write('  /clear                                 Clear screen\n');
     this.write('  /help                                  Show this help\n');
     this.write('  /quit, /exit                           Exit\n');
@@ -2195,6 +2223,80 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /intel actions [limit]\n');
     this.write('  /intel action draft <findingId> <report|request_takedown|draft_response|publish_response>\n');
     this.write('  /intel mode <manual|assisted|autonomous>\n\n');
+  }
+
+  // ─── /version ────────────────────────────────────────────────
+
+  private handleVersion(): void {
+    this.write(`\nGuardianAgent v${this.version}\n\n`);
+  }
+
+  // ─── /diag ──────────────────────────────────────────────────
+
+  private async handleDiag(): Promise<void> {
+    this.write('\n');
+    this.write(this.bold('System Diagnostics\n'));
+    this.write(`  Version:     v${this.version}\n`);
+    this.write(`  Node.js:     ${process.version}\n`);
+    this.write(`  Platform:    ${process.platform} ${process.arch}\n`);
+    this.write(`  Config:      ${this.configPath || 'default'}\n`);
+
+    // Agent and status info
+    if (this.onStatus) {
+      const status = this.onStatus();
+      this.write(`  Guardian:    ${status.guardianEnabled ? this.green('active') : this.red('disabled')}\n`);
+      this.write(`  Agents:      ${status.agentCount} registered\n`);
+      this.write(`  Providers:   ${status.providers.join(', ') || 'none'}\n`);
+    }
+
+    // Provider connectivity
+    if (this.dashboard?.onProviders) {
+      this.write('\n');
+      this.write(this.bold('Provider Connectivity\n'));
+      const providers = this.dashboard.onProviders();
+      for (const p of providers) {
+        const statusIcon = p.connected ? this.green('OK') : this.red('FAIL');
+        this.write(`  ${p.name} (${p.type}/${p.model}): ${statusIcon}\n`);
+      }
+    }
+
+    this.write('\n');
+  }
+
+  // ─── Startup banner ────────────────────────────────────────
+
+  private writeBanner(): void {
+    const lb = (t: string) => `\x1b[38;5;75m${t}\x1b[0m`;
+    const blue = (t: string) => `\x1b[38;5;33m${t}\x1b[0m`;
+    const db = (t: string) => `\x1b[38;5;27m${t}\x1b[0m`;
+    const dm = (t: string) => `\x1b[2m${t}\x1b[0m`;
+
+    this.write('\n');
+    this.write(lb(' ██████╗ ██╗   ██╗ █████╗ ██████╗ ██████╗ ██╗ █████╗ ███╗   ██╗') + '\n');
+    this.write(lb('██╔════╝ ██║   ██║██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗████╗  ██║') + '\n');
+    this.write(blue('██║  ███╗██║   ██║███████║██████╔╝██║  ██║██║███████║██╔██╗ ██║') + '\n');
+    this.write(blue('██║   ██║██║   ██║██╔══██║██╔══██╗██║  ██║██║██╔══██║██║╚██╗██║') + '\n');
+    this.write(db('╚██████╔╝╚██████╔╝██║  ██║██║  ██║██████╔╝██║██║  ██║██║ ╚████║') + '\n');
+    this.write(db(' ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝') + '\n');
+    this.write('\n');
+    this.write(lb('      █████╗  ██████╗ ███████╗███╗   ██╗████████╗') + '\n');
+    this.write(lb('     ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝') + '\n');
+    this.write(blue('     ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║') + '\n');
+    this.write(blue('     ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║') + '\n');
+    this.write(db('     ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║') + '\n');
+    this.write(db('     ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝') + '\n');
+    this.write('\n');
+
+    // Quick status line
+    const s = this.startupStatus;
+    if (s) {
+      const guardianStatus = s.guardianEnabled !== false ? this.green('active') : this.red('disabled');
+      const provider = s.providerName ?? 'ollama';
+      const channels = s.channels?.join(', ') ?? 'cli';
+      this.write(dm(`  Guardian: ${guardianStatus}  ${dm('|')}  Provider: ${lb(provider)}  ${dm('|')}  Channels: ${lb(channels)}`) + '\n');
+    }
+    this.write(dm('  Type a message or /help for commands.') + '\n');
+    this.write('\n');
   }
 
   // ─── /clear ──────────────────────────────────────────────────

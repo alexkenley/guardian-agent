@@ -70,6 +70,12 @@ const BUILTIN_PATTERNS: ReadonlyArray<{ name: string; regex: RegExp }> = [
 
   // ─── Generic Patterns ──────────────────────────────────────
   { name: 'Generic Secret', regex: /(?:password|passwd|secret|token|api_key|apikey)\s*[=:]\s*['"][^\s'"]{8,}['"]/gi },
+
+  // ─── PII (Personal Identifiable Information) ───────────────
+  { name: 'Email Address', regex: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g },
+  { name: 'US Social Security Number', regex: /\b\d{3}-\d{2}-\d{4}\b/g },
+  { name: 'Credit Card Number', regex: /\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|3(?:0[0-5]|[68][0-9])[0-9]{11}|6(?:011|5[0-9]{2})[0-9]{12}|(?:2131|1800|35\d{3})\d{11})\b/g },
+  { name: 'Phone Number (US)', regex: /\b(?:\+?1[-.\s]?)?\(?[2-9]\d{2}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g },
 ];
 
 /** File path patterns that are always denied. */

@@ -292,29 +292,21 @@ try {
 
 # --- ASCII Art Banner ---
 Write-Host ""
-# Block letter GUARDIAN
-Write-Host "  ██████╗ ██╗   ██╗ █████╗ ██████╗ ██████╗ ██╗ █████╗ ███╗   ██╗" -ForegroundColor Green
-Write-Host "  ██╔════╝ ██║   ██║██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗████╗  ██║" -ForegroundColor Green
-Write-Host "  ██║  ███╗██║   ██║███████║██████╔╝██║  ██║██║███████║██╔██╗ ██║" -ForegroundColor DarkGreen
-Write-Host "  ██║   ██║██║   ██║██╔══██║██╔══██╗██║  ██║██║██╔══██║██║╚██╗██║" -ForegroundColor DarkGreen
-Write-Host "  ╚██████╔╝╚██████╔╝██║  ██║██║  ██║██████╔╝██║██║  ██║██║ ╚████║" -ForegroundColor DarkGreen
-Write-Host "   ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝" -ForegroundColor DarkGreen
+Write-Host "   ██████╗ ██╗   ██╗ █████╗ ██████╗ ██████╗ ██╗ █████╗ ███╗   ██╗" -ForegroundColor Cyan
+Write-Host "  ██╔════╝ ██║   ██║██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗████╗  ██║" -ForegroundColor Cyan
+Write-Host "  ██║  ███╗██║   ██║███████║██████╔╝██║  ██║██║███████║██╔██╗ ██║" -ForegroundColor Blue
+Write-Host "  ██║   ██║██║   ██║██╔══██║██╔══██╗██║  ██║██║██╔══██║██║╚██╗██║" -ForegroundColor Blue
+Write-Host "  ╚██████╔╝╚██████╔╝██║  ██║██║  ██║██████╔╝██║██║  ██║██║ ╚████║" -ForegroundColor DarkBlue
+Write-Host "   ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝" -ForegroundColor DarkBlue
 Write-Host ""
-# Block letter AGENT
-Write-Host "       █████╗  ██████╗ ███████╗███╗   ██╗████████╗" -ForegroundColor Green
-Write-Host "      ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝" -ForegroundColor Green
-Write-Host "      ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   " -ForegroundColor DarkGreen
-Write-Host "      ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   " -ForegroundColor DarkGreen
-Write-Host "      ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   " -ForegroundColor DarkGreen
-Write-Host "      ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   " -ForegroundColor DarkGreen
-# Vaporwave perspective grid
-Write-Host "  ═══════════════════════════════════════════════════════════════════" -ForegroundColor DarkCyan
-Write-Host "       ─────────────────────────────────────────────────────────" -ForegroundColor DarkCyan
-Write-Host "            ═══════════════════════════════════════════════" -ForegroundColor DarkCyan
-Write-Host "                  ─────────────────────────────────────" -ForegroundColor DarkCyan
-Write-Host "                        ═════════════════════════" -ForegroundColor DarkCyan
+Write-Host "       █████╗  ██████╗ ███████╗███╗   ██╗████████╗" -ForegroundColor Cyan
+Write-Host "      ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝" -ForegroundColor Cyan
+Write-Host "      ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   " -ForegroundColor Blue
+Write-Host "      ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   " -ForegroundColor Blue
+Write-Host "      ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   " -ForegroundColor DarkBlue
+Write-Host "      ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   " -ForegroundColor DarkBlue
 Write-Host ""
-Write-Host "        Three-Layer Defense  |  Real-Time Dashboard" -ForegroundColor DarkGreen
+Write-Host "        Three-Layer Defense  |  Real-Time Dashboard" -ForegroundColor Cyan
 Write-Host ""
 
 # --- Step 1: Check Node.js ---
@@ -529,7 +521,7 @@ guardian:
 runtime:
   maxStallDurationMs: 60000
   watchdogIntervalMs: 10000
-  logLevel: info
+  logLevel: warn
 '@
 
     Set-Content -Path $configFile -Value $defaultConfig -Encoding UTF8
@@ -544,6 +536,11 @@ $webPort = 3000
 $webAuthToken = $null
 if (Test-Path $configFile) {
     $configContent = Get-Content $configFile -Raw
+    if ($configContent -match '(?m)^(\s*logLevel:\s*)info(\s*)$') {
+        $configContent = [regex]::Replace($configContent, '(?m)^(\s*logLevel:\s*)info(\s*)$', '${1}warn$2')
+        Set-Content -Path $configFile -Value $configContent -Encoding UTF8
+        Write-Host "  Runtime log level set to warn (reduced CLI noise)." -ForegroundColor DarkCyan
+    }
     if ($configContent -match 'web:\s*\n\s*enabled:\s*true') {
         $webEnabled = $true
     }

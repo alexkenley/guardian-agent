@@ -25,7 +25,7 @@ import { BaseAgent } from './agent/agent.js';
 import { createAgentDefinition } from './agent/agent.js';
 import type { AgentContext, AgentResponse, UserMessage } from './agent/types.js';
 import { SentinelAgent } from './agents/sentinel.js';
-import { createLogger } from './util/logging.js';
+import { createLogger, setLogLevel } from './util/logging.js';
 import { ConversationService } from './runtime/conversation.js';
 import { getReferenceGuide, formatGuideForTelegram } from './reference-guide.js';
 import type { ChatMessage } from './llm/types.js';
@@ -37,6 +37,7 @@ import { ThreatIntelService } from './runtime/threat-intel.js';
 import { MoltbookConnector } from './runtime/moltbook-connector.js';
 import { AssistantOrchestrator } from './runtime/orchestrator.js';
 import { AssistantJobTracker } from './runtime/assistant-jobs.js';
+import { parseDirectFileSearchIntent } from './runtime/search-intent.js';
 import { ToolExecutor } from './tools/executor.js';
 import type { ToolExecutorOptions } from './tools/executor.js';
 import type { ToolPolicySnapshot } from './tools/types.js';
@@ -241,61 +242,6 @@ class ChatAgent extends BaseAgent {
     }
     return lines.join('\n');
   }
-}
-
-interface DirectFileSearchIntent {
-  path: string;
-  query: string;
-}
-
-function parseDirectFileSearchIntent(content: string, policy: ToolPolicySnapshot): DirectFileSearchIntent | null {
-  const text = content.trim();
-  if (!text) return null;
-  if (!/\b(search|find|locate|look\s+for)\b/i.test(text)) return null;
-  if (!/\b(file|folder|directory|path|onedrive|drive)\b/i.test(text)) return null;
-
-  const query = extractSearchQuery(text);
-  if (!query) return null;
-
-  const explicitPath = extractPathHint(text);
-  if (explicitPath) {
-    return { path: explicitPath, query };
-  }
-
-  if (/onedrive/i.test(text)) {
-    const onedriveRoot = policy.sandbox.allowedPaths.find((value) => /onedrive/i.test(value));
-    if (onedriveRoot) {
-      return { path: onedriveRoot, query };
-    }
-  }
-
-  return null;
-}
-
-function extractSearchQuery(text: string): string | null {
-  const quoted = text.match(/["']([^"']{2,120})["']/);
-  if (quoted?.[1]) return quoted[1].trim();
-
-  const forMatch = text.match(/\bfor\s+(.+?)(?:\s+\b(?:in|inside|within|under)\b|$)/i);
-  const candidate = (forMatch?.[1] ?? '').trim().replace(/[.,;:!?]+$/, '');
-  if (candidate.length >= 2) return candidate;
-  return null;
-}
-
-function extractPathHint(text: string): string | null {
-  const windowsKeyword = text.match(/\b(?:in|inside|within|under|path)\s+([A-Za-z]:[\\/][^\n\r"'`]+)/i);
-  if (windowsKeyword?.[1]) return windowsKeyword[1].trim().replace(/[.,;:!?]+$/, '');
-
-  const unixKeyword = text.match(/\b(?:in|inside|within|under|path)\s+(\/[^\n\r"'`]+)/i);
-  if (unixKeyword?.[1]) return unixKeyword[1].trim().replace(/[.,;:!?]+$/, '');
-
-  const windowsAny = text.match(/([A-Za-z]:[\\/][^\n\r"'`]+)/);
-  if (windowsAny?.[1]) return windowsAny[1].trim().replace(/[.,;:!?]+$/, '');
-
-  const unixAny = text.match(/(\/mnt\/[A-Za-z]\/[^\n\r"'`]+)/);
-  if (unixAny?.[1]) return unixAny[1].trim().replace(/[.,;:!?]+$/, '');
-
-  return null;
 }
 
 function toString(value: unknown): string {
@@ -743,6 +689,11 @@ function buildDashboardCallbacks(
         guardianEnabled: configRef.current.guardian.enabled,
         providerCount: runtime.providers.size,
         providers: [...runtime.providers.keys()],
+        scheduledJobs: runtime.scheduler.getJobs().map((j) => ({
+          agentId: j.agentId,
+          cron: j.cron,
+          nextRun: j.job.nextRun()?.getTime(),
+        })),
       };
     },
 
@@ -1417,8 +1368,70 @@ function resolveAssistantDbPath(configuredPath: string | undefined, fallbackFile
 
 async function main(): Promise<void> {
   const configPath = process.argv[2] ?? DEFAULT_CONFIG_PATH;
+
+  // First-run: auto-create default config if none exists.
+  if (!existsSync(configPath)) {
+    const configDir = dirname(configPath);
+    mkdirSync(configDir, { recursive: true });
+    const defaultYaml = [
+      '# GuardianAgent Configuration',
+      '# Docs: https://github.com/alexkenley/guardian-agent',
+      '',
+      'llm:',
+      '  ollama:',
+      '    provider: ollama',
+      '    baseUrl: http://127.0.0.1:11434',
+      '    model: llama3.2',
+      '',
+      '  # Uncomment to use Anthropic:',
+      '  # claude:',
+      '  #   provider: anthropic',
+      '  #   apiKey: ${ANTHROPIC_API_KEY}',
+      '  #   model: claude-sonnet-4-20250514',
+      '',
+      '  # Uncomment to use OpenAI:',
+      '  # gpt:',
+      '  #   provider: openai',
+      '  #   apiKey: ${OPENAI_API_KEY}',
+      '  #   model: gpt-4o',
+      '',
+      'defaultProvider: ollama',
+      '',
+      'channels:',
+      '  cli:',
+      '    enabled: true',
+      '  telegram:',
+      '    enabled: false',
+      '  web:',
+      '    enabled: true',
+      '    port: 3000',
+      '',
+      'guardian:',
+      '  enabled: true',
+      '  logDenials: true',
+      '',
+      'runtime:',
+      '  maxStallDurationMs: 60000',
+      '  watchdogIntervalMs: 10000',
+      '  logLevel: warn',
+    ].join('\n') + '\n';
+    writeFileSync(configPath, defaultYaml, 'utf-8');
+    const isTTY = process.stdout.isTTY;
+    const dim = (t: string) => isTTY ? `\x1b[2m${t}\x1b[0m` : t;
+    const green = (t: string) => isTTY ? `\x1b[32m${t}\x1b[0m` : t;
+    console.log(green(`  Created default config at ${configPath}`));
+    console.log(dim('  Edit this file to configure LLM providers, channels, and security settings.'));
+    console.log(dim('  Quick start: ensure Ollama is running, or set ANTHROPIC_API_KEY / OPENAI_API_KEY.'));
+    console.log('');
+  }
+
   const configRef = { current: loadConfig(configPath) };
   const config = configRef.current;
+
+  // Respect config runtime log level unless caller explicitly overrides via LOG_LEVEL.
+  if (!process.env['LOG_LEVEL']) {
+    setLogLevel(config.runtime.logLevel);
+  }
 
   const runtime = new Runtime(config);
   const identity = new IdentityService(config.assistant.identity);
@@ -1761,10 +1774,21 @@ async function main(): Promise<void> {
   }
 
   if (config.channels.cli?.enabled) {
+    const enabledChannels: string[] = ['cli'];
+    if (config.channels.web?.enabled) enabledChannels.push('web');
+    if (config.channels.telegram?.enabled) enabledChannels.push('telegram');
+
     const cli = new CLIChannel({
       defaultAgent: config.channels.cli.defaultAgent ?? defaultAgentId,
       defaultUserId: 'cli',
       dashboard: dashboardCallbacks,
+      version: '1.0.0',
+      configPath,
+      startupStatus: {
+        guardianEnabled: config.guardian.enabled,
+        providerName: config.defaultProvider,
+        channels: enabledChannels,
+      },
       onAgents: () => runtime.registry.getAll().map(inst => ({
         id: inst.agent.id,
         name: inst.agent.name,

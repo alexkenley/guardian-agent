@@ -204,6 +204,11 @@ export interface DashboardAssistantState {
   guardianEnabled: boolean;
   providerCount: number;
   providers: string[];
+  scheduledJobs: Array<{
+    agentId: string;
+    cron: string;
+    nextRun?: number;
+  }>;
 }
 
 /** SSE event pushed to dashboard clients. */

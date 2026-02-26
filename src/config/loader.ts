@@ -105,6 +105,10 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     errors.push('channels.telegram.botToken is required when Telegram is enabled');
   }
 
+  if (!['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'].includes(config.runtime.logLevel)) {
+    errors.push("runtime.logLevel must be one of: fatal, error, warn, info, debug, trace, silent");
+  }
+
   const webAuth = config.channels.web?.auth;
   if (webAuth?.mode && !['bearer_required', 'localhost_no_auth', 'disabled'].includes(webAuth.mode)) {
     errors.push("channels.web.auth.mode must be 'bearer_required', 'localhost_no_auth', or 'disabled'");

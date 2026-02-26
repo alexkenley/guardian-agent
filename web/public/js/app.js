@@ -4,7 +4,6 @@
 
 import { api, setToken } from './api.js';
 import { renderDashboard, updateDashboard } from './pages/dashboard.js';
-import { renderChat } from './pages/chat.js';
 import { renderSecurity, updateSecurity } from './pages/security.js';
 import { renderMonitoring, updateMonitoring } from './pages/monitoring.js';
 import { renderConfig } from './pages/config.js';
@@ -12,9 +11,11 @@ import { renderReference } from './pages/reference.js';
 import { renderIntel } from './pages/intel.js';
 import { renderAssistant } from './pages/assistant.js';
 import { renderTools } from './pages/tools.js';
+import { initChatPanel, setChatContext } from './chat-panel.js';
 import { applyInputTooltips } from './tooltip.js';
 
 const content = document.getElementById('content');
+const chatPanel = document.getElementById('chat-panel');
 const authModal = document.getElementById('auth-modal');
 const app = document.getElementById('app');
 const indicator = document.getElementById('connection-indicator');
@@ -145,7 +146,6 @@ function connectSSE() {
 
 const routes = {
   '/': { render: renderDashboard, update: updateDashboard, name: 'dashboard' },
-  '/chat': { render: renderChat, name: 'chat' },
   '/security': { render: renderSecurity, update: updateSecurity, name: 'security' },
   '/monitoring': { render: renderMonitoring, update: updateMonitoring, name: 'monitoring' },
   '/intel': { render: renderIntel, name: 'intel' },
@@ -160,6 +160,7 @@ function navigate() {
   const route = routes[hash] || routes['/'];
 
   currentPage = route.name;
+  setChatContext(currentPage);
 
   // Update nav
   document.querySelectorAll('.nav-item').forEach(item => {
@@ -172,6 +173,7 @@ function navigate() {
 
 function startApp() {
   connectSSE();
+  initChatPanel(chatPanel);
   window.addEventListener('hashchange', navigate);
   navigate();
 }

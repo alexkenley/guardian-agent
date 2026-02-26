@@ -160,8 +160,15 @@ body {
 
 .layout {
   display: grid;
-  grid-template-columns: 200px 1fr;
+  grid-template-columns: 200px 1fr 350px;
   min-height: calc(100vh - 50px);
+}
+
+.chat-panel {
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
 }
 
 .sidebar {
@@ -1060,6 +1067,15 @@ tr:hover td {
 
 /* ─── Responsive ─────────────────────────────────────────── */
 
+@media (max-width: 1024px) {
+  .layout {
+    grid-template-columns: 200px 1fr;
+  }
+  .chat-panel {
+    display: none;
+  }
+}
+
 @media (max-width: 768px) {
   .layout {
     grid-template-columns: 1fr;
@@ -1083,6 +1099,10 @@ tr:hover td {
   .nav-item.active {
     border-left-color: transparent;
     border-bottom-color: var(--accent);
+  }
+
+  .chat-panel {
+    display: none;
   }
 
   .cards-grid {

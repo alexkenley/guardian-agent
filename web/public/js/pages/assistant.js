@@ -39,7 +39,7 @@ function stopPolling() {
 }
 
 function renderState(container, state, refresh) {
-  const { orchestrator, jobs, lastPolicyDecisions, defaultProvider, guardianEnabled, providers } = state;
+  const { orchestrator, jobs, lastPolicyDecisions, defaultProvider, guardianEnabled, providers, scheduledJobs } = state;
   const summary = orchestrator.summary;
   const sessions = orchestrator.sessions;
   const traces = orchestrator.traces || [];
@@ -193,6 +193,35 @@ function renderState(container, state, refresh) {
     </table>
   `;
   container.appendChild(jobTable);
+
+  const scheduledTable = document.createElement('div');
+  scheduledTable.className = 'table-container';
+  scheduledTable.innerHTML = `
+    <div class="table-header">
+      <h3>Scheduled Cron Jobs</h3>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Agent ID</th>
+          <th>Cron Expression</th>
+          <th>Next Run</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${(scheduledJobs || []).length === 0
+          ? '<tr><td colspan="3">No scheduled jobs yet</td></tr>'
+          : (scheduledJobs || []).map((job) => `
+              <tr>
+                <td>${esc(job.agentId)}</td>
+                <td><code style="background:var(--bg-tertiary);padding:0.2rem 0.4rem;border-radius:4px">${esc(job.cron)}</code></td>
+                <td>${job.nextRun ? esc(new Date(job.nextRun).toLocaleString()) : '-'}</td>
+              </tr>
+            `).join('')}
+      </tbody>
+    </table>
+  `;
+  container.appendChild(scheduledTable);
 
   const decisionTable = document.createElement('div');
   decisionTable.className = 'table-container';

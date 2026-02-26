@@ -288,6 +288,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
       guardianEnabled: true,
       providerCount: 2,
       providers: ['ollama', 'claude'],
+      scheduledJobs: [],
     }),
     onDispatch: async (agentId, msg) => ({ content: `Reply from ${agentId}: ${msg.content}` }),
     onConfigUpdate: async (updates) => ({ success: true, message: 'Config saved. Restart to apply changes.' }),
@@ -630,6 +631,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
         guardianEnabled: true,
         providerCount: 2,
         providers: ['ollama', 'claude'],
+        scheduledJobs: [],
       }),
     });
     await cli.start(async () => ({ content: 'ok' }));
@@ -705,6 +707,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
         guardianEnabled: true,
         providerCount: 1,
         providers: ['ollama'],
+        scheduledJobs: [],
       }),
     });
     await cli.start(async () => ({ content: 'ok' }));
@@ -1499,6 +1502,7 @@ describe('WebChannel', () => {
         guardianEnabled: true,
         providerCount: 1,
         providers: ['ollama'],
+        scheduledJobs: [],
       }),
       onThreatIntelSummary: () => ({
         enabled: true,
