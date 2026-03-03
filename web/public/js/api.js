@@ -46,25 +46,27 @@ async function request(path, options = {}) {
   return res.json();
 }
 
+async function requestPrivileged(path, action, payload = {}) {
+  const issued = await request('/api/auth/ticket', {
+    method: 'POST',
+    body: JSON.stringify({ action }),
+  });
+  if (!issued?.ticket) {
+    throw new Error('Failed to obtain privileged ticket');
+  }
+  return request(path, {
+    method: 'POST',
+    body: JSON.stringify({ ...(payload || {}), ticket: issued.ticket }),
+  });
+}
+
 export const api = {
   status:       () => request('/api/status'),
   authStatus:   () => request('/api/auth/status'),
-  updateAuth:   (input) => request('/api/auth/config', {
-    method: 'POST',
-    body: JSON.stringify(input || {}),
-  }),
-  rotateAuthToken: () => request('/api/auth/token/rotate', {
-    method: 'POST',
-    body: JSON.stringify({}),
-  }),
-  revealAuthToken: () => request('/api/auth/token/reveal', {
-    method: 'POST',
-    body: JSON.stringify({}),
-  }),
-  revokeAuthToken: () => request('/api/auth/token/revoke', {
-    method: 'POST',
-    body: JSON.stringify({}),
-  }),
+  updateAuth:   (input) => requestPrivileged('/api/auth/config', 'auth.config', input || {}),
+  rotateAuthToken: () => requestPrivileged('/api/auth/token/rotate', 'auth.rotate', {}),
+  revealAuthToken: () => requestPrivileged('/api/auth/token/reveal', 'auth.reveal', {}),
+  revokeAuthToken: () => requestPrivileged('/api/auth/token/revoke', 'auth.revoke', {}),
   agents:       () => request('/api/agents'),
   agentDetail:  (id) => request(`/api/agents/${encodeURIComponent(id)}`),
   audit:        (params = {}) => {

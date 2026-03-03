@@ -9,13 +9,19 @@ export class ToolApprovalStore {
   private readonly requests: ToolApprovalRequest[] = [];
   private readonly indexById = new Map<string, ToolApprovalRequest>();
 
-  create(job: ToolJobRecord, args: Record<string, unknown>, now: () => number = Date.now): ToolApprovalRequest {
+  create(
+    job: ToolJobRecord,
+    args: Record<string, unknown>,
+    argsHash: string | undefined,
+    now: () => number = Date.now,
+  ): ToolApprovalRequest {
     const request: ToolApprovalRequest = {
       id: randomUUID(),
       jobId: job.id,
       toolName: job.toolName,
       risk: job.risk,
       origin: job.origin,
+      argsHash,
       args,
       createdAt: now(),
       status: 'pending',

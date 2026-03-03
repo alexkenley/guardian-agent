@@ -84,6 +84,7 @@ export async function renderSecurity(container) {
         <option value="input_sanitized">input_sanitized</option>
         <option value="rate_limited">rate_limited</option>
         <option value="capability_probe">capability_probe</option>
+        <option value="policy_changed">policy_changed</option>
         <option value="anomaly_detected">anomaly_detected</option>
         <option value="agent_error">agent_error</option>
         <option value="agent_stalled">agent_stalled</option>

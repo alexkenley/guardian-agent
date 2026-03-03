@@ -12,18 +12,21 @@
  */
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { join, normalize, extname } from 'node:path';
 import { readFile, stat } from 'node:fs/promises';
 import type { ChannelAdapter, MessageCallback } from './types.js';
 import type { DashboardCallbacks, SSEListener } from './web-types.js';
 import type { AuditEventType, AuditSeverity } from '../guardian/audit-log.js';
 import { createLogger } from '../util/logging.js';
+import { timingSafeEqualString } from '../util/crypto-guardrails.js';
 
 const log = createLogger('channel:web');
 
 /** Default maximum request body size: 1 MB. */
 const DEFAULT_MAX_BODY_BYTES = 1_048_576;
+const PRIVILEGED_TICKET_TTL_SECONDS = 300;
+const PRIVILEGED_TICKET_MAX_REPLAY_TRACK = 2048;
 
 /** MIME types for static file serving. */
 const MIME_TYPES: Record<string, string> = {
@@ -40,6 +43,7 @@ const MIME_TYPES: Record<string, string> = {
 };
 
 export type WebAuthMode = 'bearer_required' | 'localhost_no_auth' | 'disabled';
+type PrivilegedTicketAction = 'auth.config' | 'auth.rotate' | 'auth.reveal' | 'auth.revoke';
 
 export interface WebAuthRuntimeConfig {
   mode: WebAuthMode;
@@ -86,6 +90,8 @@ export class WebChannel implements ChannelAdapter {
   private staticDir: string | undefined;
   private dashboard: DashboardCallbacks;
   private sseClients: Set<ServerResponse> = new Set();
+  private readonly privilegedTicketSecret = randomBytes(32);
+  private readonly usedPrivilegedTicketNonces = new Map<string, number>();
 
   constructor(options: WebChannelOptions = {}) {
     this.port = options.port ?? 3000;
@@ -251,7 +257,7 @@ export class WebChannel implements ChannelAdapter {
     }
 
     const token = authHeader.slice(7);
-    if (token !== this.authToken) {
+    if (!timingSafeEqualString(this.authToken, token)) {
       sendJSON(res, 403, { error: 'Invalid token' });
       return false;
     }
@@ -272,8 +278,120 @@ export class WebChannel implements ChannelAdapter {
       sendJSON(res, 401, { error: 'Authentication required' });
       return false;
     }
-    if (token !== this.authToken) {
+    if (!timingSafeEqualString(this.authToken, token)) {
       sendJSON(res, 403, { error: 'Invalid token' });
+      return false;
+    }
+    return true;
+  }
+
+  private isPrivilegedTicketAction(value: string): value is PrivilegedTicketAction {
+    return value === 'auth.config'
+      || value === 'auth.rotate'
+      || value === 'auth.reveal'
+      || value === 'auth.revoke';
+  }
+
+  private mintPrivilegedTicket(action: PrivilegedTicketAction): string {
+    const ts = Math.floor(Date.now() / 1000);
+    const nonce = randomBytes(16).toString('hex');
+    const payload = `${action}|${ts}|${nonce}`;
+    const signature = createHmac('sha256', this.privilegedTicketSecret).update(payload).digest('hex');
+    return Buffer.from(`${payload}|${signature}`, 'utf8').toString('base64url');
+  }
+
+  private pruneTicketReplayCache(nowSec: number): void {
+    const nowMs = nowSec * 1000;
+    for (const [nonce, expiresAt] of this.usedPrivilegedTicketNonces) {
+      if (expiresAt <= nowMs) {
+        this.usedPrivilegedTicketNonces.delete(nonce);
+      }
+    }
+    while (this.usedPrivilegedTicketNonces.size > PRIVILEGED_TICKET_MAX_REPLAY_TRACK) {
+      const first = this.usedPrivilegedTicketNonces.keys().next();
+      if (first.done) break;
+      this.usedPrivilegedTicketNonces.delete(first.value);
+    }
+  }
+
+  private verifyPrivilegedTicket(
+    ticket: string,
+    expectedAction: PrivilegedTicketAction,
+  ): { valid: boolean; error?: string } {
+    let decoded = '';
+    try {
+      decoded = Buffer.from(ticket, 'base64url').toString('utf8');
+    } catch {
+      return { valid: false, error: 'Invalid privileged ticket encoding' };
+    }
+
+    const parts = decoded.split('|');
+    if (parts.length !== 4) {
+      return { valid: false, error: 'Invalid privileged ticket format' };
+    }
+
+    const [action, tsRaw, nonce, signature] = parts;
+    if (action !== expectedAction) {
+      return { valid: false, error: 'Privileged ticket action mismatch' };
+    }
+    if (!/^\d+$/.test(tsRaw)) {
+      return { valid: false, error: 'Invalid privileged ticket timestamp' };
+    }
+    if (!/^[a-f0-9]{32}$/i.test(nonce)) {
+      return { valid: false, error: 'Invalid privileged ticket nonce' };
+    }
+    if (!/^[a-f0-9]{64}$/i.test(signature)) {
+      return { valid: false, error: 'Invalid privileged ticket signature' };
+    }
+
+    const issuedAtSec = Number.parseInt(tsRaw, 10);
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (!Number.isFinite(issuedAtSec) || Math.abs(nowSec - issuedAtSec) > PRIVILEGED_TICKET_TTL_SECONDS) {
+      return { valid: false, error: 'Privileged ticket expired' };
+    }
+
+    this.pruneTicketReplayCache(nowSec);
+    if (this.usedPrivilegedTicketNonces.has(nonce)) {
+      return { valid: false, error: 'Privileged ticket replay detected' };
+    }
+
+    const payload = `${action}|${tsRaw}|${nonce}`;
+    const expectedSignature = createHmac('sha256', this.privilegedTicketSecret).update(payload).digest('hex');
+    if (!timingSafeEqualString(expectedSignature, signature)) {
+      return { valid: false, error: 'Invalid privileged ticket signature' };
+    }
+
+    this.usedPrivilegedTicketNonces.set(
+      nonce,
+      (nowSec + PRIVILEGED_TICKET_TTL_SECONDS) * 1000,
+    );
+    return { valid: true };
+  }
+
+  private getPrivilegedTicket(req: IncomingMessage, url: URL, bodyTicket?: string): string | undefined {
+    if (bodyTicket?.trim()) return bodyTicket.trim();
+    const header = req.headers['x-guardian-ticket'];
+    if (typeof header === 'string' && header.trim()) return header.trim();
+    const queryTicket = url.searchParams.get('ticket');
+    if (queryTicket?.trim()) return queryTicket.trim();
+    return undefined;
+  }
+
+  private requirePrivilegedTicket(
+    req: IncomingMessage,
+    res: ServerResponse,
+    url: URL,
+    action: PrivilegedTicketAction,
+    bodyTicket?: string,
+  ): boolean {
+    const ticket = this.getPrivilegedTicket(req, url, bodyTicket);
+    if (!ticket) {
+      sendJSON(res, 401, { error: 'Privileged ticket required' });
+      return false;
+    }
+    const verify = this.verifyPrivilegedTicket(ticket, action);
+    if (!verify.valid) {
+      sendJSON(res, 403, { error: verify.error ?? 'Invalid privileged ticket' });
       return false;
     }
     return true;
@@ -314,6 +432,41 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // POST /api/auth/ticket — issue short-lived HMAC ticket for privileged auth operations
+      if (req.method === 'POST' && url.pathname === '/api/auth/ticket') {
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { action?: string };
+        try {
+          parsed = body.trim() ? (JSON.parse(body) as { action?: string }) : {};
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        const action = (parsed.action ?? '').trim();
+        if (!this.isPrivilegedTicketAction(action)) {
+          sendJSON(res, 400, { error: 'Invalid privileged action' });
+          return;
+        }
+        if (this.authMode === 'disabled' && !this.isLocalRequest(req)) {
+          sendJSON(res, 403, { error: 'Ticket issuance is restricted to localhost when auth is disabled' });
+          return;
+        }
+        const ticket = this.mintPrivilegedTicket(action);
+        sendJSON(res, 200, {
+          action,
+          ticket,
+          expiresIn: PRIVILEGED_TICKET_TTL_SECONDS,
+        });
+        return;
+      }
+
       // POST /api/auth/config — update auth mode and token settings
       if (req.method === 'POST' && url.pathname === '/api/auth/config') {
         if (!this.dashboard.onAuthUpdate) {
@@ -333,6 +486,7 @@ export class WebChannel implements ChannelAdapter {
           token?: string;
           rotateOnStartup?: boolean;
           sessionTtlMinutes?: number;
+          ticket?: string;
         };
         try {
           parsed = body.trim()
@@ -341,10 +495,14 @@ export class WebChannel implements ChannelAdapter {
               token?: string;
               rotateOnStartup?: boolean;
               sessionTtlMinutes?: number;
+              ticket?: string;
             })
             : {};
         } catch {
           sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!this.requirePrivilegedTicket(req, res, url, 'auth.config', parsed.ticket)) {
           return;
         }
         const result = await this.dashboard.onAuthUpdate(parsed);
@@ -358,6 +516,26 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
+        let body = '';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { ticket?: string } = {};
+        if (body.trim()) {
+          try {
+            parsed = JSON.parse(body) as { ticket?: string };
+          } catch {
+            sendJSON(res, 400, { error: 'Invalid JSON' });
+            return;
+          }
+        }
+        if (!this.requirePrivilegedTicket(req, res, url, 'auth.rotate', parsed.ticket)) {
+          return;
+        }
         sendJSON(res, 200, await this.dashboard.onAuthRotate());
         return;
       }
@@ -368,6 +546,26 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
+        let body = '';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { ticket?: string } = {};
+        if (body.trim()) {
+          try {
+            parsed = JSON.parse(body) as { ticket?: string };
+          } catch {
+            sendJSON(res, 400, { error: 'Invalid JSON' });
+            return;
+          }
+        }
+        if (!this.requirePrivilegedTicket(req, res, url, 'auth.reveal', parsed.ticket)) {
+          return;
+        }
         sendJSON(res, 200, await this.dashboard.onAuthReveal());
         return;
       }
@@ -376,6 +574,26 @@ export class WebChannel implements ChannelAdapter {
       if (req.method === 'POST' && url.pathname === '/api/auth/token/revoke') {
         if (!this.dashboard.onAuthRevoke) {
           sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body = '';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { ticket?: string } = {};
+        if (body.trim()) {
+          try {
+            parsed = JSON.parse(body) as { ticket?: string };
+          } catch {
+            sendJSON(res, 400, { error: 'Invalid JSON' });
+            return;
+          }
+        }
+        if (!this.requirePrivilegedTicket(req, res, url, 'auth.revoke', parsed.ticket)) {
           return;
         }
         sendJSON(res, 200, await this.dashboard.onAuthRevoke());

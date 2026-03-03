@@ -21,6 +21,7 @@ export type AuditEventType =
   | 'input_sanitized'
   | 'rate_limited'
   | 'capability_probe'
+  | 'policy_changed'
   | 'anomaly_detected'
   | 'agent_error'
   | 'agent_stalled';

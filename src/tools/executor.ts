@@ -11,6 +11,7 @@ import type { IntelActionType, IntelSourceType, IntelStatus, ThreatIntelService 
 import { MarketingStore } from './marketing-store.js';
 import { ToolApprovalStore } from './approvals.js';
 import { ToolRegistry } from './registry.js';
+import { hashRedactedObject, redactSensitiveValue } from '../util/crypto-guardrails.js';
 import type {
   ToolDecision,
   ToolDefinition,
@@ -234,7 +235,9 @@ export class ToolExecutor {
     }
 
     if (decision === 'require_approval') {
-      const approval = this.approvals.create(job, args, this.now);
+      const redactedArgs = redactSensitiveValue(args);
+      const approvalArgs = isRecord(redactedArgs) ? redactedArgs : {};
+      const approval = this.approvals.create(job, approvalArgs, job.argsHash, this.now);
       job.status = 'pending_approval';
       job.approvalId = approval.id;
       this.pendingApprovalContexts.set(approval.id, { request, args });
@@ -328,6 +331,7 @@ export class ToolExecutor {
     request: ToolExecutionRequest,
     args: Record<string, unknown>,
   ): ToolJobRecord {
+    const redactedArgs = hashRedactedObject(args);
     const job: ToolJobRecord = {
       id: randomUUID(),
       toolName: definition.name,
@@ -337,7 +341,8 @@ export class ToolExecutor {
       userId: request.userId,
       channel: request.channel,
       requestId: request.requestId,
-      argsPreview: sanitizePreview(JSON.stringify(args)),
+      argsHash: redactedArgs.hash,
+      argsPreview: sanitizePreview(JSON.stringify(redactedArgs.redacted)),
       status: 'running',
       createdAt: this.now(),
       requiresApproval: false,
@@ -2076,6 +2081,10 @@ function makeContentSnippet(text: string, matchIndex: number, queryLength: numbe
 
 function asString(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 function requireString(value: unknown, field: string): string {

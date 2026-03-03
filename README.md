@@ -75,6 +75,21 @@ Test agent behavior through the real Runtime with Guardian active:
 - Detects anomaly patterns: capability probing, repeated secret detections, volume spikes, error storms
 - Optional LLM-enhanced analysis for deeper pattern recognition
 
+## Core Security Layers, Hardening, and AI Guardrails
+
+- Layered defense lifecycle: proactive admission controls, output-time leak prevention, and scheduled Sentinel anomaly analysis.
+- Mandatory runtime chokepoints: every message, LLM call, response, and event is mediated by Runtime enforcement (not optional agent hooks).
+- Prompt-injection resistance: invisible Unicode stripping plus weighted injection signal scoring before agent execution.
+- Least-privilege capability model: per-agent capability grants with immutable frozen context (`Object.freeze`).
+- Tool governance and sandboxing: approval workflows, per-tool policy overrides, path/command/domain allowlists, and risk-tiered tool classes.
+- Secret exfiltration controls: multi-pattern secret scanning, response redaction/blocking, and inter-agent payload blocking.
+- Cryptographic correlation for tool actions: deterministic SHA-256 hashes of redacted tool args (`argsHash`) for approval/job traceability without raw secret retention.
+- Web auth hardening: constant-time bearer comparison plus short-lived signed privileged tickets for auth configuration/rotation/reveal/revoke endpoints.
+- Tamper-evident policy-change trail: SHA-256 config snapshots (`oldPolicyHash`/`newPolicyHash`) recorded as `policy_changed` audit events.
+- Audit integrity: SHA-256 hash-chained JSONL persistence with chain verification support.
+- SQLite integrity hardening: periodic `PRAGMA quick_check`, secure permissions, and hashed integrity checkpoints to detect storage drift/tampering.
+- Resource containment: invocation budgets, queue/concurrency controls, token-rate constraints, and stall/error recovery backoff.
+
 ## Mandatory Enforcement
 
 The Runtime controls every chokepoint where data flows in or out of an agent:
@@ -263,6 +278,7 @@ Full documentation in `docs/architecture/`:
 - [Security](docs/architecture/SECURITY.md) — three-layer defense system details
 - [Guardian API](docs/architecture/GUARDIAN-API.md) — complete API reference
 - [Decisions](docs/architecture/DECISIONS.md) — architecture decision records
+- [SOUL](SOUL.md) — non-negotiable operating intent and guardrail constitution
 
 Implementation specs in `docs/specs/`:
 - [Orchestration Agents](docs/specs/ORCHESTRATION-AGENTS-SPEC.md)

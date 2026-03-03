@@ -2,14 +2,22 @@
  * SQLite protection and health monitoring helpers.
  */
 
-import { chmodSync, existsSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { chmodSync, existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { SQLiteDatabase } from './sqlite-driver.js';
 
 export interface SQLiteSecurityEvent {
   service: 'conversation' | 'analytics';
   severity: 'info' | 'warn';
-  code: 'permissions_hardened' | 'permissions_check_failed' | 'integrity_check_failed' | 'integrity_ok' | 'driver_unavailable';
+  code:
+    | 'permissions_hardened'
+    | 'permissions_check_failed'
+    | 'integrity_check_failed'
+    | 'integrity_ok'
+    | 'integrity_checkpoint_written'
+    | 'integrity_checkpoint_failed'
+    | 'driver_unavailable';
   message: string;
   details?: Record<string, unknown>;
 }
@@ -21,6 +29,7 @@ export interface SQLiteSecurityMonitorOptions {
   onEvent?: (event: SQLiteSecurityEvent) => void;
   now?: () => number;
   checkIntervalMs?: number;
+  checkpointIntervalMs?: number;
 }
 
 export class SQLiteSecurityMonitor {
@@ -30,7 +39,9 @@ export class SQLiteSecurityMonitor {
   private readonly onEvent?: (event: SQLiteSecurityEvent) => void;
   private readonly now: () => number;
   private readonly checkIntervalMs: number;
+  private readonly checkpointIntervalMs: number;
   private nextCheckAt = 0;
+  private nextCheckpointAt = 0;
 
   constructor(options: SQLiteSecurityMonitorOptions) {
     this.service = options.service;
@@ -39,12 +50,14 @@ export class SQLiteSecurityMonitor {
     this.onEvent = options.onEvent;
     this.now = options.now ?? Date.now;
     this.checkIntervalMs = options.checkIntervalMs ?? 60 * 60 * 1000;
+    this.checkpointIntervalMs = options.checkpointIntervalMs ?? 6 * 60 * 60 * 1000;
   }
 
   initialize(): void {
     this.enforcePermissions();
     this.enableDefensivePragmas();
-    this.runIntegrityCheck();
+    const ok = this.runIntegrityCheck();
+    if (ok) this.maybeWriteIntegrityCheckpoint('startup');
   }
 
   maybeCheck(): void {
@@ -52,7 +65,8 @@ export class SQLiteSecurityMonitor {
     if (now < this.nextCheckAt) return;
     this.nextCheckAt = now + this.checkIntervalMs;
     this.enforcePermissions();
-    this.runIntegrityCheck();
+    const ok = this.runIntegrityCheck();
+    if (ok) this.maybeWriteIntegrityCheckpoint('scheduled');
   }
 
   private enforcePermissions(): void {
@@ -119,7 +133,7 @@ export class SQLiteSecurityMonitor {
     }
   }
 
-  private runIntegrityCheck(): void {
+  private runIntegrityCheck(): boolean {
     try {
       const row = this.db.prepare('PRAGMA quick_check;').get() as Record<string, unknown> | undefined;
       const values = row ? Object.values(row) : [];
@@ -133,7 +147,7 @@ export class SQLiteSecurityMonitor {
           message: 'SQLite integrity quick_check did not return ok',
           details: { result: first ?? null },
         });
-        return;
+        return false;
       }
 
       this.emit({
@@ -142,6 +156,7 @@ export class SQLiteSecurityMonitor {
         code: 'integrity_ok',
         message: 'SQLite integrity quick_check passed',
       });
+      return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.emit({
@@ -150,6 +165,63 @@ export class SQLiteSecurityMonitor {
         code: 'integrity_check_failed',
         message: 'SQLite integrity quick_check failed to execute',
         details: { error: message },
+      });
+      return false;
+    }
+  }
+
+  private maybeWriteIntegrityCheckpoint(reason: 'startup' | 'scheduled'): void {
+    const now = this.now();
+    if (now < this.nextCheckpointAt) return;
+    this.nextCheckpointAt = now + this.checkpointIntervalMs;
+    this.writeIntegrityCheckpoint(reason);
+  }
+
+  private writeIntegrityCheckpoint(reason: 'startup' | 'scheduled'): void {
+    try {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS integrity_checkpoints (
+          checkpoint_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          timestamp INTEGER NOT NULL,
+          db_hash TEXT NOT NULL,
+          reason TEXT NOT NULL
+        );
+      `);
+
+      try {
+        this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+      } catch {
+        // If checkpoint pragma is unsupported, continue with best-effort hash.
+      }
+
+      if (!existsSync(this.sqlitePath)) {
+        return;
+      }
+
+      const dbBytes = readFileSync(this.sqlitePath);
+      const dbHash = createHash('sha256').update(dbBytes).digest('hex');
+      this.db
+        .prepare('INSERT INTO integrity_checkpoints (timestamp, db_hash, reason) VALUES (?, ?, ?)')
+        .run(this.now(), dbHash, reason);
+
+      this.emit({
+        service: this.service,
+        severity: 'info',
+        code: 'integrity_checkpoint_written',
+        message: 'SQLite integrity checkpoint written',
+        details: {
+          reason,
+          hashPrefix: dbHash.slice(0, 12),
+        },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.emit({
+        service: this.service,
+        severity: 'warn',
+        code: 'integrity_checkpoint_failed',
+        message: 'Failed to write SQLite integrity checkpoint',
+        details: { reason, error: message },
       });
     }
   }

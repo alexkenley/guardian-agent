@@ -8,7 +8,7 @@
 
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { loadConfig, DEFAULT_CONFIG_PATH, deepMerge, validateConfig } from './config/loader.js';
@@ -46,6 +46,7 @@ import { composeGuardianSystemPrompt } from './prompts/guardian-core.js';
 import { MessageRouter, type RouteDecision } from './runtime/message-router.js';
 import { ModelFallbackChain } from './llm/model-fallback.js';
 import { createProviders } from './llm/provider.js';
+import { hashObjectSha256Hex } from './util/crypto-guardrails.js';
 
 const log = createLogger('main');
 
@@ -55,6 +56,15 @@ const __dirname = dirname(__filename);
 /** Default chat agent that uses the configured LLM provider. */
 /** Pattern matching approval-like messages from the user. */
 const APPROVAL_PATTERN = /^(yes|yep|yeah|y|approved?|go ahead|do it|confirm|ok|okay|sure|proceed|accept)\b/i;
+
+function generateSecureToken(byteLength = 24): string {
+  return randomBytes(byteLength).toString('hex');
+}
+
+function previewTokenForLog(token: string): string {
+  if (token.length <= 8) return token;
+  return `${token.slice(0, 4)}...${token.slice(-4)}`;
+}
 
 class ChatAgent extends BaseAgent {
   private systemPrompt: string;
@@ -636,8 +646,15 @@ function buildDashboardCallbacks(
     return (yaml.load(content) as Record<string, unknown>) ?? {};
   };
 
-  const persistAndApplyConfig = (rawConfig: Record<string, unknown>): { success: boolean; message: string } => {
+  const persistAndApplyConfig = (
+    rawConfig: Record<string, unknown>,
+    meta?: { changedBy?: string; reason?: string },
+  ): { success: boolean; message: string } => {
     try {
+      const previousRawConfig = loadRawConfig();
+      const oldPolicyHash = hashObjectSha256Hex(previousRawConfig);
+      const newPolicyHash = hashObjectSha256Hex(rawConfig);
+
       mkdirSync(dirname(configPath), { recursive: true });
       const yamlStr = yaml.dump(rawConfig, { lineWidth: -1, noRefs: true });
       writeFileSync(configPath, yamlStr, 'utf-8');
@@ -676,6 +693,21 @@ function buildDashboardCallbacks(
       };
       applyWebAuthRuntime(webAuthStateRef.current);
       configRef.current = nextConfig;
+
+      if (oldPolicyHash !== newPolicyHash) {
+        runtime.auditLog.record({
+          type: 'policy_changed',
+          severity: 'info',
+          agentId: 'config-center',
+          controller: 'ConfigCenter',
+          details: {
+            oldPolicyHash,
+            newPolicyHash,
+            changedBy: meta?.changedBy ?? 'dashboard',
+            reason: meta?.reason ?? 'config update',
+          },
+        });
+      }
       return { success: true, message: 'Config saved and applied.' };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -698,7 +730,10 @@ function buildDashboardCallbacks(
       autoScanIntervalMinutes: configRef.current.assistant.threatIntel.autoScanIntervalMinutes,
     };
 
-    return persistAndApplyConfig(rawConfig);
+    return persistAndApplyConfig(rawConfig, {
+      changedBy: 'threat-intel',
+      reason: 'threat intel settings update',
+    });
   };
 
   const getAuthStatus = () => ({
@@ -729,7 +764,10 @@ function buildDashboardCallbacks(
     };
     delete rawWeb.authToken;
     rawChannels.web = rawWeb;
-    return persistAndApplyConfig(rawConfig);
+    return persistAndApplyConfig(rawConfig, {
+      changedBy: 'auth-control',
+      reason: 'web auth settings update',
+    });
   };
 
   const persistToolsState = (policy: ToolPolicySnapshot): { success: boolean; message: string } => {
@@ -747,7 +785,10 @@ function buildDashboardCallbacks(
       allowedCommands: policy.sandbox.allowedCommands,
       allowedDomains: policy.sandbox.allowedDomains,
     };
-    return persistAndApplyConfig(rawConfig);
+    return persistAndApplyConfig(rawConfig, {
+      changedBy: 'tools-control-plane',
+      reason: 'tool policy update',
+    });
   };
 
   const buildProviderInfo = async (withConnectivity: boolean): Promise<DashboardProviderInfo[]> => {
@@ -864,7 +905,7 @@ function buildDashboardCallbacks(
     },
 
     onAuthRotate: async () => {
-      const token = randomUUID().replace(/-/g, '');
+      const token = generateSecureToken();
       webAuthStateRef.current = {
         ...webAuthStateRef.current,
         mode: webAuthStateRef.current.mode === 'disabled' ? 'bearer_required' : webAuthStateRef.current.mode,
@@ -1434,7 +1475,10 @@ function buildDashboardCallbacks(
             if (input.braveApiKey?.trim()) rawWS.braveApiKey = input.braveApiKey.trim();
           }
 
-          const result = persistAndApplyConfig(rawConfig);
+          const result = persistAndApplyConfig(rawConfig, {
+            changedBy: 'setup-wizard',
+            reason: 'setup apply',
+          });
           analytics.track({
             type: result.success ? 'setup_applied' : 'setup_apply_failed',
             channel: 'system',
@@ -1506,7 +1550,10 @@ function buildDashboardCallbacks(
             rawConfig.llm = llmSection;
           }
 
-          const result = persistAndApplyConfig(rawConfig);
+          const result = persistAndApplyConfig(rawConfig, {
+            changedBy: 'config-center',
+            reason: 'direct config update',
+          });
           analytics.track({
             type: result.success ? 'config_update_success' : 'config_update_failed',
             channel: 'system',
@@ -1789,7 +1836,7 @@ async function main(): Promise<void> {
     message: string;
     details?: Record<string, unknown>;
   }) => {
-    if (event.code === 'integrity_ok') {
+    if (event.code === 'integrity_ok' || event.code === 'integrity_checkpoint_written') {
       return;
     }
 
@@ -1799,17 +1846,19 @@ async function main(): Promise<void> {
       log.info({ ...event }, 'SQLite security event');
     }
 
-    runtime.auditLog.record({
-      type: 'anomaly_detected',
-      severity: event.severity,
-      agentId: 'storage',
-      details: {
-        source: 'sqlite_monitor',
-        anomalyType: event.code,
-        description: event.message,
-        evidence: event.details ?? {},
-      },
-    });
+    if (event.severity === 'warn') {
+      runtime.auditLog.record({
+        type: 'anomaly_detected',
+        severity: event.severity,
+        agentId: 'storage',
+        details: {
+          source: 'sqlite_monitor',
+          anomalyType: event.code,
+          description: event.message,
+          evidence: event.details ?? {},
+        },
+      });
+    }
 
     analytics?.track({
       type: `sqlite_${event.code}`,
@@ -2005,7 +2054,7 @@ async function main(): Promise<void> {
   const shouldGenerateToken = needsToken && (!configuredToken || rotateOnStartup);
   const effectiveToken = !needsToken
     ? configuredToken || undefined
-    : (shouldGenerateToken ? randomUUID().replace(/-/g, '') : configuredToken);
+    : (shouldGenerateToken ? generateSecureToken() : configuredToken);
   const webAuthStateRef: { current: WebAuthRuntimeConfig } = {
     current: {
       mode: webMode,
@@ -2392,14 +2441,14 @@ async function main(): Promise<void> {
     if (webAuthStateRef.current.mode !== 'disabled' && !webAuthStateRef.current.token) {
       webAuthStateRef.current = {
         ...webAuthStateRef.current,
-        token: randomUUID().replace(/-/g, ''),
+        token: generateSecureToken(),
         tokenSource: 'ephemeral',
       };
     }
     if (webAuthStateRef.current.mode === 'bearer_required' && webAuthStateRef.current.tokenSource === 'ephemeral') {
       log.warn(
         {
-          token: webAuthStateRef.current.token,
+          tokenPreview: webAuthStateRef.current.token ? previewTokenForLog(webAuthStateRef.current.token) : undefined,
           mode: webAuthStateRef.current.mode,
           host: config.channels.web.host ?? 'localhost',
           port: config.channels.web.port ?? 3000,

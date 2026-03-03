@@ -320,7 +320,7 @@ In-memory ring buffer that records all security events, backed by optional SHA-2
 
 The chain can be verified via `GET /api/audit/verify` or the web Security page.
 
-### Event Types (12)
+### Event Types (13)
 
 | Type | Description | Typical Severity |
 |------|-------------|-----------------|
@@ -333,6 +333,7 @@ The chain can be verified via `GET /api/audit/verify` or the web Security page.
 | `input_sanitized` | Invisible chars stripped from input | info |
 | `rate_limited` | Rate limit hit | warn |
 | `capability_probe` | Agent probed beyond its capabilities | warn |
+| `policy_changed` | Config policy hash changed (old/new hash recorded) | info |
 | `anomaly_detected` | Sentinel detected anomaly | warn/critical |
 | `agent_error` | Agent error (for correlation) | warn |
 | `agent_stalled` | Agent stalled (for correlation) | warn |
@@ -349,6 +350,65 @@ Events are also logged to pino at appropriate levels:
 - `critical` → `log.error()`
 - `warn` → `log.warn()`
 - `info` → `log.info()`
+
+---
+
+## Cryptographic Mechanisms and Integrity Hardening
+
+GuardianAgent adds cryptographic controls in security-sensitive paths to reduce secret exposure and improve tamper detection.
+
+### Redacted Tool-Argument Hashing
+
+**Files:** `src/util/crypto-guardrails.ts`, `src/tools/executor.ts`, `src/tools/approvals.ts`
+
+When a tool job is created, arguments are recursively redacted by sensitive key name and canonicalized before hashing:
+- `argsHash` = SHA-256 of canonical redacted JSON
+- `argsPreview` stores redacted content only (no raw secrets)
+- Approval records store redacted args + `argsHash` for deterministic correlation
+
+This preserves observability ("is this the same request?") without persisting cleartext credentials in job/approval metadata.
+
+### Constant-Time Auth Token Comparison
+
+**Files:** `src/util/crypto-guardrails.ts`, `src/channels/web.ts`
+
+Web bearer token checks use `timingSafeEqual` wrappers for equal-length string comparisons. This is applied to standard API auth and SSE auth checks to reduce token oracle timing leakage.
+
+### Privileged HMAC Tickets for Auth Mutations
+
+**File:** `src/channels/web.ts`
+
+Sensitive auth endpoints now require a short-lived signed privileged ticket in addition to bearer auth:
+- `POST /api/auth/ticket` issues a ticket for a specific action (`auth.config`, `auth.rotate`, `auth.reveal`, `auth.revoke`)
+- Ticket payload includes `action`, timestamp, and nonce, signed with HMAC-SHA256
+- Default TTL is 300 seconds
+- Nonces are tracked to block replay (`usedPrivilegedTicketNonces`)
+- Signature and bearer comparisons use constant-time equality helpers
+- If auth mode is `disabled`, ticket minting is localhost-only
+
+This constrains high-impact auth control-plane operations to explicit, action-scoped, single-use authorization artifacts.
+
+### Policy Hash Audit Trail
+
+**File:** `src/index.ts`
+
+Configuration writes compute deterministic SHA-256 hashes of the previous and next raw config:
+- `oldPolicyHash`
+- `newPolicyHash`
+
+If hashes differ, Runtime records a `policy_changed` audit event with `changedBy` and `reason` metadata, creating an immutable change trail tied to the existing audit persistence chain.
+
+### SQLite Integrity Checkpoints
+
+**Files:** `src/runtime/sqlite-security.ts`, `src/index.ts`
+
+SQLite monitoring now includes periodic cryptographic checkpoints:
+- Run `PRAGMA quick_check` on startup and schedule
+- On integrity success, write checkpoint row (`integrity_checkpoints` table) with SHA-256 hash of DB bytes
+- Attempt WAL truncate checkpoint before hashing (best effort)
+- Emit `integrity_checkpoint_written` / `integrity_checkpoint_failed` security events
+
+This supplements point-in-time integrity checks with historical hash evidence for storage drift/tamper investigations.
 
 ---
 

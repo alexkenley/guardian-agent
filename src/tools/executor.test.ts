@@ -88,6 +88,38 @@ describe('ToolExecutor', () => {
     expect(text).toBe('hello');
   });
 
+  it('stores redacted argument previews and deterministic hashes for approvals', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const run = await executor.runTool({
+      toolName: 'fs_write',
+      args: {
+        path: 'note.txt',
+        content: 'hello',
+        access_token: 'super-secret-token',
+      },
+      origin: 'web',
+    });
+    expect(run.status).toBe('pending_approval');
+
+    const jobs = executor.listJobs(1);
+    expect(jobs[0].argsHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(jobs[0].argsPreview).toContain('[REDACTED]');
+    expect(jobs[0].argsPreview).not.toContain('super-secret-token');
+
+    const approvals = executor.listApprovals(1);
+    expect(approvals[0].argsHash).toBe(jobs[0].argsHash);
+    expect(String(approvals[0].args.access_token)).toBe('[REDACTED]');
+  });
+
   it('executes read-only tools without approval', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({

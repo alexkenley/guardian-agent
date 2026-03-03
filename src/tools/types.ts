@@ -60,6 +60,8 @@ export interface ToolJobRecord {
   userId?: string;
   channel?: string;
   requestId?: string;
+  /** SHA-256 hash of redacted tool arguments for correlation without raw secrets. */
+  argsHash?: string;
   argsPreview: string;
   status: ToolJobStatus;
   createdAt: number;
@@ -78,6 +80,9 @@ export interface ToolApprovalRequest {
   toolName: string;
   risk: ToolRisk;
   origin: 'assistant' | 'cli' | 'web';
+  /** SHA-256 hash of redacted arguments. */
+  argsHash?: string;
+  /** Redacted approval arguments (never stores raw sensitive values). */
   args: Record<string, unknown>;
   createdAt: number;
   status: 'pending' | 'approved' | 'denied';
