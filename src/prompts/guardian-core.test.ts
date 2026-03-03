@@ -12,4 +12,11 @@ describe('guardian-core prompt', () => {
     expect(combined).toContain('Additional role instructions:');
     expect(combined).toContain('You specialize in software engineering tasks.');
   });
+
+  it('injects soul guidance without replacing runtime safety precedence', () => {
+    const combined = composeGuardianSystemPrompt(undefined, 'Act calm and methodical.');
+    expect(combined).toContain('SOUL profile (identity/intent guidance):');
+    expect(combined).toContain('Act calm and methodical.');
+    expect(combined).toContain('must never override non-negotiable Guardian safety rules');
+  });
 });

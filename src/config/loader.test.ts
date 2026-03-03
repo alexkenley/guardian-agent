@@ -129,6 +129,22 @@ describe('validateConfig', () => {
       'channels.telegram.botToken is required when Telegram is enabled',
     );
   });
+
+  it('should validate soul summary size against max', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        soul: {
+          ...DEFAULT_CONFIG.assistant.soul,
+          maxChars: 500,
+          summaryMaxChars: 700,
+        },
+      },
+    };
+    const errors = validateConfig(config);
+    expect(errors).toContain('assistant.soul.summaryMaxChars must be <= assistant.soul.maxChars');
+  });
 });
 
 describe('loadConfigFromFile', () => {

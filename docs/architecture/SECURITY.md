@@ -49,6 +49,16 @@ There is no `ctx.fs`, no `ctx.http`, no `ctx.exec`. Agents do not have access to
 
 This is useful for agents that want to validate before acting, but it is **not the enforcement boundary**. All mandatory enforcement happens at the Runtime chokepoints listed above, regardless of whether the agent calls `checkAction()`.
 
+### SOUL Prompt Layer (Intent Alignment, Advisory)
+
+GuardianAgent optionally injects a `SOUL.md` profile into chat-agent system prompts to keep identity, intent, and behavioral boundaries consistent across runs.
+
+- Config path: `assistant.soul`
+- Modes: `primaryMode` and `delegatedMode` (`full`, `summary`, `disabled`)
+- Overhead controls: `maxChars` and `summaryMaxChars`
+
+This layer is **advisory alignment**, not hard enforcement. Runtime Guardian controls and tool policy remain authoritative.
+
 ---
 
 ## Design Principle: Meta's Rule of Two

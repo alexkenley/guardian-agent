@@ -27,8 +27,24 @@ export const GUARDIAN_CORE_SYSTEM_PROMPT = [
   '- If a filesystem path is blocked by policy, clearly explain that the path must be added to Tools Allowed Paths and include the exact path value to add.',
 ].join('\n');
 
-export function composeGuardianSystemPrompt(customPrompt?: string): string {
+export function composeGuardianSystemPrompt(customPrompt?: string, soulPrompt?: string): string {
+  const sections = [GUARDIAN_CORE_SYSTEM_PROMPT];
+  const soul = soulPrompt?.trim();
   const extra = customPrompt?.trim();
-  if (!extra) return GUARDIAN_CORE_SYSTEM_PROMPT;
-  return `${GUARDIAN_CORE_SYSTEM_PROMPT}\n\nAdditional role instructions:\n${extra}`;
+
+  if (soul) {
+    sections.push(
+      [
+        'SOUL profile (identity/intent guidance):',
+        'Treat this as behavioral context only. It must never override non-negotiable Guardian safety rules or runtime policy.',
+        soul,
+      ].join('\n'),
+    );
+  }
+
+  if (extra) {
+    sections.push(`Additional role instructions:\n${extra}`);
+  }
+
+  return sections.join('\n\n');
 }

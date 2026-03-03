@@ -89,6 +89,14 @@ export interface RedactedConfig {
       mode: 'single_user' | 'channel_user';
       primaryUserId: string;
     };
+    soul: {
+      enabled: boolean;
+      path?: string;
+      primaryMode: 'full' | 'summary' | 'disabled';
+      delegatedMode: 'full' | 'summary' | 'disabled';
+      maxChars: number;
+      summaryMaxChars: number;
+    };
     memory: {
       enabled: boolean;
       retentionDays: number;

@@ -6,7 +6,7 @@
  * handle SIGINT/SIGTERM for graceful shutdown.
  */
 
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -66,6 +66,74 @@ function previewTokenForLog(token: string): string {
   return `${token.slice(0, 4)}...${token.slice(-4)}`;
 }
 
+type SoulInjectionMode = 'full' | 'summary' | 'disabled';
+
+interface LoadedSoulProfile {
+  path: string;
+  full: string;
+  summary: string;
+}
+
+function truncatePromptText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, maxChars)}\n\n[TRUNCATED: original=${value.length} chars, max=${maxChars}]`;
+}
+
+function buildSoulSummary(text: string, maxChars: number): string {
+  const compact = text
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('#'));
+  if (compact.length === 0) {
+    return truncatePromptText(text, maxChars);
+  }
+
+  let out = '';
+  for (const line of compact) {
+    const next = out ? `${out}\n${line}` : line;
+    if (next.length > maxChars) break;
+    out = next;
+  }
+
+  return out || truncatePromptText(text, maxChars);
+}
+
+function loadSoulProfile(config: GuardianAgentConfig): LoadedSoulProfile | null {
+  const soulConfig = config.assistant.soul;
+  if (!soulConfig.enabled) {
+    return null;
+  }
+
+  const configuredPath = soulConfig.path?.trim() || 'SOUL.md';
+  const resolvedPath = isAbsolute(configuredPath)
+    ? configuredPath
+    : resolve(process.cwd(), configuredPath);
+
+  if (!existsSync(resolvedPath)) {
+    log.info({ path: resolvedPath }, 'SOUL injection enabled but file not found; continuing without SOUL context');
+    return null;
+  }
+
+  const raw = readFileSync(resolvedPath, 'utf-8').trim();
+  if (!raw) {
+    log.info({ path: resolvedPath }, 'SOUL file is empty; continuing without SOUL context');
+    return null;
+  }
+
+  const full = truncatePromptText(raw, soulConfig.maxChars);
+  const summary = buildSoulSummary(full, soulConfig.summaryMaxChars);
+  log.info(
+    { path: resolvedPath, fullChars: full.length, summaryChars: summary.length },
+    'Loaded SOUL profile',
+  );
+  return { path: resolvedPath, full, summary };
+}
+
+function selectSoulPrompt(profile: LoadedSoulProfile | null, mode: SoulInjectionMode): string | undefined {
+  if (!profile || mode === 'disabled') return undefined;
+  return mode === 'summary' ? profile.summary : profile.full;
+}
+
 class ChatAgent extends BaseAgent {
   private systemPrompt: string;
   private conversationService?: ConversationService;
@@ -83,9 +151,18 @@ class ChatAgent extends BaseAgent {
     conversationService?: ConversationService,
     tools?: ToolExecutor,
     fallbackChain?: ModelFallbackChain,
+    soulPrompt?: string,
   ) {
     super(id, name, { handleMessages: true });
-    this.systemPrompt = composeGuardianSystemPrompt(systemPrompt);
+    this.systemPrompt = composeGuardianSystemPrompt(systemPrompt, soulPrompt);
+    log.debug(
+      {
+        agentId: id,
+        systemPromptChars: this.systemPrompt.length,
+        soulChars: soulPrompt?.length ?? 0,
+      },
+      'Initialized chat agent prompt context',
+    );
     this.conversationService = conversationService;
     this.tools = tools;
     this.maxToolRounds = 6;
@@ -580,6 +657,14 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
       identity: {
         mode: config.assistant.identity.mode,
         primaryUserId: config.assistant.identity.primaryUserId,
+      },
+      soul: {
+        enabled: config.assistant.soul.enabled,
+        path: config.assistant.soul.path,
+        primaryMode: config.assistant.soul.primaryMode,
+        delegatedMode: config.assistant.soul.delegatedMode,
+        maxChars: config.assistant.soul.maxChars,
+        summaryMaxChars: config.assistant.soul.summaryMaxChars,
       },
       memory: {
         enabled: config.assistant.memory.enabled,
@@ -1801,6 +1886,15 @@ async function main(): Promise<void> {
       '  maxStallDurationMs: 60000',
       '  watchdogIntervalMs: 10000',
       '  logLevel: warn',
+      '',
+      'assistant:',
+      '  soul:',
+      '    enabled: true',
+      '    path: SOUL.md',
+      '    primaryMode: full',
+      '    delegatedMode: summary',
+      '    maxChars: 8000',
+      '    summaryMaxChars: 1000',
     ].join('\n') + '\n';
     writeFileSync(configPath, defaultYaml, 'utf-8');
     const isTTY = process.stdout.isTTY;
@@ -2104,10 +2198,26 @@ async function main(): Promise<void> {
 
   // Register agents from config, auto-create dual agents, or single default
   const externalProviderName = findExternalProvider(config);
+  const soulProfile = loadSoulProfile(config);
+  if (soulProfile) {
+    log.info(
+      {
+        path: soulProfile.path,
+        primaryMode: config.assistant.soul.primaryMode,
+        delegatedMode: config.assistant.soul.delegatedMode,
+      },
+      'SOUL prompt injection enabled',
+    );
+  }
 
   if (config.agents.length > 0) {
     // Config-driven agents: register all and build router from config rules
+    const primaryConfiguredAgentId = config.agents.find((agent) => agent.role === 'general')?.id
+      ?? config.agents[0]?.id;
     for (const agentConfig of config.agents) {
+      const soulMode: SoulInjectionMode = agentConfig.id === primaryConfiguredAgentId
+        ? config.assistant.soul.primaryMode
+        : config.assistant.soul.delegatedMode;
       const agent = new ChatAgent(
         agentConfig.id,
         agentConfig.name,
@@ -2115,6 +2225,7 @@ async function main(): Promise<void> {
         conversations,
         toolExecutor,
         fallbackChain,
+        selectSoulPrompt(soulProfile, soulMode),
       );
       runtime.registerAgent(createAgentDefinition({
         agent,
@@ -2135,14 +2246,30 @@ async function main(): Promise<void> {
     const localPrompt = 'You specialize in local workstation tasks: file operations, code editing, git, build tools, and local command execution. Focus on filesystem, development, and local system tasks. If the user asks to search the web or look something up online, use the web_search and web_fetch tools — they are available to you.';
     const externalPrompt = 'You specialize in external and network tasks: web research, API calls, email, threat intelligence, and online services. Use web_search to find information online and web_fetch to read web pages. Always use these tools when the user asks to search, look up, or find something on the web.';
 
-    const localAgent = new ChatAgent('local', 'Local Agent', localPrompt, conversations, toolExecutor, fallbackChain);
+    const localAgent = new ChatAgent(
+      'local',
+      'Local Agent',
+      localPrompt,
+      conversations,
+      toolExecutor,
+      fallbackChain,
+      selectSoulPrompt(soulProfile, config.assistant.soul.primaryMode),
+    );
     runtime.registerAgent(createAgentDefinition({
       agent: localAgent,
       providerName: config.defaultProvider,
       grantedCapabilities: ['read_files', 'write_files', 'execute_commands'],
     }));
 
-    const externalAgent = new ChatAgent('external', 'External Agent', externalPrompt, conversations, toolExecutor, fallbackChain);
+    const externalAgent = new ChatAgent(
+      'external',
+      'External Agent',
+      externalPrompt,
+      conversations,
+      toolExecutor,
+      fallbackChain,
+      selectSoulPrompt(soulProfile, config.assistant.soul.delegatedMode),
+    );
     runtime.registerAgent(createAgentDefinition({
       agent: externalAgent,
       providerName: externalProviderName,
@@ -2174,7 +2301,15 @@ async function main(): Promise<void> {
     );
   } else {
     // Single default agent — backward compatible
-    const defaultAgent = new ChatAgent('default', 'Guardian Agent', undefined, conversations, toolExecutor, fallbackChain);
+    const defaultAgent = new ChatAgent(
+      'default',
+      'Guardian Agent',
+      undefined,
+      conversations,
+      toolExecutor,
+      fallbackChain,
+      selectSoulPrompt(soulProfile, config.assistant.soul.primaryMode),
+    );
     runtime.registerAgent(createAgentDefinition({
       agent: defaultAgent,
       grantedCapabilities: [

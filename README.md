@@ -83,6 +83,7 @@ Test agent behavior through the real Runtime with Guardian active:
 - Least-privilege capability model: per-agent capability grants with immutable frozen context (`Object.freeze`).
 - Tool governance and sandboxing: approval workflows, per-tool policy overrides, path/command/domain allowlists, and risk-tiered tool classes.
 - Secret exfiltration controls: multi-pattern secret scanning, response redaction/blocking, and inter-agent payload blocking.
+- Intent hardening via SOUL profile: configurable `assistant.soul` injection with primary/delegated modes (`full`, `summary`, `disabled`) to balance consistency vs token overhead.
 - Cryptographic correlation for tool actions: deterministic SHA-256 hashes of redacted tool args (`argsHash`) for approval/job traceability without raw secret retention.
 - Web auth hardening: constant-time bearer comparison plus short-lived signed privileged tickets for auth configuration/rotation/reveal/revoke endpoints.
 - Tamper-evident policy-change trail: SHA-256 config snapshots (`oldPolicyHash`/`newPolicyHash`) recorded as `policy_changed` audit events.
@@ -168,6 +169,13 @@ assistant:
   identity:
     mode: single_user
     primaryUserId: owner
+  soul:
+    enabled: true
+    path: ./SOUL.md
+    primaryMode: full
+    delegatedMode: summary
+    maxChars: 8000
+    summaryMaxChars: 1000
   memory:
     enabled: true
     sqlitePath: ~/.guardianagent/assistant-memory.sqlite

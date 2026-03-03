@@ -127,6 +127,26 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     errors.push("assistant.identity.mode must be 'single_user' or 'channel_user'");
   }
 
+  const soul = assistant.soul;
+  if (soul.path !== undefined && !soul.path.trim()) {
+    errors.push('assistant.soul.path must be a non-empty string when provided');
+  }
+  if (soul.maxChars < 256) {
+    errors.push('assistant.soul.maxChars must be >= 256');
+  }
+  if (soul.summaryMaxChars < 64) {
+    errors.push('assistant.soul.summaryMaxChars must be >= 64');
+  }
+  if (soul.summaryMaxChars > soul.maxChars) {
+    errors.push('assistant.soul.summaryMaxChars must be <= assistant.soul.maxChars');
+  }
+  if (!['full', 'summary', 'disabled'].includes(soul.primaryMode)) {
+    errors.push("assistant.soul.primaryMode must be 'full', 'summary', or 'disabled'");
+  }
+  if (!['full', 'summary', 'disabled'].includes(soul.delegatedMode)) {
+    errors.push("assistant.soul.delegatedMode must be 'full', 'summary', or 'disabled'");
+  }
+
   if (assistant.memory.maxTurns < 1) {
     errors.push('assistant.memory.maxTurns must be >= 1');
   }

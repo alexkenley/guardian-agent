@@ -206,6 +206,14 @@ describe('CLIChannel with DashboardCallbacks', () => {
       assistant: {
         setupCompleted: false,
         identity: { mode: 'single_user', primaryUserId: 'owner' },
+        soul: {
+          enabled: true,
+          path: 'SOUL.md',
+          primaryMode: 'full',
+          delegatedMode: 'summary',
+          maxChars: 8000,
+          summaryMaxChars: 1000,
+        },
         memory: { enabled: true, retentionDays: 30 },
         analytics: { enabled: true, retentionDays: 30 },
         quickActions: { enabled: true },
@@ -1433,6 +1441,14 @@ describe('WebChannel', () => {
         assistant: {
           setupCompleted: false,
           identity: { mode: 'single_user', primaryUserId: 'owner' },
+          soul: {
+            enabled: true,
+            path: 'SOUL.md',
+            primaryMode: 'full',
+            delegatedMode: 'summary',
+            maxChars: 8000,
+            summaryMaxChars: 1000,
+          },
           memory: { enabled: true, retentionDays: 30 },
           analytics: { enabled: true, retentionDays: 30 },
           quickActions: { enabled: true },

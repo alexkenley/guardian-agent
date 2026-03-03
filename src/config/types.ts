@@ -261,6 +261,22 @@ export interface AssistantIdentityConfig {
   aliases?: Record<string, string>;
 }
 
+/** SOUL prompt injection settings for agent identity/intent context. */
+export interface AssistantSoulConfig {
+  /** Enable SOUL prompt injection. */
+  enabled: boolean;
+  /** Path to SOUL markdown file (absolute or relative to process cwd). */
+  path?: string;
+  /** Hard cap for loaded SOUL file characters. */
+  maxChars: number;
+  /** Injection mode for the primary user-facing agent. */
+  primaryMode: 'full' | 'summary' | 'disabled';
+  /** Injection mode for delegated/non-primary agents. */
+  delegatedMode: 'full' | 'summary' | 'disabled';
+  /** Character cap for derived summary mode prompt text. */
+  summaryMaxChars: number;
+}
+
 /** Conversation memory persistence settings. */
 export interface AssistantMemoryConfig {
   /** Enable conversation memory. */
@@ -412,6 +428,7 @@ export interface AssistantToolsConfig {
 export interface AssistantConfig {
   setup: AssistantSetupConfig;
   identity: AssistantIdentityConfig;
+  soul: AssistantSoulConfig;
   memory: AssistantMemoryConfig;
   analytics: AssistantAnalyticsConfig;
   quickActions: AssistantQuickActionsConfig;
@@ -503,6 +520,14 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       mode: 'single_user',
       primaryUserId: 'owner',
       aliases: {},
+    },
+    soul: {
+      enabled: true,
+      path: 'SOUL.md',
+      maxChars: 8000,
+      primaryMode: 'full',
+      delegatedMode: 'summary',
+      summaryMaxChars: 1000,
     },
     memory: {
       enabled: true,
