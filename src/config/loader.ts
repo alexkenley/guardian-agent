@@ -165,6 +165,33 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     }
   }
 
+  const mcp = assistant.tools.mcp;
+  if (mcp?.enabled) {
+    if (!Array.isArray(mcp.servers) || mcp.servers.length === 0) {
+      errors.push('assistant.tools.mcp.servers must include at least one server when MCP is enabled');
+    } else {
+      const seenIds = new Set<string>();
+      for (const server of mcp.servers) {
+        if (!server.id?.trim()) {
+          errors.push('assistant.tools.mcp server id is required');
+        } else if (seenIds.has(server.id)) {
+          errors.push(`assistant.tools.mcp server id '${server.id}' is duplicated`);
+        } else {
+          seenIds.add(server.id);
+        }
+        if (!server.name?.trim()) {
+          errors.push(`assistant.tools.mcp server '${server.id || '(unnamed)'}' name is required`);
+        }
+        if (!server.command?.trim()) {
+          errors.push(`assistant.tools.mcp server '${server.id || '(unnamed)'}' command is required`);
+        }
+        if (server.timeoutMs !== undefined && server.timeoutMs < 1000) {
+          errors.push(`assistant.tools.mcp server '${server.id}' timeoutMs must be >= 1000`);
+        }
+      }
+    }
+  }
+
   const threatIntel = assistant.threatIntel;
   if (!['manual', 'assisted', 'autonomous'].includes(threatIntel.responseMode)) {
     errors.push("assistant.threatIntel.responseMode must be 'manual', 'assisted', or 'autonomous'");

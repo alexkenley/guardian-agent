@@ -145,6 +145,18 @@ function splitMessages(messages: ChatMessage[]): {
   for (const msg of messages) {
     if (msg.role === 'system') {
       systemPrompt = (systemPrompt ? systemPrompt + '\n' : '') + msg.content;
+    } else if (msg.role === 'assistant' && msg.toolCalls?.length) {
+      // Assistant message with tool calls → include tool_use content blocks
+      const content: Anthropic.ContentBlockParam[] = [];
+      if (msg.content) {
+        content.push({ type: 'text', text: msg.content });
+      }
+      for (const tc of msg.toolCalls) {
+        let input: Record<string, unknown> = {};
+        try { input = JSON.parse(tc.arguments) as Record<string, unknown>; } catch { /* empty */ }
+        content.push({ type: 'tool_use', id: tc.id, name: tc.name, input });
+      }
+      userMessages.push({ role: 'assistant', content });
     } else if (msg.role === 'user' || msg.role === 'assistant') {
       userMessages.push({ role: msg.role, content: msg.content });
     } else if (msg.role === 'tool') {

@@ -30,6 +30,16 @@ export interface SetupApplyInput {
   telegramBotToken?: string;
   telegramAllowedChatIds?: number[];
   setupCompleted?: boolean;
+  /** Fallback provider names (keys in llm map) tried when default fails. */
+  fallbacks?: string[];
+  /** Web search provider preference. */
+  webSearchProvider?: 'auto' | 'perplexity' | 'brave' | 'duckduckgo';
+  /** Perplexity API key for synthesized search answers. */
+  perplexityApiKey?: string;
+  /** OpenRouter API key (Perplexity via proxy — has free tier). */
+  openRouterApiKey?: string;
+  /** Brave Search API key. */
+  braveApiKey?: string;
 }
 
 export function evaluateSetupStatus(

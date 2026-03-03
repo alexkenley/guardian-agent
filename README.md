@@ -31,6 +31,30 @@ GuardianAgent is a self-contained orchestrator for personal assistant AI. Agents
 
 All security enforcement is **mandatory at the Runtime level**. Agents cannot bypass it.
 
+## Multi-Agent Orchestration
+
+Three orchestration primitives compose sub-agents into structured workflows:
+
+- **SequentialAgent** — pipeline of steps with inter-step state passing via `inputKey`/`outputKey`
+- **ParallelAgent** — concurrent fan-out with optional `maxConcurrency` limit
+- **LoopAgent** — iterative refinement with configurable condition and mandatory `maxIterations` safety cap
+
+Every sub-agent dispatch passes through the full Guardian pipeline. Orchestration does not create a security bypass path. Inter-step data flows through `SharedState` — a per-invocation, orchestrator-owned key-value store that sub-agents cannot access.
+
+## MCP Tool Server Integration
+
+The MCP (Model Context Protocol) client consumes tools from external MCP-compatible servers over stdio transport. Tool names are namespaced (`mcp:<serverId>:<toolName>`) to prevent collisions. All MCP tool calls pass through Guardian admission and are classified as `network` risk.
+
+## Agent Evaluation Framework
+
+Test agent behavior through the real Runtime with Guardian active:
+
+- 5 content matchers (exact, contains, not_contains, regex, not_empty)
+- Tool trajectory validation with ordered matching and optional steps
+- 4 independent safety metrics (secret scanning, blocked patterns, denial detection, injection scoring)
+- JSON-based test suites (`.eval.json`) for CI integration
+- Human-readable reports with per-metric pass rates
+
 ## Three-Layer Defense
 
 **Layer 1 — Proactive (before the agent sees input):**
@@ -241,6 +265,10 @@ Full documentation in `docs/architecture/`:
 - [Decisions](docs/architecture/DECISIONS.md) — architecture decision records
 
 Implementation specs in `docs/specs/`:
+- [Orchestration Agents](docs/specs/ORCHESTRATION-AGENTS-SPEC.md)
+- [MCP Client](docs/specs/MCP-CLIENT-SPEC.md)
+- [Evaluation Framework](docs/specs/EVAL-FRAMEWORK-SPEC.md)
+- [Shared State](docs/specs/SHARED-STATE-SPEC.md)
 - [Setup And Config Flow](docs/specs/SETUP-WIZARD-SPEC.md)
 - [Config Center](docs/specs/CONFIG-CENTER-SPEC.md)
 - [Assistant Orchestrator](docs/specs/ASSISTANT-ORCHESTRATOR-SPEC.md)

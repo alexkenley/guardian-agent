@@ -330,4 +330,337 @@ describe('ToolExecutor', () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  describe('web_search', () => {
+    it('is registered as a builtin tool', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        allowedPaths: [root],
+        allowedCommands: ['echo'],
+        allowedDomains: ['localhost'],
+      });
+      const names = executor.listToolDefinitions().map((t) => t.name);
+      expect(names).toContain('web_search');
+    });
+
+    it('returns error for empty query', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: [],
+      });
+      const run = await executor.runTool({
+        toolName: 'web_search',
+        args: { query: '  ' },
+        origin: 'web',
+      });
+      expect(run.success).toBe(false);
+    });
+
+    it('parses DuckDuckGo HTML results', async () => {
+      const root = createExecutorRoot();
+      const originalFetch = globalThis.fetch;
+      const ddgHtml = `
+        <html><body>
+          <div class="result results_links results_links_deep web-result">
+            <a class="result__a" href="https://example.com/page1">Example Page</a>
+            <a class="result__snippet">A great snippet about the topic.</a>
+          </div>
+          <div class="result results_links results_links_deep web-result">
+            <a class="result__a" href="https://example.com/page2">Second Result</a>
+            <a class="result__snippet">Another snippet here.</a>
+          </div>
+        </body></html>
+      `;
+      globalThis.fetch = (async () => new Response(ddgHtml, {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      })) as typeof fetch;
+      try {
+        const executor = new ToolExecutor({
+          enabled: true,
+          workspaceRoot: root,
+          policyMode: 'autonomous',
+          allowedPaths: [root],
+          allowedCommands: [],
+          allowedDomains: [],
+        });
+        const run = await executor.runTool({
+          toolName: 'web_search',
+          args: { query: 'restaurants in Brisbane', maxResults: 5 },
+          origin: 'web',
+        });
+        expect(run.success).toBe(true);
+        const output = run.output as { provider: string; results: Array<{ title: string; url: string; snippet: string }>; cached: boolean; _untrusted: string };
+        expect(output.provider).toBe('duckduckgo');
+        expect(output.results.length).toBeGreaterThanOrEqual(1);
+        expect(output.results[0].title).toBe('Example Page');
+        expect(output.results[0].url).toBe('https://example.com/page1');
+        expect(output.cached).toBe(false);
+        expect(output._untrusted).toContain('untrusted');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('returns cached results on second identical call', async () => {
+      const root = createExecutorRoot();
+      const originalFetch = globalThis.fetch;
+      let fetchCount = 0;
+      const ddgHtml = `
+        <html><body>
+          <div class="result results_links">
+            <a class="result__a" href="https://example.com/cached">Cached Result</a>
+            <a class="result__snippet">Cached snippet.</a>
+          </div>
+        </body></html>
+      `;
+      globalThis.fetch = (async () => {
+        fetchCount++;
+        return new Response(ddgHtml, { status: 200, headers: { 'Content-Type': 'text/html' } });
+      }) as typeof fetch;
+      try {
+        const executor = new ToolExecutor({
+          enabled: true,
+          workspaceRoot: root,
+          policyMode: 'autonomous',
+          allowedPaths: [root],
+          allowedCommands: [],
+          allowedDomains: [],
+        });
+        const run1 = await executor.runTool({
+          toolName: 'web_search',
+          args: { query: 'cache test', maxResults: 5 },
+          origin: 'web',
+        });
+        expect(run1.success).toBe(true);
+        const out1 = run1.output as { cached: boolean };
+        expect(out1.cached).toBe(false);
+
+        const run2 = await executor.runTool({
+          toolName: 'web_search',
+          args: { query: 'cache test', maxResults: 5 },
+          origin: 'web',
+        });
+        expect(run2.success).toBe(true);
+        const out2 = run2.output as { cached: boolean };
+        expect(out2.cached).toBe(true);
+        // fetch should only be called once (second call hits cache)
+        expect(fetchCount).toBe(1);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('uses Brave provider when configured', async () => {
+      const root = createExecutorRoot();
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+        const urlStr = typeof _url === 'string' ? _url : _url.toString();
+        if (urlStr.includes('api.search.brave.com')) {
+          expect(init?.headers).toBeDefined();
+          const headers = init!.headers as Record<string, string>;
+          expect(headers['X-Subscription-Token']).toBe('test-brave-key');
+          return new Response(JSON.stringify({
+            web: {
+              results: [
+                { title: 'Brave Result', url: 'https://brave.example.com', description: 'A brave snippet.' },
+              ],
+            },
+          }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        return new Response('not found', { status: 404 });
+      }) as typeof fetch;
+      try {
+        const executor = new ToolExecutor({
+          enabled: true,
+          workspaceRoot: root,
+          policyMode: 'autonomous',
+          allowedPaths: [root],
+          allowedCommands: [],
+          allowedDomains: [],
+          webSearch: { braveApiKey: 'test-brave-key' },
+        });
+        const run = await executor.runTool({
+          toolName: 'web_search',
+          args: { query: 'brave test', provider: 'brave' },
+          origin: 'web',
+        });
+        expect(run.success).toBe(true);
+        const output = run.output as { provider: string; results: Array<{ title: string }> };
+        expect(output.provider).toBe('brave');
+        expect(output.results[0].title).toBe('Brave Result');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+  });
+
+  describe('web_fetch', () => {
+    it('is registered as a builtin tool', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: [],
+      });
+      const names = executor.listToolDefinitions().map((t) => t.name);
+      expect(names).toContain('web_fetch');
+    });
+
+    it('blocks SSRF attempts to private IPs', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: [],
+      });
+      for (const ip of ['127.0.0.1', '10.0.0.1', '192.168.1.1', '172.16.0.1', '169.254.1.1', 'localhost']) {
+        const run = await executor.runTool({
+          toolName: 'web_fetch',
+          args: { url: `http://${ip}:8080/secret` },
+          origin: 'web',
+        });
+        expect(run.success).toBe(false);
+        expect(String(run.error ?? run.message)).toContain('SSRF');
+      }
+    });
+
+    it('rejects non-HTTP protocols', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: [],
+      });
+      const run = await executor.runTool({
+        toolName: 'web_fetch',
+        args: { url: 'ftp://example.com/file' },
+        origin: 'web',
+      });
+      expect(run.success).toBe(false);
+      expect(String(run.error ?? run.message)).toContain('HTTP');
+    });
+
+    it('fetches and extracts HTML content with untrusted marker', async () => {
+      const root = createExecutorRoot();
+      const originalFetch = globalThis.fetch;
+      const html = `
+        <html>
+          <head><title>Test Page</title></head>
+          <body>
+            <nav>Navigation stuff</nav>
+            <main><p>This is the main content of the page.</p></main>
+            <footer>Footer info</footer>
+          </body>
+        </html>
+      `;
+      globalThis.fetch = (async () => new Response(html, {
+        status: 200,
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      })) as typeof fetch;
+      try {
+        const executor = new ToolExecutor({
+          enabled: true,
+          workspaceRoot: root,
+          policyMode: 'autonomous',
+          allowedPaths: [root],
+          allowedCommands: [],
+          allowedDomains: [],
+        });
+        const run = await executor.runTool({
+          toolName: 'web_fetch',
+          args: { url: 'https://example.com/article' },
+          origin: 'web',
+        });
+        expect(run.success).toBe(true);
+        const output = run.output as { content: string; host: string };
+        expect(output.content).toContain('[EXTERNAL CONTENT from example.com');
+        expect(output.content).toContain('main content of the page');
+        expect(output.content).toContain('Test Page');
+        // nav/footer should be stripped from <main> extraction
+        expect(output.host).toBe('example.com');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('truncates long content at maxChars', async () => {
+      const root = createExecutorRoot();
+      const originalFetch = globalThis.fetch;
+      const longText = 'A'.repeat(5000);
+      globalThis.fetch = (async () => new Response(longText, {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })) as typeof fetch;
+      try {
+        const executor = new ToolExecutor({
+          enabled: true,
+          workspaceRoot: root,
+          policyMode: 'autonomous',
+          allowedPaths: [root],
+          allowedCommands: [],
+          allowedDomains: [],
+        });
+        const run = await executor.runTool({
+          toolName: 'web_fetch',
+          args: { url: 'https://example.com/long', maxChars: 500 },
+          origin: 'web',
+        });
+        expect(run.success).toBe(true);
+        const output = run.output as { content: string; truncated: boolean };
+        expect(output.truncated).toBe(true);
+        expect(output.content).toContain('[truncated]');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('returns pretty JSON for JSON responses', async () => {
+      const root = createExecutorRoot();
+      const originalFetch = globalThis.fetch;
+      const jsonData = { restaurants: [{ name: 'Test Cafe', rating: 4.5 }] };
+      globalThis.fetch = (async () => new Response(JSON.stringify(jsonData), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })) as typeof fetch;
+      try {
+        const executor = new ToolExecutor({
+          enabled: true,
+          workspaceRoot: root,
+          policyMode: 'autonomous',
+          allowedPaths: [root],
+          allowedCommands: [],
+          allowedDomains: [],
+        });
+        const run = await executor.runTool({
+          toolName: 'web_fetch',
+          args: { url: 'https://api.example.com/data' },
+          origin: 'web',
+        });
+        expect(run.success).toBe(true);
+        const output = run.output as { content: string };
+        expect(output.content).toContain('"restaurants"');
+        expect(output.content).toContain('Test Cafe');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+  });
 });

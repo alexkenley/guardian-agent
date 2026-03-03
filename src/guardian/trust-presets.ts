@@ -105,7 +105,7 @@ export const TRUST_PRESETS: Record<TrustPresetName, TrustPreset> = {
       },
     },
     resourceLimits: {
-      maxInvocationBudgetMs: 120_000,
+      maxInvocationBudgetMs: 300_000,
       maxTokensPerMinute: 50_000,
       maxConcurrentTools: 5,
       maxQueueDepth: 50,

@@ -21,6 +21,7 @@ import type { AgentContext, AgentResponse, UserMessage, ScheduleContext } from '
 import { AgentState } from './agent/types.js';
 import type { AgentEvent } from './queue/event-bus.js';
 import { SentinelAgent } from './agents/sentinel.js';
+import { MessageRouter } from './runtime/message-router.js';
 
 // ─── Test Agents ──────────────────────────────────────────────
 
@@ -514,7 +515,7 @@ describe('Integration: Watchdog Stall Detection', () => {
     await runtime?.stop();
   });
 
-  it('should detect agent stalled for >60s and transition to Stalled', async () => {
+  it('should detect agent stalled for >180s and transition to Stalled', async () => {
     runtime = new Runtime();
 
     const agent = new StallingAgent();
@@ -524,7 +525,7 @@ describe('Integration: Watchdog Stall Detection', () => {
 
     // Transition to Running and set old activity timestamp
     runtime.registry.transitionState('staller', AgentState.Running, 'test');
-    instance.lastActivityMs = Date.now() - 70_000; // 70s ago
+    instance.lastActivityMs = Date.now() - 200_000; // 200s ago (exceeds 180s default)
 
     // Run watchdog check
     const results = runtime.watchdog.check(Date.now());
@@ -556,5 +557,137 @@ describe('Integration: Graceful Shutdown', () => {
     expect(agent1.stopped).toBe(true);
     expect(agent2.stopped).toBe(true);
     expect(runtime.isRunning()).toBe(false);
+  });
+});
+
+// ─── Integration: Multi-Agent Routing ────────────────────────
+
+describe('Integration: Multi-Agent Routing', () => {
+  let runtime: Runtime;
+
+  afterEach(async () => {
+    await runtime?.stop();
+  });
+
+  it('should route file messages to local agent via dual-agent setup', async () => {
+    runtime = new Runtime();
+
+    const localAgent = new LifecycleTrackingAgent('local');
+    const externalAgent = new LifecycleTrackingAgent('external');
+
+    runtime.registerAgent(createAgentDefinition({
+      agent: localAgent,
+      grantedCapabilities: ['read_files', 'write_files', 'execute_commands'],
+    }));
+    runtime.registerAgent(createAgentDefinition({
+      agent: externalAgent,
+      grantedCapabilities: ['network_access', 'read_email', 'send_email'],
+    }));
+
+    const router = new MessageRouter({ strategy: 'keyword' });
+    router.registerAgent('local', ['read_files', 'write_files', 'execute_commands'], {
+      domains: ['filesystem', 'code'],
+      patterns: ['\\b(file|folder|directory|git|commit)\\b'],
+      priority: 5,
+    });
+    router.registerAgent('external', ['network_access', 'read_email', 'send_email'], {
+      domains: ['network', 'email'],
+      patterns: ['\\b(web|search|browse|email|mail)\\b'],
+      priority: 5,
+    });
+
+    await runtime.start();
+
+    // Route file-related message
+    const fileRoute = router.route('create a test file in the project');
+    expect(fileRoute.agentId).toBe('local');
+
+    const response = await runtime.dispatchMessage(fileRoute.agentId, {
+      id: '1',
+      userId: 'test',
+      channel: 'cli',
+      content: 'create a test file in the project',
+      timestamp: Date.now(),
+    });
+    expect(response.content).toContain('Echo:');
+  });
+
+  it('should route web messages to external agent', async () => {
+    runtime = new Runtime();
+
+    const localAgent = new LifecycleTrackingAgent('local');
+    const externalAgent = new LifecycleTrackingAgent('external');
+
+    runtime.registerAgent(createAgentDefinition({
+      agent: localAgent,
+      grantedCapabilities: ['read_files', 'write_files'],
+    }));
+    runtime.registerAgent(createAgentDefinition({
+      agent: externalAgent,
+      grantedCapabilities: ['network_access'],
+    }));
+
+    const router = new MessageRouter({ strategy: 'keyword' });
+    router.registerAgent('local', ['read_files', 'write_files'], {
+      patterns: ['\\b(file|folder)\\b'],
+    });
+    router.registerAgent('external', ['network_access'], {
+      patterns: ['\\b(web|search|browse|internet)\\b'],
+    });
+
+    await runtime.start();
+
+    const webRoute = router.route('search the web for CVEs');
+    expect(webRoute.agentId).toBe('external');
+
+    const response = await runtime.dispatchMessage(webRoute.agentId, {
+      id: '2',
+      userId: 'test',
+      channel: 'cli',
+      content: 'search the web for CVEs',
+      timestamp: Date.now(),
+    });
+    expect(response.content).toContain('Echo:');
+  });
+
+  it('should fall back to single agent when no external provider', () => {
+    const router = new MessageRouter({ strategy: 'keyword' });
+    router.registerAgent('default', [
+      'read_files', 'write_files', 'execute_commands',
+      'network_access', 'read_email', 'send_email',
+    ]);
+
+    const fileRoute = router.route('create a file');
+    expect(fileRoute.agentId).toBe('default');
+
+    const webRoute = router.route('search the web');
+    expect(webRoute.agentId).toBe('default');
+  });
+
+  it('should support config-driven agent routing rules', () => {
+    const router = new MessageRouter({
+      strategy: 'keyword',
+      rules: {
+        devops: { patterns: ['\\b(deploy|ci|cd|pipeline)\\b'], priority: 3 },
+        chat: { patterns: ['\\b(hello|hi|help)\\b'], priority: 10 },
+      },
+    });
+
+    router.registerAgent('devops', ['execute_commands'], {
+      patterns: ['\\b(deploy|ci|cd|pipeline)\\b'],
+      priority: 3,
+    });
+    router.registerAgent('chat', [], {
+      patterns: ['\\b(hello|hi|help)\\b'],
+      priority: 10,
+    });
+
+    const deployRoute = router.route('deploy the latest build');
+    expect(deployRoute.agentId).toBe('devops');
+    expect(deployRoute.confidence).toBe('high');
+
+    const helloRoute = router.route('hello there');
+    expect(helloRoute.agentId).toBe('chat');
+    expect(helloRoute.confidence).toBe('high');
   });
 });

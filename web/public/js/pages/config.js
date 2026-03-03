@@ -28,6 +28,7 @@ export async function renderConfig(container) {
     container.appendChild(createProviderStatusTable(config, providers));
     container.appendChild(createAuthPanel(config, authStatus, container));
 
+    container.appendChild(createWebSearchPanel(config, container));
     container.appendChild(createTrustPresetPanel(config));
     container.appendChild(createSection('Channels (Read-Only Snapshot)', config.channels));
     container.appendChild(createSection('Guardian (Read-Only Snapshot)', config.guardian));
@@ -79,6 +80,114 @@ function createOverview(config, providers, setupStatus) {
   }
 
   return wrap;
+}
+
+function createWebSearchPanel(config, container) {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+
+  const ws = config.assistant?.tools?.webSearch || {};
+  const fallbacks = config.fallbacks || [];
+  const providerNames = Object.keys(config.llm || {});
+
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Web Search &amp; Model Fallback</h3>
+      <span class="cfg-header-note">Search API keys and LLM fallback chain</span>
+    </div>
+    <div class="cfg-center-body">
+      <div class="cfg-form-grid">
+        <div class="cfg-field">
+          <label>Search Provider</label>
+          <select id="ws-provider">
+            <option value="auto" ${ws.provider === 'auto' || !ws.provider ? 'selected' : ''}>Auto (best available)</option>
+            <option value="brave" ${ws.provider === 'brave' ? 'selected' : ''}>Brave (search + free AI summary)</option>
+            <option value="perplexity" ${ws.provider === 'perplexity' ? 'selected' : ''}>Perplexity (synthesized answers)</option>
+            <option value="duckduckgo" ${ws.provider === 'duckduckgo' ? 'selected' : ''}>DuckDuckGo (no key needed)</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Brave Search API Key (recommended)</label>
+          <input id="ws-brave-key" type="password" placeholder="${ws.braveConfigured ? 'Configured — leave blank to keep' : 'BSA...'}">
+        </div>
+        <div class="cfg-field">
+          <label>Perplexity API Key</label>
+          <input id="ws-perplexity-key" type="password" placeholder="${ws.perplexityConfigured ? 'Configured — leave blank to keep' : 'pplx-...'}">
+        </div>
+        <div class="cfg-field">
+          <label>OpenRouter API Key (Perplexity proxy)</label>
+          <input id="ws-openrouter-key" type="password" placeholder="${ws.openRouterConfigured ? 'Configured — leave blank to keep' : 'sk-or-...'}">
+        </div>
+      </div>
+
+      <div class="cfg-divider"></div>
+
+      <div class="cfg-form-grid">
+        <div class="cfg-field">
+          <label>Model Fallback Chain</label>
+          <input id="ws-fallbacks" type="text" value="${esc(fallbacks.join(', '))}" placeholder="e.g. claude, gpt (comma-separated provider names)">
+        </div>
+        <div class="cfg-field">
+          <label>Available Providers</label>
+          <input type="text" readonly value="${esc(providerNames.join(', '))}" style="opacity:0.7;">
+        </div>
+      </div>
+
+      <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
+        Auto selects the best search provider: Brave &gt; Perplexity &gt; DuckDuckGo.
+        Brave is recommended — one API key covers search + free AI Summarizer.
+        Fallback chain: when the default LLM fails, tries each fallback in order.
+      </div>
+
+      <div class="cfg-actions">
+        <button class="btn btn-primary" id="ws-save" type="button">Save Search &amp; Fallback</button>
+        <span id="ws-save-status" class="cfg-save-status"></span>
+      </div>
+    </div>
+  `;
+
+  const statusEl = section.querySelector('#ws-save-status');
+
+  section.querySelector('#ws-save')?.addEventListener('click', async () => {
+    const provider = section.querySelector('#ws-provider').value;
+    const perplexityKey = section.querySelector('#ws-perplexity-key').value.trim();
+    const openRouterKey = section.querySelector('#ws-openrouter-key').value.trim();
+    const braveKey = section.querySelector('#ws-brave-key').value.trim();
+    const fallbacksRaw = section.querySelector('#ws-fallbacks').value.trim();
+
+    const fallbackList = fallbacksRaw
+      ? fallbacksRaw.split(',').map((s) => s.trim()).filter(Boolean)
+      : [];
+
+    statusEl.textContent = 'Saving...';
+    statusEl.style.color = 'var(--text-muted)';
+
+    try {
+      const result = await api.applyConfig({
+        llmMode: 'ollama',
+        providerName: config.defaultProvider || 'ollama',
+        model: config.llm?.[config.defaultProvider]?.model || 'llama3.2',
+        setDefaultProvider: false,
+        setupCompleted: true,
+        webSearchProvider: provider,
+        perplexityApiKey: perplexityKey || undefined,
+        openRouterApiKey: openRouterKey || undefined,
+        braveApiKey: braveKey || undefined,
+        fallbacks: fallbackList,
+      });
+      statusEl.textContent = result.message;
+      statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+      if (result.success) {
+        await renderConfig(container);
+      }
+    } catch (err) {
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+      statusEl.style.color = 'var(--error)';
+    }
+  });
+
+  applyInputTooltips(section);
+  return section;
 }
 
 function createTrustPresetPanel(config) {

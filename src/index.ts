@@ -40,7 +40,12 @@ import { parseDirectFileSearchIntent } from './runtime/search-intent.js';
 import { ToolExecutor } from './tools/executor.js';
 import type { ToolExecutorOptions } from './tools/executor.js';
 import type { ToolPolicySnapshot } from './tools/types.js';
+import { MCPClientManager } from './tools/mcp-client.js';
+import type { MCPServerConfig } from './tools/mcp-client.js';
 import { composeGuardianSystemPrompt } from './prompts/guardian-core.js';
+import { MessageRouter, type RouteDecision } from './runtime/message-router.js';
+import { ModelFallbackChain } from './llm/model-fallback.js';
+import { createProviders } from './llm/provider.js';
 
 const log = createLogger('main');
 
@@ -48,11 +53,18 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 /** Default chat agent that uses the configured LLM provider. */
+/** Pattern matching approval-like messages from the user. */
+const APPROVAL_PATTERN = /^(yes|yep|yeah|y|approved?|go ahead|do it|confirm|ok|okay|sure|proceed|accept)\b/i;
+
 class ChatAgent extends BaseAgent {
   private systemPrompt: string;
   private conversationService?: ConversationService;
   private tools?: ToolExecutor;
   private maxToolRounds: number;
+  /** Pending approval IDs from the last tool round, keyed by user+channel. */
+  private pendingApprovals: Map<string, string[]> = new Map();
+  /** Optional model fallback chain for retrying failed LLM calls. */
+  private fallbackChain?: ModelFallbackChain;
 
   constructor(
     id: string,
@@ -60,12 +72,38 @@ class ChatAgent extends BaseAgent {
     systemPrompt?: string,
     conversationService?: ConversationService,
     tools?: ToolExecutor,
+    fallbackChain?: ModelFallbackChain,
   ) {
     super(id, name, { handleMessages: true });
     this.systemPrompt = composeGuardianSystemPrompt(systemPrompt);
     this.conversationService = conversationService;
     this.tools = tools;
     this.maxToolRounds = 6;
+    this.fallbackChain = fallbackChain;
+  }
+
+  /**
+   * Chat with fallback: try ctx.llm first, fall back to chain on failure.
+   * Returns ChatResponse from whichever provider succeeds.
+   */
+  private async chatWithFallback(
+    ctx: AgentContext,
+    messages: ChatMessage[],
+    options?: import('./llm/types.js').ChatOptions,
+  ): Promise<import('./llm/types.js').ChatResponse> {
+    if (!this.fallbackChain) {
+      return ctx.llm!.chat(messages, options);
+    }
+    try {
+      return await ctx.llm!.chat(messages, options);
+    } catch (primaryError) {
+      log.warn(
+        { agent: this.id, error: primaryError instanceof Error ? primaryError.message : String(primaryError) },
+        'Primary LLM failed, trying fallback chain',
+      );
+      const result = await this.fallbackChain.chatWithFallback(messages, options);
+      return result.response;
+    }
   }
 
   async onMessage(message: UserMessage, ctx: AgentContext): Promise<AgentResponse> {
@@ -73,16 +111,29 @@ class ChatAgent extends BaseAgent {
       return { content: 'No LLM provider configured.' };
     }
 
+    // Check if user is approving a pending tool action
+    const approvalResult = await this.tryHandleApproval(message);
+    if (approvalResult) {
+      if (this.conversationService) {
+        this.conversationService.recordTurn(
+          { agentId: this.id, userId: message.userId, channel: message.channel },
+          message.content,
+          approvalResult,
+        );
+      }
+      return { content: approvalResult };
+    }
+
     const llmMessages: ChatMessage[] = this.conversationService
       ? this.conversationService.buildMessages(
-          { agentId: this.id, userId: message.userId, channel: message.channel },
-          this.systemPrompt,
-          message.content,
-        )
+        { agentId: this.id, userId: message.userId, channel: message.channel },
+        this.systemPrompt,
+        message.content,
+      )
       : [
-          { role: 'system', content: this.systemPrompt },
-          { role: 'user', content: message.content },
-        ];
+        { role: 'system', content: this.systemPrompt },
+        { role: 'user', content: message.content },
+      ];
 
     let finalContent = '';
     const directSearch = await this.tryDirectFilesystemSearch(message, ctx);
@@ -98,16 +149,91 @@ class ChatAgent extends BaseAgent {
       return { content: finalContent };
     }
 
+    // Direct web search: if the user clearly wants web results, call web_search
+    // directly so the tool executes even when the LLM doesn't invoke it.
+    const webSearchResult = await this.tryDirectWebSearch(message, ctx);
+    if (webSearchResult) {
+      // Feed the raw search results through the LLM for a natural response
+      if (ctx.llm) {
+        const llmFormat: ChatMessage[] = [
+          ...llmMessages,
+          { role: 'user', content: `Here are web search results for the user's query. Summarize and present them clearly:\n\n${webSearchResult}` },
+        ];
+        const formatted = await this.chatWithFallback(ctx, llmFormat);
+        finalContent = formatted.content || webSearchResult;
+      } else {
+        finalContent = webSearchResult;
+      }
+      if (this.conversationService) {
+        this.conversationService.recordTurn(
+          { agentId: this.id, userId: message.userId, channel: message.channel },
+          message.content,
+          finalContent,
+        );
+      }
+      return { content: finalContent };
+    }
+
+    // Clear any stale pending approvals for this user
+    const userKey = `${message.userId}:${message.channel}`;
+    this.pendingApprovals.delete(userKey);
+
     if (!this.tools?.isEnabled()) {
-      const response = await ctx.llm.chat(llmMessages);
+      const response = await this.chatWithFallback(ctx, llmMessages);
       finalContent = response.content;
     } else {
       let rounds = 0;
       const toolDefs = this.tools.listToolDefinitions();
+      const pendingIds: string[] = [];
       while (rounds < this.maxToolRounds) {
-        const response = await ctx.llm.chat(llmMessages, { tools: toolDefs });
+        const response = await this.chatWithFallback(ctx, llmMessages, { tools: toolDefs });
         finalContent = response.content;
         if (!response.toolCalls || response.toolCalls.length === 0) {
+          // Safety net for local models: if finishReason is 'stop' (no tool calls)
+          // but the message clearly needed web search, pre-fetch results and re-prompt.
+          // This catches cases where Ollama/local models fail to emit tool calls.
+          if (rounds === 0 && response.finishReason === 'stop' && this.tools) {
+            const searchQuery = parseWebSearchIntent(message.content);
+            if (searchQuery) {
+              const prefetched = await this.tools.executeModelTool(
+                'web_search',
+                { query: searchQuery, maxResults: 5 },
+                {
+                  origin: 'assistant',
+                  agentId: this.id,
+                  userId: message.userId,
+                  channel: message.channel,
+                  requestId: message.id,
+                  agentContext: { checkAction: ctx.checkAction },
+                },
+              );
+              if (toBoolean(prefetched.success) && prefetched.output) {
+                const output = prefetched.output as { answer?: unknown; results?: unknown; provider?: unknown };
+                const answer = toString(output.answer);
+                const results = Array.isArray(output.results) ? output.results : [];
+                // If Perplexity returned a synthesized answer, inject it directly
+                if (answer) {
+                  llmMessages.push({
+                    role: 'user',
+                    content: `[web_search results for "${searchQuery}"]:\n${answer}\n\nSources:\n${results.map((r: { url?: string }, i: number) => `${i + 1}. ${r.url ?? ''}`).join('\n')}\n\nPlease use these results to answer the user's question.`,
+                  });
+                } else if (results.length > 0) {
+                  const snippets = results.map((r: { title?: string; url?: string; snippet?: string }, i: number) =>
+                    `${i + 1}. ${r.title ?? '(untitled)'} — ${r.url ?? ''}\n   ${r.snippet ?? ''}`
+                  ).join('\n');
+                  llmMessages.push({
+                    role: 'user',
+                    content: `[web_search results for "${searchQuery}"]:\n${snippets}\n\nPlease synthesize these results to answer the user's question.`,
+                  });
+                }
+                // Re-prompt the LLM with the search results
+                if (answer || results.length > 0) {
+                  const retryResponse = await this.chatWithFallback(ctx, llmMessages);
+                  finalContent = retryResponse.content;
+                }
+              }
+            }
+          }
           break;
         }
 
@@ -117,6 +243,7 @@ class ChatAgent extends BaseAgent {
           toolCalls: response.toolCalls,
         });
 
+        let hasPending = false;
         for (const toolCall of response.toolCalls) {
           let parsedArgs: Record<string, unknown> = {};
           if (toolCall.arguments?.trim()) {
@@ -138,13 +265,28 @@ class ChatAgent extends BaseAgent {
               agentContext: { checkAction: ctx.checkAction },
             },
           );
+
+          // Track pending approvals so we can auto-approve on user confirmation
+          if (toolResult.status === 'pending_approval' && toolResult.approvalId) {
+            pendingIds.push(String(toolResult.approvalId));
+            hasPending = true;
+          }
+
           llmMessages.push({
             role: 'tool',
             toolCallId: toolCall.id,
             content: JSON.stringify(toolResult),
           });
         }
+
+        // If all tools in this round are pending, stop looping — user needs to approve
+        if (hasPending) break;
         rounds += 1;
+      }
+
+      // Store pending approvals for this user so we can auto-approve on their next message
+      if (pendingIds.length > 0) {
+        this.pendingApprovals.set(userKey, pendingIds);
       }
 
       if (!finalContent) {
@@ -161,6 +303,97 @@ class ChatAgent extends BaseAgent {
     }
 
     return { content: finalContent };
+  }
+
+  /**
+   * Check if the user's message is an approval for pending tool actions.
+   * If so, approve them and return a summary.
+   */
+  private async tryHandleApproval(message: UserMessage): Promise<string | null> {
+    if (!this.tools?.isEnabled()) return null;
+
+    const userKey = `${message.userId}:${message.channel}`;
+    const pendingIds = this.pendingApprovals.get(userKey);
+    if (!pendingIds?.length) return null;
+    if (!APPROVAL_PATTERN.test(message.content.trim())) return null;
+
+    // User is approving — process all pending approvals
+    this.pendingApprovals.delete(userKey);
+    const results: string[] = [];
+    for (const approvalId of pendingIds) {
+      try {
+        const result = await this.tools.decideApproval(approvalId, 'approved', message.userId);
+        if (result.success) {
+          results.push(result.message ?? `Approved and executed (${approvalId}).`);
+        } else {
+          results.push(result.message ?? `Approval failed (${approvalId}).`);
+        }
+      } catch (err) {
+        results.push(`Error approving ${approvalId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return results.join('\n');
+  }
+
+  private async tryDirectWebSearch(
+    message: UserMessage,
+    ctx: AgentContext,
+  ): Promise<string | null> {
+    if (!this.tools?.isEnabled()) return null;
+
+    const query = parseWebSearchIntent(message.content);
+    if (!query) return null;
+
+    const toolResult = await this.tools.executeModelTool(
+      'web_search',
+      { query, maxResults: 10 },
+      {
+        origin: 'assistant',
+        agentId: this.id,
+        userId: message.userId,
+        channel: message.channel,
+        requestId: message.id,
+        agentContext: { checkAction: ctx.checkAction },
+      },
+    );
+
+    if (!toBoolean(toolResult.success)) {
+      const msg = toString(toolResult.message) || toString(toolResult.error) || 'Web search failed.';
+      return `I tried to search the web for "${query}" but it failed: ${msg}`;
+    }
+
+    const output = (toolResult.output && typeof toolResult.output === 'object'
+      ? toolResult.output
+      : null) as {
+        provider?: unknown;
+        results?: unknown;
+        answer?: unknown;
+      } | null;
+
+    const provider = output ? toString(output.provider) : 'unknown';
+    const results = output && Array.isArray(output.results)
+      ? output.results as Array<{ title?: unknown; url?: unknown; snippet?: unknown }>
+      : [];
+    const answer = output ? toString(output.answer) : '';
+
+    if (results.length === 0 && !answer) {
+      return `I searched the web for "${query}" (via ${provider}) but found no results.`;
+    }
+
+    const lines = [`Web search results for "${query}" (via ${provider}):\n`];
+    if (answer) {
+      lines.push(`Summary: ${answer}\n`);
+    }
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      const title = toString(r.title) || '(untitled)';
+      const url = toString(r.url);
+      const snippet = toString(r.snippet);
+      lines.push(`${i + 1}. **${title}**`);
+      if (url) lines.push(`   ${url}`);
+      if (snippet) lines.push(`   ${snippet}`);
+    }
+    return lines.join('\n');
   }
 
   private async tryDirectFilesystemSearch(
@@ -255,6 +488,42 @@ function toNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+/**
+ * Detect web search intent from free-form user messages.
+ * Returns a search query string, or null if the message isn't a web search request.
+ * Deliberately broad: if the user asks to "find", "search", "look up", "what are the best",
+ * etc. AND the message is about an external topic (not files/code), we treat it as web search.
+ */
+function parseWebSearchIntent(content: string): string | null {
+  const text = content.trim();
+  if (!text || text.length < 5) return null;
+
+  // Must NOT be a filesystem search (those are handled by tryDirectFilesystemSearch)
+  if (/\b(file|folder|directory|path|onedrive|drive|\.txt|\.json|\.ts|\.js|\.py)\b/i.test(text)) {
+    return null;
+  }
+
+  // Detect web search patterns
+  const webPatterns = [
+    /\b(?:search|find|look\s*up|google|browse|what\s+(?:are|is)|show\s+me|tell\s+me\s+about|list)\b/i,
+    /\b(?:top\s+\d+|best|popular|recommend|nearby|restaurants?|hotels?|reviews?|news|weather|price|recipe)\b/i,
+    /\b(?:how\s+(?:to|do|does|can|much)|where\s+(?:is|are|can|to)|who\s+(?:is|are|was))\b/i,
+  ];
+
+  const matchCount = webPatterns.filter((p) => p.test(text)).length;
+  // Need at least one strong signal
+  if (matchCount === 0) return null;
+
+  // Extract the query — use the full message, cleaned up
+  const query = text
+    .replace(/^(?:please|can you|could you|help me|i need to|i want to)\s+/i, '')
+    .replace(/^(?:search|find|look\s*up|google|browse)\s+(?:for\s+|the\s+web\s+for\s+)?/i, '')
+    .replace(/\s+on\s+the\s+(?:web|internet|online)\s*$/i, '')
+    .trim();
+
+  return query.length >= 3 ? query : null;
+}
+
 /** Strip sensitive fields from config for the dashboard. */
 function redactConfig(config: GuardianAgentConfig): RedactedConfig {
   const llm: Record<string, { provider: string; model: string; baseUrl?: string }> = {};
@@ -333,8 +602,15 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
         allowedPathsCount: config.assistant.tools.allowedPaths.length,
         allowedCommandsCount: config.assistant.tools.allowedCommands.length,
         allowedDomainsCount: config.assistant.tools.allowedDomains.length,
+        webSearch: {
+          provider: config.assistant.tools.webSearch?.provider ?? 'auto',
+          perplexityConfigured: !!config.assistant.tools.webSearch?.perplexityApiKey,
+          openRouterConfigured: !!config.assistant.tools.webSearch?.openRouterApiKey,
+          braveConfigured: !!config.assistant.tools.webSearch?.braveApiKey,
+        },
       },
     },
+    fallbacks: config.fallbacks,
   };
 }
 
@@ -352,6 +628,7 @@ function buildDashboardCallbacks(
   webAuthStateRef: { current: WebAuthRuntimeConfig },
   applyWebAuthRuntime: (auth: WebAuthRuntimeConfig) => void,
   configPath: string,
+  router: MessageRouter,
 ): DashboardCallbacks {
   const loadRawConfig = (): Record<string, unknown> => {
     if (!existsSync(configPath)) return {};
@@ -509,11 +786,15 @@ function buildDashboardCallbacks(
 
   return {
     onAgents: (): DashboardAgentInfo[] => {
+      const isInternal = (agentId: string) =>
+        router.findAgentByRole('local')?.id === agentId
+        || router.findAgentByRole('external')?.id === agentId;
       return runtime.registry.getAll().map(inst => ({
         id: inst.agent.id,
         name: inst.agent.name,
         state: inst.state,
         canChat: inst.agent.capabilities.handleMessages,
+        internal: isInternal(inst.agent.id),
         capabilities: inst.definition.grantedCapabilities,
         provider: inst.definition.providerName,
         schedule: inst.definition.schedule,
@@ -525,11 +806,15 @@ function buildDashboardCallbacks(
     onAgentDetail: (id: string): DashboardAgentDetail | null => {
       const inst = runtime.registry.get(id);
       if (!inst) return null;
+      const isInternal =
+        router.findAgentByRole('local')?.id === id
+        || router.findAgentByRole('external')?.id === id;
       return {
         id: inst.agent.id,
         name: inst.agent.name,
         state: inst.state,
         canChat: inst.agent.capabilities.handleMessages,
+        internal: isInternal,
         capabilities: inst.definition.grantedCapabilities,
         provider: inst.definition.providerName,
         schedule: inst.definition.schedule,
@@ -833,7 +1118,7 @@ function buildDashboardCallbacks(
       };
     },
 
-    onDispatch: async (agentId, msg) => {
+    onDispatch: async (agentId, msg, routeDecision) => {
       const channel = msg.channel ?? 'web';
       const channelUserId = msg.userId ?? `${channel}-user`;
       const canonicalUserId = identity.resolveCanonicalUserId(channel, channelUserId);
@@ -843,6 +1128,7 @@ function buildDashboardCallbacks(
         canonicalUserId,
         channelUserId,
         agentId,
+        metadata: routeDecision?.tier ? { tier: routeDecision.tier, complexity: String(routeDecision.complexityScore ?? '') } : undefined,
       });
 
       return orchestrator.dispatch(
@@ -879,6 +1165,48 @@ function buildDashboardCallbacks(
             });
             return response;
           } catch (err) {
+            // ── Tier fallback: retry with the opposite-tier agent ──
+            const routingCfg = configRef.current.routing;
+            const fallbackEnabled = routingCfg?.fallbackOnFailure !== false;
+            const fallbackId = routeDecision?.fallbackAgentId;
+            if (fallbackEnabled && fallbackId) {
+              const messageText = err instanceof Error ? err.message : String(err);
+              log.warn(
+                { primaryAgent: agentId, fallbackAgent: fallbackId, error: messageText },
+                'Primary agent failed — falling back to alternate tier',
+              );
+              analytics.track({
+                type: 'message_error',
+                channel,
+                canonicalUserId,
+                channelUserId,
+                agentId,
+                metadata: { error: messageText, fallbackAttempt: 'true' },
+              });
+              try {
+                const fallbackResponse = await dispatchCtx.runStep(
+                  'runtime_dispatch_fallback',
+                  async () => runtime.dispatchMessage(fallbackId, message),
+                  `fallback_agent=${fallbackId}`,
+                );
+                analytics.track({
+                  type: 'message_success',
+                  channel,
+                  canonicalUserId,
+                  channelUserId,
+                  agentId: fallbackId,
+                  metadata: { fallback: 'true' },
+                });
+                return { ...fallbackResponse, metadata: { ...fallbackResponse.metadata, fallback: true } };
+              } catch (fallbackErr) {
+                log.error(
+                  { fallbackAgent: fallbackId, error: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr) },
+                  'Fallback agent also failed — propagating original error',
+                );
+                // Fall through to throw original error
+              }
+            }
+
             const messageText = err instanceof Error ? err.message : String(err);
             analytics.track({
               type: 'message_error',
@@ -1084,6 +1412,26 @@ function buildDashboardCallbacks(
             if (input.telegramBotToken?.trim()) rawTelegram.botToken = input.telegramBotToken.trim();
             if (input.telegramAllowedChatIds) rawTelegram.allowedChatIds = input.telegramAllowedChatIds;
             rawChannels.telegram = rawTelegram;
+          }
+
+          // Fallbacks
+          if (input.fallbacks !== undefined) {
+            rawConfig.fallbacks = input.fallbacks.length > 0 ? input.fallbacks : undefined;
+          }
+
+          // Web search config
+          const hasWebSearch = input.webSearchProvider || input.perplexityApiKey?.trim() || input.openRouterApiKey?.trim() || input.braveApiKey?.trim();
+          if (hasWebSearch) {
+            rawConfig.assistant = rawConfig.assistant ?? {};
+            const rawAssistantObj = rawConfig.assistant as Record<string, unknown>;
+            rawAssistantObj.tools = rawAssistantObj.tools ?? {};
+            const rawTools = rawAssistantObj.tools as Record<string, unknown>;
+            rawTools.webSearch = rawTools.webSearch ?? {};
+            const rawWS = rawTools.webSearch as Record<string, unknown>;
+            if (input.webSearchProvider) rawWS.provider = input.webSearchProvider;
+            if (input.perplexityApiKey?.trim()) rawWS.perplexityApiKey = input.perplexityApiKey.trim();
+            if (input.openRouterApiKey?.trim()) rawWS.openRouterApiKey = input.openRouterApiKey.trim();
+            if (input.braveApiKey?.trim()) rawWS.braveApiKey = input.braveApiKey.trim();
           }
 
           const result = persistAndApplyConfig(rawConfig);
@@ -1385,6 +1733,10 @@ async function main(): Promise<void> {
       '',
       'defaultProvider: ollama',
       '',
+      '# Fallback providers tried when the default fails (rate limit, timeout, etc.)',
+      '# fallbacks:',
+      '#   - claude',
+      '',
       'channels:',
       '  cli:',
       '    enabled: true',
@@ -1417,8 +1769,14 @@ async function main(): Promise<void> {
   const config = configRef.current;
 
   // Respect config runtime log level unless caller explicitly overrides via LOG_LEVEL.
+  // When running in an interactive TTY (CLI), keep logs silent so JSON output
+  // doesn't pollute the readline prompt.  Use LOG_FILE for persistent logging.
   if (!process.env['LOG_LEVEL']) {
-    setLogLevel(config.runtime.logLevel);
+    if (process.stdout.isTTY && !process.env['LOG_FILE']) {
+      setLogLevel('silent');
+    } else {
+      setLogLevel(config.runtime.logLevel);
+    }
   }
 
   const runtime = new Runtime(config);
@@ -1543,6 +1901,41 @@ async function main(): Promise<void> {
     watchlist: config.assistant.threatIntel.watchlist,
     forumConnectors: [moltbookConnector],
   });
+  // ─── MCP Client Manager ─────────────────────────────────────
+  let mcpManager: MCPClientManager | undefined;
+  const mcpConfig = config.assistant.tools.mcp;
+  if (mcpConfig?.enabled && mcpConfig.servers.length > 0) {
+    mcpManager = new MCPClientManager();
+    for (const server of mcpConfig.servers) {
+      const serverConfig: MCPServerConfig = {
+        id: server.id,
+        name: server.name,
+        transport: 'stdio',
+        command: server.command,
+        args: server.args,
+        env: server.env,
+        cwd: server.cwd,
+        timeoutMs: server.timeoutMs,
+      };
+      try {
+        await mcpManager.addServer(serverConfig);
+        log.info(
+          { serverId: server.id, serverName: server.name },
+          'MCP server connected',
+        );
+      } catch (err) {
+        log.error(
+          { serverId: server.id, err: err instanceof Error ? err.message : String(err) },
+          'Failed to connect MCP server (continuing without it)',
+        );
+      }
+    }
+    const toolCount = mcpManager.getAllToolDefinitions().length;
+    if (toolCount > 0) {
+      log.info({ toolCount }, 'MCP tools discovered and available');
+    }
+  }
+
   const toolExecutorOptions: ToolExecutorOptions = {
     enabled: config.assistant.tools.enabled,
     workspaceRoot: process.cwd(),
@@ -1552,23 +1945,24 @@ async function main(): Promise<void> {
     allowedCommands: config.assistant.tools.allowedCommands,
     allowedDomains: config.assistant.tools.allowedDomains,
     allowExternalPosting: config.assistant.tools.allowExternalPosting,
+    mcpManager,
     threatIntel,
     onCheckAction: ({ type, params, agentId, origin }) => {
       const capabilities = type === 'read_file'
         ? ['read_files']
         : type === 'write_file'
-        ? ['write_files']
-        : type === 'execute_command'
-        ? ['execute_commands']
-        : type === 'http_request'
-        ? ['network_access']
-        : type === 'read_email'
-        ? ['read_email']
-        : type === 'draft_email'
-        ? ['draft_email']
-        : type === 'send_email'
-        ? ['send_email']
-        : [];
+          ? ['write_files']
+          : type === 'execute_command'
+            ? ['execute_commands']
+            : type === 'http_request'
+              ? ['network_access']
+              : type === 'read_email'
+                ? ['read_email']
+                : type === 'draft_email'
+                  ? ['draft_email']
+                  : type === 'send_email'
+                    ? ['send_email']
+                    : [];
       const result = runtime.guardian.check({
         type,
         agentId: agentId || 'assistant-tools',
@@ -1634,8 +2028,36 @@ async function main(): Promise<void> {
   const orchestrator = new AssistantOrchestrator();
   const jobTracker = new AssistantJobTracker();
 
-  // Register agents from config (or a default chat agent)
+  // ─── Helper: detect external (non-Ollama) LLM provider ───
+  const findExternalProvider = (cfg: GuardianAgentConfig): string | null => {
+    for (const [name, llmCfg] of Object.entries(cfg.llm)) {
+      if (llmCfg.provider === 'anthropic' || llmCfg.provider === 'openai') {
+        return name;
+      }
+    }
+    return null;
+  };
+
+  // ─── Message router ────────────────────────────────────────
+  const router = new MessageRouter(config.routing);
+
+  // ─── Model fallback chain ─────────────────────────────────
+  // Build a fallback chain from config.fallbacks: [defaultProvider, ...fallbacks]
+  // When the primary provider fails (rate limit, timeout, etc.), the chain
+  // tries each fallback in order with per-provider cooldowns.
+  let fallbackChain: ModelFallbackChain | undefined;
+  if (config.fallbacks?.length) {
+    const allProviders = createProviders(config.llm);
+    const order = [config.defaultProvider, ...config.fallbacks.filter(f => f !== config.defaultProvider)];
+    fallbackChain = new ModelFallbackChain(allProviders, order);
+    log.info({ order: fallbackChain.getProviderOrder() }, 'Model fallback chain configured');
+  }
+
+  // Register agents from config, auto-create dual agents, or single default
+  const externalProviderName = findExternalProvider(config);
+
   if (config.agents.length > 0) {
+    // Config-driven agents: register all and build router from config rules
     for (const agentConfig of config.agents) {
       const agent = new ChatAgent(
         agentConfig.id,
@@ -1643,6 +2065,7 @@ async function main(): Promise<void> {
         agentConfig.systemPrompt,
         conversations,
         toolExecutor,
+        fallbackChain,
       );
       runtime.registerAgent(createAgentDefinition({
         agent,
@@ -1651,10 +2074,58 @@ async function main(): Promise<void> {
         grantedCapabilities: agentConfig.capabilities,
         resourceLimits: agentConfig.resourceLimits,
       }));
+      router.registerAgent(
+        agentConfig.id,
+        agentConfig.capabilities ?? [],
+        config.routing?.rules?.[agentConfig.id],
+        agentConfig.role,
+      );
     }
+  } else if (externalProviderName) {
+    // Auto dual-agent: local (Ollama) + external (Anthropic/OpenAI)
+    const localPrompt = 'You specialize in local workstation tasks: file operations, code editing, git, build tools, and local command execution. Focus on filesystem, development, and local system tasks. If the user asks to search the web or look something up online, use the web_search and web_fetch tools — they are available to you.';
+    const externalPrompt = 'You specialize in external and network tasks: web research, API calls, email, threat intelligence, and online services. Use web_search to find information online and web_fetch to read web pages. Always use these tools when the user asks to search, look up, or find something on the web.';
+
+    const localAgent = new ChatAgent('local', 'Local Agent', localPrompt, conversations, toolExecutor, fallbackChain);
+    runtime.registerAgent(createAgentDefinition({
+      agent: localAgent,
+      providerName: config.defaultProvider,
+      grantedCapabilities: ['read_files', 'write_files', 'execute_commands'],
+    }));
+
+    const externalAgent = new ChatAgent('external', 'External Agent', externalPrompt, conversations, toolExecutor, fallbackChain);
+    runtime.registerAgent(createAgentDefinition({
+      agent: externalAgent,
+      providerName: externalProviderName,
+      grantedCapabilities: ['network_access', 'read_email', 'draft_email', 'send_email'],
+    }));
+
+    // Register with router using default domain rules
+    router.registerAgent('local', ['read_files', 'write_files', 'execute_commands'], {
+      domains: ['filesystem', 'code'],
+      patterns: [
+        '\\b(file|folder|directory|path|create|delete|move|copy|rename|save|open)\\b',
+        '\\b(git|commit|branch|merge|pull request|build|compile|lint|test|npm|node)\\b',
+      ],
+      priority: 5,
+    }, 'local');
+    router.registerAgent('external', ['network_access', 'read_email', 'draft_email', 'send_email'], {
+      domains: ['network', 'email'],
+      patterns: [
+        '\\b(search|web|browse|http|api|download|upload|url|website|online|internet)\\b',
+        '\\b(email|mail|send|draft|inbox|compose|reply|forward|gmail)\\b',
+        '\\b(cve|vulnerability|threat|exploit|security advisory|intelligence)\\b',
+      ],
+      priority: 5,
+    }, 'external');
+
+    log.info(
+      { local: config.defaultProvider, external: externalProviderName },
+      'Auto-created dual agents: local + external',
+    );
   } else {
-    // Default agent — grant standard capabilities so Guardian allows tool actions
-    const defaultAgent = new ChatAgent('default', 'Guardian Agent', undefined, conversations, toolExecutor);
+    // Single default agent — backward compatible
+    const defaultAgent = new ChatAgent('default', 'Guardian Agent', undefined, conversations, toolExecutor, fallbackChain);
     runtime.registerAgent(createAgentDefinition({
       agent: defaultAgent,
       grantedCapabilities: [
@@ -1667,6 +2138,10 @@ async function main(): Promise<void> {
         'send_email',
       ],
     }));
+    router.registerAgent('default', [
+      'read_files', 'write_files', 'execute_commands',
+      'network_access', 'read_email', 'draft_email', 'send_email',
+    ]);
   }
 
   // Register Sentinel agent if enabled
@@ -1682,7 +2157,24 @@ async function main(): Promise<void> {
   // Start channels
   const channels: { name: string; stop: () => Promise<void> }[] = [];
 
-  const defaultAgentId = config.agents[0]?.id ?? 'default';
+  const defaultAgentId = config.agents[0]?.id ?? (externalProviderName ? 'local' : 'default');
+
+  /** Resolve target agent with tier routing: channel override → tier router → plain router. */
+  const resolveAgentWithTier = (channelDefault: string | undefined, content: string): RouteDecision => {
+    if (channelDefault) {
+      return { agentId: channelDefault, confidence: 'high', reason: 'channel default override' };
+    }
+    const routingCfg = configRef.current.routing;
+    const tierMode = routingCfg?.tierMode ?? 'auto';
+    const threshold = routingCfg?.complexityThreshold ?? 0.5;
+
+    // Only use tier routing when role-tagged agents exist
+    const hasRoles = router.findAgentByRole('local') || router.findAgentByRole('external');
+    if (hasRoles) {
+      return router.routeWithTier(content, tierMode, threshold);
+    }
+    return router.route(content);
+  };
   const dashboardCallbacks = buildDashboardCallbacks(
     runtime,
     configRef,
@@ -1696,12 +2188,31 @@ async function main(): Promise<void> {
     webAuthStateRef,
     applyWebAuthRuntime,
     configPath,
+    router,
   );
 
   // Killswitch: triggers graceful shutdown from CLI or web
   dashboardCallbacks.onKillswitch = () => {
     log.warn('Killswitch activated — shutting down all services');
     process.kill(process.pid, 'SIGTERM');
+  };
+
+  // Routing mode: read/write tier mode at runtime
+  dashboardCallbacks.onRoutingMode = () => {
+    const r = configRef.current.routing;
+    return {
+      tierMode: r?.tierMode ?? 'auto',
+      complexityThreshold: r?.complexityThreshold ?? 0.5,
+      fallbackOnFailure: r?.fallbackOnFailure !== false,
+    };
+  };
+  dashboardCallbacks.onRoutingModeUpdate = (mode) => {
+    if (!configRef.current.routing) {
+      configRef.current.routing = { strategy: 'keyword' };
+    }
+    configRef.current.routing.tierMode = mode;
+    log.info({ tierMode: mode }, 'Tier routing mode updated');
+    return { success: true, message: `Routing mode set to: ${mode}`, tierMode: mode };
   };
 
   const autoScanMinutes = config.assistant.threatIntel.autoScanIntervalMinutes;
@@ -1804,6 +2315,8 @@ async function main(): Promise<void> {
         name: inst.agent.name,
         state: inst.state,
         capabilities: inst.definition.grantedCapabilities,
+        internal: router.findAgentByRole('local')?.id === inst.agent.id
+          || router.findAgentByRole('external')?.id === inst.agent.id,
       })),
       onStatus: () => ({
         running: runtime.isRunning(),
@@ -1813,13 +2326,15 @@ async function main(): Promise<void> {
       }),
     });
     await cliChannel.start(async (msg) => {
+      const decision = resolveAgentWithTier(configRef.current.channels.cli?.defaultAgent, msg.content);
       if (dashboardCallbacks.onDispatch) {
         return dashboardCallbacks.onDispatch(
-          configRef.current.channels.cli?.defaultAgent ?? defaultAgentId,
+          decision.agentId,
           { content: msg.content, userId: msg.userId, channel: msg.channel },
+          decision,
         );
       }
-      return runtime.dispatchMessage(configRef.current.channels.cli?.defaultAgent ?? defaultAgentId, msg);
+      return runtime.dispatchMessage(decision.agentId, msg);
     });
     channels.push({ name: 'cli', stop: () => cliChannel!.stop() });
   }
@@ -1860,13 +2375,15 @@ async function main(): Promise<void> {
       },
     });
     await telegram.start(async (msg) => {
+      const decision = resolveAgentWithTier(configRef.current.channels.telegram?.defaultAgent, msg.content);
       if (dashboardCallbacks.onDispatch) {
         return dashboardCallbacks.onDispatch(
-          configRef.current.channels.telegram?.defaultAgent ?? defaultAgentId,
+          decision.agentId,
           { content: msg.content, userId: msg.userId, channel: msg.channel },
+          decision,
         );
       }
-      return runtime.dispatchMessage(configRef.current.channels.telegram?.defaultAgent ?? defaultAgentId, msg);
+      return runtime.dispatchMessage(decision.agentId, msg);
     });
     channels.push({ name: 'telegram', stop: () => telegram.stop() });
   }
@@ -1913,13 +2430,15 @@ async function main(): Promise<void> {
     });
     activeWebChannel = web;
     await web.start(async (msg) => {
+      const decision = resolveAgentWithTier(configRef.current.channels.web?.defaultAgent, msg.content);
       if (dashboardCallbacks.onDispatch) {
         return dashboardCallbacks.onDispatch(
-          configRef.current.channels.web?.defaultAgent ?? defaultAgentId,
+          decision.agentId,
           { content: msg.content, userId: msg.userId, channel: msg.channel },
+          decision,
         );
       }
-      return runtime.dispatchMessage(configRef.current.channels.web?.defaultAgent ?? defaultAgentId, msg);
+      return runtime.dispatchMessage(decision.agentId, msg);
     });
     channels.push({ name: 'web', stop: () => web.stop() });
 
@@ -1988,6 +2507,14 @@ async function main(): Promise<void> {
     if (threatIntelInterval) {
       clearInterval(threatIntelInterval);
       threatIntelInterval = null;
+    }
+
+    if (mcpManager) {
+      try {
+        await mcpManager.disconnectAll();
+      } catch (err) {
+        log.error({ err }, 'Error disconnecting MCP servers');
+      }
     }
 
     await runtime.stop();

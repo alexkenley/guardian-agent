@@ -1,6 +1,10 @@
 /**
- * Chat page — agent selector, message history, text input.
+ * Chat page — tier mode toggle or agent selector, message history, text input.
  * Shows LLM connection status and a thinking indicator while waiting.
+ *
+ * When only internal (tier-routed) agents exist, shows a unified
+ * "Guardian Agent" with an Auto / Local / External mode toggle.
+ * When user-configured agents exist, shows the classic agent dropdown.
  */
 
 import { api } from '../api.js';
@@ -8,6 +12,7 @@ import { applyInputTooltips } from '../tooltip.js';
 
 const chatHistoryByAgent = new Map();
 const ACTIVE_AGENT_KEY = 'guardianagent_active_agent';
+const TIER_MODE_KEY = 'guardianagent_tier_mode';
 const WEB_USER_KEY = 'guardianagent_web_user';
 
 export async function renderChat(container) {
@@ -16,17 +21,21 @@ export async function renderChat(container) {
   let agents = [];
   let providers = [];
   let quickActions = [];
+  let routingMode = null;
   try {
-    [agents, providers, quickActions] = await Promise.all([
+    [agents, providers, quickActions, routingMode] = await Promise.all([
       api.agents().catch(() => []),
       api.providersStatus().catch(() => api.providers().catch(() => [])),
       api.quickActions().catch(() => []),
+      api.routingMode().catch(() => null),
     ]);
   } catch {
     // Continue with empty lists
   }
 
   const chatAgents = agents.filter((a) => a.canChat !== false);
+  const userAgents = chatAgents.filter((a) => !a.internal);
+  const hasInternalOnly = userAgents.length === 0 && chatAgents.length > 0;
   const webUserId = resolveWebUserId();
 
   container.innerHTML = '';
@@ -55,23 +64,73 @@ export async function renderChat(container) {
   }
   wrapper.appendChild(providerBar);
 
-  // Toolbar with agent selector
+  // Toolbar
   const toolbar = document.createElement('div');
   toolbar.className = 'chat-toolbar';
 
-  const label = document.createElement('label');
-  label.textContent = 'Agent:';
-  label.style.fontSize = '0.8rem';
-  label.style.color = 'var(--text-muted)';
+  let select = null;
+  let modeSelect = null;
+  let activeAgentId = null;
 
-  const select = document.createElement('select');
-  select.id = 'chat-agent-select';
-  if (chatAgents.length === 0) {
-    select.innerHTML = '<option value="">No agents available</option>';
-  } else {
-    select.innerHTML = chatAgents.map(a =>
+  if (hasInternalOnly) {
+    // Unified mode: mode toggle instead of agent dropdown
+    const modeLabel = document.createElement('label');
+    modeLabel.textContent = 'Guardian Agent';
+    modeLabel.style.cssText = 'font-size:0.8rem;color:var(--accent);font-weight:600;';
+
+    const modeDiv = document.createElement('div');
+    modeDiv.style.cssText = 'display:flex;align-items:center;gap:0.5rem;';
+
+    const modeTag = document.createElement('span');
+    modeTag.style.cssText = 'font-size:0.7rem;color:var(--text-muted);';
+    modeTag.textContent = 'Routing:';
+
+    modeSelect = document.createElement('select');
+    modeSelect.id = 'chat-mode-select';
+    modeSelect.style.fontSize = '0.75rem';
+    modeSelect.innerHTML = `
+      <option value="auto">Auto</option>
+      <option value="local-only">Local Only</option>
+      <option value="external-only">External Only</option>
+    `;
+
+    const currentMode = routingMode?.tierMode ?? sessionStorage.getItem(TIER_MODE_KEY) ?? 'auto';
+    modeSelect.value = currentMode;
+
+    modeSelect.addEventListener('change', async () => {
+      const mode = modeSelect.value;
+      sessionStorage.setItem(TIER_MODE_KEY, mode);
+      try {
+        await api.setRoutingMode(mode);
+      } catch (err) {
+        console.error('Failed to set routing mode', err);
+      }
+    });
+
+    modeDiv.append(modeTag, modeSelect);
+    toolbar.append(modeLabel, modeDiv);
+
+    activeAgentId = '__guardian__';
+  } else if (userAgents.length > 0) {
+    // Classic mode
+    const label = document.createElement('label');
+    label.textContent = 'Agent:';
+    label.style.fontSize = '0.8rem';
+    label.style.color = 'var(--text-muted)';
+
+    select = document.createElement('select');
+    select.id = 'chat-agent-select';
+    select.innerHTML = userAgents.map(a =>
       `<option value="${esc(a.id)}">${esc(a.name)} (${esc(a.id)})${a.provider ? ' - ' + esc(a.provider) : ''}</option>`
     ).join('');
+
+    toolbar.append(label, select);
+    activeAgentId = resolveInitialAgent(select, userAgents);
+  } else {
+    const noAgents = document.createElement('span');
+    noAgents.style.cssText = 'font-size:0.8rem;color:var(--text-muted);';
+    noAgents.textContent = 'No agents available';
+    toolbar.appendChild(noAgents);
   }
 
   const resetBtn = document.createElement('button');
@@ -80,7 +139,7 @@ export async function renderChat(container) {
   resetBtn.style.padding = '0.45rem 0.7rem';
   resetBtn.style.fontSize = '0.75rem';
 
-  toolbar.append(label, select, resetBtn);
+  toolbar.appendChild(resetBtn);
   wrapper.appendChild(toolbar);
 
   // Chat history
@@ -123,29 +182,32 @@ export async function renderChat(container) {
   sendBtn.className = 'btn btn-primary';
   sendBtn.textContent = 'Send';
 
-  const initialAgent = resolveInitialAgent(select, chatAgents);
-  renderHistory(history, initialAgent);
+  renderHistory(history, activeAgentId);
 
-  select.addEventListener('change', () => {
-    const selected = select.value;
-    if (selected) {
-      sessionStorage.setItem(ACTIVE_AGENT_KEY, selected);
-    }
-    renderHistory(history, selected);
-  });
+  if (select) {
+    select.addEventListener('change', () => {
+      const selected = select.value;
+      if (selected) {
+        sessionStorage.setItem(ACTIVE_AGENT_KEY, selected);
+        activeAgentId = selected;
+      }
+      renderHistory(history, selected);
+    });
+  }
 
   resetBtn.addEventListener('click', async () => {
-    const agentId = select.value;
-    if (!agentId) return;
+    const resetId = hasInternalOnly ? '__guardian__' : (select?.value || '');
+    if (!resetId) return;
 
     resetBtn.disabled = true;
     const previousLabel = resetBtn.textContent;
     resetBtn.textContent = 'Resetting...';
 
     try {
-      await api.resetConversation(agentId, webUserId, 'web');
-      chatHistoryByAgent.delete(agentId);
-      renderHistory(history, agentId);
+      const apiAgentId = resetId === '__guardian__' ? (chatAgents[0]?.id || 'default') : resetId;
+      await api.resetConversation(apiAgentId, webUserId, 'web');
+      chatHistoryByAgent.delete(resetId);
+      renderHistory(history, resetId);
     } catch {
       // Keep local history if reset failed.
     } finally {
@@ -158,10 +220,10 @@ export async function renderChat(container) {
     const text = input.value.trim();
     if (!text) return;
 
-    const agentId = select.value;
-    if (!agentId) return;
+    const historyKey = hasInternalOnly ? '__guardian__' : (select?.value || '');
+    if (!historyKey) return;
 
-    const chatHistory = getHistory(agentId);
+    const chatHistory = getHistory(historyKey);
 
     input.value = '';
     input.disabled = true;
@@ -178,6 +240,8 @@ export async function renderChat(container) {
     history.scrollTop = history.scrollHeight;
 
     try {
+      // In unified mode, don't send agentId — let tier routing decide
+      const agentId = hasInternalOnly ? undefined : (select?.value || undefined);
       const response = await api.sendMessage(text, agentId, webUserId, 'web');
       // Remove thinking indicator
       thinkingEl.remove();
@@ -204,10 +268,14 @@ export async function renderChat(container) {
     const details = quickActionInput.value.trim();
     if (!details) return;
     const actionId = quickActionSelect.value;
-    const agentId = select.value;
-    if (!agentId) return;
 
-    const chatHistory = getHistory(agentId);
+    const historyKey = hasInternalOnly ? '__guardian__' : (select?.value || '');
+    if (!historyKey) return;
+
+    // For quick actions, we need an actual agent ID for the API
+    const agentId = hasInternalOnly ? (chatAgents[0]?.id || 'default') : (select?.value || '');
+
+    const chatHistory = getHistory(historyKey);
     const localPrompt = `[Quick:${actionId}] ${details}`;
     chatHistory.push({ role: 'user', content: localPrompt });
     history.appendChild(createMessageEl('user', localPrompt));

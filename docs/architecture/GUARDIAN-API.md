@@ -644,13 +644,331 @@ The Runtime wires all Guardian components together. Key integration points:
    - If secrets found + redact mode → replaces secrets with `[REDACTED]`, records `output_redacted`
    - If secrets found + block mode → returns blocked message, records `output_blocked`
 
-### `Runtime.createAgentContext(agentId)`
+### `Runtime.createAgentContext(agentId, options?)`
 
 Injects security-aware context:
 - `ctx.capabilities` — read-only list from `AgentDefinition.grantedCapabilities`
 - `ctx.checkAction(action)` — calls `guardian.check()`, throws on denial, records to AuditLog
 - `ctx.emit(partial)` — scans payload via `outputGuardian.scanPayload()`, throws if secrets found, records `event_blocked`
+- `ctx.dispatch(agentId, message)` — calls `Runtime.dispatchMessage()`, ensuring full Guardian pipeline runs for each sub-agent call. Enabled by default; set `options.enableDispatch` to `false` to disable.
+- `ctx.sharedState` — optional `SharedStateView` (read-only) for sub-agents in orchestration patterns
 
 ### `Runtime.dispatchSchedule(agentId, schedule)`
 
 Injects `auditLog` into `ScheduleContext` for Sentinel access.
+
+---
+
+## Orchestration Agents
+
+**File:** `src/agent/orchestration.ts`
+
+Three orchestration primitives that compose sub-agents into structured workflows. All extend `BaseAgent`.
+
+### `SequentialAgent`
+
+Runs sub-agents in order, passing state between steps.
+
+```typescript
+import { SequentialAgent } from './agent/orchestration.js';
+
+const pipeline = new SequentialAgent('my-pipeline', 'Pipeline Name', {
+  steps: [
+    { agentId: 'step-1', outputKey: 'result1' },
+    { agentId: 'step-2', inputKey: 'result1', outputKey: 'result2' },
+  ],
+  stopOnError: true,   // default: true — halt on first error
+});
+```
+
+#### Step Configuration
+
+```typescript
+interface OrchestrationStep {
+  agentId: string;      // target agent ID (must be registered)
+  inputKey?: string;     // read from SharedState as message content
+  outputKey?: string;    // write response to SharedState (default: agentId)
+}
+```
+
+### `ParallelAgent`
+
+Runs sub-agents concurrently with optional concurrency limit.
+
+```typescript
+import { ParallelAgent } from './agent/orchestration.js';
+
+const fanout = new ParallelAgent('search', 'Multi-Search', {
+  steps: [
+    { agentId: 'web-search',  outputKey: 'web' },
+    { agentId: 'doc-search',  outputKey: 'docs' },
+    { agentId: 'code-search', outputKey: 'code' },
+  ],
+  maxConcurrency: 2,   // optional — limit concurrent dispatches
+});
+```
+
+When `maxConcurrency` is set, uses a worker-pool pattern to process steps in batches.
+
+### `LoopAgent`
+
+Runs a single sub-agent repeatedly until a condition is met or `maxIterations` is reached.
+
+```typescript
+import { LoopAgent } from './agent/orchestration.js';
+
+const loop = new LoopAgent('refiner', 'Iterative Refiner', {
+  agentId: 'editor',
+  outputKey: 'draft',
+  maxIterations: 5,     // mandatory safety cap
+  condition: (iteration, lastResponse) => {
+    return !lastResponse?.content.includes('[DONE]');
+  },
+});
+```
+
+### Orchestration Types
+
+```typescript
+interface SequentialAgentOptions {
+  steps: OrchestrationStep[];
+  stopOnError?: boolean;
+}
+
+interface ParallelAgentOptions {
+  steps: OrchestrationStep[];
+  maxConcurrency?: number;
+}
+
+interface LoopAgentOptions {
+  agentId: string;
+  outputKey?: string;
+  maxIterations: number;
+  condition?: (iteration: number, lastResponse?: AgentResponse) => boolean;
+}
+```
+
+---
+
+## Shared State
+
+**File:** `src/runtime/shared-state.ts`
+
+Inter-agent data passing for orchestration patterns.
+
+### `SharedState` (Mutable)
+
+```typescript
+import { SharedState } from './runtime/shared-state.js';
+
+const state = new SharedState();
+state.set('input', 'user message');
+state.set('temp:counter', 0);
+
+state.get<string>('input');    // 'user message'
+state.has('input');             // true
+state.keys();                   // ['input', 'temp:counter']
+state.snapshot();               // { input: 'user message', 'temp:counter': 0 }
+state.clearTemp();              // removes 'temp:counter'
+state.clear();                  // removes all keys
+```
+
+### `SharedStateView` (Read-Only)
+
+```typescript
+const view = state.asReadOnly();
+view.get<string>('input');     // works
+view.set('x', 'y');            // TypeScript error — no set method
+```
+
+### Types
+
+```typescript
+interface SharedStateView {
+  get<T = unknown>(key: string): T | undefined;
+  has(key: string): boolean;
+  keys(): string[];
+  snapshot(): Record<string, unknown>;
+}
+
+class SharedState implements SharedStateView {
+  get<T = unknown>(key: string): T | undefined;
+  set(key: string, value: unknown): void;
+  has(key: string): boolean;
+  delete(key: string): boolean;
+  keys(): string[];
+  snapshot(): Record<string, unknown>;
+  clearTemp(): void;           // Remove all 'temp:' prefixed keys
+  clear(): void;               // Remove all keys
+  readonly size: number;
+  asReadOnly(): SharedStateView;
+}
+```
+
+---
+
+## MCP Client
+
+**File:** `src/tools/mcp-client.ts`
+
+Model Context Protocol client for consuming external tool servers.
+
+### `MCPClient`
+
+Manages a single MCP server connection over stdio.
+
+```typescript
+import { MCPClient } from './tools/mcp-client.js';
+
+const client = new MCPClient({
+  id: 'filesystem',
+  name: 'Filesystem Tools',
+  transport: 'stdio',
+  command: 'npx',
+  args: ['-y', '@modelcontextprotocol/server-filesystem', '/workspace'],
+  timeoutMs: 10_000,
+});
+
+await client.connect();              // spawn, initialize, discover tools
+client.getTools();                    // MCPToolSchema[] (raw)
+client.getToolDefinitions();          // ToolDefinition[] (GuardianAgent format)
+const result = await client.callTool('read_file', { path: '/a.txt' });
+client.disconnect();                  // kill process
+```
+
+### `MCPClientManager`
+
+Manages multiple MCP server connections with tool name namespacing.
+
+```typescript
+import { MCPClientManager } from './tools/mcp-client.js';
+
+const manager = new MCPClientManager();
+await manager.addServer(filesystemConfig);
+await manager.addServer(sqliteConfig);
+
+manager.getAllToolDefinitions();       // combined list, namespaced
+manager.getStatus();                  // per-server connection status
+
+// Tool calls use namespaced names: mcp:<serverId>:<toolName>
+const result = await manager.callTool('mcp:filesystem:read_file', { path: '/a.txt' });
+
+manager.removeServer('filesystem');
+await manager.disconnectAll();
+```
+
+### Types
+
+```typescript
+interface MCPServerConfig {
+  id: string;
+  name: string;
+  transport: 'stdio';
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  timeoutMs?: number;       // default: 30000
+}
+
+type MCPConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
+
+interface MCPToolSchema {
+  name: string;
+  description?: string;
+  inputSchema?: { type: string; properties?: Record<string, unknown>; required?: string[] };
+}
+
+interface MCPToolCallResult {
+  success: boolean;
+  output: string;
+  error?: string;
+  metadata?: Record<string, unknown>;
+}
+```
+
+---
+
+## Evaluation Framework
+
+**Files:** `src/eval/types.ts`, `src/eval/metrics.ts`, `src/eval/runner.ts`
+
+### `EvalRunner`
+
+Runs eval test cases through the real Runtime (Guardian active).
+
+```typescript
+import { EvalRunner, loadEvalSuite, formatEvalReport } from './eval/runner.js';
+
+const runner = new EvalRunner({ runtime });
+const suite = await loadEvalSuite('tests/assistant.eval.json');
+const result = await runner.runSuite(suite.name, suite.tests);
+console.log(formatEvalReport(result));
+```
+
+### Content Matchers
+
+```typescript
+type ContentMatcher =
+  | { type: 'exact'; value: string }
+  | { type: 'contains'; value: string }
+  | { type: 'not_contains'; value: string }
+  | { type: 'regex'; pattern: string; flags?: string }
+  | { type: 'not_empty' };
+```
+
+### Safety Expectations
+
+```typescript
+interface SafetyExpectation {
+  noSecrets?: boolean;              // run SecretScanner on response
+  noBlockedPatterns?: string[];     // custom regex that must not appear
+  noDenials?: boolean;              // no Guardian denial markers
+  maxInjectionScore?: number;       // InputSanitizer score threshold
+}
+```
+
+### Test Case Format
+
+```typescript
+interface EvalTestCase {
+  name: string;
+  description?: string;
+  tags?: string[];
+  agentId: string;
+  input: EvalInput;
+  expected: EvalExpected;
+  timeoutMs?: number;
+}
+
+interface EvalInput {
+  content: string;
+  userId?: string;
+  channel?: string;
+}
+
+interface EvalExpected {
+  content?: ContentMatcher;
+  toolCalls?: ExpectedToolCall[];
+  metadata?: Record<string, unknown>;
+  safety?: SafetyExpectation;
+  custom?: (response: AgentResponse & { durationMs: number }) => EvalAssertion;
+}
+```
+
+### Metrics
+
+| Metric | What It Checks |
+|--------|---------------|
+| `content_exact` | Full string equality |
+| `content_contains` | Substring present |
+| `content_not_contains` | Substring absent |
+| `content_regex` | Pattern matches |
+| `content_not_empty` | Non-whitespace content |
+| `tool_trajectory` | Required tools called in order |
+| `metadata_match` | Key-value subset matching |
+| `safety_no_secrets` | SecretScanner finds nothing |
+| `safety_no_blocked_pattern` | Custom patterns absent |
+| `safety_no_denials` | No Guardian denial markers |
+| `safety_injection_score` | Score below threshold |
+| `response_exists` | Fallback — non-empty response |

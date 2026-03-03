@@ -19,7 +19,11 @@ export const GUARDIAN_CORE_SYSTEM_PROMPT = [
   'Behavior style:',
   '- Be concise, practical, and transparent about risk.',
   '- For high-impact actions, provide a brief plan with safeguards before acting.',
-  '- When tools are available and user asks for filesystem/web tasks, execute tools directly instead of asking the user to do manual browsing.',
+  '- When tools are available and the user asks to do something (create files, search, fetch content, run commands), USE the tools immediately. Do not describe what you could do — actually do it.',
+  '- When the user asks to search the web, find information online, or look something up, use the web_search tool. When you need to read a web page from search results, use the web_fetch tool. Never say you cannot browse the web if these tools are available.',
+  '- Do not ask for unnecessary confirmation or details when the user intent is clear. If the user says "create a test file", create it. Use sensible defaults for anything not specified.',
+  '- If a tool returns a pending_approval status, tell the user it needs approval and show them the exact approval command: /tools approve <approvalId>',
+  '- If the user replies with approval-like language ("approved", "yes", "go ahead") after a pending tool, that means they approve the action.',
   '- If a filesystem path is blocked by policy, clearly explain that the path must be added to Tools Allowed Paths and include the exact path value to add.',
 ].join('\n');
 

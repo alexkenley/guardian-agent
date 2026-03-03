@@ -11,6 +11,8 @@ export interface GuardianAgentConfig {
   llm: Record<string, LLMConfig>;
   /** Default LLM provider name (key in llm map). */
   defaultProvider: string;
+  /** Fallback provider names tried when the default provider fails (keys in llm map). */
+  fallbacks?: string[];
   /** Agent configurations. */
   agents: AgentConfig[];
   /** Channel configurations. */
@@ -23,6 +25,8 @@ export interface GuardianAgentConfig {
   assistant: AssistantConfig;
   /** LLM provider failover configuration. */
   failover?: FailoverConfig;
+  /** Message routing configuration for multi-agent dispatch. */
+  routing?: RoutingConfig;
 }
 
 /** Failover configuration for LLM providers. */
@@ -71,6 +75,36 @@ export interface AgentConfig {
   capabilities?: string[];
   /** Resource limits. */
   resourceLimits?: Partial<AgentResourceLimitsConfig>;
+  /** Agent role for routing purposes. */
+  role?: 'local' | 'external' | 'general';
+}
+
+/** Routing rule for a specific agent. */
+export interface RoutingRuleConfig {
+  /** Regex patterns for keyword matching. */
+  patterns?: string[];
+  /** Domain groups: 'filesystem', 'code', 'network', 'email'. */
+  domains?: string[];
+  /** Priority (lower = higher priority, default 10). */
+  priority?: number;
+}
+
+/** Message routing configuration. */
+export interface RoutingConfig {
+  /** Routing strategy (default: 'keyword'). */
+  strategy: 'keyword' | 'capability' | 'explicit';
+  /** Fallback agent ID when no route matches (default: first agent or 'local'). */
+  fallbackAgent?: string;
+  /** Per-agent routing rules, keyed by agent ID. */
+  rules?: Record<string, RoutingRuleConfig>;
+  /** Tier routing mode: auto scores complexity, local-only/external-only force a tier (default: 'auto'). */
+  tierMode?: 'auto' | 'local-only' | 'external-only';
+  /** Complexity threshold: score >= threshold routes to external (default: 0.5). */
+  complexityThreshold?: number;
+  /** Retry with the opposite tier when the primary tier agent fails (default: true). */
+  fallbackOnFailure?: boolean;
+  /** Maximum fallback attempts before propagating the error (default: 1). */
+  maxFallbackAttempts?: number;
 }
 
 /** Resource limits for an agent (config layer). */
@@ -304,6 +338,52 @@ export interface AssistantThreatIntelMoltbookConfig {
   allowActiveResponse: boolean;
 }
 
+/** Configuration for a single MCP server connection. */
+export interface MCPServerEntry {
+  /** Unique identifier for this server. */
+  id: string;
+  /** Human-readable display name. */
+  name: string;
+  /** Command to start the MCP server process. */
+  command: string;
+  /** Arguments for the command. */
+  args?: string[];
+  /** Environment variables to pass to the server process (supports ${ENV_VAR}). */
+  env?: Record<string, string>;
+  /** Working directory for the server process. */
+  cwd?: string;
+  /** Request timeout in milliseconds (default: 30000). */
+  timeoutMs?: number;
+}
+
+/** MCP tool server configuration. */
+export interface AssistantMCPConfig {
+  /** Enable MCP tool server connections. */
+  enabled: boolean;
+  /** MCP server configurations. */
+  servers: MCPServerEntry[];
+}
+
+/** Web search provider configuration. */
+export interface WebSearchConfig {
+  /**
+   * Preferred search provider.
+   * - 'auto' selects based on available API keys (Brave > Perplexity > DuckDuckGo).
+   * - 'brave' returns structured results + free AI-synthesized summary (recommended, one key).
+   * - 'perplexity' returns AI-synthesized answers with citations.
+   * - 'duckduckgo' scrapes HTML results (fragile, last-resort).
+   */
+  provider?: 'auto' | 'duckduckgo' | 'brave' | 'perplexity';
+  /** Brave Search API key (or ${ENV_VAR}). Free tier: 2000 queries/month. Covers both search + free Summarizer API. */
+  braveApiKey?: string;
+  /** Perplexity API key (or ${ENV_VAR}). */
+  perplexityApiKey?: string;
+  /** OpenRouter API key — can be used to access Perplexity via OpenRouter (or ${ENV_VAR}). */
+  openRouterApiKey?: string;
+  /** Search result cache TTL in milliseconds (default: 600000 = 10 min). */
+  cacheTtlMs?: number;
+}
+
 /** Assistant tool execution policy and sandbox settings. */
 export interface AssistantToolsConfig {
   /** Enable assistant tool runtime and LLM tool-calling. */
@@ -322,6 +402,10 @@ export interface AssistantToolsConfig {
   allowedDomains: string[];
   /** Default dry-run mode for mutating tools (default: false). */
   dryRunDefault?: boolean;
+  /** MCP tool server configuration. */
+  mcp?: AssistantMCPConfig;
+  /** Web search tool configuration. Auto-selects best available provider (Brave > Perplexity > DuckDuckGo). */
+  webSearch?: WebSearchConfig;
 }
 
 /** Personal assistant feature configuration. */
@@ -395,7 +479,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
     },
   },
   runtime: {
-    maxStallDurationMs: 60_000,
+    maxStallDurationMs: 180_000,
     watchdogIntervalMs: 10_000,
     logLevel: 'warn',
   },
@@ -403,6 +487,13 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
     enabled: true,
     failureThreshold: 3,
     resetTimeoutMs: 30_000,
+  },
+  routing: {
+    strategy: 'keyword',
+    tierMode: 'auto',
+    complexityThreshold: 0.5,
+    fallbackOnFailure: true,
+    maxFallbackAttempts: 1,
   },
   assistant: {
     setup: {
@@ -476,6 +567,10 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         'moltbook.com',
         'gmail.googleapis.com',
         'www.googleapis.com',
+        'html.duckduckgo.com',
+        'api.search.brave.com',
+        'api.perplexity.ai',
+        'openrouter.ai',
       ],
     },
   },

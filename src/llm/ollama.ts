@@ -73,7 +73,7 @@ export class OllamaProvider implements LLMProvider {
     const model = options?.model ?? this.model;
     const body: Record<string, unknown> = {
       model,
-      messages: messages.map(m => ({ role: m.role, content: m.content })),
+      messages: messages.map(toOllamaMessage),
       max_tokens: options?.maxTokens ?? this.maxTokens,
       temperature: options?.temperature ?? this.temperature,
       stream: false,
@@ -230,6 +230,29 @@ export class OllamaProvider implements LLMProvider {
       return [];
     }
   }
+}
+
+/** Map unified ChatMessage to OpenAI-compatible format (tool calls + tool results). */
+function toOllamaMessage(msg: ChatMessage): Record<string, unknown> {
+  if (msg.role === 'tool') {
+    return {
+      role: 'tool',
+      content: msg.content,
+      tool_call_id: msg.toolCallId ?? '',
+    };
+  }
+  if (msg.role === 'assistant' && msg.toolCalls?.length) {
+    return {
+      role: 'assistant',
+      content: msg.content || null,
+      tool_calls: msg.toolCalls.map(tc => ({
+        id: tc.id,
+        type: 'function',
+        function: { name: tc.name, arguments: tc.arguments },
+      })),
+    };
+  }
+  return { role: msg.role, content: msg.content };
 }
 
 function mapFinishReason(reason?: string): ChatResponse['finishReason'] {
