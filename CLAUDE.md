@@ -25,6 +25,8 @@ npx vitest run --reporter=verbose  # Verbose test output
 ### Event-Driven Runtime
 - **Runtime** orchestrator wires: Config → LLM Providers → Registry → EventBus → Guardian → Budget → Watchdog → Scheduler → Channels
 - **Agents** are async classes extending `BaseAgent` with handlers: `onStart`, `onStop`, `onMessage`, `onEvent`, `onSchedule`
+- **Orchestration Agents** — `SequentialAgent`, `ParallelAgent`, `LoopAgent` compose sub-agents into workflows. All dispatches go through full Guardian pipeline via `ctx.dispatch()`
+- **SharedState** — per-invocation, orchestrator-owned key-value store for inter-agent data passing. `temp:` prefix convention for invocation-scoped data
 - **EventBus** provides immediate async dispatch (replaces batch-drain queue)
 - **CronScheduler** uses `croner` for periodic agent invocations
 
@@ -39,6 +41,19 @@ npx vitest run --reporter=verbose  # Verbose test output
 - **CapabilityController**: Per-agent capability grants (`read_files`, `write_files`, `execute_commands`, etc.)
 - **SecretScanController**: Regex detection for AWS keys, API tokens, JWTs, PEM headers, connection strings
 - **DeniedPathController**: Blocks access to `.env`, `*.pem`, `*.key`, `credentials.*`, `id_rsa*`
+
+### MCP Client
+- **MCPClient** — JSON-RPC 2.0 over stdio, connects to external MCP tool servers
+- **MCPClientManager** — multi-server management with tool name namespacing (`mcp:<serverId>:<toolName>`)
+- All MCP tool calls pass through Guardian admission pipeline
+- MCP tools classified as `network` risk level
+
+### Evaluation Framework
+- **EvalRunner** runs test cases through the real Runtime (Guardian active during eval)
+- Content matchers: exact, contains, not_contains, regex, not_empty
+- Safety metrics: secret scanning, blocked patterns, denial detection, injection scoring
+- Tool trajectory and metadata validation
+- JSON-based test suites (`.eval.json`) and code-based test cases
 
 ### Channel Adapters
 - **CLI**: Interactive readline prompt with `/help`, `/agents`, `/status`, `/quit` commands
@@ -66,14 +81,16 @@ npx vitest run --reporter=verbose  # Verbose test output
 ```
 src/config/     — Config types, YAML loader with env var interpolation
 src/llm/        — LLM provider interface, Ollama/Anthropic/OpenAI implementations
-src/agent/      — Agent base class, Registry, Lifecycle state machine, types
-src/runtime/    — Runtime orchestrator, BudgetTracker, Watchdog, CronScheduler
+src/agent/      — Agent base class, Registry, Lifecycle state machine, orchestration agents, types
+src/runtime/    — Runtime orchestrator, BudgetTracker, Watchdog, CronScheduler, SharedState
 src/queue/      — EventBus for inter-agent communication
 src/guardian/    — Capabilities, SecretScanner, Guardian admission pipeline
 src/channels/   — CLI, Telegram, Web channel adapters
+src/tools/      — Tool executor, MCP client (MCPClient, MCPClientManager)
+src/eval/       — Agent evaluation framework (types, metrics, runner)
 src/util/       — Backoff, logging utilities
 examples/       — single-agent, multi-agent, llm-chat demos
-docs/           — Architecture docs & research
+docs/           — Architecture docs, specs, & research
 ```
 
 ## Configuration
@@ -114,10 +131,15 @@ runtime:
 
 ## Testing
 
+- **See `docs/guides/ASSISTANT-TESTING-RUNBOOK.md`** for full manual testing procedures (server startup, API functional tests, security tests, cleanup)
+- See `docs/guides/MCP-TESTING-GUIDE.md` for MCP-specific testing scenarios
 - Use vitest with `vi.useFakeTimers()` for time-dependent tests
 - Test state machine transitions exhaustively (valid + invalid)
 - Mock HTTP/SDK for LLM provider tests
 - Test Guardian pipeline with known secret patterns
+- Orchestration agent tests use mock `ctx.dispatch()` to verify step ordering and state passing
+- Eval framework tests use real metrics against crafted responses (no Runtime needed for metric unit tests)
+- Agent eval integration tests run through real Runtime with Guardian active
 
 ## Debugging and Decision-Making Protocol
 

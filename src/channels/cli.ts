@@ -254,6 +254,9 @@ export class CLIChannel implements ChannelAdapter {
       case 'chat':
         await this.handleChat(args);
         break;
+      case 'mode':
+        await this.handleMode(args);
+        break;
       case 'agents':
         this.handleAgents();
         break;
@@ -346,6 +349,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write('\n');
     this.write(this.bold('Chat\n'));
     this.write('  /chat [agentId]                        Switch active agent or show current\n');
+    this.write('  /mode [auto|local|external]            Switch routing mode (auto / local-only / external-only)\n');
     this.write('  <text>                                 Send message to active agent\n');
     this.write('\n');
     this.write(this.bold('Status & Monitoring\n'));
@@ -418,11 +422,20 @@ export class CLIChannel implements ChannelAdapter {
 
       const agents = this.dashboard?.onAgents?.() ?? this.onAgents?.();
       if (agents && agents.length > 0) {
-        this.write('Available agents:\n');
-        const visibleAgents = agents.filter(a => 'canChat' in a ? (a as { canChat?: boolean }).canChat !== false : true);
-        for (const a of visibleAgents) {
-          const marker = a.id === (this.activeAgentId ?? this.defaultAgentId) ? ' (active)' : '';
-          this.write(`  ${a.id} — ${a.name}${marker}\n`);
+        // Filter: canChat !== false AND not internal tier agents
+        const visibleAgents = agents.filter(a => {
+          if ('canChat' in a && (a as { canChat?: boolean }).canChat === false) return false;
+          if ('internal' in a && (a as { internal?: boolean }).internal) return false;
+          return true;
+        });
+        if (visibleAgents.length > 0) {
+          this.write('Available agents:\n');
+          for (const a of visibleAgents) {
+            const marker = a.id === (this.activeAgentId ?? this.defaultAgentId) ? ' (active)' : '';
+            this.write(`  ${a.id} — ${a.name}${marker}\n`);
+          }
+        } else {
+          this.write(`Messages are automatically routed. Use ${this.cyan('/mode')} to switch between auto, local-only, or external-only.\n`);
         }
       }
       this.write('\n');
@@ -431,7 +444,7 @@ export class CLIChannel implements ChannelAdapter {
 
     const agentId = args[0];
 
-    // Validate agent exists if dashboard is available
+    // Block switching to internal tier agents — use /mode instead
     if (this.dashboard?.onAgentDetail) {
       const detail = this.dashboard.onAgentDetail(agentId);
       if (!detail) {
@@ -442,6 +455,10 @@ export class CLIChannel implements ChannelAdapter {
         this.write(`\n${this.red('Error:')} Agent "${agentId}" does not handle chat messages.\n\n`);
         return;
       }
+      if ((detail as { internal?: boolean }).internal) {
+        this.write(`\nAgent "${agentId}" is managed by automatic routing. Use ${this.cyan('/mode auto|local|external')} to switch routing mode.\n\n`);
+        return;
+      }
     }
 
     this.activeAgentId = agentId;
@@ -449,6 +466,58 @@ export class CLIChannel implements ChannelAdapter {
     this.prompt = newPrompt;
     this.rl?.setPrompt(newPrompt);
     this.write(`\nSwitched to agent: ${this.cyan(agentId)}\n\n`);
+  }
+
+  // ─── /mode ──────────────────────────────────────────────────
+
+  private async handleMode(args: string[]): Promise<void> {
+    if (!this.dashboard?.onRoutingMode) {
+      this.write(`\nRouting mode not available (no dashboard callbacks).\n\n`);
+      return;
+    }
+
+    if (args.length === 0) {
+      // Show current mode
+      const current = this.dashboard.onRoutingMode();
+      this.write(`\nRouting mode: ${this.cyan(current.tierMode)}\n`);
+      this.write(`  Complexity threshold: ${current.complexityThreshold}\n`);
+      this.write(`  Fallback on failure: ${current.fallbackOnFailure}\n`);
+      this.write(`\nAvailable modes: ${this.cyan('auto')} | ${this.cyan('local')} | ${this.cyan('external')}\n`);
+      this.write(`  auto     — Route by message complexity (recommended)\n`);
+      this.write(`  local    — Force all messages to local LLM\n`);
+      this.write(`  external — Force all messages to external LLM\n`);
+      this.write('\n');
+      return;
+    }
+
+    const modeArg = args[0].toLowerCase();
+    const modeMap: Record<string, 'auto' | 'local-only' | 'external-only'> = {
+      auto: 'auto',
+      local: 'local-only',
+      'local-only': 'local-only',
+      external: 'external-only',
+      'external-only': 'external-only',
+    };
+
+    const mode = modeMap[modeArg];
+    if (!mode) {
+      this.write(`\n${this.red('Error:')} Invalid mode "${modeArg}". Use: auto, local, or external\n\n`);
+      return;
+    }
+
+    if (!this.dashboard.onRoutingModeUpdate) {
+      this.write(`\nRouting mode update not available.\n\n`);
+      return;
+    }
+
+    const result = this.dashboard.onRoutingModeUpdate(mode);
+    // When switching to auto, clear activeAgentId so messages go through routing
+    if (mode === 'auto') {
+      this.activeAgentId = undefined;
+      this.prompt = 'you> ';
+      this.rl?.setPrompt('you> ');
+    }
+    this.write(`\n${result.message}\n\n`);
   }
 
   // ─── /agents ─────────────────────────────────────────────────

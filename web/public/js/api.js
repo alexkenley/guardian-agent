@@ -148,9 +148,18 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(updates),
   }),
-  sendMessage:  (content, agentId, userId, channel = 'web') => request('/api/message', {
+  sendMessage:  (content, agentId, userId, channel = 'web') => {
+    const payload = { content, userId, channel };
+    if (agentId) payload.agentId = agentId;
+    return request('/api/message', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+  routingMode: () => request('/api/routing/mode'),
+  setRoutingMode: (mode) => request('/api/routing/mode', {
     method: 'POST',
-    body: JSON.stringify({ content, agentId, userId, channel }),
+    body: JSON.stringify({ mode }),
   }),
   resetConversation: (agentId, userId = 'web-user', channel = 'web') => request('/api/conversations/reset', {
     method: 'POST',

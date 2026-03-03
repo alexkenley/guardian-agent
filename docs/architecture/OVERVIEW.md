@@ -27,6 +27,16 @@ Core principles:
 │  │  ┌─────────┐  ┌─────────┐  ┌──────────┐  ┌──────────┐        │  │
 │  │  │ Agent A  │  │ Agent B  │  │ Agent C  │  │ Sentinel  │        │  │
 │  │  └────┬────┘  └────┬────┘  └────┬─────┘  └────┬─────┘        │  │
+│  │                                                                │  │
+│  │  ┌──────────────────────────────────────────────────────────┐  │  │
+│  │  │  Orchestration Agents (optional composition layer)       │  │  │
+│  │  │  ┌────────────┐  ┌────────────┐  ┌────────────┐         │  │  │
+│  │  │  │ Sequential │  │  Parallel  │  │    Loop    │         │  │  │
+│  │  │  │   Agent    │  │   Agent    │  │   Agent    │         │  │  │
+│  │  │  └────────────┘  └────────────┘  └────────────┘         │  │  │
+│  │  │  Uses ctx.dispatch() → full Guardian pipeline per step   │  │  │
+│  │  │  SharedState: per-invocation, orchestrator-owned         │  │  │
+│  │  └──────────────────────────────────────────────────────────┘  │  │
 │  └───────┼─────────────┼────────────┼──────────────┼──────────────┘  │
 │          │             │            │              │                   │
 │  ┌───────▼─────────────▼────────────▼──────────────▼──────────────┐  │
@@ -67,6 +77,14 @@ Core principles:
 │  │  │ CLI  │  │ Telegram  │  │ Web  │                             │  │
 │  │  └──────┘  └──────────┘  └──────┘                             │  │
 │  └────────────────────────────────────────────────────────────────┘  │
+│                                                                       │
+│  ┌────────────────────────────────────────────────────────────────┐  │
+│  │                    External Integrations                       │  │
+│  │  ┌──────────────────┐  ┌──────────────────┐                   │  │
+│  │  │  MCP Client Mgr  │  │  Eval Runner     │                   │  │
+│  │  │  (tool servers)  │  │  (agent testing)  │                   │  │
+│  │  └──────────────────┘  └──────────────────┘                   │  │
+│  └────────────────────────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -97,6 +115,13 @@ Runtime (src/runtime/runtime.ts)
 │   ├── audit-log.ts                   — structured event logging (Layer 3)
 │   ├── audit-persistence.ts          — SHA-256 hash-chained JSONL persistence (Layer 3)
 │   └── trust-presets.ts              — predefined security postures (locked/safe/balanced/power)
+├── Orchestration (src/agent/orchestration.ts) — SequentialAgent, ParallelAgent, LoopAgent
+├── Shared State (src/runtime/shared-state.ts) — per-invocation inter-agent data passing
+├── MCP Client (src/tools/mcp-client.ts) — Model Context Protocol tool server consumption
+├── Eval Framework (src/eval/)           — agent evaluation with metrics and reporting
+│   ├── types.ts                        — test case, matcher, and result types
+│   ├── metrics.ts                      — content, trajectory, metadata, and safety metrics
+│   └── runner.ts                       — test runner with real Runtime dispatch
 ├── Sentinel (src/agents/sentinel.ts)   — retrospective anomaly detection (Layer 3)
 ├── Budget (src/runtime/budget.ts)      — compute budget tracking
 ├── Watchdog (src/runtime/watchdog.ts)  — stall detection (timestamp-based)
@@ -144,6 +169,82 @@ This gives us:
 - **Budget enforcement** via wall-clock tracking per invocation
 - **Lifecycle management** via explicit state machine
 - **Mandatory security** — the Runtime checks every message before it reaches the agent, scans every LLM response via GuardedLLMProvider, scans every outbound response before it reaches the user, and scans every inter-agent event payload before dispatch
+
+### Orchestration Agents
+
+Three orchestration primitives extend `BaseAgent` to compose sub-agents into structured workflows:
+
+```typescript
+// Sequential: pipeline of steps with state passing
+const pipeline = new SequentialAgent('scan', 'Security Pipeline', {
+  steps: [
+    { agentId: 'analyzer', outputKey: 'analysis' },
+    { agentId: 'scanner',  inputKey: 'analysis', outputKey: 'vulns' },
+    { agentId: 'reporter', inputKey: 'vulns',    outputKey: 'report' },
+  ],
+});
+
+// Parallel: fan-out with optional concurrency limit
+const research = new ParallelAgent('search', 'Multi-Source', {
+  steps: [
+    { agentId: 'web-search',  outputKey: 'web' },
+    { agentId: 'doc-search',  outputKey: 'docs' },
+  ],
+  maxConcurrency: 3,
+});
+
+// Loop: iterate until condition or maxIterations
+const refiner = new LoopAgent('refine', 'Refiner', {
+  agentId: 'editor',
+  maxIterations: 5,
+  condition: (i, resp) => !resp?.content.includes('[DONE]'),
+});
+```
+
+Key design: every sub-agent dispatch goes through `ctx.dispatch()` → `Runtime.dispatchMessage()` → full Guardian pipeline. Orchestration does not create a bypass path.
+
+See [Orchestration Agents Spec](../specs/ORCHESTRATION-AGENTS-SPEC.md) for full details.
+
+### MCP Client
+
+The MCP (Model Context Protocol) client consumes tools from external MCP-compatible servers:
+
+```typescript
+const manager = new MCPClientManager();
+await manager.addServer({
+  id: 'filesystem', name: 'FS Tools',
+  transport: 'stdio',
+  command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '/workspace'],
+});
+
+// Tool names are namespaced: mcp:filesystem:read_file
+const result = await manager.callTool('mcp:filesystem:read_file', { path: '/a.txt' });
+```
+
+MCP tools are classified as `network` risk and all calls pass through Guardian. See [MCP Client Spec](../specs/MCP-CLIENT-SPEC.md).
+
+### Agent Evaluation Framework
+
+The eval framework tests agent behavior through the real Runtime (Guardian active):
+
+```typescript
+const runner = new EvalRunner({ runtime });
+const suite = await loadEvalSuite('tests/assistant.eval.json');
+const result = await runner.runSuite(suite.name, suite.tests);
+console.log(formatEvalReport(result));
+```
+
+Supports content matchers, tool trajectory validation, metadata checks, and 4 independent safety metrics. See [Evaluation Framework Spec](../specs/EVAL-FRAMEWORK-SPEC.md).
+
+### Shared State
+
+`SharedState` enables inter-agent data passing within orchestration patterns:
+
+- **Owned by orchestrator** — sub-agents cannot read or write
+- **Scoped to invocation** — fresh state per `onMessage()` call, no persistence
+- **Temp key convention** — `temp:` prefixed keys cleaned up via `clearTemp()`
+
+See [Shared State Spec](../specs/SHARED-STATE-SPEC.md).
 
 ## Message Flow with Security
 
@@ -200,7 +301,44 @@ All security enforcement is mandatory. The Runtime controls every path where dat
 - **Resource limits** — Concurrent limits, queue depth, token rate limits, and wall-clock budgets enforced before every invocation
 - **Context immutability** — Agent contexts are frozen. Agents cannot modify their own capabilities.
 
-There is no `ctx.fs`, `ctx.http`, or `ctx.exec`. The agent's only interaction points are `ctx.llm` (guarded), `ctx.emit()` (scanned), and returning a response (scanned).
+There is no `ctx.fs`, `ctx.http`, or `ctx.exec`. The agent's only interaction points are `ctx.llm` (guarded), `ctx.emit()` (scanned), `ctx.dispatch()` (Guardian-checked per call), and returning a response (scanned).
+
+### Orchestration Message Flow
+
+When an orchestration agent dispatches to sub-agents, each dispatch passes through the full security pipeline:
+
+```
+SequentialAgent.onMessage()
+    │
+    ▼
+  SharedState created (orchestrator-owned)
+    │
+    ├── ctx.dispatch('step-1', msg)
+    │       │
+    │       ▼
+    │     LAYER 1: Guardian Pipeline (full check)
+    │       │ ✓
+    │       ▼
+    │     step-1.onMessage()
+    │       │
+    │       ▼
+    │     LAYER 2: OutputGuardian (scan response)
+    │       │
+    │       ▼
+    │     state.set('step-1', response)
+    │
+    ├── ctx.dispatch('step-2', enrichedMsg)
+    │       │
+    │       ▼
+    │     LAYER 1 → step-2.onMessage() → LAYER 2
+    │       │
+    │       ▼
+    │     state.set('step-2', response)
+    │
+    ▼
+  state.clearTemp()
+  Return final response
+```
 
 See [SECURITY.md](./SECURITY.md) for comprehensive security documentation.
 

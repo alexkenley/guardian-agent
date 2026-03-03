@@ -1019,6 +1019,46 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // GET /api/routing/mode — Current tier routing mode
+      if (req.method === 'GET' && url.pathname === '/api/routing/mode') {
+        if (!this.dashboard.onRoutingMode) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onRoutingMode());
+        return;
+      }
+
+      // POST /api/routing/mode — Switch tier routing mode
+      if (req.method === 'POST' && url.pathname === '/api/routing/mode') {
+        if (!this.dashboard.onRoutingModeUpdate) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { mode?: string };
+        try {
+          parsed = JSON.parse(body) as { mode?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        const valid = ['auto', 'local-only', 'external-only'];
+        if (!parsed.mode || !valid.includes(parsed.mode)) {
+          sendJSON(res, 400, { error: `mode must be one of: ${valid.join(', ')}` });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onRoutingModeUpdate(parsed.mode as 'auto' | 'local-only' | 'external-only'));
+        return;
+      }
+
       // POST /api/message — Send a message to an agent
       if (req.method === 'POST' && url.pathname === '/api/message') {
         let body: string;

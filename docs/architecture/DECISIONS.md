@@ -286,3 +286,106 @@ Cross-cutting: AuditLog records all security events in an in-memory ring buffer 
 - (+) Read-only tools unaffected (no unnecessary overhead)
 - (-) Preview text is approximation — actual execution may differ
 - (-) Adds a branch to every mutating tool handler
+
+---
+
+## ADR-017: Structured Orchestration Agents
+
+**Status:** Accepted
+
+**Context:** GuardianAgent's EventBus provides low-level pub/sub communication between agents. Google ADK demonstrated that structured orchestration primitives (SequentialAgent, ParallelAgent, LoopAgent) significantly simplify multi-agent workflows without requiring developers to manage state passing and error handling manually.
+
+**Decision:** Add three orchestration agent types extending `BaseAgent`:
+- **SequentialAgent**: Runs sub-agents in order, passing state between steps via `inputKey`/`outputKey`
+- **ParallelAgent**: Runs sub-agents concurrently with optional `maxConcurrency`, combining results
+- **LoopAgent**: Runs a sub-agent repeatedly with configurable condition and mandatory `maxIterations` cap
+
+All sub-agent invocations use `ctx.dispatch()`, which calls `Runtime.dispatchMessage()` — ensuring every sub-call passes through the full Guardian admission pipeline.
+
+**Consequences:**
+- (+) Declarative multi-agent composition (no manual event wiring)
+- (+) Security preserved by construction — every dispatch goes through Guardian
+- (+) Fault tolerance built in (stopOnError toggle, error isolation in parallel)
+- (+) LoopAgent has mandatory iteration cap preventing infinite loops
+- (-) Dispatch loops possible if orchestrating agents invoke each other (mitigated by budget timeouts)
+- (-) Amplification risk — single message can trigger N sub-agent calls (mitigated by rate limiting)
+- (-) Indirect prompt injection through state pipeline is an open challenge
+
+**Spec:** `docs/specs/ORCHESTRATION-AGENTS-SPEC.md`
+
+---
+
+## ADR-018: MCP Client Support
+
+**Status:** Accepted
+
+**Context:** GuardianAgent's tool system is closed — all tools are built-in. The Model Context Protocol (MCP) is an emerging standard for tool interoperability across AI systems. Adding MCP client support extends the tool ecosystem without requiring built-in implementations for every integration.
+
+**Decision:** Implement an MCP client using JSON-RPC 2.0 over stdio transport. An `MCPClientManager` manages multiple server connections. Tool names are namespaced as `mcp:<serverId>:<toolName>` to prevent collisions. All MCP tools are classified as `network` risk since they communicate with an external process.
+
+**Key security decision:** MCP tool calls must pass through the Guardian admission pipeline before execution. The MCP server process is treated as untrusted — it runs in a child process with no direct access to GuardianAgent's runtime.
+
+**Consequences:**
+- (+) Access to the entire MCP tool ecosystem (filesystem, databases, APIs, etc.)
+- (+) Namespacing prevents tool name collisions with built-in tools
+- (+) Guardian validates all MCP calls — security model is preserved
+- (+) Server processes are isolated in child processes
+- (-) MCP server process has same OS-level permissions as GuardianAgent (mitigation: container isolation)
+- (-) No automatic reconnection on server crash (planned for future)
+- (-) TypeScript MCP SDK not yet GA — we implement the protocol directly
+- (-) Only stdio transport supported initially (SSE planned)
+
+**Spec:** `docs/specs/MCP-CLIENT-SPEC.md`
+
+---
+
+## ADR-019: Agent Evaluation Framework
+
+**Status:** Accepted
+
+**Context:** GuardianAgent has comprehensive unit tests but no structured way to evaluate agent *behavior* — whether agents produce correct, safe, helpful responses to realistic inputs. Google ADK's `.test.json` evalset format demonstrated a lightweight approach to agent evaluation.
+
+**Decision:** Build an evaluation framework with three components:
+1. **Types** — `EvalTestCase` with input, expected content/tools/metadata/safety criteria
+2. **Metrics** — Content matching (5 strategies), tool trajectory, metadata match, safety checks (secrets, patterns, denials, injection score)
+3. **Runner** — Dispatches through real Runtime (Guardian active), computes per-metric pass rates
+
+**Key design choice:** Evaluations run through the real Runtime, not mocks. Guardian, output scanning, rate limiting, and budget tracking are all active. This tests the actual security posture.
+
+**Consequences:**
+- (+) Structured, repeatable agent behavior testing
+- (+) JSON-based test format compatible with CI pipelines
+- (+) Safety metrics use the same SecretScanner and InputSanitizer as production
+- (+) Real Runtime testing catches security regressions
+- (+) Per-metric pass rates enable targeted debugging
+- (-) Real Runtime eval is slower than mock-based testing
+- (-) Rate limiting may throttle rapid eval runs
+- (-) No LLM-as-judge or semantic matching (planned for future)
+
+**Spec:** `docs/specs/EVAL-FRAMEWORK-SPEC.md`
+
+---
+
+## ADR-020: Shared State for Inter-Agent Data Passing
+
+**Status:** Accepted
+
+**Context:** Orchestration agents need to pass intermediate results between sub-agent invocations. Google ADK uses `session.state` with `output_key` — a shared dict that any agent in the graph can read/write. This creates cross-agent data leakage risks.
+
+**Decision:** Implement `SharedState` as a key-value store with stricter access control than ADK:
+- **Owned by orchestrator** — Only the orchestrating agent creates and writes to SharedState
+- **Sub-agents cannot read or write** — They receive input as a `UserMessage`, not state references
+- **Per-invocation scope** — Fresh state for each `onMessage()` call, no persistence between messages
+- **Temp key convention** — Keys prefixed with `temp:` are bulk-cleaned via `clearTemp()`
+- **Read-only view** — `asReadOnly()` provides a `SharedStateView` interface (for future sub-agent access)
+
+**Consequences:**
+- (+) No cross-agent state leakage — sub-agents are unaware state exists
+- (+) Per-invocation scoping prevents stale state bugs
+- (+) Temp keys enable clean separation of scratch vs output data
+- (+) Sub-agent responses pass through OutputGuardian before being written to state
+- (-) More restrictive than ADK's open model — sub-agents can't self-coordinate via state
+- (-) State is in-memory only — no persistence for long-running orchestrations
+- (-) State poisoning via crafted response content is an open challenge (InputSanitizer helps but doesn't fully solve)
+
+**Spec:** `docs/specs/SHARED-STATE-SPEC.md`

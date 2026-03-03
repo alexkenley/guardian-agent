@@ -149,7 +149,7 @@ runtime:
     expect(config.llm.ollama.model).toBe('mistral');
     expect(config.llm.ollama.provider).toBe('ollama'); // from default
     expect(config.runtime.logLevel).toBe('debug');
-    expect(config.runtime.maxStallDurationMs).toBe(60_000); // from default
+    expect(config.runtime.maxStallDurationMs).toBe(180_000); // from default
   });
 
   it('should interpolate environment variables', () => {
@@ -182,6 +182,128 @@ llm:
     expect(() => loadConfigFromFile(configPath)).toThrow(
       'Invalid configuration file',
     );
+  });
+});
+
+describe('validateConfig — MCP', () => {
+  it('should pass with MCP disabled (default)', () => {
+    const errors = validateConfig(DEFAULT_CONFIG);
+    expect(errors).toEqual([]);
+  });
+
+  it('should fail when MCP enabled but no servers', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          mcp: { enabled: true, servers: [] },
+        },
+      },
+    };
+    const errors = validateConfig(config);
+    expect(errors).toContain(
+      'assistant.tools.mcp.servers must include at least one server when MCP is enabled',
+    );
+  });
+
+  it('should fail when MCP server missing required fields', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          mcp: {
+            enabled: true,
+            servers: [{ id: '', name: '', command: '' }],
+          },
+        },
+      },
+    };
+    const errors = validateConfig(config);
+    expect(errors.some(e => e.includes('server id is required'))).toBe(true);
+    expect(errors.some(e => e.includes('name is required'))).toBe(true);
+    expect(errors.some(e => e.includes('command is required'))).toBe(true);
+  });
+
+  it('should fail on duplicate server ids', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          mcp: {
+            enabled: true,
+            servers: [
+              { id: 'fs', name: 'FS 1', command: 'cmd1' },
+              { id: 'fs', name: 'FS 2', command: 'cmd2' },
+            ],
+          },
+        },
+      },
+    };
+    const errors = validateConfig(config);
+    expect(errors).toContain("assistant.tools.mcp server id 'fs' is duplicated");
+  });
+
+  it('should fail when timeoutMs is too low', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          mcp: {
+            enabled: true,
+            servers: [{ id: 'fast', name: 'Fast Server', command: 'cmd', timeoutMs: 100 }],
+          },
+        },
+      },
+    };
+    const errors = validateConfig(config);
+    expect(errors).toContain("assistant.tools.mcp server 'fast' timeoutMs must be >= 1000");
+  });
+
+  it('should pass with valid MCP config', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          mcp: {
+            enabled: true,
+            servers: [{
+              id: 'filesystem',
+              name: 'Filesystem Tools',
+              command: 'npx',
+              args: ['-y', '@modelcontextprotocol/server-filesystem', '/workspace'],
+              timeoutMs: 10000,
+            }],
+          },
+        },
+      },
+    };
+    const errors = validateConfig(config);
+    expect(errors).toEqual([]);
+  });
+
+  it('should skip validation when MCP is disabled', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          mcp: { enabled: false, servers: [] },
+        },
+      },
+    };
+    const errors = validateConfig(config);
+    expect(errors).toEqual([]);
   });
 });
 

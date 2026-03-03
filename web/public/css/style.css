@@ -202,7 +202,8 @@ body {
 .layout {
   display: grid;
   grid-template-columns: 200px 1fr 350px;
-  min-height: calc(100vh - 50px);
+  height: calc(100vh - 50px);
+  overflow: hidden;
 }
 
 .chat-panel {
@@ -210,12 +211,15 @@ body {
   border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
+  max-height: calc(100vh - 50px);
+  overflow: hidden;
 }
 
 .sidebar {
   background: var(--bg-surface);
   border-right: 1px solid var(--border);
   padding: 1rem 0;
+  overflow-y: auto;
 }
 
 .nav-item {
@@ -445,7 +449,8 @@ tr:hover td {
 .chat-container {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 110px);
+  height: 100%;
+  min-height: 0;
 }
 
 .chat-toolbar {

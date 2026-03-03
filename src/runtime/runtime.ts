@@ -520,13 +520,18 @@ export class Runtime {
 
   // ─── Internals ──────────────────────────────────────────────
 
-  private createAgentContext(agentId: string): AgentContext {
+  private createAgentContext(agentId: string, options?: { enableDispatch?: boolean }): AgentContext {
     const instance = this.registry.get(agentId);
     const capabilities = Object.freeze([...(instance?.definition.grantedCapabilities ?? [])]);
 
     const ctx: AgentContext = {
       agentId,
       capabilities,
+      // Dispatch: allows orchestration agents to invoke sub-agents
+      // All sub-agent calls pass through the full Guardian admission pipeline
+      dispatch: options?.enableDispatch !== false
+        ? (targetAgentId: string, message: UserMessage) => this.dispatchMessage(targetAgentId, message)
+        : undefined,
       emit: async (partial) => {
         // OUTPUT GUARD: scan event payload for secrets
         if (this.outputScanningEnabled) {

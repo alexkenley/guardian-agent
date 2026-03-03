@@ -832,7 +832,7 @@ describe('Runtime', () => {
 
       const instance = runtime.registry.get('stall-test')!;
       runtime.registry.transitionState('stall-test', AgentState.Running, 'test');
-      instance.lastActivityMs = Date.now() - 70_000; // 70s ago
+      instance.lastActivityMs = Date.now() - 200_000; // 200s ago (exceeds 180s default)
 
       runtime.watchdog.check(Date.now());
 

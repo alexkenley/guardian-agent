@@ -8,6 +8,7 @@
 import type { LLMProvider } from '../llm/types.js';
 import type { AgentEvent } from '../queue/event-bus.js';
 import type { AuditLog } from '../guardian/audit-log.js';
+import type { SharedStateView } from '../runtime/shared-state.js';
 
 // ─── Event-Driven Agent Types ─────────────────────────────────
 
@@ -23,6 +24,18 @@ export interface AgentContext {
   checkAction(action: { type: string; params: Record<string, unknown> }): void;
   /** Agent's granted capabilities (read-only). */
   capabilities: readonly string[];
+  /**
+   * Dispatch a message to another agent and get a response.
+   * Available in orchestration contexts. All sub-agent calls pass
+   * through the full Guardian admission pipeline.
+   */
+  dispatch?: (agentId: string, message: UserMessage) => Promise<AgentResponse>;
+  /**
+   * Read-only view of shared orchestration state.
+   * Orchestration agents (Sequential/Parallel/Loop) use this to pass
+   * intermediate results between sub-agent invocations.
+   */
+  sharedState?: SharedStateView;
 }
 
 /** Context provided to agents on scheduled invocations. */
@@ -116,7 +129,7 @@ export interface AgentResourceLimits {
 
 /** Default resource limits. */
 export const DEFAULT_RESOURCE_LIMITS: AgentResourceLimits = {
-  maxInvocationBudgetMs: 120_000,
+  maxInvocationBudgetMs: 300_000,
   maxTokensPerMinute: 0,
   maxConcurrentTools: 0,
   maxQueueDepth: 1000,

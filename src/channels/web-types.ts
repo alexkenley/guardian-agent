@@ -32,6 +32,8 @@ export interface DashboardAgentInfo {
   name: string;
   state: string;
   canChat?: boolean;
+  /** Internal agents are used by tier routing and hidden from user-facing selectors. */
+  internal?: boolean;
   capabilities: readonly string[];
   provider?: string;
   schedule?: string;
@@ -118,8 +120,15 @@ export interface RedactedConfig {
       allowedPathsCount: number;
       allowedCommandsCount: number;
       allowedDomainsCount: number;
+      webSearch?: {
+        provider: string;
+        perplexityConfigured: boolean;
+        openRouterConfigured: boolean;
+        braveConfigured: boolean;
+      };
     };
   };
+  fallbacks?: string[];
 }
 
 export interface DashboardAuthStatus {
@@ -234,7 +243,7 @@ export interface DashboardCallbacks {
   onProvidersStatus?: () => Promise<DashboardProviderInfo[]>;
   onAssistantState?: () => DashboardAssistantState;
   onSSESubscribe?: (listener: SSEListener) => () => void;
-  onDispatch?: (agentId: string, message: { content: string; userId?: string; channel?: string }) => Promise<{ content: string }>;
+  onDispatch?: (agentId: string, message: { content: string; userId?: string; channel?: string }, routeDecision?: { fallbackAgentId?: string; complexityScore?: number; tier?: string }) => Promise<{ content: string }>;
   onConfigUpdate?: (updates: ConfigUpdate) => Promise<{ success: boolean; message: string }>;
   onConversationReset?: (args: {
     agentId: string;
@@ -328,6 +337,8 @@ export interface DashboardCallbacks {
     reason?: string;
   }) => Promise<{ success: boolean; message: string }> | { success: boolean; message: string };
   onKillswitch?: () => void;
+  onRoutingMode?: () => { tierMode: string; complexityThreshold: number; fallbackOnFailure: boolean };
+  onRoutingModeUpdate?: (mode: 'auto' | 'local-only' | 'external-only') => { success: boolean; message: string; tierMode: string };
 }
 
 /** Fields that can be updated via POST /api/config. */

@@ -485,3 +485,94 @@ const sentinel = new SentinelAgent({
   secretDetectionThreshold: 2,
 });
 ```
+
+---
+
+## Orchestration Security
+
+Structured orchestration agents (SequentialAgent, ParallelAgent, LoopAgent) introduce new security surfaces. The key architectural decision is that **all sub-agent dispatches go through the full Guardian pipeline**.
+
+### How Security Is Preserved
+
+1. **`ctx.dispatch()` wraps `Runtime.dispatchMessage()`** — not a raw method call. Every sub-agent invocation passes through InputSanitizer → RateLimiter → CapabilityController → SecretScanController → DeniedPathController → ShellCommandController.
+
+2. **Output scanning on every response** — Each sub-agent's response is scanned by OutputGuardian before the orchestrating agent receives it. Secrets are redacted before they enter SharedState.
+
+3. **Budget enforcement** — The orchestrating agent's `maxInvocationBudgetMs` caps total wall-clock time for the entire pipeline. Each sub-agent also has its own per-invocation budget.
+
+4. **Rate limiting accumulates** — Each sub-agent dispatch counts against that sub-agent's rate limit. A 10-step pipeline with 30 req/min limit will be throttled after 30 total dispatches across all steps.
+
+### Identified Risks
+
+| Risk | Severity | Mitigation | Residual |
+|------|----------|-----------|----------|
+| Dispatch loops (A→B→A) | Medium | Budget timeout kills chain | Deep stacks before timeout |
+| Amplification (1 msg → N calls) | Medium | Rate limiting per sub-agent | Config-time step count not limited |
+| State poisoning (crafted responses) | Medium | InputSanitizer + OutputGuardian | Sophisticated indirect injection |
+| Capability escalation | Low | Sub-agent capabilities checked independently | Intentional — delegation is the point |
+| Nested orchestration depth | Medium | Budget timeout on outermost | No explicit depth counter |
+| Resource exhaustion | Medium | Budget/token/queue limits | ParallelAgent can spike concurrent load |
+
+### Open Problems
+
+1. **Indirect prompt injection through state** — A compromised sub-agent can craft its response to inject instructions into the next step's input. The InputSanitizer catches common patterns but cannot prevent all sophisticated injection.
+
+2. **No dispatch depth tracking** — Recursion depth is limited only by budget timeouts, not an explicit counter. A future `maxDispatchDepth` field in context would provide a hard cap.
+
+3. **No step count limits** — An orchestration agent could be configured with arbitrarily many steps. A configuration-time validation for `maxStepsPerOrchestration` would add defense.
+
+See [ORCHESTRATION-AGENTS-SPEC.md](../specs/ORCHESTRATION-AGENTS-SPEC.md) for the complete security analysis.
+
+---
+
+## MCP Security
+
+The MCP client connects to external tool servers via child processes. This introduces a process-boundary trust boundary.
+
+### Trust Boundary
+
+```
+┌─────────────────────────────┐    stdio    ┌──────────────────┐
+│  GuardianAgent (trusted)    │◄───────────►│  MCP Server      │
+│                             │             │  (untrusted)     │
+│  Guardian validates BEFORE  │             │                  │
+│  calling MCP tools          │             │  Has OS-level    │
+│                             │             │  process access  │
+└─────────────────────────────┘             └──────────────────┘
+```
+
+### Mitigations
+
+1. **Tool name namespacing** — MCP tools are prefixed `mcp:<serverId>:<toolName>`, preventing collision with built-in tools
+2. **Guardian validates tool calls** — Arguments are scanned for secrets before being sent to the MCP server
+3. **Response scanning** — MCP tool results pass through OutputGuardian
+4. **Scoped environment** — `config.env` explicitly controls what environment variables the server process sees
+5. **Request timeouts** — Configurable per-server timeout prevents hanging
+
+### Known Gaps
+
+1. **Process isolation** — The MCP server process has the same OS-level permissions as GuardianAgent. It can read files, environment variables, and make network connections. Container or sandbox isolation is recommended for production.
+
+2. **No response size limits** — A malicious server could return arbitrarily large responses. Content-Length enforcement is planned.
+
+3. **No reconnection** — Server crashes leave the client in `disconnected` state. Automatic reconnection with backoff is planned.
+
+See [MCP-CLIENT-SPEC.md](../specs/MCP-CLIENT-SPEC.md) for the complete security analysis.
+
+---
+
+## Evaluation Security
+
+The evaluation framework runs through the real Runtime with all security layers active.
+
+### Design Decision: No Eval Mode
+
+There is no "evaluation mode" that disables security. If Guardian blocks an eval input, that is a **meaningful test result** — it tells you the security posture would block that interaction in production.
+
+### Risks
+
+- **Secrets in test data** — `.eval.json` files must be reviewed like code. Do not use production credentials.
+- **Rate limit consumption** — Large eval suites consume rate limit budget. Use dedicated test configurations with higher limits.
+- **Result sensitivity** — Eval results contain full response content. The OutputGuardian redacts secrets before the runner receives responses.
+
+See [EVAL-FRAMEWORK-SPEC.md](../specs/EVAL-FRAMEWORK-SPEC.md) for details.

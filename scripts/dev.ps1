@@ -519,7 +519,7 @@ guardian:
     maxEvents: 10000
 
 runtime:
-  maxStallDurationMs: 60000
+  maxStallDurationMs: 180000
   watchdogIntervalMs: 10000
   logLevel: warn
 '@
