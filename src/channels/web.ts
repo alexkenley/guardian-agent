@@ -2040,6 +2040,128 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // ─── QMD Search Routes ─────────────────────────────
+
+      // GET /api/qmd/status — QMD install status and collections
+      if (req.method === 'GET' && url.pathname === '/api/qmd/status') {
+        if (!this.dashboard.onQMDStatus) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, await this.dashboard.onQMDStatus());
+        return;
+      }
+
+      // GET /api/qmd/sources — List configured document sources
+      if (req.method === 'GET' && url.pathname === '/api/qmd/sources') {
+        if (!this.dashboard.onQMDSources) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onQMDSources());
+        return;
+      }
+
+      // POST /api/qmd/sources — Add a new document source
+      if (req.method === 'POST' && url.pathname === '/api/qmd/sources') {
+        if (!this.dashboard.onQMDSourceAdd) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = JSON.parse(body) as Record<string, unknown>;
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed.id || !parsed.name || !parsed.path || !parsed.type) {
+          sendJSON(res, 400, { error: 'id, name, path, and type are required' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onQMDSourceAdd(
+          parsed as unknown as Parameters<NonNullable<typeof this.dashboard.onQMDSourceAdd>>[0],
+        ));
+        return;
+      }
+
+      // DELETE /api/qmd/sources/:id — Remove a document source
+      if (req.method === 'DELETE' && url.pathname.startsWith('/api/qmd/sources/')) {
+        if (!this.dashboard.onQMDSourceRemove) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const id = decodeURIComponent(url.pathname.slice('/api/qmd/sources/'.length));
+        if (!id) {
+          sendJSON(res, 400, { error: 'Source ID required' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onQMDSourceRemove(id));
+        return;
+      }
+
+      // PATCH /api/qmd/sources/:id — Toggle source enabled/disabled
+      if (req.method === 'PATCH' && url.pathname.startsWith('/api/qmd/sources/')) {
+        if (!this.dashboard.onQMDSourceToggle) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const id = decodeURIComponent(url.pathname.slice('/api/qmd/sources/'.length));
+        if (!id) {
+          sendJSON(res, 400, { error: 'Source ID required' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { enabled?: boolean };
+        try {
+          parsed = JSON.parse(body) as { enabled?: boolean };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (typeof parsed.enabled !== 'boolean') {
+          sendJSON(res, 400, { error: 'enabled (boolean) is required' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onQMDSourceToggle(id, parsed.enabled));
+        return;
+      }
+
+      // POST /api/qmd/reindex — Trigger vector reindex
+      if (req.method === 'POST' && url.pathname === '/api/qmd/reindex') {
+        if (!this.dashboard.onQMDReindex) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let collection: string | undefined;
+        try {
+          const body = await readBody(req, this.maxBodyBytes);
+          if (body.trim()) {
+            const parsed = JSON.parse(body) as { collection?: string };
+            collection = parsed.collection;
+          }
+        } catch {
+          // No body or invalid JSON — reindex all
+        }
+        sendJSON(res, 200, await this.dashboard.onQMDReindex(collection));
+        return;
+      }
+
       // POST /api/killswitch — Shut down the entire process
       if (req.method === 'POST' && url.pathname === '/api/killswitch') {
         sendJSON(res, 200, { success: true, message: 'Shutting down...' });

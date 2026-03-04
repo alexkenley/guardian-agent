@@ -754,6 +754,11 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
           openRouterConfigured: !!config.assistant.tools.webSearch?.openRouterApiKey,
           braveConfigured: !!config.assistant.tools.webSearch?.braveApiKey,
         },
+        qmd: config.assistant.tools.qmd ? {
+          enabled: config.assistant.tools.qmd.enabled,
+          sourceCount: config.assistant.tools.qmd.sources.length,
+          defaultMode: config.assistant.tools.qmd.defaultMode ?? 'query',
+        } : undefined,
       },
     },
     fallbacks: config.fallbacks,
@@ -2481,6 +2486,27 @@ async function main(): Promise<void> {
     }
   }
 
+  // ─── QMD Search Service ─────────────────────────────
+  let qmdSearch: import('./runtime/qmd-search.js').QMDSearchService | undefined;
+  const qmdConfig = config.assistant.tools.qmd;
+  if (qmdConfig?.enabled) {
+    const { QMDSearchService } = await import('./runtime/qmd-search.js');
+    qmdSearch = new QMDSearchService(qmdConfig);
+    const installCheck = await qmdSearch.checkInstalled();
+    if (installCheck.installed) {
+      log.info({ version: installCheck.version }, 'QMD search engine detected');
+      const syncResult = await qmdSearch.syncSources();
+      if (syncResult.synced.length > 0) {
+        log.info({ synced: syncResult.synced }, 'QMD collections synced');
+      }
+      if (syncResult.errors.length > 0) {
+        log.warn({ errors: syncResult.errors }, 'QMD collection sync errors');
+      }
+    } else {
+      log.warn('QMD enabled in config but binary not found in PATH');
+    }
+  }
+
   const toolExecutorOptions: ToolExecutorOptions = {
     enabled: config.assistant.tools.enabled,
     workspaceRoot: process.cwd(),
@@ -2495,6 +2521,7 @@ async function main(): Promise<void> {
     disabledCategories: config.assistant.tools.disabledCategories,
     conversationService: conversations,
     agentMemoryStore,
+    qmdSearch,
     mcpManager,
     threatIntel,
     onCheckAction: ({ type, params, agentId, origin }) => {
@@ -2857,6 +2884,33 @@ async function main(): Promise<void> {
   dashboardCallbacks.onScheduledTaskPresets = () => scheduledTasks.getPresets();
   dashboardCallbacks.onScheduledTaskInstallPreset = (presetId) => scheduledTasks.installPreset(presetId);
   dashboardCallbacks.onScheduledTaskHistory = () => scheduledTasks.getHistory();
+
+  // ─── QMD Search callbacks ──────────────────────────────
+  if (qmdSearch) {
+    dashboardCallbacks.onQMDStatus = () => qmdSearch!.status();
+    dashboardCallbacks.onQMDSources = () => qmdSearch!.getSources();
+    dashboardCallbacks.onQMDSourceAdd = (source) => {
+      try {
+        qmdSearch!.addSource(source);
+        return { success: true, message: `Source '${source.id}' added.` };
+      } catch (err) {
+        return { success: false, message: err instanceof Error ? err.message : String(err) };
+      }
+    };
+    dashboardCallbacks.onQMDSourceRemove = (id) => {
+      const removed = qmdSearch!.removeSource(id);
+      return removed
+        ? { success: true, message: `Source '${id}' removed.` }
+        : { success: false, message: `Source '${id}' not found.` };
+    };
+    dashboardCallbacks.onQMDSourceToggle = (id, enabled) => {
+      const toggled = qmdSearch!.toggleSource(id, enabled);
+      return toggled
+        ? { success: true, message: `Source '${id}' ${enabled ? 'enabled' : 'disabled'}.` }
+        : { success: false, message: `Source '${id}' not found.` };
+    };
+    dashboardCallbacks.onQMDReindex = (collection) => qmdSearch!.reindex(collection);
+  }
 
   const autoScanMinutes = config.assistant.threatIntel.autoScanIntervalMinutes;
   let autoScanInFlight = false;

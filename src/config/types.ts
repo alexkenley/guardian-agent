@@ -510,6 +510,45 @@ export interface AssistantMCPConfig {
   servers: MCPServerEntry[];
 }
 
+/** QMD source protocol type. */
+export type QMDSourceType = 'directory' | 'git' | 'url' | 'file';
+
+/** Configuration for a single QMD document source. */
+export interface QMDSourceConfig {
+  /** Unique identifier — becomes the QMD collection name. */
+  id: string;
+  /** Human-readable display name. */
+  name: string;
+  /** Source type / protocol. */
+  type: QMDSourceType;
+  /** Source location: directory path, git repo URL, HTTP URL, or single file path. */
+  path: string;
+  /** File glob patterns to index (default: md and txt files). Only applies to directory/git sources. */
+  globs?: string[];
+  /** Whether this source is active. */
+  enabled: boolean;
+  /** Optional branch for git sources. */
+  branch?: string;
+  /** Optional description. */
+  description?: string;
+}
+
+/** QMD hybrid search engine configuration. */
+export interface QMDConfig {
+  /** Enable QMD search integration (default: false). */
+  enabled: boolean;
+  /** Path to the qmd binary (default: 'qmd', resolved via PATH). */
+  binaryPath?: string;
+  /** Timeout for QMD queries in milliseconds (default: 30000). */
+  queryTimeoutMs?: number;
+  /** Default search mode: 'search' (BM25), 'vsearch' (vector), 'query' (hybrid + LLM re-rank). */
+  defaultMode?: 'search' | 'vsearch' | 'query';
+  /** Maximum results returned per query (default: 20). */
+  maxResults?: number;
+  /** Document sources to index and search. Supports directories, git repos, URLs, and individual files. */
+  sources: QMDSourceConfig[];
+}
+
 /** Browser automation configuration (agent-browser). */
 export interface BrowserConfig {
   /** Enable browser automation tools (default: false). */
@@ -568,6 +607,8 @@ export interface AssistantToolsConfig {
   webSearch?: WebSearchConfig;
   /** Browser automation configuration (agent-browser). Enables JS-rendered page interaction. */
   browser?: BrowserConfig;
+  /** QMD hybrid search engine. Indexes local document collections for BM25 + vector + LLM re-ranked search. */
+  qmd?: QMDConfig;
   /** Tool categories to disable. Tools in disabled categories are hidden from the LLM and blocked at execution. */
   disabledCategories?: ToolCategory[];
 }
@@ -773,6 +814,13 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         'openrouter.ai',
       ],
       browser: { enabled: true },
+      qmd: {
+        enabled: false,
+        defaultMode: 'query',
+        queryTimeoutMs: 30_000,
+        maxResults: 20,
+        sources: [],
+      },
       disabledCategories: [],
     },
   },

@@ -21,7 +21,8 @@ export type ToolCategory =
   | 'forum'
   | 'network'
   | 'system'
-  | 'memory';
+  | 'memory'
+  | 'search';
 
 /** Metadata for each tool category. */
 export const TOOL_CATEGORIES: Record<ToolCategory, { label: string; description: string }> = {
@@ -36,6 +37,7 @@ export const TOOL_CATEGORIES: Record<ToolCategory, { label: string; description:
   network: { label: 'Network', description: 'Local network diagnostics: ping, ARP, port check, DNS, traceroute.' },
   system: { label: 'System', description: 'OS info, resource usage, process listing, and service status.' },
   memory: { label: 'Memory', description: 'Search conversation history and manage persistent knowledge base.' },
+  search: { label: 'Search', description: 'Hybrid search across indexed document collections (BM25 + vector + LLM re-ranking via QMD).' },
 };
 
 /** Mapping of each category to its tool names. */
@@ -51,6 +53,7 @@ export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
   network: ['net_ping', 'net_arp_scan', 'net_port_check', 'net_interfaces', 'net_connections', 'net_dns_lookup', 'net_traceroute'],
   system: ['sys_info', 'sys_resources', 'sys_processes', 'sys_services'],
   memory: ['memory_search', 'memory_get', 'memory_save'],
+  search: ['qmd_search', 'qmd_status', 'qmd_reindex'],
 };
 
 export interface ToolDefinition {

@@ -71,6 +71,8 @@ export interface ToolExecutorOptions {
   conversationService?: ConversationService;
   /** Agent memory store for memory_get/memory_save tools. */
   agentMemoryStore?: AgentMemoryStore;
+  /** QMD hybrid search service for document collection search. */
+  qmdSearch?: import('../runtime/qmd-search.js').QMDSearchService;
   now?: () => number;
   onCheckAction?: (action: {
     type: string;
@@ -2527,6 +2529,110 @@ export class ToolExecutor {
             totalSizeChars: memoryStore.size(targetAgent),
           },
         };
+      },
+    );
+
+    // ─── QMD Search Tools ────────────────────────────────
+
+    this.registry.register(
+      {
+        name: 'qmd_search',
+        description: 'Search indexed document collections using QMD hybrid search (BM25 keyword + vector embeddings + optional LLM re-ranking). Supports multiple search modes and collection filtering. Use to find information across notes, codebases, wikis, and other configured document sources.',
+        risk: 'read_only',
+        category: 'search',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Search query text.' },
+            mode: { type: 'string', enum: ['search', 'vsearch', 'query'], description: "Search mode: 'search' (BM25 keyword), 'vsearch' (vector similarity), 'query' (hybrid + LLM re-rank). Default: configured default." },
+            collection: { type: 'string', description: 'Restrict search to a specific collection (source id). Omit to search all.' },
+            limit: { type: 'number', description: 'Maximum results to return (default: 20, max: 100).' },
+            includeBody: { type: 'boolean', description: 'Include full document body in results (default: false).' },
+          },
+          required: ['query'],
+        },
+      },
+      async (args, request) => {
+        const query = asString(args.query).trim();
+        if (!query) return { success: false, error: 'Query is required.' };
+
+        this.guardAction(request, 'read_file', { path: 'qmd:search', query });
+
+        const qmd = this.options.qmdSearch;
+        if (!qmd) {
+          return { success: false, error: 'QMD search is not enabled. Enable it in config under assistant.tools.qmd.' };
+        }
+
+        try {
+          const result = await qmd.search({
+            query,
+            mode: args.mode as 'search' | 'vsearch' | 'query' | undefined,
+            collection: args.collection ? asString(args.collection) : undefined,
+            limit: args.limit ? asNumber(args.limit, 20) : undefined,
+            includeBody: args.includeBody === true,
+          });
+          return { success: true, output: result };
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'qmd_status',
+        description: 'Get QMD search engine status: install state, version, indexed collections, and configured document sources.',
+        risk: 'read_only',
+        category: 'search',
+        parameters: {
+          type: 'object',
+          properties: {},
+        },
+      },
+      async (_args, request) => {
+        this.guardAction(request, 'read_file', { path: 'qmd:status' });
+
+        const qmd = this.options.qmdSearch;
+        if (!qmd) {
+          return { success: false, error: 'QMD search is not enabled. Enable it in config under assistant.tools.qmd.' };
+        }
+
+        try {
+          const status = await qmd.status();
+          return { success: true, output: status };
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'qmd_reindex',
+        description: 'Trigger vector embedding reindex for QMD document collections. Can target a specific collection or reindex all.',
+        risk: 'mutating',
+        category: 'search',
+        parameters: {
+          type: 'object',
+          properties: {
+            collection: { type: 'string', description: 'Collection id to reindex. Omit to reindex all collections.' },
+          },
+        },
+      },
+      async (args, request) => {
+        this.guardAction(request, 'execute_command', { command: 'qmd embed', collection: args.collection });
+
+        const qmd = this.options.qmdSearch;
+        if (!qmd) {
+          return { success: false, error: 'QMD search is not enabled. Enable it in config under assistant.tools.qmd.' };
+        }
+
+        try {
+          const result = await qmd.reindex(args.collection ? asString(args.collection) : undefined);
+          return { success: result.success, output: result.message, error: result.success ? undefined : result.message };
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
       },
     );
   }

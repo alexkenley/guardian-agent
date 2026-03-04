@@ -28,6 +28,8 @@ import type {
 import type { ConnectorFrameworkState, ConnectorPlaybookRunResult } from '../runtime/connectors.js';
 import type { ToolApprovalRequest, ToolCategory, ToolDefinition, ToolJobRecord, ToolPolicySnapshot, ToolRunResponse } from '../tools/types.js';
 import type { ScheduledTaskDefinition, ScheduledTaskCreateInput, ScheduledTaskUpdateInput, ScheduledTaskPreset, ScheduledTaskStatus } from '../runtime/scheduled-tasks.js';
+import type { QMDStatusResponse } from '../runtime/qmd-search.js';
+import type { QMDSourceConfig } from '../config/types.js';
 
 /** Agent info returned by GET /api/agents. */
 export interface DashboardAgentInfo {
@@ -157,6 +159,11 @@ export interface RedactedConfig {
         perplexityConfigured: boolean;
         openRouterConfigured: boolean;
         braveConfigured: boolean;
+      };
+      qmd?: {
+        enabled: boolean;
+        sourceCount: number;
+        defaultMode: string;
       };
     };
   };
@@ -443,6 +450,12 @@ export interface DashboardCallbacks {
     durationMs: number;
     message: string;
   }>;
+  onQMDStatus?: () => Promise<QMDStatusResponse> | QMDStatusResponse;
+  onQMDSources?: () => QMDSourceConfig[];
+  onQMDSourceAdd?: (source: QMDSourceConfig) => { success: boolean; message: string };
+  onQMDSourceRemove?: (id: string) => { success: boolean; message: string };
+  onQMDSourceToggle?: (id: string, enabled: boolean) => { success: boolean; message: string };
+  onQMDReindex?: (collection?: string) => Promise<{ success: boolean; message: string }>;
 }
 
 /** Fields that can be updated via POST /api/config. */

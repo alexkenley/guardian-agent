@@ -237,4 +237,23 @@ export const api = {
     body: JSON.stringify({ presetId }),
   }),
   scheduledTaskHistory: () => request('/api/scheduled-tasks/history'),
+
+  // QMD Search
+  qmdStatus: () => request('/api/qmd/status'),
+  qmdSources: () => request('/api/qmd/sources'),
+  qmdSourceAdd: (source) => request('/api/qmd/sources', {
+    method: 'POST',
+    body: JSON.stringify(source),
+  }),
+  qmdSourceRemove: (id) => request(`/api/qmd/sources/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  }),
+  qmdSourceToggle: (id, enabled) => request(`/api/qmd/sources/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled }),
+  }),
+  qmdReindex: (collection) => request('/api/qmd/reindex', {
+    method: 'POST',
+    body: JSON.stringify(collection ? { collection } : {}),
+  }),
 };

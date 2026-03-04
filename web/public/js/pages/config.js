@@ -29,6 +29,7 @@ export async function renderConfig(container) {
       { id: 'providers', label: 'Providers', render: renderProvidersTab },
       { id: 'tools', label: 'Tools', render: renderToolsTab },
       { id: 'policy', label: 'Policy', render: renderPolicyTab },
+      { id: 'search-sources', label: 'Search Sources', render: renderSearchSourcesTab },
       { id: 'settings', label: 'Settings', render: renderSettingsTab },
     ]);
   } catch (err) {
@@ -608,6 +609,218 @@ async function renderPolicyTab(panel) {
     render();
   } catch (err) {
     panel.innerHTML = `<div class="loading">Error: ${esc(err.message || String(err))}</div>`;
+  }
+}
+
+// ─── Search Sources Tab (QMD) ────────────────────────────
+
+function renderSearchSourcesTab(panel) {
+  const qmdCfg = sharedConfig?.assistant?.tools?.qmd;
+  const enabled = qmdCfg?.enabled ?? false;
+
+  panel.innerHTML = `
+    <div class="cfg-card" style="margin-bottom:1rem;">
+      <div class="cfg-card-header"><h3>QMD Search Engine</h3></div>
+      <div class="cfg-card-body" id="qmd-status-area">
+        <p style="color:var(--text-muted);">${enabled ? 'Loading status...' : 'QMD search is <strong>disabled</strong> in config. Set <code>assistant.tools.qmd.enabled: true</code> to activate.'}</p>
+      </div>
+    </div>
+    <div class="cfg-card" style="margin-bottom:1rem;">
+      <div class="cfg-card-header">
+        <h3>Document Sources</h3>
+        <button class="btn btn-primary btn-sm" id="qmd-add-source" type="button" ${enabled ? '' : 'disabled'}>+ Add Source</button>
+      </div>
+      <div class="cfg-card-body" id="qmd-sources-area">
+        ${enabled ? '<p style="color:var(--text-muted);">Loading...</p>' : ''}
+      </div>
+    </div>
+    <div id="qmd-add-form-area" style="display:none;">
+      <div class="cfg-card">
+        <div class="cfg-card-header"><h3>Add Source</h3></div>
+        <div class="cfg-card-body">
+          <form id="qmd-add-form" style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem 1rem;">
+            <div class="form-field"><label>ID (collection name)</label><input name="id" required placeholder="my-notes" /></div>
+            <div class="form-field"><label>Display Name</label><input name="name" required placeholder="My Notes" /></div>
+            <div class="form-field">
+              <label>Type</label>
+              <select name="type">
+                <option value="directory">Directory</option>
+                <option value="git">Git Repository</option>
+                <option value="url">URL</option>
+                <option value="file">Single File</option>
+              </select>
+            </div>
+            <div class="form-field"><label>Path / URL</label><input name="path" required placeholder="/home/user/notes or https://..." /></div>
+            <div class="form-field"><label>Globs (comma-separated)</label><input name="globs" placeholder="**/*.md, **/*.txt" /></div>
+            <div class="form-field"><label>Branch (git only)</label><input name="branch" placeholder="main" /></div>
+            <div class="form-field"><label>Description</label><input name="description" placeholder="Optional description" /></div>
+            <div class="form-field" style="display:flex;align-items:end;gap:0.5rem;">
+              <button class="btn btn-primary" type="submit">Add</button>
+              <button class="btn" type="button" id="qmd-add-cancel">Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  `;
+
+  if (!enabled) return;
+
+  // Load status
+  loadQMDStatus(panel);
+  loadQMDSources(panel);
+
+  // Wire add source toggle
+  panel.querySelector('#qmd-add-source').addEventListener('click', () => {
+    panel.querySelector('#qmd-add-form-area').style.display = '';
+  });
+  panel.querySelector('#qmd-add-cancel').addEventListener('click', () => {
+    panel.querySelector('#qmd-add-form-area').style.display = 'none';
+  });
+
+  // Wire add form
+  panel.querySelector('#qmd-add-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const source = {
+      id: fd.get('id')?.trim(),
+      name: fd.get('name')?.trim(),
+      type: fd.get('type'),
+      path: fd.get('path')?.trim(),
+      globs: fd.get('globs')?.trim() ? fd.get('globs').split(',').map(g => g.trim()).filter(Boolean) : undefined,
+      branch: fd.get('branch')?.trim() || undefined,
+      description: fd.get('description')?.trim() || undefined,
+      enabled: true,
+    };
+    try {
+      const result = await api.qmdSourceAdd(source);
+      if (result.success) {
+        e.target.reset();
+        panel.querySelector('#qmd-add-form-area').style.display = 'none';
+        loadQMDSources(panel);
+      } else {
+        alert(result.message || 'Failed to add source.');
+      }
+    } catch (err) {
+      alert(err.message || 'Error adding source.');
+    }
+  });
+}
+
+async function loadQMDStatus(panel) {
+  const area = panel.querySelector('#qmd-status-area');
+  try {
+    const status = await api.qmdStatus();
+    area.innerHTML = `
+      <div style="display:flex;gap:2rem;flex-wrap:wrap;">
+        <div><strong>Installed:</strong> ${status.installed ? '<span style="color:var(--success);">Yes</span>' : '<span style="color:var(--danger);">No</span>'}</div>
+        ${status.version ? `<div><strong>Version:</strong> ${esc(status.version)}</div>` : ''}
+        <div><strong>Collections:</strong> ${status.collections?.length ?? 0}</div>
+        <div><strong>Configured Sources:</strong> ${status.configuredSources?.length ?? 0}</div>
+      </div>
+      ${!status.installed ? '<p style="margin-top:0.5rem;color:var(--warning);">Install QMD from <a href="https://github.com/tobi/qmd" target="_blank">github.com/tobi/qmd</a> to enable search.</p>' : ''}
+    `;
+  } catch (err) {
+    area.innerHTML = `<p style="color:var(--danger);">Error loading status: ${esc(err.message)}</p>`;
+  }
+}
+
+async function loadQMDSources(panel) {
+  const area = panel.querySelector('#qmd-sources-area');
+  try {
+    const sources = await api.qmdSources();
+    if (!sources.length) {
+      area.innerHTML = '<p style="color:var(--text-muted);">No sources configured. Add one to start indexing documents.</p>';
+      return;
+    }
+    const typeLabels = { directory: 'Directory', git: 'Git Repo', url: 'URL', file: 'File' };
+    area.innerHTML = `
+      <table class="data-table" style="width:100%;">
+        <thead><tr><th>Name</th><th>Type</th><th>Path</th><th>Globs</th><th>Enabled</th><th>Actions</th></tr></thead>
+        <tbody>
+          ${sources.map(s => `<tr>
+            <td><strong>${esc(s.name)}</strong><br/><small style="color:var(--text-muted);">${esc(s.id)}</small></td>
+            <td>${esc(typeLabels[s.type] || s.type)}</td>
+            <td style="max-width:20rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(s.path)}">${esc(s.path)}</td>
+            <td>${(s.globs || []).map(g => `<code>${esc(g)}</code>`).join(', ') || '<span style="color:var(--text-muted);">default</span>'}</td>
+            <td>
+              <label class="toggle-switch">
+                <input type="checkbox" ${s.enabled ? 'checked' : ''} data-source-id="${esc(s.id)}" class="qmd-toggle" />
+                <span class="toggle-slider"></span>
+              </label>
+            </td>
+            <td>
+              <button class="btn btn-sm qmd-reindex-btn" data-source-id="${esc(s.id)}" title="Reindex">Reindex</button>
+              <button class="btn btn-sm btn-danger qmd-remove-btn" data-source-id="${esc(s.id)}" title="Remove">Remove</button>
+            </td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+      <div style="margin-top:0.75rem;">
+        <button class="btn btn-primary btn-sm" id="qmd-reindex-all" type="button">Reindex All</button>
+      </div>
+    `;
+
+    // Wire toggle handlers
+    area.querySelectorAll('.qmd-toggle').forEach(el => {
+      el.addEventListener('change', async (e) => {
+        const id = e.target.dataset.sourceId;
+        try {
+          await api.qmdSourceToggle(id, e.target.checked);
+        } catch (err) {
+          alert(err.message);
+          e.target.checked = !e.target.checked;
+        }
+      });
+    });
+
+    // Wire reindex buttons
+    area.querySelectorAll('.qmd-reindex-btn').forEach(el => {
+      el.addEventListener('click', async (e) => {
+        const id = e.target.dataset.sourceId;
+        e.target.disabled = true;
+        e.target.textContent = 'Reindexing...';
+        try {
+          const result = await api.qmdReindex(id);
+          e.target.textContent = result.success ? 'Done' : 'Failed';
+          setTimeout(() => { e.target.textContent = 'Reindex'; e.target.disabled = false; }, 2000);
+        } catch (err) {
+          e.target.textContent = 'Error';
+          setTimeout(() => { e.target.textContent = 'Reindex'; e.target.disabled = false; }, 2000);
+        }
+      });
+    });
+
+    // Wire remove buttons
+    area.querySelectorAll('.qmd-remove-btn').forEach(el => {
+      el.addEventListener('click', async (e) => {
+        const id = e.target.dataset.sourceId;
+        if (!confirm(`Remove source "${id}"?`)) return;
+        try {
+          const result = await api.qmdSourceRemove(id);
+          if (result.success) loadQMDSources(panel);
+          else alert(result.message);
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+    });
+
+    // Wire reindex all
+    area.querySelector('#qmd-reindex-all')?.addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      e.target.textContent = 'Reindexing all...';
+      try {
+        const result = await api.qmdReindex();
+        e.target.textContent = result.success ? 'Done' : 'Failed';
+        setTimeout(() => { e.target.textContent = 'Reindex All'; e.target.disabled = false; }, 2000);
+      } catch (err) {
+        e.target.textContent = 'Error';
+        setTimeout(() => { e.target.textContent = 'Reindex All'; e.target.disabled = false; }, 2000);
+      }
+    });
+  } catch (err) {
+    area.innerHTML = `<p style="color:var(--danger);">Error loading sources: ${esc(err.message)}</p>`;
   }
 }
 
