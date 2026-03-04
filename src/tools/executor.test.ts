@@ -927,7 +927,7 @@ describe('ToolExecutor', () => {
         policyMode: 'autonomous',
       });
       const info = executor.getCategoryInfo();
-      expect(info.length).toBe(10);
+      expect(info.length).toBe(11);
       const names = info.map((c) => c.category);
       expect(names).toContain('filesystem');
       expect(names).toContain('shell');
@@ -939,6 +939,7 @@ describe('ToolExecutor', () => {
       expect(names).toContain('forum');
       expect(names).toContain('network');
       expect(names).toContain('system');
+      expect(names).toContain('memory');
       const fs = info.find((c) => c.category === 'filesystem')!;
       expect(fs.toolCount).toBe(5);
       expect(fs.enabled).toBe(true);

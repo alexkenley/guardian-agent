@@ -214,4 +214,27 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({}),
   }),
+  scheduledTasks: () => request('/api/scheduled-tasks'),
+  scheduledTask: (id) => request(`/api/scheduled-tasks/${encodeURIComponent(id)}`),
+  createScheduledTask: (data) => request('/api/scheduled-tasks', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  updateScheduledTask: (id, data) => request(`/api/scheduled-tasks/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  }),
+  deleteScheduledTask: (id) => request(`/api/scheduled-tasks/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  }),
+  runScheduledTaskNow: (id) => request(`/api/scheduled-tasks/${encodeURIComponent(id)}/run`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  }),
+  scheduledTaskPresets: () => request('/api/scheduled-tasks/presets'),
+  installScheduledTaskPreset: (presetId) => request('/api/scheduled-tasks/presets/install', {
+    method: 'POST',
+    body: JSON.stringify({ presetId }),
+  }),
+  scheduledTaskHistory: () => request('/api/scheduled-tasks/history'),
 };

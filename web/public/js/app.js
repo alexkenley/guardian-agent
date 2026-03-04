@@ -8,6 +8,7 @@ import { renderSecurity, updateSecurity } from './pages/security.js';
 import { renderConfig } from './pages/config.js';
 import { renderReference } from './pages/reference.js';
 import { renderNetwork } from './pages/network.js';
+import { renderOperations, updateOperations } from './pages/operations.js';
 import { initChatPanel, setChatContext } from './chat-panel.js';
 import { applyInputTooltips } from './tooltip.js';
 
@@ -173,6 +174,7 @@ const routes = {
   '/': { render: renderDashboard, update: updateDashboard, name: 'dashboard' },
   '/security': { render: renderSecurity, update: updateSecurity, name: 'security' },
   '/network': { render: renderNetwork, name: 'network' },
+  '/operations': { render: renderOperations, update: updateOperations, name: 'operations' },
   '/config': { render: renderConfig, name: 'config' },
   '/reference': { render: renderReference, name: 'reference' },
 };

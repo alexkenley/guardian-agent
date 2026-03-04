@@ -127,6 +127,7 @@ Runtime (src/runtime/runtime.ts)
 ├── Budget (src/runtime/budget.ts)      — compute budget tracking
 ├── Watchdog (src/runtime/watchdog.ts)  — stall detection (timestamp-based)
 ├── Scheduler (src/runtime/scheduler.ts)— cron scheduling (croner)
+├── ScheduledTasks (src/runtime/scheduled-tasks.ts) — unified CRUD scheduling for tools/playbooks
 └── Channels (src/channels/)            — CLI, Telegram, Web adapters
 ```
 
@@ -389,4 +390,5 @@ Unified `LLMProvider` interface for **Ollama**, **Anthropic**, and **OpenAI**:
 - **Configuration Center**: web `#/config` (Providers/Tools/Policy/Settings tabs) + CLI `/config` onboarding/provider/channel configuration flow (no setup wizard)
 - **Tools Control Plane**: web Configuration > Tools tab + CLI `/tools` for tool execution, manual approvals, policy mode, and sandbox boundaries
 - **Connector Studio (Option 2)**: web Network > Connectors tab + configurable connector packs + playbook controls via `assistant.connectors` (runtime-ready policy layer)
+- **Operations**: web `#/operations` page — unified scheduled tasks for any tool or playbook with CRUD, presets, run history, and EventBus integration (`ScheduledTaskService`)
 - **Threat Intel**: web Security > Threat Intel tab, CLI `/intel`, Telegram `/intel` command surfaces

@@ -293,6 +293,22 @@ export interface AssistantMemoryConfig {
   maxContextChars: number;
   /** Remove records older than this many days. */
   retentionDays: number;
+  /** Per-agent persistent knowledge base settings. */
+  knowledgeBase?: AssistantKnowledgeBaseConfig;
+}
+
+/** Per-agent persistent knowledge base settings. */
+export interface AssistantKnowledgeBaseConfig {
+  /** Enable the per-agent knowledge base (default: true). */
+  enabled: boolean;
+  /** Base directory for memory files (default: ~/.guardianagent/memory). */
+  basePath?: string;
+  /** Maximum characters loaded into LLM context from the knowledge base (default: 4000). */
+  maxContextChars: number;
+  /** Maximum total file size in characters (default: 20000). */
+  maxFileChars: number;
+  /** Enable automatic memory flush before context trimming (default: true). */
+  autoFlush: boolean;
 }
 
 /** Analytics storage and retention settings. */
@@ -668,6 +684,12 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       maxMessageChars: 4000,
       maxContextChars: 12000,
       retentionDays: 30,
+      knowledgeBase: {
+        enabled: true,
+        maxContextChars: 4000,
+        maxFileChars: 20000,
+        autoFlush: true,
+      },
     },
     analytics: {
       enabled: true,

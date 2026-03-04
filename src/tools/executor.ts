@@ -27,6 +27,8 @@ import type {
 import { TOOL_CATEGORIES, BUILTIN_TOOL_CATEGORIES } from './types.js';
 import type { MCPClientManager } from './mcp-client.js';
 import type { BrowserConfig, WebSearchConfig } from '../config/types.js';
+import type { ConversationService } from '../runtime/conversation.js';
+import type { AgentMemoryStore } from '../runtime/agent-memory-store.js';
 import {
   BrowserSessionManager,
   isPrivateHost as isBrowserPrivateHost,
@@ -65,6 +67,10 @@ export interface ToolExecutorOptions {
   browserConfig?: BrowserConfig;
   /** Tool categories to disable at startup. */
   disabledCategories?: ToolCategory[];
+  /** Conversation service for memory_search tool. */
+  conversationService?: ConversationService;
+  /** Agent memory store for memory_get/memory_save tools. */
+  agentMemoryStore?: AgentMemoryStore;
   now?: () => number;
   onCheckAction?: (action: {
     type: string;
@@ -2386,6 +2392,143 @@ export class ToolExecutor {
         },
       );
     }
+
+    // ── Memory Tools ────────────────────────────────────────────────
+    this.registry.register(
+      {
+        name: 'memory_search',
+        description: 'Search conversation history using full-text search (FTS5 BM25 ranking when available, substring fallback otherwise). Returns relevant past messages scored by relevance. Use to recall previous discussions, find facts mentioned earlier, or locate context from past sessions.',
+        risk: 'read_only',
+        category: 'memory',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Search query (words, phrases). Supports FTS5 syntax when available.' },
+            limit: { type: 'number', description: 'Maximum results to return (default: 10, max: 50).' },
+          },
+          required: ['query'],
+        },
+      },
+      async (args, request) => {
+        const query = asString(args.query).trim();
+        if (!query) return { success: false, error: 'Query is required.' };
+
+        this.guardAction(request, 'read_file', { path: 'memory:conversation_search', query });
+
+        const conversationService = this.options.conversationService;
+        if (!conversationService) {
+          return { success: false, error: 'Conversation memory is not enabled.' };
+        }
+
+        const limit = Math.min(Math.max(asNumber(args.limit, 10), 1), 50);
+        const results = conversationService.searchMessages(query, {
+          userId: asString(request.userId),
+          agentId: asString(request.agentId),
+          limit,
+        });
+
+        return {
+          success: true,
+          output: {
+            query,
+            resultCount: results.length,
+            hasFTS: conversationService.hasFTS,
+            results: results.map((r) => ({
+              score: r.score,
+              role: r.role,
+              content: r.content.length > 500 ? r.content.slice(0, 500) + '...' : r.content,
+              timestamp: r.timestamp,
+              channel: r.channel,
+              sessionId: r.sessionId,
+            })),
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'memory_get',
+        description: 'Retrieve the persistent knowledge base for the current agent. Returns the curated long-term memory file containing facts, preferences, and summaries that persist across conversations.',
+        risk: 'read_only',
+        category: 'memory',
+        parameters: {
+          type: 'object',
+          properties: {
+            agentId: { type: 'string', description: 'Agent ID to retrieve knowledge base for (defaults to current agent).' },
+          },
+        },
+      },
+      async (args, request) => {
+        this.guardAction(request, 'read_file', { path: 'memory:knowledge_base' });
+
+        const memoryStore = this.options.agentMemoryStore;
+        if (!memoryStore) {
+          return { success: false, error: 'Knowledge base is not enabled.' };
+        }
+
+        const targetAgent = asString(args.agentId) || asString(request.agentId) || 'default';
+        const content = memoryStore.load(targetAgent);
+        const size = memoryStore.size(targetAgent);
+
+        return {
+          success: true,
+          output: {
+            agentId: targetAgent,
+            exists: memoryStore.exists(targetAgent),
+            sizeChars: size,
+            content: content || '(empty — no memories stored yet)',
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'memory_save',
+        description: 'Save a fact, preference, decision, or summary to the persistent knowledge base. Use this when the user says "remember this" or when important context should survive across conversations. Organize entries by category for easy retrieval.',
+        risk: 'mutating',
+        category: 'memory',
+        parameters: {
+          type: 'object',
+          properties: {
+            content: { type: 'string', description: 'The fact, preference, or summary to remember.' },
+            category: { type: 'string', description: 'Optional category heading (e.g., "Preferences", "Decisions", "Facts", "Project Notes").' },
+          },
+          required: ['content'],
+        },
+      },
+      async (args, request) => {
+        const content = asString(args.content).trim();
+        if (!content) return { success: false, error: 'Content is required.' };
+
+        this.guardAction(request, 'write_file', { path: 'memory:knowledge_base', content });
+
+        const memoryStore = this.options.agentMemoryStore;
+        if (!memoryStore) {
+          return { success: false, error: 'Knowledge base is not enabled.' };
+        }
+
+        const targetAgent = asString(request.agentId) || 'default';
+        const category = asString(args.category).trim() || undefined;
+
+        memoryStore.append(targetAgent, {
+          content,
+          createdAt: new Date().toISOString().slice(0, 10),
+          category,
+        });
+
+        return {
+          success: true,
+          output: {
+            agentId: targetAgent,
+            saved: content,
+            category: category ?? '(uncategorized)',
+            totalSizeChars: memoryStore.size(targetAgent),
+          },
+        };
+      },
+    );
   }
 
   private resolveGmailAccessToken(args: Record<string, unknown>): string | undefined {

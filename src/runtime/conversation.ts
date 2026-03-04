@@ -27,6 +27,30 @@ interface ConversationEntry {
   timestamp: number;
 }
 
+/** Result from full-text search across conversation history. */
+export interface ConversationSearchResult {
+  /** BM25 relevance score (lower = more relevant in SQLite FTS5). */
+  score: number;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+  agentId: string;
+  userId: string;
+  channel: string;
+  sessionId: string;
+}
+
+interface FTSSearchRow {
+  score: number;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+  agent_id: string;
+  user_id: string;
+  channel: string;
+  session_id: string;
+}
+
 interface SessionRow {
   session_id: string;
 }
@@ -54,6 +78,16 @@ export interface ConversationSessionInfo {
   isActive: boolean;
 }
 
+/**
+ * Callback invoked when messages are dropped from context during trimming.
+ * Receives the dropped messages so they can be summarized and persisted
+ * to the agent's knowledge base (memory flush).
+ */
+export type MemoryFlushCallback = (
+  key: ConversationKey,
+  droppedMessages: ConversationEntry[],
+) => void;
+
 export interface ConversationServiceOptions {
   /** Enable/disable memory entirely. */
   enabled: boolean;
@@ -71,6 +105,11 @@ export interface ConversationServiceOptions {
   now?: () => number;
   /** Security event callback for DB protection monitoring. */
   onSecurityEvent?: (event: SQLiteSecurityEvent) => void;
+  /**
+   * Called when messages are dropped from context window during trimming.
+   * Use this to flush important content to the knowledge base before it's lost.
+   */
+  onMemoryFlush?: MemoryFlushCallback;
 }
 
 interface MemoryStore {
@@ -465,13 +504,30 @@ export class ConversationService {
 
     const reversed: ConversationEntry[] = [];
     let totalChars = 0;
+    let cutoffIndex = -1;
 
     for (let i = history.length - 1; i >= 0; i--) {
       const entry = history[i];
       const nextTotal = totalChars + entry.content.length;
-      if (nextTotal > this.options.maxContextChars) break;
+      if (nextTotal > this.options.maxContextChars) {
+        cutoffIndex = i;
+        break;
+      }
       reversed.push(entry);
       totalChars = nextTotal;
+    }
+
+    // Memory flush: notify callback about messages being dropped from context
+    if (cutoffIndex >= 0 && this.options.onMemoryFlush) {
+      const dropped = history.slice(0, cutoffIndex + 1);
+      // Only flush if we're actually dropping substantive content (>2 messages)
+      if (dropped.length >= 2) {
+        try {
+          this.options.onMemoryFlush(key, dropped);
+        } catch {
+          // Flush failure should never break message building
+        }
+      }
     }
 
     return reversed.reverse();
@@ -555,6 +611,11 @@ export class ConversationService {
       );
     `);
 
+    // FTS5 virtual table for full-text search across conversation content.
+    // Uses content-sync (content=) to avoid data duplication — the FTS index
+    // references conversation_messages rows by rowid.
+    this.initializeFTS();
+
     this.insertStmt = this.db.prepare(`
       INSERT INTO conversation_messages (
         agent_id, user_id, channel, session_id, role, content, timestamp
@@ -568,6 +629,181 @@ export class ConversationService {
       ON CONFLICT(agent_id, user_id, channel)
       DO UPDATE SET session_id = excluded.session_id, updated_at = excluded.updated_at
     `);
+  }
+
+  private ftsAvailable = false;
+
+  private initializeFTS(): void {
+    if (!this.db) return;
+    try {
+      this.db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS conversation_messages_fts
+        USING fts5(
+          content,
+          content='conversation_messages',
+          content_rowid='id',
+          tokenize='porter unicode61'
+        );
+
+        -- Keep FTS index in sync on INSERT
+        CREATE TRIGGER IF NOT EXISTS conversation_fts_insert
+        AFTER INSERT ON conversation_messages BEGIN
+          INSERT INTO conversation_messages_fts(rowid, content) VALUES (new.id, new.content);
+        END;
+
+        -- Keep FTS index in sync on DELETE
+        CREATE TRIGGER IF NOT EXISTS conversation_fts_delete
+        AFTER DELETE ON conversation_messages BEGIN
+          INSERT INTO conversation_messages_fts(conversation_messages_fts, rowid, content)
+            VALUES ('delete', old.id, old.content);
+        END;
+      `);
+      this.ftsAvailable = true;
+
+      // Rebuild FTS if it's empty but messages exist (handles upgrade from pre-FTS schema)
+      const ftsCount = this.db
+        .prepare('SELECT COUNT(*) as count FROM conversation_messages_fts')
+        .get() as CountRow | undefined;
+      const msgCount = this.db
+        .prepare('SELECT COUNT(*) as count FROM conversation_messages')
+        .get() as CountRow | undefined;
+      if ((ftsCount?.count ?? 0) === 0 && (msgCount?.count ?? 0) > 0) {
+        this.db.exec(`INSERT INTO conversation_messages_fts(conversation_messages_fts) VALUES ('rebuild')`);
+      }
+    } catch {
+      // FTS5 may not be compiled into this SQLite build — degrade gracefully
+      this.ftsAvailable = false;
+    }
+  }
+
+  /**
+   * Full-text search across conversation history using FTS5 BM25 ranking.
+   *
+   * @param query  - FTS5 match expression (words, phrases, boolean operators)
+   * @param opts   - Optional filters: userId, agentId, channel, limit
+   * @returns Scored results sorted by relevance (best first)
+   */
+  searchMessages(
+    query: string,
+    opts?: {
+      userId?: string;
+      agentId?: string;
+      channel?: string;
+      limit?: number;
+    },
+  ): ConversationSearchResult[] {
+    const limit = Math.min(opts?.limit ?? 20, 100);
+
+    if (this.mode === 'sqlite' && this.db && this.ftsAvailable) {
+      return this.searchMessagesFTS(query, opts, limit);
+    }
+
+    // Fallback: naive substring search over in-memory store
+    return this.searchMessagesMemory(query, opts, limit);
+  }
+
+  /** Whether FTS5 full-text search is available. */
+  get hasFTS(): boolean {
+    return this.ftsAvailable;
+  }
+
+  private searchMessagesFTS(
+    query: string,
+    opts: { userId?: string; agentId?: string; channel?: string } | undefined,
+    limit: number,
+  ): ConversationSearchResult[] {
+    if (!this.db) return [];
+
+    // Sanitize FTS query: escape special characters to prevent injection
+    const safeQuery = query.replace(/['"]/g, ' ').trim();
+    if (!safeQuery) return [];
+
+    // Build WHERE clause with optional filters
+    const filters: string[] = [];
+    const params: unknown[] = [safeQuery];
+
+    if (opts?.userId) {
+      filters.push('m.user_id = ?');
+      params.push(opts.userId);
+    }
+    if (opts?.agentId) {
+      filters.push('m.agent_id = ?');
+      params.push(opts.agentId);
+    }
+    if (opts?.channel) {
+      filters.push('m.channel = ?');
+      params.push(opts.channel);
+    }
+
+    const whereClause = filters.length > 0 ? `AND ${filters.join(' AND ')}` : '';
+    params.push(limit);
+
+    const sql = `
+      SELECT
+        bm25(conversation_messages_fts) as score,
+        m.role, m.content, m.timestamp,
+        m.agent_id, m.user_id, m.channel, m.session_id
+      FROM conversation_messages_fts fts
+      JOIN conversation_messages m ON m.id = fts.rowid
+      WHERE fts.content MATCH ?
+        ${whereClause}
+      ORDER BY bm25(conversation_messages_fts)
+      LIMIT ?
+    `;
+
+    try {
+      const rows = this.db.prepare(sql).all(...params) as unknown as FTSSearchRow[];
+      return rows.map((row) => ({
+        score: row.score,
+        role: row.role,
+        content: row.content,
+        timestamp: row.timestamp,
+        agentId: row.agent_id,
+        userId: row.user_id,
+        channel: row.channel,
+        sessionId: row.session_id,
+      }));
+    } catch {
+      // Query syntax error or FTS issue — return empty
+      return [];
+    }
+  }
+
+  private searchMessagesMemory(
+    query: string,
+    opts: { userId?: string; agentId?: string; channel?: string } | undefined,
+    limit: number,
+  ): ConversationSearchResult[] {
+    const lowerQuery = query.toLowerCase();
+    const results: ConversationSearchResult[] = [];
+
+    for (const [mapKey, entries] of this.memory.conversations) {
+      const parts = mapKey.split('::');
+      if (parts.length !== 4) continue;
+      const [agentId, userId, channel, sessionId] = parts;
+
+      if (opts?.userId && userId !== opts.userId) continue;
+      if (opts?.agentId && agentId !== opts.agentId) continue;
+      if (opts?.channel && channel !== opts.channel) continue;
+
+      for (const entry of entries) {
+        if (entry.content.toLowerCase().includes(lowerQuery)) {
+          results.push({
+            score: 0,
+            role: entry.role,
+            content: entry.content,
+            timestamp: entry.timestamp,
+            agentId,
+            userId,
+            channel,
+            sessionId,
+          });
+          if (results.length >= limit) return results;
+        }
+      }
+    }
+
+    return results;
   }
 
   private pruneIfNeeded(now: number): void {

@@ -27,6 +27,7 @@ import type {
 } from '../runtime/threat-intel.js';
 import type { ConnectorFrameworkState, ConnectorPlaybookRunResult } from '../runtime/connectors.js';
 import type { ToolApprovalRequest, ToolCategory, ToolDefinition, ToolJobRecord, ToolPolicySnapshot, ToolRunResponse } from '../tools/types.js';
+import type { ScheduledTaskDefinition, ScheduledTaskCreateInput, ScheduledTaskUpdateInput, ScheduledTaskPreset, ScheduledTaskStatus } from '../runtime/scheduled-tasks.js';
 
 /** Agent info returned by GET /api/agents. */
 export interface DashboardAgentInfo {
@@ -426,6 +427,22 @@ export interface DashboardCallbacks {
   onKillswitch?: () => void;
   onRoutingMode?: () => { tierMode: string; complexityThreshold: number; fallbackOnFailure: boolean };
   onRoutingModeUpdate?: (mode: 'auto' | 'local-only' | 'external-only') => { success: boolean; message: string; tierMode: string };
+  onScheduledTasks?: () => ScheduledTaskDefinition[];
+  onScheduledTaskGet?: (id: string) => ScheduledTaskDefinition | null;
+  onScheduledTaskCreate?: (input: ScheduledTaskCreateInput) => { success: boolean; message: string; task?: ScheduledTaskDefinition };
+  onScheduledTaskUpdate?: (id: string, input: ScheduledTaskUpdateInput) => { success: boolean; message: string };
+  onScheduledTaskDelete?: (id: string) => { success: boolean; message: string };
+  onScheduledTaskRunNow?: (id: string) => Promise<{ success: boolean; message: string }>;
+  onScheduledTaskPresets?: () => ScheduledTaskPreset[];
+  onScheduledTaskInstallPreset?: (presetId: string) => { success: boolean; message: string; task?: ScheduledTaskDefinition };
+  onScheduledTaskHistory?: () => Array<{
+    taskId: string;
+    taskName: string;
+    timestamp: number;
+    status: ScheduledTaskStatus;
+    durationMs: number;
+    message: string;
+  }>;
 }
 
 /** Fields that can be updated via POST /api/config. */

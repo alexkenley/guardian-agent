@@ -1868,6 +1868,178 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // ─── Scheduled Tasks API ─────────────────────────────────
+
+      // GET /api/scheduled-tasks — List all scheduled tasks
+      if (req.method === 'GET' && url.pathname === '/api/scheduled-tasks') {
+        if (!this.dashboard.onScheduledTasks) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onScheduledTasks());
+        return;
+      }
+
+      // GET /api/scheduled-tasks/presets — List available presets
+      if (req.method === 'GET' && url.pathname === '/api/scheduled-tasks/presets') {
+        if (!this.dashboard.onScheduledTaskPresets) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onScheduledTaskPresets());
+        return;
+      }
+
+      // GET /api/scheduled-tasks/history — Get run history
+      if (req.method === 'GET' && url.pathname === '/api/scheduled-tasks/history') {
+        if (!this.dashboard.onScheduledTaskHistory) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onScheduledTaskHistory());
+        return;
+      }
+
+      // POST /api/scheduled-tasks/presets/install — Install a preset
+      if (req.method === 'POST' && url.pathname === '/api/scheduled-tasks/presets/install') {
+        if (!this.dashboard.onScheduledTaskInstallPreset) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { presetId?: string };
+        try {
+          parsed = JSON.parse(body) as { presetId?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed.presetId?.trim()) {
+          sendJSON(res, 400, { error: 'presetId is required' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onScheduledTaskInstallPreset(parsed.presetId.trim()));
+        return;
+      }
+
+      // POST /api/scheduled-tasks/:id/run — Manually trigger a task now
+      if (req.method === 'POST' && url.pathname.match(/^\/api\/scheduled-tasks\/[^/]+\/run$/)) {
+        if (!this.dashboard.onScheduledTaskRunNow) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const parts = url.pathname.split('/');
+        const id = decodeURIComponent(parts[3]);
+        if (!id) {
+          sendJSON(res, 400, { error: 'Task ID required' });
+          return;
+        }
+        sendJSON(res, 200, await this.dashboard.onScheduledTaskRunNow(id));
+        return;
+      }
+
+      // POST /api/scheduled-tasks — Create new scheduled task
+      if (req.method === 'POST' && url.pathname === '/api/scheduled-tasks') {
+        if (!this.dashboard.onScheduledTaskCreate) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = JSON.parse(body) as Record<string, unknown>;
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onScheduledTaskCreate(
+          parsed as unknown as Parameters<NonNullable<typeof this.dashboard.onScheduledTaskCreate>>[0],
+        ));
+        return;
+      }
+
+      // PUT /api/scheduled-tasks/:id — Update existing task
+      if (req.method === 'PUT' && url.pathname.startsWith('/api/scheduled-tasks/')) {
+        if (!this.dashboard.onScheduledTaskUpdate) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const id = decodeURIComponent(url.pathname.slice('/api/scheduled-tasks/'.length));
+        if (!id) {
+          sendJSON(res, 400, { error: 'Task ID required' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = JSON.parse(body) as Record<string, unknown>;
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onScheduledTaskUpdate(
+          id,
+          parsed as Parameters<NonNullable<typeof this.dashboard.onScheduledTaskUpdate>>[1],
+        ));
+        return;
+      }
+
+      // DELETE /api/scheduled-tasks/:id — Delete task
+      if (req.method === 'DELETE' && url.pathname.startsWith('/api/scheduled-tasks/')) {
+        if (!this.dashboard.onScheduledTaskDelete) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const id = decodeURIComponent(url.pathname.slice('/api/scheduled-tasks/'.length));
+        if (!id) {
+          sendJSON(res, 400, { error: 'Task ID required' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onScheduledTaskDelete(id));
+        return;
+      }
+
+      // GET /api/scheduled-tasks/:id — Get single task
+      if (req.method === 'GET' && url.pathname.startsWith('/api/scheduled-tasks/')) {
+        if (!this.dashboard.onScheduledTaskGet) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const id = decodeURIComponent(url.pathname.slice('/api/scheduled-tasks/'.length));
+        if (!id) {
+          sendJSON(res, 400, { error: 'Task ID required' });
+          return;
+        }
+        const task = this.dashboard.onScheduledTaskGet(id);
+        if (!task) {
+          sendJSON(res, 404, { error: 'Task not found' });
+          return;
+        }
+        sendJSON(res, 200, task);
+        return;
+      }
+
       // POST /api/killswitch — Shut down the entire process
       if (req.method === 'POST' && url.pathname === '/api/killswitch') {
         sendJSON(res, 200, { success: true, message: 'Shutting down...' });

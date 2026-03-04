@@ -36,8 +36,10 @@ import { ThreatIntelService } from './runtime/threat-intel.js';
 import { ConnectorPlaybookService } from './runtime/connectors.js';
 import { installTemplate, listTemplates } from './runtime/builtin-packs.js';
 import { DeviceInventoryService } from './runtime/device-inventory.js';
+import { ScheduledTaskService } from './runtime/scheduled-tasks.js';
 import { MoltbookConnector } from './runtime/moltbook-connector.js';
 import { AssistantOrchestrator } from './runtime/orchestrator.js';
+import { AgentMemoryStore } from './runtime/agent-memory-store.js';
 import { AssistantJobTracker } from './runtime/assistant-jobs.js';
 import { parseDirectFileSearchIntent } from './runtime/search-intent.js';
 import { ToolExecutor } from './tools/executor.js';
@@ -148,6 +150,8 @@ class ChatAgent extends BaseAgent {
   private pendingApprovals: Map<string, string[]> = new Map();
   /** Optional model fallback chain for retrying failed LLM calls. */
   private fallbackChain?: ModelFallbackChain;
+  /** Per-agent persistent knowledge base. */
+  private memoryStore?: AgentMemoryStore;
 
   constructor(
     id: string,
@@ -157,6 +161,7 @@ class ChatAgent extends BaseAgent {
     tools?: ToolExecutor,
     fallbackChain?: ModelFallbackChain,
     soulPrompt?: string,
+    memoryStore?: AgentMemoryStore,
   ) {
     super(id, name, { handleMessages: true });
     this.systemPrompt = composeGuardianSystemPrompt(systemPrompt, soulPrompt);
@@ -172,6 +177,7 @@ class ChatAgent extends BaseAgent {
     this.tools = tools;
     this.maxToolRounds = 6;
     this.fallbackChain = fallbackChain;
+    this.memoryStore = memoryStore;
   }
 
   /**
@@ -216,14 +222,23 @@ class ChatAgent extends BaseAgent {
       return { content: approvalResult };
     }
 
+    // Inject knowledge base into system prompt if available
+    let enrichedSystemPrompt = this.systemPrompt;
+    if (this.memoryStore) {
+      const kb = this.memoryStore.loadForContext(this.id);
+      if (kb) {
+        enrichedSystemPrompt += `\n\n<knowledge-base>\nThe following is your persistent knowledge base — facts, preferences, and summaries you have remembered across conversations:\n\n${kb}\n</knowledge-base>`;
+      }
+    }
+
     const llmMessages: ChatMessage[] = this.conversationService
       ? this.conversationService.buildMessages(
         { agentId: this.id, userId: message.userId, channel: message.channel },
-        this.systemPrompt,
+        enrichedSystemPrompt,
         message.content,
       )
       : [
-        { role: 'system', content: this.systemPrompt },
+        { role: 'system', content: enrichedSystemPrompt },
         { role: 'user', content: message.content },
       ];
 
@@ -2318,6 +2333,15 @@ async function main(): Promise<void> {
       },
     });
   };
+  // Agent knowledge base — per-agent persistent memory files
+  const kbConfig = config.assistant.memory.knowledgeBase;
+  const agentMemoryStore = new AgentMemoryStore({
+    enabled: kbConfig?.enabled ?? true,
+    basePath: kbConfig?.basePath,
+    maxContextChars: kbConfig?.maxContextChars ?? 4000,
+    maxFileChars: kbConfig?.maxFileChars ?? 20000,
+  });
+
   const conversationDbPath = resolveAssistantDbPath(config.assistant.memory.sqlitePath, 'assistant-memory.sqlite');
   const analyticsDbPath = resolveAssistantDbPath(config.assistant.analytics.sqlitePath, 'assistant-analytics.sqlite');
   const conversations = new ConversationService({
@@ -2328,6 +2352,32 @@ async function main(): Promise<void> {
     maxContextChars: config.assistant.memory.maxContextChars,
     retentionDays: config.assistant.memory.retentionDays,
     onSecurityEvent: onSQLiteSecurityEvent,
+    onMemoryFlush: (kbConfig?.autoFlush ?? true) ? (key, droppedMessages) => {
+      // Extract key facts from dropped messages and persist to knowledge base.
+      // This is a lightweight extraction — no LLM call, just preserves the raw
+      // content of dropped messages as a dated summary block.
+      if (!agentMemoryStore || droppedMessages.length === 0) return;
+
+      const timestamp = new Date().toISOString().slice(0, 10);
+      const summaryLines = droppedMessages
+        .filter((m) => m.content.length > 20) // skip trivial messages
+        .map((m) => {
+          const preview = m.content.length > 200
+            ? m.content.slice(0, 200) + '...'
+            : m.content;
+          return `- [${m.role}] ${preview}`;
+        })
+        .slice(0, 10); // cap at 10 entries per flush
+
+      if (summaryLines.length === 0) return;
+
+      const block = `## Context from ${timestamp}\n${summaryLines.join('\n')}`;
+      agentMemoryStore.appendRaw(key.agentId, block);
+      log.debug(
+        { agentId: key.agentId, droppedCount: droppedMessages.length, flushedLines: summaryLines.length },
+        'Memory flush: persisted dropped context to knowledge base',
+      );
+    } : undefined,
   });
   analytics = new AnalyticsService({
     enabled: config.assistant.analytics.enabled,
@@ -2443,6 +2493,8 @@ async function main(): Promise<void> {
     webSearch: config.assistant.tools.webSearch,
     browserConfig: config.assistant.tools.browser,
     disabledCategories: config.assistant.tools.disabledCategories,
+    conversationService: conversations,
+    agentMemoryStore,
     mcpManager,
     threatIntel,
     onCheckAction: ({ type, params, agentId, origin }) => {
@@ -2493,6 +2545,7 @@ async function main(): Promise<void> {
       });
     },
   };
+
   const toolExecutor = new ToolExecutor(toolExecutorOptions);
   const connectors = new ConnectorPlaybookService({
     config: config.assistant.connectors,
@@ -2517,6 +2570,16 @@ async function main(): Promise<void> {
       },
     });
   });
+
+  // Scheduled tasks — unified scheduling for tools and playbooks
+  const scheduledTasks = new ScheduledTaskService({
+    scheduler: runtime.scheduler,
+    toolExecutor,
+    playbookExecutor: connectors,
+    deviceInventory,
+    eventBus: runtime.eventBus,
+  });
+  scheduledTasks.load().catch(() => {});
 
   const webMode = config.channels.web?.auth?.mode
     ?? (config.channels.web?.authToken ? 'bearer_required' : 'localhost_no_auth');
@@ -2616,6 +2679,7 @@ async function main(): Promise<void> {
         toolExecutor,
         fallbackChain,
         selectSoulPrompt(soulProfile, soulMode),
+        agentMemoryStore,
       );
       runtime.registerAgent(createAgentDefinition({
         agent,
@@ -2644,6 +2708,7 @@ async function main(): Promise<void> {
       toolExecutor,
       fallbackChain,
       selectSoulPrompt(soulProfile, config.assistant.soul.primaryMode),
+      agentMemoryStore,
     );
     runtime.registerAgent(createAgentDefinition({
       agent: localAgent,
@@ -2659,6 +2724,7 @@ async function main(): Promise<void> {
       toolExecutor,
       fallbackChain,
       selectSoulPrompt(soulProfile, config.assistant.soul.delegatedMode),
+      agentMemoryStore,
     );
     runtime.registerAgent(createAgentDefinition({
       agent: externalAgent,
@@ -2699,6 +2765,7 @@ async function main(): Promise<void> {
       toolExecutor,
       fallbackChain,
       selectSoulPrompt(soulProfile, config.assistant.soul.primaryMode),
+      agentMemoryStore,
     );
     runtime.registerAgent(createAgentDefinition({
       agent: defaultAgent,
@@ -2779,6 +2846,17 @@ async function main(): Promise<void> {
     log.info({ tierMode: mode }, 'Tier routing mode updated');
     return { success: true, message: `Routing mode set to: ${mode}`, tierMode: mode };
   };
+
+  // ─── Scheduled Tasks callbacks ─────────────────────────
+  dashboardCallbacks.onScheduledTasks = () => scheduledTasks.list();
+  dashboardCallbacks.onScheduledTaskGet = (id) => scheduledTasks.get(id);
+  dashboardCallbacks.onScheduledTaskCreate = (input) => scheduledTasks.create(input);
+  dashboardCallbacks.onScheduledTaskUpdate = (id, input) => scheduledTasks.update(id, input);
+  dashboardCallbacks.onScheduledTaskDelete = (id) => scheduledTasks.delete(id);
+  dashboardCallbacks.onScheduledTaskRunNow = (id) => scheduledTasks.runNow(id);
+  dashboardCallbacks.onScheduledTaskPresets = () => scheduledTasks.getPresets();
+  dashboardCallbacks.onScheduledTaskInstallPreset = (presetId) => scheduledTasks.installPreset(presetId);
+  dashboardCallbacks.onScheduledTaskHistory = () => scheduledTasks.getHistory();
 
   const autoScanMinutes = config.assistant.threatIntel.autoScanIntervalMinutes;
   let autoScanInFlight = false;
@@ -3015,27 +3093,12 @@ async function main(): Promise<void> {
   // Start runtime
   await runtime.start();
 
-  // Register scheduled playbooks with CronScheduler
+  // Migrate hardcoded playbook schedules into ScheduledTaskService
   {
     const playbookDefs = connectors.getState().playbooks;
-    for (const pb of playbookDefs) {
-      if (pb.enabled && pb.schedule) {
-        try {
-          runtime.scheduler.schedule(`playbook:${pb.id}`, pb.schedule, async () => {
-            log.info({ playbookId: pb.id, schedule: pb.schedule }, 'Running scheduled playbook');
-            const result = await connectors.runPlaybook({
-              playbookId: pb.id,
-              origin: 'web',
-              requestedBy: 'scheduler',
-            });
-            if (result.run?.steps) {
-              deviceInventory.ingestPlaybookResults(result.run.steps);
-            }
-          });
-        } catch (err) {
-          log.warn({ playbookId: pb.id, err }, 'Failed to schedule playbook');
-        }
-      }
+    const migrated = scheduledTasks.migratePlaybookSchedules(playbookDefs);
+    if (migrated > 0) {
+      log.info({ migrated }, 'Migrated playbook schedules to ScheduledTaskService');
     }
   }
 

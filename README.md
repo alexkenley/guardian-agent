@@ -285,7 +285,7 @@ guardian:
 
 - CLI: `/config`, `/auth`, `/tools`, `/connectors`, `/playbooks`, `/campaign`, `/assistant`, `/quick`, `/session`, `/analytics`, `/intel`, `/guide`
 - Telegram: `/help`, `/guide`, `/reset`, `/quick`, `/intel`
-- Web: Dashboard, Security (Audit/Monitoring/Threat Intel), Network (Connectors/Devices), Configuration (Providers/Tools/Policy/Settings), Reference Guide, Chat
+- Web: Dashboard, Security (Audit/Monitoring/Threat Intel), Network (Connectors/Devices), Operations (Scheduled Tasks/Run History), Configuration (Providers/Tools/Policy/Settings), Reference Guide, Chat
 
 ### Connector + Playbook CLI (Web Parity)
 

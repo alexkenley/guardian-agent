@@ -34,7 +34,7 @@ npx tsx examples/llm-chat.ts         # LLM provider demo
 ### Runtime Bootstrap (`src/index.ts`)
 
 The entry point is a large (~107KB) bootstrap that wires everything together:
-Config → LLM Providers → Registry → EventBus → Guardian → Budget → Watchdog → Scheduler → Channels → Services (Conversation, Identity, Analytics, ThreatIntel, Connectors, Orchestrator, JobTracker)
+Config → LLM Providers → Registry → EventBus → Guardian → Budget → Watchdog → Scheduler → Channels → Services (Conversation, Identity, Analytics, ThreatIntel, Connectors, Orchestrator, JobTracker, ScheduledTasks)
 
 It registers built-in agents, injects SOUL personality profiles, starts channel adapters, and handles graceful shutdown.
 
@@ -45,6 +45,7 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 - **SharedState** — per-invocation key-value store for inter-agent data. `temp:` prefix for invocation-scoped data
 - **EventBus** — immediate async dispatch (not batch-drain)
 - **CronScheduler** — uses `croner` for periodic agent invocations
+- **ScheduledTaskService** — unified CRUD scheduling for tools and playbooks with persistence, presets, and EventBus integration
 
 ### LLM Provider Layer
 - Unified `LLMProvider` interface with `chat()` and `stream()` (AsyncGenerator) for **Ollama**, **Anthropic**, **OpenAI**
@@ -63,13 +64,15 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 - **OutputGuardian**: Response scanning and secret redaction before output reaches users
 
 ### Runtime Services (`src/runtime/`)
-- **ConversationService** — SQLite-backed session memory
+- **ConversationService** — SQLite-backed session memory with FTS5 full-text search and memory flush
+- **AgentMemoryStore** — per-agent persistent knowledge base files (`~/.guardianagent/memory/{agentId}.md`)
 - **IdentityService** — cross-channel user mapping (`single_user` / `channel_user`)
 - **AnalyticsService** — SQLite-backed usage analytics
 - **ThreatIntelService** — watchlist scanning, findings triage
 - **ConnectorPlaybookService** — declarative connector packs + playbook execution
 - **AssistantOrchestrator** — routes messages, orchestrates tool calls, manages assistant behavior
 - **MessageRouter** — intent classification and route decisions
+- **ScheduledTaskService** — unified CRUD scheduling for tools/playbooks, persisted to JSON, preset templates, EventBus integration
 - **BudgetTracker** — per-agent per-invocation wall-clock tracking
 - **Watchdog** — timestamp-based stall detection (default 60s)
 
@@ -84,13 +87,22 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 - **Web** (`src/channels/web.ts`) — Node.js HTTP server, REST API (`/health`, `/api/status`, `/api/message`), serves static files from `web/public/`, bearer token auth
 
 ### Web Frontend (`web/public/`)
-Vanilla JavaScript — no framework, no build step. Static HTML/CSS/JS served directly by the WebChannel HTTP server. Consolidated into 5 sidebar pages with tabbed navigation:
+Vanilla JavaScript — no framework, no build step. Static HTML/CSS/JS served directly by the WebChannel HTTP server. Consolidated into 6 sidebar pages with tabbed navigation:
 - **Dashboard** (`#/`) — status cards, agent table, LLM status, recent alerts, assistant state (sessions, jobs, cron, policy)
 - **Security** (`#/security`) — Audit tab, Monitoring tab, Threat Intel tab
 - **Network** (`#/network`) — Connectors tab, Devices tab
+- **Operations** (`#/operations`) — scheduled tasks CRUD, preset installation, run history
 - **Configuration** (`#/config`) — Providers tab, Tools tab, Policy tab (interactive allowlist editor), Settings tab
 - **Reference Guide** (`#/reference`) — unchanged
 - **Chat** — persistent right panel
+
+### Memory System
+- **FTS5 Search**: Full-text search index on conversation_messages with BM25 ranking, porter stemming, content-sync triggers
+- **Knowledge Base**: Per-agent markdown files (`~/.guardianagent/memory/{agentId}.md`) always loaded into LLM context
+- **Memory Flush**: Automatic extraction of dropped context to knowledge base when sliding window trims history
+- **Memory Tools**: `memory_search` (FTS5 query), `memory_get` (read knowledge base), `memory_save` (persist facts) — all Guardian-gated
+- **Config**: `assistant.memory.knowledgeBase` — enable/disable, maxContextChars, autoFlush
+- See `docs/guides/MEMORY-SYSTEM.md` for full documentation
 
 ### Evaluation Framework
 - **EvalRunner** runs test cases through the real Runtime (Guardian active)
@@ -117,7 +129,8 @@ src/agents/         — Built-in agent implementations (SentinelAgent)
 src/config/         — Config types, YAML loader with ${ENV_VAR} interpolation
 src/llm/            — LLMProvider interface, Ollama/Anthropic/OpenAI, circuit breaker, failover
 src/runtime/        — Runtime, services (Conversation, Identity, Analytics, ThreatIntel,
-                      Connectors, Orchestrator, JobTracker), BudgetTracker, Watchdog, Scheduler
+                      Connectors, Orchestrator, JobTracker, ScheduledTasks, AgentMemoryStore),
+                      BudgetTracker, Watchdog, Scheduler
 src/queue/          — EventBus for inter-agent communication
 src/guardian/       — Capabilities, SecretScanner, InputSanitizer, OutputGuardian,
                       RateLimiter, audit log/persistence, Guardian admission pipeline

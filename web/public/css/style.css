@@ -1396,3 +1396,55 @@ tr:hover td {
 .toggle-switch input:checked + .toggle-slider::before {
   transform: translateX(16px);
 }
+
+/* ─── Operations / Preset Bar ──────────────────────────── */
+
+.preset-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.preset-btn {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  transition: border-color 0.2s;
+}
+
+.preset-btn:not(.installed):hover {
+  border-color: var(--accent);
+}
+
+.preset-btn.installed {
+  border-color: var(--success);
+  opacity: 0.8;
+}
+
+.preset-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin-bottom: 0.3rem;
+}
+
+.preset-desc {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.75rem;
+  min-height: 2em;
+}
+
+.preset-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.preset-status.installed {
+  color: var(--success);
+  font-weight: 500;
+}
