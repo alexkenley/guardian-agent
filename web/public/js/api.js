@@ -22,17 +22,20 @@ export function hasToken() {
   return !!sessionStorage.getItem(TOKEN_KEY);
 }
 
+/** Whether we have an active HttpOnly session cookie (server-side token custody). */
+let cookieSessionActive = false;
+
 async function request(path, options = {}) {
   const token = getToken();
   const headers = { ...options.headers };
-  if (token) {
+  if (token && !cookieSessionActive) {
     headers['Authorization'] = `Bearer ${token}`;
   }
   if (options.body && typeof options.body === 'string') {
     headers['Content-Type'] = 'application/json';
   }
 
-  const res = await fetch(path, { ...options, headers });
+  const res = await fetch(path, { ...options, headers, credentials: 'same-origin' });
 
   if (res.status === 401 || res.status === 403) {
     throw new Error('AUTH_FAILED');
@@ -60,7 +63,37 @@ async function requestPrivileged(path, action, payload = {}) {
   });
 }
 
+/**
+ * Exchange bearer token for an HttpOnly session cookie.
+ * After success, clears the token from sessionStorage.
+ */
+async function createSession(token) {
+  const res = await fetch('/api/auth/session', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+  });
+  if (!res.ok) throw new Error('Failed to create session');
+  cookieSessionActive = true;
+  clearToken();
+  return res.json();
+}
+
+/**
+ * Destroy the HttpOnly session cookie.
+ */
+async function destroySession() {
+  await fetch('/api/auth/session', { method: 'DELETE', credentials: 'same-origin' });
+  cookieSessionActive = false;
+}
+
+export function hasCookieSession() {
+  return cookieSessionActive;
+}
+
 export const api = {
+  createSession,
+  destroySession,
   status:       () => request('/api/status'),
   authStatus:   () => request('/api/auth/status'),
   updateAuth:   (input) => requestPrivileged('/api/auth/config', 'auth.config', input || {}),
@@ -188,6 +221,13 @@ export const api = {
     const payload = { content, userId, channel };
     if (agentId) payload.agentId = agentId;
     return request('/api/message', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+  sendMessageStream: (content, agentId, userId, channel = 'web') => {
+    const payload = { content, agentId, userId, channel };
+    return request('/api/message/stream', {
       method: 'POST',
       body: JSON.stringify(payload),
     });

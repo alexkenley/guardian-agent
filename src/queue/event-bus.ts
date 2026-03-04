@@ -19,6 +19,14 @@ export interface AgentEvent {
   timestamp: number;
 }
 
+import type {
+  EventClassifier,
+  EventPolicy,
+  EventPipelineHandler,
+  EventPipelineRegistration,
+  ClassifiedEvent,
+} from './event-pipeline.js';
+
 /** Callback for event delivery. */
 export type EventHandler = (event: AgentEvent) => void | Promise<void>;
 
@@ -26,6 +34,7 @@ export class EventBus {
   private handlers: Map<string, EventHandler[]> = new Map();
   private broadcastHandlers: EventHandler[] = [];
   private typeHandlers: Map<string, EventHandler[]> = new Map();
+  private pipelineHandlers: EventPipelineRegistration[] = [];
   private maxDepth: number;
   private pendingCount = 0;
 
@@ -77,6 +86,21 @@ export class EventBus {
         }
       }
 
+      // Run pipeline handlers: classify → policy → execute
+      for (const pipeline of this.pipelineHandlers) {
+        const category = pipeline.classifier(event);
+        const classified: ClassifiedEvent = {
+          ...event,
+          category,
+          classifiedAt: Date.now(),
+        };
+        const decision = pipeline.policy(classified);
+        if (!decision.shouldThrottle) {
+          const result = pipeline.handler(classified, decision);
+          if (result instanceof Promise) promises.push(result);
+        }
+      }
+
       if (promises.length > 0) {
         await Promise.all(promises);
       }
@@ -125,11 +149,24 @@ export class EventBus {
     this.typeHandlers.set(eventType, existing.filter(h => h !== handler));
   }
 
+  /**
+   * Register a pipeline: classify → policy → execute for every emitted event.
+   * Returns an unsubscribe function.
+   */
+  usePipeline(classifier: EventClassifier, policy: EventPolicy, handler: EventPipelineHandler): () => void {
+    const registration: EventPipelineRegistration = { classifier, policy, handler };
+    this.pipelineHandlers.push(registration);
+    return () => {
+      this.pipelineHandlers = this.pipelineHandlers.filter(r => r !== registration);
+    };
+  }
+
   /** Remove all handlers. */
   removeAllHandlers(): void {
     this.handlers.clear();
     this.broadcastHandlers = [];
     this.typeHandlers.clear();
+    this.pipelineHandlers = [];
   }
 
   /** Current number of in-flight event dispatches. */

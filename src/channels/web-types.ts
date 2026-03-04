@@ -271,7 +271,7 @@ export interface DashboardAssistantState {
 
 /** SSE event pushed to dashboard clients. */
 export interface SSEEvent {
-  type: 'audit' | 'metrics' | 'watchdog';
+  type: 'audit' | 'metrics' | 'watchdog' | 'chat.thinking' | 'chat.tool_call' | 'chat.token' | 'chat.done' | 'chat.error';
   data: unknown;
 }
 
@@ -431,6 +431,11 @@ export interface DashboardCallbacks {
     channel?: string;
     requestedBy?: string;
   }) => Promise<ConnectorPlaybookRunResult> | ConnectorPlaybookRunResult;
+  onStreamDispatch?: (
+    agentId: string,
+    message: { content: string; userId?: string; channel?: string },
+    emitSSE: (event: SSEEvent) => void,
+  ) => Promise<{ requestId: string; content: string }>;
   onKillswitch?: () => void;
   onRoutingMode?: () => { tierMode: string; complexityThreshold: number; fallbackOnFailure: boolean };
   onRoutingModeUpdate?: (mode: 'auto' | 'local-only' | 'external-only') => { success: boolean; message: string; tierMode: string };
