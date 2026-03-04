@@ -3,7 +3,7 @@
  *
  * Interactive readline prompt with full dashboard parity.
  * Commands: /chat, /agents, /agent, /status, /assistant, /providers, /budget, /watchdog,
- * /config, /campaign, /audit, /security, /models, /intel, /clear, /help, /quit, /exit.
+ * /config, /campaign, /connectors, /playbooks, /audit, /security, /models, /intel, /clear, /help, /quit, /exit.
  *
  * Accepts the same DashboardCallbacks interface as the web channel for
  * instant feature parity with zero duplication.
@@ -284,6 +284,12 @@ export class CLIChannel implements ChannelAdapter {
       case 'campaign':
         await this.handleCampaign(args);
         break;
+      case 'connectors':
+        await this.handleConnectors(args);
+        break;
+      case 'playbooks':
+        await this.handlePlaybooks(args);
+        break;
       case 'config':
         await this.handleConfig(args);
         break;
@@ -378,7 +384,14 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /tools policy paths <csv>               Set allowed filesystem roots\n');
     this.write('  /tools policy commands <csv>            Set allowlisted shell command prefixes\n');
     this.write('  /tools policy domains <csv>             Set allowlisted network domains\n');
+    this.write('  /tools browser                          View browser automation config\n');
+    this.write('  /tools browser enable|disable           Enable/disable browser tools\n');
+    this.write('  /tools browser domains <csv>            Set browser allowed domains\n');
+    this.write('  /tools categories                       Show tool category status\n');
+    this.write('  /tools categories enable|disable <cat>  Enable/disable a tool category\n');
     this.write('  /campaign ...                            Contact discovery + email campaign workflows\n');
+    this.write('  /connectors [status|packs|settings|pack] Connector framework control plane\n');
+    this.write('  /playbooks [list|run|upsert|delete|runs] Playbook registry + execution\n');
     this.write('\n');
     this.write(this.bold('Security & Audit\n'));
     this.write('  /audit [limit]                         Recent audit events\n');
@@ -1429,11 +1442,103 @@ export class CLIChannel implements ChannelAdapter {
       return;
     }
 
-    this.write('\nUsage: /tools [list|run|approvals|approve|deny|jobs|policy]\n');
+    if (sub === 'browser') {
+      const browserSub = (args[1] ?? '').toLowerCase();
+      if (browserSub === 'enable' || browserSub === 'on') {
+        if (!this.dashboard.onBrowserConfigUpdate) {
+          this.write('\nBrowser config updates are not available.\n\n');
+          return;
+        }
+        const result = this.dashboard.onBrowserConfigUpdate({ enabled: true });
+        this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+        return;
+      }
+      if (browserSub === 'disable' || browserSub === 'off') {
+        if (!this.dashboard.onBrowserConfigUpdate) {
+          this.write('\nBrowser config updates are not available.\n\n');
+          return;
+        }
+        const result = this.dashboard.onBrowserConfigUpdate({ enabled: false });
+        this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+        return;
+      }
+      if (browserSub === 'domains') {
+        if (!this.dashboard.onBrowserConfigUpdate) {
+          this.write('\nBrowser config updates are not available.\n\n');
+          return;
+        }
+        const csv = args.slice(2).join(' ').trim();
+        if (!csv) {
+          this.write('\nUsage: /tools browser domains <comma,separated,domains>\n\n');
+          return;
+        }
+        const domains = csv.split(',').map((d) => d.trim()).filter(Boolean);
+        const result = this.dashboard.onBrowserConfigUpdate({ allowedDomains: domains });
+        this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+        return;
+      }
+      // Default: show browser config state
+      if (this.dashboard.onBrowserConfigState) {
+        const state = this.dashboard.onBrowserConfigState();
+        this.write('\n');
+        this.write(this.bold('Browser Automation\n'));
+        this.write(`  Enabled:          ${state.enabled ? this.green('yes') : this.yellow('no')}\n`);
+        this.write(`  Allowed domains:  ${state.allowedDomains.join(', ') || '(uses global tools allowedDomains)'}\n`);
+        this.write(`  Idle timeout:     ${state.sessionIdleTimeoutMs / 1000}s\n`);
+        this.write(`  Max sessions:     ${state.maxSessions}\n`);
+        this.write('\n');
+      } else {
+        this.write('\nBrowser config is not available.\n\n');
+      }
+      return;
+    }
+
+    if (sub === 'categories') {
+      const catSub = (args[1] ?? '').toLowerCase();
+      if (catSub === 'enable' || catSub === 'disable') {
+        if (!this.dashboard.onToolsCategoryToggle) {
+          this.write('\nCategory management is not available.\n\n');
+          return;
+        }
+        const catName = args[2];
+        if (!catName) {
+          this.write(`\nUsage: /tools categories ${catSub} <category>\n\n`);
+          return;
+        }
+        const result = this.dashboard.onToolsCategoryToggle({
+          category: catName as import('../tools/types.js').ToolCategory,
+          enabled: catSub === 'enable',
+        });
+        this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+        return;
+      }
+      // Default: show categories table
+      if (this.dashboard.onToolsCategories) {
+        const categories = this.dashboard.onToolsCategories();
+        const headers = ['Category', 'Label', 'Tools', 'Status', 'Description'];
+        const rows = categories.map((cat) => [
+          cat.category,
+          cat.label,
+          String(cat.toolCount),
+          cat.enabled ? this.green('enabled') : this.yellow('disabled'),
+          cat.description,
+        ]);
+        this.write('\n');
+        this.writeTable(headers, rows);
+        this.write('\n');
+      } else {
+        this.write('\nCategory info is not available.\n\n');
+      }
+      return;
+    }
+
+    this.write('\nUsage: /tools [list|run|approvals|approve|deny|jobs|policy|browser|categories]\n');
     this.write('       /tools policy mode <approve_each|approve_by_policy|autonomous>\n');
     this.write('       /tools policy paths <comma,separated,paths>\n');
     this.write('       /tools policy commands <comma,separated,prefixes>\n');
-    this.write('       /tools policy domains <comma,separated,domains>\n\n');
+    this.write('       /tools policy domains <comma,separated,domains>\n');
+    this.write('       /tools browser [enable|disable|domains <csv>]\n');
+    this.write('       /tools categories [enable|disable <name>]\n\n');
   }
 
   // ─── /campaign ───────────────────────────────────────────────
@@ -1589,6 +1694,489 @@ export class CLIChannel implements ChannelAdapter {
       this.write(`  Output:\n${this.dim(rendered)}\n`);
     }
     this.write('\n');
+  }
+
+  // ─── /connectors ─────────────────────────────────────────────
+
+  private async handleConnectors(args: string[]): Promise<void> {
+    if (!this.dashboard?.onConnectorsState) {
+      this.write('\nConnector framework is not available.\n\n');
+      return;
+    }
+
+    const sub = (args[0] ?? 'status').toLowerCase();
+    const state = this.dashboard.onConnectorsState({ limitRuns: 20 });
+
+    if (sub === 'status') {
+      this.write('\n');
+      this.write(this.bold('Connector Framework\n'));
+      this.write(`  Enabled: ${state.summary.enabled ? this.green('true') : this.yellow('false')}\n`);
+      this.write(`  Execution mode: ${state.summary.executionMode}\n`);
+      this.write(`  Max calls/run: ${state.summary.maxConnectorCallsPerRun}\n`);
+      this.write(`  Packs: ${state.summary.enabledPackCount}/${state.summary.packCount} enabled\n`);
+      this.write(`  Playbooks: ${state.summary.enabledPlaybookCount}/${state.summary.playbookCount} enabled\n`);
+      this.write(`  Runs tracked: ${state.summary.runCount}\n`);
+      this.write(`  Dry-run qualified: ${state.summary.dryRunQualifiedCount}\n`);
+      this.write('\n');
+      this.write(this.bold('Playbook Controls\n'));
+      this.write(`  Enabled: ${state.playbooksConfig.enabled}\n`);
+      this.write(`  Max steps: ${state.playbooksConfig.maxSteps}\n`);
+      this.write(`  Max parallel: ${state.playbooksConfig.maxParallelSteps}\n`);
+      this.write(`  Step timeout: ${state.playbooksConfig.defaultStepTimeoutMs}ms\n`);
+      this.write(`  Require signed: ${state.playbooksConfig.requireSignedDefinitions}\n`);
+      this.write(`  Require dry-run first: ${state.playbooksConfig.requireDryRunOnFirstExecution}\n`);
+      this.write('\n');
+      return;
+    }
+
+    if (sub === 'packs') {
+      if (state.packs.length === 0) {
+        this.write('\nNo connector packs configured.\n\n');
+        return;
+      }
+      const headers = ['ID', 'Name', 'Enabled', 'Auth', 'Capabilities', 'Hosts'];
+      const rows = state.packs.map((pack) => [
+        pack.id,
+        pack.name,
+        String(pack.enabled),
+        pack.authMode,
+        pack.allowedCapabilities.join(', ') || '-',
+        pack.allowedHosts.join(', ') || '-',
+      ]);
+      this.write('\n');
+      this.writeTable(headers, rows);
+      this.write('\n');
+      return;
+    }
+
+    if (sub === 'settings') {
+      if (!this.dashboard.onConnectorsSettingsUpdate) {
+        this.write('\nConnector settings updates are not available.\n\n');
+        return;
+      }
+      const printSettingsUsage = () => {
+        this.write('  /connectors settings enable|disable\n');
+        this.write('  /connectors settings mode <plan_then_execute|direct_execute>\n');
+        this.write('  /connectors settings limit <number>\n');
+        this.write('  /connectors settings playbooks <on|off>\n');
+        this.write('  /connectors settings playbooks enabled <on|off>\n');
+        this.write('  /connectors settings playbooks max-steps <number>\n');
+        this.write('  /connectors settings playbooks max-parallel <number>\n');
+        this.write('  /connectors settings playbooks timeout-ms <milliseconds>\n');
+        this.write('  /connectors settings playbooks require-signed <on|off>\n');
+        this.write('  /connectors settings playbooks require-dryrun <on|off>\n');
+        this.write('  /connectors settings studio enabled <on|off>\n');
+        this.write('  /connectors settings studio mode <read_only|builder>\n');
+        this.write('  /connectors settings studio ticket <on|off>\n');
+        this.write('  /connectors settings json <json>\n');
+      };
+      const parseToggle = (value: string | undefined): boolean | null => {
+        const lowered = (value ?? '').toLowerCase();
+        if (lowered === 'on' || lowered === 'true') return true;
+        if (lowered === 'off' || lowered === 'false') return false;
+        return null;
+      };
+      const action = (args[1] ?? '').toLowerCase();
+      if (!action) {
+        this.write('\nUsage:\n');
+        printSettingsUsage();
+        this.write('\n');
+        return;
+      }
+
+      if (action === 'enable' || action === 'disable') {
+        const result = this.dashboard.onConnectorsSettingsUpdate({ enabled: action === 'enable' });
+        this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+        return;
+      }
+
+      if (action === 'mode') {
+        const mode = args[2];
+        if (!mode || !['plan_then_execute', 'direct_execute'].includes(mode)) {
+          this.write('\nUsage: /connectors settings mode <plan_then_execute|direct_execute>\n\n');
+          return;
+        }
+        const result = this.dashboard.onConnectorsSettingsUpdate({
+          executionMode: mode as 'plan_then_execute' | 'direct_execute',
+        });
+        this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+        return;
+      }
+
+      if (action === 'limit') {
+        const parsed = Number.parseInt(args[2] ?? '', 10);
+        if (!Number.isFinite(parsed) || parsed < 1) {
+          this.write('\nUsage: /connectors settings limit <number>=1\n\n');
+          return;
+        }
+        const result = this.dashboard.onConnectorsSettingsUpdate({ maxConnectorCallsPerRun: parsed });
+        this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+        return;
+      }
+
+      if (action === 'json') {
+        const raw = args.slice(2).join(' ').trim();
+        if (!raw) {
+          this.write('\nUsage: /connectors settings json <json>\n\n');
+          return;
+        }
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          this.write('\nInvalid JSON for connector settings update.\n\n');
+          return;
+        }
+        const result = this.dashboard.onConnectorsSettingsUpdate(parsed as Parameters<NonNullable<DashboardCallbacks['onConnectorsSettingsUpdate']>>[0]);
+        this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+        return;
+      }
+
+      if (action === 'playbooks') {
+        const field = (args[2] ?? '').toLowerCase();
+        if (!field) {
+          this.write('\nUsage:\n');
+          this.write('  /connectors settings playbooks <on|off>\n');
+          this.write('  /connectors settings playbooks enabled <on|off>\n');
+          this.write('  /connectors settings playbooks max-steps <number>\n');
+          this.write('  /connectors settings playbooks max-parallel <number>\n');
+          this.write('  /connectors settings playbooks timeout-ms <milliseconds>\n');
+          this.write('  /connectors settings playbooks require-signed <on|off>\n');
+          this.write('  /connectors settings playbooks require-dryrun <on|off>\n\n');
+          return;
+        }
+        if (field === 'on' || field === 'off' || field === 'true' || field === 'false') {
+          const enabled = parseToggle(field);
+          const result = this.dashboard.onConnectorsSettingsUpdate({
+            playbooks: { enabled: enabled === true },
+          });
+          this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+          return;
+        }
+        if (field === 'enabled') {
+          const enabled = parseToggle(args[3]);
+          if (enabled === null) {
+            this.write('\nUsage: /connectors settings playbooks enabled <on|off>\n\n');
+            return;
+          }
+          const result = this.dashboard.onConnectorsSettingsUpdate({ playbooks: { enabled } });
+          this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+          return;
+        }
+        if (field === 'max-steps') {
+          const parsed = Number.parseInt(args[3] ?? '', 10);
+          if (!Number.isFinite(parsed) || parsed < 1) {
+            this.write('\nUsage: /connectors settings playbooks max-steps <number>=1\n\n');
+            return;
+          }
+          const result = this.dashboard.onConnectorsSettingsUpdate({
+            playbooks: { maxSteps: parsed },
+          });
+          this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+          return;
+        }
+        if (field === 'max-parallel') {
+          const parsed = Number.parseInt(args[3] ?? '', 10);
+          if (!Number.isFinite(parsed) || parsed < 1) {
+            this.write('\nUsage: /connectors settings playbooks max-parallel <number>=1\n\n');
+            return;
+          }
+          const result = this.dashboard.onConnectorsSettingsUpdate({
+            playbooks: { maxParallelSteps: parsed },
+          });
+          this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+          return;
+        }
+        if (field === 'timeout-ms' || field === 'timeout') {
+          const parsed = Number.parseInt(args[3] ?? '', 10);
+          if (!Number.isFinite(parsed) || parsed < 1000) {
+            this.write('\nUsage: /connectors settings playbooks timeout-ms <milliseconds>=1000\n\n');
+            return;
+          }
+          const result = this.dashboard.onConnectorsSettingsUpdate({
+            playbooks: { defaultStepTimeoutMs: parsed },
+          });
+          this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+          return;
+        }
+        if (field === 'require-signed') {
+          const required = parseToggle(args[3]);
+          if (required === null) {
+            this.write('\nUsage: /connectors settings playbooks require-signed <on|off>\n\n');
+            return;
+          }
+          const result = this.dashboard.onConnectorsSettingsUpdate({
+            playbooks: { requireSignedDefinitions: required },
+          });
+          this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+          return;
+        }
+        if (field === 'require-dryrun' || field === 'require-dry-run') {
+          const required = parseToggle(args[3]);
+          if (required === null) {
+            this.write('\nUsage: /connectors settings playbooks require-dryrun <on|off>\n\n');
+            return;
+          }
+          const result = this.dashboard.onConnectorsSettingsUpdate({
+            playbooks: { requireDryRunOnFirstExecution: required },
+          });
+          this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+          return;
+        }
+        this.write('\nUsage:\n');
+        this.write('  /connectors settings playbooks <on|off>\n');
+        this.write('  /connectors settings playbooks enabled <on|off>\n');
+        this.write('  /connectors settings playbooks max-steps <number>\n');
+        this.write('  /connectors settings playbooks max-parallel <number>\n');
+        this.write('  /connectors settings playbooks timeout-ms <milliseconds>\n');
+        this.write('  /connectors settings playbooks require-signed <on|off>\n');
+        this.write('  /connectors settings playbooks require-dryrun <on|off>\n\n');
+        return;
+      }
+
+      if (action === 'studio') {
+        const field = (args[2] ?? '').toLowerCase();
+        if (!field) {
+          this.write('\nUsage:\n');
+          this.write('  /connectors settings studio enabled <on|off>\n');
+          this.write('  /connectors settings studio mode <read_only|builder>\n');
+          this.write('  /connectors settings studio ticket <on|off>\n\n');
+          return;
+        }
+        if (field === 'enabled') {
+          const enabled = parseToggle(args[3]);
+          if (enabled === null) {
+            this.write('\nUsage: /connectors settings studio enabled <on|off>\n\n');
+            return;
+          }
+          const result = this.dashboard.onConnectorsSettingsUpdate({ studio: { enabled } });
+          this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+          return;
+        }
+        if (field === 'mode') {
+          const mode = args[3];
+          if (!mode || !['read_only', 'builder'].includes(mode)) {
+            this.write('\nUsage: /connectors settings studio mode <read_only|builder>\n\n');
+            return;
+          }
+          const result = this.dashboard.onConnectorsSettingsUpdate({
+            studio: { mode: mode as 'read_only' | 'builder' },
+          });
+          this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+          return;
+        }
+        if (field === 'ticket') {
+          const enabled = parseToggle(args[3]);
+          if (enabled === null) {
+            this.write('\nUsage: /connectors settings studio ticket <on|off>\n\n');
+            return;
+          }
+          const result = this.dashboard.onConnectorsSettingsUpdate({
+            studio: { requirePrivilegedTicket: enabled },
+          });
+          this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+          return;
+        }
+        this.write('\nUsage:\n');
+        this.write('  /connectors settings studio enabled <on|off>\n');
+        this.write('  /connectors settings studio mode <read_only|builder>\n');
+        this.write('  /connectors settings studio ticket <on|off>\n\n');
+        return;
+      }
+
+      this.write('\nUsage:\n');
+      printSettingsUsage();
+      this.write('\n');
+      return;
+    }
+
+    if (sub === 'pack') {
+      const action = (args[1] ?? '').toLowerCase();
+      if (action === 'upsert') {
+        if (!this.dashboard.onConnectorsPackUpsert) {
+          this.write('\nConnector pack upsert is not available.\n\n');
+          return;
+        }
+        const raw = args.slice(2).join(' ').trim();
+        if (!raw) {
+          this.write('\nUsage: /connectors pack upsert <json>\n\n');
+          return;
+        }
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          this.write('\nInvalid JSON. Example:\n');
+          this.write('  /connectors pack upsert {"id":"infra-core","name":"Infrastructure Core","enabled":true,"allowedCapabilities":["filesystem.read"],"allowedHosts":["localhost"],"allowedPaths":["./workspace"],"allowedCommands":["ssh"],"authMode":"oauth2","requireHumanApprovalForWrites":true}\n\n');
+          return;
+        }
+        const result = this.dashboard.onConnectorsPackUpsert(parsed as Parameters<NonNullable<DashboardCallbacks['onConnectorsPackUpsert']>>[0]);
+        this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+        return;
+      }
+      if (action === 'delete') {
+        if (!this.dashboard.onConnectorsPackDelete) {
+          this.write('\nConnector pack deletion is not available.\n\n');
+          return;
+        }
+        const packId = args[2];
+        if (!packId) {
+          this.write('\nUsage: /connectors pack delete <packId>\n\n');
+          return;
+        }
+        const result = this.dashboard.onConnectorsPackDelete(packId);
+        this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+        return;
+      }
+      this.write('\nUsage:\n');
+      this.write('  /connectors pack upsert <json>\n');
+      this.write('  /connectors pack delete <packId>\n\n');
+      return;
+    }
+
+    this.write('\nUsage:\n');
+    this.write('  /connectors [status|packs|settings|pack]\n');
+    this.write('  /connectors settings enable|disable\n');
+    this.write('  /connectors settings mode <plan_then_execute|direct_execute>\n');
+    this.write('  /connectors settings limit <number>\n');
+    this.write('  /connectors settings playbooks <on|off>\n');
+    this.write('  /connectors settings playbooks max-steps <number>\n');
+    this.write('  /connectors settings playbooks max-parallel <number>\n');
+    this.write('  /connectors settings playbooks timeout-ms <milliseconds>\n');
+    this.write('  /connectors settings playbooks require-signed <on|off>\n');
+    this.write('  /connectors settings playbooks require-dryrun <on|off>\n');
+    this.write('  /connectors settings studio enabled <on|off>\n');
+    this.write('  /connectors settings studio mode <read_only|builder>\n');
+    this.write('  /connectors settings studio ticket <on|off>\n');
+    this.write('  /connectors settings json <json>\n');
+    this.write('  /connectors pack upsert <json>\n');
+    this.write('  /connectors pack delete <packId>\n\n');
+  }
+
+  // ─── /playbooks ──────────────────────────────────────────────
+
+  private async handlePlaybooks(args: string[]): Promise<void> {
+    if (!this.dashboard?.onConnectorsState) {
+      this.write('\nPlaybooks are not available.\n\n');
+      return;
+    }
+    const sub = (args[0] ?? 'list').toLowerCase();
+    const state = this.dashboard.onConnectorsState({ limitRuns: 40 });
+
+    if (sub === 'list') {
+      if (state.playbooks.length === 0) {
+        this.write('\nNo playbooks configured.\n\n');
+        return;
+      }
+      const headers = ['ID', 'Name', 'Mode', 'Enabled', 'Steps'];
+      const rows = state.playbooks.map((playbook) => [
+        playbook.id,
+        playbook.name,
+        playbook.mode,
+        String(playbook.enabled),
+        String(playbook.steps.length),
+      ]);
+      this.write('\n');
+      this.writeTable(headers, rows);
+      this.write('\n');
+      return;
+    }
+
+    if (sub === 'runs') {
+      if (state.runs.length === 0) {
+        this.write('\nNo playbook runs yet.\n\n');
+        return;
+      }
+      const headers = ['Run', 'Playbook', 'Status', 'DryRun', 'Duration', 'Message'];
+      const rows = state.runs.map((run) => [
+        run.id,
+        run.playbookId,
+        run.status,
+        String(run.dryRun),
+        `${run.durationMs}ms`,
+        run.message,
+      ]);
+      this.write('\n');
+      this.writeTable(headers, rows);
+      this.write('\n');
+      return;
+    }
+
+    if (sub === 'run') {
+      if (!this.dashboard.onPlaybookRun) {
+        this.write('\nPlaybook execution is not available.\n\n');
+        return;
+      }
+      const playbookId = args[1];
+      if (!playbookId) {
+        this.write('\nUsage: /playbooks run <playbookId> [--dry-run]\n\n');
+        return;
+      }
+      const dryRun = args.includes('--dry-run');
+      const result = await this.dashboard.onPlaybookRun({
+        playbookId,
+        dryRun,
+        origin: 'cli',
+        agentId: this.activeAgentId ?? this.defaultAgentId,
+        userId: this.defaultUserId,
+        channel: 'cli',
+        requestedBy: 'cli-user',
+      });
+      this.write(`\n${result.success ? this.green('OK') : this.yellow('INFO')}: ${result.message}\n`);
+      this.write(`  Run: ${result.run.id}\n`);
+      this.write(`  Status: ${result.run.status}\n`);
+      this.write(`  Steps: ${result.run.steps.length}\n`);
+      const approvals = result.run.steps.filter((step) => !!step.approvalId);
+      if (approvals.length > 0) {
+        this.write(`  Pending approvals: ${approvals.map((step) => step.approvalId).join(', ')}\n`);
+      }
+      this.write('\n');
+      return;
+    }
+
+    if (sub === 'upsert') {
+      if (!this.dashboard.onPlaybookUpsert) {
+        this.write('\nPlaybook upsert is not available.\n\n');
+        return;
+      }
+      const raw = args.slice(1).join(' ').trim();
+      if (!raw) {
+        this.write('\nUsage: /playbooks upsert <json>\n\n');
+        return;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        this.write('\nInvalid JSON for playbook definition.\n\n');
+        return;
+      }
+      const result = this.dashboard.onPlaybookUpsert(parsed as Parameters<NonNullable<DashboardCallbacks['onPlaybookUpsert']>>[0]);
+      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+      return;
+    }
+
+    if (sub === 'delete') {
+      if (!this.dashboard.onPlaybookDelete) {
+        this.write('\nPlaybook deletion is not available.\n\n');
+        return;
+      }
+      const playbookId = args[1];
+      if (!playbookId) {
+        this.write('\nUsage: /playbooks delete <playbookId>\n\n');
+        return;
+      }
+      const result = this.dashboard.onPlaybookDelete(playbookId);
+      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+      return;
+    }
+
+    this.write('\nUsage:\n');
+    this.write('  /playbooks list\n');
+    this.write('  /playbooks runs\n');
+    this.write('  /playbooks run <playbookId> [--dry-run]\n');
+    this.write('  /playbooks upsert <json>\n');
+    this.write('  /playbooks delete <playbookId>\n\n');
   }
 
   // ─── /audit ──────────────────────────────────────────────────

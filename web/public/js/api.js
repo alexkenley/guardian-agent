@@ -90,6 +90,15 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(input),
   }),
+  saveSearchConfig: (input) => request('/api/config/search', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }),
+  browserConfig: () => request('/api/tools/browser'),
+  saveBrowserConfig: (input) => request('/api/tools/browser', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }),
   budget:       () => request('/api/budget'),
   watchdog:     () => request('/api/watchdog'),
   analyticsSummary: (windowMs = 3600000) => request(`/api/analytics/summary?windowMs=${windowMs}`),
@@ -140,6 +149,31 @@ export const api = {
   decideToolApproval: (payload) => request('/api/tools/approvals/decision', {
     method: 'POST',
     body: JSON.stringify(payload),
+  }),
+  toolCategories: () => request('/api/tools/categories'),
+  toggleToolCategory: (payload) => request('/api/tools/categories', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  connectorsState: (limitRuns = 50) => request(`/api/connectors/state?limitRuns=${limitRuns}`),
+  updateConnectorsSettings: (payload) => requestPrivileged('/api/connectors/settings', 'connectors.config', payload || {}),
+  upsertConnectorPack: (pack) => requestPrivileged('/api/connectors/packs/upsert', 'connectors.pack', pack || {}),
+  deleteConnectorPack: (packId) => requestPrivileged('/api/connectors/packs/delete', 'connectors.pack', { packId }),
+  upsertPlaybook: (playbook) => requestPrivileged('/api/connectors/playbooks/upsert', 'connectors.playbook', playbook || {}),
+  deletePlaybook: (playbookId) => requestPrivileged('/api/connectors/playbooks/delete', 'connectors.playbook', { playbookId }),
+  runPlaybook: (payload) => request('/api/connectors/playbooks/run', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  connectorsTemplates: () => request('/api/connectors/templates'),
+  installTemplate: (templateId) => request('/api/connectors/templates/install', {
+    method: 'POST',
+    body: JSON.stringify({ templateId }),
+  }),
+  networkDevices: () => request('/api/network/devices'),
+  networkScan: () => request('/api/network/scan', {
+    method: 'POST',
+    body: JSON.stringify({}),
   }),
   quickActions: () => request('/api/quick-actions'),
   runQuickAction: (payload) => request('/api/quick-actions/run', {

@@ -13,6 +13,7 @@ import { ToolApprovalStore } from './approvals.js';
 import { ToolRegistry } from './registry.js';
 import { hashRedactedObject, redactSensitiveValue } from '../util/crypto-guardrails.js';
 import type {
+  ToolCategory,
   ToolDecision,
   ToolDefinition,
   ToolExecutionRequest,
@@ -23,8 +24,16 @@ import type {
   ToolResult,
   ToolRunResponse,
 } from './types.js';
+import { TOOL_CATEGORIES, BUILTIN_TOOL_CATEGORIES } from './types.js';
 import type { MCPClientManager } from './mcp-client.js';
-import type { WebSearchConfig } from '../config/types.js';
+import type { BrowserConfig, WebSearchConfig } from '../config/types.js';
+import {
+  BrowserSessionManager,
+  isPrivateHost as isBrowserPrivateHost,
+  validateBrowserAction,
+  validateBrowserUrl,
+  validateElementRef,
+} from './browser-session.js';
 
 const execAsync = promisify(execCb);
 const MAX_JOBS = 200;
@@ -52,6 +61,10 @@ export interface ToolExecutorOptions {
   mcpManager?: MCPClientManager;
   /** Web search configuration. Auto-selects best available provider (Brave > Perplexity > DuckDuckGo). */
   webSearch?: WebSearchConfig;
+  /** Browser automation configuration (agent-browser). */
+  browserConfig?: BrowserConfig;
+  /** Tool categories to disable at startup. */
+  disabledCategories?: ToolCategory[];
   now?: () => number;
   onCheckAction?: (action: {
     type: string;
@@ -92,14 +105,17 @@ export class ToolExecutor {
   private readonly options: ToolExecutorOptions;
   private readonly marketingStore: MarketingStore;
   private readonly mcpManager?: MCPClientManager;
-  private readonly webSearchConfig: WebSearchConfig;
+  private webSearchConfig: WebSearchConfig;
   private readonly searchCache = new Map<string, { results: unknown; timestamp: number }>();
   private readonly now: () => number;
+  private readonly browserSession?: BrowserSessionManager;
+  private readonly disabledCategories: Set<string>;
   private policy: ToolPolicySnapshot;
 
   constructor(options: ToolExecutorOptions) {
     this.options = options;
     this.now = options.now ?? Date.now;
+    this.disabledCategories = new Set(options.disabledCategories ?? []);
     this.mcpManager = options.mcpManager;
     this.webSearchConfig = options.webSearch ?? {};
     this.marketingStore = new MarketingStore(options.workspaceRoot, this.now);
@@ -118,6 +134,9 @@ export class ToolExecutor {
           : ['localhost', '127.0.0.1', 'moltbook.com'],
       },
     };
+    if (options.browserConfig?.enabled) {
+      this.browserSession = new BrowserSessionManager(options.browserConfig, this.now);
+    }
     this.registerBuiltinTools();
     if (this.mcpManager) {
       this.registerMCPTools();
@@ -153,7 +172,9 @@ export class ToolExecutor {
   }
 
   listToolDefinitions(): ToolDefinition[] {
-    return this.registry.listDefinitions();
+    return this.registry.listDefinitions().filter(
+      (def) => this.isCategoryEnabled(def.category),
+    );
   }
 
   getPolicy(): ToolPolicySnapshot {
@@ -190,6 +211,54 @@ export class ToolExecutor {
     return this.getPolicy();
   }
 
+  updateWebSearchConfig(cfg: WebSearchConfig): void {
+    this.webSearchConfig = { ...cfg };
+    // Clear cache so new provider takes effect immediately
+    this.searchCache.clear();
+  }
+
+  /** Check whether a tool category is enabled. Undefined category (MCP tools) is always enabled. */
+  private isCategoryEnabled(category?: string): boolean {
+    if (!category) return true;
+    return !this.disabledCategories.has(category);
+  }
+
+  /** Return info about all 10 tool categories with current enable/disable status. */
+  getCategoryInfo(): Array<{
+    category: ToolCategory;
+    label: string;
+    description: string;
+    toolCount: number;
+    enabled: boolean;
+  }> {
+    return (Object.keys(TOOL_CATEGORIES) as ToolCategory[]).map((cat) => ({
+      category: cat,
+      label: TOOL_CATEGORIES[cat].label,
+      description: TOOL_CATEGORIES[cat].description,
+      toolCount: BUILTIN_TOOL_CATEGORIES[cat].length,
+      enabled: !this.disabledCategories.has(cat),
+    }));
+  }
+
+  /** Get currently disabled categories. */
+  getDisabledCategories(): ToolCategory[] {
+    return [...this.disabledCategories] as ToolCategory[];
+  }
+
+  /** Enable or disable a tool category at runtime (no restart required). */
+  setCategoryEnabled(category: ToolCategory, enabled: boolean): void {
+    if (enabled) {
+      this.disabledCategories.delete(category);
+    } else {
+      this.disabledCategories.add(category);
+    }
+  }
+
+  /** Dispose browser sessions and other resources. Call on shutdown. */
+  async dispose(): Promise<void> {
+    await this.browserSession?.dispose();
+  }
+
   listJobs(limit = 50): ToolJobRecord[] {
     return this.jobs.slice(0, Math.max(1, limit));
   }
@@ -216,6 +285,16 @@ export class ToolExecutor {
         status: 'failed',
         jobId: randomUUID(),
         message: `Unknown tool '${request.toolName}'.`,
+      };
+    }
+
+    // Defense-in-depth: block tools in disabled categories even if registered
+    if (!this.isCategoryEnabled(entry.definition.category)) {
+      return {
+        success: false,
+        status: 'denied',
+        jobId: randomUUID(),
+        message: `Tool '${request.toolName}' is in disabled category '${entry.definition.category}'.`,
       };
     }
 
@@ -467,6 +546,12 @@ export class ToolExecutor {
         return `Would post to forum thread '${args.threadId}'`;
       case 'intel_action':
         return `Would perform intel action '${args.action}' on finding '${args.findingId}'`;
+      case 'browser_open':
+        return `Would open browser at: ${args.url}`;
+      case 'browser_action':
+        return `Would perform browser ${args.action} on ${args.ref}${args.value ? ` with value '${args.value}'` : ''}`;
+      case 'browser_task':
+        return `Would render and read: ${args.url}`;
       default:
         return `Would execute tool '${toolName}' with args: ${sanitizePreview(JSON.stringify(args))}`;
     }
@@ -476,8 +561,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'fs_list',
-        description: 'List files and directories inside allowed workspace paths.',
+        description: 'List files and directories inside allowed workspace paths. Returns up to 500 entries with name and type. Security: path validated against allowedPaths roots. Requires read_files capability.',
         risk: 'read_only',
+        category: 'filesystem',
         parameters: {
           type: 'object',
           properties: {
@@ -506,8 +592,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'fs_search',
-        description: 'Recursively search files by name or content within allowed paths.',
+        description: 'Recursively search files by name or content within allowed paths. Modes: name, content, or auto. Configurable depth, file count, and result limits. Security: path validated against allowedPaths roots. Requires read_files capability.',
         risk: 'read_only',
+        category: 'filesystem',
         parameters: {
           type: 'object',
           properties: {
@@ -644,8 +731,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'fs_read',
-        description: 'Read a UTF-8 text file within allowed paths.',
+        description: 'Read a UTF-8 text file within allowed workspace paths. Max 1MB read, truncated if over limit. Security: path validated against allowedPaths roots. Requires read_files capability.',
         risk: 'read_only',
+        category: 'filesystem',
         parameters: {
           type: 'object',
           properties: {
@@ -678,8 +766,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'fs_write',
-        description: 'Write or append UTF-8 text to a file within allowed paths.',
+        description: 'Write or append UTF-8 text to a file within allowed paths. Creates parent directories automatically. Security: path validated against allowedPaths roots. Mutating — requires approval in approve_by_policy mode. Requires write_files capability.',
         risk: 'mutating',
+        category: 'filesystem',
         parameters: {
           type: 'object',
           properties: {
@@ -717,8 +806,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'doc_create',
-        description: 'Create a document file from plain text or markdown template.',
+        description: 'Create a document file from plain text or markdown template. Supports markdown and plain formats. Security: path validated against allowedPaths roots. Mutating — requires approval. Requires write_files capability.',
         risk: 'mutating',
+        category: 'filesystem',
         parameters: {
           type: 'object',
           properties: {
@@ -756,8 +846,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'shell_safe',
-        description: 'Run an allowlisted shell command from the workspace root.',
+        description: 'Run an allowlisted shell command from the workspace root. Command prefix must match allowedCommands list. Max 60s timeout, 1MB output buffer. Security: command validated against allowlist before execution. Mutating — requires approval. Requires execute_commands capability.',
         risk: 'mutating',
+        category: 'shell',
         parameters: {
           type: 'object',
           properties: {
@@ -804,8 +895,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'chrome_job',
-        description: 'Fetch and summarize web content from allowlisted domains.',
+        description: 'Fetch and summarize web content from allowlisted domains. Returns page title and text snippet (max 500KB). Security: hostname validated against allowedDomains list. Requires network_access capability.',
         risk: 'network',
+        category: 'web',
         parameters: {
           type: 'object',
           properties: {
@@ -874,8 +966,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'web_search',
-        description: 'Search the web for information. Returns a synthesized AI answer plus structured results. Brave (recommended) uses the free Summarizer API for answers. Perplexity returns AI answers with citations. DuckDuckGo returns raw snippets only.',
+        description: 'Search the web for information. Returns a synthesized AI answer plus structured results. Providers: Brave (recommended, free Summarizer API), Perplexity (AI answers with citations), DuckDuckGo (HTML scrape fallback). Results cached for 5 min. Security: provider API hosts must be in allowedDomains. All results marked as untrusted external content. Requires network_access capability.',
         risk: 'network',
+        category: 'web',
         parameters: {
           type: 'object',
           properties: {
@@ -950,8 +1043,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'web_fetch',
-        description: 'Fetch and extract readable content from a web page URL.',
+        description: 'Fetch and extract readable content from a web page URL. Strips HTML to readable text, handles JSON. Max 500KB fetch, 20K chars output. Security: blocks private/internal addresses (SSRF protection). All content marked as untrusted. Requires network_access capability.',
         risk: 'network',
+        category: 'web',
         parameters: {
           type: 'object',
           properties: {
@@ -1042,8 +1136,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'contacts_discover_browser',
-        description: 'Discover candidate contacts (emails) from a public web page and add/update contact store.',
+        description: 'Discover candidate contacts (emails) from a public web page and add/update contact store. Extracts email addresses via regex, max 200 per run. Security: hostname validated against allowedDomains. Requires network_access capability.',
         risk: 'network',
+        category: 'contacts',
         parameters: {
           type: 'object',
           properties: {
@@ -1138,8 +1233,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'contacts_import_csv',
-        description: 'Import marketing contacts from CSV file (columns: email,name,company,tags).',
+        description: 'Import marketing contacts from CSV file (columns: email,name,company,tags). Max 1000 rows per import. Security: path validated against allowedPaths roots. Mutating — requires approval. Requires read_files capability.',
         risk: 'mutating',
+        category: 'contacts',
         parameters: {
           type: 'object',
           properties: {
@@ -1180,8 +1276,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'contacts_list',
-        description: 'List marketing contacts from local campaign store.',
+        description: 'List marketing contacts from local campaign store. Supports query and tag filtering. Max 500 results. Read-only local data — no network calls.',
         risk: 'read_only',
+        category: 'contacts',
         parameters: {
           type: 'object',
           properties: {
@@ -1209,8 +1306,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'campaign_create',
-        description: 'Create a marketing campaign from message templates.',
+        description: 'Create a marketing campaign from subject and body templates. Templates support placeholder variables. Mutating — requires approval. No network calls — local store only.',
         risk: 'mutating',
+        category: 'contacts',
         parameters: {
           type: 'object',
           properties: {
@@ -1240,8 +1338,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'campaign_list',
-        description: 'List marketing campaigns.',
+        description: 'List marketing campaigns from local store. Read-only — no network calls.',
         risk: 'read_only',
+        category: 'contacts',
         parameters: {
           type: 'object',
           properties: {
@@ -1265,8 +1364,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'campaign_add_contacts',
-        description: 'Attach contacts to an existing campaign.',
+        description: 'Attach contacts to an existing campaign by contact IDs. Mutating — requires approval. No network calls — local store only.',
         risk: 'mutating',
+        category: 'contacts',
         parameters: {
           type: 'object',
           properties: {
@@ -1290,8 +1390,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'campaign_dry_run',
-        description: 'Render campaign subjects/bodies for review without sending.',
+        description: 'Render campaign subjects/bodies for review without sending. Previews template substitution for each recipient. Read-only — no emails sent.',
         risk: 'read_only',
+        category: 'contacts',
         parameters: {
           type: 'object',
           properties: {
@@ -1319,8 +1420,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'gmail_send',
-        description: 'Send one email via Gmail API OAuth access token.',
+        description: 'Send one email via Gmail API using an OAuth access token with gmail.send scope. Security: gmail.googleapis.com must be in allowedDomains. external_post risk — always requires manual approval. Requires send_email capability.',
         risk: 'external_post',
+        category: 'email',
         parameters: {
           type: 'object',
           properties: {
@@ -1361,8 +1463,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'campaign_run',
-        description: 'Send a campaign via Gmail. Always approval-gated (external_post risk).',
+        description: 'Send a campaign via Gmail to all attached contacts. Max 500 recipients per run. Security: gmail.googleapis.com must be in allowedDomains. external_post risk — always requires manual approval. Requires send_email capability.',
         risk: 'external_post',
+        category: 'email',
         parameters: {
           type: 'object',
           properties: {
@@ -1442,8 +1545,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'intel_summary',
-        description: 'Get threat-intel summary state.',
+        description: 'Get threat-intel summary state including watchlist count, findings count, and scan status. Read-only — no network calls.',
         risk: 'read_only',
+        category: 'intel',
         parameters: { type: 'object', properties: {} },
       },
       async () => {
@@ -1457,8 +1561,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'intel_watch_add',
-        description: 'Add a watch target to threat intel.',
+        description: 'Add a name, handle, brand, or domain to the threat-intel watchlist for monitoring. Mutating — local store only, no network calls.',
         risk: 'mutating',
+        category: 'intel',
         parameters: {
           type: 'object',
           properties: { target: { type: 'string' } },
@@ -1478,8 +1583,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'intel_watch_remove',
-        description: 'Remove a watch target from threat intel.',
+        description: 'Remove a target from the threat-intel watchlist. Mutating — local store only, no network calls.',
         risk: 'mutating',
+        category: 'intel',
         parameters: {
           type: 'object',
           properties: { target: { type: 'string' } },
@@ -1499,8 +1605,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'intel_scan',
-        description: 'Run a threat-intel scan.',
+        description: 'Run a threat-intel scan across configured sources (open web, optionally dark web). Returns findings with severity and source info. Security: network calls to configured intel sources only. Requires network_access capability.',
         risk: 'network',
+        category: 'intel',
         parameters: {
           type: 'object',
           properties: {
@@ -1529,8 +1636,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'intel_findings',
-        description: 'List threat-intel findings.',
+        description: 'List threat-intel findings with optional status filter. Returns severity, source, and match details. Read-only — no network calls.',
         risk: 'read_only',
+        category: 'intel',
         parameters: {
           type: 'object',
           properties: {
@@ -1555,8 +1663,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'intel_draft_action',
-        description: 'Draft a threat-intel response action.',
+        description: 'Draft a threat-intel response action for a specific finding. Action types: takedown, monitor, block, report. Mutating — creates draft in local store, no external calls.',
         risk: 'mutating',
+        category: 'intel',
         parameters: {
           type: 'object',
           properties: {
@@ -1580,8 +1689,9 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'forum_post',
-        description: 'Post a response to an external forum (approval and allowlist required).',
+        description: 'Post a response to an external forum. Requires allowExternalPosting to be enabled. Security: hostname validated against allowedDomains. external_post risk — always requires manual approval. Requires network_access capability.',
         risk: 'external_post',
+        category: 'forum',
         parameters: {
           type: 'object',
           properties: {
@@ -1624,6 +1734,658 @@ export class ToolExecutor {
         };
       },
     );
+
+    // ── Network Tools ────────────────────────────────────────────
+
+    this.registry.register(
+      {
+        name: 'net_ping',
+        description: 'Ping a host to check reachability and measure latency. Returns packet loss and RTT stats. Security: restricted to private/local network addresses only (RFC1918, link-local, localhost) to prevent external reconnaissance. Requires network_access capability.',
+        risk: 'read_only',
+        category: 'network',
+        parameters: {
+          type: 'object',
+          properties: {
+            host: { type: 'string', description: 'Host or IP to ping (private/local networks only).' },
+            count: { type: 'number', description: 'Number of pings (1-10, default 4).' },
+          },
+          required: ['host'],
+        },
+      },
+      async (args, request) => {
+        const host = validateHostParam(requireString(args.host, 'host'));
+        requireLocalNetwork(host);
+        const count = Math.max(1, Math.min(10, asNumber(args.count, 4)));
+        this.guardAction(request, 'network_probe', { host, count });
+        const platform = process.platform;
+        let cmd: string;
+        if (platform === 'win32') {
+          cmd = `ping -n ${count} ${host}`;
+        } else if (platform === 'darwin') {
+          // macOS: -W is wait time in milliseconds per packet
+          cmd = `ping -c ${count} -W 3000 ${host}`;
+        } else {
+          // Linux: -W is overall deadline in seconds
+          cmd = `ping -c ${count} -W 3 ${host}`;
+        }
+        try {
+          const { stdout } = await execAsync(cmd, { timeout: 30_000 });
+          const parsed = parsePingOutput(stdout, host);
+          return { success: true, output: parsed };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (message.includes('100% packet loss') || message.includes('100.0% packet loss')) {
+            return { success: true, output: { host, reachable: false, packetsSent: count, packetsReceived: 0, packetLossPercent: 100, rttAvgMs: null } };
+          }
+          return { success: false, error: `Ping failed: ${message}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'net_arp_scan',
+        description: 'Discover devices on the local network via ARP table. Uses ip neigh (Linux) or arp -a (macOS/Windows). Returns IP, MAC, and state for each neighbor. Security: local-only — reads system ARP cache. Requires network_access capability.',
+        risk: 'read_only',
+        category: 'network',
+        parameters: { type: 'object', properties: {} },
+      },
+      async (_args, request) => {
+        this.guardAction(request, 'network_probe', { action: 'arp_scan' });
+        const isLinux = process.platform === 'linux';
+        // Linux has `ip neigh show`; macOS and Windows use `arp -a`
+        if (isLinux) {
+          try {
+            const { stdout } = await execAsync('ip neigh show', { timeout: 10_000 });
+            return { success: true, output: { devices: parseArpLinux(stdout) } };
+          } catch {
+            // Fallback to arp -a if ip command not available (e.g. minimal containers)
+            try {
+              const { stdout } = await execAsync('arp -a', { timeout: 10_000 });
+              return { success: true, output: { devices: parseArpWindows(stdout) } };
+            } catch (err2) {
+              return { success: false, error: `ARP scan failed: ${err2 instanceof Error ? err2.message : String(err2)}` };
+            }
+          }
+        }
+        // macOS (darwin) and Windows both support `arp -a`
+        try {
+          const { stdout } = await execAsync('arp -a', { timeout: 10_000 });
+          return { success: true, output: { devices: parseArpWindows(stdout) } };
+        } catch (err) {
+          return { success: false, error: `ARP scan failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'net_port_check',
+        description: 'Check if TCP ports are open on a host. Tests up to 20 ports with 3s timeout each. Security: restricted to private/local network addresses only (RFC1918, link-local, localhost). Requires network_access capability.',
+        risk: 'read_only',
+        category: 'network',
+        parameters: {
+          type: 'object',
+          properties: {
+            host: { type: 'string', description: 'Host or IP to check (private/local networks only).' },
+            ports: { type: 'array', items: { type: 'number' }, description: 'Ports to check (max 20).' },
+          },
+          required: ['host', 'ports'],
+        },
+      },
+      async (args, request) => {
+        const host = validateHostParam(requireString(args.host, 'host'));
+        requireLocalNetwork(host);
+        const rawPorts = Array.isArray(args.ports) ? args.ports : [];
+        const ports = rawPorts.slice(0, 20).map(Number).filter((p) => p > 0 && p <= 65535);
+        if (ports.length === 0) return { success: false, error: 'No valid ports specified.' };
+        this.guardAction(request, 'network_probe', { host, ports });
+        const results = await Promise.all(
+          ports.map((port) => checkTcpPort(host, port, 3000)),
+        );
+        return { success: true, output: { host, results } };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'net_interfaces',
+        description: 'List network interfaces with IP addresses, MAC addresses, and netmasks. Read-only — reads from OS network stack. Requires network_access capability.',
+        risk: 'read_only',
+        category: 'network',
+        parameters: { type: 'object', properties: {} },
+      },
+      async (_args, request) => {
+        const { networkInterfaces } = await import('node:os');
+        this.guardAction(request, 'network_probe', { action: 'list_interfaces' });
+        const ifaces = networkInterfaces();
+        const interfaces = Object.entries(ifaces)
+          .filter(([, addrs]) => addrs != null)
+          .map(([name, addrs]) => ({
+            name,
+            mac: addrs![0]?.mac ?? 'unknown',
+            addresses: addrs!.map((a) => ({
+              address: a.address,
+              family: a.family,
+              netmask: a.netmask,
+              internal: a.internal,
+            })),
+          }));
+        return { success: true, output: { interfaces } };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'net_connections',
+        description: 'List active network connections on this machine. Uses ss (Linux) or netstat -an (macOS/Windows). Optional state filter (ESTABLISHED, LISTEN, etc.). Read-only — reads from OS network stack. Requires network_access capability.',
+        risk: 'read_only',
+        category: 'network',
+        parameters: {
+          type: 'object',
+          properties: {
+            state: { type: 'string', description: 'Optional filter: ESTABLISHED, LISTEN, TIME_WAIT, etc.' },
+          },
+        },
+      },
+      async (args, request) => {
+        const stateFilter = asString(args.state).toUpperCase().trim();
+        this.guardAction(request, 'network_probe', { action: 'list_connections', state: stateFilter || undefined });
+        const platform = process.platform;
+        // Linux has `ss`; macOS and Windows use `netstat -an`
+        if (platform === 'linux') {
+          try {
+            const { stdout } = await execAsync('ss -tunap', { timeout: 10_000 });
+            return { success: true, output: { connections: parseSsLinux(stdout, stateFilter) } };
+          } catch {
+            // Fallback to netstat if ss not available
+            try {
+              const { stdout } = await execAsync('netstat -an', { timeout: 10_000 });
+              return { success: true, output: { connections: parseNetstatWindows(stdout, stateFilter) } };
+            } catch (err2) {
+              return { success: false, error: `Connections query failed: ${err2 instanceof Error ? err2.message : String(err2)}` };
+            }
+          }
+        }
+        // macOS (darwin) and Windows both support `netstat -an`
+        try {
+          const { stdout } = await execAsync('netstat -an', { timeout: 10_000 });
+          return { success: true, output: { connections: parseNetstatWindows(stdout, stateFilter) } };
+        } catch (err) {
+          return { success: false, error: `Connections query failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'net_dns_lookup',
+        description: 'Resolve hostname to IPs or reverse-lookup an IP. Supports A, AAAA, MX, and PTR record types. Uses system DNS resolver. Requires network_access capability.',
+        risk: 'read_only',
+        category: 'network',
+        parameters: {
+          type: 'object',
+          properties: {
+            target: { type: 'string', description: 'Hostname or IP to resolve.' },
+            type: { type: 'string', description: 'Record type: A, AAAA, MX, PTR (default: A).' },
+          },
+          required: ['target'],
+        },
+      },
+      async (args, request) => {
+        const target = validateHostParam(requireString(args.target, 'target'));
+        const recordType = asString(args.type, 'A').toUpperCase();
+        if (!['A', 'AAAA', 'MX', 'PTR'].includes(recordType)) {
+          return { success: false, error: 'Unsupported record type. Use A, AAAA, MX, or PTR.' };
+        }
+        this.guardAction(request, 'network_probe', { target, type: recordType });
+        const dns = await import('node:dns');
+        const dnsPromises = dns.promises;
+        try {
+          let records: string[];
+          switch (recordType) {
+            case 'AAAA':
+              records = (await dnsPromises.resolve6(target));
+              break;
+            case 'MX':
+              records = (await dnsPromises.resolveMx(target)).map((r) => `${r.priority} ${r.exchange}`);
+              break;
+            case 'PTR':
+              records = await dnsPromises.reverse(target);
+              break;
+            default:
+              records = (await dnsPromises.resolve4(target));
+              break;
+          }
+          return { success: true, output: { target, type: recordType, records } };
+        } catch (err) {
+          return { success: false, error: `DNS lookup failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'net_traceroute',
+        description: 'Trace route to a host showing each network hop. Max 30 hops with 2s timeout per hop. Security: restricted to private/local network addresses only (RFC1918, link-local, localhost). Requires network_access capability.',
+        risk: 'read_only',
+        category: 'network',
+        parameters: {
+          type: 'object',
+          properties: {
+            host: { type: 'string', description: 'Host or IP to trace (private/local networks only).' },
+            maxHops: { type: 'number', description: 'Maximum hops (1-30, default 15).' },
+          },
+          required: ['host'],
+        },
+      },
+      async (args, request) => {
+        const host = validateHostParam(requireString(args.host, 'host'));
+        requireLocalNetwork(host);
+        const maxHops = Math.max(1, Math.min(30, asNumber(args.maxHops, 15)));
+        this.guardAction(request, 'network_probe', { host, maxHops });
+        const isWin = process.platform === 'win32';
+        const cmd = isWin ? `tracert -h ${maxHops} -w 2000 ${host}` : `traceroute -m ${maxHops} -w 2 ${host}`;
+        try {
+          const { stdout } = await execAsync(cmd, { timeout: 60_000 });
+          const hops = parseTracerouteOutput(stdout);
+          return { success: true, output: { host, hops } };
+        } catch (err) {
+          return { success: false, error: `Traceroute failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    // ── System Tools ─────────────────────────────────────────────
+
+    this.registry.register(
+      {
+        name: 'sys_info',
+        description: 'Get OS info, hostname, uptime, architecture, CPU count, and total memory. Read-only — reads from OS APIs, no network calls.',
+        risk: 'read_only',
+        category: 'system',
+        parameters: { type: 'object', properties: {} },
+      },
+      async (_args, request) => {
+        const os = await import('node:os');
+        this.guardAction(request, 'system_info', { action: 'sys_info' });
+        return {
+          success: true,
+          output: {
+            hostname: os.hostname(),
+            platform: os.platform(),
+            release: os.release(),
+            arch: os.arch(),
+            uptime: os.uptime(),
+            type: os.type(),
+            cpuCount: os.cpus().length,
+            totalMemoryMB: Math.round(os.totalmem() / 1_048_576),
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'sys_resources',
+        description: 'Get current CPU load averages, memory usage, and disk usage. Uses df (Linux/macOS) or wmic (Windows) for disk info. Read-only — no network calls.',
+        risk: 'read_only',
+        category: 'system',
+        parameters: { type: 'object', properties: {} },
+      },
+      async (_args, request) => {
+        const os = await import('node:os');
+        this.guardAction(request, 'system_info', { action: 'sys_resources' });
+        const totalMB = Math.round(os.totalmem() / 1_048_576);
+        const freeMB = Math.round(os.freemem() / 1_048_576);
+        const [loadAvg1m, loadAvg5m, loadAvg15m] = os.loadavg();
+        const memory = { totalMB, freeMB, usedPercent: Math.round(((totalMB - freeMB) / totalMB) * 100) };
+        const cpu = { loadAvg1m: +loadAvg1m.toFixed(2), loadAvg5m: +loadAvg5m.toFixed(2), loadAvg15m: +loadAvg15m.toFixed(2), cores: os.cpus().length };
+
+        let disks: Array<{ filesystem: string; sizeMB: number; usedMB: number; availableMB: number; usedPercent: number; mount: string }> = [];
+        try {
+          const isWin = process.platform === 'win32';
+          if (isWin) {
+            const { stdout } = await execAsync('wmic logicaldisk get size,freespace,caption /format:csv', { timeout: 10_000 });
+            disks = parseDiskWindows(stdout);
+          } else {
+            const { stdout } = await execAsync('df -Pm', { timeout: 10_000 });
+            disks = parseDiskLinux(stdout);
+          }
+        } catch { /* disk info is best-effort */ }
+
+        return { success: true, output: { memory, cpu, disks } };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'sys_processes',
+        description: 'List top processes sorted by CPU or memory usage. Returns up to 50 processes with PID, CPU%, MEM%, and command. Read-only — no network calls.',
+        risk: 'read_only',
+        category: 'system',
+        parameters: {
+          type: 'object',
+          properties: {
+            sortBy: { type: 'string', description: 'Sort by: cpu or memory (default: cpu).' },
+            limit: { type: 'number', description: 'Max processes to return (1-50, default 20).' },
+          },
+        },
+      },
+      async (args, request) => {
+        const sortBy = asString(args.sortBy, 'cpu').toLowerCase() === 'memory' ? 'memory' : 'cpu';
+        const limit = Math.max(1, Math.min(50, asNumber(args.limit, 20)));
+        this.guardAction(request, 'system_info', { action: 'sys_processes', sortBy, limit });
+        const platform = process.platform;
+        try {
+          if (platform === 'win32') {
+            const { stdout } = await execAsync('tasklist /FO CSV /NH', { timeout: 10_000 });
+            const processes = parseTasklistWindows(stdout, limit);
+            return { success: true, output: { processes } };
+          }
+          if (platform === 'darwin') {
+            // macOS BSD ps: -r sorts by CPU, -m sorts by memory (no --sort)
+            const flag = sortBy === 'memory' ? '-m' : '-r';
+            const { stdout } = await execAsync(`ps aux ${flag}`, { timeout: 10_000 });
+            const processes = parsePsLinux(stdout, limit);
+            return { success: true, output: { processes } };
+          }
+          // Linux GNU ps: supports --sort
+          const sortFlag = sortBy === 'memory' ? '-%mem' : '-%cpu';
+          const { stdout } = await execAsync(`ps aux --sort=${sortFlag}`, { timeout: 10_000 });
+          const processes = parsePsLinux(stdout, limit);
+          return { success: true, output: { processes } };
+        } catch (err) {
+          return { success: false, error: `Process listing failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'sys_services',
+        description: 'List services and their status. Uses systemctl on Linux, launchctl on macOS. Optional name filter. Not available on Windows. Read-only — no network calls.',
+        risk: 'read_only',
+        category: 'system',
+        parameters: {
+          type: 'object',
+          properties: {
+            filter: { type: 'string', description: 'Optional filter string for service names.' },
+          },
+        },
+      },
+      async (args, request) => {
+        const platform = process.platform;
+        if (platform === 'win32') {
+          return { success: false, error: 'sys_services is not available on Windows. Use sys_processes instead.' };
+        }
+        const filter = asString(args.filter).trim();
+        this.guardAction(request, 'system_info', { action: 'sys_services', filter: filter || undefined });
+
+        if (platform === 'darwin') {
+          try {
+            const { stdout } = await execAsync('launchctl list', { timeout: 10_000 });
+            const services = parseLaunchctlOutput(stdout, filter);
+            return { success: true, output: { services } };
+          } catch (err) {
+            return { success: false, error: `Service listing failed: ${err instanceof Error ? err.message : String(err)}` };
+          }
+        }
+
+        // Linux — try systemctl
+        try {
+          const { stdout } = await execAsync(
+            'systemctl list-units --type=service --all --no-pager --plain',
+            { timeout: 10_000 },
+          );
+          const services = parseSystemctlOutput(stdout, filter);
+          return { success: true, output: { services } };
+        } catch (err) {
+          return { success: false, error: `Service listing failed (systemd may not be available): ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    // ── Browser Automation Tools (agent-browser) ─────────────────
+    if (this.browserSession) {
+      const browserMgr = this.browserSession;
+      const browserAllowedDomains = this.options.browserConfig?.allowedDomains
+        ?? this.policy.sandbox.allowedDomains;
+
+      const isBrowserDomainAllowed = (host: string): boolean => {
+        const normalized = host.trim().toLowerCase();
+        if (!normalized) return false;
+        return browserAllowedDomains.some((allowed) => {
+          const a = allowed.trim().toLowerCase();
+          return normalized === a || normalized.endsWith(`.${a}`);
+        });
+      };
+
+      const makeBrowserSessionKey = (request: ToolExecutionRequest): string => {
+        return `${request.userId ?? 'anon'}:${request.channel ?? 'unknown'}`;
+      };
+
+      this.registry.register(
+        {
+          name: 'browser_open',
+          description: 'Open a URL in a headless browser with full JavaScript rendering. Returns an accessibility snapshot of interactive elements (links, buttons, inputs) with reference IDs (@e1, @e2) for use with browser_action. Use this when pages require JS to load content (SPAs, dashboards, search forms). Security: URL validated against domain allowlist and SSRF blocklist. All page content is untrusted. Requires network_access capability.',
+          risk: 'network',
+          category: 'browser',
+          parameters: {
+            type: 'object',
+            properties: {
+              url: { type: 'string', description: 'URL to open in the browser.' },
+            },
+            required: ['url'],
+          },
+        },
+        async (args, request) => {
+          const urlText = requireString(args.url, 'url').trim();
+          const parsed = validateBrowserUrl(urlText);
+          const host = parsed.hostname.toLowerCase();
+          if (isBrowserPrivateHost(host)) {
+            return { success: false, error: `Blocked: ${host} is a private/internal address (SSRF protection).` };
+          }
+          if (!isBrowserDomainAllowed(host)) {
+            return { success: false, error: `Host '${host}' is not in browser allowedDomains.` };
+          }
+          this.guardAction(request, 'http_request', { url: parsed.toString(), method: 'GET', tool: 'browser_open' });
+          try {
+            await browserMgr.checkInstalled();
+          } catch (err) {
+            return { success: false, error: err instanceof Error ? err.message : String(err) };
+          }
+          const sessionKey = makeBrowserSessionKey(request);
+          const session = browserMgr.getOrCreateSession(sessionKey);
+          const result = await browserMgr.runCommand('open', session.sessionId, [parsed.toString()]);
+          if (!result.success) {
+            return { success: false, error: result.error ?? 'Failed to open URL in browser.' };
+          }
+          session.currentUrl = parsed.toString();
+          return {
+            success: true,
+            output: {
+              url: parsed.toString(),
+              host,
+              snapshot: result.snapshot,
+              _untrusted: true,
+            },
+          };
+        },
+      );
+
+      this.registry.register(
+        {
+          name: 'browser_action',
+          description: 'Perform an action on a browser element by reference ID (@e1, @e2) from a browser_open snapshot. Actions: click (navigate/submit), fill (type into inputs), select (dropdowns), press (keyboard keys), scroll, hover. This is a mutating tool — it can submit forms, trigger navigation, and interact with external sites. Security: element refs validated against injection; values passed via subprocess args array (no shell). Requires an active browser session from browser_open.',
+          risk: 'mutating',
+          category: 'browser',
+          parameters: {
+            type: 'object',
+            properties: {
+              action: { type: 'string', description: 'Action: click, fill, select, press, scroll, hover.' },
+              ref: { type: 'string', description: 'Element reference ID from snapshot (e.g. @e1, @btn_submit).' },
+              value: { type: 'string', description: 'Value for fill/select/press actions.' },
+            },
+            required: ['action', 'ref'],
+          },
+        },
+        async (args, request) => {
+          const action = validateBrowserAction(requireString(args.action, 'action'));
+          const ref = validateElementRef(requireString(args.ref, 'ref'));
+          const value = asString(args.value);
+          const sessionKey = makeBrowserSessionKey(request);
+          const session = browserMgr.getSession(sessionKey);
+          if (!session) {
+            return { success: false, error: 'No active browser session. Use browser_open first.' };
+          }
+          this.guardAction(request, 'http_request', {
+            url: session.currentUrl ?? 'browser_action',
+            method: 'POST',
+            tool: 'browser_action',
+            action,
+            ref,
+          });
+          const cmdArgs = [action, ref];
+          if (value && (action === 'fill' || action === 'select' || action === 'press')) {
+            cmdArgs.push(value);
+          }
+          const result = await browserMgr.runCommand('action', session.sessionId, cmdArgs);
+          if (!result.success) {
+            return { success: false, error: result.error ?? 'Browser action failed.' };
+          }
+          if (result.url) {
+            session.currentUrl = result.url;
+          }
+          return {
+            success: true,
+            output: {
+              action,
+              ref,
+              url: session.currentUrl,
+              snapshot: result.snapshot,
+              _untrusted: true,
+            },
+          };
+        },
+      );
+
+      this.registry.register(
+        {
+          name: 'browser_snapshot',
+          description: 'Get the current accessibility snapshot of the active browser page. Returns interactive elements (links, buttons, inputs, text) with reference IDs (@e1, @e2). Use after browser_action to see updated page state. Read-only — does not navigate or interact. Output capped at 8000 chars and marked as untrusted external content.',
+          risk: 'read_only',
+          category: 'browser',
+          parameters: {
+            type: 'object',
+            properties: {},
+          },
+        },
+        async (_args, request) => {
+          const sessionKey = makeBrowserSessionKey(request);
+          const session = browserMgr.getSession(sessionKey);
+          if (!session) {
+            return { success: false, error: 'No active browser session. Use browser_open first.' };
+          }
+          this.guardAction(request, 'http_request', {
+            url: session.currentUrl ?? 'browser_snapshot',
+            method: 'GET',
+            tool: 'browser_snapshot',
+          });
+          const result = await browserMgr.runCommand('snapshot', session.sessionId);
+          if (!result.success) {
+            return { success: false, error: result.error ?? 'Failed to capture browser snapshot.' };
+          }
+          return {
+            success: true,
+            output: {
+              url: session.currentUrl,
+              snapshot: result.snapshot,
+              _untrusted: true,
+            },
+          };
+        },
+      );
+
+      this.registry.register(
+        {
+          name: 'browser_close',
+          description: 'Close the current headless browser session and release resources. Clears approved domains for the session. Use when done browsing to free memory. Safe to call even without an active session.',
+          risk: 'read_only',
+          category: 'browser',
+          parameters: {
+            type: 'object',
+            properties: {},
+          },
+        },
+        async (_args, request) => {
+          const sessionKey = makeBrowserSessionKey(request);
+          const session = browserMgr.getSession(sessionKey);
+          if (!session) {
+            return { success: true, output: { message: 'No active browser session.' } };
+          }
+          await browserMgr.closeSession(sessionKey);
+          return {
+            success: true,
+            output: { message: 'Browser session closed.' },
+          };
+        },
+      );
+
+      this.registry.register(
+        {
+          name: 'browser_task',
+          description: 'One-shot browser tool: opens a URL, waits for JavaScript to render, captures the full page content, and closes the session. Use for reading JS-heavy pages (SPAs, dashboards) that web_fetch cannot render. No interaction — just render and read. Security: same URL validation, SSRF blocking, and domain allowlist as browser_open. Output marked as untrusted external content.',
+          risk: 'network',
+          category: 'browser',
+          parameters: {
+            type: 'object',
+            properties: {
+              url: { type: 'string', description: 'URL to render and read.' },
+            },
+            required: ['url'],
+          },
+        },
+        async (args, request) => {
+          const urlText = requireString(args.url, 'url').trim();
+          const parsed = validateBrowserUrl(urlText);
+          const host = parsed.hostname.toLowerCase();
+          if (isBrowserPrivateHost(host)) {
+            return { success: false, error: `Blocked: ${host} is a private/internal address (SSRF protection).` };
+          }
+          if (!isBrowserDomainAllowed(host)) {
+            return { success: false, error: `Host '${host}' is not in browser allowedDomains.` };
+          }
+          this.guardAction(request, 'http_request', { url: parsed.toString(), method: 'GET', tool: 'browser_task' });
+          try {
+            await browserMgr.checkInstalled();
+          } catch (err) {
+            return { success: false, error: err instanceof Error ? err.message : String(err) };
+          }
+          // Use a temporary session for the one-shot task
+          const tempSessionId = `_task_${Date.now()}`;
+          const session = browserMgr.getOrCreateSession(tempSessionId);
+          try {
+            const openResult = await browserMgr.runCommand('open', session.sessionId, [parsed.toString()]);
+            if (!openResult.success) {
+              return { success: false, error: openResult.error ?? 'Failed to open URL.' };
+            }
+            const snapshotResult = await browserMgr.runCommand('snapshot', session.sessionId);
+            return {
+              success: true,
+              output: {
+                url: parsed.toString(),
+                host,
+                content: snapshotResult.snapshot ?? openResult.snapshot,
+                _untrusted: true,
+              },
+            };
+          } finally {
+            await browserMgr.closeSession(tempSessionId);
+          }
+        },
+      );
+    }
   }
 
   private resolveGmailAccessToken(args: Record<string, unknown>): string | undefined {
@@ -2229,4 +2991,374 @@ function splitCsvLine(line: string): string[] {
 function takeColumn(row: string[], index: number): string {
   if (index < 0 || index >= row.length) return '';
   return row[index]?.trim() ?? '';
+}
+
+// ── Network & System Tool Helpers ──────────────────────────────
+
+/**
+ * Validate and sanitize a host parameter to prevent command injection.
+ * Allows hostnames, IPv4, and IPv6 addresses only.
+ */
+export function validateHostParam(host: string): string {
+  const trimmed = host.trim();
+  if (!trimmed || trimmed.length > 253) throw new Error('Invalid host: empty or too long.');
+  if (/[;&|`$(){}[\]<>!#'"\\\n\r\t]/.test(trimmed)) {
+    throw new Error('Host contains disallowed characters (possible injection attempt).');
+  }
+  return trimmed;
+}
+
+/**
+ * Check whether a hostname or IP is within private/local network ranges.
+ * Allows: RFC1918 (10.x, 172.16-31.x, 192.168.x), link-local (169.254.x),
+ * loopback (127.x, ::1), and local hostnames (localhost, *.local).
+ * Blocks everything else to prevent external reconnaissance.
+ */
+function isLocalNetworkTarget(host: string): boolean {
+  const h = host.toLowerCase().trim();
+
+  // Loopback / localhost
+  if (h === 'localhost' || h === '::1' || h === '0.0.0.0') return true;
+  if (h.endsWith('.localhost')) return true;
+
+  // .local mDNS names (common for home networks)
+  if (h.endsWith('.local')) return true;
+
+  // IPv4 checks
+  const ipv4Match = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4Match) {
+    const [, a, b] = ipv4Match.map(Number);
+    if (a === 127) return true;                         // 127.0.0.0/8
+    if (a === 10) return true;                          // 10.0.0.0/8
+    if (a === 172 && b >= 16 && b <= 31) return true;   // 172.16.0.0/12
+    if (a === 192 && b === 168) return true;             // 192.168.0.0/16
+    if (a === 169 && b === 254) return true;             // 169.254.0.0/16 link-local
+    return false;
+  }
+
+  // IPv6 link-local (fe80::)
+  if (h.startsWith('fe80:')) return true;
+
+  // IPv6 unique local (fd00::/8, fc00::/7)
+  if (h.startsWith('fd') || h.startsWith('fc')) return true;
+
+  // Bare hostnames (no dots) are likely on the local network
+  if (!h.includes('.') && !h.includes(':')) return true;
+
+  return false;
+}
+
+/**
+ * Throw an error if the target host is not on the local/private network.
+ * Used by net_ping, net_port_check, net_traceroute to prevent external recon.
+ */
+function requireLocalNetwork(host: string): void {
+  if (!isLocalNetworkTarget(host)) {
+    throw new Error(
+      `Host '${host}' is not a private/local network address. ` +
+      'Network probing tools are restricted to local networks only ' +
+      '(10.x, 172.16-31.x, 192.168.x, localhost, *.local) ' +
+      'to avoid triggering external IDS/IPS alerts.',
+    );
+  }
+}
+
+/** Common port → service name mapping. */
+const COMMON_PORTS: Record<number, string> = {
+  21: 'ftp', 22: 'ssh', 23: 'telnet', 25: 'smtp', 53: 'dns',
+  80: 'http', 110: 'pop3', 143: 'imap', 443: 'https', 445: 'smb',
+  993: 'imaps', 995: 'pop3s', 1433: 'mssql', 1521: 'oracle',
+  3306: 'mysql', 3389: 'rdp', 5432: 'postgresql', 5900: 'vnc',
+  6379: 'redis', 8080: 'http-alt', 8443: 'https-alt', 8888: 'http-alt',
+  9090: 'prometheus', 27017: 'mongodb',
+};
+
+/** Check a single TCP port with a connect timeout. */
+async function checkTcpPort(host: string, port: number, timeoutMs: number): Promise<{ port: number; open: boolean; service: string | null }> {
+  const { Socket } = await import('node:net');
+  return new Promise((resolve) => {
+    const socket = new Socket();
+    let resolved = false;
+    const done = (open: boolean) => {
+      if (resolved) return;
+      resolved = true;
+      socket.destroy();
+      resolve({ port, open, service: open ? (COMMON_PORTS[port] ?? null) : null });
+    };
+    socket.setTimeout(timeoutMs);
+    socket.on('connect', () => done(true));
+    socket.on('timeout', () => done(false));
+    socket.on('error', () => done(false));
+    socket.connect(port, host);
+  });
+}
+
+/** Parse ping output for packet stats and RTT. */
+function parsePingOutput(stdout: string, host: string): {
+  host: string; reachable: boolean; packetsSent: number; packetsReceived: number; packetLossPercent: number; rttAvgMs: number | null;
+} {
+  const lossMatch = stdout.match(/(\d+)%\s*(?:packet\s*)?loss/i);
+  const packetLoss = lossMatch ? parseInt(lossMatch[1], 10) : 100;
+  const sentMatch = stdout.match(/(\d+)\s*(?:packets?\s*)?(?:transmitted|sent)/i);
+  const recvMatch = stdout.match(/(\d+)\s*(?:packets?\s*)?received/i);
+  const rttMatch = stdout.match(/(?:avg|average)[^=]*=\s*([\d.]+)/i)
+    || stdout.match(/\d+\.\d+\/([\d.]+)\/\d+\.\d+/);
+  return {
+    host,
+    reachable: packetLoss < 100,
+    packetsSent: sentMatch ? parseInt(sentMatch[1], 10) : 0,
+    packetsReceived: recvMatch ? parseInt(recvMatch[1], 10) : 0,
+    packetLossPercent: packetLoss,
+    rttAvgMs: rttMatch ? parseFloat(rttMatch[1]) : null,
+  };
+}
+
+/** Parse `ip neigh show` output (Linux). */
+function parseArpLinux(stdout: string): Array<{ ip: string; mac: string; state: string }> {
+  return stdout.split('\n')
+    .filter((line) => line.trim())
+    .map((line) => {
+      const parts = line.trim().split(/\s+/);
+      const ip = parts[0] ?? '';
+      const llIdx = parts.indexOf('lladdr');
+      const mac = llIdx >= 0 ? (parts[llIdx + 1] ?? 'unknown') : 'unknown';
+      const state = parts[parts.length - 1] ?? 'unknown';
+      return { ip, mac, state };
+    })
+    .filter((d) => d.ip && d.ip !== 'Destination');
+}
+
+/** Parse `arp -a` output (Windows/fallback). */
+function parseArpWindows(stdout: string): Array<{ ip: string; mac: string; state: string }> {
+  return stdout.split('\n')
+    .filter((line) => line.trim())
+    .map((line) => {
+      const match = line.trim().match(/^\s*(?:\?\s+\()?(\d+\.\d+\.\d+\.\d+)\)?\s+(?:at\s+)?([0-9a-fA-F:.-]+)\s+(.*)$/);
+      if (!match) return null;
+      return { ip: match[1], mac: match[2], state: match[3]?.trim() || 'unknown' };
+    })
+    .filter((d): d is { ip: string; mac: string; state: string } => d !== null);
+}
+
+/** Parse `ss -tunap` output (Linux). */
+function parseSsLinux(stdout: string, stateFilter: string): Array<{
+  protocol: string; localAddress: string; localPort: number; remoteAddress: string; remotePort: number; state: string; process: string | null;
+}> {
+  const lines = stdout.split('\n').slice(1).filter((l) => l.trim());
+  const results: Array<{
+    protocol: string; localAddress: string; localPort: number; remoteAddress: string; remotePort: number; state: string; process: string | null;
+  }> = [];
+  for (const line of lines) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 5) continue;
+    const proto = parts[0];
+    const state = parts[1];
+    const local = parts[4] ?? '';
+    const remote = parts[5] ?? '';
+    const procInfo = parts.slice(6).join(' ');
+    if (stateFilter && state.toUpperCase() !== stateFilter) continue;
+    const [localAddr, localPort] = splitAddress(local);
+    const [remoteAddr, remotePort] = splitAddress(remote);
+    results.push({
+      protocol: proto,
+      localAddress: localAddr,
+      localPort: parseInt(localPort, 10) || 0,
+      remoteAddress: remoteAddr,
+      remotePort: parseInt(remotePort, 10) || 0,
+      state,
+      process: procInfo || null,
+    });
+  }
+  return results.slice(0, 200);
+}
+
+/** Parse `netstat -an` output (Windows). */
+function parseNetstatWindows(stdout: string, stateFilter: string): Array<{
+  protocol: string; localAddress: string; localPort: number; remoteAddress: string; remotePort: number; state: string; process: string | null;
+}> {
+  const lines = stdout.split('\n').filter((l) => /^\s*(TCP|UDP)/i.test(l));
+  const results: Array<{
+    protocol: string; localAddress: string; localPort: number; remoteAddress: string; remotePort: number; state: string; process: string | null;
+  }> = [];
+  for (const line of lines) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 3) continue;
+    const proto = parts[0];
+    const local = parts[1] ?? '';
+    const remote = parts[2] ?? '';
+    const state = parts[3] ?? '';
+    if (stateFilter && state.toUpperCase() !== stateFilter) continue;
+    const [localAddr, localPort] = splitAddress(local);
+    const [remoteAddr, remotePort] = splitAddress(remote);
+    results.push({
+      protocol: proto,
+      localAddress: localAddr,
+      localPort: parseInt(localPort, 10) || 0,
+      remoteAddress: remoteAddr,
+      remotePort: parseInt(remotePort, 10) || 0,
+      state,
+      process: null,
+    });
+  }
+  return results.slice(0, 200);
+}
+
+/** Split "addr:port" into [addr, port]. Handles IPv6 bracket notation. */
+function splitAddress(addrPort: string): [string, string] {
+  // IPv6 bracket notation: [::1]:443
+  const bracketMatch = addrPort.match(/^\[([^\]]+)]:(\d+)$/);
+  if (bracketMatch) return [bracketMatch[1], bracketMatch[2]];
+  // Regular addr:port
+  const lastColon = addrPort.lastIndexOf(':');
+  if (lastColon <= 0) return [addrPort, '0'];
+  return [addrPort.slice(0, lastColon), addrPort.slice(lastColon + 1)];
+}
+
+/** Parse traceroute/tracert output. */
+function parseTracerouteOutput(stdout: string): Array<{ hop: number; ip: string | null; hostname: string | null; rttMs: number | null }> {
+  const lines = stdout.split('\n').filter((l) => l.trim());
+  const hops: Array<{ hop: number; ip: string | null; hostname: string | null; rttMs: number | null }> = [];
+  for (const line of lines) {
+    const hopMatch = line.match(/^\s*(\d+)\s+/);
+    if (!hopMatch) continue;
+    const hop = parseInt(hopMatch[1], 10);
+    const ipMatch = line.match(/(\d+\.\d+\.\d+\.\d+)/);
+    const rttMatch = line.match(/([\d.]+)\s*ms/);
+    const hostMatch = line.match(/\s+([a-zA-Z][\w.-]+)\s+\(/);
+    hops.push({
+      hop,
+      ip: ipMatch ? ipMatch[1] : null,
+      hostname: hostMatch ? hostMatch[1] : null,
+      rttMs: rttMatch ? parseFloat(rttMatch[1]) : null,
+    });
+  }
+  return hops;
+}
+
+/** Parse `df -Pm` output (Linux/macOS). */
+function parseDiskLinux(stdout: string): Array<{ filesystem: string; sizeMB: number; usedMB: number; availableMB: number; usedPercent: number; mount: string }> {
+  return stdout.split('\n').slice(1)
+    .filter((l) => l.trim())
+    .map((line) => {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 6) return null;
+      return {
+        filesystem: parts[0],
+        sizeMB: parseInt(parts[1], 10) || 0,
+        usedMB: parseInt(parts[2], 10) || 0,
+        availableMB: parseInt(parts[3], 10) || 0,
+        usedPercent: parseInt(parts[4], 10) || 0,
+        mount: parts[5],
+      };
+    })
+    .filter((d): d is NonNullable<typeof d> => d !== null);
+}
+
+/** Parse Windows wmic disk output. */
+function parseDiskWindows(stdout: string): Array<{ filesystem: string; sizeMB: number; usedMB: number; availableMB: number; usedPercent: number; mount: string }> {
+  return stdout.split('\n')
+    .filter((l) => l.includes(',') && !l.startsWith('Node'))
+    .map((line) => {
+      const parts = line.trim().split(',');
+      if (parts.length < 3) return null;
+      const caption = parts[1]?.trim() ?? '';
+      const freeSpace = parseInt(parts[2]?.trim() ?? '0', 10);
+      const size = parseInt(parts[3]?.trim() ?? '0', 10);
+      if (!size) return null;
+      const sizeMB = Math.round(size / 1_048_576);
+      const freeMB = Math.round(freeSpace / 1_048_576);
+      const usedMB = sizeMB - freeMB;
+      return {
+        filesystem: caption,
+        sizeMB,
+        usedMB,
+        availableMB: freeMB,
+        usedPercent: sizeMB > 0 ? Math.round((usedMB / sizeMB) * 100) : 0,
+        mount: caption,
+      };
+    })
+    .filter((d): d is NonNullable<typeof d> => d !== null);
+}
+
+/** Parse `ps aux` output (Linux). */
+function parsePsLinux(stdout: string, limit: number): Array<{ pid: number; user: string; cpuPercent: number; memoryPercent: number; command: string }> {
+  return stdout.split('\n').slice(1)
+    .filter((l) => l.trim())
+    .slice(0, limit)
+    .map((line) => {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 11) return null;
+      return {
+        pid: parseInt(parts[1], 10),
+        user: parts[0],
+        cpuPercent: parseFloat(parts[2]) || 0,
+        memoryPercent: parseFloat(parts[3]) || 0,
+        command: parts.slice(10).join(' '),
+      };
+    })
+    .filter((p): p is NonNullable<typeof p> => p !== null);
+}
+
+/** Parse `tasklist` CSV output (Windows). */
+function parseTasklistWindows(stdout: string, limit: number): Array<{ pid: number; user: string; cpuPercent: number; memoryPercent: number; command: string }> {
+  return stdout.split('\n')
+    .filter((l) => l.trim())
+    .slice(0, limit)
+    .map((line) => {
+      const parts = line.replace(/"/g, '').split(',');
+      if (parts.length < 2) return null;
+      return {
+        pid: parseInt(parts[1]?.trim() ?? '0', 10),
+        user: 'N/A',
+        cpuPercent: 0,
+        memoryPercent: 0,
+        command: parts[0]?.trim() ?? '',
+      };
+    })
+    .filter((p): p is NonNullable<typeof p> => p !== null);
+}
+
+/** Parse `launchctl list` output (macOS). */
+function parseLaunchctlOutput(stdout: string, filter: string): Array<{ name: string; active: string; sub: string; description: string }> {
+  const normalizedFilter = filter.toLowerCase();
+  // launchctl list output: PID\tStatus\tLabel
+  return stdout.split('\n')
+    .slice(1) // skip header
+    .filter((l) => l.trim())
+    .map((line) => {
+      const parts = line.trim().split('\t');
+      if (parts.length < 3) return null;
+      const pid = parts[0]?.trim() ?? '-';
+      const status = parts[1]?.trim() ?? '0';
+      const label = parts[2]?.trim() ?? '';
+      if (!label) return null;
+      if (normalizedFilter && !label.toLowerCase().includes(normalizedFilter)) return null;
+      return {
+        name: label,
+        active: pid !== '-' ? 'active' : 'inactive',
+        sub: pid !== '-' ? `running (PID ${pid})` : `exit code ${status}`,
+        description: label,
+      };
+    })
+    .filter((s): s is NonNullable<typeof s> => s !== null);
+}
+
+/** Parse `systemctl list-units --type=service` output. */
+function parseSystemctlOutput(stdout: string, filter: string): Array<{ name: string; active: string; sub: string; description: string }> {
+  const normalizedFilter = filter.toLowerCase();
+  return stdout.split('\n')
+    .filter((l) => l.includes('.service'))
+    .map((line) => {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 4) return null;
+      const name = parts[0]?.replace('.service', '') ?? '';
+      if (normalizedFilter && !name.toLowerCase().includes(normalizedFilter)) return null;
+      return {
+        name,
+        active: parts[2] ?? 'unknown',
+        sub: parts[3] ?? 'unknown',
+        description: parts.slice(4).join(' '),
+      };
+    })
+    .filter((s): s is NonNullable<typeof s> => s !== null);
 }

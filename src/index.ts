@@ -33,6 +33,9 @@ import { AnalyticsService } from './runtime/analytics.js';
 import { buildQuickActionPrompt, getQuickActions } from './quick-actions.js';
 import { evaluateSetupStatus } from './runtime/setup.js';
 import { ThreatIntelService } from './runtime/threat-intel.js';
+import { ConnectorPlaybookService } from './runtime/connectors.js';
+import { installTemplate, listTemplates } from './runtime/builtin-packs.js';
+import { DeviceInventoryService } from './runtime/device-inventory.js';
 import { MoltbookConnector } from './runtime/moltbook-connector.js';
 import { AssistantOrchestrator } from './runtime/orchestrator.js';
 import { AssistantJobTracker } from './runtime/assistant-jobs.js';
@@ -45,6 +48,8 @@ import type { MCPServerConfig } from './tools/mcp-client.js';
 import { composeGuardianSystemPrompt } from './prompts/guardian-core.js';
 import { MessageRouter, type RouteDecision } from './runtime/message-router.js';
 import { ModelFallbackChain } from './llm/model-fallback.js';
+import { TRUST_PRESETS, type TrustPresetName } from './guardian/trust-presets.js';
+import type { Capability } from './guardian/capabilities.js';
 import { createProviders } from './llm/provider.js';
 import { hashObjectSha256Hex } from './util/crypto-guardrails.js';
 
@@ -238,16 +243,26 @@ class ChatAgent extends BaseAgent {
 
     // Direct web search: if the user clearly wants web results, call web_search
     // directly so the tool executes even when the LLM doesn't invoke it.
-    const webSearchResult = await this.tryDirectWebSearch(message, ctx);
+    let webSearchResult: string | null = null;
+    try {
+      webSearchResult = await this.tryDirectWebSearch(message, ctx);
+    } catch {
+      // Search failed — fall through to LLM with tool calling
+    }
     if (webSearchResult) {
       // Feed the raw search results through the LLM for a natural response
       if (ctx.llm) {
-        const llmFormat: ChatMessage[] = [
-          ...llmMessages,
-          { role: 'user', content: `Here are web search results for the user's query. Summarize and present them clearly:\n\n${webSearchResult}` },
-        ];
-        const formatted = await this.chatWithFallback(ctx, llmFormat);
-        finalContent = formatted.content || webSearchResult;
+        try {
+          const llmFormat: ChatMessage[] = [
+            ...llmMessages,
+            { role: 'user', content: `Here are web search results for the user's query. Summarize and present them clearly:\n\n${webSearchResult}` },
+          ];
+          const formatted = await this.chatWithFallback(ctx, llmFormat);
+          finalContent = formatted.content || webSearchResult;
+        } catch {
+          // LLM formatting failed — return raw search results
+          finalContent = webSearchResult;
+        }
       } else {
         finalContent = webSearchResult;
       }
@@ -690,6 +705,27 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
           allowActiveResponse: config.assistant.threatIntel.moltbook.allowActiveResponse,
         },
       },
+      connectors: {
+        enabled: config.assistant.connectors.enabled,
+        executionMode: config.assistant.connectors.executionMode,
+        maxConnectorCallsPerRun: config.assistant.connectors.maxConnectorCallsPerRun,
+        packCount: config.assistant.connectors.packs.length,
+        enabledPackCount: config.assistant.connectors.packs.filter((pack) => pack.enabled).length,
+        playbookCount: config.assistant.connectors.playbooks.definitions.length,
+        playbooks: {
+          enabled: config.assistant.connectors.playbooks.enabled,
+          maxSteps: config.assistant.connectors.playbooks.maxSteps,
+          maxParallelSteps: config.assistant.connectors.playbooks.maxParallelSteps,
+          defaultStepTimeoutMs: config.assistant.connectors.playbooks.defaultStepTimeoutMs,
+          requireSignedDefinitions: config.assistant.connectors.playbooks.requireSignedDefinitions,
+          requireDryRunOnFirstExecution: config.assistant.connectors.playbooks.requireDryRunOnFirstExecution,
+        },
+        studio: {
+          enabled: config.assistant.connectors.studio.enabled,
+          mode: config.assistant.connectors.studio.mode,
+          requirePrivilegedTicket: config.assistant.connectors.studio.requirePrivilegedTicket,
+        },
+      },
       tools: {
         enabled: config.assistant.tools.enabled,
         policyMode: config.assistant.tools.policyMode,
@@ -719,11 +755,13 @@ function buildDashboardCallbacks(
   orchestrator: AssistantOrchestrator,
   jobTracker: AssistantJobTracker,
   threatIntel: ThreatIntelService,
+  connectors: ConnectorPlaybookService,
   toolExecutor: ToolExecutor,
   webAuthStateRef: { current: WebAuthRuntimeConfig },
   applyWebAuthRuntime: (auth: WebAuthRuntimeConfig) => void,
   configPath: string,
   router: MessageRouter,
+  deviceInventory: DeviceInventoryService,
 ): DashboardCallbacks {
   const loadRawConfig = (): Record<string, unknown> => {
     if (!existsSync(configPath)) return {};
@@ -751,6 +789,7 @@ function buildDashboardCallbacks(
         defaultProvider: nextConfig.defaultProvider,
       });
       identity.update(nextConfig.assistant.identity);
+      connectors.updateConfig(nextConfig.assistant.connectors);
       toolExecutor.updatePolicy({
         mode: nextConfig.assistant.tools.policyMode,
         toolPolicies: nextConfig.assistant.tools.toolPolicies,
@@ -760,6 +799,9 @@ function buildDashboardCallbacks(
           allowedDomains: nextConfig.assistant.tools.allowedDomains,
         },
       });
+      if (nextConfig.assistant.tools.webSearch) {
+        toolExecutor.updateWebSearchConfig(nextConfig.assistant.tools.webSearch);
+      }
       const persistedToken = nextConfig.channels.web?.auth?.token?.trim()
         || nextConfig.channels.web?.authToken?.trim();
       const mode = nextConfig.channels.web?.auth?.mode
@@ -869,10 +911,23 @@ function buildDashboardCallbacks(
       allowedPaths: policy.sandbox.allowedPaths,
       allowedCommands: policy.sandbox.allowedCommands,
       allowedDomains: policy.sandbox.allowedDomains,
+      browser: configRef.current.assistant.tools.browser,
+      disabledCategories: configRef.current.assistant.tools.disabledCategories ?? [],
     };
     return persistAndApplyConfig(rawConfig, {
       changedBy: 'tools-control-plane',
       reason: 'tool policy update',
+    });
+  };
+
+  const persistConnectorsState = (): { success: boolean; message: string } => {
+    const rawConfig = loadRawConfig();
+    rawConfig.assistant = rawConfig.assistant ?? {};
+    const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+    rawAssistant.connectors = connectors.getConfig();
+    return persistAndApplyConfig(rawConfig, {
+      changedBy: 'connectors-control-plane',
+      reason: 'connector/playbook update',
     });
   };
 
@@ -1115,6 +1170,8 @@ function buildDashboardCallbacks(
       policy: toolExecutor.getPolicy(),
       approvals: toolExecutor.listApprovals(limit ?? 50),
       jobs: toolExecutor.listJobs(limit ?? 50),
+      categories: toolExecutor.getCategoryInfo(),
+      disabledCategories: toolExecutor.getDisabledCategories(),
     }),
 
     onToolsRun: async (input) => {
@@ -1173,6 +1230,45 @@ function buildDashboardCallbacks(
       };
     },
 
+    onBrowserConfigState: () => {
+      const browser = configRef.current.assistant.tools.browser;
+      return {
+        enabled: browser?.enabled ?? true,
+        allowedDomains: browser?.allowedDomains ?? configRef.current.assistant.tools.allowedDomains ?? [],
+        sessionIdleTimeoutMs: browser?.sessionIdleTimeoutMs ?? 300_000,
+        maxSessions: browser?.maxSessions ?? 3,
+      };
+    },
+
+    onBrowserConfigUpdate: (input) => {
+      const current = configRef.current.assistant.tools.browser ?? { enabled: true };
+      const updated = {
+        ...current,
+        ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+        ...(input.allowedDomains ? { allowedDomains: input.allowedDomains } : {}),
+        ...(input.sessionIdleTimeoutMs !== undefined ? { sessionIdleTimeoutMs: input.sessionIdleTimeoutMs } : {}),
+        ...(input.maxSessions !== undefined ? { maxSessions: input.maxSessions } : {}),
+      };
+      configRef.current.assistant.tools.browser = updated;
+      const persisted = persistToolsState(toolExecutor.getPolicy());
+      if (!persisted.success) {
+        return { success: false, message: persisted.message };
+      }
+      analytics.track({
+        type: 'browser_config_updated',
+        channel: 'system',
+        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
+        metadata: { enabled: updated.enabled },
+      });
+      log.info({ browser: updated }, 'Browser config updated (restart required for changes to take effect)');
+      return {
+        success: true,
+        message: updated.enabled
+          ? 'Browser tools enabled. Restart to apply changes.'
+          : 'Browser tools disabled. Restart to apply changes.',
+      };
+    },
+
     onToolsApprovalDecision: async (input) => {
       const result = await toolExecutor.decideApproval(
         input.approvalId,
@@ -1194,6 +1290,207 @@ function buildDashboardCallbacks(
       return {
         success: result.success,
         message: result.message,
+      };
+    },
+
+    onToolsCategories: () => toolExecutor.getCategoryInfo(),
+
+    onToolsCategoryToggle: (input) => {
+      const { category, enabled } = input;
+      toolExecutor.setCategoryEnabled(category, enabled);
+      const disabled = toolExecutor.getDisabledCategories();
+      configRef.current.assistant.tools.disabledCategories = disabled;
+      const persisted = persistToolsState(toolExecutor.getPolicy());
+      if (!persisted.success) {
+        return { success: false, message: persisted.message };
+      }
+      analytics.track({
+        type: 'tool_category_toggled',
+        channel: 'system',
+        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
+        metadata: { category, enabled },
+      });
+      return {
+        success: true,
+        message: `Category '${category}' ${enabled ? 'enabled' : 'disabled'}.`,
+      };
+    },
+
+    onConnectorsState: ({ limitRuns } = {}) => connectors.getState(limitRuns ?? 50),
+
+    onConnectorsSettingsUpdate: (input) => {
+      const before = connectors.getConfig();
+      const result = connectors.updateSettings(input);
+      if (!result.success) return result;
+      const persisted = persistConnectorsState();
+      if (!persisted.success) {
+        connectors.updateConfig(before);
+        return persisted;
+      }
+
+      analytics.track({
+        type: 'connector_settings_updated',
+        channel: 'system',
+        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
+        metadata: {
+          enabled: String(input.enabled ?? ''),
+          executionMode: input.executionMode ?? '',
+        },
+      });
+      return result;
+    },
+
+    onConnectorsPackUpsert: (pack) => {
+      const before = connectors.getConfig();
+      const result = connectors.upsertPack(pack);
+      if (!result.success) return result;
+      const persisted = persistConnectorsState();
+      if (!persisted.success) {
+        connectors.updateConfig(before);
+        return persisted;
+      }
+
+      analytics.track({
+        type: 'connector_pack_upserted',
+        channel: 'system',
+        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
+        metadata: { packId: pack.id, enabled: String(pack.enabled) },
+      });
+      return result;
+    },
+
+    onConnectorsPackDelete: (packId) => {
+      const before = connectors.getConfig();
+      const result = connectors.deletePack(packId);
+      if (!result.success) return result;
+      const persisted = persistConnectorsState();
+      if (!persisted.success) {
+        connectors.updateConfig(before);
+        return persisted;
+      }
+
+      analytics.track({
+        type: 'connector_pack_deleted',
+        channel: 'system',
+        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
+        metadata: { packId },
+      });
+      return result;
+    },
+
+    onPlaybookUpsert: (playbook) => {
+      const before = connectors.getConfig();
+      const result = connectors.upsertPlaybook(playbook);
+      if (!result.success) return result;
+      const persisted = persistConnectorsState();
+      if (!persisted.success) {
+        connectors.updateConfig(before);
+        return persisted;
+      }
+
+      analytics.track({
+        type: 'playbook_upserted',
+        channel: 'system',
+        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
+        metadata: { playbookId: playbook.id, enabled: String(playbook.enabled), mode: playbook.mode },
+      });
+      return result;
+    },
+
+    onPlaybookDelete: (playbookId) => {
+      const before = connectors.getConfig();
+      const result = connectors.deletePlaybook(playbookId);
+      if (!result.success) return result;
+      const persisted = persistConnectorsState();
+      if (!persisted.success) {
+        connectors.updateConfig(before);
+        return persisted;
+      }
+
+      analytics.track({
+        type: 'playbook_deleted',
+        channel: 'system',
+        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
+        metadata: { playbookId },
+      });
+      return result;
+    },
+
+    onPlaybookRun: async (input) => {
+      const result = await connectors.runPlaybook({
+        playbookId: input.playbookId,
+        dryRun: input.dryRun,
+        origin: input.origin ?? 'web',
+        agentId: input.agentId,
+        userId: input.userId,
+        channel: input.channel,
+        requestedBy: input.requestedBy,
+      });
+      analytics.track({
+        type: result.success ? 'playbook_run_succeeded' : 'playbook_run_failed',
+        channel: input.channel ?? 'system',
+        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
+        channelUserId: input.userId ?? 'system',
+        agentId: input.agentId,
+        metadata: {
+          playbookId: input.playbookId,
+          status: result.status,
+          dryRun: String(!!input.dryRun),
+        },
+      });
+      // Feed step outputs to device inventory
+      if (result.run?.steps) {
+        deviceInventory.ingestPlaybookResults(result.run.steps);
+      }
+      return result;
+    },
+
+    onConnectorsTemplates: () => listTemplates(connectors),
+
+    onConnectorsTemplateInstall: (templateId) => {
+      const result = installTemplate(templateId, connectors);
+      if (result.success) {
+        persistConnectorsState();
+        analytics.track({
+          type: 'template_installed',
+          channel: 'system',
+          canonicalUserId: configRef.current.assistant.identity.primaryUserId,
+          metadata: { templateId },
+        });
+      }
+      return result;
+    },
+
+    onNetworkDevices: () => ({
+      devices: deviceInventory.listDevices(),
+    }),
+
+    onNetworkScan: async () => {
+      // Try to run the network-discovery playbook if installed
+      const state = connectors.getState();
+      const pb = state.playbooks.find((p) => p.id === 'network-discovery');
+      if (!pb) {
+        // Auto-install home-network template and retry
+        const installed = installTemplate('home-network', connectors);
+        if (!installed.success) {
+          return { success: false, message: 'Could not install home-network template for scanning.', devicesFound: 0 };
+        }
+        persistConnectorsState();
+      }
+      const result = await connectors.runPlaybook({
+        playbookId: 'network-discovery',
+        origin: 'web',
+        userId: 'web-user',
+        channel: 'web',
+        requestedBy: 'web-user',
+      });
+      if (result.run?.steps) {
+        deviceInventory.ingestPlaybookResults(result.run.steps);
+      }
+      return {
+        success: result.success,
+        message: result.message,
+        devicesFound: deviceInventory.size,
       };
     },
 
@@ -1446,11 +1743,14 @@ function buildDashboardCallbacks(
         },
         async () => {
           const providerName = input.providerName?.trim() || (input.llmMode === 'ollama' ? 'ollama' : 'primary');
-          const providerType = input.llmMode === 'ollama'
-            ? 'ollama'
-            : (input.providerType ?? 'openai');
-          const model = input.model?.trim();
           const existingProvider = configRef.current.llm[providerName];
+          const providerType = input.providerType
+            ?? (input.llmMode === 'ollama' ? 'ollama' : undefined)
+            ?? existingProvider?.provider;
+          if (!providerType) {
+            return { success: false, message: 'providerType is required for new providers' };
+          }
+          const model = input.model?.trim();
           if (!model) {
             return { success: false, message: 'model is required' };
           }
@@ -1546,7 +1846,10 @@ function buildDashboardCallbacks(
           }
 
           // Web search config
-          const hasWebSearch = input.webSearchProvider || input.perplexityApiKey?.trim() || input.openRouterApiKey?.trim() || input.braveApiKey?.trim();
+          const hasWebSearch = input.webSearchProvider
+            || input.perplexityApiKey !== undefined
+            || input.openRouterApiKey !== undefined
+            || input.braveApiKey !== undefined;
           if (hasWebSearch) {
             rawConfig.assistant = rawConfig.assistant ?? {};
             const rawAssistantObj = rawConfig.assistant as Record<string, unknown>;
@@ -1555,9 +1858,18 @@ function buildDashboardCallbacks(
             rawTools.webSearch = rawTools.webSearch ?? {};
             const rawWS = rawTools.webSearch as Record<string, unknown>;
             if (input.webSearchProvider) rawWS.provider = input.webSearchProvider;
-            if (input.perplexityApiKey?.trim()) rawWS.perplexityApiKey = input.perplexityApiKey.trim();
-            if (input.openRouterApiKey?.trim()) rawWS.openRouterApiKey = input.openRouterApiKey.trim();
-            if (input.braveApiKey?.trim()) rawWS.braveApiKey = input.braveApiKey.trim();
+            if (input.perplexityApiKey !== undefined) {
+              if (input.perplexityApiKey.trim()) rawWS.perplexityApiKey = input.perplexityApiKey.trim();
+              else delete rawWS.perplexityApiKey;
+            }
+            if (input.openRouterApiKey !== undefined) {
+              if (input.openRouterApiKey.trim()) rawWS.openRouterApiKey = input.openRouterApiKey.trim();
+              else delete rawWS.openRouterApiKey;
+            }
+            if (input.braveApiKey !== undefined) {
+              if (input.braveApiKey.trim()) rawWS.braveApiKey = input.braveApiKey.trim();
+              else delete rawWS.braveApiKey;
+            }
           }
 
           const result = persistAndApplyConfig(rawConfig, {
@@ -1580,6 +1892,42 @@ function buildDashboardCallbacks(
           };
         },
       );
+    },
+
+    onSearchConfigUpdate: async (input) => {
+      const rawConfig = loadRawConfig();
+      rawConfig.assistant = rawConfig.assistant ?? {};
+      const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+      rawAssistant.tools = rawAssistant.tools ?? {};
+      const rawTools = rawAssistant.tools as Record<string, unknown>;
+      rawTools.webSearch = rawTools.webSearch ?? {};
+      const rawWS = rawTools.webSearch as Record<string, unknown>;
+
+      if (input.webSearchProvider) rawWS.provider = input.webSearchProvider;
+      // Empty string = clear the key, undefined = leave unchanged, non-empty = set
+      if (input.perplexityApiKey !== undefined) {
+        if (input.perplexityApiKey.trim()) rawWS.perplexityApiKey = input.perplexityApiKey.trim();
+        else delete rawWS.perplexityApiKey;
+      }
+      if (input.openRouterApiKey !== undefined) {
+        if (input.openRouterApiKey.trim()) rawWS.openRouterApiKey = input.openRouterApiKey.trim();
+        else delete rawWS.openRouterApiKey;
+      }
+      if (input.braveApiKey !== undefined) {
+        if (input.braveApiKey.trim()) rawWS.braveApiKey = input.braveApiKey.trim();
+        else delete rawWS.braveApiKey;
+      }
+
+      if (input.fallbacks !== undefined) {
+        rawConfig.fallbacks = input.fallbacks.length > 0 ? input.fallbacks : undefined;
+      }
+
+      const result = persistAndApplyConfig(rawConfig, {
+        changedBy: 'config-center',
+        reason: 'search config update',
+      });
+      if (!result.success) return result;
+      return { success: true, message: 'Search and fallback settings saved.' };
     },
 
     onConfigUpdate: async (updates) => {
@@ -1895,6 +2243,10 @@ async function main(): Promise<void> {
       '    delegatedMode: summary',
       '    maxChars: 8000',
       '    summaryMaxChars: 1000',
+      '  connectors:',
+      '    enabled: false',
+      '    executionMode: plan_then_execute',
+      '    maxConnectorCallsPerRun: 12',
     ].join('\n') + '\n';
     writeFileSync(configPath, defaultYaml, 'utf-8');
     const isTTY = process.stdout.isTTY;
@@ -2088,6 +2440,9 @@ async function main(): Promise<void> {
     allowedCommands: config.assistant.tools.allowedCommands,
     allowedDomains: config.assistant.tools.allowedDomains,
     allowExternalPosting: config.assistant.tools.allowExternalPosting,
+    webSearch: config.assistant.tools.webSearch,
+    browserConfig: config.assistant.tools.browser,
+    disabledCategories: config.assistant.tools.disabledCategories,
     mcpManager,
     threatIntel,
     onCheckAction: ({ type, params, agentId, origin }) => {
@@ -2139,6 +2494,29 @@ async function main(): Promise<void> {
     },
   };
   const toolExecutor = new ToolExecutor(toolExecutorOptions);
+  const connectors = new ConnectorPlaybookService({
+    config: config.assistant.connectors,
+    runTool: async (request) => toolExecutor.runTool(request),
+  });
+
+  // Device inventory — tracks discovered network devices from playbook runs
+  const deviceInventory = new DeviceInventoryService();
+  deviceInventory.load().catch(() => {});
+  deviceInventory.onEvent((event) => {
+    runtime.auditLog.record({
+      type: 'action_allowed',
+      severity: event.type === 'network_new_device' ? 'info' : 'warn',
+      agentId: 'system',
+      details: {
+        event: event.type,
+        ip: event.device.ip,
+        mac: event.device.mac,
+        reason: event.type === 'network_new_device'
+          ? `New device discovered: ${event.device.ip} (${event.device.mac})`
+          : `Device went offline: ${event.device.ip} (${event.device.mac})`,
+      },
+    });
+  });
 
   const webMode = config.channels.web?.auth?.mode
     ?? (config.channels.web?.authToken ? 'bearer_required' : 'localhost_no_auth');
@@ -2210,6 +2588,18 @@ async function main(): Promise<void> {
     );
   }
 
+  // Resolve agent capabilities from trust preset / config.
+  // The orchestrator decides which MODEL handles a request (local vs external),
+  // NOT what the agent is allowed to do. Security policy is user-configured.
+  const DEFAULT_AGENT_CAPABILITIES: Capability[] = [
+    'read_files', 'write_files', 'execute_commands',
+    'network_access', 'read_email', 'draft_email', 'send_email',
+  ];
+  const presetName = config.guardian?.trustPreset as TrustPresetName | undefined;
+  const agentCapabilities: Capability[] = presetName && TRUST_PRESETS[presetName]
+    ? [...TRUST_PRESETS[presetName].capabilities]
+    : DEFAULT_AGENT_CAPABILITIES;
+
   if (config.agents.length > 0) {
     // Config-driven agents: register all and build router from config rules
     const primaryConfiguredAgentId = config.agents.find((agent) => agent.role === 'general')?.id
@@ -2258,7 +2648,7 @@ async function main(): Promise<void> {
     runtime.registerAgent(createAgentDefinition({
       agent: localAgent,
       providerName: config.defaultProvider,
-      grantedCapabilities: ['read_files', 'write_files', 'execute_commands'],
+      grantedCapabilities: agentCapabilities,
     }));
 
     const externalAgent = new ChatAgent(
@@ -2273,11 +2663,11 @@ async function main(): Promise<void> {
     runtime.registerAgent(createAgentDefinition({
       agent: externalAgent,
       providerName: externalProviderName,
-      grantedCapabilities: ['network_access', 'read_email', 'draft_email', 'send_email'],
+      grantedCapabilities: agentCapabilities,
     }));
 
     // Register with router using default domain rules
-    router.registerAgent('local', ['read_files', 'write_files', 'execute_commands'], {
+    router.registerAgent('local', agentCapabilities, {
       domains: ['filesystem', 'code'],
       patterns: [
         '\\b(file|folder|directory|path|create|delete|move|copy|rename|save|open)\\b',
@@ -2285,7 +2675,7 @@ async function main(): Promise<void> {
       ],
       priority: 5,
     }, 'local');
-    router.registerAgent('external', ['network_access', 'read_email', 'draft_email', 'send_email'], {
+    router.registerAgent('external', agentCapabilities, {
       domains: ['network', 'email'],
       patterns: [
         '\\b(search|web|browse|http|api|download|upload|url|website|online|internet)\\b',
@@ -2312,20 +2702,9 @@ async function main(): Promise<void> {
     );
     runtime.registerAgent(createAgentDefinition({
       agent: defaultAgent,
-      grantedCapabilities: [
-        'read_files',
-        'write_files',
-        'execute_commands',
-        'network_access',
-        'read_email',
-        'draft_email',
-        'send_email',
-      ],
+      grantedCapabilities: agentCapabilities,
     }));
-    router.registerAgent('default', [
-      'read_files', 'write_files', 'execute_commands',
-      'network_access', 'read_email', 'draft_email', 'send_email',
-    ]);
+    router.registerAgent('default', agentCapabilities);
   }
 
   // Register Sentinel agent if enabled
@@ -2368,11 +2747,13 @@ async function main(): Promise<void> {
     orchestrator,
     jobTracker,
     threatIntel,
+    connectors,
     toolExecutor,
     webAuthStateRef,
     applyWebAuthRuntime,
     configPath,
     router,
+    deviceInventory,
   );
 
   // Killswitch: triggers graceful shutdown from CLI or web
@@ -2634,6 +3015,30 @@ async function main(): Promise<void> {
   // Start runtime
   await runtime.start();
 
+  // Register scheduled playbooks with CronScheduler
+  {
+    const playbookDefs = connectors.getState().playbooks;
+    for (const pb of playbookDefs) {
+      if (pb.enabled && pb.schedule) {
+        try {
+          runtime.scheduler.schedule(`playbook:${pb.id}`, pb.schedule, async () => {
+            log.info({ playbookId: pb.id, schedule: pb.schedule }, 'Running scheduled playbook');
+            const result = await connectors.runPlaybook({
+              playbookId: pb.id,
+              origin: 'web',
+              requestedBy: 'scheduler',
+            });
+            if (result.run?.steps) {
+              deviceInventory.ingestPlaybookResults(result.run.steps);
+            }
+          });
+        } catch (err) {
+          log.warn({ playbookId: pb.id, err }, 'Failed to schedule playbook');
+        }
+      }
+    }
+  }
+
   // Post-start: AI greeting or setup wizard
   if (cliChannel) {
     const providers = dashboardCallbacks.onProvidersStatus
@@ -2699,6 +3104,12 @@ async function main(): Promise<void> {
       } catch (err) {
         log.error({ err }, 'Error disconnecting MCP servers');
       }
+    }
+
+    try {
+      await toolExecutor.dispose();
+    } catch (err) {
+      log.error({ err }, 'Error disposing tool executor');
     }
 
     await runtime.stop();

@@ -323,6 +323,145 @@ describe('validateConfig — MCP', () => {
   });
 });
 
+describe('validateConfig — connectors', () => {
+  it('should fail when connectors enabled but no packs are defined', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        connectors: {
+          ...DEFAULT_CONFIG.assistant.connectors,
+          enabled: true,
+          packs: [],
+        },
+      },
+    };
+    const errors = validateConfig(config);
+    expect(errors).toContain(
+      'assistant.connectors.packs must include at least one pack when connectors are enabled',
+    );
+  });
+
+  it('should fail when connectors enabled but all packs are disabled', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        connectors: {
+          ...DEFAULT_CONFIG.assistant.connectors,
+          enabled: true,
+          packs: [{
+            id: 'lab-core',
+            name: 'Lab Core',
+            enabled: false,
+            allowedCapabilities: ['inventory.read'],
+            allowedHosts: ['localhost'],
+            allowedPaths: ['./workspace'],
+            allowedCommands: ['ssh'],
+            authMode: 'api_key',
+            requireHumanApprovalForWrites: true,
+          }],
+        },
+      },
+    };
+    const errors = validateConfig(config);
+    expect(errors).toContain(
+      'assistant.connectors requires at least one enabled pack when connectors are enabled',
+    );
+  });
+
+  it('should fail on duplicate connector pack ids', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        connectors: {
+          ...DEFAULT_CONFIG.assistant.connectors,
+          packs: [
+            {
+              id: 'ops',
+              name: 'Ops A',
+              enabled: true,
+              allowedCapabilities: ['inventory.read'],
+              allowedHosts: ['localhost'],
+              allowedPaths: ['./workspace'],
+              allowedCommands: ['ssh'],
+              authMode: 'api_key',
+              requireHumanApprovalForWrites: true,
+            },
+            {
+              id: 'ops',
+              name: 'Ops B',
+              enabled: true,
+              allowedCapabilities: ['network.device.read'],
+              allowedHosts: ['localhost'],
+              allowedPaths: ['./workspace'],
+              allowedCommands: ['snmpwalk'],
+              authMode: 'oauth2',
+              requireHumanApprovalForWrites: true,
+            },
+          ],
+        },
+      },
+    };
+    const errors = validateConfig(config);
+    expect(errors).toContain("assistant.connectors.pack id 'ops' is duplicated");
+  });
+
+  it('should pass with a valid connector framework config', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        connectors: {
+          enabled: true,
+          executionMode: 'plan_then_execute',
+          maxConnectorCallsPerRun: 20,
+          packs: [{
+            id: 'infra-core',
+            name: 'Infrastructure Core',
+            enabled: true,
+            allowedCapabilities: ['inventory.read', 'vm.power.write'],
+            allowedHosts: ['localhost', '10.0.0.1'],
+            allowedPaths: ['./workspace', './docs'],
+            allowedCommands: ['ssh', 'ansible-playbook'],
+            authMode: 'oauth2',
+            requireHumanApprovalForWrites: true,
+          }],
+          playbooks: {
+            definitions: [{
+              id: 'infra-audit',
+              name: 'Infra Audit',
+              enabled: true,
+              mode: 'sequential',
+              signature: 'signed',
+              steps: [{
+                id: 'scan',
+                packId: 'infra-core',
+                toolName: 'fs_list',
+                args: { path: './workspace' },
+              }],
+            }],
+            enabled: true,
+            maxSteps: 20,
+            maxParallelSteps: 4,
+            defaultStepTimeoutMs: 20_000,
+            requireSignedDefinitions: true,
+            requireDryRunOnFirstExecution: true,
+          },
+          studio: {
+            enabled: true,
+            mode: 'builder',
+            requirePrivilegedTicket: true,
+          },
+        },
+      },
+    };
+    const errors = validateConfig(config);
+    expect(errors).toEqual([]);
+  });
+});
+
 describe('loadConfig', () => {
   it('should return defaults when no config file exists', () => {
     const config = loadConfig('/nonexistent/path/config.yaml');

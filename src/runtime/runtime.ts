@@ -159,6 +159,18 @@ export class Runtime {
       throw new Error(`Agent '${agentId}' not found`);
     }
 
+    // Auto-recover errored agents on user messages so users aren't stuck
+    // waiting for the watchdog backoff. The actual error (if still present)
+    // will surface naturally on the next invocation attempt.
+    if (instance.state === AgentState.Errored) {
+      try {
+        this.registry.transitionState(agentId, AgentState.Ready, 'user-message: auto-recover');
+        log.info({ agentId }, 'Auto-recovered errored agent on user message');
+      } catch {
+        // Transition failed — fall through to assertExecutable which will throw
+      }
+    }
+
     this.assertExecutable(agentId, instance);
 
     if (!instance.agent.onMessage) {

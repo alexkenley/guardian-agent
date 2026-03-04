@@ -5,6 +5,8 @@
  * interpolation and deep-merged with defaults.
  */
 
+import type { ToolCategory } from '../tools/types.js';
+
 /** Top-level configuration. */
 export interface GuardianAgentConfig {
   /** LLM provider configurations. */
@@ -354,6 +356,118 @@ export interface AssistantThreatIntelMoltbookConfig {
   allowActiveResponse: boolean;
 }
 
+/** Connector execution mode. */
+export type ConnectorExecutionMode = 'plan_then_execute' | 'direct_execute';
+
+/** Connector authentication mode. */
+export type ConnectorAuthMode = 'none' | 'api_key' | 'oauth2' | 'certificate';
+
+/** Declarative connector pack for infrastructure operations. */
+export interface AssistantConnectorPackConfig {
+  /** Unique identifier for the pack. */
+  id: string;
+  /** Human-readable pack name. */
+  name: string;
+  /** Enable or disable this pack without deleting config. */
+  enabled: boolean;
+  /** Optional description shown in UI/tooling. */
+  description?: string;
+  /** Logical capabilities this pack can expose. */
+  allowedCapabilities: string[];
+  /** Network host allowlist for this pack. */
+  allowedHosts: string[];
+  /** Filesystem roots this pack can access. */
+  allowedPaths: string[];
+  /** Shell command prefixes this pack can execute. */
+  allowedCommands: string[];
+  /** Primary authentication mode for this pack. */
+  authMode: ConnectorAuthMode;
+  /** Force human approval for mutating actions from this pack. */
+  requireHumanApprovalForWrites: boolean;
+}
+
+/** Playbook runtime controls for connector workflows. */
+export interface AssistantConnectorPlaybooksConfig {
+  /** One named connector playbook definition. */
+  definitions: AssistantConnectorPlaybookDefinition[];
+  /** Enable playbook execution engine. */
+  enabled: boolean;
+  /** Maximum number of steps in a playbook run. */
+  maxSteps: number;
+  /** Maximum parallelized steps within a playbook run. */
+  maxParallelSteps: number;
+  /** Default per-step timeout budget in milliseconds. */
+  defaultStepTimeoutMs: number;
+  /** Require signed playbook definitions before execution. */
+  requireSignedDefinitions: boolean;
+  /** Require dry-run before first live execution of a playbook revision. */
+  requireDryRunOnFirstExecution: boolean;
+}
+
+/** One playbook step definition. */
+export interface AssistantConnectorPlaybookStepDefinition {
+  /** Unique step id within a playbook. */
+  id: string;
+  /** Optional human label for operators. */
+  name?: string;
+  /** Connector pack id used for this step. */
+  packId: string;
+  /** Tool name to execute. */
+  toolName: string;
+  /** Tool arguments for this step. */
+  args?: Record<string, unknown>;
+  /** Continue playbook after this step fails. */
+  continueOnError?: boolean;
+  /** Optional per-step timeout override. */
+  timeoutMs?: number;
+}
+
+/** One connector playbook definition. */
+export interface AssistantConnectorPlaybookDefinition {
+  /** Unique playbook id. */
+  id: string;
+  /** Human-readable name. */
+  name: string;
+  /** Enable or disable this playbook. */
+  enabled: boolean;
+  /** Execution strategy for this playbook. */
+  mode: 'sequential' | 'parallel';
+  /** Optional description for operators. */
+  description?: string;
+  /** Optional signature blob (required when signed definitions enforced). */
+  signature?: string;
+  /** Optional cron schedule for automatic execution. */
+  schedule?: string;
+  /** Ordered list of playbook steps. */
+  steps: AssistantConnectorPlaybookStepDefinition[];
+}
+
+/** Visual connector studio controls. */
+export interface AssistantConnectorStudioConfig {
+  /** Enable connector studio surfaces (web/CLI). */
+  enabled: boolean;
+  /** Studio mode for operators. */
+  mode: 'read_only' | 'builder';
+  /** Require privileged auth ticket for studio mutations. */
+  requirePrivilegedTicket: boolean;
+}
+
+/** Connector and playbook framework configuration. */
+export interface AssistantConnectorsConfig {
+  /** Master toggle for connector framework. */
+  enabled: boolean;
+  /** Execution strategy for connector runs. */
+  executionMode: ConnectorExecutionMode;
+  /** Maximum connector calls allowed in one run. */
+  maxConnectorCallsPerRun: number;
+  /** Declarative connector packs. */
+  packs: AssistantConnectorPackConfig[];
+  /** Playbook engine controls. */
+  playbooks: AssistantConnectorPlaybooksConfig;
+  /** Visual studio controls. */
+  studio: AssistantConnectorStudioConfig;
+}
+
 /** Configuration for a single MCP server connection. */
 export interface MCPServerEntry {
   /** Unique identifier for this server. */
@@ -378,6 +492,20 @@ export interface AssistantMCPConfig {
   enabled: boolean;
   /** MCP server configurations. */
   servers: MCPServerEntry[];
+}
+
+/** Browser automation configuration (agent-browser). */
+export interface BrowserConfig {
+  /** Enable browser automation tools (default: false). */
+  enabled: boolean;
+  /** Path to agent-browser binary (default: 'agent-browser'). */
+  binaryPath?: string;
+  /** Close idle browser sessions after this many ms (default: 300000 = 5min). */
+  sessionIdleTimeoutMs?: number;
+  /** Maximum concurrent browser sessions (default: 3). */
+  maxSessions?: number;
+  /** Allowed domains for browser navigation (falls back to tools.allowedDomains). */
+  allowedDomains?: string[];
 }
 
 /** Web search provider configuration. */
@@ -422,6 +550,10 @@ export interface AssistantToolsConfig {
   mcp?: AssistantMCPConfig;
   /** Web search tool configuration. Auto-selects best available provider (Brave > Perplexity > DuckDuckGo). */
   webSearch?: WebSearchConfig;
+  /** Browser automation configuration (agent-browser). Enables JS-rendered page interaction. */
+  browser?: BrowserConfig;
+  /** Tool categories to disable. Tools in disabled categories are hidden from the LLM and blocked at execution. */
+  disabledCategories?: ToolCategory[];
 }
 
 /** Personal assistant feature configuration. */
@@ -433,6 +565,7 @@ export interface AssistantConfig {
   analytics: AssistantAnalyticsConfig;
   quickActions: AssistantQuickActionsConfig;
   threatIntel: AssistantThreatIntelConfig;
+  connectors: AssistantConnectorsConfig;
   tools: AssistantToolsConfig;
 }
 
@@ -566,6 +699,26 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         allowActiveResponse: false,
       },
     },
+    connectors: {
+      enabled: false,
+      executionMode: 'plan_then_execute',
+      maxConnectorCallsPerRun: 12,
+      packs: [],
+      playbooks: {
+        definitions: [],
+        enabled: true,
+        maxSteps: 12,
+        maxParallelSteps: 3,
+        defaultStepTimeoutMs: 15_000,
+        requireSignedDefinitions: false,
+        requireDryRunOnFirstExecution: false,
+      },
+      studio: {
+        enabled: true,
+        mode: 'builder',
+        requirePrivilegedTicket: true,
+      },
+    },
     tools: {
       enabled: true,
       policyMode: 'approve_by_policy',
@@ -597,6 +750,8 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         'api.perplexity.ai',
         'openrouter.ai',
       ],
+      browser: { enabled: true },
+      disabledCategories: [],
     },
   },
 };

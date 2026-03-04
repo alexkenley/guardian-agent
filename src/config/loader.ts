@@ -267,6 +267,125 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     }
   }
 
+  const connectors = assistant.connectors;
+  if (!['plan_then_execute', 'direct_execute'].includes(connectors.executionMode)) {
+    errors.push("assistant.connectors.executionMode must be 'plan_then_execute' or 'direct_execute'");
+  }
+  if (connectors.maxConnectorCallsPerRun < 1) {
+    errors.push('assistant.connectors.maxConnectorCallsPerRun must be >= 1');
+  }
+  if (connectors.enabled && connectors.packs.length === 0) {
+    errors.push('assistant.connectors.packs must include at least one pack when connectors are enabled');
+  }
+  if (connectors.enabled && !connectors.packs.some((pack) => pack.enabled)) {
+    errors.push('assistant.connectors requires at least one enabled pack when connectors are enabled');
+  }
+
+  const seenPackIds = new Set<string>();
+  for (const pack of connectors.packs) {
+    if (!pack.id?.trim()) {
+      errors.push('assistant.connectors.pack id is required');
+    } else if (seenPackIds.has(pack.id)) {
+      errors.push(`assistant.connectors.pack id '${pack.id}' is duplicated`);
+    } else {
+      seenPackIds.add(pack.id);
+    }
+    if (!pack.name?.trim()) {
+      errors.push(`assistant.connectors.pack '${pack.id || '(unnamed)'}' name is required`);
+    }
+    if (!['none', 'api_key', 'oauth2', 'certificate'].includes(pack.authMode)) {
+      errors.push(`assistant.connectors.pack '${pack.id || '(unnamed)'}' authMode is invalid`);
+    }
+    if (pack.enabled && pack.allowedCapabilities.length === 0) {
+      errors.push(`assistant.connectors.pack '${pack.id}' must include at least one allowedCapability when enabled`);
+    }
+    for (const capability of pack.allowedCapabilities) {
+      if (!capability.trim()) {
+        errors.push(`assistant.connectors.pack '${pack.id}' allowedCapabilities cannot contain empty values`);
+        break;
+      }
+    }
+    for (const host of pack.allowedHosts) {
+      if (!host.trim()) {
+        errors.push(`assistant.connectors.pack '${pack.id}' allowedHosts cannot contain empty values`);
+        break;
+      }
+    }
+    for (const path of pack.allowedPaths) {
+      if (!path.trim()) {
+        errors.push(`assistant.connectors.pack '${pack.id}' allowedPaths cannot contain empty values`);
+        break;
+      }
+    }
+    for (const command of pack.allowedCommands) {
+      if (!command.trim()) {
+        errors.push(`assistant.connectors.pack '${pack.id}' allowedCommands cannot contain empty values`);
+        break;
+      }
+    }
+  }
+
+  const playbooks = connectors.playbooks;
+  const seenPlaybookIds = new Set<string>();
+  for (const playbook of playbooks.definitions) {
+    if (!playbook.id?.trim()) {
+      errors.push('assistant.connectors.playbooks.definition id is required');
+    } else if (seenPlaybookIds.has(playbook.id)) {
+      errors.push(`assistant.connectors.playbooks.definition id '${playbook.id}' is duplicated`);
+    } else {
+      seenPlaybookIds.add(playbook.id);
+    }
+    if (!playbook.name?.trim()) {
+      errors.push(`assistant.connectors.playbook '${playbook.id || '(unnamed)'}' name is required`);
+    }
+    if (!['sequential', 'parallel'].includes(playbook.mode)) {
+      errors.push(`assistant.connectors.playbook '${playbook.id || '(unnamed)'}' mode must be sequential or parallel`);
+    }
+    if (!Array.isArray(playbook.steps) || playbook.steps.length === 0) {
+      errors.push(`assistant.connectors.playbook '${playbook.id || '(unnamed)'}' must include at least one step`);
+      continue;
+    }
+    if (playbook.steps.length > playbooks.maxSteps) {
+      errors.push(`assistant.connectors.playbook '${playbook.id}' exceeds maxSteps (${playbooks.maxSteps})`);
+    }
+    const seenStepIds = new Set<string>();
+    for (const step of playbook.steps) {
+      if (!step.id?.trim()) {
+        errors.push(`assistant.connectors.playbook '${playbook.id}' step id is required`);
+      } else if (seenStepIds.has(step.id)) {
+        errors.push(`assistant.connectors.playbook '${playbook.id}' step id '${step.id}' is duplicated`);
+      } else {
+        seenStepIds.add(step.id);
+      }
+      if (!step.packId?.trim()) {
+        errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id || '(unnamed)'}' packId is required`);
+      }
+      if (!step.toolName?.trim()) {
+        errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id || '(unnamed)'}' toolName is required`);
+      }
+      if (step.timeoutMs !== undefined && step.timeoutMs < 1000) {
+        errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id}' timeoutMs must be >= 1000`);
+      }
+    }
+  }
+  if (playbooks.maxSteps < 1) {
+    errors.push('assistant.connectors.playbooks.maxSteps must be >= 1');
+  }
+  if (playbooks.maxParallelSteps < 1) {
+    errors.push('assistant.connectors.playbooks.maxParallelSteps must be >= 1');
+  }
+  if (playbooks.maxParallelSteps > playbooks.maxSteps) {
+    errors.push('assistant.connectors.playbooks.maxParallelSteps must be <= assistant.connectors.playbooks.maxSteps');
+  }
+  if (playbooks.defaultStepTimeoutMs < 1000) {
+    errors.push('assistant.connectors.playbooks.defaultStepTimeoutMs must be >= 1000');
+  }
+
+  const studio = connectors.studio;
+  if (!['read_only', 'builder'].includes(studio.mode)) {
+    errors.push("assistant.connectors.studio.mode must be 'read_only' or 'builder'");
+  }
+
   return errors;
 }
 

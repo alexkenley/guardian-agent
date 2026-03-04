@@ -41,9 +41,20 @@ Smart content extraction:
 
 DuckDuckGo works immediately with no setup. Just ask the agent to search for something.
 
+### Config Center (recommended)
+
+The easiest way to configure web search is through the Config Center (`#/config` in the web UI). The web search section lets you:
+- Select a provider (Auto, Brave, Perplexity, DuckDuckGo)
+- Enter/clear API keys
+- Configure fallback providers
+
+Config Center uses the dedicated `POST /api/config/search` endpoint, which updates **only** web search settings without touching LLM provider configuration. Changes take effect immediately — no restart required. The search result cache is automatically cleared when you save new settings.
+
+**Clearing API keys:** Click the `[clear]` button next to a configured key to remove it from config. Saving with a cleared key deletes it from `config.yaml`.
+
 ### Brave Search (recommended for production)
 
-Free tier: 2,000 queries/month. Get a key at [brave.com/search/api](https://brave.com/search/api/).
+Free tier: 2,000 queries/month. Only the **Search** plan is needed (not Search + Answers). Get a key at [brave.com/search/api](https://brave.com/search/api/).
 
 ```yaml
 # ~/.guardianagent/config.yaml
@@ -79,6 +90,14 @@ assistant:
     webSearch:
       cacheTtlMs: 600000  # 10 minutes (default: 300000 = 5 min)
 ```
+
+### Hot Reload
+
+Web search configuration supports hot reload. When settings are saved via Config Center or `persistAndApplyConfig`, the `ToolExecutor.updateWebSearchConfig()` method is called, which:
+1. Updates the active web search config in memory
+2. Clears the search result cache so the new provider/keys take effect immediately
+
+No application restart is needed to switch providers or update API keys.
 
 ## Security Model
 

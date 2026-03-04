@@ -29,6 +29,7 @@ export async function renderConfig(container) {
     container.appendChild(createAuthPanel(config, authStatus, container));
 
     container.appendChild(createWebSearchPanel(config, container));
+    container.appendChild(createBrowserPanel(config, container));
     container.appendChild(createTrustPresetPanel(config));
     container.appendChild(createSection('Channels (Read-Only Snapshot)', config.channels));
     container.appendChild(createSection('Guardian (Read-Only Snapshot)', config.guardian));
@@ -107,15 +108,15 @@ function createWebSearchPanel(config, container) {
           </select>
         </div>
         <div class="cfg-field">
-          <label>Brave Search API Key (recommended)</label>
+          <label>Brave Search API Key (recommended)${ws.braveConfigured ? ' <button type="button" class="ws-clear-btn" data-target="ws-brave-key" style="font-size:0.65rem;margin-left:0.4rem;cursor:pointer;background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;padding:0 0.3rem;">clear</button>' : ''}</label>
           <input id="ws-brave-key" type="password" placeholder="${ws.braveConfigured ? 'Configured — leave blank to keep' : 'BSA...'}">
         </div>
         <div class="cfg-field">
-          <label>Perplexity API Key</label>
+          <label>Perplexity API Key${ws.perplexityConfigured ? ' <button type="button" class="ws-clear-btn" data-target="ws-perplexity-key" style="font-size:0.65rem;margin-left:0.4rem;cursor:pointer;background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;padding:0 0.3rem;">clear</button>' : ''}</label>
           <input id="ws-perplexity-key" type="password" placeholder="${ws.perplexityConfigured ? 'Configured — leave blank to keep' : 'pplx-...'}">
         </div>
         <div class="cfg-field">
-          <label>OpenRouter API Key (Perplexity proxy)</label>
+          <label>OpenRouter API Key (Perplexity proxy)${ws.openRouterConfigured ? ' <button type="button" class="ws-clear-btn" data-target="ws-openrouter-key" style="font-size:0.65rem;margin-left:0.4rem;cursor:pointer;background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;padding:0 0.3rem;">clear</button>' : ''}</label>
           <input id="ws-openrouter-key" type="password" placeholder="${ws.openRouterConfigured ? 'Configured — leave blank to keep' : 'sk-or-...'}">
         </div>
       </div>
@@ -148,11 +149,31 @@ function createWebSearchPanel(config, container) {
 
   const statusEl = section.querySelector('#ws-save-status');
 
+  // Track which keys are marked for clearing
+  const cleared = new Set();
+  section.querySelectorAll('.ws-clear-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const targetId = btn.dataset.target;
+      const input = section.querySelector(`#${targetId}`);
+      if (input) {
+        input.value = '';
+        input.placeholder = 'Key will be removed on save';
+        input.style.borderColor = 'var(--warning)';
+        cleared.add(targetId);
+      }
+    });
+  });
+
+  // Resolve key value: new value, clear signal, or leave unchanged
+  function resolveKey(fieldId, wasConfigured) {
+    const value = section.querySelector(`#${fieldId}`).value.trim();
+    if (value) return value;            // New key entered
+    if (cleared.has(fieldId)) return ''; // Explicitly cleared → send empty string
+    return undefined;                   // Untouched → leave unchanged
+  }
+
   section.querySelector('#ws-save')?.addEventListener('click', async () => {
     const provider = section.querySelector('#ws-provider').value;
-    const perplexityKey = section.querySelector('#ws-perplexity-key').value.trim();
-    const openRouterKey = section.querySelector('#ws-openrouter-key').value.trim();
-    const braveKey = section.querySelector('#ws-brave-key').value.trim();
     const fallbacksRaw = section.querySelector('#ws-fallbacks').value.trim();
 
     const fallbackList = fallbacksRaw
@@ -163,17 +184,98 @@ function createWebSearchPanel(config, container) {
     statusEl.style.color = 'var(--text-muted)';
 
     try {
-      const result = await api.applyConfig({
-        llmMode: 'ollama',
-        providerName: config.defaultProvider || 'ollama',
-        model: config.llm?.[config.defaultProvider]?.model || 'llama3.2',
-        setDefaultProvider: false,
-        setupCompleted: true,
+      const result = await api.saveSearchConfig({
         webSearchProvider: provider,
-        perplexityApiKey: perplexityKey || undefined,
-        openRouterApiKey: openRouterKey || undefined,
-        braveApiKey: braveKey || undefined,
+        perplexityApiKey: resolveKey('ws-perplexity-key', ws.perplexityConfigured),
+        openRouterApiKey: resolveKey('ws-openrouter-key', ws.openRouterConfigured),
+        braveApiKey: resolveKey('ws-brave-key', ws.braveConfigured),
         fallbacks: fallbackList,
+      });
+      statusEl.textContent = result.message;
+      statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+      if (result.success) {
+        await renderConfig(container);
+      }
+    } catch (err) {
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+      statusEl.style.color = 'var(--error)';
+    }
+  });
+
+  applyInputTooltips(section);
+  return section;
+}
+
+function createBrowserPanel(config, container) {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+
+  const browser = config.assistant?.tools?.browser || {};
+  const enabled = browser.enabled !== false;
+  const domains = (browser.allowedDomains || config.assistant?.tools?.allowedDomains || []).join(', ');
+  const maxSessions = browser.maxSessions ?? 3;
+  const idleTimeout = browser.sessionIdleTimeoutMs ?? 300000;
+
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Browser Automation</h3>
+      <span class="cfg-header-note">Headless browser for JS-rendered pages, forms, and multi-step navigation</span>
+    </div>
+    <div class="cfg-center-body">
+      <div class="cfg-form-grid">
+        <div class="cfg-field">
+          <label>Browser Tools</label>
+          <select id="browser-enabled">
+            <option value="true" ${enabled ? 'selected' : ''}>Enabled</option>
+            <option value="false" ${!enabled ? 'selected' : ''}>Disabled</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Allowed Domains</label>
+          <input id="browser-domains" type="text" value="${esc(domains)}" placeholder="example.com, github.com (comma-separated)">
+        </div>
+        <div class="cfg-field">
+          <label>Max Concurrent Sessions</label>
+          <input id="browser-max-sessions" type="number" min="1" max="10" value="${maxSessions}">
+        </div>
+        <div class="cfg-field">
+          <label>Idle Timeout (seconds)</label>
+          <input id="browser-idle-timeout" type="number" min="30" max="3600" value="${Math.round(idleTimeout / 1000)}">
+        </div>
+      </div>
+
+      <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
+        Browser tools use agent-browser to render JavaScript-heavy pages, interact with forms, and navigate multi-page flows.
+        All URLs are validated against the domain allowlist and blocked for private/internal addresses (SSRF protection).
+        Page content is treated as untrusted. Requires agent-browser binary (npm install agent-browser &amp;&amp; npx agent-browser install).
+        Changes require a restart to take effect.
+      </div>
+
+      <div class="cfg-actions">
+        <button class="btn btn-primary" id="browser-save" type="button">Save Browser Config</button>
+        <span id="browser-save-status" class="cfg-save-status"></span>
+      </div>
+    </div>
+  `;
+
+  const statusEl = section.querySelector('#browser-save-status');
+
+  section.querySelector('#browser-save')?.addEventListener('click', async () => {
+    const enabledVal = section.querySelector('#browser-enabled').value === 'true';
+    const domainsRaw = section.querySelector('#browser-domains').value.trim();
+    const domainList = domainsRaw ? domainsRaw.split(',').map((d) => d.trim()).filter(Boolean) : [];
+    const maxSessionsVal = parseInt(section.querySelector('#browser-max-sessions').value, 10) || 3;
+    const idleTimeoutVal = (parseInt(section.querySelector('#browser-idle-timeout').value, 10) || 300) * 1000;
+
+    statusEl.textContent = 'Saving...';
+    statusEl.style.color = 'var(--text-muted)';
+
+    try {
+      const result = await api.saveBrowserConfig({
+        enabled: enabledVal,
+        allowedDomains: domainList.length > 0 ? domainList : undefined,
+        maxSessions: maxSessionsVal,
+        sessionIdleTimeoutMs: idleTimeoutVal,
       });
       statusEl.textContent = result.message;
       statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
@@ -257,56 +359,98 @@ function createProviderPanel(config, providers, container) {
   const localNames = Object.keys(providerMap).filter((name) => providerMap[name].provider === 'ollama');
   const externalNames = Object.keys(providerMap).filter((name) => providerMap[name].provider !== 'ollama');
 
-  const defaultMode = providerMap[config.defaultProvider]?.provider === 'ollama' ? 'local' : 'external';
-
-  const state = {
-    mode: defaultMode,
-    selectedProfile: '',
-  };
-
   section.innerHTML = `
-      <div class="table-header">
+    <div class="table-header">
       <h3>AI Provider Configuration</h3>
-      <span class="cfg-header-note">Local vs external switching, keys, and channel access</span>
+      <span class="cfg-header-note">Configure local and external providers side by side</span>
     </div>
     <div class="cfg-center-body">
-      <div class="cfg-mode-toggle" role="tablist" aria-label="Provider mode">
-        <button class="cfg-mode-btn ${state.mode === 'local' ? 'active' : ''}" data-mode="local" type="button">Local (Ollama)</button>
-        <button class="cfg-mode-btn ${state.mode === 'external' ? 'active' : ''}" data-mode="external" type="button">External API</button>
-      </div>
-
-      <div class="cfg-form-grid">
-        <div class="cfg-field">
-          <label>Profile</label>
-          <select id="cfg-profile"></select>
+      <div class="cfg-provider-panels">
+        <div class="table-container" id="cfg-local-panel">
+          <div class="table-header"><h3>Local Providers (Ollama)</h3></div>
+          <div class="cfg-center-body">
+            <div class="cfg-form-grid">
+              <div class="cfg-field">
+                <label>Profile</label>
+                <select id="cfg-local-profile"></select>
+              </div>
+              <div class="cfg-field">
+                <label>Provider Name</label>
+                <input id="cfg-local-name" type="text" placeholder="ollama">
+              </div>
+              <div class="cfg-field">
+                <label>Model</label>
+                <input id="cfg-local-model" type="text" placeholder="llama3.2">
+              </div>
+              <div class="cfg-field">
+                <label>Base URL</label>
+                <input id="cfg-local-url" type="text" placeholder="http://127.0.0.1:11434">
+              </div>
+            </div>
+            <div class="cfg-form-grid" style="margin-top:0.75rem;">
+              <div class="cfg-field">
+                <label>Set As Default</label>
+                <select id="cfg-local-default">
+                  <option value="true">Yes</option>
+                  <option value="false">No</option>
+                </select>
+              </div>
+            </div>
+            <div class="cfg-actions">
+              <button class="btn btn-secondary" id="cfg-local-test" type="button">Test Connection</button>
+              <button class="btn btn-primary" id="cfg-local-save" type="button">Save</button>
+              <span id="cfg-local-status" class="cfg-save-status"></span>
+            </div>
+          </div>
         </div>
 
-        <div class="cfg-field">
-          <label>Provider Name</label>
-          <input id="cfg-provider-name" type="text" placeholder="ollama">
-        </div>
-
-        <div class="cfg-field" id="cfg-provider-type-field">
-          <label>Provider Type</label>
-          <select id="cfg-provider-type">
-            <option value="openai">openai</option>
-            <option value="anthropic">anthropic</option>
-          </select>
-        </div>
-
-        <div class="cfg-field">
-          <label>Model</label>
-          <input id="cfg-model" type="text" placeholder="llama3.2">
-        </div>
-
-        <div class="cfg-field">
-          <label>Base URL (optional)</label>
-          <input id="cfg-base-url" type="text" placeholder="http://127.0.0.1:11434">
-        </div>
-
-        <div class="cfg-field" id="cfg-api-key-field">
-          <label>API Key</label>
-          <input id="cfg-api-key" type="password" placeholder="Leave blank to keep existing key">
+        <div class="table-container" id="cfg-ext-panel">
+          <div class="table-header"><h3>External Providers (APIs)</h3></div>
+          <div class="cfg-center-body">
+            <div class="cfg-form-grid">
+              <div class="cfg-field">
+                <label>Profile</label>
+                <select id="cfg-ext-profile"></select>
+              </div>
+              <div class="cfg-field">
+                <label>Provider Name</label>
+                <input id="cfg-ext-name" type="text" placeholder="claude">
+              </div>
+              <div class="cfg-field">
+                <label>Provider Type</label>
+                <select id="cfg-ext-type">
+                  <option value="openai">openai</option>
+                  <option value="anthropic">anthropic</option>
+                </select>
+              </div>
+              <div class="cfg-field">
+                <label>Model</label>
+                <input id="cfg-ext-model" type="text" placeholder="claude-sonnet-4-20250514">
+              </div>
+              <div class="cfg-field">
+                <label>API Key</label>
+                <input id="cfg-ext-key" type="password" placeholder="Leave blank to keep existing">
+              </div>
+              <div class="cfg-field">
+                <label>Base URL (optional)</label>
+                <input id="cfg-ext-url" type="text" placeholder="Optional custom endpoint">
+              </div>
+            </div>
+            <div class="cfg-form-grid" style="margin-top:0.75rem;">
+              <div class="cfg-field">
+                <label>Set As Default</label>
+                <select id="cfg-ext-default">
+                  <option value="true">Yes</option>
+                  <option value="false">No</option>
+                </select>
+              </div>
+            </div>
+            <div class="cfg-actions">
+              <button class="btn btn-secondary" id="cfg-ext-test" type="button">Test Connection</button>
+              <button class="btn btn-primary" id="cfg-ext-save" type="button">Save</button>
+              <span id="cfg-ext-status" class="cfg-save-status"></span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -314,239 +458,194 @@ function createProviderPanel(config, providers, container) {
 
       <div class="cfg-form-grid">
         <div class="cfg-field">
-          <label>Set As Default Provider</label>
-          <select id="cfg-set-default">
-            <option value="true" selected>Yes</option>
-            <option value="false">No</option>
-          </select>
-        </div>
-
-        <div class="cfg-field">
           <label>Enable Telegram</label>
           <select id="cfg-telegram-enabled">
             <option value="false">No</option>
             <option value="true">Yes</option>
           </select>
         </div>
-
-        <div class="cfg-field" id="cfg-telegram-token-field">
+        <div class="cfg-field">
           <label>Telegram Bot Token</label>
           <input id="cfg-telegram-token" type="password" placeholder="Leave blank to keep existing token">
         </div>
-
-        <div class="cfg-field" id="cfg-telegram-chatids-field">
+        <div class="cfg-field">
           <label>Allowed Chat IDs</label>
           <input id="cfg-telegram-chatids" type="text" placeholder="12345,67890">
         </div>
       </div>
-
-      <div class="cfg-actions">
-        <button class="btn btn-secondary" id="cfg-test-selected" type="button">Test Selected Profile</button>
-        <button class="btn btn-primary" id="cfg-save" type="button">Save Configuration</button>
-        <span id="cfg-save-status" class="cfg-save-status"></span>
-      </div>
     </div>
   `;
 
-  const profileEl = section.querySelector('#cfg-profile');
-  const providerNameEl = section.querySelector('#cfg-provider-name');
-  const providerTypeEl = section.querySelector('#cfg-provider-type');
-  const modelEl = section.querySelector('#cfg-model');
-  const baseUrlEl = section.querySelector('#cfg-base-url');
-  const apiKeyEl = section.querySelector('#cfg-api-key');
-  const setDefaultEl = section.querySelector('#cfg-set-default');
+  // --- Telegram fields ---
   const telegramEnabledEl = section.querySelector('#cfg-telegram-enabled');
   const telegramTokenEl = section.querySelector('#cfg-telegram-token');
   const telegramChatIdsEl = section.querySelector('#cfg-telegram-chatids');
-  const providerTypeFieldEl = section.querySelector('#cfg-provider-type-field');
-  const apiKeyFieldEl = section.querySelector('#cfg-api-key-field');
-  const saveStatusEl = section.querySelector('#cfg-save-status');
-
   telegramEnabledEl.value = config.channels?.telegram?.enabled ? 'true' : 'false';
-
-  function buildProfiles(mode) {
-    const names = mode === 'local' ? localNames : externalNames;
-    return ['__new__', ...names];
-  }
-
-  function getSuggestedName(mode, type) {
-    const base = mode === 'local' ? 'ollama' : (type === 'anthropic' ? 'claude' : 'openai');
-    if (!providerMap[base]) return base;
-    let i = 2;
-    while (providerMap[`${base}${i}`]) i += 1;
-    return `${base}${i}`;
-  }
-
-  function getDefaultModel(mode, type) {
-    if (mode === 'local') return 'llama3.2';
-    return type === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4o';
-  }
-
-  function applyProfile(name) {
-    if (name === '__new__') {
-      const providerType = state.mode === 'local' ? 'ollama' : providerTypeEl.value;
-      providerNameEl.value = getSuggestedName(state.mode, providerType);
-      modelEl.value = getDefaultModel(state.mode, providerType);
-      baseUrlEl.value = state.mode === 'local' ? 'http://127.0.0.1:11434' : '';
-      apiKeyEl.value = '';
-      if (state.mode === 'external' && providerType !== 'openai' && providerType !== 'anthropic') {
-        providerTypeEl.value = 'openai';
-      }
-      return;
-    }
-
-    const selected = providerMap[name];
-    if (!selected) return;
-
-    providerNameEl.value = name;
-    providerTypeEl.value = selected.provider === 'ollama' ? 'openai' : selected.provider;
-    modelEl.value = selected.model || '';
-    baseUrlEl.value = selected.baseUrl || '';
-    apiKeyEl.value = '';
-  }
-
-  function renderProfileOptions() {
-    const profiles = buildProfiles(state.mode);
-    profileEl.innerHTML = profiles.map((name) => {
-      if (name === '__new__') return '<option value="__new__">Create new profile...</option>';
-      const info = providerMap[name];
-      const status = info.connected === false ? 'offline' : 'online';
-      return `<option value="${esc(name)}">${esc(name)} (${esc(info.provider)}, ${status})</option>`;
-    }).join('');
-
-    const firstConfigured = profiles.find((name) => name !== '__new__') || '__new__';
-    const preferred = profiles.includes(config.defaultProvider) ? config.defaultProvider : firstConfigured;
-    state.selectedProfile = preferred;
-    profileEl.value = preferred;
-    applyProfile(preferred);
-  }
-
-  function syncModeUI() {
-    const isLocal = state.mode === 'local';
-    section.querySelectorAll('.cfg-mode-btn').forEach((btn) => {
-      btn.classList.toggle('active', btn.dataset.mode === state.mode);
-    });
-
-    providerTypeFieldEl.style.display = isLocal ? 'none' : '';
-    apiKeyFieldEl.style.display = isLocal ? 'none' : '';
-    modelEl.placeholder = isLocal ? 'llama3.2' : getDefaultModel('external', providerTypeEl.value);
-    baseUrlEl.placeholder = isLocal ? 'http://127.0.0.1:11434' : 'Optional custom endpoint';
-
-    renderProfileOptions();
-  }
 
   function syncTelegramFields() {
     const enabled = telegramEnabledEl.value === 'true';
     telegramTokenEl.disabled = !enabled;
     telegramChatIdsEl.disabled = !enabled;
   }
-
-  section.querySelectorAll('.cfg-mode-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.mode = btn.dataset.mode === 'local' ? 'local' : 'external';
-      syncModeUI();
-    });
-  });
-
-  profileEl.addEventListener('change', () => {
-    state.selectedProfile = profileEl.value;
-    applyProfile(state.selectedProfile);
-  });
-
-  providerTypeEl.addEventListener('change', () => {
-    if (state.mode !== 'external') return;
-    if (state.selectedProfile === '__new__' && !modelEl.value.trim()) {
-      modelEl.value = getDefaultModel('external', providerTypeEl.value);
-    }
-  });
-
   telegramEnabledEl.addEventListener('change', syncTelegramFields);
+  syncTelegramFields();
 
-  section.querySelector('#cfg-test-selected').addEventListener('click', async () => {
-    const providerName = providerNameEl.value.trim();
-    if (!providerName) {
-      saveStatusEl.textContent = 'Set provider name first.';
-      saveStatusEl.style.color = 'var(--warning)';
-      return;
+  // --- Helpers ---
+  function getSuggestedName(side, type) {
+    const base = side === 'local' ? 'ollama' : (type === 'anthropic' ? 'claude' : 'openai');
+    if (!providerMap[base]) return base;
+    let i = 2;
+    while (providerMap[`${base}${i}`]) i += 1;
+    return `${base}${i}`;
+  }
+
+  function getDefaultModel(side, type) {
+    if (side === 'local') return 'llama3.2';
+    return type === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4o';
+  }
+
+  // --- Wire up a panel ---
+  function wirePanel(side) {
+    const isLocal = side === 'local';
+    const prefix = isLocal ? 'cfg-local' : 'cfg-ext';
+    const names = isLocal ? localNames : externalNames;
+
+    const profileEl = section.querySelector(`#${prefix}-profile`);
+    const nameEl = section.querySelector(`#${prefix}-name`);
+    const modelEl = section.querySelector(`#${prefix}-model`);
+    const urlEl = section.querySelector(`#${prefix}-url`);
+    const defaultEl = section.querySelector(`#${prefix}-default`);
+    const statusEl = section.querySelector(`#${prefix}-status`);
+    const typeEl = isLocal ? null : section.querySelector('#cfg-ext-type');
+    const keyEl = isLocal ? null : section.querySelector('#cfg-ext-key');
+
+    // Populate profile dropdown
+    function renderProfiles() {
+      const options = ['__new__', ...names];
+      profileEl.innerHTML = options.map((name) => {
+        if (name === '__new__') return '<option value="__new__">Create new profile...</option>';
+        const info = providerMap[name];
+        const st = info.connected === false ? 'offline' : 'online';
+        return `<option value="${esc(name)}">${esc(name)} (${esc(info.provider)}, ${st})</option>`;
+      }).join('');
+
+      const firstConfigured = options.find((n) => n !== '__new__') || '__new__';
+      const defaultInSide = names.includes(config.defaultProvider) ? config.defaultProvider : firstConfigured;
+      profileEl.value = defaultInSide;
+      applyProfile(defaultInSide);
     }
 
-    saveStatusEl.textContent = `Testing ${providerName}...`;
-    saveStatusEl.style.color = 'var(--text-muted)';
+    function applyProfile(name) {
+      if (name === '__new__') {
+        const pt = isLocal ? 'ollama' : (typeEl?.value || 'openai');
+        nameEl.value = getSuggestedName(side, pt);
+        modelEl.value = getDefaultModel(side, pt);
+        urlEl.value = isLocal ? 'http://127.0.0.1:11434' : '';
+        if (keyEl) keyEl.value = '';
+        return;
+      }
+      const entry = providerMap[name];
+      if (!entry) return;
+      nameEl.value = name;
+      modelEl.value = entry.model || '';
+      urlEl.value = entry.baseUrl || '';
+      if (typeEl) typeEl.value = entry.provider === 'ollama' ? 'openai' : entry.provider;
+      if (keyEl) keyEl.value = '';
+    }
 
-    try {
-      const latest = await api.providersStatus();
-      const found = latest.find((p) => p.name === providerName);
-      if (!found) {
-        saveStatusEl.textContent = `Provider '${providerName}' not yet active in runtime (save first).`;
-        saveStatusEl.style.color = 'var(--warning)';
+    profileEl.addEventListener('change', () => applyProfile(profileEl.value));
+
+    if (typeEl) {
+      typeEl.addEventListener('change', () => {
+        if (profileEl.value === '__new__' && !modelEl.value.trim()) {
+          modelEl.value = getDefaultModel('external', typeEl.value);
+        }
+      });
+    }
+
+    // Test connection
+    section.querySelector(`#${prefix}-test`).addEventListener('click', async () => {
+      const providerName = nameEl.value.trim();
+      if (!providerName) {
+        statusEl.textContent = 'Set provider name first.';
+        statusEl.style.color = 'var(--warning)';
+        return;
+      }
+      statusEl.textContent = `Testing ${providerName}...`;
+      statusEl.style.color = 'var(--text-muted)';
+      try {
+        const latest = await api.providersStatus();
+        const found = latest.find((p) => p.name === providerName);
+        if (!found) {
+          statusEl.textContent = `'${providerName}' not in runtime (save first).`;
+          statusEl.style.color = 'var(--warning)';
+          return;
+        }
+        if (found.connected === false) {
+          statusEl.textContent = `${providerName}: disconnected.`;
+          statusEl.style.color = 'var(--error)';
+        } else {
+          const count = found.availableModels?.length || 0;
+          statusEl.textContent = `${providerName}: connected (${count} model${count === 1 ? '' : 's'}).`;
+          statusEl.style.color = 'var(--success)';
+        }
+      } catch (err) {
+        statusEl.textContent = `Test failed: ${err instanceof Error ? err.message : String(err)}`;
+        statusEl.style.color = 'var(--error)';
+      }
+    });
+
+    // Save handler
+    section.querySelector(`#${prefix}-save`).addEventListener('click', async () => {
+      const providerName = nameEl.value.trim();
+      const model = modelEl.value.trim();
+      const baseUrl = urlEl.value.trim();
+      const providerType = isLocal ? 'ollama' : (typeEl?.value || 'openai');
+
+      if (!providerName) {
+        statusEl.textContent = 'Provider name is required.';
+        statusEl.style.color = 'var(--error)';
+        return;
+      }
+      if (!model) {
+        statusEl.textContent = 'Model is required.';
+        statusEl.style.color = 'var(--error)';
         return;
       }
 
-      if (found.connected === false) {
-        saveStatusEl.textContent = `${providerName}: disconnected.`;
-        saveStatusEl.style.color = 'var(--error)';
-      } else {
-        const count = found.availableModels?.length || 0;
-        saveStatusEl.textContent = `${providerName}: connected (${count} model${count === 1 ? '' : 's'} visible).`;
-        saveStatusEl.style.color = 'var(--success)';
+      const payload = {
+        llmMode: isLocal ? 'ollama' : 'external',
+        providerName,
+        providerType,
+        model,
+        baseUrl: baseUrl || undefined,
+        apiKey: keyEl?.value.trim() || undefined,
+        setDefaultProvider: defaultEl.value === 'true',
+        telegramEnabled: telegramEnabledEl.value === 'true',
+        telegramBotToken: telegramTokenEl.value.trim() || undefined,
+        telegramAllowedChatIds: parseChatIdsOrUndefined(telegramChatIdsEl.value),
+        setupCompleted: true,
+      };
+
+      statusEl.textContent = 'Saving...';
+      statusEl.style.color = 'var(--text-muted)';
+
+      try {
+        const result = await api.applyConfig(payload);
+        statusEl.textContent = result.message;
+        statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+        if (result.success) await renderConfig(container);
+      } catch (err) {
+        statusEl.textContent = err instanceof Error ? err.message : String(err);
+        statusEl.style.color = 'var(--error)';
       }
-    } catch (err) {
-      saveStatusEl.textContent = `Test failed: ${err instanceof Error ? err.message : String(err)}`;
-      saveStatusEl.style.color = 'var(--error)';
-    }
-  });
+    });
 
-  section.querySelector('#cfg-save').addEventListener('click', async () => {
-    const providerName = providerNameEl.value.trim();
-    const model = modelEl.value.trim();
-    const baseUrl = baseUrlEl.value.trim();
-    const apiKey = apiKeyEl.value.trim();
-    const providerType = state.mode === 'local' ? 'ollama' : providerTypeEl.value;
+    renderProfiles();
+  }
 
-    if (!providerName) {
-      saveStatusEl.textContent = 'Provider name is required.';
-      saveStatusEl.style.color = 'var(--error)';
-      return;
-    }
-    if (!model) {
-      saveStatusEl.textContent = 'Model is required.';
-      saveStatusEl.style.color = 'var(--error)';
-      return;
-    }
-
-    const payload = {
-      llmMode: state.mode === 'local' ? 'ollama' : 'external',
-      providerName,
-      providerType,
-      model,
-      baseUrl: baseUrl || undefined,
-      apiKey: apiKey || undefined,
-      setDefaultProvider: setDefaultEl.value === 'true',
-      telegramEnabled: telegramEnabledEl.value === 'true',
-      telegramBotToken: telegramTokenEl.value.trim() || undefined,
-      telegramAllowedChatIds: parseChatIdsOrUndefined(telegramChatIdsEl.value),
-      setupCompleted: true,
-    };
-
-    saveStatusEl.textContent = 'Saving configuration...';
-    saveStatusEl.style.color = 'var(--text-muted)';
-
-    try {
-      const result = await api.applyConfig(payload);
-      saveStatusEl.textContent = result.message;
-      saveStatusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
-
-      if (result.success) {
-        await renderConfig(container);
-      }
-    } catch (err) {
-      saveStatusEl.textContent = err instanceof Error ? err.message : String(err);
-      saveStatusEl.style.color = 'var(--error)';
-    }
-  });
-
-  syncModeUI();
-  syncTelegramFields();
+  wirePanel('local');
+  wirePanel('external');
   applyInputTooltips(section);
 
   return section;

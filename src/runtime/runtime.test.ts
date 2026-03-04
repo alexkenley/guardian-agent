@@ -493,7 +493,7 @@ describe('Runtime', () => {
       })).rejects.toThrow("cannot accept work in state 'dead'");
     });
 
-    it('should reject message dispatch to Errored agent', async () => {
+    it('should auto-recover Errored agent on user message dispatch', async () => {
       const agent = new FailingAgent();
       runtime.registerAgent(createAgentDefinition({ agent }));
 
@@ -507,10 +507,11 @@ describe('Runtime', () => {
       const instance = runtime.registry.get('failing')!;
       expect(instance.state).toBe(AgentState.Errored);
 
-      // Second dispatch should be rejected
+      // Second dispatch should auto-recover and re-attempt (which fails again
+      // because FailingAgent always throws), surfacing the real error
       await expect(runtime.dispatchMessage('failing', {
         id: '2', userId: 'u', channel: 'cli', content: 'test', timestamp: Date.now(),
-      })).rejects.toThrow("cannot accept work in state 'errored'");
+      })).rejects.toThrow('Simulated failure');
     });
 
     it('should silently skip event dispatch to Dead agent', async () => {

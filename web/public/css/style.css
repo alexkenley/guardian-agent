@@ -770,6 +770,12 @@ tr:hover td {
   font-size: 0.8rem;
 }
 
+.cfg-provider-panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
 /* ─── Agent Grid (Monitoring) ────────────────────────────── */
 
 .agent-grid {
@@ -1175,6 +1181,10 @@ tr:hover td {
     grid-template-columns: 1fr;
   }
 
+  .cfg-provider-panels {
+    grid-template-columns: 1fr;
+  }
+
   .intel-control-row {
     grid-template-columns: 1fr;
   }
@@ -1243,4 +1253,43 @@ tr:hover td {
   font-size: 0.75rem;
   color: var(--accent);
   margin-bottom: 0.75rem;
+}
+
+/* Toggle switch for category enable/disable */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  vertical-align: middle;
+}
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: var(--surface-secondary, #555);
+  border-radius: 20px;
+  transition: background-color 0.2s;
+}
+.toggle-slider::before {
+  content: "";
+  position: absolute;
+  height: 14px;
+  width: 14px;
+  left: 3px;
+  bottom: 3px;
+  background-color: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+.toggle-switch input:checked + .toggle-slider {
+  background-color: var(--accent, #4caf50);
+}
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(16px);
 }

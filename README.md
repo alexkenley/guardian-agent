@@ -82,6 +82,7 @@ Test agent behavior through the real Runtime with Guardian active:
 - Prompt-injection resistance: invisible Unicode stripping plus weighted injection signal scoring before agent execution.
 - Least-privilege capability model: per-agent capability grants with immutable frozen context (`Object.freeze`).
 - Tool governance and sandboxing: approval workflows, per-tool policy overrides, path/command/domain allowlists, and risk-tiered tool classes.
+- Connector + playbook guardrails (Option 2): declarative connector packs with host/path/command/capability allowlists, bounded step execution, and signed/dry-run controls.
 - Secret exfiltration controls: multi-pattern secret scanning, response redaction/blocking, and inter-agent payload blocking.
 - Intent hardening via SOUL profile: configurable `assistant.soul` injection with primary/delegated modes (`full`, `summary`, `disabled`) to balance consistency vs token overhead.
 - Cryptographic correlation for tool actions: deterministic SHA-256 hashes of redacted tool args (`argsHash`) for approval/job traceability without raw secret retention.
@@ -125,7 +126,7 @@ guardianagent              # if installed globally
 
 Then configure from web/CLI (no manual YAML editing required):
 - Web: open `#/config` (Configuration Center)
-- CLI: use `/config`, `/auth`, and `/tools` commands as needed
+- CLI: use `/config`, `/auth`, `/tools`, `/connectors`, and `/playbooks` commands as needed
 
 This configures local/external LLM providers, optional Telegram, web auth, and tool policy.
 
@@ -215,6 +216,22 @@ assistant:
       maxResponseBytes: 262144
       allowedHosts: [moltbook.com, api.moltbook.com]
       allowActiveResponse: false
+  connectors:
+    enabled: false
+    executionMode: plan_then_execute
+    maxConnectorCallsPerRun: 12
+    packs: []
+    playbooks:
+      enabled: true
+      maxSteps: 12
+      maxParallelSteps: 3
+      defaultStepTimeoutMs: 15000
+      requireSignedDefinitions: true
+      requireDryRunOnFirstExecution: true
+    studio:
+      enabled: true
+      mode: builder
+      requirePrivilegedTicket: true
 
 guardian:
   enabled: true
@@ -256,6 +273,7 @@ guardian:
 - SQLite-persisted conversation memory with sessions
 - SQLite DB hardening + monitoring (permission enforcement + integrity quick checks)
 - Tools control plane in web (`#/tools`) and CLI (`/tools`) for approvals, policies, and workstation-safe actions
+- Connector/playbook control plane in web (`#/connectors`) and CLI (`/connectors`, `/playbooks`) for pack governance, playbook registry, and guarded execution
 - Campaign automation tools for contact discovery and approval-gated Gmail send workflows (`/campaign`)
 - Quick actions for `email`, `task`, and `calendar` workflows
 - Threat-intel workflow for watchlist scans, findings triage, and response action drafts (human approval-gated publishing)
@@ -264,9 +282,16 @@ guardian:
 
 ### Key Commands
 
-- CLI: `/config`, `/auth`, `/tools`, `/campaign`, `/assistant`, `/quick`, `/session`, `/analytics`, `/intel`, `/guide`
+- CLI: `/config`, `/auth`, `/tools`, `/connectors`, `/playbooks`, `/campaign`, `/assistant`, `/quick`, `/session`, `/analytics`, `/intel`, `/guide`
 - Telegram: `/help`, `/guide`, `/reset`, `/quick`, `/intel`
-- Web: Config Center, Chat quick-actions bar, Tools tab, Assistant tab, Threat Intel tab, Reference Guide tab
+- Web: Config Center, Chat quick-actions bar, Tools tab, Connectors tab, Assistant tab, Threat Intel tab, Reference Guide tab
+
+### Connector + Playbook CLI (Web Parity)
+
+- Connector framework status + packs: `/connectors status`, `/connectors packs`
+- Connector settings: `/connectors settings ...` with `enable|disable`, `mode`, `limit`, `playbooks` controls, `studio` controls, and `json` bulk updates
+- Playbook controls: `/playbooks list`, `/playbooks runs`, `/playbooks run <playbookId> [--dry-run]`, `/playbooks upsert <json>`, `/playbooks delete <playbookId>`
+- Pack controls: `/connectors pack upsert <json>`, `/connectors pack delete <packId>`
 
 For Gmail campaign sends, provide OAuth token via `GOOGLE_OAUTH_ACCESS_TOKEN` (scope: `gmail.send`) or `accessToken` tool arg.
 
@@ -305,6 +330,7 @@ Implementation specs in `docs/specs/`:
 - [Threat Intel](docs/specs/THREAT-INTEL-SPEC.md)
 - [Threat Intel Research](docs/specs/THREAT-INTEL-RESEARCH.md)
 - [Hostile Forum Connectors](docs/specs/HOSTILE-FORUM-CONNECTORS-SPEC.md)
+- [Connector + Playbook Framework (Option 2)](docs/specs/CONNECTOR-PLAYBOOK-FRAMEWORK-SPEC.md)
 
 ## Disclaimer
 

@@ -10,10 +10,11 @@ import type { WatchdogResult } from '../runtime/watchdog.js';
 import type { BudgetRecord } from '../runtime/budget.js';
 import type { ReferenceGuide } from '../reference-guide.js';
 import type { QuickActionDefinition } from '../quick-actions.js';
-import type { SetupStatus, SetupApplyInput } from '../runtime/setup.js';
+import type { SetupStatus, SetupApplyInput, SearchConfigInput } from '../runtime/setup.js';
 import type { AnalyticsSummary, AnalyticsEventInput } from '../runtime/analytics.js';
 import type { ConversationSessionInfo } from '../runtime/conversation.js';
 import type { AssistantOrchestratorState } from '../runtime/orchestrator.js';
+import type { AssistantConnectorPackConfig, AssistantConnectorPlaybookDefinition, ConnectorExecutionMode } from '../config/types.js';
 import type {
   ThreatIntelSummary,
   ThreatIntelPlan,
@@ -24,7 +25,8 @@ import type {
   IntelActionType,
   IntelResponseMode,
 } from '../runtime/threat-intel.js';
-import type { ToolApprovalRequest, ToolDefinition, ToolJobRecord, ToolPolicySnapshot, ToolRunResponse } from '../tools/types.js';
+import type { ConnectorFrameworkState, ConnectorPlaybookRunResult } from '../runtime/connectors.js';
+import type { ToolApprovalRequest, ToolCategory, ToolDefinition, ToolJobRecord, ToolPolicySnapshot, ToolRunResponse } from '../tools/types.js';
 
 /** Agent info returned by GET /api/agents. */
 export interface DashboardAgentInfo {
@@ -121,6 +123,27 @@ export interface RedactedConfig {
         allowActiveResponse: boolean;
       };
     };
+    connectors: {
+      enabled: boolean;
+      executionMode: 'plan_then_execute' | 'direct_execute';
+      maxConnectorCallsPerRun: number;
+      packCount: number;
+      enabledPackCount: number;
+      playbookCount: number;
+      playbooks: {
+        enabled: boolean;
+        maxSteps: number;
+        maxParallelSteps: number;
+        defaultStepTimeoutMs: number;
+        requireSignedDefinitions: boolean;
+        requireDryRunOnFirstExecution: boolean;
+      };
+      studio: {
+        enabled: boolean;
+        mode: 'read_only' | 'builder';
+        requirePrivilegedTicket: boolean;
+      };
+    };
     tools: {
       enabled: boolean;
       policyMode: 'approve_each' | 'approve_by_policy' | 'autonomous';
@@ -156,6 +179,16 @@ export interface DashboardToolsState {
   policy: ToolPolicySnapshot;
   approvals: ToolApprovalRequest[];
   jobs: ToolJobRecord[];
+  /** All tool categories with current enable/disable status. */
+  categories?: Array<{
+    category: ToolCategory;
+    label: string;
+    description: string;
+    toolCount: number;
+    enabled: boolean;
+  }>;
+  /** Currently disabled categories. */
+  disabledCategories?: ToolCategory[];
 }
 
 /** Budget info returned by GET /api/budget. */
@@ -280,6 +313,7 @@ export interface DashboardCallbacks {
   }) => Promise<{ content: string }>;
   onSetupStatus?: () => Promise<SetupStatus> | SetupStatus;
   onSetupApply?: (input: SetupApplyInput) => Promise<{ success: boolean; message: string }>;
+  onSearchConfigUpdate?: (input: SearchConfigInput) => Promise<{ success: boolean; message: string }>;
   onAnalyticsTrack?: (event: AnalyticsEventInput) => void;
   onAnalyticsSummary?: (windowMs: number) => AnalyticsSummary;
   onThreatIntelSummary?: () => ThreatIntelSummary;
@@ -321,6 +355,8 @@ export interface DashboardCallbacks {
   onAuthReveal?: () => Promise<{ success: boolean; token?: string }> | { success: boolean; token?: string };
   onAuthRevoke?: () => Promise<{ success: boolean; message: string; status?: DashboardAuthStatus }> | { success: boolean; message: string; status?: DashboardAuthStatus };
   onToolsState?: (args?: { limit?: number }) => DashboardToolsState;
+  onToolsCategories?: () => Array<{ category: ToolCategory; label: string; description: string; toolCount: number; enabled: boolean }>;
+  onToolsCategoryToggle?: (input: { category: ToolCategory; enabled: boolean }) => { success: boolean; message: string };
   onToolsRun?: (input: {
     toolName: string;
     args?: Record<string, unknown>;
@@ -338,12 +374,55 @@ export interface DashboardCallbacks {
       allowedDomains?: string[];
     };
   }) => { success: boolean; message: string; policy?: ToolPolicySnapshot };
+  onBrowserConfigUpdate?: (input: {
+    enabled?: boolean;
+    allowedDomains?: string[];
+    sessionIdleTimeoutMs?: number;
+    maxSessions?: number;
+  }) => { success: boolean; message: string };
+  onBrowserConfigState?: () => { enabled: boolean; allowedDomains: string[]; sessionIdleTimeoutMs: number; maxSessions: number };
   onToolsApprovalDecision?: (input: {
     approvalId: string;
     decision: 'approved' | 'denied';
     actor: string;
     reason?: string;
   }) => Promise<{ success: boolean; message: string }> | { success: boolean; message: string };
+  onConnectorsState?: (args?: { limitRuns?: number }) => ConnectorFrameworkState;
+  onConnectorsTemplates?: () => Array<{ id: string; name: string; description: string; category: string; installed: boolean; playbookCount: number }>;
+  onConnectorsTemplateInstall?: (templateId: string) => { success: boolean; message: string };
+  onNetworkDevices?: () => { devices: Array<{ ip: string; mac: string; hostname: string | null; openPorts: number[]; firstSeen: number; lastSeen: number; status: 'online' | 'offline' }> };
+  onNetworkScan?: () => Promise<{ success: boolean; message: string; devicesFound: number }>;
+  onConnectorsSettingsUpdate?: (input: {
+    enabled?: boolean;
+    executionMode?: ConnectorExecutionMode;
+    maxConnectorCallsPerRun?: number;
+    playbooks?: {
+      enabled?: boolean;
+      maxSteps?: number;
+      maxParallelSteps?: number;
+      defaultStepTimeoutMs?: number;
+      requireSignedDefinitions?: boolean;
+      requireDryRunOnFirstExecution?: boolean;
+    };
+    studio?: {
+      enabled?: boolean;
+      mode?: 'read_only' | 'builder';
+      requirePrivilegedTicket?: boolean;
+    };
+  }) => { success: boolean; message: string };
+  onConnectorsPackUpsert?: (pack: AssistantConnectorPackConfig) => { success: boolean; message: string };
+  onConnectorsPackDelete?: (packId: string) => { success: boolean; message: string };
+  onPlaybookUpsert?: (playbook: AssistantConnectorPlaybookDefinition) => { success: boolean; message: string };
+  onPlaybookDelete?: (playbookId: string) => { success: boolean; message: string };
+  onPlaybookRun?: (input: {
+    playbookId: string;
+    dryRun?: boolean;
+    origin?: 'assistant' | 'cli' | 'web';
+    agentId?: string;
+    userId?: string;
+    channel?: string;
+    requestedBy?: string;
+  }) => Promise<ConnectorPlaybookRunResult> | ConnectorPlaybookRunResult;
   onKillswitch?: () => void;
   onRoutingMode?: () => { tierMode: string; complexityThreshold: number; fallbackOnFailure: boolean };
   onRoutingModeUpdate?: (mode: 'auto' | 'local-only' | 'external-only') => { success: boolean; message: string; tierMode: string };

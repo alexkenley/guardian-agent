@@ -11,6 +11,8 @@ import { renderReference } from './pages/reference.js';
 import { renderIntel } from './pages/intel.js';
 import { renderAssistant } from './pages/assistant.js';
 import { renderTools } from './pages/tools.js';
+import { renderConnectors } from './pages/connectors.js';
+import { renderNetwork } from './pages/network.js';
 import { initChatPanel, setChatContext } from './chat-panel.js';
 import { applyInputTooltips } from './tooltip.js';
 
@@ -178,6 +180,8 @@ const routes = {
   '/monitoring': { render: renderMonitoring, update: updateMonitoring, name: 'monitoring' },
   '/intel': { render: renderIntel, name: 'intel' },
   '/tools': { render: renderTools, name: 'tools' },
+  '/connectors': { render: renderConnectors, name: 'connectors' },
+  '/network': { render: renderNetwork, name: 'network' },
   '/assistant': { render: renderAssistant, name: 'assistant' },
   '/config': { render: renderConfig, name: 'config' },
   '/reference': { render: renderReference, name: 'reference' },

@@ -695,4 +695,272 @@ describe('ToolExecutor', () => {
       }
     });
   });
+
+  describe('Browser tools', () => {
+    it('does not register browser tools when browserConfig.enabled is false', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: [],
+        browserConfig: { enabled: false },
+      });
+      const names = executor.listToolDefinitions().map((t) => t.name);
+      expect(names).not.toContain('browser_open');
+      expect(names).not.toContain('browser_action');
+      expect(names).not.toContain('browser_snapshot');
+      expect(names).not.toContain('browser_close');
+      expect(names).not.toContain('browser_task');
+    });
+
+    it('registers browser tools when browserConfig.enabled is true', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: ['example.com'],
+        browserConfig: { enabled: true },
+      });
+      const names = executor.listToolDefinitions().map((t) => t.name);
+      expect(names).toContain('browser_open');
+      expect(names).toContain('browser_action');
+      expect(names).toContain('browser_snapshot');
+      expect(names).toContain('browser_close');
+      expect(names).toContain('browser_task');
+    });
+
+    it('browser_open blocks private URLs (SSRF protection)', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: ['localhost', '127.0.0.1'],
+        browserConfig: { enabled: true, allowedDomains: ['localhost'] },
+      });
+      const run = await executor.runTool({
+        toolName: 'browser_open',
+        args: { url: 'http://127.0.0.1:8080/admin' },
+        origin: 'cli',
+      });
+      expect(run.success).toBe(false);
+      expect(run.message).toContain('private/internal address');
+    });
+
+    it('browser_open blocks domains not in allowedDomains', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: ['example.com'],
+        browserConfig: { enabled: true, allowedDomains: ['example.com'] },
+      });
+      const run = await executor.runTool({
+        toolName: 'browser_open',
+        args: { url: 'https://evil.com/phish' },
+        origin: 'cli',
+      });
+      expect(run.success).toBe(false);
+      expect(run.message).toContain('not in browser allowedDomains');
+    });
+
+    it('browser_task blocks private URLs', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: ['example.com'],
+        browserConfig: { enabled: true, allowedDomains: ['example.com'] },
+      });
+      const run = await executor.runTool({
+        toolName: 'browser_task',
+        args: { url: 'http://192.168.1.1/config' },
+        origin: 'cli',
+      });
+      expect(run.success).toBe(false);
+      expect(run.message).toContain('private/internal address');
+    });
+
+    it('browser_action requires active session', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: ['example.com'],
+        browserConfig: { enabled: true },
+      });
+      const run = await executor.runTool({
+        toolName: 'browser_action',
+        args: { action: 'click', ref: '@e1' },
+        origin: 'cli',
+      });
+      expect(run.success).toBe(false);
+      expect(run.message).toContain('No active browser session');
+    });
+
+    it('browser_action validates ref format to prevent injection', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: ['example.com'],
+        browserConfig: { enabled: true },
+      });
+      const run = await executor.runTool({
+        toolName: 'browser_action',
+        args: { action: 'click', ref: '@e1; rm -rf /' },
+        origin: 'cli',
+      });
+      expect(run.success).toBe(false);
+      expect(run.message).toContain('Invalid element reference');
+    });
+
+    it('browser_action validates action enum', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: ['example.com'],
+        browserConfig: { enabled: true },
+      });
+      const run = await executor.runTool({
+        toolName: 'browser_action',
+        args: { action: 'execute', ref: '@e1' },
+        origin: 'cli',
+      });
+      expect(run.success).toBe(false);
+      expect(run.message).toContain('Invalid browser action');
+    });
+
+    it('dispose cleans up browser sessions', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: ['example.com'],
+        browserConfig: { enabled: true },
+      });
+      // Should not throw
+      await executor.dispose();
+    });
+  });
+
+  describe('tool categories', () => {
+    it('disabledCategories filters tools from list', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        disabledCategories: ['network', 'system'],
+      });
+      const names = executor.listToolDefinitions().map((t) => t.name);
+      expect(names).not.toContain('net_ping');
+      expect(names).not.toContain('sys_info');
+      expect(names).toContain('fs_read');
+      expect(names).toContain('shell_safe');
+    });
+
+    it('disabled category tool returns denied on runTool', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        disabledCategories: ['filesystem'],
+      });
+      const result = await executor.runTool({
+        toolName: 'fs_read',
+        args: { path: 'test.txt' },
+        origin: 'cli',
+      });
+      expect(result.success).toBe(false);
+      expect(result.status).toBe('denied');
+      expect(result.message).toContain('disabled category');
+    });
+
+    it('all builtin tools have category field set', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        browserConfig: { enabled: true },
+      });
+      const tools = executor.listToolDefinitions();
+      for (const tool of tools) {
+        expect(tool.category, `Tool '${tool.name}' should have a category`).toBeTruthy();
+      }
+    });
+
+    it('getCategoryInfo returns all 10 categories with correct counts', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+      });
+      const info = executor.getCategoryInfo();
+      expect(info.length).toBe(10);
+      const names = info.map((c) => c.category);
+      expect(names).toContain('filesystem');
+      expect(names).toContain('shell');
+      expect(names).toContain('web');
+      expect(names).toContain('browser');
+      expect(names).toContain('contacts');
+      expect(names).toContain('email');
+      expect(names).toContain('intel');
+      expect(names).toContain('forum');
+      expect(names).toContain('network');
+      expect(names).toContain('system');
+      const fs = info.find((c) => c.category === 'filesystem')!;
+      expect(fs.toolCount).toBe(5);
+      expect(fs.enabled).toBe(true);
+    });
+
+    it('setCategoryEnabled toggles work', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+      });
+      expect(executor.getDisabledCategories()).toEqual([]);
+      executor.setCategoryEnabled('network', false);
+      expect(executor.getDisabledCategories()).toContain('network');
+      const names = executor.listToolDefinitions().map((t) => t.name);
+      expect(names).not.toContain('net_ping');
+
+      executor.setCategoryEnabled('network', true);
+      expect(executor.getDisabledCategories()).not.toContain('network');
+      const namesAfter = executor.listToolDefinitions().map((t) => t.name);
+      expect(namesAfter).toContain('net_ping');
+    });
+  });
 });

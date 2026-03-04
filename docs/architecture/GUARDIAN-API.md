@@ -492,7 +492,8 @@ type AuditEventType =
   | 'action_denied'     | 'action_allowed'    | 'secret_detected'
   | 'output_blocked'    | 'output_redacted'   | 'event_blocked'
   | 'input_sanitized'   | 'rate_limited'      | 'capability_probe'
-  | 'anomaly_detected'  | 'agent_error'       | 'agent_stalled';
+  | 'policy_changed'    | 'anomaly_detected'  | 'agent_error'
+  | 'agent_stalled';
 
 type AuditSeverity = 'info' | 'warn' | 'critical';
 

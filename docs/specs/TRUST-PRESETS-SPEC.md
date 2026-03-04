@@ -70,6 +70,18 @@ In `loadConfigFromFile()`:
 2. If `trustPreset` is set, apply preset (preset overrides merged config)
 3. Re-apply user's explicit YAML overrides (user wins over preset)
 
+### Auto-Registered Agent Integration
+The bootstrap (`src/index.ts`) resolves agent capabilities dynamically from the configured trust preset. All auto-registered agents (local, external, default) receive capabilities from the preset rather than hardcoded lists:
+
+```typescript
+const presetName = config.guardian?.trustPreset as TrustPresetName | undefined;
+const agentCapabilities: Capability[] = presetName && TRUST_PRESETS[presetName]
+  ? [...TRUST_PRESETS[presetName].capabilities]
+  : DEFAULT_AGENT_CAPABILITIES;
+```
+
+This means the user's trust preset selection directly controls what auto-registered agents can do. For example, selecting `locked` restricts all agents to `read_files` only, while `power` grants all capabilities including `network_access`. When no preset is configured, a sensible default set is used (`read_files`, `write_files`, `execute_commands`, `network_access`, `read_email`, `draft_email`, `send_email`).
+
 ## Web UX
 The Config page includes a "Trust Preset" panel with a selector for locked/safe/balanced/power. Each option shows a brief description of the security posture. Selecting a preset applies it to the runtime config.
 

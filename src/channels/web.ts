@@ -43,7 +43,14 @@ const MIME_TYPES: Record<string, string> = {
 };
 
 export type WebAuthMode = 'bearer_required' | 'localhost_no_auth' | 'disabled';
-type PrivilegedTicketAction = 'auth.config' | 'auth.rotate' | 'auth.reveal' | 'auth.revoke';
+type PrivilegedTicketAction =
+  | 'auth.config'
+  | 'auth.rotate'
+  | 'auth.reveal'
+  | 'auth.revoke'
+  | 'connectors.config'
+  | 'connectors.pack'
+  | 'connectors.playbook';
 
 export interface WebAuthRuntimeConfig {
   mode: WebAuthMode;
@@ -289,7 +296,10 @@ export class WebChannel implements ChannelAdapter {
     return value === 'auth.config'
       || value === 'auth.rotate'
       || value === 'auth.reveal'
-      || value === 'auth.revoke';
+      || value === 'auth.revoke'
+      || value === 'connectors.config'
+      || value === 'connectors.pack'
+      || value === 'connectors.playbook';
   }
 
   private mintPrivilegedTicket(action: PrivilegedTicketAction): string {
@@ -750,6 +760,344 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // GET /api/tools/categories — list tool categories with status
+      if (req.method === 'GET' && url.pathname === '/api/tools/categories') {
+        if (!this.dashboard.onToolsCategories) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onToolsCategories());
+        return;
+      }
+
+      // POST /api/tools/categories — toggle tool category enable/disable
+      if (req.method === 'POST' && url.pathname === '/api/tools/categories') {
+        if (!this.dashboard.onToolsCategoryToggle) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { category: string; enabled: boolean };
+        try {
+          parsed = JSON.parse(body) as { category: string; enabled: boolean };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed.category || typeof parsed.enabled !== 'boolean') {
+          sendJSON(res, 400, { error: 'Missing category or enabled field' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onToolsCategoryToggle(parsed as Parameters<NonNullable<typeof this.dashboard.onToolsCategoryToggle>>[0]));
+        return;
+      }
+
+      // GET /api/tools/browser — browser automation config
+      if (req.method === 'GET' && url.pathname === '/api/tools/browser') {
+        if (!this.dashboard.onBrowserConfigState) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onBrowserConfigState());
+        return;
+      }
+
+      // POST /api/tools/browser — update browser automation config
+      if (req.method === 'POST' && url.pathname === '/api/tools/browser') {
+        if (!this.dashboard.onBrowserConfigUpdate) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { enabled?: boolean; allowedDomains?: string[]; sessionIdleTimeoutMs?: number; maxSessions?: number };
+        try {
+          parsed = JSON.parse(body) as { enabled?: boolean; allowedDomains?: string[]; sessionIdleTimeoutMs?: number; maxSessions?: number };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onBrowserConfigUpdate(parsed));
+        return;
+      }
+
+      // GET /api/connectors/state — connector packs/playbooks/runs
+      if (req.method === 'GET' && url.pathname === '/api/connectors/state') {
+        if (!this.dashboard.onConnectorsState) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const limitRuns = parseInt(url.searchParams.get('limitRuns') ?? '50', 10);
+        sendJSON(res, 200, this.dashboard.onConnectorsState({
+          limitRuns: Number.isFinite(limitRuns) ? limitRuns : 50,
+        }));
+        return;
+      }
+
+      // POST /api/connectors/settings — update connector runtime settings
+      if (req.method === 'POST' && url.pathname === '/api/connectors/settings') {
+        if (!this.dashboard.onConnectorsSettingsUpdate) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body = '';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: Parameters<NonNullable<DashboardCallbacks['onConnectorsSettingsUpdate']>>[0] & { ticket?: string };
+        try {
+          parsed = body.trim()
+            ? (JSON.parse(body) as Parameters<NonNullable<DashboardCallbacks['onConnectorsSettingsUpdate']>>[0] & { ticket?: string })
+            : {};
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        const requireTicket = this.dashboard.onConnectorsState?.({ limitRuns: 1 }).studio.requirePrivilegedTicket ?? false;
+        if (requireTicket && !this.requirePrivilegedTicket(req, res, url, 'connectors.config', parsed.ticket)) {
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onConnectorsSettingsUpdate(parsed));
+        return;
+      }
+
+      // POST /api/connectors/packs/upsert — add or update connector pack
+      if (req.method === 'POST' && url.pathname === '/api/connectors/packs/upsert') {
+        if (!this.dashboard.onConnectorsPackUpsert) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body = '';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: Parameters<NonNullable<DashboardCallbacks['onConnectorsPackUpsert']>>[0] & { ticket?: string };
+        try {
+          parsed = JSON.parse(body) as Parameters<NonNullable<DashboardCallbacks['onConnectorsPackUpsert']>>[0] & { ticket?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed?.id) {
+          sendJSON(res, 400, { error: 'pack.id is required' });
+          return;
+        }
+        const requireTicket = this.dashboard.onConnectorsState?.({ limitRuns: 1 }).studio.requirePrivilegedTicket ?? false;
+        if (requireTicket && !this.requirePrivilegedTicket(req, res, url, 'connectors.pack', parsed.ticket)) {
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onConnectorsPackUpsert(parsed));
+        return;
+      }
+
+      // POST /api/connectors/packs/delete — delete connector pack
+      if (req.method === 'POST' && url.pathname === '/api/connectors/packs/delete') {
+        if (!this.dashboard.onConnectorsPackDelete) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body = '';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { packId?: string; ticket?: string };
+        try {
+          parsed = JSON.parse(body) as { packId?: string; ticket?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed.packId?.trim()) {
+          sendJSON(res, 400, { error: 'packId is required' });
+          return;
+        }
+        const requireTicket = this.dashboard.onConnectorsState?.({ limitRuns: 1 }).studio.requirePrivilegedTicket ?? false;
+        if (requireTicket && !this.requirePrivilegedTicket(req, res, url, 'connectors.pack', parsed.ticket)) {
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onConnectorsPackDelete(parsed.packId.trim()));
+        return;
+      }
+
+      // POST /api/connectors/playbooks/upsert — add or update playbook definition
+      if (req.method === 'POST' && url.pathname === '/api/connectors/playbooks/upsert') {
+        if (!this.dashboard.onPlaybookUpsert) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body = '';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: Parameters<NonNullable<DashboardCallbacks['onPlaybookUpsert']>>[0] & { ticket?: string };
+        try {
+          parsed = JSON.parse(body) as Parameters<NonNullable<DashboardCallbacks['onPlaybookUpsert']>>[0] & { ticket?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed?.id) {
+          sendJSON(res, 400, { error: 'playbook.id is required' });
+          return;
+        }
+        const requireTicket = this.dashboard.onConnectorsState?.({ limitRuns: 1 }).studio.requirePrivilegedTicket ?? false;
+        if (requireTicket && !this.requirePrivilegedTicket(req, res, url, 'connectors.playbook', parsed.ticket)) {
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onPlaybookUpsert(parsed));
+        return;
+      }
+
+      // POST /api/connectors/playbooks/delete — delete playbook definition
+      if (req.method === 'POST' && url.pathname === '/api/connectors/playbooks/delete') {
+        if (!this.dashboard.onPlaybookDelete) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body = '';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { playbookId?: string; ticket?: string };
+        try {
+          parsed = JSON.parse(body) as { playbookId?: string; ticket?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed.playbookId?.trim()) {
+          sendJSON(res, 400, { error: 'playbookId is required' });
+          return;
+        }
+        const requireTicket = this.dashboard.onConnectorsState?.({ limitRuns: 1 }).studio.requirePrivilegedTicket ?? false;
+        if (requireTicket && !this.requirePrivilegedTicket(req, res, url, 'connectors.playbook', parsed.ticket)) {
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onPlaybookDelete(parsed.playbookId.trim()));
+        return;
+      }
+
+      // POST /api/connectors/playbooks/run — execute playbook through tool controls
+      if (req.method === 'POST' && url.pathname === '/api/connectors/playbooks/run') {
+        if (!this.dashboard.onPlaybookRun) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body = '';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: Parameters<NonNullable<DashboardCallbacks['onPlaybookRun']>>[0];
+        try {
+          parsed = JSON.parse(body) as Parameters<NonNullable<DashboardCallbacks['onPlaybookRun']>>[0];
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed.playbookId?.trim()) {
+          sendJSON(res, 400, { error: 'playbookId is required' });
+          return;
+        }
+        sendJSON(res, 200, await this.dashboard.onPlaybookRun(parsed));
+        return;
+      }
+
+      // GET /api/connectors/templates — list built-in templates
+      if (req.method === 'GET' && url.pathname === '/api/connectors/templates') {
+        if (!this.dashboard.onConnectorsTemplates) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onConnectorsTemplates());
+        return;
+      }
+
+      // POST /api/connectors/templates/install — install a built-in template
+      if (req.method === 'POST' && url.pathname === '/api/connectors/templates/install') {
+        if (!this.dashboard.onConnectorsTemplateInstall) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body = '';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { templateId?: string };
+        try {
+          parsed = JSON.parse(body) as { templateId?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed.templateId?.trim()) {
+          sendJSON(res, 400, { error: 'templateId is required' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onConnectorsTemplateInstall(parsed.templateId.trim()));
+        return;
+      }
+
+      // GET /api/network/devices — device inventory
+      if (req.method === 'GET' && url.pathname === '/api/network/devices') {
+        if (!this.dashboard.onNetworkDevices) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onNetworkDevices());
+        return;
+      }
+
+      // POST /api/network/scan — trigger network scan
+      if (req.method === 'POST' && url.pathname === '/api/network/scan') {
+        if (!this.dashboard.onNetworkScan) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, await this.dashboard.onNetworkScan());
+        return;
+      }
+
       // GET /api/agents — Agent list
       if (req.method === 'GET' && url.pathname === '/api/agents') {
         if (!this.dashboard.onAgents) {
@@ -926,6 +1274,39 @@ export class WebChannel implements ChannelAdapter {
 
         const result = await this.dashboard.onSetupApply(parsed as Parameters<NonNullable<DashboardCallbacks['onSetupApply']>>[0]);
         sendJSON(res, 200, result);
+        return;
+      }
+
+      // POST /api/config/search — update web search settings without touching LLM config
+      if (req.method === 'POST' && url.pathname === '/api/config/search') {
+        if (!this.dashboard.onSearchConfigUpdate) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(body);
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+
+        try {
+          const result = await this.dashboard.onSearchConfigUpdate(parsed as Parameters<NonNullable<DashboardCallbacks['onSearchConfigUpdate']>>[0]);
+          sendJSON(res, 200, result);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Update failed';
+          sendJSON(res, 500, { error: message });
+        }
         return;
       }
 

@@ -229,6 +229,27 @@ describe('CLIChannel with DashboardCallbacks', () => {
             allowActiveResponse: false,
           },
         },
+        connectors: {
+          enabled: true,
+          executionMode: 'plan_then_execute',
+          maxConnectorCallsPerRun: 12,
+          packCount: 1,
+          enabledPackCount: 1,
+          playbookCount: 1,
+          playbooks: {
+            enabled: true,
+            maxSteps: 12,
+            maxParallelSteps: 3,
+            defaultStepTimeoutMs: 15000,
+            requireSignedDefinitions: true,
+            requireDryRunOnFirstExecution: true,
+          },
+          studio: {
+            enabled: true,
+            mode: 'builder',
+            requirePrivilegedTicket: true,
+          },
+        },
         tools: {
           enabled: true,
           policyMode: 'approve_by_policy',
@@ -376,6 +397,11 @@ describe('CLIChannel with DashboardCallbacks', () => {
       },
     }),
     onThreatIntelSetResponseMode: (mode) => ({ success: true, message: `mode=${mode}` }),
+    onToolsCategories: () => [
+      { category: 'filesystem' as const, label: 'Filesystem', description: 'File operations', toolCount: 5, enabled: true },
+      { category: 'network' as const, label: 'Network', description: 'Network tools', toolCount: 7, enabled: true },
+    ],
+    onToolsCategoryToggle: (input) => ({ success: true, message: `${input.category} ${input.enabled ? 'enabled' : 'disabled'}` }),
   };
 
   const makeCli = (dashboardOverride?: Partial<DashboardCallbacks>) => {
@@ -396,6 +422,36 @@ describe('CLIChannel with DashboardCallbacks', () => {
     input.write(`${cmd}\n`);
     await new Promise(r => setTimeout(r, 50));
   };
+
+  const connectorState = () => ({
+    summary: {
+      enabled: true,
+      executionMode: 'plan_then_execute' as const,
+      maxConnectorCallsPerRun: 12,
+      packCount: 1,
+      enabledPackCount: 1,
+      playbookCount: 1,
+      enabledPlaybookCount: 1,
+      runCount: 2,
+      dryRunQualifiedCount: 1,
+    },
+    packs: [],
+    playbooks: [],
+    runs: [],
+    playbooksConfig: {
+      enabled: true,
+      maxSteps: 12,
+      maxParallelSteps: 3,
+      defaultStepTimeoutMs: 15000,
+      requireSignedDefinitions: true,
+      requireDryRunOnFirstExecution: true,
+    },
+    studio: {
+      enabled: true,
+      mode: 'builder' as const,
+      requirePrivilegedTicket: true,
+    },
+  });
 
   // ─── /help ─────────────────────────────────────────────
 
@@ -439,6 +495,157 @@ describe('CLIChannel with DashboardCallbacks', () => {
 
     expect(text).toContain('/campaign discover');
     expect(text).toContain('/campaign run');
+
+    await cli.stop();
+  });
+
+  it('/connectors status should show connector framework summary', async () => {
+    const { input, output, cli } = makeCli({
+      onConnectorsState: () => connectorState(),
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/connectors status');
+    const text = readOutput(output);
+
+    expect(text).toContain('Connector Framework');
+    expect(text).toContain('plan_then_execute');
+    expect(text).toContain('Max calls/run: 12');
+
+    await cli.stop();
+  });
+
+  it('/connectors settings playbooks max-steps should update full playbook settings from CLI', async () => {
+    let received: Parameters<NonNullable<DashboardCallbacks['onConnectorsSettingsUpdate']>>[0] | null = null;
+    const { input, output, cli } = makeCli({
+      onConnectorsState: () => connectorState(),
+      onConnectorsSettingsUpdate: (input) => {
+        received = input;
+        return { success: true, message: 'Connector settings updated.' };
+      },
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/connectors settings playbooks max-steps 18');
+    const text = readOutput(output);
+
+    expect(text).toContain('OK');
+    expect(received).toEqual({ playbooks: { maxSteps: 18 } });
+
+    await cli.stop();
+  });
+
+  it('/connectors settings studio mode should update studio guardrails from CLI', async () => {
+    let received: Parameters<NonNullable<DashboardCallbacks['onConnectorsSettingsUpdate']>>[0] | null = null;
+    const { input, output, cli } = makeCli({
+      onConnectorsState: () => connectorState(),
+      onConnectorsSettingsUpdate: (input) => {
+        received = input;
+        return { success: true, message: 'Connector settings updated.' };
+      },
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/connectors settings studio mode read_only');
+    const text = readOutput(output);
+
+    expect(text).toContain('OK');
+    expect(received).toEqual({ studio: { mode: 'read_only' } });
+
+    await cli.stop();
+  });
+
+  it('/connectors settings json should allow bulk connector updates from CLI', async () => {
+    let received: Parameters<NonNullable<DashboardCallbacks['onConnectorsSettingsUpdate']>>[0] | null = null;
+    const { input, output, cli } = makeCli({
+      onConnectorsState: () => connectorState(),
+      onConnectorsSettingsUpdate: (input) => {
+        received = input;
+        return { success: true, message: 'Connector settings updated.' };
+      },
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/connectors settings json {"playbooks":{"defaultStepTimeoutMs":20000},"studio":{"requirePrivilegedTicket":false}}');
+    const text = readOutput(output);
+
+    expect(text).toContain('OK');
+    expect(received).toEqual({
+      playbooks: { defaultStepTimeoutMs: 20000 },
+      studio: { requirePrivilegedTicket: false },
+    });
+
+    await cli.stop();
+  });
+
+  it('/playbooks run should execute playbook via callback', async () => {
+    const { input, output, cli } = makeCli({
+      onConnectorsState: () => ({
+        summary: {
+          enabled: true,
+          executionMode: 'plan_then_execute',
+          maxConnectorCallsPerRun: 12,
+          packCount: 1,
+          enabledPackCount: 1,
+          playbookCount: 1,
+          enabledPlaybookCount: 1,
+          runCount: 0,
+          dryRunQualifiedCount: 0,
+        },
+        packs: [],
+        playbooks: [{
+          id: 'infra-audit',
+          name: 'Infra Audit',
+          enabled: true,
+          mode: 'sequential',
+          steps: [{
+            id: 'step-1',
+            packId: 'infra-core',
+            toolName: 'fs_list',
+          }],
+        }],
+        runs: [],
+        playbooksConfig: {
+          enabled: true,
+          maxSteps: 12,
+          maxParallelSteps: 3,
+          defaultStepTimeoutMs: 15000,
+          requireSignedDefinitions: true,
+          requireDryRunOnFirstExecution: true,
+        },
+        studio: {
+          enabled: true,
+          mode: 'builder',
+          requirePrivilegedTicket: true,
+        },
+      }),
+      onPlaybookRun: async ({ playbookId, dryRun }) => ({
+        success: true,
+        status: 'succeeded',
+        message: `${playbookId} ${dryRun ? 'dry' : 'live'} run complete`,
+        run: {
+          id: 'run-1',
+          playbookId,
+          playbookName: 'Infra Audit',
+          createdAt: Date.now(),
+          startedAt: Date.now(),
+          completedAt: Date.now(),
+          durationMs: 100,
+          dryRun: !!dryRun,
+          status: 'succeeded',
+          message: 'done',
+          steps: [],
+          origin: 'cli',
+        },
+      }),
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/playbooks run infra-audit --dry-run');
+    const text = readOutput(output);
+
+    expect(text).toContain('dry run complete');
+    expect(text).toContain('run-1');
 
     await cli.stop();
   });
@@ -1464,6 +1671,27 @@ describe('WebChannel', () => {
               allowActiveResponse: false,
             },
           },
+          connectors: {
+            enabled: false,
+            executionMode: 'plan_then_execute',
+            maxConnectorCallsPerRun: 12,
+            packCount: 0,
+            enabledPackCount: 0,
+            playbookCount: 0,
+            playbooks: {
+              enabled: true,
+              maxSteps: 12,
+              maxParallelSteps: 3,
+              defaultStepTimeoutMs: 15000,
+              requireSignedDefinitions: true,
+              requireDryRunOnFirstExecution: true,
+            },
+            studio: {
+              enabled: true,
+              mode: 'builder',
+              requirePrivilegedTicket: true,
+            },
+          },
           tools: {
             enabled: true,
             policyMode: 'approve_by_policy',
@@ -1581,6 +1809,10 @@ describe('WebChannel', () => {
         message: `drafted:${findingId}:${type}`,
       }),
       onThreatIntelSetResponseMode: (mode) => ({ success: true, message: `mode:${mode}` }),
+      onToolsCategories: () => [
+        { category: 'filesystem' as const, label: 'Filesystem', description: 'File operations', toolCount: 5, enabled: true },
+      ],
+      onToolsCategoryToggle: (input) => ({ success: true, message: `${input.category} toggled` }),
     };
 
     it('GET /api/agents should return agent list', async () => {

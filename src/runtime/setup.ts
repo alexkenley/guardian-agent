@@ -42,6 +42,14 @@ export interface SetupApplyInput {
   braveApiKey?: string;
 }
 
+export interface SearchConfigInput {
+  webSearchProvider?: 'auto' | 'perplexity' | 'brave' | 'duckduckgo';
+  perplexityApiKey?: string;
+  openRouterApiKey?: string;
+  braveApiKey?: string;
+  fallbacks?: string[];
+}
+
 export function evaluateSetupStatus(
   config: GuardianAgentConfig,
   providers: DashboardProviderInfo[],

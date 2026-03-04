@@ -389,3 +389,79 @@ All sub-agent invocations use `ctx.dispatch()`, which calls `Runtime.dispatchMes
 - (-) State poisoning via crafted response content is an open challenge (InputSanitizer helps but doesn't fully solve)
 
 **Spec:** `docs/specs/SHARED-STATE-SPEC.md`
+
+---
+
+## ADR-021: Connector Pack + Playbook Framework (Option 2)
+
+**Status:** Accepted
+
+**Context:** We need workflow automation for infrastructure operations (home labs, enterprise labs, building management) without pulling in a heavyweight external orchestration runtime. External platforms add operational overhead and can create policy bypass risk if execution leaves GuardianAgent control planes.
+
+**Decision:** Adopt a native Connector + Playbook framework:
+- `assistant.connectors` defines bounded connector packs (capabilities, hosts, paths, commands, auth mode).
+- Playbook execution is step-limited and timeout-bounded with optional parallelism caps.
+- Visual studio mode is policy-driven (`read_only` or `builder`) and designed to reuse privileged-ticket patterns for mutating controls.
+- Connector actions are intended to route through existing ToolExecutor + Guardian chokepoints rather than introducing a parallel execution path.
+
+**Consequences:**
+- (+) Lower complexity than embedding a separate workflow engine.
+- (+) Security posture remains consistent with existing Guardian, tool approvals, and audit chain.
+- (+) Declarative packs provide explicit least-privilege boundaries per operational domain.
+- (+) Enables phased rollout (policy first, runtime execution second, visual builder third).
+- (-) Requires building native runtime modules for connector registry/playbook execution.
+- (-) Limited ecosystem compared with mature workflow products until connector catalog grows.
+
+**Spec:** `docs/specs/CONNECTOR-PLAYBOOK-FRAMEWORK-SPEC.md`
+
+---
+
+## ADR-022: Agent Auto-Recovery on User Messages
+
+**Status:** Accepted
+
+**Context:** When an agent enters the Errored state (e.g., due to a misconfigured provider returning 404), users receive an unhelpful "Agent cannot accept work in state 'errored'" rejection. The only recovery path was waiting for the watchdog's exponential backoff schedule [30s, 1m, 5m, 15m, 60m], which could leave agents unusable for extended periods — especially frustrating when the user has already fixed the underlying config issue.
+
+**Decision:** In `Runtime.dispatchMessage()`, before `assertExecutable()`, check if the target agent is in Errored state. If so, automatically transition it to Ready before proceeding. If the transition fails, fall through to the original `assertExecutable()` which throws the standard rejection.
+
+**Consequences:**
+- (+) Users get the actual underlying error instead of a dead-end lifecycle rejection
+- (+) Agents can recover immediately after config fixes without waiting for backoff
+- (+) No change to the Dead state — agents that exhaust max retries are still permanently dead
+- (+) Safe: if the underlying issue persists, the agent will error again and the user sees the real cause
+- (-) The consecutive error counter is not reset, so repeated auto-recoveries still accumulate toward Dead
+
+---
+
+## ADR-023: Dedicated Web Search Config Endpoint
+
+**Status:** Accepted
+
+**Context:** The Config Center's web search save handler used the same `POST /api/setup/apply` endpoint as LLM provider saves. It sent hardcoded `llmMode: 'ollama'` plus the current model name, which overwrote the provider type to `'ollama'` even when the actual provider was OpenAI/Anthropic — silently corrupting the LLM configuration.
+
+**Decision:** Create a dedicated `POST /api/config/search` endpoint that accepts only web search fields (`webSearchProvider`, API keys, `fallbacks`). This endpoint updates only `assistant.tools.webSearch` in config — it never touches LLM fields. The frontend's web search save handler now calls `api.saveSearchConfig()` instead of `api.applyConfig()`.
+
+Additionally, `POST /api/setup/apply` was hardened: when `providerType` is missing, the backend preserves the existing provider's type instead of defaulting to `'openai'`. If no existing provider exists and no `providerType` is provided, it returns an error.
+
+**Consequences:**
+- (+) Eliminates the root cause of cross-domain config corruption
+- (+) Web search settings can be saved independently without risk to LLM config
+- (+) Provider saves are now safer — explicit `providerType` required
+- (+) API key clearing supported (empty string = delete)
+- (-) Two endpoints for config writes instead of one (acceptable trade-off for safety)
+
+---
+
+## ADR-024: Dynamic Agent Capabilities from Trust Presets
+
+**Status:** Accepted
+
+**Context:** Auto-registered agents (local, external, default) had hardcoded capability lists at registration time. The `local` agent initially lacked `network_access`, which blocked web search even when the user's trust preset would have granted it. This violated the design intent that the Guardian system should be user-authorized — capabilities should come from the user's security posture configuration, not developer hardcoding.
+
+**Decision:** Resolve agent capabilities dynamically from the configured trust preset at bootstrap time. All auto-registered agents share the same capability set derived from `TRUST_PRESETS[config.guardian.trustPreset]`. When no preset is configured, a sensible default set is used.
+
+**Consequences:**
+- (+) User's trust preset selection directly controls agent capabilities
+- (+) Consistent capabilities across all auto-registered agents
+- (+) Changing the trust preset changes what agents can do (after restart)
+- (-) All auto-registered agents share the same capabilities — no per-agent differentiation for auto-registered agents (config-defined agents still have explicit capabilities)

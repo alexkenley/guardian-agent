@@ -14,6 +14,7 @@ export async function renderTools(container) {
     const policy = state.policy || { mode: 'approve_by_policy', toolPolicies: {}, sandbox: { allowedPaths: [], allowedCommands: [], allowedDomains: [] } };
     const approvals = state.approvals || [];
     const jobs = state.jobs || [];
+    const categories = state.categories || [];
 
     container.innerHTML = `
       <h2 class="page-title">Tools</h2>
@@ -77,6 +78,39 @@ export async function renderTools(container) {
           </div>
         </div>
       </div>
+
+      ${categories.length > 0 ? `
+      <div class="table-container">
+        <div class="table-header"><h3>Tool Categories</h3></div>
+        <table>
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th>Label</th>
+              <th>Tools</th>
+              <th>Status</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${categories.map((cat) => `
+              <tr>
+                <td>${esc(cat.category)}</td>
+                <td>${esc(cat.label)}</td>
+                <td>${cat.toolCount}</td>
+                <td>
+                  <label class="toggle-switch" style="margin:0;">
+                    <input type="checkbox" class="category-toggle" data-category="${escAttr(cat.category)}" ${cat.enabled ? 'checked' : ''}>
+                    <span class="toggle-slider"></span>
+                  </label>
+                </td>
+                <td style="font-size:0.72rem;">${esc(cat.description)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      ` : ''}
 
       <div class="table-container">
         <div class="table-header">
@@ -174,6 +208,26 @@ export async function renderTools(container) {
     `;
 
     container.querySelector('#tools-refresh')?.addEventListener('click', () => renderTools(container));
+
+    container.querySelectorAll('.category-toggle').forEach((toggle) => {
+      toggle.addEventListener('change', async () => {
+        const category = toggle.getAttribute('data-category');
+        const enabled = toggle.checked;
+        if (!category) return;
+        try {
+          const result = await api.toggleToolCategory({ category, enabled });
+          if (!result.success) {
+            alert(result.message || 'Failed to toggle category.');
+            toggle.checked = !enabled;
+          } else {
+            await renderTools(container);
+          }
+        } catch (err) {
+          alert(err.message || 'Failed to toggle category.');
+          toggle.checked = !enabled;
+        }
+      });
+    });
 
     container.querySelectorAll('.tool-approve').forEach((button) => {
       button.addEventListener('click', async () => {

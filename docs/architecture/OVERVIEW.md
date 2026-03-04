@@ -103,6 +103,7 @@ Runtime (src/runtime/runtime.ts)
 ├── Quick Actions (src/quick-actions.ts) — structured assistant workflows
 ├── Threat Intel (src/runtime/threat-intel.ts) — watchlist scans, findings triage, response drafting
 │   └── Moltbook Connector (src/runtime/moltbook-connector.ts) — hostile-site constrained forum ingestion
+├── Connector Framework (assistant.connectors) — Option 2 connector-pack/playbook policy controls
 ├── Guardian (src/guardian/)             — three-layer defense system
 │   ├── guardian.ts                     — admission controller pipeline
 │   ├── input-sanitizer.ts             — prompt injection detection (Layer 1)
@@ -351,9 +352,12 @@ Created → Ready → Running ⟷ Idle
                       │
                       ▼
                    Errored (with exponential backoff)
-                      │
-                      ▼ (after max retries)
-                    Dead
+                   │     │
+                   │     ▼ (after max retries)
+                   │   Dead
+                   │
+                   ▼ (on user message)
+                  Ready (auto-recovery)
 ```
 
 - **Created → Ready**: On `registerAgent()`, agent is initialized
@@ -361,7 +365,8 @@ Created → Ready → Running ⟷ Idle
 - **Running → Idle**: After handler completes successfully
 - **Idle → Running**: On next invocation
 - **Running → Errored**: On handler error; exponential backoff [30s, 1m, 5m, 15m, 60m]
-- **Errored → Dead**: After 5 consecutive failures
+- **Errored → Ready**: On user message dispatch — auto-recovery transitions the agent back to Ready so the user gets the actual error instead of a dead-end "cannot accept work" rejection
+- **Errored → Dead**: After 5 consecutive failures (via watchdog backoff, not user messages)
 
 ## LLM Provider Layer
 
@@ -383,4 +388,5 @@ Unified `LLMProvider` interface for **Ollama**, **Anthropic**, and **OpenAI**:
 - **Assistant State**: web `#/assistant` and CLI `/assistant` orchestration queue/latency visibility, priority queue stats, request-step traces, job tracking, and policy-decision telemetry
 - **Configuration Center**: web `#/config` + CLI `/config` onboarding/provider/channel configuration flow (no setup wizard)
 - **Tools Control Plane**: web `#/tools` + CLI `/tools` for tool execution, manual approvals, policy mode, and sandbox boundaries
+- **Connector Studio (Option 2)**: configurable connector packs + playbook controls via `assistant.connectors` (runtime-ready policy layer)
 - **Threat Intel**: web `#/intel`, CLI `/intel`, Telegram `/intel` command surfaces

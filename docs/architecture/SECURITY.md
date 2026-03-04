@@ -31,8 +31,9 @@ All security enforcement is **mandatory at the Runtime level**. Agents cannot by
 | **Response output** | After `agent.onMessage()` returns, the Runtime scans the response for secrets and redacts/blocks before it reaches anyone. | `runtime.ts` — output scanning in `dispatchMessage()` |
 | **LLM access** | Agents receive a `GuardedLLMProvider` via `ctx.llm`, not the raw provider. Every LLM call is automatically scanned for secrets and tracked for token usage. | `guarded-provider.ts`, `runtime.ts` — `createAgentContext()` |
 | **Event emission** | `ctx.emit()` scans all payloads for secrets before dispatch. This is the only way to send inter-agent events. | `runtime.ts` — `createAgentContext()` emit closure |
+| **Connector/playbook operations** | Option 2 connector packs are declarative allowlists; execution is intended to flow through ToolExecutor + Guardian checks, not a side-channel runtime. | `config/types.ts`, `config/loader.ts`, `tools/executor.ts` |
 | **Resource limits** | Concurrent invocation limits, queue depth, token rate limits, and wall-clock budgets are checked before every invocation. | `runtime.ts` — `checkConcurrentLimit()`, `checkQueueDepth()`, `checkTokenRateLimit()` |
-| **Lifecycle gating** | Dead, Errored, Stalled, and Paused agents cannot receive work. | `runtime.ts` — `INACTIVE_STATES`, `assertExecutable()` |
+| **Lifecycle gating** | Dead, Stalled, and Paused agents cannot receive work. Errored agents auto-recover on user messages. | `runtime.ts` — `INACTIVE_STATES`, `assertExecutable()`, `dispatchMessage()` auto-recovery |
 | **Context immutability** | Agent contexts are frozen with `Object.freeze()`. Agents cannot modify their own capabilities, emit function, or LLM provider reference. | `runtime.ts` — `createAgentContext()` |
 
 The agent's only interaction points with the system are:
@@ -159,6 +160,8 @@ Maps action types to required capabilities. Agents without the required capabili
 | `install_package` | `install_packages` |
 
 Unknown action types pass through (allow by default for extensibility).
+
+**Dynamic capability resolution:** Auto-registered agents (local, external, default) receive capabilities from the configured trust preset rather than hardcoded lists. This means the user's `guardian.trustPreset` selection directly controls what agents can do. For example, `locked` restricts agents to `read_files` only, while `power` grants `network_access` and all other capabilities. See [TRUST-PRESETS-SPEC.md](../specs/TRUST-PRESETS-SPEC.md) for details.
 
 ### 1.4 SecretScanController (Validating)
 
@@ -330,7 +333,7 @@ In-memory ring buffer that records all security events, backed by optional SHA-2
 
 The chain can be verified via `GET /api/audit/verify` or the web Security page.
 
-### Event Types (13)
+### Event Types (14)
 
 | Type | Description | Typical Severity |
 |------|-------------|-----------------|
@@ -343,10 +346,11 @@ The chain can be verified via `GET /api/audit/verify` or the web Security page.
 | `input_sanitized` | Invisible chars stripped from input | info |
 | `rate_limited` | Rate limit hit | warn |
 | `capability_probe` | Agent probed beyond its capabilities | warn |
-| `policy_changed` | Config policy hash changed (old/new hash recorded) | info |
+| `policy_changed` | Config policy hash changed (old/new hash recorded, includes `changedBy` and `reason` metadata) | info |
 | `anomaly_detected` | Sentinel detected anomaly | warn/critical |
 | `agent_error` | Agent error (for correlation) | warn |
 | `agent_stalled` | Agent stalled (for correlation) | warn |
+| `integrity_checkpoint_written` | SQLite integrity checkpoint succeeded | info |
 
 ### Configuration
 
@@ -455,6 +459,7 @@ The watchdog monitors agent activity timestamps:
 - Errors recorded in AuditLog as `agent_error` events
 - Exponential backoff: [30s, 1m, 5m, 15m, 60m]
 - After max retries, agent transitions to Dead
+- **Auto-recovery on user messages:** When a user sends a message to an errored agent, the runtime automatically transitions it back to Ready before dispatching. This prevents "cannot accept work in state 'errored'" dead-ends — the user gets the actual underlying error instead, and the agent gets another chance to recover (e.g., after a config fix)
 
 ---
 
@@ -512,6 +517,39 @@ guardian:
 | **power** | all capabilities | 60/min, 2000/hr | autonomous |
 
 Priority: user explicit config > preset > defaults. See [TRUST-PRESETS-SPEC.md](../specs/TRUST-PRESETS-SPEC.md).
+
+### Connector + Playbook Policy (Option 2)
+
+```yaml
+assistant:
+  connectors:
+    enabled: true
+    executionMode: plan_then_execute
+    maxConnectorCallsPerRun: 12
+    packs:
+      - id: infra-core
+        name: Infrastructure Core
+        enabled: true
+        authMode: oauth2
+        allowedCapabilities: [inventory.read, vm.power.write]
+        allowedHosts: [10.10.0.5, bms-gateway.local]
+        allowedPaths: [./workspace]
+        allowedCommands: [ssh, ansible-playbook]
+        requireHumanApprovalForWrites: true
+    playbooks:
+      enabled: true
+      maxSteps: 12
+      maxParallelSteps: 3
+      defaultStepTimeoutMs: 15000
+      requireSignedDefinitions: true
+      requireDryRunOnFirstExecution: true
+    studio:
+      enabled: true
+      mode: builder
+      requirePrivilegedTicket: true
+```
+
+This keeps automation scoped by explicit allowlists and approval requirements while preserving existing Guardian and audit controls.
 
 ---
 
@@ -628,6 +666,22 @@ The MCP client connects to external tool servers via child processes. This intro
 3. **No reconnection** — Server crashes leave the client in `disconnected` state. Automatic reconnection with backoff is planned.
 
 See [MCP-CLIENT-SPEC.md](../specs/MCP-CLIENT-SPEC.md) for the complete security analysis.
+
+---
+
+## Connector + Playbook Security (Option 2)
+
+Connector packs and playbooks add workflow flexibility without adding a parallel trust model.
+
+### Security Posture
+
+1. **Pack boundaries are explicit** — each pack limits capabilities, hosts, paths, and commands.
+2. **Execution remains policy-gated** — mutating operations are still approval-governed via existing tool policy/Guardian checks.
+3. **Step budgets are mandatory** — max steps, max parallelism, and per-step timeouts constrain blast radius.
+4. **Studio mutations are ticket-gated** — connector/playbook config mutations require privileged auth tickets when studio policy enables it.
+5. **Audit continuity is preserved** — connector-triggered actions remain traceable through existing hash-chained audit logging and policy hash events.
+
+See [CONNECTOR-PLAYBOOK-FRAMEWORK-SPEC.md](../specs/CONNECTOR-PLAYBOOK-FRAMEWORK-SPEC.md).
 
 ---
 
