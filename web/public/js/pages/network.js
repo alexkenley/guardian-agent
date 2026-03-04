@@ -21,10 +21,7 @@ async function renderConnectorsTab(panel) {
   panel.innerHTML = '<div class="loading">Loading...</div>';
 
   try {
-    const [state, templates] = await Promise.all([
-      api.connectorsState(40),
-      api.connectorsTemplates().catch(() => []),
-    ]);
+    const state = await api.connectorsState(40);
     const summary = state.summary || {};
     const packs = state.packs || [];
     const playbooks = state.playbooks || [];
@@ -56,33 +53,6 @@ async function renderConnectorsTab(panel) {
         </div>
       </div>
 
-      ${templates.length > 0 ? `
-      <div class="table-container">
-        <div class="table-header">
-          <h3>Template Gallery</h3>
-          <span style="color:var(--text-muted);font-size:0.85rem">One-click install</span>
-        </div>
-        <div class="template-gallery" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem;padding:1rem">
-          ${templates.map(t => `
-            <div class="status-card ${t.installed ? 'success' : 'info'}" style="cursor:default;position:relative">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
-                <span class="card-title" style="margin:0">${esc(t.name)}</span>
-                <span style="font-size:0.75rem;padding:2px 8px;border-radius:12px;background:${t.installed ? 'var(--success)' : 'var(--bg-secondary)'};color:${t.installed ? '#fff' : 'var(--text-muted)'}">${t.installed ? 'Installed' : t.category}</span>
-              </div>
-              <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:0.75rem;min-height:2.5em">${esc(t.description)}</div>
-              <div style="display:flex;justify-content:space-between;align-items:center">
-                <span style="font-size:0.8rem;color:var(--text-muted)">${t.playbookCount} playbook${t.playbookCount !== 1 ? 's' : ''}</span>
-                ${t.installed
-                  ? '<span style="font-size:0.85rem;color:var(--success)">Installed</span>'
-                  : `<button class="btn btn-primary template-install" data-template-id="${escAttr(t.id)}">Install</button>`
-                }
-              </div>
-            </div>
-          `).join('')}
-        </div>
-      </div>
-      ` : ''}
-
       <div class="table-container">
         <div class="table-header">
           <h3>Playbooks</h3>
@@ -92,7 +62,7 @@ async function renderConnectorsTab(panel) {
           <thead><tr><th>ID</th><th>Name</th><th>Mode</th><th>Steps</th><th>Schedule</th><th>Actions</th></tr></thead>
           <tbody>
             ${playbooks.length === 0
-              ? '<tr><td colspan="6">No playbooks configured. Install a template above to get started.</td></tr>'
+              ? '<tr><td colspan="6">No playbooks configured. Playbooks are auto-installed at startup.</td></tr>'
               : playbooks.map(pb => `
                 <tr>
                   <td>${esc(pb.id)}</td>
@@ -257,24 +227,6 @@ async function renderConnectorsTab(panel) {
     `;
 
     // ── Event listeners ──
-
-    // Template install
-    panel.querySelectorAll('.template-install').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const templateId = btn.getAttribute('data-template-id');
-        if (!templateId) return;
-        btn.disabled = true;
-        btn.textContent = 'Installing...';
-        try {
-          const result = await api.installTemplate(templateId);
-          if (result.success) await renderConnectorsTab(panel);
-          else btn.textContent = result.message || 'Failed';
-        } catch {
-          btn.textContent = 'Error';
-          btn.disabled = false;
-        }
-      });
-    });
 
     panel.querySelector('#connectors-refresh')?.addEventListener('click', () => renderConnectorsTab(panel));
 
@@ -492,7 +444,7 @@ async function renderDevicesTab(panel) {
           </thead>
           <tbody>
             ${devices.length === 0
-              ? '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No devices discovered. Install the "Home Network" template on the Connectors tab and run a scan, or click "Scan Now" above.</td></tr>'
+              ? '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No devices discovered. Click "Scan Now" above to discover devices on your network.</td></tr>'
               : devices.map(d => `
                 <tr>
                   <td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${d.status === 'online' ? 'var(--success)' : 'var(--text-muted)'};margin-right:4px"></span>${esc(d.status)}</td>

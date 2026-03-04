@@ -57,7 +57,7 @@ export async function renderOperations(container) {
                 <div class="preset-name">${esc(p.name)}</div>
                 <div class="preset-desc">${esc(p.description)}</div>
                 <div class="preset-meta">
-                  <span>${esc(p.type)} &middot; ${esc(p.cron)}</span>
+                  <span title="${escAttr(p.cron)}">${esc(p.type)} &middot; ${esc(cronToHuman(p.cron))}</span>
                   ${installed
                     ? '<span class="preset-status installed">Installed</span>'
                     : '<button class="btn btn-primary preset-install">Install</button>'
@@ -180,7 +180,7 @@ function renderTaskRow(t) {
       <td>${esc(t.name)}</td>
       <td>${esc(t.type)}</td>
       <td style="font-family:monospace">${esc(t.target)}</td>
-      <td style="font-family:monospace">${esc(t.cron)}</td>
+      <td title="${escAttr(t.cron)}">${esc(cronToHuman(t.cron))}</td>
       <td>${t.lastRunAt ? formatTime(t.lastRunAt) : '-'}</td>
       <td>
         <span style="color:${t.enabled ? (t.lastRunStatus ? statusColor(t.lastRunStatus) : 'var(--text-muted)') : 'var(--text-muted)'}">
@@ -365,6 +365,46 @@ function bindEvents(container, tasks) {
 }
 
 // ─── Utilities ───────────────────────────────────────────
+
+function cronToHuman(cron) {
+  if (!cron) return cron;
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length !== 5) return cron;
+  const [min, hour, dom, mon, dow] = parts;
+
+  // Every N minutes: */N * * * *
+  if (min.startsWith('*/') && hour === '*' && dom === '*' && mon === '*' && dow === '*') {
+    const n = parseInt(min.slice(2), 10);
+    if (n === 1) return 'Every minute';
+    return `Every ${n} minutes`;
+  }
+
+  // Every hour at :00: 0 * * * *
+  if (min === '0' && hour === '*' && dom === '*' && mon === '*' && dow === '*') {
+    return 'Every hour';
+  }
+
+  // Every N hours: 0 */N * * *
+  if (min === '0' && hour.startsWith('*/') && dom === '*' && mon === '*' && dow === '*') {
+    const n = parseInt(hour.slice(2), 10);
+    if (n === 1) return 'Every hour';
+    return `Every ${n} hours`;
+  }
+
+  // Daily at HH:MM: M H * * *
+  if (dom === '*' && mon === '*' && dow === '*' && /^\d+$/.test(min) && /^\d+$/.test(hour)) {
+    const hh = hour.padStart(2, '0');
+    const mm = min.padStart(2, '0');
+    return `Daily at ${hh}:${mm}`;
+  }
+
+  // Every N minutes at specific times: */N */H * * * (less common but handle)
+  if (min.startsWith('*/') && dom === '*' && mon === '*' && dow === '*') {
+    return cron; // fallback
+  }
+
+  return cron;
+}
 
 function statusColor(status) {
   if (status === 'succeeded') return 'var(--success)';
