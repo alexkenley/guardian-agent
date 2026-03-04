@@ -465,3 +465,23 @@ Additionally, `POST /api/setup/apply` was hardened: when `providerType` is missi
 - (+) Consistent capabilities across all auto-registered agents
 - (+) Changing the trust preset changes what agents can do (after restart)
 - (-) All auto-registered agents share the same capabilities — no per-agent differentiation for auto-registered agents (config-defined agents still have explicit capabilities)
+
+---
+
+## ADR-025: QMD CLI Subprocess Integration for Hybrid Document Search
+
+**Status:** Accepted
+
+**Context:** The memory system only supports BM25 keyword search (FTS5) over conversation history. There was no semantic/vector search capability, and no way to search external document collections (notes, codebases, wikis). QMD (github.com/tobi/qmd) provides local hybrid search combining BM25 + vector embeddings + LLM re-ranking.
+
+**Decision:** Integrate QMD via CLI subprocess invocations (`child_process.exec`) rather than as an MCP server or long-running HTTP sidecar. Each search/status/reindex call spawns a short-lived `qmd` process with `--json` output. Sources support multiple protocols: `directory`, `git`, `url`, `file`.
+
+**Consequences:**
+- (+) No long-running process to manage — deterministic JSON output, process isolation
+- (+) QMD loads its SQLite index on each invocation (fast after OS page cache)
+- (+) Clean separation: QMD tools live in their own `search` category, independent of `memory` tools
+- (+) Multi-protocol sources allow indexing diverse document collections
+- (+) Disabled by default — zero overhead when not used
+- (-) Per-query subprocess overhead (~50-200ms) vs in-process search
+- (-) Requires user to install QMD binary separately
+- (-) MCP HTTP mode could be added later as optimization if latency matters

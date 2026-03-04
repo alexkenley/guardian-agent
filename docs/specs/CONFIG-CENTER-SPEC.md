@@ -10,6 +10,7 @@ Provide one intuitive configuration surface (web + CLI) without an interactive s
 - Readiness diagnostics (`GET /api/setup/status`)
 - Provider apply endpoint (`POST /api/setup/apply`) used by Config Center
 - Search config endpoint (`POST /api/config/search`) for web search settings
+- QMD search source management endpoints (`/api/qmd/*`)
 
 ## Requirements
 - Users do not hand-edit YAML for normal onboarding
@@ -62,3 +63,19 @@ Input fields:
 - External providers require API key unless one already exists
 - Updated config must pass `validateConfig()`
 - Provider saves must include explicit `providerType` — missing type with no existing provider returns an error
+
+## QMD Search Source Management
+
+REST endpoints for managing QMD document search sources at runtime:
+
+- `GET /api/qmd/status` — Install status, version, indexed collections, configured sources
+- `GET /api/qmd/sources` — List all configured document sources
+- `POST /api/qmd/sources` — Add a new source (body: `{ id, name, type, path, globs?, branch?, description?, enabled }`)
+  - `type` supports: `directory` (local path + globs), `git` (repo URL + optional branch), `url` (web content), `file` (single file)
+- `DELETE /api/qmd/sources/:id` — Remove a source by id
+- `PATCH /api/qmd/sources/:id` — Toggle source enabled/disabled (body: `{ enabled: boolean }`)
+- `POST /api/qmd/reindex` — Trigger vector embedding reindex (body: `{ collection?: string }`)
+
+Web UI: Configuration > Search Sources tab provides full CRUD with status card, sources table, and add form.
+
+Config: `assistant.tools.qmd` — `enabled`, `binaryPath`, `defaultMode`, `queryTimeoutMs`, `maxResults`, `sources[]`

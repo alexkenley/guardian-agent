@@ -118,6 +118,7 @@ Runtime (src/runtime/runtime.ts)
 │   └── trust-presets.ts              — predefined security postures (locked/safe/balanced/power)
 ├── Orchestration (src/agent/orchestration.ts) — SequentialAgent, ParallelAgent, LoopAgent
 ├── Shared State (src/runtime/shared-state.ts) — per-invocation inter-agent data passing
+├── QMD Search (src/runtime/qmd-search.ts) — hybrid document search via QMD CLI subprocess
 ├── MCP Client (src/tools/mcp-client.ts) — Model Context Protocol tool server consumption
 ├── Eval Framework (src/eval/)           — agent evaluation with metrics and reporting
 │   ├── types.ts                        — test case, matcher, and result types

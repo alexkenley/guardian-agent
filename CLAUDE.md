@@ -66,6 +66,7 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 ### Runtime Services (`src/runtime/`)
 - **ConversationService** — SQLite-backed session memory with FTS5 full-text search and memory flush
 - **AgentMemoryStore** — per-agent persistent knowledge base files (`~/.guardianagent/memory/{agentId}.md`)
+- **QMDSearchService** — hybrid search (BM25 + vector + LLM re-rank) over user-defined document collections via QMD CLI subprocess
 - **IdentityService** — cross-channel user mapping (`single_user` / `channel_user`)
 - **AnalyticsService** — SQLite-backed usage analytics
 - **ThreatIntelService** — watchlist scanning, findings triage
@@ -92,7 +93,7 @@ Vanilla JavaScript — no framework, no build step. Static HTML/CSS/JS served di
 - **Security** (`#/security`) — Audit tab, Monitoring tab, Threat Intel tab
 - **Network** (`#/network`) — Connectors tab, Devices tab
 - **Operations** (`#/operations`) — scheduled tasks CRUD, preset installation, run history
-- **Configuration** (`#/config`) — Providers tab, Tools tab, Policy tab (interactive allowlist editor), Settings tab
+- **Configuration** (`#/config`) — Providers tab, Tools tab, Policy tab (interactive allowlist editor), Search Sources tab (QMD), Settings tab
 - **Reference Guide** (`#/reference`) — unchanged
 - **Chat** — persistent right panel
 
@@ -103,6 +104,14 @@ Vanilla JavaScript — no framework, no build step. Static HTML/CSS/JS served di
 - **Memory Tools**: `memory_search` (FTS5 query), `memory_get` (read knowledge base), `memory_save` (persist facts) — all Guardian-gated
 - **Config**: `assistant.memory.knowledgeBase` — enable/disable, maxContextChars, autoFlush
 - See `docs/guides/MEMORY-SYSTEM.md` for full documentation
+
+### QMD Document Search
+- **QMDSearchService** (`src/runtime/qmd-search.ts`) — wraps [QMD CLI](https://github.com/tobi/qmd) for hybrid search
+- **Search modes**: `search` (BM25 keyword), `vsearch` (vector similarity), `query` (hybrid + LLM re-rank)
+- **Multi-protocol sources**: `directory` (local path + globs), `git` (repo URL + branch), `url` (web content), `file` (single file)
+- **Search Tools**: `qmd_search`, `qmd_status`, `qmd_reindex` — category: `search`, all Guardian-gated
+- **Config**: `assistant.tools.qmd` — enable/disable, binaryPath, defaultMode, maxResults, sources array
+- **Web UI**: Configuration > Search Sources tab — source CRUD, toggle, reindex, status
 
 ### Evaluation Framework
 - **EvalRunner** runs test cases through the real Runtime (Guardian active)
@@ -129,8 +138,8 @@ src/agents/         — Built-in agent implementations (SentinelAgent)
 src/config/         — Config types, YAML loader with ${ENV_VAR} interpolation
 src/llm/            — LLMProvider interface, Ollama/Anthropic/OpenAI, circuit breaker, failover
 src/runtime/        — Runtime, services (Conversation, Identity, Analytics, ThreatIntel,
-                      Connectors, Orchestrator, JobTracker, ScheduledTasks, AgentMemoryStore),
-                      BudgetTracker, Watchdog, Scheduler
+                      Connectors, Orchestrator, JobTracker, ScheduledTasks, AgentMemoryStore,
+                      QMDSearchService), BudgetTracker, Watchdog, Scheduler
 src/queue/          — EventBus for inter-agent communication
 src/guardian/       — Capabilities, SecretScanner, InputSanitizer, OutputGuardian,
                       RateLimiter, audit log/persistence, Guardian admission pipeline

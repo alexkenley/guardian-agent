@@ -194,6 +194,26 @@ assistant:
     allowedDomains: [github.com, openai.com, anthropic.com, gmail.googleapis.com]
     toolPolicies:
       forum_post: deny
+    qmd:
+      enabled: false
+      # binaryPath: qmd          # Path to QMD binary (default: 'qmd' via PATH)
+      defaultMode: query          # search | vsearch | query
+      queryTimeoutMs: 30000
+      maxResults: 20
+      sources:
+        - id: my-notes
+          name: My Notes
+          type: directory           # directory | git | url | file
+          path: ~/Documents/notes
+          globs: ['**/*.md', '**/*.txt']
+          enabled: true
+        # - id: wiki
+        #   name: Team Wiki
+        #   type: git
+        #   path: https://github.com/org/wiki
+        #   branch: main
+        #   globs: ['**/*.md']
+        #   enabled: true
   quickActions:
     enabled: true
     templates:
@@ -280,12 +300,13 @@ guardian:
 - Threat-intel workflow in web (Security > Threat Intel tab) for watchlist scans, findings triage, and response action drafts (human approval-gated publishing)
 - Moltbook connector with hostile-site guardrails (strict host allowlist, timeout/size limits, payload sanitization)
 - Channel analytics and monitoring in web (Security > Monitoring tab) and CLI (`/analytics`)
+- QMD hybrid document search (BM25 + vector + LLM re-ranking) over user-defined collections — configure sources (directories, git repos, URLs, files) in web Config Center (`#/config` > Search Sources tab)
 
 ### Key Commands
 
 - CLI: `/config`, `/auth`, `/tools`, `/connectors`, `/playbooks`, `/campaign`, `/assistant`, `/quick`, `/session`, `/analytics`, `/intel`, `/guide`
 - Telegram: `/help`, `/guide`, `/reset`, `/quick`, `/intel`
-- Web: Dashboard, Security (Audit/Monitoring/Threat Intel), Network (Connectors/Devices), Operations (Scheduled Tasks/Run History), Configuration (Providers/Tools/Policy/Settings), Reference Guide, Chat
+- Web: Dashboard, Security (Audit/Monitoring/Threat Intel), Network (Connectors/Devices), Operations (Scheduled Tasks/Run History), Configuration (Providers/Tools/Policy/Search Sources/Settings), Reference Guide, Chat
 
 ### Connector + Playbook CLI (Web Parity)
 

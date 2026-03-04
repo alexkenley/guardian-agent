@@ -22,6 +22,10 @@ Expose a safe, auditable tool-execution plane so the assistant can perform works
 - Campaign/email: `contacts_discover_browser`, `contacts_import_csv`, `contacts_list`, `campaign_create`, `campaign_list`, `campaign_add_contacts`, `campaign_dry_run`, `gmail_send`, `campaign_run`
 - Threat intel: `intel_summary`, `intel_watch_add`, `intel_watch_remove`, `intel_scan`, `intel_findings`, `intel_draft_action`
 - External interaction: `forum_post` (restricted by policy)
+- Search: `qmd_search` (hybrid BM25 + vector + LLM re-rank), `qmd_status` (install/collection info), `qmd_reindex` (trigger embedding reindex)
+  - Category: `search` — disabled via `disabledCategories` like any other
+  - `qmd_search` and `qmd_status` are `read_only`; `qmd_reindex` is `mutating`
+  - All pass through Guardian admission checks
 
 ## Policy Model
 - Global mode:

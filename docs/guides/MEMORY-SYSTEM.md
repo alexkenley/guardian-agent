@@ -183,13 +183,13 @@ When `buildMessages()` trims conversation history to fit `maxContextChars`, mess
 
 | Feature | GuardianAgent | OpenClaw |
 |---------|--------------|----------|
-| **Storage backend** | SQLite with FTS5 | SQLite FTS5 + optional QMD sidecar |
-| **Search** | FTS5 BM25 ranking | Hybrid BM25 + vector similarity |
+| **Storage backend** | SQLite with FTS5 + optional QMD hybrid search | SQLite FTS5 + optional QMD sidecar |
+| **Search** | FTS5 BM25 + QMD hybrid (BM25 + vector + LLM re-rank) | Hybrid BM25 + vector similarity |
 | **Knowledge base** | Per-agent markdown files | `MEMORY.md` + daily logs |
 | **Memory flush** | Auto-persist dropped context | LLM-prompted flush before compaction |
 | **Temporal decay** | No | Configurable half-life scoring |
 | **MMR diversity** | No | Maximal Marginal Relevance |
-| **Embedding providers** | None (keyword search only) | OpenAI, Gemini, Voyage, Ollama, local |
+| **Embedding providers** | QMD (local, via CLI subprocess) | OpenAI, Gemini, Voyage, Ollama, local |
 | **Cross-channel identity** | IdentityService with aliases | Not documented |
 | **Session management** | Rotate, restore, list | Implicit via daily log files |
 | **Security** | Guardian admission on all tools | Not documented |
@@ -211,7 +211,7 @@ When `buildMessages()` trims conversation history to fit `maxContextChars`, mess
 
 ### Future Enhancement Opportunities
 
-1. **Vector embeddings**: Add embedding generation (via Ollama or external API) for semantic search alongside FTS5
+1. ~~**Vector embeddings**~~: **Done** — QMD integration provides BM25 + vector + LLM re-ranked search via `qmd_search` tool (`assistant.tools.qmd`)
 2. **LLM-powered flush**: Use the LLM to generate actual summaries instead of raw extractions
 3. **Temporal decay**: Add timestamp-based scoring to FTS5 results
 4. **Daily logs**: Add automatic daily log files alongside the curated knowledge base
@@ -222,9 +222,11 @@ When `buildMessages()` trims conversation history to fit `maxContextChars`, mess
 |------|---------|
 | `src/runtime/conversation.ts` | ConversationService with FTS5 search and memory flush |
 | `src/runtime/agent-memory-store.ts` | AgentMemoryStore — per-agent knowledge base files |
-| `src/tools/executor.ts` | memory_search, memory_get, memory_save tool registration |
-| `src/tools/types.ts` | 'memory' tool category definition |
-| `src/config/types.ts` | AssistantKnowledgeBaseConfig type |
-| `src/index.ts` | Service wiring, memory flush callback, ChatAgent KB injection |
+| `src/tools/executor.ts` | memory_search, memory_get, memory_save + qmd_search, qmd_status, qmd_reindex tool registration |
+| `src/tools/types.ts` | 'memory' and 'search' tool category definitions |
+| `src/config/types.ts` | AssistantKnowledgeBaseConfig, QMDConfig, QMDSourceConfig types |
+| `src/runtime/qmd-search.ts` | QMDSearchService — hybrid search via QMD CLI subprocess |
+| `src/runtime/qmd-search.test.ts` | QMD service unit tests |
+| `src/index.ts` | Service wiring, memory flush callback, ChatAgent KB injection, QMD bootstrap |
 | `src/runtime/conversation.test.ts` | FTS5 search and memory flush tests |
 | `src/runtime/agent-memory-store.test.ts` | Knowledge base CRUD tests |
