@@ -5,6 +5,7 @@
 import { api } from '../api.js';
 import { createTabs } from '../components/tabs.js';
 import { applyInputTooltips } from '../tooltip.js';
+import { themes, getSavedTheme, applyTheme } from '../theme.js';
 
 // Shared state loaded once and passed to tabs
 let sharedConfig = null;
@@ -31,6 +32,7 @@ export async function renderConfig(container) {
       { id: 'policy', label: 'Policy', render: renderPolicyTab },
       { id: 'search-sources', label: 'Search Sources', render: renderSearchSourcesTab },
       { id: 'settings', label: 'Settings', render: renderSettingsTab },
+      { id: 'appearance', label: 'Appearance', render: renderAppearanceTab },
     ]);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -1212,6 +1214,74 @@ function statusClass(status) {
   if (status === 'failed' || status === 'denied') return 'badge-errored';
   return 'badge-idle';
 }
+
+// ─── Appearance Tab ─────────────────────────────────────
+
+function renderAppearanceTab(panel) {
+  const currentTheme = getSavedTheme();
+  let activeFilter = 'all';
+
+  panel.innerHTML = `
+    <div class="config-intro">Choose a visual theme. Your selection is saved locally in the browser.</div>
+    <div class="theme-filter-bar">
+      <button class="theme-filter-btn active" data-filter="all">All</button>
+      <button class="theme-filter-btn" data-filter="dark">Dark</button>
+      <button class="theme-filter-btn" data-filter="light">Light</button>
+    </div>
+    <div class="theme-grid"></div>
+  `;
+
+  const grid = panel.querySelector('.theme-grid');
+  const filterBar = panel.querySelector('.theme-filter-bar');
+
+  function renderCards(filter) {
+    grid.innerHTML = '';
+    const visible = filter === 'all' ? themes : themes.filter(t => t.category === filter);
+    for (const theme of visible) {
+      const card = document.createElement('div');
+      card.className = 'theme-card' + (theme.id === getSavedTheme() ? ' active' : '');
+      card.dataset.themeId = theme.id;
+
+      const v = theme.vars;
+      card.innerHTML = `
+        <div class="theme-preview" style="background:${v['--bg-primary']}">
+          <div class="theme-preview-bar" style="background:${v['--bg-surface']};border-right:1px solid ${v['--border']}"></div>
+          <div class="theme-preview-main">
+            <div class="theme-preview-accent" style="background:${v['--accent']}"></div>
+            <div class="theme-preview-line" style="background:${v['--text-primary']}; opacity:0.4"></div>
+            <div class="theme-preview-line" style="background:${v['--text-secondary']}; opacity:0.3"></div>
+            <div class="theme-preview-line" style="background:${v['--text-muted']}; opacity:0.25"></div>
+          </div>
+        </div>
+        <div class="theme-card-info">
+          <div class="theme-card-name">${esc(theme.name)}<span class="theme-card-badge ${theme.category}">${theme.category}</span></div>
+          <div class="theme-card-desc">${esc(theme.description)}</div>
+        </div>
+      `;
+
+      card.addEventListener('click', () => {
+        applyTheme(theme.id);
+        grid.querySelectorAll('.theme-card').forEach(c => c.classList.remove('active'));
+        card.classList.add('active');
+      });
+
+      grid.appendChild(card);
+    }
+  }
+
+  filterBar.addEventListener('click', (e) => {
+    const btn = e.target.closest('.theme-filter-btn');
+    if (!btn) return;
+    activeFilter = btn.dataset.filter;
+    filterBar.querySelectorAll('.theme-filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    renderCards(activeFilter);
+  });
+
+  renderCards(activeFilter);
+}
+
+// ─── Helpers ────────────────────────────────────────────
 
 function esc(str) {
   const d = document.createElement('div');

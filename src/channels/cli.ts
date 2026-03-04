@@ -2955,37 +2955,44 @@ export class CLIChannel implements ChannelAdapter {
     this.write(db('     ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝') + '\n');
     this.write('\n');
 
-    // Status box
     const s = this.startupStatus;
     if (s) {
       const gn = (t: string) => `\x1b[32m${t}\x1b[0m`;
       const dc = (t: string) => `\x1b[36m${t}\x1b[0m`;
       const dg = (t: string) => `\x1b[38;5;22m${t}\x1b[0m`;
+      const yl = (t: string) => `\x1b[33m${t}\x1b[0m`;
+      const W = 37;
 
+      // ── Boot sequence ──
+      this.write(dg('  ┌──────────────────────────────────────────────────┐') + '\n');
+      this.write(dg('  │') + yl('           INITIALIZING') + ' '.repeat(27) + dg('│') + '\n');
+      this.write(dg('  ├──────────────────────────────────────────────────┤') + '\n');
+      this.write(dg('  │') + dc('  Guardian:  ') + this.pad(s.guardianEnabled !== false ? yl('Awaken') : this.red('DISABLED'), W) + dg('│') + '\n');
+      this.write(dg('  │') + dc('  Defenses:  ') + this.pad(yl('Shields raised'), W) + dg('│') + '\n');
+      this.write(dg('  │') + dc('  LLM:       ') + this.pad(yl('Neural link established'), W) + dg('│') + '\n');
+      this.write(dg('  │') + dc('  Channels:  ') + this.pad(yl('Frequencies locked'), W) + dg('│') + '\n');
+      this.write(dg('  │') + dc('  Watchdog:  ') + this.pad(yl('Eyes open'), W) + dg('│') + '\n');
+      this.write(dg('  └──────────────────────────────────────────────────┘') + '\n');
+      this.write('\n');
+
+      // ── Operational status ──
       const guardian = s.guardianEnabled !== false ? gn('ACTIVE') + ' (3-layer defense)' : this.red('DISABLED');
       const provider = s.providerName ?? 'ollama';
       const channels = s.channels?.join(', ') ?? 'cli';
       const dashUrl = s.dashboardUrl ?? 'disabled';
 
       this.write(dg('  ┌──────────────────────────────────────────────────┐') + '\n');
-      this.write(dg('  │') + gn('           SYSTEM STATUS                       ') + dg('│') + '\n');
+      this.write(dg('  │') + gn('           SYSTEM OPERATIONAL') + ' '.repeat(21) + dg('│') + '\n');
       this.write(dg('  ├──────────────────────────────────────────────────┤') + '\n');
-      this.write(dg('  │') + dc('  Guardian:  ') + this.pad(guardian, 36) + dg('│') + '\n');
-      this.write(dg('  │') + dc('  Channels:  ') + this.pad(channels, 36) + dg('│') + '\n');
-      this.write(dg('  │') + dc('  LLM:       ') + this.pad(gn(provider), 36) + dg('│') + '\n');
-      this.write(dg('  │') + dc('  Dashboard: ') + this.pad(gn(dashUrl), 36) + dg('│') + '\n');
+      this.write(dg('  │') + dc('  Guardian:  ') + this.pad(guardian, W) + dg('│') + '\n');
+      this.write(dg('  │') + dc('  Channels:  ') + this.pad(channels, W) + dg('│') + '\n');
+      this.write(dg('  │') + dc('  LLM:       ') + this.pad(gn(provider), W) + dg('│') + '\n');
+      this.write(dg('  │') + dc('  Dashboard: ') + this.pad(gn(dashUrl), W) + dg('│') + '\n');
       if (s.authToken) {
-        this.write(dg('  │') + dc('  Token:     ') + this.pad(dm(s.authToken), 36) + dg('│') + '\n');
+        this.write(dg('  │') + dc('  Token:     ') + this.pad(dm(s.authToken), W) + dg('│') + '\n');
       }
       this.write(dg('  └──────────────────────────────────────────────────┘') + '\n');
       this.write('\n');
-      if (s.dashboardUrl) {
-        this.write(dc('  Dashboard: ') + gn(s.dashboardUrl) + '\n');
-      }
-      if (s.authToken) {
-        this.write(dc('  Bearer token: ') + dm(s.authToken) + '\n');
-      }
-      if (s.dashboardUrl || s.authToken) this.write('\n');
     }
 
     this.write(dm('  /help') + ' — list all commands  ' + dm('|') + '  ' + dm('/kill') + ' — shutdown all services\n');

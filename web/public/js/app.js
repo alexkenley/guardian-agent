@@ -11,6 +11,7 @@ import { renderNetwork } from './pages/network.js';
 import { renderOperations, updateOperations } from './pages/operations.js';
 import { initChatPanel, setChatContext } from './chat-panel.js';
 import { applyInputTooltips } from './tooltip.js';
+import { initTheme } from './theme.js';
 
 const content = document.getElementById('content');
 const chatPanel = document.getElementById('chat-panel');
@@ -218,4 +219,5 @@ function startApp() {
 
 // ─── Init ────────────────────────────────────────────────
 
+initTheme();
 initAuth();
