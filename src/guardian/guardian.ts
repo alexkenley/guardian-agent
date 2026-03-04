@@ -16,6 +16,8 @@ import { RateLimiter } from './rate-limiter.js';
 import type { RateLimiterConfig } from './rate-limiter.js';
 import { ShellCommandController } from './shell-command-controller.js';
 import { createLogger } from '../util/logging.js';
+import { runAdmissionPipeline, sortControllersByPhase } from './workflows.js';
+import { handleAdmissionResult } from './operations.js';
 
 const log = createLogger('guardian');
 
@@ -191,46 +193,18 @@ export class Guardian {
   /** Add a controller to the pipeline. */
   use(controller: AdmissionController): this {
     this.controllers.push(controller);
-    // Sort: mutating first, then validating
-    this.controllers.sort((a, b) => {
-      if (a.phase === 'mutating' && b.phase === 'validating') return -1;
-      if (a.phase === 'validating' && b.phase === 'mutating') return 1;
-      return 0;
-    });
+    this.controllers = sortControllersByPhase(this.controllers);
     return this;
   }
 
   /** Run an action through the admission pipeline. */
   check(action: AgentAction): AdmissionResult {
-    let currentAction = action;
-
-    for (const controller of this.controllers) {
-      const result = controller.check(currentAction);
-      if (result === null) continue;
-
-      if (!result.allowed) {
-        if (this.logDenials) {
-          log.warn({
-            agentId: action.agentId,
-            actionType: action.type,
-            controller: result.controller,
-            reason: result.reason,
-          }, 'Guardian denied action');
-        }
-        return result;
-      }
-
-      // Mutating controller may have modified the action
-      if (result.mutatedAction) {
-        currentAction = result.mutatedAction;
-      }
-    }
-
-    return {
-      allowed: true,
-      controller: 'guardian',
-      mutatedAction: currentAction !== action ? currentAction : undefined,
-    };
+    const pipelineResult = runAdmissionPipeline(this.controllers, action);
+    return handleAdmissionResult(
+      pipelineResult,
+      action,
+      this.logDenials ? log : undefined,
+    );
   }
 
   /** Get all registered controllers. */

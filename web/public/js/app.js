@@ -2,7 +2,7 @@
  * Main application — hash-based router + SSE connection manager.
  */
 
-import { api, setToken, clearToken } from './api.js';
+import { api, setToken, clearToken, hasCookieSession } from './api.js';
 import { renderDashboard, updateDashboard } from './pages/dashboard.js';
 import { renderSecurity, updateSecurity } from './pages/security.js';
 import { renderConfig } from './pages/config.js';
@@ -121,6 +121,11 @@ const sseListeners = {
   audit: [],
   metrics: [],
   watchdog: [],
+  'chat.thinking': [],
+  'chat.tool_call': [],
+  'chat.token': [],
+  'chat.done': [],
+  'chat.error': [],
 };
 
 export function onSSE(type, fn) {
@@ -138,10 +143,14 @@ function connectSSE() {
     eventSource.close();
   }
 
-  const token = sessionStorage.getItem('guardianagent_token') || '';
-  const url = token ? `/sse?token=${encodeURIComponent(token)}` : '/sse';
+  // Use cookie auth when available (no query param needed), else fall back to token
+  let url = '/sse';
+  if (!hasCookieSession()) {
+    const token = sessionStorage.getItem('guardianagent_token') || '';
+    if (token) url = `/sse?token=${encodeURIComponent(token)}`;
+  }
 
-  eventSource = new EventSource(url);
+  eventSource = new EventSource(url, { withCredentials: true });
 
   eventSource.onopen = () => {
     indicator.className = 'indicator connected';
@@ -153,20 +162,13 @@ function connectSSE() {
     indicator.textContent = 'Disconnected';
   };
 
-  eventSource.addEventListener('audit', (e) => {
-    const data = JSON.parse(e.data);
-    for (const fn of sseListeners.audit) fn(data);
-  });
-
-  eventSource.addEventListener('metrics', (e) => {
-    const data = JSON.parse(e.data);
-    for (const fn of sseListeners.metrics) fn(data);
-  });
-
-  eventSource.addEventListener('watchdog', (e) => {
-    const data = JSON.parse(e.data);
-    for (const fn of sseListeners.watchdog) fn(data);
-  });
+  // Register listeners for all known SSE event types
+  for (const eventType of Object.keys(sseListeners)) {
+    eventSource.addEventListener(eventType, (e) => {
+      const data = JSON.parse(e.data);
+      for (const fn of sseListeners[eventType]) fn(data);
+    });
+  }
 }
 
 // ─── Router ──────────────────────────────────────────────

@@ -81,6 +81,17 @@ export interface WebChannelOptions {
   dashboard?: DashboardCallbacks;
 }
 
+/** Cookie-based session record for server-side token custody. */
+interface CookieSession {
+  sessionId: string;
+  createdAt: number;
+  expiresAt: number;
+}
+
+const SESSION_COOKIE_NAME = 'guardianagent_sid';
+const DEFAULT_SESSION_TTL_MINUTES = 480; // 8 hours
+const SESSION_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
 export class WebChannel implements ChannelAdapter {
   readonly name = 'web';
   private server: Server | null = null;
@@ -99,6 +110,8 @@ export class WebChannel implements ChannelAdapter {
   private sseClients: Set<ServerResponse> = new Set();
   private readonly privilegedTicketSecret = randomBytes(32);
   private readonly usedPrivilegedTicketNonces = new Map<string, number>();
+  private readonly sessions = new Map<string, CookieSession>();
+  private sessionCleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: WebChannelOptions = {}) {
     this.port = options.port ?? 3000;
@@ -124,8 +137,9 @@ export class WebChannel implements ChannelAdapter {
       if (origin && this.isOriginAllowed(origin)) {
         res.setHeader('Access-Control-Allow-Origin', origin);
       }
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Stream');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
 
       if (req.method === 'OPTIONS') {
         res.writeHead(204);
@@ -143,6 +157,9 @@ export class WebChannel implements ChannelAdapter {
       }
     });
 
+    // Start periodic session cleanup
+    this.sessionCleanupTimer = setInterval(() => this.pruneExpiredSessions(), SESSION_CLEANUP_INTERVAL_MS);
+
     return new Promise((resolve, reject) => {
       this.server!.listen(this.port, this.host, () => {
         log.info({ port: this.port, host: this.host }, 'Web channel started');
@@ -159,6 +176,13 @@ export class WebChannel implements ChannelAdapter {
   }
 
   async stop(): Promise<void> {
+    // Stop session cleanup
+    if (this.sessionCleanupTimer) {
+      clearInterval(this.sessionCleanupTimer);
+      this.sessionCleanupTimer = null;
+    }
+    this.sessions.clear();
+
     // Close all SSE connections
     for (const client of this.sseClients) {
       client.end();
@@ -249,6 +273,40 @@ export class WebChannel implements ChannelAdapter {
       || remote.endsWith(':0:0:0:0:0:0:0:1');
   }
 
+  /** Parse a cookie value from the request. */
+  private parseCookie(req: IncomingMessage, name: string): string | undefined {
+    const header = req.headers.cookie;
+    if (!header) return undefined;
+    for (const part of header.split(';')) {
+      const [k, ...rest] = part.trim().split('=');
+      if (k === name) return rest.join('=');
+    }
+    return undefined;
+  }
+
+  /** Validate a session cookie. Returns true if valid and not expired. */
+  private validateSessionCookie(req: IncomingMessage): boolean {
+    const sid = this.parseCookie(req, SESSION_COOKIE_NAME);
+    if (!sid) return false;
+    const session = this.sessions.get(sid);
+    if (!session) return false;
+    if (Date.now() > session.expiresAt) {
+      this.sessions.delete(sid);
+      return false;
+    }
+    return true;
+  }
+
+  /** Prune expired sessions. */
+  private pruneExpiredSessions(): void {
+    const now = Date.now();
+    for (const [sid, session] of this.sessions) {
+      if (now > session.expiresAt) {
+        this.sessions.delete(sid);
+      }
+    }
+  }
+
   /** Verify bearer token authentication. Returns true if auth passes. */
   private checkAuth(req: IncomingMessage, res: ServerResponse): boolean {
     if (!this.shouldRequireAuth(req)) return true;
@@ -257,22 +315,29 @@ export class WebChannel implements ChannelAdapter {
       return false;
     }
 
+    // Try bearer token first
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      sendJSON(res, 401, { error: 'Authentication required' });
-      return false;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.slice(7);
+      if (timingSafeEqualString(this.authToken, token)) {
+        return true;
+      }
     }
 
-    const token = authHeader.slice(7);
-    if (!timingSafeEqualString(this.authToken, token)) {
+    // Then try session cookie
+    if (this.validateSessionCookie(req)) {
+      return true;
+    }
+
+    if (authHeader) {
       sendJSON(res, 403, { error: 'Invalid token' });
-      return false;
+    } else {
+      sendJSON(res, 401, { error: 'Authentication required' });
     }
-
-    return true;
+    return false;
   }
 
-  /** Check auth via query param (for SSE/EventSource which can't set headers). */
+  /** Check auth via query param or cookie (for SSE/EventSource which can't set headers). */
   private checkAuthForSSE(req: IncomingMessage, url: URL, res: ServerResponse): boolean {
     if (!this.shouldRequireAuth(req)) return true;
     if (!this.authToken) {
@@ -280,16 +345,23 @@ export class WebChannel implements ChannelAdapter {
       return false;
     }
 
+    // Try query param token
     const token = url.searchParams.get('token');
-    if (!token) {
-      sendJSON(res, 401, { error: 'Authentication required' });
-      return false;
+    if (token && timingSafeEqualString(this.authToken, token)) {
+      return true;
     }
-    if (!timingSafeEqualString(this.authToken, token)) {
+
+    // Try session cookie
+    if (this.validateSessionCookie(req)) {
+      return true;
+    }
+
+    if (token) {
       sendJSON(res, 403, { error: 'Invalid token' });
-      return false;
+    } else {
+      sendJSON(res, 401, { error: 'Authentication required' });
     }
-    return true;
+    return false;
   }
 
   private isPrivilegedTicketAction(value: string): value is PrivilegedTicketAction {
@@ -439,6 +511,38 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
         sendJSON(res, 200, this.dashboard.onAuthStatus());
+        return;
+      }
+
+      // POST /api/auth/session — create HttpOnly session cookie (exchanges bearer token for cookie)
+      if (req.method === 'POST' && url.pathname === '/api/auth/session') {
+        // At this point checkAuth already validated the bearer token
+        const ttlMinutes = this.authSessionTtlMinutes ?? DEFAULT_SESSION_TTL_MINUTES;
+        const now = Date.now();
+        const sessionId = randomUUID();
+        const session: CookieSession = {
+          sessionId,
+          createdAt: now,
+          expiresAt: now + ttlMinutes * 60 * 1000,
+        };
+        this.sessions.set(sessionId, session);
+
+        const isSecure = req.headers['x-forwarded-proto'] === 'https'
+          || (req.socket as { encrypted?: boolean }).encrypted === true;
+        const cookieFlags = `HttpOnly; SameSite=Strict; Path=/; Max-Age=${ttlMinutes * 60}${isSecure ? '; Secure' : ''}`;
+        res.setHeader('Set-Cookie', `${SESSION_COOKIE_NAME}=${sessionId}; ${cookieFlags}`);
+        sendJSON(res, 200, { success: true, expiresAt: session.expiresAt });
+        return;
+      }
+
+      // DELETE /api/auth/session — destroy session cookie
+      if (req.method === 'DELETE' && url.pathname === '/api/auth/session') {
+        const sid = this.parseCookie(req, SESSION_COOKIE_NAME);
+        if (sid) {
+          this.sessions.delete(sid);
+        }
+        res.setHeader('Set-Cookie', `${SESSION_COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
+        sendJSON(res, 200, { success: true });
         return;
       }
 
@@ -1655,6 +1759,58 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
         sendJSON(res, 200, this.dashboard.onRoutingModeUpdate(parsed.mode as 'auto' | 'local-only' | 'external-only'));
+        return;
+      }
+
+      // POST /api/message/stream — Stream a response via SSE events
+      if (req.method === 'POST' && url.pathname === '/api/message/stream') {
+        if (!this.dashboard.onStreamDispatch) {
+          sendJSON(res, 404, { error: 'Streaming not available' });
+          return;
+        }
+
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          const status = message.includes('too large') ? 413 : 400;
+          sendJSON(res, status, { error: message });
+          return;
+        }
+
+        let parsed: { content?: string; userId?: string; agentId?: string; channel?: string };
+        try {
+          parsed = JSON.parse(body) as typeof parsed;
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+
+        if (!parsed.content || !parsed.agentId) {
+          sendJSON(res, 400, { error: 'content and agentId are required' });
+          return;
+        }
+
+        const emitSSE = (event: import('./web-types.js').SSEEvent) => {
+          for (const client of this.sseClients) {
+            if (!client.destroyed) {
+              client.write(`event: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`);
+            }
+          }
+        };
+
+        try {
+          const result = await this.dashboard.onStreamDispatch(
+            parsed.agentId,
+            { content: parsed.content, userId: parsed.userId, channel: parsed.channel ?? 'web' },
+            emitSSE,
+          );
+          sendJSON(res, 200, result);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Stream dispatch error';
+          sendJSON(res, 500, { error: message });
+        }
         return;
       }
 

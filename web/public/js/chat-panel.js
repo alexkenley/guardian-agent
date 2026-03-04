@@ -8,6 +8,7 @@
  */
 
 import { api } from './api.js';
+import { onSSE, offSSE } from './app.js';
 import { applyInputTooltips } from './tooltip.js';
 
 const chatHistoryByAgent = new Map();
@@ -200,11 +201,106 @@ export async function initChatPanel(container) {
       // In unified mode, don't send agentId — let tier routing decide
       const contextPrefix = `[Context: User is currently viewing the ${currentChatContext} panel] `;
       const agentId = hasInternalOnly ? undefined : (select?.value || undefined);
-      const response = await api.sendMessage(contextPrefix + text, agentId, webUserId, 'web');
 
-      thinkingEl.remove();
-      chatHistory.push({ role: 'agent', content: response.content });
-      history.appendChild(createMessageEl('agent', response.content));
+      // Try streaming first, fall back to regular send
+      if (agentId) {
+        try {
+          const streamResult = await api.sendMessageStream(contextPrefix + text, agentId, webUserId, 'web');
+
+          // If streaming worked, set up live rendering via SSE
+          if (streamResult?.requestId) {
+            const requestId = streamResult.requestId;
+            let liveContent = '';
+            let liveEl = null;
+
+            const onToken = (data) => {
+              if (data.requestId !== requestId) return;
+              if (!liveEl) {
+                thinkingEl.remove();
+                liveEl = createMessageEl('agent', '');
+                liveEl.classList.add('streaming');
+                history.appendChild(liveEl);
+              }
+              liveContent += data.content || '';
+              const contentEl = liveEl.querySelector('.chat-msg-content') || liveEl;
+              contentEl.textContent = liveContent;
+              history.scrollTop = history.scrollHeight;
+            };
+
+            const onToolCall = (data) => {
+              if (data.requestId !== requestId) return;
+              if (!liveEl) {
+                thinkingEl.remove();
+                liveEl = createMessageEl('agent', '');
+                liveEl.classList.add('streaming');
+                history.appendChild(liveEl);
+              }
+              const indicator = document.createElement('div');
+              indicator.className = 'tool-indicator';
+              indicator.textContent = `⚙ ${data.toolName || 'tool'}`;
+              liveEl.appendChild(indicator);
+            };
+
+            const onDone = (data) => {
+              if (data.requestId !== requestId) return;
+              cleanup();
+              if (liveEl) {
+                liveEl.classList.remove('streaming');
+                const contentEl = liveEl.querySelector('.chat-msg-content') || liveEl;
+                contentEl.textContent = data.content || liveContent;
+              } else {
+                thinkingEl.remove();
+                history.appendChild(createMessageEl('agent', data.content || ''));
+              }
+              chatHistory.push({ role: 'agent', content: data.content || liveContent });
+            };
+
+            const onError = (data) => {
+              if (data.requestId !== requestId) return;
+              cleanup();
+              if (liveEl) liveEl.remove();
+              thinkingEl.remove();
+              history.appendChild(createMessageEl('error', data.error || 'Stream error'));
+            };
+
+            const cleanup = () => {
+              offSSE('chat.token', onToken);
+              offSSE('chat.tool_call', onToolCall);
+              offSSE('chat.done', onDone);
+              offSSE('chat.error', onError);
+            };
+
+            onSSE('chat.token', onToken);
+            onSSE('chat.tool_call', onToolCall);
+            onSSE('chat.done', onDone);
+            onSSE('chat.error', onError);
+
+            // If response already has content (non-streaming fallback), use it
+            if (streamResult.content) {
+              cleanup();
+              thinkingEl.remove();
+              chatHistory.push({ role: 'agent', content: streamResult.content });
+              history.appendChild(createMessageEl('agent', streamResult.content));
+            }
+          } else {
+            // No requestId — treat as regular response
+            thinkingEl.remove();
+            chatHistory.push({ role: 'agent', content: streamResult.content || '' });
+            history.appendChild(createMessageEl('agent', streamResult.content || ''));
+          }
+        } catch {
+          // Streaming failed — fall back to regular send
+          const response = await api.sendMessage(contextPrefix + text, agentId, webUserId, 'web');
+          thinkingEl.remove();
+          chatHistory.push({ role: 'agent', content: response.content });
+          history.appendChild(createMessageEl('agent', response.content));
+        }
+      } else {
+        const response = await api.sendMessage(contextPrefix + text, agentId, webUserId, 'web');
+        thinkingEl.remove();
+        chatHistory.push({ role: 'agent', content: response.content });
+        history.appendChild(createMessageEl('agent', response.content));
+      }
     } catch (err) {
       thinkingEl.remove();
       const errorMsg = err.message === 'AUTH_FAILED' ? 'Auth failed' : (err.message || 'Error');

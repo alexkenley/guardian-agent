@@ -96,7 +96,8 @@ Runtime (src/runtime/runtime.ts)
 ├── LLM Providers (src/llm/)            — Ollama, Anthropic, OpenAI
 ├── Assistant Orchestrator (src/runtime/orchestrator.ts) — per-session queueing + timing state
 ├── Registry (src/agent/registry.ts)    — agent registration/discovery
-├── EventBus (src/queue/event-bus.ts)   — inter-agent events (immediate dispatch)
+├── EventBus (src/queue/event-bus.ts)   — inter-agent events + opt-in classify/policy pipeline hooks
+│   └── Event Pipeline (src/queue/event-pipeline.ts) — event category + policy decision primitives
 ├── Identity (src/runtime/identity.ts)  — channel user → canonical identity mapping
 ├── Memory (src/runtime/conversation.ts) — SQLite-backed conversation/session persistence
 ├── Analytics (src/runtime/analytics.ts) — SQLite-backed channel interaction telemetry
@@ -106,6 +107,8 @@ Runtime (src/runtime/runtime.ts)
 ├── Connector Framework (assistant.connectors) — Option 2 connector-pack/playbook policy controls
 ├── Guardian (src/guardian/)             — three-layer defense system
 │   ├── guardian.ts                     — admission controller pipeline
+│   ├── workflows.ts                    — pure admission decisions (no side effects)
+│   ├── operations.ts                   — side-effectful admission operations (logging, result mapping)
 │   ├── input-sanitizer.ts             — prompt injection detection (Layer 1)
 │   ├── rate-limiter.ts                — request throttling (Layer 1)
 │   ├── capabilities.ts               — per-agent permission model (Layer 1)
@@ -385,8 +388,8 @@ Unified `LLMProvider` interface for **Ollama**, **Anthropic**, and **OpenAI**:
 
 - **CLI**: Interactive readline prompt with `/help`, `/agents`, `/status`, `/quit`
 - **Telegram**: grammy framework, polling mode, `allowed_chat_ids` filtering
-- **Web**: Node.js HTTP server with REST API (`/health`, `/api/status`, `/api/message`)
-- **Web Auth**: `channels.web.auth.mode` supports `bearer_required`, `localhost_no_auth`, or `disabled`; if no token is configured, runtime can generate an ephemeral bearer token per process start
+- **Web**: Node.js HTTP server with REST API (`/health`, `/api/status`, `/api/message`, `/api/message/stream`, `/api/auth/session`)
+- **Web Auth**: `channels.web.auth.mode` supports `bearer_required`, `localhost_no_auth`, or `disabled`; bearer token auth remains supported, and browser clients can use HttpOnly `guardianagent_sid` session cookies
 - **Assistant State**: web Dashboard (assistant state section) and CLI `/assistant` orchestration queue/latency visibility, priority queue stats, request-step traces, job tracking, and policy-decision telemetry
 - **Configuration Center**: web `#/config` (Providers/Tools/Policy/Settings tabs) + CLI `/config` onboarding/provider/channel configuration flow (no setup wizard)
 - **Tools Control Plane**: web Configuration > Tools tab + CLI `/tools` for tool execution, manual approvals, policy mode, and sandbox boundaries

@@ -91,7 +91,7 @@ assistant:
           timeoutMs: 15000
 ```
 
-> **Auth mode note:** `localhost_no_auth` skips Bearer tokens for requests from 127.0.0.1 / ::1. If testing remotely or through a proxy, use `bearer_required` and pass `-H "Authorization: Bearer <token>"` on every curl.
+> **Auth mode note:** `localhost_no_auth` skips Bearer tokens for requests from 127.0.0.1 / ::1. If testing remotely or through a proxy, use `bearer_required` and pass `-H "Authorization: Bearer <token>"` on every curl. Session-cookie auth is also supported, but curl examples here use bearer tokens for clarity.
 
 ---
 
@@ -510,17 +510,20 @@ If you set per-tool policy overrides via the API (Test 8), those are in-memory o
 |--------|------|------|---------|
 | GET | `/health` | No | Health check |
 | GET | `/api/status` | Yes | Runtime status |
+| POST | `/api/auth/session` | Yes | Exchange bearer auth for HttpOnly session cookie |
+| DELETE | `/api/auth/session` | Yes | Revoke current session cookie |
 | GET | `/api/tools` | Yes | Tool definitions, policy, jobs, approvals |
 | POST | `/api/tools/run` | Yes | Execute a tool directly |
 | POST | `/api/tools/policy` | Yes | Update tool policy |
 | POST | `/api/tools/approvals/decision` | Yes | Approve/deny a pending tool |
 | POST | `/api/message` | Yes | Send a message to an agent |
+| POST | `/api/message/stream` | Yes | Streaming chat dispatch (requires stream callback wiring) |
 | GET | `/api/agents` | Yes | List agents |
 | GET | `/api/audit` | Yes | Query audit log |
 | GET | `/api/audit/summary` | Yes | Audit summary (denials, secrets, injections) |
 | GET | `/api/providers` | Yes | LLM provider list |
 | POST | `/api/conversations/reset` | Yes | Reset conversation history |
-| GET | `/sse?token=TOKEN` | Query param | Server-sent events stream |
+| GET | `/sse` (or `/sse?token=TOKEN`) | Bearer query or cookie session | Server-sent events stream |
 
 ---
 
