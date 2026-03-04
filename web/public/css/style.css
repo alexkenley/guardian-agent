@@ -7,6 +7,7 @@
   --bg-input: #060a10;
   --accent: #4facfe;
   --accent-hover: #79c0ff;
+  --accent-text: #ffffff;
   --text-primary: #e2e8f0;
   --text-secondary: #8892a8;
   --text-muted: #4a5568;
@@ -109,7 +110,7 @@ body {
 
 .btn-primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-text);
   margin-right: 0.5rem;
 }
 
@@ -720,7 +721,7 @@ tr:hover td {
 
 .cfg-mode-btn.active {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-text);
 }
 
 .cfg-form-grid {
@@ -1582,6 +1583,6 @@ tr:hover td {
 
 .theme-filter-btn.active {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-text);
   border-color: var(--accent);
 }

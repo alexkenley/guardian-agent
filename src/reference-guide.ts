@@ -127,6 +127,35 @@ export function getReferenceGuide(): ReferenceGuide {
         ],
       },
       {
+        title: 'Scheduled Tasks & Operations',
+        items: [
+          'Operations page manages recurring scheduled tasks — tools or playbooks run on cron intervals',
+          'All 13 built-in presets are auto-installed on first run: Network Watch, System Health, Full Network Discovery, Resource Monitor, Process Watch, Service Check, Connection Audit, DNS Health Check, Gateway Ping, Localhost Port Scan, Threat Intel Scan, Knowledge Base Check, Daily System Report',
+          'Cron format: minute hour day month weekday. Examples: */15 * * * * (every 15 min), 0 * * * * (every hour), 0 0 * * * (daily midnight), 0 6 * * * (daily 6 AM)',
+          'Each task can target a tool (e.g. net_arp_scan, sys_resources) or a playbook (e.g. home-network)',
+          'Manual run: click Run on any task to execute immediately outside the cron schedule',
+          'Enable/Disable: pause a schedule without deleting it; disabled tasks keep their configuration and history',
+          'Optional event emission: tasks can emit named events on completion for other agents to subscribe to',
+          'Run history shows recent executions with status, duration, and messages',
+          'CLI equivalent: scheduled tasks are managed via the web Operations page or the API',
+        ],
+      },
+      {
+        title: 'Network Connectors & Playbooks',
+        items: [
+          'Three built-in connector packs are auto-installed on first run: Home Network, System Monitor, Security Audit',
+          'Each pack bundles a connector configuration with pre-configured multi-step playbooks',
+          'Home Network pack: Network Discovery (interfaces, ARP, gateway ping, DNS) and Full Infrastructure Audit playbooks',
+          'System Monitor pack: System Health Check playbook (OS info, resources, processes, services)',
+          'Security Audit pack: Security Scan playbook (connections, processes, localhost port scan)',
+          'Devices tab shows discovered network devices with IP, MAC, hostname, open ports, and online status',
+          'Click Scan Now on the Devices tab to run an immediate ARP network scan',
+          'Run or Dry Run any playbook from the Connectors tab to execute its steps',
+          'Advanced Settings: configure execution mode, step limits, timeouts, and pack/playbook JSON editing',
+          'Playbook results feed into the Device Inventory automatically for network tools',
+        ],
+      },
+      {
         title: 'Security And Troubleshooting',
         items: [
           'Guardian blocks prompt-injection and secret leaks by default',

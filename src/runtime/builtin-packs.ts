@@ -186,6 +186,26 @@ export function installTemplate(
 }
 
 /**
+ * Auto-install all built-in templates that are not already installed.
+ */
+export function autoInstallAllTemplates(
+  service: ConnectorPlaybookService,
+): number {
+  const state = service.getState();
+  const installedPackIds = new Set(state.packs.map((p) => p.id));
+  let installed = 0;
+
+  for (const template of BUILTIN_TEMPLATES) {
+    if (!installedPackIds.has(template.pack.id)) {
+      const result = installTemplate(template.id, service);
+      if (result.success) installed++;
+    }
+  }
+
+  return installed;
+}
+
+/**
  * List all available templates with installation status.
  */
 export function listTemplates(

@@ -130,6 +130,106 @@ const BUILT_IN_PRESETS: ScheduledTaskPreset[] = [
     cron: '0 */6 * * *',
     emitEvent: 'network_discovery_completed',
   },
+  {
+    id: 'resource-monitor',
+    name: 'Resource Monitor',
+    description: 'Check CPU, memory, and disk usage every 15 minutes',
+    type: 'tool',
+    target: 'sys_resources',
+    args: {},
+    cron: '*/15 * * * *',
+    emitEvent: 'resource_check_completed',
+  },
+  {
+    id: 'process-watch',
+    name: 'Process Watch',
+    description: 'List top 20 processes by CPU every hour',
+    type: 'tool',
+    target: 'sys_processes',
+    args: { sortBy: 'cpu', limit: 20 },
+    cron: '0 * * * *',
+    emitEvent: 'process_watch_completed',
+  },
+  {
+    id: 'service-check',
+    name: 'Service Check',
+    description: 'Check running services every 2 hours',
+    type: 'tool',
+    target: 'sys_services',
+    args: {},
+    cron: '0 */2 * * *',
+    emitEvent: 'service_check_completed',
+  },
+  {
+    id: 'connection-audit',
+    name: 'Connection Audit',
+    description: 'Audit active network connections every 30 minutes',
+    type: 'tool',
+    target: 'net_connections',
+    args: {},
+    cron: '*/30 * * * *',
+    emitEvent: 'connection_audit_completed',
+  },
+  {
+    id: 'dns-health-check',
+    name: 'DNS Health Check',
+    description: 'Verify DNS resolution every hour',
+    type: 'tool',
+    target: 'net_dns_lookup',
+    args: { target: 'google.com', type: 'A' },
+    cron: '0 * * * *',
+    emitEvent: 'dns_health_checked',
+  },
+  {
+    id: 'gateway-ping',
+    name: 'Gateway Ping',
+    description: 'Ping default gateway every 10 minutes',
+    type: 'tool',
+    target: 'net_ping',
+    args: { host: '192.168.1.1', count: 3 },
+    cron: '*/10 * * * *',
+    emitEvent: 'gateway_ping_completed',
+  },
+  {
+    id: 'localhost-port-scan',
+    name: 'Localhost Port Scan',
+    description: 'Scan common ports on localhost every 4 hours',
+    type: 'tool',
+    target: 'net_port_check',
+    args: { host: 'localhost', ports: [22, 80, 443, 3306, 5432, 8080, 8443] },
+    cron: '0 */4 * * *',
+    emitEvent: 'port_scan_completed',
+  },
+  {
+    id: 'threat-intel-scan',
+    name: 'Threat Intel Scan',
+    description: 'Run threat intelligence scan every 12 hours',
+    type: 'tool',
+    target: 'intel_scan',
+    args: {},
+    cron: '0 */12 * * *',
+    emitEvent: 'threat_intel_scanned',
+  },
+  {
+    id: 'knowledge-base-check',
+    name: 'Knowledge Base Check',
+    description: 'Review agent knowledge base daily at 6 AM',
+    type: 'tool',
+    target: 'memory_get',
+    args: {},
+    cron: '0 6 * * *',
+    emitEvent: 'knowledge_base_checked',
+  },
+  {
+    id: 'daily-system-report',
+    name: 'Daily System Report',
+    description: 'Collect system info daily at midnight',
+    type: 'tool',
+    target: 'sys_info',
+    args: {},
+    cron: '0 0 * * *',
+    emitEvent: 'daily_report_completed',
+  },
 ];
 
 // ─── Service ──────────────────────────────────────────────
@@ -504,6 +604,18 @@ export class ScheduledTaskService {
       enabled: true,
       emitEvent: preset.emitEvent,
     });
+  }
+
+  autoInstallAllPresets(): number {
+    let installed = 0;
+    for (const preset of BUILT_IN_PRESETS) {
+      const result = this.installPreset(preset.id);
+      if (result.success) installed++;
+    }
+    if (installed > 0) {
+      log.info({ installed, total: BUILT_IN_PRESETS.length }, 'Auto-installed preset scheduled tasks');
+    }
+    return installed;
   }
 
   // ─── Migration ────────────────────────────────────────

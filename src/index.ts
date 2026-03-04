@@ -34,7 +34,7 @@ import { buildQuickActionPrompt, getQuickActions } from './quick-actions.js';
 import { evaluateSetupStatus } from './runtime/setup.js';
 import { ThreatIntelService } from './runtime/threat-intel.js';
 import { ConnectorPlaybookService } from './runtime/connectors.js';
-import { installTemplate, listTemplates } from './runtime/builtin-packs.js';
+import { installTemplate, listTemplates, autoInstallAllTemplates } from './runtime/builtin-packs.js';
 import { DeviceInventoryService } from './runtime/device-inventory.js';
 import { ScheduledTaskService } from './runtime/scheduled-tasks.js';
 import { MoltbookConnector } from './runtime/moltbook-connector.js';
@@ -2606,7 +2606,17 @@ async function main(): Promise<void> {
     deviceInventory,
     eventBus: runtime.eventBus,
   });
-  scheduledTasks.load().catch(() => {});
+  await scheduledTasks.load().catch(() => {});
+
+  // Auto-install all preset scheduled tasks on first run (no existing tasks)
+  if (scheduledTasks.list().length === 0) {
+    scheduledTasks.autoInstallAllPresets();
+  }
+
+  // Auto-install all connector templates if no packs exist yet
+  if (connectors.getState().packs.length === 0) {
+    autoInstallAllTemplates(connectors);
+  }
 
   const webMode = config.channels.web?.auth?.mode
     ?? (config.channels.web?.authToken ? 'bearer_required' : 'localhost_no_auth');
