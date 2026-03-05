@@ -1,29 +1,49 @@
 # GuardianAgent
 
-```
-  ██████╗ ██╗   ██╗ █████╗ ██████╗ ██████╗ ██╗ █████╗ ███╗   ██╗
-  ██╔════╝ ██║   ██║██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗████╗  ██║
-  ██║  ███╗██║   ██║███████║██████╔╝██║  ██║██║███████║██╔██╗ ██║
-  ██║   ██║██║   ██║██╔══██║██╔══██╗██║  ██║██║██╔══██║██║╚██╗██║
-  ╚██████╔╝╚██████╔╝██║  ██║██║  ██║██████╔╝██║██║  ██║██║ ╚████║
-   ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝
-
-       █████╗  ██████╗ ███████╗███╗   ██╗████████╗
-      ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝
-      ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║
-      ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║
-      ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║
-      ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝
-  ═══════════════════════════════════════════════════════════════════
-       ─────────────────────────────────────────────────────────
-            ═══════════════════════════════════════════════
-                  ─────────────────────────────────────
-                        ═════════════════════════
-
-        Three-Layer Defense  |  Real-Time Dashboard
-```
+![GuardianAgent CLI](docs/images/cli-startup.png)
 
 Security-first AI agent orchestration system. Built-in agents with predefined capabilities, strict guardrails on what they can and cannot do, and a three-layer defense system that enforces security at every stage of the message lifecycle.
+
+## Features
+
+- **Three-layer security defense** — proactive admission controls, output-time leak prevention, and scheduled Sentinel anomaly analysis, all mandatory at the Runtime level
+- **Multi-provider LLM support** — Ollama (local), Anthropic (Claude), and OpenAI (GPT) with interactive model selection, circuit breaker, and automatic failover
+- **Multi-channel access** — CLI, Telegram bot, and Web UI with bearer token auth and cross-channel identity mapping
+- **Web dashboard** — real-time status, LLM providers, agent monitoring, session queue, scheduled jobs, and integrated chat panel
+- **Multi-agent orchestration** — Sequential, Parallel, and Loop agents with inter-step state passing through SharedState
+- **Guardian security pipeline** — per-agent capabilities, secret scanning (28+ credential patterns), prompt injection detection, rate limiting, sensitive path blocking, and output redaction
+- **Tool governance** — approval workflows, per-tool policy overrides, path/command/domain allowlists, and risk-tiered tool classes with interactive policy editor
+- **MCP tool server integration** — JSON-RPC 2.0 over stdio with namespaced tools and full Guardian admission on every call
+- **Connector and playbook framework** — declarative connector packs with host/path/command allowlists, bounded step execution, dry-run mode, and signed definitions
+- **Conversation memory** — SQLite-backed session history with FTS5 full-text search, per-agent knowledge base, and automatic memory flush
+- **QMD hybrid document search** — BM25 + vector + LLM re-ranking over directories, git repos, URLs, and files
+- **Scheduled task management** — CRUD scheduling for tools and playbooks with presets, run history, and EventBus integration
+- **Security monitoring** — network threat posture, active alerts, audit log with hash-chain integrity, and SQLite DB hardening
+- **Threat intelligence** — watchlist scanning, findings triage, response drafts with human approval gates
+- **Campaign automation** — contact discovery and approval-gated Gmail send workflows
+- **Quick actions** — templated workflows for email, task, and calendar operations
+- **Analytics** — SQLite-backed usage tracking and channel analytics
+- **Agent evaluation framework** — content matchers, tool trajectory validation, safety metrics, and JSON test suites for CI
+- **SOUL personality system** — configurable personality profiles with primary/delegated injection modes
+- **Cryptographic audit trail** — SHA-256 hash-chained JSONL persistence, tamper-evident policy changes, and constant-time auth
+
+## Screenshots
+
+### Web Dashboard
+![Web Dashboard](docs/images/web-dashboard.png)
+*Real-time status cards, LLM provider table, agent monitoring, assistant state, session queue, scheduled cron jobs, and integrated chat panel.*
+
+### Security Monitoring
+![Security Monitoring](docs/images/security-monitoring.png)
+*Network threat posture cards, active network alerts table, and security event tracking.*
+
+### Network Connectors
+![Network Connectors](docs/images/network-connectors.png)
+*Playbook management with Run/Dry Run/Delete actions, recent execution history, and chat panel.*
+
+### Operations
+![Operations](docs/images/operations.png)
+*Scheduled task presets with one-click install, task table with run/edit/delete actions, and execution history.*
 
 ## What This Is
 
