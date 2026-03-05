@@ -51,6 +51,7 @@ export function getReferenceGuide(): ReferenceGuide {
           'CLI: /assistant policy to review recent allow/deny/rate-limit decisions',
           'CLI: /assistant traces to inspect per-request step traces and timing',
           'Use web Tools tab or CLI /tools to run approved workstation tools and review approvals/jobs',
+          'For chat-driven tool approvals, reply "yes" to approve or "no" to deny (or use /approve [approvalId] and /deny [approvalId]) in CLI/Telegram',
           'For local file discovery, use tool fs_search (chat can call it) and include your folder in Tools -> Allowed Paths',
           'CLI policy shortcut: /tools policy paths <comma,separated,paths> (supports C:\\... and /mnt/c/... formats)',
           'Campaign automation commands: CLI /campaign help (discover contacts, create campaigns, preview, run with approvals)',
@@ -99,7 +100,7 @@ export function getReferenceGuide(): ReferenceGuide {
           'Step 7: Paste chat ID(s) into Allowed Chat IDs and save (group IDs are usually negative, often -100...)',
           'CLI equivalent: /config telegram on, /config telegram token <token>, /config telegram chatids <id1,id2,...>, /config telegram status',
           'Restart Guardian Agent after Telegram channel changes (enable/disable/token/chat IDs)',
-          'Useful commands in Telegram: /help, /guide, /reset [agentId], /quick <action> <details>',
+          'Useful commands in Telegram: /help, /guide, /reset [agentId], /quick <action> <details>, /approve [approvalId], /deny [approvalId]',
         ],
       },
       {

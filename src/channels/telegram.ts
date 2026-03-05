@@ -139,6 +139,15 @@ export class TelegramChannel implements ChannelAdapter {
         return;
       }
 
+      if (lower.startsWith('/approve') || lower.startsWith('/deny')) {
+        if (!this.onMessage) {
+          await this.replyInChunks(ctx, 'Assistant messaging is not available.');
+          return;
+        }
+        await this.dispatchAssistantMessage(ctx, text, canonicalUserId, channelUserId);
+        return;
+      }
+
       if (lower.startsWith('/intel')) {
         await this.handleIntelCommand(ctx, text);
         return;
@@ -191,47 +200,7 @@ export class TelegramChannel implements ChannelAdapter {
       }
 
       if (!this.onMessage) return;
-
-      // Send typing indicator
-      await ctx.replyWithChatAction('typing');
-
-      try {
-        this.trackAnalytics({
-          type: 'message_sent',
-          channel: 'telegram',
-          canonicalUserId,
-          channelUserId,
-          agentId: this.defaultAgent,
-        });
-        const response = await this.onMessage({
-          id: randomUUID(),
-          userId: channelUserId,
-          channel: 'telegram',
-          content: text,
-          timestamp: Date.now(),
-        });
-
-        this.trackAnalytics({
-          type: 'message_success',
-          channel: 'telegram',
-          canonicalUserId,
-          channelUserId,
-          agentId: this.defaultAgent,
-        });
-        await this.replyInChunks(ctx, response.content);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.trackAnalytics({
-          type: 'message_error',
-          channel: 'telegram',
-          canonicalUserId,
-          channelUserId,
-          agentId: this.defaultAgent,
-          metadata: { error: msg },
-        });
-        log.error({ chatId: ctx.chat.id, err: msg }, 'Error handling Telegram message');
-        await this.replyInChunks(ctx, 'Sorry, an error occurred processing your message.');
-      }
+      await this.dispatchAssistantMessage(ctx, text, canonicalUserId, channelUserId);
     });
 
     // Start polling
@@ -345,10 +314,60 @@ export class TelegramChannel implements ChannelAdapter {
       '/guide - Open reference guide',
       '/reset [agentId] - Reset conversation memory',
       '/quick <action> <details> - Run quick action (email/task/calendar)',
+      '/approve [approvalId ...] - Approve pending tool action(s)',
+      '/deny [approvalId ...] - Deny pending tool action(s)',
       '/intel [status|scan|findings] - Threat intel status + quick scan',
       '',
       'Or just send a normal message to chat with the assistant.',
     ].join('\n');
+  }
+
+  private async dispatchAssistantMessage(
+    ctx: Context,
+    text: string,
+    canonicalUserId: string,
+    channelUserId: string,
+  ): Promise<void> {
+    if (!this.onMessage) return;
+    await ctx.replyWithChatAction('typing');
+
+    try {
+      this.trackAnalytics({
+        type: 'message_sent',
+        channel: 'telegram',
+        canonicalUserId,
+        channelUserId,
+        agentId: this.defaultAgent,
+      });
+      const response = await this.onMessage({
+        id: randomUUID(),
+        userId: channelUserId,
+        channel: 'telegram',
+        content: text,
+        timestamp: Date.now(),
+      });
+
+      this.trackAnalytics({
+        type: 'message_success',
+        channel: 'telegram',
+        canonicalUserId,
+        channelUserId,
+        agentId: this.defaultAgent,
+      });
+      await this.replyInChunks(ctx, response.content);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.trackAnalytics({
+        type: 'message_error',
+        channel: 'telegram',
+        canonicalUserId,
+        channelUserId,
+        agentId: this.defaultAgent,
+        metadata: { error: msg },
+      });
+      log.error({ chatId: ctx.chat?.id, err: msg }, 'Error handling Telegram message');
+      await this.replyInChunks(ctx, 'Sorry, an error occurred processing your message.');
+    }
   }
 
   private trackAnalytics(event: AnalyticsEventInput): void {

@@ -347,6 +347,11 @@ export class CLIChannel implements ChannelAdapter {
       case 'quick':
         await this.handleQuick(args);
         break;
+      case 'approve':
+      case 'deny':
+        // Route through normal chat dispatch so approval UX matches Telegram.
+        await this.handleUserMessage(commandLine);
+        break;
       case 'analytics':
         this.handleAnalytics(args);
         break;
@@ -389,6 +394,8 @@ export class CLIChannel implements ChannelAdapter {
     this.write(this.bold('Chat\n'));
     this.write('  /chat [agentId]                        Switch active agent or show current\n');
     this.write('  /mode [auto|local|external]            Switch routing mode (auto / local-only / external-only)\n');
+    this.write('  /approve [approvalId ...]              Approve pending chat tool action(s)\n');
+    this.write('  /deny [approvalId ...]                 Deny pending chat tool action(s)\n');
     this.write('  <text>                                 Send message to active agent\n');
     this.write('\n');
     this.write(this.bold('Status & Monitoring\n'));

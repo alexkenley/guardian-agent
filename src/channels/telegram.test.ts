@@ -39,3 +39,12 @@ describe('TelegramChannel.send', () => {
     expect(sentChunks.every((chunk) => chunk.length <= 4096)).toBe(true);
   });
 });
+
+describe('TelegramChannel help text', () => {
+  it('lists approval commands', () => {
+    const channel = new TelegramChannel({ botToken: '123:abc' });
+    const helpText = (channel as unknown as { buildHelpText: () => string }).buildHelpText();
+    expect(helpText).toContain('/approve [approvalId ...]');
+    expect(helpText).toContain('/deny [approvalId ...]');
+  });
+});

@@ -42,7 +42,7 @@ export const TOOL_CATEGORIES: Record<ToolCategory, { label: string; description:
 
 /** Mapping of each category to its tool names. */
 export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
-  filesystem: ['fs_list', 'fs_search', 'fs_read', 'fs_write', 'doc_create'],
+  filesystem: ['fs_list', 'fs_search', 'fs_read', 'fs_write', 'fs_mkdir', 'doc_create'],
   shell: ['shell_safe'],
   web: ['chrome_job', 'web_search', 'web_fetch'],
   browser: ['browser_open', 'browser_action', 'browser_snapshot', 'browser_close', 'browser_task'],
