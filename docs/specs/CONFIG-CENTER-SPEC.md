@@ -21,6 +21,7 @@ Provide one intuitive configuration surface (web + CLI) without an interactive s
 - Web auth mode/token controls are part of the same panel
 - Default provider can be changed live
 - API keys can be cleared (removed) from config, not just set
+- Telegram readiness status should update immediately after save (no manual refresh)
 
 ## UX Model
 - Web:
@@ -32,6 +33,12 @@ Provide one intuitive configuration surface (web + CLI) without an interactive s
   - API key fields show `[clear]` button when a key is configured, allowing removal
   - Readiness checklist and status cards
   - Telegram config as a separate section below provider panels
+  - Telegram section fields:
+    - `Enable Telegram` (on/off)
+    - `Bot Token`
+    - `Allowed Chat IDs` (comma-separated IDs)
+    - `Default Agent` (optional)
+  - Telegram readiness card reports completion state from saved config
 - CLI:
   - No `/setup` wizard command
   - Use `/config` and `/auth` commands for all configuration actions
@@ -57,6 +64,15 @@ Input fields:
 - Telegram channel structural updates still require restart
 - Web auth mode is configurable (`bearer_required|localhost_no_auth|disabled`)
 - If no token is configured, runtime may generate an ephemeral token for the current process
+
+## Telegram Configuration Flow
+
+Recommended setup path:
+1. Create bot with `@BotFather` (`/newbot`) and copy token.
+2. In web `#/config` -> `Settings` -> `Telegram Channel`, enable Telegram and save token.
+3. Send one message to the bot (`/start`) and fetch updates via Telegram API.
+4. Copy `message.chat.id` into `Allowed Chat IDs` and save.
+5. Restart runtime for Telegram channel structural changes.
 
 ## Validation Rules
 - `model` required

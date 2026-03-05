@@ -355,6 +355,20 @@ export class ToolExecutor {
     }
 
     const job = this.createJob(entry.definition, request, args);
+    const argsValidationError = this.validateToolArgs(entry.definition, args);
+    if (argsValidationError) {
+      job.status = 'failed';
+      job.completedAt = this.now();
+      job.durationMs = 0;
+      job.error = sanitizePreview(argsValidationError);
+      return {
+        success: false,
+        status: job.status,
+        jobId: job.id,
+        message: job.error,
+      };
+    }
+
     const decision = this.decide(entry.definition);
     if (decision === 'deny') {
       job.status = 'denied';
@@ -516,6 +530,80 @@ export class ToolExecutor {
         if (definition.risk === 'network') return 'allow';
         return 'require_approval';
     }
+  }
+
+  private validateToolArgs(definition: ToolDefinition, args: Record<string, unknown>): string | null {
+    const schema = definition.parameters;
+    if (!isRecord(schema)) return null;
+    if (schema.type !== 'object') return null;
+
+    const properties = isRecord(schema.properties) ? schema.properties : {};
+    const required = Array.isArray(schema.required)
+      ? schema.required.filter((key): key is string => typeof key === 'string')
+      : [];
+
+    for (const key of required) {
+      if (!(key in args) || args[key] === undefined || args[key] === null) {
+        return `'${key}' is required.`;
+      }
+      const propertySchema = isRecord(properties[key]) ? properties[key] : null;
+      const expectedType = propertySchema && typeof propertySchema.type === 'string'
+        ? propertySchema.type
+        : null;
+      const typeError = this.validateArgType(key, args[key], expectedType, true);
+      if (typeError) return typeError;
+    }
+
+    for (const [key, value] of Object.entries(args)) {
+      const propertySchema = isRecord(properties[key]) ? properties[key] : null;
+      if (!propertySchema) continue;
+      const expectedType = typeof propertySchema.type === 'string' ? propertySchema.type : null;
+      const typeError = this.validateArgType(key, value, expectedType, false);
+      if (typeError) return typeError;
+    }
+
+    return null;
+  }
+
+  private validateArgType(
+    key: string,
+    value: unknown,
+    expectedType: string | null,
+    required: boolean,
+  ): string | null {
+    if (!expectedType) return null;
+
+    if (expectedType === 'string') {
+      if (typeof value !== 'string') return `'${key}' must be a string.`;
+      if (required && value.trim().length === 0) return `'${key}' must be a non-empty string.`;
+      return null;
+    }
+    if (expectedType === 'number') {
+      return typeof value === 'number' && Number.isFinite(value)
+        ? null
+        : `'${key}' must be a number.`;
+    }
+    if (expectedType === 'integer') {
+      return typeof value === 'number' && Number.isInteger(value)
+        ? null
+        : `'${key}' must be an integer.`;
+    }
+    if (expectedType === 'boolean') {
+      return typeof value === 'boolean'
+        ? null
+        : `'${key}' must be a boolean.`;
+    }
+    if (expectedType === 'array') {
+      return Array.isArray(value)
+        ? null
+        : `'${key}' must be an array.`;
+    }
+    if (expectedType === 'object') {
+      return isRecord(value)
+        ? null
+        : `'${key}' must be an object.`;
+    }
+    return null;
   }
 
   private async execute(
@@ -854,6 +942,37 @@ export class ToolExecutor {
             path: safePath,
             append,
             size: details.size,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'fs_mkdir',
+        description: 'Create a directory within allowed paths. Supports recursive creation and validates path allowlist. Mutating — requires approval in approve_by_policy mode. Requires write_files capability.',
+        risk: 'mutating',
+        category: 'filesystem',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Directory path to create.' },
+            recursive: { type: 'boolean', description: 'Create parent directories if missing (default true).' },
+          },
+          required: ['path'],
+        },
+      },
+      async (args, request) => {
+        const rawPath = requireString(args.path, 'path');
+        const recursive = args.recursive !== false;
+        const safePath = await this.resolveAllowedPath(rawPath);
+        this.guardAction(request, 'write_file', { path: rawPath, content: '[mkdir]' });
+        await mkdir(safePath, { recursive });
+        return {
+          success: true,
+          output: {
+            path: safePath,
+            recursive,
           },
         };
       },

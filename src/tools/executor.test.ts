@@ -54,6 +54,7 @@ describe('ToolExecutor', () => {
     expect(names).toContain('fs_read');
     expect(names).toContain('fs_search');
     expect(names).toContain('fs_write');
+    expect(names).toContain('fs_mkdir');
     expect(names).toContain('shell_safe');
     expect(names).toContain('chrome_job');
     expect(names).toContain('campaign_create');
@@ -86,6 +87,64 @@ describe('ToolExecutor', () => {
 
     const text = await readFile(join(root, 'note.txt'), 'utf-8');
     expect(text).toBe('hello');
+  });
+
+  it('creates directories with fs_mkdir after approval', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const run = await executor.runTool({
+      toolName: 'fs_mkdir',
+      args: { path: 'apps/Testapp', recursive: true },
+      origin: 'cli',
+    });
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('pending_approval');
+    expect(run.approvalId).toBeDefined();
+
+    const decided = await executor.decideApproval(run.approvalId!, 'approved', 'tester');
+    expect(decided.success).toBe(true);
+
+    const listing = await executor.runTool({
+      toolName: 'fs_list',
+      args: { path: 'apps' },
+      origin: 'cli',
+    });
+    expect(listing.success).toBe(true);
+    const entries = Array.isArray((listing.output as { entries?: unknown })?.entries)
+      ? (listing.output as { entries: Array<{ name?: string; type?: string }> }).entries
+      : [];
+    expect(entries.some((entry) => entry.name === 'Testapp' && entry.type === 'dir')).toBe(true);
+  });
+
+  it('rejects invalid tool args before creating approval requests', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const run = await executor.runTool({
+      toolName: 'fs_write',
+      args: { path: 'note.txt', content: '' },
+      origin: 'cli',
+    });
+
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('failed');
+    expect(run.approvalId).toBeUndefined();
+    expect(run.message).toContain("'content' must be a non-empty string");
   });
 
   it('stores redacted argument previews and deterministic hashes for approvals', async () => {
@@ -961,7 +1020,7 @@ describe('ToolExecutor', () => {
       expect(names).toContain('memory');
       expect(names).toContain('search');
       const fs = info.find((c) => c.category === 'filesystem')!;
-      expect(fs.toolCount).toBe(5);
+      expect(fs.toolCount).toBe(6);
       expect(fs.enabled).toBe(true);
     });
 

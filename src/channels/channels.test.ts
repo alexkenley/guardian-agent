@@ -118,6 +118,33 @@ describe('CLIChannel', () => {
 
     await cli.stop();
   });
+
+  it('should route /approve and /deny commands to handler for chat-level approvals', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const cli = new CLIChannel({ input, output });
+    const received: UserMessage[] = [];
+
+    const handler = async (msg: UserMessage): Promise<AgentResponse> => {
+      received.push(msg);
+      return { content: `ack: ${msg.content}` };
+    };
+
+    await cli.start(handler);
+
+    input.write('/approve abc-123\n');
+    await new Promise(r => setTimeout(r, 50));
+    input.write('/deny abc-456\n');
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(received.length).toBe(2);
+    expect(received[0].content).toBe('/approve abc-123');
+    expect(received[1].content).toBe('/deny abc-456');
+    expect(received.every((msg) => msg.channel === 'cli')).toBe(true);
+
+    await cli.stop();
+  });
+
   it('should handle /exit as alias for /quit', async () => {
     const input = new PassThrough();
     const output = new PassThrough();
@@ -465,6 +492,8 @@ describe('CLIChannel with DashboardCallbacks', () => {
     expect(text).toContain('/chat');
     expect(text).toContain('/agents');
     expect(text).toContain('/agent');
+    expect(text).toContain('/approve');
+    expect(text).toContain('/deny');
     expect(text).toContain('/providers');
     expect(text).toContain('/budget');
     expect(text).toContain('/watchdog');

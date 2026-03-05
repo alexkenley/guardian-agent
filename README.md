@@ -275,23 +275,29 @@ guardian:
 
 ### Telegram Setup (Web + CLI)
 
-1. Create a bot with `@BotFather` in Telegram (`/newbot`) and copy the token.
-2. Web path: `#/config` -> `Settings` -> `Telegram Channel`:
+1. Open Telegram, search for `@BotFather`, press **Start**, then run `/newbot`.
+2. Follow prompts for bot name and username (username must end with `bot`), then copy the bot token.
+3. Web path: `#/config` -> `Settings` -> `Telegram Channel`:
    - enable Telegram
    - paste bot token
    - set allowed chat IDs (recommended)
-3. CLI path (equivalent):
+4. CLI path (equivalent):
    - `/config telegram on`
    - `/config telegram token <token>`
    - `/config telegram chatids <id1,id2,...>`
    - `/config telegram status`
-4. To find your `chat.id`, send one message to the bot and call:
+5. To find your `chat.id`, send one message to the bot and call:
 
 ```bash
 curl "https://api.telegram.org/bot<token>/getUpdates"
 ```
 
-Then copy `message.chat.id` into the allowlist.
+Then copy `message.chat.id` into the allowlist. Group IDs are usually negative (often `-100...`).
+
+For approval-gated tool actions in Telegram or CLI:
+- Reply `yes` to approve all pending actions or `no` to deny all pending actions
+- Optional explicit commands: `/approve [approvalId]` or `/deny [approvalId]`
+- Approval IDs may be typed with or without square brackets
 
 Restart Guardian Agent after Telegram channel changes.
 
@@ -327,7 +333,7 @@ Restart Guardian Agent after Telegram channel changes.
 ### Key Commands
 
 - CLI: `/config`, `/auth`, `/tools`, `/connectors`, `/playbooks`, `/campaign`, `/assistant`, `/quick`, `/session`, `/analytics`, `/intel`, `/guide`, `/factory-reset`
-- Telegram: `/help`, `/guide`, `/reset`, `/quick`, `/intel`
+- Telegram: `/help`, `/guide`, `/reset`, `/quick`, `/intel`, `/approve`, `/deny`
 - Web: Dashboard, Security (Audit/Monitoring/Threat Intel), Network (Connectors/Devices), Operations (Scheduled Tasks/Run History), Configuration (Providers/Tools/Policy/Search Sources/Settings), Reference Guide, Chat
 
 ### Connector + Playbook CLI (Web Parity)

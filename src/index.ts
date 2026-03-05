@@ -64,8 +64,17 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 /** Default chat agent that uses the configured LLM provider. */
-/** Pattern matching approval-like messages from the user. */
-const APPROVAL_PATTERN = /^(yes|yep|yeah|y|approved?|go ahead|do it|confirm|ok|okay|sure|proceed|accept)\b/i;
+const APPROVAL_CONFIRM_PATTERN = /^(?:\/)?(?:approve|approved|yes|yep|yeah|y|go ahead|do it|confirm|ok|okay|sure|proceed|accept)\b/i;
+const APPROVAL_DENY_PATTERN = /^(?:\/)?(?:deny|denied|reject|decline|cancel|no|nope|nah|n)\b/i;
+const APPROVAL_COMMAND_PATTERN = /^\/?(approve|deny)\b/i;
+const APPROVAL_ID_TOKEN_PATTERN = /^(?=.*(?:-|\d))[a-z0-9-]{4,}$/i;
+const PENDING_APPROVAL_TTL_MS = 30 * 60_000;
+
+interface PendingApprovalState {
+  ids: string[];
+  createdAt: number;
+  expiresAt: number;
+}
 
 function generateSecureToken(byteLength = 24): string {
   return randomBytes(byteLength).toString('hex');
@@ -150,7 +159,7 @@ class ChatAgent extends BaseAgent {
   private tools?: ToolExecutor;
   private maxToolRounds: number;
   /** Pending approval IDs from the last tool round, keyed by user+channel. */
-  private pendingApprovals: Map<string, string[]> = new Map();
+  private pendingApprovals: Map<string, PendingApprovalState> = new Map();
   /** Optional model fallback chain for retrying failed LLM calls. */
   private fallbackChain?: ModelFallbackChain;
   /** Per-agent persistent knowledge base. */
@@ -211,9 +220,10 @@ class ChatAgent extends BaseAgent {
     if (!ctx.llm) {
       return { content: 'No LLM provider configured.' };
     }
+    const userKey = `${message.userId}:${message.channel}`;
 
     // Check if user is approving a pending tool action
-    const approvalResult = await this.tryHandleApproval(message);
+    const approvalResult = await this.tryHandleApproval(message, userKey);
     if (approvalResult) {
       if (this.conversationService) {
         this.conversationService.recordTurn(
@@ -223,6 +233,18 @@ class ChatAgent extends BaseAgent {
         );
       }
       return { content: approvalResult };
+    }
+    const existingPending = this.getPendingApprovals(userKey);
+    if (existingPending) {
+      const reminder = this.formatPendingApprovalPrompt(existingPending.ids);
+      if (this.conversationService) {
+        this.conversationService.recordTurn(
+          { agentId: this.id, userId: message.userId, channel: message.channel },
+          message.content,
+          reminder,
+        );
+      }
+      return { content: reminder };
     }
 
     // Inject knowledge base into system prompt if available
@@ -293,10 +315,6 @@ class ChatAgent extends BaseAgent {
       }
       return { content: finalContent };
     }
-
-    // Clear any stale pending approvals for this user
-    const userKey = `${message.userId}:${message.channel}`;
-    this.pendingApprovals.delete(userKey);
 
     if (!this.tools?.isEnabled()) {
       const response = await this.chatWithFallback(ctx, llmMessages);
@@ -404,13 +422,19 @@ class ChatAgent extends BaseAgent {
         rounds += 1;
       }
 
-      // Store pending approvals for this user so we can auto-approve on their next message
+      // Store pending approvals for this user so they can be approved/denied explicitly
       if (pendingIds.length > 0) {
-        this.pendingApprovals.set(userKey, pendingIds);
+        const existing = this.getPendingApprovals(userKey)?.ids ?? [];
+        const merged = [...new Set([...existing, ...pendingIds])];
+        this.setPendingApprovals(userKey, merged);
+        const prompt = this.formatPendingApprovalPrompt(merged);
+        finalContent = finalContent?.trim()
+          ? `${finalContent.trim()}\n\n${prompt}`
+          : prompt;
       }
 
       if (!finalContent) {
-        finalContent = 'Tool processing completed, but no final assistant response was generated.';
+        finalContent = 'I could not generate a final response for that request.';
       }
     }
 
@@ -426,33 +450,138 @@ class ChatAgent extends BaseAgent {
   }
 
   /**
-   * Check if the user's message is an approval for pending tool actions.
-   * If so, approve them and return a summary.
+   * Check if the user's message is an approval decision for pending tool actions.
+   * If so, execute approval/denial and return a summary.
    */
-  private async tryHandleApproval(message: UserMessage): Promise<string | null> {
+  private async tryHandleApproval(message: UserMessage, userKey: string): Promise<string | null> {
     if (!this.tools?.isEnabled()) return null;
 
-    const userKey = `${message.userId}:${message.channel}`;
-    const pendingIds = this.pendingApprovals.get(userKey);
-    if (!pendingIds?.length) return null;
-    if (!APPROVAL_PATTERN.test(message.content.trim())) return null;
+    const pending = this.getPendingApprovals(userKey);
+    if (!pending?.ids.length) return null;
 
-    // User is approving — process all pending approvals
-    this.pendingApprovals.delete(userKey);
+    const input = message.content.trim();
+    const isApprove = APPROVAL_CONFIRM_PATTERN.test(input);
+    const isDeny = APPROVAL_DENY_PATTERN.test(input);
+    if (!isApprove && !isDeny) return null;
+
+    const decision: 'approved' | 'denied' = isDeny ? 'denied' : 'approved';
+    let targetIds = pending.ids;
+    if (APPROVAL_COMMAND_PATTERN.test(input)) {
+      const selected = this.resolveApprovalTargets(input, pending.ids);
+      if (selected.errors.length > 0) {
+        return [
+          selected.errors.join('\n'),
+          '',
+          this.formatPendingApprovalPrompt(pending.ids),
+        ].join('\n');
+      }
+      targetIds = selected.ids;
+    }
+
+    if (targetIds.length === 0) {
+      return this.formatPendingApprovalPrompt(pending.ids);
+    }
+
+    const remaining = pending.ids.filter((id) => !targetIds.includes(id));
+    this.setPendingApprovals(userKey, remaining);
     const results: string[] = [];
-    for (const approvalId of pendingIds) {
+    for (const approvalId of targetIds) {
       try {
-        const result = await this.tools.decideApproval(approvalId, 'approved', message.userId);
+        const result = await this.tools.decideApproval(approvalId, decision, message.userId);
         if (result.success) {
-          results.push(result.message ?? `Approved and executed (${approvalId}).`);
+          results.push(result.message ?? `${decision === 'approved' ? 'Approved and executed' : 'Denied'} (${approvalId}).`);
         } else {
-          results.push(result.message ?? `Approval failed (${approvalId}).`);
+          const failure = result.message ?? `${decision === 'approved' ? 'Approval' : 'Denial'} failed (${approvalId}).`;
+          results.push(
+            decision === 'approved'
+              ? `Approval received for ${approvalId}, but execution failed: ${failure}`
+              : `Denial for ${approvalId} failed: ${failure}`,
+          );
         }
       } catch (err) {
-        results.push(`Error approving ${approvalId}: ${err instanceof Error ? err.message : String(err)}`);
+        results.push(`Error processing ${approvalId}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+    if (remaining.length > 0) {
+      results.push('');
+      results.push(this.formatPendingApprovalPrompt(remaining));
+    }
     return results.join('\n');
+  }
+
+  private getPendingApprovals(userKey: string, nowMs: number = Date.now()): PendingApprovalState | null {
+    const state = this.pendingApprovals.get(userKey);
+    if (!state) return null;
+    if (state.expiresAt <= nowMs) {
+      this.pendingApprovals.delete(userKey);
+      return null;
+    }
+    return state;
+  }
+
+  private setPendingApprovals(userKey: string, ids: string[], nowMs: number = Date.now()): void {
+    const uniqueIds = [...new Set(ids.filter((id) => id.trim().length > 0))];
+    if (uniqueIds.length === 0) {
+      this.pendingApprovals.delete(userKey);
+      return;
+    }
+    const existing = this.pendingApprovals.get(userKey);
+    this.pendingApprovals.set(userKey, {
+      ids: uniqueIds,
+      createdAt: existing?.createdAt ?? nowMs,
+      expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
+    });
+  }
+
+  private resolveApprovalTargets(
+    input: string,
+    pendingIds: string[],
+  ): { ids: string[]; errors: string[] } {
+    const argsText = input.replace(APPROVAL_COMMAND_PATTERN, '').trim();
+    if (!argsText) return { ids: pendingIds, errors: [] };
+    const rawTokens = argsText
+      .split(/[,\s]+/)
+      .map((token) => token.trim().replace(/^\[+|\]+$/g, ''))
+      .filter(Boolean)
+      .filter((token) => APPROVAL_ID_TOKEN_PATTERN.test(token));
+    if (rawTokens.length === 0) return { ids: pendingIds, errors: [] };
+
+    const selected = new Set<string>();
+    const errors: string[] = [];
+    for (const token of rawTokens) {
+      if (pendingIds.includes(token)) {
+        selected.add(token);
+        continue;
+      }
+      const matches = pendingIds.filter((id) => id.startsWith(token));
+      if (matches.length === 1) {
+        selected.add(matches[0]);
+      } else if (matches.length > 1) {
+        errors.push(`Approval ID prefix '${token}' is ambiguous.`);
+      } else {
+        errors.push(`Approval ID '${token}' was not found for this chat.`);
+      }
+    }
+    return { ids: [...selected], errors };
+  }
+
+  private formatPendingApprovalPrompt(ids: string[]): string {
+    if (ids.length === 0) return 'There are no pending approvals.';
+    const ttlMinutes = Math.round(PENDING_APPROVAL_TTL_MS / 60_000);
+    if (ids.length === 1) {
+      return [
+        'I prepared an action that needs your approval.',
+        `Approval ID: ${ids[0]}`,
+        `Reply "yes" to approve or "no" to deny (expires in ${ttlMinutes} minutes).`,
+        'Optional: /approve or /deny',
+      ].join('\n');
+    }
+    return [
+      `I prepared ${ids.length} actions that need your approval.`,
+      `Approval IDs: ${ids.join(', ')}`,
+      `Reply "yes" to approve all or "no" to deny all (expires in ${ttlMinutes} minutes).`,
+      'Optional: /approve <id> or /deny <id> for specific actions',
+    ].join('\n');
   }
 
   private async tryDirectWebSearch(
@@ -611,8 +740,8 @@ function toNumber(value: unknown): number | null {
 /**
  * Detect web search intent from free-form user messages.
  * Returns a search query string, or null if the message isn't a web search request.
- * Deliberately broad: if the user asks to "find", "search", "look up", "what are the best",
- * etc. AND the message is about an external topic (not files/code), we treat it as web search.
+ * Conservative by design: only trigger for explicit web-search language
+ * or strong internet-oriented keywords to avoid hijacking normal chat.
  */
 function parseWebSearchIntent(content: string): string | null {
   const text = content.trim();
@@ -623,16 +752,20 @@ function parseWebSearchIntent(content: string): string | null {
     return null;
   }
 
-  // Detect web search patterns
-  const webPatterns = [
-    /\b(?:search|find|look\s*up|google|browse|what\s+(?:are|is)|show\s+me|tell\s+me\s+about|list)\b/i,
-    /\b(?:top\s+\d+|best|popular|recommend|nearby|restaurants?|hotels?|reviews?|news|weather|price|recipe)\b/i,
-    /\b(?:how\s+(?:to|do|does|can|much)|where\s+(?:is|are|can|to)|who\s+(?:is|are|was))\b/i,
-  ];
+  if (/^(?:hi|hello|hey)\b/i.test(text)) return null;
+  if (/^(?:who|what)\s+are\s+you\b/i.test(text)) return null;
 
-  const matchCount = webPatterns.filter((p) => p.test(text)).length;
-  // Need at least one strong signal
-  if (matchCount === 0) return null;
+  const explicitSearchPatterns = [
+    /^(?:please\s+)?(?:search|find|look\s*up|google|browse)\b/i,
+    /\b(?:search|look\s*up|google|browse)\b.*\b(?:web|internet|online)\b/i,
+    /\bon\s+the\s+(?:web|internet|online)\b/i,
+    /\bweb\s+search\b/i,
+  ];
+  const hasExplicitSignal = explicitSearchPatterns.some((pattern) => pattern.test(text));
+
+  const hasInternetTopicSignal = /\b(?:latest|news|weather|price|stock|market|review|release\s+date|breaking)\b/i.test(text);
+  const hasQuestionSignal = /[?]|\b(?:what|who|where|when|how)\b/i.test(text);
+  if (!hasExplicitSignal && !(hasInternetTopicSignal && hasQuestionSignal)) return null;
 
   // Extract the query — use the full message, cleaned up
   const query = text
