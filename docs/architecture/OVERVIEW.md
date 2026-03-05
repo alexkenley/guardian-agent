@@ -390,7 +390,7 @@ Unified `LLMProvider` interface for **Ollama**, **Anthropic**, and **OpenAI**:
 - **CLI**: Interactive readline prompt with `/help`, `/agents`, `/status`, `/factory-reset`, `/quit`
 - **Telegram**: grammy framework, polling mode, `allowed_chat_ids` filtering
 - **Web**: Node.js HTTP server with REST API (`/health`, `/api/status`, `/api/message`, `/api/message/stream`, `/api/auth/session`, `/api/factory-reset`)
-- **Web Auth**: `channels.web.auth.mode` supports `bearer_required`, `localhost_no_auth`, or `disabled`; bearer token auth remains supported, and browser clients can use HttpOnly `guardianagent_sid` session cookies
+- **Web Auth**: `channels.web.auth.mode` is enforced as `bearer_required`; browser clients can use HttpOnly `guardianagent_sid` session cookies after bearer authentication
 - **Assistant State**: web Dashboard (assistant state section) and CLI `/assistant` orchestration queue/latency visibility, priority queue stats, request-step traces, job tracking, and policy-decision telemetry
 - **Configuration Center**: web `#/config` (Providers/Tools/Policy/Settings tabs) + CLI `/config` onboarding/provider/channel configuration flow (no setup wizard)
 - **Tools Control Plane**: web Configuration > Tools tab + CLI `/tools` for tool execution, manual approvals, policy mode, and sandbox boundaries

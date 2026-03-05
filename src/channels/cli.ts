@@ -415,7 +415,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /config set <provider> <field> <value> Edit provider field\n');
     this.write('  /config add <name> <type> <model> [apiKey]  Add provider\n');
     this.write('  /config test [provider]                Test provider connectivity\n');
-    this.write('  /auth [status|mode|rotate|reveal|revoke]  Manage web auth/token settings\n');
+    this.write('  /auth [status|rotate|reveal]           Manage web auth/token settings\n');
     this.write('\n');
     this.write(this.bold('Tools\n'));
     this.write('  /tools [list|run|approvals|jobs|policy]  Tool runtime control plane\n');
@@ -1357,23 +1357,6 @@ export class CLIChannel implements ChannelAdapter {
       return;
     }
 
-    if (sub === 'mode') {
-      if (!this.dashboard.onAuthUpdate) {
-        this.write('\nAuth updates are not available.\n\n');
-        return;
-      }
-      const mode = args[1];
-      if (!mode || !['bearer_required', 'localhost_no_auth', 'disabled'].includes(mode)) {
-        this.write('\nUsage: /auth mode <bearer_required|localhost_no_auth|disabled>\n\n');
-        return;
-      }
-      const result = await this.dashboard.onAuthUpdate({
-        mode: mode as 'bearer_required' | 'localhost_no_auth' | 'disabled',
-      });
-      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
-      return;
-    }
-
     if (sub === 'rotate') {
       if (!this.dashboard.onAuthRotate) {
         this.write('\nToken rotation is not available.\n\n');
@@ -1402,17 +1385,7 @@ export class CLIChannel implements ChannelAdapter {
       return;
     }
 
-    if (sub === 'revoke') {
-      if (!this.dashboard.onAuthRevoke) {
-        this.write('\nToken revoke is not available.\n\n');
-        return;
-      }
-      const result = await this.dashboard.onAuthRevoke();
-      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
-      return;
-    }
-
-    this.write('\nUsage: /auth [status|mode|rotate|reveal|revoke]\n\n');
+    this.write('\nUsage: /auth [status|rotate|reveal]\n\n');
   }
 
   // ─── /tools ──────────────────────────────────────────────────
@@ -2529,6 +2502,9 @@ export class CLIChannel implements ChannelAdapter {
       return;
     }
 
+    // Build a flat numbered list of all models across providers
+    const entries: { provider: string; model: string; active: boolean }[] = [];
+
     this.write('\n');
     for (const p of filtered) {
       this.write(this.bold(`${p.name}`) + ` (${p.type}):\n`);
@@ -2536,16 +2512,59 @@ export class CLIChannel implements ChannelAdapter {
 
       if (p.availableModels && p.availableModels.length > 0) {
         for (const m of p.availableModels) {
-          const marker = m === activeModel ? this.green(' (active)') : '';
-          this.write(`  ${m}${marker}\n`);
+          const idx = entries.length + 1;
+          const active = m === activeModel;
+          entries.push({ provider: p.name, model: m, active });
+          const marker = active ? this.green(' ← active') : '';
+          this.write(`  ${this.dim(`[${idx}]`)} ${m}${marker}\n`);
         }
       } else if (p.connected) {
-        this.write(`  ${activeModel}${this.green(' (active)')}\n`);
+        const idx = entries.length + 1;
+        entries.push({ provider: p.name, model: activeModel, active: true });
+        this.write(`  ${this.dim(`[${idx}]`)} ${activeModel}${this.green(' ← active')}\n`);
       } else {
         this.write(`  ${this.dim('Unable to list models — provider not connected')}\n`);
       }
     }
-    this.write('\n');
+
+    this.write(`\n${this.dim('Enter a number to switch model, or press Enter to cancel:')}\n`);
+
+    // Prompt for selection
+    const choice = await new Promise<string>((resolve) => {
+      if (!this.rl) { resolve(''); return; }
+      this.rl.question('  > ', (answer) => resolve(answer.trim()));
+    });
+
+    if (!choice) {
+      this.write('\n');
+      this.rl?.prompt();
+      return;
+    }
+
+    const num = parseInt(choice, 10);
+    if (isNaN(num) || num < 1 || num > entries.length) {
+      this.write(`\n${this.red('Invalid selection.')} Enter a number between 1 and ${entries.length}.\n\n`);
+      this.rl?.prompt();
+      return;
+    }
+
+    const selected = entries[num - 1];
+    if (selected.active) {
+      this.write(`\n${selected.model} is already the active model.\n\n`);
+      this.rl?.prompt();
+      return;
+    }
+
+    // Apply the model change
+    if (this.dashboard?.onConfigUpdate) {
+      const result = await this.dashboard.onConfigUpdate({
+        llm: { [selected.provider]: { model: selected.model } },
+      });
+      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+    } else {
+      this.write(`\nTo switch: /config set ${selected.provider} model ${selected.model}\n\n`);
+    }
+    this.rl?.prompt();
   }
 
   // ─── /reset ──────────────────────────────────────────────────

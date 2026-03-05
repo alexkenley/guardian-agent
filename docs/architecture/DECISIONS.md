@@ -483,5 +483,5 @@ Additionally, `POST /api/setup/apply` was hardened: when `providerType` is missi
 - (+) Multi-protocol sources allow indexing diverse document collections
 - (+) Disabled by default — zero overhead when not used
 - (-) Per-query subprocess overhead (~50-200ms) vs in-process search
-- (-) Requires user to install QMD binary separately
+- (-) Requires QMD runtime dependency to be present (bundled via npm optional dependency, or provided on PATH)
 - (-) MCP HTTP mode could be added later as optimization if latency matters

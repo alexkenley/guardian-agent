@@ -1490,6 +1490,8 @@ describe('CLIChannel with DashboardCallbacks', () => {
 });
 
 describe('WebChannel', () => {
+  const TEST_TOKEN = 'test-token-for-tests';
+  const authHeaders = { Authorization: `Bearer ${TEST_TOKEN}` };
   let web: WebChannel | null = null;
 
   afterEach(async () => {
@@ -1500,10 +1502,10 @@ describe('WebChannel', () => {
   });
 
   it('should start and stop a server', async () => {
-    web = new WebChannel({ port: 0 }); // port 0 = random
+    web = new WebChannel({ port: 0, authToken: TEST_TOKEN }); // port 0 = random
 
     // For testing, we need a valid port. Use a high port.
-    web = new WebChannel({ port: 18923 });
+    web = new WebChannel({ port: 18923, authToken: TEST_TOKEN });
 
     const handler = async (_msg: UserMessage): Promise<AgentResponse> => {
       return { content: 'response' };
@@ -1515,7 +1517,7 @@ describe('WebChannel', () => {
   });
 
   it('should respond to health check', async () => {
-    web = new WebChannel({ port: 18924 });
+    web = new WebChannel({ port: 18924, authToken: TEST_TOKEN });
 
     await web.start(async () => ({ content: 'ok' }));
 
@@ -1527,7 +1529,7 @@ describe('WebChannel', () => {
   });
 
   it('should handle POST /api/message', async () => {
-    web = new WebChannel({ port: 18925 });
+    web = new WebChannel({ port: 18925, authToken: TEST_TOKEN });
     const received: UserMessage[] = [];
 
     await web.start(async (msg) => {
@@ -1537,7 +1539,7 @@ describe('WebChannel', () => {
 
     const res = await fetch('http://localhost:18925/api/message', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
       body: JSON.stringify({ content: 'Hello' }),
     });
 
@@ -1549,13 +1551,13 @@ describe('WebChannel', () => {
   });
 
   it('should return 400 for missing content', async () => {
-    web = new WebChannel({ port: 18926 });
+    web = new WebChannel({ port: 18926, authToken: TEST_TOKEN });
 
     await web.start(async () => ({ content: 'ok' }));
 
     const res = await fetch('http://localhost:18926/api/message', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
       body: JSON.stringify({}),
     });
 
@@ -1563,11 +1565,11 @@ describe('WebChannel', () => {
   });
 
   it('should return 404 for unknown routes', async () => {
-    web = new WebChannel({ port: 18927 });
+    web = new WebChannel({ port: 18927, authToken: TEST_TOKEN });
 
     await web.start(async () => ({ content: 'ok' }));
 
-    const res = await fetch('http://localhost:18927/unknown');
+    const res = await fetch('http://localhost:18927/unknown', { headers: authHeaders });
     expect(res.status).toBe(404);
   });
 
@@ -1618,7 +1620,7 @@ describe('WebChannel', () => {
 
   describe('Fix #4: CORS origin allowlist', () => {
     it('should not set Access-Control-Allow-Origin when no origins configured', async () => {
-      web = new WebChannel({ port: 18934 });
+      web = new WebChannel({ port: 18934, authToken: TEST_TOKEN });
       await web.start(async () => ({ content: 'ok' }));
 
       const res = await fetch('http://localhost:18934/health', {
@@ -1630,7 +1632,7 @@ describe('WebChannel', () => {
     });
 
     it('should reflect allowed origin', async () => {
-      web = new WebChannel({ port: 18935, allowedOrigins: ['https://myapp.com'] });
+      web = new WebChannel({ port: 18935, authToken: TEST_TOKEN, allowedOrigins: ['https://myapp.com'] });
       await web.start(async () => ({ content: 'ok' }));
 
       const res = await fetch('http://localhost:18935/health', {
@@ -1640,7 +1642,7 @@ describe('WebChannel', () => {
     });
 
     it('should reject disallowed origin', async () => {
-      web = new WebChannel({ port: 18936, allowedOrigins: ['https://myapp.com'] });
+      web = new WebChannel({ port: 18936, authToken: TEST_TOKEN, allowedOrigins: ['https://myapp.com'] });
       await web.start(async () => ({ content: 'ok' }));
 
       const res = await fetch('http://localhost:18936/health', {
@@ -1652,7 +1654,7 @@ describe('WebChannel', () => {
 
   describe('Fix #4: Request body size limit', () => {
     it('should reject oversized request body', async () => {
-      web = new WebChannel({ port: 18937, maxBodyBytes: 100 });
+      web = new WebChannel({ port: 18937, maxBodyBytes: 100, authToken: TEST_TOKEN });
       await web.start(async () => ({ content: 'ok' }));
 
       const largeContent = 'x'.repeat(200);
@@ -1661,7 +1663,7 @@ describe('WebChannel', () => {
       try {
         const res = await fetch('http://localhost:18937/api/message', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...authHeaders },
           body: JSON.stringify({ content: largeContent }),
         });
         // If we get a response, it should be 413
@@ -1673,24 +1675,24 @@ describe('WebChannel', () => {
     });
 
     it('should accept body within limit', async () => {
-      web = new WebChannel({ port: 18938, maxBodyBytes: 10000 });
+      web = new WebChannel({ port: 18938, maxBodyBytes: 10000, authToken: TEST_TOKEN });
       await web.start(async (msg) => ({ content: `Echo: ${msg.content}` }));
 
       const res = await fetch('http://localhost:18938/api/message', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
         body: JSON.stringify({ content: 'small' }),
       });
       expect(res.status).toBe(200);
     });
 
     it('should return 400 for invalid JSON', async () => {
-      web = new WebChannel({ port: 18939 });
+      web = new WebChannel({ port: 18939, authToken: TEST_TOKEN });
       await web.start(async () => ({ content: 'ok' }));
 
       const res = await fetch('http://localhost:18939/api/message', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
         body: 'not-json{{{',
       });
       expect(res.status).toBe(400);
@@ -1942,10 +1944,10 @@ describe('WebChannel', () => {
     };
 
     it('GET /api/agents should return agent list', async () => {
-      web = new WebChannel({ port: 18940, dashboard: mockDashboard });
+      web = new WebChannel({ port: 18940, authToken: TEST_TOKEN, dashboard: mockDashboard });
       await web.start(async () => ({ content: 'ok' }));
 
-      const res = await fetch('http://localhost:18940/api/agents');
+      const res = await fetch('http://localhost:18940/api/agents', { headers: authHeaders });
       expect(res.status).toBe(200);
       const body = await res.json() as DashboardAgentInfo[];
       expect(body.length).toBe(2);
@@ -1954,10 +1956,10 @@ describe('WebChannel', () => {
     });
 
     it('GET /api/agents/:id should return agent detail', async () => {
-      web = new WebChannel({ port: 18941, dashboard: mockDashboard });
+      web = new WebChannel({ port: 18941, authToken: TEST_TOKEN, dashboard: mockDashboard });
       await web.start(async () => ({ content: 'ok' }));
 
-      const res = await fetch('http://localhost:18941/api/agents/agent-1');
+      const res = await fetch('http://localhost:18941/api/agents/agent-1', { headers: authHeaders });
       expect(res.status).toBe(200);
       const body = await res.json() as DashboardAgentDetail;
       expect(body.id).toBe('agent-1');
@@ -1965,38 +1967,38 @@ describe('WebChannel', () => {
     });
 
     it('GET /api/agents/:id should return 404 for unknown agent', async () => {
-      web = new WebChannel({ port: 18942, dashboard: mockDashboard });
+      web = new WebChannel({ port: 18942, authToken: TEST_TOKEN, dashboard: mockDashboard });
       await web.start(async () => ({ content: 'ok' }));
 
-      const res = await fetch('http://localhost:18942/api/agents/unknown-agent');
+      const res = await fetch('http://localhost:18942/api/agents/unknown-agent', { headers: authHeaders });
       expect(res.status).toBe(404);
     });
 
     it('GET /api/audit should return filtered events', async () => {
-      web = new WebChannel({ port: 18943, dashboard: mockDashboard });
+      web = new WebChannel({ port: 18943, authToken: TEST_TOKEN, dashboard: mockDashboard });
       await web.start(async () => ({ content: 'ok' }));
 
-      const res = await fetch('http://localhost:18943/api/audit?type=action_denied&limit=10');
+      const res = await fetch('http://localhost:18943/api/audit?type=action_denied&limit=10', { headers: authHeaders });
       expect(res.status).toBe(200);
       const body = await res.json() as unknown[];
       expect(body.length).toBeGreaterThan(0);
     });
 
     it('GET /api/audit/summary should return summary', async () => {
-      web = new WebChannel({ port: 18944, dashboard: mockDashboard });
+      web = new WebChannel({ port: 18944, authToken: TEST_TOKEN, dashboard: mockDashboard });
       await web.start(async () => ({ content: 'ok' }));
 
-      const res = await fetch('http://localhost:18944/api/audit/summary?windowMs=60000');
+      const res = await fetch('http://localhost:18944/api/audit/summary?windowMs=60000', { headers: authHeaders });
       expect(res.status).toBe(200);
       const body = await res.json() as { totalEvents: number };
       expect(body.totalEvents).toBe(5);
     });
 
     it('GET /api/config should return redacted config', async () => {
-      web = new WebChannel({ port: 18945, dashboard: mockDashboard });
+      web = new WebChannel({ port: 18945, authToken: TEST_TOKEN, dashboard: mockDashboard });
       await web.start(async () => ({ content: 'ok' }));
 
-      const res = await fetch('http://localhost:18945/api/config');
+      const res = await fetch('http://localhost:18945/api/config', { headers: authHeaders });
       expect(res.status).toBe(200);
       const body = await res.json() as { defaultProvider: string; llm: Record<string, unknown> };
       expect(body.defaultProvider).toBe('ollama');
@@ -2006,20 +2008,20 @@ describe('WebChannel', () => {
     });
 
     it('GET /api/budget should return budget info', async () => {
-      web = new WebChannel({ port: 18946, dashboard: mockDashboard });
+      web = new WebChannel({ port: 18946, authToken: TEST_TOKEN, dashboard: mockDashboard });
       await web.start(async () => ({ content: 'ok' }));
 
-      const res = await fetch('http://localhost:18946/api/budget');
+      const res = await fetch('http://localhost:18946/api/budget', { headers: authHeaders });
       expect(res.status).toBe(200);
       const body = await res.json() as { agents: unknown[] };
       expect(body.agents.length).toBe(1);
     });
 
     it('GET /api/watchdog should return watchdog results', async () => {
-      web = new WebChannel({ port: 18947, dashboard: mockDashboard });
+      web = new WebChannel({ port: 18947, authToken: TEST_TOKEN, dashboard: mockDashboard });
       await web.start(async () => ({ content: 'ok' }));
 
-      const res = await fetch('http://localhost:18947/api/watchdog');
+      const res = await fetch('http://localhost:18947/api/watchdog', { headers: authHeaders });
       expect(res.status).toBe(200);
       const body = await res.json() as Array<{ agentId: string; action: string }>;
       expect(body[0].agentId).toBe('agent-1');
@@ -2027,20 +2029,20 @@ describe('WebChannel', () => {
     });
 
     it('GET /api/providers should return provider list', async () => {
-      web = new WebChannel({ port: 18948, dashboard: mockDashboard });
+      web = new WebChannel({ port: 18948, authToken: TEST_TOKEN, dashboard: mockDashboard });
       await web.start(async () => ({ content: 'ok' }));
 
-      const res = await fetch('http://localhost:18948/api/providers');
+      const res = await fetch('http://localhost:18948/api/providers', { headers: authHeaders });
       expect(res.status).toBe(200);
       const body = await res.json() as Array<{ name: string; type: string }>;
       expect(body[0].name).toBe('ollama');
     });
 
     it('GET /api/assistant/state should return orchestrator state', async () => {
-      web = new WebChannel({ port: 18960, dashboard: mockDashboard });
+      web = new WebChannel({ port: 18960, authToken: TEST_TOKEN, dashboard: mockDashboard });
       await web.start(async () => ({ content: 'ok' }));
 
-      const res = await fetch('http://localhost:18960/api/assistant/state');
+      const res = await fetch('http://localhost:18960/api/assistant/state', { headers: authHeaders });
       expect(res.status).toBe(200);
       const body = await res.json() as {
         orchestrator: { summary: { totalRequests: number; sessionCount: number } };
@@ -2052,10 +2054,10 @@ describe('WebChannel', () => {
     });
 
     it('GET /api/threat-intel/summary should return threat summary', async () => {
-      web = new WebChannel({ port: 18958, dashboard: mockDashboard });
+      web = new WebChannel({ port: 18958, authToken: TEST_TOKEN, dashboard: mockDashboard });
       await web.start(async () => ({ content: 'ok' }));
 
-      const res = await fetch('http://localhost:18958/api/threat-intel/summary');
+      const res = await fetch('http://localhost:18958/api/threat-intel/summary', { headers: authHeaders });
       expect(res.status).toBe(200);
       const body = await res.json() as { enabled: boolean; findings: { highOrCritical: number } };
       expect(body.enabled).toBe(true);
@@ -2063,12 +2065,12 @@ describe('WebChannel', () => {
     });
 
     it('POST /api/threat-intel/scan should run scan callback', async () => {
-      web = new WebChannel({ port: 18959, dashboard: mockDashboard });
+      web = new WebChannel({ port: 18959, authToken: TEST_TOKEN, dashboard: mockDashboard });
       await web.start(async () => ({ content: 'ok' }));
 
       const res = await fetch('http://localhost:18959/api/threat-intel/scan', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
         body: JSON.stringify({ query: 'target-a' }),
       });
       expect(res.status).toBe(200);
@@ -2078,10 +2080,10 @@ describe('WebChannel', () => {
     });
 
     it('GET /api/network/baseline should return baseline status', async () => {
-      web = new WebChannel({ port: 18961, dashboard: mockDashboard });
+      web = new WebChannel({ port: 18961, authToken: TEST_TOKEN, dashboard: mockDashboard });
       await web.start(async () => ({ content: 'ok' }));
 
-      const res = await fetch('http://localhost:18961/api/network/baseline');
+      const res = await fetch('http://localhost:18961/api/network/baseline', { headers: authHeaders });
       expect(res.status).toBe(200);
       const body = await res.json() as { baselineReady: boolean; snapshotCount: number };
       expect(body.baselineReady).toBe(true);
@@ -2089,10 +2091,10 @@ describe('WebChannel', () => {
     });
 
     it('GET /api/network/threats should return active network alerts', async () => {
-      web = new WebChannel({ port: 18962, dashboard: mockDashboard });
+      web = new WebChannel({ port: 18962, authToken: TEST_TOKEN, dashboard: mockDashboard });
       await web.start(async () => ({ content: 'ok' }));
 
-      const res = await fetch('http://localhost:18962/api/network/threats?limit=10');
+      const res = await fetch('http://localhost:18962/api/network/threats?limit=10', { headers: authHeaders });
       expect(res.status).toBe(200);
       const body = await res.json() as { activeAlertCount: number; alerts: Array<{ id: string }> };
       expect(body.activeAlertCount).toBe(1);
@@ -2100,12 +2102,12 @@ describe('WebChannel', () => {
     });
 
     it('POST /api/network/threats/ack should acknowledge alert', async () => {
-      web = new WebChannel({ port: 18963, dashboard: mockDashboard });
+      web = new WebChannel({ port: 18963, authToken: TEST_TOKEN, dashboard: mockDashboard });
       await web.start(async () => ({ content: 'ok' }));
 
       const res = await fetch('http://localhost:18963/api/network/threats/ack', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
         body: JSON.stringify({ alertId: 'net-alert-1' }),
       });
       expect(res.status).toBe(200);
@@ -2115,10 +2117,10 @@ describe('WebChannel', () => {
     });
 
     it('should return 404 when dashboard callback is not set', async () => {
-      web = new WebChannel({ port: 18949, dashboard: {} });
+      web = new WebChannel({ port: 18949, authToken: TEST_TOKEN, dashboard: {} });
       await web.start(async () => ({ content: 'ok' }));
 
-      const res = await fetch('http://localhost:18949/api/agents');
+      const res = await fetch('http://localhost:18949/api/agents', { headers: authHeaders });
       expect(res.status).toBe(404);
     });
 
@@ -2147,12 +2149,12 @@ describe('WebChannel', () => {
         },
       };
 
-      web = new WebChannel({ port: 18951, dashboard });
+      web = new WebChannel({ port: 18951, authToken: TEST_TOKEN, dashboard });
       await web.start(async () => ({ content: 'fallback' }));
 
       const res = await fetch('http://localhost:18951/api/message', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
         body: JSON.stringify({ content: 'Hello', agentId: 'agent-1' }),
       });
 
@@ -2176,11 +2178,11 @@ describe('WebChannel', () => {
         },
       };
 
-      web = new WebChannel({ port: 18952, dashboard });
+      web = new WebChannel({ port: 18952, authToken: TEST_TOKEN, dashboard });
       await web.start(async () => ({ content: 'ok' }));
 
       const controller = new AbortController();
-      const res = await fetch('http://localhost:18952/sse', { signal: controller.signal });
+      const res = await fetch('http://localhost:18952/sse', { signal: controller.signal, headers: authHeaders });
 
       expect(res.status).toBe(200);
       expect(res.headers.get('content-type')).toBe('text/event-stream');
@@ -2237,7 +2239,7 @@ describe('WebChannel', () => {
     it('should serve static files', async () => {
       setup();
       try {
-        web = new WebChannel({ port: 18954, staticDir: tmpDir });
+        web = new WebChannel({ port: 18954, authToken: TEST_TOKEN, staticDir: tmpDir });
         await web.start(async () => ({ content: 'ok' }));
 
         const res = await fetch('http://localhost:18954/test.css');
@@ -2253,7 +2255,7 @@ describe('WebChannel', () => {
     it('should serve index.html for root', async () => {
       setup();
       try {
-        web = new WebChannel({ port: 18955, staticDir: tmpDir });
+        web = new WebChannel({ port: 18955, authToken: TEST_TOKEN, staticDir: tmpDir });
         await web.start(async () => ({ content: 'ok' }));
 
         const res = await fetch('http://localhost:18955/');
@@ -2268,7 +2270,7 @@ describe('WebChannel', () => {
     it('should fallback to index.html for SPA routes', async () => {
       setup();
       try {
-        web = new WebChannel({ port: 18956, staticDir: tmpDir });
+        web = new WebChannel({ port: 18956, authToken: TEST_TOKEN, staticDir: tmpDir });
         await web.start(async () => ({ content: 'ok' }));
 
         // Path without extension should serve index.html (SPA fallback)
@@ -2284,7 +2286,7 @@ describe('WebChannel', () => {
     it('should not serve static files from outside staticDir (path traversal)', async () => {
       setup();
       try {
-        web = new WebChannel({ port: 18957, staticDir: tmpDir });
+        web = new WebChannel({ port: 18957, authToken: TEST_TOKEN, staticDir: tmpDir });
         await web.start(async () => ({ content: 'ok' }));
 
         const res = await fetch('http://localhost:18957/../../../etc/passwd');

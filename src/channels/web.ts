@@ -5,7 +5,7 @@
  * REST API for agent communication + dashboard API + SSE + static file serving.
  *
  * Security:
- *   - Optional bearer token authentication
+ *   - Required bearer token authentication
  *   - Configurable CORS origins (default: same-origin only)
  *   - Request body size limit (default: 1 MB)
  *   - Path traversal protection for static files
@@ -42,12 +42,11 @@ const MIME_TYPES: Record<string, string> = {
   '.woff2': 'font/woff2',
 };
 
-export type WebAuthMode = 'bearer_required' | 'localhost_no_auth' | 'disabled';
+export type WebAuthMode = 'bearer_required';
 type PrivilegedTicketAction =
   | 'auth.config'
   | 'auth.rotate'
   | 'auth.reveal'
-  | 'auth.revoke'
   | 'connectors.config'
   | 'connectors.pack'
   | 'connectors.playbook'
@@ -68,7 +67,7 @@ export interface WebChannelOptions {
   host?: string;
   /** Default agent to route messages to. */
   defaultAgent?: string;
-  /** Bearer token for authentication. If set, all non-health requests require it. */
+  /** Bearer token for authentication. Non-health requests require this token. */
   authToken?: string;
   /** Structured auth configuration. */
   auth?: WebAuthRuntimeConfig;
@@ -118,7 +117,10 @@ export class WebChannel implements ChannelAdapter {
     this.port = options.port ?? 3000;
     this.host = options.host ?? 'localhost';
     const auth = options.auth;
-    this.authMode = auth?.mode ?? (options.authToken ? 'bearer_required' : 'disabled');
+    this.authMode = 'bearer_required';
+    if (auth?.mode && auth.mode !== 'bearer_required') {
+      log.warn({ requestedMode: auth.mode }, 'Ignoring unsupported web auth mode; forcing bearer_required');
+    }
     this.authToken = auth?.token ?? options.authToken;
     this.authTokenSource = auth?.tokenSource ?? (options.authToken ? 'config' : 'ephemeral');
     this.authRotateOnStartup = auth?.rotateOnStartup ?? false;
@@ -164,7 +166,7 @@ export class WebChannel implements ChannelAdapter {
     return new Promise((resolve, reject) => {
       this.server!.listen(this.port, this.host, () => {
         log.info({ port: this.port, host: this.host }, 'Web channel started');
-        if (this.authMode === 'disabled' || (this.authMode === 'bearer_required' && !this.authToken)) {
+        if (!this.authToken) {
           log.warn(
             { port: this.port, host: this.host, authMode: this.authMode },
             'Web channel started WITHOUT strict bearer authentication.',
@@ -227,7 +229,10 @@ export class WebChannel implements ChannelAdapter {
   }
 
   setAuthConfig(auth: WebAuthRuntimeConfig): void {
-    this.authMode = auth.mode;
+    this.authMode = 'bearer_required';
+    if (auth.mode !== 'bearer_required') {
+      log.warn({ requestedMode: auth.mode }, 'Ignoring unsupported web auth mode update; forcing bearer_required');
+    }
     this.authToken = auth.token?.trim() || undefined;
     this.authTokenSource = auth.tokenSource ?? this.authTokenSource;
     this.authRotateOnStartup = auth.rotateOnStartup ?? this.authRotateOnStartup;
@@ -261,17 +266,8 @@ export class WebChannel implements ChannelAdapter {
   }
 
   private shouldRequireAuth(req: IncomingMessage): boolean {
-    if (this.authMode === 'disabled') return false;
-    if (this.authMode === 'localhost_no_auth' && this.isLocalRequest(req)) return false;
+    void req;
     return true;
-  }
-
-  private isLocalRequest(req: IncomingMessage): boolean {
-    const remote = req.socket.remoteAddress ?? '';
-    return remote === '127.0.0.1'
-      || remote === '::1'
-      || remote.endsWith(':127.0.0.1')
-      || remote.endsWith(':0:0:0:0:0:0:0:1');
   }
 
   /** Parse a cookie value from the request. */
@@ -374,7 +370,6 @@ export class WebChannel implements ChannelAdapter {
     return value === 'auth.config'
       || value === 'auth.rotate'
       || value === 'auth.reveal'
-      || value === 'auth.revoke'
       || value === 'connectors.config'
       || value === 'connectors.pack'
       || value === 'connectors.playbook'
@@ -575,10 +570,6 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'Invalid privileged action' });
           return;
         }
-        if (this.authMode === 'disabled' && !this.isLocalRequest(req)) {
-          sendJSON(res, 403, { error: 'Ticket issuance is restricted to localhost when auth is disabled' });
-          return;
-        }
         const ticket = this.mintPrivilegedTicket(action);
         sendJSON(res, 200, {
           action,
@@ -603,7 +594,7 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
         let parsed: {
-          mode?: 'bearer_required' | 'localhost_no_auth' | 'disabled';
+          mode?: 'bearer_required';
           token?: string;
           rotateOnStartup?: boolean;
           sessionTtlMinutes?: number;
@@ -612,7 +603,7 @@ export class WebChannel implements ChannelAdapter {
         try {
           parsed = body.trim()
             ? (JSON.parse(body) as {
-              mode?: 'bearer_required' | 'localhost_no_auth' | 'disabled';
+              mode?: 'bearer_required';
               token?: string;
               rotateOnStartup?: boolean;
               sessionTtlMinutes?: number;
@@ -691,36 +682,6 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
-      // POST /api/auth/token/revoke — disable auth token and auth mode
-      if (req.method === 'POST' && url.pathname === '/api/auth/token/revoke') {
-        if (!this.dashboard.onAuthRevoke) {
-          sendJSON(res, 404, { error: 'Not available' });
-          return;
-        }
-        let body = '';
-        try {
-          body = await readBody(req, this.maxBodyBytes);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          sendJSON(res, 400, { error: message });
-          return;
-        }
-        let parsed: { ticket?: string } = {};
-        if (body.trim()) {
-          try {
-            parsed = JSON.parse(body) as { ticket?: string };
-          } catch {
-            sendJSON(res, 400, { error: 'Invalid JSON' });
-            return;
-          }
-        }
-        if (!this.requirePrivilegedTicket(req, res, url, 'auth.revoke', parsed.ticket)) {
-          return;
-        }
-        sendJSON(res, 200, await this.dashboard.onAuthRevoke());
-        return;
-      }
-
       // GET /api/tools — tools catalog + policy + jobs + approvals
       if (req.method === 'GET' && url.pathname === '/api/tools') {
         if (!this.dashboard.onToolsState) {
@@ -776,8 +737,8 @@ export class WebChannel implements ChannelAdapter {
           args: parsed.args ?? {},
           origin: parsed.origin ?? 'web',
           agentId: parsed.agentId,
-          userId: parsed.userId,
-          channel: parsed.channel,
+          userId: parsed.userId ?? 'web-user',
+          channel: parsed.channel ?? 'web',
         });
         sendJSON(res, 200, result);
         return;

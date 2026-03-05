@@ -56,7 +56,12 @@ export class AnthropicProvider implements LLMProvider {
       }));
     }
 
-    const response = await this.client.messages.create(params);
+    let response: Anthropic.Message;
+    try {
+      response = await this.client.messages.create(params);
+    } catch (err) {
+      throw wrapAnthropicError(err, params.model);
+    }
 
     let content = '';
     const toolCalls: ToolCall[] = [];
@@ -101,7 +106,12 @@ export class AnthropicProvider implements LLMProvider {
       params.system = systemPrompt;
     }
 
-    const stream = this.client.messages.stream(params);
+    let stream: ReturnType<Anthropic['messages']['stream']>;
+    try {
+      stream = this.client.messages.stream(params);
+    } catch (err) {
+      throw wrapAnthropicError(err, params.model);
+    }
 
     for await (const event of stream) {
       if (event.type === 'content_block_delta') {
@@ -127,8 +137,15 @@ export class AnthropicProvider implements LLMProvider {
   async listModels(): Promise<ModelInfo[]> {
     // Anthropic doesn't have a model list API — return known models
     return [
-      { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', provider: 'anthropic', contextWindow: 200_000 },
+      // Latest generation
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', provider: 'anthropic', contextWindow: 200_000 },
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'anthropic', contextWindow: 200_000 },
       { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', provider: 'anthropic', contextWindow: 200_000 },
+      // Previous generation
+      { id: 'claude-opus-4-5-20251101', name: 'Claude Opus 4.5', provider: 'anthropic', contextWindow: 200_000 },
+      { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5', provider: 'anthropic', contextWindow: 200_000 },
+      { id: 'claude-opus-4-1-20250805', name: 'Claude Opus 4.1', provider: 'anthropic', contextWindow: 200_000 },
+      { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', provider: 'anthropic', contextWindow: 200_000 },
       { id: 'claude-opus-4-20250514', name: 'Claude Opus 4', provider: 'anthropic', contextWindow: 200_000 },
     ];
   }
@@ -174,4 +191,42 @@ function splitMessages(messages: ChatMessage[]): {
   }
 
   return { systemPrompt, userMessages };
+}
+
+/** Wrap Anthropic SDK errors into user-friendly messages. */
+function wrapAnthropicError(err: unknown, model: string): Error {
+  const status = (err as { status?: number })?.status ?? 0;
+  const raw = err instanceof Error ? err.message : String(err);
+
+  if (status === 404 || raw.includes('not_found')) {
+    return Object.assign(
+      new Error(`Model "${model}" is not available on your Anthropic API key. Check your plan or choose a different model in /config.`),
+      { status },
+    );
+  }
+  if (status === 401) {
+    return Object.assign(
+      new Error('Anthropic API key is invalid or expired. Update it in Configuration > Providers.'),
+      { status },
+    );
+  }
+  if (status === 403) {
+    return Object.assign(
+      new Error(`Access denied for model "${model}". Your Anthropic API plan may not include this model.`),
+      { status },
+    );
+  }
+  if (status === 429) {
+    return Object.assign(
+      new Error('Anthropic rate limit exceeded. Please wait a moment and try again.'),
+      { status },
+    );
+  }
+  if (status === 529 || raw.includes('overloaded')) {
+    return Object.assign(
+      new Error('Anthropic API is currently overloaded. Please try again shortly.'),
+      { status },
+    );
+  }
+  return err instanceof Error ? err : new Error(raw);
 }

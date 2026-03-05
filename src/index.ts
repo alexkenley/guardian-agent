@@ -221,6 +221,7 @@ class ChatAgent extends BaseAgent {
       return { content: 'No LLM provider configured.' };
     }
     const userKey = `${message.userId}:${message.channel}`;
+    this.syncPendingApprovalsFromExecutor(userKey, message.userId, message.channel);
 
     // Check if user is approving a pending tool action
     const approvalResult = await this.tryHandleApproval(message, userKey);
@@ -533,6 +534,14 @@ class ChatAgent extends BaseAgent {
     });
   }
 
+  private syncPendingApprovalsFromExecutor(userKey: string, userId: string, channel: string): void {
+    if (!this.tools?.isEnabled()) return;
+    const ids = this.tools.listPendingApprovalIdsForUser(userId, channel, {
+      includeUnscoped: channel === 'web',
+    });
+    this.setPendingApprovals(userKey, ids);
+  }
+
   private resolveApprovalTargets(
     input: string,
     pendingIds: string[],
@@ -804,7 +813,7 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
         port: config.channels.web.port,
         host: config.channels.web.host,
         auth: {
-          mode: config.channels.web.auth?.mode ?? (config.channels.web.authToken ? 'bearer_required' : 'disabled'),
+          mode: 'bearer_required',
           tokenConfigured: !!(config.channels.web.auth?.token?.trim() || config.channels.web.authToken?.trim()),
           tokenSource: config.channels.web.auth?.tokenSource,
           rotateOnStartup: config.channels.web.auth?.rotateOnStartup ?? false,
@@ -996,14 +1005,10 @@ function buildDashboardCallbacks(
       }
       const persistedToken = nextConfig.channels.web?.auth?.token?.trim()
         || nextConfig.channels.web?.authToken?.trim();
-      const mode = nextConfig.channels.web?.auth?.mode
-        ?? (persistedToken ? 'bearer_required' : webAuthStateRef.current.mode);
       webAuthStateRef.current = {
         ...webAuthStateRef.current,
-        mode,
-        token: mode === 'disabled'
-          ? undefined
-          : (persistedToken || webAuthStateRef.current.token),
+        mode: 'bearer_required',
+        token: persistedToken || webAuthStateRef.current.token || generateSecureToken(),
         tokenSource: persistedToken
           ? 'config'
           : (webAuthStateRef.current.tokenSource ?? 'ephemeral'),
@@ -1075,7 +1080,7 @@ function buildDashboardCallbacks(
     const rawWeb = (rawChannels.web as Record<string, unknown> | undefined) ?? {};
     rawWeb.enabled = rawWeb.enabled ?? true;
     rawWeb.auth = {
-      mode: webAuthStateRef.current.mode,
+      mode: 'bearer_required',
       token: webAuthStateRef.current.token,
       rotateOnStartup: webAuthStateRef.current.rotateOnStartup ?? false,
       sessionTtlMinutes: webAuthStateRef.current.sessionTtlMinutes,
@@ -1208,14 +1213,13 @@ function buildDashboardCallbacks(
     onAuthStatus: () => getAuthStatus(),
 
     onAuthUpdate: async (input) => {
-      const nextMode = input.mode ?? webAuthStateRef.current.mode;
       const nextToken = input.token?.trim()
         ? input.token.trim()
-        : webAuthStateRef.current.token;
+        : (webAuthStateRef.current.token || generateSecureToken());
       webAuthStateRef.current = {
         ...webAuthStateRef.current,
-        mode: nextMode,
-        token: nextMode === 'disabled' ? undefined : nextToken,
+        mode: 'bearer_required',
+        token: nextToken,
         rotateOnStartup: input.rotateOnStartup ?? webAuthStateRef.current.rotateOnStartup,
         sessionTtlMinutes: input.sessionTtlMinutes ?? webAuthStateRef.current.sessionTtlMinutes,
         tokenSource: input.token?.trim()
@@ -1231,7 +1235,7 @@ function buildDashboardCallbacks(
         type: 'auth_updated',
         channel: 'system',
         canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        metadata: { mode: webAuthStateRef.current.mode },
+        metadata: { mode: 'bearer_required' },
       });
       return { success: true, message: 'Web auth settings saved.', status: getAuthStatus() };
     },
@@ -1240,7 +1244,7 @@ function buildDashboardCallbacks(
       const token = generateSecureToken();
       webAuthStateRef.current = {
         ...webAuthStateRef.current,
-        mode: webAuthStateRef.current.mode === 'disabled' ? 'bearer_required' : webAuthStateRef.current.mode,
+        mode: 'bearer_required',
         token,
         tokenSource: 'config',
       };
@@ -1261,26 +1265,6 @@ function buildDashboardCallbacks(
       success: !!webAuthStateRef.current.token,
       token: webAuthStateRef.current.token,
     }),
-
-    onAuthRevoke: async () => {
-      webAuthStateRef.current = {
-        ...webAuthStateRef.current,
-        mode: 'disabled',
-        token: undefined,
-        tokenSource: 'config',
-      };
-      applyWebAuthRuntime(webAuthStateRef.current);
-      const persisted = persistAuthState();
-      if (!persisted.success) {
-        return { success: false, message: persisted.message, status: getAuthStatus() };
-      }
-      analytics.track({
-        type: 'auth_revoked',
-        channel: 'system',
-        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-      });
-      return { success: true, message: 'Web auth disabled. Dashboard/API are now open.', status: getAuthStatus() };
-    },
 
     onBudget: () => {
       const agents = runtime.registry.getAll().map(inst => ({
@@ -2185,6 +2169,7 @@ function buildDashboardCallbacks(
             defaultProvider: updates.defaultProvider,
             llm: updates.llm as unknown as GuardianAgentConfig['llm'] | undefined,
             channels: updates.channels as unknown as GuardianAgentConfig['channels'] | undefined,
+            assistant: updates.assistant as unknown as GuardianAgentConfig['assistant'] | undefined,
           } as Partial<GuardianAgentConfig>;
           const nextConfig = deepMerge(currentConfig, patch);
           const errors = validateConfig(nextConfig);
@@ -2251,6 +2236,17 @@ function buildDashboardCallbacks(
             }
 
             rawChannels.telegram = rawTelegram;
+          }
+
+          const qmdEnabledUpdate = updates.assistant?.tools?.qmd?.enabled;
+          if (typeof qmdEnabledUpdate === 'boolean') {
+            rawConfig.assistant = rawConfig.assistant ?? {};
+            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+            rawAssistant.tools = (rawAssistant.tools as Record<string, unknown> | undefined) ?? {};
+            const rawTools = rawAssistant.tools as Record<string, unknown>;
+            rawTools.qmd = (rawTools.qmd as Record<string, unknown> | undefined) ?? {};
+            const rawQmd = rawTools.qmd as Record<string, unknown>;
+            rawQmd.enabled = qmdEnabledUpdate;
           }
 
           const result = persistAndApplyConfig(rawConfig, {
@@ -2772,7 +2768,7 @@ async function main(): Promise<void> {
         log.warn({ errors: syncResult.errors }, 'QMD collection sync errors');
       }
     } else {
-      log.warn('QMD enabled in config but binary not found in PATH');
+      log.warn('QMD enabled but binary not available (bundled dependency missing and not found on PATH)');
     }
   }
 
@@ -3030,18 +3026,13 @@ async function main(): Promise<void> {
     autoInstallAllTemplates(connectors);
   }
 
-  const webMode = config.channels.web?.auth?.mode
-    ?? (config.channels.web?.authToken ? 'bearer_required' : 'localhost_no_auth');
   const configuredToken = config.channels.web?.auth?.token?.trim() || config.channels.web?.authToken?.trim();
   const rotateOnStartup = config.channels.web?.auth?.rotateOnStartup ?? false;
-  const needsToken = webMode === 'bearer_required';
-  const shouldGenerateToken = needsToken && (!configuredToken || rotateOnStartup);
-  const effectiveToken = !needsToken
-    ? configuredToken || undefined
-    : (shouldGenerateToken ? generateSecureToken() : configuredToken);
+  const shouldGenerateToken = !configuredToken || rotateOnStartup;
+  const effectiveToken = shouldGenerateToken ? generateSecureToken() : configuredToken;
   const webAuthStateRef: { current: WebAuthRuntimeConfig } = {
     current: {
-      mode: webMode,
+      mode: 'bearer_required',
       token: effectiveToken,
       tokenSource: configuredToken && !rotateOnStartup ? 'config' : 'ephemeral',
       rotateOnStartup,
@@ -3586,14 +3577,14 @@ async function main(): Promise<void> {
   }
 
   if (config.channels.web?.enabled) {
-    if (webAuthStateRef.current.mode !== 'disabled' && !webAuthStateRef.current.token) {
+    if (!webAuthStateRef.current.token) {
       webAuthStateRef.current = {
         ...webAuthStateRef.current,
         token: generateSecureToken(),
         tokenSource: 'ephemeral',
       };
     }
-    if (webAuthStateRef.current.mode === 'bearer_required' && webAuthStateRef.current.tokenSource === 'ephemeral') {
+    if (webAuthStateRef.current.tokenSource === 'ephemeral') {
       log.warn(
         {
           tokenPreview: webAuthStateRef.current.token ? previewTokenForLog(webAuthStateRef.current.token) : undefined,
@@ -3602,15 +3593,6 @@ async function main(): Promise<void> {
           port: config.channels.web.port ?? 3000,
         },
         'No web auth token configured. Generated an ephemeral token for this run.',
-      );
-    } else if (webAuthStateRef.current.mode === 'localhost_no_auth') {
-      log.info(
-        {
-          mode: webAuthStateRef.current.mode,
-          host: config.channels.web.host ?? 'localhost',
-          port: config.channels.web.port ?? 3000,
-        },
-        'Web dashboard: localhost access without auth token.',
       );
     }
 

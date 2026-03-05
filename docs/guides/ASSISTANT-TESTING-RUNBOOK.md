@@ -64,7 +64,8 @@ channels:
     port: 3000
     host: localhost
     auth:
-      mode: localhost_no_auth
+      mode: bearer_required
+      token: test-token-123
   cli:
     enabled: true
 
@@ -91,7 +92,7 @@ assistant:
           timeoutMs: 15000
 ```
 
-> **Auth mode note:** `localhost_no_auth` skips Bearer tokens for requests from 127.0.0.1 / ::1. If testing remotely or through a proxy, use `bearer_required` and pass `-H "Authorization: Bearer <token>"` on every curl. Session-cookie auth is also supported, but curl examples here use bearer tokens for clarity.
+> **Auth mode note:** Web auth is bearer-only. Pass `-H "Authorization: Bearer <token>"` on API calls unless you first exchange for a session cookie (`/api/auth/session`).
 
 ---
 
@@ -153,7 +154,7 @@ lsof -i :3000
 
 ## 3. Functional Tests
 
-All commands below assume `localhost_no_auth` mode and port 3000. Adjust if your config differs.
+All commands below assume `bearer_required` mode with token `test-token-123` and port 3000. Adjust if your config differs.
 
 ### Test 1: Health & Tool Discovery
 

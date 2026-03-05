@@ -71,23 +71,12 @@ async function initAuth() {
   // AUTH_FAILED — clear any stale token so it doesn't keep causing 401s
   clearToken();
 
-  // Try once more without the stale token (works for localhost_no_auth mode)
-  const retry = await checkAuth();
-  if (retry === 'ok') {
-    authModal.style.display = 'none';
-    app.style.display = '';
-    applyInputTooltips(document);
-    startApp();
-    return;
-  }
-
   // Show auth modal
   authModal.style.display = '';
   app.style.display = 'none';
 
   const input = document.getElementById('auth-token-input');
   const submit = document.getElementById('auth-submit');
-  const skip = document.getElementById('auth-skip');
   const errorEl = document.getElementById('auth-error');
 
   submit.onclick = async () => {
@@ -117,13 +106,6 @@ async function initAuth() {
       errorEl.textContent = check === 'unreachable' ? 'Server unreachable' : 'Invalid token';
       errorEl.style.display = '';
     }
-  };
-
-  skip.onclick = () => {
-    clearToken();
-    authModal.style.display = 'none';
-    app.style.display = '';
-    startApp();
   };
 
   input.addEventListener('keydown', (e) => {

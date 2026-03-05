@@ -323,6 +323,36 @@ export class ToolExecutor {
     return this.approvals.list(Math.min(MAX_APPROVALS, Math.max(1, limit)), status);
   }
 
+  listPendingApprovalIdsForUser(
+    userId: string | undefined,
+    channel: string | undefined,
+    options?: { includeUnscoped?: boolean; limit?: number },
+  ): string[] {
+    const normalizedUserId = (userId ?? '').trim();
+    const normalizedChannel = (channel ?? '').trim();
+    const includeUnscoped = options?.includeUnscoped === true;
+    const limit = Math.min(MAX_APPROVALS, Math.max(1, options?.limit ?? MAX_APPROVALS));
+    const pending = this.approvals.list(limit, 'pending');
+    const ids: string[] = [];
+
+    for (const approval of pending) {
+      const job = this.jobsById.get(approval.jobId);
+      if (!job) continue;
+      const jobUserId = (job.userId ?? '').trim();
+      const jobChannel = (job.channel ?? '').trim();
+      const scopedMatch = normalizedUserId.length > 0
+        && normalizedChannel.length > 0
+        && jobUserId === normalizedUserId
+        && jobChannel === normalizedChannel;
+      const unscopedMatch = includeUnscoped && jobUserId.length === 0 && jobChannel.length === 0;
+      if (scopedMatch || unscopedMatch) {
+        ids.push(approval.id);
+      }
+    }
+
+    return ids;
+  }
+
   async runTool(request: ToolExecutionRequest): Promise<ToolRunResponse> {
     if (!this.options.enabled) {
       return {

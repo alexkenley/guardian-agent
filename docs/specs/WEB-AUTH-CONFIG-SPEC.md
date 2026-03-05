@@ -11,7 +11,6 @@ Provide explicit, operator-friendly control of dashboard/API authentication, inc
   - `POST /api/auth/config`
   - `POST /api/auth/token/rotate`
   - `POST /api/auth/token/reveal`
-  - `POST /api/auth/token/revoke`
   - `POST /api/auth/session`
   - `DELETE /api/auth/session`
 - Web Config Center panel and CLI `/auth` commands
@@ -20,11 +19,6 @@ Provide explicit, operator-friendly control of dashboard/API authentication, inc
 - `bearer_required`:
   - Non-health endpoints require a valid bearer token or a valid HttpOnly session cookie.
   - SSE accepts `?token=<bearer>` or cookie auth.
-- `localhost_no_auth`:
-  - Localhost callers can access without token.
-  - Non-local callers still require bearer token or valid session cookie.
-- `disabled`:
-  - Auth checks are bypassed (development only).
 
 ## Token Lifecycle
 - Token sources:
@@ -35,7 +29,6 @@ Provide explicit, operator-friendly control of dashboard/API authentication, inc
   - Set/update token
   - Rotate token
   - Reveal token for copy/paste
-  - Revoke token (switches to open mode as configured)
 
 ## Session Cookie Custody
 - Browser can exchange a bearer token for a server-managed session:
@@ -53,7 +46,7 @@ Provide explicit, operator-friendly control of dashboard/API authentication, inc
 
 ## Validation + Safety
 - `sessionTtlMinutes` must be positive when set.
-- Invalid modes are rejected.
+- Auth mode is fixed to `bearer_required`.
 - Status payload always includes:
   - `mode`
   - `tokenConfigured`
@@ -66,7 +59,5 @@ Provide explicit, operator-friendly control of dashboard/API authentication, inc
 - Browser login flow should exchange bearer token to cookie session and remove browser token storage after successful exchange.
 - CLI supports:
   - `/auth status`
-  - `/auth mode <bearer_required|localhost_no_auth|disabled>`
   - `/auth rotate`
   - `/auth reveal`
-  - `/auth revoke`
