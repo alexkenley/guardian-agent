@@ -86,7 +86,7 @@ export class QMDSearchService {
   async checkInstalled(): Promise<{ installed: boolean; version?: string }> {
     if (this.installCache) return this.installCache;
     try {
-      const { stdout } = await this.exec(`${this.binary} --version`);
+      const { stdout } = await this.execArgs(['--version']);
       const version = stdout.trim() || undefined;
       this.installCache = { installed: true, version };
     } catch {
@@ -117,7 +117,7 @@ export class QMDSearchService {
     }
 
     const start = Date.now();
-    const { stdout } = await this.exec(`${this.binary} ${args.join(' ')}`);
+    const { stdout } = await this.execArgs(args);
     const durationMs = Date.now() - start;
 
     let parsed: unknown;
@@ -168,7 +168,7 @@ export class QMDSearchService {
 
     let collections: QMDCollectionInfo[] = [];
     try {
-      const { stdout } = await this.exec(`${this.binary} collections --json`);
+      const { stdout } = await this.execArgs(['collections', '--json']);
       const parsed = JSON.parse(stdout);
       const raw = Array.isArray(parsed) ? parsed : (parsed as Record<string, unknown>).collections ?? [];
       collections = (raw as Record<string, unknown>[]).map((c) => ({
@@ -232,7 +232,7 @@ export class QMDSearchService {
       if (!source.enabled) continue;
       try {
         const args = this.buildCollectionAddArgs(source);
-        await this.exec(`${this.binary} ${args.join(' ')}`);
+        await this.execArgs(args);
         synced.push(source.id);
       } catch (err) {
         errors.push({ id: source.id, error: err instanceof Error ? err.message : String(err) });
@@ -273,7 +273,7 @@ export class QMDSearchService {
     }
 
     try {
-      await this.exec(`${this.binary} ${args.join(' ')}`, this.timeoutMs * 3);
+      await this.execArgs(args, this.timeoutMs * 3);
       return { success: true, message: collectionId ? `Reindexed collection '${collectionId}'.` : 'Reindexed all collections.' };
     } catch (err) {
       return { success: false, message: err instanceof Error ? err.message : String(err) };
@@ -287,6 +287,11 @@ export class QMDSearchService {
     if (!installed) throw new Error('QMD is not installed or not found in PATH. Install from https://github.com/tobi/qmd');
   }
 
+  private async execArgs(args: string[], timeout?: number): Promise<{ stdout: string; stderr: string }> {
+    const command = [this.binary, ...args].map(shellQuote).join(' ');
+    return this.exec(command, timeout);
+  }
+
   private async exec(command: string, timeout?: number): Promise<{ stdout: string; stderr: string }> {
     return sandboxedExec(command, this.sandboxConfig, {
       profile: 'read-only',
@@ -294,4 +299,10 @@ export class QMDSearchService {
       maxBuffer: MAX_OUTPUT_BYTES,
     });
   }
+}
+
+function shellQuote(value: string): string {
+  if (value === '') return "''";
+  if (/^[a-zA-Z0-9_\-/.:=@]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }

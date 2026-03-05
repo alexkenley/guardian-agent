@@ -57,7 +57,9 @@ export class Runtime {
 
     this.lifecycle = new LifecycleManager();
     this.registry = new AgentRegistry(this.lifecycle);
-    this.eventBus = new EventBus();
+    this.eventBus = new EventBus({
+      sourceValidator: (event) => this.isTrustedEventSource(event.sourceAgentId),
+    });
 
     // Guardian configuration
     const guardianConfig = this.config.guardian;
@@ -390,6 +392,21 @@ export class Runtime {
 
   /** Emit an event to the event bus (with payload scanning). */
   async emit(event: AgentEvent): Promise<boolean> {
+    if (!this.isTrustedEventSource(event.sourceAgentId)) {
+      this.auditLog.record({
+        type: 'event_blocked',
+        severity: 'warn',
+        agentId: event.sourceAgentId,
+        details: {
+          sourceAgentId: event.sourceAgentId,
+          targetAgentId: event.targetAgentId,
+          eventType: event.type,
+          reason: 'untrusted_source',
+        },
+      });
+      throw new Error(`Event blocked: untrusted sourceAgentId '${event.sourceAgentId}'`);
+    }
+
     // OUTPUT GUARD: scan payload for secrets (same as ctx.emit)
     if (this.outputScanningEnabled) {
       const payloadSecrets = this.outputGuardian.scanPayload(event.payload);
@@ -545,41 +562,12 @@ export class Runtime {
         ? (targetAgentId: string, message: UserMessage) => this.dispatchMessage(targetAgentId, message)
         : undefined,
       emit: async (partial) => {
-        // OUTPUT GUARD: scan event payload for secrets
-        if (this.outputScanningEnabled) {
-          const payloadSecrets = this.outputGuardian.scanPayload(partial.payload);
-          if (payloadSecrets.length > 0) {
-            this.auditLog.record({
-              type: 'secret_detected',
-              severity: 'warn',
-              agentId,
-              details: {
-                source: 'event_payload',
-                secretCount: payloadSecrets.length,
-                patterns: payloadSecrets.map(s => s.pattern),
-              },
-            });
-            this.auditLog.record({
-              type: 'event_blocked',
-              severity: 'warn',
-              agentId,
-              details: {
-                targetAgentId: partial.targetAgentId,
-                eventType: partial.type,
-                secretCount: payloadSecrets.length,
-                patterns: payloadSecrets.map(s => s.pattern),
-              },
-            });
-            throw new Error('Event blocked: secrets detected in payload');
-          }
-        }
-
         const event: AgentEvent = {
           ...partial,
           sourceAgentId: agentId,
           timestamp: Date.now(),
         };
-        await this.eventBus.emit(event);
+        await this.emit(event);
       },
       checkAction: (action) => {
         if (!this.guardianEnabled) return;
@@ -735,5 +723,13 @@ export class Runtime {
           reject(err);
         });
     });
+  }
+
+  private isTrustedEventSource(sourceAgentId: string): boolean {
+    const source = sourceAgentId.trim();
+    if (!source) return false;
+    if (source === 'system' || source === 'network-sentinel') return true;
+    if (source.startsWith('sched-task:')) return true;
+    return this.registry.get(source) !== undefined;
   }
 }

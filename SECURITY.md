@@ -38,9 +38,10 @@ GuardianAgent is an AI agent orchestration system where:
 | Prompt injection | InputSanitizer with 15+ weighted signal patterns |
 | Credential leakage via LLM | OutputGuardian + GuardedLLMProvider (mandatory wrapping) |
 | Unauthorized file access | DeniedPathController with path normalization |
-| Capability escalation | Frozen per-agent capability grants (`Object.freeze`) |
-| DoS via message flooding | Per-agent sliding window rate limiting (burst/min/hour) |
+| Capability escalation | Frozen per-agent capability grants + default-deny unknown action types |
+| DoS via message flooding | Multi-scope sliding windows: per-agent + per-user + global |
 | Secret exfiltration via events | Payload scanning on all inter-agent communication |
+| Event source spoofing | Trusted source validation + Runtime-stamped `ctx.emit()` source IDs |
 | Shell command injection | POSIX tokenizer with whitelist validation |
 | LLM provider failures | CircuitBreaker + priority-based FailoverProvider |
 
@@ -149,7 +150,7 @@ All security enforcement occurs at Runtime chokepoints. Agents cannot bypass the
 | **Message input** | Guardian pipeline runs BEFORE `agent.onMessage()` | Agent never sees blocked messages |
 | **Response output** | OutputGuardian scans after execution | Response modified before delivery |
 | **LLM access** | `GuardedLLMProvider` wraps real provider | Agent receives wrapped provider via `ctx.llm` |
-| **Event emission** | Payload scanning in `ctx.emit()` | Only way to send inter-agent events |
+| **Event emission** | Runtime source validation + payload scanning before dispatch | `ctx.emit()` stamps source; untrusted source IDs rejected |
 | **Process sandbox** | bwrap namespace / ulimit for all child processes | Wrapped at exec/spawn call site |
 | **Resource limits** | Budget/token/queue checks before invocation | Runtime rejects over-limit requests |
 | **Lifecycle gating** | Dead/Errored/Stalled agents cannot receive work | `assertExecutable()` guard |
@@ -158,6 +159,8 @@ All security enforcement occurs at Runtime chokepoints. Agents cannot bypass the
 ---
 
 ## Secret Detection
+
+Secret scanning is applied to **all string fields** in action params (recursive traversal), not just `content`.
 
 ### Built-in Patterns (30+)
 
@@ -181,9 +184,9 @@ All security enforcement occurs at Runtime chokepoints. Agents cannot bypass the
 | **PII** | Email addresses, US SSN, Credit Card numbers, US Phone numbers |
 | **Generic** | `password=`, `api_key=`, `secret=`, `token=` patterns |
 
-### Denied File Paths (13 patterns)
+### Denied File Paths (15 patterns)
 
-`.env`, `*.pem`, `*.key`, `credentials.*`, `id_rsa*`, SSH keys, `*.p12`/`*.pfx`, `*.jks`, `.npmrc`, `*.tfvars`, `*.tfstate`, `docker-compose*.yml`, `kubeconfig`
+`.env`, `*.pem`, `*.key`, `credentials.*`, `id_rsa*`, SSH keys, `*.p12`/`*.pfx`, `*.jks`, `.npmrc`, `*.tfvars`, `*.tfstate`, `docker-compose*.yml`, `.aws/credentials`, `.docker/config.json`, `kubeconfig`
 
 ---
 
@@ -210,6 +213,8 @@ Removes Unicode characters that can hide instructions:
 | Data exfiltration | "repeat all above", "show your prompt" | 2 |
 
 Scores are additive. Default block threshold: **3** (configurable).
+
+Detection is run against both raw and normalized text. Normalization includes NFKC Unicode normalization, leetspeak canonicalization (`1`→`i`, `0`→`o`, etc.), and separator de-obfuscation (for cases like `ig-nore previous instructions`).
 
 ---
 
@@ -268,6 +273,7 @@ One-knob security posture configuration:
 - **Path whitelist**: Tools can only access configured filesystem roots
 - **Command whitelist**: Shell execution limited to explicitly allowed commands
 - **Domain whitelist**: Network requests limited to configured domains
+- **Provider host checks**: `web_search` verifies required provider hosts are allowlisted before making requests
 - **Dry-run mode**: Preview mutating operations without execution
 
 ### OS-Level Process Sandbox
@@ -288,7 +294,7 @@ All child processes spawned by tool execution are wrapped in OS-level isolation 
 |-----------|----------|-------------|
 | **bwrap namespace** | Linux | PID/network namespace isolation, read-only root bind, protected paths |
 | **ulimit** | POSIX | Memory (512MB), CPU (60s), file size (10MB) limits; optional process count |
-| **Env hardening** | All | Strips `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES`, `NODE_OPTIONS` |
+| **Env hardening** | All | Strips loader/interpreter injection vars (`LD_PRELOAD`, `DYLD_*`, `NODE_OPTIONS`, `GIT_SSH_COMMAND`, `PYTHONPATH`, `RUBYLIB`, `PERL5LIB`, etc.) |
 | **Symlink resolution** | All | `resolveAllowedPath` resolves symlinks via `fs.realpath()` before path checking |
 
 #### Configuration
@@ -314,7 +320,8 @@ assistant:
 When bwrap is not available (macOS, Windows, minimal Linux containers):
 1. `ulimit` resource limits are applied as a shell prefix (POSIX only)
 2. Dangerous environment variables are stripped from child processes
-3. A warning is logged at startup
+3. Filesystem namespace isolation is not available (path/domain/command policy still applies)
+4. A warning is logged at startup
 
 Install bwrap on Debian/Ubuntu: `sudo apt install bubblewrap`
 
@@ -408,7 +415,7 @@ The ShellCommandController goes beyond simple string matching:
 | **CORS** | Configurable allowed origins |
 | **Request limits** | Configurable max body size (default 1MB) |
 | **Auth modes** | `bearer_required`, `localhost_no_auth`, `disabled` |
-| **SSE** | Server-Sent Events for real-time updates |
+| **SSE** | Real-time stream authenticated via session cookie or `Authorization` header (`?token=` is rejected) |
 
 ---
 
@@ -462,6 +469,10 @@ guardian:
     maxPerMinute: 30
     maxPerHour: 500
     burstAllowed: 5
+    maxPerMinutePerUser: 30
+    maxPerHourPerUser: 500
+    maxGlobalPerMinute: 300
+    maxGlobalPerHour: 5000
 
   outputScanning:
     enabled: true

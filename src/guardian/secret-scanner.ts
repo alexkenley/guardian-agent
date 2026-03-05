@@ -93,6 +93,8 @@ const DENIED_PATH_PATTERNS: ReadonlyArray<{ name: string; regex: RegExp }> = [
   { name: 'Terraform vars', regex: /\.tfvars$/i },
   { name: 'Terraform state', regex: /\.tfstate(?:\.backup)?$/i },
   { name: 'Docker compose secrets', regex: /(?:^|\/)docker-compose[^/]*\.ya?ml$/i },
+  { name: 'AWS shared credentials', regex: /(?:^|\/)\.aws\/credentials$/i },
+  { name: 'Docker config', regex: /(?:^|\/)\.docker\/config\.json$/i },
   { name: 'Kubeconfig', regex: /(?:^|\/)(?:\.kube\/config|kubeconfig)$/i },
 ];
 

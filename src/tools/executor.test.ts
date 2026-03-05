@@ -396,6 +396,25 @@ describe('ToolExecutor', () => {
       expect(run.success).toBe(false);
     });
 
+    it('blocks search provider hosts not in allowedDomains', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: [],
+      });
+      const run = await executor.runTool({
+        toolName: 'web_search',
+        args: { query: 'test provider allowlist', provider: 'duckduckgo' },
+        origin: 'web',
+      });
+      expect(run.success).toBe(false);
+      expect(run.message).toContain('allowedDomains');
+    });
+
     it('parses DuckDuckGo HTML results', async () => {
       const root = createExecutorRoot();
       const originalFetch = globalThis.fetch;
@@ -422,7 +441,7 @@ describe('ToolExecutor', () => {
           policyMode: 'autonomous',
           allowedPaths: [root],
           allowedCommands: [],
-          allowedDomains: [],
+          allowedDomains: ['html.duckduckgo.com'],
         });
         const run = await executor.runTool({
           toolName: 'web_search',
@@ -465,7 +484,7 @@ describe('ToolExecutor', () => {
           policyMode: 'autonomous',
           allowedPaths: [root],
           allowedCommands: [],
-          allowedDomains: [],
+          allowedDomains: ['html.duckduckgo.com'],
         });
         const run1 = await executor.runTool({
           toolName: 'web_search',
@@ -517,7 +536,7 @@ describe('ToolExecutor', () => {
           policyMode: 'autonomous',
           allowedPaths: [root],
           allowedCommands: [],
-          allowedDomains: [],
+          allowedDomains: ['api.search.brave.com'],
           webSearch: { braveApiKey: 'test-brave-key' },
         });
         const run = await executor.runTool({

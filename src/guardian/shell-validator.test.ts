@@ -137,6 +137,18 @@ describe('validateShellCommand', () => {
     expect(result.reason).toContain('Subshell');
   });
 
+  it('should flag subshell execution inside double quotes', () => {
+    const result = validateShellCommand('echo "$(whoami)"', allowedCommands);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toContain('Subshell');
+  });
+
+  it('should flag backtick execution inside double quotes', () => {
+    const result = validateShellCommand('echo "user: `whoami`"', allowedCommands);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toContain('Subshell');
+  });
+
   it('should deny empty command', () => {
     const result = validateShellCommand('', allowedCommands);
     expect(result.valid).toBe(false);
@@ -144,6 +156,17 @@ describe('validateShellCommand', () => {
 
   it('should allow git status with prefix matching', () => {
     const result = validateShellCommand('git status', allowedCommands);
+    expect(result.valid).toBe(true);
+  });
+
+  it('should not allow command names that only start with an allowlisted prefix', () => {
+    const result = validateShellCommand('gitevil status', allowedCommands);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toContain('gitevil');
+  });
+
+  it('should support command+arg prefix allowlist entries', () => {
+    const result = validateShellCommand('git status --short', ['git status']);
     expect(result.valid).toBe(true);
   });
 });

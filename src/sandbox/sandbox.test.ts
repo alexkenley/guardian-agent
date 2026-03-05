@@ -8,7 +8,6 @@ import {
   buildUlimitPrefix,
   buildHardenedEnv,
   PROTECTED_PATHS,
-  PROTECTED_EXTENSIONS,
 } from './profiles.js';
 import type { SandboxConfig, SandboxResourceLimits } from './types.js';
 import { DEFAULT_SANDBOX_CONFIG, DEFAULT_RESOURCE_LIMITS } from './types.js';
@@ -231,14 +230,6 @@ describe('PROTECTED_PATHS', () => {
   it('includes .git and .env', () => {
     expect(PROTECTED_PATHS).toContain('.git');
     expect(PROTECTED_PATHS).toContain('.env');
-  });
-});
-
-describe('PROTECTED_EXTENSIONS', () => {
-  it('includes key and certificate extensions', () => {
-    expect(PROTECTED_EXTENSIONS).toContain('.pem');
-    expect(PROTECTED_EXTENSIONS).toContain('.key');
-    expect(PROTECTED_EXTENSIONS).toContain('.p12');
   });
 });
 

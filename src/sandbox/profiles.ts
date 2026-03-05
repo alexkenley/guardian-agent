@@ -16,15 +16,6 @@ export const PROTECTED_PATHS = [
   '.env.development',
 ] as const;
 
-/** File extensions that must stay read-only even when their parent is writable. */
-export const PROTECTED_EXTENSIONS = [
-  '.pem',
-  '.key',
-  '.p12',
-  '.pfx',
-  '.jks',
-] as const;
-
 /** Environment variables stripped from child processes. */
 const DANGEROUS_ENV_VARS = [
   'LD_PRELOAD',
@@ -34,6 +25,14 @@ const DANGEROUS_ENV_VARS = [
   'DYLD_FRAMEWORK_PATH',
   'NODE_OPTIONS',
   'ELECTRON_RUN_AS_NODE',
+  'GIT_SSH_COMMAND',
+  'GIT_ASKPASS',
+  'PYTHONPATH',
+  'PYTHONHOME',
+  'RUBYLIB',
+  'RUBYOPT',
+  'PERL5LIB',
+  'PERL5OPT',
   'BROWSER',
   'COLORTERM',
 ] as const;

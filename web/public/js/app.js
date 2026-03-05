@@ -2,7 +2,7 @@
  * Main application — hash-based router + SSE connection manager.
  */
 
-import { api, setToken, clearToken, hasCookieSession } from './api.js';
+import { api, setToken, clearToken } from './api.js';
 import { renderDashboard, updateDashboard } from './pages/dashboard.js';
 import { renderSecurity, updateSecurity } from './pages/security.js';
 import { renderConfig } from './pages/config.js';
@@ -38,6 +38,16 @@ async function checkAuth() {
 async function initAuth() {
   const result = await checkAuth();
   if (result === 'ok') {
+    // If we authenticated with a bearer token, exchange it for an HttpOnly session cookie
+    // so SSE can authenticate without leaking tokens in URLs.
+    const existingToken = sessionStorage.getItem('guardianagent_token') || '';
+    if (existingToken) {
+      try {
+        await api.createSession(existingToken);
+      } catch {
+        // Keep the token for API calls if session creation fails.
+      }
+    }
     authModal.style.display = 'none';
     app.style.display = '';
     applyInputTooltips(document);
@@ -90,6 +100,14 @@ async function initAuth() {
     setToken(token);
     const check = await checkAuth();
     if (check === 'ok') {
+      try {
+        await api.createSession(token);
+      } catch {
+        clearToken();
+        errorEl.textContent = 'Authenticated, but failed to create secure session.';
+        errorEl.style.display = '';
+        return;
+      }
       authModal.style.display = 'none';
       app.style.display = '';
       applyInputTooltips(document);
@@ -144,14 +162,8 @@ function connectSSE() {
     eventSource.close();
   }
 
-  // Use cookie auth when available (no query param needed), else fall back to token
-  let url = '/sse';
-  if (!hasCookieSession()) {
-    const token = sessionStorage.getItem('guardianagent_token') || '';
-    if (token) url = `/sse?token=${encodeURIComponent(token)}`;
-  }
-
-  eventSource = new EventSource(url, { withCredentials: true });
+  // SSE always uses cookie auth. Bearer tokens are exchanged for secure sessions at login.
+  eventSource = new EventSource('/sse', { withCredentials: true });
 
   eventSource.onopen = () => {
     indicator.className = 'indicator connected';

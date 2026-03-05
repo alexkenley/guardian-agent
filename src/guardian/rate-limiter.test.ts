@@ -12,12 +12,12 @@ describe('RateLimiter', () => {
     vi.useRealTimers();
   });
 
-  function makeAction(agentId: string = 'test'): AgentAction {
+  function makeAction(agentId: string = 'test', userId?: string): AgentAction {
     return {
       type: 'message_dispatch',
       agentId,
       capabilities: [],
-      params: {},
+      params: userId ? { userId } : {},
     };
   }
 
@@ -139,5 +139,39 @@ describe('RateLimiter', () => {
 
     expect(limiter.check(makeAction('a'))).toBeNull();
     expect(limiter.check(makeAction('b'))).toBeNull();
+  });
+
+  it('should enforce per-user limits across agents', () => {
+    const limiter = new RateLimiter({
+      burstAllowed: 10,
+      maxPerMinute: 100,
+      maxPerHour: 1000,
+      maxPerMinutePerUser: 2,
+      maxPerHourPerUser: 10,
+    });
+
+    expect(limiter.check(makeAction('agent-a', 'user-1'))).toBeNull();
+    expect(limiter.check(makeAction('agent-b', 'user-1'))).toBeNull();
+    const result = limiter.check(makeAction('agent-c', 'user-1'));
+    expect(result).not.toBeNull();
+    expect(result!.allowed).toBe(false);
+    expect(result!.reason).toContain("user 'user-1'");
+  });
+
+  it('should enforce global limits', () => {
+    const limiter = new RateLimiter({
+      burstAllowed: 10,
+      maxPerMinute: 100,
+      maxPerHour: 1000,
+      maxGlobalPerMinute: 2,
+      maxGlobalPerHour: 20,
+    });
+
+    expect(limiter.check(makeAction('a', 'u1'))).toBeNull();
+    expect(limiter.check(makeAction('b', 'u2'))).toBeNull();
+    const result = limiter.check(makeAction('c', 'u3'));
+    expect(result).not.toBeNull();
+    expect(result!.allowed).toBe(false);
+    expect(result!.reason).toContain('global');
   });
 });

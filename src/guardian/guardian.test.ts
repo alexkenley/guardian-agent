@@ -197,6 +197,18 @@ describe('SecretScanner', () => {
     expect(scanner.isDeniedPath('/home/user/.kube/config').denied).toBe(true);
   });
 
+  it('should deny AWS shared credentials path', () => {
+    const scanner = new SecretScanner();
+    expect(scanner.isDeniedPath('.aws/credentials').denied).toBe(true);
+    expect(scanner.isDeniedPath('/home/user/.aws/credentials').denied).toBe(true);
+  });
+
+  it('should deny Docker config path', () => {
+    const scanner = new SecretScanner();
+    expect(scanner.isDeniedPath('.docker/config.json').denied).toBe(true);
+    expect(scanner.isDeniedPath('/home/user/.docker/config.json').denied).toBe(true);
+  });
+
   // Fix #8: Windows path normalization in SecretScanner
   it('should deny Windows-style backslash paths', () => {
     const scanner = new SecretScanner();
@@ -290,6 +302,26 @@ describe('Guardian', () => {
         params: { content: 'Hello, world!' },
       };
       expect(controller.check(action)).toBeNull();
+    });
+
+    it('should scan all string params recursively, not only content', () => {
+      const controller = new SecretScanController();
+      const action: AgentAction = {
+        type: 'http_request',
+        agentId: 'test',
+        capabilities: ['network_access'],
+        params: {
+          url: 'https://example.com',
+          headers: {
+            authorization: 'Bearer sk-ant-1234567890abcdefghijklmnop',
+          },
+          nested: [{ note: 'safe' }],
+        },
+      };
+      const result = controller.check(action);
+      expect(result).not.toBeNull();
+      expect(result!.allowed).toBe(false);
+      expect(result!.reason).toContain('params.headers.authorization');
     });
   });
 

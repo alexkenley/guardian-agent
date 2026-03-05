@@ -68,18 +68,39 @@ export function stripInvisibleChars(content: string): string {
 
 /** Detect injection signals in content. Returns total score and matched signals. */
 export function detectInjection(content: string): { score: number; signals: string[] } {
+  const normalized = normalizeInjectionText(content);
   let score = 0;
   const signals: string[] = [];
 
   for (const { pattern, score: signalScore, name } of INJECTION_SIGNALS) {
     pattern.lastIndex = 0;
-    if (pattern.test(content)) {
+    const matchedRaw = pattern.test(content);
+    pattern.lastIndex = 0;
+    const matchedNormalized = pattern.test(normalized);
+    if (matchedRaw || matchedNormalized) {
       score += signalScore;
-      signals.push(name);
+      signals.push(matchedNormalized && !matchedRaw ? `${name}_normalized` : name);
     }
   }
 
   return { score, signals };
+}
+
+function normalizeInjectionText(content: string): string {
+  return content
+    .normalize('NFKC')
+    .toLowerCase()
+    // Collapse obfuscated separators inside words (e.g., "ig-nore" -> "ignore").
+    .replace(/(?<=[a-z])[_\-.]+(?=[a-z])/g, '')
+    .replace(/[0@]/g, 'o')
+    .replace(/[1!|]/g, 'i')
+    .replace(/3/g, 'e')
+    .replace(/4/g, 'a')
+    .replace(/5/g, 's')
+    .replace(/7/g, 't')
+    .replace(/[_\-.]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /**

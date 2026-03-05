@@ -63,6 +63,19 @@ export function tokenize(input: string): string[] {
     if (ch === '"') {
       i++;
       while (i < len && input[i] !== '"') {
+        // Command substitution is still active inside double quotes.
+        if (input[i] === '$' && i + 1 < len && input[i + 1] === '(') {
+          if (current) { tokens.push(current); current = ''; }
+          tokens.push('$(');
+          i += 2;
+          continue;
+        }
+        if (input[i] === '`') {
+          if (current) { tokens.push(current); current = ''; }
+          tokens.push('`');
+          i++;
+          continue;
+        }
         if (input[i] === '\\' && i + 1 < len) {
           i++;
           current += input[i];
@@ -243,6 +256,22 @@ function parseCommandTokens(tokens: string[], chainOp: string | null): ParsedCom
   return { command, args: cleanArgs, redirects, chainOp };
 }
 
+function allowedEntryMatchesCommand(cmd: ParsedCommand, allowedEntry: string): boolean {
+  const allowedTokens = tokenize(allowedEntry.trim())
+    .filter((token) => !CHAIN_OPS.has(token) && !REDIRECT_OPS.has(token));
+  if (allowedTokens.length === 0) return false;
+
+  const [allowedCommand, ...allowedArgs] = allowedTokens;
+  if (cmd.command !== allowedCommand) return false;
+
+  // Allow bare command entries (e.g. "git") to match any args.
+  if (allowedArgs.length === 0) return true;
+
+  // Allow command+arg prefixes (e.g. "git status" matches "git status -s").
+  if (cmd.args.length < allowedArgs.length) return false;
+  return allowedArgs.every((arg, idx) => cmd.args[idx] === arg);
+}
+
 /**
  * Validate a shell command string against allowed commands and denied paths.
  *
@@ -287,11 +316,9 @@ export function validateShellCommand(
     }
 
     // Check command against allowed list
-    const isAllowed = allowedCommands.some((allowed) => {
-      // Support prefix matching: "git status" matches allowed "git"
-      // Also support exact match: "git diff" matches allowed "git diff"
-      return cmd.command === allowed || allowed.startsWith(cmd.command + ' ') || cmd.command.startsWith(allowed.split(' ')[0]);
-    });
+    const isAllowed = allowedCommands.some((allowed) =>
+      allowedEntryMatchesCommand(cmd, allowed),
+    );
 
     if (!isAllowed) {
       return { valid: false, reason: `Command '${cmd.command}' is not in allowed list`, commands };

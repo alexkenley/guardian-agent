@@ -15,7 +15,7 @@ import { buildBwrapArgs, buildUlimitPrefix, buildHardenedEnv, resolveProfile } f
 export type { SandboxConfig, SandboxExecOptions, SandboxSpawnOptions, SandboxCapabilities } from './types.js';
 export type { SandboxProfile, SandboxResourceLimits } from './types.js';
 export { DEFAULT_SANDBOX_CONFIG, DEFAULT_RESOURCE_LIMITS } from './types.js';
-export { buildBwrapArgs, buildUlimitPrefix, buildHardenedEnv, PROTECTED_PATHS, PROTECTED_EXTENSIONS } from './profiles.js';
+export { buildBwrapArgs, buildUlimitPrefix, buildHardenedEnv, PROTECTED_PATHS } from './profiles.js';
 
 const execAsync = promisify(execCb);
 const log = createLogger('sandbox');

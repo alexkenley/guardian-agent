@@ -127,14 +127,15 @@ export class SecretScanController implements AdmissionController {
   }
 
   check(action: AgentAction): AdmissionResult | null {
-    // Scan content params for secrets
-    const content = action.params['content'] as string | undefined;
-    if (content) {
-      const secrets = this.scanner.scanContent(content);
+    const stringLeaves: Array<{ path: string; value: string }> = [];
+    collectStringLeaves(action.params, 'params', stringLeaves);
+    for (const leaf of stringLeaves) {
+      const secrets = this.scanner.scanContent(leaf.value);
       if (secrets.length > 0) {
+        const patterns = [...new Set(secrets.map((secret) => secret.pattern))];
         return {
           allowed: false,
-          reason: `Secret detected in content: ${secrets.map(s => s.pattern).join(', ')}`,
+          reason: `Secret detected in ${leaf.path}: ${patterns.join(', ')}`,
           controller: this.name,
         };
       }
@@ -266,5 +267,36 @@ export class Guardian {
     }
 
     return guardian;
+  }
+}
+
+function collectStringLeaves(
+  value: unknown,
+  path: string,
+  out: Array<{ path: string; value: string }>,
+  seen: Set<unknown> = new Set(),
+  depth = 0,
+): void {
+  if (out.length >= 200 || depth > 8) return;
+  if (typeof value === 'string') {
+    if (value.length > 0) out.push({ path, value });
+    return;
+  }
+  if (value === null || value === undefined) return;
+  if (typeof value !== 'object') return;
+  if (seen.has(value)) return;
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i += 1) {
+      collectStringLeaves(value[i], `${path}[${i}]`, out, seen, depth + 1);
+      if (out.length >= 200) return;
+    }
+    return;
+  }
+
+  for (const [key, nested] of Object.entries(value)) {
+    collectStringLeaves(nested, `${path}.${key}`, out, seen, depth + 1);
+    if (out.length >= 200) return;
   }
 }

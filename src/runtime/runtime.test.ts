@@ -890,10 +890,20 @@ describe('Runtime', () => {
   });
 
   describe('Fix #10: Runtime.emit payload scanning', () => {
-    it('should block Runtime.emit() with secrets in payload', async () => {
+    it('should block Runtime.emit() from untrusted sourceAgentId', async () => {
       await expect(runtime.emit({
         type: 'data',
         sourceAgentId: 'attacker',
+        targetAgentId: 'victim',
+        payload: { value: 'safe data' },
+        timestamp: Date.now(),
+      })).rejects.toThrow("untrusted sourceAgentId 'attacker'");
+    });
+
+    it('should block Runtime.emit() with secrets in payload', async () => {
+      await expect(runtime.emit({
+        type: 'data',
+        sourceAgentId: 'system',
         targetAgentId: 'victim',
         payload: { key: 'AKIAIOSFODNN7EXAMPLE' },
         timestamp: Date.now(),
