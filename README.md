@@ -399,4 +399,4 @@ This project is not affiliated with any security certification body and makes no
 
 ## License
 
-[MIT](LICENSE)
+Apache 2.0
