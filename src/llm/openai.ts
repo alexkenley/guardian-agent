@@ -53,7 +53,12 @@ export class OpenAIProvider implements LLMProvider {
       }));
     }
 
-    const response = await this.client.chat.completions.create(params);
+    let response: OpenAI.ChatCompletion;
+    try {
+      response = await this.client.chat.completions.create(params);
+    } catch (err) {
+      throw wrapOpenAIError(err, params.model as string);
+    }
     const choice = response.choices[0];
 
     const toolCalls = choice?.message.tool_calls
@@ -89,7 +94,12 @@ export class OpenAIProvider implements LLMProvider {
       stream_options: { include_usage: true },
     };
 
-    const stream = await this.client.chat.completions.create(params);
+    let stream: AsyncIterable<OpenAI.ChatCompletionChunk>;
+    try {
+      stream = await this.client.chat.completions.create(params);
+    } catch (err) {
+      throw wrapOpenAIError(err, params.model as string);
+    }
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta;
@@ -158,4 +168,42 @@ function mapFinishReason(reason?: string | null): ChatResponse['finishReason'] {
     case 'length': return 'length';
     default: return 'stop';
   }
+}
+
+/** Wrap OpenAI SDK errors into user-friendly messages. */
+function wrapOpenAIError(err: unknown, model: string): Error {
+  const status = (err as { status?: number })?.status ?? 0;
+  const raw = err instanceof Error ? err.message : String(err);
+
+  if (status === 404 || raw.includes('model_not_found') || raw.includes('does not exist')) {
+    return Object.assign(
+      new Error(`Model "${model}" is not available on your OpenAI API key. Check your plan or choose a different model in /config.`),
+      { status },
+    );
+  }
+  if (status === 401) {
+    return Object.assign(
+      new Error('OpenAI API key is invalid or expired. Update it in Configuration > Providers.'),
+      { status },
+    );
+  }
+  if (status === 403) {
+    return Object.assign(
+      new Error(`Access denied for model "${model}". Your OpenAI API plan may not include this model.`),
+      { status },
+    );
+  }
+  if (status === 429) {
+    return Object.assign(
+      new Error('OpenAI rate limit exceeded or quota depleted. Check your usage at platform.openai.com.'),
+      { status },
+    );
+  }
+  if (status === 503 || raw.includes('overloaded')) {
+    return Object.assign(
+      new Error('OpenAI API is currently overloaded. Please try again shortly.'),
+      { status },
+    );
+  }
+  return err instanceof Error ? err : new Error(raw);
 }

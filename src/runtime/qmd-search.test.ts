@@ -193,7 +193,7 @@ describe('QMDSearchService', () => {
     it('throws when QMD not installed', async () => {
       setupExecError('not found');
       const svc = new QMDSearchService(makeConfig());
-      await expect(svc.search({ query: 'test' })).rejects.toThrow('QMD is not installed');
+      await expect(svc.search({ query: 'test' })).rejects.toThrow('QMD is not available');
     });
 
     it('throws on invalid JSON output', async () => {

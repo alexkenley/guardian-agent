@@ -74,7 +74,7 @@ export interface RedactedConfig {
       port?: number;
       host?: string;
       auth?: {
-        mode: 'bearer_required' | 'localhost_no_auth' | 'disabled';
+        mode: 'bearer_required';
         tokenConfigured: boolean;
         tokenSource?: 'config' | 'env' | 'ephemeral';
         rotateOnStartup: boolean;
@@ -206,7 +206,7 @@ export interface RedactedConfig {
 }
 
 export interface DashboardAuthStatus {
-  mode: 'bearer_required' | 'localhost_no_auth' | 'disabled';
+  mode: 'bearer_required';
   tokenConfigured: boolean;
   tokenSource: 'config' | 'env' | 'ephemeral';
   tokenPreview?: string;
@@ -389,14 +389,13 @@ export interface DashboardCallbacks {
   onThreatIntelSetResponseMode?: (mode: IntelResponseMode) => { success: boolean; message: string };
   onAuthStatus?: () => DashboardAuthStatus;
   onAuthUpdate?: (input: {
-    mode?: 'bearer_required' | 'localhost_no_auth' | 'disabled';
+    mode?: 'bearer_required';
     token?: string;
     rotateOnStartup?: boolean;
     sessionTtlMinutes?: number;
   }) => Promise<{ success: boolean; message: string; status?: DashboardAuthStatus }> | { success: boolean; message: string; status?: DashboardAuthStatus };
   onAuthRotate?: () => Promise<{ success: boolean; message: string; token?: string; status?: DashboardAuthStatus }> | { success: boolean; message: string; token?: string; status?: DashboardAuthStatus };
   onAuthReveal?: () => Promise<{ success: boolean; token?: string }> | { success: boolean; token?: string };
-  onAuthRevoke?: () => Promise<{ success: boolean; message: string; status?: DashboardAuthStatus }> | { success: boolean; message: string; status?: DashboardAuthStatus };
   onToolsState?: (args?: { limit?: number }) => DashboardToolsState;
   onToolsCategories?: () => Array<{ category: ToolCategory; label: string; description: string; toolCount: number; enabled: boolean }>;
   onToolsCategoryToggle?: (input: { category: ToolCategory; enabled: boolean }) => { success: boolean; message: string };
@@ -545,6 +544,13 @@ export interface ConfigUpdate {
       allowedChatIds?: number[];
       polling?: boolean;
       defaultAgent?: string;
+    };
+  };
+  assistant?: {
+    tools?: {
+      qmd?: {
+        enabled?: boolean;
+      };
     };
   };
 }

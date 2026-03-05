@@ -179,6 +179,50 @@ describe('ToolExecutor', () => {
     expect(String(approvals[0].args.access_token)).toBe('[REDACTED]');
   });
 
+  it('lists pending approval IDs scoped to user/channel with optional unscoped fallback', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const scoped = await executor.runTool({
+      toolName: 'fs_write',
+      args: { path: 'scoped.txt', content: 'scoped' },
+      origin: 'assistant',
+      userId: 'alice',
+      channel: 'web',
+    });
+    const otherScoped = await executor.runTool({
+      toolName: 'fs_write',
+      args: { path: 'other.txt', content: 'other' },
+      origin: 'assistant',
+      userId: 'bob',
+      channel: 'web',
+    });
+    const unscoped = await executor.runTool({
+      toolName: 'fs_write',
+      args: { path: 'unscoped.txt', content: 'unscoped' },
+      origin: 'web',
+    });
+
+    expect(scoped.approvalId).toBeDefined();
+    expect(otherScoped.approvalId).toBeDefined();
+    expect(unscoped.approvalId).toBeDefined();
+
+    const aliceOnly = executor.listPendingApprovalIdsForUser('alice', 'web');
+    expect(aliceOnly).toEqual([scoped.approvalId!]);
+
+    const aliceWithUnscoped = executor.listPendingApprovalIdsForUser('alice', 'web', { includeUnscoped: true });
+    expect(aliceWithUnscoped).toContain(scoped.approvalId!);
+    expect(aliceWithUnscoped).toContain(unscoped.approvalId!);
+    expect(aliceWithUnscoped).not.toContain(otherScoped.approvalId!);
+  });
+
   it('executes read-only tools without approval', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({

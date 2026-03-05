@@ -21,12 +21,22 @@
     "check": "tsc --noEmit",
     "build": "tsc",
     "clean": "rm -rf dist",
+    "ensure:qmd": "node scripts/ensure-qmd.mjs",
     "dev": "tsx src/index.ts",
     "dev:sh": "bash scripts/dev.sh",
     "start": "node dist/index.js",
     "prepublishOnly": "npm test && npm run build"
   },
-  "keywords": ["ai", "agent", "llm", "ollama", "guardian", "security", "orchestration", "personal-assistant"],
+  "keywords": [
+    "ai",
+    "agent",
+    "llm",
+    "ollama",
+    "guardian",
+    "security",
+    "orchestration",
+    "personal-assistant"
+  ],
   "author": "Alex Kenley",
   "license": "Apache-2.0",
   "type": "module",
@@ -49,6 +59,7 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
+    "@tobilu/qmd": "^1.0.7",
     "@anthropic-ai/sdk": "^0.78.0",
     "croner": "^10.0.1",
     "grammy": "^1.40.0",

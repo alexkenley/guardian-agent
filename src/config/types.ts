@@ -155,7 +155,7 @@ export interface ChannelsConfig {
     /** Structured auth configuration (preferred over authToken). */
     auth?: {
       /** Auth mode for web/API endpoints. */
-      mode?: 'bearer_required' | 'localhost_no_auth' | 'disabled';
+      mode?: 'bearer_required';
       /** Bearer token value (supports ${ENV_VAR} interpolation). */
       token?: string;
       /** Rotate token on startup and persist generated value. */
@@ -636,9 +636,9 @@ export interface QMDSourceConfig {
 
 /** QMD hybrid search engine configuration. */
 export interface QMDConfig {
-  /** Enable QMD search integration (default: false). */
+  /** Enable QMD search integration (default: true). */
   enabled: boolean;
-  /** Path to the qmd binary (default: 'qmd', resolved via PATH). */
+  /** Path to the qmd binary (default: bundled @tobilu/qmd, fallback: PATH `qmd`). */
   binaryPath?: string;
   /** Timeout for QMD queries in milliseconds (default: 30000). */
   queryTimeoutMs?: number;
@@ -965,7 +965,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       ],
       browser: { enabled: true },
       qmd: {
-        enabled: false,
+        enabled: true,
         defaultMode: 'query',
         queryTimeoutMs: 30_000,
         maxResults: 20,

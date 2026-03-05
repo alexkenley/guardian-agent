@@ -195,8 +195,8 @@ assistant:
     toolPolicies:
       forum_post: deny
     qmd:
-      enabled: false
-      # binaryPath: qmd          # Path to QMD binary (default: 'qmd' via PATH)
+      enabled: true
+      # binaryPath: qmd          # Path override (default: bundled @tobilu/qmd, fallback: PATH `qmd`)
       defaultMode: query          # search | vsearch | query
       queryTimeoutMs: 30000
       maxResults: 20
@@ -272,6 +272,8 @@ guardian:
   auditLog:
     maxEvents: 10000
 ```
+
+If bundled QMD is missing in your local install, run `npm run ensure:qmd` to install it automatically.
 
 ### Telegram Setup (Web + CLI)
 

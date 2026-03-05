@@ -83,7 +83,7 @@ function createProviderPanel(config, providers, panel) {
             <div class="cfg-form-grid">
               <div class="cfg-field"><label>Profile</label><select id="cfg-local-profile"></select></div>
               <div class="cfg-field"><label>Provider Name</label><input id="cfg-local-name" type="text" placeholder="ollama"></div>
-              <div class="cfg-field"><label>Model</label><input id="cfg-local-model" type="text" placeholder="llama3.2"></div>
+              <div class="cfg-field"><label>Model</label><select id="cfg-local-model-select" style="display:none"></select><input id="cfg-local-model" type="text" placeholder="llama3.2"></div>
               <div class="cfg-field"><label>Base URL</label><input id="cfg-local-url" type="text" placeholder="http://127.0.0.1:11434"></div>
             </div>
             <div class="cfg-form-grid" style="margin-top:0.75rem;">
@@ -104,7 +104,7 @@ function createProviderPanel(config, providers, panel) {
               <div class="cfg-field"><label>Profile</label><select id="cfg-ext-profile"></select></div>
               <div class="cfg-field"><label>Provider Name</label><input id="cfg-ext-name" type="text" placeholder="claude"></div>
               <div class="cfg-field"><label>Provider Type</label><select id="cfg-ext-type"><option value="openai">openai</option><option value="anthropic">anthropic</option></select></div>
-              <div class="cfg-field"><label>Model</label><input id="cfg-ext-model" type="text" placeholder="claude-sonnet-4-20250514"></div>
+              <div class="cfg-field"><label>Model</label><select id="cfg-ext-model-select" style="display:none"></select><input id="cfg-ext-model" type="text" placeholder="claude-sonnet-4-6"></div>
               <div class="cfg-field"><label>API Key</label><input id="cfg-ext-key" type="password" placeholder="Leave blank to keep existing"></div>
               <div class="cfg-field"><label>Base URL (optional)</label><input id="cfg-ext-url" type="text" placeholder="Optional custom endpoint"></div>
             </div>
@@ -132,7 +132,7 @@ function createProviderPanel(config, providers, panel) {
 
   function getDefaultModel(side, type) {
     if (side === 'local') return 'llama3.2';
-    return type === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4o';
+    return type === 'anthropic' ? 'claude-sonnet-4-6' : 'gpt-4o';
   }
 
   function wirePanel(side) {
@@ -142,12 +142,35 @@ function createProviderPanel(config, providers, panel) {
 
     const profileEl = section.querySelector(`#${prefix}-profile`);
     const nameEl = section.querySelector(`#${prefix}-name`);
-    const modelEl = section.querySelector(`#${prefix}-model`);
+    const modelInputEl = section.querySelector(`#${prefix}-model`);
+    const modelSelectEl = section.querySelector(`#${prefix}-model-select`);
     const urlEl = section.querySelector(`#${prefix}-url`);
     const defaultEl = section.querySelector(`#${prefix}-default`);
     const statusEl = section.querySelector(`#${prefix}-status`);
     const typeEl = isLocal ? null : section.querySelector('#cfg-ext-type');
     const keyEl = isLocal ? null : section.querySelector('#cfg-ext-key');
+
+    // Model accessor — reads from whichever element is visible
+    const modelEl = {
+      get value() { return modelSelectEl.style.display !== 'none' ? modelSelectEl.value : modelInputEl.value; },
+      set value(v) { modelInputEl.value = v; if (modelSelectEl.style.display !== 'none') modelSelectEl.value = v; },
+    };
+
+    /** Show a <select> dropdown if models are available, otherwise fall back to text input. */
+    function updateModelSelector(models, currentModel) {
+      if (models && models.length > 0) {
+        const customOpt = currentModel && !models.includes(currentModel)
+          ? `<option value="${esc(currentModel)}">${esc(currentModel)} (custom)</option>` : '';
+        modelSelectEl.innerHTML = customOpt + models.map(m =>
+          `<option value="${esc(m)}"${m === currentModel ? ' selected' : ''}>${esc(m)}</option>`
+        ).join('');
+        modelSelectEl.style.display = '';
+        modelInputEl.style.display = 'none';
+      } else {
+        modelSelectEl.style.display = 'none';
+        modelInputEl.style.display = '';
+      }
+    }
 
     function renderProfiles() {
       const options = ['__new__', ...names];
@@ -168,7 +191,9 @@ function createProviderPanel(config, providers, panel) {
       if (name === '__new__') {
         const pt = isLocal ? 'ollama' : (typeEl?.value || 'openai');
         nameEl.value = getSuggestedName(side, pt);
-        modelEl.value = getDefaultModel(side, pt);
+        const defaultModel = getDefaultModel(side, pt);
+        updateModelSelector([], null);
+        modelInputEl.value = defaultModel;
         urlEl.value = isLocal ? 'http://127.0.0.1:11434' : '';
         if (keyEl) keyEl.value = '';
         return;
@@ -176,7 +201,8 @@ function createProviderPanel(config, providers, panel) {
       const entry = providerMap[name];
       if (!entry) return;
       nameEl.value = name;
-      modelEl.value = entry.model || '';
+      updateModelSelector(entry.availableModels, entry.model || '');
+      if (!entry.availableModels?.length) modelInputEl.value = entry.model || '';
       urlEl.value = entry.baseUrl || '';
       if (typeEl) typeEl.value = entry.provider === 'ollama' ? 'openai' : entry.provider;
       if (keyEl) keyEl.value = '';
@@ -202,7 +228,17 @@ function createProviderPanel(config, providers, panel) {
         const found = latest.find(p => p.name === providerName);
         if (!found) { statusEl.textContent = `'${providerName}' not in runtime (save first).`; statusEl.style.color = 'var(--warning)'; return; }
         if (found.connected === false) { statusEl.textContent = `${providerName}: disconnected.`; statusEl.style.color = 'var(--error)'; }
-        else { const count = found.availableModels?.length || 0; statusEl.textContent = `${providerName}: connected (${count} model${count === 1 ? '' : 's'}).`; statusEl.style.color = 'var(--success)'; }
+        else {
+          const count = found.availableModels?.length || 0;
+          statusEl.textContent = `${providerName}: connected (${count} model${count === 1 ? '' : 's'}).`;
+          statusEl.style.color = 'var(--success)';
+          // Refresh model dropdown with live models
+          if (found.availableModels?.length) {
+            const currentModel = modelSelectEl.style.display !== 'none' ? modelSelectEl.value : modelInputEl.value;
+            updateModelSelector(found.availableModels, currentModel);
+            if (providerMap[providerName]) providerMap[providerName].availableModels = found.availableModels;
+          }
+        }
       } catch (err) { statusEl.textContent = `Test failed: ${err instanceof Error ? err.message : String(err)}`; statusEl.style.color = 'var(--error)'; }
     });
 
@@ -290,9 +326,9 @@ async function renderToolsTab(panel) {
           <div class="card-subtitle">Available tools</div>
         </div>
         <div class="status-card warning">
-          <div class="card-title">Pending Approvals</div>
+          <div class="card-title">Pending Tool Approvals</div>
           <div class="card-value">${approvals.filter(a => a.status === 'pending').length}</div>
-          <div class="card-subtitle">Manual decisions required</div>
+          <div class="card-subtitle">Global queue across channels</div>
         </div>
         <div class="status-card accent">
           <div class="card-title">Recent Jobs</div>
@@ -451,127 +487,157 @@ async function renderPolicyTab(panel) {
     const policy = state.policy || { mode: 'approve_by_policy', sandbox: { allowedPaths: [], allowedCommands: [], allowedDomains: [] } };
 
     const categories = [
-      { key: 'allowedPaths', label: 'Allowed Paths', placeholder: '/home/user/data, /tmp/scratch' },
-      { key: 'allowedCommands', label: 'Allowed Commands', placeholder: 'ls, cat, ping' },
-      { key: 'allowedDomains', label: 'Allowed Domains', placeholder: 'example.com, api.github.com' },
+      { key: 'allowedPaths', label: 'Allowed Paths', icon: 'folder', placeholder: 'e.g. /home/user/data', hint: 'Filesystem paths the sandbox can access' },
+      { key: 'allowedCommands', label: 'Allowed Commands', icon: 'terminal', placeholder: 'e.g. ls, cat, ping', hint: 'Shell commands the sandbox can execute' },
+      { key: 'allowedDomains', label: 'Allowed Domains', icon: 'globe', placeholder: 'e.g. api.github.com', hint: 'Network domains the sandbox can reach' },
     ];
 
-    let activeCategory = categories[0].key;
+    const iconSvgs = {
+      folder: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>',
+      terminal: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
+      globe: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>',
+    };
+
+    const modeLabels = {
+      approve_all: { label: 'Approve All', desc: 'Every tool call requires manual approval', tone: 'warning' },
+      approve_by_policy: { label: 'Policy-Based', desc: 'Allowlisted items auto-approve; others require confirmation', tone: 'info' },
+      auto_approve: { label: 'Auto Approve', desc: 'All tool calls execute without approval', tone: 'error' },
+    };
 
     function render() {
-      const cat = categories.find(c => c.key === activeCategory);
-      const items = policy.sandbox?.[activeCategory] || [];
+      const modeInfo = modeLabels[policy.mode] || { label: policy.mode, desc: '', tone: 'info' };
+      const totalItems = categories.reduce((sum, c) => sum + (policy.sandbox?.[c.key]?.length || 0), 0);
 
       panel.innerHTML = `
-        <div class="table-container">
-          <div class="table-header">
-            <h3>Sandbox Allowlist Editor</h3>
-            <span class="cfg-header-note">Add and remove items in real-time</span>
+        <div class="policy-overview">
+          <div class="status-card ${modeInfo.tone}">
+            <div class="card-title">Execution Mode</div>
+            <div class="card-value">${esc(modeInfo.label)}</div>
+            <div class="card-subtitle">${esc(modeInfo.desc)}</div>
           </div>
-          <div class="cfg-center-body">
-            <div class="cfg-form-grid" style="margin-bottom:1rem;">
-              <div class="cfg-field">
-                <label>Execution Mode</label>
-                <span class="intel-inline" style="padding:0.4rem 0">${esc(policy.mode)}</span>
-              </div>
-              <div class="cfg-field">
-                <label>Category</label>
-                <select id="policy-category">
-                  ${categories.map(c => `<option value="${c.key}" ${c.key === activeCategory ? 'selected' : ''}>${c.label}</option>`).join('')}
-                </select>
-              </div>
-            </div>
-
-            <div class="policy-add-row">
-              <input type="text" id="policy-add-input" placeholder="${esc(cat.placeholder)}">
-              <button class="btn btn-primary" id="policy-add-btn">Add</button>
-            </div>
-
-            <div class="policy-chip-list" id="policy-chip-list">
-              ${items.length === 0
-                ? '<span style="color:var(--text-muted);font-size:0.78rem;">No items in this category. Add one above.</span>'
-                : items.map(item => `
-                  <span class="policy-chip">
-                    ${esc(item)}
-                    <button class="chip-remove" data-item="${escAttr(item)}" title="Remove">&times;</button>
-                  </span>
-                `).join('')}
-            </div>
-
-            <div id="policy-status" style="margin-top:0.75rem;font-size:0.78rem;color:var(--text-muted);"></div>
+          <div class="status-card accent">
+            <div class="card-title">Allowlist Entries</div>
+            <div class="card-value">${totalItems}</div>
+            <div class="card-subtitle">${categories.map(c => `${policy.sandbox?.[c.key]?.length || 0} ${c.label.toLowerCase().replace('allowed ', '')}`).join(', ')}</div>
           </div>
+        </div>
+
+        <div class="policy-columns">
+          ${categories.map(cat => {
+            const items = policy.sandbox?.[cat.key] || [];
+            return `
+              <div class="table-container policy-category-card" data-category="${cat.key}">
+                <div class="table-header">
+                  <h3>${iconSvgs[cat.icon]} ${esc(cat.label)}</h3>
+                  <span class="badge badge-idle">${items.length}</span>
+                </div>
+                <div class="cfg-center-body">
+                  <p class="policy-hint">${esc(cat.hint)}</p>
+                  <div class="policy-add-row">
+                    <input type="text" class="policy-add-input" data-category="${cat.key}" placeholder="${esc(cat.placeholder)}">
+                    <button class="btn btn-primary btn-sm policy-add-btn" data-category="${cat.key}">Add</button>
+                  </div>
+                  <div class="policy-item-list" data-category="${cat.key}">
+                    ${items.length === 0
+                      ? '<div class="policy-empty">No entries yet</div>'
+                      : items.map(item => `
+                        <div class="policy-item" data-category="${cat.key}" data-item="${escAttr(item)}">
+                          <code>${esc(item)}</code>
+                          <button class="policy-item-remove" data-category="${cat.key}" data-item="${escAttr(item)}" title="Remove ${esc(item)}">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                          </button>
+                        </div>
+                      `).join('')}
+                  </div>
+                  <div class="policy-feedback" data-category="${cat.key}"></div>
+                </div>
+              </div>
+            `;
+          }).join('')}
         </div>
       `;
 
-      // Category switch
-      panel.querySelector('#policy-category')?.addEventListener('change', (e) => {
-        activeCategory = e.target.value;
-        render();
+      // Wire add buttons and Enter key
+      panel.querySelectorAll('.policy-add-btn').forEach(btn => {
+        btn.addEventListener('click', () => addItem(btn.dataset.category));
+      });
+      panel.querySelectorAll('.policy-add-input').forEach(input => {
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') addItem(input.dataset.category); });
       });
 
-      // Add item
-      const addInput = panel.querySelector('#policy-add-input');
-      const addBtn = panel.querySelector('#policy-add-btn');
-      const statusEl = panel.querySelector('#policy-status');
-
-      async function addItem() {
-        const value = addInput.value.trim();
-        if (!value) return;
-        const current = policy.sandbox?.[activeCategory] || [];
-        if (current.includes(value)) {
-          statusEl.textContent = 'Item already exists.';
-          statusEl.style.color = 'var(--warning)';
-          return;
-        }
-        const updated = [...current, value];
-        statusEl.textContent = 'Saving...';
-        statusEl.style.color = 'var(--text-muted)';
-        try {
-          const result = await api.updateToolPolicy({ sandbox: { [activeCategory]: updated } });
-          if (result.success !== false) {
-            if (!policy.sandbox) policy.sandbox = {};
-            policy.sandbox[activeCategory] = updated;
-            render();
-          } else {
-            statusEl.textContent = result.message || 'Failed to save.';
-            statusEl.style.color = 'var(--error)';
-          }
-        } catch (err) {
-          statusEl.textContent = err instanceof Error ? err.message : String(err);
-          statusEl.style.color = 'var(--error)';
-        }
-      }
-
-      addBtn?.addEventListener('click', addItem);
-      addInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') addItem(); });
-
-      // Remove item
-      panel.querySelectorAll('.chip-remove').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          const item = btn.getAttribute('data-item');
-          if (!item) return;
-          if (!confirm(`Remove "${item}" from ${categories.find(c => c.key === activeCategory)?.label}?`)) return;
-          const current = policy.sandbox?.[activeCategory] || [];
-          const updated = current.filter(i => i !== item);
-          statusEl.textContent = 'Removing...';
-          statusEl.style.color = 'var(--text-muted)';
-          try {
-            const result = await api.updateToolPolicy({ sandbox: { [activeCategory]: updated } });
-            if (result.success !== false) {
-              policy.sandbox[activeCategory] = updated;
-              render();
-            } else {
-              statusEl.textContent = result.message || 'Failed to remove.';
-              statusEl.style.color = 'var(--error)';
-            }
-          } catch (err) {
-            statusEl.textContent = err instanceof Error ? err.message : String(err);
-            statusEl.style.color = 'var(--error)';
-          }
-        });
+      // Wire remove buttons
+      panel.querySelectorAll('.policy-item-remove').forEach(btn => {
+        btn.addEventListener('click', () => removeItem(btn.dataset.category, btn.dataset.item));
       });
 
       applyInputTooltips(panel);
+    }
+
+    function feedback(catKey, message, tone = 'muted') {
+      const el = panel.querySelector(`.policy-feedback[data-category="${catKey}"]`);
+      if (!el) return;
+      el.textContent = message;
+      el.style.color = tone === 'error' ? 'var(--error)' : tone === 'success' ? 'var(--success)' : tone === 'warning' ? 'var(--warning)' : 'var(--text-muted)';
+      if (tone === 'success') setTimeout(() => { if (el.textContent === message) el.textContent = ''; }, 2000);
+    }
+
+    async function addItem(catKey) {
+      const input = panel.querySelector(`.policy-add-input[data-category="${catKey}"]`);
+      if (!input) return;
+      // Support comma-separated bulk add
+      const values = input.value.split(',').map(v => v.trim()).filter(Boolean);
+      if (values.length === 0) return;
+
+      const current = policy.sandbox?.[catKey] || [];
+      const dupes = values.filter(v => current.includes(v));
+      const newValues = values.filter(v => !current.includes(v));
+
+      if (newValues.length === 0) {
+        feedback(catKey, dupes.length === 1 ? `"${dupes[0]}" already exists.` : 'All items already exist.', 'warning');
+        return;
+      }
+
+      const updated = [...current, ...newValues];
+      feedback(catKey, 'Saving...', 'muted');
+      try {
+        const result = await api.updateToolPolicy({ sandbox: { [catKey]: updated } });
+        if (result.success !== false) {
+          if (!policy.sandbox) policy.sandbox = {};
+          policy.sandbox[catKey] = updated;
+          const added = newValues.length === 1 ? `Added "${newValues[0]}"` : `Added ${newValues.length} items`;
+          const dupeNote = dupes.length > 0 ? ` (${dupes.length} duplicate${dupes.length > 1 ? 's' : ''} skipped)` : '';
+          render();
+          feedback(catKey, added + dupeNote, 'success');
+        } else {
+          feedback(catKey, result.message || 'Failed to save.', 'error');
+        }
+      } catch (err) {
+        feedback(catKey, err instanceof Error ? err.message : String(err), 'error');
+      }
+    }
+
+    async function removeItem(catKey, item) {
+      const current = policy.sandbox?.[catKey] || [];
+      const updated = current.filter(i => i !== item);
+
+      // Optimistic UI: immediately fade the item
+      const itemEl = panel.querySelector(`.policy-item[data-category="${catKey}"][data-item="${CSS.escape(item)}"]`);
+      if (itemEl) itemEl.style.opacity = '0.4';
+
+      try {
+        const result = await api.updateToolPolicy({ sandbox: { [catKey]: updated } });
+        if (result.success !== false) {
+          policy.sandbox[catKey] = updated;
+          render();
+          feedback(catKey, `Removed "${item}"`, 'success');
+        } else {
+          if (itemEl) itemEl.style.opacity = '1';
+          feedback(catKey, result.message || 'Failed to remove.', 'error');
+        }
+      } catch (err) {
+        if (itemEl) itemEl.style.opacity = '1';
+        feedback(catKey, err instanceof Error ? err.message : String(err), 'error');
+      }
     }
 
     render();
@@ -583,212 +649,532 @@ async function renderPolicyTab(panel) {
 // ─── Search Sources Tab (QMD) ────────────────────────────
 
 function renderSearchSourcesTab(panel) {
-  const qmdCfg = sharedConfig?.assistant?.tools?.qmd;
-  const enabled = qmdCfg?.enabled ?? false;
+  const qmdCfg = sharedConfig?.assistant?.tools?.qmd || {};
+  const state = {
+    enabled: qmdCfg.enabled !== false,
+    runtimeAvailable: qmdCfg.enabled !== false,
+    status: null,
+    sources: Array.isArray(qmdCfg.sources) ? [...qmdCfg.sources] : [],
+    filter: '',
+  };
 
   panel.innerHTML = `
-    <div class="cfg-card" style="margin-bottom:1rem;">
-      <div class="cfg-card-header"><h3>QMD Search Engine</h3></div>
-      <div class="cfg-card-body" id="qmd-status-area">
-        <p style="color:var(--text-muted);">${enabled ? 'Loading status...' : 'QMD search is <strong>disabled</strong> in config. Set <code>assistant.tools.qmd.enabled: true</code> to activate.'}</p>
-      </div>
-    </div>
-    <div class="cfg-card" style="margin-bottom:1rem;">
-      <div class="cfg-card-header">
+    <div class="intel-summary-grid qmd-summary-grid" id="qmd-summary-grid"></div>
+    <div class="qmd-feedback qmd-feedback-muted" id="qmd-feedback"></div>
+
+    <div class="table-container">
+      <div class="table-header">
         <h3>Document Sources</h3>
-        <button class="btn btn-primary btn-sm" id="qmd-add-source" type="button" ${enabled ? '' : 'disabled'}>+ Add Source</button>
+        <div class="qmd-toolbar-actions">
+          <button class="btn btn-secondary btn-sm" id="qmd-config-toggle" type="button">${state.enabled ? 'Disable QMD' : 'Enable QMD'}</button>
+          <button class="btn btn-secondary btn-sm" id="qmd-refresh" type="button">Refresh</button>
+          <button class="btn btn-secondary btn-sm" id="qmd-reindex-all" type="button" ${state.enabled ? '' : 'disabled'}>Reindex All</button>
+          <button class="btn btn-primary btn-sm" id="qmd-add-source" type="button" aria-expanded="false">+ Add Source</button>
+        </div>
       </div>
-      <div class="cfg-card-body" id="qmd-sources-area">
-        ${enabled ? '<p style="color:var(--text-muted);">Loading...</p>' : ''}
+      <div class="cfg-center-body">
+        <div class="qmd-filter-row">
+          <div class="qmd-filter-field">
+            <label for="qmd-source-filter">Filter Sources</label>
+            <input id="qmd-source-filter" type="text" placeholder="Filter by id, name, path, or type">
+          </div>
+          <div class="qmd-hint">
+            ${state.enabled
+    ? 'Add, enable, disable, reindex, and remove document sources from one place.'
+    : 'QMD is disabled in config. Enable it here, then restart to activate runtime source management.'}
+          </div>
+        </div>
       </div>
     </div>
-    <div id="qmd-add-form-area" style="display:none;">
-      <div class="cfg-card">
-        <div class="cfg-card-header"><h3>Add Source</h3></div>
-        <div class="cfg-card-body">
-          <form id="qmd-add-form" style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem 1rem;">
-            <div class="form-field"><label>ID (collection name)</label><input name="id" required placeholder="my-notes" /></div>
-            <div class="form-field"><label>Display Name</label><input name="name" required placeholder="My Notes" /></div>
-            <div class="form-field">
-              <label>Type</label>
-              <select name="type">
-                <option value="directory">Directory</option>
-                <option value="git">Git Repository</option>
-                <option value="url">URL</option>
-                <option value="file">Single File</option>
-              </select>
-            </div>
-            <div class="form-field"><label>Path / URL</label><input name="path" required placeholder="/home/user/notes or https://..." /></div>
-            <div class="form-field"><label>Globs (comma-separated)</label><input name="globs" placeholder="**/*.md, **/*.txt" /></div>
-            <div class="form-field"><label>Branch (git only)</label><input name="branch" placeholder="main" /></div>
-            <div class="form-field"><label>Description</label><input name="description" placeholder="Optional description" /></div>
-            <div class="form-field" style="display:flex;align-items:end;gap:0.5rem;">
-              <button class="btn btn-primary" type="submit">Add</button>
-              <button class="btn" type="button" id="qmd-add-cancel">Cancel</button>
-            </div>
-          </form>
-        </div>
+
+    <div class="table-container qmd-add-form-wrap" id="qmd-add-form-wrap" hidden>
+      <div class="table-header"><h3>Add Source</h3></div>
+      <div class="cfg-center-body">
+        <form id="qmd-add-form" class="qmd-add-form-grid">
+          <div class="cfg-field"><label>ID (collection)</label><input name="id" required placeholder="my-notes"></div>
+          <div class="cfg-field"><label>Display Name</label><input name="name" required placeholder="My Notes"></div>
+          <div class="cfg-field">
+            <label>Type</label>
+            <select name="type">
+              <option value="directory">Directory</option>
+              <option value="git">Git Repository</option>
+              <option value="url">URL</option>
+              <option value="file">Single File</option>
+            </select>
+          </div>
+          <div class="cfg-field"><label>Path / URL</label><input name="path" required placeholder="/home/user/notes or https://..."></div>
+          <div class="cfg-field" data-qmd-field="globs">
+            <label>Globs</label>
+            <input name="globs" placeholder="**/*.md, **/*.txt">
+          </div>
+          <div class="cfg-field" data-qmd-field="branch">
+            <label>Git Branch</label>
+            <input name="branch" placeholder="main">
+          </div>
+          <div class="cfg-field qmd-form-span-2">
+            <label>Description</label>
+            <input name="description" placeholder="Optional description">
+          </div>
+          <div class="cfg-actions qmd-form-span-2">
+            <button class="btn btn-primary" type="submit">Add Source</button>
+            <button class="btn btn-secondary" type="button" id="qmd-add-cancel">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="table-container">
+      <div class="table-header">
+        <h3>Configured Sources</h3>
+        <span class="cfg-header-note" id="qmd-source-count">0 sources</span>
+      </div>
+      <div class="cfg-center-body qmd-sources-wrap" id="qmd-sources-area">
+        <div class="loading">Loading...</div>
       </div>
     </div>
   `;
 
-  if (!enabled) return;
+  const feedbackEl = panel.querySelector('#qmd-feedback');
+  const summaryEl = panel.querySelector('#qmd-summary-grid');
+  const configToggleBtn = panel.querySelector('#qmd-config-toggle');
+  const addBtn = panel.querySelector('#qmd-add-source');
+  const addWrap = panel.querySelector('#qmd-add-form-wrap');
+  const addForm = panel.querySelector('#qmd-add-form');
+  const addCancelBtn = panel.querySelector('#qmd-add-cancel');
+  const refreshBtn = panel.querySelector('#qmd-refresh');
+  const reindexAllBtn = panel.querySelector('#qmd-reindex-all');
+  const filterInput = panel.querySelector('#qmd-source-filter');
+  const sourcesArea = panel.querySelector('#qmd-sources-area');
+  const sourceCountEl = panel.querySelector('#qmd-source-count');
 
-  // Load status
-  loadQMDStatus(panel);
-  loadQMDSources(panel);
+  const typeLabels = {
+    directory: 'Directory',
+    git: 'Git Repo',
+    url: 'URL',
+    file: 'File',
+  };
 
-  // Wire add source toggle
-  panel.querySelector('#qmd-add-source').addEventListener('click', () => {
-    panel.querySelector('#qmd-add-form-area').style.display = '';
-  });
-  panel.querySelector('#qmd-add-cancel').addEventListener('click', () => {
-    panel.querySelector('#qmd-add-form-area').style.display = 'none';
-  });
-
-  // Wire add form
-  panel.querySelector('#qmd-add-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const source = {
-      id: fd.get('id')?.trim(),
-      name: fd.get('name')?.trim(),
-      type: fd.get('type'),
-      path: fd.get('path')?.trim(),
-      globs: fd.get('globs')?.trim() ? fd.get('globs').split(',').map(g => g.trim()).filter(Boolean) : undefined,
-      branch: fd.get('branch')?.trim() || undefined,
-      description: fd.get('description')?.trim() || undefined,
-      enabled: true,
-    };
-    try {
-      const result = await api.qmdSourceAdd(source);
-      if (result.success) {
-        e.target.reset();
-        panel.querySelector('#qmd-add-form-area').style.display = 'none';
-        loadQMDSources(panel);
-      } else {
-        alert(result.message || 'Failed to add source.');
-      }
-    } catch (err) {
-      alert(err.message || 'Error adding source.');
-    }
-  });
-}
-
-async function loadQMDStatus(panel) {
-  const area = panel.querySelector('#qmd-status-area');
-  try {
-    const status = await api.qmdStatus();
-    area.innerHTML = `
-      <div style="display:flex;gap:2rem;flex-wrap:wrap;">
-        <div><strong>Installed:</strong> ${status.installed ? '<span style="color:var(--success);">Yes</span>' : '<span style="color:var(--danger);">No</span>'}</div>
-        ${status.version ? `<div><strong>Version:</strong> ${esc(status.version)}</div>` : ''}
-        <div><strong>Collections:</strong> ${status.collections?.length ?? 0}</div>
-        <div><strong>Configured Sources:</strong> ${status.configuredSources?.length ?? 0}</div>
-      </div>
-      ${!status.installed ? '<p style="margin-top:0.5rem;color:var(--warning);">Install QMD from <a href="https://github.com/tobi/qmd" target="_blank">github.com/tobi/qmd</a> to enable search.</p>' : ''}
-    `;
-  } catch (err) {
-    area.innerHTML = `<p style="color:var(--danger);">Error loading status: ${esc(err.message)}</p>`;
+  function setFeedback(message, tone = 'muted') {
+    feedbackEl.className = `qmd-feedback qmd-feedback-${tone}`;
+    feedbackEl.textContent = message;
   }
-}
 
-async function loadQMDSources(panel) {
-  const area = panel.querySelector('#qmd-sources-area');
-  try {
-    const sources = await api.qmdSources();
-    if (!sources.length) {
-      area.innerHTML = '<p style="color:var(--text-muted);">No sources configured. Add one to start indexing documents.</p>';
+  function canManageSources() {
+    return state.enabled && state.runtimeAvailable;
+  }
+
+  function updateManageControls() {
+    const canManage = canManageSources();
+    addBtn.disabled = false;
+    addBtn.classList.toggle('btn-primary', canManage);
+    addBtn.classList.toggle('btn-secondary', !canManage);
+    addBtn.title = canManage
+      ? 'Add a new document source'
+      : 'QMD runtime is unavailable. Click for guidance.';
+    reindexAllBtn.disabled = !canManage;
+    filterInput.disabled = false;
+    configToggleBtn.textContent = state.enabled ? 'Disable QMD' : 'Enable QMD';
+    if (state.enabled) {
+      configToggleBtn.classList.remove('btn-primary');
+      configToggleBtn.classList.add('btn-secondary');
+    } else {
+      configToggleBtn.classList.remove('btn-secondary');
+      configToggleBtn.classList.add('btn-primary');
+    }
+  }
+
+  function renderSummary() {
+    const installed = state.enabled
+      ? (state.status?.installed === true ? 'Yes' : state.status?.installed === false ? 'No' : 'Unknown')
+      : 'Disabled';
+    const installedTone = state.enabled
+      ? (state.status?.installed === true ? 'success' : state.status?.installed === false ? 'error' : 'warning')
+      : 'warning';
+    const collections = Array.isArray(state.status?.collections) ? state.status.collections.length : 0;
+    const sourceCount = state.sources.length;
+    const enabledCount = state.sources.filter((source) => source.enabled !== false).length;
+    const versionValue = state.status?.version ? esc(state.status.version) : 'n/a';
+
+    summaryEl.innerHTML = `
+      <div class="status-card ${installedTone}">
+        <div class="card-title">QMD Installed</div>
+        <div class="card-value">${esc(installed)}</div>
+        <div class="card-subtitle">${state.enabled ? 'Runtime binary availability' : 'Service is not active in current config'}</div>
+      </div>
+      <div class="status-card info">
+        <div class="card-title">QMD Version</div>
+        <div class="card-value">${versionValue}</div>
+        <div class="card-subtitle">Reported by runtime status</div>
+      </div>
+      <div class="status-card accent">
+        <div class="card-title">Collections</div>
+        <div class="card-value">${collections}</div>
+        <div class="card-subtitle">Known in QMD index</div>
+      </div>
+      <div class="status-card warning">
+        <div class="card-title">Configured Sources</div>
+        <div class="card-value">${sourceCount}</div>
+        <div class="card-subtitle">${enabledCount} enabled</div>
+      </div>
+    `;
+  }
+
+  function toggleAddForm(show) {
+    addWrap.hidden = !show;
+    addBtn.setAttribute('aria-expanded', show ? 'true' : 'false');
+    if (show) {
+      addForm.querySelector('input[name="id"]')?.focus();
+    }
+  }
+
+  function syncAddFormFields() {
+    const type = addForm.querySelector('select[name="type"]')?.value || 'directory';
+    const globsField = addForm.querySelector('[data-qmd-field="globs"]');
+    const branchField = addForm.querySelector('[data-qmd-field="branch"]');
+    const showGlobs = type === 'directory' || type === 'git';
+    const showBranch = type === 'git';
+    if (globsField) globsField.hidden = !showGlobs;
+    if (branchField) branchField.hidden = !showBranch;
+  }
+
+  function renderSources() {
+    const canManage = canManageSources();
+    const normalized = state.filter.trim().toLowerCase();
+    const filtered = normalized
+      ? state.sources.filter((source) => {
+        const haystack = [
+          source.id,
+          source.name,
+          source.path,
+          source.type,
+          source.description,
+        ].map((item) => String(item || '').toLowerCase()).join(' ');
+        return haystack.includes(normalized);
+      })
+      : state.sources;
+
+    sourceCountEl.textContent = `${filtered.length} of ${state.sources.length} source${state.sources.length === 1 ? '' : 's'}`;
+
+    if (state.sources.length === 0) {
+      sourcesArea.innerHTML = `
+        <div class="qmd-empty-state">
+          <strong>No sources configured.</strong>
+          <span>Add a source to start indexing notes, repos, or documents.</span>
+        </div>
+      `;
       return;
     }
-    const typeLabels = { directory: 'Directory', git: 'Git Repo', url: 'URL', file: 'File' };
-    area.innerHTML = `
-      <table class="data-table" style="width:100%;">
-        <thead><tr><th>Name</th><th>Type</th><th>Path</th><th>Globs</th><th>Enabled</th><th>Actions</th></tr></thead>
-        <tbody>
-          ${sources.map(s => `<tr>
-            <td><strong>${esc(s.name)}</strong><br/><small style="color:var(--text-muted);">${esc(s.id)}</small></td>
-            <td>${esc(typeLabels[s.type] || s.type)}</td>
-            <td style="max-width:20rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(s.path)}">${esc(s.path)}</td>
-            <td>${(s.globs || []).map(g => `<code>${esc(g)}</code>`).join(', ') || '<span style="color:var(--text-muted);">default</span>'}</td>
-            <td>
-              <label class="toggle-switch">
-                <input type="checkbox" ${s.enabled ? 'checked' : ''} data-source-id="${esc(s.id)}" class="qmd-toggle" />
-                <span class="toggle-slider"></span>
-              </label>
-            </td>
-            <td>
-              <button class="btn btn-sm qmd-reindex-btn" data-source-id="${esc(s.id)}" title="Reindex">Reindex</button>
-              <button class="btn btn-sm btn-danger qmd-remove-btn" data-source-id="${esc(s.id)}" title="Remove">Remove</button>
-            </td>
-          </tr>`).join('')}
-        </tbody>
-      </table>
-      <div style="margin-top:0.75rem;">
-        <button class="btn btn-primary btn-sm" id="qmd-reindex-all" type="button">Reindex All</button>
+
+    if (filtered.length === 0) {
+      sourcesArea.innerHTML = `
+        <div class="qmd-empty-state">
+          <strong>No matching sources.</strong>
+          <span>Try a different filter or clear the search input.</span>
+        </div>
+      `;
+      return;
+    }
+
+    sourcesArea.innerHTML = `
+      <div class="qmd-table-wrap">
+        <table>
+          <thead>
+            <tr><th>Name</th><th>Type</th><th>Path</th><th>Pattern</th><th>Status</th><th>Actions</th></tr>
+          </thead>
+          <tbody>
+            ${filtered.map((source) => {
+    const globs = Array.isArray(source.globs) && source.globs.length > 0
+      ? source.globs.map((glob) => `<code>${esc(glob)}</code>`).join(', ')
+      : '<span class="qmd-muted">default</span>';
+    const branch = source.branch ? ` <span class="qmd-muted">(${esc(source.branch)})</span>` : '';
+    return `
+                <tr>
+                  <td>
+                    <strong>${esc(source.name)}</strong>
+                    <div class="qmd-muted">${esc(source.id)}${source.description ? ` • ${esc(source.description)}` : ''}</div>
+                  </td>
+                  <td>${esc(typeLabels[source.type] || source.type)}${branch}</td>
+                  <td class="qmd-path-cell" title="${esc(source.path)}">${esc(source.path)}</td>
+                  <td>${globs}</td>
+                  <td>
+                    <label class="toggle-switch">
+                      <input type="checkbox" ${source.enabled !== false ? 'checked' : ''} data-source-id="${escAttr(source.id)}" class="qmd-toggle" ${canManage ? '' : 'disabled'}>
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </td>
+                  <td class="qmd-actions-cell">
+                    <button class="btn btn-secondary btn-sm qmd-action" data-action="reindex" data-source-id="${escAttr(source.id)}" ${canManage ? '' : 'disabled'}>Reindex</button>
+                    <button class="btn btn-danger btn-sm qmd-action" data-action="remove" data-source-id="${escAttr(source.id)}" ${canManage ? '' : 'disabled'}>Remove</button>
+                  </td>
+                </tr>
+              `;
+  }).join('')}
+          </tbody>
+        </table>
       </div>
     `;
+  }
 
-    // Wire toggle handlers
-    area.querySelectorAll('.qmd-toggle').forEach(el => {
-      el.addEventListener('change', async (e) => {
-        const id = e.target.dataset.sourceId;
-        try {
-          await api.qmdSourceToggle(id, e.target.checked);
-        } catch (err) {
-          alert(err.message);
-          e.target.checked = !e.target.checked;
-        }
-      });
-    });
+  async function refreshStatus() {
+    if (!state.enabled) return;
+    state.status = await api.qmdStatus();
+  }
 
-    // Wire reindex buttons
-    area.querySelectorAll('.qmd-reindex-btn').forEach(el => {
-      el.addEventListener('click', async (e) => {
-        const id = e.target.dataset.sourceId;
-        e.target.disabled = true;
-        e.target.textContent = 'Reindexing...';
-        try {
-          const result = await api.qmdReindex(id);
-          e.target.textContent = result.success ? 'Done' : 'Failed';
-          setTimeout(() => { e.target.textContent = 'Reindex'; e.target.disabled = false; }, 2000);
-        } catch (err) {
-          e.target.textContent = 'Error';
-          setTimeout(() => { e.target.textContent = 'Reindex'; e.target.disabled = false; }, 2000);
-        }
-      });
-    });
+  async function refreshSources() {
+    if (!state.enabled) return;
+    state.sources = await api.qmdSources();
+  }
 
-    // Wire remove buttons
-    area.querySelectorAll('.qmd-remove-btn').forEach(el => {
-      el.addEventListener('click', async (e) => {
-        const id = e.target.dataset.sourceId;
-        if (!confirm(`Remove source "${id}"?`)) return;
-        try {
-          const result = await api.qmdSourceRemove(id);
-          if (result.success) loadQMDSources(panel);
-          else alert(result.message);
-        } catch (err) {
-          alert(err.message);
-        }
-      });
-    });
-
-    // Wire reindex all
-    area.querySelector('#qmd-reindex-all')?.addEventListener('click', async (e) => {
-      e.target.disabled = true;
-      e.target.textContent = 'Reindexing all...';
-      try {
-        const result = await api.qmdReindex();
-        e.target.textContent = result.success ? 'Done' : 'Failed';
-        setTimeout(() => { e.target.textContent = 'Reindex All'; e.target.disabled = false; }, 2000);
-      } catch (err) {
-        e.target.textContent = 'Error';
-        setTimeout(() => { e.target.textContent = 'Reindex All'; e.target.disabled = false; }, 2000);
+  async function refreshAll(showMessage = false) {
+    try {
+      if (state.enabled) {
+        await Promise.all([refreshStatus(), refreshSources()]);
+        state.runtimeAvailable = true;
       }
-    });
-  } catch (err) {
-    area.innerHTML = `<p style="color:var(--danger);">Error loading sources: ${esc(err.message)}</p>`;
+      renderSummary();
+      renderSources();
+      updateManageControls();
+      if (showMessage) setFeedback('Search sources refreshed.', 'success');
+      if (state.enabled && state.status?.installed === false) {
+        setFeedback('QMD is unavailable in this runtime. Run npm install to include bundled QMD, or set assistant.tools.qmd.binaryPath.', 'warning');
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (state.enabled && /not available/i.test(message)) {
+        state.runtimeAvailable = false;
+        setFeedback('QMD is enabled in config but not active in this runtime. Restart GuardianAgent to apply the change.', 'warning');
+      } else {
+        setFeedback(`Failed to refresh search sources: ${message}`, 'error');
+      }
+      renderSummary();
+      renderSources();
+      updateManageControls();
+    }
+  }
+
+  configToggleBtn.addEventListener('click', async () => {
+    const nextEnabled = !state.enabled;
+    configToggleBtn.disabled = true;
+    try {
+      const result = await api.updateConfig({
+        assistant: {
+          tools: {
+            qmd: { enabled: nextEnabled },
+          },
+        },
+      });
+      if (!result.success) {
+        throw new Error(result.message || 'Failed to update QMD setting.');
+      }
+
+      state.enabled = nextEnabled;
+      state.runtimeAvailable = nextEnabled ? state.runtimeAvailable : false;
+      if (sharedConfig) {
+        sharedConfig.assistant = sharedConfig.assistant || {};
+        sharedConfig.assistant.tools = sharedConfig.assistant.tools || {};
+        sharedConfig.assistant.tools.qmd = sharedConfig.assistant.tools.qmd || { sources: [] };
+        sharedConfig.assistant.tools.qmd.enabled = nextEnabled;
+      }
+      if (!nextEnabled) {
+        toggleAddForm(false);
+      }
+      renderSummary();
+      renderSources();
+      updateManageControls();
+      setFeedback(
+        `Saved: QMD ${nextEnabled ? 'enabled' : 'disabled'} in config. Restart GuardianAgent to apply runtime changes.`,
+        'warning',
+      );
+      if (nextEnabled) {
+        void refreshAll();
+      }
+    } catch (err) {
+      setFeedback(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      configToggleBtn.disabled = false;
+    }
+  });
+
+  addBtn.addEventListener('click', () => {
+    if (!state.enabled) {
+      setFeedback('QMD is disabled. Enable it first, then restart GuardianAgent to manage live sources.', 'warning');
+      return;
+    }
+    if (!state.runtimeAvailable) {
+      setFeedback('QMD is enabled in config but not active in this runtime. Restart GuardianAgent to manage sources.', 'warning');
+      return;
+    }
+    toggleAddForm(addWrap.hidden);
+  });
+
+  addCancelBtn.addEventListener('click', () => {
+    addForm.reset();
+    syncAddFormFields();
+    toggleAddForm(false);
+  });
+
+  addForm.querySelector('select[name="type"]')?.addEventListener('change', syncAddFormFields);
+
+  addForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!canManageSources()) {
+      setFeedback('QMD source management is unavailable until QMD is enabled and active in runtime.', 'warning');
+      return;
+    }
+
+    const submitBtn = addForm.querySelector('button[type="submit"]');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Adding...';
+    try {
+      const formData = new FormData(addForm);
+      const sourceId = String(formData.get('id') || '').trim();
+      const sourceType = String(formData.get('type') || 'directory').trim();
+      const sourcePath = String(formData.get('path') || '').trim();
+      const sourceName = String(formData.get('name') || '').trim();
+      if (!/^[a-z0-9][a-z0-9-_]{1,63}$/i.test(sourceId)) {
+        throw new Error('Source ID must be 2-64 chars using letters, numbers, dash, or underscore.');
+      }
+      if (!sourceName) throw new Error('Display Name is required.');
+      if (!sourcePath) throw new Error('Path / URL is required.');
+
+      const supportsGlobs = sourceType === 'directory' || sourceType === 'git';
+      const globsRaw = String(formData.get('globs') || '').trim();
+      const source = {
+        id: sourceId,
+        name: sourceName,
+        type: sourceType,
+        path: sourcePath,
+        globs: supportsGlobs && globsRaw
+          ? globsRaw.split(',').map((glob) => glob.trim()).filter(Boolean)
+          : undefined,
+        branch: sourceType === 'git'
+          ? (String(formData.get('branch') || '').trim() || undefined)
+          : undefined,
+        description: String(formData.get('description') || '').trim() || undefined,
+        enabled: true,
+      };
+
+      const result = await api.qmdSourceAdd(source);
+      if (!result.success) {
+        throw new Error(result.message || 'Failed to add source.');
+      }
+
+      addForm.reset();
+      syncAddFormFields();
+      toggleAddForm(false);
+      setFeedback(`Added source '${sourceId}'.`, 'success');
+      await refreshAll();
+    } catch (err) {
+      setFeedback(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Add Source';
+    }
+  });
+
+  refreshBtn.addEventListener('click', async () => {
+    refreshBtn.disabled = true;
+    try {
+      await refreshAll(true);
+    } finally {
+      refreshBtn.disabled = false;
+    }
+  });
+
+  reindexAllBtn.addEventListener('click', async () => {
+    if (!canManageSources()) {
+      setFeedback('QMD reindex is unavailable until QMD is enabled and active in runtime.', 'warning');
+      return;
+    }
+    reindexAllBtn.disabled = true;
+    reindexAllBtn.textContent = 'Reindexing...';
+    try {
+      const result = await api.qmdReindex();
+      if (!result.success) throw new Error(result.message || 'Reindex all failed.');
+      setFeedback('Reindex started for all sources.', 'success');
+    } catch (err) {
+      setFeedback(`Reindex failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
+    } finally {
+      reindexAllBtn.disabled = false;
+      reindexAllBtn.textContent = 'Reindex All';
+    }
+  });
+
+  filterInput.addEventListener('input', () => {
+    state.filter = filterInput.value || '';
+    renderSources();
+  });
+
+  sourcesArea.addEventListener('change', async (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement) || !target.classList.contains('qmd-toggle')) return;
+    const sourceId = target.dataset.sourceId;
+    if (!sourceId || !canManageSources()) return;
+
+    target.disabled = true;
+    try {
+      const result = await api.qmdSourceToggle(sourceId, target.checked);
+      if (!result.success) throw new Error(result.message || 'Unable to update source status.');
+      const item = state.sources.find((source) => source.id === sourceId);
+      if (item) item.enabled = target.checked;
+      setFeedback(`Source '${sourceId}' ${target.checked ? 'enabled' : 'disabled'}.`, 'success');
+      renderSources();
+    } catch (err) {
+      target.checked = !target.checked;
+      setFeedback(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      target.disabled = false;
+    }
+  });
+
+  sourcesArea.addEventListener('click', async (event) => {
+    const button = event.target instanceof HTMLElement
+      ? event.target.closest('.qmd-action')
+      : null;
+    if (!(button instanceof HTMLButtonElement)) return;
+    if (!canManageSources()) return;
+
+    const action = button.dataset.action;
+    const sourceId = button.dataset.sourceId;
+    if (!action || !sourceId) return;
+
+    button.disabled = true;
+    const originalLabel = button.textContent || '';
+    try {
+      if (action === 'reindex') {
+        button.textContent = 'Reindexing...';
+        const result = await api.qmdReindex(sourceId);
+        if (!result.success) throw new Error(result.message || `Reindex failed for '${sourceId}'.`);
+        setFeedback(`Reindex started for '${sourceId}'.`, 'success');
+      } else if (action === 'remove') {
+        if (!confirm(`Remove source '${sourceId}'?`)) return;
+        button.textContent = 'Removing...';
+        const result = await api.qmdSourceRemove(sourceId);
+        if (!result.success) throw new Error(result.message || `Failed to remove '${sourceId}'.`);
+        state.sources = state.sources.filter((source) => source.id !== sourceId);
+        setFeedback(`Removed source '${sourceId}'.`, 'success');
+        renderSources();
+        renderSummary();
+      }
+    } catch (err) {
+      setFeedback(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      button.disabled = false;
+      button.textContent = originalLabel;
+    }
+  });
+
+  syncAddFormFields();
+  renderSummary();
+  renderSources();
+  updateManageControls();
+  if (!state.enabled) {
+    state.runtimeAvailable = false;
+    updateManageControls();
+    setFeedback('QMD is disabled in config. Enable it here, then restart GuardianAgent to activate indexing.', 'warning');
+  } else {
+    setFeedback('Loading QMD status and sources...', 'muted');
+    void refreshAll();
   }
 }
 
@@ -1145,7 +1531,7 @@ function createTrustPresetPanel(config) {
 function createAuthPanel(config, authStatus, panel) {
   const section = document.createElement('div');
   section.className = 'table-container';
-  const mode = authStatus?.mode || config.channels?.web?.auth?.mode || 'bearer_required';
+  const mode = 'bearer_required';
   const tokenConfigured = !!authStatus?.tokenConfigured;
   const tokenSource = authStatus?.tokenSource || config.channels?.web?.auth?.tokenSource || 'ephemeral';
   const ttl = authStatus?.sessionTtlMinutes ?? config.channels?.web?.auth?.sessionTtlMinutes ?? '';
@@ -1154,7 +1540,7 @@ function createAuthPanel(config, authStatus, panel) {
     <div class="table-header"><h3>Web Authentication</h3><span class="cfg-header-note">Bearer token controls for dashboard and API access</span></div>
     <div class="cfg-center-body">
       <div class="cfg-form-grid">
-        <div class="cfg-field"><label>Auth Mode</label><select id="auth-mode"><option value="bearer_required" ${mode === 'bearer_required' ? 'selected' : ''}>bearer_required</option><option value="localhost_no_auth" ${mode === 'localhost_no_auth' ? 'selected' : ''}>localhost_no_auth</option><option value="disabled" ${mode === 'disabled' ? 'selected' : ''}>disabled</option></select></div>
+        <div class="cfg-field"><label>Auth Mode</label><input id="auth-mode" type="text" readonly value="${mode}"></div>
         <div class="cfg-field"><label>Token Source</label><input id="auth-token-source" type="text" value="${esc(tokenSource)}" readonly></div>
         <div class="cfg-field"><label>Session TTL Minutes</label><input id="auth-ttl" type="number" min="1" placeholder="120" value="${esc(String(ttl))}"></div>
         <div class="cfg-field"><label>Current Token</label><input id="auth-token-preview" type="text" readonly value="${tokenConfigured ? esc(authStatus?.tokenPreview || 'configured') : 'not configured'}"></div>
@@ -1164,13 +1550,11 @@ function createAuthPanel(config, authStatus, panel) {
         <button class="btn btn-primary" id="auth-save" type="button">Save Auth Settings</button>
         <button class="btn btn-secondary" id="auth-rotate" type="button">Rotate Token</button>
         <button class="btn btn-secondary" id="auth-reveal" type="button">Reveal Token</button>
-        <button class="btn btn-secondary" id="auth-revoke" type="button">Disable Auth</button>
         <span id="auth-save-status" class="cfg-save-status"></span>
       </div>
     </div>
   `;
 
-  const modeEl = section.querySelector('#auth-mode');
   const ttlEl = section.querySelector('#auth-ttl');
   const tokenInputEl = section.querySelector('#auth-token-input-new');
   const tokenPreviewEl = section.querySelector('#auth-token-preview');
@@ -1178,7 +1562,11 @@ function createAuthPanel(config, authStatus, panel) {
   const setStatus = (text, color) => { statusEl.textContent = text; statusEl.style.color = color; };
 
   section.querySelector('#auth-save')?.addEventListener('click', async () => {
-    const payload = { mode: modeEl.value, token: tokenInputEl.value.trim() || undefined, sessionTtlMinutes: ttlEl.value ? Number(ttlEl.value) : undefined };
+    const payload = {
+      mode: 'bearer_required',
+      token: tokenInputEl.value.trim() || undefined,
+      sessionTtlMinutes: ttlEl.value ? Number(ttlEl.value) : undefined,
+    };
     setStatus('Saving...', 'var(--text-muted)');
     try {
       const result = await api.updateAuth(payload);
@@ -1203,14 +1591,6 @@ function createAuthPanel(config, authStatus, panel) {
       const result = await api.revealAuthToken();
       if (result.success && result.token) { tokenPreviewEl.value = result.token; setStatus('Token revealed. Keep it private.', 'var(--warning)'); }
       else setStatus('No active token.', 'var(--warning)');
-    } catch (err) { setStatus(err instanceof Error ? err.message : String(err), 'var(--error)'); }
-  });
-
-  section.querySelector('#auth-revoke')?.addEventListener('click', async () => {
-    setStatus('Disabling...', 'var(--text-muted)');
-    try {
-      const result = await api.revokeAuthToken();
-      setStatus(result.message || 'Auth disabled.', result.success ? 'var(--warning)' : 'var(--error)');
     } catch (err) { setStatus(err instanceof Error ? err.message : String(err), 'var(--error)'); }
   });
 

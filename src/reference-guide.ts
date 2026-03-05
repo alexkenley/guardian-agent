@@ -166,7 +166,7 @@ export function getReferenceGuide(): ReferenceGuide {
         title: 'Security And Troubleshooting',
         items: [
           'Guardian blocks prompt-injection and secret leaks by default',
-          'Web dashboard supports configurable auth modes (bearer_required, localhost_no_auth, disabled)',
+          'Web dashboard requires bearer token authentication (no unauthenticated mode)',
           'Manage/rotate token via Config Center Web Authentication panel or CLI /auth rotate',
           'Review events in web Security tab or CLI /audit /security',
           'If file access is denied, add the target root folder in Tools policy Allowed Paths, then retry',

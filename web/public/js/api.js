@@ -99,7 +99,6 @@ export const api = {
   updateAuth:   (input) => requestPrivileged('/api/auth/config', 'auth.config', input || {}),
   rotateAuthToken: () => requestPrivileged('/api/auth/token/rotate', 'auth.rotate', {}),
   revealAuthToken: () => requestPrivileged('/api/auth/token/reveal', 'auth.reveal', {}),
-  revokeAuthToken: () => requestPrivileged('/api/auth/token/revoke', 'auth.revoke', {}),
   agents:       () => request('/api/agents'),
   agentDetail:  (id) => request(`/api/agents/${encodeURIComponent(id)}`),
   audit:        (params = {}) => {

@@ -62,7 +62,7 @@ Input fields:
 - LLM/default provider updates apply live through `runtime.applyLLMConfiguration()`
 - Web search config changes apply immediately — `ToolExecutor.updateWebSearchConfig()` is called from `persistAndApplyConfig`, also clearing the search result cache so the new provider takes effect without restart
 - Telegram channel structural updates still require restart
-- Web auth mode is configurable (`bearer_required|localhost_no_auth|disabled`)
+- Web auth mode is fixed to `bearer_required` (no unauthenticated mode)
 - If no token is configured, runtime may generate an ephemeral token for the current process
 
 ## Telegram Configuration Flow

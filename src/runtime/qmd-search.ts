@@ -9,6 +9,9 @@
 
 import type { QMDConfig, QMDSourceConfig } from '../config/types.js';
 import { sandboxedExec, type SandboxConfig, DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+import { existsSync } from 'node:fs';
 
 // ─── Types ─────────────────────────────────────────────
 
@@ -72,7 +75,7 @@ export class QMDSearchService {
   private installCache: { installed: boolean; version?: string } | null = null;
 
   constructor(config: QMDConfig, sandboxConfig?: SandboxConfig) {
-    this.binary = config.binaryPath ?? 'qmd';
+    this.binary = config.binaryPath ?? resolveBundledQmdBinary() ?? 'qmd';
     this.timeoutMs = config.queryTimeoutMs ?? 30_000;
     this.defaultMode = config.defaultMode ?? 'query';
     this.maxResults = config.maxResults ?? 20;
@@ -284,7 +287,11 @@ export class QMDSearchService {
 
   private async ensureInstalled(): Promise<void> {
     const { installed } = await this.checkInstalled();
-    if (!installed) throw new Error('QMD is not installed or not found in PATH. Install from https://github.com/tobi/qmd');
+    if (!installed) {
+      throw new Error(
+        'QMD is not available. Install app dependencies to get bundled QMD (@tobilu/qmd), or set assistant.tools.qmd.binaryPath to a valid qmd binary.',
+      );
+    }
   }
 
   private async execArgs(args: string[], timeout?: number): Promise<{ stdout: string; stderr: string }> {
@@ -302,7 +309,37 @@ export class QMDSearchService {
 }
 
 function shellQuote(value: string): string {
+  if (process.platform === 'win32') {
+    if (value === '') return '""';
+    if (/^[a-zA-Z0-9_\\\-/.:=@]+$/.test(value)) return value;
+    // cmd.exe quoting
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+
   if (value === '') return "''";
   if (/^[a-zA-Z0-9_\-/.:=@]+$/.test(value)) return value;
+  // POSIX shell quoting
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function resolveBundledQmdBinary(): string | undefined {
+  const exeName = process.platform === 'win32' ? 'qmd.cmd' : 'qmd';
+  const require = createRequire(import.meta.url);
+
+  try {
+    const pkgPath = require.resolve('@tobilu/qmd/package.json');
+    const pkgDir = dirname(pkgPath);
+    const binShim = join(pkgDir, '..', '..', '.bin', exeName);
+    if (existsSync(binShim)) {
+      return binShim;
+    }
+    const packageBin = join(pkgDir, 'qmd');
+    if (existsSync(packageBin)) {
+      return packageBin;
+    }
+  } catch {
+    // optional dependency is not installed
+  }
+
+  return undefined;
 }

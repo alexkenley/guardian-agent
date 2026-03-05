@@ -111,8 +111,8 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   }
 
   const webAuth = config.channels.web?.auth;
-  if (webAuth?.mode && !['bearer_required', 'localhost_no_auth', 'disabled'].includes(webAuth.mode)) {
-    errors.push("channels.web.auth.mode must be 'bearer_required', 'localhost_no_auth', or 'disabled'");
+  if (webAuth?.mode && webAuth.mode !== 'bearer_required') {
+    errors.push("channels.web.auth.mode must be 'bearer_required'");
   }
   if (webAuth?.sessionTtlMinutes !== undefined && webAuth.sessionTtlMinutes < 1) {
     errors.push('channels.web.auth.sessionTtlMinutes must be >= 1');
@@ -474,6 +474,11 @@ export function loadConfigFromFile(filePath: string): GuardianAgentConfig {
         },
       };
     }
+  }
+
+  // Backward compatibility: legacy auth modes were removed; enforce strict bearer auth.
+  if (merged.channels.web?.auth?.mode && merged.channels.web.auth.mode !== 'bearer_required') {
+    merged.channels.web.auth.mode = 'bearer_required';
   }
 
   const errors = validateConfig(merged);
