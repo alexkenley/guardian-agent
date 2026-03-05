@@ -36,6 +36,8 @@ import { ThreatIntelService } from './runtime/threat-intel.js';
 import { ConnectorPlaybookService } from './runtime/connectors.js';
 import { installTemplate, listTemplates, autoInstallAllTemplates } from './runtime/builtin-packs.js';
 import { DeviceInventoryService } from './runtime/device-inventory.js';
+import { NetworkBaselineService, type NetworkAnomalyReport } from './runtime/network-baseline.js';
+import { NetworkTrafficService } from './runtime/network-traffic.js';
 import { ScheduledTaskService } from './runtime/scheduled-tasks.js';
 import { MoltbookConnector } from './runtime/moltbook-connector.js';
 import { AssistantOrchestrator } from './runtime/orchestrator.js';
@@ -54,6 +56,7 @@ import { TRUST_PRESETS, type TrustPresetName } from './guardian/trust-presets.js
 import type { Capability } from './guardian/capabilities.js';
 import { createProviders } from './llm/provider.js';
 import { hashObjectSha256Hex } from './util/crypto-guardrails.js';
+import { detectCapabilities as detectSandboxCapabilities, DEFAULT_SANDBOX_CONFIG, type SandboxConfig } from './sandbox/index.js';
 
 const log = createLogger('main');
 
@@ -720,6 +723,35 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
           allowActiveResponse: config.assistant.threatIntel.moltbook.allowActiveResponse,
         },
       },
+      network: {
+        deviceIntelligence: {
+          enabled: config.assistant.network.deviceIntelligence.enabled,
+          ouiDatabase: config.assistant.network.deviceIntelligence.ouiDatabase,
+          autoClassify: config.assistant.network.deviceIntelligence.autoClassify,
+        },
+        baseline: {
+          enabled: config.assistant.network.baseline.enabled,
+          minSnapshotsForBaseline: config.assistant.network.baseline.minSnapshotsForBaseline,
+          dedupeWindowMs: config.assistant.network.baseline.dedupeWindowMs,
+        },
+        fingerprinting: {
+          enabled: config.assistant.network.fingerprinting.enabled,
+          bannerTimeout: config.assistant.network.fingerprinting.bannerTimeout,
+          maxConcurrentPerDevice: config.assistant.network.fingerprinting.maxConcurrentPerDevice,
+          autoFingerprint: config.assistant.network.fingerprinting.autoFingerprint,
+        },
+        wifi: {
+          enabled: config.assistant.network.wifi.enabled,
+          platform: config.assistant.network.wifi.platform,
+          scanInterval: config.assistant.network.wifi.scanInterval,
+        },
+        trafficAnalysis: {
+          enabled: config.assistant.network.trafficAnalysis.enabled,
+          dataSource: config.assistant.network.trafficAnalysis.dataSource,
+          flowRetention: config.assistant.network.trafficAnalysis.flowRetention,
+        },
+        connectionCount: config.assistant.network.connections.length,
+      },
       connectors: {
         enabled: config.assistant.connectors.enabled,
         executionMode: config.assistant.connectors.executionMode,
@@ -782,6 +814,8 @@ function buildDashboardCallbacks(
   configPath: string,
   router: MessageRouter,
   deviceInventory: DeviceInventoryService,
+  networkBaseline: NetworkBaselineService,
+  runNetworkAnalysis: (source: string) => NetworkAnomalyReport,
 ): DashboardCallbacks {
   const loadRawConfig = (): Record<string, unknown> => {
     if (!existsSync(configPath)) return {};
@@ -1461,6 +1495,14 @@ function buildDashboardCallbacks(
       // Feed step outputs to device inventory
       if (result.run?.steps) {
         deviceInventory.ingestPlaybookResults(result.run.steps);
+        const hasNetworkScanSteps = result.run.steps.some((step) =>
+          step.toolName === 'net_arp_scan'
+          || step.toolName === 'net_port_check'
+          || step.toolName === 'net_dns_lookup',
+        );
+        if (hasNetworkScanSteps) {
+          runNetworkAnalysis('playbook-run:web');
+        }
       }
       return result;
     },
@@ -1507,11 +1549,44 @@ function buildDashboardCallbacks(
       if (result.run?.steps) {
         deviceInventory.ingestPlaybookResults(result.run.steps);
       }
+      const report = runNetworkAnalysis('network-scan:web');
       return {
         success: result.success,
-        message: result.message,
+        message: report.anomalies.length > 0
+          ? `${result.message} (${report.anomalies.length} network anomalies detected)`
+          : result.message,
         devicesFound: deviceInventory.size,
       };
+    },
+
+    onNetworkBaseline: () => networkBaseline.getSnapshot(),
+
+    onNetworkThreats: (args) => {
+      const includeAcknowledged = !!args?.includeAcknowledged;
+      const parsedLimit = Number(args?.limit ?? 100);
+      const limit = Number.isFinite(parsedLimit) ? Math.max(1, Math.min(500, parsedLimit)) : 100;
+      const alerts = networkBaseline.listAlerts({ includeAcknowledged, limit });
+      const bySeverity = {
+        low: alerts.filter((a) => a.severity === 'low').length,
+        medium: alerts.filter((a) => a.severity === 'medium').length,
+        high: alerts.filter((a) => a.severity === 'high').length,
+        critical: alerts.filter((a) => a.severity === 'critical').length,
+      };
+      const baseline = networkBaseline.getSnapshot();
+      return {
+        alerts,
+        activeAlertCount: alerts.length,
+        bySeverity,
+        baselineReady: baseline.baselineReady,
+        snapshotCount: baseline.snapshotCount,
+      };
+    },
+
+    onNetworkThreatAcknowledge: (alertId) => {
+      if (!alertId.trim()) {
+        return { success: false, message: 'alertId is required' };
+      }
+      return networkBaseline.acknowledgeAlert(alertId.trim());
     },
 
     onSSESubscribe: (listener: SSEListener): (() => void) => {
@@ -1522,6 +1597,12 @@ function buildDashboardCallbacks(
         listener({ type: 'audit', data: event });
       });
       cleanups.push(unsubAudit);
+
+      const onSecurityAlert = (event: import('./queue/event-bus.js').AgentEvent): void => {
+        listener({ type: 'security.alert', data: event.payload });
+      };
+      runtime.eventBus.subscribeByType('security:network:threat', onSecurityAlert);
+      cleanups.push(() => runtime.eventBus.unsubscribeByType('security:network:threat', onSecurityAlert));
 
       // Metrics every 5s
       const metricsInterval = setInterval(() => {
@@ -2451,11 +2532,30 @@ async function main(): Promise<void> {
     watchlist: config.assistant.threatIntel.watchlist,
     forumConnectors: [moltbookConnector],
   });
+  // ─── OS-Level Process Sandbox ───────────────────────────────
+  const sandboxConfig: SandboxConfig = {
+    ...DEFAULT_SANDBOX_CONFIG,
+    ...(config.assistant.tools.sandbox ?? {}),
+    resourceLimits: {
+      ...DEFAULT_SANDBOX_CONFIG.resourceLimits,
+      ...(config.assistant.tools.sandbox?.resourceLimits ?? {}),
+    },
+  };
+  const sandboxCaps = await detectSandboxCapabilities();
+  if (sandboxConfig.enabled) {
+    log.info(
+      { bwrap: sandboxCaps.bwrapAvailable, bwrapVersion: sandboxCaps.bwrapVersion, profile: sandboxConfig.mode },
+      'OS-level process sandbox active',
+    );
+  } else {
+    log.warn('OS-level process sandbox is disabled — child processes run unsandboxed');
+  }
+
   // ─── MCP Client Manager ─────────────────────────────────────
   let mcpManager: MCPClientManager | undefined;
   const mcpConfig = config.assistant.tools.mcp;
   if (mcpConfig?.enabled && mcpConfig.servers.length > 0) {
-    mcpManager = new MCPClientManager();
+    mcpManager = new MCPClientManager(sandboxConfig);
     for (const server of mcpConfig.servers) {
       const serverConfig: MCPServerConfig = {
         id: server.id,
@@ -2491,7 +2591,7 @@ async function main(): Promise<void> {
   const qmdConfig = config.assistant.tools.qmd;
   if (qmdConfig?.enabled) {
     const { QMDSearchService } = await import('./runtime/qmd-search.js');
-    qmdSearch = new QMDSearchService(qmdConfig);
+    qmdSearch = new QMDSearchService(qmdConfig, sandboxConfig);
     const installCheck = await qmdSearch.checkInstalled();
     if (installCheck.installed) {
       log.info({ version: installCheck.version }, 'QMD search engine detected');
@@ -2506,6 +2606,163 @@ async function main(): Promise<void> {
       log.warn('QMD enabled in config but binary not found in PATH');
     }
   }
+
+  // Device inventory — tracks discovered network devices from playbook runs
+  const deviceInventory = new DeviceInventoryService();
+  await deviceInventory.load().catch(() => {});
+  deviceInventory.onEvent((event) => {
+    runtime.auditLog.record({
+      type: 'action_allowed',
+      severity: event.type === 'network_new_device' ? 'info' : 'warn',
+      agentId: 'system',
+      details: {
+        event: event.type,
+        ip: event.device.ip,
+        mac: event.device.mac,
+        reason: event.type === 'network_new_device'
+          ? `New device discovered: ${event.device.ip} (${event.device.mac})`
+          : `Device went offline: ${event.device.ip} (${event.device.mac})`,
+      },
+    });
+  });
+
+  // Network baseline + anomaly detection
+  const networkBaseline = new NetworkBaselineService({
+    minSnapshotsForBaseline: config.assistant.network.baseline.minSnapshotsForBaseline,
+    dedupeWindowMs: config.assistant.network.baseline.dedupeWindowMs,
+    rules: {
+      new_device: {
+        enabled: config.assistant.network.baseline.anomalyRules.newDevice.enabled,
+        severity: config.assistant.network.baseline.anomalyRules.newDevice.severity,
+      },
+      port_change: {
+        enabled: config.assistant.network.baseline.anomalyRules.portChange.enabled,
+        severity: config.assistant.network.baseline.anomalyRules.portChange.severity,
+      },
+      arp_conflict: {
+        enabled: config.assistant.network.baseline.anomalyRules.arpSpoofing.enabled,
+        severity: config.assistant.network.baseline.anomalyRules.arpSpoofing.severity,
+      },
+      unusual_service: {
+        enabled: config.assistant.network.baseline.anomalyRules.unusualService.enabled,
+        severity: config.assistant.network.baseline.anomalyRules.unusualService.severity,
+      },
+      device_gone: {
+        enabled: config.assistant.network.baseline.anomalyRules.deviceGone.enabled,
+        severity: config.assistant.network.baseline.anomalyRules.deviceGone.severity,
+      },
+      mass_port_open: {
+        enabled: config.assistant.network.baseline.anomalyRules.massPortOpen.enabled,
+        severity: config.assistant.network.baseline.anomalyRules.massPortOpen.severity,
+      },
+    },
+  });
+  await networkBaseline.load().catch(() => {});
+
+  const networkTraffic = new NetworkTrafficService({
+    flowRetentionMs: config.assistant.network.trafficAnalysis.flowRetention,
+    rules: {
+      dataExfiltration: config.assistant.network.trafficAnalysis.threatRules.dataExfiltration,
+      portScanning: config.assistant.network.trafficAnalysis.threatRules.portScanning,
+      beaconing: config.assistant.network.trafficAnalysis.threatRules.beaconing,
+    },
+  });
+  await networkTraffic.load().catch(() => {});
+
+  let lastNetworkAlertEmitAt = 0;
+
+  const runNetworkAnalysis = (source: string): NetworkAnomalyReport => {
+    const devices = deviceInventory.listDevices();
+    const report = networkBaseline.runSnapshot(devices);
+    const now = Date.now();
+
+    runtime.eventBus.emit({
+      type: 'network:scan:complete',
+      sourceAgentId: 'network-sentinel',
+      targetAgentId: '*',
+      payload: {
+        source,
+        deviceCount: devices.length,
+        snapshotCount: report.snapshotCount,
+        baselineReady: report.baselineReady,
+        anomalyCount: report.anomalies.length,
+        riskScore: report.riskScore,
+      },
+      timestamp: now,
+    }).catch(() => {});
+
+    const emittedDedupeKeys = new Set<string>();
+    for (const anomaly of report.anomalies) {
+      emittedDedupeKeys.add(anomaly.dedupeKey);
+      const auditSeverity = anomaly.severity === 'critical'
+        ? 'critical'
+        : anomaly.severity === 'high' || anomaly.severity === 'medium'
+          ? 'warn'
+          : 'info';
+
+      runtime.auditLog.record({
+        type: 'anomaly_detected',
+        severity: auditSeverity,
+        agentId: 'network-sentinel',
+        details: {
+          source: 'network_sentinel',
+          anomalyType: anomaly.type,
+          description: anomaly.description,
+          networkSeverity: anomaly.severity,
+          dedupeKey: anomaly.dedupeKey,
+          riskScore: report.riskScore,
+          evidence: anomaly.evidence,
+        },
+      });
+
+      runtime.eventBus.emit({
+        type: 'security:network:anomaly',
+        sourceAgentId: 'network-sentinel',
+        targetAgentId: '*',
+        payload: { ...anomaly, source, riskScore: report.riskScore },
+        timestamp: now,
+      }).catch(() => {});
+
+      if (anomaly.severity !== 'low') {
+        runtime.eventBus.emit({
+          type: 'security:network:threat',
+          sourceAgentId: 'network-sentinel',
+          targetAgentId: '*',
+          payload: { ...anomaly, source, riskScore: report.riskScore },
+          timestamp: now,
+        }).catch(() => {});
+      }
+    }
+
+    const freshAlerts = networkBaseline
+      .listAlerts({ includeAcknowledged: false, limit: 200 })
+      .filter((alert) => alert.lastSeenAt > lastNetworkAlertEmitAt && !emittedDedupeKeys.has(alert.dedupeKey));
+    for (const alert of freshAlerts) {
+      runtime.eventBus.emit({
+        type: 'security:network:anomaly',
+        sourceAgentId: 'network-sentinel',
+        targetAgentId: '*',
+        payload: { ...alert, source, riskScore: report.riskScore },
+        timestamp: now,
+      }).catch(() => {});
+      if (alert.severity !== 'low') {
+        runtime.eventBus.emit({
+          type: 'security:network:threat',
+          sourceAgentId: 'network-sentinel',
+          targetAgentId: '*',
+          payload: { ...alert, source, riskScore: report.riskScore },
+          timestamp: now,
+        }).catch(() => {});
+      }
+    }
+    if (freshAlerts.length > 0) {
+      lastNetworkAlertEmitAt = Math.max(lastNetworkAlertEmitAt, ...freshAlerts.map((alert) => alert.lastSeenAt));
+    } else {
+      lastNetworkAlertEmitAt = Math.max(lastNetworkAlertEmitAt, now);
+    }
+
+    return report;
+  };
 
   const toolExecutorOptions: ToolExecutorOptions = {
     enabled: config.assistant.tools.enabled,
@@ -2522,24 +2779,26 @@ async function main(): Promise<void> {
     conversationService: conversations,
     agentMemoryStore,
     qmdSearch,
+    deviceInventory,
+    networkBaseline,
+    networkTraffic,
+    networkConfig: config.assistant.network,
     mcpManager,
+    sandboxConfig,
     threatIntel,
     onCheckAction: ({ type, params, agentId, origin }) => {
-      const capabilities = type === 'read_file'
-        ? ['read_files']
-        : type === 'write_file'
-          ? ['write_files']
-          : type === 'execute_command'
-            ? ['execute_commands']
-            : type === 'http_request'
-              ? ['network_access']
-              : type === 'read_email'
-                ? ['read_email']
-                : type === 'draft_email'
-                  ? ['draft_email']
-                  : type === 'send_email'
-                    ? ['send_email']
-                    : [];
+      const capMap: Record<string, string[]> = {
+        read_file: ['read_files'],
+        write_file: ['write_files'],
+        execute_command: ['execute_commands'],
+        http_request: ['network_access'],
+        network_probe: ['network_access'],
+        system_info: ['execute_commands'],
+        read_email: ['read_email'],
+        draft_email: ['draft_email'],
+        send_email: ['send_email'],
+      };
+      const capabilities = capMap[type] ?? [];
       const result = runtime.guardian.check({
         type,
         agentId: agentId || 'assistant-tools',
@@ -2579,25 +2838,6 @@ async function main(): Promise<void> {
     runTool: async (request) => toolExecutor.runTool(request),
   });
 
-  // Device inventory — tracks discovered network devices from playbook runs
-  const deviceInventory = new DeviceInventoryService();
-  deviceInventory.load().catch(() => {});
-  deviceInventory.onEvent((event) => {
-    runtime.auditLog.record({
-      type: 'action_allowed',
-      severity: event.type === 'network_new_device' ? 'info' : 'warn',
-      agentId: 'system',
-      details: {
-        event: event.type,
-        ip: event.device.ip,
-        mac: event.device.mac,
-        reason: event.type === 'network_new_device'
-          ? `New device discovered: ${event.device.ip} (${event.device.mac})`
-          : `Device went offline: ${event.device.ip} (${event.device.mac})`,
-      },
-    });
-  });
-
   // Scheduled tasks — unified scheduling for tools and playbooks
   const scheduledTasks = new ScheduledTaskService({
     scheduler: runtime.scheduler,
@@ -2605,6 +2845,9 @@ async function main(): Promise<void> {
     playbookExecutor: connectors,
     deviceInventory,
     eventBus: runtime.eventBus,
+    onNetworkScanComplete: () => {
+      runNetworkAnalysis('scheduled-task');
+    },
   });
   await scheduledTasks.load().catch(() => {});
 
@@ -2858,6 +3101,8 @@ async function main(): Promise<void> {
     configPath,
     router,
     deviceInventory,
+    networkBaseline,
+    runNetworkAnalysis,
   );
 
   // Killswitch: triggers graceful shutdown from CLI or web

@@ -30,6 +30,7 @@ import type { ToolApprovalRequest, ToolCategory, ToolDefinition, ToolJobRecord, 
 import type { ScheduledTaskDefinition, ScheduledTaskCreateInput, ScheduledTaskUpdateInput, ScheduledTaskPreset, ScheduledTaskStatus } from '../runtime/scheduled-tasks.js';
 import type { QMDStatusResponse } from '../runtime/qmd-search.js';
 import type { QMDSourceConfig } from '../config/types.js';
+import type { NetworkAlert, NetworkBaselineSnapshot } from '../runtime/network-baseline.js';
 
 /** Agent info returned by GET /api/agents. */
 export interface DashboardAgentInfo {
@@ -125,6 +126,35 @@ export interface RedactedConfig {
         baseUrl?: string;
         allowActiveResponse: boolean;
       };
+    };
+    network: {
+      deviceIntelligence: {
+        enabled: boolean;
+        ouiDatabase: 'bundled' | 'remote';
+        autoClassify: boolean;
+      };
+      baseline: {
+        enabled: boolean;
+        minSnapshotsForBaseline: number;
+        dedupeWindowMs: number;
+      };
+      fingerprinting: {
+        enabled: boolean;
+        bannerTimeout: number;
+        maxConcurrentPerDevice: number;
+        autoFingerprint: boolean;
+      };
+      wifi: {
+        enabled: boolean;
+        platform: 'auto' | 'linux' | 'macos' | 'windows';
+        scanInterval: number;
+      };
+      trafficAnalysis: {
+        enabled: boolean;
+        dataSource: 'ss' | 'conntrack' | 'router-api';
+        flowRetention: number;
+      };
+      connectionCount: number;
     };
     connectors: {
       enabled: boolean;
@@ -271,7 +301,7 @@ export interface DashboardAssistantState {
 
 /** SSE event pushed to dashboard clients. */
 export interface SSEEvent {
-  type: 'audit' | 'metrics' | 'watchdog' | 'chat.thinking' | 'chat.tool_call' | 'chat.token' | 'chat.done' | 'chat.error';
+  type: 'audit' | 'metrics' | 'watchdog' | 'security.alert' | 'chat.thinking' | 'chat.tool_call' | 'chat.token' | 'chat.done' | 'chat.error';
   data: unknown;
 }
 
@@ -398,8 +428,33 @@ export interface DashboardCallbacks {
   onConnectorsState?: (args?: { limitRuns?: number }) => ConnectorFrameworkState;
   onConnectorsTemplates?: () => Array<{ id: string; name: string; description: string; category: string; installed: boolean; playbookCount: number }>;
   onConnectorsTemplateInstall?: (templateId: string) => { success: boolean; message: string };
-  onNetworkDevices?: () => { devices: Array<{ ip: string; mac: string; hostname: string | null; openPorts: number[]; firstSeen: number; lastSeen: number; status: 'online' | 'offline' }> };
+  onNetworkDevices?: () => {
+    devices: Array<{
+      ip: string;
+      mac: string;
+      hostname: string | null;
+      openPorts: number[];
+      vendor?: string;
+      deviceType?: string;
+      deviceTypeConfidence?: number;
+      services?: Array<{ port: number; protocol: 'tcp' | 'udp'; service: string; version?: string }>;
+      userLabel?: string;
+      trusted?: boolean;
+      firstSeen: number;
+      lastSeen: number;
+      status: 'online' | 'offline';
+    }>;
+  };
   onNetworkScan?: () => Promise<{ success: boolean; message: string; devicesFound: number }>;
+  onNetworkBaseline?: () => NetworkBaselineSnapshot;
+  onNetworkThreats?: (args?: { includeAcknowledged?: boolean; limit?: number }) => {
+    alerts: NetworkAlert[];
+    activeAlertCount: number;
+    bySeverity: { low: number; medium: number; high: number; critical: number };
+    baselineReady: boolean;
+    snapshotCount: number;
+  };
+  onNetworkThreatAcknowledge?: (alertId: string) => { success: boolean; message: string };
   onConnectorsSettingsUpdate?: (input: {
     enabled?: boolean;
     executionMode?: ConnectorExecutionMode;

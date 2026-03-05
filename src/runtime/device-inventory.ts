@@ -10,12 +10,26 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
+import {
+  classifyDevice,
+  lookupOuiVendor,
+  mapPortsToServices,
+  type DeviceType,
+  type ServiceInfo,
+} from './network-intelligence.js';
+import { mergeFingerprintsIntoServices, type BannerFingerprint } from './network-fingerprinting.js';
 
 export interface DiscoveredDevice {
   ip: string;
   mac: string;
   hostname: string | null;
   openPorts: number[];
+  vendor?: string;
+  deviceType?: DeviceType;
+  deviceTypeConfidence?: number;
+  services?: ServiceInfo[];
+  userLabel?: string;
+  trusted?: boolean;
   firstSeen: number;
   lastSeen: number;
   status: 'online' | 'offline';
@@ -76,6 +90,7 @@ export class DeviceInventoryService {
               existing.ip = device.ip;
               existing.lastSeen = now;
               existing.status = 'online';
+              this.refreshIntelligence(existing);
             } else {
               const newDevice: DiscoveredDevice = {
                 ip: device.ip,
@@ -86,6 +101,7 @@ export class DeviceInventoryService {
                 lastSeen: now,
                 status: 'online',
               };
+              this.refreshIntelligence(newDevice);
               this.devices.set(key, newDevice);
               this.emit({ type: 'network_new_device', device: newDevice, timestamp: now });
             }
@@ -102,6 +118,7 @@ export class DeviceInventoryService {
               device.openPorts = portOutput.results
                 .filter((r) => r.open)
                 .map((r) => r.port);
+              this.refreshIntelligence(device);
               break;
             }
           }
@@ -114,6 +131,7 @@ export class DeviceInventoryService {
           for (const device of this.devices.values()) {
             if (device.ip === dnsOutput.target) {
               device.hostname = dnsOutput.records[0];
+              this.refreshIntelligence(device);
               break;
             }
           }
@@ -122,6 +140,31 @@ export class DeviceInventoryService {
     }
 
     this.persist().catch(() => {});
+  }
+
+  /**
+   * Enrich a device record by IP with additional metadata/fingerprinting data.
+   * Returns true when a device was found and updated.
+   */
+  updateDeviceByIp(ip: string, patch: {
+    hostname?: string | null;
+    openPorts?: number[];
+    vendor?: string;
+    fingerprints?: BannerFingerprint[];
+  }): boolean {
+    for (const device of this.devices.values()) {
+      if (device.ip !== ip) continue;
+      if (patch.hostname !== undefined) device.hostname = patch.hostname;
+      if (Array.isArray(patch.openPorts)) device.openPorts = patch.openPorts;
+      if (patch.vendor) device.vendor = patch.vendor;
+      this.refreshIntelligence(device);
+      if (Array.isArray(patch.fingerprints) && patch.fingerprints.length > 0 && device.services) {
+        device.services = mergeFingerprintsIntoServices(device.services, patch.fingerprints);
+      }
+      this.persist().catch(() => {});
+      return true;
+    }
+    return false;
   }
 
   /** Mark devices not seen recently as offline and emit events. */
@@ -151,7 +194,23 @@ export class DeviceInventoryService {
       if (Array.isArray(data)) {
         for (const device of data) {
           if (device.mac) {
-            this.devices.set(device.mac.toLowerCase(), device);
+            const normalized: DiscoveredDevice = {
+              ip: device.ip,
+              mac: device.mac.toLowerCase(),
+              hostname: device.hostname ?? null,
+              openPorts: Array.isArray(device.openPorts) ? device.openPorts : [],
+              firstSeen: device.firstSeen ?? this.now(),
+              lastSeen: device.lastSeen ?? this.now(),
+              status: device.status === 'offline' ? 'offline' : 'online',
+              vendor: device.vendor,
+              deviceType: device.deviceType,
+              deviceTypeConfidence: device.deviceTypeConfidence,
+              services: device.services,
+              userLabel: device.userLabel,
+              trusted: device.trusted,
+            };
+            this.refreshIntelligence(normalized);
+            this.devices.set(normalized.mac, normalized);
           }
         }
       }
@@ -169,5 +228,18 @@ export class DeviceInventoryService {
     } catch {
       // Best effort — don't crash
     }
+  }
+
+  /** Refresh derived device intelligence fields from current observed data. */
+  private refreshIntelligence(device: DiscoveredDevice): void {
+    device.vendor = device.vendor ?? lookupOuiVendor(device.mac);
+    device.services = mapPortsToServices(device.openPorts);
+    const classification = classifyDevice({
+      vendor: device.vendor,
+      hostname: device.hostname,
+      openPorts: device.openPorts,
+    });
+    device.deviceType = classification.deviceType;
+    device.deviceTypeConfidence = classification.confidence;
   }
 }

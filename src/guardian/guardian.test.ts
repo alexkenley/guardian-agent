@@ -240,10 +240,24 @@ describe('Guardian', () => {
       expect(result!.reason).toContain("lacks capability 'write_files'");
     });
 
-    it('should pass through unknown action types', () => {
+    it('should deny unknown action types by default', () => {
       const controller = new CapabilityController();
       const action: AgentAction = {
         type: 'custom_action',
+        agentId: 'test',
+        capabilities: [],
+        params: {},
+      };
+      const result = controller.check(action);
+      expect(result).not.toBeNull();
+      expect(result!.allowed).toBe(false);
+      expect(result!.reason).toContain('Unknown action type');
+    });
+
+    it('should pass through internal runtime actions', () => {
+      const controller = new CapabilityController();
+      const action: AgentAction = {
+        type: 'message_dispatch',
         agentId: 'test',
         capabilities: [],
         params: {},

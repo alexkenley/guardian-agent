@@ -330,7 +330,7 @@ npm start             # Run compiled (production)
 
 Full documentation in `docs/architecture/`:
 - [Overview](docs/architecture/OVERVIEW.md) — system architecture and component map
-- [Security](docs/architecture/SECURITY.md) — three-layer defense system details
+- [Security](SECURITY.md) — three-layer defense system details
 - [Guardian API](docs/architecture/GUARDIAN-API.md) — complete API reference
 - [Decisions](docs/architecture/DECISIONS.md) — architecture decision records
 - [SOUL](SOUL.md) — non-negotiable operating intent and guardrail constitution

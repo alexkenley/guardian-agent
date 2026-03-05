@@ -121,6 +121,7 @@ const sseListeners = {
   audit: [],
   metrics: [],
   watchdog: [],
+  'security.alert': [],
   'chat.thinking': [],
   'chat.tool_call': [],
   'chat.token': [],

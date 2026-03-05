@@ -12,6 +12,7 @@ export async function renderNetwork(container) {
   createTabs(container, [
     { id: 'connectors', label: 'Connectors', render: renderConnectorsTab },
     { id: 'devices', label: 'Devices', render: renderDevicesTab },
+    { id: 'threats', label: 'Threats', render: renderThreatsTab },
   ]);
 }
 
@@ -427,6 +428,10 @@ async function renderDevicesTab(panel) {
           <div class="card-title">Offline</div>
           <div class="card-value">${devices.filter(d => d.status === 'offline').length}</div>
         </div>
+        <div class="status-card accent">
+          <div class="card-title">Trusted</div>
+          <div class="card-value">${devices.filter(d => d.trusted).length}</div>
+        </div>
       </div>
 
       <div class="table-container">
@@ -440,17 +445,20 @@ async function renderDevicesTab(panel) {
         <div id="network-scan-status" style="padding:0 1rem"></div>
         <table>
           <thead>
-            <tr><th>Status</th><th>IP Address</th><th>MAC Address</th><th>Hostname</th><th>Open Ports</th><th>First Seen</th><th>Last Seen</th></tr>
+            <tr><th>Status</th><th>IP Address</th><th>MAC Address</th><th>Hostname</th><th>Vendor</th><th>Type</th><th>Trust</th><th>Open Ports</th><th>First Seen</th><th>Last Seen</th></tr>
           </thead>
           <tbody>
             ${devices.length === 0
-              ? '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No devices discovered. Click "Scan Now" above to discover devices on your network.</td></tr>'
+              ? '<tr><td colspan="10" style="text-align:center;color:var(--text-muted)">No devices discovered. Click "Scan Now" above to discover devices on your network.</td></tr>'
               : devices.map(d => `
                 <tr>
                   <td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${d.status === 'online' ? 'var(--success)' : 'var(--text-muted)'};margin-right:4px"></span>${esc(d.status)}</td>
                   <td style="font-family:monospace">${esc(d.ip)}</td>
                   <td style="font-family:monospace">${esc(d.mac)}</td>
                   <td>${esc(d.hostname || '-')}</td>
+                  <td>${esc(d.vendor || '-')}</td>
+                  <td>${esc(d.deviceType || 'unknown')}${d.deviceTypeConfidence ? ` (${Math.round(Number(d.deviceTypeConfidence) * 100)}%)` : ''}</td>
+                  <td>${d.trusted ? '<span class="badge badge-running">trusted</span>' : '<span class="badge badge-idle">untrusted</span>'}</td>
                   <td style="font-family:monospace">${d.openPorts && d.openPorts.length > 0 ? esc(d.openPorts.join(', ')) : '-'}</td>
                   <td>${formatTime(d.firstSeen)}</td>
                   <td>${formatTime(d.lastSeen)}</td>
@@ -485,6 +493,129 @@ async function renderDevicesTab(panel) {
   }
 }
 
+// ─── Threats Tab ─────────────────────────────────────────
+
+async function renderThreatsTab(panel) {
+  panel.innerHTML = '<div class="loading">Loading...</div>';
+
+  try {
+    const [baseline, threatState] = await Promise.all([
+      api.networkBaseline().catch(() => null),
+      api.networkThreats({ limit: 100 }).catch(() => null),
+    ]);
+    const safeBaseline = baseline || {
+      snapshotCount: 0,
+      minSnapshotsForBaseline: 3,
+      baselineReady: false,
+      lastUpdatedAt: 0,
+      knownDevices: [],
+    };
+    const safeThreatState = threatState || {
+      alerts: [],
+      activeAlertCount: 0,
+      bySeverity: { low: 0, medium: 0, high: 0, critical: 0 },
+      baselineReady: safeBaseline.baselineReady,
+      snapshotCount: safeBaseline.snapshotCount,
+    };
+
+    panel.innerHTML = `
+      <div class="intel-summary-grid">
+        <div class="status-card ${safeBaseline.baselineReady ? 'success' : 'warning'}">
+          <div class="card-title">Baseline</div>
+          <div class="card-value">${safeBaseline.baselineReady ? 'Ready' : 'Learning'}</div>
+          <div class="card-subtitle">${safeBaseline.snapshotCount}/${safeBaseline.minSnapshotsForBaseline} snapshots</div>
+        </div>
+        <div class="status-card info">
+          <div class="card-title">Known Devices</div>
+          <div class="card-value">${safeBaseline.knownDevices.length}</div>
+          <div class="card-subtitle">Updated: ${safeBaseline.lastUpdatedAt ? formatTime(safeBaseline.lastUpdatedAt) : 'never'}</div>
+        </div>
+        <div class="status-card ${safeThreatState.activeAlertCount > 0 ? 'error' : 'success'}">
+          <div class="card-title">Active Alerts</div>
+          <div class="card-value">${safeThreatState.activeAlertCount}</div>
+          <div class="card-subtitle">Critical: ${safeThreatState.bySeverity.critical}, High: ${safeThreatState.bySeverity.high}</div>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <div class="table-header">
+          <h3>Threat Operations</h3>
+          <div>
+            <button class="btn btn-secondary" id="network-threat-refresh-btn">Refresh</button>
+            <button class="btn btn-primary" id="network-threat-check-btn">Run Threat Check</button>
+            <button class="btn btn-secondary" id="network-baseline-refresh-btn">Refresh Baseline</button>
+          </div>
+        </div>
+        <div id="network-threat-op-status" style="padding:0 1rem"></div>
+      </div>
+
+      <div class="table-container">
+        <div class="table-header"><h3>Active Alerts</h3></div>
+        <table>
+          <thead><tr><th>Time</th><th>Severity</th><th>Type</th><th>Host</th><th>Description</th><th>Action</th></tr></thead>
+          <tbody>
+            ${safeThreatState.alerts.length === 0
+              ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No active alerts.</td></tr>'
+              : safeThreatState.alerts.map((alert) => `
+                <tr>
+                  <td>${formatTime(alert.lastSeenAt || alert.timestamp)}</td>
+                  <td><span class="badge ${severityClass(alert.severity)}">${esc(alert.severity)}</span></td>
+                  <td>${esc(alert.type)}</td>
+                  <td>${esc(alert.ip || alert.mac || '-')}</td>
+                  <td title="${escAttr(alert.description || '')}">${esc(alert.description || '-')}</td>
+                  <td><button class="btn btn-secondary network-alert-ack" data-alert-id="${escAttr(alert.id)}">Acknowledge</button></td>
+                </tr>
+              `).join('')
+            }
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    panel.querySelector('#network-threat-refresh-btn')?.addEventListener('click', () => renderThreatsTab(panel));
+    panel.querySelector('#network-baseline-refresh-btn')?.addEventListener('click', async () => {
+      const status = panel.querySelector('#network-threat-op-status');
+      status.innerHTML = '<div style="color:var(--text-muted);padding:0.5rem">Refreshing baseline snapshot...</div>';
+      try {
+        const result = await api.runTool({ toolName: 'net_anomaly_check', args: {}, origin: 'web' });
+        status.innerHTML = `<div style="color:${result.success ? 'var(--success)' : 'var(--error)'};padding:0.5rem">${esc(result.message || (result.success ? 'Baseline refreshed.' : 'Baseline refresh failed.'))}</div>`;
+        setTimeout(() => renderThreatsTab(panel), 1200);
+      } catch (err) {
+        status.innerHTML = `<div style="color:var(--error);padding:0.5rem">${esc(err instanceof Error ? err.message : String(err))}</div>`;
+      }
+    });
+    panel.querySelector('#network-threat-check-btn')?.addEventListener('click', async () => {
+      const status = panel.querySelector('#network-threat-op-status');
+      status.innerHTML = '<div style="color:var(--text-muted);padding:0.5rem">Running threat check...</div>';
+      try {
+        const result = await api.runTool({ toolName: 'net_threat_check', args: { refresh: true }, origin: 'web' });
+        status.innerHTML = `<div style="color:${result.success ? 'var(--success)' : 'var(--error)'};padding:0.5rem">${esc(result.message || (result.success ? 'Threat check complete.' : 'Threat check failed.'))}</div>`;
+        setTimeout(() => renderThreatsTab(panel), 1200);
+      } catch (err) {
+        status.innerHTML = `<div style="color:var(--error);padding:0.5rem">${esc(err instanceof Error ? err.message : String(err))}</div>`;
+      }
+    });
+
+    panel.querySelectorAll('.network-alert-ack').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const alertId = button.getAttribute('data-alert-id');
+        if (!alertId) return;
+        button.disabled = true;
+        try {
+          await api.acknowledgeNetworkThreat(alertId);
+          await renderThreatsTab(panel);
+        } catch {
+          button.disabled = false;
+        }
+      });
+    });
+
+    applyInputTooltips(panel);
+  } catch (err) {
+    panel.innerHTML = `<div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
+  }
+}
+
 // ─── Utilities ───────────────────────────────────────────
 
 function shortId(id) {
@@ -504,6 +635,13 @@ function esc(value) {
 
 function escAttr(value) {
   return esc(value).replace(/"/g, '&quot;');
+}
+
+function severityClass(severity) {
+  if (severity === 'critical') return 'badge-critical';
+  if (severity === 'high') return 'badge-errored';
+  if (severity === 'medium') return 'badge-warn';
+  return 'badge-info';
 }
 
 // Delegated event listener for step output toggles (shared)

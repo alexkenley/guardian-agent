@@ -248,10 +248,43 @@ describe('ScheduledTaskService', () => {
       expect(localDeps.deviceInventory.ingestPlaybookResults).toHaveBeenCalled();
     });
 
+    it('should trigger onNetworkScanComplete for inventory scan tools', async () => {
+      const onNetworkScanComplete = vi.fn();
+      const localDeps = createDeps({ onNetworkScanComplete });
+      const localService = new ScheduledTaskService(localDeps);
+      const { task } = localService.create({ ...validInput, target: 'net_arp_scan' });
+      await localService.runNow(task!.id);
+      expect(onNetworkScanComplete).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'tool', target: 'net_arp_scan' }),
+      );
+    });
+
+    it('should trigger onNetworkScanComplete for threat analysis tools', async () => {
+      const onNetworkScanComplete = vi.fn();
+      const localDeps = createDeps({ onNetworkScanComplete });
+      const localService = new ScheduledTaskService(localDeps);
+      const { task } = localService.create({ ...validInput, target: 'net_threat_check' });
+      await localService.runNow(task!.id);
+      expect(onNetworkScanComplete).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'tool', target: 'net_threat_check' }),
+      );
+    });
+
     it('should feed playbook results to device inventory', async () => {
       const { task } = service.create({ ...validInput, type: 'playbook', target: 'home-network' });
       await service.runNow(task!.id);
       expect(deps.deviceInventory.ingestPlaybookResults).toHaveBeenCalled();
+    });
+
+    it('should trigger onNetworkScanComplete for playbooks with inventory scan steps', async () => {
+      const onNetworkScanComplete = vi.fn();
+      const localDeps = createDeps({ onNetworkScanComplete });
+      const localService = new ScheduledTaskService(localDeps);
+      const { task } = localService.create({ ...validInput, type: 'playbook', target: 'home-network' });
+      await localService.runNow(task!.id);
+      expect(onNetworkScanComplete).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'playbook', target: 'home-network' }),
+      );
     });
 
     it('should emit completion event to EventBus', async () => {

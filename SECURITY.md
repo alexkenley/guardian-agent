@@ -90,6 +90,25 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
                         │
                         ▼
 ┌─────────────────────────────────────────────────────────┐
+│  LAYER 1.5: OS-Level Process Sandbox                    │
+│                                                         │
+│  bwrap (bubblewrap) namespace isolation on Linux         │
+│  Fallback: ulimit + env hardening on other platforms     │
+│                                                         │
+│  ┌──────────────┐  ┌─────────────┐  ┌───────────────┐  │
+│  │ Filesystem   │  │ Network     │  │ Resource      │  │
+│  │ Isolation    │  │ Namespace   │  │ Limits        │  │
+│  │ (ro-bind)    │  │ (unshare)   │  │ (ulimit)      │  │
+│  └──────────────┘  └─────────────┘  └───────────────┘  │
+│                                                         │
+│  Child processes run with namespace/resource isolation.  │
+│  Write access is constrained by sandbox binds, network   │
+│  is isolated by default, and resource quotas are         │
+│  enforced when supported by platform capabilities.       │
+└───────────────────────┬─────────────────────────────────┘
+                        │
+                        ▼
+┌─────────────────────────────────────────────────────────┐
 │  LAYER 2: Output Guardian (Reactive)                    │
 │                                                         │
 │  Scans agent response AFTER execution, BEFORE delivery  │
@@ -115,6 +134,7 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
 │  • Repeated secret detection (3+ per agent)             │
 │  • Error storms (>10 errors in window)                  │
 │  • Optional LLM-enhanced analysis                       │
+│  • Network baseline anomalies + traffic threat signals  │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -130,6 +150,7 @@ All security enforcement occurs at Runtime chokepoints. Agents cannot bypass the
 | **Response output** | OutputGuardian scans after execution | Response modified before delivery |
 | **LLM access** | `GuardedLLMProvider` wraps real provider | Agent receives wrapped provider via `ctx.llm` |
 | **Event emission** | Payload scanning in `ctx.emit()` | Only way to send inter-agent events |
+| **Process sandbox** | bwrap namespace / ulimit for all child processes | Wrapped at exec/spawn call site |
 | **Resource limits** | Budget/token/queue checks before invocation | Runtime rejects over-limit requests |
 | **Lifecycle gating** | Dead/Errored/Stalled agents cannot receive work | `assertExecutable()` guard |
 | **Context immutability** | `Object.freeze()` on agent contexts | Agents cannot modify capabilities |
@@ -248,6 +269,54 @@ One-knob security posture configuration:
 - **Command whitelist**: Shell execution limited to explicitly allowed commands
 - **Domain whitelist**: Network requests limited to configured domains
 - **Dry-run mode**: Preview mutating operations without execution
+
+### OS-Level Process Sandbox
+
+All child processes spawned by tool execution are wrapped in OS-level isolation using [bubblewrap (bwrap)](https://github.com/containers/bubblewrap) on Linux, with graceful fallback to `ulimit` + environment hardening on other platforms.
+
+#### Sandbox Profiles
+
+| Profile | Filesystem | Network | Use Case |
+|---------|-----------|---------|----------|
+| `read-only` | Root bind (read-only), `/tmp` writable | Isolated by default | System info, QMD search, network probes |
+| `workspace-write` | Workspace writable, `.git`/`.env*` forced read-only | Isolated by default | `execute_command`, MCP servers, browser |
+| `full-access` | No isolation (env hardening only) | Full access | Explicitly trusted operations |
+
+#### Isolation Mechanisms
+
+| Mechanism | Platform | What It Does |
+|-----------|----------|-------------|
+| **bwrap namespace** | Linux | PID/network namespace isolation, read-only root bind, protected paths |
+| **ulimit** | POSIX | Memory (512MB), CPU (60s), file size (10MB) limits; optional process count |
+| **Env hardening** | All | Strips `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES`, `NODE_OPTIONS` |
+| **Symlink resolution** | All | `resolveAllowedPath` resolves symlinks via `fs.realpath()` before path checking |
+
+#### Configuration
+
+```yaml
+assistant:
+  tools:
+    sandbox:
+      enabled: true
+      mode: workspace-write       # Default profile
+      networkAccess: false         # Default: isolate network
+      additionalWritePaths: []     # Extra writable paths
+      additionalReadPaths: []      # Extra read-only paths
+      resourceLimits:
+        maxMemoryMb: 512
+        maxCpuSeconds: 60
+        maxFileSizeKb: 10240       # 10 MB
+        maxProcesses: 0             # 0 = unlimited; bwrap PID namespace used instead
+```
+
+#### Fallback Behavior
+
+When bwrap is not available (macOS, Windows, minimal Linux containers):
+1. `ulimit` resource limits are applied as a shell prefix (POSIX only)
+2. Dangerous environment variables are stripped from child processes
+3. A warning is logged at startup
+
+Install bwrap on Debian/Ubuntu: `sudo apt install bubblewrap`
 
 ---
 

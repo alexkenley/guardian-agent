@@ -9,9 +9,10 @@
  * Spec: https://modelcontextprotocol.io/
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { createLogger } from '../util/logging.js';
 import type { ToolDefinition, ToolResult } from './types.js';
+import { sandboxedSpawn, type SandboxConfig, DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
 
 const log = createLogger('mcp-client');
 
@@ -118,9 +119,11 @@ export class MCPClient {
   }> = new Map();
   private buffer = '';
   private nextId = 1;
+  private readonly sandboxConfig: SandboxConfig;
 
-  constructor(config: MCPServerConfig) {
+  constructor(config: MCPServerConfig, sandboxConfig?: SandboxConfig) {
     this.config = config;
+    this.sandboxConfig = sandboxConfig ?? DEFAULT_SANDBOX_CONFIG;
   }
 
   /** Current connection state. */
@@ -150,9 +153,11 @@ export class MCPClient {
     this.state = 'connecting';
 
     try {
-      this.process = spawn(this.config.command, this.config.args ?? [], {
+      this.process = await sandboxedSpawn(this.config.command, this.config.args ?? [], this.sandboxConfig, {
+        profile: 'workspace-write',
+        networkAccess: true,
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env, ...this.config.env },
+        env: this.config.env,
         cwd: this.config.cwd,
       });
 
@@ -434,6 +439,11 @@ export class MCPClient {
  */
 export class MCPClientManager {
   private clients: Map<string, MCPClient> = new Map();
+  private readonly sandboxConfig: SandboxConfig;
+
+  constructor(sandboxConfig?: SandboxConfig) {
+    this.sandboxConfig = sandboxConfig ?? DEFAULT_SANDBOX_CONFIG;
+  }
 
   /** Add and connect to an MCP server. */
   async addServer(config: MCPServerConfig): Promise<void> {
@@ -441,7 +451,7 @@ export class MCPClientManager {
       throw new Error(`MCP server '${config.id}' is already registered`);
     }
 
-    const client = new MCPClient(config);
+    const client = new MCPClient(config, this.sandboxConfig);
     this.clients.set(config.id, client);
     await client.connect();
   }

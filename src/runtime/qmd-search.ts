@@ -7,11 +7,8 @@
  * server process to manage.
  */
 
-import { exec as execCb } from 'node:child_process';
-import { promisify } from 'node:util';
 import type { QMDConfig, QMDSourceConfig } from '../config/types.js';
-
-const execAsync = promisify(execCb);
+import { sandboxedExec, type SandboxConfig, DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
 
 // ─── Types ─────────────────────────────────────────────
 
@@ -69,16 +66,18 @@ export class QMDSearchService {
   private readonly defaultMode: QMDSearchMode;
   private readonly maxResults: number;
   private sources: QMDSourceConfig[];
+  private readonly sandboxConfig: SandboxConfig;
 
   /** Cached install check result (null = not checked yet). */
   private installCache: { installed: boolean; version?: string } | null = null;
 
-  constructor(config: QMDConfig) {
+  constructor(config: QMDConfig, sandboxConfig?: SandboxConfig) {
     this.binary = config.binaryPath ?? 'qmd';
     this.timeoutMs = config.queryTimeoutMs ?? 30_000;
     this.defaultMode = config.defaultMode ?? 'query';
     this.maxResults = config.maxResults ?? 20;
     this.sources = [...config.sources];
+    this.sandboxConfig = sandboxConfig ?? DEFAULT_SANDBOX_CONFIG;
   }
 
   // ── Install detection ──────────────────────────────
@@ -289,7 +288,8 @@ export class QMDSearchService {
   }
 
   private async exec(command: string, timeout?: number): Promise<{ stdout: string; stderr: string }> {
-    return execAsync(command, {
+    return sandboxedExec(command, this.sandboxConfig, {
+      profile: 'read-only',
       timeout: timeout ?? this.timeoutMs,
       maxBuffer: MAX_OUTPUT_BYTES,
     });

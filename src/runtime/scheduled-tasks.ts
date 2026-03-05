@@ -112,6 +112,36 @@ const BUILT_IN_PRESETS: ScheduledTaskPreset[] = [
     emitEvent: 'network_scan_completed',
   },
   {
+    id: 'network-anomaly-guard',
+    name: 'Network Anomaly Guard',
+    description: 'Run baseline anomaly detection every 15 minutes',
+    type: 'tool',
+    target: 'net_anomaly_check',
+    args: {},
+    cron: '*/15 * * * *',
+    emitEvent: 'network_anomaly_checked',
+  },
+  {
+    id: 'network-threat-summary',
+    name: 'Network Threat Summary',
+    description: 'Generate active network threat summary every 30 minutes',
+    type: 'tool',
+    target: 'net_threat_summary',
+    args: { limit: 50 },
+    cron: '*/30 * * * *',
+    emitEvent: 'network_threat_summary_generated',
+  },
+  {
+    id: 'network-baseline-status',
+    name: 'Network Baseline Status',
+    description: 'Capture network baseline status every 6 hours',
+    type: 'tool',
+    target: 'net_baseline',
+    args: {},
+    cron: '0 */6 * * *',
+    emitEvent: 'network_baseline_checked',
+  },
+  {
     id: 'system-health',
     name: 'System Health Check',
     description: 'Run uptime check every hour',
@@ -169,6 +199,36 @@ const BUILT_IN_PRESETS: ScheduledTaskPreset[] = [
     args: {},
     cron: '*/30 * * * *',
     emitEvent: 'connection_audit_completed',
+  },
+  {
+    id: 'network-fingerprint-scan',
+    name: 'Network Fingerprint Scan',
+    description: 'Fingerprint local gateway services every 6 hours',
+    type: 'tool',
+    target: 'net_fingerprint',
+    args: { host: '192.168.1.1', portScan: true },
+    cron: '0 */6 * * *',
+    emitEvent: 'network_fingerprint_completed',
+  },
+  {
+    id: 'traffic-threat-check',
+    name: 'Traffic Threat Check',
+    description: 'Evaluate traffic threat rules every 15 minutes',
+    type: 'tool',
+    target: 'net_threat_check',
+    args: { refresh: true },
+    cron: '*/15 * * * *',
+    emitEvent: 'traffic_threat_check_completed',
+  },
+  {
+    id: 'wifi-scan',
+    name: 'WiFi Scan',
+    description: 'Scan nearby WiFi networks every 30 minutes',
+    type: 'tool',
+    target: 'net_wifi_scan',
+    args: { force: true },
+    cron: '*/30 * * * *',
+    emitEvent: 'wifi_scan_completed',
   },
   {
     id: 'dns-health-check',
@@ -242,6 +302,12 @@ export interface ScheduledTaskServiceDeps {
   playbookExecutor: ScheduledTaskPlaybookExecutor;
   deviceInventory: DeviceInventoryService;
   eventBus: EventBus;
+  onNetworkScanComplete?: (meta: {
+    source: 'tool' | 'playbook';
+    taskId: string;
+    taskName: string;
+    target: string;
+  }) => void | Promise<void>;
   persistPath?: string;
   now?: () => number;
 }
@@ -253,6 +319,7 @@ export class ScheduledTaskService {
   private readonly playbookExecutor: ScheduledTaskPlaybookExecutor;
   private readonly deviceInventory: DeviceInventoryService;
   private readonly eventBus: EventBus;
+  private readonly onNetworkScanComplete?: ScheduledTaskServiceDeps['onNetworkScanComplete'];
   private readonly persistPath: string;
   private readonly now: () => number;
   /** Run history — kept in memory, most recent first. */
@@ -272,6 +339,7 @@ export class ScheduledTaskService {
     this.playbookExecutor = deps.playbookExecutor;
     this.deviceInventory = deps.deviceInventory;
     this.eventBus = deps.eventBus;
+    this.onNetworkScanComplete = deps.onNetworkScanComplete;
     this.persistPath = deps.persistPath ?? DEFAULT_PERSIST_PATH;
     this.now = deps.now ?? Date.now;
   }
@@ -485,7 +553,15 @@ export class ScheduledTaskService {
 
     // Feed network tool results to device inventory
     if (toolResult.success && toolResult.output) {
-      this.feedDeviceInventory(task.target, toolResult.output);
+      const updatedInventory = this.feedDeviceInventory(task.target, toolResult.output);
+      if (updatedInventory || isNetworkAnalysisTriggerTool(task.target)) {
+        this.onNetworkScanComplete?.({
+          source: 'tool',
+          taskId: task.id,
+          taskName: task.name,
+          target: task.target,
+        });
+      }
     }
 
     return {
@@ -511,6 +587,15 @@ export class ScheduledTaskService {
     // Feed playbook results to device inventory
     if (pbResult.run?.steps) {
       this.deviceInventory.ingestPlaybookResults(pbResult.run.steps);
+      const touchedNetworkAnalysis = pbResult.run.steps.some((step) => isNetworkAnalysisTriggerTool(step.toolName));
+      if (touchedNetworkAnalysis) {
+        this.onNetworkScanComplete?.({
+          source: 'playbook',
+          taskId: task.id,
+          taskName: task.name,
+          target: task.target,
+        });
+      }
     }
 
     return {
@@ -521,12 +606,13 @@ export class ScheduledTaskService {
     };
   }
 
-  private feedDeviceInventory(toolName: string, output: unknown): void {
+  private feedDeviceInventory(toolName: string, output: unknown): boolean {
     // Wrap single tool output as a playbook step for device inventory ingestion
-    const networkTools = ['net_arp_scan', 'net_port_check', 'net_dns_lookup'];
-    if (networkTools.includes(toolName)) {
+    if (isInventoryScanTool(toolName)) {
       this.deviceInventory.ingestPlaybookResults([{ toolName, output }]);
+      return true;
     }
+    return false;
   }
 
   private emitCompletionEvent(task: ScheduledTaskDefinition, result: ScheduledTaskRunResult): void {
@@ -656,4 +742,16 @@ export class ScheduledTaskService {
     }
     return migrated;
   }
+}
+
+function isInventoryScanTool(toolName: string): boolean {
+  return toolName === 'net_arp_scan' || toolName === 'net_port_check' || toolName === 'net_dns_lookup';
+}
+
+function isNetworkAnalysisTriggerTool(toolName: string): boolean {
+  return isInventoryScanTool(toolName)
+    || toolName === 'net_anomaly_check'
+    || toolName === 'net_traffic_baseline'
+    || toolName === 'net_threat_check'
+    || toolName === 'net_connections';
 }

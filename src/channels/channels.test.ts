@@ -1813,6 +1813,35 @@ describe('WebChannel', () => {
         { category: 'filesystem' as const, label: 'Filesystem', description: 'File operations', toolCount: 5, enabled: true },
       ],
       onToolsCategoryToggle: (input) => ({ success: true, message: `${input.category} toggled` }),
+      onNetworkBaseline: () => ({
+        snapshotCount: 4,
+        minSnapshotsForBaseline: 3,
+        baselineReady: true,
+        lastUpdatedAt: Date.now(),
+        knownDevices: [],
+      }),
+      onNetworkThreats: () => ({
+        alerts: [{
+          id: 'net-alert-1',
+          type: 'new_device',
+          severity: 'medium',
+          timestamp: Date.now(),
+          mac: 'aa:bb:cc:dd:ee:ff',
+          ip: '192.168.1.25',
+          description: 'New device detected',
+          dedupeKey: 'new_device:aa:bb:cc:dd:ee:ff',
+          evidence: {},
+          acknowledged: false,
+          firstSeenAt: Date.now(),
+          lastSeenAt: Date.now(),
+          occurrenceCount: 1,
+        }],
+        activeAlertCount: 1,
+        bySeverity: { low: 0, medium: 1, high: 0, critical: 0 },
+        baselineReady: true,
+        snapshotCount: 4,
+      }),
+      onNetworkThreatAcknowledge: (alertId) => ({ success: true, message: `acked:${alertId}` }),
     };
 
     it('GET /api/agents should return agent list', async () => {
@@ -1949,6 +1978,43 @@ describe('WebChannel', () => {
       const body = await res.json() as { success: boolean; findings: unknown[] };
       expect(body.success).toBe(true);
       expect(body.findings.length).toBeGreaterThan(0);
+    });
+
+    it('GET /api/network/baseline should return baseline status', async () => {
+      web = new WebChannel({ port: 18961, dashboard: mockDashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18961/api/network/baseline');
+      expect(res.status).toBe(200);
+      const body = await res.json() as { baselineReady: boolean; snapshotCount: number };
+      expect(body.baselineReady).toBe(true);
+      expect(body.snapshotCount).toBe(4);
+    });
+
+    it('GET /api/network/threats should return active network alerts', async () => {
+      web = new WebChannel({ port: 18962, dashboard: mockDashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18962/api/network/threats?limit=10');
+      expect(res.status).toBe(200);
+      const body = await res.json() as { activeAlertCount: number; alerts: Array<{ id: string }> };
+      expect(body.activeAlertCount).toBe(1);
+      expect(body.alerts[0].id).toBe('net-alert-1');
+    });
+
+    it('POST /api/network/threats/ack should acknowledge alert', async () => {
+      web = new WebChannel({ port: 18963, dashboard: mockDashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18963/api/network/threats/ack', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ alertId: 'net-alert-1' }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json() as { success: boolean; message: string };
+      expect(body.success).toBe(true);
+      expect(body.message).toBe('acked:net-alert-1');
     });
 
     it('should return 404 when dashboard callback is not set', async () => {

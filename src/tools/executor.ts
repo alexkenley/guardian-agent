@@ -5,8 +5,6 @@
 import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { exec as execCb } from 'node:child_process';
-import { promisify } from 'node:util';
 import type { IntelActionType, IntelSourceType, IntelStatus, ThreatIntelService } from '../runtime/threat-intel.js';
 import { MarketingStore } from './marketing-store.js';
 import { ToolApprovalStore } from './approvals.js';
@@ -26,7 +24,7 @@ import type {
 } from './types.js';
 import { TOOL_CATEGORIES, BUILTIN_TOOL_CATEGORIES } from './types.js';
 import type { MCPClientManager } from './mcp-client.js';
-import type { BrowserConfig, WebSearchConfig } from '../config/types.js';
+import type { AssistantNetworkConfig, BrowserConfig, WebSearchConfig } from '../config/types.js';
 import type { ConversationService } from '../runtime/conversation.js';
 import type { AgentMemoryStore } from '../runtime/agent-memory-store.js';
 import {
@@ -36,8 +34,16 @@ import {
   validateBrowserUrl,
   validateElementRef,
 } from './browser-session.js';
+import { sandboxedExec, type SandboxConfig, DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
+import type { SandboxProfile } from '../sandbox/types.js';
+import { realpath } from 'node:fs/promises';
+import type { DeviceInventoryService } from '../runtime/device-inventory.js';
+import type { NetworkBaselineService } from '../runtime/network-baseline.js';
+import { classifyDevice, lookupOuiVendor } from '../runtime/network-intelligence.js';
+import type { NetworkTrafficService, TrafficConnectionSample } from '../runtime/network-traffic.js';
+import { parseBanner, inferServiceFromPort } from '../runtime/network-fingerprinting.js';
+import { parseAirportWifi, parseNetshWifi, parseNmcliWifi, correlateWifiClients } from '../runtime/network-wifi.js';
 
-const execAsync = promisify(execCb);
 const MAX_JOBS = 200;
 const MAX_APPROVALS = 200;
 const MAX_READ_BYTES = 1_000_000;
@@ -73,6 +79,16 @@ export interface ToolExecutorOptions {
   agentMemoryStore?: AgentMemoryStore;
   /** QMD hybrid search service for document collection search. */
   qmdSearch?: import('../runtime/qmd-search.js').QMDSearchService;
+  /** Device inventory for network intelligence/baseline tools. */
+  deviceInventory?: DeviceInventoryService;
+  /** Network baseline and anomaly service. */
+  networkBaseline?: NetworkBaselineService;
+  /** Traffic baseline + threat analysis service. */
+  networkTraffic?: NetworkTrafficService;
+  /** Network feature configuration. */
+  networkConfig?: AssistantNetworkConfig;
+  /** OS-level process sandbox configuration. */
+  sandboxConfig?: SandboxConfig;
   now?: () => number;
   onCheckAction?: (action: {
     type: string;
@@ -118,6 +134,8 @@ export class ToolExecutor {
   private readonly now: () => number;
   private readonly browserSession?: BrowserSessionManager;
   private readonly disabledCategories: Set<string>;
+  private readonly sandboxConfig: SandboxConfig;
+  private readonly networkConfig: AssistantNetworkConfig;
   private policy: ToolPolicySnapshot;
 
   constructor(options: ToolExecutorOptions) {
@@ -126,6 +144,36 @@ export class ToolExecutor {
     this.disabledCategories = new Set(options.disabledCategories ?? []);
     this.mcpManager = options.mcpManager;
     this.webSearchConfig = options.webSearch ?? {};
+    this.sandboxConfig = options.sandboxConfig ?? DEFAULT_SANDBOX_CONFIG;
+    this.networkConfig = options.networkConfig ?? {
+      deviceIntelligence: { enabled: true, ouiDatabase: 'bundled', autoClassify: true },
+      baseline: {
+        enabled: true,
+        minSnapshotsForBaseline: 3,
+        dedupeWindowMs: 1_800_000,
+        anomalyRules: {
+          newDevice: { enabled: true, severity: 'medium' },
+          portChange: { enabled: true, severity: 'low' },
+          arpSpoofing: { enabled: true, severity: 'critical' },
+          unusualService: { enabled: true, severity: 'medium' },
+          deviceGone: { enabled: true, severity: 'low' },
+          massPortOpen: { enabled: true, severity: 'high' },
+        },
+      },
+      fingerprinting: { enabled: true, bannerTimeout: 3000, maxConcurrentPerDevice: 5, autoFingerprint: false },
+      wifi: { enabled: false, platform: 'auto', scanInterval: 300 },
+      trafficAnalysis: {
+        enabled: false,
+        dataSource: 'ss',
+        flowRetention: 86_400_000,
+        threatRules: {
+          dataExfiltration: { enabled: true, thresholdMB: 100, windowMinutes: 60 },
+          portScanning: { enabled: true, portThreshold: 20, windowSeconds: 60 },
+          beaconing: { enabled: true, minIntervals: 10, tolerancePercent: 5 },
+        },
+      },
+      connections: [],
+    };
     this.marketingStore = new MarketingStore(options.workspaceRoot, this.now);
     this.policy = {
       mode: options.policyMode,
@@ -143,7 +191,7 @@ export class ToolExecutor {
       },
     };
     if (options.browserConfig?.enabled) {
-      this.browserSession = new BrowserSessionManager(options.browserConfig, this.now);
+      this.browserSession = new BrowserSessionManager(options.browserConfig, this.now, this.sandboxConfig);
     }
     this.registerBuiltinTools();
     if (this.mcpManager) {
@@ -581,7 +629,7 @@ export class ToolExecutor {
       },
       async (args, request) => {
         const rawPath = asString(args.path, '.');
-        const safePath = this.resolveAllowedPath(rawPath);
+        const safePath = await this.resolveAllowedPath(rawPath);
         this.guardAction(request, 'read_file', { path: rawPath });
         const entries = await readdir(safePath, { withFileTypes: true });
         return {
@@ -629,7 +677,7 @@ export class ToolExecutor {
           };
         }
 
-        const safeRoot = this.resolveAllowedPath(rawPath);
+        const safeRoot = await this.resolveAllowedPath(rawPath);
         this.guardAction(request, 'read_file', { path: rawPath, query });
 
         const maxResults = Math.max(1, Math.min(MAX_SEARCH_RESULTS, asNumber(args.maxResults, 25)));
@@ -753,7 +801,7 @@ export class ToolExecutor {
       },
       async (args, request) => {
         const rawPath = requireString(args.path, 'path');
-        const safePath = this.resolveAllowedPath(rawPath);
+        const safePath = await this.resolveAllowedPath(rawPath);
         this.guardAction(request, 'read_file', { path: rawPath });
         const maxBytes = Math.min(MAX_READ_BYTES, Math.max(256, asNumber(args.maxBytes, 64_000)));
         const content = await readFile(safePath);
@@ -791,7 +839,7 @@ export class ToolExecutor {
         const rawPath = requireString(args.path, 'path');
         const content = requireString(args.content, 'content');
         const append = !!args.append;
-        const safePath = this.resolveAllowedPath(rawPath);
+        const safePath = await this.resolveAllowedPath(rawPath);
         this.guardAction(request, 'write_file', { path: rawPath, content });
         await mkdir(dirname(safePath), { recursive: true });
         if (append) {
@@ -833,7 +881,7 @@ export class ToolExecutor {
         const title = asString(args.title, 'Document');
         const content = asString(args.content, '');
         const template = asString(args.template, 'markdown').toLowerCase();
-        const safePath = this.resolveAllowedPath(rawPath);
+        const safePath = await this.resolveAllowedPath(rawPath);
         const finalBody = template === 'plain'
           ? `${title}\n\n${content}\n`
           : `# ${title}\n\n${content}\n`;
@@ -877,8 +925,7 @@ export class ToolExecutor {
         this.guardAction(request, 'execute_command', { command });
         const timeoutMs = Math.max(500, Math.min(60_000, asNumber(args.timeoutMs, 15_000)));
         try {
-          const { stdout, stderr } = await execAsync(command, {
-            cwd: this.options.workspaceRoot,
+          const { stdout, stderr } = await this.sandboxExec(command, 'workspace-write', {
             timeout: timeoutMs,
             maxBuffer: 1_000_000,
           });
@@ -1257,7 +1304,7 @@ export class ToolExecutor {
       },
       async (args, request) => {
         const rawPath = requireString(args.path, 'path');
-        const safePath = this.resolveAllowedPath(rawPath);
+        const safePath = await this.resolveAllowedPath(rawPath);
         this.guardAction(request, 'read_file', { path: rawPath });
         const maxRows = Math.max(1, Math.min(1000, asNumber(args.maxRows, 500)));
         const source = asString(args.source);
@@ -1777,7 +1824,7 @@ export class ToolExecutor {
           cmd = `ping -c ${count} -W 3 ${host}`;
         }
         try {
-          const { stdout } = await execAsync(cmd, { timeout: 30_000 });
+          const { stdout } = await this.sandboxExec(cmd, 'read-only', { networkAccess: true, timeout: 30_000 });
           const parsed = parsePingOutput(stdout, host);
           return { success: true, output: parsed };
         } catch (err) {
@@ -1796,21 +1843,75 @@ export class ToolExecutor {
         description: 'Discover devices on the local network via ARP table. Uses ip neigh (Linux) or arp -a (macOS/Windows). Returns IP, MAC, and state for each neighbor. Security: local-only — reads system ARP cache. Requires network_access capability.',
         risk: 'read_only',
         category: 'network',
-        parameters: { type: 'object', properties: {} },
+        parameters: {
+          type: 'object',
+          properties: {
+            connectionId: { type: 'string', description: 'Optional assistant.network.connections id to scope scan behavior.' },
+          },
+        },
       },
-      async (_args, request) => {
-        this.guardAction(request, 'network_probe', { action: 'arp_scan' });
+      async (args, request) => {
+        const connectionId = asString(args.connectionId).trim();
+        const connection = connectionId ? this.getConnectionProfile(connectionId) : undefined;
+        if (connectionId && !connection) {
+          return { success: false, error: `Unknown network connection profile '${connectionId}'.` };
+        }
+        this.guardAction(request, 'network_probe', { action: 'arp_scan', connectionId: connectionId || undefined });
+
+        if (connection?.type === 'remote') {
+          if (!connection.host) {
+            return { success: false, error: `Connection '${connection.id}' is remote but host is not configured.` };
+          }
+          const sshTarget = `${connection.sshUser ? `${connection.sshUser}@` : ''}${connection.host}`;
+          const remoteCommand = (connection.remoteScanCommand?.trim() || 'ip neigh show')
+            .replace(/"/g, '\\"');
+          try {
+            const { stdout } = await this.sandboxExec(
+              `ssh -o BatchMode=yes -o ConnectTimeout=8 ${sshTarget} "${remoteCommand}"`,
+              'read-only',
+              { networkAccess: true, timeout: 30_000 },
+            );
+            const parsed = parseArpLinux(stdout);
+            return {
+              success: true,
+              output: {
+                connectionId: connection.id,
+                connectionType: connection.type,
+                devices: parsed.length > 0 ? parsed : parseArpWindows(stdout),
+              },
+            };
+          } catch (err) {
+            return { success: false, error: `Remote ARP scan failed: ${err instanceof Error ? err.message : String(err)}` };
+          }
+        }
+
         const isLinux = process.platform === 'linux';
         // Linux has `ip neigh show`; macOS and Windows use `arp -a`
         if (isLinux) {
           try {
-            const { stdout } = await execAsync('ip neigh show', { timeout: 10_000 });
-            return { success: true, output: { devices: parseArpLinux(stdout) } };
+            const iface = connection?.interface ? sanitizeInterfaceName(connection.interface) : '';
+            const cmd = iface ? `ip neigh show dev ${iface}` : 'ip neigh show';
+            const { stdout } = await this.sandboxExec(cmd, 'read-only', { networkAccess: true, timeout: 10_000 });
+            return {
+              success: true,
+              output: {
+                connectionId: connection?.id ?? null,
+                connectionType: connection?.type ?? 'lan',
+                devices: parseArpLinux(stdout),
+              },
+            };
           } catch {
             // Fallback to arp -a if ip command not available (e.g. minimal containers)
             try {
-              const { stdout } = await execAsync('arp -a', { timeout: 10_000 });
-              return { success: true, output: { devices: parseArpWindows(stdout) } };
+              const { stdout } = await this.sandboxExec('arp -a', 'read-only', { networkAccess: true, timeout: 10_000 });
+              return {
+                success: true,
+                output: {
+                  connectionId: connection?.id ?? null,
+                  connectionType: connection?.type ?? 'lan',
+                  devices: parseArpWindows(stdout),
+                },
+              };
             } catch (err2) {
               return { success: false, error: `ARP scan failed: ${err2 instanceof Error ? err2.message : String(err2)}` };
             }
@@ -1818,8 +1919,15 @@ export class ToolExecutor {
         }
         // macOS (darwin) and Windows both support `arp -a`
         try {
-          const { stdout } = await execAsync('arp -a', { timeout: 10_000 });
-          return { success: true, output: { devices: parseArpWindows(stdout) } };
+          const { stdout } = await this.sandboxExec('arp -a', 'read-only', { networkAccess: true, timeout: 10_000 });
+          return {
+            success: true,
+            output: {
+              connectionId: connection?.id ?? null,
+              connectionType: connection?.type ?? (process.platform === 'darwin' ? 'wifi' : 'lan'),
+              devices: parseArpWindows(stdout),
+            },
+          };
         } catch (err) {
           return { success: false, error: `ARP scan failed: ${err instanceof Error ? err.message : String(err)}` };
         }
@@ -1899,26 +2007,28 @@ export class ToolExecutor {
       async (args, request) => {
         const stateFilter = asString(args.state).toUpperCase().trim();
         this.guardAction(request, 'network_probe', { action: 'list_connections', state: stateFilter || undefined });
-        const platform = process.platform;
-        // Linux has `ss`; macOS and Windows use `netstat -an`
-        if (platform === 'linux') {
-          try {
-            const { stdout } = await execAsync('ss -tunap', { timeout: 10_000 });
-            return { success: true, output: { connections: parseSsLinux(stdout, stateFilter) } };
-          } catch {
-            // Fallback to netstat if ss not available
-            try {
-              const { stdout } = await execAsync('netstat -an', { timeout: 10_000 });
-              return { success: true, output: { connections: parseNetstatWindows(stdout, stateFilter) } };
-            } catch (err2) {
-              return { success: false, error: `Connections query failed: ${err2 instanceof Error ? err2.message : String(err2)}` };
+        try {
+          const connections = await this.collectLocalConnections(stateFilter);
+          let ingest: ReturnType<NetworkTrafficService['ingestConnections']> | undefined;
+          if (this.options.networkTraffic && this.networkConfig.trafficAnalysis.enabled) {
+            ingest = this.options.networkTraffic.ingestConnections(
+              connections.map((connection) => toTrafficSample(connection)),
+            );
+            if (ingest.threats.length > 0 && this.options.networkBaseline) {
+              this.options.networkBaseline.recordExternalThreats(
+                ingest.threats.map((threat) => ({
+                  type: threat.type,
+                  severity: threat.severity,
+                  timestamp: threat.timestamp,
+                  ip: threat.srcIp,
+                  description: threat.description,
+                  dedupeKey: threat.dedupeKey,
+                  evidence: threat.evidence,
+                })),
+              );
             }
           }
-        }
-        // macOS (darwin) and Windows both support `netstat -an`
-        try {
-          const { stdout } = await execAsync('netstat -an', { timeout: 10_000 });
-          return { success: true, output: { connections: parseNetstatWindows(stdout, stateFilter) } };
+          return { success: true, output: { connections, ingest } };
         } catch (err) {
           return { success: false, error: `Connections query failed: ${err instanceof Error ? err.message : String(err)}` };
         }
@@ -1995,12 +2105,665 @@ export class ToolExecutor {
         const isWin = process.platform === 'win32';
         const cmd = isWin ? `tracert -h ${maxHops} -w 2000 ${host}` : `traceroute -m ${maxHops} -w 2 ${host}`;
         try {
-          const { stdout } = await execAsync(cmd, { timeout: 60_000 });
+          const { stdout } = await this.sandboxExec(cmd, 'read-only', { networkAccess: true, timeout: 60_000 });
           const hops = parseTracerouteOutput(stdout);
           return { success: true, output: { host, hops } };
         } catch (err) {
           return { success: false, error: `Traceroute failed: ${err instanceof Error ? err.message : String(err)}` };
         }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'net_oui_lookup',
+        description: 'Look up MAC vendor from OUI prefix. Returns vendor if known from bundled lookup table. Read-only.',
+        risk: 'read_only',
+        category: 'network',
+        parameters: {
+          type: 'object',
+          properties: {
+            mac: { type: 'string', description: 'MAC address (e.g. aa:bb:cc:dd:ee:ff).' },
+          },
+          required: ['mac'],
+        },
+      },
+      async (args, request) => {
+        const mac = requireString(args.mac, 'mac').trim();
+        this.guardAction(request, 'network_probe', { action: 'oui_lookup', mac });
+        return {
+          success: true,
+          output: {
+            mac,
+            vendor: lookupOuiVendor(mac) ?? null,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'net_classify',
+        description: 'Classify discovered devices by type using vendor, hostname, and open-port heuristics. Read-only.',
+        risk: 'read_only',
+        category: 'network',
+        parameters: {
+          type: 'object',
+          properties: {
+            mac: { type: 'string', description: 'Optional MAC filter.' },
+            ip: { type: 'string', description: 'Optional IP filter.' },
+          },
+        },
+      },
+      async (args, request) => {
+        this.guardAction(request, 'network_probe', { action: 'classify' });
+        if (!this.options.deviceInventory) {
+          return { success: false, error: 'Device inventory service is not available.' };
+        }
+        const macFilter = asString(args.mac).trim().toLowerCase();
+        const ipFilter = asString(args.ip).trim();
+        const devices = this.options.deviceInventory.listDevices().filter((d) => {
+          if (macFilter && d.mac.toLowerCase() !== macFilter) return false;
+          if (ipFilter && d.ip !== ipFilter) return false;
+          return true;
+        });
+        const classified = devices.map((d) => {
+          const vendor = d.vendor ?? lookupOuiVendor(d.mac);
+          const cls = classifyDevice({
+            vendor,
+            hostname: d.hostname,
+            openPorts: d.openPorts,
+          });
+          return {
+            ip: d.ip,
+            mac: d.mac,
+            hostname: d.hostname,
+            vendor,
+            deviceType: cls.deviceType,
+            confidence: cls.confidence,
+            matchedSignals: cls.matchedSignals,
+            openPorts: d.openPorts,
+          };
+        });
+        return {
+          success: true,
+          output: {
+            count: classified.length,
+            devices: classified,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'net_banner_grab',
+        description: 'Grab service banners from open ports on a local/private-network host. Protocol-aware for HTTP/SSH/SMTP/FTP with configurable timeout and concurrency. Requires network_access capability.',
+        risk: 'read_only',
+        category: 'network',
+        parameters: {
+          type: 'object',
+          properties: {
+            host: { type: 'string', description: 'Host or IP to fingerprint (private/local only).' },
+            ports: { type: 'array', items: { type: 'number' }, description: 'Optional explicit ports (max 50).' },
+          },
+          required: ['host'],
+        },
+      },
+      async (args, request) => {
+        if (!this.networkConfig.fingerprinting.enabled) {
+          return { success: false, error: 'Network fingerprinting is disabled in configuration.' };
+        }
+        const host = validateHostParam(requireString(args.host, 'host'));
+        requireLocalNetwork(host);
+        this.guardAction(request, 'network_probe', { action: 'banner_grab', host });
+
+        const explicitPorts = Array.isArray(args.ports)
+          ? args.ports.map(Number).filter((value) => Number.isFinite(value) && value > 0 && value <= 65535)
+          : [];
+        let ports = explicitPorts.slice(0, 50);
+        if (ports.length === 0 && this.options.deviceInventory) {
+          const device = this.options.deviceInventory.listDevices().find((entry) => entry.ip === host);
+          if (device) ports = device.openPorts.slice(0, 50);
+        }
+        if (ports.length === 0) {
+          ports = [21, 22, 25, 53, 80, 110, 143, 443, 445, 554, 631, 3306, 5432, 8080, 8443];
+        }
+        ports = [...new Set(ports)].sort((a, b) => a - b);
+
+        const timeoutMs = Math.max(500, this.networkConfig.fingerprinting.bannerTimeout);
+        const maxConcurrent = Math.max(1, this.networkConfig.fingerprinting.maxConcurrentPerDevice);
+        const queue = [...ports];
+        const fingerprints: ReturnType<typeof parseBanner>[] = [];
+        const failures: Array<{ port: number; error: string }> = [];
+
+        const worker = async (): Promise<void> => {
+          while (queue.length > 0) {
+            const port = queue.shift();
+            if (port === undefined) return;
+            try {
+              const banner = await grabPortBanner(host, port, timeoutMs);
+              if (banner) {
+                fingerprints.push(parseBanner(port, banner));
+              } else {
+                fingerprints.push({
+                  port,
+                  service: inferServiceFromPort(port),
+                  banner: '',
+                });
+              }
+            } catch (err) {
+              failures.push({ port, error: err instanceof Error ? err.message : String(err) });
+            }
+          }
+        };
+
+        await Promise.all(
+          Array.from({ length: Math.min(maxConcurrent, ports.length) }, () => worker()),
+        );
+
+        if (this.options.deviceInventory) {
+          this.options.deviceInventory.updateDeviceByIp(host, { fingerprints });
+        }
+
+        return {
+          success: true,
+          output: {
+            host,
+            portsScanned: ports.length,
+            fingerprints: fingerprints.sort((a, b) => a.port - b.port),
+            failures,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'net_fingerprint',
+        description: 'Run full device fingerprinting (OUI vendor + optional port check + banner grab + classification). Requires network_access capability.',
+        risk: 'read_only',
+        category: 'network',
+        parameters: {
+          type: 'object',
+          properties: {
+            host: { type: 'string', description: 'Host/IP to fingerprint (private/local only).' },
+            mac: { type: 'string', description: 'Optional MAC to look up from device inventory.' },
+            ports: { type: 'array', items: { type: 'number' }, description: 'Optional explicit ports to probe.' },
+            portScan: { type: 'boolean', description: 'Run port scan if open ports are unknown (default true).' },
+          },
+        },
+      },
+      async (args, request) => {
+        if (!this.networkConfig.fingerprinting.enabled) {
+          return { success: false, error: 'Network fingerprinting is disabled in configuration.' };
+        }
+        this.guardAction(request, 'network_probe', { action: 'fingerprint' });
+        const macFilter = asString(args.mac).trim().toLowerCase();
+        let host = asString(args.host).trim();
+        let inventoryDevice: ReturnType<DeviceInventoryService['listDevices']>[number] | undefined;
+        if (!host && macFilter && this.options.deviceInventory) {
+          inventoryDevice = this.options.deviceInventory.listDevices().find((entry) => entry.mac === macFilter);
+          host = inventoryDevice?.ip ?? '';
+        }
+        if (!host) {
+          return { success: false, error: 'host is required (or provide mac with a matching inventory device).' };
+        }
+        host = validateHostParam(host);
+        requireLocalNetwork(host);
+
+        let openPorts = Array.isArray(args.ports)
+          ? args.ports.map(Number).filter((value) => Number.isFinite(value) && value > 0 && value <= 65535)
+          : [];
+
+        if (openPorts.length === 0) {
+          if (!inventoryDevice && this.options.deviceInventory) {
+            inventoryDevice = this.options.deviceInventory.listDevices().find((entry) => entry.ip === host);
+          }
+          if (inventoryDevice?.openPorts.length) {
+            openPorts = inventoryDevice.openPorts.slice();
+          }
+        }
+
+        const shouldPortScan = args.portScan !== false;
+        if (openPorts.length === 0 && shouldPortScan) {
+          const candidatePorts = [21, 22, 23, 25, 53, 80, 110, 139, 143, 443, 445, 515, 554, 631, 2049, 3306, 3389, 5432, 8080, 8443, 9100];
+          const portResults = await Promise.all(candidatePorts.map((port) => checkTcpPort(host, port, 1500)));
+          openPorts = portResults.filter((entry) => entry.open).map((entry) => entry.port);
+        }
+        openPorts = [...new Set(openPorts)].sort((a, b) => a - b);
+
+        const timeoutMs = Math.max(500, this.networkConfig.fingerprinting.bannerTimeout);
+        const maxConcurrent = Math.max(1, this.networkConfig.fingerprinting.maxConcurrentPerDevice);
+        const queue = [...openPorts];
+        const fingerprints: ReturnType<typeof parseBanner>[] = [];
+        const worker = async (): Promise<void> => {
+          while (queue.length > 0) {
+            const port = queue.shift();
+            if (port === undefined) return;
+            const banner = await grabPortBanner(host, port, timeoutMs).catch(() => null);
+            if (banner) {
+              fingerprints.push(parseBanner(port, banner));
+            }
+          }
+        };
+        await Promise.all(
+          Array.from({ length: Math.min(maxConcurrent, Math.max(1, openPorts.length)) }, () => worker()),
+        );
+
+        const vendor = inventoryDevice?.vendor ?? (macFilter ? lookupOuiVendor(macFilter) : undefined);
+        const classification = classifyDevice({
+          vendor,
+          hostname: inventoryDevice?.hostname ?? null,
+          openPorts,
+        });
+
+        if (this.options.deviceInventory) {
+          this.options.deviceInventory.updateDeviceByIp(host, {
+            openPorts,
+            vendor,
+            fingerprints,
+          });
+        }
+
+        return {
+          success: true,
+          output: {
+            host,
+            mac: inventoryDevice?.mac ?? (macFilter || null),
+            vendor: vendor ?? null,
+            openPorts,
+            fingerprints: fingerprints.sort((a, b) => a.port - b.port),
+            classification: {
+              deviceType: classification.deviceType,
+              confidence: classification.confidence,
+              matchedSignals: classification.matchedSignals,
+            },
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'net_wifi_scan',
+        description: 'Scan nearby WiFi networks (SSID/BSSID/signal/security). Uses nmcli (Linux), airport (macOS), or netsh (Windows). Requires network_access capability.',
+        risk: 'read_only',
+        category: 'network',
+        parameters: {
+          type: 'object',
+          properties: {
+            platform: { type: 'string', description: 'Optional platform override: auto, linux, macos, windows.' },
+            force: { type: 'boolean', description: 'Run even if assistant.network.wifi.enabled is false.' },
+            connectionId: { type: 'string', description: 'Optional assistant.network.connections id (must be wifi or auto-compatible).' },
+          },
+        },
+      },
+      async (args, request) => {
+        const force = !!args.force;
+        if (!force && !this.networkConfig.wifi.enabled) {
+          return { success: false, error: 'WiFi monitoring is disabled in configuration (assistant.network.wifi.enabled=false).' };
+        }
+        this.guardAction(request, 'network_probe', { action: 'wifi_scan' });
+        const connectionId = asString(args.connectionId).trim();
+        const connection = connectionId ? this.getConnectionProfile(connectionId) : undefined;
+        if (connectionId && !connection) {
+          return { success: false, error: `Unknown network connection profile '${connectionId}'.` };
+        }
+        if (connection && connection.type !== 'wifi') {
+          return { success: false, error: `Connection '${connection.id}' is type '${connection.type}', expected 'wifi'.` };
+        }
+        const override = asString(args.platform).trim().toLowerCase();
+        const resolvedPlatform = override || this.networkConfig.wifi.platform;
+        const platform = resolvedPlatform === 'auto'
+          ? (process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux')
+          : resolvedPlatform;
+
+        try {
+          if (platform === 'linux') {
+            const { stdout } = await this.sandboxExec(
+              'nmcli -t -f SSID,BSSID,SIGNAL,CHAN,SECURITY dev wifi list',
+              'read-only',
+              { networkAccess: true, timeout: 20_000 },
+            );
+            let networks = parseNmcliWifi(stdout);
+            if (connection?.ssid) {
+              networks = networks.filter((network) => network.ssid === connection.ssid);
+            }
+            return { success: true, output: { platform, connectionId: connection?.id ?? null, count: networks.length, networks } };
+          }
+          if (platform === 'macos') {
+            const { stdout } = await this.sandboxExec(
+              '/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s',
+              'read-only',
+              { networkAccess: true, timeout: 20_000 },
+            );
+            let networks = parseAirportWifi(stdout);
+            if (connection?.ssid) {
+              networks = networks.filter((network) => network.ssid === connection.ssid);
+            }
+            return { success: true, output: { platform, connectionId: connection?.id ?? null, count: networks.length, networks } };
+          }
+          const { stdout } = await this.sandboxExec(
+            'netsh.exe wlan show networks mode=bssid',
+            'read-only',
+            { networkAccess: true, timeout: 20_000 },
+          );
+          let networks = parseNetshWifi(stdout);
+          if (connection?.ssid) {
+            networks = networks.filter((network) => network.ssid === connection.ssid);
+          }
+          return { success: true, output: { platform: 'windows', connectionId: connection?.id ?? null, count: networks.length, networks } };
+        } catch (err) {
+          return { success: false, error: `WiFi scan failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'net_wifi_clients',
+        description: 'List likely WiFi clients by correlating ARP-neighbor observations with discovered devices. Requires network_access capability.',
+        risk: 'read_only',
+        category: 'network',
+        parameters: {
+          type: 'object',
+          properties: {
+            force: { type: 'boolean', description: 'Run even if assistant.network.wifi.enabled is false.' },
+          },
+        },
+      },
+      async (args, request) => {
+        const force = !!args.force;
+        if (!force && !this.networkConfig.wifi.enabled) {
+          return { success: false, error: 'WiFi monitoring is disabled in configuration (assistant.network.wifi.enabled=false).' };
+        }
+        this.guardAction(request, 'network_probe', { action: 'wifi_clients' });
+        const platform = process.platform;
+        let arpRows: Array<{ ip: string; mac: string; state: string }> = [];
+        try {
+          if (platform === 'linux') {
+            try {
+              const { stdout } = await this.sandboxExec('ip neigh show', 'read-only', { networkAccess: true, timeout: 10_000 });
+              arpRows = parseArpLinux(stdout);
+            } catch {
+              const { stdout } = await this.sandboxExec('arp -a', 'read-only', { networkAccess: true, timeout: 10_000 });
+              arpRows = parseArpWindows(stdout);
+            }
+          } else {
+            const { stdout } = await this.sandboxExec('arp -a', 'read-only', { networkAccess: true, timeout: 10_000 });
+            arpRows = parseArpWindows(stdout);
+          }
+        } catch (err) {
+          return { success: false, error: `WiFi client enumeration failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+
+        const devices = this.options.deviceInventory?.listDevices() ?? [];
+        const byMac = new Map(devices.map((device) => [device.mac.toLowerCase(), device]));
+        const clients = arpRows
+          .filter((row) => row.mac && row.mac !== 'unknown')
+          .map((row) => {
+            const known = byMac.get(row.mac.toLowerCase());
+            return {
+              ip: row.ip,
+              mac: row.mac.toLowerCase(),
+              state: row.state,
+              hostname: known?.hostname ?? null,
+              vendor: known?.vendor ?? lookupOuiVendor(row.mac),
+              deviceType: known?.deviceType ?? null,
+              trusted: known?.trusted ?? false,
+            };
+          });
+
+        return {
+          success: true,
+          output: {
+            count: clients.length,
+            clients,
+            correlatedKnownDevices: correlateWifiClients(devices),
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'net_connection_profiles',
+        description: 'List configured assistant.network connection profiles with interface/host health hints.',
+        risk: 'read_only',
+        category: 'network',
+        parameters: { type: 'object', properties: {} },
+      },
+      async (_args, request) => {
+        this.guardAction(request, 'network_probe', { action: 'connection_profiles' });
+        const { networkInterfaces } = await import('node:os');
+        const ifaces = networkInterfaces();
+        const profiles = this.networkConfig.connections.map((connection) => {
+          const iface = connection.interface ? ifaces[connection.interface] : undefined;
+          return {
+            ...connection,
+            interfacePresent: connection.interface ? Boolean(iface && iface.length > 0) : undefined,
+            interfaceAddresses: iface
+              ? iface.map((entry) => ({ address: entry.address, family: entry.family, internal: entry.internal }))
+              : [],
+          };
+        });
+        return {
+          success: true,
+          output: {
+            count: profiles.length,
+            profiles,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'net_traffic_baseline',
+        description: 'Build/query traffic baseline from local connection metadata. Optional refresh runs a live connection capture first. Requires network_access capability.',
+        risk: 'read_only',
+        category: 'network',
+        parameters: {
+          type: 'object',
+          properties: {
+            refresh: { type: 'boolean', description: 'Capture current connections before returning baseline snapshot.' },
+            state: { type: 'string', description: 'Optional connection state filter for refresh capture.' },
+            limitFlows: { type: 'number', description: 'Recent flow sample size (default 100).' },
+          },
+        },
+      },
+      async (args, request) => {
+        this.guardAction(request, 'network_probe', { action: 'traffic_baseline' });
+        if (!this.options.networkTraffic) {
+          return { success: false, error: 'Network traffic service is not available.' };
+        }
+
+        const refresh = args.refresh !== false;
+        let ingest: { flowCount: number; added: number; threats: unknown[] } | null = null;
+        if (refresh) {
+          const stateFilter = asString(args.state).toUpperCase().trim();
+          const connections = await this.collectLocalConnections(stateFilter);
+          ingest = this.options.networkTraffic.ingestConnections(
+            connections.map((connection) => toTrafficSample(connection)),
+          );
+        }
+
+        const limit = Math.max(1, Math.min(500, asNumber(args.limitFlows, 100)));
+        return {
+          success: true,
+          output: {
+            snapshot: this.options.networkTraffic.getSnapshot(),
+            ingest,
+            recentFlows: this.options.networkTraffic.listRecentFlows({ limit }),
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'net_threat_check',
+        description: 'Run traffic-based threat detection rules (exfiltration, scanning, beaconing, lateral movement, unusual external). Optional refresh captures live connections first. Requires network_access capability.',
+        risk: 'read_only',
+        category: 'network',
+        parameters: {
+          type: 'object',
+          properties: {
+            refresh: { type: 'boolean', description: 'Capture current local connections before analysis (default true).' },
+            state: { type: 'string', description: 'Optional connection state filter for refresh capture.' },
+            includeLow: { type: 'boolean', description: 'Include low-severity findings in output.' },
+          },
+        },
+      },
+      async (args, request) => {
+        this.guardAction(request, 'network_probe', { action: 'threat_check' });
+        if (!this.options.networkTraffic) {
+          return { success: false, error: 'Network traffic service is not available.' };
+        }
+
+        const refresh = args.refresh !== false;
+        let ingestResult: { flowCount: number; added: number; threats: ReturnType<NetworkTrafficService['ingestConnections']>['threats'] } | null = null;
+        if (refresh) {
+          const stateFilter = asString(args.state).toUpperCase().trim();
+          const connections = await this.collectLocalConnections(stateFilter);
+          ingestResult = this.options.networkTraffic.ingestConnections(
+            connections.map((connection) => toTrafficSample(connection)),
+          );
+        }
+
+        let threats = ingestResult?.threats ?? [];
+        if (!args.includeLow) {
+          threats = threats.filter((threat) => threat.severity !== 'low');
+        }
+
+        let emittedAlerts: unknown[] = [];
+        if (threats.length > 0 && this.options.networkBaseline) {
+          emittedAlerts = this.options.networkBaseline.recordExternalThreats(
+            threats.map((threat) => ({
+              type: threat.type,
+              severity: threat.severity,
+              timestamp: threat.timestamp,
+              ip: threat.srcIp,
+              description: threat.description,
+              dedupeKey: threat.dedupeKey,
+              evidence: threat.evidence,
+            })),
+          );
+        }
+
+        return {
+          success: true,
+          output: {
+            snapshot: this.options.networkTraffic.getSnapshot(),
+            threats,
+            threatCount: threats.length,
+            emittedAlerts,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'net_baseline',
+        description: 'Get network baseline status and device profile summary. Read-only.',
+        risk: 'read_only',
+        category: 'network',
+        parameters: {
+          type: 'object',
+          properties: {
+            includeDevices: { type: 'boolean', description: 'Include known device records in response.' },
+          },
+        },
+      },
+      async (args, request) => {
+        this.guardAction(request, 'network_probe', { action: 'baseline_status' });
+        if (!this.networkConfig.baseline.enabled) {
+          return { success: false, error: 'Network baseline monitoring is disabled in configuration.' };
+        }
+        if (!this.options.networkBaseline) {
+          return { success: false, error: 'Network baseline service is not available.' };
+        }
+        const includeDevices = !!args.includeDevices;
+        const snapshot = this.options.networkBaseline.getSnapshot();
+        return {
+          success: true,
+          output: {
+            snapshotCount: snapshot.snapshotCount,
+            minSnapshotsForBaseline: snapshot.minSnapshotsForBaseline,
+            baselineReady: snapshot.baselineReady,
+            lastUpdatedAt: snapshot.lastUpdatedAt,
+            knownDeviceCount: snapshot.knownDevices.length,
+            knownDevices: includeDevices ? snapshot.knownDevices : undefined,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'net_anomaly_check',
+        description: 'Run anomaly detection against current discovered devices and update network alert state. Read-only.',
+        risk: 'read_only',
+        category: 'network',
+        parameters: { type: 'object', properties: {} },
+      },
+      async (_args, request) => {
+        this.guardAction(request, 'network_probe', { action: 'anomaly_check' });
+        if (!this.networkConfig.baseline.enabled) {
+          return { success: false, error: 'Network baseline monitoring is disabled in configuration.' };
+        }
+        if (!this.options.networkBaseline || !this.options.deviceInventory) {
+          return { success: false, error: 'Network baseline or device inventory service is not available.' };
+        }
+        const report = this.options.networkBaseline.runSnapshot(this.options.deviceInventory.listDevices());
+        return { success: true, output: report };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'net_threat_summary',
+        description: 'Summarize active network alerts and baseline readiness. Read-only.',
+        risk: 'read_only',
+        category: 'network',
+        parameters: {
+          type: 'object',
+          properties: {
+            includeAcknowledged: { type: 'boolean', description: 'Include acknowledged alerts.' },
+            limit: { type: 'number', description: 'Maximum alerts to return (default 50).' },
+          },
+        },
+      },
+      async (args, request) => {
+        this.guardAction(request, 'network_probe', { action: 'threat_summary' });
+        if (!this.networkConfig.baseline.enabled) {
+          return { success: false, error: 'Network baseline monitoring is disabled in configuration.' };
+        }
+        if (!this.options.networkBaseline) {
+          return { success: false, error: 'Network baseline service is not available.' };
+        }
+        const includeAcknowledged = !!args.includeAcknowledged;
+        const limit = Math.max(1, Math.min(200, asNumber(args.limit, 50)));
+        const alerts = this.options.networkBaseline.listAlerts({ includeAcknowledged, limit });
+        const bySeverity = {
+          low: alerts.filter((a) => a.severity === 'low').length,
+          medium: alerts.filter((a) => a.severity === 'medium').length,
+          high: alerts.filter((a) => a.severity === 'high').length,
+          critical: alerts.filter((a) => a.severity === 'critical').length,
+        };
+        const baseline = this.options.networkBaseline.getSnapshot();
+        return {
+          success: true,
+          output: {
+            baselineReady: baseline.baselineReady,
+            snapshotCount: baseline.snapshotCount,
+            activeAlertCount: alerts.length,
+            bySeverity,
+            alerts,
+          },
+        };
       },
     );
 
@@ -2054,10 +2817,10 @@ export class ToolExecutor {
         try {
           const isWin = process.platform === 'win32';
           if (isWin) {
-            const { stdout } = await execAsync('wmic logicaldisk get size,freespace,caption /format:csv', { timeout: 10_000 });
+            const { stdout } = await this.sandboxExec('wmic logicaldisk get size,freespace,caption /format:csv', 'read-only', { timeout: 10_000 });
             disks = parseDiskWindows(stdout);
           } else {
-            const { stdout } = await execAsync('df -Pm', { timeout: 10_000 });
+            const { stdout } = await this.sandboxExec('df -Pm', 'read-only', { timeout: 10_000 });
             disks = parseDiskLinux(stdout);
           }
         } catch { /* disk info is best-effort */ }
@@ -2087,20 +2850,20 @@ export class ToolExecutor {
         const platform = process.platform;
         try {
           if (platform === 'win32') {
-            const { stdout } = await execAsync('tasklist /FO CSV /NH', { timeout: 10_000 });
+            const { stdout } = await this.sandboxExec('tasklist /FO CSV /NH', 'read-only', { timeout: 10_000 });
             const processes = parseTasklistWindows(stdout, limit);
             return { success: true, output: { processes } };
           }
           if (platform === 'darwin') {
             // macOS BSD ps: -r sorts by CPU, -m sorts by memory (no --sort)
             const flag = sortBy === 'memory' ? '-m' : '-r';
-            const { stdout } = await execAsync(`ps aux ${flag}`, { timeout: 10_000 });
+            const { stdout } = await this.sandboxExec(`ps aux ${flag}`, 'read-only', { timeout: 10_000 });
             const processes = parsePsLinux(stdout, limit);
             return { success: true, output: { processes } };
           }
           // Linux GNU ps: supports --sort
           const sortFlag = sortBy === 'memory' ? '-%mem' : '-%cpu';
-          const { stdout } = await execAsync(`ps aux --sort=${sortFlag}`, { timeout: 10_000 });
+          const { stdout } = await this.sandboxExec(`ps aux --sort=${sortFlag}`, 'read-only', { timeout: 10_000 });
           const processes = parsePsLinux(stdout, limit);
           return { success: true, output: { processes } };
         } catch (err) {
@@ -2132,7 +2895,7 @@ export class ToolExecutor {
 
         if (platform === 'darwin') {
           try {
-            const { stdout } = await execAsync('launchctl list', { timeout: 10_000 });
+            const { stdout } = await this.sandboxExec('launchctl list', 'read-only', { timeout: 10_000 });
             const services = parseLaunchctlOutput(stdout, filter);
             return { success: true, output: { services } };
           } catch (err) {
@@ -2142,8 +2905,9 @@ export class ToolExecutor {
 
         // Linux — try systemctl
         try {
-          const { stdout } = await execAsync(
+          const { stdout } = await this.sandboxExec(
             'systemctl list-units --type=service --all --no-pager --plain',
+            'read-only',
             { timeout: 10_000 },
           );
           const services = parseSystemctlOutput(stdout, filter);
@@ -2700,11 +3464,17 @@ export class ToolExecutor {
     };
   }
 
-  private resolveAllowedPath(inputPath: string): string {
+  private async resolveAllowedPath(inputPath: string): Promise<string> {
     const normalizedInput = normalizePathForHost(inputPath);
-    const candidate = isAbsolute(normalizedInput)
+    let candidate = isAbsolute(normalizedInput)
       ? resolve(normalizedInput)
       : resolve(this.options.workspaceRoot, normalizedInput);
+    // Resolve symlinks to prevent traversal via symlink to sensitive paths
+    try {
+      candidate = await realpath(candidate);
+    } catch {
+      // Path may not exist yet (e.g. write_file creating new file) — use resolved path
+    }
     const roots = uniqueNonEmpty(this.policy.sandbox.allowedPaths)
       .map((root) => resolve(normalizePathForHost(root)));
     const allowed = roots.some((root) => isPathInside(candidate, root));
@@ -2941,6 +3711,52 @@ export class ToolExecutor {
       const allowed = allowedHost.trim().toLowerCase();
       return normalized === allowed || normalized.endsWith(`.${allowed}`);
     });
+  }
+
+  /** Execute a command through the OS-level sandbox. */
+  private sandboxExec(
+    command: string,
+    profile: SandboxProfile,
+    opts: { networkAccess?: boolean; cwd?: string; timeout?: number; maxBuffer?: number } = {},
+  ): Promise<{ stdout: string; stderr: string }> {
+    return sandboxedExec(command, this.sandboxConfig, {
+      profile,
+      networkAccess: opts.networkAccess,
+      cwd: opts.cwd ?? this.options.workspaceRoot,
+      timeout: opts.timeout,
+      maxBuffer: opts.maxBuffer,
+    });
+  }
+
+  private async collectLocalConnections(
+    stateFilter: string,
+  ): Promise<Array<{
+    protocol: string;
+    localAddress: string;
+    localPort: number;
+    remoteAddress: string;
+    remotePort: number;
+    state: string;
+    process: string | null;
+  }>> {
+    const platform = process.platform;
+    if (platform === 'linux') {
+      try {
+        const { stdout } = await this.sandboxExec('ss -tunap', 'read-only', { networkAccess: true, timeout: 10_000 });
+        return parseSsLinux(stdout, stateFilter);
+      } catch {
+        const { stdout } = await this.sandboxExec('netstat -an', 'read-only', { networkAccess: true, timeout: 10_000 });
+        return parseNetstatWindows(stdout, stateFilter);
+      }
+    }
+    const { stdout } = await this.sandboxExec('netstat -an', 'read-only', { networkAccess: true, timeout: 10_000 });
+    return parseNetstatWindows(stdout, stateFilter);
+  }
+
+  private getConnectionProfile(connectionId: string): AssistantNetworkConfig['connections'][number] | undefined {
+    const id = connectionId.trim();
+    if (!id) return undefined;
+    return this.networkConfig.connections.find((connection) => connection.id === id);
   }
 
   private guardAction(
@@ -3257,6 +4073,15 @@ export function validateHostParam(host: string): string {
   return trimmed;
 }
 
+function sanitizeInterfaceName(name: string): string {
+  const value = name.trim();
+  if (!value) throw new Error('Interface name cannot be empty.');
+  if (!/^[a-zA-Z0-9_.:-]+$/.test(value)) {
+    throw new Error('Interface name contains invalid characters.');
+  }
+  return value;
+}
+
 /**
  * Check whether a hostname or IP is within private/local network ranges.
  * Allows: RFC1918 (10.x, 172.16-31.x, 192.168.x), link-local (169.254.x),
@@ -3338,6 +4163,85 @@ async function checkTcpPort(host: string, port: number, timeoutMs: number): Prom
     socket.on('connect', () => done(true));
     socket.on('timeout', () => done(false));
     socket.on('error', () => done(false));
+    socket.connect(port, host);
+  });
+}
+
+function toTrafficSample(connection: {
+  protocol: string;
+  localAddress: string;
+  localPort: number;
+  remoteAddress: string;
+  remotePort: number;
+  state: string;
+}): TrafficConnectionSample {
+  return {
+    protocol: connection.protocol,
+    localAddress: connection.localAddress,
+    localPort: connection.localPort,
+    remoteAddress: connection.remoteAddress,
+    remotePort: connection.remotePort,
+    state: connection.state,
+  };
+}
+
+async function grabPortBanner(host: string, port: number, timeoutMs: number): Promise<string | null> {
+  const isHttp = port === 80 || port === 8080 || port === 8000;
+  const isHttps = port === 443 || port === 8443;
+  if (isHttps) {
+    const tls = await import('node:tls');
+    return new Promise((resolve, reject) => {
+      const socket = tls.connect({
+        host,
+        port,
+        rejectUnauthorized: false,
+      });
+      let resolved = false;
+      let data = '';
+      const done = (value: string | null): void => {
+        if (resolved) return;
+        resolved = true;
+        socket.destroy();
+        resolve(value);
+      };
+      socket.setTimeout(timeoutMs);
+      socket.on('secureConnect', () => {
+        socket.write(`HEAD / HTTP/1.0\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
+      });
+      socket.on('data', (chunk: Buffer | string) => {
+        data += chunk.toString('utf-8');
+        if (data.length > 8192) done(data.slice(0, 8192));
+      });
+      socket.on('end', () => done(data || null));
+      socket.on('timeout', () => done(data || null));
+      socket.on('error', (err) => reject(err));
+    });
+  }
+
+  const { Socket } = await import('node:net');
+  return new Promise((resolve, reject) => {
+    const socket = new Socket();
+    let resolved = false;
+    let data = '';
+    const done = (value: string | null): void => {
+      if (resolved) return;
+      resolved = true;
+      socket.destroy();
+      resolve(value);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.on('connect', () => {
+      if (isHttp) {
+        socket.write(`HEAD / HTTP/1.0\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
+      }
+    });
+    socket.on('data', (chunk: Buffer | string) => {
+      data += chunk.toString('utf-8');
+      if (data.length > 8192) done(data.slice(0, 8192));
+    });
+    socket.on('end', () => done(data || null));
+    socket.on('timeout', () => done(data || null));
+    socket.on('error', (err) => reject(err));
     socket.connect(port, host);
   });
 }

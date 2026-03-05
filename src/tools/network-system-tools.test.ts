@@ -27,7 +27,7 @@ function makeRequest(toolName: string, args: Record<string, unknown> = {}): Tool
 
 describe('Network & System Tools', () => {
   describe('Tool registration', () => {
-    it('registers all 11 network/system tools', () => {
+    it('registers all network/system tools including baseline/security helpers', () => {
       const executor = makeExecutor();
       const defs = executor.listToolDefinitions();
       const names = defs.map((d) => d.name);
@@ -38,6 +38,18 @@ describe('Network & System Tools', () => {
       expect(names).toContain('net_connections');
       expect(names).toContain('net_dns_lookup');
       expect(names).toContain('net_traceroute');
+      expect(names).toContain('net_oui_lookup');
+      expect(names).toContain('net_classify');
+      expect(names).toContain('net_banner_grab');
+      expect(names).toContain('net_fingerprint');
+      expect(names).toContain('net_wifi_scan');
+      expect(names).toContain('net_wifi_clients');
+      expect(names).toContain('net_connection_profiles');
+      expect(names).toContain('net_baseline');
+      expect(names).toContain('net_anomaly_check');
+      expect(names).toContain('net_threat_summary');
+      expect(names).toContain('net_traffic_baseline');
+      expect(names).toContain('net_threat_check');
       expect(names).toContain('sys_info');
       expect(names).toContain('sys_resources');
       expect(names).toContain('sys_processes');
@@ -48,7 +60,7 @@ describe('Network & System Tools', () => {
       const executor = makeExecutor();
       const defs = executor.listToolDefinitions();
       const netSysTools = defs.filter((d) => d.name.startsWith('net_') || d.name.startsWith('sys_'));
-      expect(netSysTools.length).toBe(11);
+      expect(netSysTools.length).toBe(23);
       for (const tool of netSysTools) {
         expect(tool.risk).toBe('read_only');
       }

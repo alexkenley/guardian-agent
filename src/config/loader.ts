@@ -267,6 +267,58 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     }
   }
 
+  const network = assistant.network;
+  if (!['bundled', 'remote'].includes(network.deviceIntelligence.ouiDatabase)) {
+    errors.push("assistant.network.deviceIntelligence.ouiDatabase must be 'bundled' or 'remote'");
+  }
+  if (network.baseline.minSnapshotsForBaseline < 1) {
+    errors.push('assistant.network.baseline.minSnapshotsForBaseline must be >= 1');
+  }
+  if (network.baseline.dedupeWindowMs < 1_000) {
+    errors.push('assistant.network.baseline.dedupeWindowMs must be >= 1000');
+  }
+  if (network.fingerprinting.bannerTimeout < 500) {
+    errors.push('assistant.network.fingerprinting.bannerTimeout must be >= 500');
+  }
+  if (network.fingerprinting.maxConcurrentPerDevice < 1) {
+    errors.push('assistant.network.fingerprinting.maxConcurrentPerDevice must be >= 1');
+  }
+  if (!['auto', 'linux', 'macos', 'windows'].includes(network.wifi.platform)) {
+    errors.push("assistant.network.wifi.platform must be 'auto', 'linux', 'macos', or 'windows'");
+  }
+  if (network.wifi.scanInterval < 30) {
+    errors.push('assistant.network.wifi.scanInterval must be >= 30');
+  }
+  if (!['ss', 'conntrack', 'router-api'].includes(network.trafficAnalysis.dataSource)) {
+    errors.push("assistant.network.trafficAnalysis.dataSource must be 'ss', 'conntrack', or 'router-api'");
+  }
+  if (network.trafficAnalysis.flowRetention < 60_000) {
+    errors.push('assistant.network.trafficAnalysis.flowRetention must be >= 60000');
+  }
+  if (network.trafficAnalysis.threatRules.dataExfiltration.thresholdMB < 1) {
+    errors.push('assistant.network.trafficAnalysis.threatRules.dataExfiltration.thresholdMB must be >= 1');
+  }
+  if (network.trafficAnalysis.threatRules.portScanning.portThreshold < 5) {
+    errors.push('assistant.network.trafficAnalysis.threatRules.portScanning.portThreshold must be >= 5');
+  }
+  if (network.trafficAnalysis.threatRules.beaconing.minIntervals < 2) {
+    errors.push('assistant.network.trafficAnalysis.threatRules.beaconing.minIntervals must be >= 2');
+  }
+  for (const connection of network.connections) {
+    if (!connection.id?.trim()) {
+      errors.push('assistant.network.connections[].id is required');
+    }
+    if (!['lan', 'wifi', 'vpn', 'remote'].includes(connection.type)) {
+      errors.push(`assistant.network.connections.${connection.id || '(unnamed)'}.type is invalid`);
+    }
+    if (connection.type === 'wifi' && !connection.ssid?.trim()) {
+      errors.push(`assistant.network.connections.${connection.id || '(unnamed)'} requires ssid for wifi type`);
+    }
+    if (connection.type === 'remote' && !connection.host?.trim()) {
+      errors.push(`assistant.network.connections.${connection.id || '(unnamed)'} requires host for remote type`);
+    }
+  }
+
   const connectors = assistant.connectors;
   if (!['plan_then_execute', 'direct_execute'].includes(connectors.executionMode)) {
     errors.push("assistant.connectors.executionMode must be 'plan_then_execute' or 'direct_execute'");

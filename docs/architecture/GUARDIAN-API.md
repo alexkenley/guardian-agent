@@ -183,7 +183,7 @@ import { CapabilityController } from './guardian/guardian.js';
 const controller = new CapabilityController();
 ```
 
-Action type → capability mapping is fixed (see SECURITY.md). Unknown action types pass through.
+Action type → capability mapping is fixed (see [SECURITY.md](../../SECURITY.md)). Unknown action types are denied by default except explicit internal passthrough actions.
 
 ### `SecretScanController`
 

@@ -346,7 +346,7 @@ SequentialAgent.onMessage()
   Return final response
 ```
 
-See [SECURITY.md](./SECURITY.md) for comprehensive security documentation.
+See [SECURITY.md](../../SECURITY.md) for comprehensive security documentation.
 
 See [GUARDIAN-API.md](./GUARDIAN-API.md) for API reference.
 

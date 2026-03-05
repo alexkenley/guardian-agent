@@ -204,6 +204,19 @@ export const api = {
     body: JSON.stringify({ templateId }),
   }),
   networkDevices: () => request('/api/network/devices'),
+  networkBaseline: () => request('/api/network/baseline'),
+  networkThreats: (params = {}) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== '') qs.set(k, String(v));
+    }
+    const q = qs.toString();
+    return request(`/api/network/threats${q ? '?' + q : ''}`);
+  },
+  acknowledgeNetworkThreat: (alertId) => request('/api/network/threats/ack', {
+    method: 'POST',
+    body: JSON.stringify({ alertId }),
+  }),
   networkScan: () => request('/api/network/scan', {
     method: 'POST',
     body: JSON.stringify({}),

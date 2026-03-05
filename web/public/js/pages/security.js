@@ -12,11 +12,13 @@ import { applyInputTooltips } from '../tooltip.js';
 let auditHandler = null;
 let monAuditHandler = null;
 let monMetricsHandler = null;
+let monSecurityAlertHandler = null;
 
 function cleanupSSE() {
   if (auditHandler) { offSSE('audit', auditHandler); auditHandler = null; }
   if (monAuditHandler) { offSSE('audit', monAuditHandler); monAuditHandler = null; }
   if (monMetricsHandler) { offSSE('metrics', monMetricsHandler); monMetricsHandler = null; }
+  if (monSecurityAlertHandler) { offSSE('security.alert', monSecurityAlertHandler); monSecurityAlertHandler = null; }
 }
 
 export async function renderSecurity(container) {
@@ -211,13 +213,143 @@ async function renderMonitoringTab(panel) {
   panel.innerHTML = '<div class="loading">Loading...</div>';
 
   try {
-    const [agents, budget, analytics] = await Promise.all([
+    const [agents, budget, analytics, baseline, threatState] = await Promise.all([
       api.agents().catch(() => []),
       api.budget().catch(() => ({ agents: [], recentOverruns: [] })),
       api.analyticsSummary(3600000).catch(() => null),
+      api.networkBaseline().catch(() => null),
+      api.networkThreats({ limit: 50 }).catch(() => null),
     ]);
 
     panel.innerHTML = '';
+
+    const safeBaseline = baseline || {
+      snapshotCount: 0,
+      minSnapshotsForBaseline: 3,
+      baselineReady: false,
+      lastUpdatedAt: 0,
+      knownDevices: [],
+    };
+    const safeThreatState = threatState || {
+      alerts: [],
+      activeAlertCount: 0,
+      bySeverity: { low: 0, medium: 0, high: 0, critical: 0 },
+      baselineReady: safeBaseline.baselineReady,
+      snapshotCount: safeBaseline.snapshotCount,
+    };
+
+    const threatSectionHeader = document.createElement('h3');
+    threatSectionHeader.className = 'section-header';
+    threatSectionHeader.textContent = 'Network Threat Posture';
+    panel.appendChild(threatSectionHeader);
+
+    const threatGrid = document.createElement('div');
+    threatGrid.className = 'cards-grid';
+    panel.appendChild(threatGrid);
+
+    const threatContainer = document.createElement('div');
+    threatContainer.className = 'table-container';
+    threatContainer.innerHTML = `
+      <div class="table-header">
+        <h3>Active Network Alerts</h3>
+        <div>
+          <span id="net-threat-meta" style="font-size:0.8rem;color:var(--text-muted);margin-right:0.75rem;"></span>
+          <button class="btn btn-secondary" id="net-threat-refresh">Refresh</button>
+        </div>
+      </div>
+      <table>
+        <thead><tr><th>Time</th><th>Severity</th><th>Type</th><th>Host</th><th>Details</th><th>Action</th></tr></thead>
+        <tbody id="net-threat-table-body"></tbody>
+      </table>
+    `;
+    panel.appendChild(threatContainer);
+
+    const threatMetaEl = threatContainer.querySelector('#net-threat-meta');
+    const threatTableBody = threatContainer.querySelector('#net-threat-table-body');
+
+    const renderThreatCards = (baselineState, currentThreatState) => {
+      threatGrid.innerHTML = '';
+      threatGrid.appendChild(createStatusCard(
+        'Baseline',
+        baselineState.baselineReady ? 'Ready' : 'Learning',
+        `${baselineState.snapshotCount}/${baselineState.minSnapshotsForBaseline} snapshots`,
+        baselineState.baselineReady ? 'success' : 'warning',
+      ));
+      threatGrid.appendChild(createStatusCard(
+        'Known Devices',
+        baselineState.knownDevices.length,
+        baselineState.lastUpdatedAt ? `Updated ${new Date(baselineState.lastUpdatedAt).toLocaleTimeString()}` : 'No snapshots yet',
+        'info',
+      ));
+      threatGrid.appendChild(createStatusCard(
+        'Active Alerts',
+        currentThreatState.activeAlertCount || 0,
+        `${currentThreatState.bySeverity?.critical ?? 0} critical`,
+        (currentThreatState.bySeverity?.high ?? 0) > 0 || (currentThreatState.bySeverity?.critical ?? 0) > 0 ? 'error' : 'accent',
+      ));
+      threatGrid.appendChild(createStatusCard(
+        'High + Critical',
+        (currentThreatState.bySeverity?.high ?? 0) + (currentThreatState.bySeverity?.critical ?? 0),
+        `Medium ${currentThreatState.bySeverity?.medium ?? 0} / Low ${currentThreatState.bySeverity?.low ?? 0}`,
+        (currentThreatState.bySeverity?.high ?? 0) + (currentThreatState.bySeverity?.critical ?? 0) > 0 ? 'warning' : 'success',
+      ));
+    };
+
+    const renderThreatRows = (alerts) => {
+      if (!threatTableBody) return;
+      if (!alerts || alerts.length === 0) {
+        threatTableBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No active network alerts.</td></tr>';
+        return;
+      }
+      threatTableBody.innerHTML = alerts.map((alert) => `
+        <tr>
+          <td>${new Date(alert.lastSeenAt || alert.timestamp || Date.now()).toLocaleTimeString()}</td>
+          <td><span class="badge ${severityClass(alert.severity)}">${esc(alert.severity)}</span></td>
+          <td>${esc(alert.type)}</td>
+          <td>${esc(alert.ip || alert.mac || '-')}</td>
+          <td title="${escAttr(alert.description || '')}">${esc(alert.description || '-')}</td>
+          <td><button class="btn btn-secondary net-alert-ack" data-alert-id="${escAttr(alert.id)}">Acknowledge</button></td>
+        </tr>
+      `).join('');
+    };
+
+    const applyThreatState = (baselineState, currentThreatState) => {
+      renderThreatCards(baselineState, currentThreatState);
+      renderThreatRows(currentThreatState.alerts || []);
+      if (threatMetaEl) {
+        threatMetaEl.textContent = `Snapshots: ${baselineState.snapshotCount} • Baseline: ${baselineState.baselineReady ? 'ready' : 'learning'}`;
+      }
+    };
+
+    const loadThreatState = async () => {
+      const [latestBaseline, latestThreats] = await Promise.all([
+        api.networkBaseline().catch(() => safeBaseline),
+        api.networkThreats({ limit: 50 }).catch(() => safeThreatState),
+      ]);
+      applyThreatState(latestBaseline, latestThreats);
+    };
+
+    applyThreatState(safeBaseline, safeThreatState);
+
+    threatContainer.querySelector('#net-threat-refresh')?.addEventListener('click', () => {
+      loadThreatState().catch(() => {});
+    });
+
+    threatContainer.addEventListener('click', async (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const button = target.closest('.net-alert-ack');
+      if (!(button instanceof HTMLElement)) return;
+      const alertId = button.getAttribute('data-alert-id');
+      if (!alertId) return;
+      button.setAttribute('disabled', 'true');
+      try {
+        await api.acknowledgeNetworkThreat(alertId);
+        await loadThreatState();
+      } catch {
+        button.removeAttribute('disabled');
+      }
+    });
 
     // Live event stream
     const sectionHeader1 = document.createElement('h3');
@@ -314,6 +446,22 @@ async function renderMonitoringTab(panel) {
       if (eventLogEl) appendEvent(eventLogEl, event);
     };
     onSSE('audit', monAuditHandler);
+
+    monSecurityAlertHandler = async (alert) => {
+      if (eventLogEl) {
+        appendEvent(eventLogEl, {
+          timestamp: alert?.timestamp || Date.now(),
+          type: 'security_alert',
+          severity: mapNetworkSeverityToAudit(alert?.severity),
+          agentId: 'network-sentinel',
+          details: {
+            reason: alert?.description || 'Network threat detected',
+          },
+        });
+      }
+      await loadThreatState();
+    };
+    onSSE('security.alert', monSecurityAlertHandler);
 
     // SSE: metrics updates
     monMetricsHandler = (data) => {
@@ -527,6 +675,12 @@ function severityClass(severity) {
   if (severity === 'high') return 'badge-errored';
   if (severity === 'medium') return 'badge-warn';
   return 'badge-info';
+}
+
+function mapNetworkSeverityToAudit(severity) {
+  if (severity === 'critical') return 'critical';
+  if (severity === 'high' || severity === 'medium') return 'warn';
+  return 'info';
 }
 
 function esc(str) {

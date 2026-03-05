@@ -64,6 +64,7 @@ export class CapabilityController implements AdmissionController {
   readonly phase: AdmissionPhase = 'validating';
 
   private actionCapabilityMap: Map<string, Capability>;
+  private passthroughActions: Set<string>;
 
   constructor() {
     this.actionCapabilityMap = new Map([
@@ -71,18 +72,35 @@ export class CapabilityController implements AdmissionController {
       ['write_file', 'write_files'],
       ['execute_command', 'execute_commands'],
       ['http_request', 'network_access'],
+      ['network_probe', 'network_access'],
+      ['system_info', 'execute_commands'],
       ['read_email', 'read_email'],
       ['draft_email', 'draft_email'],
       ['send_email', 'send_email'],
       ['git_operation', 'git_operations'],
       ['install_package', 'install_packages'],
     ]);
+
+    // Actions that are allowed without specific capabilities (internal runtime operations)
+    this.passthroughActions = new Set([
+      'message_dispatch',
+    ]);
   }
 
   check(action: AgentAction): AdmissionResult | null {
+    // Internal runtime actions pass through without capability check
+    if (this.passthroughActions.has(action.type)) {
+      return null;
+    }
+
     const requiredCap = this.actionCapabilityMap.get(action.type);
     if (!requiredCap) {
-      return null; // Unknown action type — pass through
+      // Default-deny unknown action types
+      return {
+        allowed: false,
+        reason: `Unknown action type '${action.type}' denied by default (no capability mapping)`,
+        controller: this.name,
+      };
     }
 
     if (!hasCapability(action.capabilities, requiredCap)) {

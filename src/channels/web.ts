@@ -1192,6 +1192,60 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // GET /api/network/baseline — network baseline status
+      if (req.method === 'GET' && url.pathname === '/api/network/baseline') {
+        if (!this.dashboard.onNetworkBaseline) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onNetworkBaseline());
+        return;
+      }
+
+      // GET /api/network/threats — active/deduped network alerts
+      if (req.method === 'GET' && url.pathname === '/api/network/threats') {
+        if (!this.dashboard.onNetworkThreats) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const includeAcknowledged = (url.searchParams.get('includeAcknowledged') ?? 'false').toLowerCase() === 'true';
+        const limit = Number.parseInt(url.searchParams.get('limit') ?? '100', 10);
+        sendJSON(res, 200, this.dashboard.onNetworkThreats({
+          includeAcknowledged,
+          limit: Number.isFinite(limit) ? limit : 100,
+        }));
+        return;
+      }
+
+      // POST /api/network/threats/ack — acknowledge alert
+      if (req.method === 'POST' && url.pathname === '/api/network/threats/ack') {
+        if (!this.dashboard.onNetworkThreatAcknowledge) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body = '';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { alertId?: string };
+        try {
+          parsed = JSON.parse(body) as { alertId?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed.alertId?.trim()) {
+          sendJSON(res, 400, { error: 'alertId is required' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onNetworkThreatAcknowledge(parsed.alertId.trim()));
+        return;
+      }
+
       // POST /api/network/scan — trigger network scan
       if (req.method === 'POST' && url.pathname === '/api/network/scan') {
         if (!this.dashboard.onNetworkScan) {

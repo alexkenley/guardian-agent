@@ -6,11 +6,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { spawn, exec as execCb } from 'node:child_process';
-import { promisify } from 'node:util';
 import type { BrowserConfig } from '../config/types.js';
-
-const execAsync = promisify(execCb);
+import { sandboxedExec, sandboxedSpawn, type SandboxConfig, DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
 
 /** Maximum snapshot text returned to the LLM. */
 const MAX_SNAPSHOT_CHARS = 8000;
@@ -51,12 +48,14 @@ export class BrowserSessionManager {
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   private installedVersion: string | null = null;
   private installChecked = false;
+  private readonly sandboxConfig: SandboxConfig;
 
-  constructor(config: BrowserConfig, now?: () => number) {
+  constructor(config: BrowserConfig, now?: () => number, sandboxConfig?: SandboxConfig) {
     this.binaryPath = config.binaryPath || 'agent-browser';
     this.maxSessions = config.maxSessions ?? 3;
     this.sessionIdleTimeoutMs = config.sessionIdleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
     this.now = now ?? Date.now;
+    this.sandboxConfig = sandboxConfig ?? DEFAULT_SANDBOX_CONFIG;
 
     this.idleTimer = setInterval(() => this.cleanupIdleSessions(), IDLE_CHECK_INTERVAL_MS);
     this.idleTimer.unref();
@@ -68,7 +67,10 @@ export class BrowserSessionManager {
       return this.installedVersion;
     }
     try {
-      const { stdout } = await execAsync(`${this.binaryPath} --version`, { timeout: 10_000 });
+      const { stdout } = await sandboxedExec(`${this.binaryPath} --version`, this.sandboxConfig, {
+        profile: 'read-only',
+        timeout: 10_000,
+      });
       this.installedVersion = stdout.trim() || 'unknown';
       this.installChecked = true;
       return this.installedVersion;
@@ -127,27 +129,33 @@ export class BrowserSessionManager {
   ): Promise<BrowserCommandResult> {
     const cmdArgs = [subcommand, '--session', sessionId, '--json', ...args];
 
-    return new Promise<BrowserCommandResult>((resolve) => {
-      const child = spawn(this.binaryPath, cmdArgs, {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: timeoutMs,
-      });
+    const child = await sandboxedSpawn(this.binaryPath, cmdArgs, this.sandboxConfig, {
+      profile: 'workspace-write',
+      networkAccess: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
 
+    // Apply timeout via kill
+    const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
+
+    return new Promise<BrowserCommandResult>((resolve) => {
       let stdout = '';
       let stderr = '';
 
-      child.stdout.on('data', (chunk: Buffer) => {
+      child.stdout!.on('data', (chunk: Buffer) => {
         stdout += chunk.toString();
       });
-      child.stderr.on('data', (chunk: Buffer) => {
+      child.stderr!.on('data', (chunk: Buffer) => {
         stderr += chunk.toString();
       });
 
       child.on('error', (err) => {
+        clearTimeout(timer);
         resolve({ success: false, error: `Browser command failed: ${err.message}` });
       });
 
       child.on('close', (code) => {
+        clearTimeout(timer);
         if (code !== 0) {
           const errorMsg = stderr.trim() || stdout.trim() || `Process exited with code ${code}`;
           resolve({ success: false, error: `Browser command failed: ${errorMsg}` });

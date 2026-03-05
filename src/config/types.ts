@@ -372,6 +372,99 @@ export interface AssistantThreatIntelMoltbookConfig {
   allowActiveResponse: boolean;
 }
 
+/** Network connection type for network monitoring/scanning. */
+export type AssistantNetworkConnectionType = 'lan' | 'wifi' | 'vpn' | 'remote';
+
+/** Network connection profile definition. */
+export interface AssistantNetworkConnectionConfig {
+  /** Unique connection id. */
+  id: string;
+  /** Connection type. */
+  type: AssistantNetworkConnectionType;
+  /** Interface name (lan/wifi/vpn). */
+  interface?: string;
+  /** Subnet CIDR (lan/wifi/vpn). */
+  subnet?: string;
+  /** WiFi SSID for wifi connections. */
+  ssid?: string;
+  /** Cron schedule for scans. */
+  scanSchedule?: string;
+  /** Enable baseline updates for this connection. */
+  autoBaseline?: boolean;
+  /** Enable WiFi monitoring for this connection. */
+  wifiMonitoring?: boolean;
+  /** Trigger scans when connection comes online (vpn). */
+  scanOnConnect?: boolean;
+  /** Remote host for remote scanning. */
+  host?: string;
+  /** SSH username for remote scanning. */
+  sshUser?: string;
+  /** Remote scan command for remote connection mode. */
+  remoteScanCommand?: string;
+}
+
+/** Generic anomaly rule config with enable and severity. */
+export interface AssistantNetworkAnomalyRuleConfig {
+  enabled: boolean;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+}
+
+/** Assistant network intelligence, baseline, and threat monitoring configuration. */
+export interface AssistantNetworkConfig {
+  deviceIntelligence: {
+    enabled: boolean;
+    ouiDatabase: 'bundled' | 'remote';
+    autoClassify: boolean;
+  };
+  baseline: {
+    enabled: boolean;
+    minSnapshotsForBaseline: number;
+    dedupeWindowMs: number;
+    anomalyRules: {
+      newDevice: AssistantNetworkAnomalyRuleConfig;
+      portChange: AssistantNetworkAnomalyRuleConfig;
+      arpSpoofing: AssistantNetworkAnomalyRuleConfig;
+      unusualService: AssistantNetworkAnomalyRuleConfig;
+      deviceGone: AssistantNetworkAnomalyRuleConfig;
+      massPortOpen: AssistantNetworkAnomalyRuleConfig;
+    };
+  };
+  fingerprinting: {
+    enabled: boolean;
+    bannerTimeout: number;
+    maxConcurrentPerDevice: number;
+    autoFingerprint: boolean;
+  };
+  wifi: {
+    enabled: boolean;
+    platform: 'auto' | 'linux' | 'macos' | 'windows';
+    scanInterval: number;
+  };
+  trafficAnalysis: {
+    enabled: boolean;
+    dataSource: 'ss' | 'conntrack' | 'router-api';
+    flowRetention: number;
+    threatRules: {
+      dataExfiltration: {
+        enabled: boolean;
+        thresholdMB: number;
+        windowMinutes: number;
+      };
+      portScanning: {
+        enabled: boolean;
+        portThreshold: number;
+        windowSeconds: number;
+      };
+      beaconing: {
+        enabled: boolean;
+        minIntervals: number;
+        tolerancePercent: number;
+      };
+    };
+  };
+  connections: AssistantNetworkConnectionConfig[];
+}
+
 /** Connector execution mode. */
 export type ConnectorExecutionMode = 'plan_then_execute' | 'direct_execute';
 
@@ -611,6 +704,8 @@ export interface AssistantToolsConfig {
   qmd?: QMDConfig;
   /** Tool categories to disable. Tools in disabled categories are hidden from the LLM and blocked at execution. */
   disabledCategories?: ToolCategory[];
+  /** OS-level process sandbox configuration. Uses bubblewrap (bwrap) on Linux, ulimit fallback elsewhere. */
+  sandbox?: import('../sandbox/types.js').SandboxConfig;
 }
 
 /** Personal assistant feature configuration. */
@@ -622,6 +717,7 @@ export interface AssistantConfig {
   analytics: AssistantAnalyticsConfig;
   quickActions: AssistantQuickActionsConfig;
   threatIntel: AssistantThreatIntelConfig;
+  network: AssistantNetworkConfig;
   connectors: AssistantConnectorsConfig;
   tools: AssistantToolsConfig;
 }
@@ -762,6 +858,48 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         allowActiveResponse: false,
       },
     },
+    network: {
+      deviceIntelligence: {
+        enabled: true,
+        ouiDatabase: 'bundled',
+        autoClassify: true,
+      },
+      baseline: {
+        enabled: true,
+        minSnapshotsForBaseline: 3,
+        dedupeWindowMs: 1_800_000,
+        anomalyRules: {
+          newDevice: { enabled: true, severity: 'medium' },
+          portChange: { enabled: true, severity: 'low' },
+          arpSpoofing: { enabled: true, severity: 'critical' },
+          unusualService: { enabled: true, severity: 'medium' },
+          deviceGone: { enabled: true, severity: 'low' },
+          massPortOpen: { enabled: true, severity: 'high' },
+        },
+      },
+      fingerprinting: {
+        enabled: true,
+        bannerTimeout: 3000,
+        maxConcurrentPerDevice: 5,
+        autoFingerprint: false,
+      },
+      wifi: {
+        enabled: false,
+        platform: 'auto',
+        scanInterval: 300,
+      },
+      trafficAnalysis: {
+        enabled: false,
+        dataSource: 'ss',
+        flowRetention: 86_400_000,
+        threatRules: {
+          dataExfiltration: { enabled: true, thresholdMB: 100, windowMinutes: 60 },
+          portScanning: { enabled: true, portThreshold: 20, windowSeconds: 60 },
+          beaconing: { enabled: true, minIntervals: 10, tolerancePercent: 5 },
+        },
+      },
+      connections: [],
+    },
     connectors: {
       enabled: false,
       executionMode: 'plan_then_execute',
@@ -822,6 +960,19 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         sources: [],
       },
       disabledCategories: [],
+      sandbox: {
+        enabled: true,
+        mode: 'workspace-write',
+        networkAccess: false,
+        additionalWritePaths: [],
+        additionalReadPaths: [],
+        resourceLimits: {
+          maxMemoryMb: 512,
+          maxCpuSeconds: 60,
+          maxFileSizeKb: 10_240,
+          maxProcesses: 0,
+        },
+      },
     },
   },
 };
