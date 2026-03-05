@@ -1041,6 +1041,7 @@ export class ToolExecutor {
         }
         const maxResults = Math.max(1, Math.min(10, asNumber(args.maxResults, 5)));
         const provider = this.resolveSearchProvider(asString(args.provider, 'auto'));
+        this.assertWebSearchHostsAllowed(provider);
 
         // Check cache
         const cacheTtl = this.webSearchConfig.cacheTtlMs ?? SEARCH_CACHE_TTL_MS;
@@ -1862,7 +1863,9 @@ export class ToolExecutor {
           if (!connection.host) {
             return { success: false, error: `Connection '${connection.id}' is remote but host is not configured.` };
           }
-          const sshTarget = `${connection.sshUser ? `${connection.sshUser}@` : ''}${connection.host}`;
+          const host = validateHostParam(connection.host);
+          const sshUser = connection.sshUser ? sanitizeSshUser(connection.sshUser) : '';
+          const sshTarget = `${sshUser ? `${sshUser}@` : ''}${host}`;
           const remoteCommand = (connection.remoteScanCommand?.trim() || 'ip neigh show')
             .replace(/"/g, '\\"');
           try {
@@ -3475,8 +3478,17 @@ export class ToolExecutor {
     } catch {
       // Path may not exist yet (e.g. write_file creating new file) — use resolved path
     }
-    const roots = uniqueNonEmpty(this.policy.sandbox.allowedPaths)
-      .map((root) => resolve(normalizePathForHost(root)));
+    const roots = await Promise.all(
+      uniqueNonEmpty(this.policy.sandbox.allowedPaths)
+        .map(async (root) => {
+          const resolvedRoot = resolve(normalizePathForHost(root));
+          try {
+            return await realpath(resolvedRoot);
+          } catch {
+            return resolvedRoot;
+          }
+        }),
+    );
     const allowed = roots.some((root) => isPathInside(candidate, root));
     if (!allowed) {
       const preview = roots.slice(0, 4).join(', ') || '(none)';
@@ -3701,6 +3713,23 @@ export class ToolExecutor {
       return { query, provider: 'perplexity', results, answer };
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  private assertWebSearchHostsAllowed(provider: 'duckduckgo' | 'brave' | 'perplexity'): void {
+    const requiredHosts = provider === 'duckduckgo'
+      ? ['html.duckduckgo.com']
+      : provider === 'brave'
+        ? ['api.search.brave.com']
+        : this.webSearchConfig.perplexityApiKey
+          ? ['api.perplexity.ai']
+          : ['openrouter.ai'];
+    const blocked = requiredHosts.filter((host) => !this.isHostAllowed(host));
+    if (blocked.length > 0) {
+      throw new Error(
+        `Web search provider '${provider}' is blocked by allowedDomains. ` +
+        `Add: ${blocked.join(', ')}`,
+      );
     }
   }
 
@@ -4078,6 +4107,15 @@ function sanitizeInterfaceName(name: string): string {
   if (!value) throw new Error('Interface name cannot be empty.');
   if (!/^[a-zA-Z0-9_.:-]+$/.test(value)) {
     throw new Error('Interface name contains invalid characters.');
+  }
+  return value;
+}
+
+function sanitizeSshUser(user: string): string {
+  const value = user.trim();
+  if (!value) throw new Error('SSH username cannot be empty.');
+  if (!/^[a-zA-Z0-9_.-]+$/.test(value)) {
+    throw new Error('SSH username contains invalid characters.');
   }
   return value;
 }

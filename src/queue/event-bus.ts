@@ -29,6 +29,12 @@ import type {
 
 /** Callback for event delivery. */
 export type EventHandler = (event: AgentEvent) => void | Promise<void>;
+export type EventSourceValidator = (event: AgentEvent) => boolean;
+
+export interface EventBusOptions {
+  maxDepth?: number;
+  sourceValidator?: EventSourceValidator;
+}
 
 export class EventBus {
   private handlers: Map<string, EventHandler[]> = new Map();
@@ -36,14 +42,24 @@ export class EventBus {
   private typeHandlers: Map<string, EventHandler[]> = new Map();
   private pipelineHandlers: EventPipelineRegistration[] = [];
   private maxDepth: number;
+  private sourceValidator?: EventSourceValidator;
   private pendingCount = 0;
 
-  constructor(maxDepth: number = 10_000) {
-    this.maxDepth = maxDepth;
+  constructor(maxDepthOrOptions: number | EventBusOptions = 10_000) {
+    if (typeof maxDepthOrOptions === 'number') {
+      this.maxDepth = maxDepthOrOptions;
+      this.sourceValidator = undefined;
+      return;
+    }
+    this.maxDepth = maxDepthOrOptions.maxDepth ?? 10_000;
+    this.sourceValidator = maxDepthOrOptions.sourceValidator;
   }
 
   /** Emit an event with immediate dispatch to matching handlers. */
   async emit(event: AgentEvent): Promise<boolean> {
+    if (this.sourceValidator && !this.sourceValidator(event)) {
+      return false;
+    }
     if (this.pendingCount >= this.maxDepth) {
       return false;
     }

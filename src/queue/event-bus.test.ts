@@ -120,6 +120,30 @@ describe('EventBus', () => {
     });
   });
 
+  describe('source validation', () => {
+    it('should reject emits when source validator denies event', async () => {
+      const guardedBus = new EventBus({
+        sourceValidator: (event) => event.sourceAgentId === 'system',
+      });
+      const received: AgentEvent[] = [];
+      guardedBus.subscribe('target', (event) => { received.push(event); });
+
+      const denied = await guardedBus.emit(makeEvent({
+        sourceAgentId: 'attacker',
+        targetAgentId: 'target',
+      }));
+      expect(denied).toBe(false);
+      expect(received.length).toBe(0);
+
+      const allowed = await guardedBus.emit(makeEvent({
+        sourceAgentId: 'system',
+        targetAgentId: 'target',
+      }));
+      expect(allowed).toBe(true);
+      expect(received.length).toBe(1);
+    });
+  });
+
   describe('unsubscribe', () => {
     it('should stop delivering after unsubscribe', async () => {
       const received: AgentEvent[] = [];

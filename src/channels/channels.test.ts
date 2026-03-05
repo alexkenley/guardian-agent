@@ -2093,7 +2093,7 @@ describe('WebChannel', () => {
       await new Promise(r => setTimeout(r, 50));
     });
 
-    it('GET /sse should require auth via query param', async () => {
+    it('GET /sse should require auth via bearer header or session cookie', async () => {
       const dashboard: DashboardCallbacks = {
         onSSESubscribe: (listener) => () => {},
       };
@@ -2105,10 +2105,17 @@ describe('WebChannel', () => {
       const res1 = await fetch('http://localhost:18953/sse');
       expect(res1.status).toBe(401);
 
-      // With token → 200
+      // Query token is no longer accepted for SSE auth.
+      const res2 = await fetch('http://localhost:18953/sse?token=sse-token');
+      expect(res2.status).toBe(401);
+
+      // Bearer header → 200
       const controller = new AbortController();
-      const res2 = await fetch('http://localhost:18953/sse?token=sse-token', { signal: controller.signal });
-      expect(res2.status).toBe(200);
+      const res3 = await fetch('http://localhost:18953/sse', {
+        signal: controller.signal,
+        headers: { Authorization: 'Bearer sse-token' },
+      });
+      expect(res3.status).toBe(200);
       controller.abort();
       await new Promise(r => setTimeout(r, 50));
     });

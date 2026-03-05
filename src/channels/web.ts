@@ -337,29 +337,34 @@ export class WebChannel implements ChannelAdapter {
     return false;
   }
 
-  /** Check auth via query param or cookie (for SSE/EventSource which can't set headers). */
-  private checkAuthForSSE(req: IncomingMessage, url: URL, res: ServerResponse): boolean {
+  /** Check auth for SSE via bearer header (non-browser clients) or session cookie (browser EventSource). */
+  private checkAuthForSSE(req: IncomingMessage, _url: URL, res: ServerResponse): boolean {
     if (!this.shouldRequireAuth(req)) return true;
     if (!this.authToken) {
       sendJSON(res, 401, { error: 'Authentication required' });
       return false;
     }
 
-    // Try query param token
-    const token = url.searchParams.get('token');
-    if (token && timingSafeEqualString(this.authToken, token)) {
-      return true;
+    // Allow bearer header for non-browser SSE clients
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.slice(7);
+      if (timingSafeEqualString(this.authToken, token)) {
+        return true;
+      }
     }
 
-    // Try session cookie
+    // Browser EventSource path: authenticated cookie session.
     if (this.validateSessionCookie(req)) {
       return true;
     }
 
-    if (token) {
+    if (authHeader) {
       sendJSON(res, 403, { error: 'Invalid token' });
     } else {
-      sendJSON(res, 401, { error: 'Authentication required' });
+      sendJSON(res, 401, {
+        error: 'Authentication required. SSE requires an authenticated session cookie or Authorization header.',
+      });
     }
     return false;
   }
@@ -491,7 +496,7 @@ export class WebChannel implements ChannelAdapter {
     // ─── API + SSE routes (require auth) ───────────────────────
 
     if (url.pathname.startsWith('/api/') || url.pathname === '/sse') {
-      // SSE uses query param auth; everything else uses header auth
+      // SSE uses cookie session auth (or bearer header for non-browser clients).
       if (url.pathname === '/sse') {
         if (!this.checkAuthForSSE(req, url, res)) return;
       } else {

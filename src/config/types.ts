@@ -190,6 +190,14 @@ export interface GuardianConfig {
     maxPerHour: number;
     /** Maximum burst requests within 10 seconds (default: 5). */
     burstAllowed: number;
+    /** Optional maximum requests per minute per user across agents. */
+    maxPerMinutePerUser?: number;
+    /** Optional maximum requests per hour per user across agents. */
+    maxPerHourPerUser?: number;
+    /** Optional maximum requests per minute across all agents/users. */
+    maxGlobalPerMinute?: number;
+    /** Optional maximum requests per hour across all agents/users. */
+    maxGlobalPerHour?: number;
   };
   /** Input sanitization configuration. */
   inputSanitization?: {
@@ -758,6 +766,10 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       maxPerMinute: 30,
       maxPerHour: 500,
       burstAllowed: 5,
+      maxPerMinutePerUser: 30,
+      maxPerHourPerUser: 500,
+      maxGlobalPerMinute: 300,
+      maxGlobalPerHour: 5000,
     },
     inputSanitization: {
       enabled: true,
