@@ -58,10 +58,10 @@ Primary files:
 ## Validation status
 - `npm run check` passed.
 - `npm test -- src/runtime/qmd-search.test.ts` passed (29/29).
-- `dev.ps1` full run passed in your output (54 files / 884 tests passed), and app started successfully.
+- `start-dev-windows.ps1` full run passed in your output (54 files / 884 tests passed), and app started successfully.
 
 ## What to do when you come back
-1. Start app normally (`scripts/dev.ps1` on Windows).
+1. Start app normally (`scripts/start-dev-windows.ps1` on Windows).
 2. In CLI prompt, run:
    - `/tools run qmd_status {}`
 3. In web UI, hard refresh (`Ctrl+F5`) and re-check Config -> Search Sources.

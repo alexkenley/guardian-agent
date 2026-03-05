@@ -3,10 +3,10 @@
 # Builds, tests, checks dependencies, and starts the system.
 #
 # Usage:
-#   bash scripts/dev.sh              # Full build + test + start
-#   bash scripts/dev.sh --skip-tests # Build + start (skip tests)
-#   bash scripts/dev.sh --build-only # Build + test only (don't start)
-#   bash scripts/dev.sh --start-only # Start without rebuilding
+#   bash scripts/start-dev-unix.sh              # Full build + test + start
+#   bash scripts/start-dev-unix.sh --skip-tests # Build + start (skip tests)
+#   bash scripts/start-dev-unix.sh --build-only # Build + test only (don't start)
+#   bash scripts/start-dev-unix.sh --start-only # Start without rebuilding
 
 set -euo pipefail
 
@@ -29,6 +29,7 @@ done
 
 # ── Colors ─────────────────────────────────────────────────────
 if [ -t 1 ]; then
+  CYAN='\033[36m'
   BLUE='\033[38;5;33m'
   LBLUE='\033[38;5;75m'
   DBLUE='\033[38;5;27m'
@@ -37,7 +38,7 @@ if [ -t 1 ]; then
   DIM='\033[2m'
   RESET='\033[0m'
 else
-  BLUE='' LBLUE='' DBLUE='' GREEN='' RED='' DIM='' RESET=''
+  CYAN='' BLUE='' LBLUE='' DBLUE='' GREEN='' RED='' DIM='' RESET=''
 fi
 
 # ── Banner ─────────────────────────────────────────────────────
@@ -127,7 +128,7 @@ if [ "$BUILD_ONLY" = true ]; then
   echo -e "${CYAN}[6/6] Done.${RESET}"
   echo ""
   echo -e "${GREEN}=== Build Complete ===${RESET}"
-  echo -e "  ${DIM}To start manually: npm run dev${RESET}"
+  echo -e "  ${DIM}To start manually: bash scripts/start-dev-unix.sh --start-only${RESET}"
   echo ""
   exit 0
 fi
@@ -242,6 +243,7 @@ echo -e "  ${DIM}Press Ctrl+C to stop.${RESET}"
 echo ""
 
 # Use tsx if available, otherwise node
+export NODE_NO_WARNINGS=1
 if [ -x "node_modules/.bin/tsx" ]; then
   exec node_modules/.bin/tsx src/index.ts
 else

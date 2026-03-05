@@ -2,10 +2,10 @@
 # Builds, tests, checks dependencies, and starts the system.
 #
 # Usage:
-#   .\scripts\dev.ps1              # Full build + test + start
-#   .\scripts\dev.ps1 -SkipTests   # Build + start (skip tests)
-#   .\scripts\dev.ps1 -BuildOnly   # Build + test only (don't start)
-#   .\scripts\dev.ps1 -StartOnly   # Start without rebuilding
+#   .\scripts\start-dev-windows.ps1              # Full build + test + start
+#   .\scripts\start-dev-windows.ps1 -SkipTests   # Build + start (skip tests)
+#   .\scripts\start-dev-windows.ps1 -BuildOnly   # Build + test only (don't start)
+#   .\scripts\start-dev-windows.ps1 -StartOnly   # Start without rebuilding
 
 param(
     [switch]$SkipTests,

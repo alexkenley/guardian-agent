@@ -109,20 +109,29 @@ There is no `ctx.fs`, `ctx.http`, or `ctx.exec`. The agent's only interaction po
 
 ## Quick Start
 
-```bash
-npm install guardianagent
-```
-
 Requires Node.js `>=20.0.0`.
 SQLite persistence/security monitoring is enabled when the Node build includes `node:sqlite`; otherwise assistant memory/analytics automatically run in-memory.
 
-Run:
+Run from the repository root:
+
+Windows (PowerShell):
+
+```powershell
+.\scripts\start-dev-windows.ps1
+```
+
+Linux/macOS:
 
 ```bash
-npx guardianagent
-# or
-guardianagent              # if installed globally
+bash scripts/start-dev-unix.sh
 ```
+
+These scripts handle dependency checks/install, TypeScript build, tests, config bootstrap, and app start.
+
+Optional script flags:
+
+- Windows: `-SkipTests`, `-BuildOnly`, `-StartOnly`
+- Linux/macOS: `--skip-tests`, `--build-only`, `--start-only`
 
 Then configure from web/CLI (no manual YAML editing required):
 - Web: open `#/config` (Configuration Center). Telegram setup is in `Settings` -> `Telegram Channel`.
@@ -348,6 +357,22 @@ Restart Guardian Agent after Telegram channel changes.
 For Gmail campaign sends, provide OAuth token via `GOOGLE_OAUTH_ACCESS_TOKEN` (scope: `gmail.send`) or `accessToken` tool arg.
 
 ## Development
+
+Primary local workflow (recommended):
+
+Windows (PowerShell):
+
+```powershell
+.\scripts\start-dev-windows.ps1
+```
+
+Linux/macOS:
+
+```bash
+bash scripts/start-dev-unix.sh
+```
+
+Manual commands (advanced/troubleshooting):
 
 ```bash
 npm test              # Run tests (vitest)

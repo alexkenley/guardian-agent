@@ -23,7 +23,8 @@
     "clean": "rm -rf dist",
     "ensure:qmd": "node scripts/ensure-qmd.mjs",
     "dev": "tsx src/index.ts",
-    "dev:sh": "bash scripts/dev.sh",
+    "dev:unix": "bash scripts/start-dev-unix.sh",
+    "dev:sh": "bash scripts/start-dev-unix.sh",
     "start": "node dist/index.js",
     "prepublishOnly": "npm test && npm run build"
   },
