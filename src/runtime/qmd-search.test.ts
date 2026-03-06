@@ -2,11 +2,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { QMDSearchService } from './qmd-search.js';
 import type { QMDConfig, QMDSourceConfig } from '../config/types.js';
 
-// Mock child_process.exec
+// Mock child_process.exec (preserve other exports like execFile for sandbox/index.ts)
 const mockExec = vi.fn();
-vi.mock('node:child_process', () => ({
-  exec: (...args: unknown[]) => mockExec(...args),
-}));
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    exec: (...args: unknown[]) => mockExec(...args),
+  };
+});
 
 function makeConfig(overrides?: Partial<QMDConfig>): QMDConfig {
   return {
