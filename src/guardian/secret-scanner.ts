@@ -137,10 +137,22 @@ export class SecretScanner {
     return matches;
   }
 
+  removeWindowsADS(filePath: string): string {
+    // No ADS or disk specifier.
+    if (filePath.lastIndexOf(':') == -1) { return filePath; }
+
+    // Only : is in a spot assosicated with disk specifiers
+    if (filePath.lastIndexOf(':') == 1) { return filePath; }
+
+    // Remove ADS
+    return filePath.slice(0, filePath.lastIndexOf(':') - 1)
+  }
+
   /** Check if a file path is in the denied list. */
   isDeniedPath(filePath: string): { denied: boolean; reason?: string } {
     // Normalize backslashes to forward slashes for platform-agnostic matching
-    const normalized = filePath.replace(/\\/g, '/');
+    const normalized = this.removeWindowsADS(filePath.replace(/\\/g, '/'));
+
     for (const { name, regex } of this.deniedPaths) {
       regex.lastIndex = 0;
       if (regex.test(normalized)) {

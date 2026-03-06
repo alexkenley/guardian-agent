@@ -172,18 +172,17 @@ export class DeniedPathController implements AdmissionController {
     const filePath = action.params['path'] as string | undefined;
     if (!filePath) return null;
 
-    // Normalize path: convert backslashes to forward slashes for cross-platform,
-    // then apply path.normalize for traversal resolution
-    const normalized = path.normalize(filePath).replace(/\\/g, '/');
-
-    // Check for path traversal attempts (.. after normalization)
-    if (normalized.includes('..')) {
+    // Check for path traversal attempts (Check before normalization)
+    if (filePath.includes('..')) {
       return {
         allowed: false,
         reason: `Path traversal detected in '${filePath}'`,
         controller: this.name,
       };
     }
+
+    // Normalize path: convert backslashes to forward slashes for cross-platform,
+    const normalized = path.normalize(filePath).replace(/\\/g, '/');
 
     const result = this.scanner.isDeniedPath(normalized);
     if (result.denied) {
