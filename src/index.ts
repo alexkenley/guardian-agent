@@ -79,7 +79,7 @@ interface PendingApprovalState {
   expiresAt: number;
 }
 
-function generateSecureToken(byteLength = 24): string {
+function generateSecureToken(byteLength = 16): string {
   return randomBytes(byteLength).toString('hex');
 }
 

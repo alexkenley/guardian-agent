@@ -1,0 +1,20 @@
+{
+  "id": "threat-intel",
+  "name": "Threat Intelligence",
+  "version": "0.1.0",
+  "description": "Guidance for structured threat intelligence gathering, watchlist management, and findings triage.",
+  "tags": ["threat", "intel", "ioc", "watchlist", "findings"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["threat", "intel", "ioc", "watchlist", "indicator", "compromise", "findings", "reputation"]
+  },
+  "tools": [
+    "intel_summary", "intel_watch_add", "intel_watch_remove",
+    "intel_scan", "intel_findings", "intel_draft_action"
+  ],
+  "risk": "informational"
+}

@@ -1,0 +1,21 @@
+{
+  "id": "outreach-campaigns",
+  "name": "Outreach Campaigns",
+  "version": "0.1.0",
+  "description": "Guidance for safe contact management and campaign execution with mandatory dry-run and approval steps.",
+  "tags": ["contacts", "campaign", "outreach", "email"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["campaign", "outreach", "contacts", "import contacts", "send campaign", "dry run", "mailing list"]
+  },
+  "tools": [
+    "contacts_discover_browser", "contacts_import_csv", "contacts_list",
+    "campaign_create", "campaign_list", "campaign_add_contacts",
+    "campaign_dry_run", "campaign_run", "gmail_send"
+  ],
+  "risk": "operational"
+}

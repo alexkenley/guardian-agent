@@ -1,0 +1,23 @@
+{
+  "id": "network-recon",
+  "name": "Network Reconnaissance",
+  "version": "0.1.0",
+  "description": "Guidance for scoped, methodical network discovery and diagnostics.",
+  "tags": ["network", "scan", "recon", "diagnostics", "wifi", "fingerprint"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["scan", "network", "ping", "port", "arp", "dns", "traceroute", "wifi", "fingerprint", "banner", "baseline", "anomaly"]
+  },
+  "tools": [
+    "net_ping", "net_arp_scan", "net_port_check", "net_interfaces",
+    "net_connections", "net_dns_lookup", "net_traceroute", "net_oui_lookup",
+    "net_classify", "net_banner_grab", "net_fingerprint", "net_wifi_scan",
+    "net_wifi_clients", "net_connection_profiles", "net_traffic_baseline",
+    "net_threat_check", "net_baseline", "net_anomaly_check", "net_threat_summary"
+  ],
+  "risk": "operational"
+}
