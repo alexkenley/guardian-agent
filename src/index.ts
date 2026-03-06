@@ -12,7 +12,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { loadConfig, DEFAULT_CONFIG_PATH, deepMerge, validateConfig } from './config/loader.js';
-import type { GuardianAgentConfig } from './config/types.js';
+import type { GuardianAgentConfig, MCPServerEntry } from './config/types.js';
 import yaml from 'js-yaml';
 import { Runtime } from './runtime/runtime.js';
 import { CLIChannel } from './channels/cli.js';
@@ -56,7 +56,10 @@ import { TRUST_PRESETS, type TrustPresetName } from './guardian/trust-presets.js
 import type { Capability } from './guardian/capabilities.js';
 import { createProviders } from './llm/provider.js';
 import { hashObjectSha256Hex } from './util/crypto-guardrails.js';
-import { detectCapabilities as detectSandboxCapabilities, DEFAULT_SANDBOX_CONFIG, type SandboxConfig } from './sandbox/index.js';
+import { detectCapabilities as detectSandboxCapabilities, detectSandboxHealth, DEFAULT_SANDBOX_CONFIG, type SandboxConfig } from './sandbox/index.js';
+import { SkillRegistry } from './skills/registry.js';
+import { SkillResolver } from './skills/resolver.js';
+import type { ResolvedSkill } from './skills/types.js';
 
 const log = createLogger('main');
 
@@ -153,10 +156,47 @@ function selectSoulPrompt(profile: LoadedSoulProfile | null, mode: SoulInjection
   return mode === 'summary' ? profile.summary : profile.full;
 }
 
+function formatResolvedSkills(skills: readonly ResolvedSkill[]): string {
+  return skills.map((skill) => (
+    `Skill: ${skill.name} (${skill.id})\n` +
+    `Summary:\n${skill.summary}`
+  )).join('\n\n');
+}
+
+function buildManagedMCPServers(config: GuardianAgentConfig): Array<MCPServerEntry & { managedProviderId: string }> {
+  const servers: Array<MCPServerEntry & { managedProviderId: string }> = [];
+  const gws = config.assistant.tools.mcp?.managedProviders?.gws;
+  if (gws?.enabled) {
+    const services = (gws.services?.length ? gws.services : ['gmail', 'calendar', 'drive'])
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const args = gws.args?.length ? [...gws.args] : ['mcp'];
+    if (!args.includes('mcp')) {
+      args.unshift('mcp');
+    }
+    if (!args.includes('-s') && !args.includes('--services') && services.length > 0) {
+      args.push('-s', services.join(','));
+    }
+    servers.push({
+      managedProviderId: 'gws',
+      id: 'gws',
+      name: 'Google Workspace CLI',
+      command: gws.command?.trim() || 'gws',
+      args,
+      env: gws.env,
+      cwd: gws.cwd,
+      timeoutMs: gws.timeoutMs,
+    });
+  }
+  return servers;
+}
+
 class ChatAgent extends BaseAgent {
   private systemPrompt: string;
   private conversationService?: ConversationService;
   private tools?: ToolExecutor;
+  private skillResolver?: SkillResolver;
+  private enabledManagedProviders?: ReadonlySet<string>;
   private maxToolRounds: number;
   /** Pending approval IDs from the last tool round, keyed by user+channel. */
   private pendingApprovals: Map<string, PendingApprovalState> = new Map();
@@ -171,6 +211,8 @@ class ChatAgent extends BaseAgent {
     systemPrompt?: string,
     conversationService?: ConversationService,
     tools?: ToolExecutor,
+    skillResolver?: SkillResolver,
+    enabledManagedProviders?: ReadonlySet<string>,
     fallbackChain?: ModelFallbackChain,
     soulPrompt?: string,
     memoryStore?: AgentMemoryStore,
@@ -187,6 +229,8 @@ class ChatAgent extends BaseAgent {
     );
     this.conversationService = conversationService;
     this.tools = tools;
+    this.skillResolver = skillResolver;
+    this.enabledManagedProviders = enabledManagedProviders;
     this.maxToolRounds = 6;
     this.fallbackChain = fallbackChain;
     this.memoryStore = memoryStore;
@@ -250,11 +294,25 @@ class ChatAgent extends BaseAgent {
 
     // Inject knowledge base into system prompt if available
     let enrichedSystemPrompt = this.systemPrompt;
+    const activeSkills = this.skillResolver?.resolve({
+      agentId: this.id,
+      channel: message.channel,
+      requestType: 'chat',
+      content: message.content,
+      enabledManagedProviders: this.enabledManagedProviders,
+    }) ?? [];
     if (this.memoryStore) {
       const kb = this.memoryStore.loadForContext(this.id);
       if (kb) {
         enrichedSystemPrompt += `\n\n<knowledge-base>\nThe following is your persistent knowledge base — facts, preferences, and summaries you have remembered across conversations:\n\n${kb}\n</knowledge-base>`;
       }
+    }
+    if (activeSkills.length > 0) {
+      enrichedSystemPrompt += `\n\n<active-skills>\n${formatResolvedSkills(activeSkills)}\n</active-skills>`;
+    }
+    const toolRuntimeNotices = this.tools?.getRuntimeNotices() ?? [];
+    if (toolRuntimeNotices.length > 0) {
+      enrichedSystemPrompt += `\n\n<tool-runtime-notices>\n${toolRuntimeNotices.map((notice) => `- ${notice.message}`).join('\n')}\n</tool-runtime-notices>`;
     }
 
     const llmMessages: ChatMessage[] = this.conversationService
@@ -279,7 +337,10 @@ class ChatAgent extends BaseAgent {
           finalContent,
         );
       }
-      return { content: finalContent };
+      return {
+        content: finalContent,
+        metadata: activeSkills.length > 0 ? { activeSkills: activeSkills.map((skill) => skill.id) } : undefined,
+      };
     }
 
     // Direct web search: if the user clearly wants web results, call web_search
@@ -447,7 +508,10 @@ class ChatAgent extends BaseAgent {
       );
     }
 
-    return { content: finalContent };
+    return {
+      content: finalContent,
+      metadata: activeSkills.length > 0 ? { activeSkills: activeSkills.map((skill) => skill.id) } : undefined,
+    };
   }
 
   /**
@@ -1346,6 +1410,8 @@ function buildDashboardCallbacks(
       policy: toolExecutor.getPolicy(),
       approvals: toolExecutor.listApprovals(limit ?? 50),
       jobs: toolExecutor.listJobs(limit ?? 50),
+      notices: toolExecutor.getRuntimeNotices(),
+      sandbox: toolExecutor.getSandboxHealth(),
       categories: toolExecutor.getCategoryInfo(),
       disabledCategories: toolExecutor.getDisabledCategories(),
     }),
@@ -2707,9 +2773,16 @@ async function main(): Promise<void> {
     },
   };
   const sandboxCaps = await detectSandboxCapabilities();
+  const sandboxHealth = await detectSandboxHealth(sandboxConfig, sandboxCaps);
   if (sandboxConfig.enabled) {
     log.info(
-      { bwrap: sandboxCaps.bwrapAvailable, bwrapVersion: sandboxCaps.bwrapVersion, profile: sandboxConfig.mode },
+      {
+        bwrap: sandboxCaps.bwrapAvailable,
+        bwrapVersion: sandboxCaps.bwrapVersion,
+        profile: sandboxConfig.mode,
+        availability: sandboxHealth.availability,
+        enforcementMode: sandboxHealth.enforcementMode,
+      },
       'OS-level process sandbox active',
     );
   } else {
@@ -2718,37 +2791,74 @@ async function main(): Promise<void> {
 
   // ─── MCP Client Manager ─────────────────────────────────────
   let mcpManager: MCPClientManager | undefined;
+  const enabledManagedProviders = new Set<string>();
   const mcpConfig = config.assistant.tools.mcp;
-  if (mcpConfig?.enabled && mcpConfig.servers.length > 0) {
-    mcpManager = new MCPClientManager(sandboxConfig);
-    for (const server of mcpConfig.servers) {
-      const serverConfig: MCPServerConfig = {
-        id: server.id,
-        name: server.name,
-        transport: 'stdio',
-        command: server.command,
-        args: server.args,
-        env: server.env,
-        cwd: server.cwd,
-        timeoutMs: server.timeoutMs,
-      };
-      try {
-        await mcpManager.addServer(serverConfig);
-        log.info(
-          { serverId: server.id, serverName: server.name },
-          'MCP server connected',
-        );
-      } catch (err) {
-        log.error(
-          { serverId: server.id, err: err instanceof Error ? err.message : String(err) },
-          'Failed to connect MCP server (continuing without it)',
-        );
+  const managedMCPServers = buildManagedMCPServers(config);
+  const configuredMCPServers = mcpConfig?.servers ?? [];
+  const allMCPServers: Array<MCPServerEntry & { managedProviderId?: string }> = [
+    ...configuredMCPServers.map((server) => ({ ...server })),
+    ...managedMCPServers,
+  ];
+  const mcpBlockedBySandbox = sandboxHealth.enforcementMode === 'strict' && sandboxHealth.availability !== 'strong';
+  if (mcpConfig?.enabled && allMCPServers.length > 0) {
+    if (mcpBlockedBySandbox) {
+      log.warn(
+        { platform: sandboxHealth.platform, availability: sandboxHealth.availability },
+        'Strict sandbox mode is blocking MCP server startup',
+      );
+    } else {
+      mcpManager = new MCPClientManager(sandboxConfig);
+      for (const server of allMCPServers) {
+        const serverConfig: MCPServerConfig = {
+          id: server.id,
+          name: server.name,
+          transport: 'stdio',
+          command: server.command,
+          args: server.args,
+          env: server.env,
+          cwd: server.cwd,
+          timeoutMs: server.timeoutMs,
+        };
+        try {
+          await mcpManager.addServer(serverConfig);
+          const managedProvider = server.managedProviderId;
+          if (managedProvider) {
+            const exposeSkills = managedProvider === 'gws'
+              ? config.assistant.tools.mcp?.managedProviders?.gws?.exposeSkills !== false
+              : true;
+            if (exposeSkills) enabledManagedProviders.add(managedProvider);
+          }
+          log.info(
+            { serverId: server.id, serverName: server.name },
+            'MCP server connected',
+          );
+        } catch (err) {
+          log.error(
+            { serverId: server.id, err: err instanceof Error ? err.message : String(err) },
+            'Failed to connect MCP server (continuing without it)',
+          );
+        }
+      }
+      const toolCount = mcpManager.getAllToolDefinitions().length;
+      if (toolCount > 0) {
+        log.info({ toolCount }, 'MCP tools discovered and available');
       }
     }
-    const toolCount = mcpManager.getAllToolDefinitions().length;
-    if (toolCount > 0) {
-      log.info({ toolCount }, 'MCP tools discovered and available');
-    }
+  }
+
+  // ─── Native Skills ───────────────────────────────────────────
+  let skillResolver: SkillResolver | undefined;
+  if (config.assistant.skills.enabled) {
+    const skillRegistry = new SkillRegistry();
+    await skillRegistry.loadFromRoots(
+      config.assistant.skills.roots,
+      config.assistant.skills.disabledSkills,
+    );
+    skillResolver = new SkillResolver(skillRegistry, {
+      autoSelect: config.assistant.skills.autoSelect,
+      maxActivePerRequest: config.assistant.skills.maxActivePerRequest,
+    });
+    log.info({ count: skillRegistry.list().length }, 'Native skills loaded');
   }
 
   // ─── QMD Search Service ─────────────────────────────
@@ -2950,6 +3060,7 @@ async function main(): Promise<void> {
     networkConfig: config.assistant.network,
     mcpManager,
     sandboxConfig,
+    sandboxHealth,
     threatIntel,
     onCheckAction: ({ type, params, agentId, origin }) => {
       const capMap: Record<string, string[]> = {
@@ -3117,6 +3228,8 @@ async function main(): Promise<void> {
         agentConfig.systemPrompt,
         conversations,
         toolExecutor,
+        skillResolver,
+        enabledManagedProviders,
         fallbackChain,
         selectSoulPrompt(soulProfile, soulMode),
         agentMemoryStore,
@@ -3146,6 +3259,8 @@ async function main(): Promise<void> {
       localPrompt,
       conversations,
       toolExecutor,
+      skillResolver,
+      enabledManagedProviders,
       fallbackChain,
       selectSoulPrompt(soulProfile, config.assistant.soul.primaryMode),
       agentMemoryStore,
@@ -3162,6 +3277,8 @@ async function main(): Promise<void> {
       externalPrompt,
       conversations,
       toolExecutor,
+      skillResolver,
+      enabledManagedProviders,
       fallbackChain,
       selectSoulPrompt(soulProfile, config.assistant.soul.delegatedMode),
       agentMemoryStore,
@@ -3203,6 +3320,8 @@ async function main(): Promise<void> {
       undefined,
       conversations,
       toolExecutor,
+      skillResolver,
+      enabledManagedProviders,
       fallbackChain,
       selectSoulPrompt(soulProfile, config.assistant.soul.primaryMode),
       agentMemoryStore,
@@ -3497,6 +3616,7 @@ async function main(): Promise<void> {
           ? `http://${config.channels.web.host ?? 'localhost'}:${config.channels.web.port ?? 3000}`
           : undefined,
         authToken: effectiveToken,
+        warnings: toolExecutor.getRuntimeNotices().map((notice) => notice.message),
       },
       onAgents: () => runtime.registry.getAll().map(inst => ({
         id: inst.agent.id,

@@ -21,6 +21,7 @@ import type {
   ToolPolicySnapshot,
   ToolResult,
   ToolRunResponse,
+  ToolRuntimeNotice,
 } from './types.js';
 import { TOOL_CATEGORIES, BUILTIN_TOOL_CATEGORIES } from './types.js';
 import type { MCPClientManager } from './mcp-client.js';
@@ -35,7 +36,7 @@ import {
   validateElementRef,
 } from './browser-session.js';
 import { sandboxedExec, type SandboxConfig, DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
-import type { SandboxProfile } from '../sandbox/types.js';
+import type { SandboxHealth, SandboxProfile } from '../sandbox/types.js';
 import { realpath } from 'node:fs/promises';
 import type { DeviceInventoryService } from '../runtime/device-inventory.js';
 import type { NetworkBaselineService } from '../runtime/network-baseline.js';
@@ -89,6 +90,8 @@ export interface ToolExecutorOptions {
   networkConfig?: AssistantNetworkConfig;
   /** OS-level process sandbox configuration. */
   sandboxConfig?: SandboxConfig;
+  /** Current sandbox health summary. */
+  sandboxHealth?: SandboxHealth;
   now?: () => number;
   onCheckAction?: (action: {
     type: string;
@@ -135,8 +138,10 @@ export class ToolExecutor {
   private readonly browserSession?: BrowserSessionManager;
   private readonly disabledCategories: Set<string>;
   private readonly sandboxConfig: SandboxConfig;
+  private readonly sandboxHealth?: SandboxHealth;
   private readonly networkConfig: AssistantNetworkConfig;
   private policy: ToolPolicySnapshot;
+  private readonly runtimeNotices: ToolRuntimeNotice[] = [];
 
   constructor(options: ToolExecutorOptions) {
     this.options = options;
@@ -145,6 +150,7 @@ export class ToolExecutor {
     this.mcpManager = options.mcpManager;
     this.webSearchConfig = options.webSearch ?? {};
     this.sandboxConfig = options.sandboxConfig ?? DEFAULT_SANDBOX_CONFIG;
+    this.sandboxHealth = options.sandboxHealth;
     this.networkConfig = options.networkConfig ?? {
       deviceIntelligence: { enabled: true, ouiDatabase: 'bundled', autoClassify: true },
       baseline: {
@@ -193,6 +199,7 @@ export class ToolExecutor {
     if (options.browserConfig?.enabled) {
       this.browserSession = new BrowserSessionManager(options.browserConfig, this.now, this.sandboxConfig);
     }
+    this.initializeSandboxNotices();
     this.registerBuiltinTools();
     if (this.mcpManager) {
       this.registerMCPTools();
@@ -229,8 +236,16 @@ export class ToolExecutor {
 
   listToolDefinitions(): ToolDefinition[] {
     return this.registry.listDefinitions().filter(
-      (def) => this.isCategoryEnabled(def.category),
+      (def) => this.isCategoryEnabled(def.category) && !this.getSandboxBlockReason(def.name, def.category),
     );
+  }
+
+  getRuntimeNotices(): ToolRuntimeNotice[] {
+    return [...this.runtimeNotices];
+  }
+
+  getSandboxHealth(): SandboxHealth | undefined {
+    return this.sandboxHealth;
   }
 
   getPolicy(): ToolPolicySnapshot {
@@ -286,13 +301,17 @@ export class ToolExecutor {
     description: string;
     toolCount: number;
     enabled: boolean;
+    disabledReason?: string;
   }> {
     return (Object.keys(TOOL_CATEGORIES) as ToolCategory[]).map((cat) => ({
       category: cat,
       label: TOOL_CATEGORIES[cat].label,
       description: TOOL_CATEGORIES[cat].description,
       toolCount: BUILTIN_TOOL_CATEGORIES[cat].length,
-      enabled: !this.disabledCategories.has(cat),
+      enabled: !this.disabledCategories.has(cat) && !this.getSandboxBlockedCategoryReason(cat),
+      disabledReason: this.disabledCategories.has(cat)
+        ? 'Disabled by policy.'
+        : this.getSandboxBlockedCategoryReason(cat) ?? undefined,
     }));
   }
 
@@ -381,6 +400,16 @@ export class ToolExecutor {
         status: 'denied',
         jobId: randomUUID(),
         message: `Tool '${request.toolName}' is in disabled category '${entry.definition.category}'.`,
+      };
+    }
+
+    const sandboxBlockReason = this.getSandboxBlockReason(entry.definition.name, entry.definition.category);
+    if (sandboxBlockReason) {
+      return {
+        success: false,
+        status: 'denied',
+        jobId: randomUUID(),
+        message: sandboxBlockReason,
       };
     }
 
@@ -3953,6 +3982,52 @@ export class ToolExecutor {
       origin: request.origin,
       agentId: request.agentId ?? 'assistant-tools',
     });
+  }
+
+  private initializeSandboxNotices(): void {
+    const health = this.sandboxHealth;
+    if (!health || !this.sandboxConfig.enabled) return;
+    if ((health.enforcementMode ?? 'permissive') !== 'strict') {
+      if (health.availability !== 'strong') {
+        this.runtimeNotices.push({
+          level: 'warn',
+          message: `Sandbox is running in ${health.availability} mode on ${health.platform}; risky subprocess-backed tools remain available because enforcementMode=permissive.`,
+        });
+      }
+      return;
+    }
+    if (health.availability !== 'strong') {
+      this.runtimeNotices.push({
+        level: 'warn',
+        message: `Strict sandbox mode is active: risky subprocess-backed tools are disabled on ${health.platform}. ${health.reasons[0] ?? ''}`.trim(),
+      });
+    }
+  }
+
+  private getSandboxBlockedCategoryReason(category: ToolCategory): string | null {
+    const health = this.sandboxHealth;
+    if (!health || !this.sandboxConfig.enabled) return null;
+    if ((health.enforcementMode ?? 'permissive') !== 'strict') return null;
+    if (health.availability === 'strong') return null;
+
+    const blockedCategories = new Set<ToolCategory>(['shell', 'browser', 'network', 'system', 'search']);
+    if (!blockedCategories.has(category)) return null;
+    return `Blocked by strict sandbox mode: no strong sandbox backend is available on ${health.platform}.`;
+  }
+
+  private getSandboxBlockReason(toolName: string, category?: string): string | null {
+    const health = this.sandboxHealth;
+    if (!health || !this.sandboxConfig.enabled) return null;
+    if ((health.enforcementMode ?? 'permissive') !== 'strict') return null;
+    if (health.availability === 'strong') return null;
+
+    if (toolName.startsWith('mcp-')) {
+      return `Tool '${toolName}' is blocked by strict sandbox mode because MCP server processes require a strong sandbox backend on ${health.platform}.`;
+    }
+    if (category && this.getSandboxBlockedCategoryReason(category as ToolCategory)) {
+      return `Tool '${toolName}' is blocked by strict sandbox mode because category '${category}' requires strong subprocess isolation on ${health.platform}.`;
+    }
+    return null;
   }
 }
 

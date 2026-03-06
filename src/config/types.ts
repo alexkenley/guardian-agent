@@ -609,6 +609,34 @@ export interface AssistantMCPConfig {
   enabled: boolean;
   /** MCP server configurations. */
   servers: MCPServerEntry[];
+  /** Managed provider wrappers that materialize MCP servers internally. */
+  managedProviders?: {
+    gws?: {
+      enabled: boolean;
+      command?: string;
+      args?: string[];
+      env?: Record<string, string>;
+      cwd?: string;
+      timeoutMs?: number;
+      services?: string[];
+      exposeSkills?: boolean;
+      accountMode?: 'single_user' | 'multi_account';
+    };
+  };
+}
+
+/** Native skills configuration. */
+export interface AssistantSkillsConfig {
+  /** Enable local skill loading and prompt injection. */
+  enabled: boolean;
+  /** Roots to scan for skill bundles. */
+  roots: string[];
+  /** Automatically select skills based on request context. */
+  autoSelect: boolean;
+  /** Maximum active skills to inject into one request. */
+  maxActivePerRequest: number;
+  /** Explicitly disabled skills by id. */
+  disabledSkills: string[];
 }
 
 /** QMD source protocol type. */
@@ -721,6 +749,7 @@ export interface AssistantConfig {
   setup: AssistantSetupConfig;
   identity: AssistantIdentityConfig;
   soul: AssistantSoulConfig;
+  skills: AssistantSkillsConfig;
   memory: AssistantMemoryConfig;
   analytics: AssistantAnalyticsConfig;
   quickActions: AssistantQuickActionsConfig;
@@ -826,6 +855,13 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       primaryMode: 'full',
       delegatedMode: 'summary',
       summaryMaxChars: 1000,
+    },
+    skills: {
+      enabled: true,
+      roots: ['./skills'],
+      autoSelect: true,
+      maxActivePerRequest: 3,
+      disabledSkills: [],
     },
     memory: {
       enabled: true,
@@ -974,6 +1010,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       disabledCategories: [],
       sandbox: {
         enabled: true,
+        enforcementMode: 'permissive',
         mode: 'workspace-write',
         networkAccess: false,
         additionalWritePaths: [],

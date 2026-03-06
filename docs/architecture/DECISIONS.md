@@ -485,3 +485,77 @@ Additionally, `POST /api/setup/apply` was hardened: when `providerType` is missi
 - (-) Per-query subprocess overhead (~50-200ms) vs in-process search
 - (-) Requires QMD runtime dependency to be present (bundled via npm optional dependency, or provided on PATH)
 - (-) MCP HTTP mode could be added later as optimization if latency matters
+
+---
+
+## ADR-026: Native Skills Complement MCP Rather Than Replacing It
+
+**Status:** Accepted
+**Implementation Status:** Foundation implemented (`SkillRegistry`, `SkillResolver`, prompt injection, bundled local skills)
+
+**Context:** GuardianAgent needs a reusable workflow and procedural-knowledge layer. External skill ecosystems show strong utility, but they also expand supply-chain risk and do not provide the typed, policy-enforced execution model that GuardianAgent already has through built-in tools and MCP. Replacing MCP with skills would collapse execution and guidance into the same trust domain.
+
+**Decision:** Add a native skills layer while keeping MCP and built-in tools as the execution plane.
+
+- Skills provide reusable instructions, templates, references, and workflow guidance.
+- Skills do not execute directly and do not bypass ToolExecutor.
+- Skills do not grant capabilities or define a parallel approval model.
+- MCP remains the typed interface for external executable capabilities.
+
+**Consequences:**
+- (+) Skills improve planning and consistency without weakening the execution boundary.
+- (+) MCP continues to provide schemas, structured arguments, and external integration support.
+- (+) Supply-chain exposure is reduced by defaulting to local reviewed skills.
+- (-) Two concepts to explain to users: skills for guidance, tools for action.
+- (-) Requires prompt-budget discipline so skill context does not bloat every request.
+
+**Specs:** `docs/specs/SKILLS-SPEC.md`, `docs/specs/MCP-CLIENT-SPEC.md`
+
+---
+
+## ADR-027: Google Workspace Uses Managed MCP + Native Skills
+
+**Status:** Accepted
+**Implementation Status:** Foundation implemented (managed `gws` provider materialization, bundled Google skills); service-specific capability expansion remains follow-up work
+
+**Context:** Broad Google Workspace support is valuable, but building and maintaining bespoke first-party integrations for Gmail, Calendar, Drive, Docs, and Sheets would be slow and inconsistent. Giving the agent unrestricted shell access to a general-purpose Google CLI would weaken GuardianAgent's policy surface and audit story.
+
+**Decision:** Integrate Google Workspace through a managed MCP provider built around the Google Workspace CLI (`gws`) and pair it with curated native Google skills.
+
+- `gws mcp` is the execution backend.
+- GuardianAgent still owns policy, approvals, capabilities, audit, and sandboxing.
+- Native Google skills provide workflow guidance and safe usage patterns.
+
+**Consequences:**
+- (+) Broad Google API coverage without hand-implementing each endpoint.
+- (+) Consistent control plane with existing MCP and tool policy.
+- (+) Curated skill packs improve usability for multi-step Google workflows.
+- (-) Dynamic provider surfaces require stricter service allowlists and capability mapping.
+- (-) Requires a managed-provider wrapper so configuration stays understandable.
+
+**Spec:** `docs/specs/GOOGLE-WORKSPACE-INTEGRATION-SPEC.md`
+
+---
+
+## ADR-028: Strict Sandbox Availability for Risky Tool Classes
+
+**Status:** Accepted
+**Implementation Status:** Implemented for sandbox health detection, strict tool gating, and user-facing notices; native Windows/macOS strong sandbox helpers remain follow-up work
+
+**Context:** GuardianAgent currently improves subprocess containment with bwrap on Linux and softer fallbacks elsewhere, but silent degradation is not a strong enough contract for high-risk tools. Users need the system to be explicit about when strong isolation is unavailable, especially on Windows and macOS.
+
+**Decision:** Introduce a sandbox availability model and a strict enforcement mode for risky tool classes.
+
+- Sandbox health is classified as `strong`, `degraded`, or `unavailable`.
+- In strict mode, risky subprocess-backed tools are disabled unless a strong backend is present.
+- All channels must surface disable reasons clearly.
+- Windows will use a native sandbox helper built on platform primitives rather than relying on JavaScript-only policy checks.
+
+**Consequences:**
+- (+) No silent downgrade for risky tool execution.
+- (+) Users get explicit, actionable feedback in CLI, web, Telegram, and chat.
+- (+) Establishes a realistic path to stronger Windows support without requiring WSL2 or Docker.
+- (-) Some capabilities will be unavailable on hosts without strong sandbox support.
+- (-) Requires additional platform-specific runtime code and UX states.
+
+**Refs:** `SECURITY.md`, `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`

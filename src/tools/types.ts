@@ -170,6 +170,11 @@ export interface ToolPolicySnapshot {
   };
 }
 
+export interface ToolRuntimeNotice {
+  level: 'info' | 'warn';
+  message: string;
+}
+
 export interface ToolRunResponse {
   success: boolean;
   status: ToolJobStatus;

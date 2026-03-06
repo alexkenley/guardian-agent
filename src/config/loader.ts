@@ -147,6 +147,15 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     errors.push("assistant.soul.delegatedMode must be 'full', 'summary', or 'disabled'");
   }
 
+  if (assistant.skills.enabled) {
+    if (!Array.isArray(assistant.skills.roots) || assistant.skills.roots.length === 0) {
+      errors.push('assistant.skills.roots must include at least one path when skills are enabled');
+    }
+    if (assistant.skills.maxActivePerRequest < 1) {
+      errors.push('assistant.skills.maxActivePerRequest must be >= 1');
+    }
+  }
+
   if (assistant.memory.maxTurns < 1) {
     errors.push('assistant.memory.maxTurns must be >= 1');
   }
@@ -187,9 +196,10 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
 
   const mcp = assistant.tools.mcp;
   if (mcp?.enabled) {
-    if (!Array.isArray(mcp.servers) || mcp.servers.length === 0) {
-      errors.push('assistant.tools.mcp.servers must include at least one server when MCP is enabled');
-    } else {
+    const hasManagedProviders = !!mcp.managedProviders?.gws?.enabled;
+    if ((!Array.isArray(mcp.servers) || mcp.servers.length === 0) && !hasManagedProviders) {
+      errors.push('assistant.tools.mcp.servers must include at least one server or managed provider when MCP is enabled');
+    } else if (Array.isArray(mcp.servers) && mcp.servers.length > 0) {
       const seenIds = new Set<string>();
       for (const server of mcp.servers) {
         if (!server.id?.trim()) {
@@ -208,6 +218,19 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
         if (server.timeoutMs !== undefined && server.timeoutMs < 1000) {
           errors.push(`assistant.tools.mcp server '${server.id}' timeoutMs must be >= 1000`);
         }
+      }
+    }
+
+    if (mcp.managedProviders?.gws?.enabled) {
+      const gws = mcp.managedProviders.gws;
+      if (gws.services && gws.services.some((value) => !value.trim())) {
+        errors.push('assistant.tools.mcp.managedProviders.gws.services cannot contain empty values');
+      }
+      if (gws.timeoutMs !== undefined && gws.timeoutMs < 1000) {
+        errors.push('assistant.tools.mcp.managedProviders.gws.timeoutMs must be >= 1000');
+      }
+      if (gws.accountMode && !['single_user', 'multi_account'].includes(gws.accountMode)) {
+        errors.push("assistant.tools.mcp.managedProviders.gws.accountMode must be 'single_user' or 'multi_account'");
       }
     }
   }

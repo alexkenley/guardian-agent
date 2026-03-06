@@ -74,6 +74,9 @@ Expose a safe, auditable tool-execution plane so the assistant can perform works
 - Tool execution checks route through Guardian action checks when available.
 - All runs/approvals/denials are recorded in tool job history.
 - External forum interactions (for example Moltbook) are treated as untrusted/hostile surfaces and remain policy-gated.
+- Native skills are advisory only and must not create a bypass around ToolExecutor.
+- Managed MCP providers still register tools through the same executor and policy model.
+- Strict sandbox mode disables risky subprocess-backed tools when no strong sandbox backend is available and surfaces explicit disable reasons.
 
 ## UX Requirements
 - Web Tools tab includes:

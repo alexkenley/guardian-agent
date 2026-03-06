@@ -137,6 +137,18 @@ const sqliteServer: MCPServerConfig = {
 };
 ```
 
+### Managed Providers
+
+Some external integrations are better represented as **managed MCP providers** rather than raw user-authored server definitions.
+
+Current foundation:
+
+- Google Workspace via `gws mcp`
+
+GuardianAgent now supports config-driven materialization of managed provider server definitions. This preserves the existing MCP runtime model while making complex provider bundles easier to secure and operate.
+
+See `docs/specs/GOOGLE-WORKSPACE-INTEGRATION-SPEC.md`.
+
 ---
 
 ## Tool Name Resolution

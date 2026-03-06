@@ -8,12 +8,12 @@
 import { exec as execCb, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createLogger } from '../util/logging.js';
-import type { SandboxConfig, SandboxExecOptions, SandboxSpawnOptions, SandboxCapabilities } from './types.js';
+import type { SandboxConfig, SandboxExecOptions, SandboxSpawnOptions, SandboxCapabilities, SandboxHealth } from './types.js';
 import { DEFAULT_SANDBOX_CONFIG } from './types.js';
 import { buildBwrapArgs, buildUlimitPrefix, buildHardenedEnv, resolveProfile } from './profiles.js';
 
-export type { SandboxConfig, SandboxExecOptions, SandboxSpawnOptions, SandboxCapabilities } from './types.js';
-export type { SandboxProfile, SandboxResourceLimits } from './types.js';
+export type { SandboxConfig, SandboxExecOptions, SandboxSpawnOptions, SandboxCapabilities, SandboxHealth } from './types.js';
+export type { SandboxProfile, SandboxResourceLimits, SandboxAvailability, SandboxEnforcementMode } from './types.js';
 export { DEFAULT_SANDBOX_CONFIG, DEFAULT_RESOURCE_LIMITS } from './types.js';
 export { buildBwrapArgs, buildUlimitPrefix, buildHardenedEnv, PROTECTED_PATHS } from './profiles.js';
 
@@ -53,6 +53,82 @@ export async function detectCapabilities(): Promise<SandboxCapabilities> {
 /** Clear the cached capability detection result (for testing). */
 export function clearCapabilityCache(): void {
   cachedCapabilities = null;
+}
+
+export async function detectSandboxHealth(
+  config: SandboxConfig = DEFAULT_SANDBOX_CONFIG,
+  capabilities?: SandboxCapabilities,
+): Promise<SandboxHealth> {
+  const enforcementMode = config.enforcementMode ?? 'permissive';
+  if (!config.enabled) {
+    return {
+      enabled: false,
+      platform: process.platform,
+      availability: 'unavailable',
+      backend: 'none',
+      enforcementMode,
+      reasons: ['Sandbox is disabled in configuration.'],
+    };
+  }
+
+  const caps = capabilities ?? await detectCapabilities();
+  const reasons: string[] = [];
+
+  if (process.platform === 'linux') {
+    if (caps.bwrapAvailable) {
+      return {
+        enabled: true,
+        platform: process.platform,
+        availability: 'strong',
+        backend: 'bubblewrap',
+        enforcementMode,
+        reasons,
+      };
+    }
+    reasons.push('bubblewrap (bwrap) is not available on this Linux host.');
+    return {
+      enabled: true,
+      platform: process.platform,
+      availability: caps.ulimitAvailable ? 'degraded' : 'unavailable',
+      backend: caps.ulimitAvailable ? 'ulimit' : 'env',
+      enforcementMode,
+      reasons,
+    };
+  }
+
+  if (process.platform === 'darwin') {
+    reasons.push('No native macOS sandbox helper is configured; only process limits and env hardening are available.');
+    return {
+      enabled: true,
+      platform: process.platform,
+      availability: caps.ulimitAvailable ? 'degraded' : 'unavailable',
+      backend: caps.ulimitAvailable ? 'ulimit' : 'env',
+      enforcementMode,
+      reasons,
+    };
+  }
+
+  if (process.platform === 'win32') {
+    reasons.push('No native Windows sandbox helper is available; strict mode will disable risky subprocess-backed tools.');
+    return {
+      enabled: true,
+      platform: process.platform,
+      availability: 'unavailable',
+      backend: 'env',
+      enforcementMode,
+      reasons,
+    };
+  }
+
+  reasons.push(`No strong sandbox backend is defined for platform '${process.platform}'.`);
+  return {
+    enabled: true,
+    platform: process.platform,
+    availability: caps.ulimitAvailable ? 'degraded' : 'unavailable',
+    backend: caps.ulimitAvailable ? 'ulimit' : 'env',
+    enforcementMode,
+    reasons,
+  };
 }
 
 // ─── Sandboxed Exec ───────────────────────────────────────────

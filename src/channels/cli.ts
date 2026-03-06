@@ -70,6 +70,7 @@ export interface CLIChannelOptions {
     channels?: string[];
     dashboardUrl?: string;
     authToken?: string;
+    warnings?: string[];
   };
 }
 
@@ -1398,8 +1399,18 @@ export class CLIChannel implements ChannelAdapter {
 
     const sub = (args[0] ?? 'list').toLowerCase();
     const state = this.dashboard.onToolsState({ limit: 40 });
+    const writeToolNotices = (): void => {
+      if (!state.notices?.length) return;
+      this.write('\n');
+      for (const notice of state.notices) {
+        const prefix = notice.level === 'warn' ? this.yellow('WARN') : this.dim('INFO');
+        this.write(`${prefix}: ${notice.message}\n`);
+      }
+      this.write('\n');
+    };
 
     if (sub === 'list') {
+      writeToolNotices();
       if (state.tools.length === 0) {
         this.write('\nNo tools are registered.\n\n');
         return;
@@ -1563,6 +1574,7 @@ export class CLIChannel implements ChannelAdapter {
         return;
       }
       this.write('\n');
+      writeToolNotices();
       this.write(this.bold('Tool Policy\n'));
       this.write(`  Mode: ${state.policy.mode}\n`);
       this.write(`  Allowed paths: ${state.policy.sandbox.allowedPaths.join(', ') || 'none'}\n`);
@@ -1650,15 +1662,16 @@ export class CLIChannel implements ChannelAdapter {
         return;
       }
       // Default: show categories table
-      if (this.dashboard.onToolsCategories) {
-        const categories = this.dashboard.onToolsCategories();
+      const categories = state.categories ?? this.dashboard.onToolsCategories?.();
+      if (categories) {
+        writeToolNotices();
         const headers = ['Category', 'Label', 'Tools', 'Status', 'Description'];
         const rows = categories.map((cat) => [
           cat.category,
           cat.label,
           String(cat.toolCount),
           cat.enabled ? this.green('enabled') : this.yellow('disabled'),
-          cat.description,
+          cat.disabledReason ? `${cat.description} (${cat.disabledReason})` : cat.description,
         ]);
         this.write('\n');
         this.writeTable(headers, rows);
@@ -3286,6 +3299,12 @@ export class CLIChannel implements ChannelAdapter {
       }
       this.write(dg('  └──────────────────────────────────────────────────┘') + '\n');
       this.write('\n');
+      if (s.warnings?.length) {
+        for (const warning of s.warnings) {
+          this.write(`${yl('  Warning:')} ${warning}\n`);
+        }
+        this.write('\n');
+      }
     }
 
     this.write(dm('  /help') + ' — list all commands  ' + dm('|') + '  ' + dm('/kill') + ' — shutdown all services\n');

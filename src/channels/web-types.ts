@@ -26,11 +26,12 @@ import type {
   IntelResponseMode,
 } from '../runtime/threat-intel.js';
 import type { ConnectorFrameworkState, ConnectorPlaybookRunResult } from '../runtime/connectors.js';
-import type { ToolApprovalRequest, ToolCategory, ToolDefinition, ToolJobRecord, ToolPolicySnapshot, ToolRunResponse } from '../tools/types.js';
+import type { ToolApprovalRequest, ToolCategory, ToolDefinition, ToolJobRecord, ToolPolicySnapshot, ToolRunResponse, ToolRuntimeNotice } from '../tools/types.js';
 import type { ScheduledTaskDefinition, ScheduledTaskCreateInput, ScheduledTaskUpdateInput, ScheduledTaskPreset, ScheduledTaskStatus } from '../runtime/scheduled-tasks.js';
 import type { QMDStatusResponse } from '../runtime/qmd-search.js';
 import type { QMDSourceConfig } from '../config/types.js';
 import type { NetworkAlert, NetworkBaselineSnapshot } from '../runtime/network-baseline.js';
+import type { SandboxHealth } from '../sandbox/index.js';
 
 /** Agent info returned by GET /api/agents. */
 export interface DashboardAgentInfo {
@@ -222,6 +223,8 @@ export interface DashboardToolsState {
   policy: ToolPolicySnapshot;
   approvals: ToolApprovalRequest[];
   jobs: ToolJobRecord[];
+  notices?: ToolRuntimeNotice[];
+  sandbox?: SandboxHealth;
   /** All tool categories with current enable/disable status. */
   categories?: Array<{
     category: ToolCategory;
@@ -229,6 +232,7 @@ export interface DashboardToolsState {
     description: string;
     toolCount: number;
     enabled: boolean;
+    disabledReason?: string;
   }>;
   /** Currently disabled categories. */
   disabledCategories?: ToolCategory[];
@@ -397,7 +401,7 @@ export interface DashboardCallbacks {
   onAuthRotate?: () => Promise<{ success: boolean; message: string; token?: string; status?: DashboardAuthStatus }> | { success: boolean; message: string; token?: string; status?: DashboardAuthStatus };
   onAuthReveal?: () => Promise<{ success: boolean; token?: string }> | { success: boolean; token?: string };
   onToolsState?: (args?: { limit?: number }) => DashboardToolsState;
-  onToolsCategories?: () => Array<{ category: ToolCategory; label: string; description: string; toolCount: number; enabled: boolean }>;
+  onToolsCategories?: () => Array<{ category: ToolCategory; label: string; description: string; toolCount: number; enabled: boolean; disabledReason?: string }>;
   onToolsCategoryToggle?: (input: { category: ToolCategory; enabled: boolean }) => { success: boolean; message: string };
   onToolsRun?: (input: {
     toolName: string;

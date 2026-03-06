@@ -8,6 +8,8 @@
 
 /** Sandbox profile determines how much filesystem access the child process gets. */
 export type SandboxProfile = 'read-only' | 'workspace-write' | 'full-access';
+export type SandboxEnforcementMode = 'permissive' | 'strict';
+export type SandboxAvailability = 'strong' | 'degraded' | 'unavailable';
 
 /** Resource limits enforced via ulimit on the child process. */
 export interface SandboxResourceLimits {
@@ -25,6 +27,8 @@ export interface SandboxResourceLimits {
 export interface SandboxConfig {
   /** Enable OS-level process isolation. When false, all commands run unsandboxed. */
   enabled: boolean;
+  /** Whether risky tools may run on degraded sandbox backends. */
+  enforcementMode?: SandboxEnforcementMode;
   /** Default sandbox profile for tool executions. */
   mode: SandboxProfile;
   /** Allow network access in sandboxed processes. */
@@ -77,6 +81,15 @@ export interface SandboxCapabilities {
   ulimitAvailable: boolean;
 }
 
+export interface SandboxHealth {
+  enabled: boolean;
+  platform: NodeJS.Platform;
+  availability: SandboxAvailability;
+  backend: 'bubblewrap' | 'ulimit' | 'env' | 'none';
+  enforcementMode: SandboxEnforcementMode;
+  reasons: string[];
+}
+
 /** Default resource limits. */
 export const DEFAULT_RESOURCE_LIMITS: SandboxResourceLimits = {
   maxMemoryMb: 512,
@@ -88,6 +101,7 @@ export const DEFAULT_RESOURCE_LIMITS: SandboxResourceLimits = {
 /** Default sandbox configuration. */
 export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
   enabled: true,
+  enforcementMode: 'permissive',
   mode: 'workspace-write',
   networkAccess: false,
   additionalWritePaths: [],

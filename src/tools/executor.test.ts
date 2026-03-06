@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ToolExecutor } from './executor.js';
+import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
 
 const testDirs: string[] = [];
 
@@ -1085,6 +1086,48 @@ describe('ToolExecutor', () => {
       expect(executor.getDisabledCategories()).not.toContain('network');
       const namesAfter = executor.listToolDefinitions().map((t) => t.name);
       expect(namesAfter).toContain('net_ping');
+    });
+
+    it('strict sandbox mode blocks risky subprocess-backed tools without a strong backend', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        allowedPaths: [root],
+        allowedCommands: ['echo'],
+        allowedDomains: ['localhost'],
+        sandboxConfig: {
+          ...DEFAULT_SANDBOX_CONFIG,
+          enforcementMode: 'strict',
+        },
+        sandboxHealth: {
+          enabled: true,
+          platform: 'win32',
+          availability: 'unavailable',
+          backend: 'env',
+          enforcementMode: 'strict',
+          reasons: ['No native Windows sandbox helper is available.'],
+        },
+      });
+
+      const names = executor.listToolDefinitions().map((t) => t.name);
+      expect(names).not.toContain('shell_safe');
+      expect(names).not.toContain('net_ping');
+      expect(names).not.toContain('qmd_search');
+
+      const shell = executor.getCategoryInfo().find((entry) => entry.category === 'shell');
+      expect(shell?.enabled).toBe(false);
+      expect(shell?.disabledReason).toContain('strict sandbox mode');
+
+      const result = await executor.runTool({
+        toolName: 'shell_safe',
+        args: { command: 'echo hello' },
+        origin: 'cli',
+      });
+      expect(result.success).toBe(false);
+      expect(result.status).toBe('denied');
+      expect(result.message).toContain('strict sandbox mode');
     });
   });
 

@@ -220,7 +220,7 @@ describe('validateConfig — MCP', () => {
     };
     const errors = validateConfig(config);
     expect(errors).toContain(
-      'assistant.tools.mcp.servers must include at least one server when MCP is enabled',
+      'assistant.tools.mcp.servers must include at least one server or managed provider when MCP is enabled',
     );
   });
 
@@ -315,6 +315,31 @@ describe('validateConfig — MCP', () => {
         tools: {
           ...DEFAULT_CONFIG.assistant.tools,
           mcp: { enabled: false, servers: [] },
+        },
+      },
+    };
+    const errors = validateConfig(config);
+    expect(errors).toEqual([]);
+  });
+
+  it('should pass with managed gws provider and no raw servers', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          mcp: {
+            enabled: true,
+            servers: [],
+            managedProviders: {
+              gws: {
+                enabled: true,
+                services: ['gmail', 'calendar'],
+                exposeSkills: true,
+              },
+            },
+          },
         },
       },
     };

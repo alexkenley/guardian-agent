@@ -1,0 +1,16 @@
+{
+  "id": "security-triage",
+  "name": "Security Triage",
+  "version": "0.1.0",
+  "description": "Guidance for concise, structured incident and alert triage.",
+  "tags": ["security", "triage", "incident", "alert"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["incident", "triage", "alert", "ioc", "threat", "investigate"]
+  },
+  "risk": "informational"
+}

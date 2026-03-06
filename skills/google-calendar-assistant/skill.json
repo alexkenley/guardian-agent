@@ -1,0 +1,17 @@
+{
+  "id": "google-calendar-assistant",
+  "name": "Google Calendar Assistant",
+  "version": "0.1.0",
+  "description": "Guidance for Google Calendar planning and review-first scheduling.",
+  "tags": ["calendar", "meeting", "schedule", "google workspace"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["calendar", "meeting", "schedule", "event", "invite"]
+  },
+  "requiredManagedProvider": "gws",
+  "risk": "operational"
+}

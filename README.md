@@ -413,6 +413,8 @@ Full documentation in `docs/architecture/`:
 Implementation specs in `docs/specs/`:
 - [Orchestration Agents](docs/specs/ORCHESTRATION-AGENTS-SPEC.md)
 - [MCP Client](docs/specs/MCP-CLIENT-SPEC.md)
+- [Native Skills](docs/specs/SKILLS-SPEC.md) — implemented local skills foundation and prompt injection model
+- [Google Workspace Integration](docs/specs/GOOGLE-WORKSPACE-INTEGRATION-SPEC.md) — managed `gws` MCP provider foundation and Google skill packs
 - [Evaluation Framework](docs/specs/EVAL-FRAMEWORK-SPEC.md)
 - [Shared State](docs/specs/SHARED-STATE-SPEC.md)
 - [Setup And Config Flow](docs/specs/SETUP-WIZARD-SPEC.md)

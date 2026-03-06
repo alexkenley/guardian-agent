@@ -44,6 +44,8 @@ GuardianAgent is an AI agent orchestration system where:
 | Event source spoofing | Trusted source validation + Runtime-stamped `ctx.emit()` source IDs |
 | Shell command injection | POSIX tokenizer with whitelist validation |
 | LLM provider failures | CircuitBreaker + priority-based FailoverProvider |
+| Malicious skill content | Local reviewed skill roots, no direct execution path, ToolExecutor/Guardian remain mandatory for effects |
+| Over-broad external tool providers | Guardian policy, managed provider allowlists, per-service capabilities, audit trail |
 
 ---
 
@@ -93,8 +95,11 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
 ┌─────────────────────────────────────────────────────────┐
 │  LAYER 1.5: OS-Level Process Sandbox                    │
 │                                                         │
-│  bwrap (bubblewrap) namespace isolation on Linux         │
-│  Fallback: ulimit + env hardening on other platforms     │
+│  Current: bwrap namespace isolation on Linux             │
+│  Current: sandbox health states + strict fail-closed     │
+│  mode for risky subprocess-backed tools                  │
+│  Current fallback: ulimit + env hardening                │
+│  Next: native Windows/macOS sandbox helpers              │
 │                                                         │
 │  ┌──────────────┐  ┌─────────────┐  ┌───────────────┐  │
 │  │ Filesystem   │  │ Network     │  │ Resource      │  │
@@ -155,6 +160,86 @@ All security enforcement occurs at Runtime chokepoints. Agents cannot bypass the
 | **Resource limits** | Budget/token/queue checks before invocation | Runtime rejects over-limit requests |
 | **Lifecycle gating** | Dead/Errored/Stalled agents cannot receive work | `assertExecutable()` guard |
 | **Context immutability** | `Object.freeze()` on agent contexts | Agents cannot modify capabilities |
+
+---
+
+## Sandbox Availability Model
+
+GuardianAgent now classifies sandbox strength as `strong`, `degraded`, or `unavailable` and threads that state into tool registration, execution, and user-facing status surfaces.
+
+### Current Behavior
+
+- Linux with `bwrap` available is treated as `strong`
+- Linux without `bwrap` degrades to `ulimit` or env hardening
+- macOS currently reports `degraded`
+- Windows currently reports `unavailable`
+- `assistant.tools.sandbox.enforcementMode` supports `permissive` and `strict`
+- In `strict` mode, risky subprocess-backed tools are disabled unless sandbox availability is `strong`
+- CLI startup warnings, tool listings, category views, web tool state, and tool execution denials surface the reason
+
+### Risky Tool Classes Blocked In `strict`
+
+- shell execution
+- browser automation
+- MCP server processes and their registered tools
+- subprocess-backed search/indexing tools
+- other broad host-access categories currently mapped as `network` and `system`
+
+### Current Limitation
+
+The current strict model is a fail-closed control plane improvement, not a complete cross-platform kernel-isolation story. Windows and macOS still need native sandbox helpers for strong enforcement.
+
+### Windows Next Stage
+
+The intended Windows backend uses native OS controls rather than attempting to emulate a kernel boundary in JavaScript:
+
+- AppContainer where feasible
+- restricted tokens
+- job objects
+- process mitigation policies
+- isolated per-tool working directories
+
+This is the next implementation stage for real OS-level enforcement of risky child processes without requiring WSL2 or Docker for the common case.
+
+### Filesystem and Network Expectations
+
+- Filesystem enforcement on Windows should prefer isolated workspaces and explicit allowed-directory grants
+- Network enforcement should support at least `on/off` at the sandbox boundary
+- Fine-grained host/domain egress policy remains an application-layer control unless a future privileged Windows networking helper is introduced
+
+---
+
+## Native Skills Security Model
+
+GuardianAgent now has a native skills foundation. Skills are a **knowledge and workflow layer**, not a privileged execution layer.
+
+### Security Requirements for Skills
+
+- Skills are loaded from configured local roots by default
+- Skills do not create or bypass tools
+- Skills do not grant capabilities
+- Skills may recommend actions, but execution still goes through ToolExecutor and Guardian
+- Any future install/setup steps must be explicitly approval-gated
+
+This separation is deliberate: skills help the model plan, while tools and MCP integrations remain the only execution surfaces.
+
+---
+
+## Managed Google Workspace Integration
+
+GuardianAgent now includes a managed MCP provider foundation for Google Workspace built around the Google Workspace CLI (`gws`) plus curated native skills.
+
+Security expectations:
+
+- only configured Google services are exposed
+- per-service capabilities should narrow agent access further as the integration expands
+- external send/post actions remain approval-gated
+- credentials should prefer provider-managed secure storage over chat-passed secrets
+
+See:
+
+- `docs/specs/SKILLS-SPEC.md`
+- `docs/specs/GOOGLE-WORKSPACE-INTEGRATION-SPEC.md`
 
 ---
 

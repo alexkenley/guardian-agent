@@ -11,6 +11,11 @@ Core principles:
 - **Mandatory enforcement at Runtime chokepoints** — not advisory checks that agents opt into
 - **The LLM is untrusted, not the agent code** — enforcement targets the data path where risk lives
 
+Current extensions:
+- **Native skills layer** for reusable procedural knowledge, templates, and task guidance
+- **Managed MCP providers** for curated external capability bundles such as Google Workspace via `gws`
+- **Strict sandbox availability model** that disables risky tools when strong OS isolation is unavailable
+
 ## Architecture Diagram
 
 ```
@@ -102,6 +107,7 @@ Runtime (src/runtime/runtime.ts)
 ├── Memory (src/runtime/conversation.ts) — SQLite-backed conversation/session persistence
 ├── Analytics (src/runtime/analytics.ts) — SQLite-backed channel interaction telemetry
 ├── Quick Actions (src/quick-actions.ts) — structured assistant workflows
+├── Skills (src/skills/)                — native procedural knowledge, templates, and references
 ├── Threat Intel (src/runtime/threat-intel.ts) — watchlist scans, findings triage, response drafting
 │   └── Moltbook Connector (src/runtime/moltbook-connector.ts) — hostile-site constrained forum ingestion
 ├── Connector Framework (assistant.connectors) — Option 2 connector-pack/playbook policy controls
@@ -123,6 +129,7 @@ Runtime (src/runtime/runtime.ts)
 ├── Shared State (src/runtime/shared-state.ts) — per-invocation inter-agent data passing
 ├── QMD Search (src/runtime/qmd-search.ts) — hybrid document search via QMD CLI subprocess
 ├── MCP Client (src/tools/mcp-client.ts) — Model Context Protocol tool server consumption
+├── Managed MCP Providers               — curated provider wrappers, including Google Workspace via `gws`
 ├── Eval Framework (src/eval/)           — agent evaluation with metrics and reporting
 │   ├── types.ts                        — test case, matcher, and result types
 │   ├── metrics.ts                      — content, trajectory, metadata, and safety metrics
@@ -228,6 +235,70 @@ const result = await manager.callTool('mcp:filesystem:read_file', { path: '/a.tx
 ```
 
 MCP tools are classified as `network` risk and all calls pass through Guardian. See [MCP Client Spec](../specs/MCP-CLIENT-SPEC.md).
+
+## Native Skills Layer
+
+GuardianAgent includes a native skills foundation to package reusable procedural knowledge, templates, and references without introducing a parallel execution plane.
+
+Design intent:
+
+- skills influence planning and prompt context
+- tools and MCP remain the only execution surfaces
+- Guardian and sandboxing remain the enforcement boundary
+
+Current implementation:
+
+- `SkillRegistry` loads local skill bundles from configured roots
+- `SkillResolver` auto-selects relevant skills for chat requests
+- active skill summaries are injected into the system prompt
+- active skill IDs are included in chat response metadata
+
+Not yet implemented:
+
+- dedicated `/skills` CLI management commands
+- web skill management surfaces
+- reviewed install flows for third-party skills
+
+See [Native Skills Spec](../specs/SKILLS-SPEC.md).
+
+## Managed Providers
+
+GuardianAgent includes a managed MCP provider foundation for complex ecosystems where both tool schemas and procedural guidance matter.
+
+The first managed provider is Google Workspace:
+
+- execution via `gws mcp`
+- safety and approvals via ToolExecutor + Guardian
+- workflow guidance via native Google skills
+
+Current implementation:
+
+- config-driven managed provider materialization for `gws`
+- default service scope of Gmail, Calendar, and Drive
+- optional skill exposure tied to successful managed-provider enablement
+
+Not yet implemented:
+
+- richer provider diagnostics in UI
+- expanded service-specific capability model
+- multi-account selection flow
+
+See [Google Workspace Integration Spec](../specs/GOOGLE-WORKSPACE-INTEGRATION-SPEC.md).
+
+## Sandbox Availability
+
+The current subprocess sandbox layer now uses an explicit availability model:
+
+- detect whether strong sandboxing is available on the current host
+- fail closed for risky tool classes in strict mode
+- surface warnings and disable reasons in CLI, web, and chat paths
+
+Next stage:
+
+- add native Windows sandbox helpers rather than relying on soft fallbacks
+- add native macOS strong-backend support
+
+See [Security](../../SECURITY.md) for the security details and remaining gaps.
 
 ### Agent Evaluation Framework
 
