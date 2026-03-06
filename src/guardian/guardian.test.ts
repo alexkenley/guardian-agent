@@ -105,6 +105,7 @@ describe('SecretScanner', () => {
   it('should detect denied file paths', () => {
     const scanner = new SecretScanner();
     expect(scanner.isDeniedPath('.env').denied).toBe(true);
+    expect(scanner.isDeniedPath('.env::$DATA').denied).toBe(true);
     expect(scanner.isDeniedPath('/home/user/.env.local').denied).toBe(true);
     expect(scanner.isDeniedPath('server.pem').denied).toBe(true);
     expect(scanner.isDeniedPath('private.key').denied).toBe(true);
@@ -357,13 +358,14 @@ describe('Guardian', () => {
         type: 'read_file',
         agentId: 'test',
         capabilities: ['read_files'],
-        params: { path: 'foo/../../.env' },
+        params: { path: 'foo/../.env' },
       };
       const result = controller.check(action);
       expect(result).not.toBeNull();
       expect(result!.allowed).toBe(false);
       // Either the traversal check or the .env check should block it
     });
+
 
     it('should normalize paths before checking', () => {
       const controller = new DeniedPathController();
