@@ -122,6 +122,30 @@ describe('MessageRouter', () => {
       expect(result.agentId).toBe('external');
     });
 
+    it('should route calendar tasks to agent with workspace capabilities', () => {
+      router.registerAgent('local', ['read_files'], {
+        domains: ['filesystem'],
+      });
+      router.registerAgent('workspace', ['read_calendar', 'write_calendar'], {
+        domains: ['workspace'],
+      });
+
+      const result = router.route('schedule a calendar event for tomorrow');
+      expect(result.agentId).toBe('workspace');
+    });
+
+    it('should route docs and sheets tasks to agent with workspace capabilities', () => {
+      router.registerAgent('local', ['read_files'], {
+        domains: ['filesystem'],
+      });
+      router.registerAgent('workspace', ['read_docs', 'write_sheets'], {
+        domains: ['workspace'],
+      });
+
+      const result = router.route('update the spreadsheet and summarize the document');
+      expect(result.agentId).toBe('workspace');
+    });
+
     it('should route "git commit" to agent with code capabilities', () => {
       router.registerAgent('local', ['execute_commands'], {
         domains: ['code'],

@@ -60,6 +60,19 @@ const DOMAIN_KEYWORDS: Record<string, { keywords: RegExp; capabilities: string[]
     keywords: /\b(email|mail|inbox|send|draft|compose|reply|forward|attachment|gmail|outlook|smtp|imap)\b/i,
     capabilities: ['read_email', 'send_email', 'draft_email'],
   },
+  workspace: {
+    keywords: /\b(calendar|meeting|schedule|event|invite|drive|folder|docs|document|sheets|spreadsheet|worksheet)\b/i,
+    capabilities: [
+      'read_calendar',
+      'write_calendar',
+      'read_drive',
+      'write_drive',
+      'read_docs',
+      'write_docs',
+      'read_sheets',
+      'write_sheets',
+    ],
+  },
 };
 
 export class MessageRouter {

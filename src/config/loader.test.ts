@@ -346,6 +346,30 @@ describe('validateConfig — MCP', () => {
     const errors = validateConfig(config);
     expect(errors).toEqual([]);
   });
+
+  it('should fail with invalid windows sandbox helper config', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          sandbox: {
+            ...DEFAULT_CONFIG.assistant.tools.sandbox,
+            enforcementMode: 'strict',
+            windowsHelper: {
+              enabled: true,
+              command: '   ',
+              timeoutMs: 500,
+            },
+          },
+        },
+      },
+    };
+    const errors = validateConfig(config);
+    expect(errors).toContain('assistant.tools.sandbox.windowsHelper.command must be a non-empty string when provided');
+    expect(errors).toContain('assistant.tools.sandbox.windowsHelper.timeoutMs must be >= 1000');
+  });
 });
 
 describe('validateConfig — connectors', () => {

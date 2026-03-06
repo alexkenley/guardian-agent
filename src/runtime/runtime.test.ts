@@ -217,6 +217,24 @@ describe('Runtime', () => {
       expect(runtime.outputGuardian).toBeDefined();
     });
 
+    it('should apply shell allowlist updates without restart', () => {
+      const action = {
+        type: 'execute_command',
+        agentId: 'test',
+        capabilities: ['execute_commands'],
+        params: { command: 'whoami /groups' },
+      };
+
+      const before = runtime.guardian.check(action);
+      expect(before.allowed).toBe(false);
+      expect(before.reason).toContain("Command 'whoami' is not in allowed list");
+
+      runtime.applyShellAllowedCommands(['node', 'npm', 'whoami']);
+
+      const after = runtime.guardian.check(action);
+      expect(after.allowed).toBe(true);
+    });
+
     it('should block prompt injection in message dispatch', async () => {
       const agent = new EchoAgent();
       runtime.registerAgent(createAgentDefinition({ agent }));

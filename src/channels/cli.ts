@@ -312,6 +312,9 @@ export class CLIChannel implements ChannelAdapter {
       case 'tools':
         await this.handleTools(args);
         break;
+      case 'skills':
+        this.handleSkills(args);
+        break;
       case 'campaign':
         await this.handleCampaign(args);
         break;
@@ -431,6 +434,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /tools browser domains <csv>            Set browser allowed domains\n');
     this.write('  /tools categories                       Show tool category status\n');
     this.write('  /tools categories enable|disable <cat>  Enable/disable a tool category\n');
+    this.write('  /skills [list|show|enable|disable]      Inspect and toggle runtime skills\n');
     this.write('  /campaign ...                            Contact discovery + email campaign workflows\n');
     this.write('  /connectors [status|packs|settings|pack] Connector framework control plane\n');
     this.write('  /playbooks [list|run|upsert|delete|runs] Playbook registry + execution\n');
@@ -1455,7 +1459,12 @@ export class CLIChannel implements ChannelAdapter {
         userId: this.defaultUserId,
         channel: 'cli',
       });
-      this.write(`\n${result.success ? this.green('OK') : this.yellow('INFO')}: ${result.message}\n`);
+      const statusLabel = result.success
+        ? this.green('OK')
+        : result.status === 'pending_approval'
+          ? this.yellow('INFO')
+          : this.red('FAIL');
+      this.write(`\n${statusLabel}: ${result.message}\n`);
       this.write(`  Job: ${result.jobId}\n`);
       if (result.approvalId) this.write(`  Approval: ${result.approvalId}\n`);
       if (result.output !== undefined) {
@@ -1689,6 +1698,93 @@ export class CLIChannel implements ChannelAdapter {
     this.write('       /tools policy domains <comma,separated,domains>\n');
     this.write('       /tools browser [enable|disable|domains <csv>]\n');
     this.write('       /tools categories [enable|disable <name>]\n\n');
+  }
+
+  // ─── /skills ────────────────────────────────────────────────
+
+  private handleSkills(args: string[]): void {
+    if (!this.dashboard?.onSkillsState) {
+      this.write('\nSkills runtime is not available.\n\n');
+      return;
+    }
+
+    const sub = (args[0] ?? 'list').toLowerCase();
+    const state = this.dashboard.onSkillsState();
+
+    if (sub === 'list') {
+      if (state.skills.length === 0) {
+        this.write('\nNo skills are loaded.\n\n');
+        return;
+      }
+      const headers = ['ID', 'Enabled', 'Provider', 'Risk', 'Description'];
+      const rows = state.skills.map((skill) => [
+        skill.id,
+        skill.enabled ? this.green('yes') : this.yellow('no'),
+        skill.requiredManagedProvider
+          ? `${skill.requiredManagedProvider}${skill.providerReady ? '' : ' (inactive)'}`
+          : '-',
+        skill.risk,
+        skill.description,
+      ]);
+      this.write('\n');
+      this.writeTable(headers, rows);
+      this.write('\n');
+      return;
+    }
+
+    if (sub === 'show') {
+      const skillId = args[1];
+      if (!skillId) {
+        this.write('\nUsage: /skills show <skillId>\n\n');
+        return;
+      }
+      const skill = state.skills.find((entry) => entry.id === skillId);
+      if (!skill) {
+        this.write(`\nSkill "${skillId}" not found.\n\n`);
+        return;
+      }
+      this.write('\n');
+      this.write(this.bold(`${skill.name}\n`));
+      this.write(`  ID:                 ${skill.id}\n`);
+      this.write(`  Version:            ${skill.version}\n`);
+      this.write(`  Enabled:            ${skill.enabled ? this.green('yes') : this.yellow('no')}\n`);
+      this.write(`  Risk:               ${skill.risk}\n`);
+      this.write(`  Description:        ${skill.description}\n`);
+      this.write(`  Tags:               ${skill.tags.length > 0 ? skill.tags.join(', ') : '-'}\n`);
+      this.write(`  Required provider:  ${skill.requiredManagedProvider ?? '-'}\n`);
+      if (skill.requiredManagedProvider) {
+        this.write(`  Provider ready:     ${skill.providerReady ? this.green('yes') : this.yellow('no')}\n`);
+      }
+      this.write(`  Required caps:      ${skill.requiredCapabilities.length > 0 ? skill.requiredCapabilities.join(', ') : '-'}\n`);
+      this.write(`  Suggested tools:    ${skill.tools.length > 0 ? skill.tools.join(', ') : '-'}\n`);
+      this.write(`  Root:               ${skill.rootDir}\n`);
+      this.write(`  Source:             ${skill.sourcePath}\n`);
+      if (skill.disabledReason) {
+        this.write(`  Note:               ${this.yellow(skill.disabledReason)}\n`);
+      }
+      this.write('\n');
+      return;
+    }
+
+    if (sub === 'enable' || sub === 'disable') {
+      if (!this.dashboard.onSkillsUpdate) {
+        this.write('\nSkill updates are not available.\n\n');
+        return;
+      }
+      const skillId = args[1];
+      if (!skillId) {
+        this.write(`\nUsage: /skills ${sub} <skillId>\n\n`);
+        return;
+      }
+      const result = this.dashboard.onSkillsUpdate({ skillId, enabled: sub === 'enable' });
+      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+      return;
+    }
+
+    this.write('\nUsage: /skills [list|show|enable|disable]\n');
+    this.write('       /skills show <skillId>\n');
+    this.write('       /skills enable <skillId>\n');
+    this.write('       /skills disable <skillId>\n\n');
   }
 
   // ─── /campaign ───────────────────────────────────────────────

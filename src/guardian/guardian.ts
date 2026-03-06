@@ -73,10 +73,19 @@ export class CapabilityController implements AdmissionController {
       ['execute_command', 'execute_commands'],
       ['http_request', 'network_access'],
       ['network_probe', 'network_access'],
+      ['mcp_tool', 'network_access'],
       ['system_info', 'execute_commands'],
       ['read_email', 'read_email'],
       ['draft_email', 'draft_email'],
       ['send_email', 'send_email'],
+      ['read_calendar', 'read_calendar'],
+      ['write_calendar', 'write_calendar'],
+      ['read_drive', 'read_drive'],
+      ['write_drive', 'write_drive'],
+      ['read_docs', 'read_docs'],
+      ['write_docs', 'write_docs'],
+      ['read_sheets', 'read_sheets'],
+      ['write_sheets', 'write_sheets'],
       ['git_operation', 'git_operations'],
       ['install_package', 'install_packages'],
     ]);
@@ -229,6 +238,43 @@ export class Guardian {
   /** Get all registered controllers. */
   getControllers(): readonly AdmissionController[] {
     return this.controllers;
+  }
+
+  /**
+   * Update shell command allowlist at runtime.
+   *
+   * If a ShellCommandController is present, it is updated in place.
+   * If missing and commands are provided, one is added.
+   * If commands are empty, existing shell command controllers are removed.
+   */
+  updateShellAllowedCommands(allowedCommands: string[], options?: {
+    additionalSecretPatterns?: string[];
+    deniedPaths?: string[];
+  }): void {
+    const normalized = allowedCommands.map((value) => value.trim()).filter(Boolean);
+    const existing = this.controllers.filter(
+      (controller): controller is ShellCommandController => controller instanceof ShellCommandController,
+    );
+
+    if (normalized.length === 0) {
+      if (existing.length > 0) {
+        this.controllers = this.controllers.filter((controller) => !(controller instanceof ShellCommandController));
+      }
+      return;
+    }
+
+    if (existing.length > 0) {
+      for (const controller of existing) {
+        controller.updateAllowedCommands(normalized);
+      }
+      return;
+    }
+
+    this.use(new ShellCommandController({
+      allowedCommands: normalized,
+      additionalSecretPatterns: options?.additionalSecretPatterns,
+      deniedPaths: options?.deniedPaths,
+    }));
   }
 
   /**

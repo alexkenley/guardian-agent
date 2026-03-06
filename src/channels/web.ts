@@ -693,6 +693,48 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // GET /api/skills — loaded skills and runtime status
+      if (req.method === 'GET' && url.pathname === '/api/skills') {
+        if (!this.dashboard.onSkillsState) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onSkillsState());
+        return;
+      }
+
+      // POST /api/skills — enable/disable one runtime skill
+      if (req.method === 'POST' && url.pathname === '/api/skills') {
+        if (!this.dashboard.onSkillsUpdate) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { skillId?: string; enabled?: boolean };
+        try {
+          parsed = JSON.parse(body) as { skillId?: string; enabled?: boolean };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed.skillId || typeof parsed.enabled !== 'boolean') {
+          sendJSON(res, 400, { error: 'skillId and enabled are required' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onSkillsUpdate({
+          skillId: parsed.skillId,
+          enabled: parsed.enabled,
+        }));
+        return;
+      }
+
       // POST /api/tools/run — execute a tool
       if (req.method === 'POST' && url.pathname === '/api/tools/run') {
         if (!this.dashboard.onToolsRun) {

@@ -20,6 +20,8 @@ describe('Capabilities', () => {
   it('should validate known capabilities', () => {
     expect(isValidCapability('read_files')).toBe(true);
     expect(isValidCapability('write_files')).toBe(true);
+    expect(isValidCapability('read_calendar')).toBe(true);
+    expect(isValidCapability('write_drive')).toBe(true);
     expect(isValidCapability('unknown')).toBe(false);
   });
 

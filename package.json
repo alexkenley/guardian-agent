@@ -25,6 +25,11 @@
     "dev": "tsx src/index.ts",
     "dev:unix": "bash scripts/start-dev-unix.sh",
     "dev:sh": "bash scripts/start-dev-unix.sh",
+    "portable:windows": "powershell -ExecutionPolicy Bypass -File scripts/make-windows-portable.ps1",
+    "helper:windows": "powershell -ExecutionPolicy Bypass -File scripts/build-windows-helper.ps1",
+    "package:windows": "powershell -ExecutionPolicy Bypass -File scripts/build-windows-package.ps1",
+    "installer:windows": "powershell -ExecutionPolicy Bypass -File scripts/build-windows-installer.ps1",
+    "release:windows": "powershell -ExecutionPolicy Bypass -File scripts/build-windows-release.ps1",
     "start": "node dist/index.js",
     "prepublishOnly": "npm test && npm run build"
   },

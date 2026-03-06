@@ -322,6 +322,45 @@ describe('sandbox module', () => {
   });
 });
 
+describe('buildWindowsAppContainerAccessPlan', () => {
+  it('treats cwd as writable for workspace-write profiles', async () => {
+    const { buildWindowsAppContainerAccessPlan } = await import('./index.js');
+    const plan = buildWindowsAppContainerAccessPlan(
+      {
+        ...DEFAULT_SANDBOX_CONFIG,
+        additionalReadPaths: ['/tmp/read-only'],
+        additionalWritePaths: ['/tmp/shared-write'],
+      },
+      { cwd: '/tmp/workspace-root' },
+      'workspace-write',
+    );
+
+    expect(plan).toEqual(expect.arrayContaining([
+      { path: '/tmp/workspace-root', access: 'write' },
+      { path: '/tmp/read-only', access: 'read' },
+      { path: '/tmp/shared-write', access: 'write' },
+    ]));
+  });
+
+  it('upgrades duplicate paths to write access', async () => {
+    const { buildWindowsAppContainerAccessPlan } = await import('./index.js');
+    const plan = buildWindowsAppContainerAccessPlan(
+      {
+        ...DEFAULT_SANDBOX_CONFIG,
+        additionalReadPaths: ['/tmp/workspace-root', '/tmp/read-only'],
+        additionalWritePaths: ['/tmp/workspace-root'],
+      },
+      { cwd: '/tmp/workspace-root' },
+      'read-only',
+    );
+
+    const workspaceEntry = plan.find((entry) => entry.path === '/tmp/workspace-root');
+    const readonlyEntry = plan.find((entry) => entry.path === '/tmp/read-only');
+    expect(workspaceEntry).toEqual({ path: '/tmp/workspace-root', access: 'write' });
+    expect(readonlyEntry).toEqual({ path: '/tmp/read-only', access: 'read' });
+  });
+});
+
 // ─── resolveProfile Tests ────────────────────────────────────
 
 describe('resolveProfile', () => {

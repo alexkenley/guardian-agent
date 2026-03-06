@@ -1,23 +1,60 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createLogger } from '../util/logging.js';
-import type { LoadedSkill, SkillManifest } from './types.js';
+import type { LoadedSkill, SkillManifest, SkillStatus } from './types.js';
 
 const log = createLogger('skills:registry');
 
 export class SkillRegistry {
   private readonly skills = new Map<string, LoadedSkill>();
+  private readonly runtimeDisabled = new Set<string>();
 
   list(): LoadedSkill[] {
-    return [...this.skills.values()];
+    return [...this.skills.values()].filter((skill) => !this.runtimeDisabled.has(skill.manifest.id));
+  }
+
+  listStatus(): SkillStatus[] {
+    return [...this.skills.values()]
+      .map((skill) => ({
+        id: skill.manifest.id,
+        name: skill.manifest.name,
+        version: skill.manifest.version,
+        description: skill.manifest.description,
+        tags: [...(skill.manifest.tags ?? [])],
+        enabled: !this.runtimeDisabled.has(skill.manifest.id),
+        rootDir: skill.rootDir,
+        sourcePath: skill.instructionPath,
+        risk: skill.manifest.risk ?? 'informational',
+        tools: [...(skill.manifest.tools ?? [])],
+        requiredCapabilities: [...(skill.manifest.requiredCapabilities ?? [])],
+        requiredManagedProvider: skill.manifest.requiredManagedProvider,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   }
 
   get(id: string): LoadedSkill | undefined {
     return this.skills.get(id);
   }
 
+  isEnabled(id: string): boolean {
+    return this.skills.has(id) && !this.runtimeDisabled.has(id);
+  }
+
+  enable(id: string): boolean {
+    if (!this.skills.has(id)) return false;
+    this.runtimeDisabled.delete(id);
+    return true;
+  }
+
+  disable(id: string): boolean {
+    if (!this.skills.has(id)) return false;
+    this.runtimeDisabled.add(id);
+    return true;
+  }
+
   async loadFromRoots(roots: readonly string[], disabledSkillIds: readonly string[] = []): Promise<void> {
     this.skills.clear();
+    this.runtimeDisabled.clear();
     const disabled = new Set(disabledSkillIds.map((value) => value.trim()).filter(Boolean));
     for (const root of roots) {
       const resolvedRoot = resolve(root);
@@ -34,13 +71,15 @@ export class SkillRegistry {
         const skillDir = join(resolvedRoot, entry.name);
         const skill = await loadSkill(skillDir);
         if (!skill) continue;
-        if (disabled.has(skill.manifest.id)) continue;
         if (this.skills.has(skill.manifest.id)) {
           log.warn({ id: skill.manifest.id, root: skillDir }, 'Duplicate skill id ignored');
           continue;
         }
         this.skills.set(skill.manifest.id, skill);
       }
+    }
+    for (const id of disabled) {
+      if (this.skills.has(id)) this.runtimeDisabled.add(id);
     }
   }
 }

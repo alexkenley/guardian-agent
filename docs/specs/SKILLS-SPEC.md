@@ -178,6 +178,7 @@ assistant:
 - Chat requests can auto-activate matching skills.
 - Active skill summaries are injected into the system prompt.
 - Chat responses include `metadata.activeSkills` when one or more skills were applied.
+- Skills can be inspected and toggled through CLI and web API surfaces.
 
 ### Bundled Skills
 
@@ -186,6 +187,7 @@ The repository currently includes bundled local skills under `skills/`, includin
 - `google-gmail-assistant`
 - `google-calendar-assistant`
 - `google-drive-assistant`
+- `google-docs-sheets-assistant`
 - `security-triage`
 
 ### Chat Behavior
@@ -197,6 +199,13 @@ Using skills: incident-triage, gmail-draft-review
 ```
 
 This metadata is intended for diagnostics and UI surfaces rather than mandatory user-visible prose on every reply.
+
+### Runtime Management Surfaces
+
+- CLI: `/skills`, `/skills show <skillId>`, `/skills enable <skillId>`, `/skills disable <skillId>`
+- Web API: `GET /api/skills`, `POST /api/skills`
+
+Skill enable/disable persists back to `assistant.skills.disabledSkills` in `config.yaml`.
 
 ---
 
@@ -223,10 +232,10 @@ This is especially important for managed providers such as Google Workspace, whe
 - Read-only bundle loading
 - Prompt summary injection
 - Basic trigger resolution and ranking
+- CLI and web API management surfaces for skill inspection and runtime toggling
 
 ### Next
 
-- explicit management surfaces in CLI/web
 - richer template/reference loading
 - reviewed import workflow
 - skill provenance audit events

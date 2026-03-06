@@ -547,6 +547,29 @@ export class Runtime {
     );
   }
 
+  /** Apply shell command allowlist changes immediately without restart. */
+  applyShellAllowedCommands(allowedCommands: string[]): void {
+    const currentAssistant = this.config.assistant ?? DEFAULT_CONFIG.assistant;
+    const currentTools = currentAssistant.tools ?? DEFAULT_CONFIG.assistant.tools;
+    this.config = {
+      ...this.config,
+      assistant: {
+        ...currentAssistant,
+        tools: {
+          ...currentTools,
+          allowedCommands: [...allowedCommands],
+        },
+      },
+    };
+
+    this.guardian.updateShellAllowedCommands(allowedCommands, {
+      additionalSecretPatterns: this.config.guardian.additionalSecretPatterns,
+      deniedPaths: this.config.guardian.deniedPaths,
+    });
+
+    log.info({ count: allowedCommands.length }, 'Runtime shell command allowlist updated without restart');
+  }
+
   // ─── Internals ──────────────────────────────────────────────
 
   private createAgentContext(agentId: string, options?: { enableDispatch?: boolean }): AgentContext {

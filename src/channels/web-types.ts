@@ -32,6 +32,7 @@ import type { QMDStatusResponse } from '../runtime/qmd-search.js';
 import type { QMDSourceConfig } from '../config/types.js';
 import type { NetworkAlert, NetworkBaselineSnapshot } from '../runtime/network-baseline.js';
 import type { SandboxHealth } from '../sandbox/index.js';
+import type { SkillRisk } from '../skills/types.js';
 
 /** Agent info returned by GET /api/agents. */
 export interface DashboardAgentInfo {
@@ -238,6 +239,32 @@ export interface DashboardToolsState {
   disabledCategories?: ToolCategory[];
 }
 
+export interface DashboardSkillsState {
+  enabled: boolean;
+  autoSelect: boolean;
+  maxActivePerRequest: number;
+  managedProviders: Array<{
+    id: string;
+    enabled: boolean;
+  }>;
+  skills: Array<{
+    id: string;
+    name: string;
+    version: string;
+    description: string;
+    tags: string[];
+    enabled: boolean;
+    risk: SkillRisk;
+    rootDir: string;
+    sourcePath: string;
+    tools: string[];
+    requiredCapabilities: string[];
+    requiredManagedProvider?: string;
+    providerReady?: boolean;
+    disabledReason?: string;
+  }>;
+}
+
 /** Budget info returned by GET /api/budget. */
 export interface DashboardBudgetInfo {
   agents: Array<{
@@ -401,6 +428,8 @@ export interface DashboardCallbacks {
   onAuthRotate?: () => Promise<{ success: boolean; message: string; token?: string; status?: DashboardAuthStatus }> | { success: boolean; message: string; token?: string; status?: DashboardAuthStatus };
   onAuthReveal?: () => Promise<{ success: boolean; token?: string }> | { success: boolean; token?: string };
   onToolsState?: (args?: { limit?: number }) => DashboardToolsState;
+  onSkillsState?: () => DashboardSkillsState;
+  onSkillsUpdate?: (input: { skillId: string; enabled: boolean }) => { success: boolean; message: string };
   onToolsCategories?: () => Array<{ category: ToolCategory; label: string; description: string; toolCount: number; enabled: boolean; disabledReason?: string }>;
   onToolsCategoryToggle?: (input: { category: ToolCategory; enabled: boolean }) => { success: boolean; message: string };
   onToolsRun?: (input: {

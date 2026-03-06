@@ -252,11 +252,11 @@ Current implementation:
 - `SkillResolver` auto-selects relevant skills for chat requests
 - active skill summaries are injected into the system prompt
 - active skill IDs are included in chat response metadata
+- runtime skill inspection and toggling are available via `/skills` in CLI and `GET/POST /api/skills`
+- skill enable/disable updates persist to `assistant.skills.disabledSkills`
 
 Not yet implemented:
 
-- dedicated `/skills` CLI management commands
-- web skill management surfaces
 - reviewed install flows for third-party skills
 
 See [Native Skills Spec](../specs/SKILLS-SPEC.md).
@@ -276,11 +276,12 @@ Current implementation:
 - config-driven managed provider materialization for `gws`
 - default service scope of Gmail, Calendar, and Drive
 - optional skill exposure tied to successful managed-provider enablement
+- provider-linked Google skills expose readiness state through the skills CLI/API
+- Google Workspace MCP tools are mapped into Gmail/Calendar/Drive/Docs/Sheets capability checks before execution
 
 Not yet implemented:
 
 - richer provider diagnostics in UI
-- expanded service-specific capability model
 - multi-account selection flow
 
 See [Google Workspace Integration Spec](../specs/GOOGLE-WORKSPACE-INTEGRATION-SPEC.md).
@@ -295,7 +296,7 @@ The current subprocess sandbox layer now uses an explicit availability model:
 
 Next stage:
 
-- add native Windows sandbox helpers rather than relying on soft fallbacks
+- ship the native Windows sandbox helper binary that matches the implemented adapter contract
 - add native macOS strong-backend support
 
 See [Security](../../SECURITY.md) for the security details and remaining gaps.

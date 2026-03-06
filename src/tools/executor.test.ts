@@ -63,6 +63,49 @@ describe('ToolExecutor', () => {
     expect(names).toContain('gmail_send');
   });
 
+  it('enforces Google Workspace service-specific capabilities for managed MCP tools', async () => {
+    const root = createExecutorRoot();
+    const checked: Array<{ type: string; params: Record<string, unknown> }> = [];
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      onCheckAction: ({ type, params }) => {
+        checked.push({ type, params });
+      },
+      mcpManager: {
+        getAllToolDefinitions: () => ([
+          {
+            name: 'mcp-gws-calendar_create_event',
+            description: 'Create a calendar event in Google Calendar',
+            risk: 'network',
+            parameters: { type: 'object', properties: {} },
+          },
+        ]),
+        callTool: async () => ({ success: true, output: { ok: true } }),
+      } as unknown as import('./mcp-client.js').MCPClientManager,
+    });
+
+    const result = await executor.runTool({
+      toolName: 'mcp-gws-calendar_create_event',
+      args: {},
+      origin: 'cli',
+    });
+
+    expect(result.status).not.toBe('failed');
+    expect(checked).toMatchObject([
+      {
+        type: 'write_calendar',
+        params: {
+          toolName: 'calendar_create_event',
+        },
+      },
+    ]);
+  });
+
   it('requires approval for mutating tools in approve_by_policy mode', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
@@ -146,6 +189,30 @@ describe('ToolExecutor', () => {
     expect(run.status).toBe('failed');
     expect(run.approvalId).toBeUndefined();
     expect(run.message).toContain("'content' must be a non-empty string");
+  });
+
+  it('rejects non-allowlisted shell_safe commands before creating approval requests', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const run = await executor.runTool({
+      toolName: 'shell_safe',
+      args: { command: 'whoami /groups' },
+      origin: 'cli',
+    });
+
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('failed');
+    expect(run.approvalId).toBeUndefined();
+    expect(run.message).toContain("Command is not allowlisted: 'whoami /groups'.");
+    expect(executor.listApprovals(10, 'pending')).toHaveLength(0);
   });
 
   it('stores redacted argument previews and deterministic hashes for approvals', async () => {

@@ -1020,6 +1020,8 @@ function buildDashboardCallbacks(
   threatIntel: ThreatIntelService,
   connectors: ConnectorPlaybookService,
   toolExecutor: ToolExecutor,
+  skillRegistry: SkillRegistry | undefined,
+  enabledManagedProviders: ReadonlySet<string>,
   webAuthStateRef: { current: WebAuthRuntimeConfig },
   applyWebAuthRuntime: (auth: WebAuthRuntimeConfig) => void,
   configPath: string,
@@ -1064,6 +1066,7 @@ function buildDashboardCallbacks(
           allowedDomains: nextConfig.assistant.tools.allowedDomains,
         },
       });
+      runtime.applyShellAllowedCommands(nextConfig.assistant.tools.allowedCommands);
       if (nextConfig.assistant.tools.webSearch) {
         toolExecutor.updateWebSearchConfig(nextConfig.assistant.tools.webSearch);
       }
@@ -1178,6 +1181,25 @@ function buildDashboardCallbacks(
     return persistAndApplyConfig(rawConfig, {
       changedBy: 'tools-control-plane',
       reason: 'tool policy update',
+    });
+  };
+
+  const persistSkillsState = (): { success: boolean; message: string } => {
+    const rawConfig = loadRawConfig();
+    rawConfig.assistant = rawConfig.assistant ?? {};
+    const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+    const existingSkills = (rawAssistant.skills as Record<string, unknown> | undefined) ?? {};
+    rawAssistant.skills = {
+      ...existingSkills,
+      enabled: configRef.current.assistant.skills.enabled,
+      roots: [...configRef.current.assistant.skills.roots],
+      autoSelect: configRef.current.assistant.skills.autoSelect,
+      maxActivePerRequest: configRef.current.assistant.skills.maxActivePerRequest,
+      disabledSkills: [...configRef.current.assistant.skills.disabledSkills],
+    };
+    return persistAndApplyConfig(rawConfig, {
+      changedBy: 'skills-control-plane',
+      reason: 'skills runtime update',
     });
   };
 
@@ -1416,6 +1438,69 @@ function buildDashboardCallbacks(
       disabledCategories: toolExecutor.getDisabledCategories(),
     }),
 
+    onSkillsState: () => {
+      const config = configRef.current.assistant.skills;
+      const statuses = skillRegistry?.listStatus() ?? [];
+      return {
+        enabled: config.enabled,
+        autoSelect: config.autoSelect,
+        maxActivePerRequest: config.maxActivePerRequest,
+        managedProviders: [
+          {
+            id: 'gws',
+            enabled: enabledManagedProviders.has('gws'),
+          },
+        ],
+        skills: statuses.map((skill) => {
+          const requiresProvider = skill.requiredManagedProvider;
+          const providerReady = requiresProvider ? enabledManagedProviders.has(requiresProvider) : undefined;
+          let disabledReason: string | undefined;
+          if (!skill.enabled) {
+            disabledReason = 'Disabled at runtime.';
+          } else if (requiresProvider && !providerReady) {
+            disabledReason = `Requires managed provider '${requiresProvider}' to be enabled and connected.`;
+          }
+          return {
+            ...skill,
+            providerReady,
+            disabledReason,
+          };
+        }),
+      };
+    },
+
+    onSkillsUpdate: ({ skillId, enabled }) => {
+      if (!skillRegistry) {
+        return { success: false, message: 'Skills runtime is not available.' };
+      }
+      const updated = enabled ? skillRegistry.enable(skillId) : skillRegistry.disable(skillId);
+      if (!updated) {
+        return { success: false, message: `Skill '${skillId}' was not found.` };
+      }
+      const disabledIds = skillRegistry.listStatus()
+        .filter((skill) => !skill.enabled)
+        .map((skill) => skill.id);
+      configRef.current.assistant.skills.disabledSkills = disabledIds;
+      const persisted = persistSkillsState();
+      if (!persisted.success) {
+        if (enabled) {
+          skillRegistry.disable(skillId);
+        } else {
+          skillRegistry.enable(skillId);
+        }
+        configRef.current.assistant.skills.disabledSkills = skillRegistry.listStatus()
+          .filter((skill) => !skill.enabled)
+          .map((skill) => skill.id);
+        return { success: false, message: persisted.message };
+      }
+      return {
+        success: true,
+        message: enabled
+          ? `Skill '${skillId}' enabled and persisted to config.`
+          : `Skill '${skillId}' disabled and persisted to config.`,
+      };
+    },
+
     onToolsRun: async (input) => {
       const result = await toolExecutor.runTool({
         toolName: input.toolName,
@@ -1442,6 +1527,7 @@ function buildDashboardCallbacks(
 
     onToolsPolicyUpdate: (input) => {
       const policy = toolExecutor.updatePolicy(input);
+      runtime.applyShellAllowedCommands(policy.sandbox.allowedCommands);
       configRef.current.assistant.tools = {
         ...configRef.current.assistant.tools,
         policyMode: policy.mode,
@@ -1467,7 +1553,7 @@ function buildDashboardCallbacks(
       });
       return {
         success: true,
-        message: 'Tool policy updated.',
+        message: 'Tool policy updated and applied live (no restart required).',
         policy,
       };
     },
@@ -2772,7 +2858,7 @@ async function main(): Promise<void> {
       ...(config.assistant.tools.sandbox?.resourceLimits ?? {}),
     },
   };
-  const sandboxCaps = await detectSandboxCapabilities();
+  const sandboxCaps = await detectSandboxCapabilities(sandboxConfig);
   const sandboxHealth = await detectSandboxHealth(sandboxConfig, sandboxCaps);
   if (sandboxConfig.enabled) {
     log.info(
@@ -2847,9 +2933,10 @@ async function main(): Promise<void> {
   }
 
   // ─── Native Skills ───────────────────────────────────────────
+  let skillRegistry: SkillRegistry | undefined;
   let skillResolver: SkillResolver | undefined;
   if (config.assistant.skills.enabled) {
-    const skillRegistry = new SkillRegistry();
+    skillRegistry = new SkillRegistry();
     await skillRegistry.loadFromRoots(
       config.assistant.skills.roots,
       config.assistant.skills.disabledSkills,
@@ -3375,6 +3462,8 @@ async function main(): Promise<void> {
     threatIntel,
     connectors,
     toolExecutor,
+    skillRegistry,
+    enabledManagedProviders,
     webAuthStateRef,
     applyWebAuthRuntime,
     configPath,

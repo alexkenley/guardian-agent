@@ -11,6 +11,17 @@ export type SandboxProfile = 'read-only' | 'workspace-write' | 'full-access';
 export type SandboxEnforcementMode = 'permissive' | 'strict';
 export type SandboxAvailability = 'strong' | 'degraded' | 'unavailable';
 
+export interface WindowsSandboxHelperConfig {
+  /** Enable the native Windows sandbox helper backend when available. */
+  enabled: boolean;
+  /** Helper command path or name. */
+  command?: string;
+  /** Extra fixed arguments passed before subcommands. */
+  args?: string[];
+  /** Timeout for helper health checks in milliseconds. */
+  timeoutMs?: number;
+}
+
 /** Resource limits enforced via ulimit on the child process. */
 export interface SandboxResourceLimits {
   /** Max virtual memory in MB (ulimit -v). 0 = unlimited. */
@@ -39,6 +50,8 @@ export interface SandboxConfig {
   additionalReadPaths: string[];
   /** Resource limits for child processes. */
   resourceLimits: SandboxResourceLimits;
+  /** Optional native Windows sandbox helper configuration. */
+  windowsHelper?: WindowsSandboxHelperConfig;
 }
 
 /** Per-invocation options for sandboxedExec. */
@@ -79,13 +92,17 @@ export interface SandboxCapabilities {
   bwrapVersion?: string;
   /** Whether ulimit is available (always true on POSIX). */
   ulimitAvailable: boolean;
+  /** Whether the configured native Windows helper is available. */
+  windowsHelperAvailable?: boolean;
+  /** Windows helper version string if available. */
+  windowsHelperVersion?: string;
 }
 
 export interface SandboxHealth {
   enabled: boolean;
   platform: NodeJS.Platform;
   availability: SandboxAvailability;
-  backend: 'bubblewrap' | 'ulimit' | 'env' | 'none';
+  backend: 'bubblewrap' | 'windows-helper' | 'ulimit' | 'env' | 'none';
   enforcementMode: SandboxEnforcementMode;
   reasons: string[];
 }
@@ -107,4 +124,9 @@ export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
   additionalWritePaths: [],
   additionalReadPaths: [],
   resourceLimits: { ...DEFAULT_RESOURCE_LIMITS },
+  windowsHelper: {
+    enabled: false,
+    args: [],
+    timeoutMs: 5_000,
+  },
 };

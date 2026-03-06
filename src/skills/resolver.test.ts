@@ -83,4 +83,51 @@ describe('SkillResolver', () => {
       enabledManagedProviders: new Set(['gws']),
     })).toHaveLength(1);
   });
+
+  it('can disable and re-enable loaded skills at runtime', async () => {
+    const root = createSkillRoot();
+    const skillDir = join(root, 'security-triage');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, 'skill.json'), JSON.stringify({
+      id: 'security-triage',
+      name: 'Security Triage',
+      version: '0.1.0',
+      description: 'Triage incidents',
+      triggers: { keywords: ['incident'] },
+    }), 'utf-8');
+    writeFileSync(join(skillDir, 'SKILL.md'), '# Security Triage\n\nSummarize the incident first.', 'utf-8');
+
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([root]);
+    const resolver = new SkillResolver(registry);
+
+    expect(registry.listStatus()).toMatchObject([
+      { id: 'security-triage', enabled: true },
+    ]);
+    expect(resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content: 'Investigate this incident.',
+    })).toHaveLength(1);
+
+    expect(registry.disable('security-triage')).toBe(true);
+    expect(registry.listStatus()).toMatchObject([
+      { id: 'security-triage', enabled: false },
+    ]);
+    expect(resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content: 'Investigate this incident.',
+    })).toHaveLength(0);
+
+    expect(registry.enable('security-triage')).toBe(true);
+    expect(resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content: 'Investigate this incident.',
+    })).toHaveLength(1);
+  });
 });

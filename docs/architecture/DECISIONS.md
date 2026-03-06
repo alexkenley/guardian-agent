@@ -516,7 +516,7 @@ Additionally, `POST /api/setup/apply` was hardened: when `providerType` is missi
 ## ADR-027: Google Workspace Uses Managed MCP + Native Skills
 
 **Status:** Accepted
-**Implementation Status:** Foundation implemented (managed `gws` provider materialization, bundled Google skills); service-specific capability expansion remains follow-up work
+**Implementation Status:** Managed `gws` provider materialization, bundled Google skills, and service-specific capability hooks are implemented; richer diagnostics and broader service rollout remain follow-up work
 
 **Context:** Broad Google Workspace support is valuable, but building and maintaining bespoke first-party integrations for Gmail, Calendar, Drive, Docs, and Sheets would be slow and inconsistent. Giving the agent unrestricted shell access to a general-purpose Google CLI would weaken GuardianAgent's policy surface and audit story.
 
@@ -540,7 +540,7 @@ Additionally, `POST /api/setup/apply` was hardened: when `providerType` is missi
 ## ADR-028: Strict Sandbox Availability for Risky Tool Classes
 
 **Status:** Accepted
-**Implementation Status:** Implemented for sandbox health detection, strict tool gating, and user-facing notices; native Windows/macOS strong sandbox helpers remain follow-up work
+**Implementation Status:** Implemented for sandbox health detection, strict tool gating, user-facing notices, and a Windows helper adapter/config surface; shipping the native Windows/macOS helper binaries remains follow-up work
 
 **Context:** GuardianAgent currently improves subprocess containment with bwrap on Linux and softer fallbacks elsewhere, but silent degradation is not a strong enough contract for high-risk tools. Users need the system to be explicit about when strong isolation is unavailable, especially on Windows and macOS.
 

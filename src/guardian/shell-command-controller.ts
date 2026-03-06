@@ -30,15 +30,20 @@ export class ShellCommandController implements AdmissionController {
   readonly name = 'ShellCommandController';
   readonly phase: AdmissionPhase = 'validating';
 
-  private readonly allowedCommands: string[];
+  private allowedCommands: string[];
   private readonly scanner: SecretScanner;
 
   constructor(config: ShellCommandControllerConfig) {
-    this.allowedCommands = config.allowedCommands;
+    this.allowedCommands = normalizeAllowedCommands(config.allowedCommands);
     this.scanner = new SecretScanner(config.additionalSecretPatterns);
     if (config.deniedPaths && config.deniedPaths.length > 0) {
       this.scanner.addDeniedPaths(config.deniedPaths);
     }
+  }
+
+  /** Update allowlisted command prefixes without recreating the controller. */
+  updateAllowedCommands(allowedCommands: string[]): void {
+    this.allowedCommands = normalizeAllowedCommands(allowedCommands);
   }
 
   check(action: AgentAction): AdmissionResult | null {
@@ -67,4 +72,10 @@ export class ShellCommandController implements AdmissionController {
 
     return null; // Allowed — pass through
   }
+}
+
+function normalizeAllowedCommands(allowedCommands: string[]): string[] {
+  return allowedCommands
+    .map((value) => value.trim())
+    .filter(Boolean);
 }

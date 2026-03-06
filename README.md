@@ -401,6 +401,54 @@ npm run dev           # Run with tsx (development)
 npm start             # Run compiled (production)
 ```
 
+Windows packaging:
+
+```powershell
+npm run portable:windows
+npm run package:windows
+npm run installer:windows
+npm run release:windows
+```
+
+Recommended simplest path on Windows:
+
+```powershell
+npm run portable:windows
+```
+
+That single command performs a clean packaging run (removes prior `build/windows` output), requires `guardian-sandbox-win.exe` (it will attempt a fresh helper build when no prebuilt helper is supplied), and fails if the helper is unavailable.
+
+Optional helper path override (single-script flow):
+
+```powershell
+$env:GUARDIAN_SANDBOX_HELPER = "C:\path\to\guardian-sandbox-win.exe"
+npm run portable:windows
+```
+
+Developer-only fallback (not recommended for isolation builds):
+
+```powershell
+npm run portable:windows -- -AllowNoHelper
+```
+
+Packaging assets:
+
+- `scripts/make-windows-portable.ps1`
+- `scripts/build-windows-helper.ps1`
+- `scripts/build-windows-package.ps1`
+- `scripts/build-windows-installer.ps1`
+- `scripts/build-windows-release.ps1`
+- `packaging/windows/GuardianAgent.iss`
+
+`npm run package:windows` creates a single portable zip under `build/windows/portable/`. If `guardian-sandbox-win.exe` is supplied to the packaging script, that same portable artifact can include both the runtime and the Windows sandbox helper.
+
+Portable launcher behavior:
+
+- `guardianagent.cmd` now starts with `config/portable-config.yaml` by default
+- that bundled config enables Windows helper mode with `enforcementMode: strict`
+- set `GUARDIAN_CONFIG_PATH` to override the config path at launch time
+- portable packaging includes `web/public` so the local dashboard serves correctly
+
 ## Architecture
 
 Full documentation in `docs/architecture/`:
@@ -430,6 +478,10 @@ Implementation specs in `docs/specs/`:
 - [Threat Intel Research](docs/specs/THREAT-INTEL-RESEARCH.md)
 - [Hostile Forum Connectors](docs/specs/HOSTILE-FORUM-CONNECTORS-SPEC.md)
 - [Connector + Playbook Framework (Option 2)](docs/specs/CONNECTOR-PLAYBOOK-FRAMEWORK-SPEC.md)
+
+Proposals in `docs/proposals/`:
+- [Windows App Options](docs/proposals/WINDOWS-APP-OPTIONS.md) — deployment options for Windows local enforcement and native helper packaging
+- [Windows Portable Isolation Option](docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md) — optional portable zip distribution for Windows users who want the extra native isolation layer without a traditional installer
 
 ## Disclaimer
 

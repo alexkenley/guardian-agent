@@ -1,0 +1,15 @@
+[package]
+name = "guardian-sandbox-win"
+version = "0.1.0"
+edition = "2021"
+description = "GuardianAgent Windows sandbox helper"
+license = "Apache-2.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59.0", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Isolation",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }

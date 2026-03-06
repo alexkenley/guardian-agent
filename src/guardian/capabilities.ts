@@ -14,6 +14,14 @@ export type Capability =
   | 'read_email'
   | 'draft_email'
   | 'send_email'
+  | 'read_calendar'
+  | 'write_calendar'
+  | 'read_drive'
+  | 'write_drive'
+  | 'read_docs'
+  | 'write_docs'
+  | 'read_sheets'
+  | 'write_sheets'
   | 'git_operations'
   | 'install_packages';
 
@@ -26,6 +34,14 @@ export const ALL_CAPABILITIES: readonly Capability[] = [
   'read_email',
   'draft_email',
   'send_email',
+  'read_calendar',
+  'write_calendar',
+  'read_drive',
+  'write_drive',
+  'read_docs',
+  'write_docs',
+  'read_sheets',
+  'write_sheets',
   'git_operations',
   'install_packages',
 ];

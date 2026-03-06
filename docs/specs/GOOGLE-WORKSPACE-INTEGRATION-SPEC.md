@@ -165,7 +165,7 @@ The current email capability set is still too coarse for broad Google Workspace 
 - `draft_email`
 - `send_email`
 
-### Planned Additions
+### Implemented Hooks / Additions
 
 - `read_calendar`
 - `write_calendar`
@@ -204,7 +204,7 @@ Default expectation:
 
 ### Current Limitation
 
-The managed provider foundation is implemented, but service-specific capability expansion is not complete yet. Today, the provider mostly benefits from the existing tool policy, Guardian checks, approval workflow, and sandbox gating.
+The managed provider foundation and capability hooks are implemented, but coverage still depends on tool-name/description inference from the provider surface. Richer provider-specific diagnostics and broader service rollout are still follow-up work.
 
 ---
 
@@ -248,6 +248,7 @@ Expose:
 - linked Google skills
 
 Current implementation already surfaces managed-provider-driven tools through the normal tool catalog. Richer provider-specific status is still follow-up work.
+Google-linked skills also report whether their required managed provider is currently ready through the skills CLI/API surfaces.
 
 ### Chat
 
@@ -268,10 +269,10 @@ The assistant should prefer workflows like:
 - Gmail / Calendar / Drive default service scope
 - Native Google skills
 - optional skill exposure when the provider is enabled
+- capability enforcement hooks for Gmail / Calendar / Drive / Docs / Sheets managed tools
 
 ### Next
 
-- service-specific capability expansion
 - Docs / Sheets
 - better provider status and diagnostics
 - richer review flows and templates

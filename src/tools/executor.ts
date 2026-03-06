@@ -24,7 +24,7 @@ import type {
   ToolRuntimeNotice,
 } from './types.js';
 import { TOOL_CATEGORIES, BUILTIN_TOOL_CATEGORIES } from './types.js';
-import type { MCPClientManager } from './mcp-client.js';
+import { MCPClientManager } from './mcp-client.js';
 import type { AssistantNetworkConfig, BrowserConfig, WebSearchConfig } from '../config/types.js';
 import type { ConversationService } from '../runtime/conversation.js';
 import type { AgentMemoryStore } from '../runtime/agent-memory-store.js';
@@ -224,7 +224,14 @@ export class ToolExecutor {
       if (this.registry.get(def.name)) continue;
 
       const manager = this.mcpManager;
-      this.registry.register(def, async (args) => {
+      this.registry.register(def, async (args, request) => {
+        const guard = inferMCPGuardAction(def);
+        if (guard) {
+          this.guardAction(request, guard.type, {
+            toolName: def.name,
+            ...guard.params,
+          });
+        }
         return manager.callTool(def.name, args);
       });
     }
@@ -425,6 +432,20 @@ export class ToolExecutor {
         status: job.status,
         jobId: job.id,
         message: job.error,
+      };
+    }
+
+    const preApprovalError = this.validateBeforeApproval(entry.definition.name, args);
+    if (preApprovalError) {
+      job.status = 'failed';
+      job.completedAt = this.now();
+      job.durationMs = 0;
+      job.error = sanitizePreview(preApprovalError);
+      return {
+        success: false,
+        status: job.status,
+        jobId: job.id,
+        message: preApprovalError,
       };
     }
 
@@ -665,6 +686,20 @@ export class ToolExecutor {
     return null;
   }
 
+  private validateBeforeApproval(toolName: string, args: Record<string, unknown>): string | null {
+    if (toolName !== 'shell_safe') {
+      return null;
+    }
+    const command = typeof args.command === 'string' ? args.command.trim() : '';
+    if (!command) {
+      return null;
+    }
+    if (!this.isCommandAllowed(command)) {
+      return `Command is not allowlisted: '${command}'.`;
+    }
+    return null;
+  }
+
   private async execute(
     job: ToolJobRecord,
     request: ToolExecutionRequest,
@@ -693,15 +728,16 @@ export class ToolExecutor {
     try {
       const result = await handler(args, request);
       if (!result.success) {
+        const fullError = result.error ?? 'Tool failed.';
         job.status = 'failed';
-        job.error = sanitizePreview(result.error ?? 'Tool failed.');
+        job.error = sanitizePreview(fullError);
         job.completedAt = this.now();
         job.durationMs = job.completedAt - (job.startedAt ?? job.createdAt);
         return {
           success: false,
           status: job.status,
           jobId: job.id,
-          message: job.error,
+          message: fullError,
         };
       }
 
@@ -726,7 +762,7 @@ export class ToolExecutor {
         success: false,
         status: job.status,
         jobId: job.id,
-        message: job.error,
+        message,
       };
     }
   }
@@ -4776,4 +4812,51 @@ function parseSystemctlOutput(stdout: string, filter: string): Array<{ name: str
       };
     })
     .filter((s): s is NonNullable<typeof s> => s !== null);
+}
+
+function inferMCPGuardAction(def: ToolDefinition): { type: string; params?: Record<string, unknown> } | null {
+  const parsed = MCPClientManager.parseToolName(def.name);
+  if (!parsed) return { type: 'mcp_tool', params: { toolName: def.name } };
+  if (parsed.serverId !== 'gws') {
+    return { type: 'mcp_tool', params: { serverId: parsed.serverId, toolName: parsed.toolName } };
+  }
+
+  const capabilityAction = inferGoogleWorkspaceCapabilityAction(parsed.toolName, def.description);
+  if (!capabilityAction) {
+    return { type: 'mcp_tool', params: { serverId: parsed.serverId, toolName: parsed.toolName } };
+  }
+
+  return {
+    type: capabilityAction,
+    params: {
+      serverId: parsed.serverId,
+      toolName: parsed.toolName,
+    },
+  };
+}
+
+function inferGoogleWorkspaceCapabilityAction(toolName: string, description: string): string | null {
+  const combined = `${toolName} ${description}`.toLowerCase();
+  const isWrite = /\b(create|update|edit|modify|delete|insert|append|upload|move|trash|share|send|publish|write|draft)\b/.test(combined);
+  const isDraft = /\bdraft\b/.test(combined);
+
+  if (/\b(gmail|mail|message|email)\b/.test(combined)) {
+    if (/\bsend\b/.test(combined)) return 'send_email';
+    if (isDraft) return 'draft_email';
+    return 'read_email';
+  }
+  if (/\b(calendar|event)\b/.test(combined)) {
+    return isWrite ? 'write_calendar' : 'read_calendar';
+  }
+  if (/\b(drive|file|folder)\b/.test(combined)) {
+    return isWrite ? 'write_drive' : 'read_drive';
+  }
+  if (/\b(docs|document)\b/.test(combined)) {
+    return isWrite ? 'write_docs' : 'read_docs';
+  }
+  if (/\b(sheets|spreadsheet)\b/.test(combined)) {
+    return isWrite ? 'write_sheets' : 'read_sheets';
+  }
+
+  return null;
 }

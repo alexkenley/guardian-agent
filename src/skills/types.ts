@@ -35,6 +35,21 @@ export interface LoadedSkill {
   summary: string;
 }
 
+export interface SkillStatus {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  tags: string[];
+  enabled: boolean;
+  rootDir: string;
+  sourcePath: string;
+  risk: SkillRisk;
+  tools: string[];
+  requiredCapabilities: string[];
+  requiredManagedProvider?: string;
+}
+
 export interface SkillResolutionInput {
   agentId: string;
   channel: string;

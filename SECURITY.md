@@ -172,7 +172,7 @@ GuardianAgent now classifies sandbox strength as `strong`, `degraded`, or `unava
 - Linux with `bwrap` available is treated as `strong`
 - Linux without `bwrap` degrades to `ulimit` or env hardening
 - macOS currently reports `degraded`
-- Windows currently reports `unavailable`
+- Windows reports `strong` only when a configured native helper is enabled and detected; otherwise it reports `unavailable`
 - `assistant.tools.sandbox.enforcementMode` supports `permissive` and `strict`
 - In `strict` mode, risky subprocess-backed tools are disabled unless sandbox availability is `strong`
 - CLI startup warnings, tool listings, category views, web tool state, and tool execution denials surface the reason
@@ -187,19 +187,60 @@ GuardianAgent now classifies sandbox strength as `strong`, `degraded`, or `unava
 
 ### Current Limitation
 
-The current strict model is a fail-closed control plane improvement, not a complete cross-platform kernel-isolation story. Windows and macOS still need native sandbox helpers for strong enforcement.
+Windows strong mode now depends on shipping and enabling `guardian-sandbox-win.exe`. The helper launches subprocesses with AppContainer security capabilities for sandboxed profiles and always applies Job Object lifetime controls. macOS still needs a native strong-backend helper.
 
-### Windows Next Stage
+### Windows Backend Status
 
-The intended Windows backend uses native OS controls rather than attempting to emulate a kernel boundary in JavaScript:
+Implemented in the current helper path:
 
-- AppContainer where feasible
-- restricted tokens
-- job objects
-- process mitigation policies
-- isolated per-tool working directories
+- AppContainer-backed process launch for sandboxed profiles (`read-only`, `workspace-write`)
+- Job Object `KILL_ON_JOB_CLOSE` enforcement for child process trees
+- strict-mode fail-closed behavior when the helper is missing/unhealthy
 
-This is the next implementation stage for real OS-level enforcement of risky child processes without requiring WSL2 or Docker for the common case.
+Still pending for a fuller Windows backend:
+
+- restricted-token layering in addition to AppContainer
+- explicit process mitigation policy wiring
+- first-class ACL automation for allowed path grants
+
+### Optional Windows Portable Isolation Mode
+
+GuardianAgent can also offer this as an **additional Windows option** via a portable zip bundle rather than a traditional installer.
+
+Shape:
+
+- `guardian-runtime.exe`
+- `guardian-sandbox-win.exe`
+- optional localhost-served or hosted web UI
+
+Packaging model:
+
+- one staged Windows app payload
+- one portable zip can include both the runtime and sandbox helper
+- installer generation is optional and can reuse the same staged payload
+
+Security implications:
+
+- this avoids installer packaging, but not the use of unsigned native binaries
+- Windows users may still see reputation or trust prompts for unsigned executables
+- strong Windows sandbox availability still depends on the helper being present, enabled, and healthy
+- the same helper path can be shipped either through the optional portable zip bundle or the Windows installer packaging flow in `packaging/windows/`
+
+Example config:
+
+```yaml
+assistant:
+  tools:
+    sandbox:
+      enabled: true
+      enforcementMode: strict
+      windowsHelper:
+        enabled: true
+        command: ./bin/guardian-sandbox-win.exe
+        timeoutMs: 5000
+```
+
+See `docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md`.
 
 ### Filesystem and Network Expectations
 
@@ -232,7 +273,7 @@ GuardianAgent now includes a managed MCP provider foundation for Google Workspac
 Security expectations:
 
 - only configured Google services are exposed
-- per-service capabilities should narrow agent access further as the integration expands
+- Gmail, Calendar, Drive, Docs, and Sheets capability hooks exist in Guardian for managed Google tooling
 - external send/post actions remain approval-gated
 - credentials should prefer provider-managed secure storage over chat-passed secrets
 

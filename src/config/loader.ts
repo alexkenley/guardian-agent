@@ -188,6 +188,18 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   if (!Array.isArray(assistant.tools.allowedDomains)) {
     errors.push('assistant.tools.allowedDomains must be an array');
   }
+  const sandbox = assistant.tools.sandbox;
+  if (sandbox?.enforcementMode && !['permissive', 'strict'].includes(sandbox.enforcementMode)) {
+    errors.push("assistant.tools.sandbox.enforcementMode must be 'permissive' or 'strict'");
+  }
+  if (sandbox?.windowsHelper?.enabled) {
+    if (sandbox.windowsHelper.command !== undefined && !sandbox.windowsHelper.command.trim()) {
+      errors.push('assistant.tools.sandbox.windowsHelper.command must be a non-empty string when provided');
+    }
+    if (sandbox.windowsHelper.timeoutMs !== undefined && sandbox.windowsHelper.timeoutMs < 1000) {
+      errors.push('assistant.tools.sandbox.windowsHelper.timeoutMs must be >= 1000');
+    }
+  }
   for (const [toolName, decision] of Object.entries(assistant.tools.toolPolicies)) {
     if (!['auto', 'policy', 'manual', 'deny'].includes(decision)) {
       errors.push(`assistant.tools.toolPolicies.${toolName} must be auto, policy, manual, or deny`);

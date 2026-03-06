@@ -1,0 +1,17 @@
+{
+  "id": "google-docs-sheets-assistant",
+  "name": "Google Docs And Sheets Assistant",
+  "version": "0.1.0",
+  "description": "Guidance for review-first Google Docs and Sheets retrieval and editing workflows.",
+  "tags": ["docs", "sheets", "spreadsheet", "document", "google workspace"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["google doc", "google sheet", "docs", "sheets", "spreadsheet", "document", "worksheet"]
+  },
+  "requiredManagedProvider": "gws",
+  "risk": "operational"
+}
