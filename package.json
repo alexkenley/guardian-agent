@@ -22,6 +22,7 @@
     "build": "tsc",
     "clean": "rm -rf dist",
     "ensure:qmd": "node scripts/ensure-qmd.mjs",
+    "ensure:gws": "node scripts/ensure-gws.mjs",
     "dev": "tsx src/index.ts",
     "dev:unix": "bash scripts/start-dev-unix.sh",
     "dev:sh": "bash scripts/start-dev-unix.sh",
@@ -65,8 +66,9 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
-    "@tobilu/qmd": "^1.0.7",
     "@anthropic-ai/sdk": "^0.78.0",
+    "@googleworkspace/cli": "^0.7.0",
+    "@tobilu/qmd": "^1.0.7",
     "croner": "^10.0.1",
     "grammy": "^1.40.0",
     "js-yaml": "^4.1.1",

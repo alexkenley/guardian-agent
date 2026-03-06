@@ -2164,6 +2164,29 @@ describe('WebChannel', () => {
       expect(dispatched.length).toBe(1);
       expect(dispatched[0].agentId).toBe('agent-1');
     });
+
+    it('does not expose internal error details from dashboard callbacks', async () => {
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+        onConfigUpdate: async () => {
+          throw new Error('stack trace detail: secret-token');
+        },
+      };
+
+      web = new WebChannel({ port: 18964, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18964/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ defaultProvider: 'ollama' }),
+      });
+
+      expect(res.status).toBe(500);
+      const body = await res.json() as { error: string };
+      expect(body.error).toBe('Update failed');
+      expect(body.error).not.toContain('secret-token');
+    });
   });
 
   // ─── SSE ─────────────────────────────────────────────────────

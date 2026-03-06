@@ -774,7 +774,8 @@ tr:hover td {
 }
 
 .cfg-field input,
-.cfg-field select {
+.cfg-field select,
+.cfg-field textarea {
   width: 100%;
   padding: 0.52rem 0.6rem;
   background: var(--bg-input);
@@ -1643,6 +1644,66 @@ tr:hover td {
 }
 
 /* ─── Operations / Preset Bar ──────────────────────────── */
+
+.ops-inline-help {
+  margin-top: 0.75rem;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.ops-advanced {
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+}
+
+.ops-advanced summary {
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.ops-task-title {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.ops-task-sub {
+  margin-top: 0.2rem;
+  font-size: 0.73rem;
+  color: var(--text-muted);
+}
+
+.ops-state-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.ops-mono {
+  font-family: var(--font-mono);
+}
+
+.ops-history-message {
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.network-tool-result {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.85rem;
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 
 .preset-bar {
   display: grid;

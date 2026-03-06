@@ -169,10 +169,11 @@ describe('Network & System Tools', () => {
 
   describe('Host injection protection', () => {
     it('blocks command injection in host parameter', () => {
-      expect(() => validateHostParam('127.0.0.1; rm -rf /')).toThrow('disallowed characters');
-      expect(() => validateHostParam('host`whoami`')).toThrow('disallowed characters');
-      expect(() => validateHostParam('$(evil)')).toThrow('disallowed characters');
-      expect(() => validateHostParam('host | cat /etc/passwd')).toThrow('disallowed characters');
+      expect(() => validateHostParam('127.0.0.1; rm -rf /')).toThrow('Invalid host');
+      expect(() => validateHostParam('host`whoami`')).toThrow('Invalid host');
+      expect(() => validateHostParam('$(evil)')).toThrow('Invalid host');
+      expect(() => validateHostParam('host | cat /etc/passwd')).toThrow('Invalid host');
+      expect(() => validateHostParam('router local')).toThrow('Invalid host');
       expect(() => validateHostParam('')).toThrow('Invalid host');
     });
 
@@ -181,6 +182,7 @@ describe('Network & System Tools', () => {
       expect(validateHostParam('localhost')).toBe('localhost');
       expect(validateHostParam('myrouter.local')).toBe('myrouter.local');
       expect(validateHostParam('10.0.0.1')).toBe('10.0.0.1');
+      expect(validateHostParam('fe80::1')).toBe('fe80::1');
     });
   });
 

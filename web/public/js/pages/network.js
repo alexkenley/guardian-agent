@@ -1,411 +1,159 @@
 /**
- * Network page — tabbed: Connectors + Devices.
+ * Network page - manual network visibility and tool execution.
  */
 
 import { api } from '../api.js';
 import { createTabs } from '../components/tabs.js';
 import { applyInputTooltips } from '../tooltip.js';
 
+const NETWORK_TOOL_ORDER = [
+  'net_interfaces',
+  'net_ping',
+  'net_arp_scan',
+  'net_port_check',
+  'net_dns_lookup',
+  'net_connections',
+  'net_traceroute',
+  'net_oui_lookup',
+  'net_classify',
+  'net_banner_grab',
+  'net_fingerprint',
+  'net_wifi_scan',
+  'net_wifi_clients',
+  'net_connection_profiles',
+  'net_baseline',
+  'net_anomaly_check',
+  'net_traffic_baseline',
+  'net_threat_check',
+  'net_threat_summary',
+];
+
+const NETWORK_TOOL_DEFAULTS = {
+  net_ping: { count: 4 },
+  net_port_check: { ports: '22,80,443' },
+  net_dns_lookup: { type: 'A' },
+  net_banner_grab: { port: 80 },
+  net_fingerprint: { portScan: true },
+  net_wifi_scan: { force: true },
+  net_baseline: { windowMinutes: 120 },
+  net_threat_check: { refresh: true },
+  net_threat_summary: { limit: 25 },
+};
+
+let currentPanel = null;
+
 export async function renderNetwork(container) {
+  currentPanel = container;
   container.innerHTML = '<h2 class="page-title">Network</h2>';
 
   createTabs(container, [
-    { id: 'connectors', label: 'Connectors', render: renderConnectorsTab },
+    { id: 'overview', label: 'Overview', render: renderOverviewTab },
     { id: 'devices', label: 'Devices', render: renderDevicesTab },
     { id: 'threats', label: 'Threats', render: renderThreatsTab },
+    { id: 'tools', label: 'Tools', render: renderToolsTab },
   ]);
 }
 
-// ─── Connectors Tab ──────────────────────────────────────
-
-async function renderConnectorsTab(panel) {
+async function renderOverviewTab(panel) {
   panel.innerHTML = '<div class="loading">Loading...</div>';
 
   try {
-    const state = await api.connectorsState(40);
-    const summary = state.summary || {};
-    const packs = state.packs || [];
-    const playbooks = state.playbooks || [];
-    const runs = state.runs || [];
-    const playbooksConfig = state.playbooksConfig || {};
-    const studio = state.studio || {};
+    const [deviceData, baseline, threatState, toolsState] = await Promise.all([
+      api.networkDevices().catch(() => ({ devices: [] })),
+      api.networkBaseline().catch(() => null),
+      api.networkThreats({ limit: 20 }).catch(() => null),
+      api.toolsState(200).catch(() => ({ tools: [] })),
+    ]);
+
+    const devices = deviceData.devices || [];
+    const safeBaseline = baseline || {
+      snapshotCount: 0,
+      minSnapshotsForBaseline: 3,
+      baselineReady: false,
+      lastUpdatedAt: 0,
+      knownDevices: [],
+    };
+    const safeThreatState = threatState || {
+      alerts: [],
+      activeAlertCount: 0,
+      bySeverity: { low: 0, medium: 0, high: 0, critical: 0 },
+      baselineReady: safeBaseline.baselineReady,
+      snapshotCount: safeBaseline.snapshotCount,
+    };
+    const networkTools = (toolsState.tools || []).filter((tool) => tool.category === 'network');
 
     panel.innerHTML = `
       <div class="intel-summary-grid">
-        <div class="status-card ${summary.enabled ? 'success' : 'warning'}">
-          <div class="card-title">Framework</div>
-          <div class="card-value">${summary.enabled ? 'Enabled' : 'Disabled'}</div>
-          <div class="card-subtitle">Execution mode: ${esc(summary.executionMode || 'plan_then_execute')}</div>
-        </div>
         <div class="status-card info">
-          <div class="card-title">Connector Packs</div>
-          <div class="card-value">${Number(summary.packCount || 0)}</div>
-          <div class="card-subtitle">${Number(summary.enabledPackCount || 0)} enabled</div>
+          <div class="card-title">Devices</div>
+          <div class="card-value">${devices.length}</div>
+          <div class="card-subtitle">${devices.filter((device) => device.status === 'online').length} online</div>
+        </div>
+        <div class="status-card ${safeBaseline.baselineReady ? 'success' : 'warning'}">
+          <div class="card-title">Baseline</div>
+          <div class="card-value">${safeBaseline.baselineReady ? 'Ready' : 'Learning'}</div>
+          <div class="card-subtitle">${safeBaseline.snapshotCount}/${safeBaseline.minSnapshotsForBaseline} snapshots</div>
+        </div>
+        <div class="status-card ${safeThreatState.activeAlertCount > 0 ? 'error' : 'success'}">
+          <div class="card-title">Active Alerts</div>
+          <div class="card-value">${safeThreatState.activeAlertCount}</div>
+          <div class="card-subtitle">Critical: ${safeThreatState.bySeverity.critical}, High: ${safeThreatState.bySeverity.high}</div>
         </div>
         <div class="status-card accent">
-          <div class="card-title">Playbooks</div>
-          <div class="card-value">${Number(summary.playbookCount || 0)}</div>
-          <div class="card-subtitle">${Number(summary.enabledPlaybookCount || 0)} enabled</div>
-        </div>
-        <div class="status-card warning">
-          <div class="card-title">Recent Runs</div>
-          <div class="card-value">${Number(summary.runCount || 0)}</div>
-          <div class="card-subtitle">${Number(summary.dryRunQualifiedCount || 0)} dry-run qualified</div>
+          <div class="card-title">Network Tools</div>
+          <div class="card-value">${networkTools.length}</div>
+          <div class="card-subtitle">Run one-off scans from the Tools tab</div>
         </div>
       </div>
 
       <div class="table-container">
         <div class="table-header">
-          <h3>Playbooks</h3>
-          <button class="btn btn-secondary" id="connectors-refresh">Refresh</button>
+          <h3>Quick Network Actions</h3>
+          <button class="btn btn-secondary" id="network-overview-refresh">Refresh</button>
         </div>
-        <table>
-          <thead><tr><th>ID</th><th>Name</th><th>Mode</th><th>Steps</th><th>Schedule</th><th>Actions</th></tr></thead>
-          <tbody>
-            ${playbooks.length === 0
-              ? '<tr><td colspan="6">No playbooks configured. Playbooks are auto-installed at startup.</td></tr>'
-              : playbooks.map(pb => `
-                <tr>
-                  <td>${esc(pb.id)}</td>
-                  <td>${esc(pb.name)}</td>
-                  <td>${esc(pb.mode)}</td>
-                  <td>${Number(pb.steps?.length || 0)}</td>
-                  <td>${esc(pb.schedule || '-')}</td>
-                  <td>
-                    <button class="btn btn-primary connectors-playbook-run" data-playbook-id="${escAttr(pb.id)}">Run</button>
-                    <button class="btn btn-secondary connectors-playbook-dryrun" data-playbook-id="${escAttr(pb.id)}">Dry Run</button>
-                    <button class="btn btn-secondary connectors-playbook-delete" data-playbook-id="${escAttr(pb.id)}">Delete</button>
-                  </td>
-                </tr>
-              `).join('')}
-          </tbody>
-        </table>
-        <div id="playbook-run-results" style="padding:0 1rem 1rem"></div>
+        <div class="cfg-center-body">
+          <div class="cfg-actions" style="margin-top:0;">
+            <button class="btn btn-primary" id="network-overview-scan">Scan Devices</button>
+            <button class="btn btn-secondary" id="network-overview-threat">Run Threat Check</button>
+            <button class="btn btn-secondary" id="network-overview-baseline">Refresh Baseline</button>
+          </div>
+          <div id="network-overview-status" class="cfg-save-status" style="margin-top:0.75rem;"></div>
+        </div>
       </div>
 
       <div class="table-container">
-        <div class="table-header"><h3>Recent Runs</h3></div>
-        <table>
-          <thead><tr><th>Run</th><th>Playbook</th><th>Status</th><th>Duration</th><th>Steps</th><th>Details</th></tr></thead>
-          <tbody>
-            ${runs.length === 0
-              ? '<tr><td colspan="6">No runs yet.</td></tr>'
-              : runs.map(run => `
-                <tr>
-                  <td>${esc(shortId(run.id))}</td>
-                  <td>${esc(run.playbookName || run.playbookId)}</td>
-                  <td><span style="color:${run.status === 'succeeded' ? 'var(--success)' : run.status === 'failed' ? 'var(--error)' : 'var(--warning)'}">${esc(run.status)}</span></td>
-                  <td>${Number(run.durationMs || 0)}ms</td>
-                  <td>${(run.steps || []).length} step${(run.steps || []).length !== 1 ? 's' : ''}</td>
-                  <td><button class="btn btn-secondary run-details-toggle" data-run-id="${escAttr(run.id)}">Show</button></td>
-                </tr>
-                <tr class="run-details-row" id="run-detail-${escAttr(run.id)}" style="display:none">
-                  <td colspan="6" style="padding:0.5rem 1rem;background:var(--bg-secondary)">
-                    ${renderStepResults(run.steps || [])}
-                  </td>
-                </tr>
-              `).join('')}
-          </tbody>
-        </table>
-      </div>
-
-      <div class="table-container">
-        <div class="table-header" style="cursor:pointer" id="advanced-toggle">
-          <h3>Advanced Settings</h3>
-          <span id="advanced-arrow" style="font-size:0.85rem;color:var(--text-muted)">&#9654; Show</span>
-        </div>
-        <div id="advanced-panel" style="display:none">
-          <div class="cfg-center-body">
-            <div class="cfg-form-grid">
-              <div class="cfg-field">
-                <label>Enabled</label>
-                <select id="connectors-enabled">
-                  <option value="true" ${summary.enabled ? 'selected' : ''}>true</option>
-                  <option value="false" ${!summary.enabled ? 'selected' : ''}>false</option>
-                </select>
-              </div>
-              <div class="cfg-field">
-                <label>Execution Mode</label>
-                <select id="connectors-mode">
-                  <option value="plan_then_execute" ${summary.executionMode === 'plan_then_execute' ? 'selected' : ''}>plan_then_execute</option>
-                  <option value="direct_execute" ${summary.executionMode === 'direct_execute' ? 'selected' : ''}>direct_execute</option>
-                </select>
-              </div>
-              <div class="cfg-field">
-                <label>Max Connector Calls/Run</label>
-                <input id="connectors-max-calls" type="number" min="1" value="${esc(String(summary.maxConnectorCallsPerRun || 12))}">
-              </div>
-              <div class="cfg-field">
-                <label>Max Steps</label>
-                <input id="connectors-max-steps" type="number" min="1" value="${esc(String(playbooksConfig.maxSteps || 12))}">
-              </div>
-              <div class="cfg-field">
-                <label>Max Parallel Steps</label>
-                <input id="connectors-max-parallel" type="number" min="1" value="${esc(String(playbooksConfig.maxParallelSteps || 3))}">
-              </div>
-              <div class="cfg-field">
-                <label>Default Step Timeout (ms)</label>
-                <input id="connectors-step-timeout" type="number" min="1000" value="${esc(String(playbooksConfig.defaultStepTimeoutMs || 15000))}">
-              </div>
-              <div class="cfg-field">
-                <label>Require Signed Definitions</label>
-                <select id="connectors-require-signed">
-                  <option value="true" ${playbooksConfig.requireSignedDefinitions ? 'selected' : ''}>true</option>
-                  <option value="false" ${!playbooksConfig.requireSignedDefinitions ? 'selected' : ''}>false</option>
-                </select>
-              </div>
-              <div class="cfg-field">
-                <label>Require Dry-Run First</label>
-                <select id="connectors-require-dryrun">
-                  <option value="true" ${playbooksConfig.requireDryRunOnFirstExecution ? 'selected' : ''}>true</option>
-                  <option value="false" ${!playbooksConfig.requireDryRunOnFirstExecution ? 'selected' : ''}>false</option>
-                </select>
-              </div>
-              <div class="cfg-field">
-                <label>Studio Enabled</label>
-                <select id="connectors-studio-enabled">
-                  <option value="true" ${studio.enabled ? 'selected' : ''}>true</option>
-                  <option value="false" ${!studio.enabled ? 'selected' : ''}>false</option>
-                </select>
-              </div>
-              <div class="cfg-field">
-                <label>Studio Mode</label>
-                <select id="connectors-studio-mode">
-                  <option value="builder" ${studio.mode === 'builder' ? 'selected' : ''}>builder</option>
-                  <option value="read_only" ${studio.mode === 'read_only' ? 'selected' : ''}>read_only</option>
-                </select>
-              </div>
-            </div>
-            <div class="cfg-actions">
-              <button class="btn btn-primary" id="connectors-settings-save">Save Settings</button>
-              <span id="connectors-settings-status" class="cfg-save-status"></span>
-            </div>
-          </div>
-
-          <div class="cfg-center-body">
-            <h4 style="margin-bottom:0.5rem">Connector Packs</h4>
-            <table>
-              <thead><tr><th>ID</th><th>Name</th><th>Capabilities</th><th>Actions</th></tr></thead>
-              <tbody>
-                ${packs.length === 0
-                  ? '<tr><td colspan="4">No connector packs.</td></tr>'
-                  : packs.map(pack => `
-                    <tr>
-                      <td>${esc(pack.id)}</td>
-                      <td>${esc(pack.name)}</td>
-                      <td>${esc((pack.allowedCapabilities || []).join(', ') || '-')}</td>
-                      <td>
-                        <button class="btn btn-secondary connectors-pack-edit" data-pack-id="${escAttr(pack.id)}">Edit</button>
-                        <button class="btn btn-secondary connectors-pack-delete" data-pack-id="${escAttr(pack.id)}">Delete</button>
-                      </td>
-                    </tr>
-                  `).join('')}
-              </tbody>
-            </table>
-            <div class="cfg-field" style="margin-top:0.75rem">
-              <label>Pack JSON (upsert)</label>
-              <textarea id="connectors-pack-json" rows="6" placeholder='{"id":"...","name":"...","enabled":true,...}'></textarea>
-            </div>
-            <div class="cfg-actions">
-              <button class="btn btn-primary" id="connectors-pack-upsert">Upsert Pack</button>
-              <span id="connectors-pack-status" class="cfg-save-status"></span>
-            </div>
-          </div>
-
-          <div class="cfg-center-body">
-            <h4 style="margin-bottom:0.5rem">Playbook JSON Editor</h4>
-            <div class="cfg-field">
-              <label>Playbook JSON (upsert)</label>
-              <textarea id="connectors-playbook-json" rows="8" placeholder='{"id":"...","name":"...","enabled":true,"mode":"sequential","steps":[...]}'></textarea>
-            </div>
-            <div class="cfg-actions">
-              <button class="btn btn-primary" id="connectors-playbook-upsert">Upsert Playbook</button>
-              <span id="connectors-playbook-status" class="cfg-save-status"></span>
-            </div>
-          </div>
+        <div class="table-header"><h3>How To Use This Area</h3></div>
+        <div class="cfg-center-body">
+          <div class="ops-inline-help">Use <strong>Tools</strong> to run one network tool right now. Use <strong>Workflows</strong> to chain multiple tools together. Use <strong>Operations</strong> to schedule either a single tool or a workflow.</div>
         </div>
       </div>
     `;
 
-    // ── Event listeners ──
-
-    panel.querySelector('#connectors-refresh')?.addEventListener('click', () => renderConnectorsTab(panel));
-
-    // Playbook run/dry-run
-    panel.querySelectorAll('.connectors-playbook-run, .connectors-playbook-dryrun').forEach(button => {
-      button.addEventListener('click', async () => {
-        const playbookId = button.getAttribute('data-playbook-id');
-        if (!playbookId) return;
-        const dryRun = button.classList.contains('connectors-playbook-dryrun');
-        button.disabled = true;
-        button.textContent = dryRun ? 'Running dry...' : 'Running...';
-        try {
-          const result = await api.runPlaybook({
-            playbookId, dryRun, origin: 'web', channel: 'web', userId: 'web-user', requestedBy: 'web-user',
-          });
-          const resultsDiv = panel.querySelector('#playbook-run-results');
-          if (resultsDiv && result.run) {
-            resultsDiv.innerHTML = `
-              <div style="margin-top:0.75rem;padding:1rem;background:var(--bg-secondary);border-radius:8px">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
-                  <strong>${esc(result.run.playbookName || playbookId)}</strong>
-                  <span style="color:${result.success ? 'var(--success)' : 'var(--error)'}">${esc(result.status)} (${result.run.durationMs}ms)</span>
-                </div>
-                ${renderStepResults(result.run.steps || [])}
-              </div>
-            `;
-          }
-        } catch (err) {
-          const resultsDiv = panel.querySelector('#playbook-run-results');
-          if (resultsDiv) resultsDiv.innerHTML = `<div style="color:var(--error);padding:0.5rem">${esc(err instanceof Error ? err.message : String(err))}</div>`;
-        }
-        button.disabled = false;
-        button.textContent = dryRun ? 'Dry Run' : 'Run';
-      });
-    });
-
-    // Run details toggle
-    panel.querySelectorAll('.run-details-toggle').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const runId = btn.getAttribute('data-run-id');
-        const row = panel.querySelector(`#run-detail-${runId}`);
-        if (row) {
-          const visible = row.style.display !== 'none';
-          row.style.display = visible ? 'none' : '';
-          btn.textContent = visible ? 'Show' : 'Hide';
-        }
-      });
-    });
-
-    // Advanced toggle
-    panel.querySelector('#advanced-toggle')?.addEventListener('click', () => {
-      const advPanel = panel.querySelector('#advanced-panel');
-      const arrow = panel.querySelector('#advanced-arrow');
-      if (advPanel) {
-        const visible = advPanel.style.display !== 'none';
-        advPanel.style.display = visible ? 'none' : '';
-        if (arrow) arrow.innerHTML = visible ? '&#9654; Show' : '&#9660; Hide';
-      }
-    });
-
-    // Settings save
-    panel.querySelector('#connectors-settings-save')?.addEventListener('click', async () => {
-      const statusEl = panel.querySelector('#connectors-settings-status');
-      statusEl.textContent = 'Saving...';
-      statusEl.style.color = 'var(--text-muted)';
-      try {
-        const result = await api.updateConnectorsSettings({
-          enabled: panel.querySelector('#connectors-enabled').value === 'true',
-          executionMode: panel.querySelector('#connectors-mode').value,
-          maxConnectorCallsPerRun: Number(panel.querySelector('#connectors-max-calls').value),
-          playbooks: {
-            enabled: true,
-            maxSteps: Number(panel.querySelector('#connectors-max-steps').value),
-            maxParallelSteps: Number(panel.querySelector('#connectors-max-parallel').value),
-            defaultStepTimeoutMs: Number(panel.querySelector('#connectors-step-timeout').value),
-            requireSignedDefinitions: panel.querySelector('#connectors-require-signed').value === 'true',
-            requireDryRunOnFirstExecution: panel.querySelector('#connectors-require-dryrun').value === 'true',
-          },
-          studio: {
-            enabled: panel.querySelector('#connectors-studio-enabled').value === 'true',
-            mode: panel.querySelector('#connectors-studio-mode').value,
-          },
-        });
-        statusEl.textContent = result.message;
-        statusEl.style.color = result.success ? 'var(--success)' : 'var(--error)';
-      } catch (err) {
-        statusEl.textContent = err instanceof Error ? err.message : String(err);
-        statusEl.style.color = 'var(--error)';
-      }
-    });
-
-    // Pack upsert
-    panel.querySelector('#connectors-pack-upsert')?.addEventListener('click', async () => {
-      const statusEl = panel.querySelector('#connectors-pack-status');
-      statusEl.textContent = 'Saving...';
-      try {
-        const raw = panel.querySelector('#connectors-pack-json').value.trim();
-        const result = await api.upsertConnectorPack(JSON.parse(raw));
-        statusEl.textContent = result.message;
-        statusEl.style.color = result.success ? 'var(--success)' : 'var(--error)';
-        if (result.success) await renderConnectorsTab(panel);
-      } catch (err) {
-        statusEl.textContent = err instanceof Error ? err.message : String(err);
-        statusEl.style.color = 'var(--error)';
-      }
-    });
-
-    panel.querySelectorAll('.connectors-pack-delete').forEach(button => {
-      button.addEventListener('click', async () => {
-        const packId = button.getAttribute('data-pack-id');
-        if (!packId || !confirm(`Delete pack '${packId}'?`)) return;
-        await api.deleteConnectorPack(packId);
-        await renderConnectorsTab(panel);
-      });
-    });
-
-    panel.querySelectorAll('.connectors-pack-edit').forEach(button => {
-      button.addEventListener('click', () => {
-        const packId = button.getAttribute('data-pack-id');
-        const pack = packs.find(p => p.id === packId);
-        if (!pack) return;
-        panel.querySelector('#connectors-pack-json').value = JSON.stringify(pack, null, 2);
-        const advPanel = panel.querySelector('#advanced-panel');
-        if (advPanel) advPanel.style.display = '';
-      });
-    });
-
-    // Playbook upsert
-    panel.querySelector('#connectors-playbook-upsert')?.addEventListener('click', async () => {
-      const statusEl = panel.querySelector('#connectors-playbook-status');
-      statusEl.textContent = 'Saving...';
-      try {
-        const raw = panel.querySelector('#connectors-playbook-json').value.trim();
-        const result = await api.upsertPlaybook(JSON.parse(raw));
-        statusEl.textContent = result.message;
-        statusEl.style.color = result.success ? 'var(--success)' : 'var(--error)';
-        if (result.success) await renderConnectorsTab(panel);
-      } catch (err) {
-        statusEl.textContent = err instanceof Error ? err.message : String(err);
-        statusEl.style.color = 'var(--error)';
-      }
-    });
-
-    panel.querySelectorAll('.connectors-playbook-delete').forEach(button => {
-      button.addEventListener('click', async () => {
-        const playbookId = button.getAttribute('data-playbook-id');
-        if (!playbookId || !confirm(`Delete playbook '${playbookId}'?`)) return;
-        await api.deletePlaybook(playbookId);
-        await renderConnectorsTab(panel);
-      });
-    });
+    panel.querySelector('#network-overview-refresh')?.addEventListener('click', () => renderOverviewTab(panel));
+    panel.querySelector('#network-overview-scan')?.addEventListener('click', () => runOverviewAction(panel, {
+      toolName: 'net_arp_scan',
+      args: {},
+      pending: 'Scanning devices...',
+      success: 'Device scan complete.',
+    }));
+    panel.querySelector('#network-overview-threat')?.addEventListener('click', () => runOverviewAction(panel, {
+      toolName: 'net_threat_check',
+      args: { refresh: true },
+      pending: 'Running threat check...',
+      success: 'Threat check complete.',
+    }));
+    panel.querySelector('#network-overview-baseline')?.addEventListener('click', () => runOverviewAction(panel, {
+      toolName: 'net_anomaly_check',
+      args: {},
+      pending: 'Refreshing baseline snapshot...',
+      success: 'Baseline refresh complete.',
+    }));
 
     applyInputTooltips(panel);
   } catch (err) {
     panel.innerHTML = `<div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
   }
 }
-
-function renderStepResults(steps) {
-  if (!steps || steps.length === 0) return '<div style="color:var(--text-muted)">No steps</div>';
-  return `<div style="font-size:0.85rem">${steps.map((step, i) => {
-    const statusColor = step.status === 'succeeded' ? 'var(--success)' : step.status === 'failed' ? 'var(--error)' : 'var(--warning)';
-    const hasOutput = step.output != null && step.output !== '';
-    const outputId = `step-output-${i}-${Math.random().toString(36).slice(2, 8)}`;
-    return `
-      <div style="display:flex;align-items:center;gap:0.5rem;padding:4px 0;border-bottom:1px solid var(--border)">
-        <span style="color:${statusColor};font-weight:bold;min-width:18px">${step.status === 'succeeded' ? '&#10003;' : step.status === 'failed' ? '&#10007;' : '&#9679;'}</span>
-        <span style="min-width:140px;font-weight:500">${esc(step.toolName)}</span>
-        <span style="color:var(--text-muted)">${esc(step.message || '')}</span>
-        <span style="margin-left:auto;color:var(--text-muted)">${step.durationMs}ms</span>
-        ${hasOutput ? `<button class="btn btn-secondary step-output-toggle" data-output-id="${outputId}" style="font-size:0.75rem;padding:2px 6px">Output</button>` : ''}
-      </div>
-      ${hasOutput ? `<div id="${outputId}" style="display:none;padding:4px 0 4px 28px;max-height:300px;overflow:auto"><pre style="font-size:0.8rem;background:var(--bg-primary);padding:0.5rem;border-radius:4px;white-space:pre-wrap;word-break:break-word">${esc(typeof step.output === 'string' ? step.output : JSON.stringify(step.output, null, 2))}</pre></div>` : ''}
-    `;
-  }).join('')}</div>`;
-}
-
-// ─── Devices Tab ─────────────────────────────────────────
 
 async function renderDevicesTab(panel) {
   panel.innerHTML = '<div class="loading">Loading...</div>';
@@ -422,15 +170,15 @@ async function renderDevicesTab(panel) {
         </div>
         <div class="status-card success">
           <div class="card-title">Online</div>
-          <div class="card-value">${devices.filter(d => d.status === 'online').length}</div>
+          <div class="card-value">${devices.filter((device) => device.status === 'online').length}</div>
         </div>
         <div class="status-card warning">
           <div class="card-title">Offline</div>
-          <div class="card-value">${devices.filter(d => d.status === 'offline').length}</div>
+          <div class="card-value">${devices.filter((device) => device.status === 'offline').length}</div>
         </div>
         <div class="status-card accent">
           <div class="card-title">Trusted</div>
-          <div class="card-value">${devices.filter(d => d.trusted).length}</div>
+          <div class="card-value">${devices.filter((device) => device.trusted).length}</div>
         </div>
       </div>
 
@@ -438,62 +186,62 @@ async function renderDevicesTab(panel) {
         <div class="table-header">
           <h3>Discovered Devices</h3>
           <div>
-            <button class="btn btn-primary" id="network-scan-btn">Scan Now</button>
-            <button class="btn btn-secondary" id="network-refresh-btn">Refresh</button>
+            <button class="btn btn-primary" id="network-device-scan">Scan Now</button>
+            <button class="btn btn-secondary" id="network-device-refresh">Refresh</button>
           </div>
         </div>
-        <div id="network-scan-status" style="padding:0 1rem"></div>
+        <div id="network-device-status" style="padding:0 1rem"></div>
         <table>
           <thead>
             <tr><th>Status</th><th>IP Address</th><th>MAC Address</th><th>Hostname</th><th>Vendor</th><th>Type</th><th>Trust</th><th>Open Ports</th><th>First Seen</th><th>Last Seen</th></tr>
           </thead>
           <tbody>
             ${devices.length === 0
-              ? '<tr><td colspan="10" style="text-align:center;color:var(--text-muted)">No devices discovered. Click "Scan Now" above to discover devices on your network.</td></tr>'
-              : devices.map(d => `
+              ? '<tr><td colspan="10" style="text-align:center;color:var(--text-muted)">No devices discovered. Click "Scan Now" to discover devices on your network.</td></tr>'
+              : devices.map((device) => `
                 <tr>
-                  <td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${d.status === 'online' ? 'var(--success)' : 'var(--text-muted)'};margin-right:4px"></span>${esc(d.status)}</td>
-                  <td style="font-family:monospace">${esc(d.ip)}</td>
-                  <td style="font-family:monospace">${esc(d.mac)}</td>
-                  <td>${esc(d.hostname || '-')}</td>
-                  <td>${esc(d.vendor || '-')}</td>
-                  <td>${esc(d.deviceType || 'unknown')}${d.deviceTypeConfidence ? ` (${Math.round(Number(d.deviceTypeConfidence) * 100)}%)` : ''}</td>
-                  <td>${d.trusted ? '<span class="badge badge-running">trusted</span>' : '<span class="badge badge-idle">untrusted</span>'}</td>
-                  <td style="font-family:monospace">${d.openPorts && d.openPorts.length > 0 ? esc(d.openPorts.join(', ')) : '-'}</td>
-                  <td>${formatTime(d.firstSeen)}</td>
-                  <td>${formatTime(d.lastSeen)}</td>
+                  <td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${device.status === 'online' ? 'var(--success)' : 'var(--text-muted)'};margin-right:4px"></span>${esc(device.status)}</td>
+                  <td style="font-family:monospace">${esc(device.ip)}</td>
+                  <td style="font-family:monospace">${esc(device.mac)}</td>
+                  <td>${esc(device.hostname || '-')}</td>
+                  <td>${esc(device.vendor || '-')}</td>
+                  <td>${esc(device.deviceType || 'unknown')}${device.deviceTypeConfidence ? ` (${Math.round(Number(device.deviceTypeConfidence) * 100)}%)` : ''}</td>
+                  <td>${device.trusted ? '<span class="badge badge-running">trusted</span>' : '<span class="badge badge-idle">untrusted</span>'}</td>
+                  <td style="font-family:monospace">${device.openPorts?.length ? esc(device.openPorts.join(', ')) : '-'}</td>
+                  <td>${formatTime(device.firstSeen)}</td>
+                  <td>${formatTime(device.lastSeen)}</td>
                 </tr>
-              `).join('')}
+              `).join('')
+            }
           </tbody>
         </table>
       </div>
     `;
 
-    panel.querySelector('#network-scan-btn')?.addEventListener('click', async () => {
-      const btn = panel.querySelector('#network-scan-btn');
-      const statusDiv = panel.querySelector('#network-scan-status');
-      btn.disabled = true;
-      btn.textContent = 'Scanning...';
-      statusDiv.innerHTML = '<div style="color:var(--text-muted);padding:0.5rem">Running network scan...</div>';
+    panel.querySelector('#network-device-scan')?.addEventListener('click', async () => {
+      const button = panel.querySelector('#network-device-scan');
+      const status = panel.querySelector('#network-device-status');
+      button.disabled = true;
+      button.textContent = 'Scanning...';
+      status.innerHTML = '<div style="color:var(--text-muted);padding:0.5rem">Running network scan...</div>';
       try {
         const result = await api.networkScan();
-        statusDiv.innerHTML = `<div style="color:${result.success ? 'var(--success)' : 'var(--error)'};padding:0.5rem">${esc(result.message)} (${result.devicesFound || 0} devices found)</div>`;
+        status.innerHTML = `<div style="color:${result.success ? 'var(--success)' : 'var(--error)'};padding:0.5rem">${esc(result.message)} (${result.devicesFound || 0} devices found)</div>`;
         setTimeout(() => renderDevicesTab(panel), 1500);
       } catch (err) {
-        statusDiv.innerHTML = `<div style="color:var(--error);padding:0.5rem">${esc(err instanceof Error ? err.message : String(err))}</div>`;
-        btn.disabled = false;
-        btn.textContent = 'Scan Now';
+        status.innerHTML = `<div style="color:var(--error);padding:0.5rem">${esc(err instanceof Error ? err.message : String(err))}</div>`;
+        button.disabled = false;
+        button.textContent = 'Scan Now';
       }
     });
 
-    panel.querySelector('#network-refresh-btn')?.addEventListener('click', () => renderDevicesTab(panel));
+    panel.querySelector('#network-device-refresh')?.addEventListener('click', () => renderDevicesTab(panel));
 
+    applyInputTooltips(panel);
   } catch (err) {
     panel.innerHTML = `<div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
   }
 }
-
-// ─── Threats Tab ─────────────────────────────────────────
 
 async function renderThreatsTab(panel) {
   panel.innerHTML = '<div class="loading">Loading...</div>';
@@ -503,6 +251,7 @@ async function renderThreatsTab(panel) {
       api.networkBaseline().catch(() => null),
       api.networkThreats({ limit: 100 }).catch(() => null),
     ]);
+
     const safeBaseline = baseline || {
       snapshotCount: 0,
       minSnapshotsForBaseline: 3,
@@ -541,12 +290,12 @@ async function renderThreatsTab(panel) {
         <div class="table-header">
           <h3>Threat Operations</h3>
           <div>
-            <button class="btn btn-secondary" id="network-threat-refresh-btn">Refresh</button>
-            <button class="btn btn-primary" id="network-threat-check-btn">Run Threat Check</button>
-            <button class="btn btn-secondary" id="network-baseline-refresh-btn">Refresh Baseline</button>
+            <button class="btn btn-secondary" id="network-threat-refresh">Refresh</button>
+            <button class="btn btn-primary" id="network-threat-check">Run Threat Check</button>
+            <button class="btn btn-secondary" id="network-baseline-refresh">Refresh Baseline</button>
           </div>
         </div>
-        <div id="network-threat-op-status" style="padding:0 1rem"></div>
+        <div id="network-threat-status" style="padding:0 1rem"></div>
       </div>
 
       <div class="table-container">
@@ -572,29 +321,19 @@ async function renderThreatsTab(panel) {
       </div>
     `;
 
-    panel.querySelector('#network-threat-refresh-btn')?.addEventListener('click', () => renderThreatsTab(panel));
-    panel.querySelector('#network-baseline-refresh-btn')?.addEventListener('click', async () => {
-      const status = panel.querySelector('#network-threat-op-status');
-      status.innerHTML = '<div style="color:var(--text-muted);padding:0.5rem">Refreshing baseline snapshot...</div>';
-      try {
-        const result = await api.runTool({ toolName: 'net_anomaly_check', args: {}, origin: 'web' });
-        status.innerHTML = `<div style="color:${result.success ? 'var(--success)' : 'var(--error)'};padding:0.5rem">${esc(result.message || (result.success ? 'Baseline refreshed.' : 'Baseline refresh failed.'))}</div>`;
-        setTimeout(() => renderThreatsTab(panel), 1200);
-      } catch (err) {
-        status.innerHTML = `<div style="color:var(--error);padding:0.5rem">${esc(err instanceof Error ? err.message : String(err))}</div>`;
-      }
-    });
-    panel.querySelector('#network-threat-check-btn')?.addEventListener('click', async () => {
-      const status = panel.querySelector('#network-threat-op-status');
-      status.innerHTML = '<div style="color:var(--text-muted);padding:0.5rem">Running threat check...</div>';
-      try {
-        const result = await api.runTool({ toolName: 'net_threat_check', args: { refresh: true }, origin: 'web' });
-        status.innerHTML = `<div style="color:${result.success ? 'var(--success)' : 'var(--error)'};padding:0.5rem">${esc(result.message || (result.success ? 'Threat check complete.' : 'Threat check failed.'))}</div>`;
-        setTimeout(() => renderThreatsTab(panel), 1200);
-      } catch (err) {
-        status.innerHTML = `<div style="color:var(--error);padding:0.5rem">${esc(err instanceof Error ? err.message : String(err))}</div>`;
-      }
-    });
+    panel.querySelector('#network-threat-refresh')?.addEventListener('click', () => renderThreatsTab(panel));
+    panel.querySelector('#network-baseline-refresh')?.addEventListener('click', () => runThreatAction(panel, {
+      toolName: 'net_anomaly_check',
+      args: {},
+      pending: 'Refreshing baseline snapshot...',
+      success: 'Baseline refresh complete.',
+    }));
+    panel.querySelector('#network-threat-check')?.addEventListener('click', () => runThreatAction(panel, {
+      toolName: 'net_threat_check',
+      args: { refresh: true },
+      pending: 'Running threat check...',
+      success: 'Threat check complete.',
+    }));
 
     panel.querySelectorAll('.network-alert-ack').forEach((button) => {
       button.addEventListener('click', async () => {
@@ -616,25 +355,295 @@ async function renderThreatsTab(panel) {
   }
 }
 
-// ─── Utilities ───────────────────────────────────────────
+async function renderToolsTab(panel) {
+  panel.innerHTML = '<div class="loading">Loading...</div>';
 
-function shortId(id) {
-  return id?.slice(0, 8) || '';
+  try {
+    const toolsState = await api.toolsState(200);
+    const networkTools = (toolsState.tools || [])
+      .filter((tool) => tool.category === 'network')
+      .sort((a, b) => {
+        const ai = NETWORK_TOOL_ORDER.indexOf(a.name);
+        const bi = NETWORK_TOOL_ORDER.indexOf(b.name);
+        const aRank = ai === -1 ? 999 : ai;
+        const bRank = bi === -1 ? 999 : bi;
+        return aRank - bRank || a.name.localeCompare(b.name);
+      });
+
+    panel.innerHTML = '';
+
+    const intro = document.createElement('div');
+    intro.className = 'table-container';
+    intro.innerHTML = `
+      <div class="table-header"><h3>Network Tools</h3></div>
+      <div class="cfg-center-body">
+        <div class="ops-inline-help">Run one network tool at a time here. If you want a repeatable chain, build a workflow. If you want it on a schedule, create a task in Operations.</div>
+      </div>
+    `;
+    panel.appendChild(intro);
+
+    if (networkTools.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'table-container';
+      empty.innerHTML = '<div class="loading">No network tools are currently available.</div>';
+      panel.appendChild(empty);
+      return;
+    }
+
+    const toolTabsRoot = document.createElement('div');
+    panel.appendChild(toolTabsRoot);
+
+    createTabs(toolTabsRoot, networkTools.map((tool) => ({
+      id: tool.name,
+      label: networkToolLabel(tool.name),
+      render: (toolPanel) => renderNetworkToolPanel(toolPanel, tool),
+    })));
+  } catch (err) {
+    panel.innerHTML = `<div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
+  }
 }
 
-function formatTime(ts) {
-  if (!ts) return '-';
-  try { return new Date(ts).toLocaleString(); } catch { return '-'; }
+function renderNetworkToolPanel(panel, tool) {
+  const properties = tool.parameters?.properties || {};
+  const required = new Set(tool.parameters?.required || []);
+  const fieldEntries = Object.entries(properties);
+
+  panel.innerHTML = `
+    <div class="table-container">
+      <div class="table-header">
+        <h3>${esc(networkToolLabel(tool.name))}</h3>
+        <span class="cfg-header-note">${esc(tool.name)}</span>
+      </div>
+      <div class="cfg-center-body">
+        <div class="ops-inline-help">${esc(tool.description || '')}</div>
+        <div class="cfg-form-grid" style="margin-top:1rem;">
+          ${fieldEntries.length === 0
+            ? '<div class="ops-inline-help">This tool does not need any input fields.</div>'
+            : fieldEntries.map(([key, schema]) => renderToolField(tool.name, key, schema, required.has(key))).join('')
+          }
+        </div>
+        <div class="cfg-actions">
+          <button class="btn btn-primary network-tool-run">Run Tool</button>
+          <button class="btn btn-secondary network-tool-clear">Clear</button>
+          <span class="cfg-save-status network-tool-status"></span>
+        </div>
+        <div class="table-container" style="margin-top:1rem;margin-bottom:0;">
+          <div class="table-header"><h3>Result</h3></div>
+          <div class="cfg-center-body">
+            <pre class="network-tool-result">Run the tool to see output here.</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  panel.querySelector('.network-tool-run')?.addEventListener('click', async () => {
+    const statusEl = panel.querySelector('.network-tool-status');
+    const resultEl = panel.querySelector('.network-tool-result');
+
+    let args;
+    try {
+      args = collectToolArgs(panel, properties, required);
+    } catch (err) {
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+      statusEl.style.color = 'var(--error)';
+      return;
+    }
+
+    statusEl.textContent = 'Running...';
+    statusEl.style.color = 'var(--text-muted)';
+    resultEl.textContent = 'Running...';
+
+    try {
+      const result = await api.runTool({ toolName: tool.name, args, origin: 'web' });
+      statusEl.textContent = result.message || (result.success ? 'Tool completed.' : 'Tool failed.');
+      statusEl.style.color = result.success ? 'var(--success)' : 'var(--error)';
+      resultEl.textContent = JSON.stringify(result.output ?? result, null, 2);
+    } catch (err) {
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+      statusEl.style.color = 'var(--error)';
+      resultEl.textContent = err instanceof Error ? err.message : String(err);
+    }
+  });
+
+  panel.querySelector('.network-tool-clear')?.addEventListener('click', () => {
+    panel.querySelectorAll('[data-tool-field]').forEach((field) => {
+      const defaultValue = field.getAttribute('data-default-value');
+      if (field.type === 'checkbox') {
+        field.checked = defaultValue === 'true';
+      } else {
+        field.value = defaultValue || '';
+      }
+    });
+    panel.querySelector('.network-tool-status').textContent = '';
+    panel.querySelector('.network-tool-result').textContent = 'Run the tool to see output here.';
+  });
+
+  applyInputTooltips(panel);
 }
 
-function esc(value) {
-  const d = document.createElement('div');
-  d.textContent = value == null ? '' : String(value);
-  return d.innerHTML;
+function renderToolField(toolName, key, schema, isRequired) {
+  const label = humanizeKey(key);
+  const type = schema?.type || 'string';
+  const defaultValue = NETWORK_TOOL_DEFAULTS[toolName]?.[key];
+  const placeholder = schema?.description || '';
+  const requiredLabel = isRequired ? ' *' : '';
+
+  if (type === 'boolean') {
+    return `
+      <div class="cfg-field">
+        <label>${esc(label + requiredLabel)}</label>
+        <select data-tool-field="${escAttr(key)}" data-schema-type="boolean" data-default-value="${defaultValue === true ? 'true' : defaultValue === false ? 'false' : ''}">
+          <option value="">Default</option>
+          <option value="true" ${defaultValue === true ? 'selected' : ''}>true</option>
+          <option value="false" ${defaultValue === false ? 'selected' : ''}>false</option>
+        </select>
+      </div>
+    `;
+  }
+
+  if (type === 'number' || type === 'integer') {
+    return `
+      <div class="cfg-field">
+        <label>${esc(label + requiredLabel)}</label>
+        <input data-tool-field="${escAttr(key)}" data-schema-type="number" data-default-value="${defaultValue ?? ''}" type="number" placeholder="${escAttr(placeholder)}" value="${escAttr(defaultValue ?? '')}">
+      </div>
+    `;
+  }
+
+  if (type === 'array') {
+    const itemType = schema?.items?.type || 'string';
+    return `
+      <div class="cfg-field">
+        <label>${esc(label + requiredLabel)}</label>
+        <input data-tool-field="${escAttr(key)}" data-schema-type="array" data-array-item-type="${escAttr(itemType)}" data-default-value="${escAttr(defaultValue ?? '')}" type="text" placeholder="${escAttr(placeholder || 'Comma-separated values')}" value="${escAttr(defaultValue ?? '')}">
+      </div>
+    `;
+  }
+
+  if (type === 'object') {
+    return `
+      <div class="cfg-field">
+        <label>${esc(label + requiredLabel)}</label>
+        <textarea data-tool-field="${escAttr(key)}" data-schema-type="object" data-default-value="${escAttr(defaultValue ? JSON.stringify(defaultValue) : '')}" rows="4" placeholder="${escAttr(placeholder || '{}')}">${esc(defaultValue ? JSON.stringify(defaultValue, null, 2) : '')}</textarea>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="cfg-field">
+      <label>${esc(label + requiredLabel)}</label>
+      <input data-tool-field="${escAttr(key)}" data-schema-type="string" data-default-value="${escAttr(defaultValue ?? '')}" type="text" placeholder="${escAttr(placeholder)}" value="${escAttr(defaultValue ?? '')}">
+    </div>
+  `;
 }
 
-function escAttr(value) {
-  return esc(value).replace(/"/g, '&quot;');
+function collectToolArgs(panel, properties, required) {
+  const args = {};
+
+  for (const [key] of Object.entries(properties)) {
+    const field = panel.querySelector(`[data-tool-field="${cssEscape(key)}"]`);
+    if (!field) continue;
+
+    const schemaType = field.getAttribute('data-schema-type');
+    let value;
+
+    if (schemaType === 'boolean') {
+      if (!field.value) continue;
+      value = field.value === 'true';
+    } else if (schemaType === 'number') {
+      if (field.value === '') continue;
+      value = Number(field.value);
+      if (!Number.isFinite(value)) throw new Error(`${humanizeKey(key)} must be a number.`);
+    } else if (schemaType === 'array') {
+      if (!field.value.trim()) continue;
+      const rawItems = field.value.split(',').map((item) => item.trim()).filter(Boolean);
+      const itemType = field.getAttribute('data-array-item-type');
+      value = itemType === 'number'
+        ? rawItems.map((item) => Number(item)).filter((item) => Number.isFinite(item))
+        : rawItems;
+    } else if (schemaType === 'object') {
+      if (!field.value.trim()) continue;
+      try {
+        value = JSON.parse(field.value);
+      } catch {
+        throw new Error(`${humanizeKey(key)} must be valid JSON.`);
+      }
+    } else {
+      if (!field.value.trim()) continue;
+      value = field.value.trim();
+    }
+
+    args[key] = value;
+  }
+
+  for (const key of required) {
+    const value = args[key];
+    if (value === undefined || value === '' || (Array.isArray(value) && value.length === 0)) {
+      throw new Error(`${humanizeKey(key)} is required.`);
+    }
+  }
+
+  return args;
+}
+
+async function runOverviewAction(panel, config) {
+  const status = panel.querySelector('#network-overview-status');
+  status.textContent = config.pending;
+  status.style.color = 'var(--text-muted)';
+  try {
+    const result = await api.runTool({ toolName: config.toolName, args: config.args, origin: 'web' });
+    status.textContent = result.message || config.success;
+    status.style.color = result.success ? 'var(--success)' : 'var(--error)';
+  } catch (err) {
+    status.textContent = err instanceof Error ? err.message : String(err);
+    status.style.color = 'var(--error)';
+  }
+}
+
+async function runThreatAction(panel, config) {
+  const status = panel.querySelector('#network-threat-status');
+  status.innerHTML = `<div style="color:var(--text-muted);padding:0.5rem">${esc(config.pending)}</div>`;
+  try {
+    const result = await api.runTool({ toolName: config.toolName, args: config.args, origin: 'web' });
+    status.innerHTML = `<div style="color:${result.success ? 'var(--success)' : 'var(--error)'};padding:0.5rem">${esc(result.message || config.success)}</div>`;
+    setTimeout(() => renderThreatsTab(panel), 1200);
+  } catch (err) {
+    status.innerHTML = `<div style="color:var(--error);padding:0.5rem">${esc(err instanceof Error ? err.message : String(err))}</div>`;
+  }
+}
+
+function networkToolLabel(toolName) {
+  return ({
+    net_interfaces: 'Interfaces',
+    net_ping: 'Ping',
+    net_arp_scan: 'ARP Scan',
+    net_port_check: 'Port Check',
+    net_dns_lookup: 'DNS Lookup',
+    net_connections: 'Connections',
+    net_traceroute: 'Traceroute',
+    net_oui_lookup: 'OUI Lookup',
+    net_classify: 'Classify Device',
+    net_banner_grab: 'Banner Grab',
+    net_fingerprint: 'Fingerprint',
+    net_wifi_scan: 'WiFi Scan',
+    net_wifi_clients: 'WiFi Clients',
+    net_connection_profiles: 'Profiles',
+    net_baseline: 'Baseline',
+    net_anomaly_check: 'Anomaly Check',
+    net_traffic_baseline: 'Traffic Baseline',
+    net_threat_check: 'Threat Check',
+    net_threat_summary: 'Threat Summary',
+  })[toolName] || toolName;
+}
+
+function humanizeKey(key) {
+  return key
+    .replace(/([A-Z])/g, ' $1')
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^\w/, (char) => char.toUpperCase());
 }
 
 function severityClass(severity) {
@@ -644,16 +653,28 @@ function severityClass(severity) {
   return 'badge-info';
 }
 
-// Delegated event listener for step output toggles (shared)
-document.addEventListener('click', (e) => {
-  const btn = e.target.closest('.step-output-toggle');
-  if (!btn) return;
-  const outputId = btn.getAttribute('data-output-id');
-  if (!outputId) return;
-  const el = document.getElementById(outputId);
-  if (el) {
-    const visible = el.style.display !== 'none';
-    el.style.display = visible ? 'none' : '';
-    btn.textContent = visible ? 'Output' : 'Hide';
+function formatTime(ts) {
+  if (!ts) return '-';
+  try {
+    return new Date(ts).toLocaleString();
+  } catch {
+    return '-';
   }
-});
+}
+
+function esc(value) {
+  const div = document.createElement('div');
+  div.textContent = value == null ? '' : String(value);
+  return div.innerHTML;
+}
+
+function escAttr(value) {
+  return esc(value).replace(/"/g, '&quot;');
+}
+
+function cssEscape(value) {
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+    return CSS.escape(value);
+  }
+  return String(value).replace(/"/g, '\\"');
+}

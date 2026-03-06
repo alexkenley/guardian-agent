@@ -116,8 +116,23 @@ try {
     throw "Required web assets were not found at web/public."
   }
 
+  # Copy skills into staged app
+  if (Test-Path (Join-Path $RepoRoot "skills")) {
+    Copy-Item -Recurse (Join-Path $RepoRoot "skills") -Destination $StageRoot
+  }
+
   Write-Host "Installing production dependencies into staged app..." -ForegroundColor Cyan
   npm ci --omit=dev --ignore-scripts --prefix $StageRoot
+
+  # Ensure bundled CLI tools are available in staged app
+  Write-Host "Ensuring bundled CLI tools..." -ForegroundColor Cyan
+  Push-Location $StageRoot
+  try {
+    node (Join-Path $RepoRoot "scripts/ensure-qmd.mjs")
+    node (Join-Path $RepoRoot "scripts/ensure-gws.mjs")
+  } finally {
+    Pop-Location
+  }
 
   $nodeExe = (Get-Command node.exe).Source
   if (-not $nodeExe) {

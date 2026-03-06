@@ -15,6 +15,7 @@ export type ToolCategory =
   | 'shell'
   | 'web'
   | 'browser'
+  | 'automation'
   | 'contacts'
   | 'email'
   | 'intel'
@@ -30,6 +31,7 @@ export const TOOL_CATEGORIES: Record<ToolCategory, { label: string; description:
   shell: { label: 'Shell', description: 'Execute allowlisted shell commands from the workspace root.' },
   web: { label: 'Web', description: 'Fetch web pages and search the internet via HTTP.' },
   browser: { label: 'Browser', description: 'Headless browser automation with JS rendering and element interaction.' },
+  automation: { label: 'Automation', description: 'Create, update, run, and schedule workflows and recurring tasks.' },
   contacts: { label: 'Contacts', description: 'Discover, import, list contacts and manage marketing campaigns.' },
   email: { label: 'Email', description: 'Send emails via Gmail API and run email campaigns.' },
   intel: { label: 'Threat Intel', description: 'Threat intelligence monitoring, scanning, and response actions.' },
@@ -46,6 +48,7 @@ export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
   shell: ['shell_safe'],
   web: ['chrome_job', 'web_search', 'web_fetch'],
   browser: ['browser_open', 'browser_action', 'browser_snapshot', 'browser_close', 'browser_task'],
+  automation: ['workflow_list', 'workflow_upsert', 'workflow_delete', 'workflow_run', 'task_list', 'task_create', 'task_update', 'task_delete'],
   contacts: ['contacts_discover_browser', 'contacts_import_csv', 'contacts_list', 'campaign_create', 'campaign_list', 'campaign_add_contacts', 'campaign_dry_run'],
   email: ['gmail_send', 'campaign_run'],
   intel: ['intel_summary', 'intel_watch_add', 'intel_watch_remove', 'intel_scan', 'intel_findings', 'intel_draft_action'],

@@ -4,6 +4,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { isIP } from 'node:net';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { IntelActionType, IntelSourceType, IntelStatus, ThreatIntelService } from '../runtime/threat-intel.js';
 import { MarketingStore } from './marketing-store.js';
@@ -123,6 +124,46 @@ interface PendingApprovalContext {
   args: Record<string, unknown>;
 }
 
+interface AutomationWorkflowSummary {
+  id: string;
+  name: string;
+  enabled: boolean;
+  mode: string;
+  description?: string;
+  schedule?: string;
+  steps?: Array<Record<string, unknown>>;
+}
+
+interface AutomationTaskSummary {
+  id: string;
+  name: string;
+  type: 'tool' | 'playbook';
+  target: string;
+  cron: string;
+  enabled: boolean;
+  args?: Record<string, unknown>;
+  emitEvent?: string;
+}
+
+interface AutomationControlPlane {
+  listWorkflows: () => AutomationWorkflowSummary[];
+  upsertWorkflow: (workflow: Record<string, unknown>) => { success: boolean; message: string };
+  deleteWorkflow: (workflowId: string) => { success: boolean; message: string };
+  runWorkflow: (input: {
+    workflowId: string;
+    dryRun?: boolean;
+    origin?: ToolExecutionRequest['origin'];
+    agentId?: string;
+    userId?: string;
+    channel?: string;
+    requestedBy?: string;
+  }) => Promise<{ success: boolean; message: string; status: string; run?: unknown }> | { success: boolean; message: string; status: string; run?: unknown };
+  listTasks: () => AutomationTaskSummary[];
+  createTask: (input: Record<string, unknown>) => { success: boolean; message: string; task?: AutomationTaskSummary };
+  updateTask: (id: string, input: Record<string, unknown>) => { success: boolean; message: string };
+  deleteTask: (id: string) => { success: boolean; message: string };
+}
+
 export class ToolExecutor {
   private readonly registry = new ToolRegistry();
   private readonly approvals = new ToolApprovalStore();
@@ -130,6 +171,7 @@ export class ToolExecutor {
   private readonly jobsById = new Map<string, ToolJobRecord>();
   private readonly pendingApprovalContexts = new Map<string, PendingApprovalContext>();
   private readonly options: ToolExecutorOptions;
+  private automationControlPlane?: AutomationControlPlane;
   private readonly marketingStore: MarketingStore;
   private readonly mcpManager?: MCPClientManager;
   private webSearchConfig: WebSearchConfig;
@@ -239,6 +281,10 @@ export class ToolExecutor {
 
   isEnabled(): boolean {
     return this.options.enabled;
+  }
+
+  setAutomationControlPlane(controlPlane: AutomationControlPlane | undefined): void {
+    this.automationControlPlane = controlPlane;
   }
 
   listToolDefinitions(): ToolDefinition[] {
@@ -3616,6 +3662,244 @@ export class ToolExecutor {
         }
       },
     );
+
+    this.registry.register(
+      {
+        name: 'workflow_list',
+        description: 'List saved workflows available for manual runs or scheduling. Read-only local control-plane data.',
+        risk: 'read_only',
+        category: 'automation',
+        parameters: {
+          type: 'object',
+          properties: {},
+        },
+      },
+      async () => {
+        if (!this.automationControlPlane) {
+          return { success: false, error: 'Workflow control plane is not available.' };
+        }
+        const workflows = this.automationControlPlane.listWorkflows().map(normalizeWorkflowSummary);
+        return {
+          success: true,
+          output: {
+            count: workflows.length,
+            workflows,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'workflow_upsert',
+        description: 'Create or update a workflow definition. Mutating - requires approval. Use mode sequential or parallel and provide workflow steps.',
+        risk: 'mutating',
+        category: 'automation',
+        parameters: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            name: { type: 'string' },
+            enabled: { type: 'boolean' },
+            mode: { type: 'string' },
+            description: { type: 'string' },
+            schedule: { type: 'string' },
+            steps: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  name: { type: 'string' },
+                  packId: { type: 'string' },
+                  toolName: { type: 'string' },
+                  args: { type: 'object' },
+                  continueOnError: { type: 'boolean' },
+                  timeoutMs: { type: 'number' },
+                },
+              },
+            },
+          },
+          required: ['id', 'name', 'mode', 'steps'],
+        },
+      },
+      async (args) => {
+        if (!this.automationControlPlane) {
+          return { success: false, error: 'Workflow control plane is not available.' };
+        }
+        const result = this.automationControlPlane.upsertWorkflow(args);
+        return { success: result.success, output: result, error: result.success ? undefined : result.message };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'workflow_delete',
+        description: 'Delete a saved workflow by id. Mutating - requires approval.',
+        risk: 'mutating',
+        category: 'automation',
+        parameters: {
+          type: 'object',
+          properties: {
+            workflowId: { type: 'string' },
+          },
+          required: ['workflowId'],
+        },
+      },
+      async (args) => {
+        if (!this.automationControlPlane) {
+          return { success: false, error: 'Workflow control plane is not available.' };
+        }
+        const workflowId = requireString(args.workflowId, 'workflowId');
+        const result = this.automationControlPlane.deleteWorkflow(workflowId);
+        return { success: result.success, output: result, error: result.success ? undefined : result.message };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'workflow_run',
+        description: 'Run a saved workflow immediately. Supports dryRun to preview it through the normal workflow engine.',
+        risk: 'mutating',
+        category: 'automation',
+        parameters: {
+          type: 'object',
+          properties: {
+            workflowId: { type: 'string' },
+            dryRun: { type: 'boolean' },
+          },
+          required: ['workflowId'],
+        },
+      },
+      async (args, request) => {
+        if (!this.automationControlPlane) {
+          return { success: false, error: 'Workflow control plane is not available.' };
+        }
+        const workflowId = requireString(args.workflowId, 'workflowId');
+        const result = await this.automationControlPlane.runWorkflow({
+          workflowId,
+          dryRun: !!args.dryRun,
+          origin: request.origin,
+          agentId: request.agentId,
+          userId: request.userId,
+          channel: request.channel,
+          requestedBy: request.userId || request.agentId || request.origin,
+        });
+        return { success: result.success, output: result, error: result.success ? undefined : result.message };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'task_list',
+        description: 'List saved recurring tasks used by Operations. Read-only local control-plane data.',
+        risk: 'read_only',
+        category: 'automation',
+        parameters: {
+          type: 'object',
+          properties: {},
+        },
+      },
+      async () => {
+        if (!this.automationControlPlane) {
+          return { success: false, error: 'Task control plane is not available.' };
+        }
+        const tasks = this.automationControlPlane.listTasks().map(normalizeTaskSummary);
+        return {
+          success: true,
+          output: {
+            count: tasks.length,
+            tasks,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'task_create',
+        description: 'Create a recurring task that runs either one tool or one workflow on a schedule. Mutating - requires approval.',
+        risk: 'mutating',
+        category: 'automation',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            type: { type: 'string', description: "Use 'tool' or 'workflow'." },
+            target: { type: 'string' },
+            cron: { type: 'string' },
+            enabled: { type: 'boolean' },
+            args: { type: 'object' },
+            emitEvent: { type: 'string' },
+          },
+          required: ['name', 'type', 'target', 'cron'],
+        },
+      },
+      async (args) => {
+        if (!this.automationControlPlane) {
+          return { success: false, error: 'Task control plane is not available.' };
+        }
+        const result = this.automationControlPlane.createTask(normalizeTaskInput(args));
+        return { success: result.success, output: result, error: result.success ? undefined : result.message };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'task_update',
+        description: 'Update an existing recurring task by id. Mutating - requires approval.',
+        risk: 'mutating',
+        category: 'automation',
+        parameters: {
+          type: 'object',
+          properties: {
+            taskId: { type: 'string' },
+            name: { type: 'string' },
+            type: { type: 'string', description: "Use 'tool' or 'workflow'." },
+            target: { type: 'string' },
+            cron: { type: 'string' },
+            enabled: { type: 'boolean' },
+            args: { type: 'object' },
+            emitEvent: { type: 'string' },
+          },
+          required: ['taskId'],
+        },
+      },
+      async (args) => {
+        if (!this.automationControlPlane) {
+          return { success: false, error: 'Task control plane is not available.' };
+        }
+        const taskId = requireString(args.taskId, 'taskId');
+        const next = { ...args };
+        delete next.taskId;
+        const result = this.automationControlPlane.updateTask(taskId, normalizeTaskInput(next));
+        return { success: result.success, output: result, error: result.success ? undefined : result.message };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'task_delete',
+        description: 'Delete an existing recurring task by id. Mutating - requires approval.',
+        risk: 'mutating',
+        category: 'automation',
+        parameters: {
+          type: 'object',
+          properties: {
+            taskId: { type: 'string' },
+          },
+          required: ['taskId'],
+        },
+      },
+      async (args) => {
+        if (!this.automationControlPlane) {
+          return { success: false, error: 'Task control plane is not available.' };
+        }
+        const taskId = requireString(args.taskId, 'taskId');
+        const result = this.automationControlPlane.deleteTask(taskId);
+        return { success: result.success, output: result, error: result.success ? undefined : result.message };
+      },
+    );
   }
 
   private resolveGmailAccessToken(args: Record<string, unknown>): string | undefined {
@@ -3755,28 +4039,7 @@ export class ToolExecutor {
         },
       });
       const html = await response.text();
-      const results: Array<{ title: string; url: string; snippet: string }> = [];
-
-      // Parse DuckDuckGo HTML results
-      const resultBlocks = html.split(/class="result\s/g).slice(1);
-      for (const block of resultBlocks) {
-        if (results.length >= maxResults) break;
-        const linkMatch = block.match(/class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/);
-        const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/(?:a|td|div|span)/);
-        if (linkMatch) {
-          let href = linkMatch[1];
-          // DuckDuckGo wraps URLs in redirect — extract actual URL
-          const uddgMatch = href.match(/[?&]uddg=([^&]+)/);
-          if (uddgMatch) {
-            href = decodeURIComponent(uddgMatch[1]);
-          }
-          results.push({
-            title: stripHtml(linkMatch[2]).trim(),
-            url: href,
-            snippet: snippetMatch ? stripHtml(snippetMatch[1]).replace(/\s+/g, ' ').trim() : '',
-          });
-        }
-      }
+      const results = parseDuckDuckGoResults(html, maxResults);
       return { query, provider: 'duckduckgo', results };
     } finally {
       clearTimeout(timer);
@@ -4068,11 +4331,7 @@ export class ToolExecutor {
 }
 
 function stripHtml(value: string): string {
-  return value.replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&');
+  return htmlToText(value, { skipTagContent: new Set(['script', 'style']) });
 }
 
 function truncateOutput(value: string): string {
@@ -4107,37 +4366,311 @@ function isPrivateHost(hostname: string): boolean {
  * Prefers <article> or <main> if present; strips nav/footer/header/script/style.
  */
 function extractReadableContent(html: string): string {
-  // Try to extract focused content from <article> or <main>
-  const articleMatch = html.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
-  const mainMatch = html.match(/<main[^>]*>([\s\S]*?)<\/main>/i);
-  let body = articleMatch?.[1] ?? mainMatch?.[1] ?? html;
-
-  // Extract title
-  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  const title = titleMatch ? stripHtml(titleMatch[1]).trim() : '';
-
-  // Strip non-content elements
-  body = body
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
-    .replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
-    .replace(/<header[\s\S]*?<\/header>/gi, ' ')
-    .replace(/<aside[\s\S]*?<\/aside>/gi, ' ');
-
-  // Strip remaining tags and clean up
-  body = body
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
+  const article = findFirstElementInnerHtml(html, 'article');
+  const main = findFirstElementInnerHtml(html, 'main');
+  const body = article ?? main ?? html;
+  const title = stripHtml(findFirstElementInnerHtml(html, 'title') ?? '').trim();
+  const bodyText = htmlToText(body, { skipTagContent: new Set(['script', 'style', 'nav', 'footer', 'header', 'aside']) })
     .replace(/\s+/g, ' ')
     .trim();
 
-  return title ? `${title}\n\n${body}` : body;
+  return title ? `${title}\n\n${bodyText}` : bodyText;
+}
+
+type ParsedHtmlElement = {
+  tagName: string;
+  attributes: Record<string, string>;
+  innerHtml: string;
+};
+
+type HtmlTextOptions = {
+  skipTagContent?: ReadonlySet<string>;
+};
+
+const VOID_HTML_TAGS = new Set([
+  'area',
+  'base',
+  'br',
+  'col',
+  'embed',
+  'hr',
+  'img',
+  'input',
+  'link',
+  'meta',
+  'param',
+  'source',
+  'track',
+  'wbr',
+]);
+
+function parseDuckDuckGoResults(
+  html: string,
+  maxResults: number,
+): Array<{ title: string; url: string; snippet: string }> {
+  const results: Array<{ title: string; url: string; snippet: string }> = [];
+  const resultBlocks = findHtmlElementsByClass(html, 'result');
+  for (const block of resultBlocks) {
+    if (results.length >= maxResults) break;
+    const link = findHtmlElementsByClass(block.innerHtml, 'result__a', 'a')[0];
+    if (!link) continue;
+    const snippet = findHtmlElementsByClass(block.innerHtml, 'result__snippet')[0];
+    const href = normalizeDuckDuckGoResultUrl(link.attributes.href ?? '');
+    if (!href) continue;
+    results.push({
+      title: stripHtml(link.innerHtml).trim(),
+      url: href,
+      snippet: snippet ? stripHtml(snippet.innerHtml).replace(/\s+/g, ' ').trim() : '',
+    });
+  }
+  return results;
+}
+
+function normalizeDuckDuckGoResultUrl(rawHref: string): string {
+  const href = rawHref.trim();
+  if (!href) return '';
+  try {
+    const parsed = new URL(href, 'https://html.duckduckgo.com');
+    const redirected = parsed.searchParams.get('uddg');
+    return redirected?.trim() || parsed.toString();
+  } catch {
+    return href;
+  }
+}
+
+function htmlToText(value: string, options: HtmlTextOptions = {}): string {
+  if (!value) return '';
+  const skipTagContent = options.skipTagContent ?? new Set<string>();
+  let text = '';
+  let index = 0;
+  while (index < value.length) {
+    const ch = value[index];
+    if (ch !== '<') {
+      text += ch;
+      index += 1;
+      continue;
+    }
+
+    if (value.startsWith('<!--', index)) {
+      const commentEnd = value.indexOf('-->', index + 4);
+      index = commentEnd === -1 ? value.length : commentEnd + 3;
+      text += ' ';
+      continue;
+    }
+
+    const tag = parseHtmlStartTag(value, index);
+    if (!tag) {
+      text += ch;
+      index += 1;
+      continue;
+    }
+
+    const tagName = tag.tagName.toLowerCase();
+    if (!tag.isClosing && skipTagContent.has(tagName) && !VOID_HTML_TAGS.has(tagName)) {
+      const close = findMatchingClosingTag(value, tagName, tag.startTagEnd + 1);
+      index = close === -1 ? value.length : close + (`</${tagName}>`).length;
+      text += ' ';
+      continue;
+    }
+
+    index = tag.startTagEnd + 1;
+    text += ' ';
+  }
+
+  return decodeHtmlEntities(text)
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function findFirstElementInnerHtml(html: string, tagName: string): string | undefined {
+  return findHtmlElementsByTagName(html, tagName)[0]?.innerHtml;
+}
+
+function findHtmlElementsByClass(html: string, className: string, tagName?: string): ParsedHtmlElement[] {
+  const classToken = className.trim();
+  if (!classToken) return [];
+  const matches: ParsedHtmlElement[] = [];
+  let index = 0;
+  while (index < html.length) {
+    const open = html.indexOf('<', index);
+    if (open === -1) break;
+    const tag = parseHtmlStartTag(html, open);
+    if (!tag) {
+      index = open + 1;
+      continue;
+    }
+    index = tag.startTagEnd + 1;
+    if (tag.isClosing) continue;
+    if (tagName && tag.tagName !== tagName) continue;
+    const classAttr = tag.attributes.class;
+    if (!classAttr || !classAttr.split(/\s+/).includes(classToken)) continue;
+    if (VOID_HTML_TAGS.has(tag.tagName)) continue;
+    const close = findMatchingClosingTag(html, tag.tagName, tag.startTagEnd + 1);
+    if (close === -1) continue;
+    matches.push({
+      tagName: tag.tagName,
+      attributes: tag.attributes,
+      innerHtml: html.slice(tag.startTagEnd + 1, close),
+    });
+  }
+  return matches;
+}
+
+function findHtmlElementsByTagName(html: string, tagName: string): ParsedHtmlElement[] {
+  const normalizedTag = tagName.toLowerCase();
+  const matches: ParsedHtmlElement[] = [];
+  let index = 0;
+  while (index < html.length) {
+    const open = html.indexOf('<', index);
+    if (open === -1) break;
+    const tag = parseHtmlStartTag(html, open);
+    if (!tag) {
+      index = open + 1;
+      continue;
+    }
+    index = tag.startTagEnd + 1;
+    if (tag.isClosing || tag.tagName !== normalizedTag || VOID_HTML_TAGS.has(tag.tagName)) continue;
+    const close = findMatchingClosingTag(html, tag.tagName, tag.startTagEnd + 1);
+    if (close === -1) continue;
+    matches.push({
+      tagName: tag.tagName,
+      attributes: tag.attributes,
+      innerHtml: html.slice(tag.startTagEnd + 1, close),
+    });
+  }
+  return matches;
+}
+
+function parseHtmlStartTag(
+  html: string,
+  start: number,
+): { tagName: string; attributes: Record<string, string>; startTagEnd: number; isClosing: boolean } | null {
+  if (html[start] !== '<') return null;
+  const next = html[start + 1];
+  if (!next || next === '!' || next === '?') return null;
+  const isClosing = next === '/';
+  let cursor = start + (isClosing ? 2 : 1);
+  while (cursor < html.length && /\s/.test(html[cursor])) cursor += 1;
+  const nameStart = cursor;
+  while (cursor < html.length && /[A-Za-z0-9:-]/.test(html[cursor])) cursor += 1;
+  if (cursor === nameStart) return null;
+  const tagName = html.slice(nameStart, cursor).toLowerCase();
+  const startTagEnd = findTagEnd(html, cursor);
+  if (startTagEnd === -1) return null;
+  if (isClosing) {
+    return { tagName, attributes: {}, startTagEnd, isClosing: true };
+  }
+  const attributes = parseHtmlAttributes(html.slice(cursor, startTagEnd));
+  return { tagName, attributes, startTagEnd, isClosing: false };
+}
+
+function findTagEnd(html: string, start: number): number {
+  let quote: '"' | "'" | null = null;
+  for (let index = start; index < html.length; index += 1) {
+    const ch = html[index];
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === '\'') {
+      quote = ch;
+      continue;
+    }
+    if (ch === '>') return index;
+  }
+  return -1;
+}
+
+function parseHtmlAttributes(source: string): Record<string, string> {
+  const attributes: Record<string, string> = {};
+  let index = 0;
+  while (index < source.length) {
+    while (index < source.length && /[\s/]/.test(source[index])) index += 1;
+    if (index >= source.length) break;
+    const nameStart = index;
+    while (index < source.length && /[^\s=/>]/.test(source[index])) index += 1;
+    const rawName = source.slice(nameStart, index).trim().toLowerCase();
+    if (!rawName) {
+      index += 1;
+      continue;
+    }
+    while (index < source.length && /\s/.test(source[index])) index += 1;
+    if (source[index] !== '=') {
+      attributes[rawName] = '';
+      continue;
+    }
+    index += 1;
+    while (index < source.length && /\s/.test(source[index])) index += 1;
+    if (index >= source.length) {
+      attributes[rawName] = '';
+      break;
+    }
+    const quote = source[index];
+    if (quote === '"' || quote === '\'') {
+      index += 1;
+      const valueStart = index;
+      while (index < source.length && source[index] !== quote) index += 1;
+      attributes[rawName] = decodeHtmlEntities(source.slice(valueStart, index));
+      if (index < source.length) index += 1;
+      continue;
+    }
+    const valueStart = index;
+    while (index < source.length && /[^\s>]/.test(source[index])) index += 1;
+    attributes[rawName] = decodeHtmlEntities(source.slice(valueStart, index));
+  }
+  return attributes;
+}
+
+function findMatchingClosingTag(html: string, tagName: string, fromIndex: number): number {
+  const openNeedle = `<${tagName}`;
+  const closeNeedle = `</${tagName}`;
+  let depth = 0;
+  let index = fromIndex;
+  while (index < html.length) {
+    const nextOpen = html.indexOf(openNeedle, index);
+    const nextClose = html.indexOf(closeNeedle, index);
+    if (nextClose === -1) return -1;
+    if (nextOpen !== -1 && nextOpen < nextClose) {
+      const nested = parseHtmlStartTag(html, nextOpen);
+      if (nested && !nested.isClosing && nested.tagName === tagName && !VOID_HTML_TAGS.has(tagName)) {
+        depth += 1;
+        index = nested.startTagEnd + 1;
+        continue;
+      }
+      index = nextOpen + openNeedle.length;
+      continue;
+    }
+    const closing = parseHtmlStartTag(html, nextClose);
+    if (!closing || !closing.isClosing || closing.tagName !== tagName) {
+      index = nextClose + closeNeedle.length;
+      continue;
+    }
+    if (depth === 0) return nextClose;
+    depth -= 1;
+    index = closing.startTagEnd + 1;
+  }
+  return -1;
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value.replace(/&(#(?:x[0-9a-fA-F]+|\d+)|[a-zA-Z]+);/g, (match, entity: string) => {
+    const normalized = entity.toLowerCase();
+    if (normalized === 'nbsp') return ' ';
+    if (normalized === 'amp') return '&';
+    if (normalized === 'lt') return '<';
+    if (normalized === 'gt') return '>';
+    if (normalized === 'quot') return '"';
+    if (normalized === '#39' || normalized === 'apos') return '\'';
+    if (normalized.startsWith('#x')) {
+      const codePoint = Number.parseInt(normalized.slice(2), 16);
+      return Number.isFinite(codePoint) && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : match;
+    }
+    if (normalized.startsWith('#')) {
+      const codePoint = Number.parseInt(normalized.slice(1), 10);
+      return Number.isFinite(codePoint) && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : match;
+    }
+    return match;
+  });
 }
 
 function uniqueNonEmpty(values: string[]): string[] {
@@ -4356,10 +4889,16 @@ function takeColumn(row: string[], index: number): string {
 export function validateHostParam(host: string): string {
   const trimmed = host.trim();
   if (!trimmed || trimmed.length > 253) throw new Error('Invalid host: empty or too long.');
-  if (/[;&|`$(){}[\]<>!#'"\\\n\r\t]/.test(trimmed)) {
-    throw new Error('Host contains disallowed characters (possible injection attempt).');
-  }
-  return trimmed;
+  const candidate = trimmed.startsWith('[') && trimmed.endsWith(']') ? trimmed.slice(1, -1) : trimmed;
+  if (isIP(candidate)) return candidate;
+  if (isValidHostname(candidate)) return candidate;
+  throw new Error('Invalid host: must be a hostname or IP address.');
+}
+
+function isValidHostname(host: string): boolean {
+  if (!host || host.length > 253) return false;
+  const labels = host.split('.');
+  return labels.every((label) => /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/.test(label));
 }
 
 function sanitizeInterfaceName(name: string): string {
@@ -4812,6 +5351,29 @@ function parseSystemctlOutput(stdout: string, filter: string): Array<{ name: str
       };
     })
     .filter((s): s is NonNullable<typeof s> => s !== null);
+}
+
+function normalizeWorkflowSummary(workflow: AutomationWorkflowSummary): AutomationWorkflowSummary & { kind: 'workflow' } {
+  return {
+    ...workflow,
+    kind: 'workflow',
+  };
+}
+
+function normalizeTaskSummary(task: AutomationTaskSummary): Record<string, unknown> {
+  return {
+    ...task,
+    kind: 'task',
+    type: task.type === 'playbook' ? 'workflow' : task.type,
+  };
+}
+
+function normalizeTaskInput(input: Record<string, unknown>): Record<string, unknown> {
+  const normalized = { ...input };
+  if (normalized.type === 'workflow') {
+    normalized.type = 'playbook';
+  }
+  return normalized;
 }
 
 function inferMCPGuardAction(def: ToolDefinition): { type: string; params?: Record<string, unknown> } | null {

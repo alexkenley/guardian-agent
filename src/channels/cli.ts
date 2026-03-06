@@ -362,6 +362,9 @@ export class CLIChannel implements ChannelAdapter {
       case 'intel':
         await this.handleIntel(args);
         break;
+      case 'google':
+        await this.handleGoogle(args);
+        break;
       case 'version':
         this.handleVersion();
         break;
@@ -438,6 +441,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /campaign ...                            Contact discovery + email campaign workflows\n');
     this.write('  /connectors [status|packs|settings|pack] Connector framework control plane\n');
     this.write('  /playbooks [list|run|upsert|delete|runs] Playbook registry + execution\n');
+    this.write('  /google [status|login|logout]           Google Workspace connection\n');
     this.write('\n');
     this.write(this.bold('Security & Audit\n'));
     this.write('  /audit [limit]                         Recent audit events\n');
@@ -2957,6 +2961,52 @@ export class CLIChannel implements ChannelAdapter {
       }
     }
     this.write('\n');
+  }
+
+  // ─── /google ─────────────────────────────────────────────────
+
+  private async handleGoogle(args: string[]): Promise<void> {
+    if (!this.dashboard?.onGwsStatus) {
+      this.write('\nGoogle Workspace integration is not available.\n\n');
+      return;
+    }
+
+    const sub = (args[0] ?? 'status').toLowerCase();
+
+    if (sub === 'status') {
+      const status = await this.dashboard.onGwsStatus();
+      this.write('\n');
+      this.write(this.bold('Google Workspace\n'));
+      this.write(`  Installed:       ${status.installed ? this.green('yes') : this.red('no')}${status.version ? ` (${status.version})` : ''}\n`);
+      this.write(`  Authenticated:   ${status.authenticated ? this.green('yes') : this.red('no')}${status.authMethod ? ` (${status.authMethod})` : ''}\n`);
+      this.write(`  Provider:        ${status.enabled ? this.green('enabled') : this.dim('disabled')}\n`);
+      this.write(`  Services:        ${status.services.length ? status.services.join(', ') : this.dim('none')}\n`);
+      if (!status.authenticated) {
+        this.write(`\n  Run ${this.cyan('/google login')} to connect your Google account.\n`);
+      }
+      this.write('\n');
+      return;
+    }
+
+    if (sub === 'login') {
+      const services = args.length > 1 ? args.slice(1) : undefined;
+      this.write('\nStarting Google Workspace authentication...\n');
+      this.write(this.dim('This will open a browser window for OAuth consent.\n\n'));
+      const result = await this.dashboard.onGwsLogin!(services);
+      this.write(`${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+      return;
+    }
+
+    if (sub === 'logout') {
+      const result = await this.dashboard.onGwsLogout!();
+      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
+      return;
+    }
+
+    this.write('\nUsage: /google [status|login|logout]\n');
+    this.write('  /google status                  Show connection status\n');
+    this.write('  /google login [services...]     Authenticate with Google (opens browser)\n');
+    this.write('  /google logout                  Clear saved credentials\n\n');
   }
 
   // ─── /intel ──────────────────────────────────────────────────

@@ -129,6 +129,12 @@ describe('ScheduledTaskService', () => {
       expect(result.success).toBe(false);
       expect(result.message).toContain('cron');
     });
+
+    it('should clear preset linkage when create input no longer matches the preset target', () => {
+      const result = service.create({ ...validInput, presetId: 'network-watch', target: 'sys_info' });
+      expect(result.success).toBe(true);
+      expect(result.task!.presetId).toBeUndefined();
+    });
   });
 
   describe('list and get', () => {
@@ -159,6 +165,14 @@ describe('ScheduledTaskService', () => {
       expect(service.get(task!.id)!.name).toBe('Updated');
     });
 
+    it('should update task type and target', () => {
+      const { task } = service.create(validInput);
+      const result = service.update(task!.id, { type: 'playbook', target: 'home-network' });
+      expect(result.success).toBe(true);
+      expect(service.get(task!.id)!.type).toBe('playbook');
+      expect(service.get(task!.id)!.target).toBe('home-network');
+    });
+
     it('should re-register cron on cron change', () => {
       const { task } = service.create(validInput);
       vi.mocked(deps.scheduler.schedule).mockClear();
@@ -178,6 +192,13 @@ describe('ScheduledTaskService', () => {
       vi.mocked(deps.scheduler.schedule).mockClear();
       service.update(task!.id, { enabled: true });
       expect(deps.scheduler.schedule).toHaveBeenCalledTimes(1);
+    });
+
+    it('should clear preset linkage when a preset task changes target', () => {
+      const { task } = service.installPreset('network-watch');
+      const result = service.update(task!.id, { target: 'sys_info' });
+      expect(result.success).toBe(true);
+      expect(service.get(task!.id)!.presetId).toBeUndefined();
     });
 
     it('should return error for unknown id', () => {
@@ -347,6 +368,7 @@ describe('ScheduledTaskService', () => {
       expect(result.task).toBeDefined();
       expect(result.task!.name).toBe('Network Watch');
       expect(result.task!.target).toBe('net_arp_scan');
+      expect(result.task!.presetId).toBe('network-watch');
     });
 
     it('should reject unknown preset', () => {

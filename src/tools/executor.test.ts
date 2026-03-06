@@ -592,8 +592,8 @@ describe('ToolExecutor', () => {
       const ddgHtml = `
         <html><body>
           <div class="result results_links results_links_deep web-result">
-            <a class="result__a" href="https://example.com/page1">Example Page</a>
-            <a class="result__snippet">A great snippet about the topic.</a>
+            <a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2Fpage1">Example <strong>Page</strong></a>
+            <a class="result__snippet">A great <em>snippet</em> about the topic.</a>
           </div>
           <div class="result results_links results_links_deep web-result">
             <a class="result__a" href="https://example.com/page2">Second Result</a>
@@ -625,6 +625,7 @@ describe('ToolExecutor', () => {
         expect(output.results.length).toBeGreaterThanOrEqual(1);
         expect(output.results[0].title).toBe('Example Page');
         expect(output.results[0].url).toBe('https://example.com/page1');
+        expect(output.results[0].snippet).toBe('A great snippet about the topic.');
         expect(output.cached).toBe(false);
         expect(output._untrusted).toContain('untrusted');
       } finally {
@@ -686,7 +687,8 @@ describe('ToolExecutor', () => {
       const originalFetch = globalThis.fetch;
       globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
         const urlStr = typeof _url === 'string' ? _url : _url.toString();
-        if (urlStr.includes('api.search.brave.com')) {
+        const parsedUrl = new URL(urlStr);
+        if (parsedUrl.hostname === 'api.search.brave.com') {
           expect(init?.headers).toBeDefined();
           const headers = init!.headers as Record<string, string>;
           expect(headers['X-Subscription-Token']).toBe('test-brave-key');
@@ -1117,7 +1119,7 @@ describe('ToolExecutor', () => {
         policyMode: 'autonomous',
       });
       const info = executor.getCategoryInfo();
-      expect(info.length).toBe(12);
+      expect(info.length).toBe(13);
       const names = info.map((c) => c.category);
       expect(names).toContain('filesystem');
       expect(names).toContain('shell');
@@ -1131,6 +1133,7 @@ describe('ToolExecutor', () => {
       expect(names).toContain('system');
       expect(names).toContain('memory');
       expect(names).toContain('search');
+      expect(names).toContain('automation');
       const fs = info.find((c) => c.category === 'filesystem')!;
       expect(fs.toolCount).toBe(6);
       expect(fs.enabled).toBe(true);

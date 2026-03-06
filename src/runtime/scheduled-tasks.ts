@@ -26,6 +26,7 @@ export interface ScheduledTaskDefinition {
   name: string;
   type: 'tool' | 'playbook';
   target: string;
+  presetId?: string;
   args?: Record<string, unknown>;
   cron: string;
   enabled: boolean;
@@ -41,6 +42,7 @@ export interface ScheduledTaskCreateInput {
   name: string;
   type: 'tool' | 'playbook';
   target: string;
+  presetId?: string;
   args?: Record<string, unknown>;
   cron: string;
   enabled?: boolean;
@@ -49,6 +51,8 @@ export interface ScheduledTaskCreateInput {
 
 export interface ScheduledTaskUpdateInput {
   name?: string;
+  type?: 'tool' | 'playbook';
+  target?: string;
   args?: Record<string, unknown>;
   cron?: string;
   enabled?: boolean;
@@ -397,6 +401,7 @@ export class ScheduledTaskService {
       name: input.name.trim(),
       type: input.type,
       target: input.target.trim(),
+      presetId: input.presetId?.trim() || undefined,
       args: input.args,
       cron: input.cron.trim(),
       enabled: input.enabled !== false,
@@ -404,6 +409,13 @@ export class ScheduledTaskService {
       runCount: 0,
       emitEvent: input.emitEvent?.trim() || undefined,
     };
+
+    if (task.presetId) {
+      const preset = BUILT_IN_PRESETS.find((candidate) => candidate.id === task.presetId);
+      if (!preset || task.type !== preset.type || task.target !== preset.target) {
+        task.presetId = undefined;
+      }
+    }
 
     this.tasks.set(task.id, task);
 
@@ -430,11 +442,31 @@ export class ScheduledTaskService {
     const cronChanged = input.cron !== undefined && input.cron !== task.cron;
     const enableChanged = input.enabled !== undefined && input.enabled !== task.enabled;
 
-    if (input.name !== undefined) task.name = input.name.trim();
+    if (input.name !== undefined) {
+      if (!input.name.trim()) return { success: false, message: 'name is required' };
+      task.name = input.name.trim();
+    }
+    if (input.type !== undefined) {
+      if (input.type !== 'tool' && input.type !== 'playbook') {
+        return { success: false, message: "type must be 'tool' or 'playbook'" };
+      }
+      task.type = input.type;
+    }
+    if (input.target !== undefined) {
+      if (!input.target.trim()) return { success: false, message: 'target is required' };
+      task.target = input.target.trim();
+    }
     if (input.args !== undefined) task.args = input.args;
     if (input.cron !== undefined) task.cron = input.cron.trim();
     if (input.enabled !== undefined) task.enabled = input.enabled;
     if (input.emitEvent !== undefined) task.emitEvent = input.emitEvent?.trim() || undefined;
+
+    if (task.presetId) {
+      const preset = BUILT_IN_PRESETS.find((candidate) => candidate.id === task.presetId);
+      if (preset && (task.type !== preset.type || task.target !== preset.target)) {
+        task.presetId = undefined;
+      }
+    }
 
     // Re-register cron if expression changed or enabled state changed
     if (cronChanged || enableChanged) {
@@ -676,7 +708,10 @@ export class ScheduledTaskService {
 
     // Check if preset is already installed
     for (const task of this.tasks.values()) {
-      if (task.name === preset.name && task.target === preset.target) {
+      if (
+        task.presetId === preset.id
+        || (task.name === preset.name && task.target === preset.target && task.type === preset.type)
+      ) {
         return { success: false, message: `Preset '${preset.name}' is already installed` };
       }
     }
@@ -685,6 +720,7 @@ export class ScheduledTaskService {
       name: preset.name,
       type: preset.type,
       target: preset.target,
+      presetId: preset.id,
       args: preset.args,
       cron: preset.cron,
       enabled: true,

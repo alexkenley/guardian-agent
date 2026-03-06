@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import { loadConfig, DEFAULT_CONFIG_PATH, deepMerge, validateConfig } from './config/loader.js';
 import type { GuardianAgentConfig, MCPServerEntry } from './config/types.js';
 import yaml from 'js-yaml';
@@ -189,6 +191,38 @@ function buildManagedMCPServers(config: GuardianAgentConfig): Array<MCPServerEnt
     });
   }
   return servers;
+}
+
+const execFileAsync = promisify(execFileCb);
+
+function resolveGwsBinary(): string {
+  const shimName = process.platform === 'win32' ? 'gws.cmd' : 'gws';
+  const localShim = join(process.cwd(), 'node_modules', '.bin', shimName);
+  if (existsSync(localShim)) return localShim;
+  return 'gws';
+}
+
+async function getGwsAuthStatus(): Promise<{
+  installed: boolean;
+  version?: string;
+  authenticated: boolean;
+  authMethod?: string;
+}> {
+  const bin = resolveGwsBinary();
+  try {
+    const { stdout } = await execFileAsync(bin, ['--version'], { timeout: 5000 });
+    const version = stdout.trim();
+    try {
+      const { stdout: statusJson } = await execFileAsync(bin, ['auth', 'status'], { timeout: 5000 });
+      const status = JSON.parse(statusJson) as { auth_method?: string; storage?: string };
+      const authenticated = !!status.auth_method && status.auth_method !== 'none';
+      return { installed: true, version, authenticated, authMethod: authenticated ? status.auth_method : undefined };
+    } catch {
+      return { installed: true, version, authenticated: false };
+    }
+  } catch {
+    return { installed: false, authenticated: false };
+  }
 }
 
 class ChatAgent extends BaseAgent {
@@ -2585,6 +2619,91 @@ function buildDashboardCallbacks(
       });
       return result;
     },
+
+    // ── Google Workspace ────────────────────────────────────────
+    onGwsStatus: async () => {
+      const status = await getGwsAuthStatus();
+      const gwsConfig = configRef.current.assistant.tools.mcp?.managedProviders?.gws;
+      const services = gwsConfig?.services ?? ['gmail', 'calendar', 'drive'];
+      return {
+        installed: status.installed,
+        version: status.version,
+        authenticated: status.authenticated,
+        authMethod: status.authMethod,
+        services: gwsConfig?.enabled ? services : [],
+        enabled: gwsConfig?.enabled ?? false,
+      };
+    },
+
+    onGwsLogin: async (services) => {
+      const bin = resolveGwsBinary();
+      const loginArgs = ['auth', 'login'];
+      if (services?.length) {
+        loginArgs.push('-s', services.join(','));
+      }
+      try {
+        await execFileAsync(bin, loginArgs, { timeout: 120_000 });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { success: false, message: `Google login failed: ${message}` };
+      }
+
+      // Verify auth succeeded
+      const status = await getGwsAuthStatus();
+      if (!status.authenticated) {
+        return { success: false, message: 'Login completed but authentication could not be verified.' };
+      }
+
+      // Auto-enable the managed provider in config
+      const gwsConfig = configRef.current.assistant.tools.mcp?.managedProviders?.gws;
+      if (!gwsConfig?.enabled) {
+        const rawConfig = loadRawConfig();
+        const assistant = (rawConfig.assistant ?? {}) as Record<string, unknown>;
+        const tools = (assistant.tools ?? {}) as Record<string, unknown>;
+        const mcp = (tools.mcp ?? {}) as Record<string, unknown>;
+        const managedProviders = (mcp.managedProviders ?? {}) as Record<string, unknown>;
+        const gwsRaw = (managedProviders.gws ?? {}) as Record<string, unknown>;
+        gwsRaw.enabled = true;
+        if (!gwsRaw.services) {
+          gwsRaw.services = services ?? ['gmail', 'calendar', 'drive'];
+        }
+        managedProviders.gws = gwsRaw;
+        mcp.managedProviders = managedProviders;
+        tools.mcp = mcp;
+        assistant.tools = tools;
+        rawConfig.assistant = assistant;
+        persistAndApplyConfig(rawConfig, { changedBy: 'gws-login', reason: 'Auto-enabled Google Workspace after successful login' });
+      }
+
+      return { success: true, message: `Google Workspace connected (${status.authMethod}). Provider enabled.` };
+    },
+
+    onGwsLogout: async () => {
+      const bin = resolveGwsBinary();
+      try {
+        await execFileAsync(bin, ['auth', 'logout'], { timeout: 10_000 });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { success: false, message: `Logout failed: ${message}` };
+      }
+
+      // Disable the managed provider in config
+      const rawConfig = loadRawConfig();
+      const assistant = (rawConfig.assistant ?? {}) as Record<string, unknown>;
+      const tools = (assistant.tools ?? {}) as Record<string, unknown>;
+      const mcp = (tools.mcp ?? {}) as Record<string, unknown>;
+      const managedProviders = (mcp.managedProviders ?? {}) as Record<string, unknown>;
+      const gwsRaw = (managedProviders.gws ?? {}) as Record<string, unknown>;
+      gwsRaw.enabled = false;
+      managedProviders.gws = gwsRaw;
+      mcp.managedProviders = managedProviders;
+      tools.mcp = mcp;
+      assistant.tools = tools;
+      rawConfig.assistant = assistant;
+      persistAndApplyConfig(rawConfig, { changedBy: 'gws-logout', reason: 'Disabled Google Workspace after logout' });
+
+      return { success: true, message: 'Google Workspace credentials cleared and provider disabled.' };
+    },
   };
 }
 
@@ -3583,6 +3702,68 @@ async function main(): Promise<void> {
   dashboardCallbacks.onScheduledTaskPresets = () => scheduledTasks.getPresets();
   dashboardCallbacks.onScheduledTaskInstallPreset = (presetId) => scheduledTasks.installPreset(presetId);
   dashboardCallbacks.onScheduledTaskHistory = () => scheduledTasks.getHistory();
+
+  toolExecutor.setAutomationControlPlane({
+    listWorkflows: () => connectors.getState().playbooks.map((workflow) => ({
+      id: workflow.id,
+      name: workflow.name,
+      enabled: workflow.enabled,
+      mode: workflow.mode,
+      description: workflow.description,
+      schedule: workflow.schedule,
+      steps: workflow.steps.map((step) => ({ ...step })),
+    })),
+    upsertWorkflow: (workflow) => {
+      if (!dashboardCallbacks.onPlaybookUpsert) {
+        return { success: false, message: 'Workflow control plane is not available.' };
+      }
+      return dashboardCallbacks.onPlaybookUpsert(workflow as unknown as Parameters<NonNullable<DashboardCallbacks['onPlaybookUpsert']>>[0]);
+    },
+    deleteWorkflow: (workflowId) => {
+      if (!dashboardCallbacks.onPlaybookDelete) {
+        return { success: false, message: 'Workflow control plane is not available.' };
+      }
+      return dashboardCallbacks.onPlaybookDelete(workflowId);
+    },
+    runWorkflow: async (input) => {
+      if (!dashboardCallbacks.onPlaybookRun) {
+        return { success: false, message: 'Workflow control plane is not available.', status: 'error' };
+      }
+      return dashboardCallbacks.onPlaybookRun({
+        playbookId: input.workflowId,
+        dryRun: input.dryRun,
+        origin: input.origin,
+        agentId: input.agentId,
+        userId: input.userId,
+        channel: input.channel,
+        requestedBy: input.requestedBy,
+      });
+    },
+    listTasks: () => scheduledTasks.list(),
+    createTask: (input) => {
+      if (!dashboardCallbacks.onScheduledTaskCreate) {
+        return { success: false, message: 'Task control plane is not available.' };
+      }
+      return dashboardCallbacks.onScheduledTaskCreate(
+        input as unknown as Parameters<NonNullable<DashboardCallbacks['onScheduledTaskCreate']>>[0],
+      );
+    },
+    updateTask: (id, input) => {
+      if (!dashboardCallbacks.onScheduledTaskUpdate) {
+        return { success: false, message: 'Task control plane is not available.' };
+      }
+      return dashboardCallbacks.onScheduledTaskUpdate(
+        id,
+        input as unknown as Parameters<NonNullable<DashboardCallbacks['onScheduledTaskUpdate']>>[1],
+      );
+    },
+    deleteTask: (id) => {
+      if (!dashboardCallbacks.onScheduledTaskDelete) {
+        return { success: false, message: 'Task control plane is not available.' };
+      }
+      return dashboardCallbacks.onScheduledTaskDelete(id);
+    },
+  });
 
   // ─── QMD Search callbacks ──────────────────────────────
   if (qmdSearch) {

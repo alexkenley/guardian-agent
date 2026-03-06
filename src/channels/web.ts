@@ -1306,7 +1306,8 @@ export class WebChannel implements ChannelAdapter {
           const result = await this.dashboard.onAuditVerifyChain();
           sendJSON(res, 200, result);
         } catch (err) {
-          sendJSON(res, 500, { error: err instanceof Error ? err.message : String(err) });
+          logInternalError('Audit verification failed', err);
+          sendJSON(res, 500, { error: 'Audit verification failed' });
         }
         return;
       }
@@ -1411,8 +1412,8 @@ export class WebChannel implements ChannelAdapter {
           const result = await this.dashboard.onConfigUpdate(parsed as Record<string, unknown>);
           sendJSON(res, 200, result);
         } catch (err) {
-          const message = err instanceof Error ? err.message : 'Update failed';
-          sendJSON(res, 500, { error: message });
+          logInternalError('Config update failed', err);
+          sendJSON(res, 500, { error: 'Update failed' });
         }
         return;
       }
@@ -1472,8 +1473,8 @@ export class WebChannel implements ChannelAdapter {
           const result = await this.dashboard.onSearchConfigUpdate(parsed as Parameters<NonNullable<DashboardCallbacks['onSearchConfigUpdate']>>[0]);
           sendJSON(res, 200, result);
         } catch (err) {
-          const message = err instanceof Error ? err.message : 'Update failed';
-          sendJSON(res, 500, { error: message });
+          logInternalError('Search config update failed', err);
+          sendJSON(res, 500, { error: 'Update failed' });
         }
         return;
       }
@@ -1872,8 +1873,8 @@ export class WebChannel implements ChannelAdapter {
           );
           sendJSON(res, 200, result);
         } catch (err) {
-          const message = err instanceof Error ? err.message : 'Stream dispatch error';
-          sendJSON(res, 500, { error: message });
+          logInternalError('Stream dispatch failed', err);
+          sendJSON(res, 500, { error: 'Stream dispatch error' });
         }
         return;
       }
@@ -1913,8 +1914,8 @@ export class WebChannel implements ChannelAdapter {
             });
             sendJSON(res, 200, response);
           } catch (err) {
-            const message = err instanceof Error ? err.message : 'Dispatch error';
-            sendJSON(res, 500, { error: message });
+            logInternalError('Message dispatch failed', err);
+            sendJSON(res, 500, { error: 'Dispatch error' });
           }
           return;
         }
@@ -1975,8 +1976,8 @@ export class WebChannel implements ChannelAdapter {
           });
           sendJSON(res, 200, result);
         } catch (err) {
-          const message = err instanceof Error ? err.message : 'Reset failed';
-          sendJSON(res, 500, { error: message });
+          logInternalError('Conversation reset failed', err);
+          sendJSON(res, 500, { error: 'Reset failed' });
         }
         return;
       }
@@ -2076,8 +2077,8 @@ export class WebChannel implements ChannelAdapter {
           });
           sendJSON(res, 200, result);
         } catch (err) {
-          const message = err instanceof Error ? err.message : 'Quick action failed';
-          sendJSON(res, 500, { error: message });
+          logInternalError('Quick action failed', err);
+          sendJSON(res, 500, { error: 'Quick action failed' });
         }
         return;
       }
@@ -2382,6 +2383,46 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // GET /api/gws/status — Google Workspace connection status
+      if (req.method === 'GET' && url.pathname === '/api/gws/status') {
+        if (!this.dashboard.onGwsStatus) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, await this.dashboard.onGwsStatus());
+        return;
+      }
+
+      // POST /api/gws/login — Start Google Workspace OAuth login
+      if (req.method === 'POST' && url.pathname === '/api/gws/login') {
+        if (!this.dashboard.onGwsLogin) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let services: string[] | undefined;
+        try {
+          const body = await readBody(req, this.maxBodyBytes);
+          if (body.trim()) {
+            const parsed = JSON.parse(body) as { services?: string[] };
+            services = parsed.services;
+          }
+        } catch {
+          // No body — use defaults
+        }
+        sendJSON(res, 200, await this.dashboard.onGwsLogin(services));
+        return;
+      }
+
+      // POST /api/gws/logout — Clear Google Workspace credentials
+      if (req.method === 'POST' && url.pathname === '/api/gws/logout') {
+        if (!this.dashboard.onGwsLogout) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, await this.dashboard.onGwsLogout());
+        return;
+      }
+
       // POST /api/factory-reset — Bulk reset data, config, or both
       if (req.method === 'POST' && url.pathname === '/api/factory-reset') {
         if (!this.dashboard.onFactoryReset) {
@@ -2522,6 +2563,10 @@ export class WebChannel implements ChannelAdapter {
       return false;
     }
   }
+}
+
+function logInternalError(message: string, err: unknown): void {
+  log.error({ err }, message);
 }
 
 function sendJSON(res: ServerResponse, status: number, data: unknown): void {

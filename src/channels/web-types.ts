@@ -559,6 +559,18 @@ export interface DashboardCallbacks {
   onQMDSourceRemove?: (id: string) => { success: boolean; message: string };
   onQMDSourceToggle?: (id: string, enabled: boolean) => { success: boolean; message: string };
   onQMDReindex?: (collection?: string) => Promise<{ success: boolean; message: string }>;
+  onGwsStatus?: () => Promise<GwsConnectionStatus>;
+  onGwsLogin?: (services?: string[]) => Promise<{ success: boolean; message: string }>;
+  onGwsLogout?: () => Promise<{ success: boolean; message: string }>;
+}
+
+export interface GwsConnectionStatus {
+  installed: boolean;
+  version?: string;
+  authenticated: boolean;
+  authMethod?: string;
+  services: string[];
+  enabled: boolean;
 }
 
 /** Fields that can be updated via POST /api/config. */

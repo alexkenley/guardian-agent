@@ -307,7 +307,10 @@ async function renderToolsTab(panel) {
   panel.innerHTML = '<div class="loading">Loading...</div>';
 
   try {
-    const state = await api.toolsState(80);
+    const [state, gwsStatus] = await Promise.all([
+      api.toolsState(80),
+      api.gwsStatus().catch(() => null),
+    ]);
     const tools = state.tools || [];
     const approvals = state.approvals || [];
     const jobs = state.jobs || [];
@@ -370,6 +373,49 @@ async function renderToolsTab(panel) {
             `).join('')}
           </tbody>
         </table>
+      </div>
+      ` : ''}
+
+      ${gwsStatus ? `
+      <div class="table-container">
+        <div class="table-header">
+          <h3>Google Workspace</h3>
+          <span class="cfg-header-note">Gmail, Calendar, Drive, Docs, Sheets</span>
+        </div>
+        <div style="padding:0.75rem 1rem;">
+          <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;">
+            <div style="font-size:0.75rem;">
+              <span style="color:var(--text-secondary);">Status:</span>
+              ${gwsStatus.authenticated
+                ? `<span class="badge badge-running">Connected</span>`
+                : `<span class="badge badge-errored">Not connected</span>`}
+            </div>
+            ${gwsStatus.authenticated && gwsStatus.authMethod ? `
+              <div style="font-size:0.75rem;">
+                <span style="color:var(--text-secondary);">Auth:</span>
+                <span style="color:var(--text-primary);">${esc(gwsStatus.authMethod)}</span>
+              </div>
+            ` : ''}
+            ${gwsStatus.services.length > 0 ? `
+              <div style="font-size:0.75rem;">
+                <span style="color:var(--text-secondary);">Services:</span>
+                <span style="color:var(--text-primary);">${gwsStatus.services.map(s => esc(s)).join(', ')}</span>
+              </div>
+            ` : ''}
+            ${!gwsStatus.installed ? `
+              <div style="font-size:0.72rem;color:var(--text-muted);">Google Workspace CLI not found.</div>
+            ` : ''}
+          </div>
+          ${gwsStatus.installed ? `
+          <div style="margin-top:0.75rem;display:flex;gap:0.5rem;">
+            ${!gwsStatus.authenticated ? `
+              <button class="btn btn-secondary" id="gws-login" style="font-size:0.75rem;padding:0.35rem 0.65rem;">Connect Google Account</button>
+            ` : `
+              <button class="btn btn-secondary" id="gws-logout" style="font-size:0.75rem;padding:0.35rem 0.65rem;">Disconnect</button>
+            `}
+          </div>
+          ` : ''}
+        </div>
       </div>
       ` : ''}
 
@@ -444,6 +490,40 @@ async function renderToolsTab(panel) {
     `;
 
     panel.querySelector('#tools-refresh')?.addEventListener('click', () => renderToolsTab(panel));
+
+    panel.querySelector('#gws-login')?.addEventListener('click', async () => {
+      const btn = panel.querySelector('#gws-login');
+      btn.disabled = true;
+      btn.textContent = 'Connecting...';
+      try {
+        const result = await api.gwsLogin();
+        if (result.success) {
+          await renderToolsTab(panel);
+        } else {
+          alert(result.message || 'Google login failed.');
+          btn.disabled = false;
+          btn.textContent = 'Connect Google Account';
+        }
+      } catch (err) {
+        alert(err.message || 'Google login failed.');
+        btn.disabled = false;
+        btn.textContent = 'Connect Google Account';
+      }
+    });
+
+    panel.querySelector('#gws-logout')?.addEventListener('click', async () => {
+      if (!confirm('Disconnect Google Workspace? This will clear saved credentials.')) return;
+      try {
+        const result = await api.gwsLogout();
+        if (result.success) {
+          await renderToolsTab(panel);
+        } else {
+          alert(result.message || 'Logout failed.');
+        }
+      } catch (err) {
+        alert(err.message || 'Logout failed.');
+      }
+    });
 
     panel.querySelectorAll('.category-toggle').forEach(toggle => {
       toggle.addEventListener('change', async () => {

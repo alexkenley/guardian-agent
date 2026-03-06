@@ -309,4 +309,13 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(collection ? { collection } : {}),
   }),
+
+  gwsStatus: () => request('/api/gws/status'),
+  gwsLogin: (services) => request('/api/gws/login', {
+    method: 'POST',
+    body: JSON.stringify(services ? { services } : {}),
+  }),
+  gwsLogout: () => request('/api/gws/logout', {
+    method: 'POST',
+  }),
 };
