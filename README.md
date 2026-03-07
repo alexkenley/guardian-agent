@@ -231,6 +231,10 @@ assistant:
     sandbox:
       enabled: true
       enforcementMode: strict
+    deferredLoading:
+      enabled: true
+      alwaysLoaded: [tool_search, web_search, fs_read, shell_safe, memory_search]
+    contextBudget: 80000              # max approximate tokens for tool results in context
     toolPolicies:
       forum_post: deny
     qmd:
@@ -311,6 +315,8 @@ guardian:
   auditLog:
     maxEvents: 10000
 ```
+
+**Prompt caching**: When using the Anthropic provider, system prompts are automatically cached using Anthropic's prompt caching feature (`cache_control: ephemeral`), reducing costs on multi-turn conversations.
 
 By default, GuardianAgent keeps tool sandboxing in `strict` mode. If a host cannot provide strong subprocess isolation, risky tool classes stay blocked until you either run on Linux/Unix with bubblewrap, or use the Windows portable app that bundles `guardian-sandbox-win.exe`. Switching to `assistant.tools.sandbox.enforcementMode: permissive` is an explicit opt-in to higher host risk.
 

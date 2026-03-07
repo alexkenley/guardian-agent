@@ -53,6 +53,15 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 - `GuardedLLMProvider` wraps raw providers to scan all LLM responses for secrets
 - `CircuitBreaker` + `ModelFallbackChain` + `FailoverProvider` for resilience
 - Ollama uses OpenAI-compatible `/v1/chat/completions` + native `/api/tags`
+- **Prompt Caching**: Anthropic provider sends system prompt with `cache_control: { type: 'ephemeral' }` for automatic prompt caching
+
+### Tool Performance
+- **Deferred Loading**: Only 5 always-loaded tools sent to LLM (`tool_search`, `web_search`, `fs_read`, `shell_safe`, `memory_search`). All other 70+ tools discovered via `tool_search` meta-tool.
+- **Parallel Execution**: Multiple tool calls per LLM response executed concurrently via `Promise.allSettled()`
+- **Short Descriptions**: `ToolDefinition.shortDescription` field used for LLM context to reduce token usage
+- **Tool Examples**: `ToolDefinition.examples` field provides usage patterns for complex tools
+- **Per-Tool Result Compaction**: Tool-specific formatters in `compactToolOutputForLLM()` for fs_read, fs_search, shell_safe, web_fetch, net_arp_scan
+- **Context Budget**: Configurable token limit (`contextBudget`, default 80K) auto-compacts oldest tool results at 80%
 
 ### Guardian Security System
 - **Admission Controller Pipeline**: Composable controllers run in order (mutating → validating)

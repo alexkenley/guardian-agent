@@ -45,7 +45,10 @@ export class AnthropicProvider implements LLMProvider {
     };
 
     if (systemPrompt) {
-      params.system = systemPrompt;
+      // Prompt caching: mark system prompt as ephemeral for Anthropic cache
+      params.system = [
+        { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
+      ] as Anthropic.TextBlockParam[];
     }
 
     if (options?.tools?.length) {
@@ -78,13 +81,16 @@ export class AnthropicProvider implements LLMProvider {
       }
     }
 
+    const usage = response.usage as { input_tokens: number; output_tokens: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number };
     return {
       content,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       usage: {
-        promptTokens: response.usage.input_tokens,
-        completionTokens: response.usage.output_tokens,
-        totalTokens: response.usage.input_tokens + response.usage.output_tokens,
+        promptTokens: usage.input_tokens,
+        completionTokens: usage.output_tokens,
+        totalTokens: usage.input_tokens + usage.output_tokens,
+        cacheCreationTokens: usage.cache_creation_input_tokens,
+        cacheReadTokens: usage.cache_read_input_tokens,
       },
       model: response.model,
       finishReason: response.stop_reason === 'tool_use' ? 'tool_calls' : 'stop',
@@ -103,7 +109,9 @@ export class AnthropicProvider implements LLMProvider {
     };
 
     if (systemPrompt) {
-      params.system = systemPrompt;
+      params.system = [
+        { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
+      ] as Anthropic.TextBlockParam[];
     }
 
     let stream: ReturnType<Anthropic['messages']['stream']>;
