@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { PassThrough } from 'node:stream';
 import { join } from 'node:path';
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { CLIChannel } from './cli.js';
 import type { AgentInfo, RuntimeStatus } from './cli.js';
 import { WebChannel } from './web.js';
@@ -176,6 +176,44 @@ describe('CLIChannel', () => {
     expect(text).toContain('foobar');
 
     await cli.stop();
+  });
+
+  it('should load only slash commands into CLI history with most recent first', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const historyDir = join('/tmp', `guardian-cli-history-${randomUUID()}`);
+    const historyPath = join(historyDir, 'cli-history');
+    mkdirSync(historyDir, { recursive: true });
+    writeFileSync(historyPath, 'hello world\n/status\n/help\nplain text\n/agents\n');
+
+    const cli = new CLIChannel({ input, output, historyPath, historyEnabled: true });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    const history = ((cli as unknown as { rl?: { history?: string[] } }).rl?.history) ?? [];
+    expect(history).toEqual(['/agents', '/help', '/status']);
+
+    await cli.stop();
+    rmSync(historyDir, { recursive: true, force: true });
+  });
+
+  it('should persist only slash commands to CLI history', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const historyDir = join('/tmp', `guardian-cli-history-${randomUUID()}`);
+    const historyPath = join(historyDir, 'cli-history');
+
+    const cli = new CLIChannel({ input, output, historyPath, historyEnabled: true });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    input.write('hello world\n');
+    input.write('/status\n');
+    await new Promise(r => setTimeout(r, 50));
+
+    const saved = readFileSync(historyPath, 'utf-8');
+    expect(saved).toBe('/status\n');
+
+    await cli.stop();
+    rmSync(historyDir, { recursive: true, force: true });
   });
 });
 
@@ -1614,6 +1652,40 @@ describe('WebChannel', () => {
       await web.start(async () => ({ content: 'ok' }));
 
       const res = await fetch('http://localhost:18933/health');
+      expect(res.status).toBe(200);
+    });
+
+    it('should rate limit repeated auth failures', async () => {
+      web = new WebChannel({ port: 18965, authToken: 'secret-token-123' });
+      await web.start(async () => ({ content: 'ok' }));
+
+      let lastResponse: Response | null = null;
+      for (let i = 0; i < 10; i++) {
+        lastResponse = await fetch('http://localhost:18965/api/status', {
+          headers: { Authorization: `Bearer wrong-token-${i}` },
+        });
+      }
+
+      expect(lastResponse).not.toBeNull();
+      expect(lastResponse!.status).toBe(429);
+      expect(lastResponse!.headers.get('retry-after')).not.toBeNull();
+      const body = await lastResponse!.json() as { error: string };
+      expect(body.error).toBe('Too many authentication failures. Try again later.');
+    });
+
+    it('should still accept a valid token after previous auth failures', async () => {
+      web = new WebChannel({ port: 18966, authToken: 'secret-token-123' });
+      await web.start(async () => ({ content: 'ok' }));
+
+      for (let i = 0; i < 10; i++) {
+        await fetch('http://localhost:18966/api/status', {
+          headers: { Authorization: `Bearer wrong-token-${i}` },
+        });
+      }
+
+      const res = await fetch('http://localhost:18966/api/status', {
+        headers: { Authorization: 'Bearer secret-token-123' },
+      });
       expect(res.status).toBe(200);
     });
   });

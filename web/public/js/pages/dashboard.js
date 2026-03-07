@@ -58,6 +58,23 @@ export async function renderDashboard(container) {
       readiness?.ready ? 'success' : 'warning',
     );
 
+    // Make cards clickable with navigation targets
+    const clickableCards = [
+      { card: cards.agents, action: () => agentTableEl?.scrollIntoView({ behavior: 'smooth' }) },
+      { card: cards.guardian, action: () => { window.location.hash = '#/security'; } },
+      { card: cards.llm, action: () => { window.location.hash = '#/config?tab=providers'; } },
+      { card: cards.readiness, action: () => { window.location.hash = '#/config?tab=settings'; } },
+    ];
+    for (const { card, action } of clickableCards) {
+      card.classList.add('status-card-link');
+      card.setAttribute('role', 'button');
+      card.setAttribute('tabindex', '0');
+      card.addEventListener('click', action);
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); action(); }
+      });
+    }
+
     grid.append(cards.runtime, cards.agents, cards.guardian, cards.llm, cards.readiness);
     container.appendChild(grid);
 
@@ -158,18 +175,35 @@ async function renderAssistantState(section) {
     // Assistant cards
     const aCards = document.createElement('div');
     aCards.className = 'cards-grid';
-    aCards.append(
-      createMiniCard('Sessions', String(summary.sessionCount), `${summary.runningCount} running / ${summary.queuedCount} queued`, 'info'),
-      createMiniCard('Throughput', `${summary.completedRequests}/${summary.totalRequests}`, `${summary.failedRequests} failed`, summary.failedRequests > 0 ? 'warning' : 'success'),
-      createMiniCard('Latency (E2E)', `${summary.avgEndToEndMs}ms`, 'Queue + execution avg', 'accent'),
-      createMiniCard('Jobs', `${jobs.summary.running} running`, `${jobs.summary.failed} failed / ${jobs.summary.total} tracked`, jobs.summary.failed > 0 ? 'warning' : 'success'),
-    );
+    const sessionsCard = createMiniCard('Sessions', String(summary.sessionCount), `${summary.runningCount} running / ${summary.queuedCount} queued`, 'info');
+    const throughputCard = createMiniCard('Throughput', `${summary.completedRequests}/${summary.totalRequests}`, `${summary.failedRequests} failed`, summary.failedRequests > 0 ? 'warning' : 'success');
+    const latencyCard = createMiniCard('Latency (E2E)', `${summary.avgEndToEndMs}ms`, 'Queue + execution avg', 'accent');
+    const jobsCard = createMiniCard('Jobs', `${jobs.summary.running} running`, `${jobs.summary.failed} failed / ${jobs.summary.total} tracked`, jobs.summary.failed > 0 ? 'warning' : 'success');
+
+    const scrollTo = (id) => () => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
+    for (const card of [sessionsCard, throughputCard, latencyCard]) {
+      card.classList.add('status-card-link');
+      card.setAttribute('role', 'button');
+      card.setAttribute('tabindex', '0');
+      const action = scrollTo('dashboard-session-queue');
+      card.addEventListener('click', action);
+      card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); action(); } });
+    }
+    jobsCard.classList.add('status-card-link');
+    jobsCard.setAttribute('role', 'button');
+    jobsCard.setAttribute('tabindex', '0');
+    const jobAction = scrollTo('dashboard-background-jobs');
+    jobsCard.addEventListener('click', jobAction);
+    jobsCard.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jobAction(); } });
+
+    aCards.append(sessionsCard, throughputCard, latencyCard, jobsCard);
     section.appendChild(aCards);
 
     // Session Queue table
     if (sessions.length > 0) {
       const sessionTable = document.createElement('div');
       sessionTable.className = 'table-container';
+      sessionTable.id = 'dashboard-session-queue';
       sessionTable.innerHTML = `
         <div class="table-header"><h3>Session Queue</h3></div>
         <table>
@@ -197,6 +231,7 @@ async function renderAssistantState(section) {
     if (jobs.jobs.length > 0) {
       const jobTable = document.createElement('div');
       jobTable.className = 'table-container';
+      jobTable.id = 'dashboard-background-jobs';
       jobTable.innerHTML = `
         <div class="table-header"><h3>Background Jobs</h3></div>
         <table>

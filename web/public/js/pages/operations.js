@@ -29,6 +29,25 @@ export async function renderOperations(container) {
     container.innerHTML = `
       <h2 class="page-title">Operations</h2>
 
+      <div class="intel-summary-grid">
+        <div class="status-card info">
+          <div class="card-title">Tasks</div>
+          <div class="card-value">${tasks.length}</div>
+        </div>
+        <div class="status-card success">
+          <div class="card-title">Enabled</div>
+          <div class="card-value">${activeTasks.length}</div>
+        </div>
+        <div class="status-card accent">
+          <div class="card-title">Last Run</div>
+          <div class="card-value" style="font-size:1rem">${lastRun ? formatTime(lastRun) : 'Never'}</div>
+        </div>
+        <div class="status-card warning">
+          <div class="card-title">Total Runs</div>
+          <div class="card-value">${tasks.reduce((sum, task) => sum + (task.runCount || 0), 0)}</div>
+        </div>
+      </div>
+
       <div class="table-container">
         <div class="table-header">
           <h3>Create Task</h3>
@@ -124,25 +143,6 @@ export async function renderOperations(container) {
 
           <input type="hidden" id="ops-edit-id" value="">
           <input type="hidden" id="ops-preset-id" value="">
-        </div>
-      </div>
-
-      <div class="intel-summary-grid">
-        <div class="status-card info">
-          <div class="card-title">Tasks</div>
-          <div class="card-value">${tasks.length}</div>
-        </div>
-        <div class="status-card success">
-          <div class="card-title">Enabled</div>
-          <div class="card-value">${activeTasks.length}</div>
-        </div>
-        <div class="status-card accent">
-          <div class="card-title">Last Run</div>
-          <div class="card-value" style="font-size:1rem">${lastRun ? formatTime(lastRun) : 'Never'}</div>
-        </div>
-        <div class="status-card warning">
-          <div class="card-title">Total Runs</div>
-          <div class="card-value">${tasks.reduce((sum, task) => sum + (task.runCount || 0), 0)}</div>
         </div>
       </div>
 
@@ -296,17 +296,19 @@ function renderOperationRow(row) {
       </td>
       <td>${hasTask ? task.runCount || 0 : 0}</td>
       <td>
+        <div class="ops-action-buttons">
         ${hasTask
           ? `
-            <button class="btn btn-primary ops-run" data-task-id="${escAttr(task.id)}">Run</button>
-            <button class="btn btn-secondary ops-edit-task" data-task-id="${escAttr(task.id)}">Edit</button>
-            <button class="btn btn-secondary ops-delete" data-task-id="${escAttr(task.id)}" data-label="${escAttr(name)}" data-delete-label="${escAttr(deleteLabel)}">${deleteLabel}</button>
+            <button class="btn btn-primary btn-sm ops-run" data-task-id="${escAttr(task.id)}">Run</button>
+            <button class="btn btn-secondary btn-sm ops-edit-task" data-task-id="${escAttr(task.id)}">Edit</button>
+            <button class="btn btn-secondary btn-sm ops-delete" data-task-id="${escAttr(task.id)}" data-label="${escAttr(name)}" data-delete-label="${escAttr(deleteLabel)}">${deleteLabel}</button>
           `
           : `
-            <button class="btn btn-primary ops-enable-preset" data-preset-id="${escAttr(preset.id)}">Enable</button>
-            <button class="btn btn-secondary ops-edit-preset" data-preset-id="${escAttr(preset.id)}">Edit</button>
+            <button class="btn btn-primary btn-sm ops-enable-preset" data-preset-id="${escAttr(preset.id)}">Enable</button>
+            <button class="btn btn-secondary btn-sm ops-edit-preset" data-preset-id="${escAttr(preset.id)}">Edit</button>
           `
         }
+        </div>
       </td>
     </tr>
   `;
@@ -525,6 +527,11 @@ function initializeForm(container, context) {
   });
 
   scheduleKind.addEventListener('change', () => {
+    const mode = scheduleKind.value;
+    const intervalInput = container.querySelector('#ops-interval');
+    const currentInterval = Number(intervalInput.value);
+    if (mode === 'every_minutes' && currentInterval === 2) intervalInput.value = '30';
+    else if (mode === 'every_hours' && currentInterval === 30) intervalInput.value = '2';
     updateScheduleFields(container);
     updateSchedulePreview(container);
   });
@@ -725,6 +732,12 @@ function updateScheduleFields(container) {
   timeField.style.display = mode === 'daily' || mode === 'weekdays' || mode === 'weekly' ? '' : 'none';
   weekdayField.style.display = mode === 'weekly' ? '' : 'none';
   customCronField.style.display = mode === 'custom' ? '' : 'none';
+
+  const intervalLabel = intervalField.querySelector('label');
+  if (intervalLabel) {
+    if (mode === 'every_minutes') intervalLabel.textContent = 'Interval (minutes)';
+    else if (mode === 'every_hours') intervalLabel.textContent = 'Interval (hours)';
+  }
 }
 
 function updateAdvancedFieldVisibility(container) {

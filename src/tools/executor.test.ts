@@ -1119,7 +1119,7 @@ describe('ToolExecutor', () => {
         policyMode: 'autonomous',
       });
       const info = executor.getCategoryInfo();
-      expect(info.length).toBe(13);
+      expect(info.length).toBe(14);
       const names = info.map((c) => c.category);
       expect(names).toContain('filesystem');
       expect(names).toContain('shell');

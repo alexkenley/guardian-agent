@@ -9,7 +9,10 @@ export async function renderWorkflows(container) {
   container.innerHTML = '<h2 class="page-title">Workflows</h2><div class="loading">Loading...</div>';
 
   try {
-    const state = await api.connectorsState(40);
+    const [state, toolsState] = await Promise.all([
+      api.connectorsState(40),
+      api.toolsState(500).catch(() => ({ tools: [] })),
+    ]);
     const summary = state.summary || {};
     const packs = state.packs || [];
     const workflows = state.playbooks || [];
@@ -46,10 +49,72 @@ export async function renderWorkflows(container) {
       <div class="table-container">
         <div class="table-header">
           <h3>Workflow Catalog</h3>
-          <button class="btn btn-secondary" id="workflow-refresh">Refresh</button>
+          <div style="display:flex;gap:0.5rem;">
+            <button class="btn btn-primary" id="workflow-create-toggle">Create Workflow</button>
+            <button class="btn btn-secondary" id="workflow-refresh">Refresh</button>
+          </div>
+        </div>
+        <div class="cfg-center-body" id="workflow-create-form" style="display:none">
+          <div class="cfg-form-grid">
+            <div class="cfg-field">
+              <label>Name</label>
+              <input id="wf-create-name" type="text" placeholder="My Workflow">
+            </div>
+            <div class="cfg-field">
+              <label>ID</label>
+              <input id="wf-create-id" type="text" placeholder="my-workflow">
+            </div>
+            <div class="cfg-field">
+              <label>Mode</label>
+              <select id="wf-create-mode">
+                <option value="sequential">Sequential</option>
+                <option value="parallel">Parallel</option>
+              </select>
+            </div>
+            <div class="cfg-field">
+              <label>Enabled</label>
+              <select id="wf-create-enabled">
+                <option value="false" selected>No</option>
+                <option value="true">Yes</option>
+              </select>
+            </div>
+            <div class="cfg-field">
+              <label>Connector Pack</label>
+              <select id="wf-create-pack">
+                ${packs.map((pack) => `<option value="${escAttr(pack.id)}">${esc(pack.name)}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div class="cfg-field" style="margin-top:0.5rem;">
+            <label>Description</label>
+            <input id="wf-create-description" type="text" placeholder="What this workflow does">
+          </div>
+          <div style="margin-top:0.75rem;">
+            <label style="font-size:0.8rem;color:var(--text-secondary);display:block;margin-bottom:0.35rem;">Steps</label>
+            <div id="wf-step-list"></div>
+            <div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.5rem;">
+              <div class="cfg-field" style="flex:1;margin:0;">
+                <select id="wf-step-tool-select">
+                  <option value="">Select a tool to add...</option>
+                  ${(toolsState?.tools || [])
+                    .slice()
+                    .sort((a, b) => (a.category || '').localeCompare(b.category || '') || a.name.localeCompare(b.name))
+                    .map((tool) => `<option value="${escAttr(tool.name)}">${esc(tool.category ? tool.name + ' (' + tool.category + ')' : tool.name)}</option>`)
+                    .join('')}
+                </select>
+              </div>
+              <button class="btn btn-secondary" id="wf-step-add" type="button">Add Step</button>
+            </div>
+            <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.35rem;">Add tools in the order they should execute. Drag steps to reorder, or use the arrow and remove buttons.</div>
+          </div>
+          <div class="cfg-actions">
+            <button class="btn btn-primary" id="wf-create-save">Create</button>
+            <button class="btn btn-secondary" id="wf-create-cancel">Cancel</button>
+            <span id="wf-create-status" class="cfg-save-status"></span>
+          </div>
         </div>
         <table>
-          <thead><tr><th>ID</th><th>Name</th><th>Mode</th><th>Steps</th><th>Status</th><th>Actions</th></tr></thead>
+          <thead><tr><th>ID</th><th>Name</th><th>Mode</th><th>Steps</th><th title="Disabled workflows cannot be executed via the assistant, scheduled tasks, or manual runs">Status</th><th>Actions</th></tr></thead>
           <tbody>
             ${workflows.length === 0
               ? '<tr><td colspan="6">No workflows configured.</td></tr>'
@@ -62,12 +127,22 @@ export async function renderWorkflows(container) {
                   </td>
                   <td>${esc(workflow.mode)}</td>
                   <td>${Number(workflow.steps?.length || 0)}</td>
-                  <td><span class="badge ${workflow.enabled ? 'badge-ready' : 'badge-dead'}">${workflow.enabled ? 'Enabled' : 'Disabled'}</span></td>
                   <td>
-                    <button class="btn btn-primary workflow-run" data-workflow-id="${escAttr(workflow.id)}">Run</button>
-                    <button class="btn btn-secondary workflow-dryrun" data-workflow-id="${escAttr(workflow.id)}">Dry Run</button>
-                    <button class="btn btn-secondary workflow-edit" data-workflow-id="${escAttr(workflow.id)}">Edit JSON</button>
-                    <button class="btn btn-secondary workflow-delete" data-workflow-id="${escAttr(workflow.id)}">Delete</button>
+                    <div class="ops-state-cell">
+                      <span class="badge ${workflow.enabled ? 'badge-ready' : 'badge-dead'}">${workflow.enabled ? 'Enabled' : 'Disabled'}</span>
+                      <label class="toggle-switch" style="margin:0;" title="${workflow.enabled ? 'Disable this workflow (prevents execution)' : 'Enable this workflow (allows execution)'}">
+                        <input type="checkbox" class="workflow-toggle" data-workflow-id="${escAttr(workflow.id)}" ${workflow.enabled ? 'checked' : ''}>
+                        <span class="toggle-slider"></span>
+                      </label>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="ops-action-buttons">
+                      <button class="btn btn-primary btn-sm workflow-run" data-workflow-id="${escAttr(workflow.id)}" ${!workflow.enabled ? 'disabled title="Enable workflow first"' : ''}>Run</button>
+                      <button class="btn btn-secondary btn-sm workflow-dryrun" data-workflow-id="${escAttr(workflow.id)}">Dry Run</button>
+                      <button class="btn btn-secondary btn-sm workflow-edit" data-workflow-id="${escAttr(workflow.id)}">Edit JSON</button>
+                      <button class="btn btn-secondary btn-sm workflow-delete" data-workflow-id="${escAttr(workflow.id)}">Delete</button>
+                    </div>
                   </td>
                 </tr>
               `).join('')
@@ -222,7 +297,7 @@ export async function renderWorkflows(container) {
       </div>
     `;
 
-    bindWorkflowEvents(container, { packs, workflows });
+    bindWorkflowEvents(container, { packs, workflows, tools: toolsState?.tools || [] });
     applyInputTooltips(container);
   } catch (err) {
     container.innerHTML = `<h2 class="page-title">Workflows</h2><div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
@@ -230,9 +305,156 @@ export async function renderWorkflows(container) {
 }
 
 function bindWorkflowEvents(container, context) {
-  const { packs, workflows } = context;
+  const { packs, workflows, tools } = context;
 
   container.querySelector('#workflow-refresh')?.addEventListener('click', () => renderWorkflows(container));
+
+  // Create workflow form toggle
+  const createToggle = container.querySelector('#workflow-create-toggle');
+  const createForm = container.querySelector('#workflow-create-form');
+  createToggle?.addEventListener('click', () => {
+    const isOpen = createForm.style.display !== 'none';
+    createForm.style.display = isOpen ? 'none' : '';
+    createToggle.textContent = isOpen ? 'Create Workflow' : 'Close';
+  });
+
+  // Auto-generate ID from name
+  container.querySelector('#wf-create-name')?.addEventListener('input', () => {
+    const name = container.querySelector('#wf-create-name').value;
+    container.querySelector('#wf-create-id').value = name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
+  });
+
+  container.querySelector('#wf-create-cancel')?.addEventListener('click', () => {
+    createForm.style.display = 'none';
+    createToggle.textContent = 'Create Workflow';
+  });
+
+  // Step builder
+  const stepList = container.querySelector('#wf-step-list');
+  const stepToolSelect = container.querySelector('#wf-step-tool-select');
+  const wfSteps = [];
+
+  function renderStepList() {
+    if (wfSteps.length === 0) {
+      stepList.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted);padding:0.5rem 0;">No steps added yet.</div>';
+      return;
+    }
+    stepList.innerHTML = wfSteps.map((step, i) => {
+      const tool = tools.find((t) => t.name === step.toolName);
+      const desc = tool?.description || '';
+      return `
+        <div class="wf-step-row" data-index="${i}">
+          <span class="wf-step-number">${i + 1}</span>
+          <span class="wf-step-name">${esc(step.toolName)}</span>
+          <span class="wf-step-desc">${esc(desc)}</span>
+          <div class="wf-step-actions">
+            <button class="btn btn-secondary btn-sm wf-step-up" data-index="${i}" ${i === 0 ? 'disabled' : ''} title="Move up">&uarr;</button>
+            <button class="btn btn-secondary btn-sm wf-step-down" data-index="${i}" ${i === wfSteps.length - 1 ? 'disabled' : ''} title="Move down">&darr;</button>
+            <button class="btn btn-secondary btn-sm wf-step-remove" data-index="${i}" title="Remove">&times;</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    stepList.querySelectorAll('.wf-step-up').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const idx = Number(btn.dataset.index);
+        if (idx > 0) { [wfSteps[idx - 1], wfSteps[idx]] = [wfSteps[idx], wfSteps[idx - 1]]; renderStepList(); }
+      });
+    });
+    stepList.querySelectorAll('.wf-step-down').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const idx = Number(btn.dataset.index);
+        if (idx < wfSteps.length - 1) { [wfSteps[idx], wfSteps[idx + 1]] = [wfSteps[idx + 1], wfSteps[idx]]; renderStepList(); }
+      });
+    });
+    stepList.querySelectorAll('.wf-step-remove').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        wfSteps.splice(Number(btn.dataset.index), 1);
+        renderStepList();
+      });
+    });
+  }
+
+  renderStepList();
+
+  container.querySelector('#wf-step-add')?.addEventListener('click', () => {
+    const toolName = stepToolSelect.value;
+    if (!toolName) return;
+    const packId = container.querySelector('#wf-create-pack')?.value || packs[0]?.id || 'default';
+    const stepId = `step-${wfSteps.length + 1}`;
+    wfSteps.push({ id: stepId, name: toolName, packId, toolName, args: {} });
+    stepToolSelect.value = '';
+    renderStepList();
+  });
+
+  container.querySelector('#wf-create-save')?.addEventListener('click', async () => {
+    const statusEl = container.querySelector('#wf-create-status');
+    const id = container.querySelector('#wf-create-id').value.trim();
+    const name = container.querySelector('#wf-create-name').value.trim();
+    const mode = container.querySelector('#wf-create-mode').value;
+    const enabled = container.querySelector('#wf-create-enabled').value === 'true';
+    const description = container.querySelector('#wf-create-description').value.trim();
+
+    if (!id || !name) {
+      statusEl.textContent = 'Name and ID are required.';
+      statusEl.style.color = 'var(--error)';
+      return;
+    }
+
+    if (wfSteps.length === 0) {
+      statusEl.textContent = 'Add at least one step.';
+      statusEl.style.color = 'var(--error)';
+      return;
+    }
+
+    statusEl.textContent = 'Saving...';
+    statusEl.style.color = 'var(--text-muted)';
+
+    try {
+      const packId = container.querySelector('#wf-create-pack')?.value || packs[0]?.id || 'default';
+      const steps = wfSteps.map((step, i) => ({
+        ...step,
+        id: `${id}-step-${i + 1}`,
+        packId,
+      }));
+      const result = await api.upsertPlaybook({ id, name, mode, enabled, description, steps });
+      statusEl.textContent = result.message || (result.success ? 'Created.' : 'Failed.');
+      statusEl.style.color = result.success ? 'var(--success)' : 'var(--error)';
+      if (result.success) {
+        setTimeout(() => renderWorkflows(container), 350);
+      }
+    } catch (err) {
+      statusEl.textContent = err.message || String(err);
+      statusEl.style.color = 'var(--error)';
+    }
+  });
+
+  // Workflow enable/disable toggle
+  container.querySelectorAll('.workflow-toggle').forEach((toggle) => {
+    toggle.addEventListener('change', async () => {
+      const workflowId = toggle.getAttribute('data-workflow-id');
+      const workflow = workflows.find((w) => w.id === workflowId);
+      if (!workflow) return;
+      toggle.disabled = true;
+      try {
+        const updated = { ...workflow, enabled: toggle.checked };
+        const result = await api.upsertPlaybook(updated);
+        if (result.success) {
+          await renderWorkflows(container);
+        } else {
+          toggle.checked = !toggle.checked;
+          toggle.disabled = false;
+        }
+      } catch {
+        toggle.checked = !toggle.checked;
+        toggle.disabled = false;
+      }
+    });
+  });
 
   container.querySelectorAll('.workflow-run, .workflow-dryrun').forEach((button) => {
     button.addEventListener('click', async () => {

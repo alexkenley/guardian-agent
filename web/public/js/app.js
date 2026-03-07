@@ -180,8 +180,10 @@ const routes = {
 };
 
 function navigate() {
-  const hash = window.location.hash.slice(1) || '/';
-  const route = routes[hash] || routes['/'];
+  const raw = window.location.hash.slice(1) || '/';
+  const [path, query] = raw.split('?');
+  const params = new URLSearchParams(query || '');
+  const route = routes[path] || routes['/'];
 
   currentPage = route.name;
   setChatContext(currentPage);
@@ -191,8 +193,8 @@ function navigate() {
     item.classList.toggle('active', item.dataset.page === route.name);
   });
 
-  // Render page
-  route.render(content);
+  // Render page, passing options like tab deep-link
+  route.render(content, { tab: params.get('tab') });
 }
 
 function startApp() {

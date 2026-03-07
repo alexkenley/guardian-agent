@@ -158,9 +158,9 @@ const BUILT_IN_PRESETS: ScheduledTaskPreset[] = [
   {
     id: 'full-network-discovery',
     name: 'Full Network Discovery',
-    description: 'Run home-network playbook every 6 hours',
+    description: 'Run network-discovery workflow every 6 hours',
     type: 'playbook',
-    target: 'home-network',
+    target: 'network-discovery',
     cron: '0 */6 * * *',
     emitEvent: 'network_discovery_completed',
   },
@@ -723,7 +723,7 @@ export class ScheduledTaskService {
       presetId: preset.id,
       args: preset.args,
       cron: preset.cron,
-      enabled: true,
+      enabled: false,
       emitEvent: preset.emitEvent,
     });
   }

@@ -77,6 +77,26 @@ export function getReferenceGuide(): ReferenceGuide {
         ],
       },
       {
+        title: 'Connect Google Workspace (Gmail, Calendar, Drive)',
+        items: [
+          'Google Workspace tools use the gws CLI (https://github.com/googleworkspace/cli) — install it globally or from the GitHub releases page',
+          'You need a Google Cloud project with OAuth 2.0 credentials before you can sign in',
+          'Quick path (requires gcloud CLI): install the Google Cloud CLI from https://docs.cloud.google.com/sdk/docs/install-sdk, run "gcloud auth login", then "gws auth setup"',
+          'Manual path (no gcloud needed): go to Google Cloud Console > APIs & Services > Credentials (https://console.cloud.google.com/apis/credentials)',
+          'Manual step 1: Create a project if you don\'t have one (top-left project selector > New Project)',
+          'Manual step 2: Go to Google Auth Platform > Audience (left sidebar). Set user type to External, fill in app name and your email, save',
+          'Manual step 3: On the Audience page, under "Publishing status", click Publish App to move out of Testing mode — otherwise only manually-added test users can authenticate',
+          'Manual step 4: Go to Credentials (left sidebar) > + Create Credentials > OAuth client ID. Set Application type to "Desktop app" (NOT Web application). Name it anything. Click Create',
+          'Manual step 5: Download the client secret JSON from the confirmation dialog. Save it as ~/.config/gws/client_secret.json (Windows: %USERPROFILE%\\.config\\gws\\client_secret.json). Create the folder if needed',
+          'After setting up credentials (either path), run "gws auth login" in your terminal — a browser window opens for Google consent',
+          'If you see "access_denied" or "app not verified": go back to Google Auth Platform > Audience and either Publish the app or add your email under Test Users',
+          'Enable the APIs you need: go to APIs & Services > Library in Cloud Console and enable Gmail API, Google Calendar API, Google Drive API, Google Docs API, Google Sheets API (only enable what you need)',
+          'Enable in Guardian Agent: open Settings > Google Workspace, select services, and click Enable. Restart Guardian Agent for the tools to become available',
+          'Verify setup: Settings > Google Workspace should show CLI Installed, Auth Connected, Integration Enabled',
+          'CLI check: /google status shows connection state from the command line',
+        ],
+      },
+      {
         title: 'Gmail Campaign Automation',
         items: [
           'Set Google OAuth access token in env var GOOGLE_OAUTH_ACCESS_TOKEN (gmail.send scope)',

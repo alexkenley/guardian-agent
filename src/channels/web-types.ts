@@ -560,8 +560,6 @@ export interface DashboardCallbacks {
   onQMDSourceToggle?: (id: string, enabled: boolean) => { success: boolean; message: string };
   onQMDReindex?: (collection?: string) => Promise<{ success: boolean; message: string }>;
   onGwsStatus?: () => Promise<GwsConnectionStatus>;
-  onGwsLogin?: (services?: string[]) => Promise<{ success: boolean; message: string }>;
-  onGwsLogout?: () => Promise<{ success: boolean; message: string }>;
 }
 
 export interface GwsConnectionStatus {
@@ -580,6 +578,7 @@ export interface ConfigUpdate {
     provider?: string;
     model?: string;
     apiKey?: string;
+    credentialRef?: string;
     baseUrl?: string;
   }>;
   channels?: {
@@ -595,6 +594,16 @@ export interface ConfigUpdate {
     tools?: {
       qmd?: {
         enabled?: boolean;
+      };
+      mcp?: {
+        enabled?: boolean;
+        managedProviders?: {
+          gws?: {
+            enabled?: boolean;
+            services?: string[];
+            command?: string;
+          };
+        };
       };
     };
   };

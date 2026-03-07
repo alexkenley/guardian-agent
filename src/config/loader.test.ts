@@ -112,8 +112,56 @@ describe('validateConfig', () => {
     };
     const errors = validateConfig(config);
     expect(errors).toContain(
-      "llm.anthropic.apiKey is required for provider 'anthropic'",
+      "llm.anthropic.apiKey or llm.anthropic.credentialRef is required for provider 'anthropic'",
     );
+  });
+
+  it('should accept credentialRef for non-ollama providers', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      llm: {
+        ...DEFAULT_CONFIG.llm,
+        anthropic: { provider: 'anthropic', model: 'claude-sonnet-4-20250514', credentialRef: 'llm.anthropic.primary' },
+      },
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'llm.anthropic.primary': { source: 'env', env: 'ANTHROPIC_API_KEY' },
+          },
+        },
+      },
+    };
+    const errors = validateConfig(config);
+    expect(errors).toEqual([]);
+  });
+
+  it('should fail when credentialRef points to an unknown ref', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      llm: {
+        ...DEFAULT_CONFIG.llm,
+        anthropic: { provider: 'anthropic', model: 'claude-sonnet-4-20250514', credentialRef: 'missing.ref' },
+      },
+    };
+    const errors = validateConfig(config);
+    expect(errors).toContain("llm.anthropic.credentialRef references unknown credential ref 'missing.ref'");
+  });
+
+  it('should fail when a credential ref has no env name', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            broken: { source: 'env', env: '' },
+          },
+        },
+      },
+    };
+    const errors = validateConfig(config);
+    expect(errors).toContain('assistant.credentials.refs.broken.env is required');
   });
 
   it('should require telegram botToken when enabled', () => {
@@ -144,6 +192,22 @@ describe('validateConfig', () => {
     };
     const errors = validateConfig(config);
     expect(errors).toContain('assistant.soul.summaryMaxChars must be <= assistant.soul.maxChars');
+  });
+
+  it('should reject wildcard web allowedOrigins when web channel is enabled', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      channels: {
+        ...DEFAULT_CONFIG.channels,
+        web: {
+          ...DEFAULT_CONFIG.channels.web,
+          enabled: true,
+          allowedOrigins: ['*'],
+        },
+      },
+    };
+    const errors = validateConfig(config);
+    expect(errors).toContain("channels.web.allowedOrigins must not contain '*' because the web API is auth-protected and served on localhost");
   });
 });
 

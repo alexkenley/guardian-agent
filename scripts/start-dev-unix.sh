@@ -90,7 +90,6 @@ fi
 # Ensure bundled CLI tools are available
 echo -e "${CYAN}    Checking bundled tools...${RESET}"
 node scripts/ensure-qmd.mjs >/dev/null 2>&1 && echo -e "  ${GREEN}QMD: OK${RESET}" || echo -e "  ${DIM}QMD: not available (optional)${RESET}"
-node scripts/ensure-gws.mjs >/dev/null 2>&1 && echo -e "  ${GREEN}GWS: OK${RESET}" || echo -e "  ${DIM}GWS: not available (optional)${RESET}"
 
 if [ "$START_ONLY" = true ]; then
   echo -e "${CYAN}[3/6] Build: SKIPPED (--start-only)${RESET}"

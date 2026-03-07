@@ -11,7 +11,7 @@
 
 import { createInterface, type Interface } from 'node:readline';
 import { readFileSync, appendFileSync, existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { ChannelAdapter, MessageCallback } from './types.js';
@@ -23,8 +23,19 @@ import { formatGuideForCLI } from '../reference-guide.js';
 const log = createLogger('channel:cli');
 
 const HISTORY_DIR = join(homedir(), '.guardianagent');
-const HISTORY_PATH = join(HISTORY_DIR, 'cli-history');
+const HISTORY_PATH = join(HISTORY_DIR, 'cli-history-v2');
 const MAX_HISTORY = 500;
+
+function loadCommandHistory(historyPath: string): string[] {
+  if (!existsSync(historyPath)) return [];
+
+  return readFileSync(historyPath, 'utf-8')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.startsWith('/'))
+    .slice(-MAX_HISTORY)
+    .reverse();
+}
 
 /** Info returned by the legacy /agents callback. */
 export interface AgentInfo {
@@ -72,6 +83,10 @@ export interface CLIChannelOptions {
     authToken?: string;
     warnings?: string[];
   };
+  /** Override history path for testing or custom CLI deployments. */
+  historyPath?: string;
+  /** Enable/disable persistent command history. Defaults to interactive TTY only. */
+  historyEnabled?: boolean;
 }
 
 export class CLIChannel implements ChannelAdapter {
@@ -91,6 +106,8 @@ export class CLIChannel implements ChannelAdapter {
   private version: string;
   private configPath: string;
   private startupStatus?: CLIChannelOptions['startupStatus'];
+  private historyPath: string;
+  private historyEnabled: boolean;
 
   constructor(options: CLIChannelOptions = {}) {
     this.prompt = options.prompt ?? 'you> ';
@@ -105,6 +122,11 @@ export class CLIChannel implements ChannelAdapter {
     this.version = options.version ?? '1.0.0';
     this.configPath = options.configPath ?? '';
     this.startupStatus = options.startupStatus;
+    this.historyPath = options.historyPath ?? HISTORY_PATH;
+    this.historyEnabled = options.historyEnabled ?? (
+      !!(this.input as NodeJS.ReadStream).isTTY
+      && !!(this.output as NodeJS.WriteStream).isTTY
+    );
   }
 
   async start(onMessage: MessageCallback): Promise<void> {
@@ -112,15 +134,12 @@ export class CLIChannel implements ChannelAdapter {
 
     // Load persisted command history for Up/Down arrow recall
     let history: string[] = [];
-    try {
-      if (existsSync(HISTORY_PATH)) {
-        history = readFileSync(HISTORY_PATH, 'utf-8')
-          .split('\n')
-          .filter(Boolean)
-          .slice(-MAX_HISTORY);
+    if (this.historyEnabled) {
+      try {
+        history = loadCommandHistory(this.historyPath);
+      } catch (err) {
+        log.warn({ err }, 'Failed to load CLI history');
       }
-    } catch (err) {
-      log.warn({ err }, 'Failed to load CLI history');
     }
 
     this.rl = createInterface({
@@ -129,6 +148,7 @@ export class CLIChannel implements ChannelAdapter {
       prompt: this.prompt,
       history,
       historySize: MAX_HISTORY,
+      removeHistoryDuplicates: true,
     });
 
     if (this.useColor) {
@@ -145,16 +165,16 @@ export class CLIChannel implements ChannelAdapter {
         return;
       }
 
-      // Persist to history file
-      try {
-        mkdirSync(HISTORY_DIR, { recursive: true });
-        appendFileSync(HISTORY_PATH, trimmed + '\n');
-      } catch (err) {
-        log.warn({ err }, 'Failed to save CLI history');
-      }
-
       // Handle commands
       if (trimmed.startsWith('/')) {
+        if (this.historyEnabled) {
+          try {
+            mkdirSync(dirname(this.historyPath), { recursive: true });
+            appendFileSync(this.historyPath, trimmed + '\n');
+          } catch (err) {
+            log.warn({ err }, 'Failed to save CLI history');
+          }
+        }
         await this.handleCommand(trimmed);
         this.rl?.prompt();
         return;
@@ -1252,7 +1272,7 @@ export class CLIChannel implements ChannelAdapter {
     if (args.length < 2) {
       this.write('\nUsage:\n');
       this.write('  /config set default <provider>\n');
-      this.write('  /config set <provider> model|baseUrl|apiKey <value>\n\n');
+      this.write('  /config set <provider> model|baseUrl|apiKey|credentialRef <value>\n\n');
       return;
     }
 
@@ -1264,20 +1284,26 @@ export class CLIChannel implements ChannelAdapter {
 
     // /config set <provider> <field> <value>
     if (args.length < 3) {
-      this.write('\nUsage: /config set <provider> model|baseUrl|apiKey <value>\n\n');
+      this.write('\nUsage: /config set <provider> model|baseUrl|apiKey|credentialRef <value>\n\n');
       return;
     }
 
     const [provider, field, ...valueParts] = args;
     const value = valueParts.join(' ');
-    const validFields = ['model', 'baseUrl', 'apiKey', 'baseurl', 'apikey'];
+    const validFields = ['model', 'baseUrl', 'apiKey', 'credentialRef', 'baseurl', 'apikey', 'credentialref'];
 
     if (!validFields.includes(field)) {
-      this.write(`\nInvalid field: ${field}. Use model, baseUrl, or apiKey.\n\n`);
+      this.write(`\nInvalid field: ${field}. Use model, baseUrl, apiKey, or credentialRef.\n\n`);
       return;
     }
 
-    const normalizedField = field === 'baseurl' ? 'baseUrl' : field === 'apikey' ? 'apiKey' : field;
+    const normalizedField = field === 'baseurl'
+      ? 'baseUrl'
+      : field === 'apikey'
+        ? 'apiKey'
+        : field === 'credentialref'
+          ? 'credentialRef'
+          : field;
     const result = await this.dashboard.onConfigUpdate({
       llm: { [provider]: { [normalizedField]: value } },
     });
@@ -2982,31 +3008,16 @@ export class CLIChannel implements ChannelAdapter {
       this.write(`  Provider:        ${status.enabled ? this.green('enabled') : this.dim('disabled')}\n`);
       this.write(`  Services:        ${status.services.length ? status.services.join(', ') : this.dim('none')}\n`);
       if (!status.authenticated) {
-        this.write(`\n  Run ${this.cyan('/google login')} to connect your Google account.\n`);
+        this.write(`\n  To connect, run ${this.cyan('gws auth login')} in a terminal.\n`);
+        this.write(`  See ${this.cyan('Settings > Google Workspace')} in the web UI for setup instructions.\n`);
       }
       this.write('\n');
       return;
     }
 
-    if (sub === 'login') {
-      const services = args.length > 1 ? args.slice(1) : undefined;
-      this.write('\nStarting Google Workspace authentication...\n');
-      this.write(this.dim('This will open a browser window for OAuth consent.\n\n'));
-      const result = await this.dashboard.onGwsLogin!(services);
-      this.write(`${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
-      return;
-    }
-
-    if (sub === 'logout') {
-      const result = await this.dashboard.onGwsLogout!();
-      this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
-      return;
-    }
-
-    this.write('\nUsage: /google [status|login|logout]\n');
+    this.write('\nUsage: /google [status]\n');
     this.write('  /google status                  Show connection status\n');
-    this.write('  /google login [services...]     Authenticate with Google (opens browser)\n');
-    this.write('  /google logout                  Clear saved credentials\n\n');
+    this.write(`\n  To authenticate, run ${this.cyan('gws auth login')} directly in a terminal.\n\n`);
   }
 
   // ─── /intel ──────────────────────────────────────────────────

@@ -30,7 +30,6 @@ Run these from the repo root with `npm run <script>`.
 | `test:verbose` | `vitest run --reporter=verbose` | Verbose test output |
 | `test:coverage` | `vitest run --coverage` | Run with v8 coverage |
 | `ensure:qmd` | `node scripts/ensure-qmd.mjs` | Ensure QMD CLI is installed |
-| `ensure:gws` | `node scripts/ensure-gws.mjs` | Ensure Google Workspace CLI is installed |
 | `portable:windows` | PowerShell `make-windows-portable.ps1` | Build Windows portable zip |
 | `package:windows` | PowerShell `build-windows-package.ps1` | Stage Windows app (no zip) |
 | `helper:windows` | PowerShell `build-windows-helper.ps1` | Build Windows sandbox helper (Rust) |
@@ -92,10 +91,10 @@ Document search CLI for hybrid BM25 + vector + LLM re-rank search. Used by `QMDS
 
 Unified CLI for Google Drive, Gmail, Calendar, Sheets, Docs, Chat, and Admin APIs. Runs as an MCP server (`gws mcp -s drive,gmail,calendar`) spawned by GuardianAgent's managed provider system.
 
-- **Ensure script:** `scripts/ensure-gws.mjs`
-- **Binary:** `node_modules/.bin/gws` (or `gws.cmd` on Windows)
+- **Not bundled** — install separately: `npm install -g @googleworkspace/cli`
 - **Config:** `assistant.tools.mcp.managedProviders.gws` in config.yaml
-- **Auth:** Run `gws auth setup` separately to authenticate with Google (credentials stored in OS keyring)
+- **Auth:** Run `gws auth setup` then `gws auth login` in a terminal (requires interactive browser OAuth)
+- **Web UI:** See Settings > Google Workspace for full setup instructions
 
 ---
 

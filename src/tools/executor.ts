@@ -81,6 +81,8 @@ export interface ToolExecutorOptions {
   agentMemoryStore?: AgentMemoryStore;
   /** QMD hybrid search service for document collection search. */
   qmdSearch?: import('../runtime/qmd-search.js').QMDSearchService;
+  /** Google Workspace CLI service for Gmail, Calendar, Drive, Docs, Sheets. */
+  gwsService?: import('../runtime/gws-service.js').GWSService;
   /** Device inventory for network intelligence/baseline tools. */
   deviceInventory?: DeviceInventoryService;
   /** Network baseline and anomaly service. */
@@ -3660,6 +3662,133 @@ export class ToolExecutor {
         } catch (err) {
           return { success: false, error: err instanceof Error ? err.message : String(err) };
         }
+      },
+    );
+
+    // ─── Google Workspace Tools ───────────────────────────
+
+    this.registry.register(
+      {
+        name: 'gws',
+        description:
+          'Execute a Google Workspace API call via the gws CLI. ' +
+          'Supports Gmail, Calendar, Drive, Docs, Sheets, and more. ' +
+          'Examples: gmail users messages list, calendar events list, drive files list. ' +
+          'Use gws_schema to discover available methods and parameters for any service.',
+        risk: 'network',
+        category: 'workspace',
+        parameters: {
+          type: 'object',
+          properties: {
+            service: { type: 'string', description: 'Google Workspace service: gmail, calendar, drive, docs, sheets, etc.' },
+            resource: { type: 'string', description: 'API resource path, e.g. "users messages", "files", "events". Space-separated for nested resources.' },
+            subResource: { type: 'string', description: 'Optional sub-resource (e.g. "attachments").' },
+            method: { type: 'string', description: 'API method: list, get, create, update, delete, send, etc.' },
+            params: { type: 'object', description: 'URL/query parameters as JSON. E.g. {"userId":"me","maxResults":10}' },
+            json: { type: 'object', description: 'Request body as JSON (for POST/PATCH/PUT methods).' },
+            format: { type: 'string', enum: ['json', 'table', 'yaml', 'csv'], description: 'Output format. Default: json.' },
+            pageAll: { type: 'boolean', description: 'Auto-paginate all results.' },
+            pageLimit: { type: 'number', description: 'Max pages when using pageAll.' },
+          },
+          required: ['service', 'resource', 'method'],
+        },
+      },
+      async (args, request) => {
+        const service = requireString(args.service, 'service').toLowerCase();
+        const resource = requireString(args.resource, 'resource');
+        const method = requireString(args.method, 'method');
+
+        // Map to appropriate Guardian action types
+        const isWrite = /\b(create|insert|update|patch|delete|send|remove|modify)\b/i.test(method);
+        const actionType = service === 'gmail' && /send/i.test(method)
+          ? 'send_email'
+          : service === 'gmail'
+            ? (isWrite ? 'draft_email' : 'read_email')
+            : service === 'calendar'
+              ? (isWrite ? 'write_calendar' : 'read_calendar')
+              : service === 'drive'
+                ? (isWrite ? 'write_drive' : 'read_drive')
+                : service === 'docs'
+                  ? (isWrite ? 'write_docs' : 'read_docs')
+                  : service === 'sheets'
+                    ? (isWrite ? 'write_sheets' : 'read_sheets')
+                    : 'mcp_tool';
+
+        this.guardAction(request, actionType, {
+          service,
+          resource,
+          method,
+          provider: 'gws',
+        });
+
+        const gws = this.options.gwsService;
+        if (!gws) {
+          return {
+            success: false,
+            error: 'Google Workspace is not enabled. Enable it in Settings > Google Workspace.',
+          };
+        }
+
+        const result = await gws.execute({
+          service,
+          resource,
+          subResource: args.subResource ? asString(args.subResource) : undefined,
+          method,
+          params: args.params as Record<string, unknown> | undefined,
+          json: args.json as Record<string, unknown> | undefined,
+          format: args.format as 'json' | 'table' | 'yaml' | 'csv' | undefined,
+          pageAll: args.pageAll === true,
+          pageLimit: args.pageLimit ? asNumber(args.pageLimit, 10) : undefined,
+        });
+
+        return {
+          success: result.success,
+          output: result.data,
+          error: result.error,
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'gws_schema',
+        description:
+          'Look up the API schema for a Google Workspace service method. ' +
+          'Returns available parameters, request body fields, and descriptions. ' +
+          'Use this to discover how to call a specific API. ' +
+          'Schema path format: service.resource.method (e.g. "gmail.users.messages.list", "drive.files.get").',
+        risk: 'read_only',
+        category: 'workspace',
+        parameters: {
+          type: 'object',
+          properties: {
+            schemaPath: {
+              type: 'string',
+              description: 'Dotted schema path: service.resource.method (e.g. "gmail.users.messages.list").',
+            },
+          },
+          required: ['schemaPath'],
+        },
+      },
+      async (args, request) => {
+        const schemaPath = requireString(args.schemaPath, 'schemaPath');
+
+        this.guardAction(request, 'read_docs', { path: `gws:schema:${schemaPath}` });
+
+        const gws = this.options.gwsService;
+        if (!gws) {
+          return {
+            success: false,
+            error: 'Google Workspace is not enabled. Enable it in Settings > Google Workspace.',
+          };
+        }
+
+        const result = await gws.schema(schemaPath);
+        return {
+          success: result.success,
+          output: result.data,
+          error: result.error,
+        };
       },
     );
 

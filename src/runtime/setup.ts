@@ -24,6 +24,7 @@ export interface SetupApplyInput {
   providerType?: 'ollama' | 'openai' | 'anthropic';
   model?: string;
   apiKey?: string;
+  credentialRef?: string;
   baseUrl?: string;
   setDefaultProvider?: boolean;
   telegramEnabled?: boolean;
@@ -36,17 +37,26 @@ export interface SetupApplyInput {
   webSearchProvider?: 'auto' | 'perplexity' | 'brave' | 'duckduckgo';
   /** Perplexity API key for synthesized search answers. */
   perplexityApiKey?: string;
+  /** Credential reference for Perplexity search. */
+  perplexityCredentialRef?: string;
   /** OpenRouter API key (Perplexity via proxy — has free tier). */
   openRouterApiKey?: string;
+  /** Credential reference for OpenRouter search. */
+  openRouterCredentialRef?: string;
   /** Brave Search API key. */
   braveApiKey?: string;
+  /** Credential reference for Brave search. */
+  braveCredentialRef?: string;
 }
 
 export interface SearchConfigInput {
   webSearchProvider?: 'auto' | 'perplexity' | 'brave' | 'duckduckgo';
   perplexityApiKey?: string;
+  perplexityCredentialRef?: string;
   openRouterApiKey?: string;
+  openRouterCredentialRef?: string;
   braveApiKey?: string;
+  braveCredentialRef?: string;
   fallbacks?: string[];
 }
 

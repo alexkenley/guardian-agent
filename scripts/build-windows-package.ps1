@@ -129,7 +129,6 @@ try {
   Push-Location $StageRoot
   try {
     node (Join-Path $RepoRoot "scripts/ensure-qmd.mjs")
-    node (Join-Path $RepoRoot "scripts/ensure-gws.mjs")
   } finally {
     Pop-Location
   }

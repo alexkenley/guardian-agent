@@ -135,18 +135,44 @@ export class SecretScanController implements AdmissionController {
     this.scanner = new SecretScanner(additionalPatterns);
   }
 
+  /**
+   * Param field names where email addresses are structurally required.
+   * Only these specific fields get the Email Address exemption — email in
+   * any other param (e.g. body, notes, description) is still flagged.
+   */
+  private static readonly EMAIL_ALLOWED_FIELDS = new Set([
+    'params.to', 'params.from', 'params.cc', 'params.bcc',
+    'params.sender', 'params.recipient', 'params.recipients',
+    'params.attendees', 'params.organizer',
+    'params.replyTo', 'params.reply_to',
+  ]);
+
+  /** Action types where the EMAIL_ALLOWED_FIELDS exemption applies. */
+  private static readonly EMAIL_FIELD_EXEMPT_ACTIONS = new Set([
+    'send_email', 'draft_email', 'read_email',
+    'read_calendar', 'write_calendar',
+    'mcp_tool',
+  ]);
+
   check(action: AgentAction): AdmissionResult | null {
     const stringLeaves: Array<{ path: string; value: string }> = [];
     collectStringLeaves(action.params, 'params', stringLeaves);
+    const canExemptFields = SecretScanController.EMAIL_FIELD_EXEMPT_ACTIONS.has(action.type);
     for (const leaf of stringLeaves) {
       const secrets = this.scanner.scanContent(leaf.value);
       if (secrets.length > 0) {
-        const patterns = [...new Set(secrets.map((secret) => secret.pattern))];
-        return {
-          allowed: false,
-          reason: `Secret detected in ${leaf.path}: ${patterns.join(', ')}`,
-          controller: this.name,
-        };
+        const isAllowedField = canExemptFields && SecretScanController.EMAIL_ALLOWED_FIELDS.has(leaf.path);
+        const filtered = isAllowedField
+          ? secrets.filter((s) => s.pattern !== 'Email Address')
+          : secrets;
+        if (filtered.length > 0) {
+          const patterns = [...new Set(filtered.map((secret) => secret.pattern))];
+          return {
+            allowed: false,
+            reason: `Secret detected in ${leaf.path}: ${patterns.join(', ')}`,
+            controller: this.name,
+          };
+        }
       }
     }
 

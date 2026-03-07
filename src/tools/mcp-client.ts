@@ -161,18 +161,24 @@ export class MCPClient {
         cwd: this.config.cwd,
       });
 
+      // Collect stderr for diagnostic messages on early exit
+      let stderrBuf = '';
+
       this.process.stdout!.on('data', (data: Buffer) => {
         this.handleStdout(data.toString());
       });
 
       this.process.stderr!.on('data', (data: Buffer) => {
-        log.warn({ server: this.config.id, stderr: data.toString().trim() }, 'MCP server stderr');
+        const text = data.toString().trim();
+        if (text) stderrBuf += (stderrBuf ? '\n' : '') + text;
+        log.warn({ server: this.config.id, stderr: text }, 'MCP server stderr');
       });
 
       this.process.on('exit', (code) => {
         log.info({ server: this.config.id, code }, 'MCP server exited');
         this.state = 'disconnected';
-        this.rejectAllPending(new Error(`MCP server exited with code ${code}`));
+        const detail = stderrBuf ? `: ${stderrBuf.slice(0, 500)}` : '';
+        this.rejectAllPending(new Error(`MCP server exited with code ${code}${detail}`));
       });
 
       this.process.on('error', (err) => {

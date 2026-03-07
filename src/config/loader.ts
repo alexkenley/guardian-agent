@@ -78,6 +78,19 @@ export function deepMerge<T>(target: T, source: Partial<T>): T {
 /** Validate required configuration fields. */
 export function validateConfig(config: GuardianAgentConfig): string[] {
   const errors: string[] = [];
+  const credentialRefs = config.assistant.credentials.refs;
+
+  const assertCredentialRef = (value: string | undefined, path: string): void => {
+    if (value === undefined) return;
+    const ref = value.trim();
+    if (!ref) {
+      errors.push(`${path} must be a non-empty string when provided`);
+      return;
+    }
+    if (!credentialRefs[ref]) {
+      errors.push(`${path} references unknown credential ref '${ref}'`);
+    }
+  };
 
   if (!config.defaultProvider) {
     errors.push('defaultProvider is required');
@@ -97,8 +110,9 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     if (!llm.model) {
       errors.push(`llm.${name}.model is required`);
     }
-    if (llm.provider !== 'ollama' && !llm.apiKey) {
-      errors.push(`llm.${name}.apiKey is required for provider '${llm.provider}'`);
+    assertCredentialRef(llm.credentialRef, `llm.${name}.credentialRef`);
+    if (llm.provider !== 'ollama' && !llm.apiKey && !llm.credentialRef) {
+      errors.push(`llm.${name}.apiKey or llm.${name}.credentialRef is required for provider '${llm.provider}'`);
     }
   }
 
@@ -117,8 +131,22 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   if (webAuth?.sessionTtlMinutes !== undefined && webAuth.sessionTtlMinutes < 1) {
     errors.push('channels.web.auth.sessionTtlMinutes must be >= 1');
   }
+  if (config.channels.web?.enabled && config.channels.web.allowedOrigins?.includes('*')) {
+    errors.push("channels.web.allowedOrigins must not contain '*' because the web API is auth-protected and served on localhost");
+  }
 
   const assistant = config.assistant;
+  for (const [name, ref] of Object.entries(credentialRefs)) {
+    if (!name.trim()) {
+      errors.push('assistant.credentials.refs keys must be non-empty');
+    }
+    if (ref.source !== 'env') {
+      errors.push(`assistant.credentials.refs.${name}.source must be 'env'`);
+    }
+    if (!ref.env?.trim()) {
+      errors.push(`assistant.credentials.refs.${name}.env is required`);
+    }
+  }
   if (!assistant.identity.primaryUserId?.trim()) {
     errors.push('assistant.identity.primaryUserId is required');
   }
@@ -188,6 +216,9 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   if (!Array.isArray(assistant.tools.allowedDomains)) {
     errors.push('assistant.tools.allowedDomains must be an array');
   }
+  assertCredentialRef(assistant.tools.webSearch?.braveCredentialRef, 'assistant.tools.webSearch.braveCredentialRef');
+  assertCredentialRef(assistant.tools.webSearch?.perplexityCredentialRef, 'assistant.tools.webSearch.perplexityCredentialRef');
+  assertCredentialRef(assistant.tools.webSearch?.openRouterCredentialRef, 'assistant.tools.webSearch.openRouterCredentialRef');
   const sandbox = assistant.tools.sandbox;
   if (sandbox?.enforcementMode && !['permissive', 'strict'].includes(sandbox.enforcementMode)) {
     errors.push("assistant.tools.sandbox.enforcementMode must be 'permissive' or 'strict'");

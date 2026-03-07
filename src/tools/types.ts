@@ -18,6 +18,7 @@ export type ToolCategory =
   | 'automation'
   | 'contacts'
   | 'email'
+  | 'workspace'
   | 'intel'
   | 'forum'
   | 'network'
@@ -34,6 +35,7 @@ export const TOOL_CATEGORIES: Record<ToolCategory, { label: string; description:
   automation: { label: 'Automation', description: 'Create, update, run, and schedule workflows and recurring tasks.' },
   contacts: { label: 'Contacts', description: 'Discover, import, list contacts and manage marketing campaigns.' },
   email: { label: 'Email', description: 'Send emails via Gmail API and run email campaigns.' },
+  workspace: { label: 'Google Workspace', description: 'Gmail, Calendar, Drive, Docs, and Sheets via the Google Workspace CLI.' },
   intel: { label: 'Threat Intel', description: 'Threat intelligence monitoring, scanning, and response actions.' },
   forum: { label: 'Forum', description: 'Post responses to external forums (approval-gated).' },
   network: { label: 'Network', description: 'Local network diagnostics: ping, ARP, port check, DNS, traceroute.' },
@@ -51,6 +53,7 @@ export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
   automation: ['workflow_list', 'workflow_upsert', 'workflow_delete', 'workflow_run', 'task_list', 'task_create', 'task_update', 'task_delete'],
   contacts: ['contacts_discover_browser', 'contacts_import_csv', 'contacts_list', 'campaign_create', 'campaign_list', 'campaign_add_contacts', 'campaign_dry_run'],
   email: ['gmail_send', 'campaign_run'],
+  workspace: ['gws', 'gws_schema'],
   intel: ['intel_summary', 'intel_watch_add', 'intel_watch_remove', 'intel_scan', 'intel_findings', 'intel_draft_action'],
   forum: ['forum_post'],
   network: [

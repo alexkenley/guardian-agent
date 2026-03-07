@@ -6,7 +6,7 @@
  *
  * Security:
  *   - Required bearer token authentication
- *   - Configurable CORS origins (default: same-origin only)
+ *   - Configurable CORS origins (default: same-origin only; wildcard disallowed by config validation)
  *   - Request body size limit (default: 1 MB)
  *   - Path traversal protection for static files
  */
@@ -27,6 +27,9 @@ const log = createLogger('channel:web');
 const DEFAULT_MAX_BODY_BYTES = 1_048_576;
 const PRIVILEGED_TICKET_TTL_SECONDS = 300;
 const PRIVILEGED_TICKET_MAX_REPLAY_TRACK = 2048;
+const AUTH_FAILURE_WINDOW_MS = 60_000;
+const AUTH_FAILURE_LIMIT = 8;
+const AUTH_BLOCK_DURATION_MS = 5 * 60_000;
 
 /** MIME types for static file serving. */
 const MIME_TYPES: Record<string, string> = {
@@ -71,7 +74,7 @@ export interface WebChannelOptions {
   authToken?: string;
   /** Structured auth configuration. */
   auth?: WebAuthRuntimeConfig;
-  /** Allowed CORS origins (default: none / same-origin). Use ['*'] to allow all (not recommended). */
+  /** Allowed CORS origins (default: none / same-origin). Wildcard origins are rejected by config validation. */
   allowedOrigins?: string[];
   /** Maximum request body size in bytes (default: 1 MB). */
   maxBodyBytes?: number;
@@ -86,6 +89,12 @@ interface CookieSession {
   sessionId: string;
   createdAt: number;
   expiresAt: number;
+}
+
+interface AuthFailureState {
+  count: number;
+  windowStartedAt: number;
+  blockedUntil?: number;
 }
 
 const SESSION_COOKIE_NAME = 'guardianagent_sid';
@@ -111,6 +120,7 @@ export class WebChannel implements ChannelAdapter {
   private readonly privilegedTicketSecret = randomBytes(32);
   private readonly usedPrivilegedTicketNonces = new Map<string, number>();
   private readonly sessions = new Map<string, CookieSession>();
+  private readonly authFailures = new Map<string, AuthFailureState>();
   private sessionCleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: WebChannelOptions = {}) {
@@ -185,6 +195,7 @@ export class WebChannel implements ChannelAdapter {
       this.sessionCleanupTimer = null;
     }
     this.sessions.clear();
+    this.authFailures.clear();
 
     // Close all SSE connections
     for (const client of this.sseClients) {
@@ -226,6 +237,67 @@ export class WebChannel implements ChannelAdapter {
     if (this.allowedOrigins.length === 0) return false;
     if (this.allowedOrigins.includes('*')) return true;
     return this.allowedOrigins.includes(origin);
+  }
+
+  private getClientAddress(req: IncomingMessage): string {
+    const forwarded = req.headers['x-forwarded-for'];
+    if (typeof forwarded === 'string' && forwarded.trim()) {
+      return forwarded.split(',')[0].trim();
+    }
+    return req.socket.remoteAddress ?? 'unknown';
+  }
+
+  private clearAuthFailures(req: IncomingMessage): void {
+    this.authFailures.delete(this.getClientAddress(req));
+  }
+
+  private getAuthBlockRemainingMs(req: IncomingMessage): number {
+    const state = this.authFailures.get(this.getClientAddress(req));
+    const blockedUntil = state?.blockedUntil ?? 0;
+    return Math.max(0, blockedUntil - Date.now());
+  }
+
+  private recordAuthFailure(req: IncomingMessage): number {
+    const key = this.getClientAddress(req);
+    const now = Date.now();
+    const existing = this.authFailures.get(key);
+    let next: AuthFailureState;
+
+    if (!existing || now - existing.windowStartedAt >= AUTH_FAILURE_WINDOW_MS) {
+      next = { count: 1, windowStartedAt: now };
+    } else {
+      next = { ...existing, count: existing.count + 1 };
+    }
+
+    if (next.count >= AUTH_FAILURE_LIMIT) {
+      next.blockedUntil = now + AUTH_BLOCK_DURATION_MS;
+    }
+
+    this.authFailures.set(key, next);
+    return Math.max(0, (next.blockedUntil ?? 0) - now);
+  }
+
+  private sendAuthBlocked(res: ServerResponse, retryAfterMs: number): false {
+    const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+    res.setHeader('Retry-After', String(retryAfterSeconds));
+    sendJSON(res, 429, { error: 'Too many authentication failures. Try again later.' });
+    return false;
+  }
+
+  private rejectAuth(req: IncomingMessage, res: ServerResponse, invalidToken: boolean): false {
+    const remainingMs = this.getAuthBlockRemainingMs(req);
+    if (remainingMs > 0) {
+      return this.sendAuthBlocked(res, remainingMs);
+    }
+
+    const blockMs = this.recordAuthFailure(req);
+    if (blockMs > 0) {
+      log.warn({ client: this.getClientAddress(req) }, 'Web auth temporarily blocked after repeated failures');
+      return this.sendAuthBlocked(res, blockMs);
+    }
+
+    sendJSON(res, invalidToken ? 403 : 401, { error: invalidToken ? 'Invalid token' : 'Authentication required' });
+    return false;
   }
 
   setAuthConfig(auth: WebAuthRuntimeConfig): void {
@@ -317,21 +389,18 @@ export class WebChannel implements ChannelAdapter {
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.slice(7);
       if (timingSafeEqualString(this.authToken, token)) {
+        this.clearAuthFailures(req);
         return true;
       }
     }
 
     // Then try session cookie
     if (this.validateSessionCookie(req)) {
+      this.clearAuthFailures(req);
       return true;
     }
 
-    if (authHeader) {
-      sendJSON(res, 403, { error: 'Invalid token' });
-    } else {
-      sendJSON(res, 401, { error: 'Authentication required' });
-    }
-    return false;
+    return this.rejectAuth(req, res, !!authHeader);
   }
 
   /** Check auth for SSE via bearer header (non-browser clients) or session cookie (browser EventSource). */
@@ -347,13 +416,26 @@ export class WebChannel implements ChannelAdapter {
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.slice(7);
       if (timingSafeEqualString(this.authToken, token)) {
+        this.clearAuthFailures(req);
         return true;
       }
     }
 
     // Browser EventSource path: authenticated cookie session.
     if (this.validateSessionCookie(req)) {
+      this.clearAuthFailures(req);
       return true;
+    }
+
+    const remainingMs = this.getAuthBlockRemainingMs(req);
+    if (remainingMs > 0) {
+      return this.sendAuthBlocked(res, remainingMs);
+    }
+
+    const blockMs = this.recordAuthFailure(req);
+    if (blockMs > 0) {
+      log.warn({ client: this.getClientAddress(req) }, 'Web auth temporarily blocked after repeated SSE failures');
+      return this.sendAuthBlocked(res, blockMs);
     }
 
     if (authHeader) {
@@ -1915,7 +1997,8 @@ export class WebChannel implements ChannelAdapter {
             sendJSON(res, 200, response);
           } catch (err) {
             logInternalError('Message dispatch failed', err);
-            sendJSON(res, 500, { error: 'Dispatch error' });
+            const detail = err instanceof Error ? err.message : String(err);
+            sendJSON(res, 500, { error: `Dispatch error: ${detail}` });
           }
           return;
         }
@@ -2390,36 +2473,6 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
         sendJSON(res, 200, await this.dashboard.onGwsStatus());
-        return;
-      }
-
-      // POST /api/gws/login — Start Google Workspace OAuth login
-      if (req.method === 'POST' && url.pathname === '/api/gws/login') {
-        if (!this.dashboard.onGwsLogin) {
-          sendJSON(res, 404, { error: 'Not available' });
-          return;
-        }
-        let services: string[] | undefined;
-        try {
-          const body = await readBody(req, this.maxBodyBytes);
-          if (body.trim()) {
-            const parsed = JSON.parse(body) as { services?: string[] };
-            services = parsed.services;
-          }
-        } catch {
-          // No body — use defaults
-        }
-        sendJSON(res, 200, await this.dashboard.onGwsLogin(services));
-        return;
-      }
-
-      // POST /api/gws/logout — Clear Google Workspace credentials
-      if (req.method === 'POST' && url.pathname === '/api/gws/logout') {
-        if (!this.dashboard.onGwsLogout) {
-          sendJSON(res, 404, { error: 'Not available' });
-          return;
-        }
-        sendJSON(res, 200, await this.dashboard.onGwsLogout());
         return;
       }
 

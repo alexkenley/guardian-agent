@@ -41,12 +41,30 @@ export interface FailoverConfig {
   resetTimeoutMs: number;
 }
 
+/** Environment-backed credential reference. */
+export interface CredentialRefConfig {
+  /** Credential source type. */
+  source: 'env';
+  /** Environment variable to read when resolving the credential. */
+  env: string;
+  /** Optional human-readable purpose/description for operators. */
+  description?: string;
+}
+
+/** Shared credential reference registry for provider/tool integrations. */
+export interface AssistantCredentialsConfig {
+  /** Named credential references resolved at runtime. */
+  refs: Record<string, CredentialRefConfig>;
+}
+
 /** Configuration for a single LLM provider. */
 export interface LLMConfig {
   /** Provider type: 'ollama' | 'anthropic' | 'openai'. */
   provider: 'ollama' | 'anthropic' | 'openai';
   /** API key (supports ${ENV_VAR} interpolation). */
   apiKey?: string;
+  /** Reference into assistant.credentials.refs (preferred over inline apiKey). */
+  credentialRef?: string;
   /** Base URL for the API. */
   baseUrl?: string;
   /** Default model to use. */
@@ -165,7 +183,7 @@ export interface ChannelsConfig {
       /** Runtime metadata about where the active token came from. */
       tokenSource?: 'config' | 'env' | 'ephemeral';
     };
-    /** Allowed CORS origins (default: none / same-origin). */
+    /** Allowed CORS origins (default: none / same-origin). Wildcard '*' is rejected. */
     allowedOrigins?: string[];
     /** Maximum request body size in bytes (default: 1 MB). */
     maxBodyBytes?: number;
@@ -704,10 +722,16 @@ export interface WebSearchConfig {
   provider?: 'auto' | 'duckduckgo' | 'brave' | 'perplexity';
   /** Brave Search API key (or ${ENV_VAR}). Free tier: 2000 queries/month. Covers both search + free Summarizer API. */
   braveApiKey?: string;
+  /** Credential reference for Brave Search API key. */
+  braveCredentialRef?: string;
   /** Perplexity API key (or ${ENV_VAR}). */
   perplexityApiKey?: string;
+  /** Credential reference for Perplexity API key. */
+  perplexityCredentialRef?: string;
   /** OpenRouter API key — can be used to access Perplexity via OpenRouter (or ${ENV_VAR}). */
   openRouterApiKey?: string;
+  /** Credential reference for OpenRouter API key. */
+  openRouterCredentialRef?: string;
   /** Search result cache TTL in milliseconds (default: 600000 = 10 min). */
   cacheTtlMs?: number;
 }
@@ -748,6 +772,7 @@ export interface AssistantToolsConfig {
 export interface AssistantConfig {
   setup: AssistantSetupConfig;
   identity: AssistantIdentityConfig;
+  credentials: AssistantCredentialsConfig;
   soul: AssistantSoulConfig;
   skills: AssistantSkillsConfig;
   memory: AssistantMemoryConfig;
@@ -847,6 +872,9 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       mode: 'single_user',
       primaryUserId: 'owner',
       aliases: {},
+    },
+    credentials: {
+      refs: {},
     },
     soul: {
       enabled: true,

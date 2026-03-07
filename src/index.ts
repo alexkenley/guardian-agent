@@ -62,6 +62,7 @@ import { detectCapabilities as detectSandboxCapabilities, detectSandboxHealth, D
 import { SkillRegistry } from './skills/registry.js';
 import { SkillResolver } from './skills/resolver.js';
 import type { ResolvedSkill } from './skills/types.js';
+import { resolveRuntimeCredentialView } from './runtime/credentials.js';
 
 const log = createLogger('main');
 
@@ -165,62 +166,40 @@ function formatResolvedSkills(skills: readonly ResolvedSkill[]): string {
   )).join('\n\n');
 }
 
-function buildManagedMCPServers(config: GuardianAgentConfig): Array<MCPServerEntry & { managedProviderId: string }> {
-  const servers: Array<MCPServerEntry & { managedProviderId: string }> = [];
-  const gws = config.assistant.tools.mcp?.managedProviders?.gws;
-  if (gws?.enabled) {
-    const services = (gws.services?.length ? gws.services : ['gmail', 'calendar', 'drive'])
-      .map((value) => value.trim())
-      .filter(Boolean);
-    const args = gws.args?.length ? [...gws.args] : ['mcp'];
-    if (!args.includes('mcp')) {
-      args.unshift('mcp');
-    }
-    if (!args.includes('-s') && !args.includes('--services') && services.length > 0) {
-      args.push('-s', services.join(','));
-    }
-    servers.push({
-      managedProviderId: 'gws',
-      id: 'gws',
-      name: 'Google Workspace CLI',
-      command: gws.command?.trim() || 'gws',
-      args,
-      env: gws.env,
-      cwd: gws.cwd,
-      timeoutMs: gws.timeoutMs,
-    });
-  }
-  return servers;
+function buildManagedMCPServers(_config: GuardianAgentConfig): Array<MCPServerEntry & { managedProviderId: string }> {
+  // GWS is now handled as a direct subprocess tool (GWSService), not via MCP.
+  // This function builds MCP server entries for any other managed providers.
+  return [];
 }
 
 const execFileAsync = promisify(execFileCb);
 
-function resolveGwsBinary(): string {
-  const shimName = process.platform === 'win32' ? 'gws.cmd' : 'gws';
-  const localShim = join(process.cwd(), 'node_modules', '.bin', shimName);
-  if (existsSync(localShim)) return localShim;
-  return 'gws';
-}
-
-async function getGwsAuthStatus(): Promise<{
+/**
+ * Probe the GWS CLI by running `gws --version` and `gws auth status`.
+ * Uses the configured command or falls back to 'gws' on PATH.
+ */
+async function probeGwsCli(config: GuardianAgentConfig): Promise<{
   installed: boolean;
   version?: string;
   authenticated: boolean;
   authMethod?: string;
 }> {
-  const bin = resolveGwsBinary();
+  const command = config.assistant.tools.mcp?.managedProviders?.gws?.command?.trim() || 'gws';
+  const execOpts = { timeout: 5000, shell: true as const };
   try {
-    const { stdout } = await execFileAsync(bin, ['--version'], { timeout: 5000 });
+    const { stdout } = await execFileAsync(command, ['--version'], execOpts);
     const version = stdout.trim();
     try {
-      const { stdout: statusJson } = await execFileAsync(bin, ['auth', 'status'], { timeout: 5000 });
+      const { stdout: statusJson } = await execFileAsync(command, ['auth', 'status'], execOpts);
       const status = JSON.parse(statusJson) as { auth_method?: string; storage?: string };
       const authenticated = !!status.auth_method && status.auth_method !== 'none';
       return { installed: true, version, authenticated, authMethod: authenticated ? status.auth_method : undefined };
-    } catch {
+    } catch (err) {
+      log.debug({ err, command }, 'GWS auth status check failed, reporting as not authenticated');
       return { installed: true, version, authenticated: false };
     }
-  } catch {
+  } catch (err) {
+    log.debug({ err, command }, 'GWS CLI not found or version check failed');
     return { installed: false, authenticated: false };
   }
 }
@@ -1027,9 +1006,9 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
         allowedDomainsCount: config.assistant.tools.allowedDomains.length,
         webSearch: {
           provider: config.assistant.tools.webSearch?.provider ?? 'auto',
-          perplexityConfigured: !!config.assistant.tools.webSearch?.perplexityApiKey,
-          openRouterConfigured: !!config.assistant.tools.webSearch?.openRouterApiKey,
-          braveConfigured: !!config.assistant.tools.webSearch?.braveApiKey,
+          perplexityConfigured: !!(config.assistant.tools.webSearch?.perplexityApiKey || config.assistant.tools.webSearch?.perplexityCredentialRef),
+          openRouterConfigured: !!(config.assistant.tools.webSearch?.openRouterApiKey || config.assistant.tools.webSearch?.openRouterCredentialRef),
+          braveConfigured: !!(config.assistant.tools.webSearch?.braveApiKey || config.assistant.tools.webSearch?.braveCredentialRef),
         },
         qmd: config.assistant.tools.qmd ? {
           enabled: config.assistant.tools.qmd.enabled,
@@ -1085,8 +1064,9 @@ function buildDashboardCallbacks(
 
       // Reload with defaults/env interpolation to maintain canonical runtime config.
       const nextConfig = loadConfig(configPath);
+      const resolvedNextCredentials = resolveRuntimeCredentialView(nextConfig);
       runtime.applyLLMConfiguration({
-        llm: nextConfig.llm,
+        llm: resolvedNextCredentials.resolvedLLM,
         defaultProvider: nextConfig.defaultProvider,
       });
       identity.update(nextConfig.assistant.identity);
@@ -1101,9 +1081,7 @@ function buildDashboardCallbacks(
         },
       });
       runtime.applyShellAllowedCommands(nextConfig.assistant.tools.allowedCommands);
-      if (nextConfig.assistant.tools.webSearch) {
-        toolExecutor.updateWebSearchConfig(nextConfig.assistant.tools.webSearch);
-      }
+      toolExecutor.updateWebSearchConfig(resolvedNextCredentials.resolvedWebSearch ?? {});
       const persistedToken = nextConfig.channels.web?.auth?.token?.trim()
         || nextConfig.channels.web?.authToken?.trim();
       webAuthStateRef.current = {
@@ -2163,8 +2141,12 @@ function buildDashboardCallbacks(
           if (!model) {
             return { success: false, message: 'model is required' };
           }
-          if (providerType !== 'ollama' && !(input.apiKey?.trim()) && !existingProvider?.apiKey) {
-            return { success: false, message: 'apiKey is required for external providers' };
+          if (providerType !== 'ollama'
+            && !(input.apiKey?.trim())
+            && !(input.credentialRef?.trim())
+            && !existingProvider?.apiKey
+            && !existingProvider?.credentialRef) {
+            return { success: false, message: 'apiKey or credentialRef is required for external providers' };
           }
 
           const patch: Partial<GuardianAgentConfig> = {
@@ -2173,6 +2155,7 @@ function buildDashboardCallbacks(
                 provider: providerType,
                 model,
                 apiKey: input.apiKey?.trim() || undefined,
+                credentialRef: input.credentialRef?.trim() || undefined,
                 baseUrl: input.baseUrl?.trim() || (providerType === 'ollama' ? 'http://127.0.0.1:11434' : undefined),
               },
             } as GuardianAgentConfig['llm'],
@@ -2232,7 +2215,16 @@ function buildDashboardCallbacks(
           if (providerType === 'ollama' && !rawLLM[providerName].baseUrl) {
             rawLLM[providerName].baseUrl = 'http://127.0.0.1:11434';
           }
-          if (input.apiKey?.trim()) rawLLM[providerName].apiKey = input.apiKey.trim();
+          if (input.apiKey !== undefined) {
+            const trimmed = input.apiKey.trim();
+            if (trimmed) rawLLM[providerName].apiKey = trimmed;
+            else delete rawLLM[providerName].apiKey;
+          }
+          if (input.credentialRef !== undefined) {
+            const trimmed = input.credentialRef.trim();
+            if (trimmed) rawLLM[providerName].credentialRef = trimmed;
+            else delete rawLLM[providerName].credentialRef;
+          }
 
           if (input.setDefaultProvider !== false) {
             rawConfig.defaultProvider = providerName;
@@ -2258,7 +2250,10 @@ function buildDashboardCallbacks(
           const hasWebSearch = input.webSearchProvider
             || input.perplexityApiKey !== undefined
             || input.openRouterApiKey !== undefined
-            || input.braveApiKey !== undefined;
+            || input.braveApiKey !== undefined
+            || input.perplexityCredentialRef !== undefined
+            || input.openRouterCredentialRef !== undefined
+            || input.braveCredentialRef !== undefined;
           if (hasWebSearch) {
             rawConfig.assistant = rawConfig.assistant ?? {};
             const rawAssistantObj = rawConfig.assistant as Record<string, unknown>;
@@ -2271,13 +2266,25 @@ function buildDashboardCallbacks(
               if (input.perplexityApiKey.trim()) rawWS.perplexityApiKey = input.perplexityApiKey.trim();
               else delete rawWS.perplexityApiKey;
             }
+            if (input.perplexityCredentialRef !== undefined) {
+              if (input.perplexityCredentialRef.trim()) rawWS.perplexityCredentialRef = input.perplexityCredentialRef.trim();
+              else delete rawWS.perplexityCredentialRef;
+            }
             if (input.openRouterApiKey !== undefined) {
               if (input.openRouterApiKey.trim()) rawWS.openRouterApiKey = input.openRouterApiKey.trim();
               else delete rawWS.openRouterApiKey;
             }
+            if (input.openRouterCredentialRef !== undefined) {
+              if (input.openRouterCredentialRef.trim()) rawWS.openRouterCredentialRef = input.openRouterCredentialRef.trim();
+              else delete rawWS.openRouterCredentialRef;
+            }
             if (input.braveApiKey !== undefined) {
               if (input.braveApiKey.trim()) rawWS.braveApiKey = input.braveApiKey.trim();
               else delete rawWS.braveApiKey;
+            }
+            if (input.braveCredentialRef !== undefined) {
+              if (input.braveCredentialRef.trim()) rawWS.braveCredentialRef = input.braveCredentialRef.trim();
+              else delete rawWS.braveCredentialRef;
             }
           }
 
@@ -2318,13 +2325,25 @@ function buildDashboardCallbacks(
         if (input.perplexityApiKey.trim()) rawWS.perplexityApiKey = input.perplexityApiKey.trim();
         else delete rawWS.perplexityApiKey;
       }
+      if (input.perplexityCredentialRef !== undefined) {
+        if (input.perplexityCredentialRef.trim()) rawWS.perplexityCredentialRef = input.perplexityCredentialRef.trim();
+        else delete rawWS.perplexityCredentialRef;
+      }
       if (input.openRouterApiKey !== undefined) {
         if (input.openRouterApiKey.trim()) rawWS.openRouterApiKey = input.openRouterApiKey.trim();
         else delete rawWS.openRouterApiKey;
       }
+      if (input.openRouterCredentialRef !== undefined) {
+        if (input.openRouterCredentialRef.trim()) rawWS.openRouterCredentialRef = input.openRouterCredentialRef.trim();
+        else delete rawWS.openRouterCredentialRef;
+      }
       if (input.braveApiKey !== undefined) {
         if (input.braveApiKey.trim()) rawWS.braveApiKey = input.braveApiKey.trim();
         else delete rawWS.braveApiKey;
+      }
+      if (input.braveCredentialRef !== undefined) {
+        if (input.braveCredentialRef.trim()) rawWS.braveCredentialRef = input.braveCredentialRef.trim();
+        else delete rawWS.braveCredentialRef;
       }
 
       if (input.fallbacks !== undefined) {
@@ -2388,8 +2407,21 @@ function buildDashboardCallbacks(
               }
               if (providerUpdates.provider) llmSection[name].provider = providerUpdates.provider;
               if (providerUpdates.model) llmSection[name].model = providerUpdates.model;
-              if (providerUpdates.apiKey) llmSection[name].apiKey = providerUpdates.apiKey;
-              if (providerUpdates.baseUrl) llmSection[name].baseUrl = providerUpdates.baseUrl;
+              if (providerUpdates.apiKey !== undefined) {
+                const trimmed = providerUpdates.apiKey.trim();
+                if (trimmed) llmSection[name].apiKey = trimmed;
+                else delete llmSection[name].apiKey;
+              }
+              if (providerUpdates.credentialRef !== undefined) {
+                const trimmed = providerUpdates.credentialRef.trim();
+                if (trimmed) llmSection[name].credentialRef = trimmed;
+                else delete llmSection[name].credentialRef;
+              }
+              if (providerUpdates.baseUrl !== undefined) {
+                const trimmed = providerUpdates.baseUrl.trim();
+                if (trimmed) llmSection[name].baseUrl = trimmed;
+                else delete llmSection[name].baseUrl;
+              }
             }
             rawConfig.llm = llmSection;
           }
@@ -2433,6 +2465,29 @@ function buildDashboardCallbacks(
             rawTools.qmd = (rawTools.qmd as Record<string, unknown> | undefined) ?? {};
             const rawQmd = rawTools.qmd as Record<string, unknown>;
             rawQmd.enabled = qmdEnabledUpdate;
+          }
+
+          // MCP + GWS managed provider updates
+          const mcpUpdate = updates.assistant?.tools?.mcp;
+          if (mcpUpdate && typeof mcpUpdate === 'object') {
+            rawConfig.assistant = rawConfig.assistant ?? {};
+            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+            rawAssistant.tools = (rawAssistant.tools as Record<string, unknown> | undefined) ?? {};
+            const rawTools = rawAssistant.tools as Record<string, unknown>;
+            rawTools.mcp = (rawTools.mcp as Record<string, unknown> | undefined) ?? {};
+            const rawMcp = rawTools.mcp as Record<string, unknown>;
+            if (typeof mcpUpdate.enabled === 'boolean') rawMcp.enabled = mcpUpdate.enabled;
+
+            const gwsUpdate = mcpUpdate.managedProviders?.gws;
+            if (gwsUpdate && typeof gwsUpdate === 'object') {
+              rawMcp.managedProviders = (rawMcp.managedProviders as Record<string, unknown> | undefined) ?? {};
+              const rawManaged = rawMcp.managedProviders as Record<string, unknown>;
+              rawManaged.gws = (rawManaged.gws as Record<string, unknown> | undefined) ?? {};
+              const rawGws = rawManaged.gws as Record<string, unknown>;
+              if (typeof gwsUpdate.enabled === 'boolean') rawGws.enabled = gwsUpdate.enabled;
+              if (Array.isArray(gwsUpdate.services)) rawGws.services = gwsUpdate.services;
+              if (typeof gwsUpdate.command === 'string') rawGws.command = gwsUpdate.command;
+            }
           }
 
           const result = persistAndApplyConfig(rawConfig, {
@@ -2622,7 +2677,7 @@ function buildDashboardCallbacks(
 
     // ── Google Workspace ────────────────────────────────────────
     onGwsStatus: async () => {
-      const status = await getGwsAuthStatus();
+      const status = await probeGwsCli(configRef.current);
       const gwsConfig = configRef.current.assistant.tools.mcp?.managedProviders?.gws;
       const services = gwsConfig?.services ?? ['gmail', 'calendar', 'drive'];
       return {
@@ -2633,76 +2688,6 @@ function buildDashboardCallbacks(
         services: gwsConfig?.enabled ? services : [],
         enabled: gwsConfig?.enabled ?? false,
       };
-    },
-
-    onGwsLogin: async (services) => {
-      const bin = resolveGwsBinary();
-      const loginArgs = ['auth', 'login'];
-      if (services?.length) {
-        loginArgs.push('-s', services.join(','));
-      }
-      try {
-        await execFileAsync(bin, loginArgs, { timeout: 120_000 });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return { success: false, message: `Google login failed: ${message}` };
-      }
-
-      // Verify auth succeeded
-      const status = await getGwsAuthStatus();
-      if (!status.authenticated) {
-        return { success: false, message: 'Login completed but authentication could not be verified.' };
-      }
-
-      // Auto-enable the managed provider in config
-      const gwsConfig = configRef.current.assistant.tools.mcp?.managedProviders?.gws;
-      if (!gwsConfig?.enabled) {
-        const rawConfig = loadRawConfig();
-        const assistant = (rawConfig.assistant ?? {}) as Record<string, unknown>;
-        const tools = (assistant.tools ?? {}) as Record<string, unknown>;
-        const mcp = (tools.mcp ?? {}) as Record<string, unknown>;
-        const managedProviders = (mcp.managedProviders ?? {}) as Record<string, unknown>;
-        const gwsRaw = (managedProviders.gws ?? {}) as Record<string, unknown>;
-        gwsRaw.enabled = true;
-        if (!gwsRaw.services) {
-          gwsRaw.services = services ?? ['gmail', 'calendar', 'drive'];
-        }
-        managedProviders.gws = gwsRaw;
-        mcp.managedProviders = managedProviders;
-        tools.mcp = mcp;
-        assistant.tools = tools;
-        rawConfig.assistant = assistant;
-        persistAndApplyConfig(rawConfig, { changedBy: 'gws-login', reason: 'Auto-enabled Google Workspace after successful login' });
-      }
-
-      return { success: true, message: `Google Workspace connected (${status.authMethod}). Provider enabled.` };
-    },
-
-    onGwsLogout: async () => {
-      const bin = resolveGwsBinary();
-      try {
-        await execFileAsync(bin, ['auth', 'logout'], { timeout: 10_000 });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return { success: false, message: `Logout failed: ${message}` };
-      }
-
-      // Disable the managed provider in config
-      const rawConfig = loadRawConfig();
-      const assistant = (rawConfig.assistant ?? {}) as Record<string, unknown>;
-      const tools = (assistant.tools ?? {}) as Record<string, unknown>;
-      const mcp = (tools.mcp ?? {}) as Record<string, unknown>;
-      const managedProviders = (mcp.managedProviders ?? {}) as Record<string, unknown>;
-      const gwsRaw = (managedProviders.gws ?? {}) as Record<string, unknown>;
-      gwsRaw.enabled = false;
-      managedProviders.gws = gwsRaw;
-      mcp.managedProviders = managedProviders;
-      tools.mcp = mcp;
-      assistant.tools = tools;
-      rawConfig.assistant = assistant;
-      persistAndApplyConfig(rawConfig, { changedBy: 'gws-logout', reason: 'Disabled Google Workspace after logout' });
-
-      return { success: true, message: 'Google Workspace credentials cleared and provider disabled.' };
     },
   };
 }
@@ -2796,6 +2781,35 @@ async function main(): Promise<void> {
   }
 
   const configRef = { current: loadConfig(configPath) };
+
+  // Auto-detect Ollama model if configured model is not available.
+  // Prevents startup failures when the default model (e.g. llama3.2) isn't pulled.
+  for (const [name, llmCfg] of Object.entries(configRef.current.llm)) {
+    if (llmCfg.provider === 'ollama') {
+      const baseUrl = llmCfg.baseUrl || 'http://127.0.0.1:11434';
+      try {
+        const res = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
+        if (res.ok) {
+          const data = (await res.json()) as { models?: Array<{ name: string }> };
+          const available = data.models?.map((m) => m.name) ?? [];
+          if (available.length > 0) {
+            const configuredModel = llmCfg.model;
+            const modelFound = available.some((m) =>
+              m === configuredModel || m.startsWith(`${configuredModel}:`)
+            );
+            if (!modelFound) {
+              const selected = available[0];
+              console.log(`  Ollama provider '${name}': model '${configuredModel}' not found. Auto-selecting '${selected}'.`);
+              (configRef.current.llm[name] as unknown as Record<string, unknown>).model = selected;
+            }
+          }
+        }
+      } catch {
+        // Ollama not reachable — skip auto-detection
+      }
+    }
+  }
+
   const config = configRef.current;
 
   // Respect config runtime log level unless caller explicitly overrides via LOG_LEVEL.
@@ -2809,7 +2823,18 @@ async function main(): Promise<void> {
     }
   }
 
-  const runtime = new Runtime(config);
+  const resolvedRuntimeCredentials = resolveRuntimeCredentialView(config);
+  const runtime = new Runtime({
+    ...config,
+    llm: resolvedRuntimeCredentials.resolvedLLM,
+    assistant: {
+      ...config.assistant,
+      tools: {
+        ...config.assistant.tools,
+        webSearch: resolvedRuntimeCredentials.resolvedWebSearch,
+      },
+    },
+  });
   const identity = new IdentityService(config.assistant.identity);
   let analytics: AnalyticsService | null = null;
   const onSQLiteSecurityEvent = (event: {
@@ -3007,6 +3032,7 @@ async function main(): Promise<void> {
   const mcpBlockedBySandbox = sandboxHealth.enforcementMode === 'strict' && sandboxHealth.availability !== 'strong';
   if (mcpConfig?.enabled && allMCPServers.length > 0) {
     if (mcpBlockedBySandbox) {
+      console.warn('  MCP servers blocked: strict sandbox mode requires strong sandbox availability');
       log.warn(
         { platform: sandboxHealth.platform, availability: sandboxHealth.availability },
         'Strict sandbox mode is blocking MCP server startup',
@@ -3033,19 +3059,25 @@ async function main(): Promise<void> {
               : true;
             if (exposeSkills) enabledManagedProviders.add(managedProvider);
           }
+          const client = mcpManager.getClient(server.id);
+          const mcpToolCount = client?.getTools().length ?? 0;
+          console.log(`  MCP server '${server.name}' connected (${mcpToolCount} tools)`);
           log.info(
-            { serverId: server.id, serverName: server.name },
+            { serverId: server.id, serverName: server.name, toolCount: mcpToolCount },
             'MCP server connected',
           );
         } catch (err) {
+          const detail = err instanceof Error ? err.message : String(err);
+          console.error(`  MCP server '${server.name}' failed to connect: ${detail}`);
           log.error(
-            { serverId: server.id, err: err instanceof Error ? err.message : String(err) },
+            { serverId: server.id, err: detail },
             'Failed to connect MCP server (continuing without it)',
           );
         }
       }
       const toolCount = mcpManager.getAllToolDefinitions().length;
       if (toolCount > 0) {
+        console.log(`  MCP: ${toolCount} tools available across all servers`);
         log.info({ toolCount }, 'MCP tools discovered and available');
       }
     }
@@ -3085,6 +3117,32 @@ async function main(): Promise<void> {
       }
     } else {
       log.warn('QMD enabled but binary not available (bundled dependency missing and not found on PATH)');
+    }
+  }
+
+  // ─── Google Workspace CLI Service ──────────────────────
+  let gwsService: import('./runtime/gws-service.js').GWSService | undefined;
+  const gwsConfig = config.assistant.tools.mcp?.managedProviders?.gws;
+  if (gwsConfig?.enabled) {
+    const { GWSService } = await import('./runtime/gws-service.js');
+    gwsService = new GWSService({
+      command: gwsConfig.command,
+      timeoutMs: gwsConfig.timeoutMs,
+      services: gwsConfig.services,
+    });
+    // Quick auth check
+    const authResult = await gwsService.authStatus();
+    if (authResult.success) {
+      const authData = authResult.data as { auth_method?: string } | undefined;
+      const method = authData?.auth_method;
+      if (method && method !== 'none') {
+        console.log(`  Google Workspace: connected (auth: ${method}, services: ${gwsService.getEnabledServices().join(', ')})`);
+        enabledManagedProviders.add('gws');
+      } else {
+        console.log('  Google Workspace: enabled but not authenticated. Run `gws auth login` to connect.');
+      }
+    } else {
+      console.log(`  Google Workspace: enabled but CLI check failed — ${authResult.error}`);
     }
   }
 
@@ -3254,12 +3312,13 @@ async function main(): Promise<void> {
     allowedCommands: config.assistant.tools.allowedCommands,
     allowedDomains: config.assistant.tools.allowedDomains,
     allowExternalPosting: config.assistant.tools.allowExternalPosting,
-    webSearch: config.assistant.tools.webSearch,
+    webSearch: resolvedRuntimeCredentials.resolvedWebSearch,
     browserConfig: config.assistant.tools.browser,
     disabledCategories: config.assistant.tools.disabledCategories,
     conversationService: conversations,
     agentMemoryStore,
     qmdSearch,
+    gwsService,
     deviceInventory,
     networkBaseline,
     networkTraffic,
@@ -3279,6 +3338,15 @@ async function main(): Promise<void> {
         read_email: ['read_email'],
         draft_email: ['draft_email'],
         send_email: ['send_email'],
+        read_calendar: ['read_calendar'],
+        write_calendar: ['write_calendar'],
+        read_drive: ['read_drive'],
+        write_drive: ['write_drive'],
+        read_docs: ['read_docs'],
+        write_docs: ['write_docs'],
+        read_sheets: ['read_sheets'],
+        write_sheets: ['write_sheets'],
+        mcp_tool: ['network_access'],
       };
       const capabilities = capMap[type] ?? [];
       const result = runtime.guardian.check({
@@ -3388,7 +3456,7 @@ async function main(): Promise<void> {
   // tries each fallback in order with per-provider cooldowns.
   let fallbackChain: ModelFallbackChain | undefined;
   if (config.fallbacks?.length) {
-    const allProviders = createProviders(config.llm);
+    const allProviders = createProviders(resolvedRuntimeCredentials.resolvedLLM);
     const order = [config.defaultProvider, ...config.fallbacks.filter(f => f !== config.defaultProvider)];
     fallbackChain = new ModelFallbackChain(allProviders, order);
     log.info({ order: fallbackChain.getProviderOrder() }, 'Model fallback chain configured');

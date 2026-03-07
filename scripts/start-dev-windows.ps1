@@ -356,7 +356,6 @@ if ($needsInstall) {
 # Ensure bundled CLI tools are available
 Write-Host "  Checking bundled tools..." -ForegroundColor DarkCyan
 try { node scripts/ensure-qmd.mjs 2>&1 | Out-Null; Write-Host "  QMD: OK" -ForegroundColor Green } catch { Write-Host "  QMD: not available (optional)" -ForegroundColor DarkGray }
-try { node scripts/ensure-gws.mjs 2>&1 | Out-Null; Write-Host "  GWS: OK" -ForegroundColor Green } catch { Write-Host "  GWS: not available (optional)" -ForegroundColor DarkGray }
 
 if (-not $StartOnly) {
     # --- Step 3: Build ---

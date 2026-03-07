@@ -275,14 +275,28 @@ This separation is deliberate: skills help the model plan, while tools and MCP i
 
 ## Managed Google Workspace Integration
 
-GuardianAgent now includes a managed MCP provider foundation for Google Workspace built around the Google Workspace CLI (`gws`) plus curated native skills.
+GuardianAgent integrates with Google Workspace (Gmail, Calendar, Drive, Docs, Sheets) via the Google Workspace CLI (`@googleworkspace/cli`) running as a managed MCP server, plus curated native skills.
 
-Security expectations:
+### Installation Model
 
-- only configured Google services are exposed
+- The GWS CLI is **not bundled** — users install it separately (`npm install -g @googleworkspace/cli`)
+- OAuth 2.0 credentials must be configured per-user via Google Cloud Console (Desktop app client type) or `gcloud` CLI
+- Authentication requires an interactive browser OAuth flow (`gws auth login`) — cannot be initiated headlessly from the web UI or API
+- Credentials are stored in the OS keyring by `gws`, not by GuardianAgent
+
+### Security Expectations
+
+- Only configured Google services are exposed (opt-in via `services` array)
 - Gmail, Calendar, Drive, Docs, and Sheets capability hooks exist in Guardian for managed Google tooling
-- external send/post actions remain approval-gated
-- credentials should prefer provider-managed secure storage over chat-passed secrets
+- External send/post actions (e.g. `gmail_send`) remain approval-gated (`external_post` risk)
+- Read-only Google actions follow the configured tool policy mode
+- The `SecretScanController` exempts email addresses only in addressing fields (`to`, `from`, `cc`, `bcc`, etc.) for email/calendar/MCP tool actions — email addresses in message bodies or other fields are still flagged as PII
+- Provider-managed secure storage (OS keyring) is used for credentials — GuardianAgent never stores or handles raw OAuth tokens
+
+### Web UI Controls
+
+- Settings > Google Workspace panel provides connectivity testing, service selection, and one-click provider enable
+- Enabling the provider writes `mcp.enabled: true` and `managedProviders.gws` to config — a restart is required for the MCP server to start
 
 See:
 
@@ -316,6 +330,19 @@ Secret scanning is applied to **all string fields** in action params (recursive 
 | **Tokens/Certs** | JWT (`eyJ...`), PEM Private Key headers, Connection Strings |
 | **PII** | Email addresses, US SSN, Credit Card numbers, US Phone numbers |
 | **Generic** | `password=`, `api_key=`, `secret=`, `token=` patterns |
+
+### PII Field-Level Exemptions
+
+Email addresses are PII and are flagged by default in all params. However, email/calendar/MCP tool actions require email addresses in addressing fields to function. The `SecretScanController` applies a **narrow, field-scoped exemption**:
+
+- **Only** the `Email Address` pattern is exempted
+- **Only** in structurally required addressing fields: `to`, `from`, `cc`, `bcc`, `sender`, `recipient`, `recipients`, `attendees`, `organizer`, `replyTo`, `reply_to`
+- **Only** for action types where addressing is expected: `send_email`, `draft_email`, `read_email`, `read_calendar`, `write_calendar`, `mcp_tool`
+- Email addresses in **any other field** (e.g. `body`, `description`, `notes`, `content`) are **still flagged** as PII, even for exempt action types
+- All other PII patterns (SSN, credit cards, phone numbers) are **never** exempted
+- All credential patterns (API keys, tokens, secrets) are **never** exempted regardless of field or action type
+
+This prevents false denials when sending email to a recipient while preserving PII detection everywhere else.
 
 ### Denied File Paths (15 patterns)
 
@@ -466,10 +493,65 @@ Install bwrap on Debian/Ubuntu: `sudo apt install bubblewrap`
 
 ## Credential Handling
 
-- LLM provider API keys and web-search API keys are currently loaded into the main runtime process from config or environment-backed config interpolation
+- GuardianAgent now supports runtime credential references for LLM and web-search providers via `assistant.credentials.refs`
+- the preferred pattern is `credentialRef` → env-backed credential reference, rather than storing raw provider keys inline in provider/tool config
+- inline `apiKey` fields remain supported as a backward-compatible fallback, but are no longer the preferred configuration path
 - Approval records store redacted arguments and a deterministic hash (`argsHash`) rather than raw sensitive values
+- current provider integrations still resolve concrete credential values inside the main runtime process when creating provider/tool clients
 - Output scanning and denied-path controls reduce accidental exfiltration, but GuardianAgent does not currently guarantee that credentials never enter the main process address space
 - Provider-managed secure storage is preferred for external integrations where available
+
+Example preferred pattern:
+
+```yaml
+assistant:
+  credentials:
+    refs:
+      llm.openai.primary:
+        source: env
+        env: OPENAI_API_KEY
+      search.brave.primary:
+        source: env
+        env: BRAVE_API_KEY
+  tools:
+    webSearch:
+      provider: brave
+      braveCredentialRef: search.brave.primary
+
+llm:
+  openai:
+    provider: openai
+    model: gpt-4o
+    credentialRef: llm.openai.primary
+```
+
+Current limitation:
+
+- this is a credential reference and resolution layer, not yet a separate secret-broker process
+- long-lived credentials are better isolated than before at config level, but not yet held outside the runtime boundary at execution time
+
+---
+
+## Browser-To-Localhost Attack Mitigations
+
+GuardianAgent is hardened against the class of attacks where a malicious website attempts to drive a locally running agent over loopback HTTP/WebSocket interfaces.
+
+Current mitigations:
+
+- the web channel does not expose a WebSocket control plane; it uses authenticated HTTP APIs plus authenticated SSE
+- localhost / loopback is **not** treated as trusted for API access; `/api/*` and `/sse` always require authentication
+- when no web token is configured, GuardianAgent generates a secure random token for the current run rather than leaving the API open
+- wildcard CORS (`'*'`) is rejected by configuration validation for the web channel
+- browser session cookies are `HttpOnly` and `SameSite=Strict`, reducing cross-site request exposure
+- repeated authentication failures are rate-limited and temporarily blocked to slow token brute force against the local API
+- privileged state-changing operations such as auth reconfiguration, token reveal/rotation, connector changes, and factory reset require short-lived privileged tickets in addition to base authentication
+- SSE does not accept query-string tokens
+
+Residual risk:
+
+- broad `allowedOrigins` settings weaken the browser boundary and should be kept narrow
+- binding the web channel to non-loopback interfaces increases remote attack surface
+- possession of a valid bearer token still grants access to the web API within the configured authorization model
 
 ---
 

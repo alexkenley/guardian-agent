@@ -1,6 +1,6 @@
 # Google Workspace Integration Specification
 
-**Status:** Implemented foundation
+**Status:** Implemented
 **Depends on:** MCP Client, Native Skills, ToolExecutor policy model, Guardian capabilities
 **Primary External Runtime:** Google Workspace CLI (`gws`) via managed MCP mode
 
@@ -8,9 +8,9 @@
 
 ## Overview
 
-GuardianAgent includes a **managed MCP provider** foundation for Google Workspace built around the Google Workspace CLI (`gws`).
+GuardianAgent integrates with Google Workspace (Gmail, Calendar, Drive, Docs, Sheets) through the **Google Workspace CLI** (`@googleworkspace/cli`) running as a managed MCP server.
 
-The recommended architecture is:
+The architecture:
 
 - `gws mcp` provides typed tool execution for Google Workspace APIs
 - Native GuardianAgent skills provide procedural guidance for Gmail, Calendar, Drive, Docs, and Sheets
@@ -77,11 +77,67 @@ All Google actions must still pass through:
 
 ---
 
-## Managed Provider Model
+## Installation and Setup
 
-GuardianAgent supports a first-class managed MCP provider entry for Google Workspace rather than forcing users to hand-author a raw MCP server block.
+The GWS CLI is **not bundled** with Guardian Agent. Users must install it separately and complete Google OAuth setup before it can be used.
 
-### Current Config
+### Prerequisites
+
+- Node.js >= 20
+- A Google account
+- A Google Cloud project with OAuth 2.0 credentials
+
+### Step 1 — Install the CLI
+
+```bash
+npm install -g @googleworkspace/cli
+```
+
+### Step 2 — Configure OAuth Credentials
+
+Users need a Google Cloud project with an OAuth 2.0 Desktop client. Two paths:
+
+**Option A — Automatic (requires Google Cloud CLI)**
+
+1. Install the [Google Cloud CLI](https://docs.cloud.google.com/sdk/docs/install-sdk)
+2. Run `gcloud auth login`
+3. Run `gws auth setup` — this auto-creates the OAuth client and consent screen
+
+**Option B — Manual (no gcloud needed)**
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+2. Create a project if needed (top-left project selector > New Project)
+3. Go to **Google Auth Platform > Audience** (left sidebar)
+   - Set user type to **External**
+   - Fill in app name (e.g. "Guardian Agent") and your email
+   - Save
+4. On the Audience page, under **Publishing status**, click **Publish App**
+   - Without this, only manually-added test users can authenticate
+   - Users will see "access_denied" errors during OAuth consent if the app is still in Testing mode
+   - Publishing is safe — the OAuth credentials are only usable on the user's machine
+5. Go to **Credentials** (left sidebar) > **+ Create Credentials** > **OAuth client ID**
+   - Set Application type to **Desktop app** (not "Web application")
+   - No redirect URIs or JavaScript origins needed
+   - Give it any name and click Create
+6. Download the client secret JSON from the confirmation dialog
+7. Save as `~/.config/gws/client_secret.json` (Windows: `%USERPROFILE%\.config\gws\client_secret.json`)
+   - Create the `.config/gws` folder if it doesn't exist
+
+### Step 3 — Authenticate
+
+```bash
+gws auth login
+```
+
+A browser window opens for Google OAuth consent. After approval, credentials are stored in the OS keyring.
+
+**Troubleshooting:** If you see "access_denied" or "app not verified", go back to Google Auth Platform > Audience and either click Publish App or add your email address under Test Users.
+
+### Step 4 — Enable in Guardian Agent
+
+In the web UI: **Settings > Google Workspace** — select services and click **Enable Google Workspace**. Restart Guardian Agent for the MCP server to start.
+
+Or manually in `~/.guardianagent/config.yaml`:
 
 ```yaml
 assistant:
@@ -91,7 +147,35 @@ assistant:
       managedProviders:
         gws:
           enabled: true
-          command: gws
+          services:
+            - gmail
+            - calendar
+            - drive
+```
+
+### Verification
+
+- **Web UI:** Settings > Google Workspace should show CLI Installed, Auth Connected, Provider Enabled
+- **CLI:** `/google status` shows connection state
+- **Test Connection:** The web UI Settings panel has a Test Connection button that probes CLI availability and auth status
+
+---
+
+## Managed Provider Model
+
+GuardianAgent supports a first-class managed MCP provider entry for Google Workspace rather than forcing users to hand-author a raw MCP server block.
+
+### Config
+
+```yaml
+assistant:
+  tools:
+    mcp:
+      enabled: true
+      managedProviders:
+        gws:
+          enabled: true
+          command: gws          # optional, defaults to 'gws' from PATH
           services:
             - gmail
             - calendar
@@ -100,31 +184,53 @@ assistant:
           accountMode: single_user
 ```
 
-GuardianAgent translates this into an internal MCP server definition and registers it with the existing MCP client manager.
+GuardianAgent translates this into an internal MCP server definition (`gws mcp -s gmail,calendar,drive`) and registers it with the MCP client manager.
+
+### Runtime Behavior
+
+- `probeGwsCli()` checks CLI availability and auth status using `gws --version` and `gws auth status`
+- All `gws` subprocess calls use `shell: true` for Windows `.cmd` compatibility
+- The `command` field allows users to specify a custom path if `gws` is not on PATH
+- Config updates (enable/disable, services, command) are persisted via `POST /api/config` and require a restart
+
+### Web UI Integration
+
+The Settings > Google Workspace panel has three states:
+
+1. **Not installed** — Full setup guide with both automatic and manual OAuth paths
+2. **Installed, not authenticated** — Compact instructions for OAuth setup and `gws auth login`
+3. **Authenticated** — Status display (CLI version, auth method, services, provider state) with Enable button if provider is disabled
+
+The Enable button saves `gws.enabled: true` and selected services directly to config via the API — no manual YAML editing required.
+
+### CLI Integration
+
+- `/google status` — Shows installed/version, authenticated, provider enabled, services
+- Authentication and logout must be done directly via `gws auth login` / `gws auth logout` in a terminal (OAuth requires an interactive browser flow)
 
 ---
 
-## Initial Service Scope
+## Service Scope
 
-### Implemented Default Scope
+### Default Scope
 
 - Gmail
 - Calendar
 - Drive
 
-### Next Scope
+### Additional (user-selectable)
 
 - Docs
 - Sheets
-- Chat
 
 ### Later / Optional
 
+- Chat
 - Admin APIs
 - Meet
 - Groups
 
-Services should be opt-in and exposed through explicit allowlists.
+Services are opt-in via the `services` array and exposed through the web UI service checkboxes.
 
 ---
 
@@ -132,49 +238,38 @@ Services should be opt-in and exposed through explicit allowlists.
 
 Native skills accompany the managed provider.
 
-Examples:
+Implemented:
 
 - `google-gmail-assistant`
 - `google-calendar-assistant`
 - `google-drive-assistant`
 - `google-docs-sheets-assistant`
 
-Each skill should:
+Each skill:
 
-- explain safe usage patterns
-- point to the relevant MCP tools
-- clarify approval expectations
-- guide drafting before sending or mutating
+- explains safe usage patterns
+- points to the relevant MCP tools
+- clarifies approval expectations
+- guides drafting before sending or mutating
 
-These skills are especially useful for:
-
-- draft-first email workflows
-- event planning with review steps
-- structured file retrieval and summarization
-- safe document update flows
+Skills are auto-exposed when `exposeSkills: true` and the GWS provider is enabled. They report readiness through the skills CLI/API surfaces based on whether the required managed provider is active.
 
 ---
 
 ## Capability Model
 
-The current email capability set is still too coarse for broad Google Workspace support.
-
-### Existing
+### Email Capabilities
 
 - `read_email`
 - `draft_email`
 - `send_email`
 
-### Implemented Hooks / Additions
+### Workspace Capabilities
 
-- `read_calendar`
-- `write_calendar`
-- `read_drive`
-- `write_drive`
-- `read_docs`
-- `write_docs`
-- `read_sheets`
-- `write_sheets`
+- `read_calendar` / `write_calendar`
+- `read_drive` / `write_drive`
+- `read_docs` / `write_docs`
+- `read_sheets` / `write_sheets`
 
 This lets GuardianAgent enforce least privilege at the agent level rather than collapsing all Google operations into `network_access`.
 
@@ -182,7 +277,7 @@ This lets GuardianAgent enforce least privilege at the agent level rather than c
 
 ## Tool Policy
 
-Google Workspace tools should still use existing ToolExecutor decisions:
+Google Workspace tools use existing ToolExecutor policy decisions:
 
 - `read_only`
 - `mutating`
@@ -196,15 +291,13 @@ Google Workspace tools should still use existing ToolExecutor decisions:
 - Drive list/read metadata = `read_only`
 - Docs/Sheets edits = `mutating`
 
-Default expectation:
+Default behavior:
 
-- read-only Google actions may run under policy
-- mutating actions should usually require approval in `approve_by_policy`
-- external send/post actions always remain manual approval
+- Read-only Google actions may run under policy
+- Mutating actions should usually require approval in `approve_by_policy`
+- External send/post actions always remain manual approval
 
-### Current Limitation
-
-The managed provider foundation and capability hooks are implemented, but coverage still depends on tool-name/description inference from the provider surface. Richer provider-specific diagnostics and broader service rollout are still follow-up work.
+Coverage depends on tool-name/description inference from the MCP provider surface.
 
 ---
 
@@ -228,29 +321,13 @@ The managed provider foundation and capability hooks are implemented, but covera
 
 ### Credential Handling
 
-Preferred approach:
-
-- rely on `gws` OS keyring-backed credential handling where available
-- do not pass raw OAuth tokens through normal chat args unless a specific tool path still requires it
-- avoid storing Workspace credentials in skill bundles or static config where possible
+- `gws` manages OAuth tokens via OS keyring — GuardianAgent never stores or passes raw tokens
+- OAuth authentication requires an interactive browser flow and cannot be initiated from the web UI or headlessly
+- The `client_secret.json` is stored in the user's home directory, not in the project
 
 ---
 
-## UX
-
-### Web / CLI
-
-Expose:
-
-- provider enabled/disabled state
-- allowed Google services
-- connected account summary if available from provider status
-- linked Google skills
-
-Current implementation already surfaces managed-provider-driven tools through the normal tool catalog. Richer provider-specific status is still follow-up work.
-Google-linked skills also report whether their required managed provider is currently ready through the skills CLI/API surfaces.
-
-### Chat
+## Chat Workflow
 
 The assistant should prefer workflows like:
 
@@ -261,33 +338,40 @@ The assistant should prefer workflows like:
 
 ---
 
-## Rollout Plan
+## Rollout Status
 
 ### Implemented
 
 - Managed `gws` MCP provider materialization
-- Gmail / Calendar / Drive default service scope
-- Native Google skills
-- optional skill exposure when the provider is enabled
-- capability enforcement hooks for Gmail / Calendar / Drive / Docs / Sheets managed tools
+- Gmail / Calendar / Drive / Docs / Sheets service scope
+- Native Google skills with auto-exposure
+- Capability enforcement hooks for all managed tools
+- Web UI setup guide with detailed OAuth walkthrough
+- Web UI enable/disable with service picker (no YAML editing required)
+- CLI `/google status` command
+- `probeGwsCli()` connectivity test via web API
+- Config persistence for `gws.enabled`, `gws.services`, `gws.command` via `POST /api/config`
 
-### Next
+### Removed
 
-- Docs / Sheets
-- better provider status and diagnostics
-- richer review flows and templates
+- Bundled `@googleworkspace/cli` dependency (was `^0.7.0` in package.json)
+- `scripts/ensure-gws.mjs` auto-provisioning script
+- Web UI login/logout buttons (OAuth is terminal-only)
+- `/api/gws/login` and `/api/gws/logout` endpoints
+- CLI `/google login` and `/google logout` commands
 
-### Later
+### Future
 
-- multi-account selection
+- Multi-account selection
 - Admin APIs with stricter gating
-- provider health checks and enhanced audit correlation
+- Provider health checks and enhanced audit correlation
+- Richer provider-specific diagnostics
 
 ---
 
 ## Relationship to Existing Gmail Tools
 
-Current built-in Gmail send flows may remain temporarily for backwards compatibility, but the long-term direction should favor:
+Current built-in Gmail send flows may remain temporarily for backwards compatibility, but the long-term direction favors:
 
 - managed `gws` MCP tools for broad Workspace coverage
 - native skills for procedure

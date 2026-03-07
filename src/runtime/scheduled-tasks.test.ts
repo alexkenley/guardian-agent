@@ -362,13 +362,14 @@ describe('ScheduledTaskService', () => {
       expect(presets.find(p => p.id === 'full-network-discovery')).toBeDefined();
     });
 
-    it('should install a preset', () => {
+    it('should install a preset as disabled by default', () => {
       const result = service.installPreset('network-watch');
       expect(result.success).toBe(true);
       expect(result.task).toBeDefined();
       expect(result.task!.name).toBe('Network Watch');
       expect(result.task!.target).toBe('net_arp_scan');
       expect(result.task!.presetId).toBe('network-watch');
+      expect(result.task!.enabled).toBe(false);
     });
 
     it('should reject unknown preset', () => {

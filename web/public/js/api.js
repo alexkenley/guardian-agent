@@ -311,11 +311,4 @@ export const api = {
   }),
 
   gwsStatus: () => request('/api/gws/status'),
-  gwsLogin: (services) => request('/api/gws/login', {
-    method: 'POST',
-    body: JSON.stringify(services ? { services } : {}),
-  }),
-  gwsLogout: () => request('/api/gws/logout', {
-    method: 'POST',
-  }),
 };

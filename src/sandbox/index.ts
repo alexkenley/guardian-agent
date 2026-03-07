@@ -290,6 +290,7 @@ export async function sandboxedSpawn(
       cwd: options.cwd,
       stdio: options.stdio,
       env: options.env ? { ...process.env, ...options.env } : undefined,
+      ...(process.platform === 'win32' ? { shell: true } : {}),
     });
   }
 
@@ -304,6 +305,7 @@ export async function sandboxedSpawn(
       cwd: options.cwd,
       stdio: options.stdio,
       env: hardenedEnv,
+      ...(process.platform === 'win32' ? { shell: true } : {}),
     });
   }
 
@@ -357,6 +359,8 @@ export async function sandboxedSpawn(
     cwd: options.cwd,
     stdio: options.stdio,
     env: hardenedEnv,
+    // On Windows, .cmd/.bat shims (e.g. npm global bins) require shell: true
+    ...(process.platform === 'win32' ? { shell: true } : {}),
   });
 }
 

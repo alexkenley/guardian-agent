@@ -334,6 +334,26 @@ body {
 .status-card.info .card-value { color: var(--info); }
 .status-card.accent .card-value { color: var(--accent); }
 
+.status-card-link {
+  cursor: pointer;
+  position: relative;
+}
+.status-card-link::after {
+  content: '\2192';
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.status-card-link:hover::after { opacity: 1; }
+.status-card-link:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
 /* ─── Tables ─────────────────────────────────────────────── */
 
 .table-container {
@@ -1690,6 +1710,54 @@ tr:hover td {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ops-action-buttons {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.wf-step-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 0.35rem;
+  background: var(--bg-secondary);
+  font-size: 0.8rem;
+}
+.wf-step-number {
+  min-width: 1.5rem;
+  height: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-tertiary);
+  border-radius: 50%;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.wf-step-name {
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.wf-step-desc {
+  flex: 1;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wf-step-actions {
+  display: flex;
+  gap: 0.25rem;
+  margin-left: auto;
 }
 
 .network-tool-result {
