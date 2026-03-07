@@ -89,6 +89,7 @@ export interface RedactedConfig {
     rateLimit?: { maxPerMinute: number; maxPerHour: number; burstAllowed: number };
     inputSanitization?: { enabled: boolean; blockThreshold: number };
     outputScanning?: { enabled: boolean; redactSecrets: boolean };
+    guardianAgent?: { enabled: boolean; llmProvider: string; failOpen: boolean; timeoutMs?: number };
     sentinel?: { enabled: boolean; schedule: string };
   };
   runtime: {
@@ -201,6 +202,11 @@ export interface RedactedConfig {
         enabled: boolean;
         sourceCount: number;
         defaultMode: string;
+      };
+      agentPolicyUpdates?: {
+        allowedPaths: boolean;
+        allowedCommands: boolean;
+        allowedDomains: boolean;
       };
     };
   };
@@ -560,6 +566,28 @@ export interface DashboardCallbacks {
   onQMDSourceToggle?: (id: string, enabled: boolean) => { success: boolean; message: string };
   onQMDReindex?: (collection?: string) => Promise<{ success: boolean; message: string }>;
   onGwsStatus?: () => Promise<GwsConnectionStatus>;
+  /** Guardian Agent inline evaluation config and status. */
+  onGuardianAgentStatus?: () => {
+    enabled: boolean;
+    llmProvider: 'local' | 'external' | 'auto';
+    failOpen: boolean;
+    timeoutMs: number;
+    actionTypes: string[];
+  };
+  onGuardianAgentUpdate?: (input: {
+    enabled?: boolean;
+    llmProvider?: 'local' | 'external' | 'auto';
+    failOpen?: boolean;
+    timeoutMs?: number;
+  }) => { success: boolean; message: string };
+  /** Sentinel audit: run on-demand and return results. */
+  onSentinelAuditRun?: (windowMs?: number) => Promise<{
+    success: boolean;
+    anomalies: Array<{ type: string; severity: string; description: string; agentId?: string }>;
+    llmFindings: Array<{ severity: string; description: string; recommendation: string }>;
+    timestamp: number;
+    windowMs: number;
+  }>;
 }
 
 export interface GwsConnectionStatus {
@@ -604,6 +632,14 @@ export interface ConfigUpdate {
             command?: string;
           };
         };
+      };
+      sandbox?: {
+        enforcementMode?: 'strict' | 'permissive';
+      };
+      agentPolicyUpdates?: {
+        allowedPaths?: boolean;
+        allowedCommands?: boolean;
+        allowedDomains?: boolean;
       };
     };
   };

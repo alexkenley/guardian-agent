@@ -2,11 +2,11 @@
 
 ![GuardianAgent CLI](docs/images/cli-startup.png)
 
-Security-first AI agent orchestration system. Built-in agents with predefined capabilities, strict guardrails on what they can and cannot do, and a three-layer defense system that enforces security at every stage of the message lifecycle.
+Security-first AI agent orchestration system. Built-in agents with predefined capabilities, strict guardrails on what they can and cannot do, and a four-layer defense system that enforces security at every stage of the message lifecycle.
 
 ## Features
 
-- **Three-layer security defense** — proactive admission controls, output-time leak prevention, and scheduled Sentinel anomaly analysis, all mandatory at the Runtime level
+- **Four-layer security defense** — proactive admission controls, inline LLM-powered action evaluation (Guardian Agent), output-time leak prevention, and Sentinel audit analysis, all mandatory at the Runtime level
 - **Multi-provider LLM support** — Ollama (local), Anthropic (Claude), and OpenAI (GPT) with interactive model selection, circuit breaker, and automatic failover
 - **Multi-channel access** — CLI, Telegram bot, and Web UI with bearer token auth and cross-channel identity mapping
 - **Web dashboard** — real-time status, LLM providers, agent monitoring, session queue, scheduled jobs, and integrated chat panel
@@ -75,7 +75,7 @@ Test agent behavior through the real Runtime with Guardian active:
 - JSON-based test suites (`.eval.json`) for CI integration
 - Human-readable reports with per-metric pass rates
 
-## Three-Layer Defense
+## Four-Layer Defense
 
 **Layer 1 — Proactive (before the agent sees input):**
 - Prompt injection detection with invisible Unicode stripping (18 signal patterns)
@@ -84,20 +84,27 @@ Test agent behavior through the real Runtime with Guardian active:
 - Secret scanning (28+ credential patterns: AWS, GCP, GitHub, OpenAI, Stripe, Slack, and more)
 - Sensitive path blocking with traversal normalization
 
-**Layer 2 — Output (after the agent responds, before output reaches anyone):**
+**Layer 2 — Guardian Agent (inline LLM evaluation before tool execution):**
+- Evaluates every non-read-only tool action via LLM before execution
+- Blocks high/critical risk actions; allows safe/low/medium with audit logging
+- Configurable LLM: local (Ollama), external (OpenAI/Anthropic), or auto (local-first fallback)
+- Fail-open by default — actions proceed if LLM is unavailable
+- All evaluations logged to audit trail with `controller: 'GuardianAgent'`
+
+**Layer 3 — Output (after the agent responds, before output reaches anyone):**
 - GuardedLLMProvider scans every LLM response for secrets automatically
 - Response redaction replaces detected credentials with `[REDACTED]`
 - Inter-agent event payloads are scanned before dispatch
 - All detections logged to the audit trail
 
-**Layer 3 — Sentinel (retrospective, scheduled):**
-- Sentinel agent analyzes the audit log on a cron schedule
+**Layer 4 — Sentinel Audit (retrospective, scheduled or on-demand):**
+- Analyzes the audit log on a cron schedule or on-demand via web UI / API
 - Detects anomaly patterns: capability probing, repeated secret detections, volume spikes, error storms
 - Optional LLM-enhanced analysis for deeper pattern recognition
 
 ## Core Security Layers, Hardening, and AI Guardrails
 
-- Layered defense lifecycle: proactive admission controls, output-time leak prevention, and scheduled Sentinel anomaly analysis.
+- Layered defense lifecycle: proactive admission controls, inline LLM action evaluation (Guardian Agent), output-time leak prevention, and Sentinel audit analysis.
 - Mandatory runtime chokepoints: every message, LLM call, response, and event is mediated by Runtime enforcement (not optional agent hooks).
 - Prompt-injection resistance: invisible Unicode stripping plus weighted injection signal scoring before agent execution.
 - Least-privilege capability model: per-agent capability grants with immutable frozen context (`Object.freeze`).
@@ -221,6 +228,9 @@ assistant:
     allowedPaths: [./docs, ./workspace]
     allowedCommands: [npm, node, git]
     allowedDomains: [github.com, openai.com, anthropic.com, gmail.googleapis.com]
+    sandbox:
+      enabled: true
+      enforcementMode: strict
     toolPolicies:
       forum_post: deny
     qmd:
@@ -301,6 +311,8 @@ guardian:
   auditLog:
     maxEvents: 10000
 ```
+
+By default, GuardianAgent keeps tool sandboxing in `strict` mode. If a host cannot provide strong subprocess isolation, risky tool classes stay blocked until you either run on Linux/Unix with bubblewrap, or use the Windows portable app that bundles `guardian-sandbox-win.exe`. Switching to `assistant.tools.sandbox.enforcementMode: permissive` is an explicit opt-in to higher host risk.
 
 If bundled QMD is missing in your local install, run `npm run ensure:qmd` to install it automatically.
 
@@ -453,7 +465,7 @@ Portable launcher behavior:
 
 Full documentation in `docs/architecture/`:
 - [Overview](docs/architecture/OVERVIEW.md) — system architecture and component map
-- [Security](SECURITY.md) — three-layer defense system details
+- [Security](SECURITY.md) — four-layer defense system details
 - [Guardian API](docs/architecture/GUARDIAN-API.md) — complete API reference
 - [Decisions](docs/architecture/DECISIONS.md) — architecture decision records
 - [SOUL](SOUL.md) — non-negotiable operating intent and guardrail constitution

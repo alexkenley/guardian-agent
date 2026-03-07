@@ -105,28 +105,31 @@
 
 ---
 
-## ADR-008: Three-Layer Defense Architecture
+## ADR-008: Four-Layer Defense Architecture
 
-**Status:** Accepted
+**Status:** Accepted (updated: added Layer 2 Guardian Agent inline evaluation)
 
-**Context:** The original Guardian (ADR-007) was built but **never wired into the Runtime dispatch path**. Messages reached agents without any security checks. Additionally, analysis of real AI agent incidents (see `docs/research/AI-AGENT-SECURITY-REPORT.md`) and OpenClaw patterns (see `docs/research/OPENCLAW-ANALYSIS.md`) revealed critical gaps: no input sanitization, no rate limiting, no output scanning, no audit trail, and no retrospective analysis.
+**Context:** The original Guardian (ADR-007) was built but **never wired into the Runtime dispatch path**. Messages reached agents without any security checks. Additionally, analysis of real AI agent incidents (see `docs/research/AI-AGENT-SECURITY-REPORT.md`) and OpenClaw patterns (see `docs/research/OPENCLAW-ANALYSIS.md`) revealed critical gaps: no input sanitization, no rate limiting, no output scanning, no audit trail, and no retrospective analysis. A further gap was identified: sync admission controllers cannot evaluate contextual risk of tool actions — only an LLM can reason about whether a tool invocation is appropriate given the conversation context.
 
-**Decision:** Expand Guardian into a three-layer defense system:
+**Decision:** Expand Guardian into a four-layer defense system:
 
-- **Layer 1 (Proactive):** Admission controller pipeline wired into `Runtime.dispatchMessage()` before agent execution. Five controllers in order: InputSanitizer (mutating), RateLimiter, CapabilityController, SecretScanController, DeniedPathController.
-- **Layer 2 (Output):** OutputGuardian scans LLM responses after agent execution but before user delivery. Also scans inter-agent event payloads in `ctx.emit()`.
-- **Layer 3 (Sentinel):** SentinelAgent runs on cron schedule, analyzes AuditLog for anomalous patterns using heuristic rules and optional LLM-enhanced analysis.
+- **Layer 1 (Admission):** Sync admission controller pipeline wired into `Runtime.dispatchMessage()` before agent execution. Five controllers in order: InputSanitizer (mutating), RateLimiter, CapabilityController, SecretScanController, DeniedPathController.
+- **Layer 2 (Guardian Agent):** `GuardianAgentService` performs inline LLM-powered evaluation of non-read-only tool actions before execution. Uses a dedicated security-focused system prompt (no SOUL/skills injection). Configurable LLM provider (`local`/`external`/`auto`), fail-open/closed mode, and timeout. Runs as an `onPreExecute` hook in `ToolExecutor`.
+- **Layer 3 (Output):** OutputGuardian scans LLM responses after agent execution but before user delivery. Also scans inter-agent event payloads in `ctx.emit()`.
+- **Layer 4 (Sentinel Audit):** `SentinelAuditService` runs on cron schedule or on-demand, analyzes AuditLog for anomalous patterns using heuristic rules and optional LLM-enhanced analysis.
 
 Cross-cutting: AuditLog records all security events in an in-memory ring buffer (12 event types, queryable, configurable) with optional SHA-256 hash-chained JSONL persistence for tamper detection and crash recovery (see ADR-012).
 
 **Consequences:**
-- (+) Defense-in-depth at every stage: input → processing → output → retrospective
+- (+) Defense-in-depth at every stage: input → tool evaluation → output → retrospective
 - (+) Input sanitization catches prompt injection before agent sees the message
+- (+) Guardian Agent catches contextually dangerous tool actions that regex rules cannot detect
 - (+) Output redaction prevents credential leaks in LLM responses without blocking useful content
 - (+) AuditLog provides structured data for both real-time monitoring and forensic analysis
-- (+) Sentinel detects slow-burn attacks that individual controllers miss
+- (+) Sentinel Audit detects slow-burn attacks that individual controllers miss
 - (+) All features configurable and individually toggleable
 - (-) Additional latency for each message (~ms for regex scanning, negligible)
+- (-) Guardian Agent adds LLM call latency for non-read-only tool actions (~1-3s depending on provider)
 - (-) ~~In-memory audit log loses data on restart~~ (resolved: ADR-012 adds hash-chained persistence)
 - (-) Heuristic injection detection has false positive/negative tradeoffs
 

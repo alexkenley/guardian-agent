@@ -314,6 +314,8 @@ async function renderToolsTab(panel) {
     const approvals = state.approvals || [];
     const jobs = state.jobs || [];
     const categories = state.categories || [];
+    const notices = state.notices || [];
+    const sandbox = state.sandbox || null;
 
     panel.innerHTML = `
       <div class="intel-summary-grid">
@@ -337,7 +339,51 @@ async function renderToolsTab(panel) {
           <div class="card-value">${jobs.length}</div>
           <div class="card-subtitle">Execution history</div>
         </div>
+        <div class="status-card ${sandbox?.enforcementMode === 'strict' ? 'success' : 'warning'}">
+          <div class="card-title">Sandbox Mode</div>
+          <div class="card-value">${esc((sandbox?.enforcementMode || 'unknown').toUpperCase())}</div>
+          <div class="card-subtitle">${esc(sandbox ? `${sandbox.availability} on ${sandbox.platform}` : 'No sandbox status available')}</div>
+        </div>
       </div>
+
+      ${sandbox ? `
+      <div class="table-container">
+        <div class="table-header"><h3>Sandbox Status</h3></div>
+        <div style="padding:0.9rem 1rem;display:grid;gap:0.5rem;">
+          <div style="font-size:0.85rem;color:var(--text-secondary);">
+            Backend: <strong>${esc(sandbox.backend)}</strong> |
+            Availability: <strong>${esc(sandbox.availability)}</strong> |
+            Enforcement: <strong>${esc(sandbox.enforcementMode)}</strong>
+          </div>
+          ${Array.isArray(sandbox.reasons) && sandbox.reasons.length > 0 ? `
+            <div style="font-size:0.78rem;color:var(--text-muted);">${sandbox.reasons.map(reason => esc(reason)).join(' ')}</div>
+          ` : ''}
+          ${sandbox.enforcementMode === 'strict' && sandbox.availability !== 'strong' ? `
+            <div style="font-size:0.78rem;color:var(--warning);margin-top:0.25rem;">
+              Strict mode is active but native sandboxing is unavailable — some tools (shell, browser, network) are disabled.
+              To allow these tools, go to <strong>Settings</strong> and set Sandbox Mode to <strong>Permissive</strong>.
+            </div>
+          ` : ''}
+        </div>
+      </div>
+      ` : ''}
+
+      ${notices.length > 0 ? `
+      <div class="table-container">
+        <div class="table-header"><h3>Runtime Notices</h3></div>
+        <div style="padding:0.9rem 1rem;display:grid;gap:0.75rem;">
+          ${notices.map(notice => `
+            <div class="cfg-check-item ${notice.level === 'warn' ? 'warning' : 'complete'}">
+              <div class="cfg-check-head">
+                <span class="cfg-check-title">${notice.level === 'warn' ? 'Warning' : 'Notice'}</span>
+                <span class="badge ${notice.level === 'warn' ? 'badge-queued' : 'badge-running'}">${esc(notice.level.toUpperCase())}</span>
+              </div>
+              <div class="cfg-check-detail">${esc(notice.message)}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+      ` : ''}
 
       <div class="table-container">
         <div class="table-header"><h3>Execution Mode</h3></div>
@@ -1190,35 +1236,159 @@ function renderSettingsTab(panel) {
 
   panel.innerHTML = '';
 
-  // Overview/Readiness
+  // Overview/Readiness — always visible at top
   panel.appendChild(createOverview(config, providers, setupStatus));
 
-  // Telegram channel
-  panel.appendChild(createTelegramPanel(config, panel));
+  // ── Helper: create an accordion group ──
+  function makeGroup(title, summary, items, openByDefault) {
+    const group = document.createElement('div');
+    group.className = 'cfg-group' + (openByDefault ? ' open' : '');
 
-  // Web Search & Fallback
-  panel.appendChild(createWebSearchPanel(config, panel));
+    const header = document.createElement('div');
+    header.className = 'cfg-group-header';
+    header.innerHTML = `
+      <span class="cfg-group-chevron">&#9654;</span>
+      <span class="cfg-group-title">${esc(title)}</span>
+      <span class="cfg-group-summary">${summary}</span>
+    `;
+    header.addEventListener('click', () => group.classList.toggle('open'));
+    group.appendChild(header);
 
-  // Browser Automation
-  panel.appendChild(createBrowserPanel(config, panel));
+    const body = document.createElement('div');
+    body.className = 'cfg-group-body';
+    const grid = document.createElement('div');
+    grid.className = 'cfg-group-grid';
 
-  // Google Workspace
-  panel.appendChild(createGoogleWorkspacePanel());
+    for (const item of items) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'cfg-item' + (item.fullWidth ? ' full-width' : '');
 
-  // Trust Preset
-  panel.appendChild(createTrustPresetPanel(config));
+      const itemHeader = document.createElement('div');
+      itemHeader.className = 'cfg-item-header';
+      itemHeader.innerHTML = `
+        <span class="cfg-item-chevron">&#9654;</span>
+        <span class="cfg-item-title">${esc(item.title)}</span>
+        <span class="cfg-item-badge">${item.badge || ''}</span>
+      `;
+      itemHeader.addEventListener('click', () => wrapper.classList.toggle('open'));
+      wrapper.appendChild(itemHeader);
 
-  // Auth
-  panel.appendChild(createAuthPanel(config, authStatus, panel));
+      const itemBody = document.createElement('div');
+      itemBody.className = 'cfg-item-body';
+      const panelEl = item.panel;
+      if (panelEl) {
+        // Remove the table-header (we use our own accordion header instead)
+        const tableHeader = panelEl.querySelector('.table-header');
+        if (tableHeader) tableHeader.remove();
+        // Remove table-container border/bg since the cfg-item provides it
+        panelEl.style.background = 'none';
+        panelEl.style.border = 'none';
+        panelEl.style.margin = '0';
+        itemBody.appendChild(panelEl);
+      }
+      wrapper.appendChild(itemBody);
+      grid.appendChild(wrapper);
+    }
 
-  // Danger Zone
-  panel.appendChild(createDangerZonePanel());
+    body.appendChild(grid);
+    group.appendChild(body);
+    return group;
+  }
 
-  // Read-only config snapshots
-  panel.appendChild(createSection('Channels (Read-Only Snapshot)', config.channels));
-  panel.appendChild(createSection('Guardian (Read-Only Snapshot)', config.guardian));
-  panel.appendChild(createSection('Runtime (Read-Only Snapshot)', config.runtime));
-  panel.appendChild(createSection('Assistant (Read-Only Snapshot)', config.assistant));
+  // ── Build summaries ──
+  const telegramEnabled = config.channels?.telegram?.enabled;
+  const sandboxMode = config.assistant?.tools?.sandbox?.enforcementMode || 'strict';
+  const apu = config.assistant?.tools?.agentPolicyUpdates || {};
+  const apuCount = [apu.allowedPaths !== false, !!apu.allowedCommands, apu.allowedDomains !== false].filter(Boolean).length;
+  const gaConfig = config.guardian?.guardianAgent;
+  const trustPreset = config.guardian?.trustPreset || 'custom';
+  const authMode = authStatus?.tokenConfigured ? 'Configured' : 'Not set';
+
+  // ── Channels group ──
+  panel.appendChild(makeGroup('Channels', `${telegramEnabled ? 'Telegram active' : 'CLI + Web'}`, [
+    {
+      title: 'Telegram',
+      badge: telegramEnabled ? 'Enabled' : 'Disabled',
+      panel: createTelegramPanel(config, panel),
+    },
+    {
+      title: 'Web Search & Fallback',
+      badge: config.assistant?.tools?.webSearch?.provider || 'auto',
+      panel: createWebSearchPanel(config, panel),
+    },
+  ]));
+
+  // ── Integrations group ──
+  panel.appendChild(makeGroup('Integrations', '', [
+    {
+      title: 'Browser Automation',
+      badge: config.assistant?.tools?.browser?.enabled !== false ? 'Enabled' : 'Disabled',
+      panel: createBrowserPanel(config, panel),
+    },
+    {
+      title: 'Google Workspace',
+      badge: 'Gmail, Calendar, Drive',
+      panel: createGoogleWorkspacePanel(),
+      fullWidth: true,
+    },
+  ]));
+
+  // ── Security group ──
+  panel.appendChild(makeGroup('Security', `${sandboxMode} sandbox`, [
+    {
+      title: 'Guardian Agent',
+      badge: gaConfig?.enabled !== false ? `${gaConfig?.llmProvider || 'auto'}` : 'Disabled',
+      panel: createGuardianAgentPanel(),
+    },
+    {
+      title: 'Sentinel Audit',
+      badge: 'Retrospective analysis',
+      panel: createSentinelAuditPanel(),
+    },
+    {
+      title: 'Sandbox Enforcement',
+      badge: sandboxMode,
+      panel: createSandboxPanel(config),
+    },
+    {
+      title: 'Trust Preset',
+      badge: trustPreset,
+      panel: createTrustPresetPanel(config),
+    },
+    {
+      title: 'Agent Policy Access',
+      badge: `${apuCount}/3 enabled`,
+      panel: createAgentPolicyAccessPanel(config, panel),
+    },
+  ]));
+
+  // ── System group ──
+  panel.appendChild(makeGroup('System', authMode, [
+    {
+      title: 'Authentication',
+      badge: authMode,
+      panel: createAuthPanel(config, authStatus, panel),
+    },
+    {
+      title: 'Danger Zone',
+      badge: '',
+      panel: createDangerZonePanel(),
+    },
+  ]));
+
+  // ── Config Snapshots group (collapsed by default) ──
+  function makeSnapshotPanel(data) {
+    const el = document.createElement('div');
+    el.className = 'table-container';
+    el.innerHTML = `<div class="cfg-center-body"><pre style="font-size:0.72rem;overflow-x:auto;max-height:400px;overflow-y:auto;">${highlight(JSON.stringify(data, null, 2))}</pre></div>`;
+    return el;
+  }
+  panel.appendChild(makeGroup('Config Snapshots', 'Read-only', [
+    { title: 'Channels', badge: 'read-only', panel: makeSnapshotPanel(config.channels), fullWidth: true },
+    { title: 'Guardian', badge: 'read-only', panel: makeSnapshotPanel(config.guardian), fullWidth: true },
+    { title: 'Runtime', badge: 'read-only', panel: makeSnapshotPanel(config.runtime), fullWidth: true },
+    { title: 'Assistant', badge: 'read-only', panel: makeSnapshotPanel(config.assistant), fullWidth: true },
+  ]));
 }
 
 function createOverview(config, providers, setupStatus) {
@@ -1501,6 +1671,261 @@ function createBrowserPanel(config, panel) {
   });
 
   applyInputTooltips(section);
+  return section;
+}
+
+function createSandboxPanel(config) {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+  const sandbox = config.assistant?.tools?.sandbox || {};
+  const mode = sandbox.enforcementMode || 'strict';
+
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Sandbox Enforcement</h3>
+      <span class="cfg-header-note">OS-level process isolation for tool execution</span>
+    </div>
+    <div class="cfg-center-body">
+      <div class="cfg-form-grid">
+        <div class="cfg-field">
+          <label>Enforcement Mode</label>
+          <select id="sandbox-enforcement-mode">
+            <option value="strict" ${mode === 'strict' ? 'selected' : ''}>Strict — disable risky tools when native sandbox unavailable</option>
+            <option value="permissive" ${mode === 'permissive' ? 'selected' : ''}>Permissive — allow all tools even without native sandbox</option>
+          </select>
+        </div>
+      </div>
+      <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
+        <strong>Strict</strong> disables shell, browser, and network tools when native sandboxing (bwrap) is not available.
+        <strong>Permissive</strong> allows these tools to run unsandboxed. Use permissive if you trust your environment (e.g. local dev machine).
+        Restart required after changes.
+      </div>
+      <div class="cfg-actions">
+        <button class="btn btn-primary" id="sandbox-save" type="button">Save Sandbox Config</button>
+        <span id="sandbox-save-status" class="cfg-save-status"></span>
+      </div>
+    </div>
+  `;
+
+  const statusEl = section.querySelector('#sandbox-save-status');
+  section.querySelector('#sandbox-save')?.addEventListener('click', async () => {
+    const modeVal = section.querySelector('#sandbox-enforcement-mode').value;
+    statusEl.textContent = 'Saving...';
+    statusEl.style.color = 'var(--text-muted)';
+    try {
+      const result = await api.updateConfig({
+        assistant: { tools: { sandbox: { enforcementMode: modeVal } } },
+      });
+      statusEl.textContent = result.message || 'Saved';
+      statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+    } catch (err) {
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+      statusEl.style.color = 'var(--error)';
+    }
+  });
+
+  return section;
+}
+
+function createAgentPolicyAccessPanel(config, settingsPanel) {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+  const apu = config.assistant?.tools?.agentPolicyUpdates || {};
+  const pathsEnabled = apu.allowedPaths !== false;
+  const commandsEnabled = !!apu.allowedCommands;
+  const domainsEnabled = apu.allowedDomains !== false;
+
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Agent Policy Access</h3>
+      <span class="cfg-header-note">Allow the assistant to modify sandbox policy via chat (always requires user approval)</span>
+    </div>
+    <div class="cfg-center-body">
+      <div style="display:grid;gap:0.6rem;padding:0.25rem 0;">
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
+          <input type="checkbox" id="apu-paths" ${pathsEnabled ? 'checked' : ''}>
+          <span>Manage filesystem paths</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
+          <input type="checkbox" id="apu-commands" ${commandsEnabled ? 'checked' : ''}>
+          <span>Manage shell commands</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
+          <input type="checkbox" id="apu-domains" ${domainsEnabled ? 'checked' : ''}>
+          <span>Manage network domains</span>
+        </label>
+      </div>
+      <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
+        When enabled, the assistant can use the <code>update_tool_policy</code> tool to add or remove paths, commands, or domains from the sandbox allowlist.
+        Every change <strong>always requires explicit user approval</strong> regardless of policy mode.
+        Useful for remote control via Telegram or other channels where the web UI is not accessible.
+        Restart required after changes.
+      </div>
+      <div class="cfg-actions">
+        <button class="btn btn-primary" id="apu-save" type="button">Save</button>
+        <span id="apu-save-status" class="cfg-save-status"></span>
+      </div>
+    </div>
+  `;
+
+  const statusEl = section.querySelector('#apu-save-status');
+  section.querySelector('#apu-save')?.addEventListener('click', async () => {
+    statusEl.textContent = 'Saving...';
+    statusEl.style.color = 'var(--text-muted)';
+    try {
+      const result = await api.updateConfig({
+        assistant: {
+          tools: {
+            agentPolicyUpdates: {
+              allowedPaths: section.querySelector('#apu-paths').checked,
+              allowedCommands: section.querySelector('#apu-commands').checked,
+              allowedDomains: section.querySelector('#apu-domains').checked,
+            },
+          },
+        },
+      });
+      statusEl.textContent = result.message || 'Saved';
+      statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+    } catch (err) {
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+      statusEl.style.color = 'var(--error)';
+    }
+  });
+
+  return section;
+}
+
+function createGuardianAgentPanel() {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Guardian Agent</h3>
+      <span class="cfg-header-note">Inline LLM-powered action evaluation</span>
+    </div>
+    <div class="cfg-center-body" id="guardian-agent-body">
+      <div class="loading" style="font-size:0.8rem;">Loading...</div>
+    </div>
+  `;
+
+  async function load() {
+    const body = section.querySelector('#guardian-agent-body');
+    if (!body) return;
+    try {
+      const status = await api.guardianAgentStatus();
+      body.innerHTML = `
+        <div class="cfg-form-grid">
+          <div class="cfg-field">
+            <label>Enabled</label>
+            <select id="ga-enabled">
+              <option value="true" ${status.enabled ? 'selected' : ''}>Enabled</option>
+              <option value="false" ${!status.enabled ? 'selected' : ''}>Disabled</option>
+            </select>
+          </div>
+          <div class="cfg-field">
+            <label>LLM Provider</label>
+            <select id="ga-llm-provider">
+              <option value="auto" ${status.llmProvider === 'auto' ? 'selected' : ''}>Auto (local first, then external)</option>
+              <option value="local" ${status.llmProvider === 'local' ? 'selected' : ''}>Local (Ollama)</option>
+              <option value="external" ${status.llmProvider === 'external' ? 'selected' : ''}>External (OpenAI/Anthropic)</option>
+            </select>
+          </div>
+          <div class="cfg-field">
+            <label>Fail Mode</label>
+            <select id="ga-fail-open">
+              <option value="true" ${status.failOpen ? 'selected' : ''}>Fail-open (allow when LLM unavailable)</option>
+              <option value="false" ${!status.failOpen ? 'selected' : ''}>Fail-closed (block when LLM unavailable)</option>
+            </select>
+          </div>
+          <div class="cfg-field">
+            <label>Timeout (ms)</label>
+            <input type="number" id="ga-timeout" value="${status.timeoutMs || 8000}" min="1000" max="30000" step="1000">
+          </div>
+        </div>
+        <div style="margin-top:0.75rem;">
+          <button class="btn btn-sm" id="ga-save-btn">Save</button>
+          <span id="ga-save-status" style="font-size:0.74rem;margin-left:0.5rem;"></span>
+        </div>
+        <div style="margin-top:0.5rem;font-size:0.74rem;color:var(--text-muted);">
+          Guardian Agent evaluates tool actions via LLM before execution. Mutating and network actions are checked; read-only actions are skipped.
+        </div>
+      `;
+      section.querySelector('#ga-save-btn')?.addEventListener('click', async () => {
+        const statusEl = section.querySelector('#ga-save-status');
+        try {
+          await api.updateGuardianAgent({
+            enabled: section.querySelector('#ga-enabled').value === 'true',
+            llmProvider: section.querySelector('#ga-llm-provider').value,
+            failOpen: section.querySelector('#ga-fail-open').value === 'true',
+            timeoutMs: parseInt(section.querySelector('#ga-timeout').value, 10) || 8000,
+          });
+          if (statusEl) { statusEl.textContent = 'Saved'; statusEl.style.color = 'var(--success)'; }
+        } catch (err) {
+          if (statusEl) { statusEl.textContent = err.message || 'Error'; statusEl.style.color = 'var(--error)'; }
+        }
+      });
+    } catch (err) {
+      body.innerHTML = `<div style="font-size:0.8rem;color:var(--text-secondary);">Guardian Agent status unavailable.</div>`;
+    }
+  }
+  load();
+  return section;
+}
+
+function createSentinelAuditPanel() {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Sentinel Audit</h3>
+      <span class="cfg-header-note">Retrospective security analysis</span>
+    </div>
+    <div class="cfg-center-body">
+      <div style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem;">
+        Sentinel analyzes audit logs for anomalous patterns: denial spikes, capability probing, secret detection, and error storms.
+        Runs automatically on a cron schedule, or trigger on-demand below.
+      </div>
+      <div style="display:flex;gap:0.5rem;align-items:center;">
+        <button class="btn btn-sm" id="sentinel-run-btn">Run Audit Now</button>
+        <span id="sentinel-run-status" style="font-size:0.74rem;"></span>
+      </div>
+      <div id="sentinel-results" style="margin-top:0.75rem;display:none;"></div>
+    </div>
+  `;
+
+  section.querySelector('#sentinel-run-btn')?.addEventListener('click', async () => {
+    const statusEl = section.querySelector('#sentinel-run-status');
+    const resultsEl = section.querySelector('#sentinel-results');
+    if (statusEl) { statusEl.textContent = 'Running...'; statusEl.style.color = 'var(--text-muted)'; }
+    try {
+      const result = await api.runSentinelAudit();
+      if (statusEl) {
+        const total = (result.anomalies?.length || 0) + (result.llmFindings?.length || 0);
+        statusEl.textContent = total > 0 ? total + ' finding(s)' : 'No anomalies detected';
+        statusEl.style.color = total > 0 ? 'var(--warning)' : 'var(--success)';
+      }
+      if (resultsEl && ((result.anomalies?.length || 0) + (result.llmFindings?.length || 0)) > 0) {
+        resultsEl.style.display = 'block';
+        const items = [
+          ...(result.anomalies || []).map(a => `<div style="padding:0.4rem 0;border-bottom:1px solid var(--border);font-size:0.8rem;">
+            <span class="status-badge ${a.severity === 'critical' ? 'status-error' : 'status-warning'}" style="font-size:0.65rem;">${esc(a.severity)}</span>
+            <strong>${esc(a.type)}</strong>: ${esc(a.description)}${a.agentId ? ' <span style="color:var(--text-muted);">('+esc(a.agentId)+')</span>' : ''}
+          </div>`),
+          ...(result.llmFindings || []).map(f => `<div style="padding:0.4rem 0;border-bottom:1px solid var(--border);font-size:0.8rem;">
+            <span class="status-badge ${f.severity === 'critical' ? 'status-error' : 'status-warning'}" style="font-size:0.65rem;">${esc(f.severity)}</span>
+            ${esc(f.description)}
+            <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.2rem;">Recommendation: ${esc(f.recommendation)}</div>
+          </div>`),
+        ];
+        resultsEl.innerHTML = items.join('');
+      } else if (resultsEl) {
+        resultsEl.style.display = 'none';
+      }
+    } catch (err) {
+      if (statusEl) { statusEl.textContent = err.message || 'Error'; statusEl.style.color = 'var(--error)'; }
+    }
+  });
+
   return section;
 }
 

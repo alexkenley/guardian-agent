@@ -106,6 +106,121 @@ describe('ToolExecutor', () => {
     ]);
   });
 
+  it('hot-applies Google Workspace service availability without rebuilding the executor', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const beforeEnable = await executor.runTool({
+      toolName: 'gws',
+      args: { service: 'gmail', resource: 'users messages', method: 'list' },
+      origin: 'cli',
+    });
+    expect(beforeEnable.success).toBe(false);
+    expect(beforeEnable.message).toContain('Google Workspace is not enabled');
+
+    executor.setGwsService({
+      execute: async () => ({ success: true, data: { messages: [] } }),
+      schema: async () => ({ success: true, data: {} }),
+      authStatus: async () => ({ success: true, data: {} }),
+      isServiceEnabled: () => true,
+      getEnabledServices: () => ['gmail'],
+    } as unknown as import('../runtime/gws-service.js').GWSService);
+
+    const afterEnable = await executor.runTool({
+      toolName: 'gws',
+      args: { service: 'gmail', resource: 'users messages', method: 'list' },
+      origin: 'cli',
+    });
+    expect(afterEnable.success).toBe(true);
+    expect(afterEnable.output).toEqual({ messages: [] });
+
+    executor.setGwsService(undefined);
+
+    const afterDisable = await executor.runTool({
+      toolName: 'gws',
+      args: { service: 'gmail', resource: 'users messages', method: 'list' },
+      origin: 'cli',
+    });
+    expect(afterDisable.success).toBe(false);
+    expect(afterDisable.message).toContain('Google Workspace is not enabled');
+  });
+
+  it('requires approval for Gmail draft creation via gws in approve_by_policy mode', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      gwsService: {
+        execute: async () => ({ success: true, data: { id: 'draft-1' } }),
+        schema: async () => ({ success: true, data: {} }),
+        authStatus: async () => ({ success: true, data: {} }),
+        isServiceEnabled: () => true,
+        getEnabledServices: () => ['gmail'],
+      } as unknown as import('../runtime/gws-service.js').GWSService,
+    });
+
+    const run = await executor.runTool({
+      toolName: 'gws',
+      args: {
+        service: 'gmail',
+        resource: 'users drafts',
+        method: 'create',
+        params: { userId: 'me' },
+        json: { message: { raw: 'Zm9v' } },
+      },
+      origin: 'cli',
+    });
+
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('pending_approval');
+    expect(run.approvalId).toBeDefined();
+  });
+
+  it('allows Gmail reads via gws without approval in approve_by_policy mode', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      gwsService: {
+        execute: async () => ({ success: true, data: { messages: [] } }),
+        schema: async () => ({ success: true, data: {} }),
+        authStatus: async () => ({ success: true, data: {} }),
+        isServiceEnabled: () => true,
+        getEnabledServices: () => ['gmail'],
+      } as unknown as import('../runtime/gws-service.js').GWSService,
+    });
+
+    const run = await executor.runTool({
+      toolName: 'gws',
+      args: {
+        service: 'gmail',
+        resource: 'users messages',
+        method: 'list',
+        params: { userId: 'me', maxResults: 5 },
+      },
+      origin: 'cli',
+    });
+
+    expect(run.success).toBe(true);
+    expect(run.status).toBe('succeeded');
+    expect(run.output).toEqual({ messages: [] });
+  });
+
   it('requires approval for mutating tools in approve_by_policy mode', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
@@ -1189,6 +1304,7 @@ describe('ToolExecutor', () => {
       const shell = executor.getCategoryInfo().find((entry) => entry.category === 'shell');
       expect(shell?.enabled).toBe(false);
       expect(shell?.disabledReason).toContain('strict sandbox mode');
+      expect(executor.getRuntimeNotices()[0]?.message).toContain('assistant.tools.sandbox.enforcementMode: permissive');
 
       const result = await executor.runTool({
         toolName: 'shell_safe',
@@ -1198,6 +1314,33 @@ describe('ToolExecutor', () => {
       expect(result.success).toBe(false);
       expect(result.status).toBe('denied');
       expect(result.message).toContain('strict sandbox mode');
+    });
+
+    it('warns when permissive mode is explicitly enabled without strong sandboxing', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        sandboxConfig: {
+          ...DEFAULT_SANDBOX_CONFIG,
+          enforcementMode: 'permissive',
+        },
+        sandboxHealth: {
+          enabled: true,
+          platform: 'win32',
+          availability: 'unavailable',
+          backend: 'env',
+          enforcementMode: 'permissive',
+          reasons: ['No native Windows sandbox helper is available.'],
+        },
+      });
+
+      const notice = executor.getRuntimeNotices()[0];
+      expect(notice?.level).toBe('warn');
+      expect(notice?.message).toContain('Permissive sandbox mode is explicitly enabled');
+      expect(notice?.message).toContain('bubblewrap');
+      expect(notice?.message).toContain('guardian-sandbox-win.exe');
     });
   });
 

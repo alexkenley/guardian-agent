@@ -25,11 +25,11 @@ import type { LLMConfig } from './config/types.js';
 import { BaseAgent } from './agent/agent.js';
 import { createAgentDefinition } from './agent/agent.js';
 import type { AgentContext, AgentResponse, UserMessage } from './agent/types.js';
-import { SentinelAgent } from './agents/sentinel.js';
+import { GuardianAgentService, SentinelAuditService } from './runtime/sentinel.js';
 import { createLogger, setLogLevel } from './util/logging.js';
 import { ConversationService } from './runtime/conversation.js';
 import { getReferenceGuide, formatGuideForTelegram } from './reference-guide.js';
-import type { ChatMessage } from './llm/types.js';
+import type { ChatMessage, LLMProvider } from './llm/types.js';
 import { IdentityService } from './runtime/identity.js';
 import { AnalyticsService } from './runtime/analytics.js';
 import { buildQuickActionPrompt, getQuickActions } from './quick-actions.js';
@@ -45,7 +45,9 @@ import { MoltbookConnector } from './runtime/moltbook-connector.js';
 import { AssistantOrchestrator } from './runtime/orchestrator.js';
 import { AgentMemoryStore } from './runtime/agent-memory-store.js';
 import { AssistantJobTracker } from './runtime/assistant-jobs.js';
+import { buildGmailRawMessage, parseDirectGmailWriteIntent } from './runtime/gmail-compose.js';
 import { parseDirectFileSearchIntent } from './runtime/search-intent.js';
+import { GWSService } from './runtime/gws-service.js';
 import { ToolExecutor } from './tools/executor.js';
 import type { ToolExecutorOptions } from './tools/executor.js';
 import type { ToolPolicySnapshot } from './tools/types.js';
@@ -75,6 +77,10 @@ const APPROVAL_DENY_PATTERN = /^(?:\/)?(?:deny|denied|reject|decline|cancel|no|n
 const APPROVAL_COMMAND_PATTERN = /^\/?(approve|deny)\b/i;
 const APPROVAL_ID_TOKEN_PATTERN = /^(?=.*(?:-|\d))[a-z0-9-]{4,}$/i;
 const PENDING_APPROVAL_TTL_MS = 30 * 60_000;
+const MAX_TOOL_RESULT_MESSAGE_CHARS = 8_000;
+const MAX_TOOL_RESULT_STRING_CHARS = 600;
+const MAX_TOOL_RESULT_ARRAY_ITEMS = 10;
+const MAX_TOOL_RESULT_OBJECT_KEYS = 20;
 
 interface PendingApprovalState {
   ids: string[];
@@ -185,7 +191,7 @@ async function probeGwsCli(config: GuardianAgentConfig): Promise<{
   authMethod?: string;
 }> {
   const command = config.assistant.tools.mcp?.managedProviders?.gws?.command?.trim() || 'gws';
-  const execOpts = { timeout: 5000, shell: true as const };
+  const execOpts = { timeout: 5000, shell: process.platform === 'win32' };
   try {
     const { stdout } = await execFileAsync(command, ['--version'], execOpts);
     const version = stdout.trim();
@@ -217,6 +223,8 @@ class ChatAgent extends BaseAgent {
   private fallbackChain?: ModelFallbackChain;
   /** Per-agent persistent knowledge base. */
   private memoryStore?: AgentMemoryStore;
+  /** Resolver for the GWS LLM provider — looked up at request time so hot-reloaded config is used. */
+  private resolveGwsProvider?: () => LLMProvider | undefined;
 
   constructor(
     id: string,
@@ -229,6 +237,7 @@ class ChatAgent extends BaseAgent {
     fallbackChain?: ModelFallbackChain,
     soulPrompt?: string,
     memoryStore?: AgentMemoryStore,
+    resolveGwsProvider?: () => LLMProvider | undefined,
   ) {
     super(id, name, { handleMessages: true });
     this.systemPrompt = composeGuardianSystemPrompt(systemPrompt, soulPrompt);
@@ -247,6 +256,7 @@ class ChatAgent extends BaseAgent {
     this.maxToolRounds = 6;
     this.fallbackChain = fallbackChain;
     this.memoryStore = memoryStore;
+    this.resolveGwsProvider = resolveGwsProvider;
   }
 
   /**
@@ -323,6 +333,9 @@ class ChatAgent extends BaseAgent {
     if (activeSkills.length > 0) {
       enrichedSystemPrompt += `\n\n<active-skills>\n${formatResolvedSkills(activeSkills)}\n</active-skills>`;
     }
+    if (this.tools) {
+      enrichedSystemPrompt += `\n\n<tool-context>\n${this.tools.getToolContext()}\n</tool-context>`;
+    }
     const toolRuntimeNotices = this.tools?.getRuntimeNotices() ?? [];
     if (toolRuntimeNotices.length > 0) {
       enrichedSystemPrompt += `\n\n<tool-runtime-notices>\n${toolRuntimeNotices.map((notice) => `- ${notice.message}`).join('\n')}\n</tool-runtime-notices>`;
@@ -343,6 +356,38 @@ class ChatAgent extends BaseAgent {
     const directSearch = await this.tryDirectFilesystemSearch(message, ctx);
     if (directSearch) {
       finalContent = directSearch;
+      if (this.conversationService) {
+        this.conversationService.recordTurn(
+          { agentId: this.id, userId: message.userId, channel: message.channel },
+          message.content,
+          finalContent,
+        );
+      }
+      return {
+        content: finalContent,
+        metadata: activeSkills.length > 0 ? { activeSkills: activeSkills.map((skill) => skill.id) } : undefined,
+      };
+    }
+
+    const directWorkspaceWrite = await this.tryDirectGoogleWorkspaceWrite(message, ctx, userKey);
+    if (directWorkspaceWrite) {
+      finalContent = directWorkspaceWrite;
+      if (this.conversationService) {
+        this.conversationService.recordTurn(
+          { agentId: this.id, userId: message.userId, channel: message.channel },
+          message.content,
+          finalContent,
+        );
+      }
+      return {
+        content: finalContent,
+        metadata: activeSkills.length > 0 ? { activeSkills: activeSkills.map((skill) => skill.id) } : undefined,
+      };
+    }
+
+    const directWorkspaceRead = await this.tryDirectGoogleWorkspaceRead(message, ctx);
+    if (directWorkspaceRead) {
+      finalContent = directWorkspaceRead;
       if (this.conversationService) {
         this.conversationService.recordTurn(
           { agentId: this.id, userId: message.userId, channel: message.channel },
@@ -391,15 +436,35 @@ class ChatAgent extends BaseAgent {
       return { content: finalContent };
     }
 
+    // If GWS provider is configured and the message looks like a workspace request,
+    // swap to the external model for the tool-calling loop so it handles
+    // structured tool calls correctly (local models often struggle with complex schemas).
+    const gwsProvider = this.enabledManagedProviders?.has('gws')
+      && /\b(gmail|email|inbox|calendar|schedule|event|drive|docs|sheets|spreadsheet|google)\b/i.test(message.content)
+      ? this.resolveGwsProvider?.()
+      : undefined;
+    const chatFn = async (msgs: ChatMessage[], opts?: import('./llm/types.js').ChatOptions) => {
+      if (gwsProvider) {
+        try {
+          return await gwsProvider.chat(msgs, opts);
+        } catch (err) {
+          log.warn({ agent: this.id, error: err instanceof Error ? err.message : String(err) },
+            'GWS provider failed, falling back to default');
+          return this.chatWithFallback(ctx, msgs, opts);
+        }
+      }
+      return this.chatWithFallback(ctx, msgs, opts);
+    };
+
     if (!this.tools?.isEnabled()) {
-      const response = await this.chatWithFallback(ctx, llmMessages);
+      const response = await chatFn(llmMessages);
       finalContent = response.content;
     } else {
       let rounds = 0;
       const toolDefs = this.tools.listToolDefinitions();
       const pendingIds: string[] = [];
       while (rounds < this.maxToolRounds) {
-        const response = await this.chatWithFallback(ctx, llmMessages, { tools: toolDefs });
+        const response = await chatFn(llmMessages, { tools: toolDefs });
         finalContent = response.content;
         if (!response.toolCalls || response.toolCalls.length === 0) {
           // Safety net for local models: if finishReason is 'stop' (no tool calls)
@@ -441,7 +506,7 @@ class ChatAgent extends BaseAgent {
                 }
                 // Re-prompt the LLM with the search results
                 if (answer || results.length > 0) {
-                  const retryResponse = await this.chatWithFallback(ctx, llmMessages);
+                  const retryResponse = await chatFn(llmMessages);
                   finalContent = retryResponse.content;
                 }
               }
@@ -488,7 +553,7 @@ class ChatAgent extends BaseAgent {
           llmMessages.push({
             role: 'tool',
             toolCallId: toolCall.id,
-            content: JSON.stringify(toolResult),
+            content: formatToolResultForLLM(toolCall.name, toolResult),
           });
         }
 
@@ -731,6 +796,237 @@ class ChatAgent extends BaseAgent {
     return lines.join('\n');
   }
 
+  private async tryDirectGoogleWorkspaceWrite(
+    message: UserMessage,
+    ctx: AgentContext,
+    userKey: string,
+  ): Promise<string | null> {
+    if (!this.tools?.isEnabled()) return null;
+
+    const intent = parseDirectGmailWriteIntent(message.content);
+    if (!intent) return null;
+
+    const missing: string[] = [];
+    if (!intent.to) missing.push('recipient email');
+    if (!intent.subject) missing.push('subject');
+    if (!intent.body) missing.push('body');
+    if (missing.length > 0) {
+      return `To ${intent.mode} a Gmail email, I need the ${missing.join(', ')}.`;
+    }
+    const to = intent.to!;
+    const subject = intent.subject!;
+    const body = intent.body!;
+
+    const toolRequest = {
+      origin: 'assistant' as const,
+      agentId: this.id,
+      userId: message.userId,
+      channel: message.channel,
+      requestId: message.id,
+      agentContext: { checkAction: ctx.checkAction },
+    };
+
+    const raw = buildGmailRawMessage({
+      to,
+      subject,
+      body,
+    });
+    const method = intent.mode === 'send' ? 'send' : 'create';
+    const resource = intent.mode === 'send' ? 'users messages' : 'users drafts';
+    const json = intent.mode === 'send'
+      ? { raw }
+      : { message: { raw } };
+
+    const toolResult = await this.tools.executeModelTool(
+      'gws',
+      {
+        service: 'gmail',
+        resource,
+        method,
+        params: { userId: 'me' },
+        json,
+      },
+      toolRequest,
+    );
+
+    if (!toBoolean(toolResult.success)) {
+      const status = toString(toolResult.status);
+      if (status === 'pending_approval') {
+        const approvalId = toString(toolResult.approvalId);
+        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
+        if (approvalId) {
+          this.setPendingApprovals(userKey, [
+            ...existingIds,
+            approvalId,
+          ]);
+        }
+        const prompt = this.formatPendingApprovalPrompt(approvalId ? [approvalId] : []);
+        return [
+          `I prepared a Gmail ${intent.mode} to ${to} with subject "${subject}", but it needs approval first.`,
+          prompt,
+        ].filter(Boolean).join('\n\n');
+      }
+      const msg = toString(toolResult.message) || toString(toolResult.error) || 'Google Workspace request failed.';
+      return `I tried to ${intent.mode} the Gmail message, but it failed: ${msg}`;
+    }
+
+    return intent.mode === 'send'
+      ? `I sent the Gmail message to ${to} with subject "${subject}".`
+      : `I drafted a Gmail message to ${to} with subject "${subject}".`;
+  }
+
+  private async tryDirectGoogleWorkspaceRead(
+    message: UserMessage,
+    ctx: AgentContext,
+  ): Promise<string | null> {
+    if (!this.tools?.isEnabled()) return null;
+
+    const intent = parseDirectGoogleWorkspaceIntent(message.content);
+    if (!intent) return null;
+
+    const toolRequest = {
+      origin: 'assistant' as const,
+      agentId: this.id,
+      userId: message.userId,
+      channel: message.channel,
+      requestId: message.id,
+      agentContext: { checkAction: ctx.checkAction },
+    };
+
+    const listParams: Record<string, unknown> = {
+      userId: 'me',
+      maxResults: intent.kind === 'gmail_unread' ? Math.max(intent.count, 10) : intent.count,
+    };
+    if (intent.kind === 'gmail_unread') {
+      listParams.q = 'is:unread';
+    }
+
+    const listResult = await this.tools.executeModelTool(
+      'gws',
+      {
+        service: 'gmail',
+        resource: 'users messages',
+        method: 'list',
+        params: listParams,
+      },
+      toolRequest,
+    );
+
+    if (!toBoolean(listResult.success)) {
+      const status = toString(listResult.status);
+      if (status === 'pending_approval') {
+        const approvalId = toString(listResult.approvalId) || 'unknown';
+        return `I prepared a Gmail inbox check, but it needs approval first (approval ID: ${approvalId}).`;
+      }
+      const msg = toString(listResult.message) || toString(listResult.error) || 'Google Workspace request failed.';
+      return `I tried to check Gmail for unread messages, but it failed: ${msg}`;
+    }
+
+    const output = (listResult.output && typeof listResult.output === 'object'
+      ? listResult.output
+      : null) as { messages?: unknown; resultSizeEstimate?: unknown } | null;
+    const messages = output && Array.isArray(output.messages)
+      ? output.messages as Array<{ id?: unknown }>
+      : [];
+    const resultSizeEstimate = output ? toNumber(output.resultSizeEstimate) : null;
+    const unreadCount = Math.max(resultSizeEstimate ?? 0, messages.length);
+
+    if (messages.length === 0) {
+      if (intent.kind === 'gmail_recent_senders') {
+        return 'I checked Gmail and could not find any recent messages.';
+      }
+      if (intent.kind === 'gmail_recent_summary') {
+        return 'I checked Gmail and could not find any recent messages to summarize.';
+      }
+      return 'I checked Gmail and found no unread messages.';
+    }
+
+    const summaries: GmailMessageSummary[] = [];
+    for (const entry of messages.slice(0, 5)) {
+      const id = toString(entry.id);
+      if (!id) continue;
+
+      const detailResult = await this.tools.executeModelTool(
+        'gws',
+        {
+          service: 'gmail',
+          resource: 'users messages',
+          method: 'get',
+          params: {
+            userId: 'me',
+            id,
+            format: 'metadata',
+            metadataHeaders: ['From', 'Subject', 'Date'],
+          },
+        },
+        toolRequest,
+      );
+
+      if (!toBoolean(detailResult.success)) continue;
+
+      const summary = summarizeGmailMessage(detailResult.output);
+      if (summary) summaries.push(summary);
+    }
+
+    if (intent.kind === 'gmail_recent_senders') {
+      if (summaries.length === 0) {
+        return `I found ${messages.length} recent message${messages.length === 1 ? '' : 's'}, but I could not read their sender metadata.`;
+      }
+      const lines = [`The senders of the last ${summaries.length} email${summaries.length === 1 ? '' : 's'} are:`];
+      for (const [index, summary] of summaries.entries()) {
+        const from = summary.from || 'Unknown sender';
+        const subject = summary.subject || '(no subject)';
+        lines.push(`${index + 1}. ${from} — ${subject}`);
+      }
+      return lines.join('\n');
+    }
+
+    if (intent.kind === 'gmail_recent_summary') {
+      if (summaries.length === 0) {
+        return `I found ${messages.length} recent message${messages.length === 1 ? '' : 's'}, but I could not read enough metadata to summarize them.`;
+      }
+      const lines = [`Here are the last ${summaries.length} email${summaries.length === 1 ? '' : 's'}:`];
+      for (const [index, summary] of summaries.entries()) {
+        const subject = summary.subject || '(no subject)';
+        const from = summary.from || 'Unknown sender';
+        lines.push(`${index + 1}. ${subject} — ${from}`);
+        if (summary.date) lines.push(`   ${summary.date}`);
+        if (summary.snippet) lines.push(`   ${summary.snippet}`);
+      }
+      return lines.join('\n');
+    }
+
+    const lines = [
+      `I checked Gmail and found ${unreadCount} unread message${unreadCount === 1 ? '' : 's'}.`,
+    ];
+
+    if (summaries.length === 0) {
+      for (const [index, entry] of messages.slice(0, 5).entries()) {
+        const id = toString(entry.id);
+        if (!id) continue;
+        lines.push(`${index + 1}. Message ID: ${id}`);
+      }
+    } else {
+      for (const [index, summary] of summaries.entries()) {
+        const subject = summary.subject || '(no subject)';
+        const from = summary.from || 'Unknown sender';
+        lines.push(`${index + 1}. ${subject} — ${from}`);
+        if (summary.date) lines.push(`   ${summary.date}`);
+        if (summary.snippet) lines.push(`   ${summary.snippet}`);
+      }
+    }
+
+    if (unreadCount > 5) {
+      lines.push(`...and ${unreadCount - 5} more unread message${unreadCount - 5 === 1 ? '' : 's'}.`);
+    }
+
+    if (intent.kind === 'gmail_unread') {
+      lines.push('Ask me to read or summarize any of these if you want the full details.');
+    }
+
+    return lines.join('\n');
+  }
+
   private async tryDirectFilesystemSearch(
     message: UserMessage,
     ctx: AgentContext,
@@ -823,6 +1119,261 @@ function toNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+interface DirectGoogleWorkspaceIntent {
+  kind: 'gmail_unread' | 'gmail_recent_senders' | 'gmail_recent_summary';
+  count: number;
+}
+
+interface GmailMessageSummary {
+  from: string;
+  subject: string;
+  date: string;
+  snippet: string;
+}
+
+function summarizeGmailMessage(output: unknown): GmailMessageSummary | null {
+  if (!output || typeof output !== 'object') return null;
+
+  const data = output as {
+    snippet?: unknown;
+    payload?: { headers?: unknown };
+  };
+  const headers = Array.isArray(data.payload?.headers)
+    ? data.payload.headers as Array<{ name?: unknown; value?: unknown }>
+    : [];
+
+  return {
+    from: findHeaderValue(headers, 'from'),
+    subject: findHeaderValue(headers, 'subject'),
+    date: findHeaderValue(headers, 'date'),
+    snippet: toString(data.snippet),
+  };
+}
+
+function findHeaderValue(
+  headers: Array<{ name?: unknown; value?: unknown }>,
+  name: string,
+): string {
+  const target = name.toLowerCase();
+  for (const header of headers) {
+    if (toString(header.name).toLowerCase() === target) {
+      return toString(header.value);
+    }
+  }
+  return '';
+}
+
+function parseDirectGoogleWorkspaceIntent(content: string): DirectGoogleWorkspaceIntent | null {
+  const text = content.trim();
+  if (!text) return null;
+
+  if (/\b(send|draft|compose|reply|forward)\b/i.test(text)) return null;
+  if (!/\b(gmail|inbox|email|emails|mail)\b/i.test(text)) return null;
+  const count = parseRequestedEmailCount(text);
+
+  const unreadInboxPatterns = [
+    /\bcheck\s+(?:my\s+)?(?:gmail|inbox|email|emails|mail)\b/i,
+    /\b(?:show|list)\s+(?:my\s+)?(?:gmail|inbox|emails?|mail)\b/i,
+    /\b(?:new|latest|recent|unread)\s+(?:gmail|emails?|mail)\b/i,
+    /\bany\s+new\s+emails?\b/i,
+    /\bwhat(?:'s|\s+is)?\s+(?:new\s+)?in\s+(?:my\s+)?(?:gmail|inbox)\b/i,
+    /\bwhat\s+(?:new|recent|unread)\s+emails?\s+do\s+i\s+have\b/i,
+  ];
+
+  if (unreadInboxPatterns.some((pattern) => pattern.test(text))) {
+    return { kind: 'gmail_unread', count: Math.max(count, 10) };
+  }
+
+  if (/\b(?:sender|senders|from|who sent)\b/i.test(text)
+    && /\b(?:last|latest|recent)\b/i.test(text)
+    && /\bemails?|mail\b/i.test(text)) {
+    return { kind: 'gmail_recent_senders', count };
+  }
+
+  if (/\b(?:last|latest|recent)\b/i.test(text)
+    && /\bemails?|mail\b/i.test(text)
+    && /\b(?:detail|details|summary|summarize|subject|snippet|snippets)\b/i.test(text)) {
+    return { kind: 'gmail_recent_summary', count };
+  }
+
+  return null;
+}
+
+function parseRequestedEmailCount(text: string): number {
+  const digitMatch = text.match(/\b(?:last|latest|recent)\s+(\d+)\s+emails?\b/i)
+    || text.match(/\b(\d+)\s+emails?\b/i);
+  if (digitMatch) {
+    const parsed = Number(digitMatch[1]);
+    if (Number.isFinite(parsed) && parsed > 0) return Math.min(parsed, 10);
+  }
+
+  const wordMap: Record<string, number> = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+  };
+  const wordMatch = text.match(/\b(?:last|latest|recent)\s+(one|two|three|four|five|six|seven|eight|nine|ten)\s+emails?\b/i)
+    || text.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten)\s+emails?\b/i);
+  if (wordMatch) {
+    return wordMap[wordMatch[1].toLowerCase()] ?? 3;
+  }
+
+  return 3;
+}
+
+function formatToolResultForLLM(toolName: string, toolResult: unknown): string {
+  const compact = compactToolResultForLLM(toolName, toolResult);
+  const serialized = safeJsonStringify(compact);
+  if (serialized.length <= MAX_TOOL_RESULT_MESSAGE_CHARS) {
+    return serialized;
+  }
+
+  const result = toolResult && typeof toolResult === 'object'
+    ? toolResult as Record<string, unknown>
+    : {};
+  return safeJsonStringify({
+    success: result.success === true,
+    status: toString(result.status),
+    message: truncateText(toString(result.message), 400),
+    error: truncateText(toString(result.error), 400),
+    outputPreview: truncateText(safeJsonStringify(compactToolOutputForLLM(toolName, result.output)), MAX_TOOL_RESULT_MESSAGE_CHARS - 300),
+    truncated: true,
+  });
+}
+
+function compactToolResultForLLM(toolName: string, toolResult: unknown): unknown {
+  if (!toolResult || typeof toolResult !== 'object') {
+    return compactValueForLLM(toolResult);
+  }
+
+  const result = toolResult as Record<string, unknown>;
+  return {
+    success: result.success,
+    status: result.status,
+    message: compactValueForLLM(result.message),
+    error: compactValueForLLM(result.error),
+    approvalId: compactValueForLLM(result.approvalId),
+    jobId: compactValueForLLM(result.jobId),
+    preview: compactValueForLLM(result.preview),
+    output: compactToolOutputForLLM(toolName, result.output),
+  };
+}
+
+function compactToolOutputForLLM(toolName: string, output: unknown): unknown {
+  if (toolName === 'gws') {
+    return compactGwsOutputForLLM(output);
+  }
+  return compactValueForLLM(output);
+}
+
+function compactGwsOutputForLLM(output: unknown): unknown {
+  if (!output || typeof output !== 'object') {
+    return compactValueForLLM(output);
+  }
+
+  const value = output as Record<string, unknown>;
+  if (Array.isArray(value.messages)) {
+    return {
+      messages: value.messages.slice(0, MAX_TOOL_RESULT_ARRAY_ITEMS).map((entry) => compactGmailMessageForLLM(entry)),
+      resultSizeEstimate: toNumber(value.resultSizeEstimate) ?? undefined,
+      nextPageToken: truncateText(toString(value.nextPageToken), 120) || undefined,
+    };
+  }
+
+  if ('payload' in value || 'snippet' in value || 'labelIds' in value) {
+    return compactGmailMessageForLLM(value);
+  }
+
+  return compactValueForLLM(output);
+}
+
+function compactGmailMessageForLLM(message: unknown): unknown {
+  if (!message || typeof message !== 'object') {
+    return compactValueForLLM(message);
+  }
+
+  const value = message as Record<string, unknown>;
+  const payload = value.payload && typeof value.payload === 'object'
+    ? value.payload as { headers?: unknown }
+    : undefined;
+  const headers = Array.isArray(payload?.headers)
+    ? payload.headers as Array<{ name?: unknown; value?: unknown }>
+    : [];
+
+  return {
+    id: truncateText(toString(value.id), 120) || undefined,
+    threadId: truncateText(toString(value.threadId), 120) || undefined,
+    labelIds: Array.isArray(value.labelIds)
+      ? value.labelIds.slice(0, MAX_TOOL_RESULT_ARRAY_ITEMS).map((item) => truncateText(toString(item), 80))
+      : undefined,
+    internalDate: truncateText(toString(value.internalDate), 120) || undefined,
+    sizeEstimate: toNumber(value.sizeEstimate) ?? undefined,
+    snippet: truncateText(toString(value.snippet), 400),
+    from: findHeaderValue(headers, 'from') || undefined,
+    to: findHeaderValue(headers, 'to') || undefined,
+    subject: findHeaderValue(headers, 'subject') || undefined,
+    date: findHeaderValue(headers, 'date') || undefined,
+  };
+}
+
+function compactValueForLLM(value: unknown, depth: number = 0): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') return truncateText(value, MAX_TOOL_RESULT_STRING_CHARS);
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  if (depth >= 3) return `[${Array.isArray(value) ? 'Array' : 'Object'} omitted]`;
+
+  if (Array.isArray(value)) {
+    const items = value.slice(0, MAX_TOOL_RESULT_ARRAY_ITEMS).map((item) => compactValueForLLM(item, depth + 1));
+    if (value.length > MAX_TOOL_RESULT_ARRAY_ITEMS) {
+      items.push(`[${value.length - MAX_TOOL_RESULT_ARRAY_ITEMS} more items omitted]`);
+    }
+    return items;
+  }
+
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>);
+    const out: Record<string, unknown> = {};
+    let kept = 0;
+    for (const [key, entryValue] of entries) {
+      if (kept >= MAX_TOOL_RESULT_OBJECT_KEYS) break;
+      if ((key === 'raw' || key === 'data') && typeof entryValue === 'string') {
+        out[key] = `[${key} omitted: ${entryValue.length} chars]`;
+      } else if (key === 'parts' && Array.isArray(entryValue)) {
+        out[key] = `[${entryValue.length} MIME parts omitted]`;
+      } else {
+        out[key] = compactValueForLLM(entryValue, depth + 1);
+      }
+      kept += 1;
+    }
+    if (entries.length > MAX_TOOL_RESULT_OBJECT_KEYS) {
+      out._truncatedKeys = entries.length - MAX_TOOL_RESULT_OBJECT_KEYS;
+    }
+    return out;
+  }
+
+  return String(value);
+}
+
+function safeJsonStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return truncateText(String(value), MAX_TOOL_RESULT_MESSAGE_CHARS);
+  }
+}
+
+function truncateText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, Math.max(0, maxChars - 16))}[...truncated]`;
+}
+
 /**
  * Detect web search intent from free-form user messages.
  * Returns a search query string, or null if the message isn't a web search request.
@@ -903,6 +1454,12 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
       rateLimit: config.guardian.rateLimit,
       inputSanitization: config.guardian.inputSanitization,
       outputScanning: config.guardian.outputScanning,
+      guardianAgent: config.guardian.guardianAgent ? {
+        enabled: config.guardian.guardianAgent.enabled,
+        llmProvider: config.guardian.guardianAgent.llmProvider,
+        failOpen: config.guardian.guardianAgent.failOpen,
+        timeoutMs: config.guardian.guardianAgent.timeoutMs,
+      } : undefined,
       sentinel: config.guardian.sentinel ? {
         enabled: config.guardian.sentinel.enabled,
         schedule: config.guardian.sentinel.schedule,
@@ -1015,6 +1572,7 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
           sourceCount: config.assistant.tools.qmd.sources.length,
           defaultMode: config.assistant.tools.qmd.defaultMode ?? 'query',
         } : undefined,
+        agentPolicyUpdates: config.assistant.tools.agentPolicyUpdates,
       },
     },
     fallbacks: config.fallbacks,
@@ -1034,7 +1592,7 @@ function buildDashboardCallbacks(
   connectors: ConnectorPlaybookService,
   toolExecutor: ToolExecutor,
   skillRegistry: SkillRegistry | undefined,
-  enabledManagedProviders: ReadonlySet<string>,
+  enabledManagedProviders: Set<string>,
   webAuthStateRef: { current: WebAuthRuntimeConfig },
   applyWebAuthRuntime: (auth: WebAuthRuntimeConfig) => void,
   configPath: string,
@@ -1042,6 +1600,8 @@ function buildDashboardCallbacks(
   deviceInventory: DeviceInventoryService,
   networkBaseline: NetworkBaselineService,
   runNetworkAnalysis: (source: string) => NetworkAnomalyReport,
+  guardianAgentService: GuardianAgentService,
+  sentinelAuditService: SentinelAuditService,
 ): DashboardCallbacks {
   const loadRawConfig = (): Record<string, unknown> => {
     if (!existsSync(configPath)) return {};
@@ -1082,6 +1642,18 @@ function buildDashboardCallbacks(
       });
       runtime.applyShellAllowedCommands(nextConfig.assistant.tools.allowedCommands);
       toolExecutor.updateWebSearchConfig(resolvedNextCredentials.resolvedWebSearch ?? {});
+      const nextGwsConfig = nextConfig.assistant.tools.mcp?.managedProviders?.gws;
+      if (nextGwsConfig?.enabled) {
+        toolExecutor.setGwsService(new GWSService({
+          command: nextGwsConfig.command,
+          timeoutMs: nextGwsConfig.timeoutMs,
+          services: nextGwsConfig.services,
+        }));
+        enabledManagedProviders.add('gws');
+      } else {
+        toolExecutor.setGwsService(undefined);
+        enabledManagedProviders.delete('gws');
+      }
       const persistedToken = nextConfig.channels.web?.auth?.token?.trim()
         || nextConfig.channels.web?.authToken?.trim();
       webAuthStateRef.current = {
@@ -2117,7 +2689,7 @@ function buildDashboardCallbacks(
 
     onSetupStatus: async () => {
       const providers = await buildProviderInfo(true);
-      return evaluateSetupStatus(configRef.current, providers);
+      return evaluateSetupStatus(configRef.current, providers, toolExecutor.getSandboxHealth());
     },
 
     onSetupApply: async (input) => {
@@ -2467,6 +3039,34 @@ function buildDashboardCallbacks(
             rawQmd.enabled = qmdEnabledUpdate;
           }
 
+          // Sandbox enforcement mode
+          const sandboxUpdate = updates.assistant?.tools?.sandbox;
+          if (sandboxUpdate && typeof sandboxUpdate === 'object') {
+            rawConfig.assistant = rawConfig.assistant ?? {};
+            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+            rawAssistant.tools = (rawAssistant.tools as Record<string, unknown> | undefined) ?? {};
+            const rawTools = rawAssistant.tools as Record<string, unknown>;
+            rawTools.sandbox = (rawTools.sandbox as Record<string, unknown> | undefined) ?? {};
+            const rawSandbox = rawTools.sandbox as Record<string, unknown>;
+            if (sandboxUpdate.enforcementMode === 'strict' || sandboxUpdate.enforcementMode === 'permissive') {
+              rawSandbox.enforcementMode = sandboxUpdate.enforcementMode;
+            }
+          }
+
+          // Agent policy updates (which policy areas the assistant can modify via chat)
+          const agentPolicyUpdatesUpdate = updates.assistant?.tools?.agentPolicyUpdates;
+          if (agentPolicyUpdatesUpdate && typeof agentPolicyUpdatesUpdate === 'object') {
+            rawConfig.assistant = rawConfig.assistant ?? {};
+            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+            rawAssistant.tools = (rawAssistant.tools as Record<string, unknown> | undefined) ?? {};
+            const rawTools = rawAssistant.tools as Record<string, unknown>;
+            rawTools.agentPolicyUpdates = (rawTools.agentPolicyUpdates as Record<string, unknown> | undefined) ?? {};
+            const rawAPU = rawTools.agentPolicyUpdates as Record<string, unknown>;
+            if (typeof agentPolicyUpdatesUpdate.allowedPaths === 'boolean') rawAPU.allowedPaths = agentPolicyUpdatesUpdate.allowedPaths;
+            if (typeof agentPolicyUpdatesUpdate.allowedCommands === 'boolean') rawAPU.allowedCommands = agentPolicyUpdatesUpdate.allowedCommands;
+            if (typeof agentPolicyUpdatesUpdate.allowedDomains === 'boolean') rawAPU.allowedDomains = agentPolicyUpdatesUpdate.allowedDomains;
+          }
+
           // MCP + GWS managed provider updates
           const mcpUpdate = updates.assistant?.tools?.mcp;
           if (mcpUpdate && typeof mcpUpdate === 'object') {
@@ -2687,6 +3287,35 @@ function buildDashboardCallbacks(
         authMethod: status.authMethod,
         services: gwsConfig?.enabled ? services : [],
         enabled: gwsConfig?.enabled ?? false,
+      };
+    },
+    onGuardianAgentStatus: () => {
+      const cfg = guardianAgentService.getConfig();
+      return {
+        enabled: cfg.enabled,
+        llmProvider: cfg.llmProvider,
+        failOpen: cfg.failOpen,
+        timeoutMs: cfg.timeoutMs,
+        actionTypes: cfg.actionTypes,
+      };
+    },
+    onGuardianAgentUpdate: (input) => {
+      guardianAgentService.updateConfig(input);
+      return { success: true, message: 'Guardian Agent configuration updated.' };
+    },
+    onSentinelAuditRun: async (windowMs) => {
+      const result = await sentinelAuditService.runAudit(runtime.auditLog, windowMs);
+      return {
+        success: true,
+        anomalies: result.anomalies.map((a: { type: string; severity: string; description: string; agentId?: string }) => ({
+          type: a.type,
+          severity: a.severity,
+          description: a.description,
+          agentId: a.agentId,
+        })),
+        llmFindings: result.llmFindings,
+        timestamp: result.timestamp,
+        windowMs: result.windowMs,
       };
     },
   };
@@ -3004,6 +3633,10 @@ async function main(): Promise<void> {
   };
   const sandboxCaps = await detectSandboxCapabilities(sandboxConfig);
   const sandboxHealth = await detectSandboxHealth(sandboxConfig, sandboxCaps);
+  const sandboxUpgradeGuidance = [
+    'Safer options: run on Linux/Unix with bubblewrap available, or use the Windows portable app with guardian-sandbox-win.exe AppContainer helper.',
+    'Set assistant.tools.sandbox.enforcementMode: permissive only if you explicitly accept higher host risk.',
+  ].join(' ');
   if (sandboxConfig.enabled) {
     log.info(
       {
@@ -3015,6 +3648,25 @@ async function main(): Promise<void> {
       },
       'OS-level process sandbox active',
     );
+    if (sandboxHealth.enforcementMode !== 'strict') {
+      log.warn(
+        {
+          platform: sandboxHealth.platform,
+          availability: sandboxHealth.availability,
+          backend: sandboxHealth.backend,
+        },
+        `Permissive sandbox mode is explicitly enabled. ${sandboxUpgradeGuidance}`,
+      );
+    } else if (sandboxHealth.availability !== 'strong') {
+      log.warn(
+        {
+          platform: sandboxHealth.platform,
+          availability: sandboxHealth.availability,
+          backend: sandboxHealth.backend,
+        },
+        `Strict sandbox mode is blocking risky subprocess-backed tools until a strong sandbox backend is available. ${sandboxUpgradeGuidance}`,
+      );
+    }
   } else {
     log.warn('OS-level process sandbox is disabled — child processes run unsandboxed');
   }
@@ -3121,28 +3773,28 @@ async function main(): Promise<void> {
   }
 
   // ─── Google Workspace CLI Service ──────────────────────
-  let gwsService: import('./runtime/gws-service.js').GWSService | undefined;
+  let gwsService: GWSService | undefined;
   const gwsConfig = config.assistant.tools.mcp?.managedProviders?.gws;
   if (gwsConfig?.enabled) {
-    const { GWSService } = await import('./runtime/gws-service.js');
     gwsService = new GWSService({
       command: gwsConfig.command,
       timeoutMs: gwsConfig.timeoutMs,
       services: gwsConfig.services,
     });
-    // Quick auth check
+    // Quick auth check — always enable GWS tools when the CLI is available so
+    // individual API calls return clear errors rather than silently disabling.
+    enabledManagedProviders.add('gws');
     const authResult = await gwsService.authStatus();
     if (authResult.success) {
       const authData = authResult.data as { auth_method?: string } | undefined;
       const method = authData?.auth_method;
       if (method && method !== 'none') {
         console.log(`  Google Workspace: connected (auth: ${method}, services: ${gwsService.getEnabledServices().join(', ')})`);
-        enabledManagedProviders.add('gws');
       } else {
-        console.log('  Google Workspace: enabled but not authenticated. Run `gws auth login` to connect.');
+        console.log('  Google Workspace: tools enabled but not authenticated. Run `gws auth login` to connect.');
       }
     } else {
-      console.log(`  Google Workspace: enabled but CLI check failed — ${authResult.error}`);
+      console.log(`  Google Workspace: tools enabled but CLI auth check failed — ${authResult.error}`);
     }
   }
 
@@ -3303,6 +3955,22 @@ async function main(): Promise<void> {
     return report;
   };
 
+  // ─── Guardian Agent (inline LLM blocking) + Sentinel (audit) ──────
+  const guardianAgentConfig = config.guardian?.guardianAgent;
+  const guardianAgentService = new GuardianAgentService({
+    enabled: guardianAgentConfig?.enabled !== false,
+    llmProvider: guardianAgentConfig?.llmProvider ?? 'auto',
+    actionTypes: guardianAgentConfig?.actionTypes,
+    failOpen: guardianAgentConfig?.failOpen !== false,
+    timeoutMs: guardianAgentConfig?.timeoutMs,
+  });
+
+  const sentinelAuditConfig = config.guardian?.sentinel;
+  const sentinelAuditService = new SentinelAuditService({
+    enabled: sentinelAuditConfig?.enabled !== false,
+    anomalyThresholds: sentinelAuditConfig?.anomalyThresholds,
+  });
+
   const toolExecutorOptions: ToolExecutorOptions = {
     enabled: config.assistant.tools.enabled,
     workspaceRoot: process.cwd(),
@@ -3312,6 +3980,26 @@ async function main(): Promise<void> {
     allowedCommands: config.assistant.tools.allowedCommands,
     allowedDomains: config.assistant.tools.allowedDomains,
     allowExternalPosting: config.assistant.tools.allowExternalPosting,
+    agentPolicyUpdates: config.assistant.tools.agentPolicyUpdates,
+    onPolicyUpdate: (policy) => {
+      // Persist policy changes to config.yaml so they survive reloads and restarts
+      try {
+        const raw: Record<string, unknown> = existsSync(configPath)
+          ? (yaml.load(readFileSync(configPath, 'utf-8')) as Record<string, unknown>) ?? {}
+          : {};
+        raw.assistant = raw.assistant ?? {};
+        const a = raw.assistant as Record<string, unknown>;
+        a.tools = (a.tools as Record<string, unknown>) ?? {};
+        const t = a.tools as Record<string, unknown>;
+        t.allowedPaths = policy.sandbox.allowedPaths;
+        t.allowedCommands = policy.sandbox.allowedCommands;
+        t.allowedDomains = policy.sandbox.allowedDomains;
+        writeFileSync(configPath, yaml.dump(raw, { lineWidth: -1, noRefs: true }), 'utf-8');
+        configRef.current = loadConfig(configPath);
+      } catch (err) {
+        log.warn({ err }, 'Failed to persist policy update to config file');
+      }
+    },
     webSearch: resolvedRuntimeCredentials.resolvedWebSearch,
     browserConfig: config.assistant.tools.browser,
     disabledCategories: config.assistant.tools.disabledCategories,
@@ -3380,6 +4068,42 @@ async function main(): Promise<void> {
         },
       });
     },
+    onPreExecute: guardianAgentConfig?.enabled !== false
+      ? async (action) => {
+          const evaluation = await guardianAgentService.evaluateAction(action);
+          if (!evaluation.allowed) {
+            runtime.auditLog.record({
+              type: 'action_denied',
+              severity: evaluation.riskLevel === 'critical' ? 'critical' : 'warn',
+              agentId: action.agentId,
+              controller: 'GuardianAgent',
+              details: {
+                actionType: action.type,
+                toolName: action.toolName,
+                reason: evaluation.reason,
+                riskLevel: evaluation.riskLevel,
+                source: 'guardian_agent_inline',
+              },
+            });
+          } else if (evaluation.riskLevel !== 'safe') {
+            // Log all non-trivial evaluations for monitoring
+            runtime.auditLog.record({
+              type: 'action_allowed',
+              severity: 'info',
+              agentId: action.agentId,
+              controller: 'GuardianAgent',
+              details: {
+                actionType: action.type,
+                toolName: action.toolName,
+                reason: evaluation.reason,
+                riskLevel: evaluation.riskLevel,
+                source: 'guardian_agent_inline',
+              },
+            });
+          }
+          return { allowed: evaluation.allowed, reason: evaluation.reason };
+        }
+      : undefined,
   };
 
   const toolExecutor = new ToolExecutor(toolExecutorOptions);
@@ -3476,6 +4200,58 @@ async function main(): Promise<void> {
     );
   }
 
+  // Dynamic GWS model provider resolver — re-evaluates at request time so
+  // providers added via web UI config (hot reload) are picked up without restart.
+  const resolveGwsProvider = () => {
+    if (!enabledManagedProviders.has('gws')) {
+      return undefined;
+    }
+    const currentConfig = configRef.current;
+    // 1. Explicitly configured GWS model
+    const gwsModelName = currentConfig.assistant.tools.mcp?.managedProviders?.gws?.model;
+    if (gwsModelName) {
+      const provider = runtime.getProvider(gwsModelName);
+      if (provider) return provider;
+    }
+    // 2. Auto-detect: if default is Ollama, find first non-Ollama provider
+    const defaultCfg = currentConfig.llm[currentConfig.defaultProvider];
+    if (defaultCfg?.provider === 'ollama') {
+      for (const [name, llmCfg] of Object.entries(currentConfig.llm)) {
+        if (llmCfg.provider !== 'ollama') {
+          const provider = runtime.getProvider(name);
+          if (provider) return provider;
+        }
+      }
+      // No external provider available — return undefined so chatWithFallback is used
+      return undefined;
+    }
+    // 3. Default provider is already external (OpenAI/Anthropic) — use it
+    return runtime.getProvider(currentConfig.defaultProvider);
+  };
+  // Log initial resolution at startup
+  if (gwsService && enabledManagedProviders.has('gws')) {
+    const initialGws = resolveGwsProvider();
+    if (initialGws) {
+      const gwsModelName = config.assistant.tools.mcp?.managedProviders?.gws?.model;
+      if (gwsModelName && runtime.getProvider(gwsModelName)) {
+        console.log(`  Google Workspace: using '${gwsModelName}' model for tool-calling`);
+      } else {
+        const defaultCfg = config.llm[config.defaultProvider];
+        if (defaultCfg?.provider === 'ollama') {
+          // Find which one was auto-selected
+          for (const [name, llmCfg] of Object.entries(config.llm)) {
+            if (llmCfg.provider !== 'ollama' && runtime.getProvider(name)) {
+              console.log(`  Google Workspace: default is Ollama, auto-selected '${name}' for tool-calling`);
+              break;
+            }
+          }
+        }
+      }
+    } else {
+      console.warn('  Google Workspace: no LLM provider available for tool-calling. Add an Anthropic or OpenAI provider for best results.');
+    }
+  }
+
   // Resolve agent capabilities from trust preset / config.
   // The orchestrator decides which MODEL handles a request (local vs external),
   // NOT what the agent is allowed to do. Security policy is user-configured.
@@ -3507,6 +4283,7 @@ async function main(): Promise<void> {
         fallbackChain,
         selectSoulPrompt(soulProfile, soulMode),
         agentMemoryStore,
+        resolveGwsProvider,
       );
       runtime.registerAgent(createAgentDefinition({
         agent,
@@ -3538,6 +4315,7 @@ async function main(): Promise<void> {
       fallbackChain,
       selectSoulPrompt(soulProfile, config.assistant.soul.primaryMode),
       agentMemoryStore,
+      resolveGwsProvider,
     );
     runtime.registerAgent(createAgentDefinition({
       agent: localAgent,
@@ -3556,6 +4334,7 @@ async function main(): Promise<void> {
       fallbackChain,
       selectSoulPrompt(soulProfile, config.assistant.soul.delegatedMode),
       agentMemoryStore,
+      resolveGwsProvider,
     );
     runtime.registerAgent(createAgentDefinition({
       agent: externalAgent,
@@ -3599,6 +4378,7 @@ async function main(): Promise<void> {
       fallbackChain,
       selectSoulPrompt(soulProfile, config.assistant.soul.primaryMode),
       agentMemoryStore,
+      resolveGwsProvider,
     );
     runtime.registerAgent(createAgentDefinition({
       agent: defaultAgent,
@@ -3607,14 +4387,62 @@ async function main(): Promise<void> {
     router.registerAgent('default', agentCapabilities);
   }
 
-  // Register Sentinel agent if enabled
-  const sentinelConfig = config.guardian?.sentinel;
-  if (sentinelConfig?.enabled !== false) {
-    const sentinel = new SentinelAgent(sentinelConfig?.anomalyThresholds);
+  // ─── Guardian Agent + Sentinel provider setup ─────────────────────
+  // Resolve local (Ollama) and external (OpenAI/Anthropic) providers for
+  // inline evaluation and audit analysis.
+  {
+    let localProvider: LLMProvider | undefined;
+    let externalLlmProvider: LLMProvider | undefined;
+    for (const [name, llmCfg] of Object.entries(config.llm)) {
+      const provider = runtime.getProvider(name);
+      if (!provider) continue;
+      if (llmCfg.provider === 'ollama' && !localProvider) {
+        localProvider = provider;
+      } else if (llmCfg.provider !== 'ollama' && !externalLlmProvider) {
+        externalLlmProvider = provider;
+      }
+    }
+    guardianAgentService.setProviders(localProvider, externalLlmProvider);
+    // Sentinel audit shares the same provider resolution (prefers external for deeper analysis)
+    sentinelAuditService.setProvider(externalLlmProvider ?? localProvider);
+
+    if (guardianAgentConfig?.enabled !== false) {
+      const mode = guardianAgentConfig?.llmProvider ?? 'auto';
+      const activeProvider = mode === 'local' ? localProvider
+        : mode === 'external' ? externalLlmProvider
+        : (localProvider ?? externalLlmProvider);
+      console.log(`  Guardian Agent: inline evaluation ${activeProvider ? `enabled (${mode}, provider: ${activeProvider.name})` : 'enabled (no LLM available, fail-open)'}`);
+    }
+  }
+
+  // Register Sentinel audit on cron schedule if enabled
+  if (sentinelAuditConfig?.enabled !== false) {
+    const auditSchedule = sentinelAuditConfig?.schedule ?? '*/5 * * * *';
+    // Create a lightweight agent that delegates to SentinelAuditService
+    const sentinelAuditAgent = new (class extends BaseAgent {
+      constructor() {
+        super('sentinel', 'Sentinel Audit Agent', {
+          handleMessages: false,
+          handleEvents: true,
+          handleSchedule: true,
+        });
+      }
+      async onSchedule(ctx: import('./agent/types.js').ScheduleContext): Promise<void> {
+        const auditLog = ctx.auditLog;
+        if (!auditLog) return;
+        await sentinelAuditService.runAudit(auditLog);
+      }
+      async onEvent(event: import('./queue/event-bus.js').AgentEvent): Promise<void> {
+        if (event.type === 'guardian.critical') {
+          // Future: automated response to critical events
+        }
+      }
+    })();
     runtime.registerAgent(createAgentDefinition({
-      agent: sentinel,
-      schedule: sentinelConfig?.schedule ?? '*/5 * * * *',
+      agent: sentinelAuditAgent,
+      schedule: auditSchedule,
     }));
+    console.log(`  Sentinel Audit: scheduled (${auditSchedule})`);
   }
 
   // Start channels
@@ -3658,6 +4486,8 @@ async function main(): Promise<void> {
     deviceInventory,
     networkBaseline,
     runNetworkAnalysis,
+    guardianAgentService,
+    sentinelAuditService,
   );
 
   // Killswitch: triggers graceful shutdown from CLI or web

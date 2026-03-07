@@ -311,4 +311,15 @@ export const api = {
   }),
 
   gwsStatus: () => request('/api/gws/status'),
+
+  // Guardian Agent + Sentinel Audit
+  guardianAgentStatus: () => request('/api/guardian-agent/status'),
+  updateGuardianAgent: (payload) => request('/api/guardian-agent/config', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  runSentinelAudit: (windowMs) => request('/api/sentinel/audit', {
+    method: 'POST',
+    body: JSON.stringify(windowMs ? { windowMs } : {}),
+  }),
 };

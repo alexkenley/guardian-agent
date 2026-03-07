@@ -4,7 +4,7 @@
 
 GuardianAgent is a **security-first, event-driven AI agent orchestration system**. It is a self-contained orchestrator where agents are developer-authored TypeScript classes with curated capabilities and strict guardrails on what they can and cannot do.
 
-The agents are your code. The LLM output is the untrusted component. All security enforcement is **mandatory at the Runtime level** — the Runtime controls every chokepoint where data flows in or out of an agent. Agents cannot bypass the three-layer defense system that protects users from credential leaks, prompt injection, capability escalation, and data exfiltration.
+The agents are your code. The LLM output is the untrusted component. All security enforcement is **mandatory at the Runtime level** — the Runtime controls every chokepoint where data flows in or out of an agent. Agents cannot bypass the four-layer defense system that protects users from credential leaks, prompt injection, capability escalation, and data exfiltration.
 
 Core principles:
 - **Actively protect users from security mistakes** rather than providing opt-in guardrails
@@ -50,7 +50,7 @@ Current extensions:
 │  └────────────────────────────┬───────────────────────────────────┘  │
 │                                │                                      │
 │  ═══════════════════════════════════════════════════════════════════  │
-│  ║               THREE-LAYER DEFENSE SYSTEM                       ║  │
+│  ║               FOUR-LAYER DEFENSE SYSTEM                        ║  │
 │  ║                                                                ║  │
 │  ║  Layer 1: PROACTIVE (inline, before agent)                     ║  │
 │  ║  ┌───────────┐ ┌───────────┐ ┌──────────┐ ┌──────────┐       ║  │
@@ -62,18 +62,24 @@ Current extensions:
 │  ║  │  Path    │  │ Command  │                                    ║  │
 │  ║  └──────────┘  └──────────┘                                    ║  │
 │  ║                                                                ║  │
-│  ║  Layer 2: OUTPUT (inline, after agent)                         ║  │
+│  ║  Layer 2: GUARDIAN AGENT (inline LLM, before tool execution)   ║  │
+│  ║  ┌───────────────────────┐                                    ║  │
+│  ║  │ GuardianAgentService  │  LLM evaluates tool actions        ║  │
+│  ║  │ (onPreExecute hook)   │  blocks high/critical risk         ║  │
+│  ║  └───────────────────────┘                                    ║  │
+│  ║                                                                ║  │
+│  ║  Layer 3: OUTPUT (inline, after agent)                         ║  │
 │  ║  ┌───────────────┐  ┌───────────────┐                         ║  │
 │  ║  │ OutputGuardian │  │ Event Payload │                         ║  │
 │  ║  │ (responses)    │  │ Scanner       │                         ║  │
 │  ║  └───────────────┘  └───────────────┘                         ║  │
 │  ║                                                                ║  │
-│  ║  Layer 3: SENTINEL (retrospective, scheduled)                  ║  │
-│  ║  ┌───────────────┐  ┌───────────────┐  ┌──────────────┐      ║  │
-│  ║  │ AuditLog      │→ │ SentinelAgent │  │   Audit      │      ║  │
-│  ║  │ (ring buffer) │  │ (anomaly det) │  │ Persistence  │      ║  │
-│  ║  └───────┬───────┘  └───────────────┘  │ (hash chain) │      ║  │
-│  ║          └────────────────────────────▶ └──────────────┘      ║  │
+│  ║  Layer 4: SENTINEL AUDIT (retrospective, scheduled/on-demand)  ║  │
+│  ║  ┌───────────────┐  ┌───────────────────┐ ┌──────────────┐   ║  │
+│  ║  │ AuditLog      │→ │SentinelAuditService│ │   Audit      │   ║  │
+│  ║  │ (ring buffer) │  │ (anomaly + LLM)   │ │ Persistence  │   ║  │
+│  ║  └───────┬───────┘  └───────────────────┘ │ (hash chain) │   ║  │
+│  ║          └────────────────────────────────▶└──────────────┘   ║  │
 │  ═══════════════════════════════════════════════════════════════════  │
 │                                │                                      │
 │  ┌─────────────────────────────▼──────────────────────────────────┐  │
@@ -111,20 +117,22 @@ Runtime (src/runtime/runtime.ts)
 ├── Threat Intel (src/runtime/threat-intel.ts) — watchlist scans, findings triage, response drafting
 │   └── Moltbook Connector (src/runtime/moltbook-connector.ts) — hostile-site constrained forum ingestion
 ├── Connector Framework (assistant.connectors) — Option 2 connector-pack/playbook policy controls
-├── Guardian (src/guardian/)             — three-layer defense system
+├── Guardian (src/guardian/)             — four-layer defense system
 │   ├── guardian.ts                     — admission controller pipeline
 │   ├── workflows.ts                    — pure admission decisions (no side effects)
 │   ├── operations.ts                   — side-effectful admission operations (logging, result mapping)
 │   ├── input-sanitizer.ts             — prompt injection detection (Layer 1)
 │   ├── rate-limiter.ts                — request throttling (Layer 1)
 │   ├── capabilities.ts               — per-agent permission model (Layer 1)
-│   ├── secret-scanner.ts             — 28+ credential patterns (Layer 1 & 2)
+│   ├── secret-scanner.ts             — 28+ credential patterns (Layer 1 & 3)
 │   ├── shell-validator.ts            — POSIX shell tokenizer + command validation (Layer 1)
 │   ├── shell-command-controller.ts   — shell command admission controller (Layer 1)
-│   ├── output-guardian.ts             — response redaction (Layer 2)
-│   ├── audit-log.ts                   — structured event logging (Layer 3)
-│   ├── audit-persistence.ts          — SHA-256 hash-chained JSONL persistence (Layer 3)
+│   ├── output-guardian.ts             — response redaction (Layer 3)
+│   ├── audit-log.ts                   — structured event logging (Layer 2 & 4)
+│   ├── audit-persistence.ts          — SHA-256 hash-chained JSONL persistence (Layer 4)
 │   └── trust-presets.ts              — predefined security postures (locked/safe/balanced/power)
+├── Guardian Agent (src/runtime/sentinel.ts) — inline LLM action evaluation (Layer 2)
+├── Sentinel Audit (src/runtime/sentinel.ts) — retrospective anomaly detection (Layer 4)
 ├── Orchestration (src/agent/orchestration.ts) — SequentialAgent, ParallelAgent, LoopAgent
 ├── Shared State (src/runtime/shared-state.ts) — per-invocation inter-agent data passing
 ├── QMD Search (src/runtime/qmd-search.ts) — hybrid document search via QMD CLI subprocess
@@ -134,7 +142,7 @@ Runtime (src/runtime/runtime.ts)
 │   ├── types.ts                        — test case, matcher, and result types
 │   ├── metrics.ts                      — content, trajectory, metadata, and safety metrics
 │   └── runner.ts                       — test runner with real Runtime dispatch
-├── Sentinel (src/agents/sentinel.ts)   — retrospective anomaly detection (Layer 3)
+├── Sentinel (src/agents/sentinel.ts)   — legacy agent (kept for test compat, see src/runtime/sentinel.ts)
 ├── Budget (src/runtime/budget.ts)      — compute budget tracking
 ├── Watchdog (src/runtime/watchdog.ts)  — stall detection (timestamp-based)
 ├── Scheduler (src/runtime/scheduler.ts)— cron scheduling (croner)
@@ -349,7 +357,16 @@ User Message
            │
            ▼
 ┌──────────────────────────────┐
-│ LAYER 2: Output Guardian     │
+│ LAYER 2: Guardian Agent      │
+│ (inline LLM evaluation)     │
+│                              │
+│ Evaluate tool actions via LLM│──▶ Block high/critical risk
+│ Log to AuditLog              │    (configurable: fail-open/closed)
+└──────────┬───────────────────┘
+           │
+           ▼
+┌──────────────────────────────┐
+│ LAYER 3: Output Guardian     │
 │                              │
 │ Scan response for secrets    │──▶ Redact with [REDACTED]
 │ Log to AuditLog              │    (configurable: redact or block)
@@ -359,8 +376,8 @@ User Message
     Response to User
 
            ┌──────────────────────────────┐
-           │ LAYER 3: Sentinel Agent      │
-           │ (runs on cron schedule)      │
+           │ LAYER 4: Sentinel Audit      │
+           │ (cron schedule / on-demand)  │
            │                              │
            │ Analyze AuditLog             │
            │ Detect anomaly patterns      │

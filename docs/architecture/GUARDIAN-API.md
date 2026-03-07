@@ -1,6 +1,6 @@
 # Guardian API Reference
 
-Complete API reference for the Guardian three-layer defense system.
+Complete API reference for the Guardian four-layer defense system.
 
 ---
 
@@ -531,11 +531,76 @@ interface AuditSummary {
 
 ---
 
-## SentinelAgent
+## GuardianAgentService
+
+**File:** `src/runtime/sentinel.ts`
+
+Layer 2 defense — inline LLM-powered action evaluation before tool execution.
+
+```typescript
+import { GuardianAgentService } from './runtime/sentinel.js';
+
+const guardianAgent = new GuardianAgentService({
+  enabled: true,
+  llmProvider: 'auto',       // 'local' | 'external' | 'auto'
+  failOpen: true,             // allow actions when LLM unavailable
+  timeoutMs: 8000,            // inline evaluation timeout
+});
+guardianAgent.setProviders(localProvider, externalProvider);
+```
+
+### Methods
+
+- `evaluateAction(action)` — evaluate a tool action, returns `{ allowed, riskLevel, reason }`
+- `setProviders(local?, external?)` — set available LLM providers
+- `updateConfig(update)` — update config at runtime
+- `getConfig()` — read current config
+
+### API Endpoints
+
+- `GET /api/guardian-agent/status` — current config and status
+- `POST /api/guardian-agent/config` — update settings (enabled, llmProvider, failOpen, timeoutMs)
+
+---
+
+## SentinelAuditService
+
+**File:** `src/runtime/sentinel.ts`
+
+Layer 4 defense — retrospective anomaly detection, runnable on cron or on-demand.
+
+```typescript
+import { SentinelAuditService } from './runtime/sentinel.js';
+
+const sentinel = new SentinelAuditService({
+  enabled: true,
+  anomalyThresholds: {
+    volumeSpikeMultiplier: 3,
+    capabilityProbeThreshold: 5,
+    secretDetectionThreshold: 3,
+  },
+});
+sentinel.setProvider(llmProvider);
+```
+
+### Methods
+
+- `runAudit(auditLog, windowMs?)` — run retrospective analysis, returns `{ anomalies, llmFindings, timestamp, windowMs }`
+- `detectAnomalies(summary, auditLog?)` — heuristic-only analysis (no LLM)
+- `setProvider(provider?)` — set LLM provider for enhanced analysis
+- `getConfig()` — read current config
+
+### API Endpoints
+
+- `POST /api/sentinel/audit` — trigger on-demand audit (optional `{ windowMs }` body)
+
+---
+
+## SentinelAgent (Legacy)
 
 **File:** `src/agents/sentinel.ts`
 
-Layer 3 defense — retrospective anomaly detection agent.
+Legacy Layer 4 agent — kept for test compatibility. Active implementation is `SentinelAuditService` above.
 
 ```typescript
 import { SentinelAgent } from './agents/sentinel.js';

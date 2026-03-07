@@ -3439,7 +3439,7 @@ export class CLIChannel implements ChannelAdapter {
       this.write('\n');
 
       // ── Operational status ──
-      const guardian = s.guardianEnabled !== false ? gn('ACTIVE') + ' (3-layer defense)' : this.red('DISABLED');
+      const guardian = s.guardianEnabled !== false ? gn('ACTIVE') + ' (4-layer defense)' : this.red('DISABLED');
       const provider = s.providerName ?? 'ollama';
       const channels = s.channels?.join(', ') ?? 'cli';
       const dashUrl = s.dashboardUrl ?? 'disabled';

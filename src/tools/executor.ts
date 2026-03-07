@@ -3,7 +3,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { appendFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { appendFile, copyFile, mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { IntelActionType, IntelSourceType, IntelStatus, ThreatIntelService } from '../runtime/threat-intel.js';
@@ -102,6 +102,18 @@ export interface ToolExecutorOptions {
     agentId: string;
     origin: ToolExecutionRequest['origin'];
   }) => void;
+  /** Controls which policy areas the assistant can modify via chat (always requires approval). */
+  agentPolicyUpdates?: import('../config/types.js').AgentPolicyUpdatesConfig;
+  /** Callback to persist policy changes to config file after update_tool_policy modifies them. */
+  onPolicyUpdate?: (policy: ToolPolicySnapshot) => void;
+  /** Async pre-execution hook (Guardian Agent inline evaluation). Called after
+   *  sync Guardian checks pass but before the tool handler runs. Can deny. */
+  onPreExecute?: (action: {
+    type: string;
+    toolName: string;
+    params: Record<string, unknown>;
+    agentId: string;
+  }) => Promise<{ allowed: boolean; reason?: string }>;
 }
 
 export interface ToolPolicyUpdate {
@@ -297,6 +309,24 @@ export class ToolExecutor {
 
   getRuntimeNotices(): ToolRuntimeNotice[] {
     return [...this.runtimeNotices];
+  }
+
+  setGwsService(gwsService: import('../runtime/gws-service.js').GWSService | undefined): void {
+    this.options.gwsService = gwsService;
+  }
+
+  /** Context summary for LLM system prompt — workspace root, allowed paths, policy mode. */
+  getToolContext(): string {
+    const lines: string[] = [
+      `Workspace root (default for file operations): ${this.options.workspaceRoot}`,
+      `Policy mode: ${this.policy.mode}`,
+      `Allowed paths: ${this.policy.sandbox.allowedPaths.join(', ') || '(workspace root only)'}`,
+      `Allowed commands: ${this.policy.sandbox.allowedCommands.join(', ')}`,
+    ];
+    if (this.policy.sandbox.allowedDomains.length > 0) {
+      lines.push(`Allowed domains: ${this.policy.sandbox.allowedDomains.join(', ')}`);
+    }
+    return lines.join('\n');
   }
 
   getSandboxHealth(): SandboxHealth | undefined {
@@ -497,7 +527,7 @@ export class ToolExecutor {
       };
     }
 
-    const decision = this.decide(entry.definition);
+    const decision = this.decide(entry.definition, args);
     if (decision === 'deny') {
       job.status = 'denied';
       job.completedAt = this.now();
@@ -633,7 +663,7 @@ export class ToolExecutor {
     return job;
   }
 
-  private decide(definition: ToolDefinition): ToolDecision {
+  private decide(definition: ToolDefinition, args: Record<string, unknown>): ToolDecision {
     if (!this.options.enabled) return 'deny';
 
     const explicit = this.policy.toolPolicies[definition.name];
@@ -641,6 +671,11 @@ export class ToolExecutor {
       if (explicit === 'deny') return 'deny';
       if (explicit === 'auto') return 'allow';
       if (explicit === 'manual') return 'require_approval';
+    }
+
+    const gwsDecision = this.decideGwsTool(definition.name, args);
+    if (gwsDecision) {
+      return gwsDecision;
     }
 
     if (definition.risk === 'external_post') {
@@ -658,6 +693,28 @@ export class ToolExecutor {
         if (definition.risk === 'network') return 'allow';
         return 'require_approval';
     }
+  }
+
+  private decideGwsTool(toolName: string, args: Record<string, unknown>): ToolDecision | null {
+    if (toolName !== 'gws') return null;
+
+    const service = asString(args.service).trim().toLowerCase();
+    const method = asString(args.method).trim().toLowerCase();
+    const resource = asString(args.resource).trim().toLowerCase();
+    const isWrite = /\b(create|insert|update|patch|delete|send|remove|modify)\b/i.test(method);
+    if (service !== 'gmail' || !isWrite) {
+      return null;
+    }
+
+    if (method === 'send') {
+      return 'require_approval';
+    }
+
+    if (resource.includes('draft')) {
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    return null;
   }
 
   private validateToolArgs(definition: ToolDefinition, args: Record<string, unknown>): string | null {
@@ -771,6 +828,32 @@ export class ToolExecutor {
         message: `[DRY RUN] Tool '${job.toolName}' validated. ${preview}`,
         output: { dryRun: true, preview, args },
       };
+    }
+
+    // Guardian Agent inline LLM evaluation — runs before tool handler on non-read actions
+    if (this.options.onPreExecute && job.risk !== 'read_only') {
+      try {
+        const evaluation = await this.options.onPreExecute({
+          type: job.risk ?? 'mutating',
+          toolName: job.toolName,
+          params: args,
+          agentId: request.agentId ?? 'assistant-tools',
+        });
+        if (!evaluation.allowed) {
+          job.status = 'denied';
+          job.completedAt = this.now();
+          job.durationMs = job.completedAt - (job.startedAt ?? job.createdAt);
+          job.error = `Blocked by Guardian Agent: ${evaluation.reason ?? 'action deemed too risky'}`;
+          return {
+            success: false,
+            status: job.status,
+            jobId: job.id,
+            message: job.error,
+          };
+        }
+      } catch {
+        // Guardian Agent evaluation failed — allow action (fail-open at this layer)
+      }
     }
 
     try {
@@ -1116,6 +1199,112 @@ export class ToolExecutor {
           output: {
             path: safePath,
             recursive,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'fs_delete',
+        description: 'Delete a file or empty directory within allowed paths. For non-empty directories, set recursive to true. Security: path validated against allowedPaths roots. Mutating — requires approval in approve_by_policy mode. Requires write_files capability.',
+        risk: 'mutating',
+        category: 'filesystem',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Path to the file or directory to delete.' },
+            recursive: { type: 'boolean', description: 'Recursively delete directory contents (default false). Required for non-empty directories.' },
+          },
+          required: ['path'],
+        },
+      },
+      async (args, request) => {
+        const rawPath = requireString(args.path, 'path');
+        const recursive = !!args.recursive;
+        const safePath = await this.resolveAllowedPath(rawPath);
+        this.guardAction(request, 'write_file', { path: rawPath, content: '[delete]' });
+        const details = await stat(safePath);
+        const isDir = details.isDirectory();
+        if (isDir) {
+          await rm(safePath, { recursive });
+        } else {
+          await unlink(safePath);
+        }
+        return {
+          success: true,
+          output: {
+            path: safePath,
+            type: isDir ? 'directory' : 'file',
+            recursive,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'fs_move',
+        description: 'Move or rename a file or directory within allowed paths. Both source and destination must be inside allowed roots. Security: paths validated against allowedPaths roots. Mutating — requires approval in approve_by_policy mode. Requires write_files capability.',
+        risk: 'mutating',
+        category: 'filesystem',
+        parameters: {
+          type: 'object',
+          properties: {
+            source: { type: 'string', description: 'Source file or directory path.' },
+            destination: { type: 'string', description: 'Destination path (new name or new location).' },
+          },
+          required: ['source', 'destination'],
+        },
+      },
+      async (args, request) => {
+        const rawSource = requireString(args.source, 'source');
+        const rawDest = requireString(args.destination, 'destination');
+        const safeSource = await this.resolveAllowedPath(rawSource);
+        const safeDest = await this.resolveAllowedPath(rawDest);
+        this.guardAction(request, 'write_file', { path: rawSource, content: `[move → ${rawDest}]` });
+        await mkdir(dirname(safeDest), { recursive: true });
+        await rename(safeSource, safeDest);
+        return {
+          success: true,
+          output: {
+            source: safeSource,
+            destination: safeDest,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'fs_copy',
+        description: 'Copy a file within allowed paths. Both source and destination must be inside allowed roots. Security: paths validated against allowedPaths roots. Mutating — requires approval in approve_by_policy mode. Requires write_files capability.',
+        risk: 'mutating',
+        category: 'filesystem',
+        parameters: {
+          type: 'object',
+          properties: {
+            source: { type: 'string', description: 'Source file path.' },
+            destination: { type: 'string', description: 'Destination file path.' },
+          },
+          required: ['source', 'destination'],
+        },
+      },
+      async (args, request) => {
+        const rawSource = requireString(args.source, 'source');
+        const rawDest = requireString(args.destination, 'destination');
+        const safeSource = await this.resolveAllowedPath(rawSource);
+        const safeDest = await this.resolveAllowedPath(rawDest);
+        this.guardAction(request, 'write_file', { path: rawDest, content: `[copy from ${rawSource}]` });
+        await mkdir(dirname(safeDest), { recursive: true });
+        await copyFile(safeSource, safeDest);
+        const details = await stat(safeDest);
+        return {
+          success: true,
+          output: {
+            source: safeSource,
+            destination: safeDest,
+            size: details.size,
           },
         };
       },
@@ -3673,19 +3862,26 @@ export class ToolExecutor {
         description:
           'Execute a Google Workspace API call via the gws CLI. ' +
           'Supports Gmail, Calendar, Drive, Docs, Sheets, and more. ' +
-          'Examples: gmail users messages list, calendar events list, drive files list. ' +
-          'Use gws_schema to discover available methods and parameters for any service.',
+          'IMPORTANT: resource uses spaces (not dots) for nested paths. ' +
+          'Common calls:\n' +
+          '  List emails:    service="gmail", resource="users messages", method="list", params={"userId":"me","maxResults":10}\n' +
+          '  Read email:     service="gmail", resource="users messages", method="get", params={"userId":"me","id":"MESSAGE_ID","format":"full"}\n' +
+          '  Send email:     service="gmail", resource="users messages", method="send", params={"userId":"me"}, json={"raw":"BASE64_RFC822"}\n' +
+          '  List events:    service="calendar", resource="events", method="list", params={"calendarId":"primary"}\n' +
+          '  List files:     service="drive", resource="files", method="list", params={"pageSize":10}\n' +
+          '  Search files:   service="drive", resource="files", method="list", params={"q":"name contains \'report\'"}\n' +
+          'Use gws_schema to discover all available methods and parameters.',
         risk: 'network',
         category: 'workspace',
         parameters: {
           type: 'object',
           properties: {
-            service: { type: 'string', description: 'Google Workspace service: gmail, calendar, drive, docs, sheets, etc.' },
-            resource: { type: 'string', description: 'API resource path, e.g. "users messages", "files", "events". Space-separated for nested resources.' },
+            service: { type: 'string', description: 'Google Workspace service: gmail, calendar, drive, docs, sheets, tasks, people, etc.' },
+            resource: { type: 'string', description: 'API resource path with spaces for nesting. Gmail: "users messages", "users labels", "users drafts". Calendar: "events", "calendarList". Drive: "files". Docs: "documents". Sheets: "spreadsheets".' },
             subResource: { type: 'string', description: 'Optional sub-resource (e.g. "attachments").' },
             method: { type: 'string', description: 'API method: list, get, create, update, delete, send, etc.' },
-            params: { type: 'object', description: 'URL/query parameters as JSON. E.g. {"userId":"me","maxResults":10}' },
-            json: { type: 'object', description: 'Request body as JSON (for POST/PATCH/PUT methods).' },
+            params: { type: 'object', description: 'URL/query parameters. Gmail requires {"userId":"me"} for most calls. Calendar uses {"calendarId":"primary"}.' },
+            json: { type: 'object', description: 'Request body as JSON (for POST/PATCH/PUT methods like send, create, update).' },
             format: { type: 'string', enum: ['json', 'table', 'yaml', 'csv'], description: 'Output format. Default: json.' },
             pageAll: { type: 'boolean', description: 'Auto-paginate all results.' },
             pageLimit: { type: 'number', description: 'Max pages when using pageAll.' },
@@ -4029,6 +4225,122 @@ export class ToolExecutor {
         return { success: result.success, output: result, error: result.success ? undefined : result.message };
       },
     );
+
+    // ── Policy Update Tool ───────────────────────────────────────
+    // Allows the assistant to modify allowed paths/commands/domains with mandatory user approval.
+    // Configurable per-action via agentPolicyUpdates config.
+
+    const policyUpdates = this.options.agentPolicyUpdates;
+    if (policyUpdates?.allowedPaths || policyUpdates?.allowedCommands || policyUpdates?.allowedDomains) {
+      const enabledActions: string[] = [];
+      if (policyUpdates.allowedPaths) enabledActions.push('add_path', 'remove_path');
+      if (policyUpdates.allowedCommands) enabledActions.push('add_command', 'remove_command');
+      if (policyUpdates.allowedDomains) enabledActions.push('add_domain', 'remove_domain');
+
+      this.registry.register(
+        {
+          name: 'update_tool_policy',
+          description: `Update tool sandbox policy (allowed paths, commands, or domains). Always requires user approval regardless of policy mode. ` +
+            `Enabled actions: ${enabledActions.join(', ')}. ` +
+            `Use this when the user asks to grant access to a directory, allow a command, or add a domain.`,
+          risk: 'external_post',  // Forces approval in all policy modes
+          category: 'system',
+          parameters: {
+            type: 'object',
+            properties: {
+              action: {
+                type: 'string',
+                description: `Action to perform: ${enabledActions.join(', ')}.`,
+              },
+              value: {
+                type: 'string',
+                description: 'The path, command prefix, or domain to add/remove.',
+              },
+            },
+            required: ['action', 'value'],
+          },
+        },
+        async (args) => {
+          const action = requireString(args.action, 'action').trim();
+          const value = requireString(args.value, 'value').trim();
+          if (!value) return { success: false, error: 'Value cannot be empty.' };
+          if (!enabledActions.includes(action)) {
+            return { success: false, error: `Action '${action}' is not enabled. Enabled actions: ${enabledActions.join(', ')}.` };
+          }
+
+          const current = this.getPolicy();
+          let updated: ToolPolicyUpdate;
+
+          switch (action) {
+            case 'add_path': {
+              if (current.sandbox.allowedPaths.includes(value)) {
+                return { success: true, output: { message: `Path '${value}' is already in the allowlist.`, allowedPaths: current.sandbox.allowedPaths } };
+              }
+              updated = { sandbox: { allowedPaths: [...current.sandbox.allowedPaths, value] } };
+              break;
+            }
+            case 'remove_path': {
+              const filtered = current.sandbox.allowedPaths.filter(p => p !== value);
+              if (filtered.length === current.sandbox.allowedPaths.length) {
+                return { success: false, error: `Path '${value}' is not in the allowlist.` };
+              }
+              if (filtered.length === 0) {
+                return { success: false, error: 'Cannot remove the last allowed path — at least one must remain.' };
+              }
+              updated = { sandbox: { allowedPaths: filtered } };
+              break;
+            }
+            case 'add_command': {
+              if (current.sandbox.allowedCommands.includes(value)) {
+                return { success: true, output: { message: `Command '${value}' is already in the allowlist.`, allowedCommands: current.sandbox.allowedCommands } };
+              }
+              updated = { sandbox: { allowedCommands: [...current.sandbox.allowedCommands, value] } };
+              break;
+            }
+            case 'remove_command': {
+              const filtered = current.sandbox.allowedCommands.filter(c => c !== value);
+              if (filtered.length === current.sandbox.allowedCommands.length) {
+                return { success: false, error: `Command '${value}' is not in the allowlist.` };
+              }
+              updated = { sandbox: { allowedCommands: filtered } };
+              break;
+            }
+            case 'add_domain': {
+              const normalizedValue = value.toLowerCase();
+              if (current.sandbox.allowedDomains.includes(normalizedValue)) {
+                return { success: true, output: { message: `Domain '${normalizedValue}' is already in the allowlist.`, allowedDomains: current.sandbox.allowedDomains } };
+              }
+              updated = { sandbox: { allowedDomains: [...current.sandbox.allowedDomains, normalizedValue] } };
+              break;
+            }
+            case 'remove_domain': {
+              const normalizedValue = value.toLowerCase();
+              const filtered = current.sandbox.allowedDomains.filter(d => d !== normalizedValue);
+              if (filtered.length === current.sandbox.allowedDomains.length) {
+                return { success: false, error: `Domain '${normalizedValue}' is not in the allowlist.` };
+              }
+              updated = { sandbox: { allowedDomains: filtered } };
+              break;
+            }
+            default:
+              return { success: false, error: `Unknown action: ${action}` };
+          }
+
+          const result = this.updatePolicy(updated);
+          // Persist to config file so changes survive reloads and restarts
+          try { this.options.onPolicyUpdate?.(result); } catch { /* best-effort persist */ }
+          return {
+            success: true,
+            output: {
+              message: `Policy updated: ${action} '${value}'.`,
+              allowedPaths: result.sandbox.allowedPaths,
+              allowedCommands: result.sandbox.allowedCommands,
+              allowedDomains: result.sandbox.allowedDomains,
+            },
+          };
+        },
+      );
+    }
   }
 
   private resolveGmailAccessToken(args: Record<string, unknown>): string | undefined {
@@ -4121,7 +4433,7 @@ export class ToolExecutor {
       const preview = roots.slice(0, 4).join(', ') || '(none)';
       throw new Error(
         `Path '${inputPath}' is outside allowed paths. Allowed roots: ${preview}. ` +
-        'Update Tools policy > Allowed Paths (web) or /tools policy paths (CLI).',
+        'Use the update_tool_policy tool to add the path, or update manually via Tools policy > Allowed Paths (web) / /tools policy paths (CLI).',
       );
     }
     return candidate;
@@ -4416,18 +4728,28 @@ export class ToolExecutor {
     const health = this.sandboxHealth;
     if (!health || !this.sandboxConfig.enabled) return;
     if ((health.enforcementMode ?? 'permissive') !== 'strict') {
-      if (health.availability !== 'strong') {
-        this.runtimeNotices.push({
-          level: 'warn',
-          message: `Sandbox is running in ${health.availability} mode on ${health.platform}; risky subprocess-backed tools remain available because enforcementMode=permissive.`,
-        });
-      }
+      this.runtimeNotices.push({
+        level: health.availability === 'strong' ? 'info' : 'warn',
+        message: [
+          `Permissive sandbox mode is explicitly enabled on ${health.platform}.`,
+          health.availability === 'strong'
+            ? 'Strong sandboxing is available, but permissive mode still allows degraded fallbacks if your configuration changes.'
+            : `Risky subprocess-backed tools remain available with only ${health.availability} sandbox isolation.`,
+          'Use this only if you accept higher host risk.',
+          'Safer options: run on Linux/Unix with bubblewrap available, or use the Windows portable app with guardian-sandbox-win.exe AppContainer helper.',
+        ].join(' '),
+      });
       return;
     }
     if (health.availability !== 'strong') {
       this.runtimeNotices.push({
         level: 'warn',
-        message: `Strict sandbox mode is active: risky subprocess-backed tools are disabled on ${health.platform}. ${health.reasons[0] ?? ''}`.trim(),
+        message: [
+          `Strict sandbox mode is active: risky subprocess-backed tools are disabled on ${health.platform}.`,
+          health.reasons[0] ?? '',
+          'To unlock them safely, run on Linux/Unix with bubblewrap available, or use the Windows portable app with guardian-sandbox-win.exe AppContainer helper.',
+          'If you still want degraded access, you must explicitly set assistant.tools.sandbox.enforcementMode: permissive.',
+        ].join(' ').trim(),
       });
     }
   }

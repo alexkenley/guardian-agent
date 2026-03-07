@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-GuardianAgent is an event-driven AI agent orchestration system with a three-layer security defense. Agents are async classes that respond to messages, events, and cron schedules. The Guardian security system enforces capabilities, scans for secrets, and blocks sensitive paths at the Runtime level — agents cannot bypass it.
+GuardianAgent is an event-driven AI agent orchestration system with a four-layer security defense. Agents are async classes that respond to messages, events, and cron schedules. The Guardian security system enforces capabilities, scans for secrets, blocks sensitive paths, and evaluates tool actions via inline LLM (Guardian Agent) at the Runtime level — agents cannot bypass it.
 
 **Core idea:** Agents implement simple async handlers (`onMessage`, `onEvent`, `onSchedule`) instead of generators. The Runtime dispatches work to agents and manages their lifecycle.
 
@@ -61,7 +61,9 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 - **DeniedPathController**: Blocks `.env`, `*.pem`, `*.key`, `credentials.*`, `id_rsa*`
 - **InputSanitizer**: Prompt injection detection with invisible Unicode stripping
 - **RateLimiter**: Per-agent burst/per-minute/per-hour sliding windows
+- **GuardianAgentService**: Inline LLM-powered evaluation of tool actions before execution (Layer 2)
 - **OutputGuardian**: Response scanning and secret redaction before output reaches users
+- **SentinelAuditService**: Retrospective anomaly detection on cron or on-demand (Layer 4)
 
 ### Runtime Services (`src/runtime/`)
 - **ConversationService** — SQLite-backed session memory with FTS5 full-text search and memory flush

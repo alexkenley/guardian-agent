@@ -4,6 +4,7 @@
 
 import type { GuardianAgentConfig } from '../config/types.js';
 import type { DashboardProviderInfo } from '../channels/web-types.js';
+import type { SandboxHealth } from '../sandbox/types.js';
 
 export interface SetupStep {
   id: string;
@@ -63,6 +64,7 @@ export interface SearchConfigInput {
 export function evaluateSetupStatus(
   config: GuardianAgentConfig,
   providers: DashboardProviderInfo[],
+  sandboxHealth?: SandboxHealth,
 ): SetupStatus {
   const defaultProvider = config.defaultProvider;
   const providerConfigured = !!config.llm[defaultProvider];
@@ -108,6 +110,49 @@ export function evaluateSetupStatus(
       ? 'At least one user channel is enabled.'
       : 'Enable CLI, Web, or Telegram channel.',
   });
+
+  const sandbox = config.assistant.tools.sandbox;
+  if (sandbox?.enabled === false) {
+    steps.push({
+      id: 'sandbox',
+      title: 'Tool Sandbox',
+      status: 'warning',
+      detail: 'OS-level process sandboxing is disabled. Child processes run without sandbox isolation.',
+    });
+  } else {
+    const enforcementMode = sandbox?.enforcementMode ?? 'strict';
+    const availability = sandboxHealth?.availability;
+    const platform = sandboxHealth?.platform;
+    const backend = sandboxHealth?.backend;
+
+    if (enforcementMode === 'permissive') {
+      const riskDetail = availability && platform
+        ? `Permissive mode is explicitly enabled on ${platform} with ${availability} sandbox availability (${backend ?? 'unknown backend'}). Risky subprocess-backed tools remain available even when strong isolation is unavailable.`
+        : 'Permissive mode is explicitly enabled. Risky subprocess-backed tools remain available even when strong isolation is unavailable.';
+      steps.push({
+        id: 'sandbox',
+        title: 'Tool Sandbox',
+        status: 'warning',
+        detail: `${riskDetail} Safer options: run on Linux/Unix with bubblewrap available, or use the Windows portable app bundled with the AppContainer helper. Keep permissive only if you accept higher host risk.`,
+      });
+    } else if (availability && availability !== 'strong' && platform) {
+      steps.push({
+        id: 'sandbox',
+        title: 'Tool Sandbox',
+        status: 'warning',
+        detail: `Strict mode is active on ${platform}, so risky subprocess-backed tools are currently blocked until a strong sandbox backend is available. Safer options: run on Linux/Unix with bubblewrap available, or use the Windows portable app with the AppContainer helper.`,
+      });
+    } else {
+      steps.push({
+        id: 'sandbox',
+        title: 'Tool Sandbox',
+        status: 'complete',
+        detail: availability && platform
+          ? `Strict mode is active on ${platform} with ${availability} sandbox availability (${backend ?? 'unknown backend'}).`
+          : 'Strict mode is active for tool sandboxing.',
+      });
+    }
+  }
 
   const ready = steps.every((step) => step.status !== 'incomplete');
   const completed = config.assistant.setup.completed;

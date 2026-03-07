@@ -1,9 +1,12 @@
 /**
- * Sentinel Agent — retrospective security analysis agent.
+ * Sentinel Agent — retrospective security analysis agent (legacy).
  *
- * Layer 3 defense: runs on a cron schedule, analyzes the AuditLog for
+ * Layer 4 defense: runs on a cron schedule, analyzes the AuditLog for
  * anomalous patterns, and optionally uses LLM for deeper analysis.
  * Also listens for real-time critical security events.
+ *
+ * Note: The active implementation is now SentinelAuditService in
+ * src/runtime/sentinel.ts. This class is kept for test compatibility.
  */
 
 import { BaseAgent } from '../agent/agent.js';

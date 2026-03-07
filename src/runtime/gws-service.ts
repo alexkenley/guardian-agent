@@ -6,10 +6,11 @@
  * (via `gws auth login` or environment variables).
  */
 
-import { execFile as execFileCb } from 'node:child_process';
+import { exec as execCb, execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createLogger } from '../util/logging.js';
 
+const execAsync = promisify(execCb);
 const execFileAsync = promisify(execFileCb);
 const log = createLogger('gws-service');
 
@@ -93,12 +94,13 @@ export class GWSService {
     // Build command args: gws <service> <resource> [sub-resource] <method> [flags]
     const args: string[] = [service];
 
-    // resource may contain spaces (e.g. "users messages") — split into parts
-    const resourceParts = resource.trim().split(/\s+/);
+    // Normalize resource: accept both "users messages" and "users.messages"
+    const normalized = resource.trim().replace(/\./g, ' ');
+    const resourceParts = normalized.split(/\s+/);
     args.push(...resourceParts);
 
     if (params.subResource) {
-      args.push(...params.subResource.trim().split(/\s+/));
+      args.push(...params.subResource.trim().replace(/\./g, ' ').split(/\s+/));
     }
 
     args.push(method);
@@ -142,11 +144,15 @@ export class GWSService {
     try {
       log.debug({ command: this.command, args }, 'GWS CLI call');
 
-      const { stdout } = await execFileAsync(this.command, args, {
-        timeout: this.timeoutMs,
-        maxBuffer: MAX_OUTPUT,
-        shell: true,
-      });
+      const stdout = process.platform === 'win32'
+        ? (await execAsync(buildShellCommand(this.command, args), {
+            timeout: this.timeoutMs,
+            maxBuffer: MAX_OUTPUT,
+          })).stdout
+        : (await execFileAsync(this.command, args, {
+            timeout: this.timeoutMs,
+            maxBuffer: MAX_OUTPUT,
+          })).stdout;
 
       const output = stdout.trim();
       if (!output) {
@@ -173,12 +179,61 @@ export class GWSService {
         return { success: true, data: output };
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      // Check if stderr has useful info
+      const stdout = (err as { stdout?: string })?.stdout?.trim();
       const stderr = (err as { stderr?: string })?.stderr?.trim();
-      const detail = stderr ? `${message} — ${stderr}` : message;
+      const structured = parseGwsCliOutput(stdout || stderr);
+      if (structured) {
+        log.warn({ args, err: structured.error }, 'GWS CLI call failed');
+        return structured;
+      }
+
+      const message = err instanceof Error ? err.message : String(err);
+      const detail = stderr ? `${message} — ${stderr}` : stdout ? `${message} — ${stdout}` : message;
       log.warn({ args, err: detail }, 'GWS CLI call failed');
       return { success: false, error: detail };
     }
   }
+}
+
+function parseGwsCliOutput(output: string | undefined): GWSResult | null {
+  if (!output) return null;
+
+  try {
+    const parsed = JSON.parse(output);
+    if (parsed && typeof parsed === 'object' && 'error' in parsed) {
+      const errObj = parsed.error as { code?: number; message?: string; reason?: string };
+      return {
+        success: false,
+        error: errObj.message || JSON.stringify(errObj),
+        data: parsed,
+      };
+    }
+    return {
+      success: false,
+      error: output,
+      data: parsed,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function buildShellCommand(
+  command: string,
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return [command, ...args].map((value) => shellQuote(value, platform)).join(' ');
+}
+
+function shellQuote(value: string, platform: NodeJS.Platform): string {
+  if (platform === 'win32') {
+    if (value === '') return '""';
+    if (/^[a-zA-Z0-9_\\\-/.:=@]+$/.test(value)) return value;
+    return `"${value.replace(/%/g, '%%').replace(/"/g, '""')}"`;
+  }
+
+  if (value === '') return "''";
+  if (/^[a-zA-Z0-9_\-/.:=@]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }

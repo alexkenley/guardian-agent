@@ -2476,6 +2476,51 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // GET /api/guardian-agent/status — Guardian Agent inline evaluation status
+      if (req.method === 'GET' && url.pathname === '/api/guardian-agent/status') {
+        if (!this.dashboard.onGuardianAgentStatus) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onGuardianAgentStatus());
+        return;
+      }
+
+      // POST /api/guardian-agent/config — Update Guardian Agent settings
+      if (req.method === 'POST' && url.pathname === '/api/guardian-agent/config') {
+        if (!this.dashboard.onGuardianAgentUpdate) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const body = await readBody(req, this.maxBodyBytes);
+        const input = JSON.parse(body) as {
+          enabled?: boolean;
+          llmProvider?: 'local' | 'external' | 'auto';
+          failOpen?: boolean;
+          timeoutMs?: number;
+        };
+        sendJSON(res, 200, this.dashboard.onGuardianAgentUpdate(input));
+        return;
+      }
+
+      // POST /api/sentinel/audit — Run Sentinel audit on-demand
+      if (req.method === 'POST' && url.pathname === '/api/sentinel/audit') {
+        if (!this.dashboard.onSentinelAuditRun) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let windowMs: number | undefined;
+        try {
+          const body = await readBody(req, this.maxBodyBytes);
+          if (body) {
+            const parsed = JSON.parse(body) as { windowMs?: number };
+            windowMs = parsed.windowMs;
+          }
+        } catch { /* empty body is fine */ }
+        sendJSON(res, 200, await this.dashboard.onSentinelAuditRun(windowMs));
+        return;
+      }
+
       // POST /api/factory-reset — Bulk reset data, config, or both
       if (req.method === 'POST' && url.pathname === '/api/factory-reset') {
         if (!this.dashboard.onFactoryReset) {

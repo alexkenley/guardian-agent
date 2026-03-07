@@ -182,6 +182,7 @@ assistant:
             - drive
           exposeSkills: true
           accountMode: single_user
+          model: openai         # optional, explicit LLM for tool-calling
 ```
 
 GuardianAgent translates this into an internal MCP server definition (`gws mcp -s gmail,calendar,drive`) and registers it with the MCP client manager.
@@ -189,9 +190,20 @@ GuardianAgent translates this into an internal MCP server definition (`gws mcp -
 ### Runtime Behavior
 
 - `probeGwsCli()` checks CLI availability and auth status using `gws --version` and `gws auth status`
-- All `gws` subprocess calls use `shell: true` for Windows `.cmd` compatibility
+- All `gws` subprocess calls use `shell: process.platform === 'win32'` for Windows `.cmd` compatibility without breaking JSON param quoting on Unix
 - The `command` field allows users to specify a custom path if `gws` is not on PATH
 - Config updates (enable/disable, services, command) are persisted via `POST /api/config` and require a restart
+
+### GWSService (`src/runtime/gws-service.ts`)
+
+Subprocess wrapper for the `gws` CLI. Key interface:
+
+- `execute(params)` — runs `gws <service> <resource> <method> [flags]` and parses JSON output
+- `schema(path)` — looks up API schema for a service method
+- `authStatus()` — checks auth status via `gws auth status`
+- `isServiceEnabled(service)` / `getEnabledServices()` — service allowlist queries
+
+Configuration: `command` (default `'gws'`), `timeoutMs` (default 30s), `services` (default `['gmail', 'calendar', 'drive', 'docs', 'sheets']`). Max output buffer: 512 KB.
 
 ### Web UI Integration
 
@@ -207,6 +219,48 @@ The Enable button saves `gws.enabled: true` and selected services directly to co
 
 - `/google status` — Shows installed/version, authenticated, provider enabled, services
 - Authentication and logout must be done directly via `gws auth login` / `gws auth logout` in a terminal (OAuth requires an interactive browser flow)
+
+---
+
+## LLM Provider Routing for Tool-Calling
+
+Google Workspace operations require structured tool calls (function calling). Local models like Ollama often struggle with complex tool schemas, so GuardianAgent routes GWS-related messages to an external LLM when available.
+
+### Dynamic Provider Resolution
+
+The `resolveGwsProvider` closure (`src/index.ts`) re-evaluates at each request so providers added via the web UI (hot reload) are picked up without restart. Resolution order:
+
+1. **Explicit model** — if `managedProviders.gws.model` is set and the named provider exists, use it
+2. **Auto-detect** — if the default provider is Ollama, scan `config.llm` for the first non-Ollama provider and use it
+3. **Default provider** — if the default is already an external LLM (OpenAI/Anthropic), use it directly
+
+If no external provider is found (only Ollama configured), the resolver returns `undefined` and the request goes through `chatWithFallback()` with its full fallback chain instead.
+
+### Message Routing
+
+When `onMessage` receives a user message, it checks:
+
+1. Is the `gws` managed provider enabled? (`enabledManagedProviders.has('gws')`)
+2. Does the message match workspace keywords? (`gmail|email|inbox|calendar|schedule|event|drive|docs|sheets|spreadsheet|google`)
+
+If both are true, `resolveGwsProvider()` is called. If a provider is returned, it handles the tool-calling loop directly. If `undefined`, `chatWithFallback` is used (primary LLM + fallback chain).
+
+### Error Handling
+
+The GWS provider `chatFn` wraps `gwsProvider.chat()` in a try/catch. If the external LLM throws (API error, timeout, rate limit), the error is logged and the request falls back to `chatWithFallback()` gracefully instead of propagating an unhandled error.
+
+```
+gwsProvider.chat() → success → return response
+                   → error   → log warning → chatWithFallback()
+no gwsProvider     →           → chatWithFallback()
+```
+
+### Key Invariant
+
+The resolver **never returns an Ollama provider**. When only Ollama is configured:
+- The resolver returns `undefined`
+- `chatWithFallback` is used, which tries `ctx.llm` (Ollama) then the `ModelFallbackChain`
+- This preserves the same behavior as before the dynamic resolver refactor
 
 ---
 
@@ -252,7 +306,7 @@ Each skill:
 - clarifies approval expectations
 - guides drafting before sending or mutating
 
-Skills are auto-exposed when `exposeSkills: true` and the GWS provider is enabled. They report readiness through the skills CLI/API surfaces based on whether the required managed provider is active.
+Skills are auto-exposed when `exposeSkills: true` (default) and the GWS provider is enabled. They report readiness through the skills CLI/API surfaces based on whether the required managed provider is active.
 
 ---
 
@@ -351,6 +405,9 @@ The assistant should prefer workflows like:
 - CLI `/google status` command
 - `probeGwsCli()` connectivity test via web API
 - Config persistence for `gws.enabled`, `gws.services`, `gws.command` via `POST /api/config`
+- Dynamic `resolveGwsProvider` with hot-reload support
+- GWS provider error handling with graceful fallback to `chatWithFallback`
+- Ollama exclusion from GWS provider resolution (prevents silent tool-call failures)
 
 ### Removed
 
@@ -359,6 +416,7 @@ The assistant should prefer workflows like:
 - Web UI login/logout buttons (OAuth is terminal-only)
 - `/api/gws/login` and `/api/gws/logout` endpoints
 - CLI `/google login` and `/google logout` commands
+- Static `gwsLlmProvider` variable (replaced by dynamic `resolveGwsProvider` closure)
 
 ### Future
 

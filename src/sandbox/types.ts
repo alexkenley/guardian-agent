@@ -118,7 +118,7 @@ export const DEFAULT_RESOURCE_LIMITS: SandboxResourceLimits = {
 /** Default sandbox configuration. */
 export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
   enabled: true,
-  enforcementMode: 'permissive',
+  enforcementMode: 'strict',
   mode: 'workspace-write',
   networkAccess: false,
   additionalWritePaths: [],

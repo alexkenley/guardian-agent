@@ -48,12 +48,13 @@ GuardianAgent is an AI agent orchestration system where:
 | LLM provider failures | CircuitBreaker + priority-based FailoverProvider |
 | Malicious skill content | Local reviewed skill roots, no direct execution path, ToolExecutor/Guardian remain mandatory for effects |
 | Over-broad external tool providers | Guardian policy, managed provider allowlists, per-service capabilities, audit trail |
+| Dangerous tool actions | Guardian Agent inline LLM evaluation blocks high/critical risk actions before execution |
 
 ---
 
-## Three-Layer Defense System
+## Four-Layer Defense System
 
-GuardianAgent's security operates at every stage of the agent lifecycle through three independent defense layers.
+GuardianAgent's security operates at every stage of the agent lifecycle through four independent defense layers.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -76,7 +77,7 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
 │  └──────────────┘  └─────────────┘  └───────────────┘  │
 │                                                         │
 │  Runs BEFORE agent.onMessage() — agent never sees       │
-│  blocked input                                          │
+│  blocked input. Sync, rule-based, zero LLM calls.       │
 └───────────────────────┬─────────────────────────────────┘
                         │ ✓ Allowed
                         ▼
@@ -102,7 +103,7 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
 │  Current: bwrap namespace isolation on Linux             │
 │  Current: sandbox health states; strict mode disables    │
 │  risky subprocess-backed tools without a strong backend  │
-│  Current default: permissive enforcement mode            │
+│  Current default: strict enforcement mode                │
 │  Current fallback: ulimit + env hardening                │
 │  Next: native Windows/macOS sandbox helpers              │
 │                                                         │
@@ -120,7 +121,27 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
                         │
                         ▼
 ┌─────────────────────────────────────────────────────────┐
-│  LAYER 2: Output Guardian (Reactive)                    │
+│  LAYER 2: Guardian Agent (Inline LLM Evaluation)        │
+│                                                         │
+│  The namesake feature. Evaluates tool actions via LLM   │
+│  BEFORE execution. Can deny risky or malicious actions.  │
+│                                                         │
+│  • Runs on non-read-only tool actions (mutating,        │
+│    network, external_post)                              │
+│  • Uses dedicated security prompt — no SOUL/skills      │
+│  • Configurable LLM: local (Ollama), external           │
+│    (OpenAI/Anthropic), or auto (local-first fallback)   │
+│  • Fail-open by default (action proceeds if LLM is      │
+│    unavailable or times out)                            │
+│  • All evaluations logged to audit trail with           │
+│    controller='GuardianAgent'                           │
+│  • Risk levels: safe, low, medium (allow), high,        │
+│    critical (block)                                     │
+└───────────────────────┬─────────────────────────────────┘
+                        │ ✓ Allowed
+                        ▼
+┌─────────────────────────────────────────────────────────┐
+│  LAYER 3: Output Guardian (Reactive)                    │
 │                                                         │
 │  Scans agent response AFTER execution, BEFORE delivery  │
 │                                                         │
@@ -135,10 +156,10 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
                         │
                         ▼
 ┌─────────────────────────────────────────────────────────┐
-│  LAYER 3: Sentinel Agent (Retrospective)                │
+│  LAYER 4: Sentinel Audit (Retrospective)                │
 │                                                         │
-│  Autonomous agent running on cron schedule (default 5m) │
-│  Analyzes AuditLog for anomalous patterns:              │
+│  Runs on cron schedule (default 5m) or on-demand via    │
+│  web UI / API. Analyzes AuditLog for patterns:          │
 │                                                         │
 │  • Volume spikes (denial rate > 3x baseline)            │
 │  • Capability probing (agent denied for 5+ actions)     │
@@ -146,6 +167,9 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
 │  • Error storms (>10 errors in window)                  │
 │  • Optional LLM-enhanced analysis                       │
 │  • Network baseline anomalies + traffic threat signals  │
+│                                                         │
+│  Available via POST /api/sentinel/audit and in the      │
+│  web UI Settings > Sentinel Audit panel.                │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -158,6 +182,7 @@ The following controls are enforced at Runtime chokepoints for framework-managed
 | Chokepoint | Enforcement | Bypass Prevention |
 |------------|-------------|-------------------|
 | **Message input** | Guardian pipeline runs BEFORE `agent.onMessage()` | Agent never sees blocked messages |
+| **Tool pre-execution** | Guardian Agent LLM evaluates action before tool handler runs | Risky actions blocked before any side effects |
 | **Response output** | OutputGuardian scans after execution | Response modified before delivery |
 | **LLM access** | `GuardedLLMProvider` wraps real provider for `ctx.llm` | Framework-managed LLM calls are scanned/redacted before delivery |
 | **Event emission** | Runtime source validation + payload scanning before dispatch | `ctx.emit()` stamps source; untrusted source IDs rejected |
@@ -179,8 +204,8 @@ GuardianAgent now classifies sandbox strength as `strong`, `degraded`, or `unava
 - macOS currently reports `degraded`
 - Windows reports `strong` only when a configured native helper is enabled and detected; otherwise it reports `unavailable`
 - `assistant.tools.sandbox.enforcementMode` supports `permissive` and `strict`
-- Current defaults are `policyMode: approve_by_policy` and `sandbox.enforcementMode: permissive`
-- In `permissive` mode, risky subprocess-backed tools remain available even when sandbox availability is not `strong`
+- Current defaults are `policyMode: approve_by_policy` and `sandbox.enforcementMode: strict`
+- In `permissive` mode, risky subprocess-backed tools remain available even when sandbox availability is not `strong`, but permissive mode must be explicitly enabled by the operator
 - In `strict` mode, risky subprocess-backed tools are disabled unless sandbox availability is `strong`
 - CLI startup warnings, tool listings, category views, web tool state, and tool execution denials surface the reason
 
@@ -705,6 +730,12 @@ guardian:
   outputScanning:
     enabled: true
     redactSecrets: true          # false = block entire response
+
+  guardianAgent:
+    enabled: true
+    llmProvider: auto             # local | external | auto
+    failOpen: true                # allow actions when LLM unavailable
+    timeoutMs: 8000               # inline evaluation timeout
 
   sentinel:
     enabled: true

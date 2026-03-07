@@ -1,7 +1,7 @@
 {
   "name": "guardianagent",
   "version": "1.0.0",
-  "description": "Security-first AI agent orchestration with three-layer defense system",
+  "description": "Security-first AI agent orchestration with four-layer defense system",
   "main": "dist/index.js",
   "exports": {
     ".": "./dist/index.js"

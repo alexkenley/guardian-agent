@@ -10,10 +10,11 @@ The [OpenAI Agentic Governance Cookbook](https://cookbook.openai.com/examples/pa
 
 ## 2. Guardrails Stages (Pre-flight, Input, Output)
 **Cookbook Concept:** Run checks at three stages: Pre-flight (raw input), Input (before LLM), and Output (after LLM). Available guardrails include PII Detection, Jailbreaks, Moderation, and Hallucination detection.
-**GuardianAgent Implementation:** We strictly enforce a three-layer defense:
-- **Layer 1 (Pre-flight/Input):** `InputSanitizer`, `RateLimiter`, `CapabilityController`, `SecretScanController`, `DeniedPathController`.
-- **Layer 2 (Output):** `OutputGuardian` redacts or blocks outputs containing secrets/PII.
-- **Layer 3 (Retrospective):** `SentinelAgent` for anomaly detection.
+**GuardianAgent Implementation:** We strictly enforce a four-layer defense:
+- **Layer 1 (Admission):** `InputSanitizer`, `RateLimiter`, `CapabilityController`, `SecretScanController`, `DeniedPathController`.
+- **Layer 2 (Guardian Agent):** `GuardianAgentService` performs inline LLM-powered evaluation of tool actions before execution.
+- **Layer 3 (Output):** `OutputGuardian` redacts or blocks outputs containing secrets/PII.
+- **Layer 4 (Sentinel Audit):** `SentinelAuditService` for retrospective anomaly detection.
 **Uplift:** Added PII Detection to our `SecretScanner` so that Layer 1 (Input) and Layer 2 (Output) automatically detect and redact PII, aligning with the cookbook's recommendation for robust data protection.
 
 ## 3. Triage / Concierge Pattern

@@ -57,7 +57,7 @@ echo -e "${BLUE}       ██╔══██║██║   ██║██╔═
 echo -e "${DBLUE}       ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ${RESET}"
 echo -e "${DBLUE}       ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   ${RESET}"
 echo ""
-echo -e "${LBLUE}      Three-Layer Defense${RESET}  ${DIM}|${RESET}  ${LBLUE}Real-Time Dashboard${RESET}"
+echo -e "${LBLUE}      Four-Layer Defense${RESET}  ${DIM}|${RESET}  ${LBLUE}Real-Time Dashboard${RESET}"
 echo ""
 
 # ── Step 1: Check Node.js ─────────────────────────────────────
@@ -233,7 +233,7 @@ echo ""
 echo -e "  ${DBLUE}+-------------------------------------------------+${RESET}"
 echo -e "  ${DBLUE}|${RESET}         ${LBLUE}SYSTEM STATUS${RESET}                          ${DBLUE}|${RESET}"
 echo -e "  ${DBLUE}+-------------------------------------------------+${RESET}"
-echo -e "  ${DBLUE}|${RESET}  Guardian:  ${GREEN}ACTIVE${RESET} (3-layer defense)            ${DBLUE}|${RESET}"
+echo -e "  ${DBLUE}|${RESET}  Guardian:  ${GREEN}ACTIVE${RESET} (4-layer defense)            ${DBLUE}|${RESET}"
 echo -e "  ${DBLUE}|${RESET}  Channels:  CLI + Web Dashboard               ${DBLUE}|${RESET}"
 echo -e "  ${DBLUE}|${RESET}  Dashboard: ${GREEN}http://localhost:3000${RESET}              ${DBLUE}|${RESET}"
 if [ "$OLLAMA_RUNNING" = true ]; then

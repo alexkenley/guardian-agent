@@ -1563,6 +1563,151 @@ tr:hover td {
   }
 }
 
+/* ─── Settings Accordion Layout ──────────────────────────── */
+
+.cfg-group {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 0.75rem;
+  overflow: hidden;
+}
+
+.cfg-group-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 1rem;
+  cursor: pointer;
+  user-select: none;
+  background: var(--bg-surface);
+  border-bottom: 1px solid transparent;
+  transition: background 0.15s;
+}
+
+.cfg-group-header:hover {
+  background: var(--bg-elevated);
+}
+
+.cfg-group.open > .cfg-group-header {
+  border-bottom-color: var(--border);
+}
+
+.cfg-group-chevron {
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  transition: transform 0.2s;
+  flex-shrink: 0;
+  width: 1rem;
+  text-align: center;
+}
+
+.cfg-group.open > .cfg-group-header .cfg-group-chevron {
+  transform: rotate(90deg);
+}
+
+.cfg-group-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.cfg-group-summary {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.cfg-group-body {
+  display: none;
+  padding: 0.75rem;
+}
+
+.cfg-group.open > .cfg-group-body {
+  display: block;
+}
+
+.cfg-group-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.cfg-group-grid > .cfg-item.full-width {
+  grid-column: 1 / -1;
+}
+
+/* Nested item accordion */
+.cfg-item {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.cfg-item-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+}
+
+.cfg-item-header:hover {
+  background: rgba(79, 172, 254, 0.04);
+}
+
+.cfg-item.open > .cfg-item-header {
+  border-bottom: 1px solid var(--border);
+}
+
+.cfg-item-chevron {
+  color: var(--text-muted);
+  font-size: 0.6rem;
+  transition: transform 0.2s;
+  flex-shrink: 0;
+  width: 0.85rem;
+  text-align: center;
+}
+
+.cfg-item.open > .cfg-item-header .cfg-item-chevron {
+  transform: rotate(90deg);
+}
+
+.cfg-item-title {
+  font-size: 0.78rem;
+  color: var(--text-primary);
+}
+
+.cfg-item-badge {
+  margin-left: auto;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+.cfg-item-body {
+  display: none;
+  padding: 0.75rem;
+}
+
+.cfg-item.open > .cfg-item-body {
+  display: block;
+}
+
+@media (max-width: 768px) {
+  .cfg-group-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cfg-group-grid > .cfg-item.full-width {
+    grid-column: auto;
+  }
+}
+
 /* ─── Scrollbar ──────────────────────────────────────────── */
 
 ::-webkit-scrollbar {

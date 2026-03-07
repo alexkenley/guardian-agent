@@ -231,11 +231,24 @@ export interface GuardianConfig {
     /** Redact secrets (true) vs block entirely (false). Default: true. */
     redactSecrets: boolean;
   };
-  /** Sentinel agent configuration. */
-  sentinel?: {
-    /** Enable Sentinel agent (default: true). */
+  /** Guardian Agent inline LLM evaluation configuration. */
+  guardianAgent?: {
+    /** Enable inline LLM-powered action evaluation (default: true). */
     enabled: boolean;
-    /** Cron schedule for analysis (default: every 5 min). */
+    /** LLM provider mode: 'local' (Ollama), 'external' (OpenAI/Anthropic), 'auto' (default). */
+    llmProvider: 'local' | 'external' | 'auto';
+    /** Action types that trigger inline evaluation. */
+    actionTypes?: string[];
+    /** Allow actions when LLM is unavailable (default: true). */
+    failOpen: boolean;
+    /** Timeout for inline evaluation in ms (default: 8000). */
+    timeoutMs?: number;
+  };
+  /** Sentinel audit configuration (retrospective analysis). */
+  sentinel?: {
+    /** Enable Sentinel audit (default: true). */
+    enabled: boolean;
+    /** Cron schedule for automatic audit (default: every 5 min). */
     schedule: string;
     /** Anomaly detection thresholds. */
     anomalyThresholds?: {
@@ -639,6 +652,8 @@ export interface AssistantMCPConfig {
       services?: string[];
       exposeSkills?: boolean;
       accountMode?: 'single_user' | 'multi_account';
+      /** LLM provider name to use for workspace tool-calling (e.g. 'anthropic', 'openai'). Falls back to default provider. */
+      model?: string;
     };
   };
 }
@@ -736,6 +751,16 @@ export interface WebSearchConfig {
   cacheTtlMs?: number;
 }
 
+/** Controls which policy areas the assistant can modify with user approval via chat. */
+export interface AgentPolicyUpdatesConfig {
+  /** Allow the assistant to add filesystem paths to the allowlist (always requires approval). */
+  allowedPaths: boolean;
+  /** Allow the assistant to add shell commands to the allowlist (always requires approval). */
+  allowedCommands: boolean;
+  /** Allow the assistant to add domains to the allowlist (always requires approval). */
+  allowedDomains: boolean;
+}
+
 /** Assistant tool execution policy and sandbox settings. */
 export interface AssistantToolsConfig {
   /** Enable assistant tool runtime and LLM tool-calling. */
@@ -766,6 +791,8 @@ export interface AssistantToolsConfig {
   disabledCategories?: ToolCategory[];
   /** OS-level process sandbox configuration. Uses bubblewrap (bwrap) on Linux, ulimit fallback elsewhere. */
   sandbox?: import('../sandbox/types.js').SandboxConfig;
+  /** Controls which policy areas the assistant can modify via chat (always requires user approval). */
+  agentPolicyUpdates?: AgentPolicyUpdatesConfig;
 }
 
 /** Personal assistant feature configuration. */
@@ -1035,10 +1062,15 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         maxResults: 20,
         sources: [],
       },
+      agentPolicyUpdates: {
+        allowedPaths: true,
+        allowedCommands: false,
+        allowedDomains: true,
+      },
       disabledCategories: [],
       sandbox: {
         enabled: true,
-        enforcementMode: 'permissive',
+        enforcementMode: 'strict',
         mode: 'workspace-write',
         networkAccess: false,
         additionalWritePaths: [],

@@ -1,8 +1,9 @@
 /**
  * Audit log — structured security event logging with in-memory ring buffer.
  *
- * Foundation for Layer 3 (Sentinel). Records all Guardian decisions,
- * security events, and anomalies for retrospective analysis.
+ * Foundation for Layer 2 (Guardian Agent) and Layer 4 (Sentinel Audit).
+ * Records all Guardian decisions, security events, and anomalies for
+ * inline evaluation and retrospective analysis.
  */
 
 import type { AuditPersistence, ChainVerifyResult } from './audit-persistence.js';
