@@ -85,10 +85,16 @@ export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
 export interface ToolDefinition {
   name: string;
   description: string;
+  /** Short description for LLM context (used instead of full description when available). */
+  shortDescription?: string;
   risk: ToolRisk;
   parameters: Record<string, unknown>;
   /** Tool category for enable/disable gating. Absent for MCP tools. */
   category?: ToolCategory;
+  /** When true, this tool is deferred and only loaded via tool_search. */
+  deferLoading?: boolean;
+  /** Usage examples to help LLMs understand parameter patterns. */
+  examples?: Array<{ input: Record<string, unknown>; description: string }>;
 }
 
 export interface ToolExecutionRequest {

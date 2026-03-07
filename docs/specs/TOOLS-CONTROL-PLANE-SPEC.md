@@ -16,16 +16,66 @@ Expose a safe, auditable tool-execution plane so the assistant can perform works
 - Web Configuration > Tools tab (`#/config`) and CLI `/tools` command set
 - LLM tool-calling integration through chat/orchestrator path
 
-## Tool Catalog (Initial)
-- Filesystem/document: `fs_list`, `fs_search`, `fs_read`, `fs_write`, `doc_create`
-- Shell/browser: `shell_safe`, `chrome_job`
+## Tool Catalog
+- **System**: `tool_search` (meta-tool for discovering deferred tools)
+- Filesystem/document: `fs_list`, `fs_search`, `fs_read`, `fs_write`, `fs_mkdir`, `fs_delete`, `fs_move`, `fs_copy`, `doc_create`
+- Shell/browser: `shell_safe`, `chrome_job`, `browser_open`, `browser_action`, `browser_snapshot`, `browser_close`, `browser_task`
+- Web: `web_search`, `web_fetch`
 - Campaign/email: `contacts_discover_browser`, `contacts_import_csv`, `contacts_list`, `campaign_create`, `campaign_list`, `campaign_add_contacts`, `campaign_dry_run`, `gmail_send`, `campaign_run`
+- Google Workspace: `gws`, `gws_schema`
 - Threat intel: `intel_summary`, `intel_watch_add`, `intel_watch_remove`, `intel_scan`, `intel_findings`, `intel_draft_action`
 - External interaction: `forum_post` (restricted by policy)
-- Search: `qmd_search` (hybrid BM25 + vector + LLM re-rank), `qmd_status` (install/collection info), `qmd_reindex` (trigger embedding reindex)
-  - Category: `search` — disabled via `disabledCategories` like any other
-  - `qmd_search` and `qmd_status` are `read_only`; `qmd_reindex` is `mutating`
-  - All pass through Guardian admission checks
+- Network: `net_ping`, `net_arp_scan`, `net_port_check`, `net_interfaces`, `net_connections`, `net_dns_lookup`, `net_traceroute`, `net_oui_lookup`, `net_classify`, `net_banner_grab`, `net_fingerprint`, `net_wifi_scan`, `net_wifi_clients`, `net_connection_profiles`, `net_baseline`, `net_anomaly_check`, `net_threat_summary`, `net_traffic_baseline`, `net_threat_check`
+- System: `sys_info`, `sys_resources`, `sys_processes`, `sys_services`
+- Memory: `memory_search`, `memory_get`, `memory_save`
+- Search: `qmd_search`, `qmd_status`, `qmd_reindex`
+- Automation: `workflow_list`, `workflow_upsert`, `workflow_delete`, `workflow_run`, `task_list`, `task_create`, `task_update`, `task_delete`
+- Policy: `update_tool_policy`
+
+## Deferred Tool Loading
+
+By default, only 5 tools are sent to the LLM on every request (**always-loaded**):
+`tool_search`, `web_search`, `fs_read`, `shell_safe`, `memory_search`
+
+All other tools have `deferLoading: true` and are only discovered via `tool_search`. When the LLM calls `tool_search`, matching tool definitions (including full parameter schemas) are merged into the active tool set for subsequent rounds.
+
+This reduces tool definition tokens from ~15-25K to ~3K per request.
+
+**Configuration:**
+```yaml
+assistant:
+  tools:
+    deferredLoading:
+      enabled: true
+      alwaysLoaded: [tool_search, web_search, fs_read, shell_safe, memory_search]
+```
+
+## Tool Definition Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Unique tool identifier |
+| `description` | string | Full description (used in tool_search results) |
+| `shortDescription` | string? | Compact description for LLM context (~60% fewer tokens) |
+| `risk` | ToolRisk | `read_only`, `mutating`, `network`, `external_post` |
+| `parameters` | object | JSON Schema for tool arguments |
+| `category` | ToolCategory? | Category for enable/disable gating |
+| `deferLoading` | boolean? | When true, tool is only loaded via tool_search |
+| `examples` | Array? | Usage examples: `{ input: Record, description: string }` |
+
+## Parallel Tool Execution
+
+When the LLM returns multiple tool calls in a single response, they are executed concurrently via `Promise.allSettled()`. Results are pushed in original order. If any call fails, an error result is returned for that specific tool call.
+
+## Context Window Awareness
+
+A configurable `contextBudget` (default: 80,000 tokens) tracks approximate context usage. When tool result messages exceed 80% of the budget, oldest tool results are summarized to ~200 chars each to prevent context overflow.
+
+```yaml
+assistant:
+  tools:
+    contextBudget: 80000
+```
 
 ## Policy Model
 - Global mode:

@@ -793,6 +793,15 @@ export interface AssistantToolsConfig {
   sandbox?: import('../sandbox/types.js').SandboxConfig;
   /** Controls which policy areas the assistant can modify via chat (always requires user approval). */
   agentPolicyUpdates?: AgentPolicyUpdatesConfig;
+  /** Deferred tool loading: only send always-loaded tools to LLM, rest discoverable via tool_search. */
+  deferredLoading?: {
+    /** Enable deferred tool loading (default: true). */
+    enabled: boolean;
+    /** Tool names that are always loaded regardless of deferral. */
+    alwaysLoaded?: string[];
+  };
+  /** Maximum approximate token budget for tool results in context (default: 80000). */
+  contextBudget?: number;
 }
 
 /** Personal assistant feature configuration. */
@@ -1067,6 +1076,11 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         allowedCommands: false,
         allowedDomains: true,
       },
+      deferredLoading: {
+        enabled: true,
+        alwaysLoaded: ['tool_search', 'web_search', 'fs_read', 'shell_safe', 'memory_search'],
+      },
+      contextBudget: 80_000,
       disabledCategories: [],
       sandbox: {
         enabled: true,

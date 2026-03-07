@@ -307,6 +307,20 @@ export class ToolExecutor {
     );
   }
 
+  /** Return only always-loaded (non-deferred) tool definitions, respecting category/sandbox filters. */
+  listAlwaysLoadedDefinitions(): ToolDefinition[] {
+    return this.registry.listAlwaysLoaded().filter(
+      (def) => this.isCategoryEnabled(def.category) && !this.getSandboxBlockReason(def.name, def.category),
+    );
+  }
+
+  /** Search tools by keyword, returning full definitions (including deferred). */
+  searchTools(query: string, maxResults: number = 10): ToolDefinition[] {
+    return this.registry.searchTools(query, maxResults).filter(
+      (def) => this.isCategoryEnabled(def.category) && !this.getSandboxBlockReason(def.name, def.category),
+    );
+  }
+
   getRuntimeNotices(): ToolRuntimeNotice[] {
     return [...this.runtimeNotices];
   }
@@ -938,12 +952,59 @@ export class ToolExecutor {
   }
 
   private registerBuiltinTools(): void {
+    // ── tool_search meta-tool (always loaded) ──
+    this.registry.register(
+      {
+        name: 'tool_search',
+        description: 'Search available tools by keyword. Returns matching tool names and schemas so you can use them in subsequent requests. Use this to discover tools for specific tasks.',
+        shortDescription: 'Search available tools by keyword. Returns matching tool names and schemas.',
+        risk: 'read_only',
+        category: 'system',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Search keywords (e.g. "network scan", "file write", "email").' },
+            maxResults: { type: 'number', description: 'Maximum tools to return (default: 10).' },
+          },
+          required: ['query'],
+        },
+        examples: [
+          { input: { query: 'network scan' }, description: 'Find network scanning tools' },
+          { input: { query: 'file write create' }, description: 'Find tools for creating/writing files' },
+          { input: { query: 'email gmail send' }, description: 'Find email-related tools' },
+        ],
+      },
+      async (args) => {
+        const query = (args.query as string)?.trim();
+        if (!query) return { success: false, error: 'query is required' };
+        const maxResults = Math.min(20, Math.max(1, (args.maxResults as number) || 10));
+        const matches = this.searchTools(query, maxResults);
+        return {
+          success: true,
+          output: {
+            query,
+            matchCount: matches.length,
+            tools: matches.map((def) => ({
+              name: def.name,
+              description: def.shortDescription ?? def.description,
+              category: def.category,
+              risk: def.risk,
+              parameters: def.parameters,
+              examples: def.examples,
+            })),
+          },
+        };
+      },
+    );
+
     this.registry.register(
       {
         name: 'fs_list',
         description: 'List files and directories inside allowed workspace paths. Returns up to 500 entries with name and type. Security: path validated against allowedPaths roots. Requires read_files capability.',
+        shortDescription: 'List files and directories. Returns entries with name and type.',
         risk: 'read_only',
         category: 'filesystem',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -973,8 +1034,14 @@ export class ToolExecutor {
       {
         name: 'fs_search',
         description: 'Recursively search files by name or content within allowed paths. Modes: name, content, or auto. Configurable depth, file count, and result limits. Security: path validated against allowedPaths roots. Requires read_files capability.',
+        shortDescription: 'Search files by name or content. Modes: name, content, auto.',
         risk: 'read_only',
         category: 'filesystem',
+        deferLoading: true,
+        examples: [
+          { input: { query: 'config', mode: 'name' }, description: 'Find files with "config" in the name' },
+          { input: { query: 'TODO', mode: 'content', maxResults: 10 }, description: 'Search file contents for TODO comments' },
+        ],
         parameters: {
           type: 'object',
           properties: {
@@ -1112,6 +1179,7 @@ export class ToolExecutor {
       {
         name: 'fs_read',
         description: 'Read a UTF-8 text file within allowed workspace paths. Max 1MB read, truncated if over limit. Security: path validated against allowedPaths roots. Requires read_files capability.',
+        shortDescription: 'Read a text file. Returns content, byte count, and truncation status.',
         risk: 'read_only',
         category: 'filesystem',
         parameters: {
@@ -1147,8 +1215,10 @@ export class ToolExecutor {
       {
         name: 'fs_write',
         description: 'Write or append UTF-8 text to a file within allowed paths. Creates parent directories automatically. Security: path validated against allowedPaths roots. Mutating — requires approval in approve_by_policy mode. Requires write_files capability.',
+        shortDescription: 'Write or append text to a file. Creates parent dirs automatically.',
         risk: 'mutating',
         category: 'filesystem',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -1187,8 +1257,10 @@ export class ToolExecutor {
       {
         name: 'fs_mkdir',
         description: 'Create a directory within allowed paths. Supports recursive creation and validates path allowlist. Mutating — requires approval in approve_by_policy mode. Requires write_files capability.',
+        shortDescription: 'Create a directory. Supports recursive creation.',
         risk: 'mutating',
         category: 'filesystem',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -1218,8 +1290,10 @@ export class ToolExecutor {
       {
         name: 'fs_delete',
         description: 'Delete a file or empty directory within allowed paths. For non-empty directories, set recursive to true. Security: path validated against allowedPaths roots. Mutating — requires approval in approve_by_policy mode. Requires write_files capability.',
+        shortDescription: 'Delete a file or empty directory within allowed paths.',
         risk: 'mutating',
         category: 'filesystem',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -1256,8 +1330,10 @@ export class ToolExecutor {
       {
         name: 'fs_move',
         description: 'Move or rename a file or directory within allowed paths. Both source and destination must be inside allowed roots. Security: paths validated against allowedPaths roots. Mutating — requires approval in approve_by_policy mode. Requires write_files capability.',
+        shortDescription: 'Move or rename a file or directory within allowed paths.',
         risk: 'mutating',
         category: 'filesystem',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -1289,8 +1365,10 @@ export class ToolExecutor {
       {
         name: 'fs_copy',
         description: 'Copy a file within allowed paths. Both source and destination must be inside allowed roots. Security: paths validated against allowedPaths roots. Mutating — requires approval in approve_by_policy mode. Requires write_files capability.',
+        shortDescription: 'Copy a file within allowed paths.',
         risk: 'mutating',
         category: 'filesystem',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -1324,8 +1402,10 @@ export class ToolExecutor {
       {
         name: 'doc_create',
         description: 'Create a document file from plain text or markdown template. Supports markdown and plain formats. Security: path validated against allowedPaths roots. Mutating — requires approval. Requires write_files capability.',
+        shortDescription: 'Create a document file from text or markdown content.',
         risk: 'mutating',
         category: 'filesystem',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -1364,8 +1444,13 @@ export class ToolExecutor {
       {
         name: 'shell_safe',
         description: 'Run an allowlisted shell command from the workspace root. Command prefix must match allowedCommands list. Max 60s timeout, 1MB output buffer. Security: command validated against allowlist before execution. Mutating — requires approval. Requires execute_commands capability.',
+        shortDescription: 'Run an allowlisted shell command. Returns stdout, stderr, exit code.',
         risk: 'mutating',
         category: 'shell',
+        examples: [
+          { input: { command: 'git status' }, description: 'Check git repository status' },
+          { input: { command: 'npm test', timeoutMs: 30000 }, description: 'Run tests with 30s timeout' },
+        ],
         parameters: {
           type: 'object',
           properties: {
@@ -1412,8 +1497,10 @@ export class ToolExecutor {
       {
         name: 'chrome_job',
         description: 'Fetch and summarize web content from allowlisted domains. Returns page title and text snippet (max 500KB). Security: hostname validated against allowedDomains list. Requires network_access capability.',
+        shortDescription: 'Fetch and render web content with JavaScript. Returns extracted text.',
         risk: 'network',
         category: 'web',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -1445,6 +1532,7 @@ export class ToolExecutor {
             headers: {
               'User-Agent': 'GuardianAgent-Tools/1.0',
               'Accept': 'text/html,application/xhtml+xml,application/json,text/plain',
+        shortDescription: 'Run an allowlisted shell command. Returns stdout, stderr, exit code.',
             },
           });
           const bytes = await response.arrayBuffer();
@@ -1483,6 +1571,7 @@ export class ToolExecutor {
       {
         name: 'web_search',
         description: 'Search the web for information. Returns a synthesized AI answer plus structured results. Providers: Brave (recommended, free Summarizer API), Perplexity (AI answers with citations), DuckDuckGo (HTML scrape fallback). Results cached for 5 min. Security: provider API hosts must be in allowedDomains. All results marked as untrusted external content. Requires network_access capability.',
+        shortDescription: 'Search the web. Returns titles, URLs, snippets, and optional AI answer.',
         risk: 'network',
         category: 'web',
         parameters: {
@@ -1561,8 +1650,14 @@ export class ToolExecutor {
       {
         name: 'web_fetch',
         description: 'Fetch and extract readable content from a web page URL. Strips HTML to readable text, handles JSON. Max 500KB fetch, 20K chars output. Security: blocks private/internal addresses (SSRF protection). All content marked as untrusted. Requires network_access capability.',
+        shortDescription: 'Fetch and extract readable content from a URL. Returns clean text.',
         risk: 'network',
         category: 'web',
+        deferLoading: true,
+        examples: [
+          { input: { url: 'https://example.com/article' }, description: 'Fetch and extract article text' },
+          { input: { url: 'https://api.example.com/data.json', maxChars: 5000 }, description: 'Fetch JSON API with char limit' },
+        ],
         parameters: {
           type: 'object',
           properties: {
@@ -1600,6 +1695,7 @@ export class ToolExecutor {
             headers: {
               'User-Agent': 'GuardianAgent-Tools/1.0',
               'Accept': 'text/html,application/xhtml+xml,application/json,text/plain',
+        shortDescription: 'Search the web. Returns titles, URLs, snippets, and optional AI answer.',
             },
           });
           if (!response.ok) {
@@ -1654,8 +1750,10 @@ export class ToolExecutor {
       {
         name: 'contacts_discover_browser',
         description: 'Discover candidate contacts (emails) from a public web page and add/update contact store. Extracts email addresses via regex, max 200 per run. Security: hostname validated against allowedDomains. Requires network_access capability.',
+        shortDescription: 'Discover contact emails from a public web page.',
         risk: 'network',
         category: 'contacts',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -1751,8 +1849,10 @@ export class ToolExecutor {
       {
         name: 'contacts_import_csv',
         description: 'Import marketing contacts from CSV file (columns: email,name,company,tags). Max 1000 rows per import. Security: path validated against allowedPaths roots. Mutating — requires approval. Requires read_files capability.',
+        shortDescription: 'Import marketing contacts from a CSV file.',
         risk: 'mutating',
         category: 'contacts',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -1794,8 +1894,10 @@ export class ToolExecutor {
       {
         name: 'contacts_list',
         description: 'List marketing contacts from local campaign store. Supports query and tag filtering. Max 500 results. Read-only local data — no network calls.',
+        shortDescription: 'List marketing contacts from local campaign store.',
         risk: 'read_only',
         category: 'contacts',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -1824,8 +1926,10 @@ export class ToolExecutor {
       {
         name: 'campaign_create',
         description: 'Create a marketing campaign from subject and body templates. Templates support placeholder variables. Mutating — requires approval. No network calls — local store only.',
+        shortDescription: 'Create a marketing campaign with subject and body template.',
         risk: 'mutating',
         category: 'contacts',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -1856,8 +1960,10 @@ export class ToolExecutor {
       {
         name: 'campaign_list',
         description: 'List marketing campaigns from local store. Read-only — no network calls.',
+        shortDescription: 'List marketing campaigns from local store.',
         risk: 'read_only',
         category: 'contacts',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -1882,8 +1988,10 @@ export class ToolExecutor {
       {
         name: 'campaign_add_contacts',
         description: 'Attach contacts to an existing campaign by contact IDs. Mutating — requires approval. No network calls — local store only.',
+        shortDescription: 'Attach contacts to an existing campaign.',
         risk: 'mutating',
         category: 'contacts',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -1908,8 +2016,10 @@ export class ToolExecutor {
       {
         name: 'campaign_dry_run',
         description: 'Render campaign subjects/bodies for review without sending. Previews template substitution for each recipient. Read-only — no emails sent.',
+        shortDescription: 'Preview campaign subjects/bodies without sending.',
         risk: 'read_only',
         category: 'contacts',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -1938,8 +2048,10 @@ export class ToolExecutor {
       {
         name: 'gmail_send',
         description: 'Send one email via Gmail API using an OAuth access token with gmail.send scope. Security: gmail.googleapis.com must be in allowedDomains. external_post risk — always requires manual approval. Requires send_email capability.',
+        shortDescription: 'Send one email via Gmail API.',
         risk: 'external_post',
         category: 'email',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -1981,8 +2093,10 @@ export class ToolExecutor {
       {
         name: 'campaign_run',
         description: 'Send a campaign via Gmail to all attached contacts. Max 500 recipients per run. Security: gmail.googleapis.com must be in allowedDomains. external_post risk — always requires manual approval. Requires send_email capability.',
+        shortDescription: 'Send a campaign via Gmail to all attached contacts.',
         risk: 'external_post',
         category: 'email',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -2063,8 +2177,10 @@ export class ToolExecutor {
       {
         name: 'intel_summary',
         description: 'Get threat-intel summary state including watchlist count, findings count, and scan status. Read-only — no network calls.',
+        shortDescription: 'Get threat-intel summary including watchlist and findings count.',
         risk: 'read_only',
         category: 'intel',
+        deferLoading: true,
         parameters: { type: 'object', properties: {} },
       },
       async () => {
@@ -2079,8 +2195,10 @@ export class ToolExecutor {
       {
         name: 'intel_watch_add',
         description: 'Add a name, handle, brand, or domain to the threat-intel watchlist for monitoring. Mutating — local store only, no network calls.',
+        shortDescription: 'Add a name, handle, or domain to the threat-intel watchlist.',
         risk: 'mutating',
         category: 'intel',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: { target: { type: 'string' } },
@@ -2101,8 +2219,10 @@ export class ToolExecutor {
       {
         name: 'intel_watch_remove',
         description: 'Remove a target from the threat-intel watchlist. Mutating — local store only, no network calls.',
+        shortDescription: 'Remove a target from the threat-intel watchlist.',
         risk: 'mutating',
         category: 'intel',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: { target: { type: 'string' } },
@@ -2123,8 +2243,10 @@ export class ToolExecutor {
       {
         name: 'intel_scan',
         description: 'Run a threat-intel scan across configured sources (open web, optionally dark web). Returns findings with severity and source info. Security: network calls to configured intel sources only. Requires network_access capability.',
+        shortDescription: 'Run a threat-intel scan across configured sources.',
         risk: 'network',
         category: 'intel',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -2154,8 +2276,10 @@ export class ToolExecutor {
       {
         name: 'intel_findings',
         description: 'List threat-intel findings with optional status filter. Returns severity, source, and match details. Read-only — no network calls.',
+        shortDescription: 'List threat-intel findings with optional status filter.',
         risk: 'read_only',
         category: 'intel',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -2181,8 +2305,10 @@ export class ToolExecutor {
       {
         name: 'intel_draft_action',
         description: 'Draft a threat-intel response action for a specific finding. Action types: takedown, monitor, block, report. Mutating — creates draft in local store, no external calls.',
+        shortDescription: 'Draft a threat-intel response action for a finding.',
         risk: 'mutating',
         category: 'intel',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -2207,8 +2333,10 @@ export class ToolExecutor {
       {
         name: 'forum_post',
         description: 'Post a response to an external forum. Requires allowExternalPosting to be enabled. Security: hostname validated against allowedDomains. external_post risk — always requires manual approval. Requires network_access capability.',
+        shortDescription: 'Post a response to an external forum (approval required).',
         risk: 'external_post',
         category: 'forum',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -2258,8 +2386,10 @@ export class ToolExecutor {
       {
         name: 'net_ping',
         description: 'Ping a host to check reachability and measure latency. Returns packet loss and RTT stats. Security: restricted to private/local network addresses only (RFC1918, link-local, localhost) to prevent external reconnaissance. Requires network_access capability.',
+        shortDescription: 'Ping a host to check reachability and measure latency.',
         risk: 'read_only',
         category: 'network',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -2303,10 +2433,13 @@ export class ToolExecutor {
       {
         name: 'net_arp_scan',
         description: 'Discover devices on the local network via ARP table. Uses ip neigh (Linux) or arp -a (macOS/Windows). Returns IP, MAC, and state for each neighbor. Security: local-only — reads system ARP cache. Requires network_access capability.',
+        shortDescription: 'Discover devices on the local network. Returns IP, MAC, and state.',
         risk: 'read_only',
         category: 'network',
+        deferLoading: true,
         parameters: {
           type: 'object',
+        shortDescription: 'Discover contact emails from a public web page.',
           properties: {
             connectionId: { type: 'string', description: 'Optional assistant.network.connections id to scope scan behavior.' },
           },
@@ -2406,8 +2539,10 @@ export class ToolExecutor {
       {
         name: 'net_port_check',
         description: 'Check if TCP ports are open on a host. Tests up to 20 ports with 3s timeout each. Security: restricted to private/local network addresses only (RFC1918, link-local, localhost). Requires network_access capability.',
+        shortDescription: 'Check if TCP ports are open on a host.',
         risk: 'read_only',
         category: 'network',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -2435,8 +2570,10 @@ export class ToolExecutor {
       {
         name: 'net_interfaces',
         description: 'List network interfaces with IP addresses, MAC addresses, and netmasks. Read-only — reads from OS network stack. Requires network_access capability.',
+        shortDescription: 'List network interfaces with IPs and MAC addresses.',
         risk: 'read_only',
         category: 'network',
+        deferLoading: true,
         parameters: { type: 'object', properties: {} },
       },
       async (_args, request) => {
@@ -2463,8 +2600,10 @@ export class ToolExecutor {
       {
         name: 'net_connections',
         description: 'List active network connections on this machine. Uses ss (Linux) or netstat -an (macOS/Windows). Optional state filter (ESTABLISHED, LISTEN, etc.). Read-only — reads from OS network stack. Requires network_access capability.',
+        shortDescription: 'List active network connections on this machine.',
         risk: 'read_only',
         category: 'network',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -2507,8 +2646,10 @@ export class ToolExecutor {
       {
         name: 'net_dns_lookup',
         description: 'Resolve hostname to IPs or reverse-lookup an IP. Supports A, AAAA, MX, and PTR record types. Uses system DNS resolver. Requires network_access capability.',
+        shortDescription: 'Resolve hostname to IPs or reverse-lookup an IP.',
         risk: 'read_only',
         category: 'network',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -2554,8 +2695,10 @@ export class ToolExecutor {
       {
         name: 'net_traceroute',
         description: 'Trace route to a host showing each network hop. Max 30 hops with 2s timeout per hop. Security: restricted to private/local network addresses only (RFC1918, link-local, localhost). Requires network_access capability.',
+        shortDescription: 'Trace route to a host showing each network hop.',
         risk: 'read_only',
         category: 'network',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -2586,8 +2729,10 @@ export class ToolExecutor {
       {
         name: 'net_oui_lookup',
         description: 'Look up MAC vendor from OUI prefix. Returns vendor if known from bundled lookup table. Read-only.',
+        shortDescription: 'Look up MAC address vendor from OUI prefix.',
         risk: 'read_only',
         category: 'network',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -2613,8 +2758,10 @@ export class ToolExecutor {
       {
         name: 'net_classify',
         description: 'Classify discovered devices by type using vendor, hostname, and open-port heuristics. Read-only.',
+        shortDescription: 'Classify devices by type using vendor, hostname, and ports.',
         risk: 'read_only',
         category: 'network',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -2667,10 +2814,13 @@ export class ToolExecutor {
       {
         name: 'net_banner_grab',
         description: 'Grab service banners from open ports on a local/private-network host. Protocol-aware for HTTP/SSH/SMTP/FTP with configurable timeout and concurrency. Requires network_access capability.',
+        shortDescription: 'Grab service banners from open ports on a device.',
         risk: 'read_only',
         category: 'network',
+        deferLoading: true,
         parameters: {
           type: 'object',
+        shortDescription: 'Check if TCP ports are open on a host.',
           properties: {
             host: { type: 'string', description: 'Host or IP to fingerprint (private/local only).' },
             ports: { type: 'array', items: { type: 'number' }, description: 'Optional explicit ports (max 50).' },
@@ -2750,10 +2900,13 @@ export class ToolExecutor {
       {
         name: 'net_fingerprint',
         description: 'Run full device fingerprinting (OUI vendor + optional port check + banner grab + classification). Requires network_access capability.',
+        shortDescription: 'Run full device fingerprinting with OUI and banner analysis.',
         risk: 'read_only',
         category: 'network',
+        deferLoading: true,
         parameters: {
           type: 'object',
+        shortDescription: 'Run full device fingerprinting with OUI and banner analysis.',
           properties: {
             host: { type: 'string', description: 'Host/IP to fingerprint (private/local only).' },
             mac: { type: 'string', description: 'Optional MAC to look up from device inventory.' },
@@ -2856,8 +3009,10 @@ export class ToolExecutor {
       {
         name: 'net_wifi_scan',
         description: 'Scan nearby WiFi networks (SSID/BSSID/signal/security). Uses nmcli (Linux), airport (macOS), or netsh (Windows). Requires network_access capability.',
+        shortDescription: 'Scan nearby WiFi networks. Returns SSID, signal, security.',
         risk: 'read_only',
         category: 'network',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -2932,8 +3087,10 @@ export class ToolExecutor {
       {
         name: 'net_wifi_clients',
         description: 'List likely WiFi clients by correlating ARP-neighbor observations with discovered devices. Requires network_access capability.',
+        shortDescription: 'List WiFi clients by correlating ARP and interface data.',
         risk: 'read_only',
         category: 'network',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -2998,8 +3155,10 @@ export class ToolExecutor {
       {
         name: 'net_connection_profiles',
         description: 'List configured assistant.network connection profiles with interface/host health hints.',
+        shortDescription: 'List configured network connection profiles.',
         risk: 'read_only',
         category: 'network',
+        deferLoading: true,
         parameters: { type: 'object', properties: {} },
       },
       async (_args, request) => {
@@ -3030,8 +3189,10 @@ export class ToolExecutor {
       {
         name: 'net_traffic_baseline',
         description: 'Build/query traffic baseline from local connection metadata. Optional refresh runs a live connection capture first. Requires network_access capability.',
+        shortDescription: 'Build or query traffic baseline from local connections.',
         risk: 'read_only',
         category: 'network',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -3073,8 +3234,10 @@ export class ToolExecutor {
       {
         name: 'net_threat_check',
         description: 'Run traffic-based threat detection rules (exfiltration, scanning, beaconing, lateral movement, unusual external). Optional refresh captures live connections first. Requires network_access capability.',
+        shortDescription: 'Run traffic-based threat detection rules.',
         risk: 'read_only',
         category: 'network',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -3136,8 +3299,10 @@ export class ToolExecutor {
       {
         name: 'net_baseline',
         description: 'Get network baseline status and device profile summary. Read-only.',
+        shortDescription: 'Get network baseline status and device profile summary.',
         risk: 'read_only',
         category: 'network',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -3173,8 +3338,10 @@ export class ToolExecutor {
       {
         name: 'net_anomaly_check',
         description: 'Run anomaly detection against current discovered devices and update network alert state. Read-only.',
+        shortDescription: 'Run anomaly detection against current device inventory.',
         risk: 'read_only',
         category: 'network',
+        deferLoading: true,
         parameters: { type: 'object', properties: {} },
       },
       async (_args, request) => {
@@ -3194,8 +3361,10 @@ export class ToolExecutor {
       {
         name: 'net_threat_summary',
         description: 'Summarize active network alerts and baseline readiness. Read-only.',
+        shortDescription: 'Summarize active network alerts and baseline readiness.',
         risk: 'read_only',
         category: 'network',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -3241,8 +3410,10 @@ export class ToolExecutor {
       {
         name: 'sys_info',
         description: 'Get OS info, hostname, uptime, architecture, CPU count, and total memory. Read-only — reads from OS APIs, no network calls.',
+        shortDescription: 'Get OS info, hostname, uptime, and CPU details.',
         risk: 'read_only',
         category: 'system',
+        deferLoading: true,
         parameters: { type: 'object', properties: {} },
       },
       async (_args, request) => {
@@ -3268,8 +3439,10 @@ export class ToolExecutor {
       {
         name: 'sys_resources',
         description: 'Get current CPU load averages, memory usage, and disk usage. Uses df (Linux/macOS) or wmic (Windows) for disk info. Read-only — no network calls.',
+        shortDescription: 'Get current CPU load, memory usage, and disk space.',
         risk: 'read_only',
         category: 'system',
+        deferLoading: true,
         parameters: { type: 'object', properties: {} },
       },
       async (_args, request) => {
@@ -3301,8 +3474,10 @@ export class ToolExecutor {
       {
         name: 'sys_processes',
         description: 'List top processes sorted by CPU or memory usage. Returns up to 50 processes with PID, CPU%, MEM%, and command. Read-only — no network calls.',
+        shortDescription: 'List top processes sorted by CPU or memory usage.',
         risk: 'read_only',
         category: 'system',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -3344,8 +3519,10 @@ export class ToolExecutor {
       {
         name: 'sys_services',
         description: 'List services and their status. Uses systemctl on Linux, launchctl on macOS. Optional name filter. Not available on Windows. Read-only — no network calls.',
+        shortDescription: 'List services and their status.',
         risk: 'read_only',
         category: 'system',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -3409,8 +3586,10 @@ export class ToolExecutor {
         {
           name: 'browser_open',
           description: 'Open a URL in a headless browser with full JavaScript rendering. Returns an accessibility snapshot of interactive elements (links, buttons, inputs) with reference IDs (@e1, @e2) for use with browser_action. Use this when pages require JS to load content (SPAs, dashboards, search forms). Security: URL validated against domain allowlist and SSRF blocklist. All page content is untrusted. Requires network_access capability.',
+          shortDescription: 'Open a URL in a headless browser with JavaScript rendering.',
           risk: 'network',
           category: 'browser',
+          deferLoading: true,
           parameters: {
             type: 'object',
             properties: {
@@ -3458,8 +3637,10 @@ export class ToolExecutor {
         {
           name: 'browser_action',
           description: 'Perform an action on a browser element by reference ID (@e1, @e2) from a browser_open snapshot. Actions: click (navigate/submit), fill (type into inputs), select (dropdowns), press (keyboard keys), scroll, hover. This is a mutating tool — it can submit forms, trigger navigation, and interact with external sites. Security: element refs validated against injection; values passed via subprocess args array (no shell). Requires an active browser session from browser_open.',
+          shortDescription: 'Perform an action on a browser element by reference.',
           risk: 'mutating',
           category: 'browser',
+          deferLoading: true,
           parameters: {
             type: 'object',
             properties: {
@@ -3514,8 +3695,10 @@ export class ToolExecutor {
         {
           name: 'browser_snapshot',
           description: 'Get the current accessibility snapshot of the active browser page. Returns interactive elements (links, buttons, inputs, text) with reference IDs (@e1, @e2). Use after browser_action to see updated page state. Read-only — does not navigate or interact. Output capped at 8000 chars and marked as untrusted external content.',
+          shortDescription: 'Get the accessibility snapshot of the active browser page.',
           risk: 'read_only',
           category: 'browser',
+          deferLoading: true,
           parameters: {
             type: 'object',
             properties: {},
@@ -3551,8 +3734,10 @@ export class ToolExecutor {
         {
           name: 'browser_close',
           description: 'Close the current headless browser session and release resources. Clears approved domains for the session. Use when done browsing to free memory. Safe to call even without an active session.',
+          shortDescription: 'Close the current headless browser session.',
           risk: 'read_only',
           category: 'browser',
+          deferLoading: true,
           parameters: {
             type: 'object',
             properties: {},
@@ -3576,8 +3761,10 @@ export class ToolExecutor {
         {
           name: 'browser_task',
           description: 'One-shot browser tool: opens a URL, waits for JavaScript to render, captures the full page content, and closes the session. Use for reading JS-heavy pages (SPAs, dashboards) that web_fetch cannot render. No interaction — just render and read. Security: same URL validation, SSRF blocking, and domain allowlist as browser_open. Output marked as untrusted external content.',
+          shortDescription: 'One-shot browser: open URL, extract content, close.',
           risk: 'network',
           category: 'browser',
+          deferLoading: true,
           parameters: {
             type: 'object',
             properties: {
@@ -3632,6 +3819,7 @@ export class ToolExecutor {
       {
         name: 'memory_search',
         description: 'Search conversation history using full-text search (FTS5 BM25 ranking when available, substring fallback otherwise). Returns relevant past messages scored by relevance. Use to recall previous discussions, find facts mentioned earlier, or locate context from past sessions.',
+        shortDescription: 'Search conversation history using full-text search.',
         risk: 'read_only',
         category: 'memory',
         parameters: {
@@ -3684,8 +3872,10 @@ export class ToolExecutor {
       {
         name: 'memory_get',
         description: 'Retrieve the persistent knowledge base for the current agent. Returns the curated long-term memory file containing facts, preferences, and summaries that persist across conversations.',
+        shortDescription: 'Retrieve the persistent knowledge base for the current agent.',
         risk: 'read_only',
         category: 'memory',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -3721,8 +3911,10 @@ export class ToolExecutor {
       {
         name: 'memory_save',
         description: 'Save a fact, preference, decision, or summary to the persistent knowledge base. Use this when the user says "remember this" or when important context should survive across conversations. Organize entries by category for easy retrieval.',
+        shortDescription: 'Save a fact or summary to the persistent knowledge base.',
         risk: 'mutating',
         category: 'memory',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -3770,8 +3962,14 @@ export class ToolExecutor {
       {
         name: 'qmd_search',
         description: 'Search indexed document collections using QMD hybrid search (BM25 keyword + vector embeddings + optional LLM re-ranking). Supports multiple search modes and collection filtering. Use to find information across notes, codebases, wikis, and other configured document sources.',
+        shortDescription: 'Search indexed document collections using hybrid search.',
         risk: 'read_only',
         category: 'search',
+        deferLoading: true,
+        examples: [
+          { input: { query: 'deployment guide', mode: 'query' }, description: 'Hybrid search with LLM re-ranking' },
+          { input: { query: 'API authentication', collection: 'docs', limit: 5 }, description: 'Search specific collection' },
+        ],
         parameters: {
           type: 'object',
           properties: {
@@ -3814,8 +4012,10 @@ export class ToolExecutor {
       {
         name: 'qmd_status',
         description: 'Get QMD search engine status: install state, version, indexed collections, and configured document sources.',
+        shortDescription: 'Get QMD search engine status and source info.',
         risk: 'read_only',
         category: 'search',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {},
@@ -3842,8 +4042,10 @@ export class ToolExecutor {
       {
         name: 'qmd_reindex',
         description: 'Trigger vector embedding reindex for QMD document collections. Can target a specific collection or reindex all.',
+        shortDescription: 'Trigger vector reindex for document collections.',
         risk: 'mutating',
         category: 'search',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -3885,8 +4087,14 @@ export class ToolExecutor {
           '  List files:     service="drive", resource="files", method="list", params={"pageSize":10}\n' +
           '  Search files:   service="drive", resource="files", method="list", params={"q":"name contains \'report\'"}\n' +
           'Use gws_schema to discover all available methods and parameters.',
+        shortDescription: 'Execute a Google Workspace API call (Gmail, Calendar, Drive, etc.).',
         risk: 'network',
         category: 'workspace',
+        deferLoading: true,
+        examples: [
+          { input: { service: 'gmail', method: 'list', resource: 'users messages', params: { userId: 'me', q: 'from:boss@company.com newer_than:7d' } }, description: 'List recent emails from a specific sender' },
+          { input: { service: 'calendar', method: 'list', resource: 'events', params: { calendarId: 'primary', timeMin: '2026-03-01T00:00:00Z' } }, description: 'List calendar events from a date' },
+        ],
         parameters: {
           type: 'object',
           properties: {
@@ -3967,8 +4175,10 @@ export class ToolExecutor {
           'Returns available parameters, request body fields, and descriptions. ' +
           'Use this to discover how to call a specific API. ' +
           'Schema path format: service.resource.method (e.g. "gmail.users.messages.list", "drive.files.get").',
+        shortDescription: 'Look up API schema for a Google Workspace service/method.',
         risk: 'read_only',
         category: 'workspace',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -4006,8 +4216,10 @@ export class ToolExecutor {
       {
         name: 'workflow_list',
         description: 'List saved workflows available for manual runs or scheduling. Read-only local control-plane data.',
+        shortDescription: 'List saved automation workflows.',
         risk: 'read_only',
         category: 'automation',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {},
@@ -4032,8 +4244,10 @@ export class ToolExecutor {
       {
         name: 'workflow_upsert',
         description: 'Create or update a workflow definition. Mutating - requires approval. Use mode sequential or parallel and provide workflow steps.',
+        shortDescription: 'Create or update a workflow definition.',
         risk: 'mutating',
         category: 'automation',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -4075,8 +4289,10 @@ export class ToolExecutor {
       {
         name: 'workflow_delete',
         description: 'Delete a saved workflow by id. Mutating - requires approval.',
+        shortDescription: 'Delete a saved workflow by id.',
         risk: 'mutating',
         category: 'automation',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -4099,8 +4315,10 @@ export class ToolExecutor {
       {
         name: 'workflow_run',
         description: 'Run a saved workflow immediately. Supports dryRun to preview it through the normal workflow engine.',
+        shortDescription: 'Run a saved workflow immediately.',
         risk: 'mutating',
         category: 'automation',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -4132,8 +4350,10 @@ export class ToolExecutor {
       {
         name: 'task_list',
         description: 'List saved recurring tasks used by Operations. Read-only local control-plane data.',
+        shortDescription: 'List saved recurring tasks.',
         risk: 'read_only',
         category: 'automation',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {},
@@ -4158,8 +4378,10 @@ export class ToolExecutor {
       {
         name: 'task_create',
         description: 'Create a recurring task that runs either one tool or one workflow on a schedule. Mutating - requires approval.',
+        shortDescription: 'Create a recurring task for a tool or playbook.',
         risk: 'mutating',
         category: 'automation',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -4187,8 +4409,10 @@ export class ToolExecutor {
       {
         name: 'task_update',
         description: 'Update an existing recurring task by id. Mutating - requires approval.',
+        shortDescription: 'Update an existing recurring task by id.',
         risk: 'mutating',
         category: 'automation',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -4220,8 +4444,10 @@ export class ToolExecutor {
       {
         name: 'task_delete',
         description: 'Delete an existing recurring task by id. Mutating - requires approval.',
+        shortDescription: 'Delete a recurring task by id.',
         risk: 'mutating',
         category: 'automation',
+        deferLoading: true,
         parameters: {
           type: 'object',
           properties: {
@@ -4257,8 +4483,10 @@ export class ToolExecutor {
           description: `Update tool sandbox policy (allowed paths, commands, or domains). Always requires user approval regardless of policy mode. ` +
             `Enabled actions: ${enabledActions.join(', ')}. ` +
             `Use this when the user asks to grant access to a directory, allow a command, or add a domain.`,
+          shortDescription: 'Update tool sandbox policy (paths, commands, domains).',
           risk: 'external_post',  // Forces approval in all policy modes
           category: 'system',
+          deferLoading: true,
           parameters: {
             type: 'object',
             properties: {

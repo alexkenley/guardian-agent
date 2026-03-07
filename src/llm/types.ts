@@ -44,6 +44,10 @@ export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  /** Tokens written to Anthropic prompt cache (first request only). */
+  cacheCreationTokens?: number;
+  /** Tokens read from Anthropic prompt cache (cache hit). */
+  cacheReadTokens?: number;
 }
 
 /** Information about an available model. */

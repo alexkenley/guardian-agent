@@ -225,6 +225,8 @@ class ChatAgent extends BaseAgent {
   private memoryStore?: AgentMemoryStore;
   /** Resolver for the GWS LLM provider — looked up at request time so hot-reloaded config is used. */
   private resolveGwsProvider?: () => LLMProvider | undefined;
+  /** Approximate token budget for tool results in context. */
+  private contextBudget: number;
 
   constructor(
     id: string,
@@ -238,6 +240,7 @@ class ChatAgent extends BaseAgent {
     soulPrompt?: string,
     memoryStore?: AgentMemoryStore,
     resolveGwsProvider?: () => LLMProvider | undefined,
+    contextBudget?: number,
   ) {
     super(id, name, { handleMessages: true });
     this.systemPrompt = composeGuardianSystemPrompt(systemPrompt, soulPrompt);
@@ -257,6 +260,7 @@ class ChatAgent extends BaseAgent {
     this.fallbackChain = fallbackChain;
     this.memoryStore = memoryStore;
     this.resolveGwsProvider = resolveGwsProvider;
+    this.contextBudget = contextBudget ?? 80_000;
   }
 
   /**
@@ -461,10 +465,17 @@ class ChatAgent extends BaseAgent {
       finalContent = response.content;
     } else {
       let rounds = 0;
-      const toolDefs = this.tools.listToolDefinitions();
+      // Deferred loading: start with always-loaded tools, expand via tool_search
+      const toolDefs = this.tools.listAlwaysLoadedDefinitions();
+      // Use shortDescription for LLM context when available, include examples
+      const llmToolDefs = toolDefs.map(toLLMToolDef);
       const pendingIds: string[] = [];
+      const contextBudget = this.contextBudget;
       while (rounds < this.maxToolRounds) {
-        const response = await chatFn(llmMessages, { tools: toolDefs });
+        // Context window awareness: if approaching budget, summarize oldest tool results
+        compactMessagesIfOverBudget(llmMessages, contextBudget);
+
+        const response = await chatFn(llmMessages, { tools: llmToolDefs });
         finalContent = response.content;
         if (!response.toolCalls || response.toolCalls.length === 0) {
           // Safety net for local models: if finishReason is 'stop' (no tool calls)
@@ -521,40 +532,73 @@ class ChatAgent extends BaseAgent {
           toolCalls: response.toolCalls,
         });
 
-        let hasPending = false;
-        for (const toolCall of response.toolCalls) {
-          let parsedArgs: Record<string, unknown> = {};
-          if (toolCall.arguments?.trim()) {
-            try {
-              parsedArgs = JSON.parse(toolCall.arguments) as Record<string, unknown>;
-            } catch {
-              parsedArgs = {};
+        // Parallel tool execution: run all tool calls concurrently
+        const toolExecOrigin = {
+          origin: 'assistant' as const,
+          agentId: this.id,
+          userId: message.userId,
+          channel: message.channel,
+          requestId: message.id,
+          agentContext: { checkAction: ctx.checkAction },
+        };
+
+        const toolResults = await Promise.allSettled(
+          response.toolCalls.map((tc) => {
+            let parsedArgs: Record<string, unknown> = {};
+            if (tc.arguments?.trim()) {
+              try {
+                parsedArgs = JSON.parse(tc.arguments) as Record<string, unknown>;
+              } catch {
+                parsedArgs = {};
+              }
             }
-          }
-          const toolResult = await this.tools.executeModelTool(
-            toolCall.name,
-            parsedArgs,
-            {
-              origin: 'assistant',
-              agentId: this.id,
-              userId: message.userId,
-              channel: message.channel,
-              requestId: message.id,
-              agentContext: { checkAction: ctx.checkAction },
-            },
-          );
+            return this.tools!.executeModelTool(tc.name, parsedArgs, toolExecOrigin)
+              .then((result) => ({ toolCall: tc, result }));
+          }),
+        );
 
-          // Track pending approvals so we can auto-approve on user confirmation
-          if (toolResult.status === 'pending_approval' && toolResult.approvalId) {
-            pendingIds.push(String(toolResult.approvalId));
-            hasPending = true;
-          }
+        let hasPending = false;
+        for (const settled of toolResults) {
+          if (settled.status === 'fulfilled') {
+            const { toolCall, result: toolResult } = settled.value;
 
-          llmMessages.push({
-            role: 'tool',
-            toolCallId: toolCall.id,
-            content: formatToolResultForLLM(toolCall.name, toolResult),
-          });
+            // Track pending approvals so we can auto-approve on user confirmation
+            if (toolResult.status === 'pending_approval' && toolResult.approvalId) {
+              pendingIds.push(String(toolResult.approvalId));
+              hasPending = true;
+            }
+
+            llmMessages.push({
+              role: 'tool',
+              toolCallId: toolCall.id,
+              content: formatToolResultForLLM(toolCall.name, toolResult),
+            });
+
+            // Deferred tool loading: if tool_search was called, merge returned definitions
+            if (toolCall.name === 'tool_search' && toolResult.success) {
+              const searchOutput = toolResult.output as { tools?: Array<{ name: string; description: string; parameters: Record<string, unknown>; risk: string; category?: string; examples?: unknown[] }> } | undefined;
+              if (searchOutput?.tools) {
+                for (const discovered of searchOutput.tools) {
+                  if (!llmToolDefs.some((d) => d.name === discovered.name)) {
+                    llmToolDefs.push({
+                      name: discovered.name,
+                      description: discovered.description,
+                      risk: discovered.risk as import('./tools/types.js').ToolRisk,
+                      parameters: discovered.parameters,
+                    });
+                  }
+                }
+              }
+            }
+          } else {
+            // Push error result for rejected tool calls
+            const failedTc = response.toolCalls[toolResults.indexOf(settled)];
+            llmMessages.push({
+              role: 'tool',
+              toolCallId: failedTc?.id ?? '',
+              content: JSON.stringify({ success: false, error: settled.reason?.message ?? 'Tool execution failed' }),
+            });
+          }
         }
 
         // If all tools in this round are pending, stop looping — user needs to approve
@@ -1228,6 +1272,44 @@ function parseRequestedEmailCount(text: string): number {
   return 3;
 }
 
+/** Convert a ToolDefinition to LLM-ready format (use shortDescription, include examples). */
+function toLLMToolDef(def: import('./tools/types.js').ToolDefinition): import('./tools/types.js').ToolDefinition {
+  return {
+    name: def.name,
+    description: def.shortDescription ?? def.description,
+    risk: def.risk,
+    parameters: def.parameters,
+    examples: def.examples,
+  };
+}
+
+/** If total context exceeds 80% of budget, summarize oldest tool results. */
+function compactMessagesIfOverBudget(messages: ChatMessage[], budget: number): void {
+  const totalChars = messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
+  const threshold = budget * 4 * 0.8; // Convert token budget to chars, 80% threshold
+  if (totalChars <= threshold) return;
+
+  // Summarize oldest tool result messages to 200 chars each
+  for (const msg of messages) {
+    if (msg.role === 'tool' && msg.content && msg.content.length > 200) {
+      try {
+        const parsed = JSON.parse(msg.content) as Record<string, unknown>;
+        msg.content = JSON.stringify({
+          success: parsed.success,
+          status: parsed.status,
+          summary: truncateText(String(parsed.message ?? parsed.output ?? ''), 150),
+          compacted: true,
+        });
+      } catch {
+        msg.content = truncateText(msg.content, 200);
+      }
+      // Check if we're now under budget
+      const newTotal = messages.reduce((sum, m2) => sum + (m2.content?.length ?? 0), 0);
+      if (newTotal <= threshold) return;
+    }
+  }
+}
+
 function formatToolResultForLLM(toolName: string, toolResult: unknown): string {
   const compact = compactToolResultForLLM(toolName, toolResult);
   const serialized = safeJsonStringify(compact);
@@ -1270,6 +1352,52 @@ function compactToolOutputForLLM(toolName: string, output: unknown): unknown {
   if (toolName === 'gws') {
     return compactGwsOutputForLLM(output);
   }
+
+  // Per-tool result compaction
+  if (output && typeof output === 'object') {
+    const obj = output as Record<string, unknown>;
+
+    if (toolName === 'fs_read' && typeof obj.content === 'string') {
+      const content = obj.content as string;
+      const lines = content.split('\n');
+      if (lines.length > 70) {
+        const head = lines.slice(0, 50).join('\n');
+        const tail = lines.slice(-20).join('\n');
+        return { ...obj, content: `${head}\n[... ${lines.length - 70} lines omitted ...]\n${tail}` };
+      }
+    }
+
+    if (toolName === 'fs_search' && Array.isArray(obj.matches)) {
+      const matches = obj.matches as unknown[];
+      if (matches.length > 20) {
+        return { ...obj, matches: matches.slice(0, 20), moreMatches: matches.length - 20 };
+      }
+    }
+
+    if (toolName === 'shell_safe' && typeof obj.stdout === 'string') {
+      const stdout = obj.stdout as string;
+      if (stdout.length > 2048) {
+        const lineCount = stdout.split('\n').length;
+        return { ...obj, stdout: `[... ${lineCount} lines, showing last 2KB ...]\n${stdout.slice(-2048)}` };
+      }
+    }
+
+    if (toolName === 'web_fetch' && typeof obj.content === 'string') {
+      const content = obj.content as string;
+      if (content.length > 3072) {
+        return { ...obj, content: content.slice(0, 3072) + '\n[... content truncated ...]' };
+      }
+    }
+
+    if ((toolName === 'net_arp_scan' || toolName === 'net_connections') && Array.isArray(obj.devices ?? obj.connections)) {
+      const items = (obj.devices ?? obj.connections) as unknown[];
+      const key = obj.devices ? 'devices' : 'connections';
+      if (items.length > 15) {
+        return { ...obj, [key]: items.slice(0, 15), totalCount: items.length, moreOmitted: items.length - 15 };
+      }
+    }
+  }
+
   return compactValueForLLM(output);
 }
 
@@ -4305,6 +4433,7 @@ async function main(): Promise<void> {
         selectSoulPrompt(soulProfile, soulMode),
         agentMemoryStore,
         resolveGwsProvider,
+        config.assistant.tools.contextBudget,
       );
       runtime.registerAgent(createAgentDefinition({
         agent,
@@ -4337,6 +4466,7 @@ async function main(): Promise<void> {
       selectSoulPrompt(soulProfile, config.assistant.soul.primaryMode),
       agentMemoryStore,
       resolveGwsProvider,
+      config.assistant.tools.contextBudget,
     );
     runtime.registerAgent(createAgentDefinition({
       agent: localAgent,
@@ -4356,6 +4486,7 @@ async function main(): Promise<void> {
       selectSoulPrompt(soulProfile, config.assistant.soul.delegatedMode),
       agentMemoryStore,
       resolveGwsProvider,
+      config.assistant.tools.contextBudget,
     );
     runtime.registerAgent(createAgentDefinition({
       agent: externalAgent,
@@ -4400,6 +4531,7 @@ async function main(): Promise<void> {
       selectSoulPrompt(soulProfile, config.assistant.soul.primaryMode),
       agentMemoryStore,
       resolveGwsProvider,
+      config.assistant.tools.contextBudget,
     );
     runtime.registerAgent(createAgentDefinition({
       agent: defaultAgent,
