@@ -53,7 +53,7 @@ npm run dev
 bash scripts/start-dev-unix.sh
 ```
 
-Does: Node check → `npm install` → ensure bundled tools (QMD, GWS) → TypeScript build → tests → Ollama check → create default config if missing → start with tsx.
+Does: Node check → `npm install` → ensure QMD → TypeScript build → tests → Ollama check → create default config if missing → start with tsx.
 
 **Flags:**
 - `--skip-tests` — skip test step
@@ -77,7 +77,7 @@ Same pipeline as Unix, plus: detects cross-platform node_modules (WSL vs Windows
 
 ## Bundled CLI Tools
 
-Two external CLI tools are bundled as npm dependencies and verified at startup:
+External CLI tools used by the system:
 
 ### QMD (`@tobilu/qmd`)
 
@@ -162,7 +162,7 @@ The zip contains a self-contained app with:
 - `dist/` — compiled JavaScript
 - `web/public/` — dashboard static assets
 - `skills/` — bundled skill packs
-- `node_modules/` — production dependencies (including QMD and GWS binaries)
+- `node_modules/` — production dependencies (including QMD binary)
 - `bin/guardian-sandbox-win.exe` — AppContainer sandbox helper (if built)
 - `config/portable-config.yaml` — default config with sandbox enabled
 - `guardianagent.cmd` — launcher script

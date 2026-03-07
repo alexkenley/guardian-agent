@@ -2328,7 +2328,11 @@ export class ToolExecutor {
           const sshUser = connection.sshUser ? sanitizeSshUser(connection.sshUser) : '';
           const sshTarget = `${sshUser ? `${sshUser}@` : ''}${host}`;
           const remoteCommand = (connection.remoteScanCommand?.trim() || 'ip neigh show')
-            .replace(/"/g, '\\"');
+            .replace(/\\/g, '\\\\')
+            .replace(/"/g, '\\"')
+            .replace(/\$/g, '\\$')
+            .replace(/`/g, '\\`')
+            .replace(/!/g, '\\!');
           try {
             const { stdout } = await this.sandboxExec(
               `ssh -o BatchMode=yes -o ConnectTimeout=8 ${sshTarget} "${remoteCommand}"`,
