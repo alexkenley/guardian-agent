@@ -31,7 +31,7 @@ GuardianAgent is an AI agent orchestration system where:
 
 | Threat | Mitigation |
 |--------|-----------|
-| Prompt injection | InputSanitizer with 15+ weighted signal patterns |
+| Prompt injection | InputSanitizer with 18 weighted signal patterns |
 | Credential leakage via LLM | OutputGuardian + GuardedLLMProvider (mandatory wrapping) |
 | Unauthorized file access | Allowed path roots + denied-path patterns + path normalization on managed file/tool actions |
 | Capability escalation | Frozen per-agent capability grants + Guardian checks on framework-managed actions |
@@ -381,7 +381,7 @@ Removes Unicode characters that can hide instructions:
 - Word joiners, isolate markers (U+2060–2069)
 - BOM (U+FEFF), soft hyphens (U+00AD)
 
-### 2. Injection Signal Detection (15+ patterns)
+### 2. Injection Signal Detection (18 patterns)
 
 | Category | Examples | Score |
 |----------|----------|-------|
@@ -412,6 +412,14 @@ Capabilities are granted per-agent at registration and **frozen** (`Object.freez
 | `read_email` | Email inbox access |
 | `draft_email` | Email composition |
 | `send_email` | Email sending |
+| `read_calendar` | Calendar read access |
+| `write_calendar` | Calendar event creation/modification |
+| `read_drive` | Google Drive read access |
+| `write_drive` | Google Drive file creation/modification |
+| `read_docs` | Google Docs read access |
+| `write_docs` | Google Docs creation/modification |
+| `read_sheets` | Google Sheets read access |
+| `write_sheets` | Google Sheets creation/modification |
 | `git_operations` | Git commands |
 | `install_packages` | Package installation |
 
@@ -595,7 +603,7 @@ const result = await auditLog.verifyChain();
 
 Available via `GET /api/audit/verify` endpoint.
 
-### Event Types (12)
+### Event Types (13)
 
 | Event | Severity | Description |
 |-------|----------|-------------|
@@ -608,6 +616,7 @@ Available via `GET /api/audit/verify` endpoint.
 | `input_sanitized` | info | Invisible chars stripped |
 | `rate_limited` | warn | Rate limit triggered |
 | `capability_probe` | warn | Agent probed beyond capabilities |
+| `policy_changed` | info | Tool or Guardian policy modified |
 | `anomaly_detected` | warn/critical | Sentinel detected anomaly |
 | `agent_error` | warn | Agent execution error |
 | `agent_stalled` | warn | Agent stall detected |
@@ -661,7 +670,7 @@ The ShellCommandController goes beyond simple string matching:
 | **Token rotation** | Optional auto-rotation on startup |
 | **CORS** | Configurable allowed origins |
 | **Request limits** | Configurable max body size (default 1MB) |
-| **Auth modes** | `bearer_required`, `localhost_no_auth`, `disabled` |
+| **Auth modes** | `bearer_required` (only supported mode; other values are ignored and forced to `bearer_required`) |
 | **SSE** | Real-time stream authenticated via session cookie or `Authorization` header (`?token=` is rejected) |
 
 ---

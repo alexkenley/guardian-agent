@@ -68,7 +68,7 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 ### Guardian Security System
 - **Admission Controller Pipeline**: Composable controllers run in order (mutating → validating)
 - **CapabilityController**: Per-agent capability grants (`read_files`, `write_files`, `execute_commands`, etc.)
-- **SecretScanController**: Regex detection for 28+ credential patterns (AWS, GCP, GitHub, OpenAI, Stripe, etc.)
+- **SecretScanController**: Regex detection for 30+ credential and PII patterns (AWS, GCP, GitHub, OpenAI, Stripe, etc.)
 - **PiiScanController**: High-signal PII detection for tool arguments (address, DOB, MRN, passport, driver's license)
 - **DeniedPathController**: Blocks `.env`, `*.pem`, `*.key`, `credentials.*`, `id_rsa*`
 - **InputSanitizer**: Prompt injection detection with invisible Unicode stripping
@@ -106,7 +106,7 @@ Vanilla JavaScript — no framework, no build step. Static HTML/CSS/JS served di
 - **Dashboard** (`#/`) — status cards, agent table, LLM status, recent alerts, assistant state (sessions, jobs, cron, policy)
 - **Security** (`#/security`) — Audit tab, Monitoring tab, Threat Intel tab
 - **Network** (`#/network`) — Connectors tab, Devices tab
-- **Operations** (`#/operations`) — scheduled tasks CRUD, preset installation, run history
+- **Automations** (`#/automations`) — unified automation catalog (single-tool and multi-step pipelines), optional cron scheduling, examples, clone, run history, engine settings
 - **Configuration** (`#/config`) — Providers tab, Tools tab, Policy tab (interactive allowlist editor), Search Sources tab (QMD), Settings tab
 - **Reference Guide** (`#/reference`) — unchanged
 - **Chat** — persistent right panel
