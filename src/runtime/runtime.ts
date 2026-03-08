@@ -72,6 +72,7 @@ export class Runtime {
       additionalSecretPatterns: guardianConfig.additionalSecretPatterns,
       deniedPaths: guardianConfig.deniedPaths,
       inputSanitization: guardianConfig.inputSanitization,
+      piiRedaction: guardianConfig.piiRedaction,
       rateLimit: guardianConfig.rateLimit,
       allowedCommands: this.config.assistant?.tools?.allowedCommands,
     });
@@ -83,7 +84,11 @@ export class Runtime {
       this.auditPersistence = new AuditPersistence(guardianConfig.auditLog?.auditDir);
     }
 
-    this.outputGuardian = new OutputGuardian(guardianConfig.additionalSecretPatterns);
+    this.outputGuardian = new OutputGuardian(
+      guardianConfig.additionalSecretPatterns,
+      guardianConfig.piiRedaction,
+      guardianConfig.inputSanitization?.blockThreshold ?? 3,
+    );
 
     this.budget = new BudgetTracker();
     this.watchdog = new Watchdog(

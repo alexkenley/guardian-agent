@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { MCPClientManager, type MCPServerConfig } from './mcp-client.js';
+import { MCPClient, MCPClientManager } from './mcp-client.js';
 import { ToolExecutor } from './executor.js';
 import type { ToolDefinition, ToolResult } from './types.js';
 
@@ -176,13 +176,93 @@ describe('ToolExecutor MCP integration', () => {
     expect(jobs[0].status).toBe('succeeded');
   });
 
-  it('should preserve MCP tool risk level as network', () => {
+  it('should preserve MCP tool risk level from manager definitions', () => {
     const defs = executor.listToolDefinitions();
     const mcpDefs = defs.filter(d => d.name.startsWith('mcp-'));
 
     for (const def of mcpDefs) {
       expect(def.risk).toBe('network');
     }
+  });
+});
+
+describe('MCPClient tool definition inference', () => {
+  it('infers read-only, mutating, and external-post risks from tool metadata', () => {
+    const client = new MCPClient({
+      id: 'docs',
+      name: 'Docs',
+      transport: 'stdio',
+      command: 'noop',
+    });
+
+    client['tools'] = new Map([
+      ['list_entries', {
+        name: 'list_entries',
+        description: 'List and fetch entries from a dictionary',
+        inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
+      }],
+      ['update_entry', {
+        name: 'update_entry',
+        description: 'Update an entry in the remote store',
+        inputSchema: { type: 'object', properties: { id: { type: 'string' }, body: { type: 'string' } } },
+      }],
+      ['send_notice', {
+        name: 'send_notice',
+        description: 'Send a notification email to the user',
+        inputSchema: { type: 'object', properties: { to: { type: 'string' } } },
+      }],
+    ]);
+
+    const defs = client.getToolDefinitions();
+    expect(defs.find((def) => def.name === 'mcp-docs-list_entries')?.risk).toBe('read_only');
+    expect(defs.find((def) => def.name === 'mcp-docs-update_entry')?.risk).toBe('mutating');
+    expect(defs.find((def) => def.name === 'mcp-docs-send_notice')?.risk).toBe('external_post');
+  });
+
+  it('honors per-server trust-level overrides', () => {
+    const client = new MCPClient({
+      id: 'mail',
+      name: 'Mail',
+      transport: 'stdio',
+      command: 'noop',
+      trustLevel: 'read_only',
+    });
+
+    client['tools'] = new Map([
+      ['send_email', {
+        name: 'send_email',
+        description: 'Send an email',
+        inputSchema: { type: 'object', properties: { to: { type: 'string' } } },
+      }],
+    ]);
+
+    const defs = client.getToolDefinitions();
+    expect(defs[0].risk).toBe('read_only');
+  });
+
+  it('enforces per-server maxCallsPerMinute', async () => {
+    const client = new MCPClient({
+      id: 'rate-limited',
+      name: 'Rate Limited',
+      transport: 'stdio',
+      command: 'noop',
+      maxCallsPerMinute: 1,
+    });
+
+    client['state'] = 'connected';
+    client['tools'] = new Map([
+      ['lookup', { name: 'lookup', description: 'Lookup a value' }],
+    ]);
+
+    vi.spyOn(client as any, 'sendRequest')
+      .mockResolvedValue({ content: [{ type: 'text', text: 'ok' }] });
+
+    const first = await client.callTool('lookup', {});
+    const second = await client.callTool('lookup', {});
+
+    expect(first.success).toBe(true);
+    expect(second.success).toBe(false);
+    expect(second.error).toContain('maxCallsPerMinute');
   });
 });
 

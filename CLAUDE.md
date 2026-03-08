@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-GuardianAgent is an event-driven AI agent orchestration system with a four-layer security defense. Agents are async classes that respond to messages, events, and cron schedules. The Guardian security system enforces capabilities, scans for secrets, blocks sensitive paths, and evaluates tool actions via inline LLM (Guardian Agent) at the Runtime level — agents cannot bypass it.
+GuardianAgent is an event-driven AI agent orchestration system with a four-layer security defense. Agents are async classes that respond to messages, events, and cron schedules. The Guardian security system enforces capabilities, scans for secrets and PII, blocks sensitive paths, and evaluates tool actions via inline LLM (Guardian Agent) at the Runtime level — agents cannot bypass it.
 
 **Core idea:** Agents implement simple async handlers (`onMessage`, `onEvent`, `onSchedule`) instead of generators. The Runtime dispatches work to agents and manages their lifecycle.
 
@@ -67,11 +67,12 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 - **Admission Controller Pipeline**: Composable controllers run in order (mutating → validating)
 - **CapabilityController**: Per-agent capability grants (`read_files`, `write_files`, `execute_commands`, etc.)
 - **SecretScanController**: Regex detection for 28+ credential patterns (AWS, GCP, GitHub, OpenAI, Stripe, etc.)
+- **PiiScanController**: High-signal PII detection for tool arguments (address, DOB, MRN, passport, driver's license)
 - **DeniedPathController**: Blocks `.env`, `*.pem`, `*.key`, `credentials.*`, `id_rsa*`
 - **InputSanitizer**: Prompt injection detection with invisible Unicode stripping
 - **RateLimiter**: Per-agent burst/per-minute/per-hour sliding windows
 - **GuardianAgentService**: Inline LLM-powered evaluation of tool actions before execution (Layer 2)
-- **OutputGuardian**: Response scanning and secret redaction before output reaches users
+- **OutputGuardian**: Response scanning plus tool-result secret/PII redaction and prompt-injection hardening before untrusted content re-enters the model
 - **SentinelAuditService**: Retrospective anomaly detection on cron or on-demand (Layer 4)
 
 ### Runtime Services (`src/runtime/`)
@@ -90,8 +91,8 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 
 ### MCP Client
 - **MCPClient** — JSON-RPC 2.0 over stdio to external MCP tool servers
-- **MCPClientManager** — multi-server with tool name namespacing (`mcp:<serverId>:<toolName>`)
-- All MCP tool calls pass through Guardian admission; classified as `network` risk
+- **MCPClientManager** — multi-server with tool name namespacing (`mcp-<serverId>-<toolName>`)
+- MCP tool risk is inferred from tool metadata (`read_only`, `mutating`, `external_post`) with optional per-server trust overrides and rate limits
 
 ### Channel Adapters
 - **CLI** (`src/channels/cli.ts`) — readline prompt with `/help`, `/agents`, `/status`, `/config`, `/tools`, `/connectors`, etc.
@@ -112,7 +113,7 @@ Vanilla JavaScript — no framework, no build step. Static HTML/CSS/JS served di
 - **FTS5 Search**: Full-text search index on conversation_messages with BM25 ranking, porter stemming, content-sync triggers
 - **Knowledge Base**: Per-agent markdown files (`~/.guardianagent/memory/{agentId}.md`) always loaded into LLM context
 - **Memory Flush**: Automatic extraction of dropped context to knowledge base when sliding window trims history
-- **Memory Tools**: `memory_search` (FTS5 query), `memory_get` (read knowledge base), `memory_save` (persist facts) — all Guardian-gated
+- **Memory Tools**: `memory_search` (FTS5 query), `memory_get` (read knowledge base), `memory_save` (persist facts) — all Guardian-gated, with tool-result scanning before memory content re-enters LLM context
 - **Config**: `assistant.memory.knowledgeBase` — enable/disable, maxContextChars, autoFlush
 - See `docs/guides/MEMORY-SYSTEM.md` for full documentation
 
@@ -152,7 +153,7 @@ src/runtime/        — Runtime, services (Conversation, Identity, Analytics, Th
                       Connectors, Orchestrator, JobTracker, ScheduledTasks, AgentMemoryStore,
                       QMDSearchService), BudgetTracker, Watchdog, Scheduler
 src/queue/          — EventBus for inter-agent communication
-src/guardian/       — Capabilities, SecretScanner, InputSanitizer, OutputGuardian,
+src/guardian/       — Capabilities, SecretScanner, PiiScanner, InputSanitizer, OutputGuardian,
                       RateLimiter, audit log/persistence, Guardian admission pipeline
 src/channels/       — CLI, Telegram, Web channel adapters
 src/tools/          — ToolExecutor, MCP client (MCPClient, MCPClientManager), approvals

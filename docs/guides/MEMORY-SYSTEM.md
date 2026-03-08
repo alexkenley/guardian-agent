@@ -88,6 +88,8 @@ Parameters:
 
 Supports FTS5 match expressions. Falls back to substring search if FTS5 is unavailable.
 
+`memory_search` results are treated as untrusted tool output when they are fed back into the model. Before reinjection, Guardian strips invisible Unicode, checks for prompt-injection signals, and redacts detected secrets and configured PII entities.
+
 **Example queries:**
 - `"project deadline"` — find messages mentioning project deadlines
 - `TypeScript AND testing` — boolean search
@@ -198,6 +200,7 @@ When `buildMessages()` trims conversation history to fit `maxContextChars`, mess
 
 **GuardianAgent advantages:**
 - All memory tools pass through Guardian security (capability checks, secret scanning, rate limiting)
+- `memory_search` / `memory_get` results are scanned again before they re-enter LLM context, reducing prompt-injection and accidental PII replay risk
 - Cross-channel identity unification
 - Explicit session management with rotate/restore
 - SQLite security hardening (permissions, integrity checks)

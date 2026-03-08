@@ -127,6 +127,18 @@ assistant:
 - Native skills are advisory only and must not create a bypass around ToolExecutor.
 - Managed MCP providers still register tools through the same executor and policy model.
 - Strict sandbox mode disables risky subprocess-backed tools when no strong sandbox backend is available and surfaces explicit disable reasons.
+- Tool arguments must stay under the executor byte budget; oversized payloads fail before approval/execution.
+- `shell_safe` rejects shell control operators and command substitution even when the command prefix is allowlisted.
+- `fs_write` / `doc_create` content is scanned for secrets and PII before anything is persisted.
+
+## Tool Result Scanning
+- Tool results are scanned before they are reinjected into LLM context.
+- Reinjected tool results are wrapped in structured `<tool_result ...>` envelopes with trust/source metadata.
+- Tool-result strings are stripped of invisible Unicode, checked for prompt-injection signals, and redacted for secrets + configured PII entities.
+
+## MCP Trust & Rate Limits
+- MCP server tool risk can be inferred from MCP metadata, then overridden per server with `trustLevel` when operators need stricter or looser policy treatment.
+- MCP servers can set `maxCallsPerMinute` to constrain noisy or high-cost external integrations at the client boundary.
 
 ## UX Requirements
 - Web Tools tab includes:

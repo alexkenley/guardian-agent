@@ -12,6 +12,7 @@ import type { Capability } from './capabilities.js';
 import { SecretScanner } from './secret-scanner.js';
 import { InputSanitizer } from './input-sanitizer.js';
 import type { InputSanitizerConfig } from './input-sanitizer.js';
+import { PiiScanner, type PiiEntityType, DEFAULT_VALIDATION_PII_ENTITIES } from './pii-scanner.js';
 import { RateLimiter } from './rate-limiter.js';
 import type { RateLimiterConfig } from './rate-limiter.js';
 import { ShellCommandController } from './shell-command-controller.js';
@@ -182,6 +183,46 @@ export class SecretScanController implements AdmissionController {
   }
 }
 
+/** Built-in: scans content for high-signal PII beyond credential patterns. */
+export class PiiScanController implements AdmissionController {
+  readonly name = 'PiiScanController';
+  readonly phase: AdmissionPhase = 'validating';
+
+  private readonly scanner: PiiScanner;
+
+  constructor(entities?: readonly PiiEntityType[]) {
+    const validationEntities = filterValidationPiiEntities(entities);
+    this.scanner = new PiiScanner({
+      entities: validationEntities.length > 0 ? validationEntities : DEFAULT_VALIDATION_PII_ENTITIES,
+      mode: 'redact',
+    });
+  }
+
+  check(action: AgentAction): AdmissionResult | null {
+    // User-authored chat content often includes legitimate PII; redact tool results
+    // later rather than blocking the user message itself.
+    if (action.type === 'message_dispatch') {
+      return null;
+    }
+
+    const stringLeaves: Array<{ path: string; value: string }> = [];
+    collectStringLeaves(action.params, 'params', stringLeaves);
+    for (const leaf of stringLeaves) {
+      const matches = this.scanner.scanContent(leaf.value);
+      if (matches.length > 0) {
+        const patterns = [...new Set(matches.map((match) => match.label))];
+        return {
+          allowed: false,
+          reason: `PII detected in ${leaf.path}: ${patterns.join(', ')}`,
+          controller: this.name,
+        };
+      }
+    }
+
+    return null;
+  }
+}
+
 /** Built-in: blocks access to denied file paths with path normalization. */
 export class DeniedPathController implements AdmissionController {
   readonly name = 'DeniedPathController';
@@ -231,6 +272,10 @@ export interface GuardianCreateOptions {
   additionalSecretPatterns?: string[];
   deniedPaths?: string[];
   inputSanitization?: Partial<InputSanitizerConfig> & { enabled?: boolean };
+  piiRedaction?: {
+    enabled?: boolean;
+    entities?: readonly PiiEntityType[];
+  };
   rateLimit?: Partial<RateLimiterConfig>;
   /** Allowed shell commands for ShellCommandController. */
   allowedCommands?: string[];
@@ -310,7 +355,8 @@ export class Guardian {
    * Pipeline order:
    *   MUTATING:   1. InputSanitizer
    *   VALIDATING: 2. RateLimiter → 3. CapabilityController →
-   *               4. SecretScanController → 5. DeniedPathController
+   *               4. SecretScanController → 5. PiiScanController →
+   *               6. DeniedPathController
    */
   static createDefault(options?: GuardianCreateOptions): Guardian {
     const guardian = new Guardian({ logDenials: options?.logDenials });
@@ -328,6 +374,9 @@ export class Guardian {
     }
     guardian.use(new CapabilityController());
     guardian.use(new SecretScanController(options?.additionalSecretPatterns));
+    if (options?.piiRedaction?.enabled !== false) {
+      guardian.use(new PiiScanController(options?.piiRedaction?.entities));
+    }
     guardian.use(new DeniedPathController(options?.additionalSecretPatterns, options?.deniedPaths));
 
     // Shell command validation (if allowed commands provided)
@@ -341,6 +390,12 @@ export class Guardian {
 
     return guardian;
   }
+}
+
+function filterValidationPiiEntities(entities?: readonly PiiEntityType[]): PiiEntityType[] {
+  const input = entities ?? DEFAULT_VALIDATION_PII_ENTITIES;
+  const allowed = new Set(DEFAULT_VALIDATION_PII_ENTITIES);
+  return input.filter((entity): entity is PiiEntityType => allowed.has(entity));
 }
 
 function collectStringLeaves(

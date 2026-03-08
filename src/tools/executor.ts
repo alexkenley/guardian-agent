@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { appendFile, copyFile, mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { sanitizeShellArgs, scanWriteContent, validateArgSize } from '../guardian/argument-sanitizer.js';
 import type { IntelActionType, IntelSourceType, IntelStatus, ThreatIntelService } from '../runtime/threat-intel.js';
 import { MarketingStore } from './marketing-store.js';
 import { ToolApprovalStore } from './approvals.js';
@@ -56,6 +57,7 @@ const MAX_SEARCH_RESULTS = 200;
 const MAX_SEARCH_FILES = 100_000;
 const MAX_SEARCH_FILE_BYTES = 1_000_000;
 const SEARCH_CACHE_TTL_MS = 300_000; // 5 minutes
+const MAX_TOOL_ARG_BYTES = 128_000;
 
 export interface ToolExecutorOptions {
   enabled: boolean;
@@ -512,6 +514,16 @@ export class ToolExecutor {
       };
     }
 
+    const sizeValidation = validateArgSize(args, MAX_TOOL_ARG_BYTES);
+    if (!sizeValidation.valid) {
+      return {
+        success: false,
+        status: 'failed',
+        jobId: randomUUID(),
+        message: sizeValidation.reason ?? 'Tool arguments exceeded the maximum size.',
+      };
+    }
+
     const job = this.createJob(entry.definition, request, args);
     const argsValidationError = this.validateToolArgs(entry.definition, args);
     if (argsValidationError) {
@@ -806,16 +818,31 @@ export class ToolExecutor {
   }
 
   private validateBeforeApproval(toolName: string, args: Record<string, unknown>): string | null {
-    if (toolName !== 'shell_safe') {
-      return null;
+    if (toolName === 'shell_safe') {
+      const command = typeof args.command === 'string' ? args.command.trim() : '';
+      if (!command) {
+        return null;
+      }
+      const shellCheck = sanitizeShellArgs(command, this.policy.sandbox.allowedCommands);
+      return shellCheck.safe ? null : shellCheck.reason ?? 'Command failed shell safety validation.';
     }
-    const command = typeof args.command === 'string' ? args.command.trim() : '';
-    if (!command) {
-      return null;
+
+    if (toolName === 'fs_write' || toolName === 'doc_create') {
+      const content = typeof args.content === 'string' ? args.content : '';
+      if (!content) {
+        return null;
+      }
+      const contentScan = scanWriteContent(content);
+      if (contentScan.secrets.length > 0) {
+        const patterns = [...new Set(contentScan.secrets.map((match) => match.pattern))];
+        return `Write content contains secrets: ${patterns.join(', ')}.`;
+      }
+      if (contentScan.pii.length > 0) {
+        const patterns = [...new Set(contentScan.pii.map((match) => match.label))];
+        return `Write content contains PII: ${patterns.join(', ')}.`;
+      }
     }
-    if (!this.isCommandAllowed(command)) {
-      return `Command is not allowlisted: '${command}'.`;
-    }
+
     return null;
   }
 
@@ -1233,6 +1260,17 @@ export class ToolExecutor {
         const rawPath = requireString(args.path, 'path');
         const content = requireString(args.content, 'content');
         const append = !!args.append;
+        const contentScan = scanWriteContent(content);
+        if (contentScan.secrets.length > 0 || contentScan.pii.length > 0) {
+          const findings = [
+            ...new Set(contentScan.secrets.map((match) => match.pattern)),
+            ...new Set(contentScan.pii.map((match) => match.label)),
+          ];
+          return {
+            success: false,
+            error: `Write content rejected by security policy: ${findings.join(', ')}.`,
+          };
+        }
         const safePath = await this.resolveAllowedPath(rawPath);
         this.guardAction(request, 'write_file', { path: rawPath, content });
         await mkdir(dirname(safePath), { recursive: true });
@@ -1426,6 +1464,17 @@ export class ToolExecutor {
         const finalBody = template === 'plain'
           ? `${title}\n\n${content}\n`
           : `# ${title}\n\n${content}\n`;
+        const contentScan = scanWriteContent(finalBody);
+        if (contentScan.secrets.length > 0 || contentScan.pii.length > 0) {
+          const findings = [
+            ...new Set(contentScan.secrets.map((match) => match.pattern)),
+            ...new Set(contentScan.pii.map((match) => match.label)),
+          ];
+          return {
+            success: false,
+            error: `Document content rejected by security policy: ${findings.join(', ')}.`,
+          };
+        }
         this.guardAction(request, 'write_file', { path: rawPath, content: finalBody });
         await mkdir(dirname(safePath), { recursive: true });
         await writeFile(safePath, finalBody, 'utf-8');
@@ -1462,10 +1511,11 @@ export class ToolExecutor {
       },
       async (args, request) => {
         const command = requireString(args.command, 'command').trim();
-        if (!this.isCommandAllowed(command)) {
+        const shellCheck = sanitizeShellArgs(command, this.policy.sandbox.allowedCommands);
+        if (!shellCheck.safe) {
           return {
             success: false,
-            error: `Command is not allowlisted: '${command}'.`,
+            error: shellCheck.reason ?? `Command is not allowlisted: '${command}'.`,
           };
         }
         this.guardAction(request, 'execute_command', { command });
@@ -4679,15 +4729,6 @@ export class ToolExecutor {
       );
     }
     return candidate;
-  }
-
-  private isCommandAllowed(command: string): boolean {
-    const normalized = command.trim().toLowerCase();
-    if (!normalized) return false;
-    return this.policy.sandbox.allowedCommands.some((allowed) => {
-      const entry = allowed.trim().toLowerCase();
-      return normalized === entry || normalized.startsWith(`${entry} `);
-    });
   }
 
   // ── Search provider helpers ───────────────────────────────────

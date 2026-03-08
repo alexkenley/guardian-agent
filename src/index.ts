@@ -58,6 +58,7 @@ import { MessageRouter, type RouteDecision } from './runtime/message-router.js';
 import { ModelFallbackChain } from './llm/model-fallback.js';
 import { TRUST_PRESETS, type TrustPresetName } from './guardian/trust-presets.js';
 import type { Capability } from './guardian/capabilities.js';
+import type { OutputGuardian } from './guardian/output-guardian.js';
 import { createProviders } from './llm/provider.js';
 import { hashObjectSha256Hex } from './util/crypto-guardrails.js';
 import { detectCapabilities as detectSandboxCapabilities, detectSandboxHealth, DEFAULT_SANDBOX_CONFIG, type SandboxConfig } from './sandbox/index.js';
@@ -214,6 +215,7 @@ class ChatAgent extends BaseAgent {
   private systemPrompt: string;
   private conversationService?: ConversationService;
   private tools?: ToolExecutor;
+  private outputGuardian?: OutputGuardian;
   private skillResolver?: SkillResolver;
   private enabledManagedProviders?: ReadonlySet<string>;
   private maxToolRounds: number;
@@ -234,6 +236,7 @@ class ChatAgent extends BaseAgent {
     systemPrompt?: string,
     conversationService?: ConversationService,
     tools?: ToolExecutor,
+    outputGuardian?: OutputGuardian,
     skillResolver?: SkillResolver,
     enabledManagedProviders?: ReadonlySet<string>,
     fallbackChain?: ModelFallbackChain,
@@ -254,6 +257,7 @@ class ChatAgent extends BaseAgent {
     );
     this.conversationService = conversationService;
     this.tools = tools;
+    this.outputGuardian = outputGuardian;
     this.skillResolver = skillResolver;
     this.enabledManagedProviders = enabledManagedProviders;
     this.maxToolRounds = 6;
@@ -357,6 +361,7 @@ class ChatAgent extends BaseAgent {
       ];
 
     let finalContent = '';
+    const defaultToolResultProviderKind = this.resolveToolResultProviderKind(ctx);
     const directSearch = await this.tryDirectFilesystemSearch(message, ctx);
     if (directSearch) {
       finalContent = directSearch;
@@ -414,21 +419,35 @@ class ChatAgent extends BaseAgent {
       // Search failed — fall through to LLM with tool calling
     }
     if (webSearchResult) {
-      // Feed the raw search results through the LLM for a natural response
+      // Scan web search results through OutputGuardian before LLM reinjection
+      const sanitizedWebSearch = this.sanitizeToolResultForLlm(
+        'web_search',
+        webSearchResult,
+        defaultToolResultProviderKind,
+      );
+      const safeWebSearchResult = typeof sanitizedWebSearch.sanitized === 'string'
+        ? sanitizedWebSearch.sanitized
+        : String(sanitizedWebSearch.sanitized ?? '');
+      const warningPrefix = formatToolThreatWarnings(sanitizedWebSearch.threats);
+      const llmSearchPayload = warningPrefix
+        ? `${warningPrefix}\n${safeWebSearchResult}`
+        : safeWebSearchResult;
+
+      // Feed the sanitized search results through the LLM for a natural response
       if (ctx.llm) {
         try {
           const llmFormat: ChatMessage[] = [
             ...llmMessages,
-            { role: 'user', content: `Here are web search results for the user's query. Summarize and present them clearly:\n\n${webSearchResult}` },
+            { role: 'user', content: `Here are web search results for the user's query. Summarize and present them clearly:\n\n${llmSearchPayload}` },
           ];
           const formatted = await this.chatWithFallback(ctx, llmFormat);
-          finalContent = formatted.content || webSearchResult;
+          finalContent = formatted.content || llmSearchPayload;
         } catch {
           // LLM formatting failed — return raw search results
-          finalContent = webSearchResult;
+          finalContent = llmSearchPayload;
         }
       } else {
-        finalContent = webSearchResult;
+        finalContent = llmSearchPayload;
       }
       if (this.conversationService) {
         this.conversationService.recordTurn(
@@ -459,6 +478,9 @@ class ChatAgent extends BaseAgent {
       }
       return this.chatWithFallback(ctx, msgs, opts);
     };
+    const toolResultProviderKind = gwsProvider
+      ? 'external'
+      : defaultToolResultProviderKind;
 
     if (!this.tools?.isEnabled()) {
       const response = await chatFn(llmMessages);
@@ -497,14 +519,21 @@ class ChatAgent extends BaseAgent {
                 },
               );
               if (toBoolean(prefetched.success) && prefetched.output) {
-                const output = prefetched.output as { answer?: unknown; results?: unknown; provider?: unknown };
+                const prefetchedScan = this.sanitizeToolResultForLlm('web_search', prefetched, toolResultProviderKind);
+                const safePrefetched = prefetchedScan.sanitized && typeof prefetchedScan.sanitized === 'object'
+                  ? prefetchedScan.sanitized as Record<string, unknown>
+                  : prefetched;
+                const output = (safePrefetched && typeof safePrefetched === 'object' && safePrefetched.output && typeof safePrefetched.output === 'object'
+                  ? safePrefetched.output
+                  : prefetched.output) as { answer?: unknown; results?: unknown; provider?: unknown };
                 const answer = toString(output.answer);
                 const results = Array.isArray(output.results) ? output.results : [];
+                const warningPrefix = formatToolThreatWarnings(prefetchedScan.threats);
                 // If Perplexity returned a synthesized answer, inject it directly
                 if (answer) {
                   llmMessages.push({
                     role: 'user',
-                    content: `[web_search results for "${searchQuery}"]:\n${answer}\n\nSources:\n${results.map((r: { url?: string }, i: number) => `${i + 1}. ${r.url ?? ''}`).join('\n')}\n\nPlease use these results to answer the user's question.`,
+                    content: `${warningPrefix ? `${warningPrefix}\n` : ''}[web_search results for "${searchQuery}"]:\n${answer}\n\nSources:\n${results.map((r: { url?: string }, i: number) => `${i + 1}. ${r.url ?? ''}`).join('\n')}\n\nPlease use these results to answer the user's question.`,
                   });
                 } else if (results.length > 0) {
                   const snippets = results.map((r: { title?: string; url?: string; snippet?: string }, i: number) =>
@@ -512,7 +541,7 @@ class ChatAgent extends BaseAgent {
                   ).join('\n');
                   llmMessages.push({
                     role: 'user',
-                    content: `[web_search results for "${searchQuery}"]:\n${snippets}\n\nPlease synthesize these results to answer the user's question.`,
+                    content: `${warningPrefix ? `${warningPrefix}\n` : ''}[web_search results for "${searchQuery}"]:\n${snippets}\n\nPlease synthesize these results to answer the user's question.`,
                   });
                 }
                 // Re-prompt the LLM with the search results
@@ -568,10 +597,20 @@ class ChatAgent extends BaseAgent {
               hasPending = true;
             }
 
+            const scannedToolResult = this.sanitizeToolResultForLlm(
+              toolCall.name,
+              toolResult,
+              toolResultProviderKind,
+            );
+
             llmMessages.push({
               role: 'tool',
               toolCallId: toolCall.id,
-              content: formatToolResultForLLM(toolCall.name, toolResult),
+              content: formatToolResultForLLM(
+                toolCall.name,
+                scannedToolResult.sanitized,
+                scannedToolResult.threats,
+              ),
             });
 
             // Deferred tool loading: if tool_search was called, merge returned definitions
@@ -633,6 +672,30 @@ class ChatAgent extends BaseAgent {
     return {
       content: finalContent,
       metadata: activeSkills.length > 0 ? { activeSkills: activeSkills.map((skill) => skill.id) } : undefined,
+    };
+  }
+
+  private resolveToolResultProviderKind(
+    ctx: AgentContext,
+    overrideProvider?: LLMProvider,
+  ): 'local' | 'external' {
+    const providerName = (overrideProvider?.name ?? ctx.llm?.name ?? '').trim().toLowerCase();
+    return providerName === 'ollama' ? 'local' : 'external';
+  }
+
+  private sanitizeToolResultForLlm(
+    toolName: string,
+    result: unknown,
+    providerKind: 'local' | 'external',
+  ): { sanitized: unknown; threats: string[] } {
+    if (!this.outputGuardian) {
+      return { sanitized: result, threats: [] };
+    }
+
+    const scan = this.outputGuardian.scanToolResult(toolName, result, { providerKind });
+    return {
+      sanitized: scan.sanitized,
+      threats: scan.threats,
     };
   }
 
@@ -1310,10 +1373,24 @@ function compactMessagesIfOverBudget(messages: ChatMessage[], budget: number): v
   }
 }
 
-function formatToolResultForLLM(toolName: string, toolResult: unknown): string {
+function formatToolResultForLLM(toolName: string, toolResult: unknown, threats: string[] = []): string {
+  const warningBlock = formatToolThreatWarnings(threats);
+  const payloadBudget = Math.max(1_500, MAX_TOOL_RESULT_MESSAGE_CHARS - warningBlock.length - toolName.length - 120);
+  const serialized = serializeToolResultForLLM(toolName, toolResult, payloadBudget);
+  const envelope = classifyToolResultEnvelope(toolName);
+
+  return [
+    `<tool_result name="${escapeToolResultAttribute(toolName)}" source="${envelope.source}" trust="${envelope.trust}">`,
+    warningBlock || undefined,
+    serialized,
+    '</tool_result>',
+  ].filter(Boolean).join('\n');
+}
+
+function serializeToolResultForLLM(toolName: string, toolResult: unknown, maxChars: number): string {
   const compact = compactToolResultForLLM(toolName, toolResult);
   const serialized = safeJsonStringify(compact);
-  if (serialized.length <= MAX_TOOL_RESULT_MESSAGE_CHARS) {
+  if (serialized.length <= maxChars) {
     return serialized;
   }
 
@@ -1325,9 +1402,26 @@ function formatToolResultForLLM(toolName: string, toolResult: unknown): string {
     status: toString(result.status),
     message: truncateText(toString(result.message), 400),
     error: truncateText(toString(result.error), 400),
-    outputPreview: truncateText(safeJsonStringify(compactToolOutputForLLM(toolName, result.output)), MAX_TOOL_RESULT_MESSAGE_CHARS - 300),
+    outputPreview: truncateText(safeJsonStringify(compactToolOutputForLLM(toolName, result.output)), Math.max(600, maxChars - 300)),
     truncated: true,
   });
+}
+
+function formatToolThreatWarnings(threats: string[]): string {
+  const unique = [...new Set(threats.map((threat) => threat.trim()).filter(Boolean))];
+  return unique.slice(0, 4).map((threat) => `[WARNING: ${threat}]`).join('\n');
+}
+
+function classifyToolResultEnvelope(toolName: string): { source: 'local' | 'remote'; trust: 'internal' | 'external' } {
+  const normalized = toolName.toLowerCase();
+  if (/^(web_|chrome_|browser_|mcp-|gws$|gmail_|forum_|campaign_|contacts_)/.test(normalized)) {
+    return { source: 'remote', trust: 'external' };
+  }
+  return { source: 'local', trust: 'internal' };
+}
+
+function escapeToolResultAttribute(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function compactToolResultForLLM(toolName: string, toolResult: unknown): unknown {
@@ -3850,6 +3944,8 @@ async function main(): Promise<void> {
           env: server.env,
           cwd: server.cwd,
           timeoutMs: server.timeoutMs,
+          trustLevel: server.trustLevel,
+          maxCallsPerMinute: server.maxCallsPerMinute,
         };
         try {
           await mcpManager.addServer(serverConfig);
@@ -4427,6 +4523,7 @@ async function main(): Promise<void> {
         agentConfig.systemPrompt,
         conversations,
         toolExecutor,
+        runtime.outputGuardian,
         skillResolver,
         enabledManagedProviders,
         fallbackChain,
@@ -4460,6 +4557,7 @@ async function main(): Promise<void> {
       localPrompt,
       conversations,
       toolExecutor,
+      runtime.outputGuardian,
       skillResolver,
       enabledManagedProviders,
       fallbackChain,
@@ -4480,6 +4578,7 @@ async function main(): Promise<void> {
       externalPrompt,
       conversations,
       toolExecutor,
+      runtime.outputGuardian,
       skillResolver,
       enabledManagedProviders,
       fallbackChain,
@@ -4525,6 +4624,7 @@ async function main(): Promise<void> {
       undefined,
       conversations,
       toolExecutor,
+      runtime.outputGuardian,
       skillResolver,
       enabledManagedProviders,
       fallbackChain,

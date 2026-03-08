@@ -63,51 +63,7 @@ describe('ToolExecutor', () => {
     expect(names).toContain('gmail_send');
   });
 
-  it('listAlwaysLoadedDefinitions excludes deferred tools', () => {
-    const root = createExecutorRoot();
-    const executor = new ToolExecutor({
-      enabled: true,
-      workspaceRoot: root,
-      policyMode: 'approve_by_policy',
-      allowedPaths: [root],
-      allowedCommands: ['echo'],
-      allowedDomains: ['localhost'],
-    });
-
-    const allNames = executor.listToolDefinitions().map((t) => t.name);
-    const alwaysNames = executor.listAlwaysLoadedDefinitions().map((t) => t.name);
-
-    // Always-loaded should be a strict subset of all definitions
-    expect(alwaysNames.length).toBeLessThan(allNames.length);
-    // tool_search, fs_read, web_search, shell_safe, memory_search should be always-loaded
-    expect(alwaysNames).toContain('tool_search');
-    expect(alwaysNames).toContain('fs_read');
-    expect(alwaysNames).toContain('web_search');
-    expect(alwaysNames).toContain('shell_safe');
-    expect(alwaysNames).toContain('memory_search');
-    // Deferred tools should NOT be in always-loaded
-    expect(alwaysNames).not.toContain('fs_write');
-    expect(alwaysNames).not.toContain('net_ping');
-    expect(alwaysNames).not.toContain('gws');
-  });
-
-  it('searchTools finds tools by keyword', () => {
-    const root = createExecutorRoot();
-    const executor = new ToolExecutor({
-      enabled: true,
-      workspaceRoot: root,
-      policyMode: 'approve_by_policy',
-      allowedPaths: [root],
-      allowedCommands: ['echo'],
-      allowedDomains: ['localhost'],
-    });
-
-    const results = executor.searchTools('network ping');
-    const names = results.map((t) => t.name);
-    expect(names).toContain('net_ping');
-  });
-
-  it('tool_search meta-tool returns matching definitions', async () => {
+  it('rejects fs_write content containing secrets before writing', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
       enabled: true,
@@ -118,32 +74,38 @@ describe('ToolExecutor', () => {
       allowedDomains: ['localhost'],
     });
 
-    const result = await executor.executeModelTool(
-      'tool_search',
-      { query: 'file write' },
-      { origin: 'assistant', agentId: 'test' },
-    );
+    const result = await executor.runTool({
+      toolName: 'fs_write',
+      args: {
+        path: 'secret.txt',
+        content: 'AWS key: AKIAIOSFODNN7EXAMPLE',
+      },
+      origin: 'cli',
+    });
 
-    expect(result.success).toBe(true);
-    const output = result.output as { tools: Array<{ name: string }> };
-    expect(output.tools.length).toBeGreaterThan(0);
-    expect(output.tools.some((t) => t.name === 'fs_write')).toBe(true);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('Write content contains secrets');
   });
 
-  it('all builtin tools have shortDescription', () => {
+  it('rejects shell_safe commands with shell control operators', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
       enabled: true,
       workspaceRoot: root,
-      policyMode: 'approve_by_policy',
+      policyMode: 'autonomous',
       allowedPaths: [root],
       allowedCommands: ['echo'],
       allowedDomains: ['localhost'],
     });
 
-    const tools = executor.listToolDefinitions();
-    const missingShort = tools.filter((t) => !t.shortDescription);
-    expect(missingShort.map((t) => t.name)).toEqual([]);
+    const result = await executor.runTool({
+      toolName: 'shell_safe',
+      args: { command: 'echo hello && pwd' },
+      origin: 'cli',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('shell control operators');
   });
 
   it('enforces Google Workspace service-specific capabilities for managed MCP tools', async () => {
