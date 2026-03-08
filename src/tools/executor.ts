@@ -303,6 +303,11 @@ export class ToolExecutor {
     this.automationControlPlane = controlPlane;
   }
 
+  /** Look up a single tool definition by name. */
+  getToolDefinition(name: string): ToolDefinition | undefined {
+    return this.registry.get(name)?.definition;
+  }
+
   listToolDefinitions(): ToolDefinition[] {
     return this.registry.listDefinitions().filter(
       (def) => this.isCategoryEnabled(def.category) && !this.getSandboxBlockReason(def.name, def.category),
@@ -471,6 +476,23 @@ export class ToolExecutor {
     }
 
     return ids;
+  }
+
+  /** Return approval ID → tool name + args preview for display in approval prompts. */
+  getApprovalSummaries(approvalIds: string[]): Map<string, { toolName: string; argsPreview: string }> {
+    const result = new Map<string, { toolName: string; argsPreview: string }>();
+    for (const id of approvalIds) {
+      const pending = this.approvals.list(MAX_APPROVALS, 'pending');
+      const approval = pending.find(a => a.id === id);
+      if (approval) {
+        const job = this.jobsById.get(approval.jobId);
+        result.set(id, {
+          toolName: approval.toolName,
+          argsPreview: job?.argsPreview ?? JSON.stringify(approval.args).slice(0, 120),
+        });
+      }
+    }
+    return result;
   }
 
   async runTool(request: ToolExecutionRequest): Promise<ToolRunResponse> {
@@ -742,19 +764,23 @@ export class ToolExecutor {
     const method = asString(args.method).trim().toLowerCase();
     const resource = asString(args.resource).trim().toLowerCase();
     const isWrite = /\b(create|insert|update|patch|delete|send|remove|modify)\b/i.test(method);
-    if (service !== 'gmail' || !isWrite) {
-      return null;
-    }
 
-    if (method === 'send') {
+    // Reads for all services pass through to default policy (network → allow)
+    if (!isWrite) return null;
+
+    // Gmail send is always approval-gated regardless of policy mode
+    if (service === 'gmail' && method === 'send') {
       return 'require_approval';
     }
 
-    if (resource.includes('draft')) {
+    // Gmail drafts: approval-gated in non-autonomous modes
+    if (service === 'gmail' && resource.includes('draft')) {
       return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
     }
 
-    return null;
+    // All other GWS write operations: approval-gated in non-autonomous modes
+    // Covers calendar, drive, docs, sheets, and any future services (fail-closed)
+    return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
   }
 
   private validateToolArgs(definition: ToolDefinition, args: Record<string, unknown>): string | null {

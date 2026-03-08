@@ -243,6 +243,14 @@ export interface DashboardToolsState {
   }>;
   /** Currently disabled categories. */
   disabledCategories?: ToolCategory[];
+  /** Per-tool/per-category LLM provider routing preferences (user overrides only). */
+  providerRouting?: Record<string, 'local' | 'external' | 'default'>;
+  /** Whether smart provider routing is enabled (default: true). When false, all tools use the default provider. */
+  providerRoutingEnabled?: boolean;
+  /** Locality of the default LLM provider ('local' for Ollama, 'external' for cloud). */
+  defaultProviderLocality?: 'local' | 'external';
+  /** Computed per-category defaults based on available providers. External categories route to external when both providers exist. */
+  categoryDefaults?: Record<string, 'local' | 'external'>;
 }
 
 export interface DashboardSkillsState {
@@ -438,6 +446,7 @@ export interface DashboardCallbacks {
   onSkillsUpdate?: (input: { skillId: string; enabled: boolean }) => { success: boolean; message: string };
   onToolsCategories?: () => Array<{ category: ToolCategory; label: string; description: string; toolCount: number; enabled: boolean; disabledReason?: string }>;
   onToolsCategoryToggle?: (input: { category: ToolCategory; enabled: boolean }) => { success: boolean; message: string };
+  onToolsProviderRoutingUpdate?: (input: { routing?: Record<string, 'local' | 'external' | 'default'>; enabled?: boolean }) => { success: boolean; message: string };
   onToolsRun?: (input: {
     toolName: string;
     args?: Record<string, unknown>;

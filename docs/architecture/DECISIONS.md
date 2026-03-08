@@ -562,3 +562,35 @@ Additionally, `POST /api/setup/apply` was hardened: when `providerType` is missi
 - (-) Requires additional platform-specific runtime code and UX states.
 
 **Refs:** `SECURITY.md`, `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`
+
+## ADR-029: Per-Tool LLM Provider Routing
+
+**Status:** Accepted (updated: added smart category defaults and routing toggle)
+
+**Context:** When using a local LLM (Ollama) as the default provider, tool result synthesis is often poor — the model returns uninformative responses like "Tool 'fs_write' completed" instead of describing what actually happened. Quality-based fallback (`isResponseDegraded()`) only catches empty/refusal patterns, not low-quality-but-non-empty responses. Users with both local and external providers configured needed a way to selectively route specific tools through higher-quality models without switching their entire default provider.
+
+Manual per-tool routing configuration was too granular for most users. A natural locality pattern emerged: local operations (filesystem, shell, network, system, memory, automation) are well-handled by local models, while external-facing operations (web, browser, workspace, email, contacts, forum, intel, search) benefit from stronger external models. This led to smart category defaults.
+
+**Decision:** Add `assistant.tools.providerRouting` — a map from tool names or category names to `'local'` or `'external'`. The routing decision happens per-round in the ChatAgent tool loop: after tools execute, `resolveToolProviderRouting()` checks executed tool names and categories against the routing map. If a preference is found, the `chatFn` is swapped to the preferred provider for the *next* LLM call — meaning the model that processes the tool result and generates the user-facing response is the routed one, not the one that initiated the tool call.
+
+Resolution order: tool-name match > category match > smart category default > default provider locality. When multiple tools in one round conflict, `external` wins. If the routed provider is unavailable, routing is silently skipped. Web UI exposes Local/External dropdowns per category and per tool, with category changes cascading to child tools.
+
+**Smart category defaults:** When both local and external providers are configured, `providerRoutingEnabled` (default: `true`) activates automatic category-based routing:
+- Local categories: filesystem, shell, network, system, memory, automation
+- External categories: web, browser, workspace, email, contacts, forum, intel, search
+- When only one provider type exists, smart routing is a no-op
+- Explicit `providerRouting` entries always override smart defaults
+
+**`providerRoutingEnabled` toggle:** A master switch (`assistant.tools.providerRoutingEnabled`, default: `true`) enables or disables smart routing. When off, all tools use the default provider unless explicitly overridden in `providerRouting`. Exposed in the web UI as a "Smart LLM Routing" checkbox in the Tools tab. The Providers tab also gained a "Set as Default" button per provider row (`POST /api/providers/default`).
+
+**Consequences:**
+- (+) Users can route expensive synthesis (file writes, workspace operations) through external models while keeping fast reads on local.
+- (+) Smart defaults provide sensible routing out of the box with zero configuration.
+- (+) Hot-reloadable — changes via web UI or config edit take effect immediately, no restart needed.
+- (+) Graceful degradation — missing providers silently fall back to default; single-provider setups are unaffected.
+- (+) Category-level defaults reduce per-tool configuration burden.
+- (-) Adds one round of routing logic per tool execution in the LLM loop.
+- (-) External provider routing incurs API costs for those tool calls.
+- (-) Smart defaults are opinionated — users who disagree can disable via toggle or override per-category.
+
+**Refs:** `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`, `src/index.ts` (`resolveToolProviderRouting`, `resolveRoutedProviderForTools`)

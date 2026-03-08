@@ -398,6 +398,116 @@ Orchestration agents should be tested with a real Runtime to verify:
 
 ---
 
+## Orchestration Architecture: LLM-Driven vs Code-Driven
+
+Modern agent systems use a two-layer orchestration model. GuardianAgent follows this pattern, with clear separation between what the LLM decides and what code determines.
+
+### Layer 1: LLM-Driven (Within an Agent)
+
+The LLM controls the **reasoning loop** inside each agent invocation. This is the "agentic" part — the model decides what to do next:
+
+- **Tool selection**: The LLM picks which tools to call via function calling (e.g., "I need to read this file, then search the web, then write a report")
+- **Iteration control**: The LLM decides when it's done (stop calling tools) or needs another round
+- **Task decomposition**: The LLM breaks complex requests into steps within a single invocation
+
+This follows the **ReAct pattern** (Reasoning + Acting):
+
+```
+Thought → Action (tool call) → Observation (result) → Thought → ...
+```
+
+GuardianAgent implements this in the `ChatAgent.onMessage` tool loop: the LLM receives tool definitions, calls tools, receives results, and iterates until it produces a final response. The system never hard-codes "for this query, call tool X then tool Y" — that's entirely the LLM's decision.
+
+### Layer 2: Code-Driven (Infrastructure)
+
+Code controls **infrastructure decisions** without consulting the LLM:
+
+| Decision | Mechanism | Why Code, Not LLM |
+|---|---|---|
+| Channel → agent routing | Config bindings, default agent | Deterministic, instant, no latency |
+| Model selection | `defaultProvider` config | Cost/latency predictability |
+| Model for tool result synthesis | `providerRouting` config + smart category defaults | Per-category optimization without per-request LLM overhead |
+| Failover on provider error | `ModelFallbackChain`, `CircuitBreaker` | Must be reliable even when LLMs are down |
+| Quality-based fallback | `isResponseDegraded()` heuristic | Pattern matching is cheaper than asking another LLM |
+| Security gating | Guardian admission pipeline | Must not be bypassable by LLM reasoning |
+| Rate limiting | Sliding window counters | Deterministic enforcement |
+| Session serialization | `AssistantOrchestrator` queue | Infrastructure concern |
+
+### Smart LLM Provider Routing
+
+When both local (Ollama) and external (Anthropic/OpenAI) providers are configured, the system automatically routes tool result synthesis to the appropriate model based on task type:
+
+| Routes to **Local** model | Routes to **External** model |
+|---|---|
+| filesystem, shell, network, system, memory, automation | web, browser, workspace, email, contacts, forum, intel, search |
+
+This is a **code-driven, config-overridable** decision. The LLM is never asked "which model should synthesize this?" — that would add latency and cost to every tool call. Users can override per-tool or per-category via the web UI (Configuration > Tools tab), and disable smart routing entirely via the `providerRoutingEnabled` toggle.
+
+See [TOOLS-CONTROL-PLANE-SPEC.md](TOOLS-CONTROL-PLANE-SPEC.md) for the full routing algorithm, API, and configuration reference.
+
+### Where Orchestration Agents Fit
+
+The `SequentialAgent`, `ParallelAgent`, and `LoopAgent` defined in this spec are **code-driven composition primitives**. They define the _structure_ of multi-agent workflows (ordering, parallelism, iteration) while the LLM controls _what happens_ within each sub-agent invocation.
+
+```
+Code decides:                    LLM decides:
+├── Run agent A, then B, then C  ├── Which tools to call in agent A
+├── Run D and E in parallel      ├── How to interpret tool results
+├── Loop F up to 5 times         ├── When to stop iterating (within F)
+└── Route to local/external      └── What to say to the user
+```
+
+### Industry Comparison
+
+GuardianAgent's orchestration model aligns with the production consensus across the industry:
+
+| System | Tool Selection | Multi-Agent Routing | Model Selection | Orchestration Style |
+|---|---|---|---|---|
+| **GuardianAgent** | LLM-driven (function calling) | Code-driven (Sequential/Parallel/Loop agents) | Code-driven (config + smart category defaults) | Structured primitives + ReAct loop |
+| **OpenAI Agents SDK** | LLM-driven (function calling) | Code-driven (Agents + Handoffs) | Code-driven (per-agent config) | Minimal: agents + handoff transfers |
+| **OpenClaw** | LLM-driven (function calling) | LLM-driven (spawns subagents via tool calls) | Code-driven (config + fallback chain) | Single ReAct loop + on-demand subagent spawn |
+| **LangGraph** | LLM-driven | Code-driven (state machine graphs) | Code-driven | Graph-based node orchestration |
+| **CrewAI** | LLM-driven | Code-driven (role-based agent teams) | Code-driven | Role assignment + task delegation |
+| **Google ADK** | LLM-driven | Code-driven (SequentialAgent/ParallelAgent/LoopAgent) | Code-driven | Structured primitives (GuardianAgent's inspiration) |
+
+Key observations from industry analysis:
+
+- **No production system uses an LLM to select which model handles a request.** Model routing is always code/config-driven because it must be fast, deterministic, and cost-predictable.
+- **Tool selection is universally LLM-driven** via function calling. This is the core "agentic" capability.
+- **Multi-agent coordination splits between two patterns**: structured primitives (GuardianAgent, Google ADK, OpenAI Agents SDK) where code defines agent flow, and on-demand spawning (OpenClaw) where the LLM decides when to delegate.
+- **LLM gateways** (Bifrost, Portkey, Agentgateway) handle multi-provider routing as middleware — code-driven load balancing, failover, and cost optimization with no LLM involvement in provider selection.
+
+### ReAct Pattern
+
+The ReAct (Reasoning + Acting) pattern, introduced by [Yao et al. 2022](https://arxiv.org/abs/2210.03629), is the foundation of tool-using agents. It interleaves reasoning traces with actions:
+
+1. **Thought**: The LLM reasons about what to do next
+2. **Action**: The LLM calls a tool (function call)
+3. **Observation**: The tool result is fed back to the LLM
+4. **Repeat** until the LLM produces a final answer
+
+GuardianAgent's `ChatAgent.onMessage` implements this loop with additions:
+- **Guardian admission** on every tool call (security gate between Action and Observation)
+- **Parallel tool execution** when the LLM returns multiple tool calls in one response
+- **Provider routing** that can swap the LLM between rounds based on which tools executed
+- **Context budget management** that compacts old tool results when context grows too large
+- **Quality-based fallback** that retries through the fallback chain on degraded responses
+
+### References
+
+- [OpenAI Agents SDK — Agent Orchestration](https://openai.github.io/openai-agents-python/multi_agent/)
+- [AI Agent Orchestration Patterns for Reliable Products](https://productschool.com/blog/artificial-intelligence/ai-agent-orchestration-patterns)
+- [Navigating Modern LLM Agent Architectures](https://www.wollenlabs.com/blog-posts/navigating-modern-llm-agent-architectures-multi-agents-plan-and-execute-rewoo-tree-of-thoughts-and-react)
+- [ReAct Prompting Guide](https://www.promptingguide.ai/techniques/react)
+- [Multi-provider LLM Orchestration in Production: A 2026 Guide](https://dev.to/ash_dubai/multi-provider-llm-orchestration-in-production-a-2026-guide-1g10)
+- [LLM Orchestration in 2026: Top 22 Frameworks and Gateways](https://research.aimultiple.com/llm-orchestration/)
+- [AI Agent Routing: Tutorial & Best Practices](https://www.patronus.ai/ai-agent-development/ai-agent-routing)
+- [From Workflows to Agents: The Evolution of LLM Orchestration](https://medium.com/@20011002nimeth/from-workflows-to-agents-the-evolution-of-llm-orchestration-7c7b8eb2eea5)
+- [Difficulty-Aware Agent Orchestration in LLM-Powered Workflows](https://arxiv.org/html/2509.11079v1)
+- [Agentic AI Frameworks: Complete Enterprise Guide for 2026](https://www.spaceo.ai/blog/agentic-ai-frameworks/)
+
+---
+
 ## Future Enhancements
 
 1. **ConditionalAgent** — Route to different sub-agents based on LLM classification or content analysis
@@ -405,5 +515,6 @@ Orchestration agents should be tested with a real Runtime to verify:
 3. **maxDispatchDepth** — Hard cap on recursion depth across nested orchestration
 4. **maxStepsPerOrchestration** — Configuration-time limit on step count
 5. **State sanitization** — Optional content cleaning when writing to shared state
-6. **LLM-driven routing** — `transfer_to_agent()` pattern where the LLM decides which sub-agent to invoke
+6. **LLM-driven routing** — `transfer_to_agent()` pattern where the LLM decides which sub-agent to invoke (following OpenAI Agents SDK handoff pattern)
 7. **AgentTool** — Wrap an agent as a callable tool for LLM function calling
+8. **On-demand subagent spawning** — LLM-triggered agent creation via tool call (following OpenClaw pattern), with depth/count limits enforced by code

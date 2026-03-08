@@ -179,10 +179,17 @@ body {
   text-shadow: 0 0 12px var(--accent-glow);
 }
 
+.header-clock {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  letter-spacing: 0.5px;
+}
+
 .header-right {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.75rem;
 }
 
 .indicator {
@@ -406,6 +413,25 @@ tr:last-child td {
 
 tr:hover td {
   background: var(--accent-glow);
+}
+
+.provider-route-select {
+  padding: 0.3rem 0.45rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  cursor: pointer;
+  min-width: 5.5rem;
+}
+.provider-route-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.provider-route-select option {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
 }
 
 /* ─── State Badges ───────────────────────────────────────── */
@@ -1905,6 +1931,681 @@ tr:hover td {
   margin-left: auto;
 }
 
+/* ─── Workflow Category Filter ───────────────────────────── */
+
+.wf-category-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex-wrap: wrap;
+}
+
+.wf-category-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.6rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 100px;
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+  text-transform: capitalize;
+}
+
+.wf-category-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(79, 172, 254, 0.06);
+}
+
+.wf-category-chip.active {
+  background: rgba(79, 172, 254, 0.12);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.wf-category-count {
+  background: rgba(79, 172, 254, 0.15);
+  padding: 0.05rem 0.35rem;
+  border-radius: 100px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: var(--accent);
+  min-width: 1rem;
+  text-align: center;
+}
+
+.wf-category-tag {
+  display: inline-block;
+  margin-top: 0.2rem;
+  padding: 0.1rem 0.4rem;
+  font-size: 0.58rem;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+/* ─── Workflow Pipeline Visualization ────────────────────── */
+
+.wf-catalog-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+  max-width: 320px;
+}
+
+.wf-tool-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.45rem;
+  background: rgba(79, 172, 254, 0.08);
+  border: 1px solid rgba(79, 172, 254, 0.18);
+  border-radius: 3px;
+  font-size: 0.68rem;
+  color: var(--accent);
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.wf-tool-chip-num {
+  font-weight: 700;
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  margin-right: 0.1rem;
+}
+
+.wf-tool-arrow {
+  color: var(--text-muted);
+  font-size: 0.6rem;
+  flex-shrink: 0;
+}
+
+.wf-tool-parallel-bar {
+  color: var(--warning);
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+
+.wf-expand-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.wf-expand-btn:hover {
+  background: rgba(79, 172, 254, 0.08);
+  border-color: var(--accent);
+}
+.wf-expand-btn .wf-expand-icon {
+  transition: transform 0.25s ease;
+  display: inline-block;
+  font-size: 0.65rem;
+}
+.wf-expand-btn.expanded .wf-expand-icon {
+  transform: rotate(90deg);
+}
+
+.wf-pipeline-row {
+  display: none;
+}
+.wf-pipeline-row.visible {
+  display: table-row;
+}
+.wf-pipeline-row.wf-filtered-out {
+  display: none !important;
+}
+
+.wf-pipeline-cell {
+  padding: 0 !important;
+  border-top: none !important;
+}
+
+.wf-pipeline-container {
+  background: linear-gradient(180deg, var(--bg-primary) 0%, rgba(13,18,32,0.95) 100%);
+  border-top: 1px solid rgba(79, 172, 254, 0.1);
+  border-bottom: 1px solid rgba(79, 172, 254, 0.1);
+  padding: 1.25rem 1.5rem;
+  animation: wfPipelineSlide 0.3s ease-out;
+  overflow-x: auto;
+}
+
+@keyframes wfPipelineSlide {
+  from { opacity: 0; max-height: 0; padding: 0 1.5rem; }
+  to   { opacity: 1; max-height: 600px; padding: 1.25rem 1.5rem; }
+}
+
+.wf-pipeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.wf-pipeline-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.wf-pipeline-mode-badge {
+  padding: 0.15rem 0.5rem;
+  border-radius: 3px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.wf-pipeline-mode-badge.sequential {
+  background: rgba(79, 172, 254, 0.12);
+  color: var(--accent);
+  border: 1px solid rgba(79, 172, 254, 0.25);
+}
+.wf-pipeline-mode-badge.parallel {
+  background: rgba(251, 191, 36, 0.12);
+  color: var(--warning);
+  border: 1px solid rgba(251, 191, 36, 0.25);
+}
+
+.wf-pipeline-step-count {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+/* Sequential pipeline — horizontal connected nodes */
+.wf-pipeline-track {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 0.5rem 0;
+  min-height: 100px;
+}
+
+.wf-pipeline-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  flex-shrink: 0;
+  min-width: 130px;
+}
+
+.wf-pipeline-node-circle {
+  width: 2.8rem;
+  height: 2.8rem;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  border: 2px solid rgba(79, 172, 254, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--accent);
+  position: relative;
+  z-index: 2;
+  box-shadow: 0 0 12px rgba(79, 172, 254, 0.08);
+  transition: all 0.25s;
+}
+
+.wf-pipeline-node:hover .wf-pipeline-node-circle {
+  border-color: var(--accent);
+  box-shadow: 0 0 20px rgba(79, 172, 254, 0.2);
+  transform: scale(1.08);
+}
+
+.wf-pipeline-node-label {
+  margin-top: 0.5rem;
+  text-align: center;
+  max-width: 140px;
+}
+
+.wf-pipeline-node-tool {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-word;
+  line-height: 1.3;
+}
+
+.wf-pipeline-node-category {
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  margin-top: 0.15rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.wf-pipeline-node-args {
+  font-size: 0.58rem;
+  color: var(--text-secondary);
+  margin-top: 0.25rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.15rem 0.35rem;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
+}
+
+/* Connector lines between nodes */
+.wf-pipeline-connector {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 48px;
+  position: relative;
+  padding-top: 0;
+}
+
+.wf-pipeline-connector-line {
+  position: absolute;
+  top: 1.4rem;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, rgba(79,172,254,0.4), rgba(79,172,254,0.15));
+}
+
+.wf-pipeline-connector-arrow {
+  position: absolute;
+  top: calc(1.4rem - 3px);
+  right: -1px;
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 6px solid rgba(79, 172, 254, 0.5);
+}
+
+/* Parallel pipeline — fan-out layout */
+.wf-pipeline-parallel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0.5rem 0;
+}
+
+.wf-pipeline-parallel-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  padding-left: 0.25rem;
+}
+
+.wf-pipeline-parallel-icon {
+  color: var(--warning);
+  font-size: 0.85rem;
+}
+
+.wf-pipeline-parallel-label {
+  font-size: 0.7rem;
+  color: var(--warning);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.wf-pipeline-parallel-tracks {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  position: relative;
+  padding-left: 1.5rem;
+}
+
+.wf-pipeline-parallel-tracks::before {
+  content: '';
+  position: absolute;
+  left: 0.6rem;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: linear-gradient(180deg, rgba(251,191,36,0.4), rgba(251,191,36,0.1));
+  border-radius: 1px;
+}
+
+.wf-pipeline-parallel-lane {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.45rem 0.75rem;
+  position: relative;
+  border-bottom: 1px solid rgba(26, 37, 64, 0.5);
+  transition: background 0.2s;
+}
+
+.wf-pipeline-parallel-lane:last-child {
+  border-bottom: none;
+}
+
+.wf-pipeline-parallel-lane:hover {
+  background: rgba(79, 172, 254, 0.03);
+}
+
+.wf-pipeline-parallel-lane::before {
+  content: '';
+  position: absolute;
+  left: -0.9rem;
+  top: 50%;
+  width: 0.65rem;
+  height: 2px;
+  background: rgba(251, 191, 36, 0.3);
+}
+
+.wf-pipeline-lane-num {
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  border: 1.5px solid rgba(251, 191, 36, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--warning);
+  flex-shrink: 0;
+}
+
+.wf-pipeline-lane-tool {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 120px;
+}
+
+.wf-pipeline-lane-category {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  min-width: 70px;
+}
+
+.wf-pipeline-lane-args {
+  font-size: 0.62rem;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.1rem 0.35rem;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.wf-pipeline-lane-settings {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.wf-pipeline-setting-tag {
+  font-size: 0.55rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 2px;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.wf-pipeline-setting-tag.timeout {
+  color: var(--info);
+  border-color: rgba(56, 189, 248, 0.2);
+}
+.wf-pipeline-setting-tag.continue-on-error {
+  color: var(--warning);
+  border-color: rgba(251, 191, 36, 0.2);
+}
+
+/* ─── Workflow Nested Config Panel ───────────────────────── */
+
+.wf-config-details {
+  margin-top: 1rem;
+  border: 1px solid rgba(79, 172, 254, 0.12);
+  border-radius: var(--radius);
+  background: rgba(8, 12, 20, 0.6);
+  overflow: hidden;
+}
+
+.wf-config-details[open] {
+  border-color: rgba(79, 172, 254, 0.22);
+}
+
+.wf-config-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem 0.85rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.2s, background 0.2s;
+  list-style: none;
+}
+
+.wf-config-summary::-webkit-details-marker { display: none; }
+.wf-config-summary::marker { content: ''; }
+
+.wf-config-summary:hover {
+  color: var(--accent);
+  background: rgba(79, 172, 254, 0.04);
+}
+
+.wf-config-details[open] > .wf-config-summary {
+  border-bottom: 1px solid rgba(79, 172, 254, 0.1);
+  color: var(--accent);
+}
+
+.wf-config-details[open] > .wf-config-summary .wf-expand-icon {
+  transform: rotate(90deg);
+}
+
+.wf-config-body {
+  padding: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  animation: wfPipelineSlide 0.25s ease-out;
+}
+
+.wf-config-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  background: var(--bg-surface);
+}
+
+.wf-config-section-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 0.6rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.wf-config-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.wf-config-step {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.wf-config-step-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.72rem;
+}
+
+.wf-config-step-num {
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 50%;
+  background: rgba(79, 172, 254, 0.12);
+  border: 1px solid rgba(79, 172, 254, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.wf-config-step-tool {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.wf-config-step-cat {
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding: 0.05rem 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+}
+
+.wf-config-step-id {
+  margin-left: auto;
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.wf-config-step-body {
+  padding: 0.5rem 0.6rem;
+}
+
+.wf-config-step-fields {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+}
+
+.wf-config-step-fields .cfg-field label {
+  font-size: 0.62rem;
+}
+
+.wf-config-step-fields .cfg-field input {
+  font-size: 0.7rem;
+  padding: 0.25rem 0.4rem;
+}
+
+.wf-config-args-pre {
+  font-size: 0.7rem;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.5rem;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 150px;
+  overflow: auto;
+  color: var(--text-secondary);
+}
+
+.wf-config-pack {
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 0.35rem;
+}
+
+.wf-config-pack:last-child {
+  margin-bottom: 0;
+}
+
+.wf-config-pack-name {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 0.2rem;
+}
+
+.wf-config-pack-caps {
+  font-size: 0.68rem;
+  color: var(--accent);
+  margin-bottom: 0.15rem;
+}
+
+.wf-config-pack-detail {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  margin-top: 0.1rem;
+}
+
+.wf-config-json-editor {
+  width: 100%;
+  min-height: 120px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 0.6rem;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.wf-config-json-editor:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(79, 172, 254, 0.15);
+}
+
 .network-tool-result {
   margin: 0;
   max-height: 320px;
@@ -2103,4 +2804,63 @@ tr:hover td {
   background: var(--accent);
   color: var(--accent-text);
   border-color: var(--accent);
+}
+
+/* ─── Automations Page ──────────────────────────────────── */
+
+.auto-kind-badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 3px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.auto-kind-badge.single {
+  background: rgba(52, 211, 153, 0.12);
+  color: var(--success);
+  border: 1px solid rgba(52, 211, 153, 0.25);
+}
+.auto-kind-badge.pipeline {
+  background: rgba(79, 172, 254, 0.12);
+  color: var(--accent);
+  border: 1px solid rgba(79, 172, 254, 0.25);
+}
+
+.auto-schedule-cell .ops-task-title {
+  font-size: 0.82rem;
+}
+
+.auto-schedule-toggle {
+  padding: 0.5rem 0;
+}
+
+.auto-example-panel {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-primary);
+}
+.auto-example-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.75rem;
+}
+.auto-example-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.85rem 1rem;
+  transition: border-color 0.2s;
+}
+.auto-example-card:hover {
+  border-color: var(--guardian-border);
+}
+
+.auto-clone-highlight {
+  animation: auto-highlight-flash 1.5s ease-out;
+}
+@keyframes auto-highlight-flash {
+  0% { background-color: var(--accent-glow); }
+  100% { background-color: transparent; }
 }

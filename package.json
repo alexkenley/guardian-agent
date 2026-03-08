@@ -66,6 +66,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
+    "@googleworkspace/cli": "^0.4.4",
     "@tobilu/qmd": "^1.0.7",
     "croner": "^10.0.1",
     "grammy": "^1.40.0",

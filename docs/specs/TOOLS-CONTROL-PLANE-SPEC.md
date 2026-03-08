@@ -45,6 +45,25 @@ This reduces tool definition tokens from ~15-25K to ~5K per request.
 
 **Quality-based fallback:** When the local LLM produces a degraded response (empty, refusal, or "I could not generate"), the system automatically retries the request through the fallback chain (typically an external provider like OpenAI). A fallback chain is auto-configured when multiple LLM providers are available, or can be explicitly set via `config.fallbacks`.
 
+**Per-tool provider routing:** Users can route specific tools or entire tool categories to a preferred LLM provider (`local` or `external`). This controls which model *synthesizes the tool result* — the model that processes the output and generates the user-facing response after a tool executes. The routing decision happens per-round in the tool loop:
+
+1. Tool(s) execute and results are appended to the message history
+2. `resolveToolProviderRouting()` checks the routing map against executed tool names/categories
+3. If a routing preference is found, `chatFn` is swapped to the preferred provider for the next LLM call
+4. Tool definitions are re-mapped for the new provider's locality (full descriptions for local, short for external)
+
+Resolution order: tool-name match > category match > smart category default > default provider. When multiple tools execute in one round with conflicting preferences, `external` wins (higher-quality synthesis).
+
+If the routed provider is unavailable (e.g., no external provider configured), the routing is silently skipped and the default provider is used. The routed provider also falls back to the default chain on error.
+
+**Smart category defaults:** When both local and external providers are configured and `providerRoutingEnabled` is `true` (the default), tools are automatically routed based on their category's natural locality:
+- **Local categories** (filesystem, shell, network, system, memory, automation) route to the local model — these are fast, low-complexity operations where local LLMs perform well.
+- **External categories** (web, browser, workspace, email, contacts, forum, intel, search) route to the external model — these involve richer content that benefits from stronger synthesis.
+- When only one provider type exists (e.g., only Ollama or only Anthropic), smart routing is a no-op and everything uses that provider.
+- Explicit `providerRouting` entries always override smart defaults.
+
+**`providerRoutingEnabled` toggle:** Master switch for smart LLM routing (`assistant.tools.providerRoutingEnabled`, default: `true`). When disabled, all tools use the default provider regardless of category. Exposed in the web UI (Configuration > Tools tab) as a "Smart LLM Routing" checkbox with tooltip.
+
 **Configuration:**
 ```yaml
 assistant:
@@ -52,7 +71,21 @@ assistant:
     deferredLoading:
       enabled: true
       alwaysLoaded: [find_tools, web_search, fs_read, fs_list, fs_search, shell_safe, memory_search, sys_info, sys_resources]
+    providerRoutingEnabled: true    # enable smart category defaults (default: true)
+    providerRouting:
+      # Per-category: all tools in this category use external LLM for result synthesis
+      workspace: external
+      filesystem: external
+      # Per-tool: overrides category default
+      fs_list: local        # reads are fine on local
+      # Omitted tools/categories use smart defaults (if enabled) or the default provider
 ```
+
+**Web UI:** Configuration > Tools tab shows an "LLM" column on both the Tool Categories and Tool Catalog tables. Each row has a Local/External dropdown. Changing a category dropdown cascades to all tools in that category. A "Smart LLM Routing" checkbox toggles `providerRoutingEnabled`. Changes are saved immediately via `POST /api/tools/provider-routing` and persisted to the user's config YAML. The Providers tab includes a "Set as Default" button per provider row.
+
+**API:**
+- `POST /api/tools/provider-routing` with body `{ routing?: { "tool_or_category": "local" | "external" }, enabled?: boolean }`. The `enabled` field controls `providerRoutingEnabled`. The routing map is also returned in `GET /api/tools` as `providerRouting`. Only entries that differ from the default provider locality are persisted.
+- `POST /api/providers/default` with body `{ name: string }` — sets the default LLM provider.
 
 ## Tool Definition Fields
 

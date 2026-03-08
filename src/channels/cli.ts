@@ -461,7 +461,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /campaign ...                            Contact discovery + email campaign workflows\n');
     this.write('  /connectors [status|packs|settings|pack] Connector framework control plane\n');
     this.write('  /playbooks [list|run|upsert|delete|runs] Playbook registry + execution\n');
-    this.write('  /google [status|login|logout]           Google Workspace connection\n');
+    this.write('  /google [status]                        Google Workspace connection\n');
     this.write('\n');
     this.write(this.bold('Security & Audit\n'));
     this.write('  /audit [limit]                         Recent audit events\n');

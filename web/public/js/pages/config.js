@@ -48,7 +48,7 @@ function renderProvidersTab(panel) {
   panel.innerHTML = '';
 
   panel.appendChild(createProviderPanel(config, providers, panel));
-  panel.appendChild(createProviderStatusTable(config, providers));
+  panel.appendChild(createProviderStatusTable(config, providers, panel));
   applyInputTooltips(panel);
 }
 
@@ -278,26 +278,52 @@ function createProviderPanel(config, providers, panel) {
   return section;
 }
 
-function createProviderStatusTable(config, providers) {
+function createProviderStatusTable(config, providers, panel) {
   const section = document.createElement('div');
   section.className = 'table-container';
-  const rows = Object.entries(config.llm || {}).map(([name, cfg]) => {
+  const providerEntries = Object.entries(config.llm || {});
+  const rows = providerEntries.map(([name, cfg]) => {
     const live = providers.find(p => p.name === name);
     const connected = live ? (live.connected !== false) : true;
     const locality = live?.locality || (cfg.provider === 'ollama' ? 'local' : 'external');
-    const statusBadge = `<span class="badge ${connected ? 'badge-idle' : 'badge-errored'}">${connected ? 'Connected' : 'Disconnected'}</span>`;
+    const statusBadge = '<span class="badge ' + (connected ? 'badge-idle' : 'badge-errored') + '">' + (connected ? 'Connected' : 'Disconnected') + '</span>';
     const modelList = live?.availableModels?.slice(0, 5).join(', ') || '-';
-    const defaultMark = name === config.defaultProvider ? ' (default)' : '';
-    return `<tr><td><strong>${esc(name)}</strong>${esc(defaultMark)}</td><td>${esc(cfg.provider)}</td><td>${esc(cfg.model)}</td><td>${esc(locality)}</td><td>${statusBadge}</td><td>${esc(modelList)}</td></tr>`;
+    const isDefault = name === config.defaultProvider;
+    const defaultBadge = isDefault ? ' <span class="badge badge-idle">default</span>' : '';
+    const actionBtn = isDefault
+      ? '<span class="text-muted" style="font-size:0.75rem">Current default</span>'
+      : '<button class="btn btn-sm set-default-provider-btn" data-provider="' + esc(name) + '">Set as Default</button>';
+    return '<tr><td><strong>' + esc(name) + '</strong>' + defaultBadge + '</td><td>' + esc(cfg.provider) + '</td><td>' + esc(cfg.model) + '</td><td>' + esc(locality) + '</td><td>' + statusBadge + '</td><td>' + esc(modelList) + '</td><td>' + actionBtn + '</td></tr>';
   }).join('');
 
   section.innerHTML = `
     <div class="table-header"><h3>Configured Providers</h3></div>
     <table>
-      <thead><tr><th>Name</th><th>Type</th><th>Model</th><th>Locality</th><th>Status</th><th>Available Models</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="6">No providers configured</td></tr>'}</tbody>
+      <thead><tr><th>Name</th><th>Type</th><th>Model</th><th>Locality</th><th>Status</th><th>Available Models</th><th>Actions</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="7">No providers configured</td></tr>'}</tbody>
     </table>
   `;
+
+  section.querySelectorAll('.set-default-provider-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const providerName = btn.dataset.provider;
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+      try {
+        const result = await api.setDefaultProvider(providerName);
+        if (result.success) {
+          sharedConfig.defaultProvider = providerName;
+          if (panel) renderProvidersTab(panel);
+        } else {
+          alert('Failed to set default provider: ' + (result.message || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Error: ' + err.message);
+      }
+      btn.disabled = false;
+    });
+  });
+
   return section;
 }
 
@@ -316,6 +342,22 @@ async function renderToolsTab(panel) {
     const categories = state.categories || [];
     const notices = state.notices || [];
     const sandbox = state.sandbox || null;
+    const routing = state.providerRouting || {};
+    const defaultLocality = state.defaultProviderLocality || 'local';
+    const categoryDefaults = state.categoryDefaults || {};
+    // Effective routing: user tool-level > user category-level > computed category default > default provider locality
+    const effectiveRoute = (key, category) => {
+      if (routing[key]) return routing[key];
+      if (category && routing[category]) return routing[category];
+      if (category && categoryDefaults[category]) return categoryDefaults[category];
+      return defaultLocality;
+    };
+    // For category rows, the effective default is the computed category default
+    const effectiveCategoryRoute = (category) => {
+      if (routing[category]) return routing[category];
+      if (categoryDefaults[category]) return categoryDefaults[category];
+      return defaultLocality;
+    };
 
     panel.innerHTML = `
       <div class="intel-summary-grid">
@@ -387,39 +429,25 @@ async function renderToolsTab(panel) {
 
       <div class="table-container">
         <div class="table-header"><h3>Execution Mode</h3></div>
-        <div style="padding:0.75rem 1rem;display:flex;align-items:center;gap:0.75rem;">
-          <label style="font-size:0.75rem;color:var(--text-secondary);display:flex;align-items:center;gap:0.5rem;">
-            <input type="checkbox" id="dry-run-toggle" ${state.dryRunDefault ? 'checked' : ''}>
-            Dry Run Mode
-          </label>
-          <span style="font-size:0.72rem;color:var(--text-muted);">When enabled, mutating tools validate but do not execute side effects.</span>
+        <div style="padding:0.75rem 1rem;display:flex;flex-direction:column;gap:0.5rem;">
+          <div style="display:flex;align-items:center;gap:0.75rem;">
+            <label style="font-size:0.75rem;color:var(--text-secondary);display:flex;align-items:center;gap:0.5rem;">
+              <input type="checkbox" id="dry-run-toggle" ${state.dryRunDefault ? 'checked' : ''}>
+              Dry Run Mode
+            </label>
+            <span style="font-size:0.72rem;color:var(--text-muted);">When enabled, mutating tools validate but do not execute side effects.</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:0.75rem;">
+            <label style="font-size:0.75rem;color:var(--text-secondary);display:flex;align-items:center;gap:0.5rem;">
+              <input type="checkbox" id="provider-routing-toggle" ${state.providerRoutingEnabled !== false ? 'checked' : ''}>
+              Smart LLM Routing
+            </label>
+            <span style="font-size:0.72rem;color:var(--text-muted);" title="When enabled, tools are automatically routed between local and external LLM providers based on the task type. External operations (web, email, workspace) use the external model for better quality synthesis, while local operations (filesystem, shell, network) use the local model for speed. Disable to force all tools through your default provider only.">Automatically route tool results between local and external models based on task type. <span style="cursor:help;text-decoration:underline dotted;">(?)</span></span>
+          </div>
         </div>
       </div>
 
-      ${categories.length > 0 ? `
-      <div class="table-container">
-        <div class="table-header"><h3>Tool Categories</h3></div>
-        <table>
-          <thead><tr><th>Category</th><th>Label</th><th>Tools</th><th>Status</th><th>Description</th></tr></thead>
-          <tbody>
-            ${categories.map(cat => `
-              <tr>
-                <td>${esc(cat.category)}</td>
-                <td>${esc(cat.label)}</td>
-                <td>${cat.toolCount}</td>
-                <td>
-                  <label class="toggle-switch" style="margin:0;">
-                    <input type="checkbox" class="category-toggle" data-category="${escAttr(cat.category)}" ${cat.enabled ? 'checked' : ''}>
-                    <span class="toggle-slider"></span>
-                  </label>
-                </td>
-                <td style="font-size:0.72rem;">${esc(cat.description)}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
-      ` : ''}
+      ${categories.length > 0 ? '<div class="table-container"><div class="table-header"><h3>Tool Categories</h3></div><table><thead><tr><th>Category</th><th>Label</th><th>Tools</th><th>Status</th><th>LLM</th><th>Description</th></tr></thead><tbody>' + categories.map(cat => { const cv = effectiveCategoryRoute(cat.category); return '<tr><td>' + esc(cat.category) + '</td><td>' + esc(cat.label) + '</td><td>' + cat.toolCount + '</td><td><label class="toggle-switch" style="margin:0;"><input type="checkbox" class="category-toggle" data-category="' + escAttr(cat.category) + '"' + (cat.enabled ? ' checked' : '') + '><span class="toggle-slider"></span></label></td><td><select class="provider-route-select" data-route-key="' + escAttr(cat.category) + '" data-route-scope="category"><option value="local"' + (cv === 'local' ? ' selected' : '') + '>Local</option><option value="external"' + (cv === 'external' ? ' selected' : '') + '>External</option></select></td><td style="font-size:0.72rem;">' + esc(cat.description) + '</td></tr>'; }).join('') + '</tbody></table></div>' : ''}
 
       <div class="table-container">
         <div class="table-header">
@@ -427,17 +455,11 @@ async function renderToolsTab(panel) {
           <button class="btn btn-secondary" id="tools-refresh" style="font-size:0.75rem;padding:0.35rem 0.65rem;">Refresh</button>
         </div>
         <table>
-          <thead><tr><th>Name</th><th>Risk</th><th>Description</th></tr></thead>
+          <thead><tr><th>Name</th><th>Risk</th><th>LLM</th><th>Description</th></tr></thead>
           <tbody>
             ${tools.length === 0
-              ? '<tr><td colspan="3">No tools registered.</td></tr>'
-              : tools.map(tool => `
-                <tr>
-                  <td>${esc(tool.name)}</td>
-                  <td><span class="badge ${riskClass(tool.risk)}">${esc(tool.risk)}</span></td>
-                  <td>${esc(tool.description)}</td>
-                </tr>
-              `).join('')}
+              ? '<tr><td colspan="4">No tools registered.</td></tr>'
+              : tools.map(tool => { const tv = effectiveRoute(tool.name, tool.category); return '<tr><td>' + esc(tool.name) + '</td><td><span class="badge ' + riskClass(tool.risk) + '">' + esc(tool.risk) + '</span></td><td><select class="provider-route-select" data-route-key="' + escAttr(tool.name) + '" data-route-scope="tool" data-tool-category="' + escAttr(tool.category || '') + '"><option value="local"' + (tv === 'local' ? ' selected' : '') + '>Local</option><option value="external"' + (tv === 'external' ? ' selected' : '') + '>External</option></select></td><td>' + esc(tool.description) + '</td></tr>'; }).join('')}
           </tbody>
         </table>
       </div>
@@ -493,6 +515,31 @@ async function renderToolsTab(panel) {
 
     panel.querySelector('#tools-refresh')?.addEventListener('click', () => renderToolsTab(panel));
 
+    // Smart LLM Routing toggle
+    const routingToggle = panel.querySelector('#provider-routing-toggle');
+    if (routingToggle) {
+      routingToggle.addEventListener('change', async () => {
+        const enabled = routingToggle.checked;
+        try {
+          const result = await api.updateToolProviderRouting({ enabled });
+          if (!result.success) {
+            alert(result.message || 'Failed to update routing.');
+            routingToggle.checked = !enabled;
+          } else {
+            // Disable/enable the per-category and per-tool dropdowns
+            panel.querySelectorAll('.provider-route-select').forEach(sel => { sel.disabled = !enabled; });
+          }
+        } catch (err) {
+          alert(err.message || 'Failed to update routing.');
+          routingToggle.checked = !enabled;
+        }
+      });
+      // Set initial disabled state on dropdowns if routing is off
+      if (!routingToggle.checked) {
+        panel.querySelectorAll('.provider-route-select').forEach(sel => { sel.disabled = true; });
+      }
+    }
+
     panel.querySelectorAll('.category-toggle').forEach(toggle => {
       toggle.addEventListener('change', async () => {
         const category = toggle.getAttribute('data-category');
@@ -503,6 +550,53 @@ async function renderToolsTab(panel) {
           if (!result.success) { alert(result.message || 'Failed to toggle category.'); toggle.checked = !enabled; }
           else await renderToolsTab(panel);
         } catch (err) { alert(err.message || 'Failed to toggle category.'); toggle.checked = !enabled; }
+      });
+    });
+
+    panel.querySelectorAll('.provider-route-select').forEach(select => {
+      select.addEventListener('change', async () => {
+        const key = select.getAttribute('data-route-key');
+        const scope = select.getAttribute('data-route-scope');
+        const value = select.value;
+        if (!key) return;
+
+        // If category changed, cascade to all tool selects in that category
+        if (scope === 'category') {
+          panel.querySelectorAll('.provider-route-select[data-route-scope="tool"]').forEach(toolSel => {
+            if (toolSel.getAttribute('data-tool-category') === key) {
+              toolSel.value = value;
+            }
+          });
+        }
+
+        // Build the full routing map from current UI state.
+        // Only persist entries that differ from the computed default for that key.
+        const updated = {};
+        panel.querySelectorAll('.provider-route-select').forEach(sel => {
+          const k = sel.getAttribute('data-route-key');
+          const v = sel.value;
+          if (!k) return;
+          const scope = sel.getAttribute('data-route-scope');
+          // For categories: compare against computed category default
+          // For tools: compare against user category override or computed category default
+          const cat = scope === 'tool' ? sel.getAttribute('data-tool-category') : k;
+          const computedDefault = (cat && categoryDefaults[cat]) || defaultLocality;
+          if (scope === 'tool') {
+            // Tool-level: only persist if different from the category-level effective route
+            const catOverride = routing[cat] || computedDefault;
+            if (v !== catOverride) { updated[k] = v; }
+          } else {
+            // Category-level: only persist if different from computed default
+            if (v !== computedDefault) { updated[k] = v; }
+          }
+        });
+        try {
+          const result = await api.updateToolProviderRouting({ routing: updated });
+          if (!result.success) { alert(result.message || 'Failed to update routing.'); }
+          // Update local routing ref so subsequent changes see correct state
+          Object.keys(routing).forEach(k => delete routing[k]);
+          Object.assign(routing, updated);
+        } catch (err) { alert(err.message || 'Failed to update routing.'); }
       });
     });
 
@@ -1974,7 +2068,7 @@ function createGoogleWorkspacePanel() {
     <div class="cfg-center-body" id="gws-settings-body">
       <div style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem;">
         Google Workspace integration provides access to Gmail, Calendar, Drive, Docs, and Sheets through the assistant
-        via the <a href="https://www.npmjs.com/package/@googleworkspace/cli" target="_blank" rel="noopener" style="color:var(--accent);">@googleworkspace/cli</a> MCP server.
+        via the <a href="https://www.npmjs.com/package/@googleworkspace/cli" target="_blank" rel="noopener" style="color:var(--accent);">@googleworkspace/cli</a> command-line tool.
       </div>
       <div id="gws-status-area">
         <div class="loading" style="font-size:0.8rem;">Checking connectivity...</div>
@@ -2071,7 +2165,7 @@ function createGoogleWorkspacePanel() {
           <div style="margin-bottom:0.6rem;">
             <div style="${stepLabel}">Step 5 — Enable in Guardian Agent</div>
             <p style="font-size:0.8rem;color:var(--text-secondary);margin:0.25rem 0;">
-              Click <strong>Test Connection</strong> below to verify, then use the <strong>Enable</strong> button that appears to activate the integration. Restart Guardian Agent for the tools to become available.
+              Click <strong>Test Connection</strong> below to verify, then use the <strong>Enable</strong> button that appears to activate the integration. Tools become available immediately.
             </p>
           </div>
         </div>
@@ -2161,7 +2255,7 @@ function createGoogleWorkspacePanel() {
             <span id="gws-enable-status" style="font-size:0.8rem;"></span>
           </div>
           <p style="margin:0.4rem 0 0;color:var(--text-muted);font-size:0.72rem;">
-            A restart is required after enabling for the tools to become available.
+            Tools become available immediately after enabling.
           </p>
         </div>
         ` : ''}

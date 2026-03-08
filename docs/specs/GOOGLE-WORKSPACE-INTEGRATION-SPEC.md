@@ -1,20 +1,20 @@
 # Google Workspace Integration Specification
 
 **Status:** Implemented
-**Depends on:** MCP Client, Native Skills, ToolExecutor policy model, Guardian capabilities
-**Primary External Runtime:** Google Workspace CLI (`gws`) via managed MCP mode
+**Depends on:** Native Skills, ToolExecutor policy model, Guardian capabilities
+**Primary External Runtime:** Google Workspace CLI (`gws`) via subprocess execution
 
 ---
 
 ## Overview
 
-GuardianAgent integrates with Google Workspace (Gmail, Calendar, Drive, Docs, Sheets) through the **Google Workspace CLI** (`@googleworkspace/cli`) running as a managed MCP server.
+GuardianAgent integrates with Google Workspace (Gmail, Calendar, Drive, Docs, Sheets) through the **Google Workspace CLI** (`@googleworkspace/cli`) running as a subprocess.
 
 The architecture:
 
-- `gws mcp` provides typed tool execution for Google Workspace APIs
+- `GWSService` executes the `gws` CLI directly via `child_process.execFile` for each tool call
 - Native GuardianAgent skills provide procedural guidance for Gmail, Calendar, Drive, Docs, and Sheets
-- GuardianAgent remains the policy, approval, audit, and sandbox boundary
+- GuardianAgent remains the policy, approval, and audit boundary
 
 This avoids two bad extremes:
 
@@ -163,7 +163,7 @@ assistant:
 
 ## Managed Provider Model
 
-GuardianAgent supports a first-class managed MCP provider entry for Google Workspace rather than forcing users to hand-author a raw MCP server block.
+GuardianAgent supports a first-class managed provider entry for Google Workspace that invokes the `gws` CLI as a subprocess rather than requiring users to manually configure external tool servers.
 
 ### Config
 
@@ -185,14 +185,14 @@ assistant:
           model: openai         # optional, explicit LLM for tool-calling
 ```
 
-GuardianAgent translates this into an internal MCP server definition (`gws mcp -s gmail,calendar,drive`) and registers it with the MCP client manager.
+GuardianAgent creates a `GWSService` instance configured with the specified services and invokes the `gws` CLI directly via subprocess for each tool call.
 
 ### Runtime Behavior
 
 - `probeGwsCli()` checks CLI availability and auth status using `gws --version` and `gws auth status`
 - All `gws` subprocess calls use `shell: process.platform === 'win32'` for Windows `.cmd` compatibility without breaking JSON param quoting on Unix
 - The `command` field allows users to specify a custom path if `gws` is not on PATH
-- Config updates (enable/disable, services, command) are persisted via `POST /api/config` and require a restart
+- Config updates (enable/disable, services, command) are persisted via `POST /api/config` and hot-applied immediately without restart
 
 ### GWSService (`src/runtime/gws-service.ts`)
 

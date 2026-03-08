@@ -290,6 +290,23 @@ function Ensure-WebAuthTokenInContent {
 
 try {
 
+# --- Pre-flight: kill stale GuardianAgent processes and clean temp configs ---
+$existing = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -match "src[/\\]index\.ts|dist[/\\]index\.js" }
+if ($existing) {
+    Write-Host "Cleaning up $($existing.Count) stale GuardianAgent process(es)..." -ForegroundColor DarkCyan
+    foreach ($proc in $existing) {
+        Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 2
+}
+
+# Remove leftover temp configs from test harnesses (prevents port/token conflicts)
+Get-ChildItem -Path $env:TEMP -Filter "guardian-*-harness*.yaml" -ErrorAction SilentlyContinue |
+    ForEach-Object {
+        Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+    }
+
 # --- ASCII Art Banner ---
 Write-Host ""
 Write-Host "   ██████╗ ██╗   ██╗ █████╗ ██████╗ ██████╗ ██╗ █████╗ ███╗   ██╗" -ForegroundColor Cyan

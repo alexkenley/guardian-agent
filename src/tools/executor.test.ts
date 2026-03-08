@@ -266,6 +266,277 @@ describe('ToolExecutor', () => {
     expect(run.output).toEqual({ messages: [] });
   });
 
+  it('requires approval for Calendar create via gws in approve_by_policy mode', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      gwsService: {
+        execute: async () => ({ success: true, data: { id: 'event-1' } }),
+        schema: async () => ({ success: true, data: {} }),
+        authStatus: async () => ({ success: true, data: {} }),
+        isServiceEnabled: () => true,
+        getEnabledServices: () => ['gmail', 'calendar', 'drive', 'docs', 'sheets'],
+      } as unknown as import('../runtime/gws-service.js').GWSService,
+    });
+
+    const run = await executor.runTool({
+      toolName: 'gws',
+      args: {
+        service: 'calendar',
+        resource: 'events',
+        method: 'create',
+        params: { calendarId: 'primary' },
+        json: { summary: 'Test Event' },
+      },
+      origin: 'cli',
+    });
+
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('pending_approval');
+    expect(run.approvalId).toBeDefined();
+  });
+
+  it('allows Calendar reads via gws without approval in approve_by_policy mode', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      gwsService: {
+        execute: async () => ({ success: true, data: { items: [] } }),
+        schema: async () => ({ success: true, data: {} }),
+        authStatus: async () => ({ success: true, data: {} }),
+        isServiceEnabled: () => true,
+        getEnabledServices: () => ['gmail', 'calendar', 'drive', 'docs', 'sheets'],
+      } as unknown as import('../runtime/gws-service.js').GWSService,
+    });
+
+    const run = await executor.runTool({
+      toolName: 'gws',
+      args: {
+        service: 'calendar',
+        resource: 'events',
+        method: 'list',
+        params: { calendarId: 'primary' },
+      },
+      origin: 'cli',
+    });
+
+    expect(run.success).toBe(true);
+    expect(run.status).toBe('succeeded');
+  });
+
+  it('requires approval for Drive create via gws in approve_by_policy mode', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      gwsService: {
+        execute: async () => ({ success: true, data: { id: 'file-1' } }),
+        schema: async () => ({ success: true, data: {} }),
+        authStatus: async () => ({ success: true, data: {} }),
+        isServiceEnabled: () => true,
+        getEnabledServices: () => ['gmail', 'calendar', 'drive', 'docs', 'sheets'],
+      } as unknown as import('../runtime/gws-service.js').GWSService,
+    });
+
+    const run = await executor.runTool({
+      toolName: 'gws',
+      args: {
+        service: 'drive',
+        resource: 'files',
+        method: 'create',
+        json: { name: 'test.txt' },
+      },
+      origin: 'cli',
+    });
+
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('pending_approval');
+    expect(run.approvalId).toBeDefined();
+  });
+
+  it('allows Drive reads via gws without approval in approve_by_policy mode', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      gwsService: {
+        execute: async () => ({ success: true, data: { files: [] } }),
+        schema: async () => ({ success: true, data: {} }),
+        authStatus: async () => ({ success: true, data: {} }),
+        isServiceEnabled: () => true,
+        getEnabledServices: () => ['gmail', 'calendar', 'drive', 'docs', 'sheets'],
+      } as unknown as import('../runtime/gws-service.js').GWSService,
+    });
+
+    const run = await executor.runTool({
+      toolName: 'gws',
+      args: {
+        service: 'drive',
+        resource: 'files',
+        method: 'list',
+        params: { pageSize: 10 },
+      },
+      origin: 'cli',
+    });
+
+    expect(run.success).toBe(true);
+    expect(run.status).toBe('succeeded');
+  });
+
+  it('requires approval for Docs update via gws in approve_by_policy mode', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      gwsService: {
+        execute: async () => ({ success: true, data: { documentId: 'doc-1' } }),
+        schema: async () => ({ success: true, data: {} }),
+        authStatus: async () => ({ success: true, data: {} }),
+        isServiceEnabled: () => true,
+        getEnabledServices: () => ['gmail', 'calendar', 'drive', 'docs', 'sheets'],
+      } as unknown as import('../runtime/gws-service.js').GWSService,
+    });
+
+    const run = await executor.runTool({
+      toolName: 'gws',
+      args: {
+        service: 'docs',
+        resource: 'documents',
+        method: 'update',
+        json: { title: 'Updated Doc' },
+      },
+      origin: 'cli',
+    });
+
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('pending_approval');
+    expect(run.approvalId).toBeDefined();
+  });
+
+  it('requires approval for Sheets delete via gws in approve_by_policy mode', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      gwsService: {
+        execute: async () => ({ success: true, data: {} }),
+        schema: async () => ({ success: true, data: {} }),
+        authStatus: async () => ({ success: true, data: {} }),
+        isServiceEnabled: () => true,
+        getEnabledServices: () => ['gmail', 'calendar', 'drive', 'docs', 'sheets'],
+      } as unknown as import('../runtime/gws-service.js').GWSService,
+    });
+
+    const run = await executor.runTool({
+      toolName: 'gws',
+      args: {
+        service: 'sheets',
+        resource: 'spreadsheets',
+        method: 'delete',
+        params: { spreadsheetId: 'sheet-1' },
+      },
+      origin: 'cli',
+    });
+
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('pending_approval');
+    expect(run.approvalId).toBeDefined();
+  });
+
+  it('allows Calendar create via gws in autonomous mode', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      gwsService: {
+        execute: async () => ({ success: true, data: { id: 'event-2' } }),
+        schema: async () => ({ success: true, data: {} }),
+        authStatus: async () => ({ success: true, data: {} }),
+        isServiceEnabled: () => true,
+        getEnabledServices: () => ['gmail', 'calendar', 'drive', 'docs', 'sheets'],
+      } as unknown as import('../runtime/gws-service.js').GWSService,
+    });
+
+    const run = await executor.runTool({
+      toolName: 'gws',
+      args: {
+        service: 'calendar',
+        resource: 'events',
+        method: 'create',
+        params: { calendarId: 'primary' },
+        json: { summary: 'Autonomous Event' },
+      },
+      origin: 'cli',
+    });
+
+    expect(run.success).toBe(true);
+    expect(run.status).toBe('succeeded');
+  });
+
+  it('requires approval for unknown GWS service writes in approve_by_policy mode', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      gwsService: {
+        execute: async () => ({ success: true, data: {} }),
+        schema: async () => ({ success: true, data: {} }),
+        authStatus: async () => ({ success: true, data: {} }),
+        isServiceEnabled: () => true,
+        getEnabledServices: () => ['gmail', 'calendar', 'drive', 'docs', 'sheets', 'tasks'],
+      } as unknown as import('../runtime/gws-service.js').GWSService,
+    });
+
+    const run = await executor.runTool({
+      toolName: 'gws',
+      args: {
+        service: 'tasks',
+        resource: 'tasklists',
+        method: 'create',
+        json: { title: 'New List' },
+      },
+      origin: 'cli',
+    });
+
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('pending_approval');
+    expect(run.approvalId).toBeDefined();
+  });
+
   it('requires approval for mutating tools in approve_by_policy mode', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({

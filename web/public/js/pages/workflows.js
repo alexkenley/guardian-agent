@@ -20,6 +20,22 @@ export async function renderWorkflows(container) {
     const workflowConfig = state.playbooksConfig || {};
     const studio = state.studio || {};
 
+    // Derive category for each workflow from its tools' categories
+    const toolMap = {};
+    for (const t of (toolsState?.tools || [])) { toolMap[t.name] = t; }
+    const workflowCategories = {};
+    for (const wf of workflows) {
+      const cats = {};
+      for (const step of (wf.steps || [])) {
+        const cat = toolMap[step.toolName]?.category;
+        if (cat) cats[cat] = (cats[cat] || 0) + 1;
+      }
+      // Primary = most-used category; fallback to 'uncategorized'
+      const sorted = Object.entries(cats).sort((a, b) => b[1] - a[1]);
+      workflowCategories[wf.id] = sorted.length > 0 ? sorted[0][0] : 'uncategorized';
+    }
+    const allCategories = [...new Set(Object.values(workflowCategories))].sort();
+
     container.innerHTML = `
       <h2 class="page-title">Workflows</h2>
 
@@ -30,7 +46,7 @@ export async function renderWorkflows(container) {
           <div class="card-subtitle">Execution mode: ${esc(summary.executionMode || 'plan_then_execute')}</div>
         </div>
         <div class="status-card info">
-          <div class="card-title">Connector Packs</div>
+          <div class="card-title">Policies</div>
           <div class="card-value">${Number(summary.packCount || 0)}</div>
           <div class="card-subtitle">${Number(summary.enabledPackCount || 0)} enabled</div>
         </div>
@@ -49,11 +65,20 @@ export async function renderWorkflows(container) {
       <div class="table-container">
         <div class="table-header">
           <h3>Workflow Catalog</h3>
-          <div style="display:flex;gap:0.5rem;">
+          <div style="display:flex;gap:0.5rem;align-items:center;">
             <button class="btn btn-primary" id="workflow-create-toggle">Create Workflow</button>
             <button class="btn btn-secondary" id="workflow-refresh">Refresh</button>
           </div>
         </div>
+        ${allCategories.length > 1 ? `
+        <div class="wf-category-bar" id="wf-category-filter">
+          <button class="wf-category-chip active" data-category="all">All</button>
+          ${allCategories.map((cat) => {
+            const count = Object.values(workflowCategories).filter((c) => c === cat).length;
+            return `<button class="wf-category-chip" data-category="${escAttr(cat)}">${esc(cat)} <span class="wf-category-count">${count}</span></button>`;
+          }).join('')}
+        </div>
+        ` : ''}
         <div class="cfg-center-body" id="workflow-create-form" style="display:none">
           <div class="cfg-form-grid">
             <div class="cfg-field">
@@ -79,8 +104,8 @@ export async function renderWorkflows(container) {
               </select>
             </div>
             <div class="cfg-field">
-              <label>Connector Pack</label>
-              <select id="wf-create-pack">
+              <label>Permission Policy</label>
+              <select id="wf-create-pack" title="Controls what hosts, paths, and commands each step is allowed to access">
                 ${packs.map((pack) => `<option value="${escAttr(pack.id)}">${esc(pack.name)}</option>`).join('')}
               </select>
             </div>
@@ -114,19 +139,36 @@ export async function renderWorkflows(container) {
           </div>
         </div>
         <table>
-          <thead><tr><th>ID</th><th>Name</th><th>Mode</th><th>Steps</th><th title="Disabled workflows cannot be executed via the assistant, scheduled tasks, or manual runs">Status</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Name</th><th>Mode</th><th>Tools</th><th title="Disabled workflows cannot be executed via the assistant, scheduled tasks, or manual runs">Status</th><th>Actions</th></tr></thead>
           <tbody>
             ${workflows.length === 0
-              ? '<tr><td colspan="6">No workflows configured.</td></tr>'
-              : workflows.map((workflow) => `
-                <tr>
-                  <td>${esc(workflow.id)}</td>
+              ? '<tr><td colspan="5">No workflows configured.</td></tr>'
+              : workflows.map((workflow) => {
+                  const steps = workflow.steps || [];
+                  const toolLookup = (toolsState?.tools || []);
+                  const wfCategory = workflowCategories[workflow.id] || 'uncategorized';
+                  return `
+                <tr class="wf-catalog-row" data-category="${escAttr(wfCategory)}">
                   <td>
                     <div>${esc(workflow.name)}</div>
-                    <div class="ops-task-sub">${esc(workflow.description || '')}</div>
+                    <div class="ops-task-sub">${esc(workflow.description || workflow.id)}</div>
+                    <span class="wf-category-tag">${esc(wfCategory)}</span>
                   </td>
-                  <td>${esc(workflow.mode)}</td>
-                  <td>${Number(workflow.steps?.length || 0)}</td>
+                  <td><span class="wf-pipeline-mode-badge ${workflow.mode}">${esc(workflow.mode)}</span></td>
+                  <td>
+                    <div class="wf-catalog-tools">
+                      ${steps.length === 0
+                        ? '<span style="color:var(--text-muted);font-size:0.75rem">No steps</span>'
+                        : steps.map((step, si) => {
+                            const sep = workflow.mode === 'parallel'
+                              ? (si < steps.length - 1 ? '<span class="wf-tool-parallel-bar">||</span>' : '')
+                              : (si < steps.length - 1 ? '<span class="wf-tool-arrow">&#9654;</span>' : '');
+                            return `<span class="wf-tool-chip"><span class="wf-tool-chip-num">${si + 1}</span>${esc(step.toolName)}</span>${sep}`;
+                          }).join('')
+                      }
+                    </div>
+                    ${steps.length > 0 ? `<button class="wf-expand-btn wf-pipeline-toggle" data-workflow-id="${escAttr(workflow.id)}" style="margin-top:0.35rem"><span class="wf-expand-icon">&#9654;</span> Pipeline</button>` : ''}
+                  </td>
                   <td>
                     <div class="ops-state-cell">
                       <span class="badge ${workflow.enabled ? 'badge-ready' : 'badge-dead'}">${workflow.enabled ? 'Enabled' : 'Disabled'}</span>
@@ -140,12 +182,16 @@ export async function renderWorkflows(container) {
                     <div class="ops-action-buttons">
                       <button class="btn btn-primary btn-sm workflow-run" data-workflow-id="${escAttr(workflow.id)}" ${!workflow.enabled ? 'disabled title="Enable workflow first"' : ''}>Run</button>
                       <button class="btn btn-secondary btn-sm workflow-dryrun" data-workflow-id="${escAttr(workflow.id)}">Dry Run</button>
-                      <button class="btn btn-secondary btn-sm workflow-edit" data-workflow-id="${escAttr(workflow.id)}">Edit JSON</button>
                       <button class="btn btn-secondary btn-sm workflow-delete" data-workflow-id="${escAttr(workflow.id)}">Delete</button>
                     </div>
                   </td>
                 </tr>
-              `).join('')
+                <tr class="wf-pipeline-row wf-catalog-row" data-category="${escAttr(wfCategory)}" id="wf-pipeline-${escAttr(workflow.id)}">
+                  <td colspan="5" class="wf-pipeline-cell">
+                    ${renderPipelineView(workflow, toolLookup, packs)}
+                  </td>
+                </tr>
+              `;}).join('')
             }
           </tbody>
         </table>
@@ -181,7 +227,7 @@ export async function renderWorkflows(container) {
 
       <div class="table-container">
         <div class="table-header" style="cursor:pointer" id="workflow-advanced-toggle">
-          <h3>Advanced Workflow Settings</h3>
+          <h3>Engine Settings</h3>
           <span id="workflow-advanced-arrow" style="font-size:0.85rem;color:var(--text-muted)">&#9654; Show</span>
         </div>
         <div id="workflow-advanced-panel" style="display:none">
@@ -202,7 +248,7 @@ export async function renderWorkflows(container) {
                 </select>
               </div>
               <div class="cfg-field">
-                <label>Max Tool Calls Per Run</label>
+                <label>Max Calls / Run</label>
                 <input id="workflow-max-calls" type="number" min="1" value="${esc(String(summary.maxConnectorCallsPerRun || 12))}">
               </div>
               <div class="cfg-field">
@@ -210,29 +256,29 @@ export async function renderWorkflows(container) {
                 <input id="workflow-max-steps" type="number" min="1" value="${esc(String(workflowConfig.maxSteps || 12))}">
               </div>
               <div class="cfg-field">
-                <label>Max Parallel Steps</label>
+                <label>Max Parallel</label>
                 <input id="workflow-max-parallel" type="number" min="1" value="${esc(String(workflowConfig.maxParallelSteps || 3))}">
               </div>
               <div class="cfg-field">
-                <label>Default Step Timeout (ms)</label>
+                <label>Step Timeout (ms)</label>
                 <input id="workflow-step-timeout" type="number" min="1000" value="${esc(String(workflowConfig.defaultStepTimeoutMs || 15000))}">
               </div>
               <div class="cfg-field">
-                <label>Require Signed Definitions</label>
+                <label>Signed Definitions</label>
                 <select id="workflow-require-signed">
                   <option value="true" ${workflowConfig.requireSignedDefinitions ? 'selected' : ''}>true</option>
                   <option value="false" ${!workflowConfig.requireSignedDefinitions ? 'selected' : ''}>false</option>
                 </select>
               </div>
               <div class="cfg-field">
-                <label>Require Dry Run First</label>
+                <label>Dry Run First</label>
                 <select id="workflow-require-dryrun">
                   <option value="true" ${workflowConfig.requireDryRunOnFirstExecution ? 'selected' : ''}>true</option>
                   <option value="false" ${!workflowConfig.requireDryRunOnFirstExecution ? 'selected' : ''}>false</option>
                 </select>
               </div>
               <div class="cfg-field">
-                <label>Studio Enabled</label>
+                <label>Studio</label>
                 <select id="workflow-studio-enabled">
                   <option value="true" ${studio.enabled ? 'selected' : ''}>true</option>
                   <option value="false" ${!studio.enabled ? 'selected' : ''}>false</option>
@@ -247,57 +293,46 @@ export async function renderWorkflows(container) {
               </div>
             </div>
             <div class="cfg-actions">
-              <button class="btn btn-primary" id="workflow-settings-save">Save Settings</button>
+              <button class="btn btn-primary" id="workflow-settings-save">Save</button>
               <span id="workflow-settings-status" class="cfg-save-status"></span>
             </div>
           </div>
 
           <div class="cfg-center-body">
-            <h4 style="margin-bottom:0.5rem">Connector Packs</h4>
+            <h4 style="margin-bottom:0.25rem">Permission Policies</h4>
+            <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:0.6rem">Each policy restricts what a workflow can access — allowed hosts, file paths, shell commands, and capabilities. Workflows run under a policy to prevent steps from reaching outside their sandbox.</div>
             <table>
-              <thead><tr><th>ID</th><th>Name</th><th>Capabilities</th><th>Actions</th></tr></thead>
+              <thead><tr><th>ID</th><th>Name</th><th>Allowed Capabilities</th><th>Actions</th></tr></thead>
               <tbody>
                 ${packs.length === 0
-                  ? '<tr><td colspan="4">No connector packs.</td></tr>'
+                  ? '<tr><td colspan="4">No permission policies defined.</td></tr>'
                   : packs.map((pack) => `
                     <tr>
                       <td>${esc(pack.id)}</td>
                       <td>${esc(pack.name)}</td>
                       <td>${esc((pack.allowedCapabilities || []).join(', ') || '-')}</td>
                       <td>
-                        <button class="btn btn-secondary workflow-pack-edit" data-pack-id="${escAttr(pack.id)}">Edit</button>
-                        <button class="btn btn-secondary workflow-pack-delete" data-pack-id="${escAttr(pack.id)}">Delete</button>
+                        <button class="btn btn-secondary btn-sm workflow-pack-edit" data-pack-id="${escAttr(pack.id)}">Edit</button>
+                        <button class="btn btn-secondary btn-sm workflow-pack-delete" data-pack-id="${escAttr(pack.id)}">Delete</button>
                       </td>
                     </tr>
                   `).join('')}
               </tbody>
             </table>
             <div class="cfg-field" style="margin-top:0.75rem">
-              <label>Pack JSON (upsert)</label>
-              <textarea id="workflow-pack-json" rows="6" placeholder='{"id":"...","name":"...","enabled":true,...}'></textarea>
+              <label>Policy JSON (upsert)</label>
+              <textarea id="workflow-pack-json" rows="4" placeholder='{"id":"...","name":"...","enabled":true,"allowedCapabilities":["network.read"],"allowedHosts":[],"allowedPaths":[],"allowedCommands":[]}'></textarea>
             </div>
             <div class="cfg-actions">
-              <button class="btn btn-primary" id="workflow-pack-upsert">Upsert Pack</button>
+              <button class="btn btn-primary" id="workflow-pack-upsert">Save Policy</button>
               <span id="workflow-pack-status" class="cfg-save-status"></span>
-            </div>
-          </div>
-
-          <div class="cfg-center-body">
-            <h4 style="margin-bottom:0.5rem">Workflow JSON Editor</h4>
-            <div class="cfg-field">
-              <label>Workflow JSON (upsert)</label>
-              <textarea id="workflow-json" rows="10" placeholder='{"id":"...","name":"...","enabled":true,"mode":"sequential","steps":[...]}'></textarea>
-            </div>
-            <div class="cfg-actions">
-              <button class="btn btn-primary" id="workflow-upsert">Upsert Workflow</button>
-              <span id="workflow-upsert-status" class="cfg-save-status"></span>
             </div>
           </div>
         </div>
       </div>
     `;
 
-    bindWorkflowEvents(container, { packs, workflows, tools: toolsState?.tools || [] });
+    bindWorkflowEvents(container, { packs, workflows, tools: toolsState?.tools || [], workflowCategories });
     applyInputTooltips(container);
   } catch (err) {
     container.innerHTML = `<h2 class="page-title">Workflows</h2><div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
@@ -305,9 +340,27 @@ export async function renderWorkflows(container) {
 }
 
 function bindWorkflowEvents(container, context) {
-  const { packs, workflows, tools } = context;
+  const { packs, workflows, tools, workflowCategories } = context;
 
   container.querySelector('#workflow-refresh')?.addEventListener('click', () => renderWorkflows(container));
+
+  // Category filter
+  container.querySelectorAll('.wf-category-chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      const cat = chip.getAttribute('data-category');
+      container.querySelectorAll('.wf-category-chip').forEach((c) => c.classList.remove('active'));
+      chip.classList.add('active');
+      container.querySelectorAll('.wf-catalog-row').forEach((row) => {
+        const match = cat === 'all' || row.getAttribute('data-category') === cat;
+        if (row.classList.contains('wf-pipeline-row')) {
+          // Pipeline rows use CSS class .visible for show/hide — just toggle a filter class
+          row.classList.toggle('wf-filtered-out', !match);
+        } else {
+          row.style.display = match ? '' : 'none';
+        }
+      });
+    });
+  });
 
   // Create workflow form toggle
   const createToggle = container.querySelector('#workflow-create-toggle');
@@ -431,6 +484,18 @@ function bindWorkflowEvents(container, context) {
       statusEl.textContent = err.message || String(err);
       statusEl.style.color = 'var(--error)';
     }
+  });
+
+  // Pipeline expand/collapse
+  container.querySelectorAll('.wf-pipeline-toggle').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const workflowId = btn.getAttribute('data-workflow-id');
+      const row = container.querySelector(`#wf-pipeline-${workflowId}`);
+      if (!row) return;
+      const isVisible = row.classList.contains('visible');
+      row.classList.toggle('visible', !isVisible);
+      btn.classList.toggle('expanded', !isVisible);
+    });
   });
 
   // Workflow enable/disable toggle
@@ -580,28 +645,24 @@ function bindWorkflowEvents(container, context) {
     });
   });
 
-  container.querySelector('#workflow-upsert')?.addEventListener('click', async () => {
-    const statusEl = container.querySelector('#workflow-upsert-status');
-    statusEl.textContent = 'Saving...';
-    try {
-      const raw = container.querySelector('#workflow-json').value.trim();
-      const result = await api.upsertPlaybook(JSON.parse(raw));
-      statusEl.textContent = result.message;
-      statusEl.style.color = result.success ? 'var(--success)' : 'var(--error)';
-      if (result.success) await renderWorkflows(container);
-    } catch (err) {
-      statusEl.textContent = err instanceof Error ? err.message : String(err);
-      statusEl.style.color = 'var(--error)';
-    }
-  });
-
-  container.querySelectorAll('.workflow-edit').forEach((button) => {
-    button.addEventListener('click', () => {
+  // Per-workflow inline JSON save (inside pipeline config panel)
+  container.querySelectorAll('.wf-config-save').forEach((button) => {
+    button.addEventListener('click', async () => {
       const workflowId = button.getAttribute('data-workflow-id');
-      const workflow = workflows.find((candidate) => candidate.id === workflowId);
-      if (!workflow) return;
-      container.querySelector('#workflow-json').value = JSON.stringify(workflow, null, 2);
-      container.querySelector('#workflow-advanced-panel').style.display = '';
+      const textarea = container.querySelector(`.wf-config-json-editor[data-workflow-id="${workflowId}"]`);
+      const statusEl = container.querySelector(`.wf-config-save-status[data-workflow-id="${workflowId}"]`);
+      if (!textarea || !statusEl) return;
+      statusEl.textContent = 'Saving...';
+      statusEl.style.color = 'var(--text-muted)';
+      try {
+        const result = await api.upsertPlaybook(JSON.parse(textarea.value.trim()));
+        statusEl.textContent = result.message || (result.success ? 'Saved.' : 'Failed.');
+        statusEl.style.color = result.success ? 'var(--success)' : 'var(--error)';
+        if (result.success) setTimeout(() => renderWorkflows(container), 500);
+      } catch (err) {
+        statusEl.textContent = err instanceof Error ? err.message : String(err);
+        statusEl.style.color = 'var(--error)';
+      }
     });
   });
 
@@ -613,6 +674,164 @@ function bindWorkflowEvents(container, context) {
       await renderWorkflows(container);
     });
   });
+}
+
+function renderPipelineView(workflow, toolLookup, packs) {
+  const steps = workflow.steps || [];
+  if (steps.length === 0) return '<div style="padding:1rem;color:var(--text-muted)">No steps defined.</div>';
+
+  const findTool = (name) => toolLookup.find((t) => t.name === name);
+
+  const header = `
+    <div class="wf-pipeline-header">
+      <div class="wf-pipeline-title">
+        <span>${esc(workflow.name)}</span>
+        <span class="wf-pipeline-mode-badge ${workflow.mode}">${esc(workflow.mode)}</span>
+      </div>
+      <div class="wf-pipeline-step-count">${steps.length} step${steps.length !== 1 ? 's' : ''}</div>
+    </div>
+  `;
+
+  let pipelineBody;
+
+  if (workflow.mode === 'parallel') {
+    const lanes = steps.map((step, i) => {
+      const tool = findTool(step.toolName);
+      const cat = tool?.category || '';
+      const argKeys = Object.keys(step.args || {});
+      const argSummary = argKeys.length > 0 ? argKeys.join(', ') : '';
+      const settings = [];
+      if (step.timeoutMs) settings.push(`<span class="wf-pipeline-setting-tag timeout">${step.timeoutMs}ms</span>`);
+      if (step.continueOnError) settings.push(`<span class="wf-pipeline-setting-tag continue-on-error">continue-on-error</span>`);
+      return `
+        <div class="wf-pipeline-parallel-lane">
+          <span class="wf-pipeline-lane-num">${i + 1}</span>
+          <span class="wf-pipeline-lane-tool">${esc(step.toolName)}</span>
+          ${cat ? `<span class="wf-pipeline-lane-category">${esc(cat)}</span>` : ''}
+          ${argSummary ? `<span class="wf-pipeline-lane-args" title="${escAttr(JSON.stringify(step.args, null, 2))}">${esc(argSummary)}</span>` : ''}
+          <div class="wf-pipeline-lane-settings">${settings.join('')}</div>
+        </div>
+      `;
+    }).join('');
+
+    pipelineBody = `
+      <div class="wf-pipeline-parallel">
+        <div class="wf-pipeline-parallel-header">
+          <span class="wf-pipeline-parallel-icon">&#9781;</span>
+          <span class="wf-pipeline-parallel-label">All steps execute concurrently</span>
+        </div>
+        <div class="wf-pipeline-parallel-tracks">${lanes}</div>
+      </div>`;
+  } else {
+    // Sequential mode — horizontal pipeline nodes
+    const nodes = steps.map((step, i) => {
+      const tool = findTool(step.toolName);
+      const cat = tool?.category || '';
+      const argKeys = Object.keys(step.args || {});
+      const argSummary = argKeys.length > 0 ? argKeys.join(', ') : '';
+      const settings = [];
+      if (step.timeoutMs) settings.push(`<span class="wf-pipeline-setting-tag timeout">${step.timeoutMs}ms</span>`);
+      if (step.continueOnError) settings.push(`<span class="wf-pipeline-setting-tag continue-on-error">skip-on-fail</span>`);
+
+      const connector = i < steps.length - 1
+        ? `<div class="wf-pipeline-connector"><div class="wf-pipeline-connector-line"></div><div class="wf-pipeline-connector-arrow"></div></div>`
+        : '';
+
+      return `
+        <div class="wf-pipeline-node">
+          <div class="wf-pipeline-node-circle">${i + 1}</div>
+          <div class="wf-pipeline-node-label">
+            <div class="wf-pipeline-node-tool">${esc(step.toolName)}</div>
+            ${cat ? `<div class="wf-pipeline-node-category">${esc(cat)}</div>` : ''}
+            ${argSummary ? `<div class="wf-pipeline-node-args" title="${escAttr(JSON.stringify(step.args, null, 2))}">${esc(argSummary)}</div>` : ''}
+            ${settings.length > 0 ? `<div style="margin-top:0.2rem;display:flex;gap:0.2rem;justify-content:center;flex-wrap:wrap">${settings.join('')}</div>` : ''}
+          </div>
+        </div>
+        ${connector}
+      `;
+    }).join('');
+
+    pipelineBody = `<div class="wf-pipeline-track">${nodes}</div>`;
+  }
+
+  // Nested config panel — per-workflow settings
+  const usedPackIds = [...new Set(steps.map((s) => s.packId).filter(Boolean))];
+  const usedPacks = (packs || []).filter((p) => usedPackIds.includes(p.id));
+
+  const stepConfigs = steps.map((step, i) => {
+    const tool = findTool(step.toolName);
+    const cat = tool?.category || '';
+    const hasArgs = step.args && Object.keys(step.args).length > 0;
+    return `
+      <div class="wf-config-step">
+        <div class="wf-config-step-header">
+          <span class="wf-config-step-num">${i + 1}</span>
+          <span class="wf-config-step-tool">${esc(step.toolName)}</span>
+          ${cat ? `<span class="wf-config-step-cat">${esc(cat)}</span>` : ''}
+          <span class="wf-config-step-id">${esc(step.id)}</span>
+        </div>
+        <div class="wf-config-step-body">
+          <div class="wf-config-step-fields">
+            <div class="cfg-field">
+              <label>Policy</label>
+              <input type="text" value="${escAttr(step.packId || '')}" readonly style="opacity:0.7;cursor:default" title="Permission policy that restricts what this step can access">
+            </div>
+            <div class="cfg-field">
+              <label>Timeout (ms)</label>
+              <input type="text" value="${escAttr(step.timeoutMs ? String(step.timeoutMs) : 'default')}" readonly style="opacity:0.7;cursor:default">
+            </div>
+            <div class="cfg-field">
+              <label>Continue on Error</label>
+              <input type="text" value="${step.continueOnError ? 'yes' : 'no'}" readonly style="opacity:0.7;cursor:default">
+            </div>
+          </div>
+          ${hasArgs ? `<div class="cfg-field" style="margin-top:0.35rem"><label>Arguments</label><pre class="wf-config-args-pre">${esc(JSON.stringify(step.args, null, 2))}</pre></div>` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  const packInfo = usedPacks.length > 0 ? usedPacks.map((pack) => `
+    <div class="wf-config-pack">
+      <div class="wf-config-pack-name">${esc(pack.name)} <span style="color:var(--text-muted);font-size:0.65rem">${esc(pack.id)}</span></div>
+      <div class="wf-config-pack-caps">Capabilities: ${esc((pack.allowedCapabilities || []).join(', ') || 'unrestricted')}</div>
+      ${(pack.allowedHosts || []).length > 0 ? `<div class="wf-config-pack-detail">Allowed hosts: ${esc(pack.allowedHosts.join(', '))}</div>` : '<div class="wf-config-pack-detail">Hosts: unrestricted</div>'}
+      ${(pack.allowedPaths || []).length > 0 ? `<div class="wf-config-pack-detail">Allowed paths: ${esc(pack.allowedPaths.join(', '))}</div>` : '<div class="wf-config-pack-detail">Paths: unrestricted</div>'}
+      ${(pack.allowedCommands || []).length > 0 ? `<div class="wf-config-pack-detail">Allowed commands: ${esc(pack.allowedCommands.join(', '))}</div>` : '<div class="wf-config-pack-detail">Commands: none allowed</div>'}
+      ${pack.requireHumanApprovalForWrites ? '<div class="wf-config-pack-detail" style="color:var(--warning)">Requires human approval for writes</div>' : ''}
+    </div>
+  `).join('') : '<div style="color:var(--text-muted);font-size:0.75rem">No permission policy assigned</div>';
+
+  const configPanel = `
+    <details class="wf-config-details">
+      <summary class="wf-config-summary">
+        <span class="wf-expand-icon" style="font-size:0.6rem">&#9654;</span>
+        Workflow Configuration
+      </summary>
+      <div class="wf-config-body">
+        <div class="wf-config-section">
+          <div class="wf-config-section-title">Step Configuration</div>
+          <div class="wf-config-steps">${stepConfigs}</div>
+        </div>
+
+        <div class="wf-config-section">
+          <div class="wf-config-section-title">Connector Packs</div>
+          ${packInfo}
+        </div>
+
+        <div class="wf-config-section">
+          <div class="wf-config-section-title">Definition JSON</div>
+          <textarea class="wf-config-json-editor" data-workflow-id="${escAttr(workflow.id)}" rows="8">${esc(JSON.stringify(workflow, null, 2))}</textarea>
+          <div class="cfg-actions" style="margin-top:0.5rem">
+            <button class="btn btn-primary btn-sm wf-config-save" data-workflow-id="${escAttr(workflow.id)}">Save Changes</button>
+            <span class="wf-config-save-status cfg-save-status" data-workflow-id="${escAttr(workflow.id)}"></span>
+          </div>
+        </div>
+      </div>
+    </details>
+  `;
+
+  return `<div class="wf-pipeline-container">${header}${pipelineBody}${configPanel}</div>`;
 }
 
 function renderStepResults(steps) {

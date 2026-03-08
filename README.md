@@ -7,7 +7,7 @@ Security-first AI agent orchestration system. Built-in agents with predefined ca
 ## Features
 
 - **Four-layer security defense** — proactive admission controls, inline LLM-powered action evaluation (Guardian Agent), output-time leak prevention, and Sentinel audit analysis, all mandatory at the Runtime level
-- **Multi-provider LLM support** — Ollama (local), Anthropic (Claude), and OpenAI (GPT) with interactive model selection, circuit breaker, and automatic failover
+- **Multi-provider LLM support** — Ollama (local), Anthropic (Claude), and OpenAI (GPT) with interactive model selection, circuit breaker, automatic failover, and smart LLM routing that automatically directs tools to local or external models by category
 - **Multi-channel access** — CLI, Telegram bot, and Web UI with bearer token auth and cross-channel identity mapping
 - **Web dashboard** — real-time status, LLM providers, agent monitoring, session queue, scheduled jobs, and integrated chat panel
 - **Multi-agent orchestration** — Sequential, Parallel, and Loop agents with inter-step state passing through SharedState
@@ -240,6 +240,10 @@ assistant:
       enabled: true
       alwaysLoaded: [tool_search, web_search, fs_read, shell_safe, memory_search]
     contextBudget: 80000              # max approximate tokens for tool results in context
+    providerRoutingEnabled: true         # smart LLM routing: auto-assigns local/external by category
+    providerRouting:                   # per-tool or per-category LLM provider routing overrides
+      # workspace: external            # route all workspace tool results through external LLM
+      # fs_write: external             # or route specific tools
     toolPolicies:
       forum_post: deny
     qmd:
@@ -364,6 +368,24 @@ Restart Guardian Agent after Telegram channel changes.
 - **Ollama** — local models via OpenAI-compatible API
 - **Anthropic** — Claude models via `@anthropic-ai/sdk`
 - **OpenAI** — GPT models via `openai` SDK
+
+### Using Local and External Providers Together
+
+When both a local (Ollama) and external (Anthropic/OpenAI) provider are configured, the system automatically splits work between them based on task type:
+
+| Routes to **Local** model | Routes to **External** model |
+|---|---|
+| Filesystem, Shell, Network, System, Memory, Automation | Web, Browser, Workspace, Email, Contacts, Forum, Threat Intel, Search |
+
+Local operations (file reads, shell commands, network scans) are fast and don't need a powerful model for result synthesis. External operations (Google Workspace, web search, email campaigns) benefit from the higher-quality reasoning of cloud models.
+
+**Single-provider setups** work without configuration — when only one provider type exists, all tools route through it.
+
+**Set the default provider** via the "Set as Default" button in Configuration > Providers. This controls which model handles general conversation and any tools without a routing preference.
+
+**Smart LLM Routing** can be toggled off in Configuration > Tools if you want all tools to use the default provider regardless of category. Per-tool and per-category overrides are available via the LLM column dropdowns in the same tab.
+
+**Quality-based fallback**: when the local model produces a degraded response (empty, refusal, or boilerplate), the system automatically retries through the fallback chain (typically the external provider). Configure explicitly with `fallbacks: [openai, anthropic]` or let it auto-detect from available providers.
 
 ## Channel Adapters
 

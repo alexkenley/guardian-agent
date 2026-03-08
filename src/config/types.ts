@@ -669,6 +669,7 @@ export interface AssistantMCPConfig {
       timeoutMs?: number;
       services?: string[];
       exposeSkills?: boolean;
+      /** Reserved for future multi-account support; validated but not yet implemented. */
       accountMode?: 'single_user' | 'multi_account';
       /** LLM provider name to use for workspace tool-calling (e.g. 'anthropic', 'openai'). Falls back to default provider. */
       model?: string;
@@ -820,6 +821,13 @@ export interface AssistantToolsConfig {
   };
   /** Maximum approximate token budget for tool results in context (default: 80000). */
   contextBudget?: number;
+  /** Per-tool or per-category LLM provider routing.
+   * Keys are tool names (e.g. 'fs_write') or category names (e.g. 'workspace').
+   * Values: 'local' (force local/Ollama), 'external' (force external/cloud), 'default' (no override). */
+  providerRouting?: Record<string, 'local' | 'external' | 'default'>;
+  /** When true, tools are automatically routed between local and external providers based on task type.
+   * When false, all tools use the default provider only. Default: true. */
+  providerRoutingEnabled?: boolean;
 }
 
 /** Personal assistant feature configuration. */
@@ -1113,6 +1121,8 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         alwaysLoaded: ['find_tools', 'web_search', 'fs_read', 'shell_safe', 'memory_search', 'memory_save'],
       },
       contextBudget: 80_000,
+      providerRouting: {},
+      providerRoutingEnabled: true,
       disabledCategories: [],
       sandbox: {
         enabled: true,

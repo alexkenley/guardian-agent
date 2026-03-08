@@ -6,13 +6,21 @@ Automated black-box testing against a running GuardianAgent instance via its RES
 
 The test harness sends messages to the agent through the Web channel's `POST /api/message` endpoint and validates responses. It tests both functional behavior (tool calling, conversation) and security controls (PII scanning, shell injection defense, output guardian).
 
-Three scripts are provided:
+Eleven scripts are provided:
 
-| Script | Purpose |
-|--------|---------|
-| **`scripts/test-harness.ps1`** | Functional + security tests (PowerShell) |
-| **`scripts/test-harness.sh`** | Functional + security tests (Bash) |
-| **`scripts/test-tools.ps1`** | Tool exercise + approval flow tests (PowerShell) |
+| Script | Purpose | Assertions |
+|--------|---------|------------|
+| **`scripts/test-harness.ps1`** | Functional + security tests (PowerShell) | ~39 |
+| **`scripts/test-harness.sh`** | Functional + security tests (Bash) | ~39 |
+| **`scripts/test-tools.ps1`** | Tool exercise + approval flow tests (PowerShell) | ~50+ |
+| **`scripts/test-approvals.ps1`** | Approval UX: contextual prompts, multi-approval, policy modes (PowerShell) | ~45+ |
+| **`scripts/test-gws.ps1`** | Google Workspace tool + approval tests (PowerShell) | ~25 |
+| **`scripts/test-network.ps1`** | Network tools (ARP, traceroute, WiFi, OUI) (PowerShell) | ~10 |
+| **`scripts/test-qmd.ps1`** | QMD document search + approval tests (PowerShell) | ~12 |
+| **`scripts/test-automation.ps1`** | Workflow + task CRUD + approval tests (PowerShell) | ~20 |
+| **`scripts/test-intel.ps1`** | Threat intel watchlist + scan + approval tests (PowerShell) | ~20 |
+| **`scripts/test-contacts.ps1`** | Contacts, campaign, gmail_send + approval tests (PowerShell) | ~24 |
+| **`scripts/test-browser.ps1`** | Browser automation + network risk verification (PowerShell) | ~15 |
 
 Unlike unit tests (vitest), these exercise the full stack: config loading, Guardian pipeline, LLM provider, tool execution, and response formatting — exactly as a real user would experience it.
 
@@ -243,6 +251,217 @@ Also tests the **approval flow** by switching between policy modes and approving
 
 #### Job History
 Verifies that all tool executions from the test session are recorded in the job history with correct tool names and status values.
+
+### Google Workspace Suite (`test-gws.ps1`, ~25+ assertions)
+
+Tests Google Workspace tool integration: discovery, read operations, write approval gating, and schema lookup. Requires the `gws` CLI to be installed and authenticated — all tests SKIP gracefully if unavailable.
+
+**Prerequisite:** Probes GWS availability via a direct `POST /api/tools/run` call with a Gmail read. All tests skip if GWS is not enabled or not authenticated.
+
+#### Tool Discovery
+| Prompt | Expected Tool | What It Validates |
+|--------|--------------|-------------------|
+| "search for workspace tools" | `find_tools` | LLM discovers GWS tools via meta-tool |
+
+#### Read Operations (autonomous mode)
+| Prompt | Expected Tool | What It Validates |
+|--------|--------------|-------------------|
+| "list gmail emails" | `gws` | Gmail list without approval |
+| "list calendar events" | `gws` | Calendar list without approval |
+| "look up gmail schema" | `gws_schema` | Schema discovery |
+
+#### Write Approval Tests (approve_by_policy, direct API)
+| Operation | Expected Status | What It Validates |
+|-----------|----------------|-------------------|
+| Calendar event create | `pending_approval` | Calendar writes gated |
+| Drive file create | `pending_approval` | Drive writes gated |
+| Docs update | `pending_approval` | Docs writes gated |
+| Sheets delete | `pending_approval` | Sheets writes gated |
+| Gmail send | `pending_approval` | Gmail send always gated |
+| Gmail read | `succeeded` | Reads bypass approval |
+| Calendar create (autonomous) | `succeeded` | Autonomous allows writes |
+
+#### Approval Lifecycle
+Each write approval test denies the pending approval via `POST /api/tools/approvals/decision` and verifies the denial is accepted.
+
+### Network Tools Suite (`test-network.ps1`, ~10 assertions)
+
+Tests network tools via direct API in autonomous mode. All network tools are `read_only` risk — no approval tests needed. Platform-dependent failures (no WiFi adapter, no ARP binary, WSL limitations) are treated as PASS with a note.
+
+| Tool | Args | What It Validates |
+|------|------|-------------------|
+| `net_arp_scan` | `{}` | ARP table scan (may fail on WSL) |
+| `net_traceroute` | `{ host: "127.0.0.1", maxHops: 3 }` | Traceroute to localhost |
+| `net_oui_lookup` | `{ mac: "00:50:56:00:00:00" }` | OUI vendor lookup (VMware) |
+| `net_wifi_scan` | `{ force: true }` | WiFi network scan (skips if no adapter) |
+| `net_wifi_clients` | `{ force: true }` | WiFi client list (skips if no adapter) |
+| `net_connection_profiles` | `{}` | Network connection profiles |
+
+### QMD Document Search Suite (`test-qmd.ps1`, ~12 assertions)
+
+Tests QMD search tools: status, search, reindex. Includes approval tests for the mutating `qmd_reindex` operation. Requires QMD CLI to be installed — all tests SKIP gracefully if unavailable.
+
+| Operation | Policy Mode | Expected | What It Validates |
+|-----------|-------------|----------|-------------------|
+| `qmd_status` | autonomous | succeeded/failed | Status check (read_only) |
+| `qmd_search` | autonomous | succeeded/failed | Search query (read_only) |
+| `qmd_reindex` | autonomous | succeeded/failed | Reindex (mutating, allowed in autonomous) |
+| `qmd_search` | approve_by_policy | NOT pending_approval | Read-only passes through |
+| `qmd_reindex` | approve_by_policy | pending_approval → deny | Mutating gated by approval |
+
+### Automation Tools Suite (`test-automation.ps1`, ~20 assertions)
+
+Tests workflow CRUD (`workflow_upsert`, `workflow_delete`, `workflow_run`) and scheduled task CRUD (`task_create`, `task_update`, `task_delete`, `task_list`). All mutating operations are approval-gated in `approve_by_policy`.
+
+| Operation | Policy Mode | Expected | What It Validates |
+|-----------|-------------|----------|-------------------|
+| `task_list` | autonomous | succeeded/failed | Read-only task listing |
+| `workflow_upsert` | autonomous | succeeded/failed | Workflow creation |
+| `task_create` | autonomous | succeeded/failed | Task creation |
+| `workflow_delete` | autonomous | succeeded/failed | Workflow deletion |
+| `task_delete` | autonomous | succeeded/failed | Task deletion (nonexistent OK) |
+| `workflow_upsert` | approve_by_policy | pending_approval → deny | Workflow create gated |
+| `workflow_delete` | approve_by_policy | pending_approval → deny | Workflow delete gated |
+| `workflow_run` | approve_by_policy | pending_approval → deny | Workflow run gated |
+| `task_create` | approve_by_policy | pending_approval → deny | Task create gated |
+| `task_update` | approve_by_policy | pending_approval → deny | Task update gated |
+| `task_delete` | approve_by_policy | pending_approval → deny | Task delete gated |
+| `task_list` | approve_by_policy | NOT pending_approval | Read-only passes through |
+
+### Threat Intelligence Suite (`test-intel.ps1`, ~20 assertions)
+
+Tests threat intelligence tools: watchlist management, scanning, and action drafting. Mutating tools are approval-gated; network tools (`intel_scan`) are auto-allowed in `approve_by_policy`.
+
+| Operation | Policy Mode | Expected | What It Validates |
+|-----------|-------------|----------|-------------------|
+| `intel_watch_list` | autonomous | succeeded/failed | List watchlist (read_only) |
+| `intel_findings` | autonomous | succeeded/failed | List findings (read_only) |
+| `intel_watch_add` | autonomous | succeeded/failed | Add indicator (mutating) |
+| `intel_watch_remove` | autonomous | succeeded/failed | Remove indicator (mutating) |
+| `intel_scan` | autonomous | succeeded/failed | Scan for threats (network) |
+| `intel_watch_add` | approve_by_policy | pending_approval → deny | Mutating gated |
+| `intel_watch_remove` | approve_by_policy | pending_approval → deny | Mutating gated |
+| `intel_draft_action` | approve_by_policy | pending_approval → deny | Mutating gated |
+| `intel_scan` | approve_by_policy | NOT pending_approval | Network auto-allowed |
+| `intel_watch_list` | approve_by_policy | NOT pending_approval | Read-only passes through |
+| `intel_findings` | approve_by_policy | NOT pending_approval | Read-only passes through |
+
+### Contacts & Campaign Suite (`test-contacts.ps1`, ~24 assertions)
+
+Tests contacts management, campaign lifecycle, and `gmail_send` approval gating. The `gmail_send` tool has `external_post` risk — it always requires approval except in autonomous mode.
+
+| Operation | Policy Mode | Expected | What It Validates |
+|-----------|-------------|----------|-------------------|
+| `contacts_list` | autonomous | succeeded/failed | List contacts (read_only) |
+| `campaign_list` | autonomous | succeeded/failed | List campaigns (read_only) |
+| `contacts_import` | autonomous | succeeded/failed | Import contacts (mutating) |
+| `campaign_create` | autonomous | succeeded/failed | Create campaign (mutating) |
+| `campaign_delete` | autonomous | succeeded/failed | Delete campaign (mutating) |
+| `contacts_import` | approve_by_policy | pending_approval → deny | Mutating gated |
+| `contacts_discover` | approve_by_policy | pending_approval → deny | Mutating gated |
+| `campaign_create` | approve_by_policy | pending_approval → deny | Mutating gated |
+| `campaign_update` | approve_by_policy | pending_approval → deny | Mutating gated |
+| `campaign_delete` | approve_by_policy | pending_approval → deny | Mutating gated |
+| `contacts_list` | approve_by_policy | NOT pending_approval | Read-only passes through |
+| `campaign_list` | approve_by_policy | NOT pending_approval | Read-only passes through |
+| `gmail_send` | approve_by_policy | pending_approval → deny | External_post always gated |
+| `gmail_send` | autonomous | NOT pending_approval | Autonomous allows all |
+
+### Browser Automation Suite (`test-browser.ps1`, ~15 assertions)
+
+Tests browser automation tools. Requires Chromium/Puppeteer — uses a two-tier availability check: tool registered (basic tests) vs browser binary available (full lifecycle tests). All browser tools are `network` risk — auto-allowed in `approve_by_policy`.
+
+#### Full Lifecycle (if browser available)
+| Step | Tool | What It Validates |
+|------|------|-------------------|
+| 1 | `browser_open` | Opens URL, captures sessionId |
+| 2 | `browser_snapshot` | Takes page snapshot |
+| 3 | `browser_action` | Evaluates JS expression |
+| 4 | `browser_close` | Closes session |
+| 5 | `browser_task` | High-level browser task |
+
+#### Registration Verification (if registered but no binary)
+| Tool | Expected | What It Validates |
+|------|----------|-------------------|
+| `browser_open` | executed (failed OK) | Tool registered, handler ran |
+| `browser_close` | executed (failed OK) | Tool registered, handler ran |
+| `browser_task` | executed (failed OK) | Tool registered, handler ran |
+
+#### Network Risk Policy (approve_by_policy)
+| Tool | Expected | What It Validates |
+|------|----------|-------------------|
+| `browser_open` | NOT pending_approval | Network tools auto-allowed |
+| `browser_task` | NOT pending_approval | Network tools auto-allowed |
+| `browser_close` | NOT pending_approval | Network tools auto-allowed |
+
+### Approval UX Suite (`test-approvals.ps1`, ~45+ assertions)
+
+Tests the full approval lifecycle and UX improvements: contextual prompts (tool name + args preview), multi-approval flows, policy mode transitions, post-approval result synthesis, and double-approval sequences. Uses both direct API calls (deterministic) and LLM path (real user experience).
+
+#### Section 1: Single Tool Approval (Direct API)
+| Operation | Policy Mode | Expected | What It Validates |
+|-----------|-------------|----------|-------------------|
+| `fs_write` | approve_by_policy (manual) | pending_approval | Basic approval gate |
+| approval object | — | has toolName, args, risk | Contextual data on approval record |
+| deny decision | — | accepted | Single deny flow |
+| `fs_write` (2nd) | approve_by_policy (manual) | pending → approve → succeeded | Approve-then-execute flow |
+| `fs_list` | approve_by_policy | succeeded | Read-only bypasses approval |
+
+#### Section 2: Multiple Simultaneous Approvals (Direct API)
+| Operation | Policy Mode | Expected | What It Validates |
+|-----------|-------------|----------|-------------------|
+| 3× tool runs | approve_by_policy (manual) | 3 pending_approval | Multiple pending at once |
+| pending list | — | ≥2 entries, distinct args | API returns all pending |
+| deny 1 of N | — | accepted, others unchanged | Selective deny |
+| approve remaining | — | accepted | Partial approve/deny flow |
+
+#### Section 3: Policy Mode Transitions (Direct API)
+| Operation | Policy Mode | Expected | What It Validates |
+|-----------|-------------|----------|-------------------|
+| `fs_list` | approve_each | succeeded | read_only still auto-allowed |
+| `fs_write` | approve_each | pending_approval | Mutating gated |
+| `fs_write` | autonomous | succeeded | No approval needed |
+| `fs_delete` | autonomous + deny override | denied | Per-tool deny overrides mode |
+| `fs_write` | autonomous + manual on delete | succeeded | Manual override scoped to specific tool |
+| `fs_delete` | autonomous + manual override | pending_approval | Manual forces approval in autonomous |
+
+#### Section 4: Contextual Approval Prompts (LLM Path)
+| Scenario | Expected | What It Validates |
+|----------|----------|-------------------|
+| LLM write request | Response mentions tool/action | `formatPendingApprovalPrompt` includes tool context |
+| Approval prompt | Contains `fs_write` | Tool name in prompt text |
+| Approval prompt | Contains file path/args | Args preview in prompt text |
+| User says "no" | Approval denied | LLM routes denial correctly |
+
+#### Section 5: Post-Approval Result Synthesis (LLM Path)
+| Scenario | Expected | What It Validates |
+|----------|----------|-------------------|
+| Approve via API, then ask LLM | Describes what was created/written | LLM summarizes result, not just "Tool X completed" |
+| Response content check | NOT `^Tool '.*' completed\.$` | Regression check for uninformative responses |
+
+#### Section 6: Double-Approval Flow (LLM Path)
+| Scenario | Expected | What It Validates |
+|----------|----------|-------------------|
+| Write to out-of-sandbox path | LLM explains policy update needed | System prompt line 29 guidance |
+| Step 1 | `update_tool_policy` pending | Policy update gated by approval |
+| Approve step 1, continue | `fs_write` pending or auto-executes | Two-step flow completes |
+| Step 2 approval | File created | Full double-approval lifecycle |
+
+#### Section 7: Edge Cases (Direct API)
+| Scenario | Expected | What It Validates |
+|----------|----------|-------------------|
+| Bogus approval ID | Rejected gracefully | Error handling |
+| Double-deny same ID | Rejected or idempotent | Already-resolved approval |
+| Approve after deny | Rejected | Immutable decision |
+| `sys_info` (auto-allowed) | succeeded, no approvalId | Clean auto-execute path |
+
+#### Section 8: Job History & Audit
+| Check | Expected | What It Validates |
+|-------|----------|-------------------|
+| Job count | >5 recorded | Tool activity tracking |
+| Approval count | >3 recorded | Approval audit trail |
+| Decision types | Both approved + denied | Full audit coverage |
+| All approvals have toolName | 0 missing | Contextual data integrity |
 
 ## How It Works
 

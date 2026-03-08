@@ -8,8 +8,7 @@ import { renderSecurity, updateSecurity } from './pages/security.js';
 import { renderConfig } from './pages/config.js';
 import { renderReference } from './pages/reference.js';
 import { renderNetwork } from './pages/network.js';
-import { renderWorkflows } from './pages/workflows.js';
-import { renderOperations, updateOperations } from './pages/operations.js';
+import { renderAutomations, updateAutomations } from './pages/automations.js';
 import { initChatPanel, setChatContext } from './chat-panel.js';
 import { applyInputTooltips } from './tooltip.js';
 import { initTheme } from './theme.js';
@@ -173,8 +172,7 @@ const routes = {
   '/': { render: renderDashboard, update: updateDashboard, name: 'dashboard' },
   '/security': { render: renderSecurity, update: updateSecurity, name: 'security' },
   '/network': { render: renderNetwork, name: 'network' },
-  '/workflows': { render: renderWorkflows, name: 'workflows' },
-  '/operations': { render: renderOperations, update: updateOperations, name: 'operations' },
+  '/automations': { render: renderAutomations, update: updateAutomations, name: 'automations' },
   '/config': { render: renderConfig, name: 'config' },
   '/reference': { render: renderReference, name: 'reference' },
 };
@@ -182,6 +180,13 @@ const routes = {
 function navigate() {
   const raw = window.location.hash.slice(1) || '/';
   const [path, query] = raw.split('?');
+
+  // Redirect old pages to unified Automations
+  if (path === '/workflows' || path === '/operations') {
+    window.location.hash = '#/automations';
+    return;
+  }
+
   const params = new URLSearchParams(query || '');
   const route = routes[path] || routes['/'];
 
@@ -197,8 +202,20 @@ function navigate() {
   route.render(content, { tab: params.get('tab') });
 }
 
+function startClock() {
+  const el = document.getElementById('header-clock');
+  if (!el) return;
+  const tick = () => {
+    const now = new Date();
+    el.textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  };
+  tick();
+  setInterval(tick, 1000);
+}
+
 function startApp() {
   connectSSE();
+  startClock();
   initChatPanel(chatPanel);
   window.addEventListener('hashchange', navigate);
   navigate();

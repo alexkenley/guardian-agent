@@ -168,6 +168,10 @@ export const api = {
   }),
   providers:    () => request('/api/providers'),
   providersStatus: () => request('/api/providers/status'),
+  setDefaultProvider: (name) => request('/api/providers/default', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  }),
   assistantState: () => request('/api/assistant/state'),
   toolsState: (limit = 50) => request(`/api/tools?limit=${limit}`),
   runTool: (payload) => request('/api/tools/run', {
@@ -184,6 +188,10 @@ export const api = {
   }),
   toolCategories: () => request('/api/tools/categories'),
   toggleToolCategory: (payload) => request('/api/tools/categories', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  updateToolProviderRouting: (payload) => request('/api/tools/provider-routing', {
     method: 'POST',
     body: JSON.stringify(payload),
   }),

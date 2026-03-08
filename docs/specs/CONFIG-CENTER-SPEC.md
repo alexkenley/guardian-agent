@@ -95,3 +95,21 @@ REST endpoints for managing QMD document search sources at runtime:
 Web UI: Configuration > Search Sources tab provides full CRUD with status card, sources table, and add form.
 
 Config: `assistant.tools.qmd` — `enabled`, `binaryPath`, `defaultMode`, `queryTimeoutMs`, `maxResults`, `sources[]`
+
+## Tool Provider Routing Management
+
+Per-tool and per-category LLM provider routing, controlling which model synthesizes tool results. Smart category defaults automatically assign tools to local or external models based on task type when both provider types are configured.
+
+- `GET /api/tools` — Returns `providerRouting` map, `providerRoutingEnabled`, and `defaultProviderLocality` in the tools state response
+- `POST /api/tools/provider-routing` — Update routing map and/or toggle (body: `{ routing?: { "key": "local" | "external" }, enabled?: boolean }`)
+  - Keys are tool names (e.g. `fs_write`) or category names (e.g. `workspace`)
+  - `enabled` controls the `providerRoutingEnabled` master toggle
+  - Only entries differing from the default provider locality are persisted
+  - Validated server-side; invalid values return 400
+- `POST /api/providers/default` — Set the default LLM provider (body: `{ name: string }`)
+
+**Smart defaults:** When `providerRoutingEnabled` is `true` (default) and both local and external providers exist, categories are auto-routed: local categories (filesystem, shell, network, system, memory, automation) use the local model; external categories (web, browser, workspace, email, contacts, forum, intel, search) use the external model. Explicit `providerRouting` entries always override smart defaults. When only one provider type exists, smart routing is a no-op.
+
+Web UI: Configuration > Tools tab — "LLM" column on both Tool Categories and Tool Catalog tables with Local/External dropdowns. "Smart LLM Routing" checkbox toggles `providerRoutingEnabled`. Category changes cascade to all tools in that category. Providers tab includes a "Set as Default" button per provider row. Changes save immediately and take effect on the next tool execution (hot-reloadable, no restart needed).
+
+Config: `assistant.tools.providerRoutingEnabled` (boolean, default `true`), `assistant.tools.providerRouting` — `Record<string, 'local' | 'external'>`

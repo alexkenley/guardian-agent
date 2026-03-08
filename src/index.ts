@@ -231,6 +231,8 @@ class ChatAgent extends BaseAgent {
   private contextBudget: number;
   /** Whether to retry degraded local LLM responses with an external fallback. */
   private qualityFallbackEnabled: boolean;
+  /** Resolve a routed LLM provider based on tools just executed. Returns undefined if no routing override. */
+  private resolveRoutedProviderForTools?: (tools: Array<{ name: string; category?: string }>) => { provider: LLMProvider; locality: 'local' | 'external' } | undefined;
 
   constructor(
     id: string,
@@ -247,6 +249,7 @@ class ChatAgent extends BaseAgent {
     resolveGwsProvider?: () => LLMProvider | undefined,
     contextBudget?: number,
     qualityFallback?: boolean,
+    resolveRoutedProviderForTools?: (tools: Array<{ name: string; category?: string }>) => { provider: LLMProvider; locality: 'local' | 'external' } | undefined,
   ) {
     super(id, name, { handleMessages: true });
     this.systemPrompt = composeGuardianSystemPrompt(systemPrompt, soulPrompt);
@@ -269,6 +272,7 @@ class ChatAgent extends BaseAgent {
     this.resolveGwsProvider = resolveGwsProvider;
     this.contextBudget = contextBudget ?? 80_000;
     this.qualityFallbackEnabled = qualityFallback ?? true;
+    this.resolveRoutedProviderForTools = resolveRoutedProviderForTools;
   }
 
   /**
@@ -466,7 +470,7 @@ class ChatAgent extends BaseAgent {
       && /\b(gmail|email|inbox|calendar|schedule|event|drive|docs|sheets|spreadsheet|google)\b/i.test(message.content)
       ? this.resolveGwsProvider?.()
       : undefined;
-    const chatFn = async (msgs: ChatMessage[], opts?: import('./llm/types.js').ChatOptions) => {
+    let chatFn = async (msgs: ChatMessage[], opts?: import('./llm/types.js').ChatOptions) => {
       if (gwsProvider) {
         try {
           return await gwsProvider.chat(msgs, opts);
@@ -478,7 +482,7 @@ class ChatAgent extends BaseAgent {
       }
       return this.chatWithFallback(ctx, msgs, opts);
     };
-    const toolResultProviderKind = gwsProvider
+    let toolResultProviderKind = gwsProvider
       ? 'external'
       : defaultToolResultProviderKind;
 
@@ -498,9 +502,9 @@ class ChatAgent extends BaseAgent {
     } else {
       let rounds = 0;
       // Deferred loading: start with always-loaded tools, expand via find_tools
-      const toolDefs = this.tools.listAlwaysLoadedDefinitions();
+      const allToolDefs = this.tools.listAlwaysLoadedDefinitions();
       // Local models get full descriptions for better tool selection; external models get short
-      const llmToolDefs = toolDefs.map((d) => toLLMToolDef(d, providerLocality));
+      let llmToolDefs = allToolDefs.map((d) => toLLMToolDef(d, providerLocality));
       const pendingIds: string[] = [];
       const contextBudget = this.contextBudget;
       while (rounds < this.maxToolRounds) {
@@ -629,12 +633,15 @@ class ChatAgent extends BaseAgent {
               if (searchOutput?.tools) {
                 for (const discovered of searchOutput.tools) {
                   if (!llmToolDefs.some((d) => d.name === discovered.name)) {
-                    llmToolDefs.push({
+                    const disc = {
                       name: discovered.name,
                       description: discovered.description,
                       risk: discovered.risk as import('./tools/types.js').ToolRisk,
                       parameters: discovered.parameters,
-                    });
+                      category: discovered.category as import('./tools/types.js').ToolCategory | undefined,
+                    };
+                    allToolDefs.push(disc);
+                    llmToolDefs.push(toLLMToolDef(disc, toolResultProviderKind));
                   }
                 }
               }
@@ -652,6 +659,32 @@ class ChatAgent extends BaseAgent {
 
         // If all tools in this round are pending, stop looping — user needs to approve
         if (hasPending) break;
+
+        // Per-tool provider routing: if any executed tool has a routing preference,
+        // swap the provider for the next round so a better model synthesizes the result.
+        if (this.resolveRoutedProviderForTools) {
+          const executedTools = response.toolCalls.map((tc) => {
+            const def = this.tools?.getToolDefinition?.(tc.name);
+            return { name: tc.name, category: def?.category };
+          });
+          const routed = this.resolveRoutedProviderForTools(executedTools);
+          if (routed) {
+            const { provider: routedProvider, locality: routedLocality } = routed;
+            chatFn = async (msgs, opts) => {
+              try {
+                return await routedProvider.chat(msgs, opts);
+              } catch (err) {
+                log.warn({ agent: this.id, routing: routedLocality, error: err instanceof Error ? err.message : String(err) },
+                  'Routed provider failed, falling back to default');
+                return this.chatWithFallback(ctx, msgs, opts);
+              }
+            };
+            toolResultProviderKind = routedLocality;
+            // Re-map tool definitions for the new provider's locality
+            llmToolDefs = allToolDefs.map((d) => toLLMToolDef(d, toolResultProviderKind));
+          }
+        }
+
         rounds += 1;
       }
 
@@ -660,7 +693,8 @@ class ChatAgent extends BaseAgent {
         const existing = this.getPendingApprovals(userKey)?.ids ?? [];
         const merged = [...new Set([...existing, ...pendingIds])];
         this.setPendingApprovals(userKey, merged);
-        const prompt = this.formatPendingApprovalPrompt(merged);
+        const summaries = this.tools?.getApprovalSummaries(merged);
+        const prompt = this.formatPendingApprovalPrompt(merged, summaries);
         finalContent = finalContent?.trim()
           ? `${finalContent.trim()}\n\n${prompt}`
           : prompt;
@@ -807,17 +841,19 @@ class ChatAgent extends BaseAgent {
     if (APPROVAL_COMMAND_PATTERN.test(input)) {
       const selected = this.resolveApprovalTargets(input, pending.ids);
       if (selected.errors.length > 0) {
+        const summaries = this.tools?.getApprovalSummaries(pending.ids);
         return [
           selected.errors.join('\n'),
           '',
-          this.formatPendingApprovalPrompt(pending.ids),
+          this.formatPendingApprovalPrompt(pending.ids, summaries),
         ].join('\n');
       }
       targetIds = selected.ids;
     }
 
     if (targetIds.length === 0) {
-      return this.formatPendingApprovalPrompt(pending.ids);
+      const summaries = this.tools?.getApprovalSummaries(pending.ids);
+      return this.formatPendingApprovalPrompt(pending.ids, summaries);
     }
 
     const remaining = pending.ids.filter((id) => !targetIds.includes(id));
@@ -841,8 +877,9 @@ class ChatAgent extends BaseAgent {
       }
     }
     if (remaining.length > 0) {
+      const summaries = this.tools?.getApprovalSummaries(remaining);
       results.push('');
-      results.push(this.formatPendingApprovalPrompt(remaining));
+      results.push(this.formatPendingApprovalPrompt(remaining, summaries));
     }
     return results.join('\n');
   }
@@ -911,23 +948,36 @@ class ChatAgent extends BaseAgent {
     return { ids: [...selected], errors };
   }
 
-  private formatPendingApprovalPrompt(ids: string[]): string {
+  private formatPendingApprovalPrompt(
+    ids: string[],
+    summaries?: Map<string, { toolName: string; argsPreview: string }>,
+  ): string {
     if (ids.length === 0) return 'There are no pending approvals.';
     const ttlMinutes = Math.round(PENDING_APPROVAL_TTL_MS / 60_000);
     if (ids.length === 1) {
+      const summary = summaries?.get(ids[0]);
+      const what = summary
+        ? `Action: ${summary.toolName}${summary.argsPreview ? ` — ${summary.argsPreview}` : ''}`
+        : undefined;
       return [
-        'I prepared an action that needs your approval.',
+        what ?? 'I prepared an action that needs your approval.',
         `Approval ID: ${ids[0]}`,
         `Reply "yes" to approve or "no" to deny (expires in ${ttlMinutes} minutes).`,
         'Optional: /approve or /deny',
       ].join('\n');
     }
-    return [
-      `I prepared ${ids.length} actions that need your approval.`,
-      `Approval IDs: ${ids.join(', ')}`,
-      `Reply "yes" to approve all or "no" to deny all (expires in ${ttlMinutes} minutes).`,
-      'Optional: /approve <id> or /deny <id> for specific actions',
-    ].join('\n');
+    const lines = [`I prepared ${ids.length} actions that need your approval.`];
+    for (const id of ids) {
+      const summary = summaries?.get(id);
+      if (summary) {
+        lines.push(`  • ${summary.toolName}${summary.argsPreview ? ` — ${summary.argsPreview}` : ''} (${id.slice(0, 8)}…)`);
+      } else {
+        lines.push(`  • ${id}`);
+      }
+    }
+    lines.push(`Reply "yes" to approve all or "no" to deny all (expires in ${ttlMinutes} minutes).`);
+    lines.push('Optional: /approve <id> or /deny <id> for specific actions');
+    return lines.join('\n');
   }
 
   private async tryDirectWebSearch(
@@ -1434,6 +1484,102 @@ function toLLMToolDef(def: import('./tools/types.js').ToolDefinition, locality: 
     parameters: def.parameters,
     examples: def.examples,
   };
+}
+
+type ProviderRoutePreference = 'local' | 'external' | 'default';
+
+/**
+ * Natural locality for each tool category.
+ * "External" categories involve external APIs/services and benefit from smarter models.
+ * "Local" categories operate on the local machine and are fine with local models.
+ */
+const CATEGORY_NATURAL_LOCALITY: Record<string, 'local' | 'external'> = {
+  filesystem: 'local',
+  shell: 'local',
+  network: 'local',
+  system: 'local',
+  memory: 'local',
+  automation: 'local',
+  web: 'external',
+  browser: 'external',
+  workspace: 'external',
+  email: 'external',
+  contacts: 'external',
+  forum: 'external',
+  intel: 'external',
+  search: 'external',
+};
+
+/**
+ * Compute effective per-category routing defaults based on available providers.
+ * - Both local + external available: use natural locality per category
+ * - Only local available: everything routes to local
+ * - Only external available: everything routes to external
+ */
+function computeCategoryDefaults(
+  llmConfig: Record<string, { provider?: string }>,
+): Record<string, 'local' | 'external'> {
+  const hasLocal = Object.values(llmConfig).some(c => c.provider === 'ollama');
+  const hasExternal = Object.values(llmConfig).some(c => c.provider !== 'ollama');
+
+  const defaults: Record<string, 'local' | 'external'> = {};
+  for (const [category, natural] of Object.entries(CATEGORY_NATURAL_LOCALITY)) {
+    if (hasLocal && hasExternal) {
+      defaults[category] = natural;
+    } else if (hasLocal) {
+      defaults[category] = 'local';
+    } else {
+      defaults[category] = 'external';
+    }
+  }
+  return defaults;
+}
+
+/**
+ * Given tools just executed, resolve the provider routing preference for the
+ * next LLM call. Resolution order:
+ *   1. User per-tool override (providerRouting config)
+ *   2. User per-category override (providerRouting config)
+ *   3. Computed category default (based on available providers)
+ * 'external' wins when multiple tools conflict.
+ */
+function resolveToolProviderRouting(
+  executedTools: Array<{ name: string; category?: string }>,
+  routingMap: Record<string, ProviderRoutePreference> | undefined,
+  categoryDefaults?: Record<string, 'local' | 'external'>,
+): ProviderRoutePreference {
+  const hasRouting = routingMap && Object.keys(routingMap).length > 0;
+  const hasDefaults = categoryDefaults && Object.keys(categoryDefaults).length > 0;
+  if (!hasRouting && !hasDefaults) return 'default';
+
+  let result: ProviderRoutePreference = 'default';
+
+  for (const tool of executedTools) {
+    // 1. User per-tool override (most specific)
+    const toolRoute = routingMap?.[tool.name];
+    if (toolRoute && toolRoute !== 'default') {
+      if (toolRoute === 'external') return 'external';
+      result = toolRoute;
+      continue;
+    }
+    // 2. User per-category override
+    if (tool.category) {
+      const catRoute = routingMap?.[tool.category];
+      if (catRoute && catRoute !== 'default') {
+        if (catRoute === 'external') return 'external';
+        if (result === 'default') result = catRoute;
+        continue;
+      }
+      // 3. Computed category default
+      const computedRoute = categoryDefaults?.[tool.category];
+      if (computedRoute) {
+        if (computedRoute === 'external') return 'external';
+        if (result === 'default') result = computedRoute;
+      }
+    }
+  }
+
+  return result;
 }
 
 /** If total context exceeds 80% of budget, summarize oldest tool results. */
@@ -2090,6 +2236,8 @@ function buildDashboardCallbacks(
       allowedDomains: policy.sandbox.allowedDomains,
       browser: configRef.current.assistant.tools.browser,
       disabledCategories: configRef.current.assistant.tools.disabledCategories ?? [],
+      providerRouting: configRef.current.assistant.tools.providerRouting ?? {},
+      providerRoutingEnabled: configRef.current.assistant.tools.providerRoutingEnabled !== false,
     };
     return persistAndApplyConfig(rawConfig, {
       changedBy: 'tools-control-plane',
@@ -2349,6 +2497,10 @@ function buildDashboardCallbacks(
       sandbox: toolExecutor.getSandboxHealth(),
       categories: toolExecutor.getCategoryInfo(),
       disabledCategories: toolExecutor.getDisabledCategories(),
+      providerRouting: configRef.current.assistant.tools.providerRouting ?? {},
+      providerRoutingEnabled: configRef.current.assistant.tools.providerRoutingEnabled !== false,
+      defaultProviderLocality: (configRef.current.llm[configRef.current.defaultProvider]?.provider === 'ollama' ? 'local' : 'external') as 'local' | 'external',
+      categoryDefaults: computeCategoryDefaults(configRef.current.llm as Record<string, { provider?: string }>),
     }),
 
     onSkillsState: () => {
@@ -2555,6 +2707,35 @@ function buildDashboardCallbacks(
         success: true,
         message: `Category '${category}' ${enabled ? 'enabled' : 'disabled'}.`,
       };
+    },
+
+    onToolsProviderRoutingUpdate: (input) => {
+      // Handle enabled/disabled toggle
+      if (typeof input.enabled === 'boolean') {
+        configRef.current.assistant.tools.providerRoutingEnabled = input.enabled;
+      }
+
+      // Handle routing map update (if provided)
+      if (input.routing) {
+        const validValues = new Set(['local', 'external', 'default']);
+        const routing: Record<string, 'local' | 'external' | 'default'> = {};
+        for (const [key, value] of Object.entries(input.routing)) {
+          if (!validValues.has(value as string)) {
+            return { success: false, message: `Invalid routing value '${value}' for '${key}'. Must be local, external, or default.` };
+          }
+          // Strip 'default' entries — they're no-ops and clutter the config
+          if (value !== 'default') {
+            routing[key] = value as 'local' | 'external' | 'default';
+          }
+        }
+        configRef.current.assistant.tools.providerRouting = routing;
+      }
+
+      const persisted = persistToolsState(toolExecutor.getPolicy());
+      if (!persisted.success) {
+        return { success: false, message: persisted.message };
+      }
+      return { success: true, message: 'Provider routing updated.' };
     },
 
     onConnectorsState: ({ limitRuns } = {}) => connectors.getState(limitRuns ?? 50),
@@ -4598,6 +4779,41 @@ async function main(): Promise<void> {
     }
   }
 
+  // Per-tool provider routing: resolves tool names → routed LLM provider.
+  // Reads configRef.current at call time so hot-reloaded routing config takes effect immediately.
+  // Uses computed category defaults (based on available providers) as fallback.
+  // Disabled when providerRoutingEnabled is false — all tools use the default provider.
+  const resolveRoutedProviderForTools = (
+    tools: Array<{ name: string; category?: string }>,
+  ): { provider: LLMProvider; locality: 'local' | 'external' } | undefined => {
+    if (configRef.current.assistant.tools.providerRoutingEnabled === false) return undefined;
+
+    const routingMap = configRef.current.assistant.tools.providerRouting;
+    const catDefaults = computeCategoryDefaults(configRef.current.llm as Record<string, { provider?: string }>);
+
+    const pref = resolveToolProviderRouting(tools, routingMap, catDefaults);
+    if (pref === 'default') return undefined;
+
+    const currentConfig = configRef.current;
+    if (pref === 'local') {
+      for (const [name, llmCfg] of Object.entries(currentConfig.llm)) {
+        if (llmCfg.provider === 'ollama') {
+          const provider = runtime.getProvider(name);
+          if (provider) return { provider, locality: 'local' };
+        }
+      }
+      return undefined;
+    }
+    // pref === 'external'
+    for (const [name, llmCfg] of Object.entries(currentConfig.llm)) {
+      if (llmCfg.provider !== 'ollama') {
+        const provider = runtime.getProvider(name);
+        if (provider) return { provider, locality: 'external' };
+      }
+    }
+    return undefined;
+  };
+
   // Resolve agent capabilities from trust preset / config.
   // The orchestrator decides which MODEL handles a request (local vs external),
   // NOT what the agent is allowed to do. Security policy is user-configured.
@@ -4633,6 +4849,7 @@ async function main(): Promise<void> {
         resolveGwsProvider,
         config.assistant.tools.contextBudget,
         config.qualityFallback,
+        resolveRoutedProviderForTools,
       );
       runtime.registerAgent(createAgentDefinition({
         agent,

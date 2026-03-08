@@ -995,6 +995,38 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // POST /api/tools/provider-routing — update per-tool/per-category LLM provider routing
+      if (req.method === 'POST' && url.pathname === '/api/tools/provider-routing') {
+        if (!this.dashboard.onToolsProviderRoutingUpdate) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { routing?: Record<string, string>; enabled?: boolean };
+        try {
+          parsed = JSON.parse(body) as { routing?: Record<string, string>; enabled?: boolean };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed.routing && typeof parsed.enabled !== 'boolean') {
+          sendJSON(res, 400, { error: 'routing object or enabled flag is required' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onToolsProviderRoutingUpdate({
+          routing: parsed.routing as Record<string, 'local' | 'external' | 'default'> | undefined,
+          enabled: parsed.enabled,
+        }));
+        return;
+      }
+
       // GET /api/tools/browser — browser automation config
       if (req.method === 'GET' && url.pathname === '/api/tools/browser') {
         if (!this.dashboard.onBrowserConfigState) {
@@ -1856,6 +1888,36 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
         sendJSON(res, 200, await this.dashboard.onProvidersStatus());
+        return;
+      }
+
+      // POST /api/providers/default — set default LLM provider
+      if (req.method === 'POST' && url.pathname === '/api/providers/default') {
+        if (!this.dashboard.onConfigUpdate) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { name?: string };
+        try {
+          parsed = JSON.parse(body) as { name?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed.name || typeof parsed.name !== 'string') {
+          sendJSON(res, 400, { error: 'Missing provider name' });
+          return;
+        }
+        const result = await this.dashboard.onConfigUpdate({ defaultProvider: parsed.name });
+        sendJSON(res, result.success ? 200 : 400, result);
         return;
       }
 
