@@ -5,7 +5,8 @@
  * interpolation and deep-merged with defaults.
  */
 
-import type { ToolCategory } from '../tools/types.js';
+import { DEFAULT_PII_ENTITIES, type PiiEntityType, type PiiRedactionMode } from '../guardian/pii-scanner.js';
+import type { ToolCategory, ToolRisk } from '../tools/types.js';
 
 /** Top-level configuration. */
 export interface GuardianAgentConfig {
@@ -230,6 +231,17 @@ export interface GuardianConfig {
     enabled: boolean;
     /** Redact secrets (true) vs block entirely (false). Default: true. */
     redactSecrets: boolean;
+  };
+  /** PII redaction for tool results before reinjection into LLM context. */
+  piiRedaction?: {
+    /** Enable tool-result PII redaction (default: true). */
+    enabled: boolean;
+    /** Replace with redactions or deterministic anonymized placeholders. */
+    mode: PiiRedactionMode;
+    /** PII entity types to scan for. */
+    entities: PiiEntityType[];
+    /** Apply to all providers or only external models. */
+    providerScope: 'all' | 'external';
   };
   /** Guardian Agent inline LLM evaluation configuration. */
   guardianAgent?: {
@@ -632,6 +644,10 @@ export interface MCPServerEntry {
   cwd?: string;
   /** Request timeout in milliseconds (default: 30000). */
   timeoutMs?: number;
+  /** Optional trust-level override for all tools exposed by this server. */
+  trustLevel?: ToolRisk;
+  /** Optional per-server call rate limit. */
+  maxCallsPerMinute?: number;
 }
 
 /** MCP tool server configuration. */
@@ -868,6 +884,12 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
     outputScanning: {
       enabled: true,
       redactSecrets: true,
+    },
+    piiRedaction: {
+      enabled: true,
+      mode: 'redact',
+      entities: [...DEFAULT_PII_ENTITIES],
+      providerScope: 'external',
     },
     sentinel: {
       enabled: true,

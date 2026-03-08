@@ -11,9 +11,9 @@ Security-first AI agent orchestration system. Built-in agents with predefined ca
 - **Multi-channel access** — CLI, Telegram bot, and Web UI with bearer token auth and cross-channel identity mapping
 - **Web dashboard** — real-time status, LLM providers, agent monitoring, session queue, scheduled jobs, and integrated chat panel
 - **Multi-agent orchestration** — Sequential, Parallel, and Loop agents with inter-step state passing through SharedState
-- **Guardian security pipeline** — per-agent capabilities, secret scanning (28+ credential patterns), prompt injection detection, rate limiting, sensitive path blocking, and output redaction
+- **Guardian security pipeline** — per-agent capabilities, secret scanning (28+ credential patterns), PII detection/redaction, prompt injection detection, rate limiting, sensitive path blocking, and output redaction
 - **Tool governance** — approval workflows, per-tool policy overrides, path/command/domain allowlists, and risk-tiered tool classes with interactive policy editor
-- **MCP tool server integration** — JSON-RPC 2.0 over stdio with namespaced tools and full Guardian admission on every call
+- **MCP tool server integration** — JSON-RPC 2.0 over stdio with namespaced tools, inferred trust levels, optional per-server rate limits, and full Guardian admission on every call
 - **Connector and playbook framework** — declarative connector packs with host/path/command allowlists, bounded step execution, dry-run mode, and signed definitions
 - **Conversation memory** — SQLite-backed session history with FTS5 full-text search, per-agent knowledge base, and automatic memory flush
 - **QMD hybrid document search** — BM25 + vector + LLM re-ranking over directories, git repos, URLs, and files
@@ -63,7 +63,7 @@ Every sub-agent dispatch passes through the full Guardian pipeline. Orchestratio
 
 ## MCP Tool Server Integration
 
-The MCP (Model Context Protocol) client consumes tools from external MCP-compatible servers over stdio transport. Tool names are namespaced (`mcp:<serverId>:<toolName>`) to prevent collisions. All MCP tool calls pass through Guardian admission and are classified as `network` risk.
+The MCP (Model Context Protocol) client consumes tools from external MCP-compatible servers over stdio transport. Tool names are namespaced (`mcp-<serverId>-<toolName>`) to prevent collisions. All MCP tool calls pass through Guardian admission, can infer `read_only` / `mutating` / `external_post` risk from MCP metadata, and support optional per-server `trustLevel` and `maxCallsPerMinute` overrides.
 
 ## Agent Evaluation Framework
 
@@ -82,6 +82,7 @@ Test agent behavior through the real Runtime with Guardian active:
 - Per-agent rate limiting (burst, per-minute, per-hour sliding windows)
 - Capability enforcement (per-agent permission grants)
 - Secret scanning (28+ credential patterns: AWS, GCP, GitHub, OpenAI, Stripe, Slack, and more)
+- High-signal PII scanning on tool arguments (addresses, DOB, MRN, passport, driver's license)
 - Sensitive path blocking with traversal normalization
 
 **Layer 2 — Guardian Agent (inline LLM evaluation before tool execution):**
@@ -95,6 +96,8 @@ Test agent behavior through the real Runtime with Guardian active:
 - GuardedLLMProvider scans every LLM response for secrets automatically
 - Response redaction replaces detected credentials with `[REDACTED]`
 - Inter-agent event payloads are scanned before dispatch
+- Tool results are wrapped as structured `<tool_result ...>` envelopes before they return to the model
+- Tool-result strings are stripped of invisible Unicode, checked for prompt-injection signals, and PII-redacted before reinjection
 - All detections logged to the audit trail
 
 **Layer 4 — Sentinel Audit (retrospective, scheduled or on-demand):**
@@ -306,6 +309,10 @@ guardian:
     maxPerMinute: 30
     maxPerHour: 500
     burstAllowed: 5
+  piiRedaction:
+    enabled: true
+    mode: redact
+    providerScope: external
   outputScanning:
     enabled: true
     redactSecrets: true

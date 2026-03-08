@@ -11,7 +11,7 @@
 
 import type { ChildProcess } from 'node:child_process';
 import { createLogger } from '../util/logging.js';
-import type { ToolDefinition, ToolResult } from './types.js';
+import type { ToolDefinition, ToolResult, ToolRisk } from './types.js';
 import { sandboxedSpawn, type SandboxConfig, DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
 
 const log = createLogger('mcp-client');
@@ -95,6 +95,10 @@ export interface MCPServerConfig {
   cwd?: string;
   /** Request timeout in milliseconds. Default: 30000. */
   timeoutMs?: number;
+  /** Optional trust-level override for all tools exposed by this server. */
+  trustLevel?: ToolRisk;
+  /** Optional per-server rate limit. */
+  maxCallsPerMinute?: number;
 }
 
 // ─── MCP Client ───────────────────────────────────────────────
@@ -120,6 +124,7 @@ export class MCPClient {
   private buffer = '';
   private nextId = 1;
   private readonly sandboxConfig: SandboxConfig;
+  private readonly recentCallTimestamps: number[] = [];
 
   constructor(config: MCPServerConfig, sandboxConfig?: SandboxConfig) {
     this.config = config;
@@ -256,7 +261,7 @@ export class MCPClient {
     return this.getTools().map(tool => ({
       name: `mcp-${this.config.id}-${tool.name}`,
       description: tool.description ?? `MCP tool from ${this.config.name}`,
-      risk: 'network' as const,
+      risk: inferMcpToolRisk(tool, this.config.trustLevel),
       parameters: {
         type: 'object' as const,
         properties: tool.inputSchema?.properties ?? {},
@@ -278,6 +283,15 @@ export class MCPClient {
 
     if (!this.tools.has(toolName)) {
       return { success: false, error: `MCP tool '${toolName}' not found on server '${this.config.id}'` };
+    }
+
+    const rateLimitError = this.enforceRateLimit();
+    if (rateLimitError) {
+      return {
+        success: false,
+        error: rateLimitError,
+        metadata: { server: this.config.id, tool: toolName },
+      };
     }
 
     try {
@@ -313,6 +327,26 @@ export class MCPClient {
         metadata: { server: this.config.id, tool: toolName },
       };
     }
+  }
+
+  private enforceRateLimit(): string | null {
+    const limit = this.config.maxCallsPerMinute;
+    if (!limit || limit < 1) {
+      return null;
+    }
+
+    const now = Date.now();
+    const cutoff = now - 60_000;
+    while (this.recentCallTimestamps.length > 0 && this.recentCallTimestamps[0] < cutoff) {
+      this.recentCallTimestamps.shift();
+    }
+
+    if (this.recentCallTimestamps.length >= limit) {
+      return `MCP server '${this.config.id}' exceeded maxCallsPerMinute (${limit}).`;
+    }
+
+    this.recentCallTimestamps.push(now);
+    return null;
   }
 
   // ─── JSON-RPC Transport ───────────────────────────────────────
@@ -553,4 +587,31 @@ export class MCPClientManager {
       serverInfo: client.getServerInfo(),
     }));
   }
+}
+
+function inferMcpToolRisk(tool: MCPToolSchema, override?: ToolRisk): ToolRisk {
+  if (override) {
+    return override;
+  }
+
+  const fields = tool.inputSchema?.properties
+    ? Object.keys(tool.inputSchema.properties).join(' ')
+    : '';
+  const combined = `${tool.name} ${tool.description ?? ''} ${fields}`.toLowerCase();
+
+  const isExternalPost = /\b(send|post|publish|notify|message|email|comment|reply|webhook|tweet|sms|invite)\b/.test(combined)
+    && /\b(create|write|update|post|publish|send|reply|comment|notify|share)\b/.test(combined);
+  if (isExternalPost) {
+    return 'external_post';
+  }
+
+  if (/\b(create|write|update|delete|remove|insert|append|edit|modify|set|save|upload|rename|move|trash|archive)\b/.test(combined)) {
+    return 'mutating';
+  }
+
+  if (/\b(read|get|list|search|find|fetch|query|lookup|show|describe|preview|inspect|download)\b/.test(combined)) {
+    return 'read_only';
+  }
+
+  return 'network';
 }

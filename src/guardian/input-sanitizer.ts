@@ -86,6 +86,9 @@ export function detectInjection(content: string): { score: number; signals: stri
   return { score, signals };
 }
 
+/** Backwards-compatible alias for callers that want the lower-level utility. */
+export const detectInjectionSignals = detectInjection;
+
 function normalizeInjectionText(content: string): string {
   return content
     .normalize('NFKC')

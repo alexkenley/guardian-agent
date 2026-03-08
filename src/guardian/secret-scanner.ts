@@ -137,6 +137,11 @@ export class SecretScanner {
     return matches;
   }
 
+  /** Explicit alias used by argument sanitizers and other call sites. */
+  scanForSecrets(content: string): SecretMatch[] {
+    return this.scanContent(content);
+  }
+
   removeWindowsADS(filePath: string): string {
     // Find first colon after position 1 (to skip drive letter like C:)
     const adsIndex = filePath.indexOf(':', 2);

@@ -124,6 +124,32 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     errors.push("runtime.logLevel must be one of: fatal, error, warn, info, debug, trace, silent");
   }
 
+  const piiRedaction = config.guardian?.piiRedaction;
+  const validPiiEntities = new Set([
+    'email',
+    'ssn',
+    'credit_card',
+    'phone',
+    'street_address',
+    'date_of_birth',
+    'medical_record_number',
+    'passport',
+    'drivers_license',
+  ]);
+  if (piiRedaction?.mode && !['redact', 'anonymize'].includes(piiRedaction.mode)) {
+    errors.push("guardian.piiRedaction.mode must be 'redact' or 'anonymize'");
+  }
+  if (piiRedaction?.providerScope && !['all', 'external'].includes(piiRedaction.providerScope)) {
+    errors.push("guardian.piiRedaction.providerScope must be 'all' or 'external'");
+  }
+  if (piiRedaction?.entities) {
+    for (const entity of piiRedaction.entities) {
+      if (!validPiiEntities.has(entity)) {
+        errors.push(`guardian.piiRedaction.entities contains unknown entity '${entity}'`);
+      }
+    }
+  }
+
   const webAuth = config.channels.web?.auth;
   if (webAuth?.mode && webAuth.mode !== 'bearer_required') {
     errors.push("channels.web.auth.mode must be 'bearer_required'");
@@ -260,6 +286,12 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
         }
         if (server.timeoutMs !== undefined && server.timeoutMs < 1000) {
           errors.push(`assistant.tools.mcp server '${server.id}' timeoutMs must be >= 1000`);
+        }
+        if (server.trustLevel && !['read_only', 'mutating', 'network', 'external_post'].includes(server.trustLevel)) {
+          errors.push(`assistant.tools.mcp server '${server.id || '(unnamed)'}' trustLevel is invalid`);
+        }
+        if (server.maxCallsPerMinute !== undefined && server.maxCallsPerMinute < 1) {
+          errors.push(`assistant.tools.mcp server '${server.id || '(unnamed)'}' maxCallsPerMinute must be >= 1`);
         }
       }
     }

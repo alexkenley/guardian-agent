@@ -3,6 +3,7 @@ import {
   Guardian,
   CapabilityController,
   SecretScanController,
+  PiiScanController,
   DeniedPathController,
 } from './guardian.js';
 import type { AgentAction } from './guardian.js';
@@ -416,6 +417,35 @@ describe('Guardian', () => {
     });
   });
 
+  describe('PiiScanController', () => {
+    it('should deny high-signal PII in tool arguments', () => {
+      const controller = new PiiScanController();
+      const action: AgentAction = {
+        type: 'write_file',
+        agentId: 'test',
+        capabilities: ['write_files'],
+        params: { path: 'patient.txt', content: 'Patient DOB: 01/31/1988' },
+      };
+
+      const result = controller.check(action);
+      expect(result).not.toBeNull();
+      expect(result!.allowed).toBe(false);
+      expect(result!.reason).toContain('Date of Birth');
+    });
+
+    it('should not block raw user messages by default', () => {
+      const controller = new PiiScanController();
+      const action: AgentAction = {
+        type: 'message_dispatch',
+        agentId: 'test',
+        capabilities: [],
+        params: { content: 'My address is 123 Main St' },
+      };
+
+      expect(controller.check(action)).toBeNull();
+    });
+  });
+
   describe('Guardian pipeline', () => {
     it('should run controllers in order (mutating then validating)', () => {
       const guardian = Guardian.createDefault({ logDenials: false });
@@ -491,6 +521,14 @@ describe('Guardian', () => {
       const names = controllers.map(c => c.name);
 
       expect(names).toContain('RateLimiter');
+    });
+
+    it('should include PiiScanController in default pipeline', () => {
+      const guardian = Guardian.createDefault({ logDenials: false });
+      const controllers = guardian.getControllers();
+      const names = controllers.map(c => c.name);
+
+      expect(names).toContain('PiiScanController');
     });
 
     it('should block prompt injection via pipeline', () => {
