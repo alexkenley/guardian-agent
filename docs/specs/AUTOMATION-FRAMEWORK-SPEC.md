@@ -1,4 +1,4 @@
-# Connector + Playbook Framework Spec (Option 2)
+# Automation Framework Spec
 
 ## Goal
 Build a native automation framework for infrastructure operations (home labs, enterprise labs, building systems) without adopting a full external workflow engine.
@@ -100,6 +100,11 @@ Validation guarantees:
 - Web Connectors control plane (Network > Connectors tab, `#/network`) for settings, pack/playbook CRUD, and playbook runs.
 - Privileged-ticket gating for connector/playbook mutations when `assistant.connectors.studio.requirePrivilegedTicket` is enabled.
 - Signed-definition and dry-run-first enforcement in playbook runtime.
+
+### Phase 4 (Implemented — unified Automations)
+- Web `#/automations` page merges playbooks + scheduled tasks into a single "Automations" UI. Old `#/workflows` and `#/operations` routes redirect.
+- Conversational automation creation: the assistant can create playbooks and schedule tasks via `workflow_upsert` and `task_create` tools, guided by system prompt instructions and tool examples.
+- Clone, example catalog (templates + presets), and merged run history in the unified page.
 
 ## Out of Scope (Current Phase)
 - Distributed multi-node workflow scheduler.

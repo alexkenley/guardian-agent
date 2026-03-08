@@ -11,7 +11,7 @@ Security-first AI agent orchestration system. Built-in agents with predefined ca
 - **Multi-channel access** — CLI, Telegram bot, and Web UI with bearer token auth and cross-channel identity mapping
 - **Web dashboard** — real-time status, LLM providers, agent monitoring, session queue, scheduled jobs, and integrated chat panel
 - **Multi-agent orchestration** — Sequential, Parallel, and Loop agents with inter-step state passing through SharedState
-- **Guardian security pipeline** — per-agent capabilities, secret scanning (28+ credential patterns), PII detection/redaction, prompt injection detection, rate limiting, sensitive path blocking, and output redaction
+- **Guardian security pipeline** — per-agent capabilities, secret scanning (30+ credential and PII patterns), PII detection/redaction, prompt injection detection, rate limiting, sensitive path blocking, and output redaction
 - **Tool governance** — approval workflows, per-tool policy overrides, path/command/domain allowlists, and risk-tiered tool classes with interactive policy editor
 - **MCP tool server integration** — JSON-RPC 2.0 over stdio with namespaced tools, inferred trust levels, optional per-server rate limits, and full Guardian admission on every call
 - **Connector and playbook framework** — declarative connector packs with host/path/command allowlists, bounded step execution, dry-run mode, and signed definitions
@@ -41,9 +41,9 @@ Security-first AI agent orchestration system. Built-in agents with predefined ca
 ![Network Connectors](docs/images/network-connectors.png)
 *Playbook management with Run/Dry Run/Delete actions, recent execution history, and chat panel.*
 
-### Operations
-![Operations](docs/images/operations.png)
-*Scheduled task presets with one-click install, task table with run/edit/delete actions, and execution history.*
+### Automations
+![Automations](docs/images/operations.png)
+*Unified automation catalog — single-tool and multi-step pipelines with optional cron scheduling, examples, clone, and run history.*
 
 ## What This Is
 
@@ -81,7 +81,7 @@ Test agent behavior through the real Runtime with Guardian active:
 - Prompt injection detection with invisible Unicode stripping (18 signal patterns)
 - Per-agent rate limiting (burst, per-minute, per-hour sliding windows)
 - Capability enforcement (per-agent permission grants)
-- Secret scanning (28+ credential patterns: AWS, GCP, GitHub, OpenAI, Stripe, Slack, and more)
+- Secret scanning (30+ credential and PII patterns: AWS, GCP, GitHub, OpenAI, Stripe, Slack, and more)
 - High-signal PII scanning on tool arguments (addresses, DOB, MRN, passport, driver's license)
 - Sensitive path blocking with traversal normalization
 
@@ -414,7 +414,7 @@ Local operations (file reads, shell commands, network scans) are fast and don't 
 
 - CLI: `/config`, `/auth`, `/tools`, `/connectors`, `/playbooks`, `/campaign`, `/assistant`, `/quick`, `/session`, `/analytics`, `/intel`, `/guide`, `/factory-reset`
 - Telegram: `/help`, `/guide`, `/reset`, `/quick`, `/intel`, `/approve`, `/deny`
-- Web: Dashboard, Security (Audit/Monitoring/Threat Intel), Network (Connectors/Devices), Operations (Scheduled Tasks/Run History), Configuration (Providers/Tools/Policy/Search Sources/Settings), Reference Guide, Chat
+- Web: Dashboard, Security (Audit/Monitoring/Threat Intel), Network (Connectors/Devices), Automations (Catalog/Run History/Engine Settings), Configuration (Providers/Tools/Policy/Search Sources/Settings), Reference Guide, Chat
 
 ### Connector + Playbook CLI (Web Parity)
 
@@ -526,7 +526,7 @@ Implementation specs in `docs/specs/`:
 - [Threat Intel](docs/specs/THREAT-INTEL-SPEC.md)
 - [Threat Intel Research](docs/specs/THREAT-INTEL-RESEARCH.md)
 - [Hostile Forum Connectors](docs/specs/HOSTILE-FORUM-CONNECTORS-SPEC.md)
-- [Connector + Playbook Framework (Option 2)](docs/specs/CONNECTOR-PLAYBOOK-FRAMEWORK-SPEC.md)
+- [Automation Framework](docs/specs/AUTOMATION-FRAMEWORK-SPEC.md)
 
 Proposals in `docs/proposals/`:
 - [Windows App Options](docs/proposals/WINDOWS-APP-OPTIONS.md) — deployment options for Windows local enforcement and native helper packaging
