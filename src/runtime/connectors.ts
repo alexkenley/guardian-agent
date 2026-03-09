@@ -375,65 +375,70 @@ export class ConnectorPlaybookService {
     input: ConnectorPlaybookRunInput,
   ): Promise<PlaybookStepRunResult> {
     const startedAt = this.now();
-    const pack = this.config.packs.find((candidate) => candidate.id === step.packId);
-    if (!pack || !pack.enabled) {
+    const scopedPackId = normalizeStepPackId(step.packId);
+    const pack = scopedPackId
+      ? this.config.packs.find((candidate) => candidate.id === scopedPackId)
+      : undefined;
+    if (scopedPackId && (!pack || !pack.enabled)) {
       return {
         stepId: step.id,
         toolName: step.toolName,
-        packId: step.packId,
+        packId: scopedPackId,
         status: 'failed',
-        message: `Connector pack '${step.packId}' is unavailable.`,
-        durationMs: this.now() - startedAt,
-      };
-    }
-
-    const capability = inferCapability(step.toolName);
-    if (!capabilityAllowed(capability, pack.allowedCapabilities)) {
-      return {
-        stepId: step.id,
-        toolName: step.toolName,
-        packId: step.packId,
-        status: 'failed',
-        message: `Capability '${capability}' is not allowed for pack '${pack.id}'.`,
+        message: `Tool access profile '${scopedPackId}' is unavailable.`,
         durationMs: this.now() - startedAt,
       };
     }
 
     const args = isRecord(step.args) ? step.args : {};
-    const pathCheck = checkArgsPaths(args, pack.allowedPaths);
-    if (!pathCheck.allowed) {
-      return {
-        stepId: step.id,
-        toolName: step.toolName,
-        packId: step.packId,
-        status: 'failed',
-        message: pathCheck.reason,
-        durationMs: this.now() - startedAt,
-      };
-    }
+    if (pack) {
+      const capability = inferCapability(step.toolName);
+      if (!capabilityAllowed(capability, pack.allowedCapabilities)) {
+        return {
+          stepId: step.id,
+          toolName: step.toolName,
+          packId: scopedPackId,
+          status: 'failed',
+          message: `Capability '${capability}' is not allowed for access profile '${pack.id}'.`,
+          durationMs: this.now() - startedAt,
+        };
+      }
 
-    const commandCheck = checkArgsCommands(args, pack.allowedCommands);
-    if (!commandCheck.allowed) {
-      return {
-        stepId: step.id,
-        toolName: step.toolName,
-        packId: step.packId,
-        status: 'failed',
-        message: commandCheck.reason,
-        durationMs: this.now() - startedAt,
-      };
-    }
+      const pathCheck = checkArgsPaths(args, pack.allowedPaths);
+      if (!pathCheck.allowed) {
+        return {
+          stepId: step.id,
+          toolName: step.toolName,
+          packId: scopedPackId,
+          status: 'failed',
+          message: pathCheck.reason,
+          durationMs: this.now() - startedAt,
+        };
+      }
 
-    const hostCheck = checkArgsHosts(args, pack.allowedHosts);
-    if (!hostCheck.allowed) {
-      return {
-        stepId: step.id,
-        toolName: step.toolName,
-        packId: step.packId,
-        status: 'failed',
-        message: hostCheck.reason,
-        durationMs: this.now() - startedAt,
-      };
+      const commandCheck = checkArgsCommands(args, pack.allowedCommands);
+      if (!commandCheck.allowed) {
+        return {
+          stepId: step.id,
+          toolName: step.toolName,
+          packId: scopedPackId,
+          status: 'failed',
+          message: commandCheck.reason,
+          durationMs: this.now() - startedAt,
+        };
+      }
+
+      const hostCheck = checkArgsHosts(args, pack.allowedHosts);
+      if (!hostCheck.allowed) {
+        return {
+          stepId: step.id,
+          toolName: step.toolName,
+          packId: scopedPackId,
+          status: 'failed',
+          message: hostCheck.reason,
+          durationMs: this.now() - startedAt,
+        };
+      }
     }
 
     const timeoutMs = step.timeoutMs ?? this.config.playbooks.defaultStepTimeoutMs;
@@ -460,7 +465,7 @@ export class ConnectorPlaybookService {
       return {
         stepId: step.id,
         toolName: step.toolName,
-        packId: step.packId,
+        packId: scopedPackId,
         status,
         message: toolResult.message,
         jobId: toolResult.jobId,
@@ -472,7 +477,7 @@ export class ConnectorPlaybookService {
       return {
         stepId: step.id,
         toolName: step.toolName,
-        packId: step.packId,
+        packId: scopedPackId,
         status: 'failed',
         message: err instanceof Error ? err.message : String(err),
         durationMs: this.now() - startedAt,
@@ -518,6 +523,12 @@ function capabilityAllowed(capability: string, allowedCapabilities: string[]): b
   return allowedCapabilities.includes('*') || allowedCapabilities.includes(capability);
 }
 
+function normalizeStepPackId(packId: string | null | undefined): string {
+  const normalized = (packId ?? '').trim();
+  if (!normalized) return '';
+  return normalized.toLowerCase() === 'default' ? '' : normalized;
+}
+
 function inferCapability(toolName: string): string {
   if (toolName.startsWith('fs_') || toolName === 'doc_create') {
     return toolName === 'fs_read' || toolName === 'fs_list' || toolName === 'fs_search'
@@ -543,7 +554,7 @@ function checkArgsPaths(args: Record<string, unknown>, allowedPaths: string[]): 
 
   for (const candidate of candidates) {
     if (!isPathWithinAllowedRoots(candidate, allowedPaths)) {
-      return { allowed: false, reason: `Path '${candidate}' is outside connector pack allowedPaths.` };
+      return { allowed: false, reason: `Path '${candidate}' is outside the allowed paths for this access profile.` };
     }
   }
   return { allowed: true, reason: 'ok' };
@@ -561,7 +572,7 @@ function checkArgsCommands(args: Record<string, unknown>, allowedCommands: strin
       normalized === prefix || normalized.startsWith(`${prefix} `),
     );
     if (!allowed) {
-      return { allowed: false, reason: `Command '${candidate}' is outside connector pack allowedCommands.` };
+      return { allowed: false, reason: `Command '${candidate}' is outside the allowed commands for this access profile.` };
     }
   }
   return { allowed: true, reason: 'ok' };
@@ -582,7 +593,7 @@ function checkArgsHosts(args: Record<string, unknown>, allowedHosts: string[]): 
         return host === normalized || host.endsWith(`.${normalized}`);
       });
       if (!allowed) {
-        return { allowed: false, reason: `Host '${host}' is outside connector pack allowedHosts.` };
+        return { allowed: false, reason: `Host '${host}' is outside the allowed hosts for this access profile.` };
       }
     } catch {
       return { allowed: false, reason: `Invalid URL '${candidate}'.` };

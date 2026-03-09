@@ -109,6 +109,7 @@ The assistant can create automations (playbooks + scheduled tasks) conversationa
 1. **Detect intent**: When the user asks to "create an automation", "schedule a scan", "set up a recurring task", etc., the assistant calls `find_tools` with keyword "automation" to load the 8 automation tools.
 2. **Gather requirements**: The assistant asks for (a) what to automate (which tool or sequence), (b) tool arguments, (c) whether to schedule and how often. It asks for missing critical details but uses sensible defaults for the rest.
 3. **Create the playbook**: Calls `workflow_upsert` with id, name, mode, and steps. Single-tool automations use one step with mode "sequential". Multi-step pipelines use multiple steps.
+   Built-in tool steps can omit an access profile by using `packId: ""` or `packId: "default"`. That runs through the normal Guardian tool path without extra access-profile allowlists.
 4. **Optionally schedule**: If the user wants recurring execution, calls `task_create` with type "workflow", target set to the playbook id, and a cron expression.
 5. **Verify**: Calls `workflow_list` / `task_list` to confirm creation, and can `workflow_run` with `dryRun: true` to preview.
 
@@ -117,6 +118,7 @@ The automation tools include `examples` arrays with concrete parameter patterns 
 ### Web UI Parity
 
 The web Automations page (`#/automations`) provides the same create/run/clone/delete/schedule capabilities. Old `#/workflows` and `#/operations` routes redirect to `#/automations`.
+For operator-facing copy, the UI uses `Tool Access` and `Built-in tools` language instead of exposing `connector pack` terminology for default steps.
 
 ## Parallel Tool Execution
 

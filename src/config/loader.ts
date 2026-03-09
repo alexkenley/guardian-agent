@@ -424,13 +424,6 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   if (connectors.maxConnectorCallsPerRun < 1) {
     errors.push('assistant.connectors.maxConnectorCallsPerRun must be >= 1');
   }
-  if (connectors.enabled && connectors.packs.length === 0) {
-    errors.push('assistant.connectors.packs must include at least one pack when connectors are enabled');
-  }
-  if (connectors.enabled && !connectors.packs.some((pack) => pack.enabled)) {
-    errors.push('assistant.connectors requires at least one enabled pack when connectors are enabled');
-  }
-
   const seenPackIds = new Set<string>();
   for (const pack of connectors.packs) {
     if (!pack.id?.trim()) {
@@ -506,9 +499,6 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
         errors.push(`assistant.connectors.playbook '${playbook.id}' step id '${step.id}' is duplicated`);
       } else {
         seenStepIds.add(step.id);
-      }
-      if (!step.packId?.trim()) {
-        errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id || '(unnamed)'}' packId is required`);
       }
       if (!step.toolName?.trim()) {
         errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id || '(unnamed)'}' toolName is required`);

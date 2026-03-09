@@ -15,15 +15,20 @@ Option 2 favors:
 
 ## Core Model
 
-### Connector Pack
-A connector pack is a bounded integration profile:
+### Tool Access
+Automation steps use built-in tools by default. An optional access profile can add tighter boundaries for specific workflows.
+
+### Access Profile
+An access profile (internally still stored as a connector pack) is a bounded integration profile:
 - `id`, `name`, `enabled`
 - `allowedCapabilities` (domain-level permissions)
 - `allowedHosts`, `allowedPaths`, `allowedCommands` (sandbox boundaries)
 - `authMode` (`none`, `api_key`, `oauth2`, `certificate`)
 - `requireHumanApprovalForWrites`
 
-Connector packs are declarative policy units, not arbitrary code bundles.
+Access profiles are declarative policy units, not arbitrary code bundles.
+
+If a step uses `packId: ""` or `packId: "default"`, it runs as a built-in tool step with the normal Guardian policy path and no extra access-profile boundary.
 
 ### Playbook
 A playbook is an ordered workflow that calls one or more connector actions.
@@ -46,7 +51,7 @@ Operator-facing visual mode:
 ### Mandatory Controls
 1. Connector calls map to Guardian action checks (`read_file`, `write_file`, `http_request`, `execute_command`, etc.).
 2. Existing tool approval model remains authoritative for mutating/external actions.
-3. Connector pack boundaries are explicit allowlists (hosts/paths/commands/capabilities).
+3. Access profile boundaries are explicit allowlists (hosts/paths/commands/capabilities) when a step opts into one.
 4. Playbook step budgets enforce bounded execution and reduce runaway workflows.
 5. Playbook metadata and results flow into existing audit + hash-chain persistence.
 
@@ -80,7 +85,6 @@ assistant:
 ```
 
 Validation guarantees:
-- Connectors enabled requires at least one enabled pack.
 - Pack IDs must be unique.
 - `maxParallelSteps <= maxSteps`.
 - Timeout floors and enum validation are enforced.
@@ -105,6 +109,7 @@ Validation guarantees:
 - Web `#/automations` page merges playbooks + scheduled tasks into a single "Automations" UI. Old `#/workflows` and `#/operations` routes redirect.
 - Conversational automation creation: the assistant can create playbooks and schedule tasks via `workflow_upsert` and `task_create` tools, guided by system prompt instructions and tool examples.
 - Clone, example catalog (templates + presets), and merged run history in the unified page.
+- Web labels use `Tool Access` / `Built-in tools` language for default steps. Access-profile names only appear when an operator deliberately assigns one.
 
 ## Out of Scope (Current Phase)
 - Distributed multi-node workflow scheduler.

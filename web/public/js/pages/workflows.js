@@ -104,8 +104,9 @@ export async function renderWorkflows(container) {
               </select>
             </div>
             <div class="cfg-field">
-              <label>Permission Policy</label>
-              <select id="wf-create-pack" title="Controls what hosts, paths, and commands each step is allowed to access">
+              <label>Tool Access</label>
+              <select id="wf-create-pack" title="Built-in tools use the normal Guardian rules. Access profiles add extra host, path, and command limits.">
+                <option value="default">Built-in tools</option>
                 ${packs.map((pack) => `<option value="${escAttr(pack.id)}">${esc(pack.name)}</option>`).join('')}
               </select>
             </div>
@@ -773,8 +774,8 @@ function renderPipelineView(workflow, toolLookup, packs) {
         <div class="wf-config-step-body">
           <div class="wf-config-step-fields">
             <div class="cfg-field">
-              <label>Policy</label>
-              <input type="text" value="${escAttr(step.packId || '')}" readonly style="opacity:0.7;cursor:default" title="Permission policy that restricts what this step can access">
+              <label>Tool Access</label>
+              <input type="text" value="${escAttr(formatStepAccess(step.packId, packs))}" readonly style="opacity:0.7;cursor:default" title="Built-in tools use the normal Guardian rules. Access profiles add extra host, path, and command limits.">
             </div>
             <div class="cfg-field">
               <label>Timeout (ms)</label>
@@ -800,7 +801,7 @@ function renderPipelineView(workflow, toolLookup, packs) {
       ${(pack.allowedCommands || []).length > 0 ? `<div class="wf-config-pack-detail">Allowed commands: ${esc(pack.allowedCommands.join(', '))}</div>` : '<div class="wf-config-pack-detail">Commands: none allowed</div>'}
       ${pack.requireHumanApprovalForWrites ? '<div class="wf-config-pack-detail" style="color:var(--warning)">Requires human approval for writes</div>' : ''}
     </div>
-  `).join('') : '<div style="color:var(--text-muted);font-size:0.75rem">No permission policy assigned</div>';
+  `).join('') : '<div style="color:var(--text-muted);font-size:0.75rem">Using built-in tool access</div>';
 
   const configPanel = `
     <details class="wf-config-details">
@@ -865,6 +866,15 @@ function esc(value) {
 
 function escAttr(value) {
   return esc(value).replace(/"/g, '&quot;');
+}
+
+function formatStepAccess(packId, packs) {
+  const normalized = (packId || '').trim();
+  if (!normalized || normalized.toLowerCase() === 'default') {
+    return 'Built-in tools';
+  }
+  const pack = (packs || []).find((candidate) => candidate.id === normalized);
+  return pack ? `${pack.name} (${pack.id})` : normalized;
 }
 
 document.addEventListener('click', (event) => {
