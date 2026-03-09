@@ -406,7 +406,7 @@ Write-Log "=== Autonomous Mode Execution Tests ==="
 Write-Host ""
 Write-Log "--- Test: workflow_upsert (autonomous) ---"
 
-$wfUpsertArgs = @{ name = "harness-test-wf"; steps = @(@{tool="sys_info";args=@{}}) }
+$wfUpsertArgs = @{ id = "harness-test-wf"; name = "Harness Test WF"; mode = "sequential"; steps = @(@{id="step-1";toolName="sys_info";args=@{}}) }
 $wfUpsertResult = Invoke-ToolRun -ToolName "workflow_upsert" -ToolArgs $wfUpsertArgs
 
 if ($wfUpsertResult.status -eq "pending_approval") {
@@ -425,7 +425,7 @@ Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "--- Test: task_create (autonomous) ---"
 
-$taskCreateArgs = @{ name = "harness-test-task"; schedule = "0 0 31 2 *"; action = @{type="tool";toolName="sys_info";args=@{}} }
+$taskCreateArgs = @{ name = "harness-test-task"; type = "tool"; target = "sys_info"; cron = "0 0 31 2 *" }
 $taskCreateResult = Invoke-ToolRun -ToolName "task_create" -ToolArgs $taskCreateArgs
 
 if ($taskCreateResult.status -eq "pending_approval") {
@@ -444,7 +444,7 @@ Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "--- Test: workflow_delete (autonomous) ---"
 
-$wfDeleteArgs = @{ name = "harness-test-wf" }
+$wfDeleteArgs = @{ workflowId = "harness-test-wf" }
 $wfDeleteResult = Invoke-ToolRun -ToolName "workflow_delete" -ToolArgs $wfDeleteArgs
 
 if ($wfDeleteResult.status -eq "pending_approval") {
@@ -463,7 +463,7 @@ Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "--- Test: task_delete (autonomous) ---"
 
-$taskDeleteArgs = @{ id = "harness-nonexistent-id" }
+$taskDeleteArgs = @{ taskId = "harness-nonexistent-id" }
 $taskDeleteResult = Invoke-ToolRun -ToolName "task_delete" -ToolArgs $taskDeleteArgs
 
 if ($taskDeleteResult.status -eq "pending_approval") {
@@ -498,7 +498,7 @@ Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "--- Test: workflow_upsert under approve_by_policy ---"
 
-$wfUpsertApprovalArgs = @{ name = "harness-test-wf"; steps = @(@{tool="sys_info";args=@{}}) }
+$wfUpsertApprovalArgs = @{ id = "harness-test-wf-2"; name = "Harness Test WF 2"; mode = "sequential"; steps = @(@{id="step-1";toolName="sys_info";args=@{}}) }
 $wfUpsertApproval = Invoke-ToolRun -ToolName "workflow_upsert" -ToolArgs $wfUpsertApprovalArgs
 
 if ($wfUpsertApproval.status -eq "pending_approval") {
@@ -522,7 +522,7 @@ Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "--- Test: workflow_delete under approve_by_policy ---"
 
-$wfDeleteApprovalArgs = @{ name = "harness-test-wf" }
+$wfDeleteApprovalArgs = @{ workflowId = "harness-test-wf" }
 $wfDeleteApproval = Invoke-ToolRun -ToolName "workflow_delete" -ToolArgs $wfDeleteApprovalArgs
 
 if ($wfDeleteApproval.status -eq "pending_approval") {
@@ -546,7 +546,7 @@ Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "--- Test: workflow_run under approve_by_policy ---"
 
-$wfRunApprovalArgs = @{ name = "harness-test-wf" }
+$wfRunApprovalArgs = @{ workflowId = "harness-test-wf" }
 $wfRunApproval = Invoke-ToolRun -ToolName "workflow_run" -ToolArgs $wfRunApprovalArgs
 
 if ($wfRunApproval.status -eq "pending_approval") {
@@ -570,7 +570,7 @@ Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "--- Test: task_create under approve_by_policy ---"
 
-$taskCreateApprovalArgs = @{ name = "harness-test-task-2"; schedule = "0 0 31 2 *"; action = @{type="tool";toolName="sys_info";args=@{}} }
+$taskCreateApprovalArgs = @{ name = "harness-test-task-2"; type = "tool"; target = "sys_info"; cron = "0 0 31 2 *" }
 $taskCreateApproval = Invoke-ToolRun -ToolName "task_create" -ToolArgs $taskCreateApprovalArgs
 
 if ($taskCreateApproval.status -eq "pending_approval") {
@@ -594,7 +594,7 @@ Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "--- Test: task_update under approve_by_policy ---"
 
-$taskUpdateApprovalArgs = @{ id = "harness-nonexistent-id"; updates = @{name="updated-name"} }
+$taskUpdateApprovalArgs = @{ taskId = "harness-nonexistent-id"; name = "updated-name" }
 $taskUpdateApproval = Invoke-ToolRun -ToolName "task_update" -ToolArgs $taskUpdateApprovalArgs
 
 if ($taskUpdateApproval.status -eq "pending_approval") {
@@ -618,7 +618,7 @@ Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "--- Test: task_delete under approve_by_policy ---"
 
-$taskDeleteApprovalArgs = @{ id = "harness-nonexistent-id" }
+$taskDeleteApprovalArgs = @{ taskId = "harness-nonexistent-id" }
 $taskDeleteApproval = Invoke-ToolRun -ToolName "task_delete" -ToolArgs $taskDeleteApprovalArgs
 
 if ($taskDeleteApproval.status -eq "pending_approval") {

@@ -91,6 +91,7 @@ export interface RedactedConfig {
     outputScanning?: { enabled: boolean; redactSecrets: boolean };
     guardianAgent?: { enabled: boolean; llmProvider: string; failOpen: boolean; timeoutMs?: number };
     sentinel?: { enabled: boolean; schedule: string };
+    policy?: { enabled: boolean; mode: string; rulesPath?: string };
   };
   runtime: {
     maxStallDurationMs: number;
@@ -590,6 +591,30 @@ export interface DashboardCallbacks {
     failOpen?: boolean;
     timeoutMs?: number;
   }) => { success: boolean; message: string };
+  /** Policy-as-Code engine status. */
+  onPolicyStatus?: () => {
+    enabled: boolean;
+    mode: 'off' | 'shadow' | 'enforce';
+    families: { tool: string; admin: string; guardian: string; event: string };
+    rulesPath: string;
+    ruleCount: number;
+    mismatchLogLimit: number;
+    shadowStats?: {
+      totalComparisons: number;
+      totalMismatches: number;
+      matchRate: number;
+      mismatchesByClass: Record<string, number>;
+    };
+  };
+  /** Update Policy-as-Code engine config. */
+  onPolicyUpdate?: (input: {
+    enabled?: boolean;
+    mode?: 'off' | 'shadow' | 'enforce';
+    families?: { tool?: string; admin?: string; guardian?: string; event?: string };
+    mismatchLogLimit?: number;
+  }) => { success: boolean; message: string };
+  /** Reload policy rules from disk. */
+  onPolicyReload?: () => { success: boolean; message: string; loaded: number; skipped: number; errors: string[] };
   /** Sentinel audit: run on-demand and return results. */
   onSentinelAuditRun?: (windowMs?: number) => Promise<{
     success: boolean;

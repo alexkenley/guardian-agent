@@ -57,6 +57,10 @@ $Fail = 0
 $Skip = 0
 $Results = @()
 $LogFile = Join-Path $env:TEMP "guardian-intel-harness.log"
+$HarnessScanTarget = "harness-intel-scan-" + [guid]::NewGuid().ToString("N") + ".example.com"
+$HarnessApprovalRemoveTarget = "harness-intel-remove-" + [guid]::NewGuid().ToString("N") + ".example.com"
+$HarnessApprovalAddTarget = "harness-intel-add-" + [guid]::NewGuid().ToString("N") + ".example.com"
+$DraftFindingId = $null
 
 # --- Helpers ---
 function Write-Log($msg) { Write-Host "[intel] $msg" -ForegroundColor Cyan }
@@ -214,6 +218,18 @@ function Invoke-ToolRun {
     catch { return @{ success = $false; error = $_.Exception.Message } }
 }
 
+function Get-ErrorText {
+    param(
+        [object]$Primary,
+        [object]$Secondary,
+        [string]$Fallback = "unknown"
+    )
+
+    if ($null -ne $Primary -and "$Primary".Trim().Length -gt 0) { return "$Primary" }
+    if ($null -ne $Secondary -and "$Secondary".Trim().Length -gt 0) { return "$Secondary" }
+    return $Fallback
+}
+
 # --- Start the app ---
 if (-not $SkipStart) {
     $existing = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
@@ -348,9 +364,9 @@ $intelToolsAvailable = $false
 
 # Try a read-only intel call via direct tool API to check availability
 $probeArgs = @{}
-$intelProbe = Invoke-ToolRun -ToolName "intel_watch_list" -ToolArgs $probeArgs
+$intelProbe = Invoke-ToolRun -ToolName "intel_summary" -ToolArgs $probeArgs
 
-if ($intelProbe.success -eq $true -or $intelProbe.status -eq "succeeded" -or $intelProbe.status -eq "failed") {
+if ($intelProbe.success -eq $true -or $intelProbe.status -eq "succeeded") {
     $intelToolsAvailable = $true
     Write-Pass "intel: tools available (probe status: $($intelProbe.status))"
 }
@@ -358,16 +374,16 @@ elseif ($intelProbe.message -match "not enabled|not configured") {
     Write-Skip "intel: all intel tests" "Threat intel not enabled or not configured"
 }
 elseif ($intelProbe.message -match "Unknown tool") {
-    Write-Skip "intel: all intel tests" "intel_watch_list tool not registered (intel category may be disabled)"
+    Write-Skip "intel: all intel tests" "intel_summary tool not registered (intel category may be disabled)"
 }
 elseif ($intelProbe.error -match "not enabled|not configured") {
     Write-Skip "intel: all intel tests" "Threat intel not enabled or not configured"
 }
 elseif ($intelProbe.error -match "Unknown tool") {
-    Write-Skip "intel: all intel tests" "intel_watch_list tool not registered (intel category may be disabled)"
+    Write-Skip "intel: all intel tests" "intel_summary tool not registered (intel category may be disabled)"
 }
 else {
-    Write-Skip "intel: all intel tests" "unexpected probe result: status=$($intelProbe.status), error=$($intelProbe.error), message=$($intelProbe.message)"
+    Write-Fail "intel: prerequisite probe" "status=$($intelProbe.status), error=$($intelProbe.error), message=$($intelProbe.message)"
 }
 
 if ($intelToolsAvailable) {
@@ -378,23 +394,33 @@ if ($intelToolsAvailable) {
 Write-Host ""
 Write-Log "=== Read-Only Intel Tests (Autonomous Mode) ==="
 
-$null = Invoke-ToolPolicy @{ mode = "autonomous" }
+$null = Invoke-ToolPolicy @{
+    mode = "autonomous"
+    toolPolicies = @{
+        intel_watch_add = "policy"
+        intel_watch_remove = "policy"
+        intel_draft_action = "policy"
+        intel_scan = "policy"
+        intel_summary = "policy"
+        intel_findings = "policy"
+    }
+}
 Write-Pass "setup: autonomous policy for intel read-only tests"
 
 Start-Sleep -Seconds 2
 
-# --- intel_watch_list (read_only) ---
+# --- intel_summary (read_only) ---
 Write-Host ""
-Write-Log "--- intel_watch_list (read_only) ---"
+Write-Log "--- intel_summary (read_only) ---"
 
-$watchListArgs = @{}
-$watchListResult = Invoke-ToolRun -ToolName "intel_watch_list" -ToolArgs $watchListArgs
+$summaryArgs = @{}
+$summaryResult = Invoke-ToolRun -ToolName "intel_summary" -ToolArgs $summaryArgs
 
-if ($watchListResult.success -eq $true -or $watchListResult.status -eq "succeeded" -or $watchListResult.status -eq "failed") {
-    Write-Pass "intel_watch_list: tool executed (status: $($watchListResult.status))"
+if ($summaryResult.success -eq $true -or $summaryResult.status -eq "succeeded") {
+    Write-Pass "intel_summary: tool executed (status: $($summaryResult.status))"
 }
 else {
-    Write-Fail "intel_watch_list: tool execution" "status=$($watchListResult.status), error=$($watchListResult.error)"
+    Write-Fail "intel_summary: tool execution" "status=$($summaryResult.status), error=$($summaryResult.error), message=$($summaryResult.message)"
 }
 
 Start-Sleep -Seconds 2
@@ -406,11 +432,11 @@ Write-Log "--- intel_findings (read_only) ---"
 $findingsArgs = @{ limit = 5 }
 $findingsResult = Invoke-ToolRun -ToolName "intel_findings" -ToolArgs $findingsArgs
 
-if ($findingsResult.success -eq $true -or $findingsResult.status -eq "succeeded" -or $findingsResult.status -eq "failed") {
+if ($findingsResult.success -eq $true -or $findingsResult.status -eq "succeeded") {
     Write-Pass "intel_findings: tool executed (status: $($findingsResult.status))"
 }
 else {
-    Write-Fail "intel_findings: tool execution" "status=$($findingsResult.status), error=$($findingsResult.error)"
+    Write-Fail "intel_findings: tool execution" "status=$($findingsResult.status), error=$($findingsResult.error), message=$($findingsResult.message)"
 }
 
 Start-Sleep -Seconds 2
@@ -425,30 +451,14 @@ Write-Log "=== Autonomous Mode Execution (Mutating + Network) ==="
 Write-Host ""
 Write-Log "--- intel_watch_add (mutating, autonomous) ---"
 
-$addArgs = @{ indicator = "harness-test-indicator.example.com"; type = "domain"; notes = "harness test" }
+$addArgs = @{ target = $HarnessScanTarget }
 $addResult = Invoke-ToolRun -ToolName "intel_watch_add" -ToolArgs $addArgs
 
-if ($addResult.success -eq $true -or $addResult.status -eq "succeeded" -or $addResult.status -eq "failed") {
+if ($addResult.success -eq $true -or $addResult.status -eq "succeeded") {
     Write-Pass "intel_watch_add: tool executed (status: $($addResult.status))"
 }
 else {
-    Write-Fail "intel_watch_add: tool execution" "status=$($addResult.status), error=$($addResult.error)"
-}
-
-Start-Sleep -Seconds 2
-
-# --- intel_watch_remove (mutating) ---
-Write-Host ""
-Write-Log "--- intel_watch_remove (mutating, autonomous) ---"
-
-$removeArgs = @{ indicator = "harness-test-indicator.example.com" }
-$removeResult = Invoke-ToolRun -ToolName "intel_watch_remove" -ToolArgs $removeArgs
-
-if ($removeResult.success -eq $true -or $removeResult.status -eq "succeeded" -or $removeResult.status -eq "failed") {
-    Write-Pass "intel_watch_remove: tool executed (status: $($removeResult.status))"
-}
-else {
-    Write-Fail "intel_watch_remove: tool execution" "status=$($removeResult.status), error=$($removeResult.error)"
+    Write-Fail "intel_watch_add: tool execution" "status=$($addResult.status), error=$($addResult.error), message=$($addResult.message)"
 }
 
 Start-Sleep -Seconds 2
@@ -457,14 +467,52 @@ Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "--- intel_scan (network, autonomous) ---"
 
-$scanArgs = @{}
+$scanArgs = @{ query = $HarnessScanTarget }
 $scanResult = Invoke-ToolRun -ToolName "intel_scan" -ToolArgs $scanArgs
 
-if ($scanResult.success -eq $true -or $scanResult.status -eq "succeeded" -or $scanResult.status -eq "failed") {
+if ($scanResult.success -eq $true -or $scanResult.status -eq "succeeded") {
     Write-Pass "intel_scan: tool executed (status: $($scanResult.status))"
+    if ($scanResult.output -and $scanResult.output.findings -and $scanResult.output.findings.Count -gt 0) {
+        $DraftFindingId = $scanResult.output.findings[0].id
+        if ($DraftFindingId) {
+            Write-Pass "intel_scan: produced finding for draft_action approval test"
+        }
+    }
 }
 else {
-    Write-Fail "intel_scan: tool execution" "status=$($scanResult.status), error=$($scanResult.error)"
+    Write-Fail "intel_scan: tool execution" "status=$($scanResult.status), error=$($scanResult.error), message=$($scanResult.message)"
+}
+
+Start-Sleep -Seconds 2
+
+# --- intel_watch_add for approval remove target (mutating) ---
+Write-Host ""
+Write-Log "--- intel_watch_add for approval remove target (mutating, autonomous) ---"
+
+$seedRemoveArgs = @{ target = $HarnessApprovalRemoveTarget }
+$seedRemoveResult = Invoke-ToolRun -ToolName "intel_watch_add" -ToolArgs $seedRemoveArgs
+
+if ($seedRemoveResult.success -eq $true -or $seedRemoveResult.status -eq "succeeded") {
+    Write-Pass "intel_watch_add (seed remove target): tool executed (status: $($seedRemoveResult.status))"
+}
+else {
+    Write-Fail "intel_watch_add (seed remove target): tool execution" "status=$($seedRemoveResult.status), error=$($seedRemoveResult.error), message=$($seedRemoveResult.message)"
+}
+
+Start-Sleep -Seconds 2
+
+# --- intel_watch_remove (mutating) ---
+Write-Host ""
+Write-Log "--- intel_watch_remove (mutating, autonomous) ---"
+
+$removeArgs = @{ target = $HarnessScanTarget }
+$removeResult = Invoke-ToolRun -ToolName "intel_watch_remove" -ToolArgs $removeArgs
+
+if ($removeResult.success -eq $true -or $removeResult.status -eq "succeeded") {
+    Write-Pass "intel_watch_remove: tool executed (status: $($removeResult.status))"
+}
+else {
+    Write-Fail "intel_watch_remove: tool execution" "status=$($removeResult.status), error=$($removeResult.error), message=$($removeResult.message)"
 }
 
 Start-Sleep -Seconds 2
@@ -476,12 +524,22 @@ Write-Host ""
 Write-Log "=== Intel Approval Tests (approve_by_policy) ==="
 
 # --- Switch to approve_by_policy ---
-$policyResult = Invoke-ToolPolicy @{ mode = "approve_by_policy" }
+$policyResult = Invoke-ToolPolicy @{
+    mode = "approve_by_policy"
+    toolPolicies = @{
+        intel_watch_add = "manual"
+        intel_watch_remove = "manual"
+        intel_draft_action = "manual"
+        intel_scan = "policy"
+        intel_summary = "policy"
+        intel_findings = "policy"
+    }
+}
 if ($policyResult.error) {
     Write-Fail "approval: set approve_by_policy" $policyResult.error
 }
 else {
-    Write-Pass "approval: policy set to approve_by_policy"
+    Write-Pass "approval: policy set to approve_by_policy with explicit intel overrides"
 }
 
 Start-Sleep -Seconds 2
@@ -490,7 +548,7 @@ Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "--- intel_watch_add under approve_by_policy ---"
 
-$addApprovalArgs = @{ indicator = "harness-test-indicator.example.com"; type = "domain"; notes = "harness approval test" }
+$addApprovalArgs = @{ target = $HarnessApprovalAddTarget }
 $addApprovalResult = Invoke-ToolRun -ToolName "intel_watch_add" -ToolArgs $addApprovalArgs
 
 if ($addApprovalResult.status -eq "pending_approval") {
@@ -498,14 +556,14 @@ if ($addApprovalResult.status -eq "pending_approval") {
     if ($addApprovalResult.approvalId) {
         $deny = Invoke-ApprovalDecision $addApprovalResult.approvalId "denied" "harness test"
         if ($deny.success) { Write-Pass "intel_watch_add (approve_by_policy): denial accepted" }
-        else { Write-Fail "intel_watch_add (approve_by_policy): deny" ($deny.error ?? "unknown") }
+        else { Write-Fail "intel_watch_add (approve_by_policy): deny" (Get-ErrorText $deny.error $deny.message) }
     }
 }
 elseif ($addApprovalResult.success -eq $true) {
     Write-Fail "intel_watch_add (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
 }
 else {
-    Write-Fail "intel_watch_add (approve_by_policy): unexpected" "status=$($addApprovalResult.status), error=$($addApprovalResult.error)"
+    Write-Fail "intel_watch_add (approve_by_policy): unexpected" "status=$($addApprovalResult.status), error=$($addApprovalResult.error), message=$($addApprovalResult.message)"
 }
 
 Start-Sleep -Seconds 2
@@ -514,7 +572,7 @@ Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "--- intel_watch_remove under approve_by_policy ---"
 
-$removeApprovalArgs = @{ indicator = "harness-test-indicator.example.com" }
+$removeApprovalArgs = @{ target = $HarnessApprovalRemoveTarget }
 $removeApprovalResult = Invoke-ToolRun -ToolName "intel_watch_remove" -ToolArgs $removeApprovalArgs
 
 if ($removeApprovalResult.status -eq "pending_approval") {
@@ -522,14 +580,14 @@ if ($removeApprovalResult.status -eq "pending_approval") {
     if ($removeApprovalResult.approvalId) {
         $deny = Invoke-ApprovalDecision $removeApprovalResult.approvalId "denied" "harness test"
         if ($deny.success) { Write-Pass "intel_watch_remove (approve_by_policy): denial accepted" }
-        else { Write-Fail "intel_watch_remove (approve_by_policy): deny" ($deny.error ?? "unknown") }
+        else { Write-Fail "intel_watch_remove (approve_by_policy): deny" (Get-ErrorText $deny.error $deny.message) }
     }
 }
 elseif ($removeApprovalResult.success -eq $true) {
     Write-Fail "intel_watch_remove (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
 }
 else {
-    Write-Fail "intel_watch_remove (approve_by_policy): unexpected" "status=$($removeApprovalResult.status), error=$($removeApprovalResult.error)"
+    Write-Fail "intel_watch_remove (approve_by_policy): unexpected" "status=$($removeApprovalResult.status), error=$($removeApprovalResult.error), message=$($removeApprovalResult.message)"
 }
 
 Start-Sleep -Seconds 2
@@ -538,22 +596,27 @@ Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "--- intel_draft_action under approve_by_policy ---"
 
-$draftApprovalArgs = @{ findingId = "harness-fake-finding" }
-$draftApprovalResult = Invoke-ToolRun -ToolName "intel_draft_action" -ToolArgs $draftApprovalArgs
+if ($DraftFindingId) {
+    $draftApprovalArgs = @{ findingId = $DraftFindingId; type = "draft_response" }
+    $draftApprovalResult = Invoke-ToolRun -ToolName "intel_draft_action" -ToolArgs $draftApprovalArgs
 
-if ($draftApprovalResult.status -eq "pending_approval") {
-    Write-Pass "intel_draft_action (approve_by_policy): requires approval (pending_approval)"
-    if ($draftApprovalResult.approvalId) {
-        $deny = Invoke-ApprovalDecision $draftApprovalResult.approvalId "denied" "harness test"
-        if ($deny.success) { Write-Pass "intel_draft_action (approve_by_policy): denial accepted" }
-        else { Write-Fail "intel_draft_action (approve_by_policy): deny" ($deny.error ?? "unknown") }
+    if ($draftApprovalResult.status -eq "pending_approval") {
+        Write-Pass "intel_draft_action (approve_by_policy): requires approval (pending_approval)"
+        if ($draftApprovalResult.approvalId) {
+            $deny = Invoke-ApprovalDecision $draftApprovalResult.approvalId "denied" "harness test"
+            if ($deny.success) { Write-Pass "intel_draft_action (approve_by_policy): denial accepted" }
+            else { Write-Fail "intel_draft_action (approve_by_policy): deny" (Get-ErrorText $deny.error $deny.message) }
+        }
+    }
+    elseif ($draftApprovalResult.success -eq $true) {
+        Write-Fail "intel_draft_action (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
+    }
+    else {
+        Write-Fail "intel_draft_action (approve_by_policy): unexpected" "status=$($draftApprovalResult.status), error=$($draftApprovalResult.error), message=$($draftApprovalResult.message)"
     }
 }
-elseif ($draftApprovalResult.success -eq $true) {
-    Write-Fail "intel_draft_action (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
-}
 else {
-    Write-Fail "intel_draft_action (approve_by_policy): unexpected" "status=$($draftApprovalResult.status), error=$($draftApprovalResult.error)"
+    Write-Skip "intel_draft_action (approve_by_policy)" "no valid findingId available from autonomous intel_scan"
 }
 
 Start-Sleep -Seconds 2
@@ -581,25 +644,21 @@ else {
 
 Start-Sleep -Seconds 2
 
-# --- intel_watch_list (read_only) should NOT require approval ---
+# --- intel_summary (read_only) should NOT require approval ---
 Write-Host ""
-Write-Log "--- intel_watch_list under approve_by_policy ---"
+Write-Log "--- intel_summary under approve_by_policy ---"
 
-$watchListPolicyArgs = @{}
-$watchListPolicyResult = Invoke-ToolRun -ToolName "intel_watch_list" -ToolArgs $watchListPolicyArgs
+$summaryPolicyArgs = @{}
+$summaryPolicyResult = Invoke-ToolRun -ToolName "intel_summary" -ToolArgs $summaryPolicyArgs
 
-if ($watchListPolicyResult.status -eq "pending_approval") {
-    Write-Fail "intel_watch_list (approve_by_policy): incorrectly requires approval" "read_only tools should be auto-allowed"
+if ($summaryPolicyResult.status -eq "pending_approval") {
+    Write-Fail "intel_summary (approve_by_policy): incorrectly requires approval" "read_only tools should be auto-allowed"
 }
-elseif ($watchListPolicyResult.success -eq $true -or $watchListPolicyResult.status -eq "succeeded") {
-    Write-Pass "intel_watch_list (approve_by_policy): allowed without approval"
-}
-elseif ($watchListPolicyResult.status -eq "failed" -or $watchListPolicyResult.status -eq "error") {
-    # Tool executed past approval gate — acceptable
-    Write-Pass "intel_watch_list (approve_by_policy): tool executed without approval (status: $($watchListPolicyResult.status))"
+elseif ($summaryPolicyResult.success -eq $true -or $summaryPolicyResult.status -eq "succeeded") {
+    Write-Pass "intel_summary (approve_by_policy): allowed without approval"
 }
 else {
-    Write-Fail "intel_watch_list (approve_by_policy): unexpected" "status=$($watchListPolicyResult.status), error=$($watchListPolicyResult.error)"
+    Write-Fail "intel_summary (approve_by_policy): unexpected" "status=$($summaryPolicyResult.status), error=$($summaryPolicyResult.error), message=$($summaryPolicyResult.message)"
 }
 
 Start-Sleep -Seconds 2
@@ -617,12 +676,8 @@ if ($findingsPolicyResult.status -eq "pending_approval") {
 elseif ($findingsPolicyResult.success -eq $true -or $findingsPolicyResult.status -eq "succeeded") {
     Write-Pass "intel_findings (approve_by_policy): allowed without approval"
 }
-elseif ($findingsPolicyResult.status -eq "failed" -or $findingsPolicyResult.status -eq "error") {
-    # Tool executed past approval gate — acceptable
-    Write-Pass "intel_findings (approve_by_policy): tool executed without approval (status: $($findingsPolicyResult.status))"
-}
 else {
-    Write-Fail "intel_findings (approve_by_policy): unexpected" "status=$($findingsPolicyResult.status), error=$($findingsPolicyResult.error)"
+    Write-Fail "intel_findings (approve_by_policy): unexpected" "status=$($findingsPolicyResult.status), error=$($findingsPolicyResult.error), message=$($findingsPolicyResult.message)"
 }
 
 Start-Sleep -Seconds 2
@@ -633,12 +688,22 @@ Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "=== Cleanup ==="
 
-$restoreResult = Invoke-ToolPolicy @{ mode = "approve_by_policy" }
+$restoreResult = Invoke-ToolPolicy @{
+    mode = "approve_by_policy"
+    toolPolicies = @{
+        intel_watch_add = "policy"
+        intel_watch_remove = "policy"
+        intel_draft_action = "policy"
+        intel_scan = "policy"
+        intel_summary = "policy"
+        intel_findings = "policy"
+    }
+}
 if ($restoreResult.error) {
     Write-Fail "cleanup: restore policy" $restoreResult.error
 }
 else {
-    Write-Pass "cleanup: policy restored to approve_by_policy"
+    Write-Pass "cleanup: intel tool policies restored to policy/approve_by_policy"
 }
 
 # ===============================================================

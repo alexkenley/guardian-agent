@@ -291,3 +291,5 @@ if ($AppProcess -and -not $AppProcess.HasExited) {
     Write-Log "Stopping app (PID $($AppProcess.Id))..."
     $AppProcess.Kill()
 }
+
+exit $Fail

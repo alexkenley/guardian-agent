@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "contacts": [
+    {
+      "id": "aefb1fb3-d97a-4bae-a5e5-0a3d546fcc2b",
+      "email": "harness-contact-e6c6424c36fb4843bfbd1f1658334322@example.com",
+      "name": "Harness Contact",
+      "company": "GuardianAgent",
+      "tags": [
+        "harness"
+      ],
+      "source": "harness",
+      "createdAt": 1773019354484,
+      "updatedAt": 1773019354484
+    },
+    {
+      "id": "173ea5da-cf13-42cc-a5f6-395445860446",
+      "email": "harness-extra-e6c6424c36fb4843bfbd1f1658334322@example.com",
+      "name": "Harness Extra",
+      "company": "GuardianAgent",
+      "tags": [
+        "harness"
+      ],
+      "source": "harness",
+      "createdAt": 1773019354484,
+      "updatedAt": 1773019354484
+    },
+    {
+      "id": "8043a115-3ded-4767-bf72-c172ba6c8765",
+      "email": "harness-contact-177b85bdf8d641b18afa505382596452@example.com",
+      "name": "Harness Contact",
+      "company": "GuardianAgent",
+      "tags": [
+        "harness"
+      ],
+      "source": "harness",
+      "createdAt": 1773019956492,
+      "updatedAt": 1773019956492
+    },
+    {
+      "id": "fe3119fb-bf61-41e0-9e14-96b40a2e1dfc",
+      "email": "harness-extra-177b85bdf8d641b18afa505382596452@example.com",
+      "name": "Harness Extra",
+      "company": "GuardianAgent",
+      "tags": [
+        "harness"
+      ],
+      "source": "harness",
+      "createdAt": 1773019956492,
+      "updatedAt": 1773019956492
+    }
+  ],
+  "campaigns": [
+    {
+      "id": "eb01c82e-c7a6-41c9-8c9d-bb40b28611c1",
+      "name": "harness-campaign-e6c6424c36fb4843bfbd1f1658334322",
+      "subjectTemplate": "Harness hello {{name}}",
+      "bodyTemplate": "Hello {{name}}, your email is {{email}}.",
+      "contactIds": [
+        "aefb1fb3-d97a-4bae-a5e5-0a3d546fcc2b"
+      ],
+      "status": "ready",
+      "createdAt": 1773019358524,
+      "updatedAt": 1773019360553
+    },
+    {
+      "id": "20c5f4ac-5b9f-4698-8529-d64f10e45349",
+      "name": "harness-campaign-177b85bdf8d641b18afa505382596452",
+      "subjectTemplate": "Harness hello {{name}}",
+      "bodyTemplate": "Hello {{name}}, your email is {{email}}.",
+      "contactIds": [
+        "8043a115-3ded-4767-bf72-c172ba6c8765"
+      ],
+      "status": "ready",
+      "createdAt": 1773019960529,
+      "updatedAt": 1773019962542
+    }
+  ],
+  "runs": []
+}

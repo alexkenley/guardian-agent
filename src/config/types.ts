@@ -285,6 +285,24 @@ export interface GuardianConfig {
   };
   /** Trust preset for quick security posture configuration. */
   trustPreset?: 'locked' | 'safe' | 'balanced' | 'power';
+  /** Policy-as-Code engine configuration. */
+  policy?: {
+    /** Enable the policy engine (default: true). */
+    enabled: boolean;
+    /** Operating mode: 'off' (disabled), 'shadow' (compare only), 'enforce' (authoritative). */
+    mode: 'off' | 'shadow' | 'enforce';
+    /** Per-family mode overrides (inherit from top-level mode if absent). */
+    families?: {
+      tool?: 'off' | 'shadow' | 'enforce';
+      admin?: 'off' | 'shadow' | 'enforce';
+      guardian?: 'off' | 'shadow' | 'enforce';
+      event?: 'off' | 'shadow' | 'enforce';
+    };
+    /** Path to policy rule files directory (default: policies/). */
+    rulesPath?: string;
+    /** Maximum shadow mismatches to log before throttling (default: 1000). */
+    mismatchLogLimit?: number;
+  };
 }
 
 /** Runtime configuration. */
@@ -913,6 +931,12 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
     auditLog: {
       maxEvents: 10_000,
       persistenceEnabled: true,
+    },
+    policy: {
+      enabled: true,
+      mode: 'shadow',
+      rulesPath: 'policies/',
+      mismatchLogLimit: 1000,
     },
   },
   runtime: {

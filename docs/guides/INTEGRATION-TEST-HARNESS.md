@@ -419,38 +419,39 @@ Tests threat intelligence tools: watchlist management, scanning, and action draf
 
 | Operation | Policy Mode | Expected | What It Validates |
 |-----------|-------------|----------|-------------------|
-| `intel_watch_list` | autonomous | succeeded/failed | List watchlist (read_only) |
+| `intel_summary` | autonomous | succeeded | Get summary state (read_only) |
 | `intel_findings` | autonomous | succeeded/failed | List findings (read_only) |
-| `intel_watch_add` | autonomous | succeeded/failed | Add indicator (mutating) |
-| `intel_watch_remove` | autonomous | succeeded/failed | Remove indicator (mutating) |
-| `intel_scan` | autonomous | succeeded/failed | Scan for threats (network) |
+| `intel_watch_add` | autonomous | succeeded | Add indicator (mutating) |
+| `intel_watch_remove` | autonomous | succeeded | Remove indicator (mutating) |
+| `intel_scan` | autonomous | succeeded | Scan for threats and seed a real finding ID |
 | `intel_watch_add` | approve_by_policy | pending_approval → deny | Mutating gated |
 | `intel_watch_remove` | approve_by_policy | pending_approval → deny | Mutating gated |
-| `intel_draft_action` | approve_by_policy | pending_approval → deny | Mutating gated |
+| `intel_draft_action` | approve_by_policy | pending_approval → deny | Mutating gated with a valid finding ID |
 | `intel_scan` | approve_by_policy | NOT pending_approval | Network auto-allowed |
-| `intel_watch_list` | approve_by_policy | NOT pending_approval | Read-only passes through |
+| `intel_summary` | approve_by_policy | NOT pending_approval | Read-only passes through |
 | `intel_findings` | approve_by_policy | NOT pending_approval | Read-only passes through |
 
 ### Contacts & Campaign Suite (`test-contacts.ps1`, ~24 assertions)
 
-Tests contacts management, campaign lifecycle, and `gmail_send` approval gating. The `gmail_send` tool has `external_post` risk — it always requires approval except in autonomous mode.
+Tests contacts management, campaign lifecycle, and `gmail_send` approval gating. The `gmail_send` tool has `external_post` risk and always requires approval, even in autonomous mode.
 
 | Operation | Policy Mode | Expected | What It Validates |
 |-----------|-------------|----------|-------------------|
-| `contacts_list` | autonomous | succeeded/failed | List contacts (read_only) |
-| `campaign_list` | autonomous | succeeded/failed | List campaigns (read_only) |
-| `contacts_import` | autonomous | succeeded/failed | Import contacts (mutating) |
-| `campaign_create` | autonomous | succeeded/failed | Create campaign (mutating) |
-| `campaign_delete` | autonomous | succeeded/failed | Delete campaign (mutating) |
-| `contacts_import` | approve_by_policy | pending_approval → deny | Mutating gated |
-| `contacts_discover` | approve_by_policy | pending_approval → deny | Mutating gated |
+| `contacts_list` | autonomous | succeeded | List contacts (read_only) |
+| `campaign_list` | autonomous | succeeded | List campaigns (read_only) |
+| `contacts_import_csv` | autonomous | succeeded | Import contacts from CSV (mutating) |
+| `campaign_create` | autonomous | succeeded | Create campaign with valid templates (mutating) |
+| `campaign_add_contacts` | autonomous | succeeded | Attach imported contacts to a campaign (mutating) |
+| `campaign_dry_run` | autonomous | succeeded | Render campaign drafts without sending (read_only) |
+| `contacts_import_csv` | approve_by_policy | pending_approval → deny | Mutating gated |
+| `contacts_discover_browser` | approve_by_policy | NOT pending_approval | Network tool auto-allowed |
 | `campaign_create` | approve_by_policy | pending_approval → deny | Mutating gated |
-| `campaign_update` | approve_by_policy | pending_approval → deny | Mutating gated |
-| `campaign_delete` | approve_by_policy | pending_approval → deny | Mutating gated |
+| `campaign_add_contacts` | approve_by_policy | pending_approval → deny | Mutating gated |
 | `contacts_list` | approve_by_policy | NOT pending_approval | Read-only passes through |
 | `campaign_list` | approve_by_policy | NOT pending_approval | Read-only passes through |
+| `campaign_dry_run` | approve_by_policy | NOT pending_approval | Read-only passes through |
 | `gmail_send` | approve_by_policy | pending_approval → deny | External_post always gated |
-| `gmail_send` | autonomous | NOT pending_approval | Autonomous allows all |
+| `gmail_send` | autonomous | pending_approval → deny | External_post still gated in autonomous |
 
 ### Browser Automation Suite (`test-browser.ps1`, ~15 assertions)
 

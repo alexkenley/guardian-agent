@@ -26,6 +26,8 @@ import { BaseAgent } from './agent/agent.js';
 import { createAgentDefinition } from './agent/agent.js';
 import type { AgentContext, AgentResponse, UserMessage } from './agent/types.js';
 import { GuardianAgentService, SentinelAuditService } from './runtime/sentinel.js';
+import { createPolicyEngine, loadPolicyFiles, ShadowEvaluator } from './policy/index.js';
+import type { PolicyModeConfig } from './policy/index.js';
 import { createLogger, setLogLevel } from './util/logging.js';
 import { ConversationService } from './runtime/conversation.js';
 import { getReferenceGuide, formatGuideForTelegram } from './reference-guide.js';
@@ -1922,6 +1924,11 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
         enabled: config.guardian.sentinel.enabled,
         schedule: config.guardian.sentinel.schedule,
       } : undefined,
+      policy: config.guardian.policy ? {
+        enabled: config.guardian.policy.enabled,
+        mode: config.guardian.policy.mode,
+        rulesPath: config.guardian.policy.rulesPath,
+      } : undefined,
     },
     runtime: config.runtime,
     assistant: {
@@ -2037,6 +2044,31 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
   };
 }
 
+/** Policy engine runtime state container. */
+interface PolicyState {
+  getStatus: () => {
+    enabled: boolean;
+    mode: 'off' | 'shadow' | 'enforce';
+    families: { tool: string; admin: string; guardian: string; event: string };
+    rulesPath: string;
+    ruleCount: number;
+    mismatchLogLimit: number;
+    shadowStats?: {
+      totalComparisons: number;
+      totalMismatches: number;
+      matchRate: number;
+      mismatchesByClass: Record<string, number>;
+    };
+  };
+  update: (input: {
+    enabled?: boolean;
+    mode?: 'off' | 'shadow' | 'enforce';
+    families?: { tool?: string; admin?: string; guardian?: string; event?: string };
+    mismatchLogLimit?: number;
+  }) => { success: boolean; message: string };
+  reload: () => { success: boolean; message: string; loaded: number; skipped: number; errors: string[] };
+}
+
 /** Build dashboard callbacks wired to runtime internals. */
 function buildDashboardCallbacks(
   runtime: Runtime,
@@ -2060,6 +2092,7 @@ function buildDashboardCallbacks(
   runNetworkAnalysis: (source: string) => NetworkAnomalyReport,
   guardianAgentService: GuardianAgentService,
   sentinelAuditService: SentinelAuditService,
+  policyState: PolicyState,
 ): DashboardCallbacks {
   const loadRawConfig = (): Record<string, unknown> => {
     if (!existsSync(configPath)) return {};
@@ -3813,6 +3846,9 @@ function buildDashboardCallbacks(
       guardianAgentService.updateConfig(input);
       return { success: true, message: 'Guardian Agent configuration updated.' };
     },
+    onPolicyStatus: policyState.getStatus,
+    onPolicyUpdate: policyState.update,
+    onPolicyReload: policyState.reload,
     onSentinelAuditRun: async (windowMs) => {
       const result = await sentinelAuditService.runAudit(runtime.auditLog, windowMs);
       return {
@@ -4885,6 +4921,7 @@ async function main(): Promise<void> {
       resolveGwsProvider,
       config.assistant.tools.contextBudget,
       config.qualityFallback,
+      resolveRoutedProviderForTools,
     );
     runtime.registerAgent(createAgentDefinition({
       agent: localAgent,
@@ -4907,6 +4944,7 @@ async function main(): Promise<void> {
       resolveGwsProvider,
       config.assistant.tools.contextBudget,
       config.qualityFallback,
+      resolveRoutedProviderForTools,
     );
     runtime.registerAgent(createAgentDefinition({
       agent: externalAgent,
@@ -4954,6 +4992,7 @@ async function main(): Promise<void> {
       resolveGwsProvider,
       config.assistant.tools.contextBudget,
       config.qualityFallback,
+      resolveRoutedProviderForTools,
     );
     runtime.registerAgent(createAgentDefinition({
       agent: defaultAgent,
@@ -5042,6 +5081,137 @@ async function main(): Promise<void> {
     }
     return router.route(content);
   };
+  // ─── Policy-as-Code Engine Bootstrap ─────────────────────────────
+  const policyConfig = config.guardian?.policy ?? { enabled: true, mode: 'shadow' as const, rulesPath: 'policies/', mismatchLogLimit: 1000 };
+  const policyEngine = createPolicyEngine();
+  let policyMode: PolicyModeConfig = policyConfig.enabled ? (policyConfig.mode ?? 'shadow') : 'off';
+  let policyFamilies: Record<string, PolicyModeConfig> = {
+    tool: (policyConfig as { families?: Record<string, PolicyModeConfig> }).families?.tool ?? policyMode,
+    admin: (policyConfig as { families?: Record<string, PolicyModeConfig> }).families?.admin ?? policyMode,
+    guardian: (policyConfig as { families?: Record<string, PolicyModeConfig> }).families?.guardian ?? policyMode,
+    event: (policyConfig as { families?: Record<string, PolicyModeConfig> }).families?.event ?? policyMode,
+  };
+  let policyMismatchLogLimit = policyConfig.mismatchLogLimit ?? 1000;
+  const policyRulesPath = join(process.cwd(), policyConfig.rulesPath ?? 'policies/');
+
+  const shadowEvaluator = new ShadowEvaluator({
+    engine: policyEngine,
+    logger: {
+      info: (msg, data) => log.info(data ?? {}, msg),
+      warn: (msg, data) => {
+        log.warn(data ?? {}, msg);
+        runtime.auditLog?.record?.({
+          type: 'policy_shadow_mismatch',
+          severity: 'info',
+          agentId: 'policy-engine',
+          controller: 'PolicyEngine',
+          details: data ?? {},
+        });
+      },
+    },
+    mismatchLogLimit: policyMismatchLogLimit,
+  });
+
+  // Load rules from disk
+  const policyLoadResult = loadPolicyFiles(policyRulesPath);
+  if (policyLoadResult.rules.length > 0) {
+    const reloadResult = policyEngine.reload(policyLoadResult.rules);
+    log.info({
+      loaded: reloadResult.loaded,
+      skipped: reloadResult.skipped,
+      errors: reloadResult.errors.length,
+      path: policyRulesPath,
+    }, `Policy engine: loaded ${reloadResult.loaded} rules from ${policyLoadResult.fileCount} file(s)`);
+    if (reloadResult.errors.length > 0) {
+      for (const err of reloadResult.errors.slice(0, 5)) {
+        log.warn({ error: err }, 'Policy rule error');
+      }
+    }
+  } else if (policyLoadResult.errors.length > 0) {
+    for (const err of policyLoadResult.errors) {
+      log.warn({ error: err }, 'Policy file load error');
+    }
+  } else {
+    log.info({ path: policyRulesPath }, 'Policy engine: no rule files found (using family defaults)');
+  }
+
+  runtime.auditLog?.record?.({
+    type: 'policy_engine_started',
+    severity: 'info',
+    agentId: 'policy-engine',
+    controller: 'PolicyEngine',
+    details: {
+      mode: policyMode,
+      families: policyFamilies,
+      ruleCount: policyEngine.ruleCount(),
+      rulesPath: policyRulesPath,
+    },
+  });
+
+  const policyState: PolicyState = {
+    getStatus: () => ({
+      enabled: policyMode !== 'off',
+      mode: policyMode,
+      families: { ...policyFamilies } as { tool: string; admin: string; guardian: string; event: string },
+      rulesPath: policyConfig.rulesPath ?? 'policies/',
+      ruleCount: policyEngine.ruleCount(),
+      mismatchLogLimit: policyMismatchLogLimit,
+      shadowStats: policyMode === 'shadow' ? shadowEvaluator.stats() : undefined,
+    }),
+    update: (input) => {
+      if (input.mode !== undefined) {
+        const validModes = ['off', 'shadow', 'enforce'];
+        if (!validModes.includes(input.mode)) {
+          return { success: false, message: `Invalid mode '${input.mode}'. Valid: ${validModes.join(', ')}` };
+        }
+        policyMode = input.mode;
+        runtime.auditLog?.record?.({
+          type: 'policy_mode_changed',
+          severity: input.mode === 'enforce' ? 'warn' : 'info',
+          agentId: 'policy-engine',
+          controller: 'PolicyEngine',
+          details: { newMode: input.mode },
+        });
+      }
+      if (input.enabled !== undefined) {
+        policyMode = input.enabled ? (input.mode ?? 'shadow') : 'off';
+      }
+      if (input.families) {
+        for (const [fam, mode] of Object.entries(input.families)) {
+          if (mode && ['off', 'shadow', 'enforce'].includes(mode)) {
+            policyFamilies[fam] = mode as PolicyModeConfig;
+          }
+        }
+      }
+      if (input.mismatchLogLimit !== undefined) {
+        policyMismatchLogLimit = input.mismatchLogLimit;
+      }
+      return { success: true, message: `Policy engine updated: mode=${policyMode}` };
+    },
+    reload: () => {
+      const loadResult = loadPolicyFiles(policyRulesPath);
+      if (loadResult.errors.length > 0 && loadResult.rules.length === 0) {
+        return { success: false, message: 'Failed to load policy files.', loaded: 0, skipped: 0, errors: loadResult.errors };
+      }
+      const reloadResult = policyEngine.reload(loadResult.rules);
+      shadowEvaluator.reset();
+      runtime.auditLog?.record?.({
+        type: 'policy_rules_reloaded',
+        severity: 'info',
+        agentId: 'policy-engine',
+        controller: 'PolicyEngine',
+        details: { loaded: reloadResult.loaded, skipped: reloadResult.skipped, errors: reloadResult.errors.length, fileCount: loadResult.fileCount },
+      });
+      return {
+        success: true,
+        message: `Reloaded ${reloadResult.loaded} rules from ${loadResult.fileCount} file(s).`,
+        loaded: reloadResult.loaded,
+        skipped: reloadResult.skipped,
+        errors: [...loadResult.errors, ...reloadResult.errors],
+      };
+    },
+  };
+
   const dashboardCallbacks = buildDashboardCallbacks(
     runtime,
     configRef,
@@ -5064,6 +5234,7 @@ async function main(): Promise<void> {
     runNetworkAnalysis,
     guardianAgentService,
     sentinelAuditService,
+    policyState,
   );
 
   // Killswitch: triggers graceful shutdown from CLI or web

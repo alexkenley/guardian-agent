@@ -356,6 +356,9 @@ export class CLIChannel implements ChannelAdapter {
       case 'security':
         this.handleSecurity();
         break;
+      case 'policy':
+        this.handlePolicy(args);
+        break;
       case 'models':
         await this.handleModels(args);
         break;
@@ -468,6 +471,9 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /audit filter <field> <value>          Filter events\n');
     this.write('  /audit summary [windowMs]              Audit stats summary\n');
     this.write('  /security                              Security overview\n');
+    this.write('  /policy                                Policy engine status and shadow stats\n');
+    this.write('  /policy mode <off|shadow|enforce>      Set policy engine mode\n');
+    this.write('  /policy reload                         Hot-reload rules from disk\n');
     this.write('\n');
     this.write(this.bold('Threat Intel\n'));
     this.write('  /intel [status]                        Threat-intel summary\n');
@@ -2594,6 +2600,10 @@ export class CLIChannel implements ChannelAdapter {
       if (config.guardian.sentinel) {
         this.write(`  Sentinel: ${config.guardian.sentinel.enabled ? 'on' : 'off'} (${config.guardian.sentinel.schedule})\n`);
       }
+      if (config.guardian.policy) {
+        const p = config.guardian.policy;
+        this.write(`  Policy engine: ${p.enabled ? this.formatPolicyMode(p.mode) : this.red('disabled')}\n`);
+      }
     }
 
     // Last-hour audit summary
@@ -2615,6 +2625,117 @@ export class CLIChannel implements ChannelAdapter {
       this.write('\n  Audit data not available.\n');
     }
     this.write('\n');
+  }
+
+  // ─── /policy ─────────────────────────────────────────────────
+
+  private handlePolicy(args: string[]): void {
+    const sub = args[0];
+
+    // /policy mode <off|shadow|enforce>
+    if (sub === 'mode' && args[1]) {
+      const mode = args[1];
+      if (!['off', 'shadow', 'enforce'].includes(mode)) {
+        this.write('\nInvalid mode. Use: off, shadow, or enforce.\n');
+        this.write('  off     — Engine disabled; legacy decide() only. No policy evaluation occurs.\n');
+        this.write('  shadow  — Engine runs alongside legacy; mismatches logged, legacy decision used.\n');
+        this.write('  enforce — Engine is authoritative; legacy path bypassed.\n\n');
+        return;
+      }
+      if (!this.dashboard?.onPolicyUpdate) {
+        this.write('\nPolicy engine not available.\n\n');
+        return;
+      }
+      const result = this.dashboard.onPolicyUpdate({ mode: mode as 'off' | 'shadow' | 'enforce' });
+      this.write(`\n${result.success ? this.green('OK') : this.red('Error')}: ${result.message}\n\n`);
+      return;
+    }
+
+    // /policy reload
+    if (sub === 'reload') {
+      if (!this.dashboard?.onPolicyReload) {
+        this.write('\nPolicy engine not available.\n\n');
+        return;
+      }
+      const result = this.dashboard.onPolicyReload();
+      this.write(`\n${result.success ? this.green('OK') : this.red('Error')}: ${result.message}\n`);
+      this.write(`  Loaded: ${result.loaded}  Skipped: ${result.skipped}\n`);
+      if (result.errors.length > 0) {
+        this.write(this.yellow(`  Errors (${result.errors.length}):\n`));
+        for (const err of result.errors.slice(0, 10)) {
+          this.write(`    - ${err}\n`);
+        }
+        if (result.errors.length > 10) {
+          this.write(`    ... and ${result.errors.length - 10} more\n`);
+        }
+      }
+      this.write('\n');
+      return;
+    }
+
+    // /policy (status)
+    if (!this.dashboard?.onPolicyStatus) {
+      this.write('\nPolicy engine not available.\n\n');
+      return;
+    }
+
+    const status = this.dashboard.onPolicyStatus();
+    this.write('\n');
+    this.write(this.bold('Policy-as-Code Engine\n'));
+    this.write(`  Enabled:     ${status.enabled ? this.green('YES') : this.red('NO')}\n`);
+    this.write(`  Mode:        ${this.formatPolicyMode(status.mode)}\n`);
+    this.write(`  Rules path:  ${status.rulesPath}\n`);
+    this.write(`  Rule count:  ${status.ruleCount}\n`);
+
+    // Per-family modes
+    this.write('\n');
+    this.write(this.bold('  Family Modes:\n'));
+    for (const fam of ['tool', 'admin', 'guardian', 'event'] as const) {
+      const famMode = status.families[fam];
+      this.write(`    ${fam.padEnd(10)} ${this.formatPolicyMode(famMode)}\n`);
+    }
+
+    // Shadow stats
+    if (status.shadowStats && status.shadowStats.totalComparisons > 0) {
+      const s = status.shadowStats;
+      const rate = (s.matchRate * 100).toFixed(1);
+      const rateColor = s.matchRate >= 0.99 ? this.green(rate + '%') : s.matchRate >= 0.95 ? this.yellow(rate + '%') : this.red(rate + '%');
+      this.write('\n');
+      this.write(this.bold('  Shadow Mode Statistics:\n'));
+      this.write(`    Comparisons: ${s.totalComparisons.toLocaleString()}\n`);
+      this.write(`    Mismatches:  ${s.totalMismatches > 0 ? this.yellow(String(s.totalMismatches)) : '0'}\n`);
+      this.write(`    Match rate:  ${rateColor}\n`);
+      if (s.totalMismatches > 0) {
+        this.write('    By class:\n');
+        for (const [cls, count] of Object.entries(s.mismatchesByClass)) {
+          if ((count as number) > 0) {
+            this.write(`      ${cls}: ${count}\n`);
+          }
+        }
+      }
+    }
+
+    // Mode descriptions
+    this.write('\n');
+    this.write(this.bold('  Mode Descriptions:\n'));
+    this.write('    off     — Engine disabled. All tool decisions use the legacy decide() logic\n');
+    this.write('              (explicit per-tool overrides, risk classification, mode-based defaults).\n');
+    this.write('              No policy evaluation occurs.\n');
+    this.write('    shadow  — Engine runs alongside legacy decide() on every request. Both decisions\n');
+    this.write('              are computed but only the legacy decision is used. Mismatches are logged\n');
+    this.write('              and classified for safe migration. Recommended starting mode.\n');
+    this.write('    enforce — Engine\'s decision is authoritative. Legacy path is bypassed entirely.\n');
+    this.write('              Use after shadow mode shows 99%+ match rate over 14+ days.\n');
+    this.write('\n');
+  }
+
+  private formatPolicyMode(mode: string): string {
+    switch (mode) {
+      case 'off': return this.red('off');
+      case 'shadow': return this.yellow('shadow');
+      case 'enforce': return this.green('enforce');
+      default: return mode;
+    }
   }
 
   // ─── /models ─────────────────────────────────────────────────

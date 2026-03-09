@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 1,
+  "rules": [
+    {
+      "id": "tool-read-only-allow",
+      "family": "tool",
+      "enabled": true,
+      "priority": 100,
+      "description": "Read-only tools are always allowed.",
+      "match": {
+        "context.isReadOnly": true
+      },
+      "decision": {
+        "kind": "allow",
+        "reason": "Read-only tools are safe to execute without approval."
+      }
+    },
+    {
+      "id": "tool-external-post-approval",
+      "family": "tool",
+      "enabled": true,
+      "priority": 50,
+      "description": "External posting tools always require approval.",
+      "match": {
+        "context.risk": "external_post"
+      },
+      "decision": {
+        "kind": "require_approval",
+        "reason": "External posting tools send data to third parties and require explicit user approval."
+      }
+    },
+    {
+      "id": "tool-shell-readonly-commands",
+      "family": "tool",
+      "enabled": true,
+      "priority": 90,
+      "description": "Known read-only shell commands bypass approval.",
+      "match": {
+        "action": "tool:shell_safe",
+        "resource.attrs.firstWord": {
+          "in": ["ls", "dir", "pwd", "whoami", "hostname", "uname", "date", "echo", "cat", "head", "tail", "wc", "file", "which", "type"]
+        }
+      },
+      "decision": {
+        "kind": "allow",
+        "reason": "Read-only shell command: safe to execute without approval."
+      }
+    },
+    {
+      "id": "tool-shell-git-readonly",
+      "family": "tool",
+      "enabled": true,
+      "priority": 90,
+      "description": "Read-only git commands bypass approval.",
+      "match": {
+        "action": "tool:shell_safe",
+        "resource.attrs.command": {
+          "regex": "^git\\s+(status|diff|log|branch|remote|tag)(\\s|$)"
+        }
+      },
+      "decision": {
+        "kind": "allow",
+        "reason": "Read-only git command: safe to execute without approval."
+      }
+    },
+    {
+      "id": "tool-shell-operator-approval",
+      "family": "tool",
+      "enabled": true,
+      "priority": 40,
+      "description": "Shell commands with operators (pipes, semicolons, subshells) require approval.",
+      "match": {
+        "action": "tool:shell_safe",
+        "resource.attrs.hasShellOperators": true
+      },
+      "decision": {
+        "kind": "require_approval",
+        "reason": "Shell command contains operators (pipes, chains, or subshells) — requires approval.",
+        "obligations": ["log_command"]
+      }
+    },
+    {
+      "id": "tool-network-readonly-allow",
+      "family": "tool",
+      "enabled": true,
+      "priority": 100,
+      "description": "Network diagnostic tools are allowed in policy mode.",
+      "match": {
+        "context.risk": "network",
+        "context.policyMode": {
+          "in": ["approve_by_policy", "autonomous"]
+        }
+      },
+      "decision": {
+        "kind": "allow",
+        "reason": "Network diagnostic tools are allowed under approve_by_policy and autonomous modes."
+      }
+    },
+    {
+      "id": "tool-autonomous-allow-all",
+      "family": "tool",
+      "enabled": true,
+      "priority": 200,
+      "description": "In autonomous mode, all tools are allowed.",
+      "match": {
+        "context.policyMode": "autonomous"
+      },
+      "decision": {
+        "kind": "allow",
+        "reason": "Autonomous mode: all tools allowed."
+      }
+    },
+    {
+      "id": "tool-mutating-approval",
+      "family": "tool",
+      "enabled": true,
+      "priority": 300,
+      "description": "Mutating tools require approval in approve_by_policy mode.",
+      "match": {
+        "context.risk": "mutating",
+        "context.policyMode": "approve_by_policy"
+      },
+      "decision": {
+        "kind": "require_approval",
+        "reason": "Mutating tool requires user approval under approve_by_policy mode."
+      }
+    },
+    {
+      "id": "tool-approve-each-mutating",
+      "family": "tool",
+      "enabled": true,
+      "priority": 300,
+      "description": "In approve_each mode, non-read-only tools require approval.",
+      "match": {
+        "context.policyMode": "approve_each",
+        "context.isReadOnly": false
+      },
+      "decision": {
+        "kind": "require_approval",
+        "reason": "approve_each mode: all mutating tools require individual approval."
+      }
+    },
+    {
+      "id": "tool-dryrun-allow",
+      "family": "tool",
+      "enabled": true,
+      "priority": 10,
+      "description": "Dry-run requests are always allowed (no side effects).",
+      "match": {
+        "context.dryRun": true
+      },
+      "decision": {
+        "kind": "allow",
+        "reason": "Dry-run mode: no side effects, safe to execute."
+      }
+    }
+  ]
+}

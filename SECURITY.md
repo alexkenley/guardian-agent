@@ -448,6 +448,37 @@ Current defaults align most closely with the `balanced` posture for tool policy 
 | `approve_by_policy` | Per-tool overrides: `auto`, `policy`, `manual`, `deny`; read-only and network tools are allowed by default |
 | `autonomous` | Tools execute without approval (still sandboxed) |
 
+### Policy-as-Code Engine
+
+The policy engine replaces hard-coded `decide()` logic with declarative JSON rules that are version-controlled, auditable, and hot-reloadable.
+
+**Architecture:**
+- **Rule files** in `policies/` are loaded at startup and compiled into priority-sorted matcher closures
+- **Canonical PolicyInput** model: `{ family, principal, action, resource, context }` — resource is always the tool; targets go in `resource.attrs`
+- **Deterministic evaluation**: first-match wins, with family defaults as fallback (tool→mode-dependent, guardian/admin/event→deny)
+- **10 match primitives**: exact, `in`/`notIn`, `gt`/`gte`/`lt`/`lte`, `startsWith`/`endsWith`, `regex`, `exists`
+- **Compound conditions**: `allOf` (implicit default) and `anyOf` for disjunctive logic
+
+**Operating modes:**
+
+| Mode | Behavior |
+|------|----------|
+| `off` | Engine disabled, legacy `decide()` only |
+| `shadow` | Engine runs alongside legacy; mismatches logged but legacy decision used (default) |
+| `enforce` | Engine's decision is authoritative; legacy path disabled |
+
+**Shadow mode safety:**
+- Mismatches classified as `policy_too_strict`, `policy_too_permissive`, `normalization_bug`, or `legacy_bug`
+- Log throttling after configurable limit (default 1000)
+- Match rate and mismatch-by-class stats available via API
+- 14-day exit criteria: 99%+ match rate, zero `policy_too_permissive` mismatches
+
+**Schema versioning:** Files include `schemaVersion` field; engine rejects files with a newer version than supported, preventing accidental deployment of incompatible rules.
+
+**Fail-safe behavior:**
+- Shadow mode: engine error → log + continue with legacy decision
+- Enforce mode: engine error → fail closed (deny)
+
 ### Risk Classification
 
 | Risk Level | Examples |

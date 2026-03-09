@@ -76,6 +76,7 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 - **GuardianAgentService**: Inline LLM-powered evaluation of tool actions before execution (Layer 2)
 - **OutputGuardian**: Response scanning plus tool-result secret/PII redaction and prompt-injection hardening before untrusted content re-enters the model
 - **SentinelAuditService**: Retrospective anomaly detection on cron or on-demand (Layer 4)
+- **Policy-as-Code Engine** (`src/policy/`): Declarative JSON rule engine with compiled matchers, shadow mode, hot-reload. Config: `guardian.policy` (enabled, mode: off/shadow/enforce, rulesPath). Rule files in `policies/`.
 
 ### Runtime Services (`src/runtime/`)
 - **ConversationService** — SQLite-backed session memory with FTS5 full-text search and memory flush
@@ -158,12 +159,14 @@ src/queue/          — EventBus for inter-agent communication
 src/guardian/       — Capabilities, SecretScanner, PiiScanner, InputSanitizer, OutputGuardian,
                       RateLimiter, audit log/persistence, Guardian admission pipeline
 src/channels/       — CLI, Telegram, Web channel adapters
+src/policy/         — Policy-as-Code engine (types, matcher, compiler, engine, rules, shadow mode)
 src/tools/          — ToolExecutor, MCP client (MCPClient, MCPClientManager), approvals
 src/eval/           — Evaluation framework (types, metrics, runner)
 src/prompts/        — System prompt composition (composeGuardianSystemPrompt)
 src/util/           — Backoff, logging (pino), crypto guardrails
 web/public/         — Static frontend (vanilla JS, no build step)
 examples/           — Demo scripts (single-agent, multi-agent, llm-chat)
+policies/           — Declarative JSON policy rule files (base tool rules shipped)
 docs/               — Architecture docs, specs, guides, research
 scripts/            — Dev/deploy shell scripts
 ```

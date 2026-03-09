@@ -2565,6 +2565,43 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // GET /api/policy/status — Policy-as-Code engine status
+      if (req.method === 'GET' && url.pathname === '/api/policy/status') {
+        if (!this.dashboard.onPolicyStatus) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onPolicyStatus());
+        return;
+      }
+
+      // POST /api/policy/config — Update Policy-as-Code engine config
+      if (req.method === 'POST' && url.pathname === '/api/policy/config') {
+        if (!this.dashboard.onPolicyUpdate) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const body = await readBody(req, this.maxBodyBytes);
+        const input = JSON.parse(body) as {
+          enabled?: boolean;
+          mode?: 'off' | 'shadow' | 'enforce';
+          families?: { tool?: string; admin?: string; guardian?: string; event?: string };
+          mismatchLogLimit?: number;
+        };
+        sendJSON(res, 200, this.dashboard.onPolicyUpdate(input));
+        return;
+      }
+
+      // POST /api/policy/reload — Reload policy rules from disk
+      if (req.method === 'POST' && url.pathname === '/api/policy/reload') {
+        if (!this.dashboard.onPolicyReload) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onPolicyReload());
+        return;
+      }
+
       // POST /api/sentinel/audit — Run Sentinel audit on-demand
       if (req.method === 'POST' && url.pathname === '/api/sentinel/audit') {
         if (!this.dashboard.onSentinelAuditRun) {

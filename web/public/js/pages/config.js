@@ -1435,6 +1435,11 @@ function renderSettingsTab(panel) {
       panel: createGuardianAgentPanel(),
     },
     {
+      title: 'Policy-as-Code Engine',
+      badge: (config.guardian?.policy?.mode || 'shadow'),
+      panel: createPolicyEnginePanel(),
+    },
+    {
       title: 'Sentinel Audit',
       badge: 'Retrospective analysis',
       panel: createSentinelAuditPanel(),
@@ -2020,6 +2025,197 @@ function createSentinelAuditPanel() {
     }
   });
 
+  return section;
+}
+
+function createPolicyEnginePanel() {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Policy-as-Code Engine</h3>
+      <span class="cfg-header-note">Declarative rule evaluation</span>
+    </div>
+    <div class="cfg-center-body" id="policy-engine-body">
+      <div class="loading" style="font-size:0.8rem;">Loading...</div>
+    </div>
+  `;
+
+  async function load() {
+    const body = section.querySelector('#policy-engine-body');
+    if (!body) return;
+    try {
+      const status = await api.policyStatus();
+      const familyMode = (fam) => status.families?.[fam] || status.mode || 'off';
+
+      body.innerHTML = `
+        <div style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:0.75rem;line-height:1.5;">
+          The policy engine evaluates tool requests against declarative JSON rules. Rules are loaded from
+          <code style="font-size:0.72rem;background:var(--bg-secondary);padding:0.1rem 0.3rem;border-radius:3px;">${esc(status.rulesPath || 'policies/')}</code>
+          and compiled into fast matchers at startup.
+        </div>
+        <div class="cfg-form-grid">
+          <div class="cfg-field">
+            <label>Enabled</label>
+            <select id="pe-enabled">
+              <option value="true" ${status.enabled ? 'selected' : ''}>Enabled</option>
+              <option value="false" ${!status.enabled ? 'selected' : ''}>Disabled</option>
+            </select>
+          </div>
+          <div class="cfg-field">
+            <label>Mode</label>
+            <select id="pe-mode">
+              <option value="off" ${status.mode === 'off' ? 'selected' : ''}>Off &mdash; engine disabled, legacy decide() only</option>
+              <option value="shadow" ${status.mode === 'shadow' ? 'selected' : ''}>Shadow &mdash; compare with legacy, log mismatches (recommended)</option>
+              <option value="enforce" ${status.mode === 'enforce' ? 'selected' : ''}>Enforce &mdash; engine is authoritative, replaces legacy logic</option>
+            </select>
+          </div>
+          <div class="cfg-field">
+            <label>Mismatch Log Limit</label>
+            <input type="number" id="pe-mismatch-limit" value="${status.mismatchLogLimit || 1000}" min="100" max="100000" step="100">
+          </div>
+        </div>
+
+        <div style="margin-top:0.5rem;">
+          <div style="font-size:0.74rem;color:var(--text-muted);margin-bottom:0.5rem;font-weight:500;">Per-Family Mode Overrides</div>
+          <div class="cfg-form-grid" style="grid-template-columns:1fr 1fr;">
+            <div class="cfg-field">
+              <label>Tool Family</label>
+              <select id="pe-fam-tool">
+                <option value="inherit" ${familyMode('tool') === status.mode ? 'selected' : ''}>Inherit (${esc(status.mode)})</option>
+                <option value="off" ${status.families?.tool === 'off' ? 'selected' : ''}>Off</option>
+                <option value="shadow" ${status.families?.tool === 'shadow' ? 'selected' : ''}>Shadow</option>
+                <option value="enforce" ${status.families?.tool === 'enforce' ? 'selected' : ''}>Enforce</option>
+              </select>
+            </div>
+            <div class="cfg-field">
+              <label>Admin Family</label>
+              <select id="pe-fam-admin">
+                <option value="inherit" ${familyMode('admin') === status.mode ? 'selected' : ''}>Inherit (${esc(status.mode)})</option>
+                <option value="off" ${status.families?.admin === 'off' ? 'selected' : ''}>Off</option>
+                <option value="shadow" ${status.families?.admin === 'shadow' ? 'selected' : ''}>Shadow</option>
+                <option value="enforce" ${status.families?.admin === 'enforce' ? 'selected' : ''}>Enforce</option>
+              </select>
+            </div>
+            <div class="cfg-field">
+              <label>Guardian Family</label>
+              <select id="pe-fam-guardian">
+                <option value="inherit" ${familyMode('guardian') === status.mode ? 'selected' : ''}>Inherit (${esc(status.mode)})</option>
+                <option value="off" ${status.families?.guardian === 'off' ? 'selected' : ''}>Off</option>
+                <option value="shadow" ${status.families?.guardian === 'shadow' ? 'selected' : ''}>Shadow</option>
+                <option value="enforce" ${status.families?.guardian === 'enforce' ? 'selected' : ''}>Enforce</option>
+              </select>
+            </div>
+            <div class="cfg-field">
+              <label>Event Family</label>
+              <select id="pe-fam-event">
+                <option value="inherit" ${familyMode('event') === status.mode ? 'selected' : ''}>Inherit (${esc(status.mode)})</option>
+                <option value="off" ${status.families?.event === 'off' ? 'selected' : ''}>Off</option>
+                <option value="shadow" ${status.families?.event === 'shadow' ? 'selected' : ''}>Shadow</option>
+                <option value="enforce" ${status.families?.event === 'enforce' ? 'selected' : ''}>Enforce</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top:0.75rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+          <button class="btn btn-sm" id="pe-save-btn">Save</button>
+          <button class="btn btn-sm" id="pe-reload-btn" style="background:var(--bg-secondary);color:var(--text);">Reload Rules</button>
+          <span id="pe-save-status" style="font-size:0.74rem;margin-left:0.25rem;"></span>
+        </div>
+
+        <div id="pe-stats" style="margin-top:0.75rem;"></div>
+
+        <div style="margin-top:0.5rem;font-size:0.74rem;color:var(--text-muted);line-height:1.45;">
+          <strong>Mode descriptions:</strong><br>
+          <strong>Off</strong> &mdash; The policy engine is completely disabled. All tool decisions use the legacy <code>decide()</code> logic
+          (explicit per-tool overrides, risk classification, and mode-based defaults). No policy evaluation occurs.<br>
+          <strong>Shadow</strong> &mdash; The policy engine runs alongside legacy <code>decide()</code> on every tool request.
+          Both decisions are computed, but only the legacy decision is used. Mismatches are logged and classified
+          (<em>policy_too_strict</em>, <em>policy_too_permissive</em>, <em>normalization_bug</em>, <em>legacy_bug</em>)
+          for safe, data-driven migration. This is the recommended starting mode.<br>
+          <strong>Enforce</strong> &mdash; The policy engine's decision is authoritative. The legacy <code>decide()</code> path is bypassed entirely.
+          Only use this after shadow mode has demonstrated a 99%+ match rate with zero <em>policy_too_permissive</em> mismatches
+          over a sustained period (recommended: 14 days).
+        </div>
+      `;
+
+      // Render shadow stats if available
+      if (status.shadowStats && status.shadowStats.totalComparisons > 0) {
+        const s = status.shadowStats;
+        const rate = (s.matchRate * 100).toFixed(1);
+        const statsEl = section.querySelector('#pe-stats');
+        if (statsEl) {
+          const rateColor = s.matchRate >= 0.99 ? 'var(--success)' : s.matchRate >= 0.95 ? 'var(--warning)' : 'var(--error)';
+          statsEl.innerHTML = `
+            <div style="font-size:0.74rem;color:var(--text-muted);font-weight:500;margin-bottom:0.3rem;">Shadow Mode Statistics</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:0.5rem;font-size:0.78rem;">
+              <div>Comparisons: <strong>${s.totalComparisons.toLocaleString()}</strong></div>
+              <div>Mismatches: <strong style="color:${s.totalMismatches > 0 ? 'var(--warning)' : 'var(--success)'}">${s.totalMismatches.toLocaleString()}</strong></div>
+              <div>Match rate: <strong style="color:${rateColor}">${rate}%</strong></div>
+            </div>
+            ${s.totalMismatches > 0 ? `
+              <div style="margin-top:0.3rem;font-size:0.72rem;color:var(--text-muted);">
+                By class:
+                ${Object.entries(s.mismatchesByClass).filter(([,v]) => v > 0).map(([k,v]) => `<span style="margin-right:0.5rem;">${esc(k)}: <strong>${v}</strong></span>`).join('')}
+              </div>
+            ` : ''}
+          `;
+        }
+      }
+
+      // Rule count
+      const statsEl = section.querySelector('#pe-stats');
+      if (statsEl && status.ruleCount !== undefined) {
+        const countLine = document.createElement('div');
+        countLine.style.cssText = 'font-size:0.74rem;color:var(--text-muted);margin-top:0.3rem;';
+        countLine.textContent = 'Loaded rules: ' + status.ruleCount;
+        statsEl.appendChild(countLine);
+      }
+
+      // Save handler
+      section.querySelector('#pe-save-btn')?.addEventListener('click', async () => {
+        const statusEl = section.querySelector('#pe-save-status');
+        try {
+          const families = {};
+          for (const fam of ['tool', 'admin', 'guardian', 'event']) {
+            const val = section.querySelector('#pe-fam-' + fam)?.value;
+            if (val && val !== 'inherit') families[fam] = val;
+          }
+          await api.updatePolicy({
+            enabled: section.querySelector('#pe-enabled').value === 'true',
+            mode: section.querySelector('#pe-mode').value,
+            mismatchLogLimit: parseInt(section.querySelector('#pe-mismatch-limit').value, 10) || 1000,
+            families: Object.keys(families).length > 0 ? families : undefined,
+          });
+          if (statusEl) { statusEl.textContent = 'Saved'; statusEl.style.color = 'var(--success)'; }
+        } catch (err) {
+          if (statusEl) { statusEl.textContent = err.message || 'Error'; statusEl.style.color = 'var(--error)'; }
+        }
+      });
+
+      // Reload handler
+      section.querySelector('#pe-reload-btn')?.addEventListener('click', async () => {
+        const statusEl = section.querySelector('#pe-save-status');
+        try {
+          const result = await api.reloadPolicy();
+          if (statusEl) {
+            statusEl.textContent = `Reloaded: ${result.loaded} rules loaded, ${result.skipped} skipped` +
+              (result.errors?.length ? `, ${result.errors.length} error(s)` : '');
+            statusEl.style.color = result.errors?.length ? 'var(--warning)' : 'var(--success)';
+          }
+          // Refresh the panel to update stats
+          setTimeout(load, 500);
+        } catch (err) {
+          if (statusEl) { statusEl.textContent = err.message || 'Error'; statusEl.style.color = 'var(--error)'; }
+        }
+      });
+
+    } catch (err) {
+      body.innerHTML = `<div style="font-size:0.8rem;color:var(--text-secondary);">Policy engine status unavailable.</div>`;
+    }
+  }
+  load();
   return section;
 }
 

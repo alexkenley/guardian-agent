@@ -33,7 +33,7 @@
 .NOTES
     See docs/guides/INTEGRATION-TEST-HARNESS.md for full documentation.
     All mutating operations are denied after assertion in approval tests.
-    gmail_send (external_post) always requires approval except in autonomous mode.
+    gmail_send (external_post) always requires approval in all policy modes.
 #>
 
 param(
@@ -56,6 +56,18 @@ $Fail = 0
 $Skip = 0
 $Results = @()
 $LogFile = Join-Path $env:TEMP "guardian-contacts-harness.log"
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
+$RunId = [guid]::NewGuid().ToString("N")
+$HarnessContactEmail = "harness-contact-$RunId@example.com"
+$HarnessExtraContactEmail = "harness-extra-$RunId@example.com"
+$HarnessApprovalContactEmail = "harness-approval-$RunId@example.com"
+$HarnessCampaignName = "harness-campaign-$RunId"
+$HarnessImportCsvRelativePath = "scripts/harness-contacts-import-$RunId.csv"
+$HarnessApprovalCsvRelativePath = "scripts/harness-contacts-approval-$RunId.csv"
+$HarnessImportCsvPath = Join-Path $ProjectRoot $HarnessImportCsvRelativePath
+$HarnessApprovalCsvPath = Join-Path $ProjectRoot $HarnessApprovalCsvRelativePath
+$HarnessCampaignId = $null
+$HarnessContactIds = @()
 
 # --- Helpers ---
 function Write-Log($msg) { Write-Host "[contacts] $msg" -ForegroundColor Cyan }
@@ -213,6 +225,18 @@ function Invoke-ToolRun {
     catch { return @{ success = $false; error = $_.Exception.Message } }
 }
 
+function Get-ErrorText {
+    param(
+        [object]$Primary,
+        [object]$Secondary,
+        [string]$Fallback = "unknown"
+    )
+
+    if ($null -ne $Primary -and "$Primary".Trim().Length -gt 0) { return "$Primary" }
+    if ($null -ne $Secondary -and "$Secondary".Trim().Length -gt 0) { return "$Secondary" }
+    return $Fallback
+}
+
 # --- Start the app ---
 if (-not $SkipStart) {
     $existing = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
@@ -225,7 +249,6 @@ if (-not $SkipStart) {
         Start-Sleep -Seconds 2
     }
 
-    $projectRoot = Split-Path -Parent $PSScriptRoot
     $userConfig = Join-Path $env:USERPROFILE ".guardianagent\config.yaml"
     $harnessConfig = Join-Path $env:TEMP "guardian-contacts-harness-config.yaml"
 
@@ -270,7 +293,7 @@ guardian:
 
     $AppProcess = Start-Process -FilePath "cmd.exe" `
         -ArgumentList "/c npx tsx src/index.ts `"$harnessConfig`"" `
-        -WorkingDirectory $projectRoot `
+        -WorkingDirectory $ProjectRoot `
         -RedirectStandardOutput $LogFile `
         -RedirectStandardError "$LogFile.err" `
         -PassThru -WindowStyle Hidden
@@ -314,6 +337,8 @@ $cleanupBlock = {
     }
     $tempCfg = Join-Path $env:TEMP "guardian-contacts-harness-config.yaml"
     if (Test-Path $tempCfg) { Remove-Item $tempCfg -Force -ErrorAction SilentlyContinue }
+    if (Test-Path $script:HarnessImportCsvPath) { Remove-Item $script:HarnessImportCsvPath -Force -ErrorAction SilentlyContinue }
+    if (Test-Path $script:HarnessApprovalCsvPath) { Remove-Item $script:HarnessApprovalCsvPath -Force -ErrorAction SilentlyContinue }
 }
 
 try {
@@ -337,6 +362,18 @@ catch {
     Write-Log "LLM Provider: could not query /api/providers"
 }
 
+$importCsv = @"
+email,name,company,tags
+$HarnessContactEmail,Harness Contact,GuardianAgent,harness
+$HarnessExtraContactEmail,Harness Extra,GuardianAgent,harness
+"@
+$approvalCsv = @"
+email,name,company,tags
+$HarnessApprovalContactEmail,Approval Contact,GuardianAgent,harness
+"@
+$importCsv | Set-Content $HarnessImportCsvPath -Encoding utf8
+$approvalCsv | Set-Content $HarnessApprovalCsvPath -Encoding utf8
+
 # ===============================================================
 # 1. PREREQUISITE CHECK
 # ===============================================================
@@ -349,7 +386,7 @@ $contactsAvailable = $false
 $probeArgs = @{ limit = 1 }
 $contactsProbe = Invoke-ToolRun -ToolName "contacts_list" -ToolArgs $probeArgs
 
-if ($contactsProbe.success -eq $true -or $contactsProbe.status -eq "succeeded" -or $contactsProbe.status -eq "failed") {
+if ($contactsProbe.success -eq $true -or $contactsProbe.status -eq "succeeded") {
     $contactsAvailable = $true
     Write-Pass "contacts: tool available (probe status: $($contactsProbe.status))"
 }
@@ -360,7 +397,7 @@ elseif ($contactsProbe.error -match "Unknown tool") {
     Write-Skip "contacts: all contacts tests" "contacts_list tool not registered"
 }
 else {
-    Write-Skip "contacts: all contacts tests" "unexpected probe result: status=$($contactsProbe.status), error=$($contactsProbe.error), message=$($contactsProbe.message)"
+    Write-Fail "contacts: prerequisite probe" "status=$($contactsProbe.status), error=$($contactsProbe.error), message=$($contactsProbe.message)"
 }
 
 if ($contactsAvailable) {
@@ -371,8 +408,20 @@ if ($contactsAvailable) {
 Write-Host ""
 Write-Log "=== Read-Only Tests (Autonomous Mode) ==="
 
-$null = Invoke-ToolPolicy @{ mode = "autonomous" }
-Write-Pass "setup: autonomous policy for read-only tests"
+$null = Invoke-ToolPolicy @{
+    mode = "autonomous"
+    toolPolicies = @{
+        contacts_import_csv = "policy"
+        contacts_discover_browser = "policy"
+        campaign_create = "policy"
+        campaign_add_contacts = "policy"
+        campaign_dry_run = "policy"
+        gmail_send = "manual"
+        contacts_list = "policy"
+        campaign_list = "policy"
+    }
+}
+Write-Pass "setup: autonomous policy for contacts/campaign tests"
 
 Start-Sleep -Seconds 2
 
@@ -383,11 +432,11 @@ Write-Log "--- contacts_list (read_only) ---"
 $listArgs = @{ limit = 5 }
 $listResult = Invoke-ToolRun -ToolName "contacts_list" -ToolArgs $listArgs
 
-if ($listResult.success -eq $true -or $listResult.status -eq "succeeded" -or $listResult.status -eq "failed") {
+if ($listResult.success -eq $true -or $listResult.status -eq "succeeded") {
     Write-Pass "contacts_list: tool executed (status: $($listResult.status))"
 }
 else {
-    Write-Fail "contacts_list: tool execution" "status=$($listResult.status), error=$($listResult.error)"
+    Write-Fail "contacts_list: tool execution" "status=$($listResult.status), error=$($listResult.error), message=$($listResult.message)"
 }
 
 Start-Sleep -Seconds 2
@@ -399,11 +448,11 @@ Write-Log "--- campaign_list (read_only) ---"
 $campListArgs = @{}
 $campListResult = Invoke-ToolRun -ToolName "campaign_list" -ToolArgs $campListArgs
 
-if ($campListResult.success -eq $true -or $campListResult.status -eq "succeeded" -or $campListResult.status -eq "failed") {
+if ($campListResult.success -eq $true -or $campListResult.status -eq "succeeded") {
     Write-Pass "campaign_list: tool executed (status: $($campListResult.status))"
 }
 else {
-    Write-Fail "campaign_list: tool execution" "status=$($campListResult.status), error=$($campListResult.error)"
+    Write-Fail "campaign_list: tool execution" "status=$($campListResult.status), error=$($campListResult.error), message=$($campListResult.message)"
 }
 
 Start-Sleep -Seconds 2
@@ -414,18 +463,41 @@ Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "=== Autonomous Mode Execution (Mutating Tools) ==="
 
-# --- contacts_import ---
+# --- contacts_import_csv ---
 Write-Host ""
-Write-Log "--- contacts_import (mutating, autonomous) ---"
+Write-Log "--- contacts_import_csv (mutating, autonomous) ---"
 
-$importArgs = @{ contacts = @(@{ name = "Harness Test"; email = "harness@example.com" }) }
-$importResult = Invoke-ToolRun -ToolName "contacts_import" -ToolArgs $importArgs
+$importArgs = @{ path = $HarnessImportCsvRelativePath; source = "harness"; tags = @("harness") }
+$importResult = Invoke-ToolRun -ToolName "contacts_import_csv" -ToolArgs $importArgs
 
-if ($importResult.success -eq $true -or $importResult.status -eq "succeeded" -or $importResult.status -eq "failed") {
-    Write-Pass "contacts_import: tool executed (status: $($importResult.status))"
+if ($importResult.success -eq $true -or $importResult.status -eq "succeeded") {
+    Write-Pass "contacts_import_csv: tool executed (status: $($importResult.status))"
 }
 else {
-    Write-Fail "contacts_import: tool execution" "status=$($importResult.status), error=$($importResult.error)"
+    Write-Fail "contacts_import_csv: tool execution" "status=$($importResult.status), error=$($importResult.error), message=$($importResult.message)"
+}
+
+Start-Sleep -Seconds 2
+
+# --- contacts_list (capture imported contact IDs) ---
+Write-Host ""
+Write-Log "--- contacts_list (capture harness contacts) ---"
+
+$captureContactsArgs = @{ query = $HarnessContactEmail; limit = 5 }
+$captureContactsResult = Invoke-ToolRun -ToolName "contacts_list" -ToolArgs $captureContactsArgs
+
+if (($captureContactsResult.success -eq $true -or $captureContactsResult.status -eq "succeeded") -and
+    $captureContactsResult.output -and $captureContactsResult.output.contacts) {
+    $HarnessContactIds = @($captureContactsResult.output.contacts | ForEach-Object { $_.id } | Where-Object { $_ })
+    if ($HarnessContactIds.Count -gt 0) {
+        Write-Pass "contacts_list: captured imported contact IDs"
+    }
+    else {
+        Write-Fail "contacts_list: captured imported contact IDs" "no harness contact IDs returned"
+    }
+}
+else {
+    Write-Fail "contacts_list: capture harness contacts" "status=$($captureContactsResult.status), error=$($captureContactsResult.error), message=$($captureContactsResult.message)"
 }
 
 Start-Sleep -Seconds 2
@@ -434,30 +506,64 @@ Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "--- campaign_create (mutating, autonomous) ---"
 
-$createArgs = @{ name = "harness-test-campaign"; type = "test" }
+$createArgs = @{
+    name = $HarnessCampaignName
+    subjectTemplate = "Harness hello {{name}}"
+    bodyTemplate = "Hello {{name}}, your email is {{email}}."
+}
 $createResult = Invoke-ToolRun -ToolName "campaign_create" -ToolArgs $createArgs
 
-if ($createResult.success -eq $true -or $createResult.status -eq "succeeded" -or $createResult.status -eq "failed") {
+if ($createResult.success -eq $true -or $createResult.status -eq "succeeded") {
     Write-Pass "campaign_create: tool executed (status: $($createResult.status))"
+    if ($createResult.output -and $createResult.output.id) {
+        $HarnessCampaignId = $createResult.output.id
+        Write-Pass "campaign_create: returned campaign ID"
+    }
 }
 else {
-    Write-Fail "campaign_create: tool execution" "status=$($createResult.status), error=$($createResult.error)"
+    Write-Fail "campaign_create: tool execution" "status=$($createResult.status), error=$($createResult.error), message=$($createResult.message)"
 }
 
 Start-Sleep -Seconds 2
 
-# --- campaign_delete ---
+# --- campaign_add_contacts ---
 Write-Host ""
-Write-Log "--- campaign_delete (mutating, autonomous) ---"
+Write-Log "--- campaign_add_contacts (mutating, autonomous) ---"
 
-$deleteAutoArgs = @{ campaignId = "harness-nonexistent" }
-$deleteAutoResult = Invoke-ToolRun -ToolName "campaign_delete" -ToolArgs $deleteAutoArgs
+if ($HarnessCampaignId -and $HarnessContactIds.Count -gt 0) {
+    $addContactsArgs = @{ campaignId = $HarnessCampaignId; contactIds = $HarnessContactIds }
+    $addContactsResult = Invoke-ToolRun -ToolName "campaign_add_contacts" -ToolArgs $addContactsArgs
 
-if ($deleteAutoResult.success -eq $true -or $deleteAutoResult.status -eq "succeeded" -or $deleteAutoResult.status -eq "failed") {
-    Write-Pass "campaign_delete: tool executed (status: $($deleteAutoResult.status))"
+    if ($addContactsResult.success -eq $true -or $addContactsResult.status -eq "succeeded") {
+        Write-Pass "campaign_add_contacts: tool executed (status: $($addContactsResult.status))"
+    }
+    else {
+        Write-Fail "campaign_add_contacts: tool execution" "status=$($addContactsResult.status), error=$($addContactsResult.error), message=$($addContactsResult.message)"
+    }
 }
 else {
-    Write-Fail "campaign_delete: tool execution" "status=$($deleteAutoResult.status), error=$($deleteAutoResult.error)"
+    Write-Skip "campaign_add_contacts (autonomous)" "missing harness campaign ID or contact IDs"
+}
+
+Start-Sleep -Seconds 2
+
+# --- campaign_dry_run ---
+Write-Host ""
+Write-Log "--- campaign_dry_run (read_only, autonomous) ---"
+
+if ($HarnessCampaignId) {
+    $dryRunArgs = @{ campaignId = $HarnessCampaignId; limit = 5 }
+    $dryRunResult = Invoke-ToolRun -ToolName "campaign_dry_run" -ToolArgs $dryRunArgs
+
+    if ($dryRunResult.success -eq $true -or $dryRunResult.status -eq "succeeded") {
+        Write-Pass "campaign_dry_run: tool executed (status: $($dryRunResult.status))"
+    }
+    else {
+        Write-Fail "campaign_dry_run: tool execution" "status=$($dryRunResult.status), error=$($dryRunResult.error), message=$($dryRunResult.message)"
+    }
+}
+else {
+    Write-Skip "campaign_dry_run (autonomous)" "missing harness campaign ID"
 }
 
 Start-Sleep -Seconds 2
@@ -468,60 +574,67 @@ Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "=== Approval Tests (approve_by_policy) ==="
 
-$policyResult = Invoke-ToolPolicy @{ mode = "approve_by_policy" }
+$policyResult = Invoke-ToolPolicy @{
+    mode = "approve_by_policy"
+    toolPolicies = @{
+        contacts_import_csv = "manual"
+        contacts_discover_browser = "policy"
+        campaign_create = "manual"
+        campaign_add_contacts = "manual"
+        campaign_dry_run = "policy"
+        gmail_send = "manual"
+        contacts_list = "policy"
+        campaign_list = "policy"
+    }
+}
 if ($policyResult.error) {
     Write-Fail "approval: set approve_by_policy" $policyResult.error
 }
 else {
-    Write-Pass "approval: policy set to approve_by_policy"
+    Write-Pass "approval: policy set to approve_by_policy with explicit contacts overrides"
 }
 
 Start-Sleep -Seconds 2
 
-# --- contacts_import (mutating) should require approval ---
+# --- contacts_import_csv (mutating) should require approval ---
 Write-Host ""
-Write-Log "--- contacts_import under approve_by_policy ---"
+Write-Log "--- contacts_import_csv under approve_by_policy ---"
 
-$importApprovalArgs = @{ contacts = @(@{ name = "Approval Test"; email = "approval@example.com" }) }
-$importApprovalResult = Invoke-ToolRun -ToolName "contacts_import" -ToolArgs $importApprovalArgs
+$importApprovalArgs = @{ path = $HarnessApprovalCsvRelativePath; source = "harness-approval"; tags = @("harness") }
+$importApprovalResult = Invoke-ToolRun -ToolName "contacts_import_csv" -ToolArgs $importApprovalArgs
 
 if ($importApprovalResult.status -eq "pending_approval") {
-    Write-Pass "contacts_import (approve_by_policy): requires approval (pending_approval)"
+    Write-Pass "contacts_import_csv (approve_by_policy): requires approval (pending_approval)"
     if ($importApprovalResult.approvalId) {
         $deny = Invoke-ApprovalDecision $importApprovalResult.approvalId "denied" "harness test"
-        if ($deny.success) { Write-Pass "contacts_import (approve_by_policy): denial accepted" }
-        else { Write-Fail "contacts_import (approve_by_policy): deny" ($deny.error ?? "unknown") }
+        if ($deny.success) { Write-Pass "contacts_import_csv (approve_by_policy): denial accepted" }
+        else { Write-Fail "contacts_import_csv (approve_by_policy): deny" (Get-ErrorText $deny.error $deny.message) }
     }
 }
 elseif ($importApprovalResult.success -eq $true) {
-    Write-Fail "contacts_import (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
+    Write-Fail "contacts_import_csv (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
 }
 else {
-    Write-Fail "contacts_import (approve_by_policy): unexpected" "status=$($importApprovalResult.status), error=$($importApprovalResult.error)"
+    Write-Fail "contacts_import_csv (approve_by_policy): unexpected" "status=$($importApprovalResult.status), error=$($importApprovalResult.error), message=$($importApprovalResult.message)"
 }
 
 Start-Sleep -Seconds 2
 
-# --- contacts_discover (mutating) should require approval ---
+# --- contacts_discover_browser (network) should NOT require approval ---
 Write-Host ""
-Write-Log "--- contacts_discover under approve_by_policy ---"
+Write-Log "--- contacts_discover_browser under approve_by_policy ---"
 
-$discoverApprovalArgs = @{ source = "test" }
-$discoverApprovalResult = Invoke-ToolRun -ToolName "contacts_discover" -ToolArgs $discoverApprovalArgs
+$discoverApprovalArgs = @{ url = "$BaseUrl/health"; maxContacts = 5; tags = @("harness") }
+$discoverApprovalResult = Invoke-ToolRun -ToolName "contacts_discover_browser" -ToolArgs $discoverApprovalArgs
 
 if ($discoverApprovalResult.status -eq "pending_approval") {
-    Write-Pass "contacts_discover (approve_by_policy): requires approval (pending_approval)"
-    if ($discoverApprovalResult.approvalId) {
-        $deny = Invoke-ApprovalDecision $discoverApprovalResult.approvalId "denied" "harness test"
-        if ($deny.success) { Write-Pass "contacts_discover (approve_by_policy): denial accepted" }
-        else { Write-Fail "contacts_discover (approve_by_policy): deny" ($deny.error ?? "unknown") }
-    }
+    Write-Fail "contacts_discover_browser (approve_by_policy): incorrectly requires approval" "network tools should be auto-allowed"
 }
-elseif ($discoverApprovalResult.success -eq $true) {
-    Write-Fail "contacts_discover (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
+elseif ($discoverApprovalResult.success -eq $true -or $discoverApprovalResult.status -eq "succeeded") {
+    Write-Pass "contacts_discover_browser (approve_by_policy): allowed without approval"
 }
 else {
-    Write-Fail "contacts_discover (approve_by_policy): unexpected" "status=$($discoverApprovalResult.status), error=$($discoverApprovalResult.error)"
+    Write-Fail "contacts_discover_browser (approve_by_policy): unexpected" "status=$($discoverApprovalResult.status), error=$($discoverApprovalResult.error), message=$($discoverApprovalResult.message)"
 }
 
 Start-Sleep -Seconds 2
@@ -530,7 +643,11 @@ Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "--- campaign_create under approve_by_policy ---"
 
-$createApprovalArgs = @{ name = "approval-test-campaign"; type = "test" }
+$createApprovalArgs = @{
+    name = "approval-$HarnessCampaignName"
+    subjectTemplate = "Approval hello {{name}}"
+    bodyTemplate = "Approval body for {{email}}."
+}
 $createApprovalResult = Invoke-ToolRun -ToolName "campaign_create" -ToolArgs $createApprovalArgs
 
 if ($createApprovalResult.status -eq "pending_approval") {
@@ -538,62 +655,43 @@ if ($createApprovalResult.status -eq "pending_approval") {
     if ($createApprovalResult.approvalId) {
         $deny = Invoke-ApprovalDecision $createApprovalResult.approvalId "denied" "harness test"
         if ($deny.success) { Write-Pass "campaign_create (approve_by_policy): denial accepted" }
-        else { Write-Fail "campaign_create (approve_by_policy): deny" ($deny.error ?? "unknown") }
+        else { Write-Fail "campaign_create (approve_by_policy): deny" (Get-ErrorText $deny.error $deny.message) }
     }
 }
 elseif ($createApprovalResult.success -eq $true) {
     Write-Fail "campaign_create (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
 }
 else {
-    Write-Fail "campaign_create (approve_by_policy): unexpected" "status=$($createApprovalResult.status), error=$($createApprovalResult.error)"
+    Write-Fail "campaign_create (approve_by_policy): unexpected" "status=$($createApprovalResult.status), error=$($createApprovalResult.error), message=$($createApprovalResult.message)"
 }
 
 Start-Sleep -Seconds 2
 
-# --- campaign_update (mutating) should require approval ---
+# --- campaign_add_contacts (mutating) should require approval ---
 Write-Host ""
-Write-Log "--- campaign_update under approve_by_policy ---"
+Write-Log "--- campaign_add_contacts under approve_by_policy ---"
 
-$updateApprovalArgs = @{ campaignId = "fake"; updates = @{ name = "updated" } }
-$updateApprovalResult = Invoke-ToolRun -ToolName "campaign_update" -ToolArgs $updateApprovalArgs
+if ($HarnessCampaignId -and $HarnessContactIds.Count -gt 0) {
+    $updateApprovalArgs = @{ campaignId = $HarnessCampaignId; contactIds = $HarnessContactIds }
+    $updateApprovalResult = Invoke-ToolRun -ToolName "campaign_add_contacts" -ToolArgs $updateApprovalArgs
 
-if ($updateApprovalResult.status -eq "pending_approval") {
-    Write-Pass "campaign_update (approve_by_policy): requires approval (pending_approval)"
-    if ($updateApprovalResult.approvalId) {
-        $deny = Invoke-ApprovalDecision $updateApprovalResult.approvalId "denied" "harness test"
-        if ($deny.success) { Write-Pass "campaign_update (approve_by_policy): denial accepted" }
-        else { Write-Fail "campaign_update (approve_by_policy): deny" ($deny.error ?? "unknown") }
+    if ($updateApprovalResult.status -eq "pending_approval") {
+        Write-Pass "campaign_add_contacts (approve_by_policy): requires approval (pending_approval)"
+        if ($updateApprovalResult.approvalId) {
+            $deny = Invoke-ApprovalDecision $updateApprovalResult.approvalId "denied" "harness test"
+            if ($deny.success) { Write-Pass "campaign_add_contacts (approve_by_policy): denial accepted" }
+            else { Write-Fail "campaign_add_contacts (approve_by_policy): deny" (Get-ErrorText $deny.error $deny.message) }
+        }
+    }
+    elseif ($updateApprovalResult.success -eq $true) {
+        Write-Fail "campaign_add_contacts (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
+    }
+    else {
+        Write-Fail "campaign_add_contacts (approve_by_policy): unexpected" "status=$($updateApprovalResult.status), error=$($updateApprovalResult.error), message=$($updateApprovalResult.message)"
     }
 }
-elseif ($updateApprovalResult.success -eq $true) {
-    Write-Fail "campaign_update (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
-}
 else {
-    Write-Fail "campaign_update (approve_by_policy): unexpected" "status=$($updateApprovalResult.status), error=$($updateApprovalResult.error)"
-}
-
-Start-Sleep -Seconds 2
-
-# --- campaign_delete (mutating) should require approval ---
-Write-Host ""
-Write-Log "--- campaign_delete under approve_by_policy ---"
-
-$deleteApprovalArgs = @{ campaignId = "harness-nonexistent" }
-$deleteApprovalResult = Invoke-ToolRun -ToolName "campaign_delete" -ToolArgs $deleteApprovalArgs
-
-if ($deleteApprovalResult.status -eq "pending_approval") {
-    Write-Pass "campaign_delete (approve_by_policy): requires approval (pending_approval)"
-    if ($deleteApprovalResult.approvalId) {
-        $deny = Invoke-ApprovalDecision $deleteApprovalResult.approvalId "denied" "harness test"
-        if ($deny.success) { Write-Pass "campaign_delete (approve_by_policy): denial accepted" }
-        else { Write-Fail "campaign_delete (approve_by_policy): deny" ($deny.error ?? "unknown") }
-    }
-}
-elseif ($deleteApprovalResult.success -eq $true) {
-    Write-Fail "campaign_delete (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
-}
-else {
-    Write-Fail "campaign_delete (approve_by_policy): unexpected" "status=$($deleteApprovalResult.status), error=$($deleteApprovalResult.error)"
+    Write-Skip "campaign_add_contacts (approve_by_policy)" "missing harness campaign ID or contact IDs"
 }
 
 Start-Sleep -Seconds 2
@@ -611,12 +709,8 @@ if ($listPolicyResult.status -eq "pending_approval") {
 elseif ($listPolicyResult.success -eq $true -or $listPolicyResult.status -eq "succeeded") {
     Write-Pass "contacts_list (approve_by_policy): allowed without approval"
 }
-elseif ($listPolicyResult.status -eq "failed" -or $listPolicyResult.status -eq "error") {
-    # Tool executed past approval gate -- acceptable
-    Write-Pass "contacts_list (approve_by_policy): tool executed without approval (status: $($listPolicyResult.status))"
-}
 else {
-    Write-Fail "contacts_list (approve_by_policy): unexpected" "status=$($listPolicyResult.status), error=$($listPolicyResult.error)"
+    Write-Fail "contacts_list (approve_by_policy): unexpected" "status=$($listPolicyResult.status), error=$($listPolicyResult.error), message=$($listPolicyResult.message)"
 }
 
 Start-Sleep -Seconds 2
@@ -634,12 +728,32 @@ if ($campListPolicyResult.status -eq "pending_approval") {
 elseif ($campListPolicyResult.success -eq $true -or $campListPolicyResult.status -eq "succeeded") {
     Write-Pass "campaign_list (approve_by_policy): allowed without approval"
 }
-elseif ($campListPolicyResult.status -eq "failed" -or $campListPolicyResult.status -eq "error") {
-    # Tool executed past approval gate -- acceptable
-    Write-Pass "campaign_list (approve_by_policy): tool executed without approval (status: $($campListPolicyResult.status))"
+else {
+    Write-Fail "campaign_list (approve_by_policy): unexpected" "status=$($campListPolicyResult.status), error=$($campListPolicyResult.error), message=$($campListPolicyResult.message)"
+}
+
+Start-Sleep -Seconds 2
+
+# --- campaign_dry_run (read_only) should NOT require approval ---
+Write-Host ""
+Write-Log "--- campaign_dry_run under approve_by_policy ---"
+
+if ($HarnessCampaignId) {
+    $dryRunPolicyArgs = @{ campaignId = $HarnessCampaignId; limit = 5 }
+    $dryRunPolicyResult = Invoke-ToolRun -ToolName "campaign_dry_run" -ToolArgs $dryRunPolicyArgs
+
+    if ($dryRunPolicyResult.status -eq "pending_approval") {
+        Write-Fail "campaign_dry_run (approve_by_policy): incorrectly requires approval" "read_only tools should be auto-allowed"
+    }
+    elseif ($dryRunPolicyResult.success -eq $true -or $dryRunPolicyResult.status -eq "succeeded") {
+        Write-Pass "campaign_dry_run (approve_by_policy): allowed without approval"
+    }
+    else {
+        Write-Fail "campaign_dry_run (approve_by_policy): unexpected" "status=$($dryRunPolicyResult.status), error=$($dryRunPolicyResult.error), message=$($dryRunPolicyResult.message)"
+    }
 }
 else {
-    Write-Fail "campaign_list (approve_by_policy): unexpected" "status=$($campListPolicyResult.status), error=$($campListPolicyResult.error)"
+    Write-Skip "campaign_dry_run (approve_by_policy)" "missing harness campaign ID"
 }
 
 Start-Sleep -Seconds 2
@@ -658,7 +772,7 @@ if ($gmailResult.status -eq "pending_approval") {
     if ($gmailResult.approvalId) {
         $deny = Invoke-ApprovalDecision $gmailResult.approvalId "denied" "harness test"
         if ($deny.success) { Write-Pass "gmail_send (approve_by_policy): denial accepted" }
-        else { Write-Fail "gmail_send (approve_by_policy): deny" ($deny.error ?? "unknown") }
+        else { Write-Fail "gmail_send (approve_by_policy): deny" (Get-ErrorText $deny.error $deny.message) }
     }
 }
 elseif ($gmailResult.success -eq $true) {
@@ -668,7 +782,7 @@ elseif ($gmailResult.message -match "Unknown tool" -or $gmailResult.error -match
     Write-Skip "gmail_send (approve_by_policy)" "gmail_send tool not registered"
 }
 else {
-    Write-Fail "gmail_send (approve_by_policy): unexpected" "status=$($gmailResult.status), error=$($gmailResult.error)"
+    Write-Fail "gmail_send (approve_by_policy): unexpected" "status=$($gmailResult.status), error=$($gmailResult.error), message=$($gmailResult.message)"
 }
 
 Start-Sleep -Seconds 2
@@ -687,16 +801,21 @@ $gmailAutoArgs = @{ to = "harness@example.com"; subject = "test"; body = "harnes
 $gmailAutoResult = Invoke-ToolRun -ToolName "gmail_send" -ToolArgs $gmailAutoArgs
 
 if ($gmailAutoResult.status -eq "pending_approval") {
-    Write-Fail "gmail_send (autonomous): still requires approval" "autonomous mode should not gate external_post"
+    Write-Pass "gmail_send (autonomous): still requires approval (external_post)"
+    if ($gmailAutoResult.approvalId) {
+        $deny = Invoke-ApprovalDecision $gmailAutoResult.approvalId "denied" "harness test"
+        if ($deny.success) { Write-Pass "gmail_send (autonomous): denial accepted" }
+        else { Write-Fail "gmail_send (autonomous): deny" (Get-ErrorText $deny.error $deny.message) }
+    }
 }
-elseif ($gmailAutoResult.success -eq $true -or $gmailAutoResult.status -eq "succeeded" -or $gmailAutoResult.status -eq "failed" -or $gmailAutoResult.status -eq "error") {
-    Write-Pass "gmail_send (autonomous): executed without approval (status: $($gmailAutoResult.status))"
+elseif ($gmailAutoResult.success -eq $true -or $gmailAutoResult.status -eq "succeeded") {
+    Write-Fail "gmail_send (autonomous): BYPASSED APPROVAL" "external_post should still require approval in autonomous mode"
 }
 elseif ($gmailAutoResult.message -match "Unknown tool" -or $gmailAutoResult.error -match "Unknown tool") {
     Write-Skip "gmail_send (autonomous)" "gmail_send tool not registered"
 }
 else {
-    Write-Fail "gmail_send (autonomous): unexpected" "status=$($gmailAutoResult.status), error=$($gmailAutoResult.error)"
+    Write-Fail "gmail_send (autonomous): unexpected" "status=$($gmailAutoResult.status), error=$($gmailAutoResult.error), message=$($gmailAutoResult.message)"
 }
 
 Start-Sleep -Seconds 2
@@ -707,12 +826,24 @@ Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "=== Cleanup ==="
 
-$restoreResult = Invoke-ToolPolicy @{ mode = "approve_by_policy" }
+$restoreResult = Invoke-ToolPolicy @{
+    mode = "approve_by_policy"
+    toolPolicies = @{
+        contacts_import_csv = "policy"
+        contacts_discover_browser = "policy"
+        campaign_create = "policy"
+        campaign_add_contacts = "policy"
+        campaign_dry_run = "policy"
+        gmail_send = "manual"
+        contacts_list = "policy"
+        campaign_list = "policy"
+    }
+}
 if ($restoreResult.error) {
     Write-Fail "cleanup: restore policy" $restoreResult.error
 }
 else {
-    Write-Pass "cleanup: policy restored to approve_by_policy"
+    Write-Pass "cleanup: contacts tool policies restored to policy/approve_by_policy"
 }
 
 # ===============================================================

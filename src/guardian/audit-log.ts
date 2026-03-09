@@ -25,7 +25,11 @@ export type AuditEventType =
   | 'policy_changed'
   | 'anomaly_detected'
   | 'agent_error'
-  | 'agent_stalled';
+  | 'agent_stalled'
+  | 'policy_engine_started'
+  | 'policy_mode_changed'
+  | 'policy_rules_reloaded'
+  | 'policy_shadow_mismatch';
 
 /** Severity levels for audit events. */
 export type AuditSeverity = 'info' | 'warn' | 'critical';

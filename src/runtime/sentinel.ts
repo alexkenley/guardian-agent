@@ -480,6 +480,29 @@ export class SentinelAuditService {
       });
     }
 
+    // Rule 6: Policy engine shadow mismatches — high mismatch rate may indicate
+    // rules need adjustment before switching to enforce mode
+    const mismatchCount = summary.byType['policy_shadow_mismatch'] ?? 0;
+    if (mismatchCount > 10) {
+      anomalies.push({
+        type: 'policy_shadow_drift',
+        severity: mismatchCount > 50 ? 'critical' : 'warn',
+        description: `Policy engine shadow mode: ${mismatchCount} mismatches between legacy and policy decisions in analysis window`,
+        evidence: { mismatchCount },
+      });
+    }
+
+    // Rule 7: Policy mode changes — audit trail for mode transitions
+    const modeChanges = summary.byType['policy_mode_changed'] ?? 0;
+    if (modeChanges > 3) {
+      anomalies.push({
+        type: 'policy_mode_churn',
+        severity: 'warn',
+        description: `Policy engine mode changed ${modeChanges} times in analysis window — indicates instability`,
+        evidence: { modeChanges },
+      });
+    }
+
     return anomalies;
   }
 }

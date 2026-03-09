@@ -320,6 +320,17 @@ export const api = {
 
   gwsStatus: () => request('/api/gws/status'),
 
+  // Policy-as-Code Engine
+  policyStatus: () => request('/api/policy/status'),
+  updatePolicy: (payload) => request('/api/policy/config', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  reloadPolicy: () => request('/api/policy/reload', {
+    method: 'POST',
+    body: '{}',
+  }),
+
   // Guardian Agent + Sentinel Audit
   guardianAgentStatus: () => request('/api/guardian-agent/status'),
   updateGuardianAgent: (payload) => request('/api/guardian-agent/config', {

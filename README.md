@@ -84,6 +84,7 @@ Test agent behavior through the real Runtime with Guardian active:
 - Secret scanning (30+ credential and PII patterns: AWS, GCP, GitHub, OpenAI, Stripe, Slack, and more)
 - High-signal PII scanning on tool arguments (addresses, DOB, MRN, passport, driver's license)
 - Sensitive path blocking with traversal normalization
+- **Policy-as-Code engine** — declarative JSON rules with deterministic evaluation, shadow mode for safe migration, and hot-reload
 
 **Layer 2 — Guardian Agent (inline LLM evaluation before tool execution):**
 - Evaluates every non-read-only tool action via LLM before execution
@@ -136,6 +137,49 @@ The Runtime controls every chokepoint where data flows in or out of an agent:
 | Agent context | Frozen with Object.freeze — capabilities immutable |
 
 There is no `ctx.fs`, `ctx.http`, or `ctx.exec`. The agent's only interaction points are `ctx.llm` (guarded), `ctx.emit()` (scanned), and returning a response (scanned).
+
+## Policy-as-Code Engine
+
+Declarative JSON rule files replace hard-coded approval logic with an auditable, version-controlled policy engine.
+
+**How it works:** JSON policy files in `policies/` are compiled into sorted matcher functions at startup. The engine evaluates each tool request against matching rules (priority-ordered, first-match wins) and returns `allow`, `deny`, or `require_approval`.
+
+**Shadow mode (default):** The policy engine runs alongside the legacy `decide()` path and compares decisions without affecting execution. Mismatches are logged with classification (`policy_too_strict`, `policy_too_permissive`, `normalization_bug`, `legacy_bug`) for safe, data-driven migration to enforce mode.
+
+```yaml
+# config.yaml
+guardian:
+  policy:
+    enabled: true
+    mode: shadow    # 'off' | 'shadow' | 'enforce'
+    rulesPath: policies/
+```
+
+**Rule format:**
+
+```json
+{
+  "schemaVersion": 1,
+  "rules": [{
+    "id": "shell-readonly-allow",
+    "family": "tool",
+    "enabled": true,
+    "priority": 90,
+    "match": {
+      "action": "tool:shell_safe",
+      "resource.attrs.firstWord": { "in": ["ls", "pwd", "cat", "git"] }
+    },
+    "decision": {
+      "kind": "allow",
+      "reason": "Read-only shell command."
+    }
+  }]
+}
+```
+
+**Match primitives:** exact, `in`/`notIn`, `gt`/`gte`/`lt`/`lte`, `startsWith`/`endsWith`, `regex`, `exists` — with `allOf`/`anyOf` compound conditions.
+
+See [`docs/specs/POLICY-AS-CODE-SPEC.md`](docs/specs/POLICY-AS-CODE-SPEC.md) for the full specification.
 
 ## Quick Start
 
