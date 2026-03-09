@@ -373,7 +373,7 @@ export interface DashboardCallbacks {
   onProvidersStatus?: () => Promise<DashboardProviderInfo[]>;
   onAssistantState?: () => DashboardAssistantState;
   onSSESubscribe?: (listener: SSEListener) => () => void;
-  onDispatch?: (agentId: string, message: { content: string; userId?: string; channel?: string }, routeDecision?: { fallbackAgentId?: string; complexityScore?: number; tier?: string }) => Promise<{ content: string }>;
+  onDispatch?: (agentId: string, message: { content: string; userId?: string; channel?: string }, routeDecision?: { fallbackAgentId?: string; complexityScore?: number; tier?: string }) => Promise<{ content: string; metadata?: Record<string, unknown> }>;
   onConfigUpdate?: (updates: ConfigUpdate) => Promise<{ success: boolean; message: string }>;
   onConversationReset?: (args: {
     agentId: string;
@@ -543,7 +543,7 @@ export interface DashboardCallbacks {
     agentId: string,
     message: { content: string; userId?: string; channel?: string },
     emitSSE: (event: SSEEvent) => void,
-  ) => Promise<{ requestId: string; content: string }>;
+  ) => Promise<{ requestId: string; content: string; metadata?: Record<string, unknown> }>;
   onTelegramReload?: () => Promise<{ success: boolean; message: string }>;
   onKillswitch?: () => void;
   onFactoryReset?: (args: { scope: 'data' | 'config' | 'all' }) => Promise<{

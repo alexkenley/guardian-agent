@@ -98,9 +98,10 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 - MCP tool risk is inferred from tool metadata (`read_only`, `mutating`, `external_post`) with optional per-server trust overrides and rate limits
 
 ### Channel Adapters
-- **CLI** (`src/channels/cli.ts`) — readline prompt with `/help`, `/agents`, `/status`, `/config`, `/tools`, `/connectors`, etc.
-- **Telegram** (`src/channels/telegram.ts`) — grammy bot, polling mode, `allowed_chat_ids` filtering
-- **Web** (`src/channels/web.ts`) — Node.js HTTP server, REST API (`/health`, `/api/status`, `/api/message`), serves static files from `web/public/`, bearer token auth
+- **CLI** (`src/channels/cli.ts`) — readline prompt with `/help`, `/agents`, `/status`, `/config`, `/tools`, `/connectors`, etc. Structured approval prompts via interactive `Approve (y) / Deny (n):` readline question with auto-continuation.
+- **Telegram** (`src/channels/telegram.ts`) — grammy bot, polling mode, `allowed_chat_ids` filtering. Inline keyboard buttons for tool approvals with callback query handling and auto-continuation.
+- **Web** (`src/channels/web.ts`) — Node.js HTTP server, REST API (`/health`, `/api/status`, `/api/message`), serves static files from `web/public/`, bearer token auth. Structured Approve/Deny buttons via `response.metadata.pendingApprovals` with auto-continuation.
+- **Approval UX**: All channels use structured `response.metadata.pendingApprovals` (array of `{ id, toolName, argsPreview }`) for native approval UI rendering. On approval, each channel auto-dispatches a continuation message so the LLM completes multi-step tasks (e.g., add path → write file).
 
 ### Web Frontend (`web/public/`)
 Vanilla JavaScript — no framework, no build step. Static HTML/CSS/JS served directly by the WebChannel HTTP server. Consolidated into 6 sidebar pages with tabbed navigation:
