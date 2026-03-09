@@ -234,6 +234,7 @@ export class CLIChannel implements ChannelAdapter {
           agentId: this.activeAgentId,
         });
         this.write(`\nguardian-agent> ${response.content}\n\n`);
+        await this.handleApprovalPrompt(response, this.activeAgentId);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         this.trackAnalytics({
@@ -268,6 +269,7 @@ export class CLIChannel implements ChannelAdapter {
         agentId: agentIdForEvent,
       });
       this.write(`\nguardian-agent> ${response.content}\n\n`);
+      await this.handleApprovalPrompt(response, agentIdForEvent);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.trackAnalytics({
@@ -280,6 +282,95 @@ export class CLIChannel implements ChannelAdapter {
       });
       this.write(`\n${this.red('[error]')} ${msg}\n\n`);
     }
+  }
+
+  /** Maximum chained approval continuations to prevent infinite loops. */
+  private static readonly MAX_APPROVAL_CHAIN = 5;
+
+  /**
+   * If a response has pending approvals in metadata, present an interactive
+   * Approve / Deny prompt and handle the decision inline.
+   */
+  private async handleApprovalPrompt(
+    response: { content: string; metadata?: Record<string, unknown> },
+    agentId?: string,
+    depth = 0,
+  ): Promise<void> {
+    const approvals = response.metadata?.pendingApprovals as
+      | Array<{ id: string; toolName: string; argsPreview: string }>
+      | undefined;
+    if (!approvals?.length || !this.dashboard?.onToolsApprovalDecision) return;
+
+    if (depth >= CLIChannel.MAX_APPROVAL_CHAIN) {
+      this.write(`\n${this.yellow('[info]')} Maximum approval chain reached. Use /tools approvals to manage remaining approvals.\n\n`);
+      return;
+    }
+
+    // Display approval summary
+    for (const approval of approvals) {
+      const preview = approval.argsPreview ? ` — ${approval.argsPreview}` : '';
+      this.write(`  ${this.yellow('⚠')} ${this.bold(approval.toolName)}${preview}\n`);
+    }
+    this.write('\n');
+
+    // Prompt for decision
+    const answer = await this.question(`${this.yellow('Approve')} (y) / ${this.red('Deny')} (n): `);
+    const decision = /^(y|yes|approve|ok|sure|go ahead)\b/i.test(answer.trim()) ? 'approved' : 'denied';
+
+    // Execute decisions and collect results
+    const resultMessages: string[] = [];
+    let allSucceeded = true;
+    for (const approval of approvals) {
+      try {
+        const result = await this.dashboard.onToolsApprovalDecision({
+          approvalId: approval.id,
+          decision,
+          actor: 'cli-user',
+        });
+        if (result.success) {
+          resultMessages.push(`${decision === 'approved' ? this.green('✓') : this.red('✗')} ${approval.toolName}: ${result.message || decision}`);
+        } else {
+          allSucceeded = false;
+          resultMessages.push(`${this.red('✗')} ${approval.toolName}: ${result.message || 'failed'}`);
+        }
+      } catch (err) {
+        allSucceeded = false;
+        resultMessages.push(`${this.red('✗')} ${approval.toolName}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    this.write('\n' + resultMessages.join('\n') + '\n\n');
+
+    // On approval, auto-continue so the LLM can complete the original task
+    if (decision === 'approved' && agentId && this.dashboard?.onDispatch) {
+      const summary = resultMessages.map((r) => r.replace(/\x1b\[\d+m/g, '')).join('; ');
+      try {
+        const continuation = await this.dashboard.onDispatch(agentId, {
+          content: `[User approved the pending tool action(s). Results: ${summary}] ${allSucceeded ? 'Please continue with the original task.' : 'Some actions failed — adjust your approach accordingly.'}`,
+          userId: this.defaultUserId,
+          channel: 'cli',
+        });
+        this.write(`\nguardian-agent> ${continuation.content}\n\n`);
+        // Recurse for chained approvals (e.g. add path → then write file)
+        await this.handleApprovalPrompt(continuation, agentId, depth + 1);
+      } catch (err) {
+        this.write(`\n${this.red('[error]')} Continuation failed: ${err instanceof Error ? err.message : String(err)}\n\n`);
+      }
+    }
+  }
+
+  /**
+   * Prompt the user for a single-line answer, pausing the readline line listener.
+   */
+  private question(prompt: string): Promise<string> {
+    return new Promise((resolve) => {
+      if (!this.rl) {
+        resolve('');
+        return;
+      }
+      this.rl.question(prompt, (answer) => {
+        resolve(answer);
+      });
+    });
   }
 
   // ─── Command dispatch ────────────────────────────────────────

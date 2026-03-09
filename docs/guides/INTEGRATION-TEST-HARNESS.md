@@ -98,25 +98,26 @@ Set the port to your web channel port and the token to the auth token shown in t
 
 The app stays running after tests finish. Useful for manual follow-up testing.
 
-### Debugging Web UI Approval Loops
+### Automated Node.js / Jest Test Scripts (Preferred for Coding Assistants)
 
-When debugging state loop issues specifically tied to the Web UI (e.g. LLM endlessly retrying an approved action), use the isolated Node.js test harness. The web UI secretly prepends context strings like `[Context: User is currently viewing the chat panel]` to continuation messages, which the standard PowerShell harness does not simulate.
+When debugging complex state loops (e.g., approval systems, UI-specific message formatting, or LLM context poisoning), the standard PowerShell test harness can be difficult for AI coding assistants to reliably generate and execute automatically within a Linux/WSL environment.
 
-To accurately simulate the Web UI's exact REST API flow, use the Node-based test:
+The **preferred method** for automated testing and bug reproduction is to write self-contained Node.js (`.mjs`) scripts or Jest tests. This allows for precise simulation of frontend HTTP signatures, hidden prefixes, and concurrent API requests.
 
+**Process for Creating an Isolated Node.js Test:**
+1. **Create a dummy configuration:** Generate a temporary `.yaml` file within the script to configure the agent to use a `mock` LLM provider (or explicit local provider like Ollama) and an isolated port.
+2. **Spawn the backend:** Use `child_process.spawn` to launch `npx tsx src/index.ts` in the background, piping `stdout` and `stderr` to a temporary log file.
+3. **Wait for Health:** Poll the `/health` endpoint until the server is fully ready.
+4. **Setup the Environment:** Make an initial HTTP call (e.g., to `/api/tools/policy`) to configure the necessary state (like `approve_by_policy` and restricted sandbox paths).
+5. **Simulate the User/UI Flow:** Send HTTP requests that exactly mimic the UI's behavior. If the Web UI prepends hidden contexts (like `[Context: User is currently viewing the chat panel]`), include these exactly as they appear in the browser payload.
+6. **Assert and Cleanup:** Evaluate the API responses programmatically. Regardless of pass or fail, ensure `appProcess.kill()` is called in a `finally` block or `catch` handler so the port is properly released.
+
+Example script generated during debugging (see `scripts/test-web-approvals.mjs`):
 ```bash
 node scripts/test-web-approvals.mjs
 ```
 
-**What this script does:**
-1. Spins up an isolated instance of GuardianAgent using a dummy mock provider (to remove external LLM latency).
-2. Sets the policy mode to `approve_by_policy` with a restricted sandbox.
-3. Issues a direct `POST /api/tools/run` command to write a file outside the sandbox, generating a real `pending_approval` state.
-4. Simulates the Web UI calling `POST /api/tools/approvals/decision` to approve the action.
-5. Simulates the Web UI's exact continuation message (including the `[Context: ...]` prefix) via `POST /api/message`.
-6. Asserts that the response is processed properly and the LLM does not get stuck in an approval loop.
-
-This is the **preferred method** for coding assistants (like Gemini/Claude) to verify loop fixes, as it can be easily run automatically in WSL/Ubuntu environments and accurately reproduces the frontend's exact HTTP signature.
+This method is fast, removes dependencies on cross-platform shell quirks, and can be instantly executed via `run_shell_command` natively in WSL.
 
 ## Environment Variables
 

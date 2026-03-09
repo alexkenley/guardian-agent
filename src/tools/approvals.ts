@@ -15,6 +15,14 @@ export class ToolApprovalStore {
     argsHash: string | undefined,
     now: () => number = Date.now,
   ): ToolApprovalRequest {
+    // Dedup: if an identical pending approval already exists (same tool + argsHash), return it
+    if (argsHash) {
+      const existing = this.requests.find(
+        (r) => r.status === 'pending' && r.toolName === job.toolName && r.argsHash === argsHash,
+      );
+      if (existing) return existing;
+    }
+
     const request: ToolApprovalRequest = {
       id: randomUUID(),
       jobId: job.id,

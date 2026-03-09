@@ -5,7 +5,7 @@
  * Filters by allowed_chat_ids. Typing indicators.
  */
 
-import { Bot, type Context } from 'grammy';
+import { Bot, InlineKeyboard, type Context } from 'grammy';
 import { randomUUID } from 'node:crypto';
 import type { ChannelAdapter, MessageCallback } from './types.js';
 import { createLogger } from '../util/logging.js';
@@ -55,6 +55,15 @@ export interface TelegramChannelOptions {
   onThreatIntelFindings?: (args: { limit?: number; status?: IntelStatus }) => ThreatIntelFinding[];
   /** Analytics tracking callback. */
   onAnalyticsTrack?: (event: AnalyticsEventInput) => void;
+  /** Tool approval decision callback — used for inline keyboard approve/deny buttons. */
+  onToolsApprovalDecision?: (input: {
+    approvalId: string;
+    decision: 'approved' | 'denied';
+    actor: string;
+    reason?: string;
+  }) => Promise<{ success: boolean; message: string }> | { success: boolean; message: string };
+  /** Dispatch a follow-up message to an agent (for auto-continuation after approval). */
+  onDispatch?: (agentId: string, message: { content: string; userId?: string; channel?: string }) => Promise<{ content: string; metadata?: Record<string, unknown> }>;
 }
 
 export class TelegramChannel implements ChannelAdapter {
@@ -71,6 +80,8 @@ export class TelegramChannel implements ChannelAdapter {
   private onThreatIntelScan?: TelegramChannelOptions['onThreatIntelScan'];
   private onThreatIntelFindings?: TelegramChannelOptions['onThreatIntelFindings'];
   private onAnalyticsTrack?: TelegramChannelOptions['onAnalyticsTrack'];
+  private onToolsApprovalDecision?: TelegramChannelOptions['onToolsApprovalDecision'];
+  private onDispatchMsg?: TelegramChannelOptions['onDispatch'];
 
   constructor(options: TelegramChannelOptions) {
     this.bot = new Bot(options.botToken);
@@ -84,6 +95,8 @@ export class TelegramChannel implements ChannelAdapter {
     this.onThreatIntelScan = options.onThreatIntelScan;
     this.onThreatIntelFindings = options.onThreatIntelFindings;
     this.onAnalyticsTrack = options.onAnalyticsTrack;
+    this.onToolsApprovalDecision = options.onToolsApprovalDecision;
+    this.onDispatchMsg = options.onDispatch;
   }
 
   async start(onMessage: MessageCallback): Promise<void> {
@@ -201,6 +214,72 @@ export class TelegramChannel implements ChannelAdapter {
 
       if (!this.onMessage) return;
       await this.dispatchAssistantMessage(ctx, text, canonicalUserId, channelUserId);
+    });
+
+    // Handle inline keyboard callback queries for tool approvals
+    this.bot.on('callback_query:data', async (ctx) => {
+      const data = ctx.callbackQuery.data;
+      if (!data.startsWith('approve:') && !data.startsWith('deny:')) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+
+      const [action, ...idParts] = data.split(':');
+      const approvalId = idParts.join(':');
+      const decision = action === 'approve' ? 'approved' as const : 'denied' as const;
+
+      if (!this.onToolsApprovalDecision) {
+        await ctx.answerCallbackQuery({ text: 'Approval handler not available.' });
+        return;
+      }
+
+      try {
+        const result = await this.onToolsApprovalDecision({
+          approvalId,
+          decision,
+          actor: `telegram:${ctx.from.id}`,
+        });
+
+        // Update the button message to show the decision result
+        const statusText = decision === 'approved'
+          ? (result.success ? '✅ Approved and executed' : `⚠️ Approved but failed: ${result.message || 'unknown error'}`)
+          : '❌ Denied';
+        await ctx.answerCallbackQuery({ text: (result.message || statusText).slice(0, 200) });
+
+        // Replace the inline keyboard with the decision status
+        try {
+          const originalText = (ctx.callbackQuery.message && 'text' in ctx.callbackQuery.message)
+            ? ctx.callbackQuery.message.text ?? ''
+            : '';
+          await ctx.editMessageText(`${originalText}\n${statusText}`);
+        } catch {
+          // Message may have been deleted or keyboard already removed
+        }
+
+        // On approval, auto-continue so the LLM completes the original task.
+        // Include the result so the LLM knows if the action succeeded or failed.
+        if (decision === 'approved' && this.onDispatchMsg) {
+          await ctx.replyWithChatAction('typing');
+          const resultContext = result.success
+            ? 'Action executed successfully.'
+            : `Action failed: ${result.message || 'unknown error'}. Adjust your approach.`;
+          try {
+            const continuation = await this.onDispatchMsg(this.defaultAgent, {
+              content: `[User approved the pending tool action. ${resultContext}] Please continue with the original task.`,
+              userId: String(ctx.from.id),
+              channel: 'telegram',
+            });
+            await this.replyWithApprovalSupport(ctx, continuation);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.error({ err: msg }, 'Telegram approval continuation failed');
+            await ctx.reply('Sorry, an error occurred continuing after approval.');
+          }
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await ctx.answerCallbackQuery({ text: `Error: ${msg}` });
+      }
     });
 
     // Validate token before starting polling
@@ -365,7 +444,7 @@ export class TelegramChannel implements ChannelAdapter {
         channelUserId,
         agentId: this.defaultAgent,
       });
-      await this.replyInChunks(ctx, response.content);
+      await this.replyWithApprovalSupport(ctx, response);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.trackAnalytics({
@@ -378,6 +457,48 @@ export class TelegramChannel implements ChannelAdapter {
       });
       log.error({ chatId: ctx.chat?.id, err: msg }, 'Error handling Telegram message');
       await this.replyInChunks(ctx, 'Sorry, an error occurred processing your message.');
+    }
+  }
+
+  /**
+   * Reply with the response text, and if pending approvals are present,
+   * append an inline keyboard with Approve / Deny buttons.
+   */
+  private async replyWithApprovalSupport(
+    ctx: Context,
+    response: { content: string; metadata?: Record<string, unknown> },
+  ): Promise<void> {
+    const approvals = response.metadata?.pendingApprovals as
+      | Array<{ id: string; toolName: string; argsPreview: string }>
+      | undefined;
+
+    if (!approvals?.length || !this.onToolsApprovalDecision) {
+      await this.replyInChunks(ctx, response.content);
+      return;
+    }
+
+    // Send the main content first
+    await this.replyInChunks(ctx, response.content);
+
+    // Build an inline keyboard with approve/deny per approval
+    // For simplicity, use a single approve-all / deny-all row when there's one approval,
+    // or per-item buttons for multiple.
+    if (approvals.length === 1) {
+      const a = approvals[0];
+      const preview = a.argsPreview ? ` — ${a.argsPreview}` : '';
+      const keyboard = new InlineKeyboard()
+        .text('✅ Approve', `approve:${a.id}`)
+        .text('❌ Deny', `deny:${a.id}`);
+      await ctx.reply(`⚠️ ${a.toolName}${preview}`, { reply_markup: keyboard });
+    } else {
+      // Multiple approvals: show each with its own buttons
+      for (const a of approvals) {
+        const preview = a.argsPreview ? ` — ${a.argsPreview}` : '';
+        const keyboard = new InlineKeyboard()
+          .text('✅ Approve', `approve:${a.id}`)
+          .text('❌ Deny', `deny:${a.id}`);
+        await ctx.reply(`⚠️ ${a.toolName}${preview}`, { reply_markup: keyboard });
+      }
     }
   }
 
