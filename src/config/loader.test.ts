@@ -441,7 +441,7 @@ describe('validateConfig — MCP', () => {
 });
 
 describe('validateConfig — connectors', () => {
-  it('should fail when connectors enabled but no packs are defined', () => {
+  it('should allow connectors enabled with no access profiles', () => {
     const config: GuardianAgentConfig = {
       ...DEFAULT_CONFIG,
       assistant: {
@@ -454,12 +454,10 @@ describe('validateConfig — connectors', () => {
       },
     };
     const errors = validateConfig(config);
-    expect(errors).toContain(
-      'assistant.connectors.packs must include at least one pack when connectors are enabled',
-    );
+    expect(errors).toEqual([]);
   });
 
-  it('should fail when connectors enabled but all packs are disabled', () => {
+  it('should allow connectors enabled when all access profiles are disabled', () => {
     const config: GuardianAgentConfig = {
       ...DEFAULT_CONFIG,
       assistant: {
@@ -482,9 +480,7 @@ describe('validateConfig — connectors', () => {
       },
     };
     const errors = validateConfig(config);
-    expect(errors).toContain(
-      'assistant.connectors requires at least one enabled pack when connectors are enabled',
-    );
+    expect(errors).toEqual([]);
   });
 
   it('should fail on duplicate connector pack ids', () => {
@@ -574,6 +570,50 @@ describe('validateConfig — connectors', () => {
         },
       },
     };
+    const errors = validateConfig(config);
+    expect(errors).toEqual([]);
+  });
+
+  it('should allow built-in playbook steps without an access profile', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        connectors: {
+          enabled: true,
+          executionMode: 'plan_then_execute',
+          maxConnectorCallsPerRun: 20,
+          packs: [],
+          playbooks: {
+            definitions: [{
+              id: 'lan-arp-scan',
+              name: 'LAN ARP Scan',
+              enabled: true,
+              mode: 'sequential',
+              signature: 'signed',
+              steps: [{
+                id: 'scan',
+                packId: '',
+                toolName: 'net_arp_scan',
+                args: {},
+              }],
+            }],
+            enabled: true,
+            maxSteps: 20,
+            maxParallelSteps: 4,
+            defaultStepTimeoutMs: 20_000,
+            requireSignedDefinitions: true,
+            requireDryRunOnFirstExecution: true,
+          },
+          studio: {
+            enabled: true,
+            mode: 'builder',
+            requirePrivilegedTicket: true,
+          },
+        },
+      },
+    };
+
     const errors = validateConfig(config);
     expect(errors).toEqual([]);
   });

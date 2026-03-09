@@ -154,7 +154,7 @@ describe('ConnectorPlaybookService', () => {
     });
     expect(result.success).toBe(false);
     expect(result.run.steps[0].status).toBe('failed');
-    expect(result.run.steps[0].message).toContain('outside connector pack allowedPaths');
+    expect(result.run.steps[0].message).toContain('outside the allowed paths for this access profile');
   });
 
   it('propagates pending approvals from tool executor', async () => {
@@ -180,5 +180,76 @@ describe('ConnectorPlaybookService', () => {
     expect(result.status).toBe('awaiting_approval');
     expect(result.run.steps[0].status).toBe('pending_approval');
     expect(result.run.steps[0].approvalId).toBe('approval-123');
+  });
+
+  it('treats default packId as built-in tool access', async () => {
+    const config = makeConfig();
+    config.playbooks.requireDryRunOnFirstExecution = false;
+    config.playbooks.definitions = [
+      {
+        id: 'built-in-tool',
+        name: 'Built-in Tool',
+        enabled: true,
+        mode: 'sequential',
+        signature: 'signed-v1',
+        steps: [
+          { id: 'arp-scan', packId: 'default', toolName: 'net_arp_scan', args: {} },
+        ],
+      },
+    ];
+
+    const runTool = vi.fn(async (): Promise<ToolRunResponse> => ({
+      success: true,
+      status: 'succeeded',
+      jobId: 'job-arp',
+      message: 'scan complete',
+    }));
+    const service = new ConnectorPlaybookService({ config, runTool });
+
+    const result = await service.runPlaybook({
+      playbookId: 'built-in-tool',
+      origin: 'web',
+      dryRun: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(runTool).toHaveBeenCalledTimes(1);
+    expect(result.run.steps[0].packId).toBe('');
+    expect(result.run.steps[0].message).toBe('scan complete');
+  });
+
+  it('treats blank packId as built-in tool access', async () => {
+    const config = makeConfig();
+    config.playbooks.requireDryRunOnFirstExecution = false;
+    config.playbooks.definitions = [
+      {
+        id: 'blank-pack',
+        name: 'Blank Pack',
+        enabled: true,
+        mode: 'sequential',
+        signature: 'signed-v1',
+        steps: [
+          { id: 'arp-scan', packId: '', toolName: 'net_arp_scan', args: {} },
+        ],
+      },
+    ];
+
+    const runTool = vi.fn(async (): Promise<ToolRunResponse> => ({
+      success: true,
+      status: 'succeeded',
+      jobId: 'job-arp',
+      message: 'scan complete',
+    }));
+    const service = new ConnectorPlaybookService({ config, runTool });
+
+    const result = await service.runPlaybook({
+      playbookId: 'blank-pack',
+      origin: 'web',
+      dryRun: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(runTool).toHaveBeenCalledTimes(1);
+    expect(result.run.steps[0].packId).toBe('');
   });
 });

@@ -375,7 +375,7 @@ function renderPipelineView(auto, toolLookup, packs) {
         </div>
         <div class="wf-config-step-body">
           <div class="wf-config-step-fields">
-            <div class="cfg-field"><label>Policy</label><input type="text" value="${escAttr(step.packId || '')}" readonly style="opacity:0.7;cursor:default"></div>
+            <div class="cfg-field"><label>Tool Access</label><input type="text" value="${escAttr(formatStepAccess(step.packId, packs))}" readonly style="opacity:0.7;cursor:default"></div>
             <div class="cfg-field"><label>Timeout (ms)</label><input type="text" value="${escAttr(step.timeoutMs ? String(step.timeoutMs) : 'default')}" readonly style="opacity:0.7;cursor:default"></div>
             <div class="cfg-field"><label>Continue on Error</label><input type="text" value="${step.continueOnError ? 'yes' : 'no'}" readonly style="opacity:0.7;cursor:default"></div>
           </div>
@@ -394,7 +394,7 @@ function renderPipelineView(auto, toolLookup, packs) {
       ${(pack.allowedCommands || []).length > 0 ? `<div class="wf-config-pack-detail">Allowed commands: ${esc(pack.allowedCommands.join(', '))}</div>` : '<div class="wf-config-pack-detail">Commands: none allowed</div>'}
       ${pack.requireHumanApprovalForWrites ? '<div class="wf-config-pack-detail" style="color:var(--warning)">Requires human approval for writes</div>' : ''}
     </div>
-  `).join('') : '<div style="color:var(--text-muted);font-size:0.75rem">No permission policy assigned</div>';
+  `).join('') : '<div style="color:var(--text-muted);font-size:0.75rem">Using built-in tool access</div>';
 
   const playbookData = auto._playbook || { id: auto.id, name: auto.name, mode: auto.mode, steps, enabled: auto.enabled, description: auto.description };
   const configPanel = `
@@ -453,9 +453,9 @@ function renderCreateForm(tools, packs) {
         </select>
       </div>
       <div class="cfg-field">
-        <label>Permission Policy</label>
-        <select id="auto-create-pack">
-          <option value="">None</option>
+        <label>Tool Access</label>
+        <select id="auto-create-pack" title="Built-in tools use the normal Guardian rules. Access profiles add extra host, path, and command limits.">
+          <option value="">Built-in tools</option>
           ${packs.map((p) => `<option value="${escAttr(p.id)}">${esc(p.name)}</option>`).join('')}
         </select>
       </div>
@@ -1452,6 +1452,15 @@ function esc(value) {
 
 function escAttr(value) {
   return esc(value).replace(/"/g, '&quot;');
+}
+
+function formatStepAccess(packId, packs) {
+  const normalized = (packId || '').trim();
+  if (!normalized || normalized.toLowerCase() === 'default') {
+    return 'Built-in tools';
+  }
+  const pack = (packs || []).find((candidate) => candidate.id === normalized);
+  return pack ? `${pack.name} (${pack.id})` : normalized;
 }
 
 // Global click handler for step output toggles

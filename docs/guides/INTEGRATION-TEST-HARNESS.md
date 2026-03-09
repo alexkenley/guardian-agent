@@ -739,3 +739,15 @@ After ~80K tokens of tool results, compaction should kick in (oldest results sum
 ## Test Results
 
 Test run logs are recorded in [`docs/guides/test-results/`](test-results/).
+### Automation Built-In Tool Regression
+
+When testing web/scheduled automations that call built-in tools such as `net_arp_scan`, verify both of these cases:
+
+- a playbook step with `packId: "default"` executes successfully
+- a playbook step with `packId: ""` executes successfully after reload/config validation
+
+Expected behavior:
+
+- built-in tool steps run through the normal `ToolExecutor` path
+- run history must not show `Connector pack 'default' is unavailable.`
+- the UI should describe default access as `Built-in tools` / `Tool Access`

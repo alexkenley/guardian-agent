@@ -590,7 +590,7 @@ export interface AssistantConnectorPlaybookStepDefinition {
   id: string;
   /** Optional human label for operators. */
   name?: string;
-  /** Connector pack id used for this step. */
+  /** Optional access profile id used for this step. Empty/default means built-in tool access. */
   packId: string;
   /** Tool name to execute. */
   toolName: string;
