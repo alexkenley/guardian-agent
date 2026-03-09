@@ -17,7 +17,6 @@ const DEFAULT_TOOLTIPS = {
   '#cfg-model': 'Model ID to use when this profile is selected.',
   '#cfg-base-url': 'Optional custom endpoint. Leave blank for provider defaults.',
   '#cfg-api-key': 'API key for external providers. Leave blank to keep the existing key.',
-  '#cfg-set-default': 'Set this profile as the assistant default provider after save.',
   '#cfg-telegram-enabled': 'Enable or disable Telegram channel integration (restart required after changes).',
   '#cfg-telegram-token': 'Telegram bot token from @BotFather (/newbot). Leave blank to keep current token.',
   '#cfg-telegram-chatids': 'Comma-separated chat IDs allowed to use this bot. Find IDs via getUpdates -> message.chat.id.',

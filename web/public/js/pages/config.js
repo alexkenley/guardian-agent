@@ -86,9 +86,6 @@ function createProviderPanel(config, providers, panel) {
               <div class="cfg-field"><label>Model</label><select id="cfg-local-model-select" style="display:none"></select><input id="cfg-local-model" type="text" placeholder="llama3.2"></div>
               <div class="cfg-field"><label>Base URL</label><input id="cfg-local-url" type="text" placeholder="http://127.0.0.1:11434"></div>
             </div>
-            <div class="cfg-form-grid" style="margin-top:0.75rem;">
-              <div class="cfg-field"><label>Set As Default</label><select id="cfg-local-default"><option value="true">Yes</option><option value="false">No</option></select></div>
-            </div>
             <div class="cfg-actions">
               <button class="btn btn-secondary" id="cfg-local-test" type="button">Test Connection</button>
               <button class="btn btn-primary" id="cfg-local-save" type="button">Save</button>
@@ -107,9 +104,6 @@ function createProviderPanel(config, providers, panel) {
               <div class="cfg-field"><label>Model</label><select id="cfg-ext-model-select" style="display:none"></select><input id="cfg-ext-model" type="text" placeholder="claude-sonnet-4-6"></div>
               <div class="cfg-field"><label>API Key</label><input id="cfg-ext-key" type="password" placeholder="Leave blank to keep existing"></div>
               <div class="cfg-field"><label>Base URL (optional)</label><input id="cfg-ext-url" type="text" placeholder="Optional custom endpoint"></div>
-            </div>
-            <div class="cfg-form-grid" style="margin-top:0.75rem;">
-              <div class="cfg-field"><label>Set As Default</label><select id="cfg-ext-default"><option value="true">Yes</option><option value="false">No</option></select></div>
             </div>
             <div class="cfg-actions">
               <button class="btn btn-secondary" id="cfg-ext-test" type="button">Test Connection</button>
@@ -145,7 +139,6 @@ function createProviderPanel(config, providers, panel) {
     const modelInputEl = section.querySelector(`#${prefix}-model`);
     const modelSelectEl = section.querySelector(`#${prefix}-model-select`);
     const urlEl = section.querySelector(`#${prefix}-url`);
-    const defaultEl = section.querySelector(`#${prefix}-default`);
     const statusEl = section.querySelector(`#${prefix}-status`);
     const typeEl = isLocal ? null : section.querySelector('#cfg-ext-type');
     const keyEl = isLocal ? null : section.querySelector('#cfg-ext-key');
@@ -256,7 +249,6 @@ function createProviderPanel(config, providers, panel) {
         providerName, providerType, model,
         baseUrl: baseUrl || undefined,
         apiKey: keyEl?.value.trim() || undefined,
-        setDefaultProvider: defaultEl.value === 'true',
         setupCompleted: true,
       };
 
