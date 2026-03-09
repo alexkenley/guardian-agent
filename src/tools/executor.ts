@@ -561,7 +561,7 @@ export class ToolExecutor {
       };
     }
 
-    const preApprovalError = this.validateBeforeApproval(entry.definition.name, args);
+    const preApprovalError = await this.validateBeforeApproval(entry.definition.name, args);
     if (preApprovalError) {
       job.status = 'failed';
       job.completedAt = this.now();
@@ -893,7 +893,7 @@ export class ToolExecutor {
     return null;
   }
 
-  private validateBeforeApproval(toolName: string, args: Record<string, unknown>): string | null {
+  private async validateBeforeApproval(toolName: string, args: Record<string, unknown>): Promise<string | null> {
     if (toolName === 'shell_safe') {
       const command = typeof args.command === 'string' ? args.command.trim() : '';
       if (!command) {
@@ -901,6 +901,41 @@ export class ToolExecutor {
       }
       const shellCheck = sanitizeShellArgs(command, this.policy.sandbox.allowedCommands);
       return shellCheck.safe ? null : shellCheck.reason ?? 'Command failed shell safety validation.';
+    }
+
+    if (toolName === 'fs_read' || toolName === 'fs_write' || toolName === 'fs_mkdir' || toolName === 'fs_delete' || toolName === 'doc_create') {
+      const path = typeof args.path === 'string' ? args.path.trim() : '';
+      if (path) {
+        try {
+          await this.resolveAllowedPath(path);
+        } catch (err) {
+          return err instanceof Error ? err.message : String(err);
+        }
+      }
+    }
+
+    if (toolName === 'fs_move' || toolName === 'fs_copy') {
+      const source = typeof args.source === 'string' ? args.source.trim() : '';
+      const destination = typeof args.destination === 'string' ? args.destination.trim() : '';
+      for (const path of [source, destination]) {
+        if (!path) continue;
+        try {
+          await this.resolveAllowedPath(path);
+        } catch (err) {
+          return err instanceof Error ? err.message : String(err);
+        }
+      }
+    }
+
+    if (toolName === 'contacts_import_csv') {
+      const csvPath = typeof args.csvPath === 'string' ? args.csvPath.trim() : '';
+      if (csvPath) {
+        try {
+          await this.resolveAllowedPath(csvPath);
+        } catch (err) {
+          return err instanceof Error ? err.message : String(err);
+        }
+      }
     }
 
     if (toolName === 'fs_write' || toolName === 'doc_create') {

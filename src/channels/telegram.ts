@@ -11,9 +11,46 @@ import type { ChannelAdapter, MessageCallback } from './types.js';
 import { createLogger } from '../util/logging.js';
 import type { AnalyticsEventInput } from '../runtime/analytics.js';
 import type { ThreatIntelSummary, ThreatIntelScanInput, ThreatIntelFinding, IntelStatus } from '../runtime/threat-intel.js';
+import { formatPendingApprovalMessage } from '../runtime/pending-approval-copy.js';
 
 const log = createLogger('channel:telegram');
 const TELEGRAM_MAX_MESSAGE_CHARS = 4096;
+const APPROVAL_CONFIRM_PATTERN = /^(?:\/)?(?:approve|approved|yes|yep|yeah|y|go ahead|do it|confirm|ok|okay|sure|proceed|accept)\b/i;
+const APPROVAL_DENY_PATTERN = /^(?:\/)?(?:deny|denied|reject|decline|cancel|no|nope|nah|n)\b/i;
+const APPROVAL_COMMAND_PATTERN = /^\/?(approve|deny)\b/i;
+const APPROVAL_ID_TOKEN_PATTERN = /^(?=.*(?:-|\d))[a-z0-9-]{4,}$/i;
+
+interface PendingTelegramApproval {
+  id: string;
+  toolName: string;
+  argsPreview: string;
+}
+
+interface PendingTelegramApprovalState {
+  approvals: PendingTelegramApproval[];
+  agentId: string;
+}
+
+function normalizeApprovalStatusMessage(message: string, decision: 'approved' | 'denied'): string {
+  const normalized = message.trim();
+  if (!normalized) {
+    return decision === 'approved' ? 'Approved and executed' : 'Denied';
+  }
+
+  if (/^tool '.*' completed\.$/i.test(normalized)) {
+    return decision === 'approved' ? 'Approved and executed' : 'Denied';
+  }
+
+  if (/^denied approval /i.test(normalized)) {
+    return 'Denied';
+  }
+
+  if (/^approval received .* execution failed:/i.test(normalized)) {
+    return normalized.replace(/^approval received .* execution failed:\s*/i, '').trim() || 'Execution failed';
+  }
+
+  return normalized;
+}
 
 export interface TelegramChannelOptions {
   /** Telegram bot token. */
@@ -82,6 +119,7 @@ export class TelegramChannel implements ChannelAdapter {
   private onAnalyticsTrack?: TelegramChannelOptions['onAnalyticsTrack'];
   private onToolsApprovalDecision?: TelegramChannelOptions['onToolsApprovalDecision'];
   private onDispatchMsg?: TelegramChannelOptions['onDispatch'];
+  private readonly pendingApprovalsByChat = new Map<string, PendingTelegramApprovalState>();
 
   constructor(options: TelegramChannelOptions) {
     this.bot = new Bot(options.botToken);
@@ -115,6 +153,7 @@ export class TelegramChannel implements ChannelAdapter {
       const canonicalUserId = this.resolveCanonicalUserId
         ? this.resolveCanonicalUserId(channelUserId)
         : channelUserId;
+      const approvalKey = this.buildApprovalKey(ctx);
 
       // Filter by allowed chat IDs
       if (this.allowedChatIds.size > 0 && !this.allowedChatIds.has(ctx.chat.id)) {
@@ -152,12 +191,12 @@ export class TelegramChannel implements ChannelAdapter {
         return;
       }
 
-      if (lower.startsWith('/approve') || lower.startsWith('/deny')) {
-        if (!this.onMessage) {
-          await this.replyInChunks(ctx, 'Assistant messaging is not available.');
-          return;
-        }
-        await this.dispatchAssistantMessage(ctx, text, canonicalUserId, channelUserId);
+      if (
+        this.onToolsApprovalDecision
+        && this.pendingApprovalsByChat.has(approvalKey)
+        && this.isApprovalInput(text)
+      ) {
+        await this.handlePendingApprovalInput(ctx, text, approvalKey, channelUserId);
         return;
       }
 
@@ -227,6 +266,7 @@ export class TelegramChannel implements ChannelAdapter {
       const [action, ...idParts] = data.split(':');
       const approvalId = idParts.join(':');
       const decision = action === 'approve' ? 'approved' as const : 'denied' as const;
+      const approvalKey = this.buildApprovalKey(ctx);
 
       if (!this.onToolsApprovalDecision) {
         await ctx.answerCallbackQuery({ text: 'Approval handler not available.' });
@@ -234,47 +274,24 @@ export class TelegramChannel implements ChannelAdapter {
       }
 
       try {
-        const result = await this.onToolsApprovalDecision({
-          approvalId,
-          decision,
+        const result = await this.handleApprovalDecisions(ctx, {
+          approvalKey,
           actor: `telegram:${ctx.from.id}`,
+          decision,
+          approvalIds: [approvalId],
+          userId: String(ctx.from.id),
         });
+        const callbackText = result.callbackText ?? (result.statusLines[0] ?? (decision === 'approved' ? 'Approved.' : 'Denied.'));
+        await ctx.answerCallbackQuery({ text: callbackText.slice(0, 200) });
 
-        // Update the button message to show the decision result
-        const statusText = decision === 'approved'
-          ? (result.success ? '✅ Approved and executed' : `⚠️ Approved but failed: ${result.message || 'unknown error'}`)
-          : '❌ Denied';
-        await ctx.answerCallbackQuery({ text: (result.message || statusText).slice(0, 200) });
-
-        // Replace the inline keyboard with the decision status
         try {
           const originalText = (ctx.callbackQuery.message && 'text' in ctx.callbackQuery.message)
             ? ctx.callbackQuery.message.text ?? ''
             : '';
-          await ctx.editMessageText(`${originalText}\n${statusText}`);
+          const suffix = result.statusLines[0] ?? (decision === 'approved' ? '✅ Approved and executed' : '❌ Denied');
+          await ctx.editMessageText(`${originalText}\n${suffix}`);
         } catch {
           // Message may have been deleted or keyboard already removed
-        }
-
-        // On approval, auto-continue so the LLM completes the original task.
-        // Include the result so the LLM knows if the action succeeded or failed.
-        if (decision === 'approved' && this.onDispatchMsg) {
-          await ctx.replyWithChatAction('typing');
-          const resultContext = result.success
-            ? 'Action executed successfully.'
-            : `Action failed: ${result.message || 'unknown error'}. Adjust your approach.`;
-          try {
-            const continuation = await this.onDispatchMsg(this.defaultAgent, {
-              content: `[User approved the pending tool action. ${resultContext}] Please continue with the original task.`,
-              userId: String(ctx.from.id),
-              channel: 'telegram',
-            });
-            await this.replyWithApprovalSupport(ctx, continuation);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            log.error({ err: msg }, 'Telegram approval continuation failed');
-            await ctx.reply('Sorry, an error occurred continuing after approval.');
-          }
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -467,18 +484,30 @@ export class TelegramChannel implements ChannelAdapter {
   private async replyWithApprovalSupport(
     ctx: Context,
     response: { content: string; metadata?: Record<string, unknown> },
+    agentId: string = this.defaultAgent,
   ): Promise<void> {
     const approvals = response.metadata?.pendingApprovals as
       | Array<{ id: string; toolName: string; argsPreview: string }>
       | undefined;
+    const approvalKey = this.buildApprovalKey(ctx);
 
     if (!approvals?.length || !this.onToolsApprovalDecision) {
+      this.pendingApprovalsByChat.delete(approvalKey);
       await this.replyInChunks(ctx, response.content);
       return;
     }
 
-    // Send the main content first
-    await this.replyInChunks(ctx, response.content);
+    this.pendingApprovalsByChat.set(approvalKey, {
+      approvals: approvals.map((approval) => ({
+        id: approval.id,
+        toolName: approval.toolName,
+        argsPreview: approval.argsPreview,
+      })),
+      agentId,
+    });
+
+    // Telegram owns the approval copy when structured approval metadata exists.
+    await this.replyInChunks(ctx, formatPendingApprovalMessage(approvals));
 
     // Build an inline keyboard with approve/deny per approval
     // For simplicity, use a single approve-all / deny-all row when there's one approval,
@@ -500,6 +529,189 @@ export class TelegramChannel implements ChannelAdapter {
         await ctx.reply(`⚠️ ${a.toolName}${preview}`, { reply_markup: keyboard });
       }
     }
+  }
+
+  private buildApprovalKey(ctx: Context): string {
+    const chatId = String(ctx.chat?.id ?? 'unknown-chat');
+    const userId = String(ctx.from?.id ?? ctx.chat?.id ?? 'unknown-user');
+    return `${chatId}:${userId}`;
+  }
+
+  private isApprovalInput(text: string): boolean {
+    return APPROVAL_CONFIRM_PATTERN.test(text.trim()) || APPROVAL_DENY_PATTERN.test(text.trim());
+  }
+
+  private async handlePendingApprovalInput(
+    ctx: Context,
+    text: string,
+    approvalKey: string,
+    userId: string,
+  ): Promise<void> {
+    const state = this.pendingApprovalsByChat.get(approvalKey);
+    if (!state || !this.onToolsApprovalDecision) {
+      await this.replyInChunks(ctx, 'There are no pending approvals.');
+      return;
+    }
+
+    const input = text.trim();
+    const decision: 'approved' | 'denied' = APPROVAL_DENY_PATTERN.test(input) ? 'denied' : 'approved';
+    const selected = this.resolveApprovalTargets(input, state.approvals);
+
+    if (selected.errors.length > 0) {
+      await this.replyInChunks(ctx, selected.errors.join('\n'));
+      return;
+    }
+
+    const approvalIds = selected.approvals.length > 0
+      ? selected.approvals.map((approval) => approval.id)
+      : state.approvals.map((approval) => approval.id);
+
+    await ctx.replyWithChatAction('typing');
+    const result = await this.handleApprovalDecisions(ctx, {
+      approvalKey,
+      actor: `telegram:${ctx.from?.id ?? userId}`,
+      decision,
+      approvalIds,
+      userId,
+    });
+
+    if (decision === 'denied' || !result.continued) {
+      await this.replyInChunks(ctx, result.statusLines.join('\n'));
+    }
+  }
+
+  private resolveApprovalTargets(
+    input: string,
+    approvals: PendingTelegramApproval[],
+  ): { approvals: PendingTelegramApproval[]; errors: string[] } {
+    if (!APPROVAL_COMMAND_PATTERN.test(input)) {
+      return { approvals, errors: [] };
+    }
+
+    const argsText = input.replace(APPROVAL_COMMAND_PATTERN, '').trim();
+    if (!argsText) return { approvals, errors: [] };
+
+    const rawTokens = argsText
+      .split(/[,\s]+/)
+      .map((token) => token.trim().replace(/^\[+|\]+$/g, ''))
+      .filter(Boolean)
+      .filter((token) => APPROVAL_ID_TOKEN_PATTERN.test(token));
+    if (rawTokens.length === 0) return { approvals, errors: [] };
+
+    const selected = new Map<string, PendingTelegramApproval>();
+    const errors: string[] = [];
+    for (const token of rawTokens) {
+      const exact = approvals.find((approval) => approval.id === token);
+      if (exact) {
+        selected.set(exact.id, exact);
+        continue;
+      }
+      const matches = approvals.filter((approval) => approval.id.startsWith(token));
+      if (matches.length === 1) {
+        selected.set(matches[0].id, matches[0]);
+      } else if (matches.length > 1) {
+        errors.push(`Approval ID prefix '${token}' is ambiguous.`);
+      } else {
+        errors.push(`Approval ID '${token}' was not found for this chat.`);
+      }
+    }
+
+    return { approvals: [...selected.values()], errors };
+  }
+
+  private async handleApprovalDecisions(
+    ctx: Context,
+    input: {
+      approvalKey: string;
+      actor: string;
+      decision: 'approved' | 'denied';
+      approvalIds: string[];
+      userId: string;
+    },
+  ): Promise<{ statusLines: string[]; callbackText?: string; continued: boolean }> {
+    if (!this.onToolsApprovalDecision) {
+      return { statusLines: ['Approval handler not available.'], callbackText: 'Approval handler not available.', continued: false };
+    }
+
+    const state = this.pendingApprovalsByChat.get(input.approvalKey);
+    const approvalLookup = new Map((state?.approvals ?? []).map((approval) => [approval.id, approval] as const));
+    const results: Array<{ approvalId: string; toolName: string; success: boolean; message: string }> = [];
+    let allSucceeded = true;
+
+    for (const approvalId of input.approvalIds) {
+      const approval = approvalLookup.get(approvalId);
+      const toolName = approval?.toolName ?? 'tool';
+      try {
+        const result = await this.onToolsApprovalDecision({
+          approvalId,
+          decision: input.decision,
+          actor: input.actor,
+        });
+        const message = normalizeApprovalStatusMessage(result.message || '', input.decision);
+        if (!result.success) allSucceeded = false;
+        results.push({ approvalId, toolName, success: result.success, message });
+      } catch (err) {
+        allSucceeded = false;
+        results.push({
+          approvalId,
+          toolName,
+          success: false,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    if (state) {
+      const remaining = state.approvals.filter((approval) => !input.approvalIds.includes(approval.id));
+      if (remaining.length > 0) {
+        this.pendingApprovalsByChat.set(input.approvalKey, { approvals: remaining, agentId: state.agentId });
+      } else {
+        this.pendingApprovalsByChat.delete(input.approvalKey);
+      }
+    }
+
+    const statusLines = results.map((result) => {
+      if (input.decision === 'approved') {
+        return result.success
+          ? `✅ ${result.toolName}: ${result.message}`
+          : `⚠️ ${result.toolName}: ${result.message}`;
+      }
+      return result.success
+        ? `❌ ${result.toolName}: ${result.message}`
+        : `⚠️ ${result.toolName}: ${result.message}`;
+    });
+
+    if (input.decision === 'approved' && this.onDispatchMsg) {
+      const agentId = state?.agentId ?? this.defaultAgent;
+      const summary = results.map((result) => `${result.toolName}: ${result.message}`).join('; ');
+      try {
+        const continuation = await this.onDispatchMsg(agentId, {
+          content: `[User approved the pending tool action(s). Result: ${summary}] ${allSucceeded ? 'Please continue with the current request only. Do not resume older unrelated pending tasks.' : 'Some actions failed — adjust your approach accordingly. Focus only on the current request.'}`,
+          userId: input.userId,
+          channel: 'telegram',
+        });
+        await this.replyWithApprovalSupport(ctx, continuation, agentId);
+        return {
+          statusLines,
+          callbackText: results[0]?.message,
+          continued: true,
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error({ err: msg }, 'Telegram approval continuation failed');
+        return {
+          statusLines: [...statusLines, 'Sorry, an error occurred continuing after approval.'],
+          callbackText: 'Continuation failed.',
+          continued: false,
+        };
+      }
+    }
+
+    return {
+      statusLines,
+      callbackText: results[0]?.message,
+      continued: false,
+    };
   }
 
   private trackAnalytics(event: AnalyticsEventInput): void {

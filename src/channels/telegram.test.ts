@@ -48,3 +48,128 @@ describe('TelegramChannel help text', () => {
     expect(helpText).toContain('/deny [approvalId ...]');
   });
 });
+
+describe('Telegram approval flow', () => {
+  function createFakeCtx() {
+    const replies: Array<{ text: string; extra?: unknown }> = [];
+    return {
+      replies,
+      ctx: {
+        chat: { id: 1001 },
+        from: { id: 2002 },
+        reply: vi.fn(async (text: string, extra?: unknown) => {
+          replies.push({ text, extra });
+          return {} as unknown;
+        }),
+        replyWithChatAction: vi.fn(async () => ({} as unknown)),
+      },
+    };
+  }
+
+  it('auto-continues plain-text approvals through add-path then write-file without generic completion chatter', async () => {
+    const decisions: Array<{ approvalId: string; decision: string }> = [];
+    const dispatches: Array<{ agentId: string; content: string; userId?: string; channel?: string }> = [];
+    const channel = new TelegramChannel({
+      botToken: '123:abc',
+      onToolsApprovalDecision: async ({ approvalId, decision }) => {
+        decisions.push({ approvalId, decision });
+        return {
+          success: true,
+          message: approvalId === 'approval-path-1'
+            ? "Tool 'update_tool_policy' completed."
+            : "Tool 'fs_write' completed.",
+        };
+      },
+      onDispatch: async (agentId, message) => {
+        dispatches.push({ agentId, ...message });
+        if (dispatches.length === 1) {
+          return {
+            content: 'Waiting for approval to write S:\\Development\\test26.txt.',
+            metadata: {
+              pendingApprovals: [
+                {
+                  id: 'approval-write-1',
+                  toolName: 'fs_write',
+                  argsPreview: '{"path":"S:\\\\Development\\\\test26.txt","content":"This is a test file.","append":false}',
+                },
+              ],
+            },
+          };
+        }
+        return {
+          content: 'Done — created `S:\\Development\\test26.txt` with the specified contents.',
+        };
+      },
+    });
+    const { ctx, replies } = createFakeCtx();
+
+    await (channel as unknown as {
+      replyWithApprovalSupport: (ctx: unknown, response: { content: string; metadata?: Record<string, unknown> }, agentId?: string) => Promise<void>;
+      handlePendingApprovalInput: (ctx: unknown, text: string, approvalKey: string, userId: string) => Promise<void>;
+    }).replyWithApprovalSupport(ctx, {
+      content: 'Waiting for approval to add S:\\Development to allowed paths.',
+      metadata: {
+        pendingApprovals: [
+          {
+            id: 'approval-path-1',
+            toolName: 'update_tool_policy',
+            argsPreview: '{"action":"add_path","value":"S:\\\\Development"}',
+          },
+        ],
+      },
+    }, 'default');
+
+    await (channel as unknown as {
+      handlePendingApprovalInput: (ctx: unknown, text: string, approvalKey: string, userId: string) => Promise<void>;
+    }).handlePendingApprovalInput(ctx, 'approved', '1001:2002', '2002');
+
+    await (channel as unknown as {
+      handlePendingApprovalInput: (ctx: unknown, text: string, approvalKey: string, userId: string) => Promise<void>;
+    }).handlePendingApprovalInput(ctx, 'yes approved', '1001:2002', '2002');
+
+    expect(decisions).toEqual([
+      { approvalId: 'approval-path-1', decision: 'approved' },
+      { approvalId: 'approval-write-1', decision: 'approved' },
+    ]);
+    expect(dispatches).toHaveLength(2);
+    expect(dispatches[0]?.content).toContain('[User approved the pending tool action(s). Result: update_tool_policy: Approved and executed]');
+    expect(dispatches[0]?.content).toContain('Please continue with the current request only. Do not resume older unrelated pending tasks.');
+    expect(dispatches[1]?.content).toContain('[User approved the pending tool action(s). Result: fs_write: Approved and executed]');
+    expect(dispatches[1]?.content).toContain('Please continue with the current request only. Do not resume older unrelated pending tasks.');
+
+    const output = replies.map((reply) => reply.text).join('\n');
+    expect(output).toContain('Waiting for approval to add S:\\Development to allowed paths.');
+    expect(output).toContain('Waiting for approval to write S:\\Development\\test26.txt.');
+    expect(output).toContain('Done — created `S:\\Development\\test26.txt` with the specified contents.');
+    expect(output).not.toContain("Tool 'fs_write' completed.");
+    expect(output).not.toContain("Tool 'update_tool_policy' completed.");
+    expect(output).not.toContain('I need your approval before proceeding.');
+    expect(output).not.toContain('tool is unavailable');
+  });
+
+  it('replaces model approval preamble with structured Telegram approval copy', async () => {
+    const channel = new TelegramChannel({
+      botToken: '123:abc',
+      onToolsApprovalDecision: async () => ({ success: true, message: 'Approved and executed' }),
+    });
+    const { ctx, replies } = createFakeCtx();
+
+    await (channel as unknown as {
+      replyWithApprovalSupport: (ctx: unknown, response: { content: string; metadata?: Record<string, unknown> }, agentId?: string) => Promise<void>;
+    }).replyWithApprovalSupport(ctx, {
+      content: "Let's add `S:\\Development` to the allowed paths, then I'll create the file **test32.txt** there. Please approve this action.",
+      metadata: {
+        pendingApprovals: [
+          {
+            id: 'approval-path-1',
+            toolName: 'update_tool_policy',
+            argsPreview: '{"action":"add_path","value":"S:\\\\Development"}',
+          },
+        ],
+      },
+    }, 'default');
+
+    expect(replies[0]?.text).toBe('Waiting for approval to add S:\\Development to allowed paths.');
+    expect(replies.map((reply) => reply.text).join('\n')).not.toContain('Please approve this action.');
+  });
+});

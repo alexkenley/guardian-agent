@@ -107,6 +107,33 @@ describe('ToolExecutor', () => {
     expect(result.message).toContain('Write content contains secrets');
   });
 
+  it('fails fs_write before approval when the path is outside allowed roots', async () => {
+    const root = createExecutorRoot();
+    const outside = join(tmpdir(), `guardianagent-outside-${randomUUID()}`, 'blocked.txt');
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const result = await executor.runTool({
+      toolName: 'fs_write',
+      args: {
+        path: outside,
+        content: 'hello',
+      },
+      origin: 'telegram',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.status).toBe('failed');
+    expect(result.approvalId).toBeUndefined();
+    expect(result.message).toContain('outside allowed paths');
+  });
+
   it('rejects shell_safe commands with shell control operators', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
