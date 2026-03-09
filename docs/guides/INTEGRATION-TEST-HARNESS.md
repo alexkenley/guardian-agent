@@ -6,7 +6,7 @@ Automated black-box testing against a running GuardianAgent instance via its RES
 
 The test harness sends messages to the agent through the Web channel's `POST /api/message` endpoint and validates responses. It tests both functional behavior (tool calling, conversation) and security controls (PII scanning, shell injection defense, output guardian).
 
-Fourteen scripts are provided:
+Fifteen scripts are provided:
 
 | Script | Purpose | Assertions |
 |--------|---------|------------|
@@ -24,6 +24,7 @@ Fourteen scripts are provided:
 | **`scripts/test-browser.ps1`** | Browser automation + network risk verification (PowerShell) | ~15 |
 | **`scripts/test-security-api.ps1`** | Focused security API suite: auth, privileged tickets, approvals, audit, direct tool enforcement (PowerShell) | ~20 |
 | **`scripts/test-security-content.ps1`** | Focused content-security suite: injection, denied paths, shell validation, PII/secret redaction (PowerShell) | ~18 |
+| **`scripts/test-cli-approvals.mjs`** | CLI approval UX regression harness: readline prompt capture, chained approvals, continuation flow, stale approval-ID refresh (Node.js) | ~10 |
 
 Unlike unit tests (vitest), these exercise the full stack: config loading, Guardian pipeline, LLM provider, tool execution, and response formatting — exactly as a real user would experience it.
 
@@ -120,6 +121,13 @@ Example script generated during debugging (see `scripts/test-web-approvals.mjs`)
 ```bash
 node scripts/test-web-approvals.mjs
 ```
+
+CLI has its own standalone regression harness as well:
+```bash
+node --import tsx scripts/test-cli-approvals.mjs
+```
+
+This script exercises the CLI readline approval flow directly and fails if prompt answers such as `y` leak into normal chat dispatch, which can cause duplicate approval attempts or `Approval '<id>' not found` errors. It also covers the CLI-specific recovery path that refreshes current pending approvals if the inline prompt hits a stale approval ID.
 
 This method is fast, removes dependencies on cross-platform shell quirks, and can be instantly executed via `run_shell_command` natively in WSL.
 
@@ -646,6 +654,25 @@ if (Test-ValidResponse $resp "my-test: valid response") {
 ## Manual CLI Tests
 
 If you prefer manual testing via the CLI channel, here are key scenarios to exercise:
+
+### Approval UX Baseline
+```
+you> Create a new test file called test1.txt in the S drive development directory.
+```
+Expected approval flow under `approve_by_policy` when `S:\Development` is not yet allowlisted:
+1. `Waiting for approval to add S:/Development to allowed paths.`
+2. inline prompt: `Approve (y) / Deny (n):`
+3. `✓ update_tool_policy: Approved and executed`
+4. `Waiting for approval to write S:/Development/test1.txt.`
+5. inline prompt: `Approve (y) / Deny (n):`
+6. `✓ fs_write: Approved and executed`
+7. final completion message
+
+Should not appear in normal CLI chat flow:
+- `Approval ID: ...`
+- `Reply "yes" to approve or "no" to deny`
+- `Tool 'fs_write' completed.`
+- `Approval '<id>' not found.`
 
 ### Deferred Tool Loading
 ```

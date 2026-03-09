@@ -443,6 +443,15 @@ export interface DashboardCallbacks {
   onAuthRotate?: () => Promise<{ success: boolean; message: string; token?: string; status?: DashboardAuthStatus }> | { success: boolean; message: string; token?: string; status?: DashboardAuthStatus };
   onAuthReveal?: () => Promise<{ success: boolean; token?: string }> | { success: boolean; token?: string };
   onToolsState?: (args?: { limit?: number }) => DashboardToolsState;
+  onToolsPendingApprovals?: (args: {
+    userId: string;
+    channel: string;
+    limit?: number;
+  }) => Array<{
+    id: string;
+    toolName: string;
+    argsPreview: string;
+  }>;
   onSkillsState?: () => DashboardSkillsState;
   onSkillsUpdate?: (input: { skillId: string; enabled: boolean }) => { success: boolean; message: string };
   onToolsCategories?: () => Array<{ category: ToolCategory; label: string; description: string; toolCount: number; enabled: boolean; disabledReason?: string }>;

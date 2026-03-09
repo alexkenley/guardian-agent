@@ -160,19 +160,63 @@ assistant:
 
 ### Structured Approval UX (all channels)
 
-When a tool returns `pending_approval`, the response includes structured metadata (`response.metadata.pendingApprovals`) with an array of `{ id, toolName, argsPreview }` objects. Each channel renders approval UI natively:
+When a tool returns `pending_approval`, the response includes structured metadata (`response.metadata.pendingApprovals`) with an array of `{ id, toolName, argsPreview }` objects. Channels use that metadata as the canonical approval source instead of trusting model-written approval prose.
 
-- **Web UI**: Styled Approve / Deny buttons rendered in the chat panel via `buildApprovalButtons()`. Buttons call `api.decideToolApproval()` directly, then send a continuation message so the LLM completes the original task.
-- **CLI**: Interactive `Approve (y) / Deny (n):` readline prompt displayed inline after the agent response. On approval, the CLI auto-dispatches a continuation message and handles chained approvals (e.g., add path → write file).
-- **Telegram**: Inline keyboard buttons (✅ Approve / ❌ Deny) sent as a separate message after the agent response. Callback queries trigger the approval decision and auto-continue via `onDispatch`.
+#### Shared chat-flow rules
 
-The text-based `/approve <id>` and `/deny <id>` commands remain available as a fallback on CLI and Telegram, but the structured button/prompt UX is the primary path.
+- Approval copy is normalized from structured metadata when the model emits weak placeholder text.
+- Normalized copy must stay action-focused and must not leak internal planning/schema chatter such as:
+  - `tool is unavailable`
+  - `tool is available`
+  - `action and value`
+  - raw `Approval ID: ...` helper text in normal chat flows
+- Chained approvals are supported. Common example:
+  1. `Waiting for approval to add S:\Development to allowed paths.`
+  2. user approves
+  3. `Waiting for approval to write S:\Development\test26.txt.`
+  4. user approves
+  5. final completion message
+- The approval decision executes immediately in `ToolExecutor.decideApproval`; the continuation message is only for getting the LLM to finish the original task cleanly.
 
-For chat responses, pending-approval copy is normalized from the structured metadata when the model emits weak placeholder text. This keeps approval prompts action-focused and avoids leaking internal tool-selection chatter such as "tool is unavailable" or schema hints like "action and value".
+#### Channel-specific behavior
 
-Examples:
+- **Web UI**
+  - Renders native Approve / Deny buttons in the chat panel.
+  - Button clicks call `api.decideToolApproval()` directly.
+  - The web channel then sends a continuation message so the LLM finishes the suspended task.
+  - Web should not expose model-written approval chatter when structured metadata is present.
+  - Web remains the reference UX for approval wording.
+
+- **Telegram**
+  - Sends the approval prompt as a separate message with inline keyboard buttons (✅ Approve / ❌ Deny).
+  - Plain-text approvals such as `approved` / `yes approved` are also supported as a fallback for the current pending approval state.
+  - Telegram ignores model-written manual approval prose when `pendingApprovals` metadata exists and always renders channel-owned copy instead.
+  - Approval status lines are normalized to user-facing text such as `Approved and executed`; raw backend strings like `Tool 'fs_write' completed.` should not leak.
+
+- **CLI**
+  - Shows the approval prompt inline:
+    - `Approve (y) / Deny (n):`
+  - The CLI should not show legacy chat-style helper text such as:
+    - `Reply "yes" to approve or "no" to deny`
+    - `Approval ID: ...`
+  - On approval, the CLI auto-dispatches a continuation message and handles chained approvals inline.
+  - If an inline prompt references a stale approval ID, the CLI refreshes the current scoped pending approvals and re-prompts instead of surfacing raw `Approval '<id>' not found.` text.
+  - If a bare `y/yes/no/deny` leaks through the normal readline message path while an inline approval is active, CLI intercepts it locally and routes it through the pending inline approval flow instead of sending it as a normal chat message.
+
+#### Fallback approval commands
+
+- CLI and Telegram still support explicit fallback commands:
+  - `/approve <id>`
+  - `/deny <id> [reason]`
+- These commands are control-plane fallbacks, not the primary chat approval UX.
+
+#### Examples
+
 - `Waiting for approval to add S:\Development to allowed paths.`
 - `Waiting for approval to write S:\Development\test26.txt.`
+- CLI status lines:
+  - `✓ update_tool_policy: Approved and executed`
+  - `✓ fs_write: Approved and executed`
 
 ### Read-Only Shell Bypass
 Under `approve_by_policy`, `shell_safe` commands that are purely read-only skip approval automatically. Recognized read-only commands: `ls`, `dir`, `pwd`, `whoami`, `hostname`, `uname`, `date`, `echo`, `cat`, `head`, `tail`, `wc`, `file`, `which`, `type`, plus prefixed commands like `git status`, `git diff`, `git log`, `git branch`, `node --version`, `npm --version`, `npm ls`.

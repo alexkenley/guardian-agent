@@ -116,7 +116,7 @@ Change `policyMode` to test different behaviors:
 ```yaml
 policyMode: approve_each
 ```
-Restart, then ask the agent to read a file. You should see a "pending approval" message. Type "yes" to approve.
+Restart, then ask the agent to read a file. You should see a pending approval prompt. In CLI, use the inline `Approve (y) / Deny (n):` prompt and expect channel-owned approval copy rather than raw `Approval ID:` / `Reply "yes" to approve` helper text. In Telegram and web, use the channel buttons.
 
 **Per-tool deny** — Block specific MCP tools:
 ```yaml
