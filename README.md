@@ -1,8 +1,24 @@
-# GuardianAgent
+<p align="center">
+  <img src="docs/images/cli-startup.png" alt="GuardianAgent CLI" width="100%"/>
+</p>
 
-![GuardianAgent CLI](docs/images/cli-startup.png)
+<h1 align="center">GuardianAgent</h1>
 
-Security-first AI agent orchestration system. Built-in agents with predefined capabilities, strict guardrails on what they can and cannot do, and a four-layer defense system that enforces security at every stage of the message lifecycle.
+<h3 align="center">Security-first AI agent orchestration.</h3>
+
+<p align="center">
+  An event-driven AI agent system with a four-layer security defense that enforces capabilities, scans for secrets and PII, blocks sensitive paths, and evaluates tool actions via inline LLM — agents cannot bypass it.
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/v1.0.0-release-brightgreen?style=for-the-badge" alt="Version 1.0.0"/>
+  <img src="https://img.shields.io/badge/LICENSE-Apache--2.0-blue?style=for-the-badge" alt="Apache 2.0 License"/>
+  <img src="https://img.shields.io/badge/Node.js-%3E%3D20-339933?style=for-the-badge&logo=nodedotjs&logoColor=white" alt="Node.js >= 20"/>
+  <br/>
+  <img src="https://img.shields.io/badge/SECURITY-FOUR--LAYER%20DEFENSE-critical?style=for-the-badge" alt="Four-Layer Defense"/>
+  <img src="https://img.shields.io/badge/LLM-Ollama%20%7C%20Anthropic%20%7C%20OpenAI-blueviolet?style=for-the-badge&logo=openai&logoColor=white" alt="Multi-LLM"/>
+  <img src="https://img.shields.io/badge/CHANNELS-CLI%20%7C%20Web%20%7C%20Telegram-2496ED?style=for-the-badge" alt="Multi-Channel"/>
+</p>
 
 ## Features
 

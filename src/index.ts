@@ -2644,6 +2644,22 @@ function buildDashboardCallbacks(
       categoryDefaults: computeCategoryDefaults(configRef.current.llm as Record<string, { provider?: string }>),
     }),
 
+    onToolsPendingApprovals: ({ userId, channel, limit }) => {
+      const ids = toolExecutor.listPendingApprovalIdsForUser(userId, channel, {
+        limit: limit ?? 20,
+        includeUnscoped: channel === 'web',
+      });
+      const summaries = toolExecutor.getApprovalSummaries(ids);
+      return ids.map((id) => {
+        const summary = summaries.get(id);
+        return {
+          id,
+          toolName: summary?.toolName ?? 'unknown',
+          argsPreview: summary?.argsPreview ?? '',
+        };
+      });
+    },
+
     onSkillsState: () => {
       const config = configRef.current.assistant.skills;
       const statuses = skillRegistry?.listStatus() ?? [];

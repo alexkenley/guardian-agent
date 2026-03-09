@@ -19,12 +19,82 @@ import type { DashboardCallbacks } from './web-types.js';
 import type { SetupApplyInput } from '../runtime/setup.js';
 import { createLogger } from '../util/logging.js';
 import { formatGuideForCLI } from '../reference-guide.js';
+import { formatPendingApprovalMessage } from '../runtime/pending-approval-copy.js';
 
 const log = createLogger('channel:cli');
 
 const HISTORY_DIR = join(homedir(), '.guardianagent');
 const HISTORY_PATH = join(HISTORY_DIR, 'cli-history-v2');
 const MAX_HISTORY = 500;
+
+interface PendingApprovalSummary {
+  id: string;
+  toolName: string;
+  argsPreview: string;
+}
+
+interface InlineApprovalState {
+  approvals: PendingApprovalSummary[];
+  agentId?: string;
+  depth: number;
+}
+
+function parseLegacyPendingApprovalContent(content: string): PendingApprovalSummary[] {
+  const actionMatch = content.match(/^Action:\s+([a-z0-9_:-]+)\s+—\s+(.+)$/im);
+  const approvalIdMatch = content.match(/^Approval ID:\s+([a-z0-9-]+)$/im);
+  if (!actionMatch || !approvalIdMatch) return [];
+  return [{
+    id: approvalIdMatch[1],
+    toolName: actionMatch[1],
+    argsPreview: actionMatch[2].trim(),
+  }];
+}
+
+function extractPendingApprovals(response: { content: string; metadata?: Record<string, unknown> }): PendingApprovalSummary[] {
+  const approvals = response.metadata?.pendingApprovals;
+  if (Array.isArray(approvals) && approvals.length > 0) {
+    return approvals
+      .filter((approval): approval is PendingApprovalSummary => {
+        return !!approval
+          && typeof approval === 'object'
+          && typeof (approval as Record<string, unknown>).id === 'string'
+          && typeof (approval as Record<string, unknown>).toolName === 'string';
+      })
+      .map((approval) => ({
+        id: approval.id,
+        toolName: approval.toolName,
+        argsPreview: typeof approval.argsPreview === 'string' ? approval.argsPreview : '',
+      }));
+  }
+  return parseLegacyPendingApprovalContent(response.content);
+}
+
+function formatCliResponseContent(response: { content: string; metadata?: Record<string, unknown> }): string {
+  const approvals = extractPendingApprovals(response);
+  return approvals.length > 0 ? formatPendingApprovalMessage(approvals) : response.content;
+}
+
+function normalizeApprovalStatusMessage(message: string, decision: 'approved' | 'denied'): string {
+  const normalized = message.trim();
+  if (!normalized) {
+    return decision === 'approved' ? 'Approved and executed' : 'Denied';
+  }
+  if (/^tool '.*' completed\.$/i.test(normalized)) {
+    return decision === 'approved' ? 'Approved and executed' : 'Denied';
+  }
+  if (/^denied approval /i.test(normalized)) {
+    return 'Denied';
+  }
+  if (/^approval received .* execution failed:/i.test(normalized)) {
+    return normalized.replace(/^approval received .* execution failed:\s*/i, '').trim() || 'Execution failed';
+  }
+  return normalized;
+}
+
+function isMissingApprovalMessage(message: string): boolean {
+  return /approval '.*' not found\./i.test(message)
+    || /no pending context found for approval /i.test(message);
+}
 
 function loadCommandHistory(historyPath: string): string[] {
   if (!existsSync(historyPath)) return [];
@@ -108,6 +178,8 @@ export class CLIChannel implements ChannelAdapter {
   private startupStatus?: CLIChannelOptions['startupStatus'];
   private historyPath: string;
   private historyEnabled: boolean;
+  private pendingPromptResolver: ((answer: string) => void) | null = null;
+  private pendingInlineApprovalState: InlineApprovalState | null = null;
 
   constructor(options: CLIChannelOptions = {}) {
     this.prompt = options.prompt ?? 'you> ';
@@ -159,6 +231,13 @@ export class CLIChannel implements ChannelAdapter {
     this.rl.prompt();
 
     this.rl.on('line', async (line) => {
+      if (this.pendingPromptResolver) {
+        const resolve = this.pendingPromptResolver;
+        this.pendingPromptResolver = null;
+        resolve(line);
+        return;
+      }
+
       const trimmed = line.trim();
       if (!trimmed) {
         this.rl?.prompt();
@@ -209,6 +288,14 @@ export class CLIChannel implements ChannelAdapter {
   // ─── Message handling ────────────────────────────────────────
 
   private async handleUserMessage(text: string): Promise<void> {
+    if (this.pendingInlineApprovalState && /^(y|yes|approve|ok|sure|go ahead|n|no|deny)\b/i.test(text.trim())) {
+      const inlineState = this.pendingInlineApprovalState;
+      this.pendingInlineApprovalState = null;
+      this.pendingPromptResolver = null;
+      await this.processApprovalDecision(inlineState.approvals, text, inlineState.agentId, inlineState.depth);
+      return;
+    }
+
     const agentIdForEvent = this.activeAgentId ?? this.defaultAgentId;
     this.trackAnalytics({
       type: 'message_sent',
@@ -233,7 +320,7 @@ export class CLIChannel implements ChannelAdapter {
           channelUserId: 'cli',
           agentId: this.activeAgentId,
         });
-        this.write(`\nguardian-agent> ${response.content}\n\n`);
+        this.write(`\nguardian-agent> ${formatCliResponseContent(response)}\n\n`);
         await this.handleApprovalPrompt(response, this.activeAgentId);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -268,7 +355,7 @@ export class CLIChannel implements ChannelAdapter {
         channelUserId: 'cli',
         agentId: agentIdForEvent,
       });
-      this.write(`\nguardian-agent> ${response.content}\n\n`);
+      this.write(`\nguardian-agent> ${formatCliResponseContent(response)}\n\n`);
       await this.handleApprovalPrompt(response, agentIdForEvent);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -296,10 +383,8 @@ export class CLIChannel implements ChannelAdapter {
     agentId?: string,
     depth = 0,
   ): Promise<void> {
-    const approvals = response.metadata?.pendingApprovals as
-      | Array<{ id: string; toolName: string; argsPreview: string }>
-      | undefined;
-    if (!approvals?.length || !this.dashboard?.onToolsApprovalDecision) return;
+    const approvals = extractPendingApprovals(response);
+    if (!approvals.length || !this.dashboard?.onToolsApprovalDecision) return;
 
     if (depth >= CLIChannel.MAX_APPROVAL_CHAIN) {
       this.write(`\n${this.yellow('[info]')} Maximum approval chain reached. Use /tools approvals to manage remaining approvals.\n\n`);
@@ -314,42 +399,80 @@ export class CLIChannel implements ChannelAdapter {
     this.write('\n');
 
     // Prompt for decision
+    this.pendingInlineApprovalState = { approvals, agentId, depth };
     const answer = await this.question(`${this.yellow('Approve')} (y) / ${this.red('Deny')} (n): `);
+    this.pendingInlineApprovalState = null;
+    await this.processApprovalDecision(approvals, answer, agentId, depth);
+  }
+
+  private async processApprovalDecision(
+    approvals: PendingApprovalSummary[],
+    answer: string,
+    agentId?: string,
+    depth = 0,
+  ): Promise<void> {
     const decision = /^(y|yes|approve|ok|sure|go ahead)\b/i.test(answer.trim()) ? 'approved' : 'denied';
+    const approvalDecisionHandler = this.dashboard?.onToolsApprovalDecision;
+    if (!approvalDecisionHandler) return;
 
     // Execute decisions and collect results
     const resultMessages: string[] = [];
     let allSucceeded = true;
+    let allMissingApprovals = decision === 'approved' && approvals.length > 0;
     for (const approval of approvals) {
       try {
-        const result = await this.dashboard.onToolsApprovalDecision({
+        const result = await approvalDecisionHandler({
           approvalId: approval.id,
           decision,
           actor: 'cli-user',
         });
         if (result.success) {
-          resultMessages.push(`${decision === 'approved' ? this.green('✓') : this.red('✗')} ${approval.toolName}: ${result.message || decision}`);
+          allMissingApprovals = false;
+          resultMessages.push(`${decision === 'approved' ? this.green('✓') : this.red('✗')} ${approval.toolName}: ${normalizeApprovalStatusMessage(result.message || '', decision)}`);
         } else {
           allSucceeded = false;
-          resultMessages.push(`${this.red('✗')} ${approval.toolName}: ${result.message || 'failed'}`);
+          allMissingApprovals = allMissingApprovals && isMissingApprovalMessage(result.message || '');
+          resultMessages.push(`${this.red('✗')} ${approval.toolName}: ${normalizeApprovalStatusMessage(result.message || 'failed', decision)}`);
         }
       } catch (err) {
         allSucceeded = false;
+        allMissingApprovals = false;
         resultMessages.push(`${this.red('✗')} ${approval.toolName}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+
+    const pendingApprovalLookup = this.dashboard?.onToolsPendingApprovals;
+    if (allMissingApprovals && pendingApprovalLookup) {
+      const refreshed = pendingApprovalLookup({
+        userId: this.defaultUserId,
+        channel: 'cli',
+        limit: 20,
+      });
+      const originalIds = new Set(approvals.map((approval) => approval.id));
+      const hasFreshIds = refreshed.some((approval) => !originalIds.has(approval.id));
+      if (refreshed.length > 0 && hasFreshIds) {
+        const refreshedResponse = {
+          content: formatPendingApprovalMessage(refreshed),
+          metadata: { pendingApprovals: refreshed },
+        };
+        this.write(`\nguardian-agent> ${formatCliResponseContent(refreshedResponse)}\n\n`);
+        await this.handleApprovalPrompt(refreshedResponse, agentId, depth + 1);
+        return;
+      }
+    }
+
     this.write('\n' + resultMessages.join('\n') + '\n\n');
 
     // On approval, auto-continue so the LLM can complete the original task
-    if (decision === 'approved' && agentId && this.dashboard?.onDispatch) {
+    if (decision === 'approved' && allSucceeded && agentId && this.dashboard?.onDispatch) {
       const summary = resultMessages.map((r) => r.replace(/\x1b\[\d+m/g, '')).join('; ');
       try {
         const continuation = await this.dashboard.onDispatch(agentId, {
-          content: `[User approved the pending tool action(s). Results: ${summary}] ${allSucceeded ? 'Please continue with the original task.' : 'Some actions failed — adjust your approach accordingly.'}`,
+          content: `[User approved the pending tool action(s). Result: ${summary}] ${allSucceeded ? 'Please continue with the current request only. Do not resume older unrelated pending tasks.' : 'Some actions failed — adjust your approach accordingly. Focus only on the current request.'}`,
           userId: this.defaultUserId,
           channel: 'cli',
         });
-        this.write(`\nguardian-agent> ${continuation.content}\n\n`);
+        this.write(`\nguardian-agent> ${formatCliResponseContent(continuation)}\n\n`);
         // Recurse for chained approvals (e.g. add path → then write file)
         await this.handleApprovalPrompt(continuation, agentId, depth + 1);
       } catch (err) {
@@ -367,9 +490,8 @@ export class CLIChannel implements ChannelAdapter {
         resolve('');
         return;
       }
-      this.rl.question(prompt, (answer) => {
-        resolve(answer);
-      });
+      this.write(prompt);
+      this.pendingPromptResolver = resolve;
     });
   }
 

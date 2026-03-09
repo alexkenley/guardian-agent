@@ -746,6 +746,194 @@ describe('CLIChannel with DashboardCallbacks', () => {
     await cli.stop();
   });
 
+  it('normalizes CLI approval flow copy and status messages', async () => {
+    const decisions: Array<{ approvalId: string; decision: string }> = [];
+    const dispatches: Array<{ agentId: string; content: string }> = [];
+    const { input, output, cli } = makeCli({
+      onDispatch: async (agentId, msg) => {
+        dispatches.push({ agentId, content: msg.content });
+        if (msg.content.trim().toLowerCase() === 'y') {
+          throw new Error('CLI approval prompt answer leaked into onDispatch');
+        }
+        if (dispatches.length === 1) {
+          return {
+            content: 'Action: fs_write — {"path":"S:/Development/test50.txt","content":"This is test50.txt","append":false}\nApproval ID: approval-write-1\nReply "yes" to approve or "no" to deny (expires in 30 minutes).\nOptional: /approve or /deny',
+            metadata: {
+              pendingApprovals: [
+                {
+                  id: 'approval-write-1',
+                  toolName: 'fs_write',
+                  argsPreview: '{"path":"S:/Development/test50.txt","content":"This is test50.txt","append":false}',
+                },
+              ],
+            },
+          };
+        }
+        if (dispatches.length === 2) {
+          return {
+            content: 'Waiting for approval to add S:\\Development to allowed paths.',
+            metadata: {
+              pendingApprovals: [
+                {
+                  id: 'approval-path-1',
+                  toolName: 'update_tool_policy',
+                  argsPreview: '{"action":"add_path","value":"S:\\\\Development"}',
+                },
+              ],
+            },
+          };
+        }
+        return {
+          content: 'Done – `test50.txt` has been created in `S:\\Development`.',
+        };
+      },
+      onToolsApprovalDecision: async ({ approvalId, decision }) => {
+        decisions.push({ approvalId, decision });
+        return {
+          success: true,
+          message: approvalId === 'approval-path-1'
+            ? "Tool 'update_tool_policy' completed."
+            : "Tool 'fs_write' completed.",
+        };
+      },
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/chat agent-1');
+    readOutput(output);
+    await sendCommand(input, 'Create a new test file called test50.txt in the s Drive Development Directory.');
+    await sendCommand(input, 'y');
+    await sendCommand(input, 'y');
+    await new Promise(r => setTimeout(r, 100));
+
+    const text = readOutput(output);
+    expect(text).toContain('Waiting for approval to write S:/Development/test50.txt.');
+    expect(text).toContain('Waiting for approval to add S:\\Development to allowed paths.');
+    expect(text).toContain('Done – `test50.txt` has been created in `S:\\Development`.');
+    expect(text).not.toContain('Approval ID:');
+    expect(text).not.toContain('Reply "yes" to approve');
+    expect(text).not.toContain("Tool 'fs_write' completed.");
+    expect(text).not.toContain("Tool 'update_tool_policy' completed.");
+    expect(dispatches.map((dispatch) => dispatch.content.trim().toLowerCase())).not.toContain('y');
+    expect(decisions).toEqual([
+      { approvalId: 'approval-write-1', decision: 'approved' },
+      { approvalId: 'approval-path-1', decision: 'approved' },
+    ]);
+    expect(dispatches[1]?.content).toContain('Please continue with the current request only. Do not resume older unrelated pending tasks.');
+    expect(dispatches[2]?.content).toContain('Please continue with the current request only. Do not resume older unrelated pending tasks.');
+
+    await cli.stop();
+  });
+
+  it('refreshes stale CLI approval IDs and re-prompts with current pending approvals', async () => {
+    const decisions: Array<{ approvalId: string; decision: string }> = [];
+    const dispatches: Array<{ agentId: string; content: string }> = [];
+    const { input, output, cli } = makeCli({
+      onDispatch: async (agentId, msg) => {
+        dispatches.push({ agentId, content: msg.content });
+        if (dispatches.length === 1) {
+          return {
+            content: 'Waiting for approval to write S:/Development/Test60.txt.',
+            metadata: {
+              pendingApprovals: [
+                {
+                  id: 'stale-write-1',
+                  toolName: 'fs_write',
+                  argsPreview: '{"path":"S:/Development/Test60.txt","content":"This is Test60.txt","append":false}',
+                },
+              ],
+            },
+          };
+        }
+        return {
+          content: 'Done – `Test60.txt` has been created in `S:\\Development`.',
+        };
+      },
+      onToolsApprovalDecision: async ({ approvalId, decision }) => {
+        decisions.push({ approvalId, decision });
+        if (approvalId === 'stale-write-1') {
+          return { success: false, message: "Approval 'stale-write-1' not found." };
+        }
+        return { success: true, message: "Tool 'fs_write' completed." };
+      },
+      onToolsPendingApprovals: () => [
+        {
+          id: 'fresh-write-1',
+          toolName: 'fs_write',
+          argsPreview: '{"path":"S:/Development/Test60.txt","content":"This is Test60.txt","append":false}',
+        },
+      ],
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/chat agent-1');
+    readOutput(output);
+    await sendCommand(input, 'Create a test file called Test60 in the S Drive development directory.');
+    await sendCommand(input, 'y');
+    await sendCommand(input, 'y');
+    await new Promise(r => setTimeout(r, 100));
+
+    const text = readOutput(output);
+    expect(text).toContain('Waiting for approval to write S:/Development/Test60.txt.');
+    expect(text).toContain('Done – `Test60.txt` has been created in `S:\\Development`.');
+    expect(text).not.toContain("Approval 'stale-write-1' not found.");
+    expect(decisions).toEqual([
+      { approvalId: 'stale-write-1', decision: 'approved' },
+      { approvalId: 'fresh-write-1', decision: 'approved' },
+    ]);
+
+    await cli.stop();
+  });
+
+  it('intercepts leaked yes/no input locally when an inline CLI approval is active', async () => {
+    const decisions: Array<{ approvalId: string; decision: string }> = [];
+    const dispatches: Array<string> = [];
+    const { input, output, cli } = makeCli({
+      onDispatch: async (_agentId, msg) => {
+        dispatches.push(msg.content);
+        return { content: 'should not be called for leaked inline approval input' };
+      },
+      onToolsApprovalDecision: async ({ approvalId, decision }) => {
+        decisions.push({ approvalId, decision });
+        return { success: true, message: "Tool 'fs_write' completed." };
+      },
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+    readOutput(output);
+
+    (cli as unknown as {
+      pendingInlineApprovalState: {
+        approvals: Array<{ id: string; toolName: string; argsPreview: string }>;
+        agentId?: string;
+        depth: number;
+      } | null;
+      pendingPromptResolver: ((answer: string) => void) | null;
+    }).pendingInlineApprovalState = {
+      approvals: [
+        {
+          id: 'approval-leaked-1',
+          toolName: 'fs_write',
+          argsPreview: '{"path":"S:/Development/test.txt","content":"This is test.txt","append":false}',
+        },
+      ],
+      agentId: 'agent-1',
+      depth: 0,
+    };
+    (cli as unknown as { pendingPromptResolver: ((answer: string) => void) | null }).pendingPromptResolver = null;
+
+    await sendCommand(input, 'y');
+    await new Promise(r => setTimeout(r, 100));
+
+    const text = readOutput(output);
+    expect(decisions).toEqual([{ approvalId: 'approval-leaked-1', decision: 'approved' }]);
+    expect(dispatches).toEqual([
+      '[User approved the pending tool action(s). Result: ✓ fs_write: Approved and executed] Please continue with the current request only. Do not resume older unrelated pending tasks.',
+    ]);
+    expect(text).toContain('fs_write: Approved and executed');
+
+    await cli.stop();
+  });
+
   it('/chat <invalid> should show error for unknown agent', async () => {
     const { input, output, cli } = makeCli();
     await cli.start(async () => ({ content: 'ok' }));

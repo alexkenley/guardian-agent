@@ -51,7 +51,7 @@ export function getReferenceGuide(): ReferenceGuide {
           'CLI: /assistant policy to review recent allow/deny/rate-limit decisions',
           'CLI: /assistant traces to inspect per-request step traces and timing',
           'Use web Tools tab or CLI /tools to run approved workstation tools and review approvals/jobs',
-          'For chat-driven tool approvals, reply "yes" to approve or "no" to deny (or use /approve [approvalId] and /deny [approvalId]) in CLI/Telegram',
+          'For chat-driven tool approvals, use the native prompt or buttons first (CLI: Approve (y) / Deny (n), Telegram: inline buttons); /approve [approvalId] and /deny [approvalId] remain available as fallback commands',
           'For local file discovery, use tool fs_search (chat can call it) and include your folder in Tools -> Allowed Paths',
           'CLI policy shortcut: /tools policy paths <comma,separated,paths> (supports C:\\... and /mnt/c/... formats)',
           'Campaign automation commands: CLI /campaign help (discover contacts, create campaigns, preview, run with approvals)',
