@@ -112,6 +112,10 @@ The **preferred method** for automated testing and bug reproduction is to write 
 5. **Simulate the User/UI Flow:** Send HTTP requests that exactly mimic the UI's behavior. If the Web UI prepends hidden contexts (like `[Context: User is currently viewing the chat panel]`), include these exactly as they appear in the browser payload.
 6. **Assert and Cleanup:** Evaluate the API responses programmatically. Regardless of pass or fail, ensure `appProcess.kill()` is called in a `finally` block or `catch` handler so the port is properly released.
 
+For planner-path bugs such as tool discovery regressions, "tool is unavailable" chatter, or approval preamble wording, drive the scenario through `POST /api/message`. Direct `POST /api/tools/run` tests validate the approval transport, but they bypass the LLM's tool-selection and response-copy path.
+
+For web approval UX regressions, assert both the positive action copy and the absence of internal schema chatter. A good write-to-new-path scenario should produce approval text like `Waiting for approval to add S:\Development to allowed paths.` followed by `Waiting for approval to write S:\Development\test26.txt.`, and should not contain phrases like `tool is unavailable`, `tool is available`, or `action and value`.
+
 Example script generated during debugging (see `scripts/test-web-approvals.mjs`):
 ```bash
 node scripts/test-web-approvals.mjs
@@ -135,7 +139,7 @@ This method is fast, removes dependencies on cross-platform shell quirks, and ca
 
 ### Stream A: Tooling Performance (4 tests)
 
-**Deferred Tool Loading** — Asks about network scanning tools. The LLM should call `find_tools` to discover deferred tools (`net_arp_scan`, `net_ping`, etc.) since only 10 tools are always-loaded (`find_tools`, `web_search`, `fs_read`, `fs_list`, `fs_search`, `shell_safe`, `memory_search`, `memory_save`, `sys_info`, `sys_resources`).
+**Deferred Tool Loading** — Asks about network scanning tools. The LLM should call `find_tools` to discover deferred tools (`net_arp_scan`, `net_ping`, etc.) since only 11 tools are always-loaded (`find_tools`, `update_tool_policy`, `web_search`, `fs_read`, `fs_list`, `fs_search`, `shell_safe`, `memory_search`, `memory_save`, `sys_info`, `sys_resources`).
 
 **Parallel Execution** — Requests two independent pieces of information. Both tool calls should execute concurrently (verify via app logs showing near-simultaneous starts).
 
@@ -535,9 +539,9 @@ Tests the full approval lifecycle and UX improvements: contextual prompts (tool 
 #### Section 4: Contextual Approval Prompts (LLM Path)
 | Scenario | Expected | What It Validates |
 |----------|----------|-------------------|
-| LLM write request | Response mentions tool/action | `formatPendingApprovalPrompt` includes tool context |
-| Approval prompt | Contains `fs_write` | Tool name in prompt text |
-| Approval prompt | Contains file path/args | Args preview in prompt text |
+| LLM write request | Response mentions the concrete action | Approval copy is user-facing, not schema-facing |
+| Approval prompt | Contains target path | Action/path preview is preserved |
+| Approval prompt | Does not contain `tool is unavailable` / `action and value` | Model chatter is suppressed or normalized |
 | User says "no" | Approval denied | LLM routes denial correctly |
 
 #### Section 5: Post-Approval Result Synthesis (LLM Path)
@@ -549,9 +553,11 @@ Tests the full approval lifecycle and UX improvements: contextual prompts (tool 
 #### Section 6: Double-Approval Flow (LLM Path)
 | Scenario | Expected | What It Validates |
 |----------|----------|-------------------|
-| Write to out-of-sandbox path | LLM explains policy update needed | System prompt line 29 guidance |
+| Write to out-of-sandbox path | LLM explains policy update needed | System prompt guidance for allowlist escalation |
 | Step 1 | `update_tool_policy` pending | Policy update gated by approval |
+| Step 1 copy | `Waiting for approval to add ... to allowed paths.` | Structured approval wording |
 | Approve step 1, continue | `fs_write` pending or auto-executes | Two-step flow completes |
+| Step 2 copy | `Waiting for approval to write ...` | Chained approval wording stays concrete |
 | Step 2 approval | File created | Full double-approval lifecycle |
 
 #### Section 7: Edge Cases (Direct API)

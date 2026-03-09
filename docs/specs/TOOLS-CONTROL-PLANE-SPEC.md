@@ -34,8 +34,10 @@ Expose a safe, auditable tool-execution plane so the assistant can perform works
 
 ## Deferred Tool Loading
 
-By default, 10 tools are sent to the LLM on every request (**always-loaded**):
-`find_tools`, `web_search`, `fs_read`, `fs_list`, `fs_search`, `shell_safe`, `memory_search`, `memory_save`, `sys_info`, `sys_resources`
+By default, 11 tools are sent to the LLM on every request (**always-loaded**) when agent policy updates are enabled:
+`find_tools`, `update_tool_policy`, `web_search`, `fs_read`, `fs_list`, `fs_search`, `shell_safe`, `memory_search`, `memory_save`, `sys_info`, `sys_resources`
+
+If `assistant.tools.agentPolicyUpdates` is disabled, `update_tool_policy` is not registered and the always-loaded set drops back to 10 tools.
 
 All other tools have `deferLoading: true` and are only discovered via `find_tools`. When the LLM calls `find_tools`, matching tool definitions (including full parameter schemas) are merged into the active tool set for subsequent rounds.
 
@@ -70,7 +72,7 @@ assistant:
   tools:
     deferredLoading:
       enabled: true
-      alwaysLoaded: [find_tools, web_search, fs_read, fs_list, fs_search, shell_safe, memory_search, sys_info, sys_resources]
+      alwaysLoaded: [find_tools, update_tool_policy, web_search, fs_read, fs_list, fs_search, shell_safe, memory_search, memory_save, sys_info, sys_resources]
     providerRoutingEnabled: true    # enable smart category defaults (default: true)
     providerRouting:
       # Per-category: all tools in this category use external LLM for result synthesis
@@ -165,6 +167,12 @@ When a tool returns `pending_approval`, the response includes structured metadat
 - **Telegram**: Inline keyboard buttons (✅ Approve / ❌ Deny) sent as a separate message after the agent response. Callback queries trigger the approval decision and auto-continue via `onDispatch`.
 
 The text-based `/approve <id>` and `/deny <id>` commands remain available as a fallback on CLI and Telegram, but the structured button/prompt UX is the primary path.
+
+For chat responses, pending-approval copy is normalized from the structured metadata when the model emits weak placeholder text. This keeps approval prompts action-focused and avoids leaking internal tool-selection chatter such as "tool is unavailable" or schema hints like "action and value".
+
+Examples:
+- `Waiting for approval to add S:\Development to allowed paths.`
+- `Waiting for approval to write S:\Development\test26.txt.`
 
 ### Read-Only Shell Bypass
 Under `approve_by_policy`, `shell_safe` commands that are purely read-only skip approval automatically. Recognized read-only commands: `ls`, `dir`, `pwd`, `whoami`, `hostname`, `uname`, `date`, `echo`, `cat`, `head`, `tail`, `wc`, `file`, `which`, `type`, plus prefixed commands like `git status`, `git diff`, `git log`, `git branch`, `node --version`, `npm --version`, `npm ls`.

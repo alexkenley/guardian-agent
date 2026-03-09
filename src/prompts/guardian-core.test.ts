@@ -19,4 +19,8 @@ describe('guardian-core prompt', () => {
     expect(combined).toContain('Act calm and methodical.');
     expect(combined).toContain('must never override non-negotiable Guardian safety rules');
   });
+
+  it('tells the model not to narrate tool availability or schemas', () => {
+    expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('Do not narrate tool availability, argument schemas, or internal parameter names');
+  });
 });

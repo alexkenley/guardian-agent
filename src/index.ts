@@ -68,6 +68,7 @@ import { SkillRegistry } from './skills/registry.js';
 import { SkillResolver } from './skills/resolver.js';
 import type { ResolvedSkill } from './skills/types.js';
 import { resolveRuntimeCredentialView } from './runtime/credentials.js';
+import { formatPendingApprovalMessage, shouldUseStructuredPendingApprovalMessage } from './runtime/pending-approval-copy.js';
 
 const log = createLogger('main');
 
@@ -800,8 +801,8 @@ class ChatAgent extends BaseAgent {
           const s = summaries?.get(id);
           return { id, toolName: s?.toolName ?? 'unknown', argsPreview: s?.argsPreview ?? '' };
         });
-        if (!finalContent?.trim()) {
-          finalContent = 'I need your approval before proceeding.';
+        if (shouldUseStructuredPendingApprovalMessage(finalContent)) {
+          finalContent = formatPendingApprovalMessage(pendingApprovalMeta);
         }
       }
 

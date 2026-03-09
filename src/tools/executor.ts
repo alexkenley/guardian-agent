@@ -4640,7 +4640,6 @@ export class ToolExecutor {
           shortDescription: 'Update tool sandbox policy (paths, commands, domains).',
           risk: 'external_post',  // Forces approval in all policy modes
           category: 'system',
-          deferLoading: true,
           parameters: {
             type: 'object',
             properties: {

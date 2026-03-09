@@ -63,6 +63,26 @@ describe('ToolExecutor', () => {
     expect(names).toContain('gmail_send');
   });
 
+  it('keeps update_tool_policy always loaded when policy updates are enabled', () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      agentPolicyUpdates: {
+        allowedPaths: true,
+        allowedCommands: false,
+        allowedDomains: true,
+      },
+    });
+
+    const alwaysLoaded = executor.listAlwaysLoadedDefinitions().map((tool) => tool.name);
+    expect(alwaysLoaded).toContain('update_tool_policy');
+  });
+
   it('rejects fs_write content containing secrets before writing', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
