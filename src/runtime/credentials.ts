@@ -154,6 +154,27 @@ export function resolveCloudCredentialConfig(
         `assistant.tools.cloud.cloudflareProfiles.${profile.id}`,
       ),
     })),
+    awsProfiles: (config.awsProfiles ?? []).map((profile) => ({
+      ...profile,
+      accessKeyId: resolveCredentialValue(
+        profile.accessKeyId,
+        profile.accessKeyIdCredentialRef,
+        provider,
+        `assistant.tools.cloud.awsProfiles.${profile.id}.accessKeyId`,
+      ),
+      secretAccessKey: resolveCredentialValue(
+        profile.secretAccessKey,
+        profile.secretAccessKeyCredentialRef,
+        provider,
+        `assistant.tools.cloud.awsProfiles.${profile.id}.secretAccessKey`,
+      ),
+      sessionToken: resolveCredentialValue(
+        profile.sessionToken,
+        profile.sessionTokenCredentialRef,
+        provider,
+        `assistant.tools.cloud.awsProfiles.${profile.id}.sessionToken`,
+      ),
+    })),
   };
 }
 

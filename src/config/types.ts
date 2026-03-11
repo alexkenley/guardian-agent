@@ -850,6 +850,41 @@ export interface AssistantCloudCloudflareProfileConfig {
   defaultZoneId?: string;
 }
 
+/** An AWS account profile for cloud operations. */
+export interface AssistantCloudAwsProfileConfig {
+  /** Unique profile id referenced by AWS tools. */
+  id: string;
+  /** Human-readable label for operator-facing output. */
+  name: string;
+  /** Default AWS region for regional service calls. */
+  region: string;
+  /** Optional inline access key id (supports ${ENV_VAR}). */
+  accessKeyId?: string;
+  /** Optional credential reference for access key id. */
+  accessKeyIdCredentialRef?: string;
+  /** Optional inline secret access key (supports ${ENV_VAR}). */
+  secretAccessKey?: string;
+  /** Optional credential reference for secret access key. */
+  secretAccessKeyCredentialRef?: string;
+  /** Optional inline session token (supports ${ENV_VAR}). */
+  sessionToken?: string;
+  /** Optional credential reference for session token. */
+  sessionTokenCredentialRef?: string;
+  /** Optional per-service endpoint overrides for local emulators or tests. */
+  endpoints?: {
+    sts?: string;
+    ec2?: string;
+    s3?: string;
+    route53?: string;
+    lambda?: string;
+    cloudwatch?: string;
+    cloudwatchLogs?: string;
+    rds?: string;
+    iam?: string;
+    costExplorer?: string;
+  };
+}
+
 /** Hosting and cloud-provider tool configuration. */
 export interface AssistantCloudConfig {
   /** Enable built-in hosting/cloud tools. */
@@ -860,6 +895,8 @@ export interface AssistantCloudConfig {
   vercelProfiles?: AssistantCloudVercelProfileConfig[];
   /** Available Cloudflare profiles. */
   cloudflareProfiles?: AssistantCloudCloudflareProfileConfig[];
+  /** Available AWS profiles. */
+  awsProfiles?: AssistantCloudAwsProfileConfig[];
 }
 
 /** Controls which policy areas the assistant can modify with user approval via chat. */
@@ -1209,6 +1246,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         cpanelProfiles: [],
         vercelProfiles: [],
         cloudflareProfiles: [],
+        awsProfiles: [],
       },
       qmd: {
         enabled: true,

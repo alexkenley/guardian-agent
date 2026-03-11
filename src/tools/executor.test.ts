@@ -1003,6 +1003,148 @@ describe('ToolExecutor', () => {
     expect(requests.some((entry) => entry.url === '/zones/zone_1/dns_records' && entry.method === 'POST')).toBe(true);
   });
 
+  it('executes AWS read-only tools through an AWS profile', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['amazonaws.com'],
+      cloudConfig: {
+        enabled: true,
+        awsProfiles: [{
+          id: 'aws-main',
+          name: 'AWS Main',
+          region: 'us-east-1',
+        }],
+      },
+    });
+
+    const fakeClient = {
+      config: { id: 'aws-main', name: 'AWS Main', region: 'us-east-1' },
+      getCallerIdentity: async () => ({ Account: '123456789012', Arn: 'arn:aws:iam::123456789012:user/tester' }),
+      listAccountAliases: async () => ({ AccountAliases: ['main'] }),
+      listS3Buckets: async () => ({ Buckets: [{ Name: 'bucket-a' }] }),
+      getS3ObjectText: async () => ({ metadata: { contentType: 'text/plain' }, bodyText: 'hello world' }),
+    };
+    (executor as unknown as { createAwsClient: () => typeof fakeClient }).createAwsClient = () => fakeClient;
+    (executor as unknown as { describeAwsEndpoint: () => string }).describeAwsEndpoint = () => 'https://sts.us-east-1.amazonaws.com';
+
+    const status = await executor.runTool({
+      toolName: 'aws_status',
+      args: { profile: 'aws-main' },
+      origin: 'cli',
+    });
+    expect(status.success).toBe(true);
+    expect(status.output).toMatchObject({
+      profile: 'aws-main',
+      region: 'us-east-1',
+      identity: { Account: '123456789012' },
+      aliases: { AccountAliases: ['main'] },
+    });
+
+    const s3Object = await executor.runTool({
+      toolName: 'aws_s3_buckets',
+      args: { profile: 'aws-main', action: 'get_object', bucket: 'bucket-a', key: 'notes.txt' },
+      origin: 'cli',
+    });
+    expect(s3Object.success).toBe(true);
+    expect(s3Object.output).toMatchObject({
+      action: 'get_object',
+      bucket: 'bucket-a',
+      key: 'notes.txt',
+      data: { metadata: { contentType: 'text/plain' }, bodyText: 'hello world' },
+    });
+  });
+
+  it('requires approval for AWS EC2 and Route53 mutations', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['amazonaws.com'],
+      cloudConfig: {
+        enabled: true,
+        awsProfiles: [{
+          id: 'aws-main',
+          name: 'AWS Main',
+          region: 'us-east-1',
+        }],
+      },
+    });
+
+    const calls: Array<{ method: string; payload: unknown }> = [];
+    const fakeClient = {
+      config: { id: 'aws-main', name: 'AWS Main', region: 'us-east-1' },
+      startEc2Instances: async (instanceIds: string[]) => {
+        calls.push({ method: 'startEc2Instances', payload: instanceIds });
+        return { StartingInstances: instanceIds.map((id) => ({ InstanceId: id })) };
+      },
+      changeRoute53Records: async (hostedZoneId: string, changes: unknown) => {
+        calls.push({ method: 'changeRoute53Records', payload: { hostedZoneId, changes } });
+        return { ChangeInfo: { Id: 'change-1', Status: 'PENDING' } };
+      },
+    };
+    (executor as unknown as { createAwsClient: () => typeof fakeClient }).createAwsClient = () => fakeClient;
+    (executor as unknown as { describeAwsEndpoint: () => string }).describeAwsEndpoint = () => 'https://ec2.us-east-1.amazonaws.com';
+
+    const ec2Pending = await executor.runTool({
+      toolName: 'aws_ec2_instances',
+      args: { profile: 'aws-main', action: 'start', instanceIds: ['i-123'] },
+      origin: 'cli',
+    });
+    expect(ec2Pending.success).toBe(false);
+    expect(ec2Pending.status).toBe('pending_approval');
+    const ec2Approved = await executor.decideApproval(ec2Pending.approvalId!, 'approved', 'tester');
+    expect(ec2Approved.success).toBe(true);
+    expect(ec2Approved.result?.output).toMatchObject({
+      action: 'start',
+      instanceIds: ['i-123'],
+    });
+
+    const route53Pending = await executor.runTool({
+      toolName: 'aws_route53',
+      args: {
+        profile: 'aws-main',
+        action: 'change_records',
+        hostedZoneId: 'Z123',
+        changeAction: 'UPSERT',
+        type: 'A',
+        name: 'app.example.com',
+        records: ['1.2.3.4'],
+      },
+      origin: 'cli',
+    });
+    expect(route53Pending.success).toBe(false);
+    expect(route53Pending.status).toBe('pending_approval');
+    const route53Approved = await executor.decideApproval(route53Pending.approvalId!, 'approved', 'tester');
+    expect(route53Approved.success).toBe(true);
+    expect(route53Approved.result?.output).toMatchObject({
+      action: 'change_records',
+      hostedZoneId: 'Z123',
+    });
+
+    expect(calls).toEqual([
+      { method: 'startEc2Instances', payload: ['i-123'] },
+      {
+        method: 'changeRoute53Records',
+        payload: {
+          hostedZoneId: 'Z123',
+          changes: [{
+            Action: 'UPSERT',
+            ResourceRecordSet: {
+              Name: 'app.example.com',
+              Type: 'A',
+              TTL: 300,
+              ResourceRecords: [{ Value: '1.2.3.4' }],
+            },
+          }],
+        },
+      },
+    ]);
+  });
+
   it('rejects fs_write content containing secrets before writing', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({

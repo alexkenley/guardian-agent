@@ -255,6 +255,36 @@ describe('validateConfig', () => {
     expect(validateConfig(config)).toEqual([]);
   });
 
+  it('should validate cloud AWS credential refs', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'cloud.aws.primary.accessKeyId': { source: 'env', env: 'AWS_ACCESS_KEY_ID' },
+            'cloud.aws.primary.secretAccessKey': { source: 'env', env: 'AWS_SECRET_ACCESS_KEY' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          cloud: {
+            enabled: true,
+            awsProfiles: [{
+              id: 'aws-main',
+              name: 'AWS Main',
+              region: 'us-east-1',
+              accessKeyIdCredentialRef: 'cloud.aws.primary.accessKeyId',
+              secretAccessKeyCredentialRef: 'cloud.aws.primary.secretAccessKey',
+            }],
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toEqual([]);
+  });
+
   it('should require telegram botToken when enabled', () => {
     const config: GuardianAgentConfig = {
       ...DEFAULT_CONFIG,
