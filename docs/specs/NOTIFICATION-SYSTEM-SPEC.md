@@ -172,6 +172,7 @@ The notification system now has a concrete integration path with workstation mon
 - those events are normalized into `security:alert` notifications
 - the Security page, CLI, and Telegram receive the same operator-facing alert family
 - `host_monitor_check` and the web manual check path both route through the same audit/notification flow
+- current host-monitor coverage includes suspicious process, persistence, sensitive-path, network-drift, and firewall alerts
 
 This keeps notifications consistent whether the anomaly came from:
 

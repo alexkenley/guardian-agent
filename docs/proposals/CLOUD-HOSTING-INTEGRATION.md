@@ -28,6 +28,7 @@ The most valuable adjacent workstream after the first six phases is **local work
 As of **March 11, 2026**, the repository now has an initial implementation of that direction:
 
 - workstation host monitoring with suspicious-process, persistence, sensitive-path, and network-drift checks
+- first-pass host-firewall monitoring for Windows Defender Firewall, Linux firewall backends, and macOS `pf`
 - `host_alert` audit events plus notification fanout through web, CLI, and Telegram
 - built-in host-security playbooks and scheduled-task presets
 - self-policing pre-execution enforcement that can block risky actions when host alerts indicate suspicious local activity

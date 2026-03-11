@@ -567,6 +567,7 @@ export interface AssistantHostMonitoringConfig {
   monitorPersistence: boolean;
   monitorSensitivePaths: boolean;
   monitorNetwork: boolean;
+  monitorFirewall: boolean;
   sensitivePaths: string[];
   suspiciousProcessNames: string[];
 }
@@ -1315,6 +1316,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       monitorPersistence: true,
       monitorSensitivePaths: true,
       monitorNetwork: true,
+      monitorFirewall: true,
       sensitivePaths: [
         '{HOME}/.guardianagent',
         '{HOME}/.ssh',

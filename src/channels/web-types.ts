@@ -185,6 +185,7 @@ export interface RedactedConfig {
       monitorPersistence: boolean;
       monitorSensitivePaths: boolean;
       monitorNetwork: boolean;
+      monitorFirewall: boolean;
       sensitivePathCount: number;
       suspiciousProcessCount: number;
     };

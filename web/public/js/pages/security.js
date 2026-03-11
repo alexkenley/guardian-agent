@@ -256,6 +256,9 @@ async function renderMonitoringTab(panel) {
         watchedPathCount: 0,
         knownExternalDestinationCount: 0,
         listeningPortCount: 0,
+        firewallBackend: 'unavailable',
+        firewallEnabled: null,
+        firewallRuleCount: 0,
       },
       activeAlertCount: 0,
       bySeverity: { low: 0, medium: 0, high: 0, critical: 0 },
@@ -437,6 +440,12 @@ async function renderMonitoringTab(panel) {
         `${status.snapshot?.persistenceEntryCount || 0} persistence entries • ${status.snapshot?.knownExternalDestinationCount || 0} remotes`,
         'info',
       ));
+      hostGrid.appendChild(createStatusCard(
+        'Host Firewall',
+        status.snapshot?.firewallEnabled === true ? 'Enabled' : status.snapshot?.firewallEnabled === false ? 'Alert' : 'Unknown',
+        `${status.snapshot?.firewallBackend || 'unavailable'} • ${status.snapshot?.firewallRuleCount || 0} rules`,
+        status.snapshot?.firewallEnabled === false ? 'error' : status.snapshot?.firewallEnabled === true ? 'success' : 'warning',
+      ));
     };
 
     const summarizeHostEvidence = (alert) => {
@@ -446,6 +455,8 @@ async function renderMonitoringTab(panel) {
       if (typeof alert.evidence.remoteAddress === 'string') return alert.evidence.remoteAddress;
       if (typeof alert.evidence.port === 'number') return `port ${alert.evidence.port}`;
       if (typeof alert.evidence.name === 'string') return alert.evidence.name;
+      if (typeof alert.evidence.backend === 'string') return `${alert.evidence.backend}`;
+      if (typeof alert.evidence.summary === 'string') return alert.evidence.summary;
       return '-';
     };
 

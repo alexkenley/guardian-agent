@@ -18,6 +18,7 @@ function makeConfig(overrides: Partial<AssistantHostMonitoringConfig> = {}): Ass
     monitorPersistence: true,
     monitorSensitivePaths: true,
     monitorNetwork: true,
+    monitorFirewall: true,
     sensitivePaths: [],
     suspiciousProcessNames: ['wscript.exe', 'mshta.exe', 'osascript', 'nc'],
     ...overrides,
@@ -59,6 +60,15 @@ describe('HostMonitoringService', () => {
         'reg query HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce': '',
         'schtasks /Query /FO CSV': '"TaskName","Next Run Time"\n',
         'netstat -an': '',
+        'netsh advfirewall show allprofiles state': [
+          'Domain Profile Settings:',
+          'State                                 ON',
+          'Private Profile Settings:',
+          'State                                 ON',
+          'Public Profile Settings:',
+          'State                                 ON',
+        ].join('\n'),
+        'netsh advfirewall firewall show rule name=all': 'Rule Name: Allow DNS\nRule Name: Allow HTTPS\n',
       }),
     });
 
@@ -81,6 +91,15 @@ describe('HostMonitoringService', () => {
       'reg query HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce': '',
       'schtasks /Query /FO CSV': '"TaskName","Next Run Time"\n',
       'netstat -an': '',
+      'netsh advfirewall show allprofiles state': [
+        'Domain Profile Settings:',
+        'State                                 ON',
+        'Private Profile Settings:',
+        'State                                 ON',
+        'Public Profile Settings:',
+        'State                                 ON',
+      ].join('\n'),
+      'netsh advfirewall firewall show rule name=all': 'Rule Name: Allow DNS\nRule Name: Allow HTTPS\n',
     });
     const driftRunner = makeRunner({
       'tasklist /FO CSV /NH': '',
@@ -90,6 +109,15 @@ describe('HostMonitoringService', () => {
       'reg query HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce': '',
       'schtasks /Query /FO CSV': '"TaskName","Next Run Time"\n',
       'netstat -an': '',
+      'netsh advfirewall show allprofiles state': [
+        'Domain Profile Settings:',
+        'State                                 ON',
+        'Private Profile Settings:',
+        'State                                 ON',
+        'Public Profile Settings:',
+        'State                                 ON',
+      ].join('\n'),
+      'netsh advfirewall firewall show rule name=all': 'Rule Name: Allow DNS\nRule Name: Allow HTTPS\n',
     });
 
     const baselineService = new HostMonitoringService({
@@ -135,6 +163,7 @@ describe('HostMonitoringService', () => {
         'ps -axo pid=,comm=': '',
         'crontab -l': '',
         'ss -tun': '',
+        'ufw status verbose': 'Status: active\nTo                         Action      From\n22/tcp                     ALLOW       Anywhere\n',
       }),
     });
     await baselineService.runCheck();
@@ -154,6 +183,7 @@ describe('HostMonitoringService', () => {
         'ps -axo pid=,comm=': '4242 /usr/bin/wscript.exe\n',
         'crontab -l': '',
         'ss -tun': '',
+        'ufw status verbose': 'Status: active\nTo                         Action      From\n22/tcp                     ALLOW       Anywhere\n',
       }),
     });
     await service.load();
@@ -178,6 +208,7 @@ describe('HostMonitoringService', () => {
         'ps -axo pid=,comm=': '',
         'crontab -l': '',
         'ss -tun': '',
+        'ufw status verbose': 'Status: active\nTo                         Action      From\n22/tcp                     ALLOW       Anywhere\n',
       }),
     });
     await baselineService.runCheck();
@@ -196,6 +227,7 @@ describe('HostMonitoringService', () => {
           'tcp        0      0 0.0.0.0:3389            0.0.0.0:*               LISTEN',
           'tcp        0      0 192.168.1.20:51514      203.0.113.10:443        ESTABLISHED',
         ].join('\n'),
+        'ufw status verbose': 'Status: active\nTo                         Action      From\n22/tcp                     ALLOW       Anywhere\n',
       }),
     });
     await service.load();
@@ -205,5 +237,71 @@ describe('HostMonitoringService', () => {
       expect.objectContaining({ type: 'new_listening_port', severity: 'high' }),
       expect.objectContaining({ type: 'new_external_destination', severity: 'medium' }),
     ]));
+  });
+
+  it('detects Windows firewall disablement and rule drift', async () => {
+    const dir = await makeTempDir();
+    const persistPath = join(dir, 'host-monitor.json');
+
+    const baselineService = new HostMonitoringService({
+      config: makeConfig(),
+      platform: 'win32',
+      homeDir: dir,
+      persistPath,
+      runner: makeRunner({
+        'tasklist /FO CSV /NH': '',
+        'reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run': '',
+        'reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce': '',
+        'reg query HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run': '',
+        'reg query HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce': '',
+        'schtasks /Query /FO CSV': '"TaskName","Next Run Time"\n',
+        'netstat -an': '',
+        'netsh advfirewall show allprofiles state': [
+          'Domain Profile Settings:',
+          'State                                 ON',
+          'Private Profile Settings:',
+          'State                                 ON',
+          'Public Profile Settings:',
+          'State                                 ON',
+        ].join('\n'),
+        'netsh advfirewall firewall show rule name=all': 'Rule Name: Allow DNS\nRule Name: Allow HTTPS\n',
+      }),
+    });
+    await baselineService.runCheck();
+    await baselineService.persist();
+
+    const service = new HostMonitoringService({
+      config: makeConfig(),
+      platform: 'win32',
+      homeDir: dir,
+      persistPath,
+      runner: makeRunner({
+        'tasklist /FO CSV /NH': '',
+        'reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run': '',
+        'reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce': '',
+        'reg query HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run': '',
+        'reg query HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce': '',
+        'schtasks /Query /FO CSV': '"TaskName","Next Run Time"\n',
+        'netstat -an': '',
+        'netsh advfirewall show allprofiles state': [
+          'Domain Profile Settings:',
+          'State                                 OFF',
+          'Private Profile Settings:',
+          'State                                 OFF',
+          'Public Profile Settings:',
+          'State                                 OFF',
+        ].join('\n'),
+        'netsh advfirewall firewall show rule name=all': 'Rule Name: Allow DNS\n',
+      }),
+    });
+    await service.load();
+    const report = await service.runCheck();
+
+    expect(report.alerts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'firewall_disabled', severity: 'critical' }),
+      expect.objectContaining({ type: 'firewall_change', severity: 'high' }),
+    ]));
+    expect(report.snapshot.firewallBackend).toBe('windows-advfirewall');
+    expect(report.snapshot.firewallEnabled).toBe(false);
   });
 });

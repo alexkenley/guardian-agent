@@ -296,6 +296,10 @@ GuardianAgent now includes a practical host-monitoring layer intended for direct
 - network drift
   - new external destinations
   - new listening ports, with high-risk ports elevated
+- firewall posture
+  - Windows Defender Firewall profile state and rule drift
+  - Linux `ufw` state or `nftables`/`iptables` ruleset drift
+  - macOS `pf` state and ruleset drift
 
 ### Self-Policing Behavior
 

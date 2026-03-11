@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
@@ -13,7 +13,20 @@ export type HostMonitorAlertType =
   | 'persistence_change'
   | 'sensitive_path_change'
   | 'new_external_destination'
-  | 'new_listening_port';
+  | 'new_listening_port'
+  | 'firewall_change'
+  | 'firewall_disabled';
+
+export interface HostFirewallState {
+  backend: string;
+  available: boolean;
+  enabled: boolean | null;
+  enabledProfileCount: number;
+  profileCount: number;
+  ruleCount: number;
+  fingerprint: string;
+  summary: string;
+}
 
 export interface HostMonitorAlert {
   id: string;
@@ -36,6 +49,9 @@ export interface HostMonitorSnapshot {
   watchedPathCount: number;
   knownExternalDestinationCount: number;
   listeningPortCount: number;
+  firewallBackend: string;
+  firewallEnabled: boolean | null;
+  firewallRuleCount: number;
 }
 
 export interface HostMonitorStatus {
@@ -62,6 +78,8 @@ interface PersistedState {
   sensitiveFingerprints: Record<string, string>;
   knownExternalDestinations: string[];
   knownListeningPorts: number[];
+  firewallFingerprint?: string;
+  firewallBackend?: string;
   alerts: HostMonitorAlert[];
 }
 
@@ -108,6 +126,8 @@ export class HostMonitoringService {
   private sensitiveFingerprints = new Map<string, string>();
   private knownExternalDestinations = new Set<string>();
   private knownListeningPorts = new Set<number>();
+  private firewallFingerprint = '';
+  private firewallBackend = 'unavailable';
   private readonly alerts = new Map<string, HostMonitorAlert>();
   private lastSnapshot: HostMonitorSnapshot = {
     processCount: 0,
@@ -116,6 +136,9 @@ export class HostMonitoringService {
     watchedPathCount: 0,
     knownExternalDestinationCount: 0,
     listeningPortCount: 0,
+    firewallBackend: 'unavailable',
+    firewallEnabled: null,
+    firewallRuleCount: 0,
   };
 
   constructor(options: HostMonitoringServiceOptions) {
@@ -137,6 +160,8 @@ export class HostMonitoringService {
       this.sensitiveFingerprints = new Map(Object.entries(data.sensitiveFingerprints ?? {}));
       this.knownExternalDestinations = new Set(data.knownExternalDestinations ?? []);
       this.knownListeningPorts = new Set((data.knownListeningPorts ?? []).map(Number).filter((p) => Number.isFinite(p)));
+      this.firewallFingerprint = data.firewallFingerprint ?? '';
+      this.firewallBackend = data.firewallBackend ?? 'unavailable';
       this.alerts.clear();
       for (const alert of data.alerts ?? []) {
         this.alerts.set(alert.id, alert);
@@ -154,6 +179,8 @@ export class HostMonitoringService {
       sensitiveFingerprints: Object.fromEntries([...this.sensitiveFingerprints.entries()].sort(([a], [b]) => a.localeCompare(b))),
       knownExternalDestinations: [...this.knownExternalDestinations].sort(),
       knownListeningPorts: [...this.knownListeningPorts].sort((a, b) => a - b),
+      firewallFingerprint: this.firewallFingerprint,
+      firewallBackend: this.firewallBackend,
       alerts: [...this.alerts.values()],
     };
     await mkdir(dirname(this.persistPath), { recursive: true });
@@ -203,6 +230,16 @@ export class HostMonitoringService {
     const persistenceEntries = this.config.monitorPersistence ? await this.collectPersistenceEntries() : [];
     const sensitiveFingerprints = this.config.monitorSensitivePaths ? await this.collectSensitiveFingerprints() : new Map<string, string>();
     const networkState = this.config.monitorNetwork ? await this.collectNetworkState() : { externalDestinations: [] as string[], listeningPorts: [] as number[] };
+    const firewallState = this.config.monitorFirewall ? await this.collectFirewallState() : {
+      backend: 'disabled',
+      available: false,
+      enabled: null,
+      enabledProfileCount: 0,
+      profileCount: 0,
+      ruleCount: 0,
+      fingerprint: '',
+      summary: 'Firewall monitoring disabled by config.',
+    } satisfies HostFirewallState;
 
     const snapshot: HostMonitorSnapshot = {
       processCount: processes.length,
@@ -211,6 +248,9 @@ export class HostMonitoringService {
       watchedPathCount: sensitiveFingerprints.size,
       knownExternalDestinationCount: networkState.externalDestinations.length,
       listeningPortCount: networkState.listeningPorts.length,
+      firewallBackend: firewallState.backend,
+      firewallEnabled: firewallState.enabled,
+      firewallRuleCount: firewallState.ruleCount,
     };
 
     const anomalies: Array<Omit<HostMonitorAlert, 'id' | 'acknowledged' | 'firstSeenAt' | 'lastSeenAt' | 'occurrenceCount'>> = [];
@@ -223,6 +263,24 @@ export class HostMonitoringService {
         description: `Suspicious process detected: ${proc.name} (PID ${proc.pid})`,
         dedupeKey: `suspicious_process:${proc.name}:${proc.pid}`,
         evidence: proc,
+      });
+    }
+
+    if (firewallState.available && firewallState.enabled === false) {
+      anomalies.push({
+        type: 'firewall_disabled',
+        severity: firewallDisabledSeverity(this.platform, firewallState),
+        timestamp,
+        description: `Host firewall is disabled or partially disabled: ${firewallState.summary}`,
+        dedupeKey: `firewall_disabled:${firewallState.backend}:${firewallState.summary}`,
+        evidence: {
+          backend: firewallState.backend,
+          enabled: firewallState.enabled,
+          profileCount: firewallState.profileCount,
+          enabledProfileCount: firewallState.enabledProfileCount,
+          ruleCount: firewallState.ruleCount,
+          summary: firewallState.summary,
+        },
       });
     }
 
@@ -279,6 +337,24 @@ export class HostMonitoringService {
           });
         }
       }
+
+      if (firewallState.available && this.firewallFingerprint && firewallState.fingerprint !== this.firewallFingerprint) {
+        anomalies.push({
+          type: 'firewall_change',
+          severity: firewallChangeSeverity(this.platform, firewallState, this.firewallBackend),
+          timestamp,
+          description: `Host firewall configuration changed: ${firewallState.summary}`,
+          dedupeKey: `firewall_change:${firewallState.backend}:${firewallState.fingerprint}`,
+          evidence: {
+            backend: firewallState.backend,
+            previousBackend: this.firewallBackend,
+            profileCount: firewallState.profileCount,
+            enabledProfileCount: firewallState.enabledProfileCount,
+            ruleCount: firewallState.ruleCount,
+            summary: firewallState.summary,
+          },
+        });
+      }
     }
 
     const alerts = this.recordAlerts(anomalies, timestamp);
@@ -286,6 +362,8 @@ export class HostMonitoringService {
     this.sensitiveFingerprints = sensitiveFingerprints;
     this.knownExternalDestinations = new Set(networkState.externalDestinations);
     this.knownListeningPorts = new Set(networkState.listeningPorts);
+    this.firewallFingerprint = firewallState.fingerprint;
+    this.firewallBackend = firewallState.backend;
     this.baselineReady = true;
     this.lastUpdatedAt = timestamp;
     this.lastSnapshot = snapshot;
@@ -509,6 +587,68 @@ export class HostMonitoringService {
     };
   }
 
+  private async collectFirewallState(): Promise<HostFirewallState> {
+    if (this.platform === 'win32') {
+      return this.collectWindowsFirewallState();
+    }
+    if (this.platform === 'linux') {
+      return this.collectLinuxFirewallState();
+    }
+    if (this.platform === 'darwin') {
+      return this.collectMacFirewallState();
+    }
+    return unavailableFirewallState('unsupported', 'Firewall monitoring is not supported on this platform.');
+  }
+
+  private async collectWindowsFirewallState(): Promise<HostFirewallState> {
+    try {
+      const [stateOut, rulesOut] = await Promise.all([
+        this.runner('netsh', ['advfirewall', 'show', 'allprofiles', 'state'], 15_000),
+        this.runner('netsh', ['advfirewall', 'firewall', 'show', 'rule', 'name=all'], 20_000),
+      ]);
+      const state = parseWindowsFirewallState(stateOut, rulesOut);
+      return {
+        ...state,
+        available: true,
+      };
+    } catch {
+      return unavailableFirewallState('windows-advfirewall', 'Windows Defender Firewall state could not be collected.');
+    }
+  }
+
+  private async collectLinuxFirewallState(): Promise<HostFirewallState> {
+    try {
+      const stdout = await this.runner('ufw', ['status', 'verbose'], 12_000);
+      return parseUfwState(stdout);
+    } catch {
+      // continue
+    }
+    try {
+      const stdout = await this.runner('nft', ['list', 'ruleset'], 12_000);
+      return parseNftState(stdout);
+    } catch {
+      // continue
+    }
+    try {
+      const stdout = await this.runner('iptables-save', [], 12_000);
+      return parseIptablesState(stdout);
+    } catch {
+      return unavailableFirewallState('linux-firewall', 'Linux firewall state could not be collected.');
+    }
+  }
+
+  private async collectMacFirewallState(): Promise<HostFirewallState> {
+    try {
+      const [infoOut, rulesOut] = await Promise.all([
+        this.runner('pfctl', ['-s', 'info'], 12_000),
+        this.runner('pfctl', ['-sr'], 12_000),
+      ]);
+      return parsePfState(infoOut, rulesOut);
+    } catch {
+      return unavailableFirewallState('pf', 'macOS packet filter state could not be collected.');
+    }
+  }
+
   private isSuspiciousProcess(name: string): boolean {
     const normalized = name.trim().toLowerCase();
     return this.config.suspiciousProcessNames.some((candidate) => candidate.trim().toLowerCase() === normalized);
@@ -523,7 +663,7 @@ export class HostMonitoringService {
 }
 
 async function defaultRunner(command: string, args: string[], timeoutMs = 10_000): Promise<string> {
-  const { stdout } = await execFile(command, args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 });
+  const { stdout } = await execFile(command, args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 });
   return stdout;
 }
 
@@ -643,10 +783,141 @@ function uniqueSorted(values: string[]): string[] {
   return [...new Set(values)].sort();
 }
 
+function hashText(input: string): string {
+  return createHash('sha256').update(input).digest('hex');
+}
+
+function unavailableFirewallState(backend: string, summary: string): HostFirewallState {
+  return {
+    backend,
+    available: false,
+    enabled: null,
+    enabledProfileCount: 0,
+    profileCount: 0,
+    ruleCount: 0,
+    fingerprint: '',
+    summary,
+  };
+}
+
+function parseWindowsFirewallState(stateOut: string, rulesOut: string): HostFirewallState {
+  const profiles: Array<{ name: string; enabled: boolean }> = [];
+  let currentProfile: string | null = null;
+  for (const raw of stateOut.split('\n')) {
+    const line = raw.trim();
+    const profileMatch = line.match(/^(Domain|Private|Public)\s+Profile/i);
+    if (profileMatch) {
+      currentProfile = profileMatch[1].toLowerCase();
+      continue;
+    }
+    const stateMatch = line.match(/^State\s+(ON|OFF)$/i);
+    if (currentProfile && stateMatch) {
+      profiles.push({ name: currentProfile, enabled: stateMatch[1].toUpperCase() === 'ON' });
+      currentProfile = null;
+    }
+  }
+  const enabledProfileCount = profiles.filter((profile) => profile.enabled).length;
+  const ruleCount = (rulesOut.match(/^Rule Name:/gm) ?? []).length;
+  return {
+    backend: 'windows-advfirewall',
+    available: true,
+    enabled: profiles.length > 0 ? enabledProfileCount === profiles.length : null,
+    enabledProfileCount,
+    profileCount: profiles.length,
+    ruleCount,
+    fingerprint: hashText(`${stateOut}\n---\n${rulesOut}`),
+    summary: profiles.length > 0
+      ? `Profiles enabled ${enabledProfileCount}/${profiles.length}; rules ${ruleCount}`
+      : `Firewall rules ${ruleCount}`,
+  };
+}
+
+function parseUfwState(stdout: string): HostFirewallState {
+  const enabled = /^Status:\s+active/im.test(stdout);
+  const disabled = /^Status:\s+inactive/im.test(stdout);
+  const ruleLines = stdout.split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !/^Status:/i.test(line) && !/^To\s+/i.test(line) && !/^--/i.test(line));
+  return {
+    backend: 'ufw',
+    available: true,
+    enabled: disabled ? false : enabled,
+    enabledProfileCount: enabled ? 1 : 0,
+    profileCount: 1,
+    ruleCount: ruleLines.length,
+    fingerprint: hashText(stdout),
+    summary: `UFW ${enabled ? 'active' : disabled ? 'inactive' : 'unknown'}; rules ${ruleLines.length}`,
+  };
+}
+
+function parseNftState(stdout: string): HostFirewallState {
+  const normalized = stdout.trim();
+  const ruleCount = normalized ? normalized.split('\n').filter((line) => /\b(chain|rule|table)\b/.test(line)).length : 0;
+  return {
+    backend: 'nftables',
+    available: true,
+    enabled: null,
+    enabledProfileCount: 0,
+    profileCount: 0,
+    ruleCount,
+    fingerprint: hashText(stdout),
+    summary: `nftables ruleset collected; rules ${ruleCount}`,
+  };
+}
+
+function parseIptablesState(stdout: string): HostFirewallState {
+  const normalized = stdout.trim();
+  const ruleCount = normalized ? normalized.split('\n').filter((line) => line.startsWith('-A ')).length : 0;
+  return {
+    backend: 'iptables',
+    available: true,
+    enabled: null,
+    enabledProfileCount: 0,
+    profileCount: 0,
+    ruleCount,
+    fingerprint: hashText(stdout),
+    summary: `iptables ruleset collected; rules ${ruleCount}`,
+  };
+}
+
+function parsePfState(infoOut: string, rulesOut: string): HostFirewallState {
+  const statusMatch = infoOut.match(/^Status:\s+(Enabled|Disabled)/im);
+  const enabled = statusMatch ? statusMatch[1].toLowerCase() === 'enabled' : null;
+  const ruleCount = rulesOut.split('\n').map((line) => line.trim()).filter(Boolean).length;
+  return {
+    backend: 'pf',
+    available: true,
+    enabled,
+    enabledProfileCount: enabled ? 1 : 0,
+    profileCount: enabled === null ? 0 : 1,
+    ruleCount,
+    fingerprint: hashText(`${infoOut}\n---\n${rulesOut}`),
+    summary: `pf ${enabled === true ? 'enabled' : enabled === false ? 'disabled' : 'unknown'}; rules ${ruleCount}`,
+  };
+}
+
 function persistenceSeverity(entry: string, platform: NodeJS.Platform): HostMonitorSeverity {
   if (platform === 'win32' && (entry.startsWith('schtasks:') || entry.includes('\\Run'))) return 'critical';
   if (entry.includes('LaunchDaemon') || entry.includes('systemd-system')) return 'high';
   return 'high';
+}
+
+function firewallDisabledSeverity(platform: NodeJS.Platform, state: HostFirewallState): HostMonitorSeverity {
+  if (platform === 'win32') {
+    return state.enabledProfileCount === 0 ? 'critical' : 'high';
+  }
+  return 'high';
+}
+
+function firewallChangeSeverity(
+  platform: NodeJS.Platform,
+  state: HostFirewallState,
+  previousBackend: string,
+): HostMonitorSeverity {
+  if (platform === 'win32' && previousBackend === state.backend) {
+    return 'high';
+  }
+  return 'medium';
 }
 
 function sensitivePathSeverity(pathKey: string): HostMonitorSeverity {

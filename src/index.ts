@@ -2320,6 +2320,7 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
         monitorPersistence: config.assistant.hostMonitoring.monitorPersistence,
         monitorSensitivePaths: config.assistant.hostMonitoring.monitorSensitivePaths,
         monitorNetwork: config.assistant.hostMonitoring.monitorNetwork,
+        monitorFirewall: config.assistant.hostMonitoring.monitorFirewall,
         sensitivePathCount: config.assistant.hostMonitoring.sensitivePaths.length,
         suspiciousProcessCount: config.assistant.hostMonitoring.suspiciousProcessNames.length,
       },
