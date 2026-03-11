@@ -480,9 +480,11 @@ Unified `LLMProvider` interface for **Ollama**, **Anthropic**, and **OpenAI**:
 - **Telegram**: grammy framework, polling mode, `allowed_chat_ids` filtering
 - **Web**: Node.js HTTP server with REST API (`/health`, `/api/status`, `/api/message`, `/api/message/stream`, `/api/auth/session`, `/api/factory-reset`)
 - **Web Auth**: `channels.web.auth.mode` is enforced as `bearer_required`; browser clients can use HttpOnly `guardianagent_sid` session cookies after bearer authentication
+- **Live Dashboard Invalidation**: mutating web/API operations emit SSE `ui.invalidate` events so the active dashboard page refreshes in place without a manual browser reload
 - **Assistant State**: web Dashboard (assistant state section) and CLI `/assistant` orchestration queue/latency visibility, priority queue stats, request-step traces, job tracking, and policy-decision telemetry
 - **Configuration Center**: web `#/config` (Providers/Tools/Policy/Settings tabs) + CLI `/config` onboarding/provider/channel configuration flow (no setup wizard)
 - **Tools Control Plane**: web Configuration > Tools tab + CLI `/tools` for tool execution, manual approvals, policy mode, and sandbox boundaries
 - **Connector Studio (Option 2)**: web Network > Connectors tab + configurable connector packs + playbook controls via `assistant.connectors` (runtime-ready policy layer)
-- **Automations**: web `#/automations` page — unified automation catalog merging playbooks + scheduled tasks, with single-tool and pipeline creation, optional cron scheduling, examples, clone, run history, and engine settings. The assistant can also create automations conversationally via `workflow_upsert` and `task_create` tools
+- **Automations**: web `#/automations` page — unified automation catalog merging playbooks + scheduled tasks, with single-tool and pipeline creation, optional cron scheduling, examples, clone, run history, per-step output inspection, and engine settings. The assistant can also create automations conversationally via `workflow_upsert` and `task_create` tools
+- **Network History**: web `#/network` includes recent network run history plus inline output views for quick scans and threat checks, so scheduled and manual network actions are inspectable beyond the device inventory snapshot
 - **Threat Intel**: web Security > Threat Intel tab, CLI `/intel`, Telegram `/intel` command surfaces

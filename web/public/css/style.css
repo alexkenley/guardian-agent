@@ -1386,6 +1386,18 @@ tr:hover td {
   /* display toggled by JS */
 }
 
+.network-tool-picker {
+  gap: 0.75rem;
+}
+
+.network-tool-picker-meta {
+  margin-top: 0.85rem;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+
 /* ─── Policy Editor Chips ────────────────────────────────── */
 
 /* ─── Policy Tab ─────────────────────────────────────────── */

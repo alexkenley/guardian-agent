@@ -40,9 +40,40 @@ const NETWORK_TOOL_DEFAULTS = {
   net_threat_summary: { limit: 25 },
 };
 
+const NETWORK_TOOL_GROUPS = [
+  {
+    id: 'discovery',
+    label: 'Discovery',
+    tools: ['net_interfaces', 'net_arp_scan', 'net_wifi_scan', 'net_wifi_clients'],
+  },
+  {
+    id: 'diagnostics',
+    label: 'Diagnostics',
+    tools: ['net_ping', 'net_port_check', 'net_dns_lookup', 'net_traceroute'],
+  },
+  {
+    id: 'identity',
+    label: 'Identity & Fingerprinting',
+    tools: ['net_oui_lookup', 'net_classify', 'net_banner_grab', 'net_fingerprint'],
+  },
+  {
+    id: 'traffic',
+    label: 'Traffic & Threat',
+    tools: [
+      'net_connections',
+      'net_connection_profiles',
+      'net_baseline',
+      'net_anomaly_check',
+      'net_traffic_baseline',
+      'net_threat_check',
+      'net_threat_summary',
+    ],
+  },
+];
+
 let currentPanel = null;
 
-export async function renderNetwork(container) {
+export async function renderNetwork(container, options = {}) {
   currentPanel = container;
   container.innerHTML = '<h2 class="page-title">Network</h2>';
 
@@ -50,8 +81,15 @@ export async function renderNetwork(container) {
     { id: 'overview', label: 'Overview', render: renderOverviewTab },
     { id: 'devices', label: 'Devices', render: renderDevicesTab },
     { id: 'threats', label: 'Threats', render: renderThreatsTab },
+    { id: 'history', label: 'History', render: renderHistoryTab },
     { id: 'tools', label: 'Tools', render: renderToolsTab },
-  ]);
+  ], options?.tab);
+}
+
+export async function updateNetwork() {
+  if (!currentPanel) return;
+  const activeTab = currentPanel.dataset.activeTab;
+  await renderNetwork(currentPanel, activeTab ? { tab: activeTab } : {});
 }
 
 async function renderOverviewTab(panel) {
@@ -118,6 +156,7 @@ async function renderOverviewTab(panel) {
             <button class="btn btn-secondary" id="network-overview-baseline">Refresh Baseline</button>
           </div>
           <div id="network-overview-status" class="cfg-save-status" style="margin-top:0.75rem;"></div>
+          <pre id="network-overview-output" class="network-tool-result" style="margin-top:0.75rem;">Run an action to see output here.</pre>
         </div>
       </div>
 
@@ -191,6 +230,7 @@ async function renderDevicesTab(panel) {
           </div>
         </div>
         <div id="network-device-status" style="padding:0 1rem"></div>
+        <div style="padding:0 1rem 1rem"><pre id="network-device-output" class="network-tool-result">Run a scan to inspect discovery output here.</pre></div>
         <table>
           <thead>
             <tr><th>Status</th><th>IP Address</th><th>MAC Address</th><th>Hostname</th><th>Vendor</th><th>Type</th><th>Trust</th><th>Open Ports</th><th>First Seen</th><th>Last Seen</th></tr>
@@ -227,6 +267,10 @@ async function renderDevicesTab(panel) {
       try {
         const result = await api.networkScan();
         status.innerHTML = `<div style="color:${result.success ? 'var(--success)' : 'var(--error)'};padding:0.5rem">${esc(result.message)} (${result.devicesFound || 0} devices found)</div>`;
+        const output = panel.querySelector('#network-device-output');
+        if (output && result.run?.steps) {
+          output.textContent = JSON.stringify(result.run.steps, null, 2);
+        }
         setTimeout(() => renderDevicesTab(panel), 1500);
       } catch (err) {
         status.innerHTML = `<div style="color:var(--error);padding:0.5rem">${esc(err instanceof Error ? err.message : String(err))}</div>`;
@@ -296,6 +340,7 @@ async function renderThreatsTab(panel) {
           </div>
         </div>
         <div id="network-threat-status" style="padding:0 1rem"></div>
+        <div style="padding:0 1rem 1rem"><pre id="network-threat-output" class="network-tool-result">Run a threat action to inspect output here.</pre></div>
       </div>
 
       <div class="table-container">
@@ -355,6 +400,114 @@ async function renderThreatsTab(panel) {
   }
 }
 
+async function renderHistoryTab(panel) {
+  panel.innerHTML = '<div class="loading">Loading...</div>';
+
+  try {
+    const [connState, taskHistory] = await Promise.all([
+      api.connectorsState(40).catch(() => ({ runs: [] })),
+      api.scheduledTaskHistory().catch(() => []),
+    ]);
+
+    const runs = [];
+
+    for (const run of (connState.runs || [])) {
+      if (!isNetworkPlaybookRun(run)) continue;
+      runs.push({
+        id: run.id || `playbook-${run.playbookId}-${run.startedAt || run.completedAt || 0}`,
+        time: run.startedAt || run.completedAt || run.createdAt || 0,
+        name: run.playbookName || run.playbookId || 'Network Playbook',
+        source: 'playbook',
+        status: run.status || 'unknown',
+        durationMs: run.durationMs || 0,
+        message: run.message || '',
+        steps: run.steps || [],
+      });
+    }
+
+    for (const item of (taskHistory || [])) {
+      if (!isNetworkTaskRun(item)) continue;
+      runs.push({
+        id: item.id || `task-${item.taskId}-${item.timestamp || 0}`,
+        time: item.timestamp || 0,
+        name: item.taskName || item.target || 'Scheduled Run',
+        source: item.taskType === 'playbook' ? 'scheduled playbook' : 'scheduled tool',
+        status: item.status || 'unknown',
+        durationMs: item.durationMs || 0,
+        message: item.message || '',
+        steps: item.steps || [],
+      });
+    }
+
+    runs.sort((a, b) => b.time - a.time);
+
+    panel.innerHTML = `
+      <div class="table-container">
+        <div class="table-header">
+          <h3>Recent Network Runs</h3>
+          <button class="btn btn-secondary" id="network-history-refresh">Refresh</button>
+        </div>
+        <table>
+          <thead><tr><th>Time</th><th>Name</th><th>Source</th><th>Status</th><th>Duration</th><th>Output</th></tr></thead>
+          <tbody>
+            ${runs.length === 0
+              ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No network runs recorded yet.</td></tr>'
+              : runs.slice(0, 30).map((run) => `
+                <tr>
+                  <td>${formatTime(run.time)}</td>
+                  <td>${esc(run.name)}</td>
+                  <td>${esc(run.source)}</td>
+                  <td><span class="badge ${severityClass(run.status === 'succeeded' ? 'low' : run.status === 'failed' ? 'high' : 'medium')}">${esc(run.status)}</span></td>
+                  <td>${run.durationMs}ms</td>
+                  <td>
+                    ${run.steps.length > 0
+                      ? `<button class="btn btn-secondary btn-sm network-run-toggle" data-run-id="${escAttr(run.id)}">Show</button>`
+                      : `<span style="color:var(--text-muted)">${esc(run.message || '-')}</span>`
+                    }
+                  </td>
+                </tr>
+                ${run.steps.length > 0 ? `
+                <tr id="network-run-detail-${escAttr(run.id)}" style="display:none">
+                  <td colspan="6" style="padding:0.75rem 1rem;background:var(--bg-secondary)">
+                    ${renderRunSteps(run.steps)}
+                  </td>
+                </tr>
+                ` : ''}
+              `).join('')
+            }
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    panel.querySelector('#network-history-refresh')?.addEventListener('click', () => renderHistoryTab(panel));
+    panel.querySelectorAll('.network-run-toggle').forEach((button) => {
+      button.addEventListener('click', () => {
+        const runId = button.getAttribute('data-run-id');
+        const detail = panel.querySelector(`#network-run-detail-${cssEscape(runId || '')}`);
+        if (!detail) return;
+        const visible = detail.style.display !== 'none';
+        detail.style.display = visible ? 'none' : '';
+        button.textContent = visible ? 'Show' : 'Hide';
+      });
+    });
+    panel.querySelectorAll('.auto-step-output-toggle').forEach((button) => {
+      button.addEventListener('click', () => {
+        const outputId = button.getAttribute('data-output-id');
+        const output = panel.querySelector(`#${cssEscape(outputId || '')}`);
+        if (!output) return;
+        const visible = output.style.display !== 'none';
+        output.style.display = visible ? 'none' : '';
+        button.textContent = visible ? 'Output' : 'Hide';
+      });
+    });
+
+    applyInputTooltips(panel);
+  } catch (err) {
+    panel.innerHTML = `<div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
+  }
+}
+
 async function renderToolsTab(panel) {
   panel.innerHTML = '<div class="loading">Loading...</div>';
 
@@ -390,14 +543,78 @@ async function renderToolsTab(panel) {
       return;
     }
 
-    const toolTabsRoot = document.createElement('div');
-    panel.appendChild(toolTabsRoot);
+    const groupedTools = buildNetworkToolGroups(networkTools);
+    const initialGroupId = panel.dataset.networkToolGroup && groupedTools.some((group) => group.id === panel.dataset.networkToolGroup)
+      ? panel.dataset.networkToolGroup
+      : groupedTools[0]?.id;
+    const initialGroup = groupedTools.find((group) => group.id === initialGroupId) || groupedTools[0];
+    const initialToolName = panel.dataset.networkToolName && initialGroup.tools.some((tool) => tool.name === panel.dataset.networkToolName)
+      ? panel.dataset.networkToolName
+      : initialGroup.tools[0]?.name;
 
-    createTabs(toolTabsRoot, networkTools.map((tool) => ({
-      id: tool.name,
-      label: networkToolLabel(tool.name),
-      render: (toolPanel) => renderNetworkToolPanel(toolPanel, tool),
-    })));
+    panel.insertAdjacentHTML('beforeend', `
+      <div class="table-container">
+        <div class="table-header">
+          <h3>Tool Selector</h3>
+          <span class="cfg-header-note">Choose a category, then pick a tool</span>
+        </div>
+        <div class="cfg-center-body network-tool-picker">
+          <div class="cfg-form-grid">
+            <div class="cfg-field">
+              <label>Category</label>
+              <select id="network-tool-group-select">
+                ${groupedTools.map((group) => `<option value="${escAttr(group.id)}"${group.id === initialGroup.id ? ' selected' : ''}>${esc(group.label)} (${group.tools.length})</option>`).join('')}
+              </select>
+            </div>
+            <div class="cfg-field">
+              <label>Tool</label>
+              <select id="network-tool-select"></select>
+            </div>
+          </div>
+          <div class="network-tool-picker-meta" id="network-tool-picker-meta"></div>
+        </div>
+      </div>
+    `);
+
+    const toolPanel = document.createElement('div');
+    panel.appendChild(toolPanel);
+
+    const groupSelect = panel.querySelector('#network-tool-group-select');
+    const toolSelect = panel.querySelector('#network-tool-select');
+    const pickerMeta = panel.querySelector('#network-tool-picker-meta');
+
+    function renderSelectedTool(groupId, toolName) {
+      const group = groupedTools.find((entry) => entry.id === groupId) || groupedTools[0];
+      if (!group) return;
+      const tool = group.tools.find((entry) => entry.name === toolName) || group.tools[0];
+      if (!tool) return;
+      panel.dataset.networkToolGroup = group.id;
+      panel.dataset.networkToolName = tool.name;
+      pickerMeta.textContent = `${group.label}: ${tool.description || networkToolLabel(tool.name)}`;
+      renderNetworkToolPanel(toolPanel, tool);
+    }
+
+    function syncToolOptions(groupId, preferredToolName) {
+      const group = groupedTools.find((entry) => entry.id === groupId) || groupedTools[0];
+      if (!group) return;
+      toolSelect.innerHTML = group.tools
+        .map((tool) => `<option value="${escAttr(tool.name)}">${esc(networkToolLabel(tool.name))}</option>`)
+        .join('');
+      const selectedTool = group.tools.some((tool) => tool.name === preferredToolName)
+        ? preferredToolName
+        : group.tools[0]?.name;
+      toolSelect.value = selectedTool || '';
+      renderSelectedTool(group.id, selectedTool);
+    }
+
+    groupSelect?.addEventListener('change', () => {
+      syncToolOptions(groupSelect.value, null);
+    });
+    toolSelect?.addEventListener('change', () => {
+      renderSelectedTool(groupSelect.value, toolSelect.value);
+    });
+
+    syncToolOptions(initialGroup.id, initialToolName);
   } catch (err) {
     panel.innerHTML = `<div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
   }
@@ -589,28 +806,100 @@ function collectToolArgs(panel, properties, required) {
 
 async function runOverviewAction(panel, config) {
   const status = panel.querySelector('#network-overview-status');
+  const output = panel.querySelector('#network-overview-output');
   status.textContent = config.pending;
   status.style.color = 'var(--text-muted)';
+  if (output) output.textContent = 'Running...';
   try {
     const result = await api.runTool({ toolName: config.toolName, args: config.args, origin: 'web' });
     status.textContent = result.message || config.success;
     status.style.color = result.success ? 'var(--success)' : 'var(--error)';
+    if (output) {
+      output.textContent = JSON.stringify(result.output ?? result, null, 2);
+    }
   } catch (err) {
     status.textContent = err instanceof Error ? err.message : String(err);
     status.style.color = 'var(--error)';
+    if (output) {
+      output.textContent = err instanceof Error ? err.message : String(err);
+    }
   }
 }
 
 async function runThreatAction(panel, config) {
   const status = panel.querySelector('#network-threat-status');
+  const output = panel.querySelector('#network-threat-output');
   status.innerHTML = `<div style="color:var(--text-muted);padding:0.5rem">${esc(config.pending)}</div>`;
+  if (output) output.textContent = 'Running...';
   try {
     const result = await api.runTool({ toolName: config.toolName, args: config.args, origin: 'web' });
     status.innerHTML = `<div style="color:${result.success ? 'var(--success)' : 'var(--error)'};padding:0.5rem">${esc(result.message || config.success)}</div>`;
+    if (output) {
+      output.textContent = JSON.stringify(result.output ?? result, null, 2);
+    }
     setTimeout(() => renderThreatsTab(panel), 1200);
   } catch (err) {
     status.innerHTML = `<div style="color:var(--error);padding:0.5rem">${esc(err instanceof Error ? err.message : String(err))}</div>`;
+    if (output) {
+      output.textContent = err instanceof Error ? err.message : String(err);
+    }
   }
+}
+
+function renderRunSteps(steps) {
+  if (!steps || steps.length === 0) {
+    return '<div style="color:var(--text-muted)">No output recorded.</div>';
+  }
+
+  return steps.map((step, index) => {
+    const outputId = `network-run-output-${index}-${Math.random().toString(36).slice(2, 8)}`;
+    const hasOutput = step.output != null && step.output !== '';
+    return `
+      <div style="padding:0.45rem 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;gap:0.5rem;align-items:center">
+          <strong>${esc(step.toolName || 'step')}</strong>
+          <span style="color:var(--text-muted)">${esc(step.message || '')}</span>
+          <span style="margin-left:auto;color:var(--text-muted)">${Number(step.durationMs || 0)}ms</span>
+          ${hasOutput ? `<button class="btn btn-secondary btn-sm auto-step-output-toggle" data-output-id="${outputId}">Output</button>` : ''}
+        </div>
+        ${hasOutput ? `<div id="${outputId}" style="display:none;padding-top:0.5rem"><pre class="network-tool-result">${esc(typeof step.output === 'string' ? step.output : JSON.stringify(step.output, null, 2))}</pre></div>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+function buildNetworkToolGroups(networkTools) {
+  const toolMap = new Map(networkTools.map((tool) => [tool.name, tool]));
+  const grouped = NETWORK_TOOL_GROUPS
+    .map((group) => ({
+      id: group.id,
+      label: group.label,
+      tools: group.tools.map((toolName) => toolMap.get(toolName)).filter(Boolean),
+    }))
+    .filter((group) => group.tools.length > 0);
+
+  const groupedNames = new Set(grouped.flatMap((group) => group.tools.map((tool) => tool.name)));
+  const remaining = networkTools.filter((tool) => !groupedNames.has(tool.name));
+  if (remaining.length > 0) {
+    grouped.push({
+      id: 'other',
+      label: 'Other',
+      tools: remaining,
+    });
+  }
+
+  return grouped;
+}
+
+function isNetworkPlaybookRun(run) {
+  return (run.steps || []).some((step) => typeof step.toolName === 'string' && step.toolName.startsWith('net_'));
+}
+
+function isNetworkTaskRun(entry) {
+  if (typeof entry?.target === 'string' && entry.target.startsWith('net_')) {
+    return true;
+  }
+  return (entry?.steps || []).some((step) => typeof step.toolName === 'string' && step.toolName.startsWith('net_'));
 }
 
 function networkToolLabel(toolName) {

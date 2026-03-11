@@ -34,7 +34,15 @@ function createMockPlaybookExecutor() {
       success: true,
       status: 'succeeded',
       message: 'Playbook ran',
-      run: { steps: [{ toolName: 'net_arp_scan', output: { devices: [] } }] },
+      run: {
+        steps: [{
+          toolName: 'net_arp_scan',
+          status: 'succeeded',
+          message: 'Step succeeded',
+          durationMs: 42,
+          output: { devices: [] },
+        }],
+      },
     }),
   };
 }
@@ -348,8 +356,32 @@ describe('ScheduledTaskService', () => {
       await service.runNow(task!.id);
       const history = service.getHistory();
       expect(history).toHaveLength(1);
+      expect(history[0].id).toBeTruthy();
       expect(history[0].taskId).toBe(task!.id);
+      expect(history[0].taskType).toBe('tool');
+      expect(history[0].target).toBe('net_arp_scan');
       expect(history[0].status).toBe('succeeded');
+      expect(history[0].steps).toEqual([
+        expect.objectContaining({
+          toolName: 'net_arp_scan',
+          status: 'succeeded',
+          output: { result: 'ok' },
+        }),
+      ]);
+    });
+
+    it('should keep playbook step output in history', async () => {
+      const { task } = service.create({ ...validInput, type: 'playbook', target: 'home-network' });
+      await service.runNow(task!.id);
+      const history = service.getHistory();
+      expect(history[0].taskType).toBe('playbook');
+      expect(history[0].steps).toEqual([
+        expect.objectContaining({
+          toolName: 'net_arp_scan',
+          status: 'succeeded',
+          output: { devices: [] },
+        }),
+      ]);
     });
   });
 

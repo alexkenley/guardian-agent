@@ -36,6 +36,7 @@ export function createTabs(container, tabs, defaultTab) {
   }
 
   function switchTo(tabId) {
+    container.dataset.activeTab = tabId;
     for (const t of tabs) {
       const isActive = t.id === tabId;
       buttons[t.id].classList.toggle('active', isActive);

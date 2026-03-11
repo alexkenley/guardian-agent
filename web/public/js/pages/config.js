@@ -8,12 +8,14 @@ import { applyInputTooltips } from '../tooltip.js';
 import { themes, getSavedTheme, applyTheme } from '../theme.js';
 
 // Shared state loaded once and passed to tabs
+let currentContainer = null;
 let sharedConfig = null;
 let sharedProviders = null;
 let sharedSetupStatus = null;
 let sharedAuthStatus = null;
 
 export async function renderConfig(container, options = {}) {
+  currentContainer = container;
   container.innerHTML = '<h2 class="page-title">Configuration</h2><div class="loading">Loading...</div>';
 
   try {
@@ -38,6 +40,12 @@ export async function renderConfig(container, options = {}) {
     const message = err instanceof Error ? err.message : String(err);
     container.innerHTML = `<h2 class="page-title">Configuration</h2><div class="loading">Error: ${esc(message)}</div>`;
   }
+}
+
+export async function updateConfig() {
+  if (!currentContainer) return;
+  const activeTab = currentContainer.dataset.activeTab;
+  await renderConfig(currentContainer, activeTab ? { tab: activeTab } : {});
 }
 
 // ─── Providers Tab ───────────────────────────────────────

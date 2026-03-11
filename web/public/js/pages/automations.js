@@ -632,11 +632,12 @@ function renderRunHistory(playbookRuns, taskHistory) {
     merged.push({
       time: item.timestamp || 0,
       name: item.taskName || '',
-      source: 'scheduled',
+      source: item.taskType === 'playbook' ? 'scheduled playbook' : 'scheduled',
       status: item.status || '',
       duration: item.durationMs || 0,
       message: item.message || '',
-      id: null,
+      steps: item.steps || [],
+      id: item.id || `${item.taskId || 'task'}-${item.timestamp || 0}`,
     });
   }
 

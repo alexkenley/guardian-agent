@@ -13,6 +13,7 @@ let auditHandler = null;
 let monAuditHandler = null;
 let monMetricsHandler = null;
 let monSecurityAlertHandler = null;
+let currentContainer = null;
 
 function cleanupSSE() {
   if (auditHandler) { offSSE('audit', auditHandler); auditHandler = null; }
@@ -21,7 +22,8 @@ function cleanupSSE() {
   if (monSecurityAlertHandler) { offSSE('security.alert', monSecurityAlertHandler); monSecurityAlertHandler = null; }
 }
 
-export async function renderSecurity(container) {
+export async function renderSecurity(container, options = {}) {
+  currentContainer = container;
   cleanupSSE();
   container.innerHTML = '<h2 class="page-title">Security</h2>';
 
@@ -29,11 +31,13 @@ export async function renderSecurity(container) {
     { id: 'audit', label: 'Audit', render: renderAuditTab },
     { id: 'monitoring', label: 'Monitoring', render: renderMonitoringTab },
     { id: 'intel', label: 'Threat Intel', render: renderIntelTab },
-  ]);
+  ], options?.tab);
 }
 
-export function updateSecurity() {
-  // SSE handlers manage live updates
+export async function updateSecurity() {
+  if (!currentContainer) return;
+  const activeTab = currentContainer.dataset.activeTab;
+  await renderSecurity(currentContainer, activeTab ? { tab: activeTab } : {});
 }
 
 // ─── Audit Tab ────────────────────────────────────────────

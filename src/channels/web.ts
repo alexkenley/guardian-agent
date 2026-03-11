@@ -16,7 +16,7 @@ import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { join, normalize, extname } from 'node:path';
 import { readFile, stat } from 'node:fs/promises';
 import type { ChannelAdapter, MessageCallback } from './types.js';
-import type { DashboardCallbacks, SSEListener } from './web-types.js';
+import type { DashboardCallbacks, SSEEvent, SSEListener, UIInvalidationEvent } from './web-types.js';
 import type { AuditEventType, AuditSeverity } from '../guardian/audit-log.js';
 import { createLogger } from '../util/logging.js';
 import { timingSafeEqualString } from '../util/crypto-guardrails.js';
@@ -230,6 +230,39 @@ export class WebChannel implements ChannelAdapter {
   async send(_userId: string, _text: string): Promise<void> {
     // Web channel is request/response — no push capability without WebSocket
     log.warn('WebChannel.send() called but push is not supported without WebSocket');
+  }
+
+  private emitSSE(event: SSEEvent): void {
+    if (this.sseClients.size === 0) {
+      return;
+    }
+    const payload = `event: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`;
+    for (const client of this.sseClients) {
+      if (!client.destroyed) {
+        client.write(payload);
+      }
+    }
+  }
+
+  private emitUIInvalidation(topics: string[], reason: string, path: string): void {
+    const deduped = uniqueTopics(topics);
+    if (deduped.length === 0) {
+      return;
+    }
+    const event: UIInvalidationEvent = {
+      topics: deduped,
+      reason,
+      path,
+      timestamp: Date.now(),
+    };
+    this.emitSSE({ type: 'ui.invalidate', data: event });
+  }
+
+  private maybeEmitUIInvalidation(result: unknown, topics: string[], reason: string, path: string): void {
+    if (!isSuccessfulMutationResult(result)) {
+      return;
+    }
+    this.emitUIInvalidation(topics, reason, path);
   }
 
   /** Check if a request origin is in the allowed list. */
@@ -810,10 +843,12 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'skillId and enabled are required' });
           return;
         }
-        sendJSON(res, 200, this.dashboard.onSkillsUpdate({
+        const result = this.dashboard.onSkillsUpdate({
           skillId: parsed.skillId,
           enabled: parsed.enabled,
-        }));
+        });
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['config', 'skills'], 'skills.updated', url.pathname);
         return;
       }
 
@@ -865,6 +900,7 @@ export class WebChannel implements ChannelAdapter {
           channel: parsed.channel ?? 'web',
         });
         sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, toolInvalidationTopics(parsed.toolName), 'tools.run', url.pathname);
         return;
       }
 
@@ -907,7 +943,9 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'Invalid JSON' });
           return;
         }
-        sendJSON(res, 200, this.dashboard.onToolsPolicyUpdate(parsed));
+        const result = this.dashboard.onToolsPolicyUpdate(parsed);
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['config', 'tools', 'security'], 'tools.policy.updated', url.pathname);
         return;
       }
 
@@ -953,6 +991,7 @@ export class WebChannel implements ChannelAdapter {
           reason: parsed.reason,
         });
         sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['config', 'tools', 'automations'], 'tools.approval.decided', url.pathname);
         return;
       }
 
@@ -991,7 +1030,9 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'Missing category or enabled field' });
           return;
         }
-        sendJSON(res, 200, this.dashboard.onToolsCategoryToggle(parsed as Parameters<NonNullable<typeof this.dashboard.onToolsCategoryToggle>>[0]));
+        const result = this.dashboard.onToolsCategoryToggle(parsed as Parameters<NonNullable<typeof this.dashboard.onToolsCategoryToggle>>[0]);
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['config', 'tools'], 'tools.category.updated', url.pathname);
         return;
       }
 
@@ -1020,10 +1061,12 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'routing object or enabled flag is required' });
           return;
         }
-        sendJSON(res, 200, this.dashboard.onToolsProviderRoutingUpdate({
+        const result = this.dashboard.onToolsProviderRoutingUpdate({
           routing: parsed.routing as Record<string, 'local' | 'external' | 'default'> | undefined,
           enabled: parsed.enabled,
-        }));
+        });
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['config', 'tools'], 'tools.routing.updated', url.pathname);
         return;
       }
 
@@ -1058,7 +1101,9 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'Invalid JSON' });
           return;
         }
-        sendJSON(res, 200, this.dashboard.onBrowserConfigUpdate(parsed));
+        const result = this.dashboard.onBrowserConfigUpdate(parsed);
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['config', 'tools'], 'tools.browser.updated', url.pathname);
         return;
       }
 
@@ -1102,7 +1147,9 @@ export class WebChannel implements ChannelAdapter {
         if (requireTicket && !this.requirePrivilegedTicket(req, res, url, 'connectors.config', parsed.ticket)) {
           return;
         }
-        sendJSON(res, 200, this.dashboard.onConnectorsSettingsUpdate(parsed));
+        const result = this.dashboard.onConnectorsSettingsUpdate(parsed);
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['automations', 'config'], 'connectors.settings.updated', url.pathname);
         return;
       }
 
@@ -1135,7 +1182,9 @@ export class WebChannel implements ChannelAdapter {
         if (requireTicket && !this.requirePrivilegedTicket(req, res, url, 'connectors.pack', parsed.ticket)) {
           return;
         }
-        sendJSON(res, 200, this.dashboard.onConnectorsPackUpsert(parsed));
+        const result = this.dashboard.onConnectorsPackUpsert(parsed);
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['automations', 'config'], 'connectors.pack.upserted', url.pathname);
         return;
       }
 
@@ -1168,7 +1217,9 @@ export class WebChannel implements ChannelAdapter {
         if (requireTicket && !this.requirePrivilegedTicket(req, res, url, 'connectors.pack', parsed.ticket)) {
           return;
         }
-        sendJSON(res, 200, this.dashboard.onConnectorsPackDelete(parsed.packId.trim()));
+        const result = this.dashboard.onConnectorsPackDelete(parsed.packId.trim());
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['automations', 'config'], 'connectors.pack.deleted', url.pathname);
         return;
       }
 
@@ -1201,7 +1252,9 @@ export class WebChannel implements ChannelAdapter {
         if (requireTicket && !this.requirePrivilegedTicket(req, res, url, 'connectors.playbook', parsed.ticket)) {
           return;
         }
-        sendJSON(res, 200, this.dashboard.onPlaybookUpsert(parsed));
+        const result = this.dashboard.onPlaybookUpsert(parsed);
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['automations', 'network'], 'playbook.upserted', url.pathname);
         return;
       }
 
@@ -1234,7 +1287,9 @@ export class WebChannel implements ChannelAdapter {
         if (requireTicket && !this.requirePrivilegedTicket(req, res, url, 'connectors.playbook', parsed.ticket)) {
           return;
         }
-        sendJSON(res, 200, this.dashboard.onPlaybookDelete(parsed.playbookId.trim()));
+        const result = this.dashboard.onPlaybookDelete(parsed.playbookId.trim());
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['automations', 'network'], 'playbook.deleted', url.pathname);
         return;
       }
 
@@ -1263,7 +1318,9 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'playbookId is required' });
           return;
         }
-        sendJSON(res, 200, await this.dashboard.onPlaybookRun(parsed));
+        const result = await this.dashboard.onPlaybookRun(parsed);
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['automations', 'network'], 'playbook.ran', url.pathname);
         return;
       }
 
@@ -1302,7 +1359,9 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'templateId is required' });
           return;
         }
-        sendJSON(res, 200, this.dashboard.onConnectorsTemplateInstall(parsed.templateId.trim()));
+        const result = this.dashboard.onConnectorsTemplateInstall(parsed.templateId.trim());
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['automations', 'network'], 'connectors.template.installed', url.pathname);
         return;
       }
 
@@ -1366,7 +1425,9 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'alertId is required' });
           return;
         }
-        sendJSON(res, 200, this.dashboard.onNetworkThreatAcknowledge(parsed.alertId.trim()));
+        const result = this.dashboard.onNetworkThreatAcknowledge(parsed.alertId.trim());
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['network', 'security'], 'network.threat.acknowledged', url.pathname);
         return;
       }
 
@@ -1376,7 +1437,9 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
-        sendJSON(res, 200, await this.dashboard.onNetworkScan());
+        const result = await this.dashboard.onNetworkScan();
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['network', 'automations', 'security'], 'network.scan.completed', url.pathname);
         return;
       }
 
@@ -1525,6 +1588,7 @@ export class WebChannel implements ChannelAdapter {
         try {
           const result = await this.dashboard.onConfigUpdate(parsed as Record<string, unknown>);
           sendJSON(res, 200, result);
+          this.maybeEmitUIInvalidation(result, ['config', 'providers', 'tools', 'automations', 'network'], 'config.updated', url.pathname);
         } catch (err) {
           logInternalError('Config update failed', err);
           sendJSON(res, 500, { error: 'Update failed' });
@@ -1557,6 +1621,7 @@ export class WebChannel implements ChannelAdapter {
 
         const result = await this.dashboard.onSetupApply(parsed as Parameters<NonNullable<DashboardCallbacks['onSetupApply']>>[0]);
         sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['config', 'providers'], 'setup.applied', url.pathname);
         return;
       }
 
@@ -1586,6 +1651,7 @@ export class WebChannel implements ChannelAdapter {
         try {
           const result = await this.dashboard.onSearchConfigUpdate(parsed as Parameters<NonNullable<DashboardCallbacks['onSearchConfigUpdate']>>[0]);
           sendJSON(res, 200, result);
+          this.maybeEmitUIInvalidation(result, ['config'], 'search.config.updated', url.pathname);
         } catch (err) {
           logInternalError('Search config update failed', err);
           sendJSON(res, 500, { error: 'Update failed' });
@@ -1682,6 +1748,7 @@ export class WebChannel implements ChannelAdapter {
           ? this.dashboard.onThreatIntelWatchAdd(parsed.target)
           : this.dashboard.onThreatIntelWatchRemove(parsed.target);
         sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['security', 'threat-intel'], 'threat-intel.watchlist.updated', url.pathname);
         return;
       }
 
@@ -1718,6 +1785,7 @@ export class WebChannel implements ChannelAdapter {
           sources: parsed.sources as Parameters<NonNullable<DashboardCallbacks['onThreatIntelScan']>>[0]['sources'],
         });
         sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['security', 'threat-intel'], 'threat-intel.scan.completed', url.pathname);
         return;
       }
 
@@ -1773,6 +1841,7 @@ export class WebChannel implements ChannelAdapter {
           status: parsed.status as Parameters<NonNullable<DashboardCallbacks['onThreatIntelUpdateFindingStatus']>>[0]['status'],
         });
         sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['security', 'threat-intel'], 'threat-intel.finding.updated', url.pathname);
         return;
       }
 
@@ -1822,6 +1891,7 @@ export class WebChannel implements ChannelAdapter {
           type: parsed.type as Parameters<NonNullable<DashboardCallbacks['onThreatIntelDraftAction']>>[0]['type'],
         });
         sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['security', 'threat-intel'], 'threat-intel.action.drafted', url.pathname);
         return;
       }
 
@@ -1858,6 +1928,7 @@ export class WebChannel implements ChannelAdapter {
           parsed.mode as Parameters<NonNullable<DashboardCallbacks['onThreatIntelSetResponseMode']>>[0],
         );
         sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['security', 'threat-intel'], 'threat-intel.response-mode.updated', url.pathname);
         return;
       }
 
@@ -1918,6 +1989,7 @@ export class WebChannel implements ChannelAdapter {
         }
         const result = await this.dashboard.onConfigUpdate({ defaultProvider: parsed.name });
         sendJSON(res, result.success ? 200 : 400, result);
+        this.maybeEmitUIInvalidation(result, ['config', 'providers'], 'providers.default.updated', url.pathname);
         return;
       }
 
@@ -1967,7 +2039,9 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: `mode must be one of: ${valid.join(', ')}` });
           return;
         }
-        sendJSON(res, 200, this.dashboard.onRoutingModeUpdate(parsed.mode as 'auto' | 'local-only' | 'external-only'));
+        const result = this.dashboard.onRoutingModeUpdate(parsed.mode as 'auto' | 'local-only' | 'external-only');
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['config', 'dashboard'], 'routing.mode.updated', url.pathname);
         return;
       }
 
@@ -2120,6 +2194,7 @@ export class WebChannel implements ChannelAdapter {
             channel: parsed.channel ?? 'web',
           });
           sendJSON(res, 200, result);
+          this.maybeEmitUIInvalidation(result, ['dashboard'], 'conversation.reset', url.pathname);
         } catch (err) {
           logInternalError('Conversation reset failed', err);
           sendJSON(res, 500, { error: 'Reset failed' });
@@ -2179,6 +2254,7 @@ export class WebChannel implements ChannelAdapter {
           sessionId: parsed.sessionId,
         });
         sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['dashboard'], 'conversation.session.selected', url.pathname);
         return;
       }
 
@@ -2291,7 +2367,9 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'presetId is required' });
           return;
         }
-        sendJSON(res, 200, this.dashboard.onScheduledTaskInstallPreset(parsed.presetId.trim()));
+        const result = this.dashboard.onScheduledTaskInstallPreset(parsed.presetId.trim());
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['automations', 'network'], 'scheduled-task.preset.installed', url.pathname);
         return;
       }
 
@@ -2307,7 +2385,9 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'Task ID required' });
           return;
         }
-        sendJSON(res, 200, await this.dashboard.onScheduledTaskRunNow(id));
+        const result = await this.dashboard.onScheduledTaskRunNow(id);
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['automations', 'network', 'security'], 'scheduled-task.ran', url.pathname);
         return;
       }
 
@@ -2332,9 +2412,11 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'Invalid JSON' });
           return;
         }
-        sendJSON(res, 200, this.dashboard.onScheduledTaskCreate(
+        const result = this.dashboard.onScheduledTaskCreate(
           parsed as unknown as Parameters<NonNullable<typeof this.dashboard.onScheduledTaskCreate>>[0],
-        ));
+        );
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['automations', 'network'], 'scheduled-task.created', url.pathname);
         return;
       }
 
@@ -2364,10 +2446,12 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'Invalid JSON' });
           return;
         }
-        sendJSON(res, 200, this.dashboard.onScheduledTaskUpdate(
+        const result = this.dashboard.onScheduledTaskUpdate(
           id,
           parsed as Parameters<NonNullable<typeof this.dashboard.onScheduledTaskUpdate>>[1],
-        ));
+        );
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['automations', 'network'], 'scheduled-task.updated', url.pathname);
         return;
       }
 
@@ -2382,7 +2466,9 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'Task ID required' });
           return;
         }
-        sendJSON(res, 200, this.dashboard.onScheduledTaskDelete(id));
+        const result = this.dashboard.onScheduledTaskDelete(id);
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['automations', 'network'], 'scheduled-task.deleted', url.pathname);
         return;
       }
 
@@ -2453,9 +2539,11 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'id, name, path, and type are required' });
           return;
         }
-        sendJSON(res, 200, this.dashboard.onQMDSourceAdd(
+        const result = this.dashboard.onQMDSourceAdd(
           parsed as unknown as Parameters<NonNullable<typeof this.dashboard.onQMDSourceAdd>>[0],
-        ));
+        );
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['config'], 'qmd.source.added', url.pathname);
         return;
       }
 
@@ -2470,7 +2558,9 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'Source ID required' });
           return;
         }
-        sendJSON(res, 200, this.dashboard.onQMDSourceRemove(id));
+        const result = this.dashboard.onQMDSourceRemove(id);
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['config'], 'qmd.source.removed', url.pathname);
         return;
       }
 
@@ -2504,7 +2594,9 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'enabled (boolean) is required' });
           return;
         }
-        sendJSON(res, 200, this.dashboard.onQMDSourceToggle(id, parsed.enabled));
+        const result = this.dashboard.onQMDSourceToggle(id, parsed.enabled);
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['config'], 'qmd.source.toggled', url.pathname);
         return;
       }
 
@@ -2524,7 +2616,9 @@ export class WebChannel implements ChannelAdapter {
         } catch {
           // No body or invalid JSON — reindex all
         }
-        sendJSON(res, 200, await this.dashboard.onQMDReindex(collection));
+        const result = await this.dashboard.onQMDReindex(collection);
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['config'], 'qmd.reindex.started', url.pathname);
         return;
       }
 
@@ -2561,7 +2655,9 @@ export class WebChannel implements ChannelAdapter {
           failOpen?: boolean;
           timeoutMs?: number;
         };
-        sendJSON(res, 200, this.dashboard.onGuardianAgentUpdate(input));
+        const result = this.dashboard.onGuardianAgentUpdate(input);
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['config', 'security'], 'guardian-agent.updated', url.pathname);
         return;
       }
 
@@ -2588,7 +2684,9 @@ export class WebChannel implements ChannelAdapter {
           families?: { tool?: string; admin?: string; guardian?: string; event?: string };
           mismatchLogLimit?: number;
         };
-        sendJSON(res, 200, this.dashboard.onPolicyUpdate(input));
+        const result = this.dashboard.onPolicyUpdate(input);
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['config', 'security'], 'policy.config.updated', url.pathname);
         return;
       }
 
@@ -2598,7 +2696,9 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
-        sendJSON(res, 200, this.dashboard.onPolicyReload());
+        const result = this.dashboard.onPolicyReload();
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['config', 'security'], 'policy.reloaded', url.pathname);
         return;
       }
 
@@ -2616,7 +2716,9 @@ export class WebChannel implements ChannelAdapter {
             windowMs = parsed.windowMs;
           }
         } catch { /* empty body is fine */ }
-        sendJSON(res, 200, await this.dashboard.onSentinelAuditRun(windowMs));
+        const result = await this.dashboard.onSentinelAuditRun(windowMs);
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['security'], 'sentinel.audit.completed', url.pathname);
         return;
       }
 
@@ -2637,6 +2739,7 @@ export class WebChannel implements ChannelAdapter {
         }
         const result = await this.dashboard.onFactoryReset({ scope: parsed.scope as 'data' | 'config' | 'all' });
         sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['dashboard', 'config', 'providers', 'tools', 'automations', 'network', 'security'], 'factory-reset.completed', url.pathname);
         if (parsed.scope === 'all' && result.success && this.dashboard.onKillswitch) {
           setTimeout(() => this.dashboard.onKillswitch!(), 100);
         }
@@ -2795,4 +2898,26 @@ function readBody(req: IncomingMessage, maxBytes: number): Promise<string> {
 function previewToken(token: string): string {
   if (token.length <= 8) return token;
   return `${token.slice(0, 4)}...${token.slice(-4)}`;
+}
+
+function isSuccessfulMutationResult(result: unknown): boolean {
+  if (!result || typeof result !== 'object' || !('success' in result)) {
+    return true;
+  }
+  return (result as { success?: boolean }).success !== false;
+}
+
+function uniqueTopics(topics: string[]): string[] {
+  return [...new Set(topics.filter((topic) => topic && topic.trim()))];
+}
+
+function toolInvalidationTopics(toolName: string): string[] {
+  const topics = ['tools'];
+  if (toolName.startsWith('intel_')) {
+    topics.push('threat-intel');
+  }
+  if (toolName.startsWith('memory_')) {
+    topics.push('dashboard');
+  }
+  return topics;
 }

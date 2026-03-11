@@ -65,6 +65,13 @@ export interface ScheduledTaskRunResult {
   message: string;
   durationMs: number;
   output?: unknown;
+  steps?: Array<{
+    toolName: string;
+    status: ScheduledTaskStatus;
+    message: string;
+    durationMs: number;
+    output?: unknown;
+  }>;
 }
 
 export interface ScheduledTaskPreset {
@@ -98,7 +105,15 @@ export interface ScheduledTaskPlaybookExecutor {
     success: boolean;
     status: string;
     message: string;
-    run: { steps: Array<{ toolName: string; output?: unknown }> };
+    run: {
+      steps: Array<{
+        toolName: string;
+        status?: string;
+        message?: string;
+        durationMs?: number;
+        output?: unknown;
+      }>;
+    };
   }>;
 }
 
@@ -316,6 +331,20 @@ export interface ScheduledTaskServiceDeps {
   now?: () => number;
 }
 
+export interface ScheduledTaskHistoryEntry {
+  id: string;
+  taskId: string;
+  taskName: string;
+  taskType: 'tool' | 'playbook';
+  target: string;
+  timestamp: number;
+  status: ScheduledTaskStatus;
+  durationMs: number;
+  message: string;
+  output?: unknown;
+  steps?: ScheduledTaskRunResult['steps'];
+}
+
 export class ScheduledTaskService {
   private readonly tasks = new Map<string, ScheduledTaskDefinition>();
   private readonly scheduler: CronScheduler;
@@ -327,14 +356,7 @@ export class ScheduledTaskService {
   private readonly persistPath: string;
   private readonly now: () => number;
   /** Run history — kept in memory, most recent first. */
-  private readonly history: Array<{
-    taskId: string;
-    taskName: string;
-    timestamp: number;
-    status: ScheduledTaskStatus;
-    durationMs: number;
-    message: string;
-  }> = [];
+  private readonly history: ScheduledTaskHistoryEntry[] = [];
   private readonly maxHistory = 100;
 
   constructor(deps: ScheduledTaskServiceDeps) {
@@ -506,7 +528,7 @@ export class ScheduledTaskService {
     return this.tasks.get(id) ?? null;
   }
 
-  getHistory(): typeof this.history {
+  getHistory(): ScheduledTaskHistoryEntry[] {
     return this.history.slice(0, this.maxHistory);
   }
 
@@ -553,12 +575,17 @@ export class ScheduledTaskService {
 
     // Record history
     this.history.unshift({
+      id: randomUUID(),
       taskId: task.id,
       taskName: task.name,
+      taskType: task.type,
+      target: task.target,
       timestamp: task.lastRunAt,
       status: result.status,
       durationMs: result.durationMs,
       message: result.message,
+      output: result.output,
+      steps: result.steps?.map((step) => ({ ...step })),
     });
     if (this.history.length > this.maxHistory) {
       this.history.length = this.maxHistory;
@@ -602,6 +629,13 @@ export class ScheduledTaskService {
       message: toolResult.message,
       durationMs: 0,
       output: toolResult.output,
+      steps: [{
+        toolName: task.target,
+        status,
+        message: toolResult.message,
+        durationMs: 0,
+        output: toolResult.output,
+      }],
     };
   }
 
@@ -635,6 +669,13 @@ export class ScheduledTaskService {
       status,
       message: pbResult.message,
       durationMs: 0,
+      steps: (pbResult.run?.steps ?? []).map((step) => ({
+        toolName: step.toolName,
+        status: normalizeStepStatus(step.status),
+        message: step.message ?? '',
+        durationMs: step.durationMs ?? 0,
+        output: step.output,
+      })),
     };
   }
 
@@ -790,4 +831,11 @@ function isNetworkAnalysisTriggerTool(toolName: string): boolean {
     || toolName === 'net_traffic_baseline'
     || toolName === 'net_threat_check'
     || toolName === 'net_connections';
+}
+
+function normalizeStepStatus(status: string | undefined): ScheduledTaskStatus {
+  if (status === 'pending_approval') {
+    return 'pending_approval';
+  }
+  return status === 'succeeded' ? 'succeeded' : 'failed';
 }

@@ -13,8 +13,10 @@ let agentTableEl = null;
 let llmStatusEl = null;
 let metricsHandler = null;
 let assistantPollTimer = null;
+let currentContainer = null;
 
 export async function renderDashboard(container) {
+  currentContainer = container;
   stopAssistantPolling();
   container.innerHTML = '<h2 class="page-title">Dashboard</h2><div class="loading">Loading...</div>';
 
@@ -358,7 +360,9 @@ function createMiniCard(title, value, subtitle, tone) {
 }
 
 export function updateDashboard() {
-  // SSE handler above handles live updates
+  if (currentContainer) {
+    void renderDashboard(currentContainer);
+  }
 }
 
 function esc(str) {

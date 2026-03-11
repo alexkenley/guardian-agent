@@ -3295,6 +3295,7 @@ function buildDashboardCallbacks(
           ? `${result.message} (${report.anomalies.length} network anomalies detected)`
           : result.message,
         devicesFound: deviceInventory.size,
+        run: result.run,
       };
     },
 

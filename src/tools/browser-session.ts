@@ -30,6 +30,7 @@ export interface BrowserSession {
   currentUrl?: string;
   lastActivityAt: number;
   approvedDomains: Set<string>;
+  processActive: boolean;
 }
 
 export interface BrowserCommandResult {
@@ -110,6 +111,7 @@ export class BrowserSessionManager {
       sessionKey,
       lastActivityAt: this.now(),
       approvedDomains: new Set(),
+      processActive: false,
     };
     this.sessions.set(sessionKey, session);
     return session;
@@ -164,6 +166,7 @@ export class BrowserSessionManager {
 
         try {
           const parsed = JSON.parse(stdout);
+          this.setSessionProcessState(sessionId, subcommand !== 'close');
           resolve({
             success: true,
             url: parsed.url,
@@ -175,6 +178,7 @@ export class BrowserSessionManager {
           });
         } catch {
           // If JSON parse fails, return raw stdout capped
+          this.setSessionProcessState(sessionId, subcommand !== 'close');
           resolve({
             success: true,
             snapshot: capSnapshot(stdout),
@@ -204,6 +208,9 @@ export class BrowserSessionManager {
     const session = this.sessions.get(sessionKey);
     if (!session) return;
     this.sessions.delete(sessionKey);
+    if (!session.processActive) {
+      return;
+    }
     try {
       await this.runCommand('close', session.sessionId, [], 5_000);
     } catch {
@@ -237,8 +244,19 @@ export class BrowserSessionManager {
     for (const [key, session] of this.sessions) {
       if (now - session.lastActivityAt > this.sessionIdleTimeoutMs) {
         this.sessions.delete(key);
-        // Fire-and-forget close command
-        this.runCommand('close', session.sessionId, [], 5_000).catch(() => {});
+        if (session.processActive) {
+          // Fire-and-forget close command
+          this.runCommand('close', session.sessionId, [], 5_000).catch(() => {});
+        }
+      }
+    }
+  }
+
+  private setSessionProcessState(sessionId: string, processActive: boolean): void {
+    for (const session of this.sessions.values()) {
+      if (session.sessionId === sessionId) {
+        session.processActive = processActive;
+        break;
       }
     }
   }

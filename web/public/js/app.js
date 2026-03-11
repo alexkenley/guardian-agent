@@ -5,9 +5,9 @@
 import { api, setToken, clearToken } from './api.js';
 import { renderDashboard, updateDashboard } from './pages/dashboard.js';
 import { renderSecurity, updateSecurity } from './pages/security.js';
-import { renderConfig } from './pages/config.js';
+import { renderConfig, updateConfig } from './pages/config.js';
 import { renderReference } from './pages/reference.js';
-import { renderNetwork } from './pages/network.js';
+import { renderNetwork, updateNetwork } from './pages/network.js';
 import { renderAutomations, updateAutomations } from './pages/automations.js';
 import { initChatPanel, setChatContext } from './chat-panel.js';
 import { applyInputTooltips } from './tooltip.js';
@@ -20,6 +20,9 @@ const app = document.getElementById('app');
 const indicator = document.getElementById('connection-indicator');
 let eventSource = null;
 let currentPage = '';
+let invalidationTimer = null;
+let invalidationInFlight = false;
+let invalidationQueued = false;
 
 // ─── Auth ────────────────────────────────────────────────
 
@@ -127,6 +130,7 @@ const sseListeners = {
   'chat.token': [],
   'chat.done': [],
   'chat.error': [],
+  'ui.invalidate': [],
 };
 
 export function onSSE(type, fn) {
@@ -169,13 +173,84 @@ function connectSSE() {
 // ─── Router ──────────────────────────────────────────────
 
 const routes = {
-  '/': { render: renderDashboard, update: updateDashboard, name: 'dashboard' },
-  '/security': { render: renderSecurity, update: updateSecurity, name: 'security' },
-  '/network': { render: renderNetwork, name: 'network' },
-  '/automations': { render: renderAutomations, update: updateAutomations, name: 'automations' },
-  '/config': { render: renderConfig, name: 'config' },
+  '/': {
+    render: renderDashboard,
+    update: updateDashboard,
+    name: 'dashboard',
+    invalidateTags: ['dashboard', 'config', 'providers', 'security', 'network', 'automations', 'tools'],
+  },
+  '/security': {
+    render: renderSecurity,
+    update: updateSecurity,
+    name: 'security',
+    invalidateTags: ['security', 'threat-intel', 'network', 'config'],
+  },
+  '/network': {
+    render: renderNetwork,
+    update: updateNetwork,
+    name: 'network',
+    invalidateTags: ['network', 'automations', 'security'],
+  },
+  '/automations': {
+    render: renderAutomations,
+    update: updateAutomations,
+    name: 'automations',
+    invalidateTags: ['automations', 'network', 'tools', 'config'],
+  },
+  '/config': {
+    render: renderConfig,
+    update: updateConfig,
+    name: 'config',
+    invalidateTags: ['config', 'providers', 'tools', 'skills', 'security'],
+  },
   '/reference': { render: renderReference, name: 'reference' },
 };
+
+function getRouteState() {
+  const raw = window.location.hash.slice(1) || '/';
+  const [path] = raw.split('?');
+  const route = routes[path] || routes['/'];
+  return { path, route };
+}
+
+function routeMatchesInvalidation(route, payload) {
+  const topics = Array.isArray(payload?.topics) ? payload.topics : [];
+  const invalidateTags = route?.invalidateTags || [];
+  return topics.some((topic) => invalidateTags.includes(topic));
+}
+
+async function refreshCurrentRoute() {
+  const { route } = getRouteState();
+  const updater = route?.update || route?.render;
+  if (!updater) return;
+  await updater(content);
+}
+
+function scheduleCurrentRouteRefresh() {
+  if (invalidationTimer) {
+    clearTimeout(invalidationTimer);
+  }
+
+  invalidationTimer = setTimeout(async () => {
+    invalidationTimer = null;
+
+    if (invalidationInFlight) {
+      invalidationQueued = true;
+      return;
+    }
+
+    invalidationInFlight = true;
+    try {
+      await refreshCurrentRoute();
+    } finally {
+      invalidationInFlight = false;
+      if (invalidationQueued) {
+        invalidationQueued = false;
+        scheduleCurrentRouteRefresh();
+      }
+    }
+  }, 250);
+}
 
 function navigate() {
   const raw = window.location.hash.slice(1) || '/';
@@ -215,6 +290,11 @@ function startClock() {
 
 function startApp() {
   connectSSE();
+  onSSE('ui.invalidate', (payload) => {
+    const { route } = getRouteState();
+    if (!routeMatchesInvalidation(route, payload)) return;
+    scheduleCurrentRouteRefresh();
+  });
   startClock();
   initChatPanel(chatPanel);
   window.addEventListener('hashchange', navigate);

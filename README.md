@@ -25,7 +25,7 @@
 - **Four-layer security defense** — proactive admission controls, inline LLM-powered action evaluation (Guardian Agent), output-time leak prevention, and Sentinel audit analysis, all mandatory at the Runtime level
 - **Multi-provider LLM support** — Ollama (local), Anthropic (Claude), and OpenAI (GPT) with interactive model selection, circuit breaker, automatic failover, and smart LLM routing that automatically directs tools to local or external models by category
 - **Multi-channel access** — CLI, Telegram bot, and Web UI with bearer token auth and cross-channel identity mapping
-- **Web dashboard** — real-time status, LLM providers, agent monitoring, session queue, scheduled jobs, and integrated chat panel
+- **Web dashboard** — real-time status, LLM providers, agent monitoring, session queue, scheduled jobs, integrated chat panel, and SSE-driven live refresh when config, automation, or network state changes
 - **Multi-agent orchestration** — Sequential, Parallel, and Loop agents with inter-step state passing through SharedState
 - **Guardian security pipeline** — per-agent capabilities, secret scanning (30+ credential and PII patterns), PII detection/redaction, prompt injection detection, rate limiting, sensitive path blocking, and output redaction
 - **Tool governance** — approval workflows, per-tool policy overrides, path/command/domain allowlists, and risk-tiered tool classes with interactive policy editor
@@ -33,8 +33,8 @@
 - **Connector and playbook framework** — declarative connector packs with host/path/command allowlists, bounded step execution, dry-run mode, and signed definitions
 - **Conversation memory** — SQLite-backed session history with FTS5 full-text search, per-agent knowledge base, and automatic memory flush
 - **QMD hybrid document search** — BM25 + vector + LLM re-ranking over directories, git repos, URLs, and files
-- **Scheduled task management** — CRUD scheduling for tools and playbooks with presets, run history, and EventBus integration
-- **Security monitoring** — network threat posture, active alerts, audit log with hash-chain integrity, and SQLite DB hardening
+- **Scheduled task management** — CRUD scheduling for tools and playbooks with presets, run history, inspectable step output, and EventBus integration
+- **Security monitoring** — network threat posture, active alerts, network run history, audit log with hash-chain integrity, and SQLite DB hardening
 - **Threat intelligence** — watchlist scanning, findings triage, response drafts with human approval gates
 - **Campaign automation** — contact discovery and approval-gated Gmail send workflows
 - **Quick actions** — templated workflows for email, task, and calendar operations
@@ -55,11 +55,11 @@
 
 ### Network Connectors
 ![Network Connectors](docs/images/network-connectors.png)
-*Playbook management with Run/Dry Run/Delete actions, recent execution history, and chat panel.*
+*Playbook management with Run/Dry Run/Delete actions, recent execution history, inspectable step output, and chat panel.*
 
 ### Automations
 ![Automations](docs/images/operations.png)
-*Unified automation catalog — single-tool and multi-step pipelines with optional cron scheduling, examples, clone, and run history.*
+*Unified automation catalog — single-tool and multi-step pipelines with optional cron scheduling, examples, clone, live-updating run history, and per-step output inspection.*
 
 ## What This Is
 

@@ -81,6 +81,14 @@ describe('BrowserSessionManager', () => {
     expect(mgr.sessionCount).toBe(0);
   });
 
+  it('dispose does not try to close untouched sessions', async () => {
+    const mgr = createManager();
+    const runCommandSpy = vi.spyOn(mgr, 'runCommand');
+    mgr.getOrCreateSession('user1:cli');
+    await mgr.dispose();
+    expect(runCommandSpy).not.toHaveBeenCalled();
+  });
+
   it('closeSession removes specific session', async () => {
     const mgr = createManager();
     mgr.getOrCreateSession('user1:cli');

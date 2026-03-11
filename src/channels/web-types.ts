@@ -350,9 +350,24 @@ export interface DashboardAssistantState {
   }>;
 }
 
+export interface UIInvalidationEvent {
+  topics: string[];
+  reason: string;
+  path: string;
+  timestamp: number;
+}
+
+export interface ScheduledTaskHistoryStep {
+  toolName: string;
+  status: ScheduledTaskStatus;
+  message: string;
+  durationMs: number;
+  output?: unknown;
+}
+
 /** SSE event pushed to dashboard clients. */
 export interface SSEEvent {
-  type: 'audit' | 'metrics' | 'watchdog' | 'security.alert' | 'chat.thinking' | 'chat.tool_call' | 'chat.token' | 'chat.done' | 'chat.error';
+  type: 'audit' | 'metrics' | 'watchdog' | 'security.alert' | 'chat.thinking' | 'chat.tool_call' | 'chat.token' | 'chat.done' | 'chat.error' | 'ui.invalidate';
   data: unknown;
 }
 
@@ -517,7 +532,7 @@ export interface DashboardCallbacks {
       status: 'online' | 'offline';
     }>;
   };
-  onNetworkScan?: () => Promise<{ success: boolean; message: string; devicesFound: number }>;
+  onNetworkScan?: () => Promise<{ success: boolean; message: string; devicesFound: number; run?: ConnectorPlaybookRunResult['run'] }>;
   onNetworkBaseline?: () => NetworkBaselineSnapshot;
   onNetworkThreats?: (args?: { includeAcknowledged?: boolean; limit?: number }) => {
     alerts: NetworkAlert[];
@@ -582,12 +597,17 @@ export interface DashboardCallbacks {
   onScheduledTaskPresets?: () => ScheduledTaskPreset[];
   onScheduledTaskInstallPreset?: (presetId: string) => { success: boolean; message: string; task?: ScheduledTaskDefinition };
   onScheduledTaskHistory?: () => Array<{
+    id: string;
     taskId: string;
     taskName: string;
+    taskType: 'tool' | 'playbook';
+    target: string;
     timestamp: number;
     status: ScheduledTaskStatus;
     durationMs: number;
     message: string;
+    output?: unknown;
+    steps?: ScheduledTaskHistoryStep[];
   }>;
   onQMDStatus?: () => Promise<QMDStatusResponse> | QMDStatusResponse;
   onQMDSources?: () => QMDSourceConfig[];
