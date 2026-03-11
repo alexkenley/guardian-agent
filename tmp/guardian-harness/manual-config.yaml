@@ -1,0 +1,24 @@
+llm:
+  ollama:
+    provider: ollama
+    baseUrl: http://127.0.0.1:11434
+    model: llama3.2
+defaultProvider: ollama
+channels:
+  cli:
+    enabled: false
+  web:
+    enabled: true
+    port: 3000
+    authToken: "manual-harness-token"
+guardian:
+  enabled: true
+  auditLog:
+    auditDir: /mnt/s/Development/GuardianAgent/tmp/guardian-harness/audit
+assistant:
+  memory:
+    enabled: true
+    sqlitePath: /mnt/s/Development/GuardianAgent/tmp/guardian-harness/memory.db
+  analytics:
+    enabled: true
+    sqlitePath: /mnt/s/Development/GuardianAgent/tmp/guardian-harness/analytics.db
