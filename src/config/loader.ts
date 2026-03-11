@@ -426,6 +426,64 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
         }
       }
     }
+    const seenAzureProfileIds = new Set<string>();
+    for (const profile of cloud.azureProfiles ?? []) {
+      if (!profile.id?.trim()) {
+        errors.push('assistant.tools.cloud.azureProfiles.id is required');
+      } else if (seenAzureProfileIds.has(profile.id)) {
+        errors.push(`assistant.tools.cloud.azureProfiles id '${profile.id}' is duplicated`);
+      } else {
+        seenAzureProfileIds.add(profile.id);
+      }
+      if (!profile.name?.trim()) {
+        errors.push(`assistant.tools.cloud.azureProfiles.${profile.id || '(unnamed)'}.name is required`);
+      }
+      if (!profile.subscriptionId?.trim()) {
+        errors.push(`assistant.tools.cloud.azureProfiles.${profile.id || '(unnamed)'}.subscriptionId is required`);
+      }
+      const hasAccessToken = !!profile.accessToken?.trim() || !!profile.accessTokenCredentialRef?.trim();
+      const hasClientId = !!profile.clientId?.trim() || !!profile.clientIdCredentialRef?.trim();
+      const hasClientSecret = !!profile.clientSecret?.trim() || !!profile.clientSecretCredentialRef?.trim();
+      if (!hasAccessToken && !(profile.tenantId?.trim() && hasClientId && hasClientSecret)) {
+        errors.push(`assistant.tools.cloud.azureProfiles.${profile.id || '(unnamed)'}.accessToken/accessTokenCredentialRef or tenantId + clientId + clientSecret is required`);
+      }
+      if (hasClientId !== hasClientSecret) {
+        errors.push(`assistant.tools.cloud.azureProfiles.${profile.id || '(unnamed)'}.clientId and clientSecret must be provided together`);
+      }
+      assertCredentialRef(
+        profile.accessTokenCredentialRef,
+        `assistant.tools.cloud.azureProfiles.${profile.id || '(unnamed)'}.accessTokenCredentialRef`,
+      );
+      assertCredentialRef(
+        profile.clientIdCredentialRef,
+        `assistant.tools.cloud.azureProfiles.${profile.id || '(unnamed)'}.clientIdCredentialRef`,
+      );
+      assertCredentialRef(
+        profile.clientSecretCredentialRef,
+        `assistant.tools.cloud.azureProfiles.${profile.id || '(unnamed)'}.clientSecretCredentialRef`,
+      );
+      if (profile.blobBaseUrl?.trim()) {
+        try {
+          const parsed = new URL(profile.blobBaseUrl);
+          if (!['http:', 'https:'].includes(parsed.protocol)) {
+            errors.push(`assistant.tools.cloud.azureProfiles.${profile.id || '(unnamed)'}.blobBaseUrl must use http or https`);
+          }
+        } catch {
+          errors.push(`assistant.tools.cloud.azureProfiles.${profile.id || '(unnamed)'}.blobBaseUrl must be a valid URL`);
+        }
+      }
+      for (const [service, endpoint] of Object.entries(profile.endpoints ?? {})) {
+        if (!endpoint?.trim()) continue;
+        try {
+          const parsed = new URL(endpoint);
+          if (!['http:', 'https:'].includes(parsed.protocol)) {
+            errors.push(`assistant.tools.cloud.azureProfiles.${profile.id || '(unnamed)'}.endpoints.${service} must use http or https`);
+          }
+        } catch {
+          errors.push(`assistant.tools.cloud.azureProfiles.${profile.id || '(unnamed)'}.endpoints.${service} must be a valid URL`);
+        }
+      }
+    }
   }
   const sandbox = assistant.tools.sandbox;
   if (sandbox?.enforcementMode && !['permissive', 'strict'].includes(sandbox.enforcementMode)) {

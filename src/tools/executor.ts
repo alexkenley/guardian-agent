@@ -48,6 +48,7 @@ import type { NetworkTrafficService, TrafficConnectionSample } from '../runtime/
 import { parseBanner, inferServiceFromPort } from '../runtime/network-fingerprinting.js';
 import { parseAirportWifi, parseNetshWifi, parseNmcliWifi, correlateWifiClients } from '../runtime/network-wifi.js';
 import { AwsClient, type AwsInstanceConfig } from './cloud/aws-client.js';
+import { AzureClient, type AzureInstanceConfig, type AzureServiceName } from './cloud/azure-client.js';
 import { CpanelClient, type CpanelInstanceConfig } from './cloud/cpanel-client.js';
 import { CloudflareClient, type CloudflareInstanceConfig } from './cloud/cloudflare-client.js';
 import { GcpClient, type GcpInstanceConfig, type GcpServiceName } from './cloud/gcp-client.js';
@@ -92,6 +93,7 @@ function emptyCloudConfig(): AssistantCloudConfig {
     cloudflareProfiles: [],
     awsProfiles: [],
     gcpProfiles: [],
+    azureProfiles: [],
   };
 }
 
@@ -1018,6 +1020,34 @@ export class ToolExecutor {
       return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
     }
 
+    if (toolName === 'azure_status' || toolName === 'azure_monitor') {
+      return 'allow';
+    }
+
+    if (toolName === 'azure_vms') {
+      const action = asString(args.action, 'list').trim().toLowerCase();
+      if (action === 'list' || action === 'get') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'azure_app_service') {
+      const action = asString(args.action, 'list').trim().toLowerCase();
+      if (action === 'list' || action === 'get' || action === 'config') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'azure_storage') {
+      const action = asString(args.action, 'list_accounts').trim().toLowerCase();
+      if (action === 'list_accounts' || action === 'list_containers' || action === 'list_blobs') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'azure_dns') {
+      const action = asString(args.action, 'list_zones').trim().toLowerCase();
+      if (action === 'list_zones' || action === 'list_records') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
     if (toolName === 'whm_dns') {
       const action = asString(args.action, 'list').trim().toLowerCase();
       if (action === 'list' || action === 'parse_zone') return 'allow';
@@ -1521,6 +1551,104 @@ export class ToolExecutor {
       }
     }
 
+    if (toolName === 'azure_status') {
+      try {
+        this.createAzureClient(requireString(args.profile, 'profile'), 'management');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    if (toolName === 'azure_vms') {
+      try {
+        this.createAzureClient(requireString(args.profile, 'profile'), 'management');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'get' || action === 'start' || action === 'stop' || action === 'restart' || action === 'deallocate') && !this.resolveAzureResourceGroup(args.resourceGroup, requireString(args.profile, 'profile'), false)) {
+        return `resourceGroup is required for ${action} when the Azure profile has no default resource group`;
+      }
+      if ((action === 'get' || action === 'start' || action === 'stop' || action === 'restart' || action === 'deallocate') && !asString(args.vmName).trim()) {
+        return `vmName is required for ${action}`;
+      }
+    }
+
+    if (toolName === 'azure_app_service') {
+      try {
+        this.createAzureClient(requireString(args.profile, 'profile'), 'management');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'get' || action === 'config' || action === 'restart') && !this.resolveAzureResourceGroup(args.resourceGroup, requireString(args.profile, 'profile'), false)) {
+        return `resourceGroup is required for ${action} when the Azure profile has no default resource group`;
+      }
+      if ((action === 'get' || action === 'config' || action === 'restart') && !asString(args.name).trim()) {
+        return `name is required for ${action}`;
+      }
+    }
+
+    if (toolName === 'azure_storage') {
+      try {
+        this.createAzureClient(requireString(args.profile, 'profile'), asString(args.action).trim().toLowerCase().startsWith('list_') && asString(args.action).trim().toLowerCase() !== 'list_accounts' ? 'blob' : 'management');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'list_containers' || action === 'list_blobs' || action === 'put_blob' || action === 'delete_blob') && !asString(args.accountName).trim()) {
+        return `accountName is required for ${action}`;
+      }
+      if ((action === 'list_blobs' || action === 'put_blob' || action === 'delete_blob') && !asString(args.container).trim()) {
+        return `container is required for ${action}`;
+      }
+      if ((action === 'put_blob' || action === 'delete_blob') && !asString(args.blobName).trim()) {
+        return `blobName is required for ${action}`;
+      }
+      if (action === 'put_blob' && !asString(args.body).trim()) {
+        return 'body is required for put_blob';
+      }
+    }
+
+    if (toolName === 'azure_dns') {
+      try {
+        this.createAzureClient(requireString(args.profile, 'profile'), 'management');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'list_zones' || action === 'list_records' || action === 'upsert_record_set' || action === 'delete_record_set') && !this.resolveAzureResourceGroup(args.resourceGroup, requireString(args.profile, 'profile'), false)) {
+        return `resourceGroup is required for ${action} when the Azure profile has no default resource group`;
+      }
+      if ((action === 'list_records' || action === 'upsert_record_set' || action === 'delete_record_set') && !asString(args.zoneName).trim()) {
+        return `zoneName is required for ${action}`;
+      }
+      if ((action === 'upsert_record_set' || action === 'delete_record_set') && !asString(args.recordType).trim()) {
+        return `recordType is required for ${action}`;
+      }
+      if ((action === 'upsert_record_set' || action === 'delete_record_set') && !asString(args.relativeRecordSetName).trim()) {
+        return `relativeRecordSetName is required for ${action}`;
+      }
+      if (action === 'upsert_record_set' && !isRecord(args.recordSet)) {
+        return 'recordSet object is required for upsert_record_set';
+      }
+    }
+
+    if (toolName === 'azure_monitor') {
+      try {
+        this.createAzureClient(requireString(args.profile, 'profile'), 'management');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if (action === 'metrics' && !asString(args.resourceId).trim()) {
+        return 'resourceId is required for metrics';
+      }
+      if (action === 'metrics' && !asString(args.metricnames).trim()) {
+        return 'metricnames is required for metrics';
+      }
+    }
+
     if (toolName === 'whm_dns') {
       try {
         this.createWhmClient(requireString(args.profile, 'profile'));
@@ -1928,6 +2056,41 @@ export class ToolExecutor {
       }
       case 'gcp_logs':
         return `Would query Cloud Logging entries for profile '${args.profile}'`;
+      case 'azure_status':
+        return `Would inspect Azure subscription status for profile '${args.profile}'`;
+      case 'azure_vms': {
+        const action = asString(args.action, 'list').trim().toLowerCase();
+        if (action === 'start' || action === 'stop' || action === 'restart' || action === 'deallocate') return `Would ${action} Azure VM '${args.vmName}'`;
+        if (action === 'get') return `Would inspect Azure VM '${args.vmName}'`;
+        return `Would list Azure VMs for profile '${args.profile}'`;
+      }
+      case 'azure_app_service': {
+        const action = asString(args.action, 'list').trim().toLowerCase();
+        if (action === 'restart') return `Would restart Azure Web App '${args.name}'`;
+        if (action === 'config') return `Would inspect Azure Web App config for '${args.name}'`;
+        if (action === 'get') return `Would inspect Azure Web App '${args.name}'`;
+        return `Would list Azure Web Apps for profile '${args.profile}'`;
+      }
+      case 'azure_storage': {
+        const action = asString(args.action, 'list_accounts').trim().toLowerCase();
+        if (action === 'put_blob') return `Would upload blob '${args.blobName}' to container '${args.container}'`;
+        if (action === 'delete_blob') return `Would delete blob '${args.blobName}' from container '${args.container}'`;
+        if (action === 'list_blobs') return `Would list blobs in container '${args.container}'`;
+        if (action === 'list_containers') return `Would list containers for storage account '${args.accountName}'`;
+        return `Would list Azure storage accounts for profile '${args.profile}'`;
+      }
+      case 'azure_dns': {
+        const action = asString(args.action, 'list_zones').trim().toLowerCase();
+        if (action === 'upsert_record_set') return `Would upsert Azure DNS record set '${args.relativeRecordSetName}'`;
+        if (action === 'delete_record_set') return `Would delete Azure DNS record set '${args.relativeRecordSetName}'`;
+        if (action === 'list_records') return `Would list Azure DNS records for zone '${args.zoneName}'`;
+        return `Would list Azure DNS zones for profile '${args.profile}'`;
+      }
+      case 'azure_monitor': {
+        const action = asString(args.action, 'activity_logs').trim().toLowerCase();
+        if (action === 'metrics') return `Would fetch Azure Monitor metrics for resource '${args.resourceId}'`;
+        return `Would list Azure activity logs for profile '${args.profile}'`;
+      }
       case 'whm_dns': {
         const action = asString(args.action, 'list').trim().toLowerCase();
         if (action === 'create_zone') return `Would create WHM DNS zone '${args.domain}'`;
@@ -7212,6 +7375,444 @@ export class ToolExecutor {
 
     this.registry.register(
       {
+        name: 'azure_status',
+        description: 'Inspect Azure subscription details and resource groups. Read-only.',
+        shortDescription: 'Inspect Azure subscription and resource groups.',
+        risk: 'read_only',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.azureProfiles id.' },
+            includeResourceGroups: { type: 'boolean', description: 'Include resource group list (default: true).' },
+            top: { type: 'number', description: 'Optional max resource groups.' },
+          },
+          required: ['profile'],
+        },
+      },
+      async (args, request) => {
+        let client: AzureClient;
+        try {
+          client = this.createAzureClient(requireString(args.profile, 'profile'), 'management');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        const includeResourceGroups = args.includeResourceGroups !== false;
+        this.guardAction(request, 'http_request', {
+          url: this.describeAzureEndpoint(client.config, 'management'),
+          method: 'GET',
+          tool: 'azure_status',
+          subscriptionId: client.config.subscriptionId,
+        });
+        try {
+          const [subscription, resourceGroups] = await Promise.all([
+            client.getSubscription(),
+            includeResourceGroups
+              ? client.listResourceGroups(Number.isFinite(Number(args.top)) ? Number(args.top) : undefined)
+              : Promise.resolve(null),
+          ]);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              subscriptionId: client.config.subscriptionId,
+              tenantId: client.config.tenantId,
+              defaultResourceGroup: client.config.defaultResourceGroup,
+              subscription,
+              resourceGroups,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `Azure status request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'azure_vms',
+        description: 'List, inspect, start, stop, restart, or deallocate Azure VMs.',
+        shortDescription: 'Manage Azure virtual machines.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.azureProfiles id.' },
+            action: { type: 'string', description: 'list, get, start, stop, restart, or deallocate.' },
+            resourceGroup: { type: 'string', description: 'Resource group. Falls back to profile default.' },
+            vmName: { type: 'string', description: 'VM name for get/start/stop/restart/deallocate.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list', 'get', 'start', 'stop', 'restart', 'deallocate'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list, get, start, stop, restart, or deallocate.' };
+        }
+        let client: AzureClient;
+        try {
+          client = this.createAzureClient(requireString(args.profile, 'profile'), 'management');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        const resourceGroup = this.resolveAzureResourceGroup(args.resourceGroup, client.config.id, action === 'list' ? false : true);
+        this.guardAction(request, 'http_request', {
+          url: this.describeAzureEndpoint(client.config, 'management'),
+          method: action === 'list' || action === 'get' ? 'GET' : 'POST',
+          tool: 'azure_vms',
+          action,
+          subscriptionId: client.config.subscriptionId,
+          resourceGroup: resourceGroup || undefined,
+          vmName: asString(args.vmName).trim() || undefined,
+        });
+        try {
+          const vmName = asString(args.vmName).trim();
+          const result = action === 'list'
+            ? await client.listVms(resourceGroup || undefined)
+            : action === 'get'
+              ? await client.getVm(resourceGroup, vmName)
+              : action === 'start'
+                ? await client.startVm(resourceGroup, vmName)
+                : action === 'stop'
+                  ? await client.powerOffVm(resourceGroup, vmName)
+                  : action === 'restart'
+                    ? await client.restartVm(resourceGroup, vmName)
+                    : await client.deallocateVm(resourceGroup, vmName);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              subscriptionId: client.config.subscriptionId,
+              action,
+              resourceGroup: resourceGroup || undefined,
+              vmName: vmName || undefined,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `Azure VM request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'azure_app_service',
+        description: 'List, inspect, inspect config, or restart Azure Web Apps.',
+        shortDescription: 'Manage Azure App Service web apps.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.azureProfiles id.' },
+            action: { type: 'string', description: 'list, get, config, or restart.' },
+            resourceGroup: { type: 'string', description: 'Resource group. Falls back to profile default.' },
+            name: { type: 'string', description: 'Web app name.' },
+            softRestart: { type: 'boolean', description: 'Optional softRestart for restart.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list', 'get', 'config', 'restart'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list, get, config, or restart.' };
+        }
+        let client: AzureClient;
+        try {
+          client = this.createAzureClient(requireString(args.profile, 'profile'), 'management');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        const resourceGroup = this.resolveAzureResourceGroup(args.resourceGroup, client.config.id, action === 'list' ? false : true);
+        this.guardAction(request, 'http_request', {
+          url: this.describeAzureEndpoint(client.config, 'management'),
+          method: action === 'restart' ? 'POST' : 'GET',
+          tool: 'azure_app_service',
+          action,
+          subscriptionId: client.config.subscriptionId,
+          resourceGroup: resourceGroup || undefined,
+          name: asString(args.name).trim() || undefined,
+        });
+        try {
+          const name = asString(args.name).trim();
+          const result = action === 'list'
+            ? await client.listWebApps(resourceGroup || undefined)
+            : action === 'get'
+              ? await client.getWebApp(resourceGroup, name)
+              : action === 'config'
+                ? await client.getWebAppConfig(resourceGroup, name)
+                : await client.restartWebApp(resourceGroup, name, args.softRestart === undefined ? undefined : !!args.softRestart);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              subscriptionId: client.config.subscriptionId,
+              action,
+              resourceGroup: resourceGroup || undefined,
+              name: name || undefined,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `Azure App Service request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'azure_storage',
+        description: 'List storage accounts, containers, blobs, or upload/delete blob text.',
+        shortDescription: 'Manage Azure Storage accounts and blobs.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.azureProfiles id.' },
+            action: { type: 'string', description: 'list_accounts, list_containers, list_blobs, put_blob, or delete_blob.' },
+            resourceGroup: { type: 'string', description: 'Optional resource group filter for list_accounts.' },
+            accountName: { type: 'string', description: 'Storage account name for blob actions.' },
+            container: { type: 'string', description: 'Container name for blob actions.' },
+            blobName: { type: 'string', description: 'Blob name/path.' },
+            prefix: { type: 'string', description: 'Optional blob prefix for list_blobs.' },
+            body: { type: 'string', description: 'Blob body text for put_blob.' },
+            contentType: { type: 'string', description: 'Optional content type for put_blob.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list_accounts', 'list_containers', 'list_blobs', 'put_blob', 'delete_blob'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list_accounts, list_containers, list_blobs, put_blob, or delete_blob.' };
+        }
+        let client: AzureClient;
+        try {
+          client = this.createAzureClient(requireString(args.profile, 'profile'), action === 'list_accounts' ? 'management' : 'blob');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        this.guardAction(request, 'http_request', {
+          url: this.describeAzureEndpoint(client.config, action === 'list_accounts' ? 'management' : 'blob', asString(args.accountName).trim() || undefined),
+          method: action === 'put_blob' ? 'PUT' : action === 'delete_blob' ? 'DELETE' : 'GET',
+          tool: 'azure_storage',
+          action,
+          subscriptionId: client.config.subscriptionId,
+          accountName: asString(args.accountName).trim() || undefined,
+          container: asString(args.container).trim() || undefined,
+          blobName: asString(args.blobName).trim() || undefined,
+        });
+        try {
+          const result = action === 'list_accounts'
+            ? await client.listStorageAccounts(asString(args.resourceGroup).trim() || undefined)
+            : action === 'list_containers'
+              ? await client.listBlobContainers(requireString(args.accountName, 'accountName').trim())
+              : action === 'list_blobs'
+                ? await client.listBlobs(
+                  requireString(args.accountName, 'accountName').trim(),
+                  requireString(args.container, 'container').trim(),
+                  asString(args.prefix).trim() || undefined,
+                )
+                : action === 'put_blob'
+                  ? await client.putBlobText(
+                    requireString(args.accountName, 'accountName').trim(),
+                    requireString(args.container, 'container').trim(),
+                    requireString(args.blobName, 'blobName').trim(),
+                    requireString(args.body, 'body'),
+                    asString(args.contentType).trim() || undefined,
+                  )
+                  : await client.deleteBlob(
+                    requireString(args.accountName, 'accountName').trim(),
+                    requireString(args.container, 'container').trim(),
+                    requireString(args.blobName, 'blobName').trim(),
+                  );
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              subscriptionId: client.config.subscriptionId,
+              action,
+              accountName: asString(args.accountName).trim() || undefined,
+              container: asString(args.container).trim() || undefined,
+              blobName: asString(args.blobName).trim() || undefined,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `Azure Storage request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'azure_dns',
+        description: 'List Azure DNS zones/records or upsert/delete record sets.',
+        shortDescription: 'Manage Azure DNS zones and record sets.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.azureProfiles id.' },
+            action: { type: 'string', description: 'list_zones, list_records, upsert_record_set, or delete_record_set.' },
+            resourceGroup: { type: 'string', description: 'Resource group. Falls back to profile default.' },
+            zoneName: { type: 'string', description: 'DNS zone name.' },
+            recordType: { type: 'string', description: 'Record type for record-set operations, e.g. A or TXT.' },
+            relativeRecordSetName: { type: 'string', description: 'Relative record-set name, e.g. www or @.' },
+            recordSet: { type: 'object', description: 'Raw Azure DNS record-set payload for upsert_record_set.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list_zones', 'list_records', 'upsert_record_set', 'delete_record_set'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list_zones, list_records, upsert_record_set, or delete_record_set.' };
+        }
+        let client: AzureClient;
+        try {
+          client = this.createAzureClient(requireString(args.profile, 'profile'), 'management');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        const resourceGroup = this.resolveAzureResourceGroup(args.resourceGroup, client.config.id);
+        this.guardAction(request, 'http_request', {
+          url: this.describeAzureEndpoint(client.config, 'management'),
+          method: action === 'upsert_record_set' ? 'PUT' : action === 'delete_record_set' ? 'DELETE' : 'GET',
+          tool: 'azure_dns',
+          action,
+          subscriptionId: client.config.subscriptionId,
+          resourceGroup,
+          zoneName: asString(args.zoneName).trim() || undefined,
+        });
+        try {
+          const zoneName = asString(args.zoneName).trim();
+          const result = action === 'list_zones'
+            ? await client.listDnsZones(resourceGroup)
+            : action === 'list_records'
+              ? await client.listDnsRecordSets(resourceGroup, zoneName, asString(args.recordType).trim() || undefined)
+              : action === 'upsert_record_set'
+                ? await client.upsertDnsRecordSet(
+                  resourceGroup,
+                  zoneName,
+                  requireString(args.recordType, 'recordType').trim(),
+                  requireString(args.relativeRecordSetName, 'relativeRecordSetName').trim(),
+                  args.recordSet as Record<string, unknown>,
+                )
+                : await client.deleteDnsRecordSet(
+                  resourceGroup,
+                  zoneName,
+                  requireString(args.recordType, 'recordType').trim(),
+                  requireString(args.relativeRecordSetName, 'relativeRecordSetName').trim(),
+                );
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              subscriptionId: client.config.subscriptionId,
+              action,
+              resourceGroup,
+              zoneName: zoneName || undefined,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `Azure DNS request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'azure_monitor',
+        description: 'List activity logs or fetch Azure Monitor metrics. Read-only.',
+        shortDescription: 'Inspect Azure activity logs and metrics.',
+        risk: 'read_only',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.azureProfiles id.' },
+            action: { type: 'string', description: 'activity_logs or metrics.' },
+            filter: { type: 'string', description: 'Optional activity-log or metrics filter.' },
+            resourceId: { type: 'string', description: 'Resource id for metrics action.' },
+            metricnames: { type: 'string', description: 'Comma-separated metric names for metrics action.' },
+            timespan: { type: 'string', description: 'Optional metrics timespan.' },
+            interval: { type: 'string', description: 'Optional metrics interval.' },
+            aggregation: { type: 'string', description: 'Optional metrics aggregation.' },
+            top: { type: 'number', description: 'Optional metrics top value.' },
+            orderby: { type: 'string', description: 'Optional metrics ordering.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['activity_logs', 'metrics'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use activity_logs or metrics.' };
+        }
+        let client: AzureClient;
+        try {
+          client = this.createAzureClient(requireString(args.profile, 'profile'), 'management');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        this.guardAction(request, 'http_request', {
+          url: this.describeAzureEndpoint(client.config, 'management'),
+          method: 'GET',
+          tool: 'azure_monitor',
+          action,
+          subscriptionId: client.config.subscriptionId,
+          resourceId: asString(args.resourceId).trim() || undefined,
+        });
+        try {
+          const result = action === 'activity_logs'
+            ? await client.listActivityLogs(asString(args.filter).trim() || undefined)
+            : await client.listMetrics(requireString(args.resourceId, 'resourceId').trim(), {
+              metricnames: requireString(args.metricnames, 'metricnames').trim(),
+              timespan: asString(args.timespan).trim() || undefined,
+              interval: asString(args.interval).trim() || undefined,
+              aggregation: asString(args.aggregation).trim() || undefined,
+              top: Number.isFinite(Number(args.top)) ? Number(args.top) : undefined,
+              orderby: asString(args.orderby).trim() || undefined,
+              filter: asString(args.filter).trim() || undefined,
+            });
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              subscriptionId: client.config.subscriptionId,
+              action,
+              resourceId: asString(args.resourceId).trim() || undefined,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `Azure Monitor request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
         name: 'whm_status',
         description: 'Inspect a WHM server profile for hostname, version, load average, and service health. Read-only.',
         shortDescription: 'Inspect WHM server hostname, version, load, and services.',
@@ -9575,6 +10176,11 @@ export class ToolExecutor {
     return new GcpClient(config);
   }
 
+  private createAzureClient(profileId: string, service?: AzureServiceName): AzureClient {
+    const config = this.getCloudAzureProfile(profileId, service);
+    return new AzureClient(config);
+  }
+
   private getCloudVercelProfile(profileId: string): VercelInstanceConfig {
     if (!this.cloudConfig.enabled) {
       throw new Error('Cloud tools are disabled in assistant.tools.cloud.enabled.');
@@ -9735,6 +10341,55 @@ export class ToolExecutor {
     return config;
   }
 
+  private getCloudAzureProfile(profileId: string, service?: AzureServiceName): AzureInstanceConfig {
+    if (!this.cloudConfig.enabled) {
+      throw new Error('Cloud tools are disabled in assistant.tools.cloud.enabled.');
+    }
+    const id = profileId.trim();
+    if (!id) {
+      throw new Error('profile is required');
+    }
+    const profile = (this.cloudConfig.azureProfiles ?? []).find((entry) => entry.id === id);
+    if (!profile) {
+      throw new Error(`Unknown Azure profile '${id}'.`);
+    }
+    const hasAccessToken = !!profile.accessToken?.trim();
+    const hasClientId = !!profile.clientId?.trim();
+    const hasClientSecret = !!profile.clientSecret?.trim();
+    if (!hasAccessToken && !(profile.tenantId?.trim() && hasClientId && hasClientSecret)) {
+      throw new Error(`Azure profile '${id}' does not have a resolved access token or service principal credentials.`);
+    }
+    if (hasClientId !== hasClientSecret) {
+      throw new Error(`Azure profile '${id}' must provide both clientId and clientSecret together.`);
+    }
+    const config: AzureInstanceConfig = {
+      id: profile.id,
+      name: profile.name,
+      subscriptionId: profile.subscriptionId,
+      tenantId: profile.tenantId,
+      accessToken: profile.accessToken,
+      clientId: profile.clientId,
+      clientSecret: profile.clientSecret,
+      defaultResourceGroup: profile.defaultResourceGroup,
+      blobBaseUrl: profile.blobBaseUrl,
+      endpoints: profile.endpoints,
+    };
+    const endpoint = this.describeAzureEndpoint(config, service ?? 'management');
+    const endpointHost = new URL(endpoint).hostname;
+    if (!this.isHostAllowed(endpointHost)) {
+      throw new Error(`Host '${endpointHost}' is not in allowedDomains.`);
+    }
+    if (config.blobBaseUrl?.trim()) {
+      const blobHost = new URL(config.blobBaseUrl).hostname;
+      if (!this.isHostAllowed(blobHost)) {
+        throw new Error(`Host '${blobHost}' is not in allowedDomains.`);
+      }
+    } else if (service === 'blob' && !this.isHostAllowed('blob.core.windows.net')) {
+      throw new Error(`Host 'blob.core.windows.net' is not in allowedDomains.`);
+    }
+    return config;
+  }
+
   private describeCloudEndpoint(profile: CpanelInstanceConfig): string {
     const ssl = profile.ssl !== false;
     const defaultPort = profile.type === 'whm'
@@ -9803,6 +10458,19 @@ export class ToolExecutor {
     }
   }
 
+  private describeAzureEndpoint(profile: AzureInstanceConfig, service: AzureServiceName, accountName?: string): string {
+    switch (service) {
+      case 'oauth2Token':
+        return profile.endpoints?.oauth2Token?.trim()
+          || `https://login.microsoftonline.com/${encodeURIComponent(profile.tenantId?.trim() || 'common')}/oauth2/v2.0/token`;
+      case 'blob':
+        return profile.blobBaseUrl?.trim() || `https://${accountName?.trim() || 'account'}.blob.core.windows.net`;
+      case 'management':
+      default:
+        return profile.endpoints?.management?.trim() || 'https://management.azure.com';
+    }
+  }
+
   private resolveGcpLocation(value: unknown, profileId: string, throwOnMissing: boolean = true): string {
     const explicit = asString(value).trim();
     if (explicit) return explicit;
@@ -9811,6 +10479,18 @@ export class ToolExecutor {
     if (fallback) return fallback;
     if (throwOnMissing) {
       throw new Error(`location is required when GCP profile '${profileId}' has no default location.`);
+    }
+    return '';
+  }
+
+  private resolveAzureResourceGroup(value: unknown, profileId: string, throwOnMissing: boolean = true): string {
+    const explicit = asString(value).trim();
+    if (explicit) return explicit;
+    const profile = (this.cloudConfig.azureProfiles ?? []).find((entry) => entry.id === profileId.trim());
+    const fallback = profile?.defaultResourceGroup?.trim();
+    if (fallback) return fallback;
+    if (throwOnMissing) {
+      throw new Error(`resourceGroup is required when Azure profile '${profileId}' has no default resource group.`);
     }
     return '';
   }

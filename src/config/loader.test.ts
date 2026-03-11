@@ -314,6 +314,38 @@ describe('validateConfig', () => {
     expect(validateConfig(config)).toEqual([]);
   });
 
+  it('should validate cloud Azure credential refs', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'cloud.azure.primary.clientId': { source: 'env', env: 'AZURE_CLIENT_ID' },
+            'cloud.azure.primary.clientSecret': { source: 'env', env: 'AZURE_CLIENT_SECRET' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          cloud: {
+            enabled: true,
+            azureProfiles: [{
+              id: 'azure-main',
+              name: 'Azure Main',
+              subscriptionId: 'sub-123',
+              tenantId: 'tenant-123',
+              clientIdCredentialRef: 'cloud.azure.primary.clientId',
+              clientSecretCredentialRef: 'cloud.azure.primary.clientSecret',
+              defaultResourceGroup: 'rg-main',
+            }],
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toEqual([]);
+  });
+
   it('should require telegram botToken when enabled', () => {
     const config: GuardianAgentConfig = {
       ...DEFAULT_CONFIG,

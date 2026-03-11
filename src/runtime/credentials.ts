@@ -190,6 +190,27 @@ export function resolveCloudCredentialConfig(
         `assistant.tools.cloud.gcpProfiles.${profile.id}.serviceAccountJson`,
       ),
     })),
+    azureProfiles: (config.azureProfiles ?? []).map((profile) => ({
+      ...profile,
+      accessToken: resolveCredentialValue(
+        profile.accessToken,
+        profile.accessTokenCredentialRef,
+        provider,
+        `assistant.tools.cloud.azureProfiles.${profile.id}.accessToken`,
+      ),
+      clientId: resolveCredentialValue(
+        profile.clientId,
+        profile.clientIdCredentialRef,
+        provider,
+        `assistant.tools.cloud.azureProfiles.${profile.id}.clientId`,
+      ),
+      clientSecret: resolveCredentialValue(
+        profile.clientSecret,
+        profile.clientSecretCredentialRef,
+        provider,
+        `assistant.tools.cloud.azureProfiles.${profile.id}.clientSecret`,
+      ),
+    })),
   };
 }
 

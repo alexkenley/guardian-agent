@@ -95,7 +95,7 @@ The current provider roadmap is:
 | 3 | Cloudflare | Implemented | Core DNS and SSL/TLS operations |
 | 4 | AWS | Implemented foundation | Broad service foundation across EC2, S3, Route53, Lambda, CloudWatch, RDS, IAM, and Cost Explorer |
 | 5 | GCP | Implemented foundation | Hyperscaler coverage focused on hosting/runtime, storage, DNS, and logging |
-| 6 | Azure | Planned | Hyperscaler coverage focused on VMs, app hosting, storage, DNS, and monitoring |
+| 6 | Azure | Implemented foundation | Hyperscaler coverage focused on VMs, app hosting, storage, DNS, and monitoring |
 | 7 | DigitalOcean | Planned stretch | Smaller hosting-oriented provider surface |
 
 This should be treated as a pragmatic infrastructure-management expansion, not a claim of absolute market uniqueness.
@@ -397,7 +397,7 @@ AWS has the largest blast radius, the broadest auth surface, and the highest ver
 
 ## Part 4: Cloudflare Integration
 
-### Proposed Tool Set — Category: `cloud`
+### Implemented Tool Set — Category: `cloud`
 
 | Tool | Purpose | Risk Level | Complexity |
 |------|---------|-----------|------------|
@@ -454,17 +454,18 @@ AWS has the largest blast radius, the broadest auth surface, and the highest ver
 
 | Tool | Purpose | Azure Service | Risk Level | Complexity |
 |------|---------|---------------|-----------|------------|
-| `azure_status` | Subscription, tenant, identity, resource group summary | ARM | read_only | LOW |
-| `azure_vms` | List/start/stop/restart/deallocate VMs | Compute | mutating | MODERATE |
-| `azure_app_service` | List and restart web apps, inspect config | App Service | mutating | MODERATE |
+| `azure_status` | Subscription metadata and resource group summary | ARM | read_only | LOW |
+| `azure_vms` | List/get/start/stop/restart/deallocate VMs | Compute | mutating | MODERATE |
+| `azure_app_service` | List/get web apps, inspect config, restart | App Service | mutating | MODERATE |
 | `azure_storage` | List accounts/containers/blobs and put/delete blobs | Storage | mutating | MODERATE |
-| `azure_dns` | List zones and mutate DNS records | Azure DNS | mutating | MODERATE |
-| `azure_monitor` | Metrics, activity logs, and diagnostic signals | Azure Monitor | read_only | LOW |
+| `azure_dns` | List zones/records and mutate DNS record sets | Azure DNS | mutating | MODERATE |
+| `azure_monitor` | Metrics and activity logs | Azure Monitor | read_only | LOW |
 
 ### API / SDK
 
-- Prefer the official Azure SDK for JavaScript/TypeScript
-- Use service principal, managed identity, or other standard Azure credential flows via `assistant.credentials.refs`
+- Implemented via direct REST clients against Azure ARM and Blob APIs
+- Authentication currently supports explicit bearer tokens or service principal client-credentials via `assistant.credentials.refs`
+- Managed identity and broader Azure credential-chain support can be added later if needed
 
 ### Estimated LOC
 
@@ -909,7 +910,7 @@ This suite would give GuardianAgent a differentiated infrastructure-management s
 | Vercel deployment mgmt | Limited/none | No | Rare | **Implemented** |
 | AWS infrastructure | No | No | Limited | **Implemented foundation** |
 | GCP infrastructure | No | No | Limited | **Implemented foundation** |
-| Azure infrastructure | No | No | Limited | **Planned** |
+| Azure infrastructure | No | No | Limited | **Implemented foundation** |
 | Cloudflare WAF/DNS | Limited/none | No | Rare | **Implemented foundation** |
 | Security-gated cloud ops | N/A | N/A | N/A | **4-layer Guardian** |
 | Network + cloud unified | No | No | No | **Yes** |

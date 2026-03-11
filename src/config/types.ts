@@ -916,6 +916,39 @@ export interface AssistantCloudGcpProfileConfig {
   };
 }
 
+/** An Azure subscription profile for cloud operations. */
+export interface AssistantCloudAzureProfileConfig {
+  /** Unique profile id referenced by Azure tools. */
+  id: string;
+  /** Human-readable label for operator-facing output. */
+  name: string;
+  /** Azure subscription id. */
+  subscriptionId: string;
+  /** Optional tenant id/domain for OAuth token acquisition. */
+  tenantId?: string;
+  /** Optional inline OAuth bearer token (supports ${ENV_VAR}). */
+  accessToken?: string;
+  /** Optional credential reference for the OAuth bearer token. */
+  accessTokenCredentialRef?: string;
+  /** Optional inline service principal client id. */
+  clientId?: string;
+  /** Optional credential reference for service principal client id. */
+  clientIdCredentialRef?: string;
+  /** Optional inline service principal client secret. */
+  clientSecret?: string;
+  /** Optional credential reference for service principal client secret. */
+  clientSecretCredentialRef?: string;
+  /** Optional default resource group for group-scoped operations. */
+  defaultResourceGroup?: string;
+  /** Optional custom blob base URL used instead of https://<account>.blob.core.windows.net. */
+  blobBaseUrl?: string;
+  /** Optional per-service endpoint overrides for tests or sovereign clouds. */
+  endpoints?: {
+    oauth2Token?: string;
+    management?: string;
+  };
+}
+
 /** Hosting and cloud-provider tool configuration. */
 export interface AssistantCloudConfig {
   /** Enable built-in hosting/cloud tools. */
@@ -930,6 +963,8 @@ export interface AssistantCloudConfig {
   awsProfiles?: AssistantCloudAwsProfileConfig[];
   /** Available GCP profiles. */
   gcpProfiles?: AssistantCloudGcpProfileConfig[];
+  /** Available Azure profiles. */
+  azureProfiles?: AssistantCloudAzureProfileConfig[];
 }
 
 /** Controls which policy areas the assistant can modify with user approval via chat. */
@@ -1269,6 +1304,9 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         'gmail.googleapis.com',
         'www.googleapis.com',
         'googleapis.com',
+        'management.azure.com',
+        'login.microsoftonline.com',
+        'blob.core.windows.net',
         'html.duckduckgo.com',
         'api.search.brave.com',
         'api.perplexity.ai',
@@ -1282,6 +1320,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         cloudflareProfiles: [],
         awsProfiles: [],
         gcpProfiles: [],
+        azureProfiles: [],
       },
       qmd: {
         enabled: true,

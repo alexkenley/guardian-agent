@@ -269,4 +269,39 @@ describe('resolveRuntimeCredentialView', () => {
     const resolved = resolveRuntimeCredentialView(config);
     expect(resolved.resolvedCloud?.gcpProfiles?.[0]?.serviceAccountJson).toContain('guardian@example.iam.gserviceaccount.com');
   });
+
+  it('resolves Azure profile credentials from credential refs', () => {
+    vi.stubEnv('AZURE_CLIENT_ID', 'azure-client-id');
+    vi.stubEnv('AZURE_CLIENT_SECRET', 'azure-client-secret');
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'cloud.azure.primary.clientId': { source: 'env', env: 'AZURE_CLIENT_ID' },
+            'cloud.azure.primary.clientSecret': { source: 'env', env: 'AZURE_CLIENT_SECRET' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          cloud: {
+            enabled: true,
+            azureProfiles: [{
+              id: 'azure-main',
+              name: 'Azure Main',
+              subscriptionId: 'sub-123',
+              tenantId: 'tenant-123',
+              clientIdCredentialRef: 'cloud.azure.primary.clientId',
+              clientSecretCredentialRef: 'cloud.azure.primary.clientSecret',
+            }],
+          },
+        },
+      },
+    };
+
+    const resolved = resolveRuntimeCredentialView(config);
+    expect(resolved.resolvedCloud?.azureProfiles?.[0]?.clientId).toBe('azure-client-id');
+    expect(resolved.resolvedCloud?.azureProfiles?.[0]?.clientSecret).toBe('azure-client-secret');
+  });
 });

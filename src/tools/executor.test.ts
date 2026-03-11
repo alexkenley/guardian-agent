@@ -1297,6 +1297,158 @@ describe('ToolExecutor', () => {
     ]);
   });
 
+  it('executes Azure read-only tools through an Azure profile', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['management.azure.com', 'blob.core.windows.net', 'login.microsoftonline.com'],
+      cloudConfig: {
+        enabled: true,
+        azureProfiles: [{
+          id: 'azure-main',
+          name: 'Azure Main',
+          subscriptionId: 'sub-123',
+          accessToken: 'azure-secret',
+          defaultResourceGroup: 'rg-main',
+        }],
+      },
+    });
+
+    const fakeClient = {
+      config: { id: 'azure-main', name: 'Azure Main', subscriptionId: 'sub-123', defaultResourceGroup: 'rg-main' },
+      getSubscription: async () => ({ subscriptionId: 'sub-123', displayName: 'Primary' }),
+      listResourceGroups: async () => ({ value: [{ name: 'rg-main' }] }),
+      listActivityLogs: async () => ({ value: [{ operationName: { value: 'Microsoft.Compute/virtualMachines/start/action' } }] }),
+    };
+    (executor as unknown as { createAzureClient: () => typeof fakeClient }).createAzureClient = () => fakeClient;
+    (executor as unknown as { describeAzureEndpoint: () => string }).describeAzureEndpoint = () => 'https://management.azure.com';
+
+    const status = await executor.runTool({
+      toolName: 'azure_status',
+      args: { profile: 'azure-main' },
+      origin: 'cli',
+    });
+    expect(status.success).toBe(true);
+    expect(status.output).toMatchObject({
+      profile: 'azure-main',
+      subscriptionId: 'sub-123',
+      subscription: { subscriptionId: 'sub-123' },
+      resourceGroups: { value: [{ name: 'rg-main' }] },
+    });
+
+    const monitor = await executor.runTool({
+      toolName: 'azure_monitor',
+      args: { profile: 'azure-main', action: 'activity_logs' },
+      origin: 'cli',
+    });
+    expect(monitor.success).toBe(true);
+    expect(monitor.output).toMatchObject({
+      action: 'activity_logs',
+      data: { value: [{ operationName: { value: 'Microsoft.Compute/virtualMachines/start/action' } }] },
+    });
+  });
+
+  it('requires approval for Azure VM and DNS mutations', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['management.azure.com', 'blob.core.windows.net', 'login.microsoftonline.com'],
+      cloudConfig: {
+        enabled: true,
+        azureProfiles: [{
+          id: 'azure-main',
+          name: 'Azure Main',
+          subscriptionId: 'sub-123',
+          accessToken: 'azure-secret',
+          defaultResourceGroup: 'rg-main',
+        }],
+      },
+    });
+
+    const calls: Array<{ method: string; payload: unknown }> = [];
+    const fakeClient = {
+      config: { id: 'azure-main', name: 'Azure Main', subscriptionId: 'sub-123', defaultResourceGroup: 'rg-main' },
+      startVm: async (resourceGroup: string, vmName: string) => {
+        calls.push({ method: 'startVm', payload: { resourceGroup, vmName } });
+        return { name: 'vm-op-1' };
+      },
+      upsertDnsRecordSet: async (resourceGroup: string, zoneName: string, recordType: string, relativeRecordSetName: string, recordSet: unknown) => {
+        calls.push({ method: 'upsertDnsRecordSet', payload: { resourceGroup, zoneName, recordType, relativeRecordSetName, recordSet } });
+        return { id: 'dns-op-1' };
+      },
+    };
+    (executor as unknown as { createAzureClient: () => typeof fakeClient }).createAzureClient = () => fakeClient;
+    (executor as unknown as { describeAzureEndpoint: () => string }).describeAzureEndpoint = () => 'https://management.azure.com';
+
+    const vmPending = await executor.runTool({
+      toolName: 'azure_vms',
+      args: { profile: 'azure-main', action: 'start', vmName: 'web-1' },
+      origin: 'cli',
+    });
+    expect(vmPending.success).toBe(false);
+    expect(vmPending.status).toBe('pending_approval');
+    const vmApproved = await executor.decideApproval(vmPending.approvalId!, 'approved', 'tester');
+    expect(vmApproved.success).toBe(true);
+    expect(vmApproved.result?.output).toMatchObject({
+      action: 'start',
+      resourceGroup: 'rg-main',
+      vmName: 'web-1',
+    });
+
+    const dnsPending = await executor.runTool({
+      toolName: 'azure_dns',
+      args: {
+        profile: 'azure-main',
+        action: 'upsert_record_set',
+        zoneName: 'example.com',
+        recordType: 'A',
+        relativeRecordSetName: 'app',
+        recordSet: {
+          properties: {
+            TTL: 300,
+            ARecords: [{ ipv4Address: '1.2.3.4' }],
+          },
+        },
+      },
+      origin: 'cli',
+    });
+    expect(dnsPending.success).toBe(false);
+    expect(dnsPending.status).toBe('pending_approval');
+    const dnsApproved = await executor.decideApproval(dnsPending.approvalId!, 'approved', 'tester');
+    expect(dnsApproved.success).toBe(true);
+    expect(dnsApproved.result?.output).toMatchObject({
+      action: 'upsert_record_set',
+      resourceGroup: 'rg-main',
+      zoneName: 'example.com',
+    });
+
+    expect(calls).toEqual([
+      {
+        method: 'startVm',
+        payload: { resourceGroup: 'rg-main', vmName: 'web-1' },
+      },
+      {
+        method: 'upsertDnsRecordSet',
+        payload: {
+          resourceGroup: 'rg-main',
+          zoneName: 'example.com',
+          recordType: 'A',
+          relativeRecordSetName: 'app',
+          recordSet: {
+            properties: {
+              TTL: 300,
+              ARecords: [{ ipv4Address: '1.2.3.4' }],
+            },
+          },
+        },
+      },
+    ]);
+  });
+
   it('rejects fs_write content containing secrets before writing', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
