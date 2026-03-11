@@ -885,6 +885,37 @@ export interface AssistantCloudAwsProfileConfig {
   };
 }
 
+/** A GCP project profile for cloud operations. */
+export interface AssistantCloudGcpProfileConfig {
+  /** Unique profile id referenced by GCP tools. */
+  id: string;
+  /** Human-readable label for operator-facing output. */
+  name: string;
+  /** Default GCP project id. */
+  projectId: string;
+  /** Optional default regional/locational scope for compute and Cloud Run operations. */
+  location?: string;
+  /** Optional inline OAuth bearer token (supports ${ENV_VAR}). */
+  accessToken?: string;
+  /** Optional credential reference for the OAuth bearer token. */
+  accessTokenCredentialRef?: string;
+  /** Optional inline service account JSON string (supports ${ENV_VAR}). */
+  serviceAccountJson?: string;
+  /** Optional credential reference for the service account JSON string. */
+  serviceAccountCredentialRef?: string;
+  /** Optional per-service endpoint overrides for tests or emulators. */
+  endpoints?: {
+    oauth2Token?: string;
+    cloudResourceManager?: string;
+    serviceUsage?: string;
+    compute?: string;
+    run?: string;
+    storage?: string;
+    dns?: string;
+    logging?: string;
+  };
+}
+
 /** Hosting and cloud-provider tool configuration. */
 export interface AssistantCloudConfig {
   /** Enable built-in hosting/cloud tools. */
@@ -897,6 +928,8 @@ export interface AssistantCloudConfig {
   cloudflareProfiles?: AssistantCloudCloudflareProfileConfig[];
   /** Available AWS profiles. */
   awsProfiles?: AssistantCloudAwsProfileConfig[];
+  /** Available GCP profiles. */
+  gcpProfiles?: AssistantCloudGcpProfileConfig[];
 }
 
 /** Controls which policy areas the assistant can modify with user approval via chat. */
@@ -1235,6 +1268,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         'moltbook.com',
         'gmail.googleapis.com',
         'www.googleapis.com',
+        'googleapis.com',
         'html.duckduckgo.com',
         'api.search.brave.com',
         'api.perplexity.ai',
@@ -1247,6 +1281,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         vercelProfiles: [],
         cloudflareProfiles: [],
         awsProfiles: [],
+        gcpProfiles: [],
       },
       qmd: {
         enabled: true,

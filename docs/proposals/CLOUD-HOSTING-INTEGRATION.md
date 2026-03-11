@@ -1,7 +1,7 @@
-# Proposal: Cloud & Hosting Management Integration for GuardianAgent
+# Implementation Document: Cloud & Hosting Management for GuardianAgent
 
 **Date:** 2026-03-11
-**Status:** Draft
+**Status:** Active Implementation Document
 
 ---
 
@@ -9,13 +9,16 @@
 
 Cloud and hosting operations are a strong product extension for GuardianAgent, especially because the app already has approval gating, policy controls, audit history, and operator-facing output surfaces.
 
-This proposal has been revised against official cPanel/WHM and Vercel documentation on **2026-03-11**. The original draft was directionally good, but it was too broad and included several API assumptions that were deprecated, plugin-specific, or too optimistic for GuardianAgent's current architecture.
+This implementation document has been revised against official provider documentation on **2026-03-11**. The original draft was directionally good, but it was too broad and included several API assumptions that were deprecated, plugin-specific, or too optimistic for GuardianAgent's current architecture.
 
 The recommended implementation order is:
 - **Phase 1:** cPanel/WHM core account, domain, DNS, backup, and SSL operations
 - **Phase 2:** Vercel projects, deployments, project domains, environment variables, and logs
 - **Phase 3:** Cloudflare DNS and SSL settings
-- **Later:** AWS and other providers after the hosting path proves operationally useful
+- **Phase 4:** AWS foundation
+- **Phase 5:** GCP foundation
+- **Phase 6:** Azure foundation
+- **Phase 7:** DigitalOcean stretch
 
 ### Delivery Breakdown
 
@@ -80,6 +83,20 @@ This repository now also implements the core of **Phase 4**:
 - `aws_costs`
 
 The remaining work for this provider family is primarily deeper action coverage per AWS service, richer pagination/filter helpers, and live-environment verification against a staged AWS account.
+
+### Cloud Service Providers
+
+The current provider roadmap is:
+
+| Phase | Provider Family | Status | Notes |
+|------|------------------|--------|------|
+| 1 | cPanel/WHM | Implemented | Core account, domain, DNS, backup, SSL, and server operations |
+| 2 | Vercel | Implemented | Core project, deployment, domain, env, and log operations |
+| 3 | Cloudflare | Implemented | Core DNS and SSL/TLS operations |
+| 4 | AWS | Implemented foundation | Broad service foundation across EC2, S3, Route53, Lambda, CloudWatch, RDS, IAM, and Cost Explorer |
+| 5 | GCP | Implemented foundation | Hyperscaler coverage focused on hosting/runtime, storage, DNS, and logging |
+| 6 | Azure | Planned | Hyperscaler coverage focused on VMs, app hosting, storage, DNS, and monitoring |
+| 7 | DigitalOcean | Planned stretch | Smaller hosting-oriented provider surface |
 
 This should be treated as a pragmatic infrastructure-management expansion, not a claim of absolute market uniqueness.
 
@@ -255,7 +272,7 @@ Auth: Bearer token (`Authorization: Bearer {token}`)
 
 Do not hardcode a guessed request-per-minute limit. Respect the documented Vercel rate-limit headers and backoff behavior instead.
 
-### Proposed Tool Set — Category: `cloud`
+### Implemented Tool Set — Category: `cloud`
 
 | Tool | Purpose | Risk Level | Complexity |
 |------|---------|-----------|------------|
@@ -324,13 +341,13 @@ class VercelClient {
 
 ---
 
-## Part 3: AWS Integration (Deferred Foundation)
+## Part 3: AWS Integration
 
 ### Approach
 
 Rather than wrapping the entire AWS SDK, we would implement a focused set of tools for the most common infrastructure management tasks using `@aws-sdk/*` modular packages.
 
-AWS should **not** be part of the first implementation wave. It has the largest blast radius, the broadest auth surface, and the highest verification burden.
+AWS has the largest blast radius, the broadest auth surface, and the highest verification burden. For that reason, the implementation should stay intentionally narrow and service-scoped even though the foundation layer now exists in the repository.
 
 ### Possible Future Tool Set — Category: `cloud`
 
@@ -400,7 +417,68 @@ AWS should **not** be part of the first implementation wave. It has the largest 
 
 ---
 
-## Part 5: DigitalOcean Integration (Stretch)
+## Part 5: GCP Integration
+
+### Proposed Tool Set — Category: `cloud`
+
+| Tool | Purpose | GCP Service | Risk Level | Complexity |
+|------|---------|-------------|-----------|------------|
+| `gcp_status` | Project metadata and enabled services | Resource Manager, Service Usage | read_only | LOW |
+| `gcp_compute` | List/start/stop/reset VM instances | Compute Engine | mutating | MODERATE |
+| `gcp_cloud_run` | List services/revisions, inspect a service, update traffic | Cloud Run | mutating | MODERATE |
+| `gcp_storage` | List buckets, list/get/put/delete objects | Cloud Storage | mutating | MODERATE |
+| `gcp_dns` | List managed zones/records and mutate record sets | Cloud DNS | mutating | MODERATE |
+| `gcp_logs` | Read log entries for projects/services | Cloud Logging | read_only | LOW |
+
+### API / SDK
+
+- Implemented via direct REST clients against the official Google Cloud APIs
+- Authentication currently supports explicit bearer tokens or service-account JSON via `assistant.credentials.refs`
+- Service-account profiles use OAuth JWT bearer exchange; broader ADC support can be added later if needed
+
+### Estimated LOC
+
+| Component | LOC |
+|-----------|-----|
+| GCP client wrappers | ~300 |
+| GCP tools (6 tools) | ~700 |
+| Config types | ~120 |
+| Tests | ~450 |
+| **Total** | **~1,570** |
+
+---
+
+## Part 6: Azure Integration
+
+### Proposed Tool Set — Category: `cloud`
+
+| Tool | Purpose | Azure Service | Risk Level | Complexity |
+|------|---------|---------------|-----------|------------|
+| `azure_status` | Subscription, tenant, identity, resource group summary | ARM | read_only | LOW |
+| `azure_vms` | List/start/stop/restart/deallocate VMs | Compute | mutating | MODERATE |
+| `azure_app_service` | List and restart web apps, inspect config | App Service | mutating | MODERATE |
+| `azure_storage` | List accounts/containers/blobs and put/delete blobs | Storage | mutating | MODERATE |
+| `azure_dns` | List zones and mutate DNS records | Azure DNS | mutating | MODERATE |
+| `azure_monitor` | Metrics, activity logs, and diagnostic signals | Azure Monitor | read_only | LOW |
+
+### API / SDK
+
+- Prefer the official Azure SDK for JavaScript/TypeScript
+- Use service principal, managed identity, or other standard Azure credential flows via `assistant.credentials.refs`
+
+### Estimated LOC
+
+| Component | LOC |
+|-----------|-----|
+| Azure client wrappers | ~320 |
+| Azure tools (6 tools) | ~760 |
+| Config types | ~120 |
+| Tests | ~450 |
+| **Total** | **~1,650** |
+
+---
+
+## Part 7: DigitalOcean Integration (Stretch)
 
 ### Proposed Tool Set — Category: `cloud`
 
@@ -765,7 +843,7 @@ Add a **Cloud** section in Configuration for:
 | Tests | 300 |
 | **Subtotal** | **1,160** |
 
-### Phase 4: AWS Foundation (Later)
+### Phase 4: AWS Foundation
 
 | Task | Est. LOC |
 |------|---------|
@@ -775,7 +853,27 @@ Add a **Cloud** section in Configuration for:
 | Tests | 500 |
 | **Subtotal** | **1,870** |
 
-### Phase 5: DigitalOcean (Week 6-7, stretch)
+### Phase 5: GCP Foundation
+
+| Task | Est. LOC |
+|------|---------|
+| GCP client wrappers | 300 |
+| GCP tools (6 tools) | 700 |
+| Config types | 120 |
+| Tests | 450 |
+| **Subtotal** | **1,570** |
+
+### Phase 6: Azure Foundation
+
+| Task | Est. LOC |
+|------|---------|
+| Azure client wrappers | 320 |
+| Azure tools (6 tools) | 760 |
+| Config types | 120 |
+| Tests | 450 |
+| **Subtotal** | **1,650** |
+
+### Phase 7: DigitalOcean (Week 6-7, stretch)
 
 | Task | Est. LOC |
 |------|---------|
@@ -794,8 +892,10 @@ Add a **Cloud** section in Configuration for:
 | 2 | Vercel | 9 | 2,060 |
 | 3 | Cloudflare | 8 | 1,160 |
 | 4 | AWS | 10 | 1,870 |
-| 5 | DigitalOcean | 6 | 800 |
-| **Total** | **5 providers + shared foundations** | **48 tools** | **~9,990** |
+| 5 | GCP | 6 | 1,570 |
+| 6 | Azure | 6 | 1,650 |
+| 7 | DigitalOcean | 6 | 800 |
+| **Total** | **7 providers + shared foundations** | **60 tools** | **~13,210** |
 
 ---
 
@@ -805,10 +905,12 @@ This suite would give GuardianAgent a differentiated infrastructure-management s
 
 | Capability | OpenClaw | Claude Code | Other Agents | GuardianAgent |
 |-----------|---------|------------|-------------|---------------|
-| cPanel/WHM management | Limited/none | No | Rare | **Planned** |
-| Vercel deployment mgmt | Limited/none | No | Rare | **Planned** |
-| AWS infrastructure | No | No | Limited | **Future** |
-| Cloudflare WAF/DNS | Limited/none | No | Rare | **Planned** |
+| cPanel/WHM management | Limited/none | No | Rare | **Implemented** |
+| Vercel deployment mgmt | Limited/none | No | Rare | **Implemented** |
+| AWS infrastructure | No | No | Limited | **Implemented foundation** |
+| GCP infrastructure | No | No | Limited | **Implemented foundation** |
+| Azure infrastructure | No | No | Limited | **Planned** |
+| Cloudflare WAF/DNS | Limited/none | No | Rare | **Implemented foundation** |
 | Security-gated cloud ops | N/A | N/A | N/A | **4-layer Guardian** |
 | Network + cloud unified | No | No | No | **Yes** |
 

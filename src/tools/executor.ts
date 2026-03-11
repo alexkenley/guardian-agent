@@ -50,6 +50,7 @@ import { parseAirportWifi, parseNetshWifi, parseNmcliWifi, correlateWifiClients 
 import { AwsClient, type AwsInstanceConfig } from './cloud/aws-client.js';
 import { CpanelClient, type CpanelInstanceConfig } from './cloud/cpanel-client.js';
 import { CloudflareClient, type CloudflareInstanceConfig } from './cloud/cloudflare-client.js';
+import { GcpClient, type GcpInstanceConfig, type GcpServiceName } from './cloud/gcp-client.js';
 import { VercelClient, type VercelInstanceConfig } from './cloud/vercel-client.js';
 
 const MAX_JOBS = 200;
@@ -90,6 +91,7 @@ function emptyCloudConfig(): AssistantCloudConfig {
     vercelProfiles: [],
     cloudflareProfiles: [],
     awsProfiles: [],
+    gcpProfiles: [],
   };
 }
 
@@ -988,6 +990,34 @@ export class ToolExecutor {
       return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
     }
 
+    if (toolName === 'gcp_status' || toolName === 'gcp_logs') {
+      return 'allow';
+    }
+
+    if (toolName === 'gcp_compute') {
+      const action = asString(args.action, 'list').trim().toLowerCase();
+      if (action === 'list' || action === 'get') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'gcp_cloud_run') {
+      const action = asString(args.action, 'list_services').trim().toLowerCase();
+      if (action === 'list_services' || action === 'get_service' || action === 'list_revisions') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'gcp_storage') {
+      const action = asString(args.action, 'list_buckets').trim().toLowerCase();
+      if (action === 'list_buckets' || action === 'list_objects' || action === 'get_object') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'gcp_dns') {
+      const action = asString(args.action, 'list_zones').trim().toLowerCase();
+      if (action === 'list_zones' || action === 'list_records') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
     if (toolName === 'whm_dns') {
       const action = asString(args.action, 'list').trim().toLowerCase();
       if (action === 'list' || action === 'parse_zone') return 'allow';
@@ -1409,6 +1439,88 @@ export class ToolExecutor {
       if (!isRecord(args.timePeriod)) return 'timePeriod object is required for aws_costs';
     }
 
+    if (toolName === 'gcp_status') {
+      try {
+        this.createGcpClient(requireString(args.profile, 'profile'), 'cloudResourceManager');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    if (toolName === 'gcp_compute') {
+      try {
+        this.createGcpClient(requireString(args.profile, 'profile'), 'compute');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'get' || action === 'start' || action === 'stop' || action === 'reset') && !asString(args.zone).trim()) {
+        return `zone is required for ${action}`;
+      }
+      if ((action === 'get' || action === 'start' || action === 'stop' || action === 'reset') && !asString(args.instance).trim()) {
+        return `instance is required for ${action}`;
+      }
+    }
+
+    if (toolName === 'gcp_cloud_run') {
+      try {
+        this.createGcpClient(requireString(args.profile, 'profile'), 'run');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'list_services' || action === 'list_revisions' || action === 'get_service' || action === 'update_traffic') && !this.resolveGcpLocation(args.location, requireString(args.profile, 'profile'), false)) {
+        return `location is required for ${action} when the GCP profile has no default location`;
+      }
+      if ((action === 'get_service' || action === 'update_traffic') && !asString(args.service).trim()) {
+        return `service is required for ${action}`;
+      }
+      if (action === 'update_traffic' && !Array.isArray(args.traffic)) {
+        return 'traffic array is required for update_traffic';
+      }
+    }
+
+    if (toolName === 'gcp_storage') {
+      try {
+        this.createGcpClient(requireString(args.profile, 'profile'), 'storage');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'list_objects' || action === 'get_object' || action === 'put_object' || action === 'delete_object') && !asString(args.bucket).trim()) {
+        return `bucket is required for ${action}`;
+      }
+      if ((action === 'get_object' || action === 'put_object' || action === 'delete_object') && !asString(args.object).trim()) {
+        return `object is required for ${action}`;
+      }
+      if (action === 'put_object' && !asString(args.body).trim()) {
+        return 'body is required for put_object';
+      }
+    }
+
+    if (toolName === 'gcp_dns') {
+      try {
+        this.createGcpClient(requireString(args.profile, 'profile'), 'dns');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'list_records' || action === 'change_records') && !asString(args.managedZone).trim()) {
+        return `managedZone is required for ${action}`;
+      }
+      if (action === 'change_records' && !Array.isArray(args.additions) && !Array.isArray(args.deletions)) {
+        return 'additions or deletions array is required for change_records';
+      }
+    }
+
+    if (toolName === 'gcp_logs') {
+      try {
+        this.createGcpClient(requireString(args.profile, 'profile'), 'logging');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+    }
+
     if (toolName === 'whm_dns') {
       try {
         this.createWhmClient(requireString(args.profile, 'profile'));
@@ -1785,6 +1897,37 @@ export class ToolExecutor {
       }
       case 'aws_costs':
         return `Would query AWS cost and usage for profile '${args.profile}'`;
+      case 'gcp_status':
+        return `Would inspect GCP project status for profile '${args.profile}'`;
+      case 'gcp_compute': {
+        const action = asString(args.action, 'list').trim().toLowerCase();
+        if (action === 'start' || action === 'stop' || action === 'reset') return `Would ${action} GCE instance '${args.instance}' in zone '${args.zone}'`;
+        if (action === 'get') return `Would inspect GCE instance '${args.instance}' in zone '${args.zone}'`;
+        return `Would list GCE instances for profile '${args.profile}'`;
+      }
+      case 'gcp_cloud_run': {
+        const action = asString(args.action, 'list_services').trim().toLowerCase();
+        if (action === 'get_service') return `Would inspect Cloud Run service '${args.service}'`;
+        if (action === 'update_traffic') return `Would update Cloud Run traffic for service '${args.service}'`;
+        if (action === 'list_revisions') return `Would list Cloud Run revisions in location '${args.location ?? '(profile default)'}'`;
+        return `Would list Cloud Run services in location '${args.location ?? '(profile default)'}'`;
+      }
+      case 'gcp_storage': {
+        const action = asString(args.action, 'list_buckets').trim().toLowerCase();
+        if (action === 'put_object') return `Would put GCS object '${args.object}' in bucket '${args.bucket}'`;
+        if (action === 'delete_object') return `Would delete GCS object '${args.object}' from bucket '${args.bucket}'`;
+        if (action === 'get_object') return `Would fetch GCS object '${args.object}' from bucket '${args.bucket}'`;
+        if (action === 'list_objects') return `Would list GCS objects in bucket '${args.bucket}'`;
+        return `Would list GCS buckets for profile '${args.profile}'`;
+      }
+      case 'gcp_dns': {
+        const action = asString(args.action, 'list_zones').trim().toLowerCase();
+        if (action === 'change_records') return `Would change Cloud DNS records in managed zone '${args.managedZone}'`;
+        if (action === 'list_records') return `Would list Cloud DNS records in managed zone '${args.managedZone}'`;
+        return `Would list Cloud DNS managed zones for profile '${args.profile}'`;
+      }
+      case 'gcp_logs':
+        return `Would query Cloud Logging entries for profile '${args.profile}'`;
       case 'whm_dns': {
         const action = asString(args.action, 'list').trim().toLowerCase();
         if (action === 'create_zone') return `Would create WHM DNS zone '${args.domain}'`;
@@ -6649,6 +6792,426 @@ export class ToolExecutor {
 
     this.registry.register(
       {
+        name: 'gcp_status',
+        description: 'Inspect GCP project identity and enabled services. Read-only.',
+        shortDescription: 'Inspect GCP project metadata and enabled services.',
+        risk: 'read_only',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.gcpProfiles id.' },
+            includeServices: { type: 'boolean', description: 'Include enabled services list (default: true).' },
+            servicesPageSize: { type: 'number', description: 'Optional enabled-services page size.' },
+          },
+          required: ['profile'],
+        },
+      },
+      async (args, request) => {
+        let client: GcpClient;
+        try {
+          client = this.createGcpClient(requireString(args.profile, 'profile'), 'cloudResourceManager');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        const includeServices = args.includeServices !== false;
+        this.guardAction(request, 'http_request', {
+          url: this.describeGcpEndpoint(client.config, 'cloudResourceManager'),
+          method: 'GET',
+          tool: 'gcp_status',
+          projectId: client.config.projectId,
+        });
+        try {
+          const [project, services] = await Promise.all([
+            client.getProject(),
+            includeServices
+              ? client.listEnabledServices(Number.isFinite(Number(args.servicesPageSize)) ? Number(args.servicesPageSize) : undefined)
+              : Promise.resolve(null),
+          ]);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              projectId: client.config.projectId,
+              project,
+              services,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `GCP status request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'gcp_compute',
+        description: 'List, inspect, start, stop, or reset Compute Engine VM instances.',
+        shortDescription: 'Manage GCP Compute Engine VM instances.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.gcpProfiles id.' },
+            action: { type: 'string', description: 'list, get, start, stop, or reset.' },
+            zone: { type: 'string', description: 'Zone for get/start/stop/reset.' },
+            instance: { type: 'string', description: 'Instance name for get/start/stop/reset.' },
+            filter: { type: 'string', description: 'Optional Compute Engine filter for list.' },
+            maxResults: { type: 'number', description: 'Optional max results for list.' },
+            discardLocalSsd: { type: 'boolean', description: 'Optional discardLocalSsd for stop.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list', 'get', 'start', 'stop', 'reset'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list, get, start, stop, or reset.' };
+        }
+        let client: GcpClient;
+        try {
+          client = this.createGcpClient(requireString(args.profile, 'profile'), 'compute');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        this.guardAction(request, 'http_request', {
+          url: this.describeGcpEndpoint(client.config, 'compute'),
+          method: action === 'list' || action === 'get' ? 'GET' : 'POST',
+          tool: 'gcp_compute',
+          action,
+          projectId: client.config.projectId,
+          zone: asString(args.zone).trim() || undefined,
+          instance: asString(args.instance).trim() || undefined,
+        });
+        try {
+          const zone = asString(args.zone).trim();
+          const instance = asString(args.instance).trim();
+          const result = action === 'list'
+            ? await client.listComputeInstances({
+              filter: asString(args.filter).trim() || undefined,
+              maxResults: Number.isFinite(Number(args.maxResults)) ? Number(args.maxResults) : undefined,
+            })
+            : action === 'get'
+              ? await client.getComputeInstance(zone, instance)
+              : action === 'start'
+                ? await client.startComputeInstance(zone, instance)
+                : action === 'stop'
+                  ? await client.stopComputeInstance(zone, instance, args.discardLocalSsd === undefined ? undefined : !!args.discardLocalSsd)
+                  : await client.resetComputeInstance(zone, instance);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              projectId: client.config.projectId,
+              action,
+              zone: zone || undefined,
+              instance: instance || undefined,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `GCP compute request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'gcp_cloud_run',
+        description: 'List Cloud Run services/revisions, inspect a service, or update service traffic.',
+        shortDescription: 'Inspect or adjust GCP Cloud Run services.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.gcpProfiles id.' },
+            action: { type: 'string', description: 'list_services, get_service, list_revisions, or update_traffic.' },
+            location: { type: 'string', description: 'Region/location. Falls back to profile default.' },
+            service: { type: 'string', description: 'Cloud Run service name for get_service/update_traffic.' },
+            filter: { type: 'string', description: 'Optional filter for list_revisions.' },
+            pageSize: { type: 'number', description: 'Optional max results.' },
+            traffic: { type: 'array', description: 'Traffic targets for update_traffic.' },
+            etag: { type: 'string', description: 'Optional etag for update_traffic concurrency control.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list_services', 'get_service', 'list_revisions', 'update_traffic'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list_services, get_service, list_revisions, or update_traffic.' };
+        }
+        let client: GcpClient;
+        try {
+          client = this.createGcpClient(requireString(args.profile, 'profile'), 'run');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        const location = this.resolveGcpLocation(args.location, client.config.id);
+        this.guardAction(request, 'http_request', {
+          url: this.describeGcpEndpoint(client.config, 'run'),
+          method: action === 'update_traffic' ? 'PATCH' : 'GET',
+          tool: 'gcp_cloud_run',
+          action,
+          projectId: client.config.projectId,
+          location,
+          service: asString(args.service).trim() || undefined,
+        });
+        try {
+          const result = action === 'list_services'
+            ? await client.listCloudRunServices(location, Number.isFinite(Number(args.pageSize)) ? Number(args.pageSize) : undefined)
+            : action === 'get_service'
+              ? await client.getCloudRunService(location, requireString(args.service, 'service').trim())
+              : action === 'list_revisions'
+                ? await client.listCloudRunRevisions(
+                  location,
+                  asString(args.filter).trim() || undefined,
+                  Number.isFinite(Number(args.pageSize)) ? Number(args.pageSize) : undefined,
+                )
+                : await client.updateCloudRunTraffic(
+                  location,
+                  requireString(args.service, 'service').trim(),
+                  Array.isArray(args.traffic) ? args.traffic : [],
+                  asString(args.etag).trim() || undefined,
+                );
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              projectId: client.config.projectId,
+              action,
+              location,
+              service: asString(args.service).trim() || undefined,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `GCP Cloud Run request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'gcp_storage',
+        description: 'List Cloud Storage buckets/objects or read/write object text.',
+        shortDescription: 'Manage GCP Cloud Storage buckets and objects.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.gcpProfiles id.' },
+            action: { type: 'string', description: 'list_buckets, list_objects, get_object, put_object, or delete_object.' },
+            bucket: { type: 'string', description: 'Bucket name.' },
+            object: { type: 'string', description: 'Object name/path.' },
+            prefix: { type: 'string', description: 'Optional object prefix for list_objects.' },
+            maxResults: { type: 'number', description: 'Optional max results.' },
+            body: { type: 'string', description: 'Object body text for put_object.' },
+            contentType: { type: 'string', description: 'Optional content type for put_object.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list_buckets', 'list_objects', 'get_object', 'put_object', 'delete_object'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list_buckets, list_objects, get_object, put_object, or delete_object.' };
+        }
+        let client: GcpClient;
+        try {
+          client = this.createGcpClient(requireString(args.profile, 'profile'), 'storage');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        this.guardAction(request, 'http_request', {
+          url: this.describeGcpEndpoint(client.config, 'storage'),
+          method: action === 'put_object' ? 'POST' : action === 'delete_object' ? 'DELETE' : 'GET',
+          tool: 'gcp_storage',
+          action,
+          projectId: client.config.projectId,
+          bucket: asString(args.bucket).trim() || undefined,
+          object: asString(args.object).trim() || undefined,
+        });
+        try {
+          const bucket = asString(args.bucket).trim();
+          const objectName = asString(args.object).trim();
+          const result = action === 'list_buckets'
+            ? await client.listStorageBuckets(Number.isFinite(Number(args.maxResults)) ? Number(args.maxResults) : undefined)
+            : action === 'list_objects'
+              ? await client.listStorageObjects(bucket, {
+                prefix: asString(args.prefix).trim() || undefined,
+                maxResults: Number.isFinite(Number(args.maxResults)) ? Number(args.maxResults) : undefined,
+              })
+              : action === 'get_object'
+                ? await client.getStorageObjectText(bucket, objectName)
+                : action === 'put_object'
+                  ? await client.putStorageObjectText(bucket, objectName, requireString(args.body, 'body'), asString(args.contentType).trim() || undefined)
+                  : await client.deleteStorageObject(bucket, objectName);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              projectId: client.config.projectId,
+              action,
+              bucket: bucket || undefined,
+              object: objectName || undefined,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `GCP storage request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'gcp_dns',
+        description: 'List Cloud DNS managed zones/records or apply record-set changes.',
+        shortDescription: 'Manage GCP Cloud DNS zones and record sets.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.gcpProfiles id.' },
+            action: { type: 'string', description: 'list_zones, list_records, or change_records.' },
+            managedZone: { type: 'string', description: 'Managed zone name for records/change operations.' },
+            dnsName: { type: 'string', description: 'Optional DNS name filter for list_zones.' },
+            name: { type: 'string', description: 'Optional record name for list_records.' },
+            type: { type: 'string', description: 'Optional record type for list_records.' },
+            maxResults: { type: 'number', description: 'Optional max results.' },
+            additions: { type: 'array', description: 'Cloud DNS additions array for change_records.' },
+            deletions: { type: 'array', description: 'Cloud DNS deletions array for change_records.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list_zones', 'list_records', 'change_records'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list_zones, list_records, or change_records.' };
+        }
+        let client: GcpClient;
+        try {
+          client = this.createGcpClient(requireString(args.profile, 'profile'), 'dns');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        this.guardAction(request, 'http_request', {
+          url: this.describeGcpEndpoint(client.config, 'dns'),
+          method: action === 'change_records' ? 'POST' : 'GET',
+          tool: 'gcp_dns',
+          action,
+          projectId: client.config.projectId,
+          managedZone: asString(args.managedZone).trim() || undefined,
+        });
+        try {
+          const result = action === 'list_zones'
+            ? await client.listDnsZones({
+              dnsName: asString(args.dnsName).trim() || undefined,
+              maxResults: Number.isFinite(Number(args.maxResults)) ? Number(args.maxResults) : undefined,
+            })
+            : action === 'list_records'
+              ? await client.listDnsRecordSets(requireString(args.managedZone, 'managedZone').trim(), {
+                name: asString(args.name).trim() || undefined,
+                type: asString(args.type).trim() || undefined,
+                maxResults: Number.isFinite(Number(args.maxResults)) ? Number(args.maxResults) : undefined,
+              })
+              : await client.changeDnsRecordSets(requireString(args.managedZone, 'managedZone').trim(), {
+                additions: normalizeObjectArray(args.additions),
+                deletions: normalizeObjectArray(args.deletions),
+              });
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              projectId: client.config.projectId,
+              action,
+              managedZone: asString(args.managedZone).trim() || undefined,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `GCP DNS request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'gcp_logs',
+        description: 'Query Cloud Logging entries for a project. Read-only.',
+        shortDescription: 'Inspect GCP Cloud Logging entries.',
+        risk: 'read_only',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.gcpProfiles id.' },
+            filter: { type: 'string', description: 'Optional Cloud Logging filter expression.' },
+            resourceNames: { type: 'array', items: { type: 'string' }, description: 'Optional resource names. Defaults to projects/<projectId>.' },
+            pageSize: { type: 'number', description: 'Optional max results.' },
+            orderBy: { type: 'string', description: 'Optional sort order, e.g. timestamp desc.' },
+          },
+          required: ['profile'],
+        },
+      },
+      async (args, request) => {
+        let client: GcpClient;
+        try {
+          client = this.createGcpClient(requireString(args.profile, 'profile'), 'logging');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        this.guardAction(request, 'http_request', {
+          url: this.describeGcpEndpoint(client.config, 'logging'),
+          method: 'POST',
+          tool: 'gcp_logs',
+          projectId: client.config.projectId,
+        });
+        try {
+          const resourceNames = asStringArray(args.resourceNames).length
+            ? asStringArray(args.resourceNames)
+            : [`projects/${client.config.projectId}`];
+          const result = await client.listLogEntries({
+            resourceNames,
+            filter: asString(args.filter).trim() || undefined,
+            pageSize: Number.isFinite(Number(args.pageSize)) ? Number(args.pageSize) : undefined,
+            orderBy: asString(args.orderBy).trim() || undefined,
+          });
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              projectId: client.config.projectId,
+              resourceNames,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `GCP logs request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
         name: 'whm_status',
         description: 'Inspect a WHM server profile for hostname, version, load average, and service health. Read-only.',
         shortDescription: 'Inspect WHM server hostname, version, load, and services.',
@@ -9007,6 +9570,11 @@ export class ToolExecutor {
     return new AwsClient(config);
   }
 
+  private createGcpClient(profileId: string, service?: GcpServiceName): GcpClient {
+    const config = this.getCloudGcpProfile(profileId, service);
+    return new GcpClient(config);
+  }
+
   private getCloudVercelProfile(profileId: string): VercelInstanceConfig {
     if (!this.cloudConfig.enabled) {
       throw new Error('Cloud tools are disabled in assistant.tools.cloud.enabled.');
@@ -9117,6 +9685,56 @@ export class ToolExecutor {
     return config;
   }
 
+  private getCloudGcpProfile(profileId: string, service?: GcpServiceName): GcpInstanceConfig {
+    if (!this.cloudConfig.enabled) {
+      throw new Error('Cloud tools are disabled in assistant.tools.cloud.enabled.');
+    }
+    const id = profileId.trim();
+    if (!id) {
+      throw new Error('profile is required');
+    }
+    const profile = (this.cloudConfig.gcpProfiles ?? []).find((entry) => entry.id === id);
+    if (!profile) {
+      throw new Error(`Unknown GCP profile '${id}'.`);
+    }
+    const hasAccessToken = !!profile.accessToken?.trim();
+    const hasServiceAccount = !!profile.serviceAccountJson?.trim();
+    if (!hasAccessToken && !hasServiceAccount) {
+      throw new Error(`GCP profile '${id}' does not have a resolved access token or service account JSON.`);
+    }
+    const config: GcpInstanceConfig = {
+      id: profile.id,
+      name: profile.name,
+      projectId: profile.projectId,
+      location: profile.location,
+      accessToken: profile.accessToken,
+      serviceAccountJson: profile.serviceAccountJson,
+      endpoints: profile.endpoints,
+    };
+    const host = this.describeGcpEndpoint(config, service ?? 'cloudResourceManager');
+    const parsed = new URL(host);
+    if (!this.isHostAllowed(parsed.hostname)) {
+      throw new Error(`Host '${parsed.hostname}' is not in allowedDomains.`);
+    }
+    for (const [endpointName, endpoint] of Object.entries(config.endpoints ?? {})) {
+      if (!endpoint?.trim()) continue;
+      const endpointHost = new URL(endpoint).hostname;
+      if (!this.isHostAllowed(endpointHost)) {
+        throw new Error(`Host '${endpointHost}' is not in allowedDomains for GCP endpoint '${endpointName}'.`);
+      }
+    }
+    if (hasServiceAccount) {
+      const tokenHost = new URL(this.describeGcpEndpoint(config, 'oauth2Token'));
+      if (!this.isHostAllowed(tokenHost.hostname)) {
+        throw new Error(`Host '${tokenHost.hostname}' is not in allowedDomains.`);
+      }
+    }
+    if (!config.projectId.trim()) {
+      throw new Error(`GCP profile '${id}' must define projectId.`);
+    }
+    return config;
+  }
+
   private describeCloudEndpoint(profile: CpanelInstanceConfig): string {
     const ssl = profile.ssl !== false;
     const defaultPort = profile.type === 'whm'
@@ -9158,6 +9776,43 @@ export class ToolExecutor {
       default:
         return `https://${service}.${region}.amazonaws.com`;
     }
+  }
+
+  private describeGcpEndpoint(profile: GcpInstanceConfig, service: GcpServiceName): string {
+    const override = profile.endpoints?.[service];
+    if (override?.trim()) {
+      return override;
+    }
+    switch (service) {
+      case 'oauth2Token':
+        return 'https://oauth2.googleapis.com/token';
+      case 'cloudResourceManager':
+        return 'https://cloudresourcemanager.googleapis.com';
+      case 'serviceUsage':
+        return 'https://serviceusage.googleapis.com';
+      case 'compute':
+        return 'https://compute.googleapis.com';
+      case 'run':
+        return 'https://run.googleapis.com';
+      case 'storage':
+        return 'https://storage.googleapis.com';
+      case 'dns':
+        return 'https://dns.googleapis.com';
+      case 'logging':
+        return 'https://logging.googleapis.com';
+    }
+  }
+
+  private resolveGcpLocation(value: unknown, profileId: string, throwOnMissing: boolean = true): string {
+    const explicit = asString(value).trim();
+    if (explicit) return explicit;
+    const profile = (this.cloudConfig.gcpProfiles ?? []).find((entry) => entry.id === profileId.trim());
+    const fallback = profile?.location?.trim();
+    if (fallback) return fallback;
+    if (throwOnMissing) {
+      throw new Error(`location is required when GCP profile '${profileId}' has no default location.`);
+    }
+    return '';
   }
 
   private isHostAllowed(host: string): boolean {
@@ -9718,6 +10373,11 @@ function asStringArray(value: unknown): string[] {
     .filter((item): item is string => typeof item === 'string')
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function normalizeObjectArray(value: unknown): Record<string, unknown>[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((item): item is Record<string, unknown> => isRecord(item));
 }
 
 function encodeJsonParamArray(value: unknown): string | undefined {

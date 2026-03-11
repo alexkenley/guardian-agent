@@ -386,6 +386,46 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
         }
       }
     }
+    const seenGcpProfileIds = new Set<string>();
+    for (const profile of cloud.gcpProfiles ?? []) {
+      if (!profile.id?.trim()) {
+        errors.push('assistant.tools.cloud.gcpProfiles.id is required');
+      } else if (seenGcpProfileIds.has(profile.id)) {
+        errors.push(`assistant.tools.cloud.gcpProfiles id '${profile.id}' is duplicated`);
+      } else {
+        seenGcpProfileIds.add(profile.id);
+      }
+      if (!profile.name?.trim()) {
+        errors.push(`assistant.tools.cloud.gcpProfiles.${profile.id || '(unnamed)'}.name is required`);
+      }
+      if (!profile.projectId?.trim()) {
+        errors.push(`assistant.tools.cloud.gcpProfiles.${profile.id || '(unnamed)'}.projectId is required`);
+      }
+      const hasAccessToken = !!profile.accessToken?.trim() || !!profile.accessTokenCredentialRef?.trim();
+      const hasServiceAccount = !!profile.serviceAccountJson?.trim() || !!profile.serviceAccountCredentialRef?.trim();
+      if (!hasAccessToken && !hasServiceAccount) {
+        errors.push(`assistant.tools.cloud.gcpProfiles.${profile.id || '(unnamed)'}.accessToken/accessTokenCredentialRef or serviceAccountJson/serviceAccountCredentialRef is required`);
+      }
+      assertCredentialRef(
+        profile.accessTokenCredentialRef,
+        `assistant.tools.cloud.gcpProfiles.${profile.id || '(unnamed)'}.accessTokenCredentialRef`,
+      );
+      assertCredentialRef(
+        profile.serviceAccountCredentialRef,
+        `assistant.tools.cloud.gcpProfiles.${profile.id || '(unnamed)'}.serviceAccountCredentialRef`,
+      );
+      for (const [service, endpoint] of Object.entries(profile.endpoints ?? {})) {
+        if (!endpoint?.trim()) continue;
+        try {
+          const parsed = new URL(endpoint);
+          if (!['http:', 'https:'].includes(parsed.protocol)) {
+            errors.push(`assistant.tools.cloud.gcpProfiles.${profile.id || '(unnamed)'}.endpoints.${service} must use http or https`);
+          }
+        } catch {
+          errors.push(`assistant.tools.cloud.gcpProfiles.${profile.id || '(unnamed)'}.endpoints.${service} must be a valid URL`);
+        }
+      }
+    }
   }
   const sandbox = assistant.tools.sandbox;
   if (sandbox?.enforcementMode && !['permissive', 'strict'].includes(sandbox.enforcementMode)) {

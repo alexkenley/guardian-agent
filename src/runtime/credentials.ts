@@ -175,6 +175,21 @@ export function resolveCloudCredentialConfig(
         `assistant.tools.cloud.awsProfiles.${profile.id}.sessionToken`,
       ),
     })),
+    gcpProfiles: (config.gcpProfiles ?? []).map((profile) => ({
+      ...profile,
+      accessToken: resolveCredentialValue(
+        profile.accessToken,
+        profile.accessTokenCredentialRef,
+        provider,
+        `assistant.tools.cloud.gcpProfiles.${profile.id}.accessToken`,
+      ),
+      serviceAccountJson: resolveCredentialValue(
+        profile.serviceAccountJson,
+        profile.serviceAccountCredentialRef,
+        provider,
+        `assistant.tools.cloud.gcpProfiles.${profile.id}.serviceAccountJson`,
+      ),
+    })),
   };
 }
 
