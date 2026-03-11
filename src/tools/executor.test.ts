@@ -1145,6 +1145,158 @@ describe('ToolExecutor', () => {
     ]);
   });
 
+  it('executes GCP read-only tools through a GCP profile', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['googleapis.com'],
+      cloudConfig: {
+        enabled: true,
+        gcpProfiles: [{
+          id: 'gcp-main',
+          name: 'GCP Main',
+          projectId: 'guardian-prod',
+          location: 'australia-southeast1',
+          accessToken: 'gcp-secret',
+        }],
+      },
+    });
+
+    const fakeClient = {
+      config: { id: 'gcp-main', name: 'GCP Main', projectId: 'guardian-prod', location: 'australia-southeast1' },
+      getProject: async () => ({ projectId: 'guardian-prod', lifecycleState: 'ACTIVE' }),
+      listEnabledServices: async () => ({ services: [{ name: 'compute.googleapis.com' }] }),
+      listStorageBuckets: async () => ({ items: [{ name: 'bucket-a' }] }),
+      getStorageObjectText: async () => ({ metadata: { contentType: 'text/plain' }, bodyText: 'hello gcp' }),
+    };
+    (executor as unknown as { createGcpClient: () => typeof fakeClient }).createGcpClient = () => fakeClient;
+    (executor as unknown as { describeGcpEndpoint: () => string }).describeGcpEndpoint = () => 'https://cloudresourcemanager.googleapis.com';
+
+    const status = await executor.runTool({
+      toolName: 'gcp_status',
+      args: { profile: 'gcp-main' },
+      origin: 'cli',
+    });
+    expect(status.success).toBe(true);
+    expect(status.output).toMatchObject({
+      profile: 'gcp-main',
+      projectId: 'guardian-prod',
+      project: { projectId: 'guardian-prod' },
+      services: { services: [{ name: 'compute.googleapis.com' }] },
+    });
+
+    const object = await executor.runTool({
+      toolName: 'gcp_storage',
+      args: { profile: 'gcp-main', action: 'get_object', bucket: 'bucket-a', object: 'notes.txt' },
+      origin: 'cli',
+    });
+    expect(object.success).toBe(true);
+    expect(object.output).toMatchObject({
+      action: 'get_object',
+      bucket: 'bucket-a',
+      object: 'notes.txt',
+      data: { metadata: { contentType: 'text/plain' }, bodyText: 'hello gcp' },
+    });
+  });
+
+  it('requires approval for GCP compute and DNS mutations', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['googleapis.com'],
+      cloudConfig: {
+        enabled: true,
+        gcpProfiles: [{
+          id: 'gcp-main',
+          name: 'GCP Main',
+          projectId: 'guardian-prod',
+          location: 'australia-southeast1',
+          accessToken: 'gcp-secret',
+        }],
+      },
+    });
+
+    const calls: Array<{ method: string; payload: unknown }> = [];
+    const fakeClient = {
+      config: { id: 'gcp-main', name: 'GCP Main', projectId: 'guardian-prod', location: 'australia-southeast1' },
+      startComputeInstance: async (zone: string, instance: string) => {
+        calls.push({ method: 'startComputeInstance', payload: { zone, instance } });
+        return { name: 'op-start-1', targetLink: instance };
+      },
+      changeDnsRecordSets: async (managedZone: string, body: unknown) => {
+        calls.push({ method: 'changeDnsRecordSets', payload: { managedZone, body } });
+        return { id: 'change-1', status: 'pending' };
+      },
+    };
+    (executor as unknown as { createGcpClient: () => typeof fakeClient }).createGcpClient = () => fakeClient;
+    (executor as unknown as { describeGcpEndpoint: () => string }).describeGcpEndpoint = () => 'https://compute.googleapis.com';
+
+    const computePending = await executor.runTool({
+      toolName: 'gcp_compute',
+      args: { profile: 'gcp-main', action: 'start', zone: 'australia-southeast1-b', instance: 'web-1' },
+      origin: 'cli',
+    });
+    expect(computePending.success).toBe(false);
+    expect(computePending.status).toBe('pending_approval');
+    const computeApproved = await executor.decideApproval(computePending.approvalId!, 'approved', 'tester');
+    expect(computeApproved.success).toBe(true);
+    expect(computeApproved.result?.output).toMatchObject({
+      action: 'start',
+      zone: 'australia-southeast1-b',
+      instance: 'web-1',
+    });
+
+    const dnsPending = await executor.runTool({
+      toolName: 'gcp_dns',
+      args: {
+        profile: 'gcp-main',
+        action: 'change_records',
+        managedZone: 'primary-zone',
+        additions: [{
+          name: 'app.example.com.',
+          type: 'A',
+          ttl: 300,
+          rrdatas: ['1.2.3.4'],
+        }],
+      },
+      origin: 'cli',
+    });
+    expect(dnsPending.success).toBe(false);
+    expect(dnsPending.status).toBe('pending_approval');
+    const dnsApproved = await executor.decideApproval(dnsPending.approvalId!, 'approved', 'tester');
+    expect(dnsApproved.success).toBe(true);
+    expect(dnsApproved.result?.output).toMatchObject({
+      action: 'change_records',
+      managedZone: 'primary-zone',
+    });
+
+    expect(calls).toEqual([
+      {
+        method: 'startComputeInstance',
+        payload: { zone: 'australia-southeast1-b', instance: 'web-1' },
+      },
+      {
+        method: 'changeDnsRecordSets',
+        payload: {
+          managedZone: 'primary-zone',
+          body: {
+            additions: [{
+              name: 'app.example.com.',
+              type: 'A',
+              ttl: 300,
+              rrdatas: ['1.2.3.4'],
+            }],
+            deletions: undefined,
+          },
+        },
+      },
+    ]);
+  });
+
   it('rejects fs_write content containing secrets before writing', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({

@@ -239,4 +239,34 @@ describe('resolveRuntimeCredentialView', () => {
     expect(resolved.resolvedCloud?.awsProfiles?.[0]?.accessKeyId).toBe('AKIATESTRUNTIMEKEY123');
     expect(resolved.resolvedCloud?.awsProfiles?.[0]?.secretAccessKey).toBe('runtime-secret-key-value');
   });
+
+  it('resolves GCP profile credentials from credential refs', () => {
+    vi.stubEnv('GCP_SERVICE_ACCOUNT_JSON', '{"client_email":"guardian@example.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----\\n"}');
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'cloud.gcp.primary.serviceAccount': { source: 'env', env: 'GCP_SERVICE_ACCOUNT_JSON' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          cloud: {
+            enabled: true,
+            gcpProfiles: [{
+              id: 'gcp-main',
+              name: 'GCP Main',
+              projectId: 'guardian-prod',
+              serviceAccountCredentialRef: 'cloud.gcp.primary.serviceAccount',
+            }],
+          },
+        },
+      },
+    };
+
+    const resolved = resolveRuntimeCredentialView(config);
+    expect(resolved.resolvedCloud?.gcpProfiles?.[0]?.serviceAccountJson).toContain('guardian@example.iam.gserviceaccount.com');
+  });
 });

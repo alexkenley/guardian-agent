@@ -285,6 +285,35 @@ describe('validateConfig', () => {
     expect(validateConfig(config)).toEqual([]);
   });
 
+  it('should validate cloud GCP credential refs', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'cloud.gcp.primary.serviceAccount': { source: 'env', env: 'GCP_SERVICE_ACCOUNT_JSON' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          cloud: {
+            enabled: true,
+            gcpProfiles: [{
+              id: 'gcp-main',
+              name: 'GCP Main',
+              projectId: 'guardian-prod',
+              location: 'australia-southeast1',
+              serviceAccountCredentialRef: 'cloud.gcp.primary.serviceAccount',
+            }],
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toEqual([]);
+  });
+
   it('should require telegram botToken when enabled', () => {
     const config: GuardianAgentConfig = {
       ...DEFAULT_CONFIG,
