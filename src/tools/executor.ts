@@ -47,6 +47,7 @@ import { classifyDevice, lookupOuiVendor } from '../runtime/network-intelligence
 import type { NetworkTrafficService, TrafficConnectionSample } from '../runtime/network-traffic.js';
 import { parseBanner, inferServiceFromPort } from '../runtime/network-fingerprinting.js';
 import { parseAirportWifi, parseNetshWifi, parseNmcliWifi, correlateWifiClients } from '../runtime/network-wifi.js';
+import { AwsClient, type AwsInstanceConfig } from './cloud/aws-client.js';
 import { CpanelClient, type CpanelInstanceConfig } from './cloud/cpanel-client.js';
 import { CloudflareClient, type CloudflareInstanceConfig } from './cloud/cloudflare-client.js';
 import { VercelClient, type VercelInstanceConfig } from './cloud/vercel-client.js';
@@ -70,6 +71,17 @@ const DEFAULT_CLOUDFLARE_SSL_SETTING_IDS = [
   'automatic_https_rewrites',
   'opportunistic_encryption',
 ];
+type AwsServiceName =
+  | 'sts'
+  | 'ec2'
+  | 's3'
+  | 'route53'
+  | 'lambda'
+  | 'cloudwatch'
+  | 'cloudwatchLogs'
+  | 'rds'
+  | 'iam'
+  | 'costExplorer';
 
 function emptyCloudConfig(): AssistantCloudConfig {
   return {
@@ -77,6 +89,7 @@ function emptyCloudConfig(): AssistantCloudConfig {
     cpanelProfiles: [],
     vercelProfiles: [],
     cloudflareProfiles: [],
+    awsProfiles: [],
   };
 }
 
@@ -935,6 +948,46 @@ export class ToolExecutor {
       return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
     }
 
+    if (toolName === 'aws_status' || toolName === 'aws_cloudwatch' || toolName === 'aws_iam' || toolName === 'aws_costs') {
+      return 'allow';
+    }
+
+    if (toolName === 'aws_ec2_instances') {
+      const action = asString(args.action, 'list').trim().toLowerCase();
+      if (action === 'list' || action === 'describe') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'aws_ec2_security_groups') {
+      const action = asString(args.action, 'list').trim().toLowerCase();
+      if (action === 'list' || action === 'describe') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'aws_s3_buckets') {
+      const action = asString(args.action, 'list_buckets').trim().toLowerCase();
+      if (action === 'list_buckets' || action === 'list_objects' || action === 'get_object') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'aws_route53') {
+      const action = asString(args.action, 'list_zones').trim().toLowerCase();
+      if (action === 'list_zones' || action === 'list_records') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'aws_lambda') {
+      const action = asString(args.action, 'list').trim().toLowerCase();
+      if (action === 'list' || action === 'get') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'aws_rds') {
+      const action = asString(args.action, 'list').trim().toLowerCase();
+      if (action === 'list') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
     if (toolName === 'whm_dns') {
       const action = asString(args.action, 'list').trim().toLowerCase();
       if (action === 'list' || action === 'parse_zone') return 'allow';
@@ -1233,6 +1286,127 @@ export class ToolExecutor {
       if (action === 'update_setting' && args.value === undefined) {
         return 'value is required for update_setting';
       }
+    }
+
+    if (toolName === 'aws_status') {
+      try {
+        this.createAwsClient(requireString(args.profile, 'profile'), 'sts');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    if (toolName === 'aws_ec2_instances') {
+      try {
+        this.createAwsClient(requireString(args.profile, 'profile'), 'ec2');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'start' || action === 'stop' || action === 'reboot' || action === 'describe') && asStringArray(args.instanceIds).length === 0) {
+        return `instanceIds is required for ${action}`;
+      }
+    }
+
+    if (toolName === 'aws_ec2_security_groups') {
+      try {
+        this.createAwsClient(requireString(args.profile, 'profile'), 'ec2');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'authorize_ingress' || action === 'revoke_ingress') && !asString(args.groupId).trim()) {
+        return `groupId is required for ${action}`;
+      }
+      if ((action === 'authorize_ingress' || action === 'revoke_ingress') && !asString(args.protocol).trim()) {
+        return `protocol is required for ${action}`;
+      }
+    }
+
+    if (toolName === 'aws_s3_buckets') {
+      try {
+        this.createAwsClient(requireString(args.profile, 'profile'), 's3');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'list_objects' || action === 'get_object' || action === 'put_object' || action === 'delete_object') && !asString(args.bucket).trim()) {
+        return `bucket is required for ${action}`;
+      }
+      if ((action === 'get_object' || action === 'put_object' || action === 'delete_object') && !asString(args.key).trim()) {
+        return `key is required for ${action}`;
+      }
+      if (action === 'put_object' && !asString(args.body).trim()) {
+        return 'body is required for put_object';
+      }
+    }
+
+    if (toolName === 'aws_route53') {
+      try {
+        this.createAwsClient(requireString(args.profile, 'profile'), 'route53');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'list_records' || action === 'change_records') && !asString(args.hostedZoneId).trim()) {
+        return `hostedZoneId is required for ${action}`;
+      }
+      if (action === 'change_records' && !Array.isArray(args.changes) && !asString(args.changeAction).trim()) {
+        return 'changes array or changeAction is required for change_records';
+      }
+    }
+
+    if (toolName === 'aws_lambda') {
+      try {
+        this.createAwsClient(requireString(args.profile, 'profile'), 'lambda');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'get' || action === 'invoke') && !asString(args.functionName).trim()) {
+        return `functionName is required for ${action}`;
+      }
+    }
+
+    if (toolName === 'aws_cloudwatch') {
+      try {
+        this.createAwsClient(requireString(args.profile, 'profile'), 'cloudwatch');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if (action === 'logs' && !asString(args.logGroupName).trim()) {
+        return 'logGroupName is required for logs';
+      }
+    }
+
+    if (toolName === 'aws_rds') {
+      try {
+        this.createAwsClient(requireString(args.profile, 'profile'), 'rds');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'start' || action === 'stop' || action === 'reboot') && !asString(args.dbInstanceIdentifier).trim()) {
+        return `dbInstanceIdentifier is required for ${action}`;
+      }
+    }
+
+    if (toolName === 'aws_iam') {
+      try {
+        this.createAwsClient(requireString(args.profile, 'profile'), 'iam');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    if (toolName === 'aws_costs') {
+      try {
+        this.createAwsClient(requireString(args.profile, 'profile'), 'costExplorer');
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      if (!isRecord(args.timePeriod)) return 'timePeriod object is required for aws_costs';
     }
 
     if (toolName === 'whm_dns') {
@@ -1561,6 +1735,56 @@ export class ToolExecutor {
         if (action === 'get_setting') return `Would inspect Cloudflare SSL setting '${args.settingId}'`;
         return `Would list Cloudflare SSL settings for zone '${args.zoneId ?? args.zone ?? '(default)'}'`;
       }
+      case 'aws_status':
+        return `Would inspect AWS account status for profile '${args.profile}'`;
+      case 'aws_ec2_instances': {
+        const action = asString(args.action, 'list').trim().toLowerCase();
+        if (action === 'start' || action === 'stop' || action === 'reboot') return `Would ${action} EC2 instances '${asStringArray(args.instanceIds).join(', ')}'`;
+        if (action === 'describe') return `Would describe EC2 instances '${asStringArray(args.instanceIds).join(', ')}'`;
+        return `Would list EC2 instances for profile '${args.profile}'`;
+      }
+      case 'aws_ec2_security_groups': {
+        const action = asString(args.action, 'list').trim().toLowerCase();
+        if (action === 'authorize_ingress' || action === 'revoke_ingress') return `Would ${action} on security group '${args.groupId}'`;
+        return `Would list EC2 security groups for profile '${args.profile}'`;
+      }
+      case 'aws_s3_buckets': {
+        const action = asString(args.action, 'list_buckets').trim().toLowerCase();
+        if (action === 'put_object') return `Would put S3 object '${args.key}' in bucket '${args.bucket}'`;
+        if (action === 'delete_object') return `Would delete S3 object '${args.key}' in bucket '${args.bucket}'`;
+        if (action === 'get_object') return `Would fetch S3 object '${args.key}' from bucket '${args.bucket}'`;
+        if (action === 'list_objects') return `Would list S3 objects in bucket '${args.bucket}'`;
+        return `Would list S3 buckets for profile '${args.profile}'`;
+      }
+      case 'aws_route53': {
+        const action = asString(args.action, 'list_zones').trim().toLowerCase();
+        if (action === 'change_records') return `Would change Route53 records in hosted zone '${args.hostedZoneId}'`;
+        if (action === 'list_records') return `Would list Route53 records in hosted zone '${args.hostedZoneId}'`;
+        return `Would list Route53 hosted zones for profile '${args.profile}'`;
+      }
+      case 'aws_lambda': {
+        const action = asString(args.action, 'list').trim().toLowerCase();
+        if (action === 'invoke') return `Would invoke Lambda function '${args.functionName}'`;
+        if (action === 'get') return `Would inspect Lambda function '${args.functionName}'`;
+        return `Would list Lambda functions for profile '${args.profile}'`;
+      }
+      case 'aws_cloudwatch': {
+        const action = asString(args.action, 'metrics').trim().toLowerCase();
+        if (action === 'logs') return `Would fetch CloudWatch logs for '${args.logGroupName}'`;
+        if (action === 'alarms') return `Would list CloudWatch alarms for profile '${args.profile}'`;
+        return `Would list CloudWatch metrics for profile '${args.profile}'`;
+      }
+      case 'aws_rds': {
+        const action = asString(args.action, 'list').trim().toLowerCase();
+        if (action === 'start' || action === 'stop' || action === 'reboot') return `Would ${action} RDS instance '${args.dbInstanceIdentifier}'`;
+        return `Would list RDS instances for profile '${args.profile}'`;
+      }
+      case 'aws_iam': {
+        const action = asString(args.action, 'list_users').trim().toLowerCase();
+        return `Would run AWS IAM action '${action}' for profile '${args.profile}'`;
+      }
+      case 'aws_costs':
+        return `Would query AWS cost and usage for profile '${args.profile}'`;
       case 'whm_dns': {
         const action = asString(args.action, 'list').trim().toLowerCase();
         if (action === 'create_zone') return `Would create WHM DNS zone '${args.domain}'`;
@@ -5668,6 +5892,763 @@ export class ToolExecutor {
 
     this.registry.register(
       {
+        name: 'aws_status',
+        description: 'Inspect AWS caller identity, account aliases, and configured region. Read-only.',
+        shortDescription: 'Inspect AWS caller identity and account aliases.',
+        risk: 'read_only',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.awsProfiles id.' },
+            includeAliases: { type: 'boolean', description: 'Include IAM account aliases (default: true).' },
+          },
+          required: ['profile'],
+        },
+      },
+      async (args, request) => {
+        let client: AwsClient;
+        try {
+          client = this.createAwsClient(requireString(args.profile, 'profile'), 'sts');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        const includeAliases = args.includeAliases !== false;
+        this.guardAction(request, 'http_request', {
+          url: this.describeAwsEndpoint(client.config, 'sts'),
+          method: 'POST',
+          tool: 'aws_status',
+          region: client.config.region,
+        });
+        try {
+          const [identity, aliases] = await Promise.all([
+            client.getCallerIdentity(),
+            includeAliases ? client.listAccountAliases().catch((error) => ({ error: error instanceof Error ? error.message : String(error) })) : Promise.resolve(null),
+          ]);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              region: client.config.region,
+              identity,
+              aliases: isRecord(aliases) && !('error' in aliases) ? aliases : null,
+              aliasesError: isRecord(aliases) && 'error' in aliases ? aliases.error : undefined,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `AWS status request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'aws_ec2_instances',
+        description: 'List, describe, start, stop, or reboot EC2 instances.',
+        shortDescription: 'Manage AWS EC2 instances.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.awsProfiles id.' },
+            action: { type: 'string', description: 'list, describe, start, stop, or reboot.' },
+            instanceIds: { type: 'array', items: { type: 'string' }, description: 'EC2 instance ids.' },
+            state: { type: 'string', description: 'Optional instance-state-name filter for list.' },
+            tagKey: { type: 'string', description: 'Optional tag filter key for list.' },
+            tagValue: { type: 'string', description: 'Optional tag filter value for list.' },
+            force: { type: 'boolean', description: 'Force stop when action=stop.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list', 'describe', 'start', 'stop', 'reboot'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list, describe, start, stop, or reboot.' };
+        }
+        let client: AwsClient;
+        try {
+          client = this.createAwsClient(requireString(args.profile, 'profile'), 'ec2');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        const instanceIds = asStringArray(args.instanceIds);
+        this.guardAction(request, 'http_request', {
+          url: this.describeAwsEndpoint(client.config, 'ec2'),
+          method: 'POST',
+          tool: 'aws_ec2_instances',
+          action,
+          instanceIds,
+          region: client.config.region,
+        });
+        try {
+          if (action === 'list' || action === 'describe') {
+            const result = await client.listEc2Instances({
+              instanceIds: action === 'describe' ? instanceIds : undefined,
+              state: asString(args.state).trim() || undefined,
+              tagKey: asString(args.tagKey).trim() || undefined,
+              tagValue: asString(args.tagValue).trim() || undefined,
+            });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                region: client.config.region,
+                action,
+                instanceIds: instanceIds.length ? instanceIds : undefined,
+                instances: flattenEc2Instances(result),
+                data: result,
+              },
+            };
+          }
+          const result = action === 'start'
+            ? await client.startEc2Instances(instanceIds)
+            : action === 'stop'
+              ? await client.stopEc2Instances(instanceIds, !!args.force)
+              : await client.rebootEc2Instances(instanceIds);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              region: client.config.region,
+              action,
+              instanceIds,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `AWS EC2 request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'aws_ec2_security_groups',
+        description: 'List or modify EC2 security group ingress rules.',
+        shortDescription: 'List or mutate AWS EC2 security groups.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.awsProfiles id.' },
+            action: { type: 'string', description: 'list, describe, authorize_ingress, or revoke_ingress.' },
+            groupIds: { type: 'array', items: { type: 'string' }, description: 'Optional security group ids for list/describe.' },
+            groupId: { type: 'string', description: 'Security group id for authorize/revoke.' },
+            protocol: { type: 'string', description: 'Ingress protocol, e.g. tcp or -1.' },
+            fromPort: { type: 'number', description: 'Optional from port.' },
+            toPort: { type: 'number', description: 'Optional to port.' },
+            cidr: { type: 'string', description: 'Optional CIDR, e.g. 0.0.0.0/0.' },
+            description: { type: 'string', description: 'Optional rule description.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list', 'describe', 'authorize_ingress', 'revoke_ingress'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list, describe, authorize_ingress, or revoke_ingress.' };
+        }
+        let client: AwsClient;
+        try {
+          client = this.createAwsClient(requireString(args.profile, 'profile'), 'ec2');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        this.guardAction(request, 'http_request', {
+          url: this.describeAwsEndpoint(client.config, 'ec2'),
+          method: 'POST',
+          tool: 'aws_ec2_security_groups',
+          action,
+          groupId: asString(args.groupId).trim() || undefined,
+        });
+        try {
+          if (action === 'list' || action === 'describe') {
+            const result = await client.listSecurityGroups(asStringArray(args.groupIds));
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                region: client.config.region,
+                action,
+                data: result,
+              },
+            };
+          }
+          const permission = {
+            groupId: requireString(args.groupId, 'groupId').trim(),
+            protocol: requireString(args.protocol, 'protocol').trim(),
+            fromPort: Number.isFinite(Number(args.fromPort)) ? Number(args.fromPort) : undefined,
+            toPort: Number.isFinite(Number(args.toPort)) ? Number(args.toPort) : undefined,
+            cidr: asString(args.cidr).trim() || undefined,
+            description: asString(args.description).trim() || undefined,
+          };
+          const result = action === 'authorize_ingress'
+            ? await client.authorizeSecurityGroupIngress(permission)
+            : await client.revokeSecurityGroupIngress(permission);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              region: client.config.region,
+              action,
+              ...permission,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `AWS EC2 security group request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'aws_s3_buckets',
+        description: 'List S3 buckets, inspect objects, or put/delete object content.',
+        shortDescription: 'Manage AWS S3 buckets and objects.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.awsProfiles id.' },
+            action: { type: 'string', description: 'list_buckets, list_objects, get_object, put_object, or delete_object.' },
+            bucket: { type: 'string', description: 'Bucket name.' },
+            key: { type: 'string', description: 'Object key.' },
+            prefix: { type: 'string', description: 'Optional key prefix for list_objects.' },
+            maxKeys: { type: 'number', description: 'Optional max keys for list_objects.' },
+            body: { type: 'string', description: 'Object body text for put_object.' },
+            contentType: { type: 'string', description: 'Optional content type for put_object.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list_buckets', 'list_objects', 'get_object', 'put_object', 'delete_object'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list_buckets, list_objects, get_object, put_object, or delete_object.' };
+        }
+        let client: AwsClient;
+        try {
+          client = this.createAwsClient(requireString(args.profile, 'profile'), 's3');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        this.guardAction(request, 'http_request', {
+          url: this.describeAwsEndpoint(client.config, 's3'),
+          method: 'POST',
+          tool: 'aws_s3_buckets',
+          action,
+          bucket: asString(args.bucket).trim() || undefined,
+          key: asString(args.key).trim() || undefined,
+          region: client.config.region,
+        });
+        try {
+          if (action === 'list_buckets') {
+            const result = await client.listS3Buckets();
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                region: client.config.region,
+                action,
+                data: result,
+              },
+            };
+          }
+          const bucket = requireString(args.bucket, 'bucket').trim();
+          if (action === 'list_objects') {
+            const result = await client.listS3Objects(bucket, {
+              prefix: asString(args.prefix).trim() || undefined,
+              maxKeys: Number.isFinite(Number(args.maxKeys)) ? Number(args.maxKeys) : undefined,
+            });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                region: client.config.region,
+                action,
+                bucket,
+                data: result,
+              },
+            };
+          }
+          const key = requireString(args.key, 'key').trim();
+          if (action === 'get_object') {
+            const result = await client.getS3ObjectText(bucket, key);
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                region: client.config.region,
+                action,
+                bucket,
+                key,
+                data: result,
+              },
+            };
+          }
+          const result = action === 'put_object'
+            ? await client.putS3ObjectText(bucket, key, requireString(args.body, 'body'), asString(args.contentType).trim() || undefined)
+            : await client.deleteS3Object(bucket, key);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              region: client.config.region,
+              action,
+              bucket,
+              key,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `AWS S3 request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'aws_route53',
+        description: 'List Route53 hosted zones, inspect records, or apply change batches.',
+        shortDescription: 'Manage AWS Route53 zones and records.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.awsProfiles id.' },
+            action: { type: 'string', description: 'list_zones, list_records, or change_records.' },
+            hostedZoneId: { type: 'string', description: 'Hosted zone id for record operations.' },
+            startName: { type: 'string', description: 'Optional start record name for list_records.' },
+            maxItems: { type: 'string', description: 'Optional max items for list_records.' },
+            changes: { type: 'array', description: 'Raw Route53 change batch entries.' },
+            changeAction: { type: 'string', description: 'Shorthand action for a single change, e.g. UPSERT.' },
+            type: { type: 'string', description: 'Record type shorthand for a single change.' },
+            name: { type: 'string', description: 'Record name shorthand for a single change.' },
+            ttl: { type: 'number', description: 'TTL shorthand for a single change.' },
+            records: { type: 'array', items: { type: 'string' }, description: 'Resource record values shorthand for a single change.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list_zones', 'list_records', 'change_records'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list_zones, list_records, or change_records.' };
+        }
+        let client: AwsClient;
+        try {
+          client = this.createAwsClient(requireString(args.profile, 'profile'), 'route53');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        this.guardAction(request, 'http_request', {
+          url: this.describeAwsEndpoint(client.config, 'route53'),
+          method: 'POST',
+          tool: 'aws_route53',
+          action,
+          hostedZoneId: asString(args.hostedZoneId).trim() || undefined,
+        });
+        try {
+          if (action === 'list_zones') {
+            const result = await client.listHostedZones();
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                action,
+                data: result,
+              },
+            };
+          }
+          const hostedZoneId = requireString(args.hostedZoneId, 'hostedZoneId').trim();
+          if (action === 'list_records') {
+            const result = await client.listRoute53Records(hostedZoneId, {
+              startName: asString(args.startName).trim() || undefined,
+              maxItems: Number.isFinite(Number(args.maxItems)) ? Number(args.maxItems) : undefined,
+            });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                action,
+                hostedZoneId,
+                data: result,
+              },
+            };
+          }
+          const changes = buildRoute53Changes(args);
+          const result = await client.changeRoute53Records(hostedZoneId, changes);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              action,
+              hostedZoneId,
+              changes,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `AWS Route53 request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'aws_lambda',
+        description: 'List, inspect, or invoke Lambda functions.',
+        shortDescription: 'Manage AWS Lambda functions.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.awsProfiles id.' },
+            action: { type: 'string', description: 'list, get, or invoke.' },
+            functionName: { type: 'string', description: 'Lambda function name or ARN.' },
+            maxItems: { type: 'number', description: 'Optional max items for list.' },
+            payload: { type: 'string', description: 'JSON payload string for invoke.' },
+            invocationType: { type: 'string', description: 'RequestResponse, Event, or DryRun.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list', 'get', 'invoke'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list, get, or invoke.' };
+        }
+        let client: AwsClient;
+        try {
+          client = this.createAwsClient(requireString(args.profile, 'profile'), 'lambda');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        this.guardAction(request, 'http_request', {
+          url: this.describeAwsEndpoint(client.config, 'lambda'),
+          method: 'POST',
+          tool: 'aws_lambda',
+          action,
+          functionName: asString(args.functionName).trim() || undefined,
+          region: client.config.region,
+        });
+        try {
+          if (action === 'list') {
+            const result = await client.listLambdaFunctions(Number.isFinite(Number(args.maxItems)) ? Number(args.maxItems) : undefined);
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                region: client.config.region,
+                action,
+                data: result,
+              },
+            };
+          }
+          const functionName = requireString(args.functionName, 'functionName').trim();
+          const result = action === 'get'
+            ? await client.getLambdaFunction(functionName)
+            : await client.invokeLambda(functionName, {
+              payload: asString(args.payload).trim() || undefined,
+              invocationType: asString(args.invocationType).trim() || undefined,
+            });
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              region: client.config.region,
+              action,
+              functionName,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `AWS Lambda request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'aws_cloudwatch',
+        description: 'Inspect CloudWatch metrics, alarms, or log events. Read-only.',
+        shortDescription: 'Inspect AWS CloudWatch metrics, alarms, and logs.',
+        risk: 'read_only',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.awsProfiles id.' },
+            action: { type: 'string', description: 'metrics, alarms, or logs.' },
+            namespace: { type: 'string', description: 'Optional metric namespace.' },
+            metricName: { type: 'string', description: 'Optional metric name.' },
+            dimensions: { type: 'array', description: 'Optional metric dimensions [{Name,Value}] or name=value strings.' },
+            alarmNamePrefix: { type: 'string', description: 'Optional alarm name prefix.' },
+            logGroupName: { type: 'string', description: 'Log group name for logs action.' },
+            filterPattern: { type: 'string', description: 'Optional CloudWatch Logs filter pattern.' },
+            startTime: { type: 'number', description: 'Optional start time epoch ms.' },
+            endTime: { type: 'number', description: 'Optional end time epoch ms.' },
+            limit: { type: 'number', description: 'Optional max log events.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['metrics', 'alarms', 'logs'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use metrics, alarms, or logs.' };
+        }
+        let client: AwsClient;
+        try {
+          client = this.createAwsClient(requireString(args.profile, 'profile'), action === 'logs' ? 'cloudwatchLogs' : 'cloudwatch');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        this.guardAction(request, 'http_request', {
+          url: this.describeAwsEndpoint(client.config, action === 'logs' ? 'cloudwatchLogs' : 'cloudwatch'),
+          method: 'POST',
+          tool: 'aws_cloudwatch',
+          action,
+          region: client.config.region,
+          logGroupName: asString(args.logGroupName).trim() || undefined,
+        });
+        try {
+          const result = action === 'metrics'
+            ? await client.listMetrics({
+              namespace: asString(args.namespace).trim() || undefined,
+              metricName: asString(args.metricName).trim() || undefined,
+              dimensions: buildCloudWatchDimensions(args.dimensions),
+            })
+            : action === 'alarms'
+              ? await client.describeAlarms(asString(args.alarmNamePrefix).trim() || undefined)
+              : await client.filterLogEvents({
+                logGroupName: requireString(args.logGroupName, 'logGroupName').trim(),
+                filterPattern: asString(args.filterPattern).trim() || undefined,
+                startTime: Number.isFinite(Number(args.startTime)) ? Number(args.startTime) : undefined,
+                endTime: Number.isFinite(Number(args.endTime)) ? Number(args.endTime) : undefined,
+                limit: Number.isFinite(Number(args.limit)) ? Number(args.limit) : undefined,
+              });
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              region: client.config.region,
+              action,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `AWS CloudWatch request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'aws_rds',
+        description: 'List, start, stop, or reboot RDS DB instances.',
+        shortDescription: 'Manage AWS RDS DB instances.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.awsProfiles id.' },
+            action: { type: 'string', description: 'list, start, stop, or reboot.' },
+            dbInstanceIdentifier: { type: 'string', description: 'DB instance identifier.' },
+            forceFailover: { type: 'boolean', description: 'Force failover on reboot for Multi-AZ instances.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list', 'start', 'stop', 'reboot'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list, start, stop, or reboot.' };
+        }
+        let client: AwsClient;
+        try {
+          client = this.createAwsClient(requireString(args.profile, 'profile'), 'rds');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        this.guardAction(request, 'http_request', {
+          url: this.describeAwsEndpoint(client.config, 'rds'),
+          method: 'POST',
+          tool: 'aws_rds',
+          action,
+          dbInstanceIdentifier: asString(args.dbInstanceIdentifier).trim() || undefined,
+          region: client.config.region,
+        });
+        try {
+          const result = action === 'list'
+            ? await client.listRdsInstances()
+            : action === 'start'
+              ? await client.startRdsInstance(requireString(args.dbInstanceIdentifier, 'dbInstanceIdentifier').trim())
+              : action === 'stop'
+                ? await client.stopRdsInstance(requireString(args.dbInstanceIdentifier, 'dbInstanceIdentifier').trim())
+                : await client.rebootRdsInstance(requireString(args.dbInstanceIdentifier, 'dbInstanceIdentifier').trim(), !!args.forceFailover);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              region: client.config.region,
+              action,
+              dbInstanceIdentifier: asString(args.dbInstanceIdentifier).trim() || undefined,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `AWS RDS request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'aws_iam',
+        description: 'List IAM users, roles, or policies. Read-only.',
+        shortDescription: 'Inspect AWS IAM users, roles, or policies.',
+        risk: 'read_only',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.awsProfiles id.' },
+            action: { type: 'string', description: 'list_users, list_roles, or list_policies.' },
+            maxItems: { type: 'number', description: 'Optional maximum results.' },
+            scope: { type: 'string', description: 'Policy scope for list_policies: AWS, Local, or All.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list_users', 'list_roles', 'list_policies'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list_users, list_roles, or list_policies.' };
+        }
+        let client: AwsClient;
+        try {
+          client = this.createAwsClient(requireString(args.profile, 'profile'), 'iam');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        this.guardAction(request, 'http_request', {
+          url: this.describeAwsEndpoint(client.config, 'iam'),
+          method: 'POST',
+          tool: 'aws_iam',
+          action,
+        });
+        try {
+          const maxItems = Number.isFinite(Number(args.maxItems)) ? Number(args.maxItems) : undefined;
+          const result = action === 'list_users'
+            ? await client.listIamUsers(maxItems)
+            : action === 'list_roles'
+              ? await client.listIamRoles(maxItems)
+              : await client.listIamPolicies({ scope: asString(args.scope).trim() || undefined, maxItems });
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              action,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `AWS IAM request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'aws_costs',
+        description: 'Query AWS Cost Explorer cost and usage summaries. Read-only.',
+        shortDescription: 'Inspect AWS cost and usage summaries.',
+        risk: 'read_only',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.awsProfiles id.' },
+            timePeriod: { type: 'object', description: 'Time period with start and end YYYY-MM-DD.' },
+            granularity: { type: 'string', description: 'DAILY, MONTHLY, or HOURLY (default: MONTHLY).' },
+            metrics: { type: 'array', items: { type: 'string' }, description: 'Metrics such as UnblendedCost or UsageQuantity.' },
+            groupBy: { type: 'array', description: 'Optional groupBy entries [{Type,Key}] or Type:Key strings.' },
+          },
+          required: ['profile', 'timePeriod'],
+        },
+      },
+      async (args, request) => {
+        let client: AwsClient;
+        try {
+          client = this.createAwsClient(requireString(args.profile, 'profile'), 'costExplorer');
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        this.guardAction(request, 'http_request', {
+          url: this.describeAwsEndpoint(client.config, 'costExplorer'),
+          method: 'POST',
+          tool: 'aws_costs',
+        });
+        try {
+          const result = await client.getCostAndUsage({
+            timePeriod: buildAwsCostTimePeriod(args.timePeriod),
+            granularity: asString(args.granularity, 'MONTHLY').trim().toUpperCase() || 'MONTHLY',
+            metrics: asStringArray(args.metrics).length ? asStringArray(args.metrics) : ['UnblendedCost'],
+            groupBy: buildAwsCostGroupBy(args.groupBy),
+          });
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              action: 'get_cost_and_usage',
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `AWS costs request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
         name: 'whm_status',
         description: 'Inspect a WHM server profile for hostname, version, load average, and service health. Read-only.',
         shortDescription: 'Inspect WHM server hostname, version, load, and services.',
@@ -8021,6 +9002,11 @@ export class ToolExecutor {
     return new CloudflareClient(config);
   }
 
+  private createAwsClient(profileId: string, service?: AwsServiceName): AwsClient {
+    const config = this.getCloudAwsProfile(profileId, service);
+    return new AwsClient(config);
+  }
+
   private getCloudVercelProfile(profileId: string): VercelInstanceConfig {
     if (!this.cloudConfig.enabled) {
       throw new Error('Cloud tools are disabled in assistant.tools.cloud.enabled.');
@@ -8096,6 +9082,41 @@ export class ToolExecutor {
     };
   }
 
+  private getCloudAwsProfile(profileId: string, service?: AwsServiceName): AwsInstanceConfig {
+    if (!this.cloudConfig.enabled) {
+      throw new Error('Cloud tools are disabled in assistant.tools.cloud.enabled.');
+    }
+    const id = profileId.trim();
+    if (!id) {
+      throw new Error('profile is required');
+    }
+    const profile = (this.cloudConfig.awsProfiles ?? []).find((entry) => entry.id === id);
+    if (!profile) {
+      throw new Error(`Unknown AWS profile '${id}'.`);
+    }
+    const hasAccessKey = !!profile.accessKeyId?.trim();
+    const hasSecretKey = !!profile.secretAccessKey?.trim();
+    if (hasAccessKey !== hasSecretKey) {
+      throw new Error(`AWS profile '${id}' must provide both accessKeyId and secretAccessKey when using explicit credentials.`);
+    }
+
+    const config: AwsInstanceConfig = {
+      id: profile.id,
+      name: profile.name,
+      region: profile.region,
+      accessKeyId: profile.accessKeyId,
+      secretAccessKey: profile.secretAccessKey,
+      sessionToken: profile.sessionToken,
+      endpoints: profile.endpoints,
+    };
+    const host = this.describeAwsEndpoint(config, service ?? 'sts');
+    const parsed = new URL(host);
+    if (!this.isHostAllowed(parsed.hostname)) {
+      throw new Error(`Host '${parsed.hostname}' is not in allowedDomains.`);
+    }
+    return config;
+  }
+
   private describeCloudEndpoint(profile: CpanelInstanceConfig): string {
     const ssl = profile.ssl !== false;
     const defaultPort = profile.type === 'whm'
@@ -8113,6 +9134,30 @@ export class ToolExecutor {
   private describeCloudflareEndpoint(profile: CloudflareInstanceConfig): string {
     const url = new URL(profile.apiBaseUrl?.trim() || 'https://api.cloudflare.com/client/v4');
     return url.origin;
+  }
+
+  private describeAwsEndpoint(profile: AwsInstanceConfig, service: AwsServiceName): string {
+    const override = profile.endpoints?.[service];
+    if (override?.trim()) {
+      return override;
+    }
+    const region = profile.region;
+    switch (service) {
+      case 'iam':
+        return 'https://iam.amazonaws.com';
+      case 'route53':
+        return 'https://route53.amazonaws.com';
+      case 'costExplorer':
+        return 'https://ce.us-east-1.amazonaws.com';
+      case 'cloudwatch':
+        return `https://monitoring.${region}.amazonaws.com`;
+      case 'cloudwatchLogs':
+        return `https://logs.${region}.amazonaws.com`;
+      case 's3':
+        return `https://s3.${region}.amazonaws.com`;
+      default:
+        return `https://${service}.${region}.amazonaws.com`;
+    }
   }
 
   private isHostAllowed(host: string): boolean {
@@ -8857,6 +9902,91 @@ function buildCloudflareDnsPayload(args: Record<string, unknown>): Record<string
   if (typeof args.priority === 'number' && Number.isFinite(args.priority)) payload['priority'] = args.priority;
   if (typeof args.comment === 'string' && args.comment.trim()) payload['comment'] = args.comment.trim();
   return payload;
+}
+
+function flattenEc2Instances(value: unknown): unknown[] {
+  if (!isRecord(value) || !Array.isArray(value.Reservations)) return [];
+  const instances: unknown[] = [];
+  for (const reservation of value.Reservations) {
+    if (!reservation || typeof reservation !== 'object' || Array.isArray(reservation)) continue;
+    const reservationRecord = reservation as Record<string, unknown>;
+    if (!Array.isArray(reservationRecord.Instances)) continue;
+    instances.push(...reservationRecord.Instances);
+  }
+  return instances;
+}
+
+function buildCloudWatchDimensions(value: unknown): Array<{ Name: string; Value: string }> | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const dimensions = value.flatMap((entry) => {
+    if (typeof entry === 'string') {
+      const [name, ...rest] = entry.split('=');
+      const joined = rest.join('=').trim();
+      if (!name?.trim() || !joined) return [];
+      return [{ Name: name.trim(), Value: joined }];
+    }
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+      const record = entry as Record<string, unknown>;
+      const name = asString(record.Name).trim();
+      const dimensionValue = asString(record.Value).trim();
+      if (!name || !dimensionValue) return [];
+      return [{ Name: name, Value: dimensionValue }];
+    }
+    return [];
+  });
+  return dimensions.length ? dimensions : undefined;
+}
+
+function buildRoute53Changes(args: Record<string, unknown>): Array<Record<string, unknown>> {
+  if (Array.isArray(args.changes) && args.changes.every((entry) => entry && typeof entry === 'object' && !Array.isArray(entry))) {
+    return args.changes as Array<Record<string, unknown>>;
+  }
+  const changeAction = requireString(args.changeAction, 'changeAction').trim().toUpperCase();
+  const type = requireString(args.type, 'type').trim().toUpperCase();
+  const name = requireString(args.name, 'name').trim();
+  const records = asStringArray(args.records);
+  return [{
+    Action: changeAction,
+    ResourceRecordSet: {
+      Name: name,
+      Type: type,
+      TTL: Number.isFinite(Number(args.ttl)) ? Number(args.ttl) : 300,
+      ResourceRecords: records.map((value) => ({ Value: value })),
+    },
+  }];
+}
+
+function buildAwsCostTimePeriod(value: unknown): { Start: string; End: string } {
+  if (!isRecord(value)) {
+    throw new Error('timePeriod object is required');
+  }
+  const start = asString(value.start ?? value.Start).trim();
+  const end = asString(value.end ?? value.End).trim();
+  if (!start || !end) {
+    throw new Error('timePeriod.start and timePeriod.end are required');
+  }
+  return { Start: start, End: end };
+}
+
+function buildAwsCostGroupBy(value: unknown): Array<{ Type: string; Key: string }> | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const out = value.flatMap((entry) => {
+    if (typeof entry === 'string') {
+      const [type, ...rest] = entry.split(':');
+      const key = rest.join(':').trim();
+      if (!type?.trim() || !key) return [];
+      return [{ Type: type.trim().toUpperCase(), Key: key }];
+    }
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+      const record = entry as Record<string, unknown>;
+      const type = asString(record.Type ?? record.type).trim().toUpperCase();
+      const key = asString(record.Key ?? record.key).trim();
+      if (!type || !key) return [];
+      return [{ Type: type, Key: key }];
+    }
+    return [];
+  });
+  return out.length ? out : undefined;
 }
 
 function extractEmails(text: string): string[] {

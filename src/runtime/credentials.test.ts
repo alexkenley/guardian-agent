@@ -205,4 +205,38 @@ describe('resolveRuntimeCredentialView', () => {
     const resolved = resolveRuntimeCredentialView(config);
     expect(resolved.resolvedCloud?.cloudflareProfiles?.[0]?.apiToken).toBe('cloudflare-runtime-token');
   });
+
+  it('resolves AWS profile credentials from credential refs', () => {
+    vi.stubEnv('AWS_ACCESS_KEY_ID', 'AKIATESTRUNTIMEKEY123');
+    vi.stubEnv('AWS_SECRET_ACCESS_KEY', 'runtime-secret-key-value');
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'cloud.aws.primary.accessKeyId': { source: 'env', env: 'AWS_ACCESS_KEY_ID' },
+            'cloud.aws.primary.secretAccessKey': { source: 'env', env: 'AWS_SECRET_ACCESS_KEY' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          cloud: {
+            enabled: true,
+            awsProfiles: [{
+              id: 'aws-main',
+              name: 'AWS Main',
+              region: 'us-east-1',
+              accessKeyIdCredentialRef: 'cloud.aws.primary.accessKeyId',
+              secretAccessKeyCredentialRef: 'cloud.aws.primary.secretAccessKey',
+            }],
+          },
+        },
+      },
+    };
+
+    const resolved = resolveRuntimeCredentialView(config);
+    expect(resolved.resolvedCloud?.awsProfiles?.[0]?.accessKeyId).toBe('AKIATESTRUNTIMEKEY123');
+    expect(resolved.resolvedCloud?.awsProfiles?.[0]?.secretAccessKey).toBe('runtime-secret-key-value');
+  });
 });

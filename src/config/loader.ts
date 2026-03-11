@@ -342,6 +342,50 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
         `assistant.tools.cloud.cloudflareProfiles.${profile.id || '(unnamed)'}.credentialRef`,
       );
     }
+    const seenAwsProfileIds = new Set<string>();
+    for (const profile of cloud.awsProfiles ?? []) {
+      if (!profile.id?.trim()) {
+        errors.push('assistant.tools.cloud.awsProfiles.id is required');
+      } else if (seenAwsProfileIds.has(profile.id)) {
+        errors.push(`assistant.tools.cloud.awsProfiles id '${profile.id}' is duplicated`);
+      } else {
+        seenAwsProfileIds.add(profile.id);
+      }
+      if (!profile.name?.trim()) {
+        errors.push(`assistant.tools.cloud.awsProfiles.${profile.id || '(unnamed)'}.name is required`);
+      }
+      if (!profile.region?.trim()) {
+        errors.push(`assistant.tools.cloud.awsProfiles.${profile.id || '(unnamed)'}.region is required`);
+      }
+      const hasAccessKey = !!profile.accessKeyId?.trim() || !!profile.accessKeyIdCredentialRef?.trim();
+      const hasSecretKey = !!profile.secretAccessKey?.trim() || !!profile.secretAccessKeyCredentialRef?.trim();
+      if (hasAccessKey !== hasSecretKey) {
+        errors.push(`assistant.tools.cloud.awsProfiles.${profile.id || '(unnamed)'}.accessKeyId and secretAccessKey must be provided together`);
+      }
+      assertCredentialRef(
+        profile.accessKeyIdCredentialRef,
+        `assistant.tools.cloud.awsProfiles.${profile.id || '(unnamed)'}.accessKeyIdCredentialRef`,
+      );
+      assertCredentialRef(
+        profile.secretAccessKeyCredentialRef,
+        `assistant.tools.cloud.awsProfiles.${profile.id || '(unnamed)'}.secretAccessKeyCredentialRef`,
+      );
+      assertCredentialRef(
+        profile.sessionTokenCredentialRef,
+        `assistant.tools.cloud.awsProfiles.${profile.id || '(unnamed)'}.sessionTokenCredentialRef`,
+      );
+      for (const [service, endpoint] of Object.entries(profile.endpoints ?? {})) {
+        if (!endpoint?.trim()) continue;
+        try {
+          const parsed = new URL(endpoint);
+          if (!['http:', 'https:'].includes(parsed.protocol)) {
+            errors.push(`assistant.tools.cloud.awsProfiles.${profile.id || '(unnamed)'}.endpoints.${service} must use http or https`);
+          }
+        } catch {
+          errors.push(`assistant.tools.cloud.awsProfiles.${profile.id || '(unnamed)'}.endpoints.${service} must be a valid URL`);
+        }
+      }
+    }
   }
   const sandbox = assistant.tools.sandbox;
   if (sandbox?.enforcementMode && !['permissive', 'strict'].includes(sandbox.enforcementMode)) {

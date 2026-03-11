@@ -67,6 +67,20 @@ This repository now also implements the core of **Phase 3**:
 
 The remaining work for this provider family is primarily wider Cloudflare surface area (`cf_firewall`, `cf_cache`, `cf_workers`, `cf_analytics`, `cf_page_rules`) and live-environment verification against a staged Cloudflare account.
 
+This repository now also implements the core of **Phase 4**:
+- `aws_status`
+- `aws_ec2_instances`
+- `aws_ec2_security_groups`
+- `aws_s3_buckets`
+- `aws_route53`
+- `aws_lambda`
+- `aws_cloudwatch`
+- `aws_rds`
+- `aws_iam`
+- `aws_costs`
+
+The remaining work for this provider family is primarily deeper action coverage per AWS service, richer pagination/filter helpers, and live-environment verification against a staged AWS account.
+
 This should be treated as a pragmatic infrastructure-management expansion, not a claim of absolute market uniqueness.
 
 ---
