@@ -145,4 +145,34 @@ describe('resolveRuntimeCredentialView', () => {
     const resolved = resolveRuntimeCredentialView(config);
     expect(resolved.resolvedCloud?.cpanelProfiles[0]?.apiToken).toBe('cpanel-runtime-token');
   });
+
+  it('resolves Vercel profile API tokens from credential refs', () => {
+    vi.stubEnv('VERCEL_TOKEN', 'vercel-runtime-token');
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'cloud.vercel.primary': { source: 'env', env: 'VERCEL_TOKEN' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          cloud: {
+            enabled: true,
+            vercelProfiles: [{
+              id: 'vercel-main',
+              name: 'Vercel Main',
+              credentialRef: 'cloud.vercel.primary',
+              teamId: 'team_123',
+            }],
+          },
+        },
+      },
+    };
+
+    const resolved = resolveRuntimeCredentialView(config);
+    expect(resolved.resolvedCloud?.vercelProfiles?.[0]?.apiToken).toBe('vercel-runtime-token');
+  });
 });

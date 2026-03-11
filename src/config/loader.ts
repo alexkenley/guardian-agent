@@ -248,7 +248,7 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   const cloud = assistant.tools.cloud;
   if (cloud) {
     const seenProfileIds = new Set<string>();
-    for (const profile of cloud.cpanelProfiles) {
+    for (const profile of cloud.cpanelProfiles ?? []) {
       if (!profile.id?.trim()) {
         errors.push('assistant.tools.cloud.cpanelProfiles.id is required');
       } else if (seenProfileIds.has(profile.id)) {
@@ -277,6 +277,39 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
       assertCredentialRef(
         profile.credentialRef,
         `assistant.tools.cloud.cpanelProfiles.${profile.id || '(unnamed)'}.credentialRef`,
+      );
+    }
+    const seenVercelProfileIds = new Set<string>();
+    for (const profile of cloud.vercelProfiles ?? []) {
+      if (!profile.id?.trim()) {
+        errors.push('assistant.tools.cloud.vercelProfiles.id is required');
+      } else if (seenVercelProfileIds.has(profile.id)) {
+        errors.push(`assistant.tools.cloud.vercelProfiles id '${profile.id}' is duplicated`);
+      } else {
+        seenVercelProfileIds.add(profile.id);
+      }
+      if (!profile.name?.trim()) {
+        errors.push(`assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.name is required`);
+      }
+      if (!profile.apiToken?.trim() && !profile.credentialRef?.trim()) {
+        errors.push(`assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.apiToken or credentialRef is required`);
+      }
+      if (profile.teamId?.trim() && profile.slug?.trim()) {
+        errors.push(`assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.teamId and slug are mutually exclusive`);
+      }
+      if (profile.apiBaseUrl?.trim()) {
+        try {
+          const parsed = new URL(profile.apiBaseUrl);
+          if (!['http:', 'https:'].includes(parsed.protocol)) {
+            errors.push(`assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.apiBaseUrl must use http or https`);
+          }
+        } catch {
+          errors.push(`assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.apiBaseUrl must be a valid URL`);
+        }
+      }
+      assertCredentialRef(
+        profile.credentialRef,
+        `assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.credentialRef`,
       );
     }
   }

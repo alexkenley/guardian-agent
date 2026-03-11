@@ -48,6 +48,7 @@ import type { NetworkTrafficService, TrafficConnectionSample } from '../runtime/
 import { parseBanner, inferServiceFromPort } from '../runtime/network-fingerprinting.js';
 import { parseAirportWifi, parseNetshWifi, parseNmcliWifi, correlateWifiClients } from '../runtime/network-wifi.js';
 import { CpanelClient, type CpanelInstanceConfig } from './cloud/cpanel-client.js';
+import { VercelClient, type VercelInstanceConfig } from './cloud/vercel-client.js';
 
 const MAX_JOBS = 200;
 const MAX_APPROVALS = 200;
@@ -60,6 +61,14 @@ const MAX_SEARCH_FILES = 100_000;
 const MAX_SEARCH_FILE_BYTES = 1_000_000;
 const SEARCH_CACHE_TTL_MS = 300_000; // 5 minutes
 const MAX_TOOL_ARG_BYTES = 128_000;
+
+function emptyCloudConfig(): AssistantCloudConfig {
+  return {
+    enabled: false,
+    cpanelProfiles: [],
+    vercelProfiles: [],
+  };
+}
 
 export interface ToolExecutorOptions {
   enabled: boolean;
@@ -221,7 +230,7 @@ export class ToolExecutor {
     this.webSearchConfig = options.webSearch ?? {};
     this.sandboxConfig = options.sandboxConfig ?? DEFAULT_SANDBOX_CONFIG;
     this.sandboxHealth = options.sandboxHealth;
-    this.cloudConfig = options.cloudConfig ?? { enabled: false, cpanelProfiles: [] };
+    this.cloudConfig = options.cloudConfig ?? emptyCloudConfig();
     this.networkConfig = options.networkConfig ?? {
       deviceIntelligence: { enabled: true, ouiDatabase: 'bundled', autoClassify: true },
       baseline: {
@@ -350,7 +359,7 @@ export class ToolExecutor {
   }
 
   setCloudConfig(cloudConfig: AssistantCloudConfig | undefined): void {
-    this.cloudConfig = cloudConfig ?? { enabled: false, cpanelProfiles: [] };
+    this.cloudConfig = cloudConfig ?? emptyCloudConfig();
   }
 
   /** Context summary for LLM system prompt — workspace root, allowed paths, policy mode. */
@@ -872,6 +881,34 @@ export class ToolExecutor {
       return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
     }
 
+    if (toolName === 'vercel_projects') {
+      const action = asString(args.action, 'list').trim().toLowerCase();
+      if (action === 'list' || action === 'get') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'vercel_deployments') {
+      const action = asString(args.action, 'list').trim().toLowerCase();
+      if (action === 'list' || action === 'get') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'vercel_domains') {
+      const action = asString(args.action, 'list').trim().toLowerCase();
+      if (action === 'list' || action === 'get') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'vercel_env') {
+      const action = asString(args.action, 'list').trim().toLowerCase();
+      if (action === 'list') return 'allow';
+      return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    }
+
+    if (toolName === 'vercel_status' || toolName === 'vercel_logs') {
+      return 'allow';
+    }
+
     if (toolName === 'whm_dns') {
       const action = asString(args.action, 'list').trim().toLowerCase();
       if (action === 'list' || action === 'parse_zone') return 'allow';
@@ -1037,6 +1074,98 @@ export class ToolExecutor {
       if (action === 'install_ssl') {
         if (!asString(args.certificate).trim()) return 'certificate is required for install_ssl';
         if (!asString(args.privateKey).trim()) return 'privateKey is required for install_ssl';
+      }
+    }
+
+    if (toolName === 'vercel_status') {
+      try {
+        this.createVercelClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    if (toolName === 'vercel_projects') {
+      try {
+        this.createVercelClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'get' || action === 'update' || action === 'delete') && !asString(args.project).trim()) {
+        return `project is required for ${action}`;
+      }
+      if (action === 'create' && !asString(args.name).trim() && !isRecord(args.settings)) {
+        return 'name or settings object is required for create';
+      }
+      if (action === 'update' && !isRecord(args.settings) && !asString(args.name).trim()) {
+        return 'settings object or name is required for update';
+      }
+    }
+
+    if (toolName === 'vercel_deployments') {
+      try {
+        this.createVercelClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if ((action === 'get' || action === 'cancel') && !asString(args.deploymentId).trim()) {
+        return `deploymentId is required for ${action}`;
+      }
+      if (action === 'promote') {
+        if (!asString(args.project).trim()) return 'project is required for promote';
+        if (!asString(args.deploymentId).trim()) return 'deploymentId is required for promote';
+      }
+      if (action === 'create' && !isRecord(args.deployment) && !asString(args.project).trim()) {
+        return 'deployment object or project is required for create';
+      }
+    }
+
+    if (toolName === 'vercel_domains') {
+      try {
+        this.createVercelClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if (!asString(args.project).trim()) return 'project is required for vercel_domains actions';
+      if ((action === 'get' || action === 'add' || action === 'remove' || action === 'verify') && !asString(args.domain).trim()) {
+        return `domain is required for ${action}`;
+      }
+    }
+
+    if (toolName === 'vercel_env') {
+      try {
+        this.createVercelClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if (!asString(args.project).trim()) return 'project is required for vercel_env actions';
+      if ((action === 'update' || action === 'delete') && !asString(args.envId).trim()) {
+        return `envId is required for ${action}`;
+      }
+      if ((action === 'create' || action === 'update') && !isRecord(args.env) && !asString(args.key).trim()) {
+        return `env object or key is required for ${action}`;
+      }
+      if ((action === 'create' || action === 'update') && !isRecord(args.env) && !asString(args.value).trim()) {
+        return `value is required for ${action}`;
+      }
+    }
+
+    if (toolName === 'vercel_logs') {
+      try {
+        this.createVercelClient(requireString(args.profile, 'profile'));
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const action = requireString(args.action, 'action').trim().toLowerCase();
+      if (action === 'runtime') {
+        if (!asString(args.project).trim()) return 'project is required for runtime logs';
+        if (!asString(args.deploymentId).trim()) return 'deploymentId is required for runtime logs';
+      } else if (action === 'events') {
+        if (!asString(args.deploymentId).trim()) return 'deploymentId is required for deployment events';
       }
     }
 
@@ -1313,6 +1442,43 @@ export class ToolExecutor {
         if (action === 'fetch_best_for_domain') return `Would inspect best SSL certificate for '${args.domain}'`;
         return `Would list SSL certificates for profile '${args.profile}'`;
       }
+      case 'vercel_status':
+        return `Would summarize Vercel account status for profile '${args.profile}'`;
+      case 'vercel_projects': {
+        const action = asString(args.action, 'list').trim().toLowerCase();
+        if (action === 'create') return `Would create Vercel project '${args.name ?? '(from settings)'}'`;
+        if (action === 'update') return `Would update Vercel project '${args.project}'`;
+        if (action === 'delete') return `Would delete Vercel project '${args.project}'`;
+        if (action === 'get') return `Would inspect Vercel project '${args.project}'`;
+        return `Would list Vercel projects for profile '${args.profile}'`;
+      }
+      case 'vercel_deployments': {
+        const action = asString(args.action, 'list').trim().toLowerCase();
+        if (action === 'create') return `Would create a Vercel deployment for project '${args.project ?? '(from deployment payload)'}'`;
+        if (action === 'cancel') return `Would cancel Vercel deployment '${args.deploymentId}'`;
+        if (action === 'promote') return `Would promote deployment '${args.deploymentId}' for project '${args.project}'`;
+        if (action === 'get') return `Would inspect Vercel deployment '${args.deploymentId}'`;
+        return `Would list Vercel deployments for profile '${args.profile}'`;
+      }
+      case 'vercel_domains': {
+        const action = asString(args.action, 'list').trim().toLowerCase();
+        if (action === 'add') return `Would add Vercel domain '${args.domain}' to project '${args.project}'`;
+        if (action === 'remove') return `Would remove Vercel domain '${args.domain}' from project '${args.project}'`;
+        if (action === 'verify') return `Would verify Vercel domain '${args.domain}' on project '${args.project}'`;
+        if (action === 'get') return `Would inspect Vercel domain '${args.domain}' on project '${args.project}'`;
+        return `Would list Vercel domains for project '${args.project}'`;
+      }
+      case 'vercel_env': {
+        const action = asString(args.action, 'list').trim().toLowerCase();
+        if (action === 'create') return `Would create Vercel env '${args.key ?? '(from env payload)'}' on project '${args.project}'`;
+        if (action === 'update') return `Would update Vercel env '${args.envId}' on project '${args.project}'`;
+        if (action === 'delete') return `Would delete Vercel env '${args.envId}' on project '${args.project}'`;
+        return `Would list Vercel env vars for project '${args.project}'`;
+      }
+      case 'vercel_logs':
+        return asString(args.action, 'runtime').trim().toLowerCase() === 'events'
+          ? `Would fetch Vercel deployment events for '${args.deploymentId}'`
+          : `Would fetch Vercel runtime logs for deployment '${args.deploymentId}'`;
       case 'whm_dns': {
         const action = asString(args.action, 'list').trim().toLowerCase();
         if (action === 'create_zone') return `Would create WHM DNS zone '${args.domain}'`;
@@ -4484,6 +4650,662 @@ export class ToolExecutor {
 
     this.registry.register(
       {
+        name: 'vercel_status',
+        description: 'Summarize Vercel project and deployment activity for a configured account or team profile. Read-only.',
+        shortDescription: 'Summarize Vercel projects and recent deployments.',
+        risk: 'read_only',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.vercelProfiles id.' },
+            limitProjects: { type: 'number', description: 'Maximum projects to sample (default: 10).' },
+            limitDeployments: { type: 'number', description: 'Maximum deployments to sample (default: 10).' },
+          },
+          required: ['profile'],
+        },
+      },
+      async (args, request) => {
+        let client: VercelClient;
+        try {
+          client = this.createVercelClient(requireString(args.profile, 'profile'));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        const limitProjects = Math.max(1, Math.min(50, asNumber(args.limitProjects, 10)));
+        const limitDeployments = Math.max(1, Math.min(50, asNumber(args.limitDeployments, 10)));
+
+        this.guardAction(request, 'http_request', {
+          url: this.describeVercelEndpoint(client.config),
+          method: 'GET',
+          tool: 'vercel_status',
+        });
+
+        try {
+          const [projects, deployments] = await Promise.all([
+            client.listProjects({ limit: limitProjects }),
+            client.listDeployments({ limit: limitDeployments }),
+          ]);
+          const projectList = asArrayField(projects, 'projects');
+          const deploymentList = asArrayField(deployments, 'deployments');
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              endpoint: this.describeVercelEndpoint(client.config),
+              scope: describeVercelScope(client.config),
+              projectCount: projectList.length,
+              deploymentCount: deploymentList.length,
+              projects: projectList,
+              deployments: deploymentList,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `Vercel status request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'vercel_projects',
+        description: 'List, inspect, create, update, or delete Vercel projects.',
+        shortDescription: 'Manage Vercel projects.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.vercelProfiles id.' },
+            action: { type: 'string', description: 'list, get, create, update, or delete.' },
+            project: { type: 'string', description: 'Project id or name for get/update/delete.' },
+            name: { type: 'string', description: 'Project name shorthand for create/update.' },
+            framework: { type: 'string', description: 'Optional framework preset for create/update.' },
+            rootDirectory: { type: 'string', description: 'Optional root directory for create/update.' },
+            publicSource: { type: 'boolean', description: 'Optional publicSource setting.' },
+            settings: { type: 'object', description: 'Raw Vercel project payload fields to merge into create/update.' },
+            limit: { type: 'number', description: 'Maximum projects to return for list (default: 20).' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list', 'get', 'create', 'update', 'delete'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list, get, create, update, or delete.' };
+        }
+
+        let client: VercelClient;
+        try {
+          client = this.createVercelClient(requireString(args.profile, 'profile'));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+
+        const method = action === 'list' || action === 'get'
+          ? 'GET'
+          : (action === 'delete' ? 'DELETE' : (action === 'update' ? 'PATCH' : 'POST'));
+        this.guardAction(request, 'http_request', {
+          url: this.describeVercelEndpoint(client.config),
+          method,
+          tool: 'vercel_projects',
+          action,
+          project: asString(args.project).trim() || undefined,
+        });
+
+        try {
+          if (action === 'list') {
+            const limit = Math.max(1, Math.min(100, asNumber(args.limit, 20)));
+            const projects = await client.listProjects({ limit });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                endpoint: this.describeVercelEndpoint(client.config),
+                scope: describeVercelScope(client.config),
+                action,
+                data: projects,
+              },
+            };
+          }
+
+          const project = asString(args.project).trim();
+          if (action === 'get') {
+            const result = await client.getProject(project);
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                endpoint: this.describeVercelEndpoint(client.config),
+                scope: describeVercelScope(client.config),
+                action,
+                project,
+                data: result,
+              },
+            };
+          }
+
+          if (action === 'delete') {
+            const result = await client.deleteProject(project);
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                endpoint: this.describeVercelEndpoint(client.config),
+                scope: describeVercelScope(client.config),
+                action,
+                project,
+                data: result,
+              },
+            };
+          }
+
+          const payload = buildVercelProjectPayload(args);
+          const result = action === 'create'
+            ? await client.createProject(payload)
+            : await client.updateProject(project, payload);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              endpoint: this.describeVercelEndpoint(client.config),
+              scope: describeVercelScope(client.config),
+              action,
+              project: action === 'create' ? undefined : project,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `Vercel project request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'vercel_deployments',
+        description: 'List, inspect, create, cancel, or promote Vercel deployments.',
+        shortDescription: 'Manage Vercel deployments.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.vercelProfiles id.' },
+            action: { type: 'string', description: 'list, get, create, cancel, or promote.' },
+            project: { type: 'string', description: 'Project id or name. Required for promote and shorthand create payloads.' },
+            deploymentId: { type: 'string', description: 'Deployment id or deployment URL identifier for get/cancel/promote.' },
+            limit: { type: 'number', description: 'Maximum deployments to return for list (default: 20).' },
+            target: { type: 'string', description: 'Deployment target such as production or preview.' },
+            deployment: { type: 'object', description: 'Raw deployment payload for create.' },
+            files: { type: 'array', description: 'Optional files payload for create.' },
+            meta: { type: 'object', description: 'Optional deployment metadata.' },
+            gitSource: { type: 'object', description: 'Optional gitSource object for create.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list', 'get', 'create', 'cancel', 'promote'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list, get, create, cancel, or promote.' };
+        }
+
+        let client: VercelClient;
+        try {
+          client = this.createVercelClient(requireString(args.profile, 'profile'));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+
+        const method = action === 'list' || action === 'get' ? 'GET' : (action === 'cancel' ? 'PATCH' : 'POST');
+        this.guardAction(request, 'http_request', {
+          url: this.describeVercelEndpoint(client.config),
+          method,
+          tool: 'vercel_deployments',
+          action,
+          deploymentId: asString(args.deploymentId).trim() || undefined,
+          project: asString(args.project).trim() || undefined,
+        });
+
+        try {
+          if (action === 'list') {
+            const limit = Math.max(1, Math.min(100, asNumber(args.limit, 20)));
+            const result = await client.listDeployments({ limit });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                endpoint: this.describeVercelEndpoint(client.config),
+                scope: describeVercelScope(client.config),
+                action,
+                data: result,
+              },
+            };
+          }
+
+          const deploymentId = asString(args.deploymentId).trim();
+          if (action === 'get') {
+            const result = await client.getDeployment(deploymentId);
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                endpoint: this.describeVercelEndpoint(client.config),
+                scope: describeVercelScope(client.config),
+                action,
+                deploymentId,
+                data: result,
+              },
+            };
+          }
+
+          if (action === 'cancel') {
+            const result = await client.cancelDeployment(deploymentId);
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                endpoint: this.describeVercelEndpoint(client.config),
+                scope: describeVercelScope(client.config),
+                action,
+                deploymentId,
+                data: result,
+              },
+            };
+          }
+
+          if (action === 'promote') {
+            const project = requireString(args.project, 'project').trim();
+            const result = await client.promoteDeployment(project, deploymentId);
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                endpoint: this.describeVercelEndpoint(client.config),
+                scope: describeVercelScope(client.config),
+                action,
+                project,
+                deploymentId,
+                data: result,
+              },
+            };
+          }
+
+          const payload = buildVercelDeploymentPayload(args);
+          const result = await client.createDeployment(payload);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              endpoint: this.describeVercelEndpoint(client.config),
+              scope: describeVercelScope(client.config),
+              action,
+              project: asString(args.project).trim() || undefined,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `Vercel deployment request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'vercel_domains',
+        description: 'List, inspect, add, remove, or verify project domains on Vercel.',
+        shortDescription: 'Manage Vercel project domains.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.vercelProfiles id.' },
+            action: { type: 'string', description: 'list, get, add, remove, or verify.' },
+            project: { type: 'string', description: 'Project id or name.' },
+            domain: { type: 'string', description: 'Domain name for get/add/remove/verify.' },
+            gitBranch: { type: 'string', description: 'Optional git branch for branch-specific domains.' },
+            redirect: { type: 'string', description: 'Optional redirect target when adding a domain.' },
+            redirectStatusCode: { type: 'number', description: 'Optional redirect status code when adding a domain.' },
+            limit: { type: 'number', description: 'Optional list limit.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list', 'get', 'add', 'remove', 'verify'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list, get, add, remove, or verify.' };
+        }
+
+        let client: VercelClient;
+        try {
+          client = this.createVercelClient(requireString(args.profile, 'profile'));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+
+        const project = requireString(args.project, 'project').trim();
+        const method = action === 'list' || action === 'get' ? 'GET' : (action === 'remove' ? 'DELETE' : 'POST');
+        this.guardAction(request, 'http_request', {
+          url: this.describeVercelEndpoint(client.config),
+          method,
+          tool: 'vercel_domains',
+          action,
+          project,
+          domain: asString(args.domain).trim() || undefined,
+        });
+
+        try {
+          if (action === 'list') {
+            const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(100, Number(args.limit))) : undefined;
+            const result = await client.listProjectDomains(project, { limit });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                endpoint: this.describeVercelEndpoint(client.config),
+                scope: describeVercelScope(client.config),
+                action,
+                project,
+                data: result,
+              },
+            };
+          }
+
+          const domain = requireString(args.domain, 'domain').trim();
+          if (action === 'get') {
+            const result = await client.getProjectDomain(project, domain);
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                endpoint: this.describeVercelEndpoint(client.config),
+                scope: describeVercelScope(client.config),
+                action,
+                project,
+                domain,
+                data: result,
+              },
+            };
+          }
+          if (action === 'remove') {
+            const result = await client.removeProjectDomain(project, domain);
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                endpoint: this.describeVercelEndpoint(client.config),
+                scope: describeVercelScope(client.config),
+                action,
+                project,
+                domain,
+                data: result,
+              },
+            };
+          }
+          if (action === 'verify') {
+            const result = await client.verifyProjectDomain(project, domain);
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                endpoint: this.describeVercelEndpoint(client.config),
+                scope: describeVercelScope(client.config),
+                action,
+                project,
+                domain,
+                data: result,
+              },
+            };
+          }
+
+          const payload = buildVercelDomainPayload(args);
+          const result = await client.addProjectDomain(project, payload);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              endpoint: this.describeVercelEndpoint(client.config),
+              scope: describeVercelScope(client.config),
+              action,
+              project,
+              domain,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `Vercel domain request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'vercel_env',
+        description: 'List, create, update, or delete Vercel project environment variables. Secret values are redacted from tool output.',
+        shortDescription: 'Manage Vercel project environment variables.',
+        risk: 'mutating',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.vercelProfiles id.' },
+            action: { type: 'string', description: 'list, create, update, or delete.' },
+            project: { type: 'string', description: 'Project id or name.' },
+            envId: { type: 'string', description: 'Environment variable id for update/delete.' },
+            key: { type: 'string', description: 'Environment variable key shorthand for create/update.' },
+            value: { type: 'string', description: 'Environment variable value shorthand for create/update.' },
+            type: { type: 'string', description: 'plain or encrypted (default: encrypted).' },
+            targets: { type: 'array', items: { type: 'string' }, description: 'Targets such as production, preview, development.' },
+            gitBranch: { type: 'string', description: 'Optional git branch for branch-scoped env vars.' },
+            customEnvironmentIds: { type: 'array', items: { type: 'string' }, description: 'Optional custom environment ids.' },
+            upsert: { type: 'string', description: 'Vercel env upsert mode for create, e.g. true.' },
+            env: { type: 'object', description: 'Raw Vercel env payload to use for create/update.' },
+            decrypt: { type: 'boolean', description: 'Forward decrypt=true on list; response values remain redacted.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['list', 'create', 'update', 'delete'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use list, create, update, or delete.' };
+        }
+
+        let client: VercelClient;
+        try {
+          client = this.createVercelClient(requireString(args.profile, 'profile'));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+
+        const project = requireString(args.project, 'project').trim();
+        const method = action === 'list' ? 'GET' : (action === 'update' ? 'PATCH' : (action === 'delete' ? 'DELETE' : 'POST'));
+        this.guardAction(request, 'http_request', {
+          url: this.describeVercelEndpoint(client.config),
+          method,
+          tool: 'vercel_env',
+          action,
+          project,
+          envId: asString(args.envId).trim() || undefined,
+        });
+
+        try {
+          if (action === 'list') {
+            const result = await client.listProjectEnv(project, { decrypt: args.decrypt === true });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                endpoint: this.describeVercelEndpoint(client.config),
+                scope: describeVercelScope(client.config),
+                action,
+                project,
+                data: redactVercelEnvData(result),
+              },
+            };
+          }
+
+          if (action === 'delete') {
+            const envId = requireString(args.envId, 'envId').trim();
+            const result = await client.deleteProjectEnv(project, envId);
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                endpoint: this.describeVercelEndpoint(client.config),
+                scope: describeVercelScope(client.config),
+                action,
+                project,
+                envId,
+                data: redactVercelEnvData(result),
+              },
+            };
+          }
+
+          const payload = buildVercelEnvPayload(args);
+          const result = action === 'create'
+            ? await client.createProjectEnv(project, payload, asString(args.upsert).trim() || undefined)
+            : await client.updateProjectEnv(project, requireString(args.envId, 'envId').trim(), payload);
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              endpoint: this.describeVercelEndpoint(client.config),
+              scope: describeVercelScope(client.config),
+              action,
+              project,
+              envId: asString(args.envId).trim() || undefined,
+              data: redactVercelEnvData(result),
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `Vercel env request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'vercel_logs',
+        description: 'Fetch Vercel runtime logs or deployment event streams. Read-only.',
+        shortDescription: 'Fetch Vercel runtime logs or deployment events.',
+        risk: 'read_only',
+        category: 'cloud',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Configured assistant.tools.cloud.vercelProfiles id.' },
+            action: { type: 'string', description: 'runtime or events.' },
+            project: { type: 'string', description: 'Project id or name for runtime logs.' },
+            deploymentId: { type: 'string', description: 'Deployment id or URL identifier.' },
+            limit: { type: 'number', description: 'Maximum items to return.' },
+            since: { type: 'number', description: 'Start timestamp in milliseconds.' },
+            until: { type: 'number', description: 'End timestamp in milliseconds.' },
+            direction: { type: 'string', description: 'forward or backward for runtime logs.' },
+          },
+          required: ['profile', 'action'],
+        },
+      },
+      async (args, request) => {
+        const action = requireString(args.action, 'action').trim().toLowerCase();
+        if (!['runtime', 'events'].includes(action)) {
+          return { success: false, error: 'Unsupported action. Use runtime or events.' };
+        }
+
+        let client: VercelClient;
+        try {
+          client = this.createVercelClient(requireString(args.profile, 'profile'));
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+
+        this.guardAction(request, 'http_request', {
+          url: this.describeVercelEndpoint(client.config),
+          method: 'GET',
+          tool: 'vercel_logs',
+          action,
+          deploymentId: asString(args.deploymentId).trim() || undefined,
+          project: asString(args.project).trim() || undefined,
+        });
+
+        try {
+          if (action === 'events') {
+            const deploymentId = requireString(args.deploymentId, 'deploymentId').trim();
+            const result = await client.getDeploymentEvents(deploymentId, {
+              limit: Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(100, Number(args.limit))) : undefined,
+              since: Number.isFinite(Number(args.since)) ? Number(args.since) : undefined,
+              until: Number.isFinite(Number(args.until)) ? Number(args.until) : undefined,
+            });
+            return {
+              success: true,
+              output: {
+                profile: client.config.id,
+                profileName: client.config.name,
+                endpoint: this.describeVercelEndpoint(client.config),
+                scope: describeVercelScope(client.config),
+                action,
+                deploymentId,
+                data: result,
+              },
+            };
+          }
+
+          const project = requireString(args.project, 'project').trim();
+          const deploymentId = requireString(args.deploymentId, 'deploymentId').trim();
+          const result = await client.getRuntimeLogs(project, deploymentId, {
+            limit: Number.isFinite(Number(args.limit)) ? Math.max(1, Math.min(100, Number(args.limit))) : undefined,
+            since: Number.isFinite(Number(args.since)) ? Number(args.since) : undefined,
+            until: Number.isFinite(Number(args.until)) ? Number(args.until) : undefined,
+            direction: asString(args.direction).trim() || undefined,
+          });
+          return {
+            success: true,
+            output: {
+              profile: client.config.id,
+              profileName: client.config.name,
+              endpoint: this.describeVercelEndpoint(client.config),
+              scope: describeVercelScope(client.config),
+              action,
+              project,
+              deploymentId,
+              data: result,
+            },
+          };
+        } catch (err) {
+          return { success: false, error: `Vercel log request failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
         name: 'whm_status',
         description: 'Inspect a WHM server profile for hostname, version, load average, and service health. Read-only.',
         shortDescription: 'Inspect WHM server hostname, version, load, and services.',
@@ -6802,7 +7624,7 @@ export class ToolExecutor {
     if (!id) {
       throw new Error('profile is required');
     }
-    const profile = this.cloudConfig.cpanelProfiles.find((entry) => entry.id === id);
+    const profile = (this.cloudConfig.cpanelProfiles ?? []).find((entry) => entry.id === id);
     if (!profile) {
       throw new Error(`Unknown cloud profile '${id}'.`);
     }
@@ -6827,6 +7649,50 @@ export class ToolExecutor {
     };
   }
 
+  private createVercelClient(profileId: string): VercelClient {
+    const config = this.getCloudVercelProfile(profileId);
+    return new VercelClient(config);
+  }
+
+  private getCloudVercelProfile(profileId: string): VercelInstanceConfig {
+    if (!this.cloudConfig.enabled) {
+      throw new Error('Cloud tools are disabled in assistant.tools.cloud.enabled.');
+    }
+    const id = profileId.trim();
+    if (!id) {
+      throw new Error('profile is required');
+    }
+    const profile = (this.cloudConfig.vercelProfiles ?? []).find((entry) => entry.id === id);
+    if (!profile) {
+      throw new Error(`Unknown Vercel profile '${id}'.`);
+    }
+    if (!profile.apiToken?.trim()) {
+      throw new Error(`Vercel profile '${id}' does not have a resolved API token.`);
+    }
+    if (profile.teamId?.trim() && profile.slug?.trim()) {
+      throw new Error(`Vercel profile '${id}' cannot set both teamId and slug.`);
+    }
+
+    let baseUrl: URL;
+    try {
+      baseUrl = new URL(profile.apiBaseUrl?.trim() || 'https://api.vercel.com');
+    } catch {
+      throw new Error(`Vercel profile '${id}' has an invalid apiBaseUrl.`);
+    }
+    if (!this.isHostAllowed(baseUrl.hostname)) {
+      throw new Error(`Host '${baseUrl.hostname}' is not in allowedDomains.`);
+    }
+
+    return {
+      id: profile.id,
+      name: profile.name,
+      apiBaseUrl: baseUrl.toString(),
+      apiToken: profile.apiToken,
+      teamId: profile.teamId,
+      slug: profile.slug,
+    };
+  }
+
   private describeCloudEndpoint(profile: CpanelInstanceConfig): string {
     const ssl = profile.ssl !== false;
     const defaultPort = profile.type === 'whm'
@@ -6834,6 +7700,11 @@ export class ToolExecutor {
       : (ssl ? 2083 : 2082);
     const port = profile.port ?? defaultPort;
     return `${ssl ? 'https' : 'http'}://${profile.host}:${port}`;
+  }
+
+  private describeVercelEndpoint(profile: VercelInstanceConfig): string {
+    const url = new URL(profile.apiBaseUrl?.trim() || 'https://api.vercel.com');
+    return url.origin;
   }
 
   private isHostAllowed(host: string): boolean {
@@ -7456,6 +8327,111 @@ function coerceWhmScalar(value: unknown): string | number | boolean | undefined 
     return value;
   }
   return JSON.stringify(value);
+}
+
+function asArrayField(value: unknown, key: string): unknown[] {
+  if (!isRecord(value)) return [];
+  const field = value[key];
+  return Array.isArray(field) ? field : [];
+}
+
+function describeVercelScope(config: VercelInstanceConfig): { teamId: string | null; slug: string | null } {
+  return {
+    teamId: config.teamId?.trim() || null,
+    slug: config.slug?.trim() || null,
+  };
+}
+
+function buildVercelProjectPayload(args: Record<string, unknown>): Record<string, unknown> {
+  const payload = isRecord(args.settings) ? { ...args.settings } : {};
+  const name = asString(args.name).trim();
+  const framework = asString(args.framework).trim();
+  const rootDirectory = asString(args.rootDirectory).trim();
+
+  if (name) payload['name'] = name;
+  if (framework) payload['framework'] = framework;
+  if (rootDirectory) payload['rootDirectory'] = rootDirectory;
+  if (typeof args.publicSource === 'boolean') payload['publicSource'] = args.publicSource;
+  return payload;
+}
+
+function buildVercelDeploymentPayload(args: Record<string, unknown>): Record<string, unknown> {
+  const payload = isRecord(args.deployment) ? { ...args.deployment } : {};
+  const project = asString(args.project).trim();
+  const target = asString(args.target).trim();
+  if (project && payload['name'] === undefined && payload['project'] === undefined) {
+    payload['name'] = project;
+  }
+  if (target && payload['target'] === undefined) {
+    payload['target'] = target;
+  }
+  if (Array.isArray(args.files) && payload['files'] === undefined) {
+    payload['files'] = args.files;
+  }
+  if (isRecord(args.meta) && payload['meta'] === undefined) {
+    payload['meta'] = args.meta;
+  }
+  if (isRecord(args.gitSource) && payload['gitSource'] === undefined) {
+    payload['gitSource'] = args.gitSource;
+  }
+  return payload;
+}
+
+function buildVercelDomainPayload(args: Record<string, unknown>): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    name: requireString(args.domain, 'domain').trim(),
+  };
+  const gitBranch = asString(args.gitBranch).trim();
+  const redirect = asString(args.redirect).trim();
+  if (gitBranch) payload['gitBranch'] = gitBranch;
+  if (redirect) payload['redirect'] = redirect;
+  if (typeof args.redirectStatusCode === 'number' && Number.isFinite(args.redirectStatusCode)) {
+    payload['redirectStatusCode'] = args.redirectStatusCode;
+  }
+  return payload;
+}
+
+function buildVercelEnvPayload(args: Record<string, unknown>): Record<string, unknown> {
+  if (isRecord(args.env)) {
+    return { ...args.env };
+  }
+
+  const key = requireString(args.key, 'key').trim();
+  const value = requireString(args.value, 'value');
+  const type = asString(args.type, 'encrypted').trim() || 'encrypted';
+  const targets = asStringArray(args.targets);
+  const gitBranch = asString(args.gitBranch).trim();
+  const customEnvironmentIds = asStringArray(args.customEnvironmentIds);
+
+  const payload: Record<string, unknown> = {
+    key,
+    value,
+    type,
+  };
+  if (targets.length > 0) payload['target'] = targets;
+  if (gitBranch) payload['gitBranch'] = gitBranch;
+  if (customEnvironmentIds.length > 0) payload['customEnvironmentIds'] = customEnvironmentIds;
+  return payload;
+}
+
+function redactVercelEnvData(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactVercelEnvData(item));
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  const out: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    const normalized = normalizeSensitiveKeyName(key);
+    if (normalized === 'value') {
+      out[key] = '[REDACTED]';
+      continue;
+    }
+    out[key] = redactVercelEnvData(child);
+  }
+  return out;
 }
 
 function extractEmails(text: string): string[] {

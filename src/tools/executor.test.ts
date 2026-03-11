@@ -657,6 +657,175 @@ describe('ToolExecutor', () => {
     expect(requests.some((url) => url.includes('/json-api/restartservice'))).toBe(true);
   });
 
+  it('executes Vercel read-only tools and redacts env values', async () => {
+    const server = createServer((req, res) => {
+      res.setHeader('content-type', 'application/json');
+      if (req.url?.startsWith('/v10/projects?')) {
+        res.end(JSON.stringify({
+          projects: [{ id: 'prj_1', name: 'web-app' }],
+        }));
+        return;
+      }
+      if (req.url?.startsWith('/v6/deployments?')) {
+        res.end(JSON.stringify({
+          deployments: [{ uid: 'dpl_1', name: 'web-app', target: 'production' }],
+        }));
+        return;
+      }
+      if (req.url === '/v10/projects/web-app/env?decrypt=true&teamId=team_123') {
+        res.end(JSON.stringify({
+          envs: [{ id: 'env_1', key: 'API_KEY', value: 'secret-value', target: ['production'] }],
+        }));
+        return;
+      }
+      if (req.url?.startsWith('/v1/projects/prj_1/deployments/dpl_1/runtime-logs?')) {
+        res.end(JSON.stringify({
+          entries: [{ message: 'hello', level: 'info' }],
+        }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: { message: 'not found' } }));
+    });
+    testServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: createExecutorRoot(),
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['127.0.0.1'],
+      cloudConfig: {
+        enabled: true,
+        vercelProfiles: [{
+          id: 'vercel-main',
+          name: 'Vercel Main',
+          apiBaseUrl: `http://127.0.0.1:${address.port}`,
+          apiToken: 'secret',
+          teamId: 'team_123',
+        }],
+      },
+    });
+
+    const status = await executor.runTool({
+      toolName: 'vercel_status',
+      args: { profile: 'vercel-main' },
+      origin: 'cli',
+    });
+    expect(status.success).toBe(true);
+    expect(status.output).toMatchObject({
+      profile: 'vercel-main',
+      projectCount: 1,
+      deploymentCount: 1,
+    });
+
+    const envs = await executor.runTool({
+      toolName: 'vercel_env',
+      args: { profile: 'vercel-main', action: 'list', project: 'web-app', decrypt: true },
+      origin: 'cli',
+    });
+    expect(envs.success).toBe(true);
+    expect(envs.output).toMatchObject({
+      action: 'list',
+      project: 'web-app',
+      data: {
+        envs: [{ id: 'env_1', key: 'API_KEY', value: '[REDACTED]', target: ['production'] }],
+      },
+    });
+
+    const logs = await executor.runTool({
+      toolName: 'vercel_logs',
+      args: { profile: 'vercel-main', action: 'runtime', project: 'prj_1', deploymentId: 'dpl_1' },
+      origin: 'cli',
+    });
+    expect(logs.success).toBe(true);
+    expect(logs.output).toMatchObject({
+      action: 'runtime',
+      project: 'prj_1',
+      deploymentId: 'dpl_1',
+      data: { entries: [{ message: 'hello', level: 'info' }] },
+    });
+  });
+
+  it('requires approval for Vercel env mutations and redacts stored values', async () => {
+    const requests: Array<{ method: string; url: string | undefined; body: string }> = [];
+    const server = createServer((req, res) => {
+      let raw = '';
+      req.setEncoding('utf8');
+      req.on('data', (chunk) => {
+        raw += chunk;
+      });
+      req.on('end', () => {
+        requests.push({ method: req.method ?? 'GET', url: req.url, body: raw });
+        res.setHeader('content-type', 'application/json');
+        if (req.url === '/v10/projects/web-app/env?upsert=true&teamId=team_123') {
+          res.end(JSON.stringify({
+            created: { id: 'env_1', key: 'API_KEY', value: 'secret-value', target: ['production'] },
+          }));
+          return;
+        }
+        res.statusCode = 404;
+        res.end(JSON.stringify({ error: { message: 'not found' } }));
+      });
+    });
+    testServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: createExecutorRoot(),
+      policyMode: 'approve_by_policy',
+      allowedDomains: ['127.0.0.1'],
+      cloudConfig: {
+        enabled: true,
+        vercelProfiles: [{
+          id: 'vercel-main',
+          name: 'Vercel Main',
+          apiBaseUrl: `http://127.0.0.1:${address.port}`,
+          apiToken: 'secret',
+          teamId: 'team_123',
+        }],
+      },
+    });
+
+    const pending = await executor.runTool({
+      toolName: 'vercel_env',
+      args: {
+        profile: 'vercel-main',
+        action: 'create',
+        project: 'web-app',
+        key: 'API_KEY',
+        value: 'secret-value',
+        targets: ['production'],
+        upsert: 'true',
+      },
+      origin: 'cli',
+    });
+    expect(pending.success).toBe(false);
+    expect(pending.status).toBe('pending_approval');
+
+    const approved = await executor.decideApproval(pending.approvalId!, 'approved', 'tester');
+    expect(approved.success).toBe(true);
+    expect(approved.result?.output).toMatchObject({
+      action: 'create',
+      project: 'web-app',
+      data: {
+        created: { id: 'env_1', key: 'API_KEY', value: '[REDACTED]', target: ['production'] },
+      },
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ method: 'POST' });
+    expect(requests[0]?.url).toBe('/v10/projects/web-app/env?upsert=true&teamId=team_123');
+    expect(JSON.parse(requests[0]!.body)).toMatchObject({
+      key: 'API_KEY',
+      value: 'secret-value',
+      type: 'encrypted',
+      target: ['production'],
+    });
+  });
+
   it('rejects fs_write content containing secrets before writing', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({

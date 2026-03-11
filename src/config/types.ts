@@ -814,12 +814,32 @@ export interface AssistantCloudCpanelProfileConfig {
   defaultCpanelUser?: string;
 }
 
+/** A Vercel account or team profile for cloud operations. */
+export interface AssistantCloudVercelProfileConfig {
+  /** Unique profile id referenced by Vercel tools. */
+  id: string;
+  /** Human-readable label for operator-facing output. */
+  name: string;
+  /** Base URL override. Defaults to https://api.vercel.com. */
+  apiBaseUrl?: string;
+  /** Inline bearer token (supports ${ENV_VAR}). Prefer credentialRef instead. */
+  apiToken?: string;
+  /** Credential reference for the bearer token. */
+  credentialRef?: string;
+  /** Optional team identifier for scoped operations. */
+  teamId?: string;
+  /** Optional team slug for scoped operations. */
+  slug?: string;
+}
+
 /** Hosting and cloud-provider tool configuration. */
 export interface AssistantCloudConfig {
   /** Enable built-in hosting/cloud tools. */
   enabled: boolean;
   /** Available cPanel/WHM profiles. */
-  cpanelProfiles: AssistantCloudCpanelProfileConfig[];
+  cpanelProfiles?: AssistantCloudCpanelProfileConfig[];
+  /** Available Vercel profiles. */
+  vercelProfiles?: AssistantCloudVercelProfileConfig[];
 }
 
 /** Controls which policy areas the assistant can modify with user approval via chat. */
@@ -1167,6 +1187,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       cloud: {
         enabled: false,
         cpanelProfiles: [],
+        vercelProfiles: [],
       },
       qmd: {
         enabled: true,

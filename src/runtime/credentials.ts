@@ -127,13 +127,22 @@ export function resolveCloudCredentialConfig(
 
   return {
     ...config,
-    cpanelProfiles: config.cpanelProfiles.map((profile) => ({
+    cpanelProfiles: (config.cpanelProfiles ?? []).map((profile) => ({
       ...profile,
       apiToken: resolveCredentialValue(
         profile.apiToken,
         profile.credentialRef,
         provider,
         `assistant.tools.cloud.cpanelProfiles.${profile.id}`,
+      ),
+    })),
+    vercelProfiles: (config.vercelProfiles ?? []).map((profile) => ({
+      ...profile,
+      apiToken: resolveCredentialValue(
+        profile.apiToken,
+        profile.credentialRef,
+        provider,
+        `assistant.tools.cloud.vercelProfiles.${profile.id}`,
       ),
     })),
   };

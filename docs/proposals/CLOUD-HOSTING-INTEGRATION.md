@@ -50,6 +50,16 @@ This repository change implements the core of **Phase 1**:
 
 The remaining work for this provider family is primarily hardening, richer action coverage, and operator-facing UX polish rather than missing phase-one tool surfaces.
 
+This repository now also implements the core of **Phase 2**:
+- `vercel_status`
+- `vercel_projects`
+- `vercel_deployments`
+- `vercel_domains`
+- `vercel_env`
+- `vercel_logs`
+
+The remaining work for this provider family is primarily broader action coverage (`vercel_dns`, `vercel_edge_config`, `vercel_checks`), richer provider-specific validation, and live-environment verification against staged Vercel projects.
+
 This should be treated as a pragmatic infrastructure-management expansion, not a claim of absolute market uniqueness.
 
 ---
