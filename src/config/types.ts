@@ -392,6 +392,27 @@ export interface AssistantAnalyticsConfig {
   retentionDays: number;
 }
 
+/** Automated operator notifications for security/anomaly events. */
+export interface AssistantNotificationsConfig {
+  /** Enable automated notifications (default: true). */
+  enabled: boolean;
+  /** Minimum audit severity that should notify. */
+  minSeverity: 'info' | 'warn' | 'critical';
+  /** Audit event types that should generate notifications. */
+  auditEventTypes: import('../guardian/audit-log.js').AuditEventType[];
+  /** Suppress duplicate notifications for this many milliseconds. */
+  cooldownMs: number;
+  /** Delivery destinations. */
+  destinations: {
+    /** Emit web/dashboard notifications over SSE/event bus. */
+    web: boolean;
+    /** Show notifications on the local CLI when active. */
+    cli: boolean;
+    /** Send notifications to configured Telegram chats when enabled. */
+    telegram: boolean;
+  };
+}
+
 /** Quick action templates for structured assistant workflows. */
 export interface AssistantQuickActionsConfig {
   /** Enable quick actions. */
@@ -534,6 +555,20 @@ export interface AssistantNetworkConfig {
     };
   };
   connections: AssistantNetworkConnectionConfig[];
+}
+
+export type HostMonitorSeverity = 'low' | 'medium' | 'high' | 'critical';
+
+export interface AssistantHostMonitoringConfig {
+  enabled: boolean;
+  scanIntervalSec: number;
+  dedupeWindowMs: number;
+  monitorProcesses: boolean;
+  monitorPersistence: boolean;
+  monitorSensitivePaths: boolean;
+  monitorNetwork: boolean;
+  sensitivePaths: string[];
+  suspiciousProcessNames: string[];
 }
 
 /** Connector execution mode. */
@@ -1038,9 +1073,11 @@ export interface AssistantConfig {
   skills: AssistantSkillsConfig;
   memory: AssistantMemoryConfig;
   analytics: AssistantAnalyticsConfig;
+  notifications: AssistantNotificationsConfig;
   quickActions: AssistantQuickActionsConfig;
   threatIntel: AssistantThreatIntelConfig;
   network: AssistantNetworkConfig;
+  hostMonitoring: AssistantHostMonitoringConfig;
   connectors: AssistantConnectorsConfig;
   tools: AssistantToolsConfig;
 }
@@ -1181,6 +1218,27 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       enabled: true,
       retentionDays: 30,
     },
+    notifications: {
+      enabled: true,
+      minSeverity: 'warn',
+      auditEventTypes: [
+        'anomaly_detected',
+        'host_alert',
+        'action_denied',
+        'secret_detected',
+        'policy_changed',
+        'policy_mode_changed',
+        'policy_shadow_mismatch',
+        'agent_error',
+        'agent_stalled',
+      ],
+      cooldownMs: 60_000,
+      destinations: {
+        web: true,
+        cli: true,
+        telegram: true,
+      },
+    },
     quickActions: {
       enabled: true,
       templates: {
@@ -1248,6 +1306,45 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         },
       },
       connections: [],
+    },
+    hostMonitoring: {
+      enabled: true,
+      scanIntervalSec: 300,
+      dedupeWindowMs: 1_800_000,
+      monitorProcesses: true,
+      monitorPersistence: true,
+      monitorSensitivePaths: true,
+      monitorNetwork: true,
+      sensitivePaths: [
+        '{HOME}/.guardianagent',
+        '{HOME}/.ssh',
+        '{HOME}/.aws',
+        '{HOME}/.config/gcloud',
+        '{HOME}/.azure',
+        '{HOME}/.kube/config',
+        '{HOME}/.npmrc',
+        '{HOME}/.git-credentials',
+        '{HOME}/.bashrc',
+        '{HOME}/.zshrc',
+        '{HOME}/.profile',
+        '{HOME}/Documents/WindowsPowerShell/profile.ps1',
+        '{HOME}/Documents/PowerShell/Profile.ps1',
+        '{HOME}/Library/LaunchAgents',
+      ],
+      suspiciousProcessNames: [
+        'wscript.exe',
+        'cscript.exe',
+        'mshta.exe',
+        'rundll32.exe',
+        'regsvr32.exe',
+        'bitsadmin.exe',
+        'certutil.exe',
+        'psexec.exe',
+        'osascript',
+        'launchctl',
+        'socat',
+        'nc',
+      ],
     },
     connectors: {
       enabled: false,

@@ -237,3 +237,6 @@ GitHub issues and forum posts describe OTHER people's setups. They may not apply
 - If you don't know the root cause yet, say so. "I need to run X to confirm" is better than guessing
 - Do not present a hypothesis as a conclusion. Label hypotheses as hypotheses
 - When presenting options, include "run diagnostic X to determine which" as the recommended first step
+
+### Estimation
+- Do not give time estimates in human days/hours for implementation plans. You are not a human developer — "2 days" is meaningless for your work. Instead, describe effort in terms of scope: number of files, number of tests, number of phases, and dependencies between them.

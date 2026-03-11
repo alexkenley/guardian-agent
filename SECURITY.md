@@ -43,6 +43,7 @@ GuardianAgent is an AI agent orchestration system where:
 | Malicious skill content | Local reviewed skill roots, no direct execution path, ToolExecutor/Guardian remain mandatory for effects |
 | Over-broad external tool providers | Guardian policy, managed provider allowlists, per-service capabilities, audit trail |
 | Dangerous tool actions | Guardian Agent inline LLM evaluation blocks high/critical risk actions before execution |
+| Host-installed agent drift or suspicious local activity | Host monitor baselines suspicious processes, persistence, sensitive paths, and network deltas; critical findings can block risky actions |
 
 ---
 
@@ -177,6 +178,7 @@ The following controls are enforced at Runtime chokepoints for framework-managed
 |------------|-------------|-------------------|
 | **Message input** | Guardian pipeline runs BEFORE `agent.onMessage()` | Agent never sees blocked messages |
 | **Tool pre-execution** | Guardian Agent LLM evaluates action before tool handler runs | Risky actions blocked before any side effects |
+| **Host self-policing** | Host monitor can block risky command/network actions when critical or stacked high-severity host alerts are active | High-risk follow-up actions require operator review after suspicious host activity |
 | **Response output** | OutputGuardian scans after execution | Response modified before delivery |
 | **LLM access** | `GuardedLLMProvider` wraps real provider for `ctx.llm` | Framework-managed LLM calls are scanned/redacted before delivery |
 | **Event emission** | Runtime source validation + payload scanning before dispatch | `ctx.emit()` stamps source; untrusted source IDs rejected |
@@ -273,6 +275,57 @@ See `docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md`.
 - Filesystem enforcement on Windows should prefer isolated workspaces and explicit allowed-directory grants
 - Network enforcement should support at least `on/off` at the sandbox boundary
 - Fine-grained host/domain egress policy remains an application-layer control unless a future privileged Windows networking helper is introduced
+
+---
+
+## Host Workstation Monitoring
+
+GuardianAgent now includes a practical host-monitoring layer intended for direct host installs where there is no Docker or VM boundary. The current implementation is Windows-first in threat model and process naming, while still shipping portable coverage for Linux and macOS.
+
+### Current Signals
+
+- suspicious process detection
+  - Windows-focused high-risk names such as `wscript.exe`, `mshta.exe`, `rundll32.exe`, `regsvr32.exe`, `bitsadmin.exe`, and `certutil.exe`
+  - portable checks for `osascript`, `launchctl`, `socat`, and `nc`
+- persistence drift
+  - Windows Run/RunOnce keys, scheduled tasks, and Startup folders
+  - Linux autostart, `systemd`, and `crontab`
+  - macOS LaunchAgents, LaunchDaemons, and `crontab`
+- sensitive path drift
+  - GuardianAgent state, SSH, cloud credentials, kube config, shell profiles, and PowerShell profiles
+- network drift
+  - new external destinations
+  - new listening ports, with high-risk ports elevated
+
+### Self-Policing Behavior
+
+Host monitoring is not only informational. It participates in execution control:
+
+- critical host alerts can block risky follow-up actions such as command execution and outbound/network actions
+- multiple active high-severity host alerts can also force operator review before sensitive execution continues
+- denials are written to the audit log as `action_denied` with `controller: HostMonitor`
+
+This means GuardianAgent can police itself when the local machine starts showing behavior that looks inconsistent with the intended operating posture.
+
+### Operator Surfaces
+
+- audit event type: `host_alert`
+- notification fanout: web, CLI, Telegram via the notification service
+- Security page:
+  - host monitor posture cards
+  - active host alerts table
+  - manual check trigger
+  - acknowledgement flow
+- tools:
+  - `host_monitor_status`
+  - `host_monitor_check`
+
+### Current Limitations
+
+- this is a practical first-pass monitor, not EDR-grade telemetry
+- file drift on sensitive directories is metadata-based rather than full content inspection
+- Windows helper-backed deep process/file correlation is still future work
+- Linux `auditd`/eBPF and macOS EndpointSecurity-class telemetry remain future optional depth layers
 
 ---
 

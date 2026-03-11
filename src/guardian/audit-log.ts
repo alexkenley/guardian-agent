@@ -24,6 +24,7 @@ export type AuditEventType =
   | 'capability_probe'
   | 'policy_changed'
   | 'anomaly_detected'
+  | 'host_alert'
   | 'agent_error'
   | 'agent_stalled'
   | 'policy_engine_started'

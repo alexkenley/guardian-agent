@@ -23,6 +23,17 @@ The recommended implementation order is:
 
 The next planned roadmap phase is therefore not another new provider. It is a **cross-provider mutation expansion** to deepen the action surface for the services that already exist in the repo.
 
+The most valuable adjacent workstream after the first six phases is **local workstation security monitoring** for the machine GuardianAgent is running on. That work should be treated as complementary to cloud/hosting operations, not separate from them, because the operator concern is the same: "what is the agent doing, what changed, and how do I get alerted before damage or exfiltration happens?"
+
+As of **March 11, 2026**, the repository now has an initial implementation of that direction:
+
+- workstation host monitoring with suspicious-process, persistence, sensitive-path, and network-drift checks
+- `host_alert` audit events plus notification fanout through web, CLI, and Telegram
+- built-in host-security playbooks and scheduled-task presets
+- self-policing pre-execution enforcement that can block risky actions when host alerts indicate suspicious local activity
+
+The remaining work in this proposal is therefore about depth and fidelity, especially on Windows, rather than starting from zero.
+
 ### Delivery Breakdown
 
 To keep this operationally safe, **Phase 1** should be delivered in smaller slices:
@@ -847,6 +858,307 @@ Add a **Cloud** section in Configuration for:
 
 ---
 
+## Parallel Workstream: Local Workstation Security Monitoring
+
+This should run as a **parallel security workstream** rather than block the remaining provider roadmap. It is directly relevant to the hardest user objection to local agents without Docker: the fear that the assistant can read too much, spawn too much, persist too long, or talk to the network in ways the operator cannot see in time.
+
+Monitoring is not a substitute for isolation. The right GuardianAgent position is:
+
+- use **brokered isolation** where available
+- keep **strict sandbox mode** as the default
+- add **host-local telemetry and alerts** so suspicious behavior is visible even when the agent runs on the host
+
+This proposal aligns with:
+
+- [BROKERED-AGENT-ISOLATION-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/BROKERED-AGENT-ISOLATION-PROPOSAL.md)
+- [WINDOWS-PORTABLE-ISOLATION-OPTION.md](/mnt/s/Development/GuardianAgent/docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md)
+- existing runtime services such as Sentinel audit, audit persistence, network baseline, network traffic heuristics, and the Security monitoring UI
+
+### What Users Are Actually Worried About
+
+For a host-installed AI agent, the high-trust fears are usually:
+
+- unexpected process execution or process trees that survive after the requested task
+- reads of secrets outside the intended workspace such as `.env`, SSH keys, browser profiles, cloud credentials, and OS credential stores
+- outbound traffic to unknown hosts after reading local files
+- creation of persistence mechanisms such as startup entries, scheduled tasks, login items, LaunchAgents, `systemd` units, or shell profile edits
+- attempts to weaken guardrails such as policy changes, sandbox downgrades, log deletion, AV changes, or firewall changes
+- broad file churn such as mass rename, mass delete, archive staging, or encryption-like behavior
+- privilege escalation attempts such as `sudo`, `runas`, `pkexec`, AppleScript privilege prompts, or service creation
+
+GuardianAgent should monitor these concerns explicitly instead of only reporting generic "anomaly detected" events.
+
+### Proposed Monitoring Model
+
+Treat GuardianAgent and its descendants as a **tracked security subject**. Every managed action should be correlated to:
+
+- `agentId`
+- `toolName`
+- `approvalId` when present
+- `runId` or job ID
+- parent PID and child PID chain
+- start time, end time, and exit reason
+
+The monitoring stack should have three layers:
+
+1. **Runtime-native telemetry**
+   - audit log events already emitted by Guardian, ToolExecutor, approvals, OutputGuardian, and Sentinel
+   - tool execution metadata, sandbox health, and policy mode changes
+2. **Host telemetry collector**
+   - process, file, persistence, and network observations from the local OS
+   - correlation back to GuardianAgent run IDs and child process trees
+3. **Alerting and response**
+   - normalized `host_alert` events written to audit persistence
+   - surfaced in web Security, CLI, SSE, and optional outbound notifications
+   - optional response hooks such as kill process tree, disable risky tools, revoke session tokens, or pause automations
+
+### Telemetry To Collect
+
+#### 1. Process and Execution Telemetry
+
+Minimum cross-platform telemetry:
+
+- GuardianAgent PID and all descendant process trees
+- executable path, working directory, parent PID, command line hash, and signer metadata when available
+- process lifetime and orphaned/background descendants
+- unexpected interpreters or packagers:
+  - `powershell`, `cmd`, `wscript`, `cscript`, `mshta`
+  - `bash`, `sh`, `zsh`, `python`, `node`, `perl`, `ruby`
+  - `osascript`, `launchctl`
+- command class mismatches, for example a read-only request that spawns a mutating shell path
+
+#### 2. Sensitive File Access and Drift
+
+Minimum cross-platform watch targets:
+
+- workspace boundary violations
+- `.env`, `.npmrc`, `.pypirc`, `.git-credentials`
+- `.ssh/`, `authorized_keys`, private keys
+- cloud credentials:
+  - `.aws/`
+  - `.config/gcloud/`
+  - `.azure/`
+  - kubeconfigs and Terraform state
+- browser profile and cookie stores
+- shell init files:
+  - `.bashrc`, `.zshrc`, `.profile`, PowerShell profile
+- GuardianAgent config, policies, skills, MCP config, and credential-ref mappings
+
+Alerts should distinguish:
+
+- read access
+- write access
+- new file creation
+- delete or rename bursts
+- archive/compression staging near sensitive directories
+
+#### 3. Persistence and Autorun Changes
+
+This is one of the most important no-container trust signals.
+
+GuardianAgent should watch for creation or modification of:
+
+- **Windows**
+  - Run/RunOnce registry keys
+  - Startup folder entries
+  - Scheduled Tasks
+  - Windows services
+- **Linux**
+  - `systemd` user/system services and timers
+  - cron jobs
+  - shell profile persistence
+  - `~/.config/autostart`
+- **macOS**
+  - LaunchAgents and LaunchDaemons
+  - login items
+  - cron entries
+  - shell profile persistence
+
+Any persistence event created by a GuardianAgent child process should be a `high` or `critical` alert by default unless the tool/action was explicitly approved for that purpose.
+
+#### 4. Network and Exfiltration Telemetry
+
+Build on the existing network baseline and traffic heuristics already in the repo.
+
+Additional agent-specific correlation should include:
+
+- first-seen outbound destination by process tree
+- DNS queries to new or low-reputation domains
+- archive creation followed by outbound connection
+- large outbound byte volume after reads from sensitive paths
+- repeated low-volume periodic callbacks consistent with beaconing
+- connections that bypass configured domain allowlists or approval expectations
+
+#### 5. Security Control Tampering
+
+High-confidence alerts should fire when GuardianAgent or its descendants attempt to:
+
+- change Guardian policy to broaden allowed paths, commands, or domains
+- switch sandbox enforcement from `strict` to `permissive`
+- disable audit persistence or rotate/delete audit files unexpectedly
+- disable Defender, firewall, Gatekeeper-related protections, `auditd`, or other local security services
+- add AV exclusions or modify host logging configuration
+
+### Platform-Specific Data Sources
+
+Use a layered approach: a **portable user-mode baseline** everywhere, then stronger native integrations where the OS permits it.
+
+| Signal | Windows | Linux | macOS |
+|-------|---------|-------|-------|
+| Process tree | `CreateProcess`-correlated child tracking, WMI/Event Log, optional Sysmon | `/proc`, `ps`, `systemd`, optional `auditd`/eBPF | `ps`, `launchctl`, optional EndpointSecurity helper |
+| Persistence | registry Run keys, Startup folder, Scheduled Tasks, services | `systemd`, cron, autostart dirs, shell profiles | LaunchAgents, LaunchDaemons, login items, shell profiles |
+| File drift | filesystem watch APIs, optional Sysmon FileCreate/FileCreateStreamHash | inotify/fanotify, optional `auditd` | FSEvents, optional EndpointSecurity helper |
+| Network | connection table + Defender/Sysmon where available | `ss`/`netstat`, conntrack where available, optional eBPF | `lsof`/`nettop`-style connection inventory, Unified Logging where useful |
+| Security controls | Defender/firewall/service state | `auditd`, firewall, service state | TCC-relevant prompts, launch services, quarantine metadata |
+
+Important constraint:
+
+- **portable user-mode monitoring** is good enough for baseline visibility and operator trust
+- **high-fidelity file/process telemetry** often needs an OS-native helper or elevated service
+- GuardianAgent should therefore ship a baseline monitor first and make stronger helpers optional but explicit
+
+### High-Priority Alert Rules For A Local AI Agent
+
+The first release should focus on a small number of high-value alerts rather than broad EDR-style noise.
+
+#### Critical
+
+- unapproved child process writes to persistence locations
+- unapproved reads of high-sensitivity credential stores followed by outbound traffic
+- process tree survives GuardianAgent exit or detaches into background persistence
+- sandbox downgrade, audit disablement, or policy broadening outside an approved change path
+- mass file modification or delete activity outside the allowed workspace
+
+#### High
+
+- first-time outbound destination from a GuardianAgent child process
+- execution of LOLBins or scripting hosts not expected for the task
+- scheduled task, service, LaunchAgent, or `systemd` unit creation
+- writes to browser profile, SSH, cloud credential, or shell startup locations
+- privilege escalation attempts or prompts
+
+#### Medium
+
+- unusual archive creation in temp directories
+- repeated beacon-like outbound traffic
+- new executable or script dropped into startup-adjacent paths
+- MCP or skill configuration drift
+
+### Operator-Facing Responses
+
+Alerting should not stop at visibility. GuardianAgent should support response actions such as:
+
+- kill descendant process tree
+- pause automations or chat-triggered tool execution
+- force `strict` sandbox mode
+- temporarily disable categories such as shell, browser, MCP, or cloud mutation tools
+- revoke or rotate short-lived provider/session tokens when configured
+- require manual approval for all further mutating actions for the current session
+
+These responses should remain operator-controlled by default. Automatic remediation can be added later for narrow cases such as an orphaned background process or an unapproved persistence write.
+
+### Product Surface Changes
+
+#### Audit Model
+
+Add normalized event types such as:
+
+- `host_process_spawn`
+- `host_sensitive_access`
+- `host_persistence_change`
+- `host_network_alert`
+- `host_policy_drift`
+- `host_alert`
+
+All should be persisted through the same tamper-evident audit pipeline already used for Guardian events.
+
+#### Security UI
+
+Extend the existing Security page with a **Host Monitoring** view that shows:
+
+- current GuardianAgent process tree
+- recent host alerts
+- sensitive-path access timeline
+- persistence changes
+- outbound destinations by process tree
+- quick actions to acknowledge, suppress, or respond
+
+#### CLI
+
+Add command families such as:
+
+- `/security host`
+- `/security host alerts`
+- `/security host processes`
+- `/security host persistence`
+- `/security host response <action>`
+
+#### Config
+
+Add workstation monitoring settings for:
+
+- enable/disable monitoring
+- baseline-only vs enhanced-native mode
+- watched paths
+- alert thresholds
+- allowed long-lived destinations
+- notification transports
+- auto-response toggles
+
+### Recommended Delivery Slices
+
+#### Slice A: Baseline Host Telemetry
+
+- correlate all tool runs to PIDs and child processes
+- monitor sensitive paths and config drift
+- correlate existing network threat signals back to GuardianAgent process trees
+- emit normalized host alerts into audit + SSE + web UI
+
+#### Slice B: Persistence Monitoring
+
+- add autorun and persistence watchers per OS
+- add critical alerts for background survival and startup registration
+- add response hooks for kill tree and force-manual-approval mode
+
+#### Slice C: Native Helper Depth
+
+- **Windows:** deepen the existing helper path with richer process/file telemetry and Defender/service correlation
+- **Linux:** optional `auditd` or eBPF-assisted collector for high-fidelity file/process events
+- **macOS:** optional native helper for EndpointSecurity/FSEvents-backed monitoring where feasible
+
+#### Slice D: Response Automation and Playbooks
+
+- built-in "AI agent host audit" workflow
+- scheduled workstation security checks
+- policy-driven escalation and outbound notifications
+- exportable incident bundle with correlated audit, process, and network evidence
+
+### Practical Security Position For Non-Container Deployments
+
+For operators who want to run GuardianAgent directly on the host without Docker, the recommended baseline should be:
+
+- run as a dedicated non-admin user where possible
+- keep `sandbox.enforcementMode: strict`
+- enable the strongest local helper available for the OS
+- use credential refs instead of raw environment secrets
+- keep risky categories such as shell/browser/MCP behind approval unless there is a strong sandbox backend
+- enable host monitoring and audit persistence by default
+
+That combination gives a materially better answer than "trust the agent" while staying more practical than requiring containers or full VMs for every installation.
+
+### Estimated Size
+
+This parallel workstream is likely on the order of **2,500-4,000 LOC** for a useful first pass:
+
+- baseline host collector + correlation: ~900
+- persistence detection per OS: ~700
+- UI/API/CLI surfaces: ~600
+- tests + fixtures: ~800
+
+The value is high because it directly addresses operator trust for host-installed agents, improves incident response, and reuses GuardianAgent's existing audit and monitoring architecture.
+
+---
+
 ## Implementation Roadmap
 
 ### Phase 0: Shared Foundations
@@ -979,6 +1291,8 @@ This suite would give GuardianAgent a differentiated infrastructure-management s
 | Network + cloud unified | No | No | No | **Yes** |
 
 The combination of **local network security tools** (existing 19 net_* tools) + **cloud infrastructure management** + **Guardian security gating** creates a unique value proposition: a security-first infrastructure management agent that can monitor your network AND manage your hosting/cloud from a single interface.
+
+Adding **host workstation monitoring** on top of that would close the most important trust gap for local deployments: not just "what can the agent manage?" but "what did it actually do on this machine, and did anything suspicious happen while it was doing it?"
 
 ---
 

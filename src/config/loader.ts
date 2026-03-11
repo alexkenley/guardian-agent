@@ -225,6 +225,55 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   if (assistant.analytics.retentionDays < 1) {
     errors.push('assistant.analytics.retentionDays must be >= 1');
   }
+  if (!['info', 'warn', 'critical'].includes(assistant.notifications.minSeverity)) {
+    errors.push("assistant.notifications.minSeverity must be 'info', 'warn', or 'critical'");
+  }
+  if (assistant.notifications.cooldownMs < 0) {
+    errors.push('assistant.notifications.cooldownMs must be >= 0');
+  }
+  const validNotificationAuditTypes = new Set([
+    'action_denied',
+    'action_allowed',
+    'secret_detected',
+    'output_blocked',
+    'output_redacted',
+    'event_blocked',
+    'input_sanitized',
+    'rate_limited',
+    'capability_probe',
+    'policy_changed',
+    'anomaly_detected',
+    'host_alert',
+    'agent_error',
+    'agent_stalled',
+    'policy_engine_started',
+    'policy_mode_changed',
+    'policy_rules_reloaded',
+    'policy_shadow_mismatch',
+  ]);
+  for (const eventType of assistant.notifications.auditEventTypes ?? []) {
+    if (!validNotificationAuditTypes.has(eventType)) {
+      errors.push(`assistant.notifications.auditEventTypes contains unknown event '${eventType}'`);
+    }
+  }
+  if (assistant.hostMonitoring.scanIntervalSec < 10) {
+    errors.push('assistant.hostMonitoring.scanIntervalSec must be >= 10');
+  }
+  if (assistant.hostMonitoring.dedupeWindowMs < 0) {
+    errors.push('assistant.hostMonitoring.dedupeWindowMs must be >= 0');
+  }
+  for (const path of assistant.hostMonitoring.sensitivePaths ?? []) {
+    if (typeof path !== 'string' || !path.trim()) {
+      errors.push('assistant.hostMonitoring.sensitivePaths must contain only non-empty strings');
+      break;
+    }
+  }
+  for (const name of assistant.hostMonitoring.suspiciousProcessNames ?? []) {
+    if (typeof name !== 'string' || !name.trim()) {
+      errors.push('assistant.hostMonitoring.suspiciousProcessNames must contain only non-empty strings');
+      break;
+    }
+  }
 
   if (assistant.quickActions.enabled && Object.keys(assistant.quickActions.templates).length === 0) {
     errors.push('assistant.quickActions.templates must contain at least one template when enabled');

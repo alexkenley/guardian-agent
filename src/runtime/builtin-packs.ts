@@ -145,6 +145,59 @@ export const BUILTIN_TEMPLATES: BuiltinTemplate[] = [
       },
     ],
   },
+  {
+    id: 'agent-host-guard',
+    name: 'Agent Host Guard',
+    description: 'Host-focused triage and anomaly review for the workstation GuardianAgent is running on.',
+    category: 'security',
+    pack: {
+      id: 'agent-host-guard',
+      name: 'Agent Host Guard',
+      enabled: true,
+      description: 'Host security telemetry and anomaly review workflows.',
+      allowedCapabilities: ['network.read', 'system.read'],
+      allowedHosts: [],
+      allowedPaths: [],
+      allowedCommands: [],
+      authMode: 'none',
+      requireHumanApprovalForWrites: false,
+    },
+    playbooks: [
+      {
+        id: 'host-security-baseline',
+        name: 'Host Security Baseline',
+        enabled: true,
+        mode: 'sequential',
+        description: 'Collect a broad workstation security snapshot: system state, services, processes, connections, and active alerts.',
+        steps: [
+          { id: 'hsb-1', name: 'Host monitor check', packId: 'agent-host-guard', toolName: 'host_monitor_check', args: {} },
+          { id: 'hsb-2', name: 'System info', packId: 'agent-host-guard', toolName: 'sys_info', args: {} },
+          { id: 'hsb-3', name: 'Resources', packId: 'agent-host-guard', toolName: 'sys_resources', args: {} },
+          { id: 'hsb-4', name: 'Services', packId: 'agent-host-guard', toolName: 'sys_services', args: {}, continueOnError: true },
+          { id: 'hsb-5', name: 'Top processes', packId: 'agent-host-guard', toolName: 'sys_processes', args: { sortBy: 'cpu', limit: 25 }, continueOnError: true },
+          { id: 'hsb-6', name: 'Connections', packId: 'agent-host-guard', toolName: 'net_connections', args: {}, continueOnError: true },
+          { id: 'hsb-7', name: 'Threat summary', packId: 'agent-host-guard', toolName: 'net_threat_summary', args: { limit: 25 }, continueOnError: true },
+        ],
+      },
+      {
+        id: 'anomaly-response-triage',
+        name: 'Anomaly Response Triage',
+        enabled: true,
+        mode: 'sequential',
+        description: 'Triage suspicious activity with targeted process, connection, and localhost exposure checks.',
+        steps: [
+          { id: 'art-1', name: 'Host monitor check', packId: 'agent-host-guard', toolName: 'host_monitor_check', args: {} },
+          { id: 'art-2', name: 'Threat check', packId: 'agent-host-guard', toolName: 'net_threat_check', args: { refresh: true } },
+          { id: 'art-3', name: 'Connections', packId: 'agent-host-guard', toolName: 'net_connections', args: {}, continueOnError: true },
+          { id: 'art-4', name: 'Top 30 processes', packId: 'agent-host-guard', toolName: 'sys_processes', args: { sortBy: 'cpu', limit: 30 }, continueOnError: true },
+          { id: 'art-5', name: 'Localhost port scan', packId: 'agent-host-guard', toolName: 'net_port_check', args: {
+            host: 'localhost',
+            ports: [22, 80, 443, 445, 3000, 5432, 6379, 8080, 8443],
+          }, continueOnError: true },
+        ],
+      },
+    ],
+  },
 ];
 
 /**

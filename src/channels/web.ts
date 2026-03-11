@@ -1443,6 +1443,74 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // GET /api/host-monitor/status
+      if (req.method === 'GET' && url.pathname === '/api/host-monitor/status') {
+        if (!this.dashboard.onHostMonitorStatus) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onHostMonitorStatus());
+        return;
+      }
+
+      // GET /api/host-monitor/alerts
+      if (req.method === 'GET' && url.pathname === '/api/host-monitor/alerts') {
+        if (!this.dashboard.onHostMonitorAlerts) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const includeAcknowledged = (url.searchParams.get('includeAcknowledged') ?? 'false').toLowerCase() === 'true';
+        const limit = Number.parseInt(url.searchParams.get('limit') ?? '100', 10);
+        sendJSON(res, 200, this.dashboard.onHostMonitorAlerts({
+          includeAcknowledged,
+          limit: Number.isFinite(limit) ? limit : 100,
+        }));
+        return;
+      }
+
+      // POST /api/host-monitor/alerts/ack
+      if (req.method === 'POST' && url.pathname === '/api/host-monitor/alerts/ack') {
+        if (!this.dashboard.onHostMonitorAcknowledge) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body = '';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { alertId?: string };
+        try {
+          parsed = JSON.parse(body) as { alertId?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed.alertId?.trim()) {
+          sendJSON(res, 400, { error: 'alertId is required' });
+          return;
+        }
+        const result = this.dashboard.onHostMonitorAcknowledge(parsed.alertId.trim());
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['security'], 'host-monitor.alert.acknowledged', url.pathname);
+        return;
+      }
+
+      // POST /api/host-monitor/check
+      if (req.method === 'POST' && url.pathname === '/api/host-monitor/check') {
+        if (!this.dashboard.onHostMonitorCheck) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const result = await this.dashboard.onHostMonitorCheck();
+        sendJSON(res, 200, result);
+        this.emitUIInvalidation(['security'], 'host-monitor.check.completed', url.pathname);
+        return;
+      }
+
       // GET /api/agents — Agent list
       if (req.method === 'GET' && url.pathname === '/api/agents') {
         if (!this.dashboard.onAgents) {

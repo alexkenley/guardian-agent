@@ -31,6 +31,7 @@ import type { ScheduledTaskDefinition, ScheduledTaskCreateInput, ScheduledTaskUp
 import type { QMDStatusResponse } from '../runtime/qmd-search.js';
 import type { QMDSourceConfig } from '../config/types.js';
 import type { NetworkAlert, NetworkBaselineSnapshot } from '../runtime/network-baseline.js';
+import type { HostMonitorAlert, HostMonitorStatus, HostMonitorReport } from '../runtime/host-monitor.js';
 import type { SandboxHealth } from '../sandbox/index.js';
 import type { SkillRisk } from '../skills/types.js';
 
@@ -120,6 +121,17 @@ export interface RedactedConfig {
       enabled: boolean;
       retentionDays: number;
     };
+    notifications: {
+      enabled: boolean;
+      minSeverity: AuditSeverity;
+      auditEventTypes: AuditEventType[];
+      cooldownMs: number;
+      destinations: {
+        web: boolean;
+        cli: boolean;
+        telegram: boolean;
+      };
+    };
     quickActions: {
       enabled: boolean;
     };
@@ -164,6 +176,17 @@ export interface RedactedConfig {
         flowRetention: number;
       };
       connectionCount: number;
+    };
+    hostMonitoring: {
+      enabled: boolean;
+      scanIntervalSec: number;
+      dedupeWindowMs: number;
+      monitorProcesses: boolean;
+      monitorPersistence: boolean;
+      monitorSensitivePaths: boolean;
+      monitorNetwork: boolean;
+      sensitivePathCount: number;
+      suspiciousProcessCount: number;
     };
     connectors: {
       enabled: boolean;
@@ -542,6 +565,16 @@ export interface DashboardCallbacks {
     snapshotCount: number;
   };
   onNetworkThreatAcknowledge?: (alertId: string) => { success: boolean; message: string };
+  onHostMonitorStatus?: () => HostMonitorStatus;
+  onHostMonitorAlerts?: (args?: { includeAcknowledged?: boolean; limit?: number }) => {
+    alerts: HostMonitorAlert[];
+    activeAlertCount: number;
+    bySeverity: { low: number; medium: number; high: number; critical: number };
+    baselineReady: boolean;
+    lastUpdatedAt: number;
+  };
+  onHostMonitorAcknowledge?: (alertId: string) => { success: boolean; message: string };
+  onHostMonitorCheck?: () => Promise<HostMonitorReport> | HostMonitorReport;
   onConnectorsSettingsUpdate?: (input: {
     enabled?: boolean;
     executionMode?: ConnectorExecutionMode;

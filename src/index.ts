@@ -42,11 +42,13 @@ import { installTemplate, listTemplates, autoInstallAllTemplates } from './runti
 import { DeviceInventoryService } from './runtime/device-inventory.js';
 import { NetworkBaselineService, type NetworkAnomalyReport } from './runtime/network-baseline.js';
 import { NetworkTrafficService } from './runtime/network-traffic.js';
+import { HostMonitoringService, type HostMonitorReport } from './runtime/host-monitor.js';
 import { ScheduledTaskService } from './runtime/scheduled-tasks.js';
 import { MoltbookConnector } from './runtime/moltbook-connector.js';
 import { AssistantOrchestrator } from './runtime/orchestrator.js';
 import { AgentMemoryStore } from './runtime/agent-memory-store.js';
 import { AssistantJobTracker } from './runtime/assistant-jobs.js';
+import { NotificationService } from './runtime/notifications.js';
 import { buildGmailRawMessage, parseDirectGmailWriteIntent } from './runtime/gmail-compose.js';
 import { parseDirectFileSearchIntent } from './runtime/search-intent.js';
 import { GWSService } from './runtime/gws-service.js';
@@ -2258,6 +2260,13 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
         enabled: config.assistant.analytics.enabled,
         retentionDays: config.assistant.analytics.retentionDays,
       },
+      notifications: {
+        enabled: config.assistant.notifications.enabled,
+        minSeverity: config.assistant.notifications.minSeverity,
+        auditEventTypes: [...config.assistant.notifications.auditEventTypes],
+        cooldownMs: config.assistant.notifications.cooldownMs,
+        destinations: { ...config.assistant.notifications.destinations },
+      },
       quickActions: {
         enabled: config.assistant.quickActions.enabled,
       },
@@ -2302,6 +2311,17 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
           flowRetention: config.assistant.network.trafficAnalysis.flowRetention,
         },
         connectionCount: config.assistant.network.connections.length,
+      },
+      hostMonitoring: {
+        enabled: config.assistant.hostMonitoring.enabled,
+        scanIntervalSec: config.assistant.hostMonitoring.scanIntervalSec,
+        dedupeWindowMs: config.assistant.hostMonitoring.dedupeWindowMs,
+        monitorProcesses: config.assistant.hostMonitoring.monitorProcesses,
+        monitorPersistence: config.assistant.hostMonitoring.monitorPersistence,
+        monitorSensitivePaths: config.assistant.hostMonitoring.monitorSensitivePaths,
+        monitorNetwork: config.assistant.hostMonitoring.monitorNetwork,
+        sensitivePathCount: config.assistant.hostMonitoring.sensitivePaths.length,
+        suspiciousProcessCount: config.assistant.hostMonitoring.suspiciousProcessNames.length,
       },
       connectors: {
         enabled: config.assistant.connectors.enabled,
@@ -2395,6 +2415,8 @@ function buildDashboardCallbacks(
   router: MessageRouter,
   deviceInventory: DeviceInventoryService,
   networkBaseline: NetworkBaselineService,
+  hostMonitor: HostMonitoringService,
+  runHostMonitoring: (source: string) => Promise<HostMonitorReport>,
   runNetworkAnalysis: (source: string) => NetworkAnomalyReport,
   guardianAgentService: GuardianAgentService,
   sentinelAuditService: SentinelAuditService,
@@ -3330,6 +3352,32 @@ function buildDashboardCallbacks(
       return networkBaseline.acknowledgeAlert(alertId.trim());
     },
 
+    onHostMonitorStatus: () => hostMonitor.getStatus(),
+
+    onHostMonitorAlerts: (args) => {
+      const includeAcknowledged = !!args?.includeAcknowledged;
+      const parsedLimit = Number(args?.limit ?? 100);
+      const limit = Number.isFinite(parsedLimit) ? Math.max(1, Math.min(500, parsedLimit)) : 100;
+      const alerts = hostMonitor.listAlerts({ includeAcknowledged, limit });
+      const status = hostMonitor.getStatus();
+      return {
+        alerts,
+        activeAlertCount: alerts.length,
+        bySeverity: status.bySeverity,
+        baselineReady: status.baselineReady,
+        lastUpdatedAt: status.lastUpdatedAt,
+      };
+    },
+
+    onHostMonitorAcknowledge: (alertId) => {
+      if (!alertId.trim()) {
+        return { success: false, message: 'alertId is required' };
+      }
+      return hostMonitor.acknowledgeAlert(alertId.trim());
+    },
+
+    onHostMonitorCheck: () => runHostMonitoring('web:manual'),
+
     onSSESubscribe: (listener: SSEListener): (() => void) => {
       const cleanups: Array<() => void> = [];
 
@@ -3342,8 +3390,8 @@ function buildDashboardCallbacks(
       const onSecurityAlert = (event: import('./queue/event-bus.js').AgentEvent): void => {
         listener({ type: 'security.alert', data: event.payload });
       };
-      runtime.eventBus.subscribeByType('security:network:threat', onSecurityAlert);
-      cleanups.push(() => runtime.eventBus.unsubscribeByType('security:network:threat', onSecurityAlert));
+      runtime.eventBus.subscribeByType('security:alert', onSecurityAlert);
+      cleanups.push(() => runtime.eventBus.unsubscribeByType('security:alert', onSecurityAlert));
 
       // Metrics every 5s
       const metricsInterval = setInterval(() => {
@@ -4753,7 +4801,14 @@ async function main(): Promise<void> {
   });
   await networkTraffic.load().catch(() => {});
 
+  const hostMonitor = new HostMonitoringService({
+    config: config.assistant.hostMonitoring,
+  });
+  await hostMonitor.load().catch(() => {});
+
   let lastNetworkAlertEmitAt = 0;
+  let hostMonitorInterval: ReturnType<typeof setInterval> | null = null;
+  let lastHostMonitorTriggeredAt = 0;
 
   const runNetworkAnalysis = (source: string): NetworkAnomalyReport => {
     const devices = deviceInventory.listDevices();
@@ -4848,6 +4903,48 @@ async function main(): Promise<void> {
     return report;
   };
 
+  const runHostMonitoring = async (source: string) => {
+    const report = await hostMonitor.runCheck();
+    if (!configRef.current.assistant.hostMonitoring.enabled) {
+      return report;
+    }
+    const now = Date.now();
+
+    runtime.eventBus.emit({
+      type: 'host:monitor:check',
+      sourceAgentId: 'host-monitor',
+      targetAgentId: '*',
+      payload: {
+        source,
+        baselineReady: report.baselineReady,
+        snapshot: report.snapshot,
+      },
+      timestamp: now,
+    }).catch(() => {});
+
+    for (const alert of report.alerts) {
+      const severity = alert.severity === 'critical'
+        ? 'critical'
+        : alert.severity === 'high' || alert.severity === 'medium'
+          ? 'warn'
+          : 'info';
+      runtime.auditLog.record({
+        type: 'host_alert',
+        severity,
+        agentId: 'host-monitor',
+        details: {
+          source: 'host_monitor',
+          alertType: alert.type,
+          description: alert.description,
+          hostSeverity: alert.severity,
+          dedupeKey: alert.dedupeKey,
+          evidence: alert.evidence,
+        },
+      });
+    }
+    return report;
+  };
+
   // ─── Guardian Agent (inline LLM blocking) + Sentinel (audit) ──────
   const guardianAgentConfig = config.guardian?.guardianAgent;
   const guardianAgentService = new GuardianAgentService({
@@ -4893,6 +4990,20 @@ async function main(): Promise<void> {
           metadata: { args, result },
         });
       }
+
+      const hostRelevant = new Set(['shell_safe', 'browser_open', 'browser_action', 'browser_task', 'net_connections', 'sys_processes']);
+      const now = Date.now();
+      if (
+        configRef.current.assistant.hostMonitoring.enabled
+        && result.success
+        && (hostRelevant.has(toolName) || toolName.startsWith('mcp-') || toolName.startsWith('cf_') || toolName.startsWith('aws_') || toolName.startsWith('gcp_') || toolName.startsWith('azure_'))
+        && (now - lastHostMonitorTriggeredAt) >= 60_000
+      ) {
+        lastHostMonitorTriggeredAt = now;
+        runHostMonitoring(`tool:${toolName}`).catch((err) => {
+          log.warn({ err: err instanceof Error ? err.message : String(err), toolName }, 'Post-tool host monitoring check failed');
+        });
+      }
     },
     onPolicyUpdate: (policy) => {
       // Persist policy changes to config.yaml so they survive reloads and restarts
@@ -4924,6 +5035,8 @@ async function main(): Promise<void> {
     deviceInventory,
     networkBaseline,
     networkTraffic,
+    hostMonitor,
+    runHostMonitorCheck: runHostMonitoring,
     networkConfig: config.assistant.network,
     mcpManager,
     sandboxConfig,
@@ -4982,42 +5095,60 @@ async function main(): Promise<void> {
         },
       });
     },
-    onPreExecute: guardianAgentConfig?.enabled !== false
-      ? async (action) => {
-          const evaluation = await guardianAgentService.evaluateAction(action);
-          if (!evaluation.allowed) {
-            runtime.auditLog.record({
-              type: 'action_denied',
-              severity: evaluation.riskLevel === 'critical' ? 'critical' : 'warn',
-              agentId: action.agentId,
-              controller: 'GuardianAgent',
-              details: {
-                actionType: action.type,
-                toolName: action.toolName,
-                reason: evaluation.reason,
-                riskLevel: evaluation.riskLevel,
-                source: 'guardian_agent_inline',
-              },
-            });
-          } else if (evaluation.riskLevel !== 'safe') {
-            // Log all non-trivial evaluations for monitoring
-            runtime.auditLog.record({
-              type: 'action_allowed',
-              severity: 'info',
-              agentId: action.agentId,
-              controller: 'GuardianAgent',
-              details: {
-                actionType: action.type,
-                toolName: action.toolName,
-                reason: evaluation.reason,
-                riskLevel: evaluation.riskLevel,
-                source: 'guardian_agent_inline',
-              },
-            });
-          }
-          return { allowed: evaluation.allowed, reason: evaluation.reason };
-        }
-      : undefined,
+    onPreExecute: async (action) => {
+      const hostDecision = hostMonitor.shouldBlockAction(action);
+      if (!hostDecision.allowed) {
+        runtime.auditLog.record({
+          type: 'action_denied',
+          severity: 'critical',
+          agentId: action.agentId,
+          controller: 'HostMonitor',
+          details: {
+            actionType: action.type,
+            toolName: action.toolName,
+            reason: hostDecision.reason,
+            source: 'host_monitor_enforcement',
+          },
+        });
+        return hostDecision;
+      }
+
+      if (guardianAgentConfig?.enabled === false) {
+        return { allowed: true };
+      }
+
+      const evaluation = await guardianAgentService.evaluateAction(action);
+      if (!evaluation.allowed) {
+        runtime.auditLog.record({
+          type: 'action_denied',
+          severity: evaluation.riskLevel === 'critical' ? 'critical' : 'warn',
+          agentId: action.agentId,
+          controller: 'GuardianAgent',
+          details: {
+            actionType: action.type,
+            toolName: action.toolName,
+            reason: evaluation.reason,
+            riskLevel: evaluation.riskLevel,
+            source: 'guardian_agent_inline',
+          },
+        });
+      } else if (evaluation.riskLevel !== 'safe') {
+        runtime.auditLog.record({
+          type: 'action_allowed',
+          severity: 'info',
+          agentId: action.agentId,
+          controller: 'GuardianAgent',
+          details: {
+            actionType: action.type,
+            toolName: action.toolName,
+            reason: evaluation.reason,
+            riskLevel: evaluation.riskLevel,
+            source: 'guardian_agent_inline',
+          },
+        });
+      }
+      return { allowed: evaluation.allowed, reason: evaluation.reason };
+    },
   };
 
   const toolExecutor = new ToolExecutor(toolExecutorOptions);
@@ -5599,6 +5730,8 @@ async function main(): Promise<void> {
     router,
     deviceInventory,
     networkBaseline,
+    hostMonitor,
+    runHostMonitoring,
     runNetworkAnalysis,
     guardianAgentService,
     sentinelAuditService,
@@ -6072,8 +6205,40 @@ async function main(): Promise<void> {
     log.info({ url: webUrl }, 'Dashboard available at');
   }
 
+  const notificationService = new NotificationService({
+    config: config.assistant.notifications,
+    auditLog: runtime.auditLog,
+    eventBus: runtime.eventBus,
+    senders: {
+      sendCli: cliChannel
+        ? async (text: string) => {
+            await cliChannel!.send(configRef.current.assistant.identity.primaryUserId, text);
+          }
+        : undefined,
+      sendTelegram: async (text: string) => {
+        const chatIds = configRef.current.channels.telegram?.allowedChatIds ?? [];
+        if (!activeTelegram || chatIds.length === 0) return;
+        for (const chatId of chatIds) {
+          await activeTelegram.send(String(chatId), text);
+        }
+      },
+    },
+  });
+  notificationService.start();
+
   // Start runtime
   await runtime.start();
+
+  if (config.assistant.hostMonitoring.enabled) {
+    await runHostMonitoring('startup').catch((err) => {
+      log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Initial host monitoring check failed');
+    });
+    hostMonitorInterval = setInterval(() => {
+      runHostMonitoring('interval').catch((err) => {
+        log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Host monitoring interval check failed');
+      });
+    }, Math.max(10, configRef.current.assistant.hostMonitoring.scanIntervalSec) * 1000);
+  }
 
   // Migrate hardcoded playbook schedules into ScheduledTaskService
   {
@@ -6142,6 +6307,10 @@ async function main(): Promise<void> {
       clearInterval(threatIntelInterval);
       threatIntelInterval = null;
     }
+    if (hostMonitorInterval) {
+      clearInterval(hostMonitorInterval);
+      hostMonitorInterval = null;
+    }
 
     if (mcpManager) {
       try {
@@ -6157,6 +6326,7 @@ async function main(): Promise<void> {
       log.error({ err }, 'Error disposing tool executor');
     }
 
+    notificationService.stop();
     await runtime.stop();
     conversations.close();
     analytics.close();

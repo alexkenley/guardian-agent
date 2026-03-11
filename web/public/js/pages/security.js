@@ -109,6 +109,7 @@ async function renderAuditTab(panel) {
         <option value="capability_probe">capability_probe</option>
         <option value="policy_changed">policy_changed</option>
         <option value="anomaly_detected">anomaly_detected</option>
+        <option value="host_alert">host_alert</option>
         <option value="agent_error">agent_error</option>
         <option value="agent_stalled">agent_stalled</option>
       </select>
@@ -217,12 +218,14 @@ async function renderMonitoringTab(panel) {
   panel.innerHTML = '<div class="loading">Loading...</div>';
 
   try {
-    const [agents, budget, analytics, baseline, threatState] = await Promise.all([
+    const [agents, budget, analytics, baseline, threatState, hostStatus, hostAlerts] = await Promise.all([
       api.agents().catch(() => []),
       api.budget().catch(() => ({ agents: [], recentOverruns: [] })),
       api.analyticsSummary(3600000).catch(() => null),
       api.networkBaseline().catch(() => null),
       api.networkThreats({ limit: 50 }).catch(() => null),
+      api.hostMonitorStatus().catch(() => null),
+      api.hostMonitorAlerts({ limit: 50 }).catch(() => null),
     ]);
 
     panel.innerHTML = '';
@@ -240,6 +243,29 @@ async function renderMonitoringTab(panel) {
       bySeverity: { low: 0, medium: 0, high: 0, critical: 0 },
       baselineReady: safeBaseline.baselineReady,
       snapshotCount: safeBaseline.snapshotCount,
+    };
+    const safeHostStatus = hostStatus || {
+      platform: 'unknown',
+      enabled: false,
+      baselineReady: false,
+      lastUpdatedAt: 0,
+      snapshot: {
+        processCount: 0,
+        suspiciousProcesses: [],
+        persistenceEntryCount: 0,
+        watchedPathCount: 0,
+        knownExternalDestinationCount: 0,
+        listeningPortCount: 0,
+      },
+      activeAlertCount: 0,
+      bySeverity: { low: 0, medium: 0, high: 0, critical: 0 },
+    };
+    const safeHostAlerts = hostAlerts || {
+      alerts: [],
+      activeAlertCount: 0,
+      bySeverity: safeHostStatus.bySeverity,
+      baselineReady: safeHostStatus.baselineReady,
+      lastUpdatedAt: safeHostStatus.lastUpdatedAt,
     };
 
     const threatSectionHeader = document.createElement('h3');
@@ -355,6 +381,145 @@ async function renderMonitoringTab(panel) {
       }
     });
 
+    const hostSectionHeader = document.createElement('h3');
+    hostSectionHeader.className = 'section-header';
+    hostSectionHeader.textContent = 'Host Monitor Posture';
+    panel.appendChild(hostSectionHeader);
+
+    const hostGrid = document.createElement('div');
+    hostGrid.className = 'cards-grid';
+    panel.appendChild(hostGrid);
+
+    const hostContainer = document.createElement('div');
+    hostContainer.className = 'table-container';
+    hostContainer.innerHTML = `
+      <div class="table-header">
+        <h3>Active Host Alerts</h3>
+        <div>
+          <span id="host-monitor-meta" style="font-size:0.8rem;color:var(--text-muted);margin-right:0.75rem;"></span>
+          <button class="btn btn-secondary" id="host-monitor-refresh">Refresh</button>
+          <button class="btn btn-primary" id="host-monitor-check">Run Check</button>
+        </div>
+      </div>
+      <table>
+        <thead><tr><th>Time</th><th>Severity</th><th>Type</th><th>Evidence</th><th>Details</th><th>Action</th></tr></thead>
+        <tbody id="host-monitor-table-body"></tbody>
+      </table>
+    `;
+    panel.appendChild(hostContainer);
+
+    const hostMetaEl = hostContainer.querySelector('#host-monitor-meta');
+    const hostTableBody = hostContainer.querySelector('#host-monitor-table-body');
+
+    const renderHostCards = (status, alertState) => {
+      hostGrid.innerHTML = '';
+      hostGrid.appendChild(createStatusCard(
+        'Host Monitor',
+        status.enabled ? 'Enabled' : 'Disabled',
+        `${String(status.platform).toUpperCase()} • ${status.baselineReady ? 'baseline ready' : 'learning'}`,
+        status.enabled ? 'success' : 'warning',
+      ));
+      hostGrid.appendChild(createStatusCard(
+        'Active Host Alerts',
+        alertState.activeAlertCount || 0,
+        `${alertState.bySeverity?.critical ?? 0} critical / ${alertState.bySeverity?.high ?? 0} high`,
+        (alertState.bySeverity?.critical ?? 0) > 0 ? 'error' : (alertState.bySeverity?.high ?? 0) > 0 ? 'warning' : 'success',
+      ));
+      hostGrid.appendChild(createStatusCard(
+        'Suspicious Processes',
+        status.snapshot?.suspiciousProcesses?.length || 0,
+        `${status.snapshot?.processCount || 0} total processes sampled`,
+        (status.snapshot?.suspiciousProcesses?.length || 0) > 0 ? 'warning' : 'info',
+      ));
+      hostGrid.appendChild(createStatusCard(
+        'Watched Paths',
+        status.snapshot?.watchedPathCount || 0,
+        `${status.snapshot?.persistenceEntryCount || 0} persistence entries • ${status.snapshot?.knownExternalDestinationCount || 0} remotes`,
+        'info',
+      ));
+    };
+
+    const summarizeHostEvidence = (alert) => {
+      if (!alert?.evidence) return '-';
+      if (typeof alert.evidence.path === 'string') return alert.evidence.path;
+      if (typeof alert.evidence.entry === 'string') return alert.evidence.entry;
+      if (typeof alert.evidence.remoteAddress === 'string') return alert.evidence.remoteAddress;
+      if (typeof alert.evidence.port === 'number') return `port ${alert.evidence.port}`;
+      if (typeof alert.evidence.name === 'string') return alert.evidence.name;
+      return '-';
+    };
+
+    const renderHostRows = (alerts) => {
+      if (!hostTableBody) return;
+      if (!alerts || alerts.length === 0) {
+        hostTableBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No active host alerts.</td></tr>';
+        return;
+      }
+      hostTableBody.innerHTML = alerts.map((alert) => `
+        <tr>
+          <td>${new Date(alert.lastSeenAt || alert.timestamp || Date.now()).toLocaleTimeString()}</td>
+          <td><span class="badge ${severityClass(alert.severity)}">${esc(alert.severity)}</span></td>
+          <td>${esc(alert.type)}</td>
+          <td title="${escAttr(JSON.stringify(alert.evidence || {}))}">${esc(summarizeHostEvidence(alert))}</td>
+          <td title="${escAttr(alert.description || '')}">${esc(alert.description || '-')}</td>
+          <td><button class="btn btn-secondary host-alert-ack" data-alert-id="${escAttr(alert.id)}">Acknowledge</button></td>
+        </tr>
+      `).join('');
+    };
+
+    const applyHostState = (status, alertState) => {
+      renderHostCards(status, alertState);
+      renderHostRows(alertState.alerts || []);
+      if (hostMetaEl) {
+        const updated = alertState.lastUpdatedAt || status.lastUpdatedAt;
+        hostMetaEl.textContent = `Baseline: ${status.baselineReady ? 'ready' : 'learning'} • Updated: ${updated ? new Date(updated).toLocaleTimeString() : 'never'}`;
+      }
+    };
+
+    const loadHostState = async () => {
+      const [latestStatus, latestAlerts] = await Promise.all([
+        api.hostMonitorStatus().catch(() => safeHostStatus),
+        api.hostMonitorAlerts({ limit: 50 }).catch(() => safeHostAlerts),
+      ]);
+      applyHostState(latestStatus, latestAlerts);
+    };
+
+    applyHostState(safeHostStatus, safeHostAlerts);
+
+    hostContainer.querySelector('#host-monitor-refresh')?.addEventListener('click', () => {
+      loadHostState().catch(() => {});
+    });
+
+    hostContainer.querySelector('#host-monitor-check')?.addEventListener('click', async (event) => {
+      const button = event.currentTarget;
+      if (!(button instanceof HTMLButtonElement)) return;
+      button.disabled = true;
+      try {
+        await api.runHostMonitorCheck();
+        await loadHostState();
+      } catch {
+        button.disabled = false;
+        return;
+      }
+      button.disabled = false;
+    });
+
+    hostContainer.addEventListener('click', async (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const button = target.closest('.host-alert-ack');
+      if (!(button instanceof HTMLElement)) return;
+      const alertId = button.getAttribute('data-alert-id');
+      if (!alertId) return;
+      button.setAttribute('disabled', 'true');
+      try {
+        await api.acknowledgeHostMonitorAlert(alertId);
+        await loadHostState();
+      } catch {
+        button.removeAttribute('disabled');
+      }
+    });
+
     // Live event stream
     const sectionHeader1 = document.createElement('h3');
     sectionHeader1.className = 'section-header';
@@ -452,18 +617,23 @@ async function renderMonitoringTab(panel) {
     onSSE('audit', monAuditHandler);
 
     monSecurityAlertHandler = async (alert) => {
+      const description = alert?.description || alert?.details?.reason || 'Security alert detected';
+      const severity = alert?.severity || 'warn';
       if (eventLogEl) {
         appendEvent(eventLogEl, {
           timestamp: alert?.timestamp || Date.now(),
           type: 'security_alert',
-          severity: mapNetworkSeverityToAudit(alert?.severity),
-          agentId: 'network-sentinel',
+          severity: mapNetworkSeverityToAudit(severity),
+          agentId: alert?.agentId || 'security-monitor',
           details: {
-            reason: alert?.description || 'Network threat detected',
+            reason: description,
           },
         });
       }
-      await loadThreatState();
+      await Promise.all([
+        loadThreatState(),
+        loadHostState(),
+      ]);
     };
     onSSE('security.alert', monSecurityAlertHandler);
 
@@ -683,7 +853,7 @@ function severityClass(severity) {
 
 function mapNetworkSeverityToAudit(severity) {
   if (severity === 'critical') return 'critical';
-  if (severity === 'high' || severity === 'medium') return 'warn';
+  if (severity === 'high' || severity === 'medium' || severity === 'warn') return 'warn';
   return 'info';
 }
 

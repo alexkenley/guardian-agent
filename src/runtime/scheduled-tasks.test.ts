@@ -392,6 +392,8 @@ describe('ScheduledTaskService', () => {
       expect(presets.find(p => p.id === 'network-watch')).toBeDefined();
       expect(presets.find(p => p.id === 'system-health')).toBeDefined();
       expect(presets.find(p => p.id === 'full-network-discovery')).toBeDefined();
+      expect(presets.find(p => p.id === 'host-security-baseline')).toBeDefined();
+      expect(presets.find(p => p.id === 'anomaly-response-triage')).toBeDefined();
     });
 
     it('should install a preset as disabled by default', () => {

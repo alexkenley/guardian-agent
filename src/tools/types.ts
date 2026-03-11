@@ -124,7 +124,7 @@ export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
     'whm_backup',
     'whm_services',
   ],
-  system: ['sys_info', 'sys_resources', 'sys_processes', 'sys_services'],
+  system: ['sys_info', 'sys_resources', 'sys_processes', 'sys_services', 'host_monitor_status', 'host_monitor_check'],
   memory: ['memory_search', 'memory_recall', 'memory_save'],
   search: ['qmd_search', 'qmd_status', 'qmd_reindex'],
 };

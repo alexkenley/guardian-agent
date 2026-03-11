@@ -45,6 +45,7 @@ import type { DeviceInventoryService } from '../runtime/device-inventory.js';
 import type { NetworkBaselineService } from '../runtime/network-baseline.js';
 import { classifyDevice, lookupOuiVendor } from '../runtime/network-intelligence.js';
 import type { NetworkTrafficService, TrafficConnectionSample } from '../runtime/network-traffic.js';
+import type { HostMonitoringService, HostMonitorReport } from '../runtime/host-monitor.js';
 import { parseBanner, inferServiceFromPort } from '../runtime/network-fingerprinting.js';
 import { parseAirportWifi, parseNetshWifi, parseNmcliWifi, correlateWifiClients } from '../runtime/network-wifi.js';
 import { AwsClient, type AwsInstanceConfig } from './cloud/aws-client.js';
@@ -131,6 +132,10 @@ export interface ToolExecutorOptions {
   networkBaseline?: NetworkBaselineService;
   /** Traffic baseline + threat analysis service. */
   networkTraffic?: NetworkTrafficService;
+  /** Host workstation monitoring service. */
+  hostMonitor?: HostMonitoringService;
+  /** Centralized host-monitor check wrapper so alerts are audited/notified consistently. */
+  runHostMonitorCheck?: (source: string) => Promise<HostMonitorReport>;
   /** Network feature configuration. */
   networkConfig?: AssistantNetworkConfig;
   /** OS-level process sandbox configuration. */
@@ -8907,6 +8912,64 @@ export class ToolExecutor {
         } catch (err) {
           return { success: false, error: `Service listing failed (systemd may not be available): ${err instanceof Error ? err.message : String(err)}` };
         }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'host_monitor_status',
+        description: 'Return workstation host-monitor posture, including baseline status, recent host alerts, suspicious process count, persistence visibility, and sensitive-path monitoring summary. Read-only.',
+        shortDescription: 'Return workstation host-monitor posture and active alerts.',
+        risk: 'read_only',
+        category: 'system',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            limit: { type: 'number', description: 'Max active alerts to include (1-100, default 20).' },
+            includeAcknowledged: { type: 'boolean', description: 'Include acknowledged alerts (default false).' },
+          },
+        },
+      },
+      async (args, request) => {
+        if (!this.options.hostMonitor) {
+          return { success: false, error: 'Host monitoring is not available.' };
+        }
+        const limit = Math.max(1, Math.min(100, asNumber(args.limit, 20)));
+        const includeAcknowledged = !!args.includeAcknowledged;
+        this.guardAction(request, 'system_info', { action: 'host_monitor_status', limit, includeAcknowledged });
+        return {
+          success: true,
+          output: {
+            status: this.options.hostMonitor.getStatus(),
+            alerts: this.options.hostMonitor.listAlerts({ includeAcknowledged, limit }),
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'host_monitor_check',
+        description: 'Run an immediate workstation host-monitoring check. Detects suspicious processes, persistence changes, sensitive-path drift, and new external destinations relative to the saved baseline. Read-only.',
+        shortDescription: 'Run an immediate workstation host-monitoring check.',
+        risk: 'read_only',
+        category: 'system',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {},
+        },
+      },
+      async (_args, request) => {
+        if (!this.options.hostMonitor) {
+          return { success: false, error: 'Host monitoring is not available.' };
+        }
+        this.guardAction(request, 'system_info', { action: 'host_monitor_check' });
+        const report = this.options.runHostMonitorCheck
+          ? await this.options.runHostMonitorCheck(`tool:host_monitor_check:${request.agentId || 'assistant'}`)
+          : await this.options.hostMonitor.runCheck();
+        return { success: true, output: report };
       },
     );
 
