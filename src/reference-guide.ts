@@ -214,8 +214,8 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'After credentials are in place, run `gws auth login` to complete the browser sign-in flow.',
                   'Enable only the Google APIs you need in Google Cloud Console.',
-                  'In Guardian Agent, open Settings > Google Workspace, choose services, enable the integration, and restart if the tools are not already loaded.',
-                  'Verify with the Settings panel or CLI `/google status`.',
+                  'In Guardian Agent, open Configuration > Integrations > Google Workspace, choose services, enable the integration, and restart if the tools are not already loaded.',
+                  'Verify with the Integrations panel or CLI `/google status`.',
                 ],
                 note: 'If Google shows `access_denied` or `app not verified`, return to the Google Auth Platform Audience settings and either publish the app or add yourself as a test user.',
               },
@@ -230,7 +230,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Bot Setup',
                 items: [
                   'Create the bot through `@BotFather` using `/newbot`, then copy the returned token.',
-                  'Enable Telegram in Configuration > Settings > Telegram Channel, paste the token, and save.',
+                  'Enable Telegram in Configuration > Integrations, paste the token, and save.',
                   'Send at least one message to the bot, then fetch your `message.chat.id` from `https://api.telegram.org/bot<token>/getUpdates`.',
                   'Paste allowed chat IDs into the configuration. Group IDs are commonly negative and often start with `-100`.',
                 ],
@@ -321,21 +321,21 @@ export function getReferenceGuide(): ReferenceGuide {
           {
             id: 'network-operations',
             title: 'Network Operations',
-            summary: 'Use the Network page for inventory, threat posture, one-off scans, and network run history.',
+            summary: 'Use the Network page for inventory, one-off diagnostics, and network run history. Use Security for the unified alert queue.',
             sections: [
               {
                 title: 'Core Tabs',
                 items: [
                   'Overview summarizes device counts, baseline readiness, active alerts, and quick actions.',
                   'Devices shows discovered devices, trust state, open ports, and first/last seen timestamps.',
-                  'Threats shows active alerts plus acknowledgment controls and on-demand threat checks.',
+                  'Security owns the unified alert queue; Network keeps the operational device and diagnostics views.',
                   'History shows recent scheduled and manual network runs with expandable per-step output.',
                 ],
               },
               {
                 title: 'Tools Tab',
                 items: [
-                  'The Tools tab now groups network tools by category and uses dropdown selectors instead of a scrolling tab strip.',
+                  'The Diagnostics tab groups network tools by category and uses dropdown selectors instead of a scrolling tab strip.',
                   'Choose a category first, then select the specific tool to run.',
                   'Each tool panel keeps its own argument form and result viewer so raw output is inspectable immediately.',
                   'Live result panels include Copy, Text export, and HTML export actions so one-off scan output can be reused outside the dashboard.',
@@ -464,7 +464,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Policy Engine',
                 items: [
                   'Policy-as-code supports off, shadow, and enforce modes depending on how aggressively you want rules to apply.',
-                  'Configuration > Policy and CLI `/policy ...` expose the current mode, family settings, and reload controls.',
+                  'Configuration > Tools & Policy and CLI `/policy ...` expose the current mode, family settings, and reload controls.',
                   'Shadow mode is the safest way to compare rule output with current behavior before switching to enforce.',
                 ],
               },
@@ -498,7 +498,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Guardian blocks prompt injection patterns, secret leakage, and risky tool actions by default.',
                   'Bearer auth is mandatory for the web dashboard; there is no unauthenticated dashboard mode.',
                   'Rotate web auth credentials from the web Config Center or with CLI `/auth rotate`.',
-                  'Security alerts default to CLI-only delivery; use Configuration > Settings > Security > Security Alerts when you want web or Telegram fanout.',
+                  'Security alerts default to CLI-only delivery; use Configuration > System to enable web or Telegram fanout.',
                   'Use audit and policy views to understand why an action was denied instead of loosening controls blindly.',
                   'Outbound HTTP tool calls are checked against SSRF protection rules that block private IPs, cloud metadata endpoints, and obfuscated addresses.',
                 ],

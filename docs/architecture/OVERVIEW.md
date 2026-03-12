@@ -2,18 +2,20 @@
 
 ## Design Philosophy
 
-GuardianAgent is a **security-first, event-driven AI agent orchestration system**. It is a self-contained orchestrator where agents are developer-authored TypeScript classes with curated capabilities and strict guardrails on what they can and cannot do.
+GuardianAgent is a **security-first, event-driven AI agent orchestration system**. It is a self-contained orchestrator with curated capabilities, strict guardrails, and a brokered worker boundary for the built-in chat/planner execution path.
 
-The agents are your code. The LLM output is the untrusted component. All security enforcement is **mandatory at the Runtime level** — the Runtime controls every chokepoint where data flows in or out of an agent. Agents cannot bypass the four-layer defense system that protects users from credential leaks, prompt injection, capability escalation, and data exfiltration.
+The Runtime controls every chokepoint where data flows in or out of an agent. The built-in chat/planner LLM loop is isolated into a brokered worker by default. Supervisor-side framework code still owns admission, audit, approvals, and tool execution. Agents cannot bypass the four-layer defense system that protects users from credential leaks, prompt injection, capability escalation, and data exfiltration.
 
 Core principles:
 - **Actively protect users from security mistakes** rather than providing opt-in guardrails
 - **Mandatory enforcement at Runtime chokepoints** — not advisory checks that agents opt into
-- **The LLM is untrusted, not the agent code** — enforcement targets the data path where risk lives
+- **Broker the highest-risk execution loop away from the supervisor** — the default chat/planner path runs in a separate worker process
+- **Keep the supervisor narrow and authoritative** — admission, audit, approvals, and tools stay supervisor-owned
 
 Current extensions:
 - **Native skills layer** for reusable procedural knowledge, templates, and task guidance
 - **Managed MCP providers** for curated external capability bundles such as Google Workspace via `gws`
+- **Brokered worker execution** for the built-in chat/planner path, enabled by default
 - **Strict sandbox availability model** that disables risky tools when strong OS isolation is unavailable
 
 ## Architecture Diagram
@@ -245,7 +247,7 @@ const router = new ConditionalAgent('route', 'Intent Router', {
 });
 ```
 
-Key design: every sub-agent dispatch goes through `ctx.dispatch()` → `Runtime.dispatchMessage()` → full Guardian pipeline. Orchestration does not create a bypass path.
+Key design: every sub-agent dispatch goes through `ctx.dispatch()` → `Runtime.dispatchMessage()` → full Guardian pipeline. When the target is a built-in chat agent, that dispatch then crosses into the brokered worker path. Orchestration does not create a bypass path.
 
 See [Orchestration Agents Spec](../specs/ORCHESTRATION-AGENTS-SPEC.md) for full details.
 
@@ -317,6 +319,34 @@ Not yet implemented:
 
 See [Google Workspace Integration Spec](../specs/GOOGLE-WORKSPACE-INTEGRATION-SPEC.md).
 
+## Brokered Execution Boundary
+
+GuardianAgent now defaults to brokered worker execution for the built-in chat/planner flow.
+
+Supervisor responsibilities:
+
+- config loading
+- Guardian admission checks
+- audit logging
+- tool execution
+- approval state
+- worker lifecycle
+
+Worker responsibilities:
+
+- prompt assembly
+- conversation-context assembly from supervisor-provided state
+- LLM chat/tool loop
+- pending-approval continuation
+
+What this does not mean:
+
+- orchestration agents are not moved into the worker
+- every arbitrary developer-authored code path is not automatically sandboxed
+- degraded hosts do not imply strong filesystem or network namespace isolation
+
+See [Brokered Agent Isolation Spec](../specs/BROKERED-AGENT-ISOLATION-SPEC.md).
+
 ## Sandbox Availability
 
 The current subprocess sandbox layer now uses an explicit availability model:
@@ -376,7 +406,15 @@ User Message
 └──────────┬───────────────────┘
            │ ✓ allowed
            ▼
-    Agent.onMessage()
+    Runtime routes execution
+           │
+           ▼
+┌──────────────────────────────┐
+│ Brokered worker path         │
+│ (built-in chat/planner)      │
+│ or supervisor handler path   │
+│ (framework/orchestration)    │
+└──────────┬───────────────────┘
            │
            ▼
 ┌──────────────────────────────┐
@@ -413,13 +451,14 @@ User Message
 All security enforcement is mandatory. The Runtime controls every path where data enters or leaves an agent:
 
 - **Message input** — Guardian pipeline runs before the agent sees the message
+- **Chat agent execution** — The built-in chat/planner loop runs in a brokered worker by default; it reaches tools and approvals only through broker RPC
 - **LLM access** — Agents receive a `GuardedLLMProvider`, not the raw provider. Every LLM response is scanned for secrets and tracked for token usage automatically.
 - **Response output** — After the agent responds, the Runtime scans for secrets and redacts before the response reaches anyone
 - **Event emission** — `ctx.emit()` scans payloads for secrets before dispatch
 - **Resource limits** — Concurrent limits, queue depth, token rate limits, and wall-clock budgets enforced before every invocation
 - **Context immutability** — Agent contexts are frozen. Agents cannot modify their own capabilities.
 
-There is no `ctx.fs`, `ctx.http`, or `ctx.exec`. The agent's only interaction points are `ctx.llm` (guarded), `ctx.emit()` (scanned), `ctx.dispatch()` (Guardian-checked per call), and returning a response (scanned).
+There is no default `ctx.fs`, `ctx.http`, or `ctx.exec`. The agent's framework-managed interaction points are `ctx.llm` (guarded), `ctx.emit()` (scanned), `ctx.dispatch()` (Guardian-checked per call), and returning a response (scanned). For built-in chat execution, these interactions occur inside the worker-backed brokered path.
 
 ### Orchestration Message Flow
 

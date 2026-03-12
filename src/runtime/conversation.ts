@@ -206,6 +206,14 @@ export class ConversationService {
     ];
   }
 
+  /** Return trimmed prior user/assistant turns for worker-side prompt assembly. */
+  getHistoryForContext(key: ConversationKey): Array<{ role: 'user' | 'assistant'; content: string }> {
+    return this.getTrimmedHistoryForContext(key).map((entry) => ({
+      role: entry.role,
+      content: entry.content,
+    }));
+  }
+
   /** Record the completed user/assistant turn for future context. */
   recordTurn(key: ConversationKey, userContent: string, assistantContent: string): void {
     const sessionId = this.getActiveSessionId(key);

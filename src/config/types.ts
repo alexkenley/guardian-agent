@@ -318,6 +318,33 @@ export interface GuardianConfig {
   };
 }
 
+export interface AgentIsolationConfig {
+  enabled: boolean;                     // Master switch (default: false)
+  mode: 'in-process' | 'brokered';     // Default: 'in-process'
+
+  // Worker process settings
+  workerIdleTimeoutMs: number;          // Default: 300000 (5 min)
+  workerMaxMemoryMb: number;            // Default: 512
+  workerHeartbeatIntervalMs: number;    // Default: 30000 (30s)
+  workerShutdownGracePeriodMs: number;  // Default: 10000 (10s)
+  workerMaxConcurrent: number;          // Default: 4
+  workerEntryPoint: string;             // Default: built-in worker-entry.ts
+
+  // Capability tokens
+  capabilityTokenTtlMs: number;         // Default: 600000 (10 min)
+  capabilityTokenMaxToolCalls: number;  // Default: 0 (unlimited)
+
+  // LLM in worker
+  llmEgressHosts: string[];             // Allowed outbound hosts for LLM API calls
+  llmCredentialRotationMs: number;      // Default: 300000 (5 min)
+
+  // Taint policy (Phase 4)
+  taintPolicy: {
+    enabled: boolean;                   // Default: false
+    mode: 'warn' | 'require_approval' | 'block';  // Default: 'require_approval'
+  };
+}
+
 /** Runtime configuration. */
 export interface RuntimeConfig {
   /** Watchdog stall detection timeout (ms). */
@@ -326,6 +353,8 @@ export interface RuntimeConfig {
   watchdogIntervalMs: number;
   /** Log level. */
   logLevel: string;
+  /** Agent isolation configuration (Brokered Agent Isolation). */
+  agentIsolation: AgentIsolationConfig;
 }
 
 /** Optional setup/config state and preferences. */
@@ -428,6 +457,18 @@ export interface AssistantNotificationsConfig {
     /** Send notifications to configured Telegram chats when enabled. */
     telegram: boolean;
   };
+}
+
+export type AutomationOutputRoutingMode = 'off' | 'warn_critical' | 'all';
+export type AutomationArtifactPersistenceMode = 'run_history_only' | 'run_history_plus_memory';
+
+export interface AutomationOutputHandlingConfig {
+  /** Whether normalized findings should trigger operator notifications. */
+  notify: AutomationOutputRoutingMode;
+  /** Whether normalized findings should appear in Security > Alerts. */
+  sendToSecurity: AutomationOutputRoutingMode;
+  /** Where artifacts should be persisted. */
+  persistArtifacts: AutomationArtifactPersistenceMode;
 }
 
 /** Quick action templates for structured assistant workflows. */
@@ -688,6 +729,8 @@ export interface AssistantConnectorPlaybookDefinition {
   signature?: string;
   /** Optional cron schedule for automatic execution. */
   schedule?: string;
+  /** Optional output routing behavior for this automation. */
+  outputHandling?: AutomationOutputHandlingConfig;
   /** Ordered list of playbook steps. */
   steps: AssistantConnectorPlaybookStepDefinition[];
 }
@@ -1161,6 +1204,24 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
     maxStallDurationMs: 180_000,
     watchdogIntervalMs: 10_000,
     logLevel: 'warn',
+    agentIsolation: {
+      enabled: true,
+      mode: 'brokered',
+      workerIdleTimeoutMs: 300_000,
+      workerMaxMemoryMb: 512,
+      workerHeartbeatIntervalMs: 30_000,
+      workerShutdownGracePeriodMs: 10_000,
+      workerMaxConcurrent: 4,
+      workerEntryPoint: '',
+      capabilityTokenTtlMs: 600_000,
+      capabilityTokenMaxToolCalls: 0,
+      llmEgressHosts: ['api.anthropic.com', 'api.openai.com'],
+      llmCredentialRotationMs: 300_000,
+      taintPolicy: {
+        enabled: false,
+        mode: 'require_approval',
+      },
+    },
   },
   failover: {
     enabled: true,
@@ -1230,6 +1291,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         'policy_changed',
         'policy_mode_changed',
         'policy_shadow_mismatch',
+        'automation_finding',
         'agent_error',
         'agent_stalled',
       ],

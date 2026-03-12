@@ -110,6 +110,12 @@ export class NotificationService {
   }
 
   private shouldNotify(config: AssistantNotificationsConfig, event: AuditEvent): boolean {
+    if (event.type === 'automation_finding') {
+      const disposition = event.details.automationDisposition;
+      if (!isRecord(disposition) || disposition.notify !== true) {
+        return false;
+      }
+    }
     if (!config.auditEventTypes.includes(event.type)) return false;
     if (SEVERITY_WEIGHT[event.severity] < SEVERITY_WEIGHT[config.minSeverity]) return false;
 
@@ -223,6 +229,8 @@ function summarizeTitle(event: AuditEvent): string {
       return 'Agent error requires attention';
     case 'agent_stalled':
       return 'Agent stalled';
+    case 'automation_finding':
+      return `Automation finding: ${extractAutomationName(event.details)}`;
     default:
       return `Security event: ${event.type}`;
   }
@@ -240,6 +248,18 @@ function extractDescription(details: Record<string, unknown>): string {
     return `Action type: ${actionType.trim()}`;
   }
   return 'No additional detail provided.';
+}
+
+function extractAutomationName(details: Record<string, unknown>): string {
+  const name = details.automationName;
+  if (typeof name === 'string' && name.trim()) return name.trim();
+  const automationId = details.automationId;
+  if (typeof automationId === 'string' && automationId.trim()) return automationId.trim();
+  return 'automation';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 export function formatNotificationText(notification: SecurityNotification): string {

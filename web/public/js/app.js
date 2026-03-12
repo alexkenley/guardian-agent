@@ -9,6 +9,7 @@ import { renderConfig, updateConfig } from './pages/config.js';
 import { renderReference } from './pages/reference.js';
 import { renderNetwork, updateNetwork } from './pages/network.js';
 import { renderAutomations, updateAutomations } from './pages/automations.js';
+import { renderCloud, updateCloud } from './pages/cloud.js';
 import { initChatPanel, setChatContext } from './chat-panel.js';
 import { applyInputTooltips } from './tooltip.js';
 import { initTheme } from './theme.js';
@@ -234,6 +235,12 @@ const routes = {
     update: updateNetwork,
     name: 'network',
     invalidateTags: ['network', 'automations', 'security'],
+  },
+  '/cloud': {
+    render: renderCloud,
+    update: updateCloud,
+    name: 'cloud',
+    invalidateTags: ['cloud', 'config', 'security', 'automations', 'tools'],
   },
   '/automations': {
     render: renderAutomations,

@@ -11,7 +11,7 @@
 
 Structured orchestration agents enable declarative multi-agent composition within GuardianAgent's security model. Inspired by Google ADK's SequentialAgent/ParallelAgent/LoopAgent, but with a critical difference: **all sub-agent invocations pass through the full Guardian admission pipeline**.
 
-These are not lightweight wrappers — each sub-agent call goes through input sanitization, rate limiting, capability checking, secret scanning, output scanning, and budget enforcement. Security is preserved by construction.
+These are not lightweight wrappers — each sub-agent call goes through input sanitization, rate limiting, capability checking, secret scanning, output scanning, and budget enforcement. When the target is a built-in chat agent, the dispatched call also goes through the brokered worker execution path. Security is preserved by construction.
 
 ### Agents
 
@@ -60,8 +60,15 @@ User Message
 └──────────────────────┘                    │  SecretScan →        │
                                             │  DeniedPath →        │
                                             │  ShellCmd            │
-                                            │                      │
-                                            │  + Output scanning   │
+                                            └──────────┬───────────┘
+                                                       │
+                                                       ▼
+                                            ┌──────────────────────┐
+                                            │  Target execution    │
+                                            │  chat agent ->       │
+                                            │  brokered worker     │
+                                            │  other agent ->      │
+                                            │  supervisor handler  │
                                             └──────────────────────┘
 ```
 
@@ -70,10 +77,15 @@ User Message
 Orchestration agents receive `ctx.dispatch()`, which is a **guarded wrapper** around `Runtime.dispatchMessage()`. They never receive a reference to the Runtime itself. This means:
 
 1. Every sub-agent call passes through Layer 1 (Guardian admission)
-2. Every sub-agent response passes through Layer 2 (Output scanning)
-3. Sub-agent budget/token/concurrent limits are enforced per-call
-4. The orchestrating agent's own limits apply to its outer invocation
-5. Rate limiting applies per sub-agent independently
+2. Built-in chat-agent targets are routed into the brokered worker path by default
+3. Every sub-agent response passes through Layer 2 (Output scanning)
+4. Sub-agent budget/token/concurrent limits are enforced per-call
+5. The orchestrating agent's own limits apply to its outer invocation
+6. Rate limiting applies per sub-agent independently
+
+### Scope Note
+
+Orchestration agents themselves remain trusted framework code running in the supervisor process. The brokered boundary applies when orchestration dispatches into the built-in chat/planner execution path.
 
 ---
 

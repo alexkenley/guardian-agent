@@ -1,362 +1,144 @@
-/**
- * Dashboard page — overview with status cards, agent table, LLM status, recent events,
- * plus assistant state (sessions, throughput, latency, jobs, cron, policy decisions).
- */
-
 import { api } from '../api.js';
 import { createStatusCard, updateStatusCard } from '../components/status-card.js';
-import { createAgentTable, updateAgentTable } from '../components/agent-table.js';
+import { renderGuidancePanel, renderInfoButton, activateContextHelp, enhanceSectionHelp } from '../components/context-help.js';
 import { onSSE, offSSE } from '../app.js';
 
 let cards = {};
-let agentTableEl = null;
-let llmStatusEl = null;
 let metricsHandler = null;
-let assistantPollTimer = null;
 let currentContainer = null;
 
 export async function renderDashboard(container) {
   currentContainer = container;
-  stopAssistantPolling();
   container.innerHTML = '<h2 class="page-title">Dashboard</h2><div class="loading">Loading...</div>';
 
   try {
-    const [agents, summary, providers] = await Promise.all([
+    const [agents, summary, providers, readiness, assistantState, recentWarn, recentCritical] = await Promise.all([
       api.agents().catch(() => []),
       api.auditSummary(300000).catch(() => null),
       api.providersStatus().catch(() => api.providers().catch(() => [])),
+      api.setupStatus().catch(() => null),
+      api.assistantState().catch(() => null),
+      api.audit({ severity: 'warn', limit: 6 }).catch(() => []),
+      api.audit({ severity: 'critical', limit: 6 }).catch(() => []),
     ]);
-    const readiness = await api.setupStatus().catch(() => null);
 
-    container.innerHTML = '<h2 class="page-title">Dashboard</h2>';
+    const primaryProvider = providers[0];
+    const attentionItems = [...(recentCritical || []), ...(recentWarn || [])]
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, 8);
+    const orchestratorSummary = assistantState?.orchestrator?.summary || {};
+    const jobsSummary = assistantState?.jobs?.summary || {};
 
-    // Status cards
-    const grid = document.createElement('div');
-    grid.className = 'cards-grid';
+    container.innerHTML = `
+      <h2 class="page-title">Dashboard</h2>
+      ${renderGuidancePanel({
+        kicker: 'Orientation',
+        title: 'Dashboard at a glance',
+        compact: true,
+        whatItIs: 'This is the landing page for quick health checks and cross-app orientation.',
+        whatSeeing: 'You are seeing compact status across runtime, readiness, alerts, providers, and the fastest links into each owner page.',
+        whatCanDo: 'Use it to spot attention items, confirm the system is healthy, and jump into Security, Cloud, Automations, or Configuration.',
+        howLinks: 'Dashboard summarizes multiple domains, but deep investigation and editing always happen on the owning page.',
+      })}
+    `;
+
+    const summaryGrid = document.createElement('div');
+    summaryGrid.className = 'cards-grid';
 
     cards.runtime = createStatusCard('Guardian Core', 'Online', 'System operational', 'success');
-    cards.agents = createStatusCard('Agents', agents.length, `${agents.filter(a => a.state === 'idle' || a.state === 'running').length} active`, 'info');
-    cards.guardian = createStatusCard('Shield Status', summary ? 'Active' : 'N/A', summary ? `${summary.totalEvents} events (5m)` : 'No data', 'accent');
-
-    // LLM card - show primary provider status
-    const primaryProvider = providers[0];
-    if (primaryProvider) {
-      const connected = primaryProvider.connected !== false;
-      const locality = primaryProvider.locality === 'local' ? 'Local' : 'External API';
-      cards.llm = createStatusCard(
-        'LLM Provider',
-        connected ? 'Connected' : 'Disconnected',
-        `${primaryProvider.model} (${locality})`,
-        connected ? 'success' : 'error'
-      );
-    } else {
-      cards.llm = createStatusCard('LLM Provider', 'None', 'No providers configured', 'warning');
-    }
-
+    setCardTooltip(cards.runtime, 'Guardian core runtime status. Shows whether the main system is up and serving requests.');
     cards.readiness = createStatusCard(
       'Readiness',
       readiness?.ready ? 'Ready' : 'Needs Review',
-      readiness?.completed ? 'Config baseline complete' : 'Complete Config Center',
+      readiness?.completed ? 'Config baseline complete' : 'Complete system configuration',
       readiness?.ready ? 'success' : 'warning',
     );
+    setCardTooltip(cards.readiness, 'Configuration readiness summary. Opens Configuration > System.');
+    cards.alerts = createStatusCard(
+      'Active Alerts',
+      summary ? (summary.bySeverity.warn + summary.bySeverity.critical) : 0,
+      summary ? `${summary.bySeverity.critical} critical in last 5m` : 'No recent audit summary',
+      summary && summary.bySeverity.critical > 0 ? 'error' : 'warning',
+    );
+    setCardTooltip(cards.alerts, 'Count of current warning and critical security events. Opens Security > Alerts.');
+    cards.llm = createStatusCard(
+      'Primary Provider',
+      primaryProvider ? (primaryProvider.connected !== false ? 'Connected' : 'Disconnected') : 'None',
+      primaryProvider ? `${primaryProvider.model} (${primaryProvider.locality === 'local' ? 'Local' : 'External'})` : 'Configure AI & Search',
+      primaryProvider ? (primaryProvider.connected !== false ? 'success' : 'warning') : 'warning',
+    );
+    setCardTooltip(cards.llm, 'Current primary AI provider status and model. Opens Configuration > AI & Search.');
+    cards.agents = createStatusCard(
+      'Agents',
+      agents.length,
+      `${agents.filter((agent) => agent.state === 'running' || agent.state === 'idle').length} available`,
+      'info',
+    );
+    setCardTooltip(cards.agents, 'High-level agent count and availability. Opens Automations.');
 
-    // Make cards clickable with navigation targets
-    const clickableCards = [
-      { card: cards.agents, action: () => agentTableEl?.scrollIntoView({ behavior: 'smooth' }) },
-      { card: cards.guardian, action: () => { window.location.hash = '#/security'; } },
-      { card: cards.llm, action: () => { window.location.hash = '#/config?tab=providers'; } },
-      { card: cards.readiness, action: () => { window.location.hash = '#/config?tab=settings'; } },
-    ];
-    for (const { card, action } of clickableCards) {
-      card.classList.add('status-card-link');
-      card.setAttribute('role', 'button');
-      card.setAttribute('tabindex', '0');
-      card.addEventListener('click', action);
-      card.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); action(); }
-      });
-    }
+    bindCard(cards.alerts, '#/security?tab=alerts');
+    bindCard(cards.llm, '#/config?tab=ai-search');
+    bindCard(cards.readiness, '#/config?tab=system');
+    bindCard(cards.agents, '#/automations');
 
-    grid.append(cards.runtime, cards.agents, cards.guardian, cards.llm, cards.readiness);
-    container.appendChild(grid);
+    summaryGrid.append(cards.runtime, cards.readiness, cards.alerts, cards.llm, cards.agents);
 
-    // LLM Provider Status section
-    if (providers.length > 0) {
-      llmStatusEl = document.createElement('div');
-      llmStatusEl.className = 'table-container';
-      renderLLMStatus(llmStatusEl, providers);
-      container.appendChild(llmStatusEl);
-    }
+    const summarySection = document.createElement('div');
+    summarySection.className = 'table-container';
+    summarySection.innerHTML = `
+      <div class="table-header">
+        <div class="section-heading">
+          <h3>System Summary</h3>
+          ${renderInfoButton('System Summary', {
+            whatItIs: 'This is the dashboard summary strip for the major product domains.',
+            whatSeeing: 'You are seeing compact cards for Guardian core health, setup readiness, active alerts, the current provider, and agent availability.',
+            whatCanDo: 'Use these cards to confirm health quickly and jump straight into the owning page for follow-up work.',
+            howLinks: 'Each linked card routes into the canonical owner page instead of opening a duplicate control plane inside Dashboard.',
+          })}
+        </div>
+      </div>
+    `;
+    summarySection.appendChild(summaryGrid);
+    container.appendChild(summarySection);
 
-    // Agent table
-    agentTableEl = createAgentTable(agents, 'Agent Status');
-    container.appendChild(agentTableEl);
+    container.appendChild(createAttentionSection(attentionItems));
+    container.appendChild(createRuntimeSection({ orchestratorSummary, jobsSummary, agents, summary }));
+    container.appendChild(createQuickLinksSection());
+    enhanceSectionHelp(container, {
+      'Needs Attention': {
+        whatItIs: 'This is the compact attention queue for the most recent warning and critical events.',
+        whatSeeing: 'You are seeing a mixed list of recent issues from audit, automation, and monitoring sources.',
+        whatCanDo: 'Review the highest-priority items here, then open Security > Alerts for full triage and acknowledgement.',
+        howLinks: 'This list points toward Security for action, while Dashboard stays summary-only.',
+      },
+      'Agent Runtime': {
+        whatItIs: 'This section summarizes request volume, queue health, jobs, and where to go for deeper runtime work.',
+        whatSeeing: 'You are seeing compact runtime metrics plus direct links into Automations, Audit, Cloud, and Configuration.',
+        whatCanDo: 'Use it to tell whether the system is keeping up with work and to navigate into the operational surface that owns the detail.',
+        howLinks: 'It links outward to the owner pages instead of reproducing their full tables here.',
+      },
+      'Quick Links': {
+        whatItIs: 'This is a fast-launch set of high-value destinations for common operator tasks.',
+        whatSeeing: 'You are seeing cards for the alert queue, cloud hub, automations, and AI/search configuration.',
+        whatCanDo: 'Use these links when you know the task you want and do not need to scan the left navigation first.',
+        howLinks: 'Each card opens the canonical owner page or tab for that workflow.',
+      },
+    });
+    activateContextHelp(container);
 
-    // Recent critical/warn events
-    if (summary && (summary.bySeverity.warn > 0 || summary.bySeverity.critical > 0)) {
-      const recentEvents = await api.audit({ severity: 'warn', limit: 5 }).catch(() => []);
-      const critEvents = await api.audit({ severity: 'critical', limit: 5 }).catch(() => []);
-      const allRecent = [...critEvents, ...recentEvents].slice(0, 5);
-
-      if (allRecent.length > 0) {
-        const section = document.createElement('div');
-        section.className = 'table-container';
-        section.innerHTML = `
-          <div class="table-header"><h3>Recent Alerts</h3></div>
-          <table>
-            <thead><tr><th>Time</th><th>Type</th><th>Severity</th><th>Agent</th><th>Details</th></tr></thead>
-            <tbody>${allRecent.map(e => `
-              <tr>
-                <td>${new Date(e.timestamp).toLocaleTimeString()}</td>
-                <td>${esc(e.type)}</td>
-                <td><span class="badge badge-${e.severity}">${esc(e.severity)}</span></td>
-                <td>${esc(e.agentId)}</td>
-                <td>${esc(e.controller || JSON.stringify(e.details).slice(0, 60))}</td>
-              </tr>
-            `).join('')}</tbody>
-          </table>
-        `;
-        container.appendChild(section);
-      }
-    }
-
-    // SSE updates
     if (metricsHandler) offSSE('metrics', metricsHandler);
     metricsHandler = (data) => {
-      if (agentTableEl && data.agents) {
-        updateAgentTable(agentTableEl, data.agents);
-        updateStatusCard(cards.agents, data.agents.length,
-          `${data.agents.filter(a => a.state === 'idle' || a.state === 'running').length} active`);
-      }
+      if (!data?.agents) return;
+      updateStatusCard(
+        cards.agents,
+        data.agents.length,
+        `${data.agents.filter((agent) => agent.state === 'running' || agent.state === 'idle').length} available`,
+      );
     };
     onSSE('metrics', metricsHandler);
-
-    // ─── Assistant State Section ──────────────────────────
-    const assistantSection = document.createElement('div');
-    assistantSection.id = 'dashboard-assistant-state';
-    container.appendChild(assistantSection);
-
-    await renderAssistantState(assistantSection);
-
-    // Poll assistant state every 4s while on dashboard
-    assistantPollTimer = setInterval(() => {
-      if (window.location.hash && window.location.hash !== '#/' && window.location.hash !== '#') {
-        stopAssistantPolling();
-        return;
-      }
-      const el = document.getElementById('dashboard-assistant-state');
-      if (el) void renderAssistantState(el);
-    }, 4000);
-
   } catch (err) {
-    container.innerHTML = `<h2 class="page-title">Dashboard</h2><div class="loading">Error: ${esc(err.message)}</div>`;
+    container.innerHTML = `<h2 class="page-title">Dashboard</h2><div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
   }
-}
-
-function stopAssistantPolling() {
-  if (assistantPollTimer) {
-    clearInterval(assistantPollTimer);
-    assistantPollTimer = null;
-  }
-}
-
-async function renderAssistantState(section) {
-  try {
-    const state = await api.assistantState();
-    const { orchestrator, jobs, lastPolicyDecisions, scheduledJobs } = state;
-    const summary = orchestrator.summary;
-    const sessions = orchestrator.sessions;
-
-    section.innerHTML = '';
-
-    const header = document.createElement('h3');
-    header.className = 'section-header';
-    header.textContent = 'Assistant State';
-    section.appendChild(header);
-
-    // Assistant cards
-    const aCards = document.createElement('div');
-    aCards.className = 'cards-grid';
-    const sessionsCard = createMiniCard('Sessions', String(summary.sessionCount), `${summary.runningCount} running / ${summary.queuedCount} queued`, 'info');
-    const throughputCard = createMiniCard('Throughput', `${summary.completedRequests}/${summary.totalRequests}`, `${summary.failedRequests} failed`, summary.failedRequests > 0 ? 'warning' : 'success');
-    const latencyCard = createMiniCard('Latency (E2E)', `${summary.avgEndToEndMs}ms`, 'Queue + execution avg', 'accent');
-    const jobsCard = createMiniCard('Jobs', `${jobs.summary.running} running`, `${jobs.summary.failed} failed / ${jobs.summary.total} tracked`, jobs.summary.failed > 0 ? 'warning' : 'success');
-
-    const scrollTo = (id) => () => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
-    for (const card of [sessionsCard, throughputCard, latencyCard]) {
-      card.classList.add('status-card-link');
-      card.setAttribute('role', 'button');
-      card.setAttribute('tabindex', '0');
-      const action = scrollTo('dashboard-session-queue');
-      card.addEventListener('click', action);
-      card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); action(); } });
-    }
-    jobsCard.classList.add('status-card-link');
-    jobsCard.setAttribute('role', 'button');
-    jobsCard.setAttribute('tabindex', '0');
-    const jobAction = scrollTo('dashboard-background-jobs');
-    jobsCard.addEventListener('click', jobAction);
-    jobsCard.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jobAction(); } });
-
-    aCards.append(sessionsCard, throughputCard, latencyCard, jobsCard);
-    section.appendChild(aCards);
-
-    // Session Queue table
-    if (sessions.length > 0) {
-      const sessionTable = document.createElement('div');
-      sessionTable.className = 'table-container';
-      sessionTable.id = 'dashboard-session-queue';
-      sessionTable.innerHTML = `
-        <div class="table-header"><h3>Session Queue</h3></div>
-        <table>
-          <thead>
-            <tr><th>Session</th><th>Status</th><th>Queue</th><th>Requests</th><th>Wait ms</th><th>Exec ms</th></tr>
-          </thead>
-          <tbody>
-            ${sessions.slice(0, 10).map(s => `
-              <tr>
-                <td>${esc(`${s.channel}:${s.userId}:${s.agentId}`)}</td>
-                <td><span class="badge ${s.status === 'running' ? 'badge-running' : s.status === 'queued' ? 'badge-warn' : 'badge-idle'}">${esc(s.status)}</span></td>
-                <td>${s.queueDepth}</td>
-                <td>${s.totalRequests}</td>
-                <td>${s.lastQueueWaitMs ?? '-'}</td>
-                <td>${s.lastExecutionMs ?? '-'}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      `;
-      section.appendChild(sessionTable);
-    }
-
-    // Background Jobs table
-    if (jobs.jobs.length > 0) {
-      const jobTable = document.createElement('div');
-      jobTable.className = 'table-container';
-      jobTable.id = 'dashboard-background-jobs';
-      jobTable.innerHTML = `
-        <div class="table-header"><h3>Background Jobs</h3></div>
-        <table>
-          <thead><tr><th>Type</th><th>Source</th><th>Status</th><th>Duration</th><th>Detail</th></tr></thead>
-          <tbody>
-            ${jobs.jobs.slice(0, 10).map(j => `
-              <tr>
-                <td>${esc(j.type)}</td>
-                <td>${esc(j.source)}</td>
-                <td><span class="badge ${j.status === 'running' ? 'badge-running' : j.status === 'failed' ? 'badge-errored' : 'badge-idle'}">${esc(j.status)}</span></td>
-                <td>${j.durationMs !== undefined ? `${j.durationMs}ms` : '-'}</td>
-                <td>${esc(j.detail ?? j.error ?? '-')}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      `;
-      section.appendChild(jobTable);
-    }
-
-    // Scheduled Cron
-    if (scheduledJobs && scheduledJobs.length > 0) {
-      const cronTable = document.createElement('div');
-      cronTable.className = 'table-container';
-      cronTable.innerHTML = `
-        <div class="table-header"><h3>Scheduled Cron Jobs</h3></div>
-        <table>
-          <thead><tr><th>Agent ID</th><th>Cron</th><th>Next Run</th></tr></thead>
-          <tbody>
-            ${scheduledJobs.map(j => `
-              <tr>
-                <td>${esc(j.agentId)}</td>
-                <td><code style="background:var(--bg-tertiary);padding:0.2rem 0.4rem;border-radius:4px">${esc(j.cron)}</code></td>
-                <td>${j.nextRun ? esc(new Date(j.nextRun).toLocaleString()) : '-'}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      `;
-      section.appendChild(cronTable);
-    }
-
-    // Recent Policy Decisions
-    if (lastPolicyDecisions.length > 0) {
-      const policyTable = document.createElement('div');
-      policyTable.className = 'table-container';
-      policyTable.innerHTML = `
-        <div class="table-header"><h3>Recent Policy Decisions</h3></div>
-        <table>
-          <thead><tr><th>Type</th><th>Severity</th><th>Agent</th><th>Controller</th><th>Reason</th></tr></thead>
-          <tbody>
-            ${lastPolicyDecisions.slice(0, 10).map(e => `
-              <tr>
-                <td>${esc(e.type)}</td>
-                <td><span class="badge ${e.severity === 'critical' ? 'badge-critical' : e.severity === 'warn' ? 'badge-warn' : 'badge-info'}">${esc(e.severity)}</span></td>
-                <td>${esc(e.agentId)}</td>
-                <td>${esc(e.controller ?? '-')}</td>
-                <td>${esc(e.reason ?? '-')}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      `;
-      section.appendChild(policyTable);
-    }
-  } catch {
-    // Silently fail — assistant state is optional enrichment
-  }
-}
-
-function renderLLMStatus(container, providers) {
-  container.innerHTML = `
-    <div class="table-header">
-      <h3>LLM Providers</h3>
-      <button class="btn btn-secondary" id="refresh-llm" style="font-size:0.7rem;padding:0.3rem 0.6rem;">Refresh</button>
-    </div>
-    <table>
-      <thead><tr><th>Name</th><th>Type</th><th>Model</th><th>Endpoint</th><th>Status</th><th>Circuit</th><th>Available Models</th></tr></thead>
-      <tbody>${providers.map(p => {
-        const connected = p.connected !== false;
-        const locality = p.locality === 'local' ? 'Local' : 'External API';
-        const circuit = p.circuitState || 'closed';
-        return `
-          <tr>
-            <td>${esc(p.name)}</td>
-            <td>${esc(p.type)}</td>
-            <td><strong>${esc(p.model)}</strong></td>
-            <td>${esc(p.baseUrl || locality)}</td>
-            <td><span class="badge ${connected ? 'badge-idle' : 'badge-errored'}">${connected ? 'Connected' : 'Disconnected'}</span></td>
-            <td><span class="badge badge-${esc(circuit)}">${esc(circuit)}</span></td>
-            <td>${p.availableModels ? p.availableModels.slice(0, 5).map(m => esc(m)).join(', ') : '-'}</td>
-          </tr>
-        `;
-      }).join('')}</tbody>
-    </table>
-  `;
-
-  container.querySelector('#refresh-llm')?.addEventListener('click', async () => {
-    try {
-      const updated = await api.providersStatus();
-      renderLLMStatus(container, updated);
-
-      // Update the LLM card too
-      const primary = updated[0];
-      if (primary && cards.llm) {
-        const connected = primary.connected !== false;
-        const locality = primary.locality === 'local' ? 'Local' : 'External API';
-        updateStatusCard(cards.llm, connected ? 'Connected' : 'Disconnected', `${primary.model} (${locality})`);
-        cards.llm.className = `status-card ${connected ? 'success' : 'error'}`;
-      }
-    } catch { /* ignore */ }
-  });
-}
-
-function createMiniCard(title, value, subtitle, tone) {
-  const card = document.createElement('div');
-  card.className = `status-card ${tone}`;
-  card.innerHTML = `
-    <div class="card-title">${esc(title)}</div>
-    <div class="card-value">${esc(String(value))}</div>
-    <div class="card-subtitle">${esc(String(subtitle))}</div>
-  `;
-  return card;
 }
 
 export function updateDashboard() {
@@ -365,8 +147,129 @@ export function updateDashboard() {
   }
 }
 
+function createAttentionSection(items) {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Needs Attention</h3>
+      <a class="btn btn-secondary btn-sm" href="#/security?tab=alerts">Open Alerts</a>
+    </div>
+    <table>
+      <thead><tr><th>Time</th><th>Type</th><th>Severity</th><th>Source</th><th>Detail</th></tr></thead>
+      <tbody>
+        ${items.length === 0
+          ? '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">Nothing urgent right now.</td></tr>'
+          : items.map((item) => `
+            <tr>
+              <td>${formatTime(item.timestamp)}</td>
+              <td>${esc(item.type)}</td>
+              <td><span class="badge badge-${esc(item.severity)}">${esc(item.severity)}</span></td>
+              <td>${esc(item.details?.automationName || item.details?.source || item.agentId || '-')}</td>
+              <td title="${escAttr(item.details?.description || item.details?.reason || '')}">${esc(item.details?.description || item.details?.reason || '-')}</td>
+            </tr>
+          `).join('')}
+      </tbody>
+    </table>
+  `;
+  return section;
+}
+
+function createRuntimeSection({ orchestratorSummary, jobsSummary, agents, summary }) {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+  section.innerHTML = `
+    <div class="table-header"><h3>Agent Runtime</h3></div>
+    <div class="cards-grid" style="padding:1rem;">
+      ${renderMiniCard('Sessions', orchestratorSummary.sessionCount || 0, `${orchestratorSummary.runningCount || 0} running / ${orchestratorSummary.queuedCount || 0} queued`, 'info', 'Assistant session volume and queue depth across active conversations.')}
+      ${renderMiniCard('Requests', orchestratorSummary.totalRequests || 0, `${orchestratorSummary.failedRequests || 0} failed`, (orchestratorSummary.failedRequests || 0) > 0 ? 'warning' : 'success', 'Total assistant requests processed, including failures.')}
+      ${renderMiniCard('Latency', `${orchestratorSummary.avgEndToEndMs || 0}ms`, 'Average end-to-end', 'accent', 'Average end-to-end request time through routing, tool use, and response delivery.')}
+      ${renderMiniCard('Jobs', jobsSummary.total || 0, `${jobsSummary.running || 0} running / ${jobsSummary.failed || 0} failed`, (jobsSummary.failed || 0) > 0 ? 'warning' : 'success', 'Background job summary for async and deferred work.')}
+    </div>
+    <table>
+      <thead><tr><th>Area</th><th>Summary</th><th>Destination</th></tr></thead>
+      <tbody>
+        <tr><td>Agents</td><td>${agents.length} total • ${agents.filter((agent) => agent.state === 'running').length} running • ${agents.filter((agent) => agent.state === 'idle').length} idle</td><td><a href="#/automations">Open Automations</a></td></tr>
+        <tr><td>Security</td><td>${summary ? summary.totalEvents : 0} audit events in the last 5 minutes</td><td><a href="#/security?tab=audit">Open Audit</a></td></tr>
+        <tr><td>Cloud</td><td>Connections, activity, and cloud automations live in the dedicated Cloud hub</td><td><a href="#/cloud">Open Cloud</a></td></tr>
+        <tr><td>Configuration</td><td>Provider setup, integrations, system policy, and appearance live in Config</td><td><a href="#/config">Open Config</a></td></tr>
+      </tbody>
+    </table>
+  `;
+  return section;
+}
+
+function createQuickLinksSection() {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+  section.innerHTML = `
+    <div class="table-header"><h3>Quick Links</h3></div>
+    <div class="cards-grid" style="padding:1rem;">
+      ${renderQuickLink('Security Alerts', 'Unified alert queue and triage', '#/security?tab=alerts', 'warning', 'Open Security > Alerts for triage, acknowledgement, and source filtering.')}
+      ${renderQuickLink('Cloud Hub', 'Connections, activity, and cloud-focused automations', '#/cloud', 'info', 'Open Cloud for provider connections, activity, and cloud automation entry points.')}
+      ${renderQuickLink('Automations', 'Workflows, schedules, runs, and output routing', '#/automations', 'accent', 'Open Automations for workflow editing, scheduling, run history, and output routing.')}
+      ${renderQuickLink('AI & Search', 'Provider setup, embeddings, and retrieval settings', '#/config?tab=ai-search', 'success', 'Open Configuration > AI & Search for provider, search, and retrieval setup.')}
+    </div>
+  `;
+  return section;
+}
+
+function renderMiniCard(title, value, subtitle, tone, tooltip) {
+  return `
+    <div class="status-card ${tone}" title="${escAttr(tooltip || subtitle)}" aria-label="${escAttr(tooltip || subtitle)}">
+      <div class="card-title">${esc(title)}</div>
+      <div class="card-value">${esc(String(value))}</div>
+      <div class="card-subtitle">${esc(String(subtitle))}</div>
+    </div>
+  `;
+}
+
+function renderQuickLink(title, subtitle, href, tone, tooltip) {
+  return `
+    <a class="status-card ${tone} status-card-link" href="${escAttr(href)}" style="text-decoration:none" title="${escAttr(tooltip || subtitle)}" aria-label="${escAttr(tooltip || subtitle)}">
+      <div class="card-title">${esc(title)}</div>
+      <div class="card-value">Open</div>
+      <div class="card-subtitle">${esc(subtitle)}</div>
+    </a>
+  `;
+}
+
+function bindCard(card, href) {
+  card.classList.add('status-card-link');
+  card.setAttribute('role', 'button');
+  card.setAttribute('tabindex', '0');
+  if (!card.getAttribute('title')) {
+    card.setAttribute('title', `Open ${href.replace(/^#\//, '')}`);
+  }
+  if (!card.getAttribute('aria-label')) {
+    card.setAttribute('aria-label', card.getAttribute('title'));
+  }
+  const action = () => { window.location.hash = href; };
+  card.addEventListener('click', action);
+  card.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      action();
+    }
+  });
+}
+
+function setCardTooltip(card, text) {
+  card.setAttribute('title', text);
+  card.setAttribute('aria-label', text);
+}
+
+function formatTime(timestamp) {
+  if (!timestamp) return '-';
+  return new Date(timestamp).toLocaleTimeString();
+}
+
 function esc(str) {
   const d = document.createElement('div');
-  d.textContent = str;
+  d.textContent = str == null ? '' : String(str);
   return d.innerHTML;
+}
+
+function escAttr(str) {
+  return esc(str).replace(/"/g, '&quot;');
 }

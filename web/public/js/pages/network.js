@@ -3,6 +3,7 @@
  */
 
 import { api } from '../api.js';
+import { activateContextHelp, enhanceSectionHelp, renderGuidancePanel } from '../components/context-help.js';
 import { createTabs } from '../components/tabs.js';
 import { applyInputTooltips } from '../tooltip.js';
 
@@ -73,23 +74,91 @@ const NETWORK_TOOL_GROUPS = [
 
 let currentPanel = null;
 
+const NETWORK_HELP = {
+  overview: {
+    'Quick Network Actions': {
+      whatItIs: 'This section provides one-off network actions for discovery, threat checks, and baseline refreshes.',
+      whatSeeing: 'You are seeing immediate buttons for common network tasks plus a live output panel.',
+      whatCanDo: 'Run quick checks without building a workflow, then inspect the output directly below.',
+      howLinks: 'For repeatable or scheduled work, move into Automations. For alert triage, move into Security.',
+    },
+    'How To Use This Area': {
+      whatItIs: 'This is the orientation note for when to use Network versus other pages.',
+      whatSeeing: 'You are seeing guidance on the division between diagnostics, automations, and security investigation.',
+      whatCanDo: 'Use it to decide whether you need a one-off network action, a repeatable automation, or the unified alert queue.',
+      howLinks: 'It explains the handoff between Network, Automations, and Security.',
+    },
+  },
+  devices: {
+    'Discovered Devices': {
+      whatItIs: 'This is the main inventory table for discovered devices on the network.',
+      whatSeeing: 'You are seeing device identity, trust state, ports, and first/last seen timing.',
+      whatCanDo: 'Refresh discovery, run a new scan, and review what is currently known about each device.',
+      howLinks: 'Device findings inform network investigation here, while active alert handling stays in Security.',
+    },
+  },
+  history: {
+    'Recent Network Runs': {
+      whatItIs: 'This section records recent network-specific playbook and scheduled task runs.',
+      whatSeeing: 'You are seeing recent executions, run status, duration, and expandable step output.',
+      whatCanDo: 'Review recent results, inspect output, and confirm whether network automations ran successfully.',
+      howLinks: 'This is the network-focused history view; full automation ownership and editing stay in Automations.',
+    },
+  },
+  diagnostics: {
+    Diagnostics: {
+      whatItIs: 'This is the diagnostics workspace for one-off network tool execution.',
+      whatSeeing: 'You are seeing the tool picker and the currently selected network tool runner.',
+      whatCanDo: 'Choose a tool, supply inputs, run it immediately, and inspect or export the output.',
+      howLinks: 'Use this tab for ad hoc checks. Move to Automations when the same sequence should repeat or be scheduled.',
+    },
+    'Tool Selector': {
+      whatItIs: 'This section controls which network tool group and individual tool are active below.',
+      whatSeeing: 'You are seeing grouped network tools organized by task type.',
+      whatCanDo: 'Select a category, choose a tool, and switch the runner panel without leaving the page.',
+      howLinks: 'The selector drives the ad hoc runner below and helps separate discovery, diagnostics, identity, and threat tools.',
+    },
+    Result: {
+      whatItIs: 'This is the output area for the currently selected network tool.',
+      whatSeeing: 'You are seeing raw tool output with quick copy and export actions.',
+      whatCanDo: 'Review the result, copy it, or export it as text or HTML.',
+      howLinks: 'Use the output here for immediate inspection, then move to Security if the result indicates something that needs triage.',
+    },
+  },
+};
+
 export async function renderNetwork(container, options = {}) {
   currentPanel = container;
-  container.innerHTML = '<h2 class="page-title">Network</h2>';
+  container.innerHTML = `
+    <h2 class="page-title">Network</h2>
+    ${renderGuidancePanel({
+      kicker: 'Network Guide',
+      title: 'Inventory, diagnostics, and network history',
+      whatItIs: 'Network is the operational home for device visibility, one-off diagnostics, and network-specific run history.',
+      whatSeeing: 'You are seeing tabs for posture overview, device inventory, ad hoc diagnostics, and recent network runs.',
+      whatCanDo: 'Use this page to inspect devices, run targeted checks, and review network-specific results.',
+      howLinks: 'Security owns the unified alert queue, while Automations owns repeatable and scheduled workflow configuration.',
+    })}
+  `;
 
   createTabs(container, [
     { id: 'overview', label: 'Overview', render: renderOverviewTab },
     { id: 'devices', label: 'Devices', render: renderDevicesTab },
-    { id: 'threats', label: 'Threats', render: renderThreatsTab },
     { id: 'history', label: 'History', render: renderHistoryTab },
-    { id: 'tools', label: 'Tools', render: renderToolsTab },
-  ], options?.tab);
+    { id: 'diagnostics', label: 'Diagnostics', render: renderToolsTab },
+  ], normalizeNetworkTab(options?.tab));
 }
 
 export async function updateNetwork() {
   if (!currentPanel) return;
   const activeTab = currentPanel.dataset.activeTab;
   await renderNetwork(currentPanel, activeTab ? { tab: activeTab } : {});
+}
+
+function normalizeNetworkTab(tab) {
+  if (tab === 'threats') return 'overview';
+  if (tab === 'tools') return 'diagnostics';
+  return tab || 'overview';
 }
 
 async function renderOverviewTab(panel) {
@@ -121,6 +190,14 @@ async function renderOverviewTab(panel) {
     const networkTools = (toolsState.tools || []).filter((tool) => tool.category === 'network');
 
     panel.innerHTML = `
+      ${renderGuidancePanel({
+        kicker: 'Overview',
+        compact: true,
+        whatItIs: 'Overview is the quick posture and action surface for the network domain.',
+        whatSeeing: 'You are seeing device counts, baseline state, active network alerts, and fast action buttons.',
+        whatCanDo: 'Run high-value one-off actions immediately or decide whether you need Devices, Diagnostics, or Security next.',
+        howLinks: 'This tab summarizes state; full device detail lives in Devices and ad hoc execution lives in Diagnostics.',
+      })}
       <div class="intel-summary-grid">
         <div class="status-card info">
           <div class="card-title">Devices</div>
@@ -167,7 +244,7 @@ async function renderOverviewTab(panel) {
       <div class="table-container">
         <div class="table-header"><h3>How To Use This Area</h3></div>
         <div class="cfg-center-body">
-          <div class="ops-inline-help">Use <strong>Tools</strong> to run one network tool right now. Use <strong>Workflows</strong> to chain multiple tools together. Use <strong>Operations</strong> to schedule either a single tool or a workflow.</div>
+          <div class="ops-inline-help">Use <strong>Diagnostics</strong> to run one network tool right now. Use <strong>Automations</strong> when you want a repeatable chain or a schedule. Use <strong>Security</strong> when you need the unified alert queue and cross-domain investigation view.</div>
         </div>
       </div>
     `;
@@ -194,6 +271,8 @@ async function renderOverviewTab(panel) {
 
     bindOutputActions(panel);
     applyInputTooltips(panel);
+    enhanceSectionHelp(panel, NETWORK_HELP.overview, createGenericHelpFactory('Network Overview'));
+    activateContextHelp(panel);
   } catch (err) {
     panel.innerHTML = `<div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
   }
@@ -207,6 +286,14 @@ async function renderDevicesTab(panel) {
     const devices = data.devices || [];
 
     panel.innerHTML = `
+      ${renderGuidancePanel({
+        kicker: 'Devices',
+        compact: true,
+        whatItIs: 'Devices is the inventory view for discovered hosts and their observed attributes.',
+        whatSeeing: 'You are seeing the current discovered device list, trust state, ports, and presence over time.',
+        whatCanDo: 'Run discovery again, review what is online, and inspect device-level network details.',
+        howLinks: 'This tab handles inventory detail; suspicious conditions still roll up into Security for unified triage.',
+      })}
       <div class="intel-summary-grid">
         <div class="status-card info">
           <div class="card-title">Total Devices</div>
@@ -294,6 +381,8 @@ async function renderDevicesTab(panel) {
 
     bindOutputActions(panel);
     applyInputTooltips(panel);
+    enhanceSectionHelp(panel, NETWORK_HELP.devices, createGenericHelpFactory('Network Devices'));
+    activateContextHelp(panel);
   } catch (err) {
     panel.innerHTML = `<div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
   }
@@ -461,6 +550,14 @@ async function renderHistoryTab(panel) {
     runs.sort((a, b) => b.time - a.time);
 
     panel.innerHTML = `
+      ${renderGuidancePanel({
+        kicker: 'History',
+        compact: true,
+        whatItIs: 'History is the recent run ledger for network-specific tools and workflows.',
+        whatSeeing: 'You are seeing recent playbook and scheduled runs that involved network tooling, with expandable step output.',
+        whatCanDo: 'Inspect recent executions and confirm what ran, when it ran, and what it returned.',
+        howLinks: 'This is a focused history view for the network domain; automation ownership and editing remain in Automations.',
+      })}
       <div class="table-container">
         <div class="table-header">
           <h3>Recent Network Runs</h3>
@@ -523,6 +620,8 @@ async function renderHistoryTab(panel) {
 
     bindOutputActions(panel);
     applyInputTooltips(panel);
+    enhanceSectionHelp(panel, NETWORK_HELP.history, createGenericHelpFactory('Network History'));
+    activateContextHelp(panel);
   } catch (err) {
     panel.innerHTML = `<div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
   }
@@ -545,12 +644,21 @@ async function renderToolsTab(panel) {
 
     panel.innerHTML = '';
 
+    panel.insertAdjacentHTML('beforeend', renderGuidancePanel({
+      kicker: 'Diagnostics',
+      compact: true,
+      whatItIs: 'Diagnostics is the ad hoc tool runner for network operations.',
+      whatSeeing: 'You are seeing a selector for network tool groups and a runner for the currently selected tool.',
+      whatCanDo: 'Use it to run one tool immediately, inspect the result, and export output if needed.',
+      howLinks: 'Repeatable work belongs in Automations, and actionable findings should be followed into Security.',
+    }));
+
     const intro = document.createElement('div');
     intro.className = 'table-container';
     intro.innerHTML = `
-      <div class="table-header"><h3>Network Tools</h3></div>
+      <div class="table-header"><h3>Diagnostics</h3></div>
       <div class="cfg-center-body">
-        <div class="ops-inline-help">Run one network tool at a time here. If you want a repeatable chain, build a workflow. If you want it on a schedule, create a task in Operations.</div>
+        <div class="ops-inline-help">Run one network tool at a time here. If you want a repeatable or scheduled workflow, create it in Automations. If the result should feed the unified alert queue, review it in Security.</div>
       </div>
     `;
     panel.appendChild(intro);
@@ -635,6 +743,8 @@ async function renderToolsTab(panel) {
     });
 
     syncToolOptions(initialGroup.id, initialToolName);
+    enhanceSectionHelp(panel, NETWORK_HELP.diagnostics, createGenericHelpFactory('Network Diagnostics'));
+    activateContextHelp(panel);
   } catch (err) {
     panel.innerHTML = `<div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
   }
@@ -722,6 +832,8 @@ function renderNetworkToolPanel(panel, tool) {
 
   bindOutputActions(panel);
   applyInputTooltips(panel);
+  enhanceSectionHelp(panel, NETWORK_HELP.diagnostics, createGenericHelpFactory('Network Diagnostics'));
+  activateContextHelp(panel);
 }
 
 function renderToolField(toolName, key, schema, isRequired) {
@@ -1096,6 +1208,15 @@ function humanizeKey(key) {
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^\w/, (char) => char.toUpperCase());
+}
+
+function createGenericHelpFactory(area) {
+  return (title) => ({
+    whatItIs: `${title} is part of ${area}.`,
+    whatSeeing: 'You are seeing the current data, controls, or output for this section.',
+    whatCanDo: 'Review the current state here and use the available controls when you need to act.',
+    howLinks: `This section supports the broader ${area} workflow and hands off to related pages when deeper action is required.`,
+  });
 }
 
 function severityClass(severity) {

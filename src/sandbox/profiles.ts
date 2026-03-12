@@ -60,6 +60,41 @@ export function buildBwrapArgs(
 
   const args: string[] = [];
 
+  if (profile === 'agent-worker') {
+    // Agent Worker: strictest isolation. Only essentials, writable ephemeral workspace.
+    args.push('--ro-bind', '/usr', '/usr');
+    args.push('--ro-bind', '/lib', '/lib');
+    args.push('--ro-bind-try', '/lib64', '/lib64');
+    args.push('--ro-bind', '/bin', '/bin');
+    args.push('--ro-bind-try', '/etc/resolv.conf', '/etc/resolv.conf');
+    args.push('--ro-bind-try', '/etc/ssl', '/etc/ssl');
+    args.push('--symlink', 'usr/lib', '/lib64'); // Fallback symlink if no real /lib64
+    
+    args.push('--proc', '/proc');
+    args.push('--dev', '/dev');
+    args.push('--tmpfs', '/tmp');
+    
+    // Bind workspace to the ephemeral path
+    args.push('--bind', workspacePath, workspacePath);
+    args.push('--setenv', 'HOME', workspacePath);
+    args.push('--setenv', 'TMPDIR', `${workspacePath}/tmp`);
+    
+    // Process & IPC isolation
+    args.push('--unshare-pid');
+    args.push('--unshare-ipc');
+    args.push('--die-with-parent');
+    args.push('--new-session');
+
+    // Network is required for LLM API calls, egress restricted by app-level proxy or routing
+    if (opts.networkAccess) {
+      args.push('--share-net');
+    } else {
+      args.push('--unshare-net');
+    }
+    
+    return args;
+  }
+
   // Base filesystem: read-only bind of root
   args.push('--ro-bind', '/', '/');
 

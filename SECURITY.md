@@ -15,15 +15,16 @@ If you find a security issue, please open a GitHub issue or reach out via the re
 
 # Security Architecture
 
-GuardianAgent implements a security-focused runtime architecture with mandatory enforcement on framework-managed agent flows. Guardian, ToolExecutor, wrapped LLM access, approvals, and subprocess sandboxing are structural parts of the runtime, not optional conventions.
+GuardianAgent implements a security-focused runtime architecture with mandatory enforcement on framework-managed agent flows. Guardian, ToolExecutor, wrapped LLM access, approvals, brokered worker execution, and subprocess sandboxing are structural parts of the runtime, not optional conventions.
 
-GuardianAgent does **not** currently treat developer-authored agent code as untrusted code running in a separate supervisor-controlled sandbox. Agents run in the main Node.js process, and the strongest OS isolation available today applies to child processes launched through managed tool surfaces.
+The built-in chat/planner execution path runs in a separate brokered worker process by default. The supervisor process owns config loading, admission, audit logging, tool execution, approvals, and orchestration. Structured orchestration agents execute in the supervisor process and dispatch built-in chat-agent work through the brokered path.
 
 ## Threat Model
 
 GuardianAgent is an AI agent orchestration system where:
 
-- **Agent code is trusted** — TypeScript classes written by the developer
+- **Supervisor-side framework code is trusted** — Runtime, orchestration, approvals, and tool execution run in the supervisor process
+- **The built-in chat/planner loop is isolated from the supervisor** — it runs in a brokered worker and reaches tools and approvals through broker RPC
 - **LLM output is NOT trusted** — Models can hallucinate, leak secrets, or be prompt-injected
 - **User input is NOT trusted** — External input may contain injection attempts
 
@@ -87,14 +88,19 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
 ┌─────────────────────────────────────────────────────────┐
 │  AGENT EXECUTION                                        │
 │                                                         │
-│  Agent receives:                                        │
+│  The built-in chat/planner execution path runs in the   │
+│  brokered worker process. The worker receives           │
+│  supervisor-provided context and reaches                │
+│  tools/approvals through broker RPC.                    │
+│                                                         │
+│  Supervisor-side framework code receives:               │
 │  • ctx.llm = GuardedLLMProvider (NOT raw provider)      │
 │  • ctx.emit() = scanned for secrets before dispatch     │
 │  • ctx.capabilities = Object.freeze([...])              │
 │  • ctx.checkAction() = Guardian policy check            │
 │                                                         │
-│  Agent does NOT have: ctx.fs, ctx.http, ctx.exec        │
-│  by default. Runtime mediates framework-provided        │
+│  There is no default direct ctx.fs / ctx.http / ctx.exec│
+│  surface. Runtime mediates framework-provided           │
 │  interaction surfaces such as ctx.llm, ctx.emit(),      │
 │  ctx.dispatch(), and managed tools.                     │
 └───────────────────────┬─────────────────────────────────┘
@@ -103,12 +109,12 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
 ┌─────────────────────────────────────────────────────────┐
 │  LAYER 1.5: OS-Level Process Sandbox                    │
 │                                                         │
-│  Current: bwrap namespace isolation on Linux             │
-│  Current: sandbox health states; strict mode disables    │
-│  risky subprocess-backed tools without a strong backend  │
-│  Current default: strict enforcement mode                │
-│  Current fallback: ulimit + env hardening                │
-│  Next: native Windows/macOS sandbox helpers              │
+│  Linux uses bwrap namespace isolation when available.    │
+│  Sandbox health states control strict-mode availability  │
+│  for risky subprocess-backed tools.                      │
+│  The default enforcement mode is strict.                 │
+│  Fallback behavior uses ulimit + env hardening.          │
+│  Windows and macOS support depend on platform helpers.   │
 │                                                         │
 │  ┌──────────────┐  ┌─────────────┐  ┌───────────────┐  │
 │  │ Filesystem   │  │ Network     │  │ Resource      │  │
@@ -180,11 +186,12 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
 
 ## Framework Enforcement Points
 
-The following controls are enforced at Runtime chokepoints for framework-managed flows. They are strong guarantees for `ctx.llm`, `ctx.emit()`, `ctx.dispatch()`, and managed tool execution. They are not a claim that arbitrary developer-authored agent code is confined in a separate sandboxed process.
+The following controls are enforced at Runtime chokepoints for the built-in brokered chat path plus supervisor-managed `ctx.emit()`, `ctx.dispatch()`, and managed tool execution.
 
 | Chokepoint | Enforcement | Bypass Prevention |
 |------------|-------------|-------------------|
 | **Message input** | Guardian pipeline runs BEFORE `agent.onMessage()` | Agent never sees blocked messages |
+| **Chat agent execution** | Built-in chat/planner loop runs in a brokered worker by default | The worker has no direct `Runtime` or `ToolExecutor` reference |
 | **Tool pre-execution** | Guardian Agent LLM evaluates action before tool handler runs | Risky actions blocked before any side effects |
 | **Host self-policing** | Host monitor can block risky command/network actions when critical or stacked high-severity host alerts are active | High-risk follow-up actions require operator review after suspicious host activity |
 | **Response output** | OutputGuardian scans after execution | Response modified before delivery |
@@ -199,16 +206,16 @@ The following controls are enforced at Runtime chokepoints for framework-managed
 
 ## Sandbox Availability Model
 
-GuardianAgent now classifies sandbox strength as `strong`, `degraded`, or `unavailable` and threads that state into tool registration, execution, and user-facing status surfaces.
+GuardianAgent classifies sandbox strength as `strong`, `degraded`, or `unavailable` and threads that state into tool registration, execution, and user-facing status surfaces.
 
-### Current Behavior
+### Behavior
 
 - Linux with `bwrap` available is treated as `strong`
 - Linux without `bwrap` degrades to `ulimit` or env hardening
 - macOS currently reports `degraded`
 - Windows reports `strong` only when a configured native helper is enabled and detected; otherwise it reports `unavailable`
 - `assistant.tools.sandbox.enforcementMode` supports `permissive` and `strict`
-- Current defaults are `policyMode: approve_by_policy` and `sandbox.enforcementMode: strict`
+- Defaults are `policyMode: approve_by_policy` and `sandbox.enforcementMode: strict`
 - In `permissive` mode, risky subprocess-backed tools remain available even when sandbox availability is not `strong`, but permissive mode must be explicitly enabled by the operator
 - In `strict` mode, risky subprocess-backed tools are disabled unless sandbox availability is `strong`
 - CLI startup warnings, tool listings, category views, web tool state, and tool execution denials surface the reason
@@ -221,19 +228,19 @@ GuardianAgent now classifies sandbox strength as `strong`, `degraded`, or `unava
 - subprocess-backed search/indexing tools
 - other broad host-access categories currently mapped as `network` and `system`
 
-### Current Limitation
+### Platform Limits
 
-Windows strong mode now depends on shipping and enabling `guardian-sandbox-win.exe`. The helper launches subprocesses with AppContainer security capabilities for sandboxed profiles and always applies Job Object lifetime controls. macOS still needs a native strong-backend helper.
+Windows strong mode depends on shipping and enabling `guardian-sandbox-win.exe`. The helper launches subprocesses with AppContainer security capabilities for sandboxed profiles and always applies Job Object lifetime controls. macOS requires a native strong-backend helper for the same class of isolation.
 
 ### Windows Backend Status
 
-Implemented in the current helper path:
+Implemented in the helper path:
 
 - AppContainer-backed process launch for sandboxed profiles (`read-only`, `workspace-write`)
 - Job Object `KILL_ON_JOB_CLOSE` enforcement for child process trees
 - strict-mode fail-closed behavior when the helper is missing/unhealthy
 
-Still pending for a fuller Windows backend:
+Additional Windows backend work:
 
 - restricted-token layering in addition to AppContainer
 - explicit process mitigation policy wiring
@@ -259,7 +266,7 @@ Security implications:
 
 - this avoids installer packaging, but not the use of unsigned native binaries
 - Windows users may still see reputation or trust prompts for unsigned executables
-- strong Windows sandbox availability still depends on the helper being present, enabled, and healthy
+- strong Windows sandbox availability depends on the helper being present, enabled, and healthy
 - the same helper path can be shipped either through the optional portable zip bundle or the Windows installer packaging flow in `packaging/windows/`
 
 Example config:
@@ -288,9 +295,9 @@ See `docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md`.
 
 ## Host Workstation Monitoring
 
-GuardianAgent now includes a practical host-monitoring layer intended for direct host installs where there is no Docker or VM boundary. The current implementation is Windows-first in threat model and process naming, while still shipping portable coverage for Linux and macOS.
+GuardianAgent includes a practical host-monitoring layer intended for direct host installs where there is no Docker or VM boundary. The implementation is Windows-first in threat model and process naming, with portable coverage for Linux and macOS.
 
-### Current Signals
+### Signals
 
 - suspicious process detection
   - Windows-focused high-risk names such as `wscript.exe`, `mshta.exe`, `rundll32.exe`, `regsvr32.exe`, `bitsadmin.exe`, and `certutil.exe`
@@ -341,20 +348,20 @@ This means GuardianAgent can police itself when the local machine starts showing
   - template: `agent-host-guard`
   - presets: `host-security-baseline`, `anomaly-response-triage`, `host-monitor-watch`, `firewall-posture-watch`
 
-### Current Limitations
+### Limits
 
 - this is a practical first-pass monitor, not EDR-grade telemetry
 - file drift on sensitive directories is metadata-based rather than full content inspection
-- Windows helper-backed deep process/file correlation is still future work
+- Windows helper-backed deep process/file correlation is future work
 - Linux `auditd`/eBPF and macOS EndpointSecurity-class telemetry remain future optional depth layers
 
 ---
 
 ## Gateway Firewall Monitoring
 
-GuardianAgent now also supports gateway-firewall monitoring as a separate subsystem for edge devices such as OPNsense, pfSense, and UniFi-class gateways.
+GuardianAgent supports gateway-firewall monitoring as a separate subsystem for edge devices such as OPNsense, pfSense, and UniFi-class gateways.
 
-### Current Model
+### Model
 
 - configuration path: `assistant.gatewayMonitoring`
 - collector mode: operator-configured command returning normalized JSON
@@ -367,7 +374,7 @@ GuardianAgent now also supports gateway-firewall monitoring as a separate subsys
   - optional firmware version
 - alert family: `gateway_alert`
 
-### Current Behavior
+### Behavior
 
 - detects gateway firewall disablement or relaxation
 - detects gateway configuration drift
@@ -383,7 +390,7 @@ Gateway monitoring is intentionally separate from local host monitoring:
 - host monitoring observes the machine GuardianAgent runs on
 - gateway monitoring observes remote perimeter devices through operator-supplied collectors
 
-This separation avoids conflating local OS telemetry with remote appliance state while still letting Guardian correlate both.
+This separation avoids conflating local OS telemetry with remote appliance state while letting Guardian correlate both.
 
 ### Automation Starters
 
@@ -399,14 +406,14 @@ This separation avoids conflating local OS telemetry with remote appliance state
 
 ## Native Skills Security Model
 
-GuardianAgent now has a native skills foundation. Skills are a **knowledge and workflow layer**, not a privileged execution layer.
+GuardianAgent has a native skills foundation. Skills are a **knowledge and workflow layer**, not a privileged execution layer.
 
 ### Security Requirements for Skills
 
 - Skills are loaded from configured local roots by default
 - Skills do not create or bypass tools
 - Skills do not grant capabilities
-- Skills may recommend actions, but execution still goes through ToolExecutor and Guardian
+- Skills may recommend actions, but execution goes through ToolExecutor and Guardian
 - Any future install/setup steps must be explicitly approval-gated
 
 This separation is deliberate: skills help the model plan, while tools and MCP integrations remain the only execution surfaces.
@@ -555,7 +562,7 @@ One-knob security posture configuration:
 | **balanced** | read/write/exec/git/email | 30/min, 500/hr | 60s | approve_by_policy |
 | **power** | all capabilities | 60/min, 2000/hr | 300s | autonomous |
 
-Current defaults align most closely with the `balanced` posture for tool policy behavior: mutating and external-post actions require approval, while read-only and network tools are allowed by policy unless overridden.
+Defaults align most closely with the `balanced` posture for tool policy behavior: mutating and external-post actions require approval, while read-only and network tools are allowed by policy unless overridden.
 
 ---
 
@@ -621,12 +628,15 @@ The policy engine replaces hard-coded `decide()` logic with declarative JSON rul
 
 Managed child processes spawned by tool execution are wrapped in OS-level isolation using [bubblewrap (bwrap)](https://github.com/containers/bubblewrap) on Linux, an optional native helper on Windows, and graceful fallback to `ulimit` + environment hardening when stronger backends are unavailable.
 
+The brokered chat worker is also launched through the managed sandbox layer. On strong hosts it uses the `agent-worker` profile. On degraded hosts it runs as a separate process with a hardened environment and dedicated workspace.
+
 #### Sandbox Profiles
 
 | Profile | Filesystem | Network | Use Case |
 |---------|-----------|---------|----------|
 | `read-only` | Root bind (read-only), `/tmp` writable | Isolated by default | System info, document search, network probes |
 | `workspace-write` | Workspace writable, `.git`/`.env*` forced read-only | Isolated by default | `execute_command`, MCP servers, browser |
+| `agent-worker` | Dedicated worker workspace, remapped `HOME`/`TMPDIR` | Backend-dependent | Brokered chat/planner worker |
 | `full-access` | No isolation (env hardening only) | Full access | Explicitly trusted operations |
 
 #### Isolation Mechanisms
@@ -672,11 +682,11 @@ Install bwrap on Debian/Ubuntu: `sudo apt install bubblewrap`
 
 ## Credential Handling
 
-- GuardianAgent now supports runtime credential references for LLM and web-search providers via `assistant.credentials.refs`
+- GuardianAgent supports runtime credential references for LLM and web-search providers via `assistant.credentials.refs`
 - the preferred pattern is `credentialRef` → env-backed credential reference, rather than storing raw provider keys inline in provider/tool config
 - inline `apiKey` fields remain supported as a backward-compatible fallback, but are no longer the preferred configuration path
 - Approval records store redacted arguments and a deterministic hash (`argsHash`) rather than raw sensitive values
-- current provider integrations still resolve concrete credential values inside the main runtime process when creating provider/tool clients
+- provider integrations resolve concrete credential values inside the main runtime process when creating provider/tool clients
 - Output scanning and denied-path controls reduce accidental exfiltration, but GuardianAgent does not currently guarantee that credentials never enter the main process address space
 - Provider-managed secure storage is preferred for external integrations where available
 
@@ -704,7 +714,7 @@ llm:
     credentialRef: llm.openai.primary
 ```
 
-Current limitation:
+Limit:
 
 - this is a credential reference and resolution layer, not yet a separate secret-broker process
 - long-lived credentials are better isolated than before at config level, but not yet held outside the runtime boundary at execution time
@@ -715,11 +725,11 @@ Current limitation:
 
 GuardianAgent is hardened against the class of attacks where a malicious website attempts to drive a locally running agent over loopback HTTP/WebSocket interfaces.
 
-Current mitigations:
+Mitigations:
 
 - the web channel does not expose a WebSocket control plane; it uses authenticated HTTP APIs plus authenticated SSE
 - localhost / loopback is **not** treated as trusted for API access; `/api/*` and `/sse` always require authentication
-- when no web token is configured, GuardianAgent generates a secure random token for the current run rather than leaving the API open
+- when no web token is configured, GuardianAgent generates a secure random token for the active run rather than leaving the API open
 - wildcard CORS (`'*'`) is rejected by configuration validation for the web channel
 - browser session cookies are `HttpOnly` and `SameSite=Strict`, reducing cross-site request exposure
 - repeated authentication failures are rate-limited and temporarily blocked to slow token brute force against the local API
@@ -855,7 +865,7 @@ An agent should satisfy **at most two** of:
 | Capability enforcement | **Frozen grants** (Object.freeze) | Runtime checks |
 | Admission pipeline | **Inline in Runtime** | Plugin/middleware |
 | Audit logging | **Automatic** for all security events | Manual instrumentation |
-| Context isolation | **Object.freeze** on agent context | Documentation only |
+| Context isolation | **Brokered worker + frozen context** on framework surfaces | Documentation only |
 
 ---
 

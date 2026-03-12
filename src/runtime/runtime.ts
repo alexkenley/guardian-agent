@@ -9,7 +9,7 @@
  *   Layer 2 (Output):    Secret scanning/redaction on responses and event payloads
  */
 
-import type { GuardianAgentConfig } from '../config/types.js';
+import type { GuardianAgentConfig, LLMConfig } from '../config/types.js';
 import { DEFAULT_CONFIG } from '../config/types.js';
 import type { LLMProvider } from '../llm/types.js';
 import { createProviders, createFailoverProvider } from '../llm/provider.js';
@@ -29,6 +29,7 @@ import { Watchdog } from './watchdog.js';
 import { CronScheduler } from './scheduler.js';
 import { GuardedLLMProvider } from '../llm/guarded-provider.js';
 import { createLogger } from '../util/logging.js';
+import type { WorkerManager } from '../supervisor/worker-manager.js';
 
 const log = createLogger('runtime');
 
@@ -43,6 +44,8 @@ export class Runtime {
   readonly watchdog: Watchdog;
   readonly scheduler: CronScheduler;
   readonly providers: Map<string, LLMProvider>;
+  
+  public workerManager?: WorkerManager;
 
   private config: GuardianAgentConfig;
   private running = false;
@@ -287,7 +290,9 @@ export class Runtime {
 
     try {
       const response = await this.withBudgetTimeout(
-        () => instance.agent.onMessage!(message, ctx),
+        () => {
+          return instance.agent.onMessage!(message, ctx, this.workerManager);
+        },
         agentId,
         budgetMs,
       );
@@ -530,6 +535,10 @@ export class Runtime {
     this.scheduler.stop();
     this.watchdog.stop();
 
+    if (this.workerManager) {
+      this.workerManager.shutdown();
+    }
+
     // Stop all agents (call onStop)
     for (const instance of this.registry.getAll()) {
       if (instance.state !== AgentState.Dead && instance.agent.onStop) {
@@ -559,6 +568,14 @@ export class Runtime {
   /** Get the default provider. */
   getDefaultProvider(): LLMProvider | undefined {
     return this.providers.get(this.config.defaultProvider);
+  }
+
+  /** Get the configured provider config for an agent's effective provider. */
+  getAgentProviderConfig(agentId: string): LLMConfig | undefined {
+    const instance = this.registry.get(agentId);
+    if (!instance) return undefined;
+    const providerName = instance.definition.providerName ?? this.config.defaultProvider;
+    return this.config.llm[providerName];
   }
 
   /**

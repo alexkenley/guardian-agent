@@ -12,9 +12,11 @@ import type {
   AssistantConnectorPackConfig,
   AssistantConnectorPlaybookDefinition,
   AssistantConnectorPlaybookStepDefinition,
+  AutomationOutputHandlingConfig,
   ConnectorExecutionMode,
 } from '../config/types.js';
 import type { ToolExecutionRequest, ToolRunResponse } from '../tools/types.js';
+import type { AutomationPromotedFindingRef } from './automation-output.js';
 
 const MAX_RUN_HISTORY = 200;
 
@@ -45,6 +47,8 @@ export interface PlaybookRunRecord {
   status: PlaybookRunStatus;
   message: string;
   steps: PlaybookStepRunResult[];
+  outputHandling?: AutomationOutputHandlingConfig;
+  promotedFindings?: AutomationPromotedFindingRef[];
   requestedBy?: string;
   origin: ToolExecutionRequest['origin'];
 }
@@ -306,6 +310,7 @@ export class ConnectorPlaybookService {
       status,
       message,
       steps,
+      outputHandling: playbook.outputHandling,
       requestedBy: input.requestedBy,
       origin: input.origin,
     };
@@ -503,6 +508,7 @@ export class ConnectorPlaybookService {
       status: 'failed',
       message: reason,
       steps: [],
+      outputHandling: playbook?.outputHandling,
       requestedBy: input.requestedBy,
       origin: input.origin,
     };
@@ -667,6 +673,7 @@ function clonePack(pack: AssistantConnectorPackConfig): AssistantConnectorPackCo
 function clonePlaybook(playbook: AssistantConnectorPlaybookDefinition): AssistantConnectorPlaybookDefinition {
   return {
     ...playbook,
+    outputHandling: playbook.outputHandling ? { ...playbook.outputHandling } : undefined,
     steps: playbook.steps.map(cloneStep),
   };
 }

@@ -254,6 +254,7 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     'policy_mode_changed',
     'policy_rules_reloaded',
     'policy_shadow_mismatch',
+    'automation_finding',
   ]);
   for (const eventType of assistant.notifications.auditEventTypes ?? []) {
     if (!validNotificationAuditTypes.has(eventType)) {

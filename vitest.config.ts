@@ -6,7 +6,9 @@ const isWindows = process.platform === 'win32';
 export default defineConfig({
   test: {
     pool: 'forks',
-    maxWorkers: isCI ? 3 : undefined,
+    // Windows has been intermittently unstable with the fork pool under the full suite.
+    // Run serially there so `npm test` stays deterministic for the dev launcher.
+    maxWorkers: isCI ? 3 : isWindows ? 1 : undefined,
     testTimeout: 30_000,
     hookTimeout: isWindows ? 60_000 : 30_000,
     unstubEnvs: true,

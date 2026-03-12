@@ -1,8 +1,9 @@
 /**
- * Configuration page — tabbed: Providers + Tools + Policy + Settings.
+ * Configuration page — product setup and policy, not operational monitoring.
  */
 
 import { api } from '../api.js';
+import { activateContextHelp, enhanceSectionHelp, renderGuidancePanel } from '../components/context-help.js';
 import { createTabs } from '../components/tabs.js';
 import { applyInputTooltips } from '../tooltip.js';
 import { themes, getSavedTheme, applyTheme } from '../theme.js';
@@ -14,6 +15,173 @@ let sharedProviders = null;
 let sharedSetupStatus = null;
 let sharedAuthStatus = null;
 const COMMON_PROVIDER_TYPES = ['ollama', 'openai', 'anthropic', 'openrouter', 'lmstudio', 'llamacpp', 'generic_json'];
+const CONFIG_HELP = {
+  aiSearch: {
+    'AI Provider Configuration': {
+      whatItIs: 'This is the main setup surface for local and external AI providers.',
+      whatSeeing: 'You are seeing provider groups, profile selectors, model controls, and save/test actions.',
+      whatCanDo: 'Configure providers, test connectivity, and choose which profiles back the assistant.',
+      howLinks: 'These settings power assistant behavior throughout the app, while runtime operations happen on the owner pages.',
+    },
+    'Configured Providers': {
+      whatItIs: 'This section lists the currently configured and detected provider profiles.',
+      whatSeeing: 'You are seeing provider status, locality, connectivity, and model context.',
+      whatCanDo: 'Use it to review what providers exist before editing or troubleshooting them.',
+      howLinks: 'It complements the provider editor above and supports setup validation for the rest of the product.',
+    },
+    'Web Search & Model Fallback': {
+      whatItIs: 'This section controls search availability and fallback model behavior.',
+      whatSeeing: 'You are seeing the main toggles and settings that govern search-backed retrieval and model fallback.',
+      whatCanDo: 'Enable or tune search behavior and fallback strategy for the assistant.',
+      howLinks: 'These settings affect retrieval behavior used across conversations and automations.',
+    },
+    'Document Sources': {
+      whatItIs: 'This section manages the source collections used for document search.',
+      whatSeeing: 'You are seeing the source-management toolbar and current search-source state.',
+      whatCanDo: 'Enable search, refresh status, reindex sources, and start adding new collections.',
+      howLinks: 'Configured sources support AI retrieval and search-backed workflows elsewhere in the app.',
+    },
+    'Add Source': {
+      whatItIs: 'This is the guided form for adding a new search source.',
+      whatSeeing: 'You are seeing the source metadata and path or URL details required to register a document collection.',
+      whatCanDo: 'Create a new searchable source without editing raw configuration manually.',
+      howLinks: 'New sources appear in Configured Sources and then become available to AI & Search features.',
+    },
+    'Configured Sources': {
+      whatItIs: 'This section lists the document sources currently registered for search.',
+      whatSeeing: 'You are seeing the current source inventory and related management actions.',
+      whatCanDo: 'Review, filter, reindex, and manage existing search sources.',
+      howLinks: 'These sources feed retrieval quality for assistant and automation use cases.',
+    },
+  },
+  toolsPolicy: {
+    'Sandbox Status': {
+      whatItIs: 'This section reports the current sandbox backend and enforcement posture.',
+      whatSeeing: 'You are seeing sandbox availability, backend details, and whether strict mode is reducing tool access.',
+      whatCanDo: 'Use it to understand why some tools may be unavailable or restricted.',
+      howLinks: 'It complements Sandbox Enforcement and explains the runtime effect of policy decisions.',
+    },
+    'Runtime Notices': {
+      whatItIs: 'This section surfaces warnings or notices from the tool runtime.',
+      whatSeeing: 'You are seeing messages about current runtime conditions that may affect tool execution.',
+      whatCanDo: 'Review current warnings before changing tool settings or approvals.',
+      howLinks: 'These notices provide context for the status and controls elsewhere in Tools & Policy.',
+    },
+    'Execution Mode': {
+      whatItIs: 'This section controls global tool execution behavior.',
+      whatSeeing: 'You are seeing high-level toggles such as dry-run mode and smart provider routing.',
+      whatCanDo: 'Change how tool execution behaves without editing every tool individually.',
+      howLinks: 'These modes affect tool behavior across the app and influence the more detailed routing sections below.',
+    },
+    'Tool Categories': {
+      whatItIs: 'This section groups tools by category for broad enablement and routing control.',
+      whatSeeing: 'You are seeing category-level counts, status toggles, and provider routing choices.',
+      whatCanDo: 'Enable or disable whole categories and steer their default LLM routing.',
+      howLinks: 'Category routing acts as a higher-level default for the per-tool catalog beneath it.',
+    },
+    'Tool Catalog': {
+      whatItIs: 'This is the detailed catalog of registered tools.',
+      whatSeeing: 'You are seeing each tool, its risk class, routing state, and description.',
+      whatCanDo: 'Review tool availability and override routing at the individual-tool level.',
+      howLinks: 'These settings influence how tools are invoked by operators, agents, and automations.',
+    },
+    'Pending Approvals': {
+      whatItIs: 'This section lists tool actions waiting for approval.',
+      whatSeeing: 'You are seeing approval requests across channels with their risk and origin.',
+      whatCanDo: 'Approve or deny pending tool actions from the central queue.',
+      howLinks: 'This queue ties runtime execution back to policy and operator decisions.',
+    },
+    'Recent Tool Jobs': {
+      whatItIs: 'This section shows recent tool execution history.',
+      whatSeeing: 'You are seeing job status, origin, duration, and a brief result or error summary.',
+      whatCanDo: 'Review what ran recently and whether it succeeded.',
+      howLinks: 'It complements approvals and routing by showing the execution outcome.',
+    },
+    'Allowed Paths': {
+      whatItIs: 'This is the allowlist for filesystem paths available to the sandbox.',
+      whatSeeing: 'You are seeing currently allowed path entries and controls to add or remove them.',
+      whatCanDo: 'Manage which filesystem roots tools may access.',
+      howLinks: 'These allowlist entries influence sandbox policy enforcement for filesystem-capable tools.',
+    },
+    'Allowed Commands': {
+      whatItIs: 'This is the allowlist for shell commands available to the sandbox.',
+      whatSeeing: 'You are seeing currently allowed command prefixes and controls to manage them.',
+      whatCanDo: 'Add or remove shell command prefixes that are permitted for execution.',
+      howLinks: 'These entries affect shell-safe execution policy across operator and agent workflows.',
+    },
+    'Allowed Domains': {
+      whatItIs: 'This is the allowlist for outbound network destinations.',
+      whatSeeing: 'You are seeing domains currently permitted for network and browser-related tools.',
+      whatCanDo: 'Manage which external destinations tools may contact.',
+      howLinks: 'These entries shape network policy enforcement for tool and browser activity.',
+    },
+  },
+  integrations: {
+    'Telegram Channel': {
+      whatItIs: 'This section configures Telegram as an operator-facing integration channel.',
+      whatSeeing: 'You are seeing bot enablement, token, and allowed chat controls.',
+      whatCanDo: 'Connect or update Telegram so approved users can interact with GuardianAgent there.',
+      howLinks: 'Telegram can receive notifications and operate the assistant once configured here.',
+    },
+    'Browser Automation': {
+      whatItIs: 'This section configures the browser automation tool runtime.',
+      whatSeeing: 'You are seeing browser enablement, allowed domains, concurrency, and idle timeout.',
+      whatCanDo: 'Tune whether and how browser-based automation is allowed to run.',
+      howLinks: 'These controls affect browser-backed tools and any workflows that depend on them.',
+    },
+    'Google Workspace': {
+      whatItIs: 'This section configures the Google Workspace integration path.',
+      whatSeeing: 'You are seeing install, authentication, enablement, and connectivity guidance for Google services.',
+      whatCanDo: 'Set up or validate Google Workspace access before assistant tools use it.',
+      howLinks: 'Once configured here, Google Workspace capabilities become available to the assistant and tool layer.',
+    },
+  },
+  system: {
+    'Web Authentication': {
+      whatItIs: 'This section controls bearer-token access to the Web UI and API.',
+      whatSeeing: 'You are seeing auth mode, token source, TTL, and token management controls.',
+      whatCanDo: 'Save a token, rotate it, reveal it temporarily, and manage session timing.',
+      howLinks: 'These settings gate access to the whole web surface and API endpoints.',
+    },
+    'Security Alerts': {
+      whatItIs: 'This section configures notification delivery for security events.',
+      whatSeeing: 'You are seeing severity thresholds, event-type filters, cooldowns, and destination toggles.',
+      whatCanDo: 'Tune what generates notifications and where those notifications are delivered.',
+      howLinks: 'These settings control how alerts from Security and promoted automation findings are delivered outward.',
+    },
+    'Guardian Agent': {
+      whatItIs: 'This section configures the Guardian agent evaluation layer.',
+      whatSeeing: 'You are seeing enablement, provider choice, fail mode, and timeout controls.',
+      whatCanDo: 'Adjust how pre-execution action evaluation behaves.',
+      howLinks: 'This affects how risky actions are judged before tools actually execute.',
+    },
+    'Policy-as-Code Engine': {
+      whatItIs: 'This section controls the declarative policy engine.',
+      whatSeeing: 'You are seeing enablement, mode, per-family overrides, and shadow statistics.',
+      whatCanDo: 'Tune the policy engine and reload rules when policy configuration changes.',
+      howLinks: 'These settings influence enforcement and comparison behavior across tool and event decisions.',
+    },
+    'Sentinel Audit': {
+      whatItIs: 'This section controls retrospective anomaly analysis over audit logs.',
+      whatSeeing: 'You are seeing a run-on-demand surface for Sentinel and any resulting findings.',
+      whatCanDo: 'Trigger an audit analysis pass and review any anomalies or recommendations.',
+      howLinks: 'Sentinel works against the shared audit record and complements live security monitoring.',
+    },
+    'Trust Preset': {
+      whatItIs: 'This section applies coarse-grained trust posture presets.',
+      whatSeeing: 'You are seeing the current preset and the available predefined posture choices.',
+      whatCanDo: 'Apply a baseline security posture without editing every individual control.',
+      howLinks: 'The preset influences capabilities, limits, and tool-policy defaults across the system.',
+    },
+    'Danger Zone': {
+      whatItIs: 'This section contains destructive reset operations.',
+      whatSeeing: 'You are seeing data and config reset actions with their scope and consequence.',
+      whatCanDo: 'Clear data, reset configuration, or wipe everything when you intentionally need a reset.',
+      howLinks: 'These actions affect the entire product and should only be used when recovery or reinitialization is intended.',
+    },
+  },
+  appearance: {},
+};
 
 export async function renderConfig(container, options = {}) {
   currentContainer = container;
@@ -27,17 +195,25 @@ export async function renderConfig(container, options = {}) {
       api.authStatus().catch(() => null),
     ]);
 
-    container.innerHTML = '<h2 class="page-title">Configuration</h2>';
+    container.innerHTML = `
+      <h2 class="page-title">Configuration</h2>
+      ${renderGuidancePanel({
+        kicker: 'Configuration Guide',
+        title: 'Product setup and policy ownership',
+        whatItIs: 'Configuration is the home for product setup, tool policy, integrations, system controls, and appearance.',
+        whatSeeing: 'You are seeing tabs that separate AI/search setup, tool policy, integrations, system controls, and visual preferences.',
+        whatCanDo: 'Use this page to configure how GuardianAgent behaves, connects, authenticates, and notifies.',
+        howLinks: 'This page defines setup and policy. Operational investigation, monitoring, and workflow execution stay on their owner pages.',
+      })}
+    `;
 
     createTabs(container, [
-      { id: 'providers', label: 'Providers', render: renderProvidersTab },
-      { id: 'tools', label: 'Tools', render: renderToolsTab },
-      { id: 'policy', label: 'Policy', render: renderPolicyTab },
-      { id: 'search-sources', label: 'Search Sources', render: renderSearchSourcesTab },
-      { id: 'cloud', label: 'Cloud', render: renderCloudTab },
-      { id: 'settings', label: 'Settings', render: renderSettingsTab },
+      { id: 'ai-search', label: 'AI & Search', render: renderAiSearchTab },
+      { id: 'tools-policy', label: 'Tools & Policy', render: renderToolsPolicyTab },
+      { id: 'integrations', label: 'Integrations', render: renderIntegrationsTab },
+      { id: 'system', label: 'System', render: renderSystemTab },
       { id: 'appearance', label: 'Appearance', render: renderAppearanceTab },
-    ], options?.tab);
+    ], normalizeConfigTab(options?.tab));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     container.innerHTML = `<h2 class="page-title">Configuration</h2><div class="loading">Error: ${esc(message)}</div>`;
@@ -48,6 +224,105 @@ export async function updateConfig() {
   if (!currentContainer) return;
   const activeTab = currentContainer.dataset.activeTab;
   await renderConfig(currentContainer, activeTab ? { tab: activeTab } : {});
+}
+
+function normalizeConfigTab(tab) {
+  if (!tab) return 'ai-search';
+  if (tab === 'providers' || tab === 'search-sources' || tab === 'cloud') return 'ai-search';
+  if (tab === 'tools' || tab === 'policy') return 'tools-policy';
+  if (tab === 'settings') return 'system';
+  return tab;
+}
+
+function renderAiSearchTab(panel) {
+  panel.innerHTML = '';
+  panel.insertAdjacentHTML('beforeend', renderGuidancePanel({
+    kicker: 'AI & Search',
+    compact: true,
+    whatItIs: 'This tab configures AI providers, search behavior, and document retrieval sources.',
+    whatSeeing: 'You are seeing provider setup, search fallback controls, and source management.',
+    whatCanDo: 'Set up language models, tune search-backed retrieval, and manage indexed document sources.',
+    howLinks: 'These settings affect assistant responses and any workflows that rely on model or retrieval behavior.',
+  }));
+
+  const providersPanel = document.createElement('div');
+  renderProvidersTab(providersPanel);
+  panel.appendChild(providersPanel);
+
+  panel.appendChild(createWebSearchPanel(sharedConfig, panel));
+
+  const sourcesPanel = document.createElement('div');
+  renderSearchSourcesTab(sourcesPanel);
+  panel.appendChild(sourcesPanel);
+
+  applyInputTooltips(panel);
+  enhanceSectionHelp(panel, CONFIG_HELP.aiSearch, createGenericHelpFactory('Configuration AI & Search'));
+  activateContextHelp(panel);
+}
+
+function renderToolsPolicyTab(panel) {
+  panel.innerHTML = '';
+  panel.insertAdjacentHTML('beforeend', renderGuidancePanel({
+    kicker: 'Tools & Policy',
+    compact: true,
+    whatItIs: 'This tab controls the tool runtime, approvals, sandbox policy, and allowlists.',
+    whatSeeing: 'You are seeing runtime state, routing controls, approval queues, and policy allowlists.',
+    whatCanDo: 'Tune tool behavior, approve actions, and manage the constraints that govern tool execution.',
+    howLinks: 'These settings shape what operational pages and automations are allowed to do when they invoke tools.',
+  }));
+
+  const toolsPanel = document.createElement('div');
+  panel.appendChild(toolsPanel);
+  void renderToolsTab(toolsPanel);
+
+  const policyPanel = document.createElement('div');
+  panel.appendChild(policyPanel);
+  void renderPolicyTab(policyPanel);
+}
+
+function renderIntegrationsTab(panel) {
+  panel.innerHTML = '';
+  panel.insertAdjacentHTML('beforeend', renderGuidancePanel({
+    kicker: 'Integrations',
+    compact: true,
+    whatItIs: 'This tab configures external service integrations and operator channels.',
+    whatSeeing: 'You are seeing integration-specific setup for Telegram, browser automation, and Google Workspace.',
+    whatCanDo: 'Connect or validate external integrations before the assistant or automations use them.',
+    howLinks: 'These integrations extend what the product can reach, but they are configured here rather than in operational pages.',
+  }));
+
+  panel.appendChild(createTelegramPanel(sharedConfig, panel));
+  panel.appendChild(createBrowserPanel(sharedConfig, panel));
+  panel.appendChild(createGoogleWorkspacePanel());
+
+  applyInputTooltips(panel);
+  enhanceSectionHelp(panel, CONFIG_HELP.integrations, createGenericHelpFactory('Configuration Integrations'));
+  activateContextHelp(panel);
+}
+
+function renderSystemTab(panel) {
+  panel.innerHTML = '';
+  panel.insertAdjacentHTML('beforeend', renderGuidancePanel({
+    kicker: 'System',
+    compact: true,
+    whatItIs: 'This tab contains system-wide controls for authentication, notifications, trust posture, and internal policy engines.',
+    whatSeeing: 'You are seeing overview cards plus configuration panels for auth, alert delivery, Guardian, Sentinel, and trust posture.',
+    whatCanDo: 'Adjust the product-level controls that affect access, enforcement, alert delivery, and reset behavior.',
+    howLinks: 'These are system settings, not operational dashboards, and they influence behavior across the whole app.',
+  }));
+
+  panel.appendChild(createOverview(sharedConfig, sharedProviders, sharedSetupStatus));
+  panel.appendChild(createAuthPanel(sharedConfig, sharedAuthStatus, panel));
+  panel.appendChild(createNotificationsPanel(sharedConfig, panel));
+  panel.appendChild(createGuardianAgentPanel());
+  panel.appendChild(createPolicyEnginePanel());
+  panel.appendChild(createSentinelAuditPanel());
+  panel.appendChild(createTrustPresetPanel(sharedConfig));
+  panel.appendChild(createDangerZonePanel());
+
+  applyInputTooltips(panel);
+  enhanceSectionHelp(panel, CONFIG_HELP.system, createGenericHelpFactory('Configuration System'));
+  activateContextHelp(panel);
 }
 
 // ─── Providers Tab ───────────────────────────────────────
@@ -89,8 +364,11 @@ function createProviderPanel(config, providers, panel) {
     <div class="cfg-center-body">
       <datalist id="cfg-provider-type-options">${providerTypeOptions}</datalist>
       <div class="cfg-provider-panels">
-        <div class="table-container" id="cfg-local-panel">
-          <div class="table-header"><h3>Local Providers</h3></div>
+        <details class="cfg-provider-accordion" id="cfg-local-panel">
+          <summary class="cfg-provider-summary">
+            <span class="cfg-provider-summary-title">Local Providers</span>
+            <span class="cfg-provider-summary-note">Ollama / on-device models</span>
+          </summary>
           <div class="cfg-center-body">
             <div class="cfg-form-grid">
               <div class="cfg-field"><label>Profile</label><select id="cfg-local-profile"></select></div>
@@ -105,10 +383,13 @@ function createProviderPanel(config, providers, panel) {
               <span id="cfg-local-status" class="cfg-save-status"></span>
             </div>
           </div>
-        </div>
+        </details>
 
-        <div class="table-container" id="cfg-ext-panel">
-          <div class="table-header"><h3>External Providers</h3></div>
+        <details class="cfg-provider-accordion" id="cfg-ext-panel">
+          <summary class="cfg-provider-summary">
+            <span class="cfg-provider-summary-title">External Providers</span>
+            <span class="cfg-provider-summary-note">Hosted APIs and custom endpoints</span>
+          </summary>
           <div class="cfg-center-body">
             <div class="cfg-form-grid">
               <div class="cfg-field"><label>Profile</label><select id="cfg-ext-profile"></select></div>
@@ -124,7 +405,7 @@ function createProviderPanel(config, providers, panel) {
               <span id="cfg-ext-status" class="cfg-save-status"></span>
             </div>
           </div>
-        </div>
+        </details>
       </div>
     </div>
   `;
@@ -415,7 +696,7 @@ async function renderToolsTab(panel) {
           ${sandbox.enforcementMode === 'strict' && sandbox.availability !== 'strong' ? `
             <div style="font-size:0.78rem;color:var(--warning);margin-top:0.25rem;">
               Strict mode is active but native sandboxing is unavailable — some tools (shell, browser, network) are disabled.
-              To allow these tools, go to <strong>Settings</strong> and set Sandbox Mode to <strong>Permissive</strong>.
+              To allow these tools, go to <strong>Tools &amp; Policy</strong> and set Sandbox Mode to <strong>Permissive</strong>.
             </div>
           ` : ''}
         </div>
@@ -626,6 +907,8 @@ async function renderToolsTab(panel) {
     });
 
     applyInputTooltips(panel);
+    enhanceSectionHelp(panel, CONFIG_HELP.toolsPolicy, createGenericHelpFactory('Configuration Tools & Policy'));
+    activateContextHelp(panel);
   } catch (err) {
     panel.innerHTML = `<div class="loading">Error: ${esc(err.message || String(err))}</div>`;
   }
@@ -725,6 +1008,8 @@ async function renderPolicyTab(panel) {
       });
 
       applyInputTooltips(panel);
+      enhanceSectionHelp(panel, CONFIG_HELP.toolsPolicy, createGenericHelpFactory('Configuration Policy'));
+      activateContextHelp(panel);
     }
 
     function feedback(catKey, message, tone = 'muted') {
@@ -1819,7 +2104,7 @@ function createOverview(config, providers, setupStatus) {
   cards.appendChild(createMiniCard('Readiness', setupStatus?.ready ? 'Ready' : 'Needs attention', setupStatus?.completed ? 'Baseline saved' : 'Configuration pending', setupStatus?.ready ? 'success' : 'warning'));
   cards.appendChild(createMiniCard('Default Provider', config.defaultProvider || 'None', connectedText, connectedTone));
   cards.appendChild(createMiniCard('Providers', String(Object.keys(config.llm || {}).length), `${providers.length} detected`, 'info'));
-  cards.appendChild(createMiniCard('Telegram', config.channels?.telegram?.enabled ? 'Enabled' : 'Disabled', 'Configure in Settings tab', config.channels?.telegram?.enabled ? 'success' : 'warning'));
+  cards.appendChild(createMiniCard('Telegram', config.channels?.telegram?.enabled ? 'Enabled' : 'Disabled', 'Configure in Integrations', config.channels?.telegram?.enabled ? 'success' : 'warning'));
   cards.appendChild(createMiniCard('Cloud', cloud?.enabled ? 'Enabled' : 'Disabled', `${cloud?.profileCounts?.total || 0} profiles`, cloud?.enabled ? 'success' : 'warning'));
   wrap.appendChild(cards);
 
@@ -3187,7 +3472,14 @@ function renderAppearanceTab(panel) {
   let activeFilter = 'all';
 
   panel.innerHTML = `
-    <div class="config-intro">Choose a visual theme. Your selection is saved locally in the browser.</div>
+    ${renderGuidancePanel({
+      kicker: 'Appearance',
+      compact: true,
+      whatItIs: 'This tab controls the visual theme of the Web UI.',
+      whatSeeing: 'You are seeing theme filters and preview cards.',
+      whatCanDo: 'Pick a theme and preview how the interface will look before switching.',
+      howLinks: 'Appearance only changes presentation. It does not affect monitoring, policy, or workflow behavior.',
+    })}
     <div class="theme-filter-bar">
       <button class="theme-filter-btn active" data-filter="all">All</button>
       <button class="theme-filter-btn" data-filter="dark">Dark</button>
@@ -3244,6 +3536,15 @@ function renderAppearanceTab(panel) {
   });
 
   renderCards(activeFilter);
+}
+
+function createGenericHelpFactory(area) {
+  return (title) => ({
+    whatItIs: `${title} is part of ${area}.`,
+    whatSeeing: 'You are seeing the current settings, status, or management controls for this section.',
+    whatCanDo: 'Review the current state here and use the controls in the section to make changes when needed.',
+    howLinks: `This section supports the broader ${area} workflow and affects related operational behavior elsewhere in the app.`,
+  });
 }
 
 // ─── Helpers ────────────────────────────────────────────

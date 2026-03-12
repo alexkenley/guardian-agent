@@ -2283,15 +2283,20 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
 
-        const response = await this.onMessage({
-          id: randomUUID(),
-          userId: parsed.userId ?? 'web-user',
-          channel: 'web',
-          content: parsed.content,
-          timestamp: Date.now(),
-        });
-
-        sendJSON(res, 200, response);
+        try {
+          const response = await this.onMessage({
+            id: randomUUID(),
+            userId: parsed.userId ?? 'web-user',
+            channel: 'web',
+            content: parsed.content,
+            timestamp: Date.now(),
+          });
+          sendJSON(res, 200, response);
+        } catch (err) {
+          logInternalError('Message dispatch failed', err);
+          const detail = err instanceof Error ? err.message : String(err);
+          sendJSON(res, 500, { error: `Dispatch error: ${detail}` });
+        }
         return;
       }
 
