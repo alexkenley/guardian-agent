@@ -45,6 +45,13 @@
 - **SOUL personality system** — configurable personality profiles with primary/delegated injection modes
 - **Cryptographic audit trail** — SHA-256 hash-chained JSONL persistence, tamper-evident policy changes, and constant-time auth
 
+## Start Here
+
+- [Installation](INSTALLATION.md)
+- [Usage](USAGE.md)
+- [Security](SECURITY.md)
+- [Architecture](docs/architecture/OVERVIEW.md)
+
 ## Screenshots
 
 ### Web Dashboard
@@ -173,42 +180,7 @@ For the built-in chat/planner path, those interactions occur inside the brokered
 
 Declarative JSON rule files replace hard-coded approval logic with an auditable, version-controlled policy engine.
 
-**How it works:** JSON policy files in `policies/` are compiled into sorted matcher functions at startup. The engine evaluates each tool request against matching rules (priority-ordered, first-match wins) and returns `allow`, `deny`, or `require_approval`.
-
-**Shadow mode (default):** The policy engine runs alongside the legacy `decide()` path and compares decisions without affecting execution. Mismatches are logged with classification (`policy_too_strict`, `policy_too_permissive`, `normalization_bug`, `legacy_bug`) for safe, data-driven migration to enforce mode.
-
-```yaml
-# config.yaml
-guardian:
-  policy:
-    enabled: true
-    mode: shadow    # 'off' | 'shadow' | 'enforce'
-    rulesPath: policies/
-```
-
-**Rule format:**
-
-```json
-{
-  "schemaVersion": 1,
-  "rules": [{
-    "id": "shell-readonly-allow",
-    "family": "tool",
-    "enabled": true,
-    "priority": 90,
-    "match": {
-      "action": "tool:shell_safe",
-      "resource.attrs.firstWord": { "in": ["ls", "pwd", "cat", "git"] }
-    },
-    "decision": {
-      "kind": "allow",
-      "reason": "Read-only shell command."
-    }
-  }]
-}
-```
-
-**Match primitives:** exact, `in`/`notIn`, `gt`/`gte`/`lt`/`lte`, `startsWith`/`endsWith`, `regex`, `exists` — with `allOf`/`anyOf` compound conditions.
+Policies are version-controlled, auditable, and hot-reloadable. They evaluate tool requests deterministically and support staged rollout through shadow and enforce modes.
 
 See [`docs/specs/POLICY-AS-CODE-SPEC.md`](docs/specs/POLICY-AS-CODE-SPEC.md) for the full specification.
 
@@ -217,28 +189,9 @@ See [`docs/specs/POLICY-AS-CODE-SPEC.md`](docs/specs/POLICY-AS-CODE-SPEC.md) for
 Requires Node.js `>=20.0.0`.
 SQLite persistence/security monitoring is enabled when the Node build includes `node:sqlite`; otherwise assistant memory/analytics automatically run in-memory.
 
-Run from the repository root:
+Start GuardianAgent from the repository root using the platform start script in `scripts/`.
 
-Windows (PowerShell):
-
-```powershell
-.\scripts\start-dev-windows.ps1
-```
-
-Linux/macOS:
-
-```bash
-bash scripts/start-dev-unix.sh
-```
-
-These scripts handle dependency checks/install, TypeScript build, tests, config bootstrap, and app start.
-
-Optional script flags:
-
-- Windows: `-SkipTests`, `-BuildOnly`, `-StartOnly`
-- Linux/macOS: `--skip-tests`, `--build-only`, `--start-only`
-
-Then configure from web/CLI (no manual YAML editing required):
+Then configure from web or CLI:
 - Web: open `#/config` (Configuration Center). Telegram setup is in `Settings` -> `Telegram Channel`.
 - CLI: use `/config`, `/auth`, `/tools`, `/connectors`, and `/playbooks` commands as needed
 
@@ -250,165 +203,10 @@ Most users should configure the assistant via the web Config Center or CLI `/con
 `config.yaml` is created/updated automatically by those flows.
 Manual editing is optional and intended only for advanced troubleshooting.
 
-```yaml
-llm:
-  ollama:
-    provider: ollama
-    model: llama3.2
-  claude:
-    provider: anthropic
-    apiKey: ${ANTHROPIC_API_KEY}
-    model: claude-sonnet-4-20250514
+Configuration details are documented in:
 
-defaultProvider: ollama
-# qualityFallback: true          # Retry with external LLM when local model produces degraded responses (default: true)
-# fallbacks: [openai, anthropic]  # Explicit fallback order (auto-detected when omitted)
-
-channels:
-  cli:
-    enabled: true
-  telegram:
-    enabled: true
-    botToken: ${TELEGRAM_BOT_TOKEN}
-    allowedChatIds: [12345678]
-  web:
-    enabled: true
-    port: 3000
-    auth:
-      mode: bearer_required
-      token: ${WEB_AUTH_TOKEN}
-      rotateOnStartup: false
-      sessionTtlMinutes: 120
-
-assistant:
-  setup:
-    completed: false
-  identity:
-    mode: single_user
-    primaryUserId: owner
-  soul:
-    enabled: true
-    path: ./SOUL.md
-    primaryMode: full
-    delegatedMode: summary
-    maxChars: 8000
-    summaryMaxChars: 1000
-  memory:
-    enabled: true
-    sqlitePath: ~/.guardianagent/assistant-memory.sqlite
-    retentionDays: 30
-  analytics:
-    enabled: true
-    sqlitePath: ~/.guardianagent/assistant-analytics.sqlite
-    retentionDays: 30
-  tools:
-    enabled: true
-    policyMode: approve_by_policy
-    allowExternalPosting: false
-    allowedPaths: [./docs, ./workspace]
-    allowedCommands: [npm, node, git]
-    allowedDomains: [github.com, openai.com, anthropic.com, gmail.googleapis.com]
-    sandbox:
-      enabled: true
-      enforcementMode: strict
-    deferredLoading:
-      enabled: true
-      alwaysLoaded: [tool_search, web_search, fs_read, shell_safe, memory_search]
-    contextBudget: 80000              # max approximate tokens for tool results in context
-    providerRoutingEnabled: true         # smart LLM routing: auto-assigns local/external by category
-    providerRouting:                   # per-tool or per-category LLM provider routing overrides
-      # workspace: external            # route all workspace tool results through external LLM
-      # fs_write: external             # or route specific tools
-    toolPolicies:
-      forum_post: deny
-    search:
-      enabled: true
-      defaultMode: keyword          # keyword | semantic | hybrid
-      maxResults: 20
-      sources:
-        - id: my-notes
-          name: My Notes
-          type: directory           # directory | git | url | file
-          path: ~/Documents/notes
-          globs: ['**/*.md', '**/*.txt']
-          enabled: true
-        # - id: wiki
-        #   name: Team Wiki
-        #   type: git
-        #   path: https://github.com/org/wiki
-        #   branch: main
-        #   globs: ['**/*.md']
-        #   enabled: true
-  quickActions:
-    enabled: true
-    templates:
-      email: "Draft a concise, professional email based on these details:\n{details}"
-      task: "Turn this into a clear prioritized task list:\n{details}"
-      calendar: "Create a calendar-ready event plan from these details:\n{details}"
-  threatIntel:
-    enabled: true
-    allowDarkWeb: false
-    responseMode: assisted
-    watchlist: []
-    autoScanIntervalMinutes: 180
-    moltbook:
-      enabled: false
-      mode: mock
-      baseUrl: https://moltbook.com
-      searchPath: /api/v1/posts/search
-      requestTimeoutMs: 8000
-      maxPostsPerQuery: 20
-      maxResponseBytes: 262144
-      allowedHosts: [moltbook.com, api.moltbook.com]
-      allowActiveResponse: false
-  connectors:
-    enabled: false
-    executionMode: plan_then_execute
-    maxConnectorCallsPerRun: 12
-    packs: []
-    playbooks:
-      enabled: true
-      maxSteps: 12
-      maxParallelSteps: 3
-      defaultStepTimeoutMs: 15000
-      requireSignedDefinitions: true
-      requireDryRunOnFirstExecution: true
-    studio:
-      enabled: true
-      mode: builder
-      requirePrivilegedTicket: true
-
-guardian:
-  enabled: true
-  logDenials: true
-  inputSanitization:
-    enabled: true
-    blockThreshold: 3
-  rateLimit:
-    maxPerMinute: 30
-    maxPerHour: 500
-    burstAllowed: 5
-  piiRedaction:
-    enabled: true
-    mode: redact
-    providerScope: external
-  outputScanning:
-    enabled: true
-    redactSecrets: true
-  sentinel:
-    enabled: true
-    schedule: '*/5 * * * *'
-  auditLog:
-    maxEvents: 10000
-
-runtime:
-  agentIsolation:
-    enabled: true
-    mode: brokered
-    workerIdleTimeoutMs: 300000
-```
-
-**Prompt caching**: When using the Anthropic provider, system prompts are automatically cached using Anthropic's prompt caching feature (`cache_control: ephemeral`), reducing costs on multi-turn conversations.
+- [`docs/specs/CONFIG-CENTER-SPEC.md`](docs/specs/CONFIG-CENTER-SPEC.md)
+- [`docs/specs/SETUP-WIZARD-SPEC.md`](docs/specs/SETUP-WIZARD-SPEC.md)
 
 By default, GuardianAgent keeps tool sandboxing in `strict` mode. If a host cannot provide strong subprocess isolation, risky tool classes stay blocked until you either run on Linux/Unix with bubblewrap, or use the Windows portable app that bundles `guardian-sandbox-win.exe`. Switching to `assistant.tools.sandbox.enforcementMode: permissive` is an explicit opt-in to higher host risk.
 
@@ -418,29 +216,9 @@ Brokered agent isolation is enabled by default. On strong hosts the worker uses 
 
 1. Open Telegram, search for `@BotFather`, press **Start**, then run `/newbot`.
 2. Follow prompts for bot name and username (username must end with `bot`), then copy the bot token.
-3. Web path: `#/config` -> `Settings` -> `Telegram Channel`:
-   - enable Telegram
-   - paste bot token
-   - set allowed chat IDs (recommended)
-4. CLI path (equivalent):
-   - `/config telegram on`
-   - `/config telegram token <token>`
-   - `/config telegram chatids <id1,id2,...>`
-   - `/config telegram status`
-5. To find your `chat.id`, send one message to the bot and call:
-
-```bash
-curl "https://api.telegram.org/bot<token>/getUpdates"
-```
-
-Then copy `message.chat.id` into the allowlist. Group IDs are usually negative (often `-100...`).
-
-For approval-gated tool actions in Telegram or CLI:
-- Reply `yes` to approve all pending actions or `no` to deny all pending actions
-- Optional explicit commands: `/approve [approvalId]` or `/deny [approvalId]`
-- Approval IDs may be typed with or without square brackets
-
-Restart Guardian Agent after Telegram channel changes.
+3. Add the token in the web Configuration Center or the CLI configuration flow.
+4. Restrict access with allowed chat IDs.
+5. Restart GuardianAgent after Telegram channel changes.
 
 ## LLM Providers
 
@@ -491,106 +269,9 @@ Local operations (file reads, shell commands, network scans) are fast and don't 
 - Channel analytics and monitoring in web (Security > Monitoring tab) and CLI (`/analytics`)
 - Native document search (BM25 keyword + vector similarity) over user-defined collections — configure sources (directories, git repos, URLs, files) in web Config Center (`#/config` > Search Sources tab)
 
-### Key Commands
-
-- CLI: `/config`, `/auth`, `/tools`, `/connectors`, `/playbooks`, `/campaign`, `/assistant`, `/quick`, `/session`, `/analytics`, `/intel`, `/guide`, `/factory-reset`
-- Telegram: `/help`, `/guide`, `/reset`, `/quick`, `/intel`, `/approve`, `/deny`
-- Web: Dashboard, Security (Audit/Monitoring/Threat Intel), Network (Connectors/Devices), Automations (Catalog/Run History/Engine Settings), Configuration (Providers/Tools/Policy/Search Sources/Settings), Reference Guide, Chat
-
-### Connector + Playbook CLI (Web Parity)
-
-- Connector framework status + packs: `/connectors status`, `/connectors packs`
-- Connector settings: `/connectors settings ...` with `enable|disable`, `mode`, `limit`, `playbooks` controls, `studio` controls, and `json` bulk updates
-- Playbook controls: `/playbooks list`, `/playbooks runs`, `/playbooks run <playbookId> [--dry-run]`, `/playbooks upsert <json>`, `/playbooks delete <playbookId>`
-- Pack controls: `/connectors pack upsert <json>`, `/connectors pack delete <packId>`
-
-### Built-In Security Automation Starters
-
-- Templates:
-  - `agent-host-guard` — workstation baseline and anomaly triage playbooks
-  - `firewall-sentry` — host/gateway firewall posture and firewall-drift triage playbooks
-- Presets:
-  - `host-security-baseline`
-  - `anomaly-response-triage`
-  - `host-monitor-watch`
-  - `firewall-posture-watch`
-  - `gateway-firewall-watch`
-  - `gateway-firewall-posture`
-
-For Gmail campaign sends, provide OAuth token via `GOOGLE_OAUTH_ACCESS_TOKEN` (scope: `gmail.send`) or `accessToken` tool arg.
-
 ## Development
 
-Primary local workflow (recommended):
-
-Windows (PowerShell):
-
-```powershell
-.\scripts\start-dev-windows.ps1
-```
-
-Linux/macOS:
-
-```bash
-bash scripts/start-dev-unix.sh
-```
-
-Manual commands (advanced/troubleshooting):
-
-```bash
-npm test              # Run tests (vitest)
-npm run build         # TypeScript compilation
-npm run dev           # Run with tsx (development)
-npm start             # Run compiled (production)
-```
-
-Windows packaging:
-
-```powershell
-npm run portable:windows
-npm run package:windows
-npm run installer:windows
-npm run release:windows
-```
-
-Recommended simplest path on Windows:
-
-```powershell
-npm run portable:windows
-```
-
-That single command performs a clean packaging run (removes prior `build/windows` output), requires `guardian-sandbox-win.exe` (it will attempt a fresh helper build when no prebuilt helper is supplied), and fails if the helper is unavailable.
-
-Optional helper path override (single-script flow):
-
-```powershell
-$env:GUARDIAN_SANDBOX_HELPER = "C:\path\to\guardian-sandbox-win.exe"
-npm run portable:windows
-```
-
-Developer-only fallback (not recommended for isolation builds):
-
-```powershell
-npm run portable:windows -- -AllowNoHelper
-```
-
-Packaging assets:
-
-- `scripts/make-windows-portable.ps1`
-- `scripts/build-windows-helper.ps1`
-- `scripts/build-windows-package.ps1`
-- `scripts/build-windows-installer.ps1`
-- `scripts/build-windows-release.ps1`
-- `packaging/windows/GuardianAgent.iss`
-
-`npm run package:windows` creates a single portable zip under `build/windows/portable/`. If `guardian-sandbox-win.exe` is supplied to the packaging script, that same portable artifact can include both the runtime and the Windows sandbox helper.
-
-Portable launcher behavior:
-
-- `guardianagent.cmd` starts with `config/portable-config.yaml` by default
-- that bundled config enables Windows helper mode with `enforcementMode: strict`
-- set `GUARDIAN_CONFIG_PATH` to override the config path at launch time
-- portable packaging includes `web/public` so the local dashboard serves correctly
+For local development, packaging, and platform-specific setup, use the scripts in `scripts/` and the architecture/spec documentation linked below. The README is intentionally kept high-level.
 
 ## Architecture
 

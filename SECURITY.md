@@ -913,6 +913,24 @@ guardian:
 
 ---
 
+## Security Verification Artifacts
+
+Current verification artifacts for the claims in this document live in:
+
+- `docs/security-testing-results/README.md`
+- `docs/security-testing-results/SECURITY-CLAIM-MATRIX.md`
+- `docs/security-testing-results/SECURITY-TEST-RESULTS-2026-03-12.md`
+- `docs/security-testing-results/RELATED-TEST-SCRIPTS.md`
+
+Primary executable harnesses:
+
+- `scripts/test-security-verification.mjs`
+- `scripts/test-brokered-isolation.mjs`
+- `scripts/test-web-approvals.mjs`
+- `scripts/test-cli-approvals.mjs`
+
+---
+
 ## Extensibility
 
 ### Custom Admission Controllers
