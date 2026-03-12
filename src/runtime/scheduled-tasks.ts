@@ -12,9 +12,12 @@ import { dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { createLogger } from '../util/logging.js';
+import type { AutomationOutputHandlingConfig } from '../config/types.js';
+import type { AuditLog } from '../guardian/audit-log.js';
 import type { CronScheduler } from './scheduler.js';
 import type { EventBus, AgentEvent } from '../queue/event-bus.js';
 import type { DeviceInventoryService } from './device-inventory.js';
+import { promoteAutomationFindings, type AutomationPromotedFindingRef } from './automation-output.js';
 const log = createLogger('scheduled-tasks');
 
 // ─── Types ────────────────────────────────────────────────
@@ -36,6 +39,7 @@ export interface ScheduledTaskDefinition {
   lastRunMessage?: string;
   runCount: number;
   emitEvent?: string;
+  outputHandling?: AutomationOutputHandlingConfig;
 }
 
 export interface ScheduledTaskCreateInput {
@@ -47,6 +51,7 @@ export interface ScheduledTaskCreateInput {
   cron: string;
   enabled?: boolean;
   emitEvent?: string;
+  outputHandling?: AutomationOutputHandlingConfig;
 }
 
 export interface ScheduledTaskUpdateInput {
@@ -57,6 +62,7 @@ export interface ScheduledTaskUpdateInput {
   cron?: string;
   enabled?: boolean;
   emitEvent?: string;
+  outputHandling?: AutomationOutputHandlingConfig;
 }
 
 export interface ScheduledTaskRunResult {
@@ -65,7 +71,10 @@ export interface ScheduledTaskRunResult {
   message: string;
   durationMs: number;
   output?: unknown;
+  outputHandling?: AutomationOutputHandlingConfig;
+  promotedFindings?: AutomationPromotedFindingRef[];
   steps?: Array<{
+    stepId?: string;
     toolName: string;
     status: ScheduledTaskStatus;
     message: string;
@@ -83,6 +92,7 @@ export interface ScheduledTaskPreset {
   args?: Record<string, unknown>;
   cron: string;
   emitEvent?: string;
+  outputHandling?: AutomationOutputHandlingConfig;
 }
 
 /** Tool executor interface — matches ToolExecutor.runTool signature. */
@@ -106,7 +116,10 @@ export interface ScheduledTaskPlaybookExecutor {
     status: string;
     message: string;
     run: {
+      outputHandling?: AutomationOutputHandlingConfig;
+      promotedFindings?: AutomationPromotedFindingRef[];
       steps: Array<{
+        stepId?: string;
         toolName: string;
         status?: string;
         message?: string;
@@ -379,12 +392,14 @@ export interface ScheduledTaskServiceDeps {
   playbookExecutor: ScheduledTaskPlaybookExecutor;
   deviceInventory: DeviceInventoryService;
   eventBus: EventBus;
+  auditLog?: AuditLog;
   onNetworkScanComplete?: (meta: {
     source: 'tool' | 'playbook';
     taskId: string;
     taskName: string;
     target: string;
   }) => void | Promise<void>;
+  resolvePlaybookOutputHandling?: (playbookId: string) => AutomationOutputHandlingConfig | undefined;
   persistPath?: string;
   now?: () => number;
 }
@@ -400,6 +415,8 @@ export interface ScheduledTaskHistoryEntry {
   durationMs: number;
   message: string;
   output?: unknown;
+  outputHandling?: AutomationOutputHandlingConfig;
+  promotedFindings?: AutomationPromotedFindingRef[];
   steps?: ScheduledTaskRunResult['steps'];
 }
 
@@ -410,7 +427,9 @@ export class ScheduledTaskService {
   private readonly playbookExecutor: ScheduledTaskPlaybookExecutor;
   private readonly deviceInventory: DeviceInventoryService;
   private readonly eventBus: EventBus;
+  private readonly auditLog?: AuditLog;
   private readonly onNetworkScanComplete?: ScheduledTaskServiceDeps['onNetworkScanComplete'];
+  private readonly resolvePlaybookOutputHandling?: ScheduledTaskServiceDeps['resolvePlaybookOutputHandling'];
   private readonly persistPath: string;
   private readonly now: () => number;
   /** Run history — kept in memory, most recent first. */
@@ -423,7 +442,9 @@ export class ScheduledTaskService {
     this.playbookExecutor = deps.playbookExecutor;
     this.deviceInventory = deps.deviceInventory;
     this.eventBus = deps.eventBus;
+    this.auditLog = deps.auditLog;
     this.onNetworkScanComplete = deps.onNetworkScanComplete;
+    this.resolvePlaybookOutputHandling = deps.resolvePlaybookOutputHandling;
     this.persistPath = deps.persistPath ?? DEFAULT_PERSIST_PATH;
     this.now = deps.now ?? Date.now;
   }
@@ -488,6 +509,7 @@ export class ScheduledTaskService {
       createdAt: this.now(),
       runCount: 0,
       emitEvent: input.emitEvent?.trim() || undefined,
+      outputHandling: this.resolveOutputHandling(input),
     };
 
     if (task.presetId) {
@@ -540,6 +562,7 @@ export class ScheduledTaskService {
     if (input.cron !== undefined) task.cron = input.cron.trim();
     if (input.enabled !== undefined) task.enabled = input.enabled;
     if (input.emitEvent !== undefined) task.emitEvent = input.emitEvent?.trim() || undefined;
+    if (input.outputHandling !== undefined) task.outputHandling = input.outputHandling;
 
     if (task.presetId) {
       const preset = BUILT_IN_PRESETS.find((candidate) => candidate.id === task.presetId);
@@ -630,6 +653,8 @@ export class ScheduledTaskService {
     task.lastRunStatus = result.status;
     task.lastRunMessage = result.message;
     task.runCount++;
+    result.outputHandling = result.outputHandling ?? task.outputHandling;
+    result.promotedFindings = this.promoteRunFindings(task, result);
 
     // Record history
     this.history.unshift({
@@ -643,6 +668,8 @@ export class ScheduledTaskService {
       durationMs: result.durationMs,
       message: result.message,
       output: result.output,
+      outputHandling: result.outputHandling,
+      promotedFindings: result.promotedFindings?.map((finding) => ({ ...finding })),
       steps: result.steps?.map((step) => ({ ...step })),
     });
     if (this.history.length > this.maxHistory) {
@@ -687,7 +714,9 @@ export class ScheduledTaskService {
       message: toolResult.message,
       durationMs: 0,
       output: toolResult.output,
+      outputHandling: task.outputHandling,
       steps: [{
+        stepId: `${task.id}-step-1`,
         toolName: task.target,
         status,
         message: toolResult.message,
@@ -727,7 +756,10 @@ export class ScheduledTaskService {
       status,
       message: pbResult.message,
       durationMs: 0,
+      outputHandling: task.outputHandling ?? pbResult.run?.outputHandling,
+      promotedFindings: pbResult.run?.promotedFindings?.map((finding) => ({ ...finding })),
       steps: (pbResult.run?.steps ?? []).map((step) => ({
+        stepId: step.stepId,
         toolName: step.toolName,
         status: normalizeStepStatus(step.status),
         message: step.message ?? '',
@@ -759,6 +791,7 @@ export class ScheduledTaskService {
         status: result.status,
         message: result.message,
         durationMs: result.durationMs,
+        promotedFindings: result.promotedFindings,
       },
       timestamp: this.now(),
     };
@@ -772,6 +805,40 @@ export class ScheduledTaskService {
       };
       this.eventBus.emit(customEvent).catch(() => {});
     }
+  }
+
+  private resolveOutputHandling(
+    input: Pick<ScheduledTaskCreateInput, 'type' | 'target' | 'outputHandling'>,
+  ): AutomationOutputHandlingConfig | undefined {
+    if (input.outputHandling) return input.outputHandling;
+    if (input.type === 'playbook') {
+      return this.resolvePlaybookOutputHandling?.(input.target);
+    }
+    return undefined;
+  }
+
+  private promoteRunFindings(
+    task: ScheduledTaskDefinition,
+    result: ScheduledTaskRunResult,
+  ): AutomationPromotedFindingRef[] {
+    if (result.promotedFindings?.length) {
+      return result.promotedFindings;
+    }
+    if (!this.auditLog) return [];
+    return promoteAutomationFindings(this.auditLog, {
+      automationId: task.target,
+      automationName: task.name,
+      runId: `${task.id}:${task.lastRunAt ?? this.now()}`,
+      status: result.status,
+      message: result.message,
+      steps: result.steps,
+      outputHandling: result.outputHandling ?? task.outputHandling,
+      origin: 'scheduled-task',
+      agentId: `sched-task:${task.id}`,
+      emittedEvent: task.emitEvent,
+      target: task.target,
+      taskId: task.id,
+    });
   }
 
   // ─── Cron Registration ────────────────────────────────

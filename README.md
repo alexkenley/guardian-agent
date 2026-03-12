@@ -23,6 +23,7 @@
 ## Features
 
 - **Four-layer security defense** — proactive admission controls, inline LLM-powered action evaluation (Guardian Agent), output-time leak prevention, and Sentinel audit analysis, all mandatory at the Runtime level
+- **Brokered agent isolation by default** — the built-in chat/planner loop runs in a separate worker process with brokered tool and approval access, instead of executing the LLM/tool loop in the privileged supervisor
 - **Multi-provider LLM support** — Ollama (local), Anthropic (Claude), OpenAI (GPT), plus Groq, Mistral, DeepSeek, Together, xAI, and Google Gemini via curated ProviderRegistry — with interactive model selection, circuit breaker, automatic failover, and smart LLM routing that automatically directs tools to local or external models by category
 - **Multi-channel access** — CLI, Telegram bot, and Web UI with bearer token auth and cross-channel identity mapping
 - **Web dashboard** — real-time status, LLM providers, agent monitoring, session queue, scheduled jobs, integrated chat panel, and SSE-driven live refresh when config, automation, or network state changes
@@ -64,7 +65,11 @@
 
 ## What This Is
 
-GuardianAgent is a self-contained orchestrator for personal assistant AI. Agents are built into the system with predefined capabilities. The Runtime manages their lifecycle. The LLM output is the untrusted component, not the agent code, and all enforcement targets the data path where risk lives.
+GuardianAgent is a self-contained orchestrator for personal assistant AI. The Runtime manages agent lifecycle, admission checks, audit logging, tool execution, and approvals. The built-in chat/planner execution path runs in a brokered worker process by default.
+
+The supervisor process owns config loading, admission, audit logging, tool execution, approvals, and orchestration. The worker process owns prompt assembly, conversation-context assembly, and the LLM chat/tool loop.
+
+Structured orchestration agents execute in the supervisor process. Their sub-agent dispatches pass through `Runtime.dispatchMessage()`, which routes built-in chat-agent execution into the brokered worker path.
 
 All security enforcement is **mandatory at the Runtime level**. Agents cannot bypass it.
 
@@ -80,6 +85,8 @@ Four orchestration primitives compose sub-agents into structured workflows:
 All orchestration steps support **per-step retry** (`StepRetryPolicy` with exponential backoff) and **fail-branch** error handling (`StepFailBranch` — alternative agent invoked when a step fails all retries). Shared orchestration utilities (`executeWithRetry`, `runStepsSequentially`, `runWithConcurrencyLimit`, `prepareStepInput`, `recordStepOutput`) are extracted as reusable module-level functions.
 
 Every sub-agent dispatch passes through the full Guardian pipeline. Orchestration does not create a security bypass path. Inter-step data flows through `SharedState` — a per-invocation, orchestrator-owned key-value store that sub-agents cannot access.
+
+For built-in chat agents, that dispatch path crosses the broker boundary into the worker process before the LLM/tool loop runs.
 
 ## MCP Tool Server Integration
 
@@ -131,6 +138,7 @@ Test agent behavior through the real Runtime with Guardian active:
 
 - Layered defense lifecycle: proactive admission controls, inline LLM action evaluation (Guardian Agent), output-time leak prevention, and Sentinel audit analysis.
 - Mandatory runtime chokepoints: every message, LLM call, response, and event is mediated by Runtime enforcement (not optional agent hooks).
+- Brokered worker boundary: the default chat/planner execution loop runs in a separate worker process and reaches tools and approvals through broker RPC.
 - Prompt-injection resistance: invisible Unicode stripping plus weighted injection signal scoring before agent execution.
 - Least-privilege capability model: per-agent capability grants with immutable frozen context (`Object.freeze`).
 - Tool governance and sandboxing: approval workflows, per-tool policy overrides, path/command/domain allowlists, and risk-tiered tool classes.
@@ -157,7 +165,9 @@ The Runtime controls every chokepoint where data flows in or out of an agent:
 | Resource limits | Concurrent, queue depth, token rate, wall-clock budgets |
 | Agent context | Frozen with Object.freeze — capabilities immutable |
 
-There is no `ctx.fs`, `ctx.http`, or `ctx.exec`. The agent's only interaction points are `ctx.llm` (guarded), `ctx.emit()` (scanned), and returning a response (scanned).
+There is no `ctx.fs`, `ctx.http`, or `ctx.exec`. Framework-managed interaction points are `ctx.llm` (guarded), `ctx.emit()` (scanned), `ctx.dispatch()` (Guardian-checked per call), managed tools, and returning a response (scanned).
+
+For the built-in chat/planner path, those interactions occur inside the brokered worker process.
 
 ## Policy-as-Code Engine
 
@@ -390,11 +400,19 @@ guardian:
     schedule: '*/5 * * * *'
   auditLog:
     maxEvents: 10000
+
+runtime:
+  agentIsolation:
+    enabled: true
+    mode: brokered
+    workerIdleTimeoutMs: 300000
 ```
 
 **Prompt caching**: When using the Anthropic provider, system prompts are automatically cached using Anthropic's prompt caching feature (`cache_control: ephemeral`), reducing costs on multi-turn conversations.
 
 By default, GuardianAgent keeps tool sandboxing in `strict` mode. If a host cannot provide strong subprocess isolation, risky tool classes stay blocked until you either run on Linux/Unix with bubblewrap, or use the Windows portable app that bundles `guardian-sandbox-win.exe`. Switching to `assistant.tools.sandbox.enforcementMode: permissive` is an explicit opt-in to higher host risk.
+
+Brokered agent isolation is enabled by default. On strong hosts the worker uses the `agent-worker` sandbox profile. On degraded or unavailable hosts the worker runs as a separate brokered process with a hardened environment and dedicated workspace.
 
 ### Telegram Setup (Web + CLI)
 
@@ -569,7 +587,7 @@ Packaging assets:
 
 Portable launcher behavior:
 
-- `guardianagent.cmd` now starts with `config/portable-config.yaml` by default
+- `guardianagent.cmd` starts with `config/portable-config.yaml` by default
 - that bundled config enables Windows helper mode with `enforcementMode: strict`
 - set `GUARDIAN_CONFIG_PATH` to override the config path at launch time
 - portable packaging includes `web/public` so the local dashboard serves correctly
@@ -584,6 +602,7 @@ Full documentation in `docs/architecture/`:
 - [SOUL](SOUL.md) — non-negotiable operating intent and guardrail constitution
 
 Implementation specs in `docs/specs/`:
+- [Brokered Agent Isolation](docs/specs/BROKERED-AGENT-ISOLATION-SPEC.md)
 - [Orchestration Agents](docs/specs/ORCHESTRATION-AGENTS-SPEC.md)
 - [MCP Client](docs/specs/MCP-CLIENT-SPEC.md)
 - [Native Skills](docs/specs/SKILLS-SPEC.md) — implemented local skills foundation and prompt injection model

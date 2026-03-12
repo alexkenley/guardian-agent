@@ -1,9 +1,10 @@
 /**
- * Security page — tabbed: Audit + Monitoring + Threat Intel.
+ * Security page — overview, unified alerts, audit, and threat intel.
  */
 
 import { api } from '../api.js';
 import { createStatusCard } from '../components/status-card.js';
+import { activateContextHelp, enhanceSectionHelp, renderGuidancePanel } from '../components/context-help.js';
 import { createEventLog, appendEvent } from '../components/event-log.js';
 import { createTabs } from '../components/tabs.js';
 import { onSSE, offSSE } from '../app.js';
@@ -15,6 +16,83 @@ let monMetricsHandler = null;
 let monSecurityAlertHandler = null;
 let currentContainer = null;
 
+const SECURITY_HELP = {
+  overview: {
+    'Security Domains': {
+      whatItIs: 'This section shows where major security responsibilities live across the app.',
+      whatSeeing: 'You are seeing alert ownership, cloud ownership, network ownership, and direct links into each destination.',
+      whatCanDo: 'Use it to understand which page owns the next action before you drill further.',
+      howLinks: 'It links Security, Cloud, and Network together without duplicating their full control planes.',
+    },
+    'Recent Security Activity': {
+      whatItIs: 'This is the recent cross-domain activity feed for notable security events.',
+      whatSeeing: 'You are seeing recent high-signal audit events such as denials, anomalies, host alerts, gateway alerts, and promoted automation findings.',
+      whatCanDo: 'Scan for recent change, then move to Alerts or Audit depending on whether you need action or investigation.',
+      howLinks: 'It bridges the summary view in Overview with the deeper queues in Alerts and Audit.',
+    },
+  },
+  alerts: {
+    'Unified Alert Queue': {
+      whatItIs: 'This is the main operator queue for actionable security issues.',
+      whatSeeing: 'You are seeing normalized alerts from network, host, gateway, cloud, policy, and automation sources in one place.',
+      whatCanDo: 'Filter by source or severity, acknowledge supported alerts, and open linked automation runs when relevant.',
+      howLinks: 'Alerts is the action surface; detailed evidence and history continue to live in Audit and the originating owner pages.',
+    },
+  },
+  audit: {
+    'Audit Chain Integrity': {
+      whatItIs: 'This section verifies the tamper-evident audit chain.',
+      whatSeeing: 'You are seeing a manual integrity check for the stored audit ledger.',
+      whatCanDo: 'Run verification when you need confidence that the event history has not been altered.',
+      howLinks: 'This supports trust in the Audit tab and any downstream investigation based on those events.',
+    },
+    'Audit Log': {
+      whatItIs: 'This is the canonical historical ledger of security and policy events.',
+      whatSeeing: 'You are seeing filterable audit events with timestamps, event types, controller context, and full detail payloads.',
+      whatCanDo: 'Filter by event type, severity, or agent and expand rows for deeper investigation.',
+      howLinks: 'Audit complements Alerts by preserving full history even when an event never became an active alert.',
+    },
+    'Top Denied Agents': {
+      whatItIs: 'This is a short summary of which agents are most often blocked by policy.',
+      whatSeeing: 'You are seeing the agents with the highest denial counts over the current summary window.',
+      whatCanDo: 'Use it to identify noisy automations, misconfigured routing, or overly aggressive agent behavior.',
+      howLinks: 'It helps explain patterns you see in the Audit log and policy-related alerts.',
+    },
+  },
+  intel: {
+    'Operations Configuration': {
+      whatItIs: 'This section summarizes the active threat-intel operating mode.',
+      whatSeeing: 'You are seeing response mode, darkweb status, and forum connector posture.',
+      whatCanDo: 'Refresh the page and confirm how aggressive the threat-intel workflow is configured to be.',
+      howLinks: 'It provides the policy context for the watchlist, findings, and drafted actions below.',
+    },
+    Watchlist: {
+      whatItIs: 'This is the set of monitored targets for threat-intel scanning.',
+      whatSeeing: 'You are seeing people, handles, brands, domains, or phrases currently under watch.',
+      whatCanDo: 'Review coverage and confirm the monitored set before interpreting findings.',
+      howLinks: 'Watchlist entries feed the Findings and Drafted Actions sections.',
+    },
+    Findings: {
+      whatItIs: 'This section contains the current threat-intel detections.',
+      whatSeeing: 'You are seeing findings with severity, confidence, status, and action shortcuts.',
+      whatCanDo: 'Triages findings, update their status, and draft follow-up actions.',
+      howLinks: 'Findings drive drafted actions and inform the operating plan.',
+    },
+    'Drafted Actions': {
+      whatItIs: 'This is the queue of generated follow-up actions for threat-intel findings.',
+      whatSeeing: 'You are seeing response, reporting, or takedown drafts along with approval posture.',
+      whatCanDo: 'Review what actions have been drafted and whether they need approval.',
+      howLinks: 'These actions are downstream of Findings and should be evaluated against the Operating Plan.',
+    },
+    'Operating Plan': {
+      whatItIs: 'This section outlines the current phased response plan for threat-intel work.',
+      whatSeeing: 'You are seeing the plan title, objectives, and deliverables by phase.',
+      whatCanDo: 'Use it to align triage and response work with the intended operating sequence.',
+      howLinks: 'It gives broader context for how Watchlist items, Findings, and Actions should be handled.',
+    },
+  },
+};
+
 function cleanupSSE() {
   if (auditHandler) { offSSE('audit', auditHandler); auditHandler = null; }
   if (monAuditHandler) { offSSE('audit', monAuditHandler); monAuditHandler = null; }
@@ -25,20 +103,310 @@ function cleanupSSE() {
 export async function renderSecurity(container, options = {}) {
   currentContainer = container;
   cleanupSSE();
-  container.innerHTML = '<h2 class="page-title">Security</h2>';
+  container.innerHTML = `
+    <h2 class="page-title">Security</h2>
+    ${renderGuidancePanel({
+      kicker: 'Security Guide',
+      title: 'Investigation, triage, and evidence',
+      whatItIs: 'Security is the canonical home for alert triage, audit review, and threat-intel investigation.',
+      whatSeeing: 'You are seeing tabs for posture overview, the active alert queue, the historical audit ledger, and threat-intel operations.',
+      whatCanDo: 'Use Alerts for action now, Audit for full history and verification, Overview for posture, and Threat Intel for monitoring and response planning.',
+      howLinks: 'Security receives normalized signals from Network, Cloud, policy, and automations, while deep operational edits stay on the owner pages.',
+    })}
+  `;
 
   createTabs(container, [
+    { id: 'overview', label: 'Overview', render: renderOverviewTab },
+    { id: 'alerts', label: 'Alerts', render: renderAlertsTab },
     { id: 'audit', label: 'Audit', render: renderAuditTab },
-    { id: 'monitoring', label: 'Monitoring', render: renderMonitoringTab },
-    { id: 'cloud', label: 'Cloud', render: renderCloudTab },
     { id: 'intel', label: 'Threat Intel', render: renderIntelTab },
-  ], options?.tab);
+  ], normalizeSecurityTab(options?.tab));
 }
 
 export async function updateSecurity() {
   if (!currentContainer) return;
   const activeTab = currentContainer.dataset.activeTab;
   await renderSecurity(currentContainer, activeTab ? { tab: activeTab } : {});
+}
+
+function normalizeSecurityTab(tab) {
+  if (tab === 'monitoring') return 'overview';
+  if (tab === 'cloud') return 'overview';
+  return tab || 'overview';
+}
+
+async function renderOverviewTab(panel) {
+  panel.innerHTML = '<div class="loading">Loading...</div>';
+
+  try {
+    const [networkThreats, hostAlerts, gatewayAlerts, config, auditEvents] = await Promise.all([
+      api.networkThreats({ limit: 20 }).catch(() => ({ alerts: [], activeAlertCount: 0, bySeverity: { critical: 0, high: 0, medium: 0, low: 0 } })),
+      api.hostMonitorAlerts({ limit: 20 }).catch(() => ({ alerts: [], activeAlertCount: 0, bySeverity: { critical: 0, high: 0, medium: 0, low: 0 } })),
+      api.gatewayMonitorAlerts({ limit: 20 }).catch(() => ({ alerts: [], activeAlertCount: 0, bySeverity: { critical: 0, high: 0, medium: 0, low: 0 } })),
+      api.config().catch(() => ({})),
+      api.audit({ limit: 100 }).catch(() => []),
+    ]);
+
+    const cloud = config?.assistant?.tools?.cloud || { profileCounts: { total: 0 }, enabled: false };
+    const cloudEvents = (auditEvents || []).filter(isCloudAuditEvent);
+    const notableAudit = (auditEvents || [])
+      .filter((event) => ['action_denied', 'secret_detected', 'anomaly_detected', 'host_alert', 'gateway_alert', 'automation_finding'].includes(event.type))
+      .slice(0, 12);
+
+    panel.innerHTML = `
+      ${renderGuidancePanel({
+        kicker: 'Overview',
+        compact: true,
+        whatItIs: 'Overview is the posture summary for the major security domains.',
+        whatSeeing: 'You are seeing high-level counts for network, host, gateway, and cloud-adjacent activity plus a short security activity feed.',
+        whatCanDo: 'Use it to decide whether to move into Alerts for triage or Audit for detail.',
+        howLinks: 'This tab summarizes domain state without replacing the owner queues in Alerts, Cloud, or Network.',
+      })}
+      <div class="intel-summary-grid">
+        <div class="status-card ${networkThreats.activeAlertCount > 0 ? 'warning' : 'success'}">
+          <div class="card-title">Network Alerts</div>
+          <div class="card-value">${networkThreats.activeAlertCount || 0}</div>
+          <div class="card-subtitle">${networkThreats.bySeverity?.critical || 0} critical</div>
+        </div>
+        <div class="status-card ${hostAlerts.activeAlertCount > 0 ? 'warning' : 'success'}">
+          <div class="card-title">Host Alerts</div>
+          <div class="card-value">${hostAlerts.activeAlertCount || 0}</div>
+          <div class="card-subtitle">${hostAlerts.bySeverity?.critical || 0} critical</div>
+        </div>
+        <div class="status-card ${gatewayAlerts.activeAlertCount > 0 ? 'warning' : 'success'}">
+          <div class="card-title">Gateway Alerts</div>
+          <div class="card-value">${gatewayAlerts.activeAlertCount || 0}</div>
+          <div class="card-subtitle">${gatewayAlerts.bySeverity?.critical || 0} critical</div>
+        </div>
+        <div class="status-card ${cloudEvents.length > 0 ? 'info' : 'accent'}">
+          <div class="card-title">Cloud Activity</div>
+          <div class="card-value">${cloudEvents.length}</div>
+          <div class="card-subtitle">${cloud.profileCounts?.total || 0} cloud profiles</div>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <div class="table-header"><h3>Security Domains</h3></div>
+        <table>
+          <thead><tr><th>Domain</th><th>Current State</th><th>Owner</th><th>Next Action</th></tr></thead>
+          <tbody>
+            <tr><td>Alerts</td><td>${(networkThreats.activeAlertCount || 0) + (hostAlerts.activeAlertCount || 0) + (gatewayAlerts.activeAlertCount || 0)} active</td><td>Security</td><td><a href="#/security?tab=alerts">Open unified alert queue</a></td></tr>
+            <tr><td>Cloud</td><td>${cloud.enabled ? 'Enabled' : 'Disabled'} · ${cloud.profileCounts?.total || 0} profiles</td><td>Cloud</td><td><a href="#/cloud">Open cloud hub</a></td></tr>
+            <tr><td>Network Operations</td><td>${networkThreats.activeAlertCount || 0} alerts</td><td>Network</td><td><a href="#/network">Open network tools</a></td></tr>
+            <tr><td>Threat Intel</td><td>Watchlist and findings available</td><td>Security</td><td><a href="#/security?tab=intel">Open threat intel</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="table-container">
+        <div class="table-header"><h3>Recent Security Activity</h3></div>
+        <table>
+          <thead><tr><th>Time</th><th>Type</th><th>Severity</th><th>Source</th><th>Detail</th></tr></thead>
+          <tbody>
+            ${notableAudit.length === 0
+              ? '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No recent security activity.</td></tr>'
+              : notableAudit.map((event) => `
+                <tr>
+                  <td>${new Date(event.timestamp).toLocaleTimeString()}</td>
+                  <td>${esc(event.type)}</td>
+                  <td><span class="badge ${auditSeverityClass(event.severity)}">${esc(event.severity)}</span></td>
+                  <td>${esc(event.details?.source || event.details?.toolName || event.controller || '-')}</td>
+                  <td>${esc(event.details?.description || event.details?.reason || '-')}</td>
+                </tr>
+              `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+    enhanceSectionHelp(panel, SECURITY_HELP.overview, createGenericHelpFactory('Security Overview'));
+    activateContextHelp(panel);
+  } catch (err) {
+    panel.innerHTML = `<div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
+  }
+}
+
+async function renderAlertsTab(panel) {
+  panel.innerHTML = '<div class="loading">Loading...</div>';
+
+  try {
+    const [networkThreats, hostAlerts, gatewayAlerts, auditEvents] = await Promise.all([
+      api.networkThreats({ limit: 100 }).catch(() => ({ alerts: [] })),
+      api.hostMonitorAlerts({ limit: 100 }).catch(() => ({ alerts: [] })),
+      api.gatewayMonitorAlerts({ limit: 100 }).catch(() => ({ alerts: [] })),
+      api.audit({ limit: 200 }).catch(() => []),
+    ]);
+
+    const rows = [
+      ...(networkThreats.alerts || []).map((alert) => ({
+        id: alert.id,
+        source: 'network',
+        timestamp: alert.lastSeenAt || alert.timestamp || Date.now(),
+        severity: mapNetworkSeverityToAudit(alert.severity),
+        title: alert.type,
+        subject: alert.ip || alert.mac || '-',
+        detail: alert.description || '-',
+        ackType: 'network',
+      })),
+      ...(hostAlerts.alerts || []).map((alert) => ({
+        id: alert.id,
+        source: 'host',
+        timestamp: alert.lastSeenAt || alert.timestamp || Date.now(),
+        severity: mapNetworkSeverityToAudit(alert.severity),
+        title: alert.type,
+        subject: alert.evidence?.path || alert.evidence?.name || alert.evidence?.remoteAddress || '-',
+        detail: alert.description || '-',
+        ackType: 'host',
+      })),
+      ...(gatewayAlerts.alerts || []).map((alert) => ({
+        id: alert.id,
+        source: 'gateway',
+        timestamp: alert.lastSeenAt || alert.timestamp || Date.now(),
+        severity: mapNetworkSeverityToAudit(alert.severity),
+        title: alert.type,
+        subject: alert.targetName || alert.targetId || '-',
+        detail: alert.description || '-',
+        ackType: 'gateway',
+      })),
+      ...(auditEvents || [])
+        .filter((event) => isCloudAuditEvent(event))
+        .map((event) => ({
+          id: `cloud-${event.timestamp}-${event.type}`,
+          source: 'cloud',
+          timestamp: event.timestamp,
+          severity: event.severity || 'info',
+          title: event.type,
+          subject: event.details?.toolName || '-',
+          detail: event.details?.reason || event.details?.source || '-',
+          ackType: '',
+        })),
+      ...(auditEvents || [])
+        .filter((event) => ['action_denied', 'secret_detected', 'policy_changed', 'anomaly_detected'].includes(event.type))
+        .map((event) => ({
+          id: `policy-${event.timestamp}-${event.type}`,
+          source: 'tool/policy',
+          timestamp: event.timestamp,
+          severity: event.severity || 'info',
+          title: event.type,
+          subject: event.details?.toolName || event.agentId || '-',
+          detail: event.details?.reason || event.details?.description || '-',
+          ackType: '',
+        })),
+      ...(auditEvents || [])
+        .filter((event) => isAutomationAuditEvent(event))
+        .map((event) => ({
+          id: event.id || `automation-${event.timestamp}`,
+          source: 'automation',
+          timestamp: event.timestamp,
+          severity: event.severity || 'info',
+          title: event.details?.title || 'Automation finding',
+          subject: event.details?.automationName || event.details?.automationId || '-',
+          detail: event.details?.description || '-',
+          ackType: '',
+          href: event.details?.runLink || '',
+          actionLabel: 'Open run',
+        })),
+    ]
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, 200);
+
+    panel.innerHTML = `
+      ${renderGuidancePanel({
+        kicker: 'Alerts',
+        compact: true,
+        whatItIs: 'Alerts is the active queue for security items that may need operator action.',
+        whatSeeing: 'You are seeing normalized alert rows from multiple sources with shared filtering.',
+        whatCanDo: 'Filter, acknowledge supported alerts, and follow linked rows back to the originating run or owner system.',
+        howLinks: 'This is the action queue, while Audit remains the durable ledger of everything that happened.',
+      })}
+      <div class="filters">
+        <label>Source:</label>
+        <select id="security-alert-source">
+          <option value="">All</option>
+          <option value="network">Network</option>
+          <option value="host">Host</option>
+          <option value="gateway">Gateway</option>
+          <option value="cloud">Cloud</option>
+          <option value="tool/policy">Tool/Policy</option>
+          <option value="automation">Automation</option>
+        </select>
+        <label>Severity:</label>
+        <select id="security-alert-severity">
+          <option value="">All</option>
+          <option value="critical">Critical</option>
+          <option value="warn">Warn</option>
+          <option value="info">Info</option>
+        </select>
+        <button class="btn btn-secondary" id="security-alert-refresh">Refresh</button>
+      </div>
+
+      <div class="table-container">
+        <div class="table-header"><h3>Unified Alert Queue</h3></div>
+        <table>
+          <thead><tr><th>Time</th><th>Source</th><th>Title</th><th>Severity</th><th>Subject</th><th>Detail</th><th>Action</th></tr></thead>
+          <tbody id="security-alerts-body"></tbody>
+        </table>
+      </div>
+    `;
+
+    const bodyEl = panel.querySelector('#security-alerts-body');
+    const sourceEl = panel.querySelector('#security-alert-source');
+    const severityEl = panel.querySelector('#security-alert-severity');
+
+    const renderRows = () => {
+      const source = sourceEl?.value || '';
+      const severity = severityEl?.value || '';
+      const filtered = rows.filter((row) => (!source || row.source === source) && (!severity || row.severity === severity));
+      bodyEl.innerHTML = filtered.length === 0
+        ? '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No alerts match the current filters.</td></tr>'
+        : filtered.map((row) => `
+          <tr>
+            <td>${new Date(row.timestamp).toLocaleTimeString()}</td>
+            <td>${esc(row.source)}</td>
+            <td>${esc(row.title)}</td>
+            <td><span class="badge ${auditSeverityClass(row.severity)}">${esc(row.severity)}</span></td>
+            <td>${esc(row.subject)}</td>
+            <td title="${escAttr(row.detail)}">${esc(row.detail)}</td>
+            <td>
+              ${row.ackType
+                ? `<button class="btn btn-secondary btn-sm security-alert-ack" data-alert-id="${escAttr(row.id)}" data-ack-type="${escAttr(row.ackType)}">Acknowledge</button>`
+                : row.href
+                  ? `<a class="btn btn-secondary btn-sm" href="${escAttr(row.href)}">${esc(row.actionLabel || 'Open')}</a>`
+                : '<span style="color:var(--text-muted)">Audit only</span>'}
+            </td>
+          </tr>
+        `).join('');
+    };
+
+    renderRows();
+
+    sourceEl?.addEventListener('change', renderRows);
+    severityEl?.addEventListener('change', renderRows);
+    panel.querySelector('#security-alert-refresh')?.addEventListener('click', () => renderAlertsTab(panel));
+    applyInputTooltips(panel);
+    enhanceSectionHelp(panel, SECURITY_HELP.alerts, createGenericHelpFactory('Security Alerts'));
+    activateContextHelp(panel);
+
+    bodyEl.addEventListener('click', async (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const button = target.closest('.security-alert-ack');
+      if (!(button instanceof HTMLElement)) return;
+      const alertId = button.getAttribute('data-alert-id');
+      const ackType = button.getAttribute('data-ack-type');
+      if (!alertId || !ackType) return;
+      button.setAttribute('disabled', 'true');
+      try {
+        if (ackType === 'network') await api.acknowledgeNetworkThreat(alertId);
+        else if (ackType === 'host') await api.acknowledgeHostMonitorAlert(alertId);
+        else if (ackType === 'gateway') await api.acknowledgeGatewayMonitorAlert(alertId);
+        await renderAlertsTab(panel);
+      } catch {
+        button.removeAttribute('disabled');
+      }
+    });
+  } catch (err) {
+    panel.innerHTML = `<div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
+  }
 }
 
 // ─── Audit Tab ────────────────────────────────────────────
@@ -48,7 +416,14 @@ async function renderAuditTab(panel) {
 
   try {
     const summary = await api.auditSummary(300000);
-    panel.innerHTML = '';
+    panel.innerHTML = renderGuidancePanel({
+      kicker: 'Audit',
+      compact: true,
+      whatItIs: 'Audit is the full historical ledger for security, policy, and promoted automation events.',
+      whatSeeing: 'You are seeing summary cards, chain verification, a filterable event log, and denial summaries.',
+      whatCanDo: 'Use it to verify integrity, investigate what happened, and review the evidence behind alerts or policy decisions.',
+      howLinks: 'Audit preserves full context for current alerts and for events that never surfaced in the active alert queue.',
+    });
 
     // Summary cards
     const grid = document.createElement('div');
@@ -114,6 +489,7 @@ async function renderAuditTab(panel) {
         <option value="gateway_alert">gateway_alert</option>
         <option value="agent_error">agent_error</option>
         <option value="agent_stalled">agent_stalled</option>
+        <option value="automation_finding">automation_finding</option>
       </select>
       <label>Severity:</label>
       <select id="filter-severity">
@@ -162,6 +538,8 @@ async function renderAuditTab(panel) {
     await loadAuditEvents();
     panel.querySelector('#filter-apply')?.addEventListener('click', loadAuditEvents);
     applyInputTooltips(panel);
+    enhanceSectionHelp(panel, SECURITY_HELP.audit, createGenericHelpFactory('Security Audit'));
+    activateContextHelp(panel);
 
     // Top denied agents
     if (summary.topDeniedAgents.length > 0) {
@@ -934,6 +1312,14 @@ async function renderCloudTab(panel) {
     const deniedCount = cloudEvents.filter((event) => event.type === 'action_denied').length;
 
     panel.innerHTML = `
+      ${renderGuidancePanel({
+        kicker: 'Threat Intel',
+        compact: true,
+        whatItIs: 'Threat Intel is the monitored-target and response-planning workspace.',
+        whatSeeing: 'You are seeing watch targets, findings, drafted actions, and the current operating plan.',
+        whatCanDo: 'Review monitored targets, update finding status, and generate follow-up actions from detections.',
+        howLinks: 'This tab is separate from the alert queue because it handles longer-running monitoring and response workflows.',
+      })}
       <div class="intel-summary-grid">
         <div class="status-card ${cloud.enabled ? 'success' : 'error'}">
           <div class="card-title">Cloud Controls</div>
@@ -1186,6 +1572,8 @@ async function renderIntelTab(panel) {
     });
 
     applyInputTooltips(panel);
+    enhanceSectionHelp(panel, SECURITY_HELP.intel, createGenericHelpFactory('Threat Intel'));
+    activateContextHelp(panel);
   } catch (err) {
     panel.innerHTML = `<div class="loading">Error: ${esc(err.message)}</div>`;
   }
@@ -1202,6 +1590,15 @@ function severityClass(severity) {
   if (severity === 'high') return 'badge-errored';
   if (severity === 'medium') return 'badge-warn';
   return 'badge-info';
+}
+
+function createGenericHelpFactory(area) {
+  return (title) => ({
+    whatItIs: `${title} is part of ${area}.`,
+    whatSeeing: 'You are seeing the current data, controls, or actions available in this section.',
+    whatCanDo: 'Review the current state here and use the controls or links in the section when you need to act.',
+    howLinks: `This section supports the broader ${area} workflow and links outward to related owner pages when deeper work is needed.`,
+  });
 }
 
 function mapNetworkSeverityToAudit(severity) {
@@ -1231,6 +1628,11 @@ function isCloudAuditEvent(event) {
     || source.includes('tool:vercel_')
     || source.includes('tool:cpanel_')
     || source.includes('tool:whm_');
+}
+
+function isAutomationAuditEvent(event) {
+  if (event?.type !== 'automation_finding') return false;
+  return event?.details?.automationDisposition?.sendToSecurity === true;
 }
 
 function esc(str) {

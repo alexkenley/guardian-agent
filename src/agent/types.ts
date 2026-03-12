@@ -102,7 +102,7 @@ export interface Agent {
   /** Called when the agent is stopped. */
   onStop?(): Promise<void>;
   /** Called when the agent receives a user message. */
-  onMessage?(message: UserMessage, ctx: AgentContext): Promise<AgentResponse>;
+  onMessage?(message: UserMessage, ctx: AgentContext, workerManager?: import('../supervisor/worker-manager.js').WorkerManager): Promise<AgentResponse>;
   /** Called when the agent receives an event. */
   onEvent?(event: AgentEvent, ctx: AgentContext): Promise<void>;
   /** Called on a cron schedule. */

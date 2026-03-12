@@ -59,6 +59,7 @@ import { AssistantOrchestrator } from './runtime/orchestrator.js';
 import { AgentMemoryStore } from './runtime/agent-memory-store.js';
 import { AssistantJobTracker } from './runtime/assistant-jobs.js';
 import { NotificationService } from './runtime/notifications.js';
+import { promoteAutomationFindings } from './runtime/automation-output.js';
 import { buildGmailRawMessage, parseDirectGmailWriteIntent } from './runtime/gmail-compose.js';
 import { parseDirectFileSearchIntent } from './runtime/search-intent.js';
 import { GWSService } from './runtime/gws-service.js';
@@ -80,6 +81,7 @@ import { SkillRegistry } from './skills/registry.js';
 import { SkillResolver } from './skills/resolver.js';
 import type { ResolvedSkill } from './skills/types.js';
 import { resolveRuntimeCredentialView } from './runtime/credentials.js';
+import { WorkerManager } from './supervisor/worker-manager.js';
 import { formatPendingApprovalMessage, shouldUseStructuredPendingApprovalMessage } from './runtime/pending-approval-copy.js';
 
 const log = createLogger('main');
@@ -495,7 +497,52 @@ class ChatAgent extends BaseAgent {
     }
   }
 
-  async onMessage(message: UserMessage, ctx: AgentContext): Promise<AgentResponse> {
+  async onMessage(message: UserMessage, ctx: AgentContext, workerManager?: WorkerManager): Promise<AgentResponse> {
+    if (workerManager) {
+      try {
+        const activeSkills = this.skillResolver?.resolve({
+          agentId: this.id,
+          channel: message.channel,
+          requestType: 'chat',
+          content: message.content,
+          enabledManagedProviders: this.enabledManagedProviders,
+        }) ?? [];
+        const knowledgeBase = this.memoryStore?.loadForContext(this.id) ?? '';
+        const history = this.conversationService?.getHistoryForContext({
+          agentId: this.id,
+          userId: message.userId,
+          channel: message.channel,
+        }) ?? [];
+        const result = await workerManager.handleMessage({
+          sessionId: `${message.userId}:${message.channel}`,
+          agentId: this.id,
+          userId: message.userId,
+          grantedCapabilities: [...ctx.capabilities],
+          message,
+          systemPrompt: this.systemPrompt,
+          history,
+          knowledgeBase,
+          activeSkills,
+          toolContext: this.tools?.getToolContext() ?? '',
+          runtimeNotices: this.tools?.getRuntimeNotices() ?? [],
+        });
+        if (this.conversationService) {
+          this.conversationService.recordTurn(
+            { agentId: this.id, userId: message.userId, channel: message.channel },
+            message.content,
+            result.content,
+          );
+        }
+        return {
+          content: result.content,
+          metadata: result.metadata,
+        };
+      } catch (error) {
+        log.error({ agent: this.id, error: error instanceof Error ? error.stack ?? error.message : String(error) }, 'Brokered message execution failed');
+        throw error;
+      }
+    }
+
     if (!ctx.llm) {
       return { content: 'No LLM provider configured.' };
     }
@@ -3662,7 +3709,6 @@ function buildDashboardCallbacks(
         connectors.updateConfig(before);
         return persisted;
       }
-
       analytics.track({
         type: 'playbook_upserted',
         channel: 'system',
@@ -6042,6 +6088,14 @@ async function main(): Promise<void> {
   };
 
   const toolExecutor = new ToolExecutor(toolExecutorOptions);
+
+  runtime.workerManager = new WorkerManager(
+    toolExecutor,
+    runtime,
+    config.runtime.agentIsolation,
+    DEFAULT_SANDBOX_CONFIG,
+  );
+
   const initialSearchReload = await initialSearchReloadRef.current();
   if (!initialSearchReload.success) {
     console.error(initialSearchReload.message);
@@ -6052,6 +6106,10 @@ async function main(): Promise<void> {
     runTool: async (request) => toolExecutor.runTool(request),
   });
 
+  const getPlaybookOutputHandling = (playbookId: string) => (
+    connectors.getState().playbooks.find((playbook) => playbook.id === playbookId)?.outputHandling
+  );
+
   // Scheduled tasks — unified scheduling for tools and playbooks
   const scheduledTasks = new ScheduledTaskService({
     scheduler: runtime.scheduler,
@@ -6059,6 +6117,8 @@ async function main(): Promise<void> {
     playbookExecutor: connectors,
     deviceInventory,
     eventBus: runtime.eventBus,
+    auditLog: runtime.auditLog,
+    resolvePlaybookOutputHandling: getPlaybookOutputHandling,
     onNetworkScanComplete: () => {
       runNetworkAnalysis('scheduled-task');
     },
@@ -6073,6 +6133,50 @@ async function main(): Promise<void> {
   // Auto-install all connector templates if no packs exist yet
   if (connectors.getState().packs.length === 0) {
     autoInstallAllTemplates(connectors);
+  }
+
+  function syncPlaybookOutputHandlingToSchedules(playbookId: string): void {
+    const outputHandling = getPlaybookOutputHandling(playbookId);
+    for (const task of scheduledTasks.list()) {
+      if (task.type !== 'playbook' || task.target !== playbookId) continue;
+      scheduledTasks.update(task.id, { outputHandling });
+    }
+  }
+
+  function attachPlaybookPromotions(result: {
+    run?: {
+      id: string;
+      playbookId: string;
+      playbookName: string;
+      status: string;
+      message: string;
+      steps: Array<{ stepId?: string; toolName: string; status?: string; message?: string; output?: unknown }>;
+      outputHandling?: unknown;
+      promotedFindings?: unknown;
+    };
+  }, input: {
+    playbookId: string;
+    origin?: 'assistant' | 'cli' | 'web';
+    agentId?: string;
+    userId?: string;
+    channel?: string;
+  }): void {
+    if (!result.run) return;
+    result.run.outputHandling = getPlaybookOutputHandling(input.playbookId);
+    result.run.promotedFindings = promoteAutomationFindings(runtime.auditLog, {
+      automationId: result.run.playbookId,
+      automationName: result.run.playbookName,
+      runId: result.run.id,
+      status: result.run.status,
+      message: result.run.message,
+      steps: result.run.steps,
+      outputHandling: getPlaybookOutputHandling(input.playbookId),
+      origin: input.origin,
+      agentId: input.agentId,
+      userId: input.userId,
+      channel: input.channel,
+      runLink: `#/automations?runId=${encodeURIComponent(result.run.id)}`,
+    });
   }
 
   const configuredToken = config.channels.web?.auth?.token?.trim() || config.channels.web?.authToken?.trim();
@@ -6639,13 +6743,27 @@ async function main(): Promise<void> {
     policyState,
   );
 
-  reloadSearchRef.current = initialSearchReloadRef.current;
+  const basePlaybookUpsert = dashboardCallbacks.onPlaybookUpsert;
+  if (basePlaybookUpsert) {
+    dashboardCallbacks.onPlaybookUpsert = (playbook) => {
+      const result = basePlaybookUpsert(playbook);
+      if (result.success) {
+        syncPlaybookOutputHandlingToSchedules(playbook.id);
+      }
+      return result;
+    };
+  }
 
-  // Killswitch: triggers graceful shutdown from CLI or web
-  dashboardCallbacks.onKillswitch = () => {
-    log.warn('Killswitch activated — shutting down all services');
-    process.kill(process.pid, 'SIGTERM');
-  };
+  const basePlaybookRun = dashboardCallbacks.onPlaybookRun;
+  if (basePlaybookRun) {
+    dashboardCallbacks.onPlaybookRun = async (input) => {
+      const result = await basePlaybookRun(input);
+      attachPlaybookPromotions(result, input);
+      return result;
+    };
+  }
+
+  reloadSearchRef.current = initialSearchReloadRef.current;
 
   // Factory reset: bulk-clear data, config, or both
   dashboardCallbacks.onFactoryReset = async ({ scope }) => {
@@ -6760,6 +6878,7 @@ async function main(): Promise<void> {
       mode: workflow.mode,
       description: workflow.description,
       schedule: workflow.schedule,
+      outputHandling: workflow.outputHandling,
       steps: workflow.steps.map((step) => ({ ...step })),
     })),
     upsertWorkflow: (workflow) => {
@@ -7277,7 +7396,14 @@ async function main(): Promise<void> {
     conversations.close();
     analytics.close();
 
+    clearTimeout(forceExitTimer);
     process.exit(0);
+  };
+
+  // Killswitch: triggers graceful shutdown from CLI or web
+  dashboardCallbacks.onKillswitch = () => {
+    log.warn('Killswitch activated — shutting down all services');
+    void shutdown('KILLSWITCH');
   };
 
   process.on('SIGINT', () => shutdown('SIGINT'));

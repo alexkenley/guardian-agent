@@ -12,7 +12,7 @@ function makeConfig(overrides?: Partial<AssistantNotificationsConfig>): Assistan
   return {
     enabled: true,
     minSeverity: 'warn',
-    auditEventTypes: ['anomaly_detected', 'action_denied', 'secret_detected'],
+    auditEventTypes: ['anomaly_detected', 'action_denied', 'secret_detected', 'automation_finding'],
     suppressedDetailTypes: [],
     cooldownMs: 60_000,
     deliveryMode: 'selected',
@@ -181,6 +181,53 @@ describe('NotificationService', () => {
     expect(vi.mocked(eventBus.emit)).toHaveBeenCalledTimes(1);
     expect(sendCli).toHaveBeenCalledTimes(1);
     expect(sendTelegram).toHaveBeenCalledTimes(1);
+  });
+
+  it('notifies only when automation findings explicitly opt into notifications', async () => {
+    const auditLog = new AuditLog();
+    const eventBus = { emit: vi.fn().mockResolvedValue(true) } as unknown as EventBus;
+    const sendCli = vi.fn().mockResolvedValue(undefined);
+    const service = new NotificationService({
+      config: makeConfig(),
+      auditLog,
+      eventBus,
+      senders: { sendCli },
+    });
+
+    service.start();
+    auditLog.record({
+      type: 'automation_finding',
+      severity: 'warn',
+      agentId: 'automation:cloud-drift',
+      details: {
+        automationName: 'Cloud Drift Check',
+        description: 'DNS drift detected',
+        automationDisposition: {
+          notify: false,
+          sendToSecurity: true,
+        },
+      },
+    });
+    await flushAsyncWork();
+
+    expect(sendCli).not.toHaveBeenCalled();
+
+    auditLog.record({
+      type: 'automation_finding',
+      severity: 'warn',
+      agentId: 'automation:cloud-drift',
+      details: {
+        automationName: 'Cloud Drift Check',
+        description: 'DNS drift detected',
+        automationDisposition: {
+          notify: true,
+          sendToSecurity: true,
+        },
+      },
+    });
+    await flushAsyncWork();
+
+    expect(sendCli).toHaveBeenCalledTimes(1);
   });
 
   it('formats readable notification text', () => {

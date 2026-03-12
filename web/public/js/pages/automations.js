@@ -6,12 +6,48 @@
  */
 
 import { api } from '../api.js';
+import { activateContextHelp, enhanceSectionHelp, renderGuidancePanel } from '../components/context-help.js';
 import { applyInputTooltips } from '../tooltip.js';
 
 let currentContainer = null;
 const automationUiState = {
   clonePlacement: null,
 };
+
+const AUTOMATION_HELP = {
+  'Automation Catalog': {
+    whatItIs: 'This is the main catalog of saved automations and schedules.',
+    whatSeeing: 'You are seeing automation definitions, their type, linked tools, schedule state, and available actions.',
+    whatCanDo: 'Create new automations, edit existing ones, run them, or review their scheduling posture.',
+    howLinks: 'This is the canonical home for workflow editing and schedule ownership; filtered entry points from Cloud and Network should land here.',
+  },
+  'Run History': {
+    whatItIs: 'This section records recent automation and scheduled-task executions.',
+    whatSeeing: 'You are seeing recent runs with status, source, duration, and expandable detail output.',
+    whatCanDo: 'Inspect what happened during a run, including step output and any promoted findings.',
+    howLinks: 'Run output remains visible here even when notifications or Security findings were also generated.',
+  },
+  'Engine Settings': {
+    whatItIs: 'This section contains runtime-level automation engine controls.',
+    whatSeeing: 'You are seeing the collapsible engine configuration area rather than a second catalog or history view.',
+    whatCanDo: 'Review or adjust how the automation engine operates without leaving the Automations page.',
+    howLinks: 'These settings affect how catalog items run, but they do not replace per-automation editing above.',
+  },
+};
+
+function normalizeOutputHandling(outputHandling) {
+  return {
+    notify: outputHandling?.notify || 'off',
+    sendToSecurity: outputHandling?.sendToSecurity || 'off',
+    persistArtifacts: outputHandling?.persistArtifacts || 'run_history_only',
+  };
+}
+
+function getRequestedRunId() {
+  const raw = window.location.hash || '';
+  const [, query = ''] = raw.split('?');
+  return new URLSearchParams(query).get('runId') || '';
+}
 
 // ─── Public API ───────────────────────────────────────────
 
@@ -46,6 +82,14 @@ export async function renderAutomations(container) {
 
     container.innerHTML = `
       <h2 class="page-title">Automations</h2>
+      ${renderGuidancePanel({
+        kicker: 'Automation Guide',
+        title: 'Workflows, schedules, runs, and output routing',
+        whatItIs: 'Automations is the single home for creating, scheduling, running, and reviewing workflows.',
+        whatSeeing: 'You are seeing the automation catalog, recent run history, engine status, and automation-level controls.',
+        whatCanDo: 'Create or edit workflows, run them manually, review history, and control how findings route into notifications or Security.',
+        howLinks: 'Other pages can launch or filter into automations, but workflow ownership, schedule ownership, and run output all stay here.',
+      })}
 
       <div class="intel-summary-grid">
         <div class="status-card ${summary.enabled ? 'success' : 'warning'}">
@@ -127,7 +171,10 @@ export async function renderAutomations(container) {
     `;
 
     bindEvents(container, { automations, playbooks, tasks, presets, tools, packs, templates, workflowConfig, summary, studio, runs, history });
+    focusRequestedRun(container);
     applyInputTooltips(container);
+    enhanceSectionHelp(container, AUTOMATION_HELP, createGenericHelpFactory('Automations'));
+    activateContextHelp(container);
   } catch (err) {
     container.innerHTML = `<h2 class="page-title">Automations</h2><div class="loading">Error: ${esc(err instanceof Error ? err.message : String(err))}</div>`;
   }
@@ -135,6 +182,17 @@ export async function renderAutomations(container) {
 
 export async function updateAutomations() {
   if (currentContainer) await renderAutomations(currentContainer);
+}
+
+function focusRequestedRun(container) {
+  const runId = getRequestedRunId();
+  if (!runId) return;
+  const row = container.querySelector(`#auto-run-detail-${CSS.escape(runId)}`);
+  const trigger = container.querySelector(`.auto-run-details[data-run-id="${CSS.escape(runId)}"]`);
+  if (!(row instanceof HTMLElement) || !(trigger instanceof HTMLElement)) return;
+  row.style.display = '';
+  trigger.textContent = 'Hide';
+  trigger.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 function reorderAutomationsForUi(automations) {
@@ -150,6 +208,15 @@ function reorderAutomationsForUi(automations) {
   const nextAnchorIndex = reordered.findIndex((auto) => auto.id === placement.anchorId);
   reordered.splice(nextAnchorIndex + 1, 0, cloned);
   return reordered;
+}
+
+function createGenericHelpFactory(area) {
+  return (title) => ({
+    whatItIs: `${title} is part of ${area}.`,
+    whatSeeing: 'You are seeing the current workflow data, run detail, or controls for this section.',
+    whatCanDo: 'Review the current state here and use the controls in the section when you need to act.',
+    howLinks: `This section supports the broader ${area} workflow and links to related operational surfaces when needed.`,
+  });
 }
 
 // ─── Data Model — merge workflows + scheduled tasks ──────
@@ -191,6 +258,8 @@ function buildAutomationList(playbooks, tasks, tools, templates = [], presets = 
       packId: (pb.steps || [])[0]?.packId || null,
       enabled: pb.enabled !== false,
       cron: linkedTask?.cron || null,
+      emitEvent: linkedTask?.emitEvent || '',
+      outputHandling: normalizeOutputHandling(pb.outputHandling || linkedTask?.outputHandling),
       scheduleEnabled: linkedTask?.enabled || false,
       taskId: linkedTask?.id || null,
       lastRunAt: linkedTask?.lastRunAt || null,
@@ -220,6 +289,8 @@ function buildAutomationList(playbooks, tasks, tools, templates = [], presets = 
       packId: null,
       enabled: task.enabled,
       cron: task.cron || null,
+      emitEvent: task.emitEvent || '',
+      outputHandling: normalizeOutputHandling(task.outputHandling),
       scheduleEnabled: task.enabled,
       taskId: task.id,
       lastRunAt: task.lastRunAt || null,
@@ -245,8 +316,10 @@ function buildAutomationList(playbooks, tasks, tools, templates = [], presets = 
         steps: pb.steps || [],
         packId: (pb.steps || [])[0]?.packId || null,
         enabled: false,
-        cron: null,
-        scheduleEnabled: false,
+      cron: null,
+      emitEvent: '',
+      outputHandling: normalizeOutputHandling(pb.outputHandling),
+      scheduleEnabled: false,
         taskId: null,
         lastRunAt: null,
         lastRunStatus: null,
@@ -292,6 +365,8 @@ function buildAutomationList(playbooks, tasks, tools, templates = [], presets = 
       packId: steps[0]?.packId || null,
       enabled: false,
       cron: preset.cron || null,
+      emitEvent: preset.emitEvent || '',
+      outputHandling: normalizeOutputHandling(preset.outputHandling),
       scheduleEnabled: false,
       taskId: null,
       lastRunAt: null,
@@ -382,6 +457,8 @@ function renderAutomationRow(auto, tools, packs) {
       <td class="auto-schedule-cell">
         <div class="ops-task-title">${esc(scheduleLabel)}</div>
         ${auto.cron ? `<div class="ops-task-sub">${esc(auto.cron)}</div>` : ''}
+        ${auto.emitEvent ? `<div class="ops-task-sub">Output event: <code>${esc(auto.emitEvent)}</code></div>` : ''}
+        <div class="ops-task-sub">${renderOutputHandlingBadges(auto.outputHandling)}</div>
       </td>
       <td>
         <div class="ops-state-cell">
@@ -553,6 +630,35 @@ function renderPipelineView(auto, toolLookup, packs) {
   return `<div class="wf-pipeline-container">${header}${pipelineBody}${configPanel}</div>`;
 }
 
+function renderOutputHandlingBadges(outputHandling, promotedFindings = []) {
+  const normalized = normalizeOutputHandling(outputHandling);
+  const badges = [];
+  if (normalized.notify !== 'off') badges.push('<span class="badge badge-info">notifies</span>');
+  if (normalized.sendToSecurity !== 'off') badges.push('<span class="badge badge-warn">security</span>');
+  if (normalized.persistArtifacts !== 'run_history_only') badges.push('<span class="badge badge-accent">artifacts</span>');
+  if ((promotedFindings || []).length > 0) badges.push(`<span class="badge badge-critical">${promotedFindings.length} finding${promotedFindings.length === 1 ? '' : 's'}</span>`);
+  return badges.join(' ') || '<span style="color:var(--text-muted)">Run history only</span>';
+}
+
+function renderPromotedFindings(promotedFindings) {
+  if (!promotedFindings || promotedFindings.length === 0) return '';
+  return `
+    <div style="margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid var(--border);font-size:0.78rem">
+      <div style="font-weight:600;margin-bottom:0.35rem">Promoted Findings</div>
+      ${promotedFindings.map((finding) => `
+        <div style="display:flex;gap:0.5rem;align-items:flex-start;margin-bottom:0.25rem">
+          <span class="badge ${finding.severity === 'critical' ? 'badge-critical' : finding.severity === 'warn' ? 'badge-warn' : 'badge-info'}">${esc(finding.severity)}</span>
+          <div style="flex:1">
+            <div>${esc(finding.title || 'Finding')}</div>
+            <div style="color:var(--text-muted)">${esc(finding.description || '')}</div>
+          </div>
+          ${finding.sendToSecurity && finding.runLink ? `<a class="btn btn-secondary btn-sm" href="${escAttr(finding.runLink)}">Open run</a>` : ''}
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
 function renderCreateForm(tools, packs) {
   const toolOptions = tools
     .slice()
@@ -684,8 +790,8 @@ function renderCreateForm(tools, packs) {
           <textarea id="auto-create-args" rows="4" placeholder='{"host":"192.168.1.1","count":3}'></textarea>
         </div>
         <div class="cfg-field">
-          <label>Event Name (optional)</label>
-          <input id="auto-create-event" type="text" placeholder="scan_completed">
+          <label>Output Event (optional)</label>
+          <input id="auto-create-event" type="text" placeholder="cloud.drift.detected">
         </div>
         <div class="cfg-field">
           <label>Enabled</label>
@@ -694,8 +800,35 @@ function renderCreateForm(tools, packs) {
             <option value="false" selected>No</option>
           </select>
         </div>
+        <div class="cfg-field">
+          <label>Notify</label>
+          <select id="auto-output-notify">
+            <option value="off" selected>Off</option>
+            <option value="warn_critical">On warn/critical findings</option>
+            <option value="all">On all findings</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Send To Security</label>
+          <select id="auto-output-security">
+            <option value="off" selected>Off</option>
+            <option value="warn_critical">On warn/critical findings</option>
+            <option value="all">On all findings</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Persist Artifacts</label>
+          <select id="auto-output-artifacts">
+            <option value="run_history_only" selected>Run history only</option>
+            <option value="run_history_plus_memory">Run history + search/memory</option>
+          </select>
+        </div>
       </div>
     </details>
+
+    <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);line-height:1.5;">
+      Automation output is always available in run history. Notifications and Security receive normalized findings only, not raw logs. <code>Output Event</code> is optional and lets scheduled runs emit a named downstream event.
+    </div>
 
     <div class="cfg-actions">
       <button class="btn btn-primary" id="auto-create-save">Create Automation</button>
@@ -721,6 +854,8 @@ function renderRunHistory(playbookRuns, taskHistory) {
       duration: run.durationMs || 0,
       steps: run.steps || [],
       id: run.id,
+      outputHandling: normalizeOutputHandling(run.outputHandling),
+      promotedFindings: run.promotedFindings || [],
     });
   }
 
@@ -734,6 +869,8 @@ function renderRunHistory(playbookRuns, taskHistory) {
       message: item.message || '',
       steps: item.steps || [],
       id: item.id || `${item.taskId || 'task'}-${item.timestamp || 0}`,
+      outputHandling: normalizeOutputHandling(item.outputHandling),
+      promotedFindings: item.promotedFindings || [],
     });
   }
 
@@ -748,7 +885,10 @@ function renderRunHistory(playbookRuns, taskHistory) {
       <td>${formatTime(entry.time)}</td>
       <td>${esc(entry.name)}</td>
       <td><span class="badge ${entry.source === 'workflow' ? 'badge-info' : 'badge-created'}">${esc(entry.source)}</span></td>
-      <td><span style="color:${statusColor(entry.status)}">${esc(entry.status)}</span></td>
+      <td>
+        <span style="color:${statusColor(entry.status)}">${esc(entry.status)}</span>
+        <div class="ops-task-sub" style="margin-top:0.25rem">${renderOutputHandlingBadges(entry.outputHandling, entry.promotedFindings)}</div>
+      </td>
       <td>${entry.duration}ms</td>
       <td>
         ${entry.steps && entry.steps.length > 0
@@ -761,6 +901,7 @@ function renderRunHistory(playbookRuns, taskHistory) {
     <tr class="auto-run-details-row" id="auto-run-detail-${escAttr(entry.id || '')}" style="display:none">
       <td colspan="6" style="padding:0.5rem 1rem;background:var(--bg-secondary)">
         ${renderStepResults(entry.steps)}
+        ${renderPromotedFindings(entry.promotedFindings)}
       </td>
     </tr>
     ` : ''}
@@ -973,13 +1114,16 @@ function bindEvents(container, ctx) {
           });
           const resultsDiv = container.querySelector('#auto-run-results');
           if (resultsDiv && result.run) {
+            const runOutputHandling = normalizeOutputHandling(result.run.outputHandling);
             resultsDiv.innerHTML = `
               <div style="margin-top:0.75rem;padding:1rem;background:var(--bg-secondary);border-radius:8px">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
                   <strong>${esc(result.run.playbookName || autoId)}</strong>
                   <span style="color:${result.success ? 'var(--success)' : 'var(--error)'}">${esc(result.status)} (${result.run.durationMs}ms)</span>
                 </div>
+                <div style="margin-bottom:0.5rem">${renderOutputHandlingBadges(runOutputHandling, result.run.promotedFindings || [])}</div>
                 ${renderStepResults(result.run.steps || [])}
+                ${renderPromotedFindings(result.run.promotedFindings || [])}
               </div>
             `;
           }
@@ -1022,6 +1166,7 @@ function bindEvents(container, ctx) {
             mode: 'sequential',
             enabled: false,
             description: auto.description,
+            outputHandling: auto.outputHandling,
             steps: auto.steps.map((s, i) => ({ ...s, id: `${newId}-step-${i + 1}` })),
           });
         }
@@ -1034,6 +1179,7 @@ function bindEvents(container, ctx) {
             target: newId,
             cron: auto.cron,
             enabled: false,
+            outputHandling: auto.outputHandling,
           });
         }
 
@@ -1127,6 +1273,9 @@ function bindCreateForm(container, { tools, packs }) {
   const scheduleSection = container.querySelector('#auto-schedule-section');
   const argsInput = container.querySelector('#auto-create-args');
   const eventInput = container.querySelector('#auto-create-event');
+  const outputNotifySelect = container.querySelector('#auto-output-notify');
+  const outputSecuritySelect = container.querySelector('#auto-output-security');
+  const outputArtifactsSelect = container.querySelector('#auto-output-artifacts');
   const editIdInput = container.querySelector('#auto-edit-id');
   const editSourceInput = container.querySelector('#auto-edit-source');
   const editTaskIdInput = container.querySelector('#auto-edit-task-id');
@@ -1214,6 +1363,9 @@ function bindCreateForm(container, { tools, packs }) {
     singleToolSelect.value = '';
     argsInput.value = '';
     eventInput.value = '';
+    outputNotifySelect.value = 'off';
+    outputSecuritySelect.value = 'off';
+    outputArtifactsSelect.value = 'run_history_only';
     modeSelect.value = 'single';
     scheduleCheck.checked = false;
     scheduleSection.style.display = 'none';
@@ -1407,6 +1559,11 @@ function bindCreateForm(container, { tools, packs }) {
 
     try {
       const emitEvent = eventInput.value.trim() || undefined;
+      const outputHandling = {
+        notify: outputNotifySelect.value || 'off',
+        sendToSecurity: outputSecuritySelect.value || 'off',
+        persistArtifacts: outputArtifactsSelect.value || 'run_history_only',
+      };
       const cron = scheduleEnabled ? buildCronFromForm(container) : '';
 
       if (scheduleEnabled && !cron) {
@@ -1426,6 +1583,7 @@ function bindCreateForm(container, { tools, packs }) {
           cron,
           enabled,
           emitEvent,
+          outputHandling,
         });
         if (!result.success) {
           statusEl.textContent = result.message || 'Failed.';
@@ -1434,7 +1592,15 @@ function bindCreateForm(container, { tools, packs }) {
         }
       } else {
         const playbookMode = mode === 'single' ? 'sequential' : mode;
-        const result = await api.upsertPlaybook({ id: editId || id, name, mode: playbookMode, enabled, description, steps });
+        const result = await api.upsertPlaybook({
+          id: editId || id,
+          name,
+          mode: playbookMode,
+          enabled,
+          description,
+          outputHandling,
+          steps,
+        });
 
         if (!result.success) {
           statusEl.textContent = result.message || 'Failed.';
@@ -1451,6 +1617,7 @@ function bindCreateForm(container, { tools, packs }) {
               cron,
               enabled: true,
               emitEvent,
+              outputHandling,
             });
           } else {
             await api.createScheduledTask({
@@ -1460,6 +1627,7 @@ function bindCreateForm(container, { tools, packs }) {
               cron,
               enabled: true,
               emitEvent,
+              outputHandling,
             });
           }
         } else if (editTaskId) {
@@ -1498,6 +1666,9 @@ function bindCreateForm(container, { tools, packs }) {
     descriptionInput.value = auto.description || '';
     enabledSelect.value = String(auto.enabled !== false);
     eventInput.value = auto._task?.emitEvent || '';
+    outputNotifySelect.value = auto.outputHandling?.notify || 'off';
+    outputSecuritySelect.value = auto.outputHandling?.sendToSecurity || 'off';
+    outputArtifactsSelect.value = auto.outputHandling?.persistArtifacts || 'run_history_only';
     packSelect.value = uniformPackId;
 
     wfSteps.splice(0, wfSteps.length, ...(auto.steps || []).map((step) => ({

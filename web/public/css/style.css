@@ -384,6 +384,130 @@ body {
   color: var(--text-primary);
 }
 
+.section-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.section-heading h3,
+.section-heading .section-header {
+  margin: 0;
+}
+
+.section-info-button {
+  width: 1.2rem;
+  height: 1.2rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  line-height: 1;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: help;
+  flex-shrink: 0;
+}
+
+.section-info-button:hover,
+.section-info-button:focus-visible {
+  color: var(--text-primary);
+  border-color: var(--accent);
+  background: rgba(79, 172, 254, 0.14);
+  outline: none;
+}
+
+.context-panel {
+  margin-bottom: 1rem;
+  padding: 1rem 1.05rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, rgba(79, 172, 254, 0.08), rgba(255, 255, 255, 0.02));
+}
+
+.context-panel.compact {
+  padding: 0.9rem 1rem;
+}
+
+.context-kicker {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 0.35rem;
+}
+
+.context-title {
+  margin: 0 0 0.8rem;
+  color: var(--text-primary);
+  font-size: 0.98rem;
+}
+
+.context-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+
+.context-item {
+  min-width: 0;
+}
+
+.context-label {
+  color: var(--text-primary);
+  font-size: 0.73rem;
+  font-weight: 700;
+  margin-bottom: 0.22rem;
+}
+
+.context-copy {
+  color: var(--text-secondary);
+  font-size: 0.77rem;
+  line-height: 1.45;
+}
+
+.context-help-tooltip {
+  position: absolute;
+  z-index: 2000;
+  width: min(360px, calc(100vw - 24px));
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(12, 18, 31, 0.98);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+}
+
+.context-help-tooltip-title {
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 700;
+  margin-bottom: 0.55rem;
+}
+
+.context-help-tooltip-row + .context-help-tooltip-row {
+  margin-top: 0.45rem;
+}
+
+.context-help-tooltip-label {
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  margin-bottom: 0.1rem;
+}
+
+.context-help-tooltip-copy {
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -774,15 +898,37 @@ tr:hover td {
   padding: 0.5rem 0.75rem 0.9rem;
   background: rgba(79, 172, 254, 0.04);
   border-top: none;
+  overflow: hidden;
+}
+
+.auto-inline-editor-host {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.auto-inline-editor-cell {
+  max-width: 0;
 }
 
 .auto-inline-editor-host .cfg-center-body,
 .auto-create-form-inline {
   margin: 0;
+  width: 100%;
+  max-width: 100%;
   background: var(--bg-surface);
   border: 1px solid var(--guardian-border);
   border-radius: var(--radius);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  box-sizing: border-box;
+}
+
+.auto-create-form-inline .cfg-form-grid,
+.auto-create-form-inline .cfg-field,
+.auto-create-form-inline textarea,
+.auto-create-form-inline input,
+.auto-create-form-inline select {
+  min-width: 0;
 }
 
 .cfg-header-note {
@@ -869,6 +1015,47 @@ tr:hover td {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 1rem;
+}
+
+.cfg-provider-accordion {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+
+.cfg-provider-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.cfg-provider-summary::-webkit-details-marker { display: none; }
+.cfg-provider-summary::marker { content: ''; }
+
+.cfg-provider-summary:hover {
+  background: rgba(79, 172, 254, 0.05);
+}
+
+.cfg-provider-summary-title {
+  font-size: 0.86rem;
+}
+
+.cfg-provider-summary-note {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+.cfg-provider-accordion[open] > .cfg-provider-summary {
+  border-bottom: 1px solid var(--border);
 }
 
 /* ─── Search Sources ───────────────────────────────────── */
@@ -1076,6 +1263,19 @@ tr:hover td {
   font-size: 1.1rem;
   color: var(--text-primary);
   margin-bottom: 1.5rem;
+}
+
+.page-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0 0 0.7rem;
+}
+
+.page-section-title h3 {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-primary);
 }
 
 /* ─── Reference Guide ────────────────────────────────────── */

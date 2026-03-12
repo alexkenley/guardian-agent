@@ -7,7 +7,7 @@
  */
 
 /** Sandbox profile determines how much filesystem access the child process gets. */
-export type SandboxProfile = 'read-only' | 'workspace-write' | 'full-access';
+export type SandboxProfile = 'read-only' | 'workspace-write' | 'full-access' | 'agent-worker';
 export type SandboxEnforcementMode = 'permissive' | 'strict';
 export type SandboxAvailability = 'strong' | 'degraded' | 'unavailable';
 

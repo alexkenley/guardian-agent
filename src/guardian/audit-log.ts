@@ -23,6 +23,8 @@ export type AuditEventType =
   | 'rate_limited'
   | 'capability_probe'
   | 'policy_changed'
+  | 'broker_action'
+  | 'worker_crash'
   | 'anomaly_detected'
   | 'host_alert'
   | 'gateway_alert'
@@ -31,7 +33,8 @@ export type AuditEventType =
   | 'policy_engine_started'
   | 'policy_mode_changed'
   | 'policy_rules_reloaded'
-  | 'policy_shadow_mismatch';
+  | 'policy_shadow_mismatch'
+  | 'automation_finding';
 
 /** Severity levels for audit events. */
 export type AuditSeverity = 'info' | 'warn' | 'critical';
