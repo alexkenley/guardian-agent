@@ -13,6 +13,8 @@ GuardianAgent can be used through:
 3. Configure your model provider and auth settings.
 4. Use chat for general requests, tools for guarded actions, and approvals for anything mutating or externally risky.
 
+On Windows, if you want the extra native isolation layer for risky subprocess-backed work, use the portable Windows build described in [INSTALLATION.md](/mnt/s/Development/GuardianAgent/INSTALLATION.md).
+
 ## What You Can Do
 
 - chat with the built-in assistant

@@ -28,6 +28,42 @@ bash scripts/start-dev-unix.sh
 
 These scripts handle dependency checks, build, startup, and the initial config bootstrap flow.
 
+## Windows Portable Isolation Build
+
+If you want the additional native Windows isolation layer, use the portable Windows build path. This is the path that bundles the Windows sandbox helper used for stronger subprocess isolation on Windows.
+
+Primary build command:
+
+```powershell
+npm run portable:windows
+```
+
+This produces the portable Windows package and is the recommended path for Windows users who want the extra isolation layer.
+
+Direct PowerShell script:
+
+```powershell
+.\scripts\make-windows-portable.ps1
+```
+
+If you want an installer build instead of the portable package:
+
+```powershell
+npm run installer:windows
+```
+
+Direct PowerShell script:
+
+```powershell
+.\scripts\build-windows-installer.ps1
+```
+
+Other Windows packaging scripts are also available:
+
+- `.\scripts\build-windows-helper.ps1`
+- `.\scripts\build-windows-package.ps1`
+- `.\scripts\build-windows-release.ps1`
+
 ## First Run
 
 After startup:
@@ -42,5 +78,6 @@ Most users should configure GuardianAgent through the web UI or CLI rather than 
 ## More Detail
 
 - Deployment guidance: [docs/guides/DEPLOYMENT.md](/mnt/s/Development/GuardianAgent/docs/guides/DEPLOYMENT.md)
+- Windows portable isolation option: [docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md](/mnt/s/Development/GuardianAgent/docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md)
 - Security model: [SECURITY.md](/mnt/s/Development/GuardianAgent/SECURITY.md)
 - Architecture overview: [docs/architecture/OVERVIEW.md](/mnt/s/Development/GuardianAgent/docs/architecture/OVERVIEW.md)
