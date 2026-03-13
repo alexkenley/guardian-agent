@@ -167,6 +167,10 @@ export const api = {
     body: JSON.stringify({ mode }),
   }),
   telegramTest: () => request('/api/telegram/test', { method: 'POST' }),
+  cloudTest: (provider, profileId) => request('/api/cloud/test', {
+    method: 'POST',
+    body: JSON.stringify({ provider, profileId }),
+  }),
   providers:    () => request('/api/providers'),
   providerTypes: () => request('/api/providers/types'),
   providersStatus: () => request('/api/providers/status'),

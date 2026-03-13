@@ -2448,20 +2448,90 @@ function renderCloudTab(panel) {
     const section = document.createElement('div');
     section.className = 'table-container';
     const profiles = cloud[provider.key] || [];
+
+    // Build per-profile credential ref + test UI
+    let profileCards = '';
+    for (const profile of profiles) {
+      const pid = profile.id || '';
+      const pName = profile.name || pid;
+      const hasCredRef = !!(profile.credentialRef || profile.accessKeyIdCredentialRef || profile.accessTokenCredentialRef || profile.serviceAccountCredentialRef || profile.clientIdCredentialRef);
+      const credRefValue = profile.credentialRef || profile.accessKeyIdCredentialRef || profile.accessTokenCredentialRef || profile.serviceAccountCredentialRef || profile.clientIdCredentialRef || '';
+      const tokenConfigured = !!(profile.apiTokenConfigured || profile.accessKeyIdConfigured || profile.accessTokenConfigured || profile.serviceAccountJsonConfigured || profile.clientIdConfigured);
+      const statusLabel = tokenConfigured || hasCredRef ? 'Credential configured' : 'No credential';
+      const statusColor = tokenConfigured || hasCredRef ? 'var(--success)' : 'var(--text-muted)';
+      profileCards += `
+        <div style="border:1px solid var(--border);border-radius:var(--radius);padding:0.6rem 0.75rem;margin-bottom:0.5rem;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem;">
+            <strong style="font-size:0.78rem;">${esc(pName)}</strong>
+            <span style="font-size:0.68rem;color:${statusColor};">${statusLabel}</span>
+          </div>
+          <div class="cfg-field" style="margin-bottom:0.4rem;">
+            <label style="display:flex;align-items:center;gap:0.35rem;justify-content:flex-start;cursor:pointer;"><input type="checkbox" class="cloud-cred-ref-toggle" data-provider="${esc(provider.key)}" data-profile-id="${escAttr(pid)}" title="Use an environment-backed credential ref" ${hasCredRef ? 'checked' : ''}> Enable Credential Ref</label>
+            <input type="text" class="cloud-cred-ref-input" data-provider="${esc(provider.key)}" data-profile-id="${escAttr(pid)}" value="${escAttr(credRefValue)}" placeholder="cloud.${esc(provider.key.replace('Profiles', ''))}.${escAttr(pid)}" ${hasCredRef ? '' : 'disabled'}>
+          </div>
+          <div class="cfg-actions" style="margin-top:0.3rem;">
+            <button class="btn btn-secondary cloud-test-btn" data-provider="${esc(provider.key)}" data-profile-id="${escAttr(pid)}" type="button">Test Connection</button>
+            <span class="cloud-test-status" data-provider="${esc(provider.key)}" data-profile-id="${escAttr(pid)}" style="font-size:0.72rem;"></span>
+          </div>
+        </div>`;
+    }
+    if (!profiles.length) {
+      profileCards = '<div style="font-size:0.75rem;color:var(--text-muted);padding:0.4rem 0;">No profiles configured.</div>';
+    }
+
     section.innerHTML = `
       <div class="table-header">
         <h3>${esc(provider.label)}</h3>
         <span class="cfg-header-note">${profiles.length} profile${profiles.length === 1 ? '' : 's'}</span>
       </div>
       <div class="cfg-center-body">
-        <div style="margin-bottom:0.45rem;font-size:0.72rem;color:var(--text-muted);line-height:1.45;">${provider.note}</div>
-        <textarea
-          id="cfg-cloud-${provider.key}"
-          spellcheck="false"
-          style="width:100%;min-height:220px;padding:0.85rem;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;font-size:0.74rem;border:1px solid var(--border);border-radius:10px;background:var(--bg-panel);color:var(--text-primary);resize:vertical;"
-        >${esc(JSON.stringify(profiles, null, 2))}</textarea>
+        ${profileCards}
+        <details style="margin-top:0.5rem;">
+          <summary style="font-size:0.72rem;color:var(--text-muted);cursor:pointer;user-select:none;">Advanced JSON Editor</summary>
+          <div style="margin-top:0.35rem;margin-bottom:0.25rem;font-size:0.72rem;color:var(--text-muted);line-height:1.45;">${provider.note}</div>
+          <textarea
+            id="cfg-cloud-${provider.key}"
+            spellcheck="false"
+            style="width:100%;min-height:180px;padding:0.85rem;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;font-size:0.74rem;border:1px solid var(--border);border-radius:10px;background:var(--bg-panel);color:var(--text-primary);resize:vertical;"
+          >${esc(JSON.stringify(profiles, null, 2))}</textarea>
+        </details>
       </div>
     `;
+
+    // Wire credential ref toggles
+    for (const toggle of section.querySelectorAll('.cloud-cred-ref-toggle')) {
+      const input = section.querySelector(`.cloud-cred-ref-input[data-provider="${toggle.dataset.provider}"][data-profile-id="${toggle.dataset.profileId}"]`);
+      if (input) {
+        toggle.addEventListener('change', () => {
+          input.disabled = !toggle.checked;
+          if (!toggle.checked) input.value = '';
+        });
+      }
+    }
+
+    // Wire test buttons
+    for (const btn of section.querySelectorAll('.cloud-test-btn')) {
+      btn.addEventListener('click', async () => {
+        const statusSpan = section.querySelector(`.cloud-test-status[data-provider="${btn.dataset.provider}"][data-profile-id="${btn.dataset.profileId}"]`);
+        if (statusSpan) {
+          statusSpan.textContent = 'Testing...';
+          statusSpan.style.color = 'var(--text-muted)';
+        }
+        try {
+          const result = await api.cloudTest(btn.dataset.provider, btn.dataset.profileId);
+          if (statusSpan) {
+            statusSpan.textContent = result.message || (result.success ? 'Connected' : 'Failed');
+            statusSpan.style.color = result.success ? 'var(--success)' : 'var(--error)';
+          }
+        } catch (err) {
+          if (statusSpan) {
+            statusSpan.textContent = err instanceof Error ? err.message : String(err);
+            statusSpan.style.color = 'var(--error)';
+          }
+        }
+      });
+    }
+
     panel.appendChild(section);
   }
 

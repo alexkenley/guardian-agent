@@ -790,6 +790,7 @@ export interface DashboardCallbacks {
     emitSSE: (event: SSEEvent) => void,
   ) => Promise<{ requestId: string; content: string; metadata?: Record<string, unknown> }>;
   onTelegramReload?: () => Promise<{ success: boolean; message: string }>;
+  onCloudTest?: (provider: string, profileId: string) => Promise<{ success: boolean; message: string }>;
   onKillswitch?: () => void;
   onFactoryReset?: (args: { scope: 'data' | 'config' | 'all' }) => Promise<{
     success: boolean;

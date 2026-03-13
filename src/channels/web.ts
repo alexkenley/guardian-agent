@@ -1750,6 +1750,41 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // POST /api/cloud/test — test a cloud provider profile connection
+      if (req.method === 'POST' && url.pathname === '/api/cloud/test') {
+        if (!this.dashboard.onCloudTest) {
+          sendJSON(res, 404, { error: 'Cloud test not available' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { provider?: string; profileId?: string };
+        try {
+          parsed = JSON.parse(body);
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed.provider || !parsed.profileId) {
+          sendJSON(res, 400, { error: 'provider and profileId are required' });
+          return;
+        }
+        try {
+          const result = await this.dashboard.onCloudTest(parsed.provider, parsed.profileId);
+          sendJSON(res, 200, result);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Cloud test failed';
+          sendJSON(res, 500, { success: false, message });
+        }
+        return;
+      }
+
       // POST /api/setup/apply — apply setup/config selections
       if (req.method === 'POST' && url.pathname === '/api/setup/apply') {
         if (!this.dashboard.onSetupApply) {
