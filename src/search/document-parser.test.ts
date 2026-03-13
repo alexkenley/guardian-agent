@@ -70,6 +70,31 @@ describe('parseDocument', () => {
     expect(result.text).not.toContain('body{}');
   });
 
+  it('ignores HTML comments and decodes named and numeric entities once', async () => {
+    const path = join(tmpDir, 'entities.html');
+    await writeFile(
+      path,
+      '<html><head><title>Alpha &#x26; Beta</title></head><body><!--hidden--><p>&amp;lt;safe&amp;gt; &#39;quote&#39; &#x1F600;</p></body></html>',
+    );
+    const result = await parseDocument(path);
+    expect(result.title).toBe('Alpha & Beta');
+    expect(result.text).toContain('&lt;safe&gt;');
+    expect(result.text).toContain('\'quote\'');
+    expect(result.text).toContain('😀');
+    expect(result.text).not.toContain('hidden');
+    expect(result.text).not.toContain('<p>');
+  });
+
+  it('skips nested script and style content without dropping surrounding text', async () => {
+    const path = join(tmpDir, 'nested.html');
+    await writeFile(
+      path,
+      '<div>before<script>const tpl = "<script>ignore()</script>";</script><style>.x::before{content:"<b>bad</b>";}</style><span>after</span></div>',
+    );
+    const result = await parseDocument(path);
+    expect(result.text).toBe('before after');
+  });
+
   it('handles empty files', async () => {
     const path = join(tmpDir, 'empty.txt');
     await writeFile(path, '');

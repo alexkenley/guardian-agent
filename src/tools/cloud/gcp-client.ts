@@ -1,4 +1,4 @@
-import { createSign } from 'node:crypto';
+import { createPrivateKey, webcrypto } from 'node:crypto';
 import http from 'node:http';
 import https from 'node:https';
 
@@ -61,6 +61,9 @@ interface ServiceAccountKey {
   private_key: string;
   token_uri?: string;
 }
+
+const { subtle } = webcrypto;
+const textEncoder = new TextEncoder();
 
 export class GcpClient {
   readonly config: GcpInstanceConfig;
@@ -358,7 +361,7 @@ export class GcpClient {
 
     const key = this.parseServiceAccountJson();
     const tokenUrl = key.token_uri?.trim() || this.endpointFor('oauth2Token');
-    const assertion = createJwtAssertion({
+    const assertion = await createJwtAssertion({
       issuer: key.client_email,
       subject: key.client_email,
       audience: tokenUrl,
@@ -554,13 +557,13 @@ function truncate(value: string, limit: number): string {
   return `${value.slice(0, Math.max(0, limit - 3))}...`;
 }
 
-function createJwtAssertion(input: {
+async function createJwtAssertion(input: {
   issuer: string;
   subject: string;
   audience: string;
   scope: string;
   privateKey: string;
-}): string {
+}): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const header = base64UrlJson({ alg: 'RS256', typ: 'JWT' });
   const claims = base64UrlJson({
@@ -572,17 +575,22 @@ function createJwtAssertion(input: {
     exp: now + 3600,
   });
   const unsigned = `${header}.${claims}`;
-  const signer = createSign('RSA-SHA256');
-  signer.update(unsigned);
-  signer.end();
-  const signature = signer.sign(input.privateKey);
-  return `${unsigned}.${base64Url(signature)}`;
+  const privateKeyDer = createPrivateKey(input.privateKey).export({ format: 'der', type: 'pkcs8' });
+  const signingKey = await subtle.importKey(
+    'pkcs8',
+    privateKeyDer,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await subtle.sign('RSASSA-PKCS1-v1_5', signingKey, textEncoder.encode(unsigned));
+  return `${unsigned}.${base64Url(new Uint8Array(signature))}`;
 }
 
 function base64UrlJson(value: unknown): string {
   return base64Url(Buffer.from(JSON.stringify(value)));
 }
 
-function base64Url(buffer: Buffer): string {
-  return buffer.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+function base64Url(buffer: Uint8Array | Buffer): string {
+  return Buffer.from(buffer).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }

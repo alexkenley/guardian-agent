@@ -1,4 +1,4 @@
-import { generateKeyPairSync } from 'node:crypto';
+import { createPublicKey, generateKeyPairSync, verify } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -44,6 +44,7 @@ describe('gcp-client', () => {
 
   it('exchanges service-account JWTs for access tokens', async () => {
     const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const publicKey = createPublicKey(privateKey);
     let tokenRequests = 0;
     const server = createServer((req, res) => {
       if (req.url === '/token') {
@@ -58,7 +59,21 @@ describe('gcp-client', () => {
           const params = new URLSearchParams(raw);
           expect(params.get('grant_type')).toBe('urn:ietf:params:oauth:grant-type:jwt-bearer');
           const assertion = params.get('assertion') ?? '';
-          expect(assertion.split('.')).toHaveLength(3);
+          const [header, claims, signature] = assertion.split('.');
+          expect([header, claims, signature]).toHaveLength(3);
+          expect(JSON.parse(decodeBase64Url(header))).toEqual({ alg: 'RS256', typ: 'JWT' });
+          const parsedClaims = JSON.parse(decodeBase64Url(claims)) as Record<string, string | number>;
+          expect(parsedClaims.iss).toBe('guardian@example.iam.gserviceaccount.com');
+          expect(parsedClaims.sub).toBe('guardian@example.iam.gserviceaccount.com');
+          expect(parsedClaims.aud).toBe(`http://127.0.0.1:${address.port}/token`);
+          expect(parsedClaims.scope).toBe('https://www.googleapis.com/auth/cloud-platform');
+          const verified = verify(
+            'RSA-SHA256',
+            Buffer.from(`${header}.${claims}`),
+            publicKey,
+            decodeBase64UrlBuffer(signature),
+          );
+          expect(verified).toBe(true);
           res.setHeader('content-type', 'application/json');
           res.end(JSON.stringify({ access_token: 'exchanged-token', expires_in: 3600 }));
         });
@@ -164,3 +179,12 @@ describe('gcp-client', () => {
     expect(result).toEqual({ name: 'app-bucket', location: 'AUSTRALIA-SOUTHEAST1' });
   });
 });
+
+function decodeBase64Url(value: string): string {
+  return decodeBase64UrlBuffer(value).toString('utf8');
+}
+
+function decodeBase64UrlBuffer(value: string): Buffer {
+  const padding = (4 - (value.length % 4)) % 4;
+  return Buffer.from(`${value}${'='.repeat(padding)}`.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+}
