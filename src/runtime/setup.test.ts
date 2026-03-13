@@ -25,7 +25,21 @@ describe('evaluateSetupStatus', () => {
       reasons: ['No native Windows sandbox helper is available.'],
     };
 
-    const status = evaluateSetupStatus(DEFAULT_CONFIG, providers, sandboxHealth);
+    const strictConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          sandbox: {
+            ...DEFAULT_CONFIG.assistant.tools.sandbox,
+            enforcementMode: 'strict' as const,
+          },
+        },
+      },
+    };
+
+    const status = evaluateSetupStatus(strictConfig, providers, sandboxHealth);
     const sandboxStep = status.steps.find((step) => step.id === 'sandbox');
 
     expect(sandboxStep?.status).toBe('warning');

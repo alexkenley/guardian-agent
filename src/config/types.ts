@@ -1557,7 +1557,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       disabledCategories: [],
       sandbox: {
         enabled: true,
-        enforcementMode: 'strict',
+        enforcementMode: 'permissive',
         mode: 'workspace-write',
         networkAccess: false,
         additionalWritePaths: [],

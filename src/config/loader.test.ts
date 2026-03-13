@@ -72,8 +72,8 @@ describe('deepMerge', () => {
 });
 
 describe('validateConfig', () => {
-  it('should default tool sandbox enforcement to strict', () => {
-    expect(DEFAULT_CONFIG.assistant.tools.sandbox?.enforcementMode).toBe('strict');
+  it('should default tool sandbox enforcement to permissive', () => {
+    expect(DEFAULT_CONFIG.assistant.tools.sandbox?.enforcementMode).toBe('permissive');
   });
 
   it('should pass with valid default config', () => {
