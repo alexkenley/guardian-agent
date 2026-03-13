@@ -29,5 +29,8 @@ describe('guardian-core prompt', () => {
     expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('use that profile id directly');
     expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('prefer a provider read-only status/list tool first');
     expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('call find_tools with keywords such as cloud, hosting, whm, cpanel, vercel, cloudflare, aws, gcp, or azure');
+    expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('S Drive Development');
+    expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('answer from the literal executed tool records');
+    expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('Do not use memory_save for transient operational notes');
   });
 });

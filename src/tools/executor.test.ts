@@ -2499,6 +2499,9 @@ describe('ToolExecutor', () => {
     const decided = await executor.decideApproval(run.approvalId!, 'approved', 'tester');
     expect(decided.success).toBe(true);
 
+    const latestJob = executor.listJobs(1)[0];
+    expect(latestJob?.argsRedacted).toEqual({ path: 'empty.txt', content: '' });
+
     const text = await readFile(join(root, 'empty.txt'), 'utf-8');
     expect(text).toBe('');
   });

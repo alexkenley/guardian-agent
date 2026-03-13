@@ -1,4 +1,5 @@
 import type { ToolDefinition, ToolExecutionRequest, ToolRunResponse } from '../tools/types.js';
+import type { ChatMessage, ChatOptions, ChatResponse } from '../llm/types.js';
 import type { JsonRpcRequest, JsonRpcResponse, JsonRpcNotification } from './types.js';
 
 export interface BrokerClientOptions {
@@ -72,14 +73,54 @@ export class BrokerClient {
     return Array.isArray(result.tools) ? result.tools : [];
   }
 
-  async callTool(request: ToolExecutionRequest): Promise<ToolRunResponse & { approvalSummary?: { toolName: string; argsPreview: string } }> {
+  async callTool(
+    request: ToolExecutionRequest & { allowImplicitMemorySave?: boolean },
+  ): Promise<ToolRunResponse & { approvalSummary?: { toolName: string; argsPreview: string } }> {
     const result = await this.sendRequest<ToolRunResponse & { approvalSummary?: { toolName: string; argsPreview: string } }>('tool.call', {
       toolName: request.toolName,
       args: request.args,
       requestId: request.requestId,
       agentId: request.agentId,
+      allowImplicitMemorySave: request.allowImplicitMemorySave,
     });
     return result;
+  }
+
+  /** Proxy an LLM chat call through the supervisor (worker stays network-disabled). */
+  async llmChat(
+    messages: ChatMessage[],
+    options?: ChatOptions,
+    opts?: { useFallback?: boolean },
+  ): Promise<ChatResponse> {
+    // LLM calls can take up to 120s; use extended timeout
+    return this.sendRequest<ChatResponse>('llm.chat', {
+      messages,
+      options: options ?? {},
+      useFallback: opts?.useFallback ?? false,
+    }, 120_000);
+  }
+
+  async listJobs(
+    userId?: string,
+    channel?: string,
+    limit?: number,
+  ): Promise<Array<{
+    toolName: string;
+    status: string;
+    argsRedacted?: Record<string, unknown>;
+    completedAt?: number;
+    createdAt?: number;
+  }>> {
+    const result = await this.sendRequest<{
+      jobs: Array<{
+        toolName: string;
+        status: string;
+        argsRedacted?: Record<string, unknown>;
+        completedAt?: number;
+        createdAt?: number;
+      }>;
+    }>('job.list', { userId, channel, limit });
+    return Array.isArray(result.jobs) ? result.jobs : [];
   }
 
   async decideApproval(
@@ -149,13 +190,14 @@ export class BrokerClient {
     this.notificationHandler?.(notification);
   }
 
-  private sendRequest<T>(method: string, params: Record<string, unknown>): Promise<T> {
+  private sendRequest<T>(method: string, params: Record<string, unknown>, timeoutMs?: number): Promise<T> {
+    const effectiveTimeout = timeoutMs ?? this.requestTimeoutMs;
     return new Promise<T>((resolve, reject) => {
       const id = String(this.nextId++);
       const timeout = setTimeout(() => {
         this.pendingRequests.delete(id);
-        reject(new Error(`Broker request '${method}' timed out after ${this.requestTimeoutMs}ms`));
-      }, this.requestTimeoutMs);
+        reject(new Error(`Broker request '${method}' timed out after ${effectiveTimeout}ms`));
+      }, effectiveTimeout);
 
       this.pendingRequests.set(id, { resolve, reject, timeout });
 

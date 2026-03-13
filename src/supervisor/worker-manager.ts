@@ -9,7 +9,7 @@ import { BrokerServer } from '../broker/broker-server.js';
 import { CapabilityTokenManager } from '../broker/capability-token.js';
 import type { ToolExecutor } from '../tools/executor.js';
 import type { Runtime } from '../runtime/runtime.js';
-import type { AgentIsolationConfig, LLMConfig } from '../config/types.js';
+import type { AgentIsolationConfig } from '../config/types.js';
 import type { UserMessage } from '../agent/types.js';
 import type { ResolvedSkill } from '../skills/types.js';
 
@@ -71,10 +71,10 @@ export class WorkerManager {
 
   async handleMessage(input: WorkerMessageRequest): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     const worker = await this.getOrSpawnWorker(input.sessionId, input.agentId, input.userId, input.grantedCapabilities);
-    const providerConfig = this.runtime.getAgentProviderConfig(input.agentId);
-    if (!providerConfig) {
-      throw new Error(`No provider configuration found for agent '${input.agentId}'`);
-    }
+
+    // LLM calls are proxied through the broker — the worker no longer needs the provider config.
+    // We only tell the worker whether a fallback provider exists for quality-based retry.
+    const hasFallbackProvider = !!this.runtime.getFallbackProviderConfig?.(input.agentId);
 
     return this.dispatchToWorker(worker, {
       message: input.message,
@@ -84,7 +84,7 @@ export class WorkerManager {
       activeSkills: input.activeSkills ?? [],
       toolContext: input.toolContext ?? '',
       runtimeNotices: input.runtimeNotices ?? [],
-      providerConfig,
+      hasFallbackProvider,
     });
   }
 
@@ -128,13 +128,30 @@ export class WorkerManager {
 
     const launch = resolveWorkerLaunch(this.config.workerEntryPoint);
     const sandboxHealth = await detectSandboxHealth(this.sandboxConfig);
+    // LLM calls are proxied through the broker RPC, so the worker does not need network access.
+    // On strong hosts, use the strict agent-worker profile. On degraded hosts, fall back to
+    // workspace-write (NOT full-access) — the worker should never have unmediated system access.
+    const workerProfile = sandboxHealth.availability === 'strong'
+      ? 'agent-worker' as const
+      : 'workspace-write' as const;
+    // Workers are full Node.js processes that need more memory than short-lived tool subprocesses.
+    // Use the configured workerMaxMemoryMb (default 512) but with a floor of 2048MB for V8.
+    const workerMemoryMb = Math.max(this.config.workerMaxMemoryMb, 2048);
+    const workerSandboxConfig = {
+      ...this.sandboxConfig,
+      resourceLimits: {
+        ...this.sandboxConfig.resourceLimits,
+        maxMemoryMb: workerMemoryMb,
+        maxCpuSeconds: 0, // Workers are long-lived — no CPU time limit
+      },
+    };
     const child = await sandboxedSpawn(
       launch.command,
       launch.args,
-      this.sandboxConfig,
+      workerSandboxConfig,
       {
-        profile: sandboxHealth.availability === 'strong' ? 'agent-worker' : 'full-access',
-        networkAccess: true,
+        profile: workerProfile,
+        networkAccess: false,
         cwd: workspacePath,
         env: {
           CAPABILITY_TOKEN: token.id,
@@ -247,7 +264,7 @@ export class WorkerManager {
       activeSkills: ResolvedSkill[];
       toolContext: string;
       runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>;
-      providerConfig: LLMConfig;
+      hasFallbackProvider?: boolean;
     },
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     worker.lastActivityMs = Date.now();

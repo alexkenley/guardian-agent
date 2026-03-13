@@ -968,6 +968,9 @@ export function loadConfigFromFile(filePath: string): GuardianAgentConfig {
     merged.assistant.tools.search.sources = [];
   }
 
+  // Resolve unified operator controls (sandbox_mode, approval_policy, writable_roots)
+  merged = resolveUnifiedOperatorControls(merged);
+
   merged = normalizeConfigInputs(merged);
 
   const errors = validateConfig(merged);
@@ -976,6 +979,86 @@ export function loadConfigFromFile(filePath: string): GuardianAgentConfig {
   }
 
   return merged;
+}
+
+/**
+ * Map simplified operator controls to internal config sections.
+ * These are convenience aliases — the internal config sections take precedence
+ * if explicitly set alongside the aliases.
+ */
+function resolveUnifiedOperatorControls(config: GuardianAgentConfig): GuardianAgentConfig {
+  const result = { ...config };
+
+  // sandbox_mode → runtime.agentIsolation + assistant.tools.sandbox
+  if (result.sandbox_mode) {
+    switch (result.sandbox_mode) {
+      case 'off':
+        result.runtime = {
+          ...result.runtime,
+          agentIsolation: { ...result.runtime.agentIsolation, enabled: false, mode: 'in-process' },
+        };
+        if (result.assistant.tools.sandbox) {
+          result.assistant.tools.sandbox.enabled = false;
+        }
+        break;
+      case 'workspace-write':
+        result.runtime = {
+          ...result.runtime,
+          agentIsolation: { ...result.runtime.agentIsolation, enabled: true, mode: 'brokered' },
+        };
+        if (result.assistant.tools.sandbox) {
+          result.assistant.tools.sandbox.mode = 'workspace-write';
+        }
+        break;
+      case 'strict':
+        result.runtime = {
+          ...result.runtime,
+          agentIsolation: { ...result.runtime.agentIsolation, enabled: true, mode: 'brokered' },
+        };
+        if (result.assistant.tools.sandbox) {
+          result.assistant.tools.sandbox.mode = 'workspace-write';
+          result.assistant.tools.sandbox.enforcementMode = 'strict';
+        }
+        break;
+    }
+  }
+
+  // approval_policy → assistant.tools.policyMode
+  if (result.approval_policy) {
+    const policyMap: Record<string, typeof result.assistant.tools.policyMode> = {
+      'on-request': 'approve_each',
+      'auto-approve': 'approve_by_policy',
+      'autonomous': 'autonomous',
+    };
+    const mapped = policyMap[result.approval_policy];
+    if (mapped) {
+      result.assistant = {
+        ...result.assistant,
+        tools: { ...result.assistant.tools, policyMode: mapped },
+      };
+    }
+  }
+
+  // writable_roots → assistant.tools.allowedPaths + sandbox additionalWritePaths
+  if (result.writable_roots && result.writable_roots.length > 0) {
+    result.assistant = {
+      ...result.assistant,
+      tools: {
+        ...result.assistant.tools,
+        allowedPaths: [...new Set([...result.assistant.tools.allowedPaths, ...result.writable_roots])],
+      },
+    };
+    if (result.assistant.tools.sandbox) {
+      result.assistant.tools.sandbox.additionalWritePaths = [
+        ...new Set([
+          ...(result.assistant.tools.sandbox.additionalWritePaths ?? []),
+          ...result.writable_roots,
+        ]),
+      ];
+    }
+  }
+
+  return result;
 }
 
 /** Load configuration with fallback to defaults. */

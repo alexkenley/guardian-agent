@@ -32,6 +32,34 @@ export interface GuardianAgentConfig {
   qualityFallback?: boolean;
   /** Message routing configuration for multi-agent dispatch. */
   routing?: RoutingConfig;
+
+  // --- Unified operator controls (map to internal config sections) ---
+
+  /**
+   * Simplified sandbox mode for the execution environment.
+   * Maps to `assistant.tools.sandbox.mode` + `runtime.agentIsolation`.
+   *
+   * - `'off'`              — sandbox disabled, in-process execution
+   * - `'workspace-write'`  — writable workspace, read-only system (default)
+   * - `'strict'`           — brokered worker with agent-worker profile, network-disabled worker
+   */
+  sandbox_mode?: 'off' | 'workspace-write' | 'strict';
+
+  /**
+   * Simplified approval policy.
+   * Maps to `assistant.tools.policyMode`.
+   *
+   * - `'on-request'`   — every tool call requires approval (`approve_each`)
+   * - `'auto-approve'` — read-only tools auto, mutating need approval (`approve_by_policy`)
+   * - `'autonomous'`   — no approvals required (`autonomous`)
+   */
+  approval_policy?: 'on-request' | 'auto-approve' | 'autonomous';
+
+  /**
+   * Writable filesystem roots for tool operations.
+   * Maps to `assistant.tools.allowedPaths` + `assistant.tools.sandbox.additionalWritePaths`.
+   */
+  writable_roots?: string[];
 }
 
 /** Failover configuration for LLM providers. */
@@ -348,8 +376,9 @@ export interface AgentIsolationConfig {
   capabilityTokenTtlMs: number;         // Default: 600000 (10 min)
   capabilityTokenMaxToolCalls: number;  // Default: 0 (unlimited)
 
-  // LLM in worker
-  llmEgressHosts: string[];             // Allowed outbound hosts for LLM API calls
+  // LLM proxy (calls are brokered through the supervisor — worker has no network access)
+  /** @deprecated LLM calls are now proxied through the broker; worker has no network egress. */
+  llmEgressHosts: string[];             // Retained for config compat; no longer enforced
   llmCredentialRotationMs: number;      // Default: 300000 (5 min)
 
   // Taint policy (Phase 4)

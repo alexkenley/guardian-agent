@@ -145,7 +145,7 @@ Test agent behavior through the real Runtime with Guardian active:
 
 - Layered defense lifecycle: proactive admission controls, inline LLM action evaluation (Guardian Agent), output-time leak prevention, and Sentinel audit analysis.
 - Mandatory runtime chokepoints: every message, LLM call, response, and event is mediated by Runtime enforcement (not optional agent hooks).
-- Brokered worker boundary: the default chat/planner execution loop runs in a separate worker process and reaches tools and approvals through broker RPC.
+- Brokered worker boundary: the default chat/planner execution loop runs in a separate worker process with no network access. Tools, approvals, and LLM API calls are all mediated through broker RPC.
 - Prompt-injection resistance: invisible Unicode stripping plus weighted injection signal scoring before agent execution.
 - Least-privilege capability model: per-agent capability grants with immutable frozen context (`Object.freeze`).
 - Tool governance and sandboxing: approval workflows, per-tool policy overrides, path/command/domain allowlists, and risk-tiered tool classes.
@@ -210,7 +210,16 @@ Configuration details are documented in:
 
 By default, GuardianAgent keeps tool sandboxing in `strict` mode. If a host cannot provide strong subprocess isolation, risky tool classes stay blocked until you either run on Linux/Unix with bubblewrap, or use the Windows portable app that bundles `guardian-sandbox-win.exe`. Switching to `assistant.tools.sandbox.enforcementMode: permissive` is an explicit opt-in to higher host risk.
 
-Brokered agent isolation is enabled by default. On strong hosts the worker uses the `agent-worker` sandbox profile. On degraded or unavailable hosts the worker runs as a separate brokered process with a hardened environment and dedicated workspace.
+Brokered agent isolation is enabled by default. LLM API calls are proxied through the broker — the worker has no network access. On strong hosts the worker uses the `agent-worker` sandbox profile with namespace isolation. On degraded hosts the worker uses the `workspace-write` profile with a hardened environment.
+
+Three simplified top-level config aliases map to the internal machinery:
+
+```yaml
+sandbox_mode: strict           # off | workspace-write | strict
+approval_policy: auto-approve  # on-request | auto-approve | autonomous
+writable_roots:                # merged into allowedPaths + sandbox additionalWritePaths
+  - /home/user/projects
+```
 
 ### Telegram Setup (Web + CLI)
 

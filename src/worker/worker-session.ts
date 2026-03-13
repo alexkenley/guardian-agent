@@ -1,11 +1,11 @@
 import type { UserMessage } from '../agent/types.js';
-import { createProvider } from '../llm/provider.js';
 import type { ChatMessage, ChatOptions, ChatResponse } from '../llm/types.js';
-import type { LLMConfig } from '../config/types.js';
 import type { ToolDefinition, ToolExecutionRequest, ToolRunResponse } from '../tools/types.js';
 import { formatPendingApprovalMessage, shouldUseStructuredPendingApprovalMessage } from '../runtime/pending-approval-copy.js';
 import { runLlmLoop } from './worker-llm-loop.js';
 import { BrokerClient } from '../broker/broker-client.js';
+import { shouldAllowImplicitMemorySave } from '../util/memory-intent.js';
+import { isToolReportQuery, formatToolReport } from '../util/tool-report.js';
 
 const APPROVAL_CONFIRM_PATTERN = /^(?:\/)?(?:approve|approved|yes|yep|yeah|y|go ahead|do it|confirm|ok|okay|sure|proceed|accept)\b/i;
 const APPROVAL_DENY_PATTERN = /^(?:\/)?(?:deny|denied|reject|decline|cancel|no|nope|nah|n)\b/i;
@@ -43,7 +43,8 @@ export interface WorkerMessageHandleParams {
   activeSkills: Array<{ id: string; name: string; summary: string }>;
   toolContext: string;
   runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>;
-  providerConfig: LLMConfig;
+  /** Whether a fallback provider is available on the supervisor side for quality-based retry. */
+  hasFallbackProvider?: boolean;
 }
 
 class BrokeredToolExecutor {
@@ -133,13 +134,32 @@ export class BrokeredWorkerSession {
 
   async handleMessage(params: WorkerMessageHandleParams): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     const toolExecutor = new BrokeredToolExecutor(this.client);
-    const provider = createProvider(params.providerConfig);
 
-    if (this.isContinuationMessage(params.message.content) && this.suspendedSession) {
-      return this.resumeSuspendedSession(params.message, provider.chat.bind(provider), toolExecutor);
+    // LLM calls are proxied through the broker — the worker has no network access.
+    const chatFn = (msgs: ChatMessage[], opts?: ChatOptions): Promise<ChatResponse> =>
+      this.client.llmChat(msgs, opts);
+
+    // Direct tool report: answer "what tools did you use?" from broker job list.
+    // Don't filter by channel — brokered tool calls use channel 'broker' regardless of origin.
+    if (isToolReportQuery(params.message.content)) {
+      try {
+        const jobs = await this.client.listJobs(params.message.userId, undefined, 50);
+        if (jobs.length > 0) {
+          const report = formatToolReport(jobs);
+          if (report) {
+            return { content: report };
+          }
+        }
+      } catch {
+        // Fall through to normal LLM path if job listing fails
+      }
     }
 
-    const approvalResponse = await this.tryHandleApprovalMessage(params.message, provider.chat.bind(provider), toolExecutor);
+    if (this.isContinuationMessage(params.message.content) && this.suspendedSession) {
+      return this.resumeSuspendedSession(params.message, chatFn, toolExecutor, params);
+    }
+
+    const approvalResponse = await this.tryHandleApprovalMessage(params.message, chatFn, toolExecutor, params);
     if (approvalResponse) {
       return approvalResponse;
     }
@@ -151,13 +171,14 @@ export class BrokeredWorkerSession {
       { role: 'user', content: params.message.content },
     ];
 
-    return this.executeLoop(params.message, llmMessages, provider.chat.bind(provider), toolExecutor);
+    return this.executeLoop(params.message, llmMessages, chatFn, toolExecutor, params);
   }
 
   private async tryHandleApprovalMessage(
     message: UserMessage,
     chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>,
     toolExecutor: BrokeredToolExecutor,
+    params: WorkerMessageHandleParams,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     const pendingIds = this.getPendingApprovalIds();
     if (pendingIds.length === 0) return null;
@@ -185,7 +206,7 @@ export class BrokeredWorkerSession {
     }
 
     if (decision === 'approved' && approvedAny && this.suspendedSession) {
-      return this.resumeSuspendedSession(message, chatFn, toolExecutor);
+      return this.resumeSuspendedSession(message, chatFn, toolExecutor, params);
     }
 
     this.consumePendingApprovals(targetIds);
@@ -196,6 +217,7 @@ export class BrokeredWorkerSession {
     message: UserMessage,
     chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>,
     toolExecutor: BrokeredToolExecutor,
+    params: WorkerMessageHandleParams,
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     const suspended = this.suspendedSession;
     if (!suspended) {
@@ -219,7 +241,7 @@ export class BrokeredWorkerSession {
     this.suspendedSession = null;
     this.pendingApprovals = null;
 
-    return this.executeLoop(message, resumedMessages, chatFn, toolExecutor);
+    return this.executeLoop(message, resumedMessages, chatFn, toolExecutor, params);
   }
 
   private async executeLoop(
@@ -227,8 +249,18 @@ export class BrokeredWorkerSession {
     llmMessages: ChatMessage[],
     chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>,
     toolExecutor: BrokeredToolExecutor,
+    params: WorkerMessageHandleParams,
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     const pendingTools: SuspendedToolCall[] = [];
+
+    // Fallback chat function: proxied through the broker with useFallback flag
+    let fallbackChatFn: ((msgs: ChatMessage[], opts?: ChatOptions) => Promise<ChatResponse>) | undefined;
+    if (params.hasFallbackProvider) {
+      fallbackChatFn = (msgs, opts) => this.client.llmChat(msgs, opts, { useFallback: true });
+    }
+
+    const allowImplicit = shouldAllowImplicitMemorySave(message.content);
+
     const result = await runLlmLoop(
       llmMessages,
       async (messages, options) => chatFn(messages, options),
@@ -251,6 +283,10 @@ export class BrokeredWorkerSession {
             name: toolCall.name,
           });
         }
+      },
+      {
+        allowImplicitMemorySave: allowImplicit,
+        fallbackChatFn,
       },
     );
 

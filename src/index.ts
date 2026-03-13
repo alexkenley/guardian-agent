@@ -88,6 +88,10 @@ import { resolveRuntimeCredentialView } from './runtime/credentials.js';
 import { LocalSecretStore } from './runtime/secret-store.js';
 import { WorkerManager } from './supervisor/worker-manager.js';
 import { formatPendingApprovalMessage, shouldUseStructuredPendingApprovalMessage } from './runtime/pending-approval-copy.js';
+import { shouldAllowImplicitMemorySave as _shouldAllowImplicitMemorySave } from './util/memory-intent.js';
+import { isResponseDegraded as _isResponseDegraded } from './util/response-quality.js';
+import { compactMessagesIfOverBudget as _compactMessagesIfOverBudget } from './util/context-budget.js';
+import { isToolReportQuery as _isToolReportQuery, formatToolReport as _formatToolReport } from './util/tool-report.js';
 
 const log = createLogger('main');
 
@@ -405,7 +409,8 @@ class ChatAgent extends BaseAgent {
 
   private executeToolsConflictAware(
     toolCalls: Array<{ id: string; name: string; arguments?: string }>,
-    toolExecOrigin: Omit<ToolExecutionRequest, 'toolName' | 'args'>
+    toolExecOrigin: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
+    options?: { allowImplicitMemorySave?: boolean },
   ): Promise<{ toolCall: { id: string; name: string; arguments?: string }; result: Record<string, unknown> }>[] {
     const promises: Promise<{ toolCall: { id: string; name: string; arguments?: string }; result: Record<string, unknown> }>[] = [];
     const locks = new Map<string, Promise<void>>();
@@ -414,6 +419,18 @@ class ChatAgent extends BaseAgent {
       let parsedArgs: Record<string, unknown> = {};
       if (tc.arguments?.trim()) {
         try { parsedArgs = JSON.parse(tc.arguments) as Record<string, unknown>; } catch { /* empty */ }
+      }
+
+      if (tc.name === 'memory_save' && options?.allowImplicitMemorySave !== true) {
+        promises.push(Promise.resolve({
+          toolCall: tc,
+          result: {
+            success: false,
+            status: 'denied',
+            message: 'memory_save is reserved for explicit remember/save requests from the user.',
+          },
+        }));
+        continue;
       }
 
       const def = this.tools?.getToolDefinition(tc.name);
@@ -579,9 +596,25 @@ class ChatAgent extends BaseAgent {
       return { content: approvalResult };
     }
 
+    const directToolReport = this.tryDirectRecentToolReport(message);
+    if (directToolReport) {
+      if (this.conversationService) {
+        this.conversationService.recordTurn(
+          { agentId: stateAgentId, userId: message.userId, channel: message.channel },
+          message.content,
+          directToolReport,
+        );
+      }
+      return { content: directToolReport };
+    }
+
     const isContinuation = message.content.includes('[User approved the pending tool action(s)') || 
                            message.content.includes('Tool actions have been decided');
     const suspended = this.suspendedSessions.get(userKey);
+    const requestIntentContent = (isContinuation && suspended)
+      ? suspended.originalMessage.content
+      : message.content;
+    const allowImplicitMemorySave = this.shouldAllowImplicitMemorySave(requestIntentContent);
 
     let llmMessages: import('./llm/types.js').ChatMessage[];
     let skipDirectTools = false;
@@ -899,7 +932,7 @@ class ChatAgent extends BaseAgent {
         };
 
         const toolResults = await Promise.allSettled(
-          this.executeToolsConflictAware(response.toolCalls, toolExecOrigin)
+          this.executeToolsConflictAware(response.toolCalls, toolExecOrigin, { allowImplicitMemorySave })
         );
 
         let hasPending = false;
@@ -1060,7 +1093,7 @@ class ChatAgent extends BaseAgent {
               agentContext: { checkAction: ctx.checkAction },
             };
             const fbToolResults = await Promise.allSettled(
-              this.executeToolsConflictAware(fallbackResult.response.toolCalls, fbToolOrigin)
+              this.executeToolsConflictAware(fallbackResult.response.toolCalls, fbToolOrigin, { allowImplicitMemorySave })
             );
             let fallbackHasPending = false;
             for (const settled of fbToolResults) {
@@ -1250,21 +1283,23 @@ class ChatAgent extends BaseAgent {
     return Object.keys(metadata).length > 0 ? metadata : undefined;
   }
 
-  /** Detect degraded LLM responses that warrant a fallback retry. */
+  private shouldAllowImplicitMemorySave(content: string): boolean {
+    return _shouldAllowImplicitMemorySave(content);
+  }
+
+  private tryDirectRecentToolReport(message: UserMessage): string | null {
+    if (!this.tools?.isEnabled()) return null;
+    if (!_isToolReportQuery(message.content)) return null;
+
+    const jobs = this.tools.listJobs(50)
+      .filter((job) => job.userId === message.userId && job.channel === message.channel);
+
+    const report = _formatToolReport(jobs);
+    return report || null;
+  }
+
   private isResponseDegraded(content: string | undefined): boolean {
-    if (!content?.trim()) return true;
-    const lower = content.trim().toLowerCase();
-    const degradedPatterns = [
-      'i could not generate',
-      'i cannot generate',
-      'i can\'t assist with that',
-      'i\'m unable to help',
-      'i am unable to',
-      'i don\'t have the ability',
-      'i cannot help with',
-      'as an ai, i cannot',
-    ];
-    return degradedPatterns.some(p => lower.includes(p));
+    return _isResponseDegraded(content);
   }
 
   private shouldRetryPolicyUpdateCorrection(
@@ -2140,29 +2175,7 @@ function resolveToolProviderRouting(
 
 /** If total context exceeds 80% of budget, summarize oldest tool results. */
 function compactMessagesIfOverBudget(messages: ChatMessage[], budget: number): void {
-  const totalChars = messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
-  const threshold = budget * 4 * 0.8; // Convert token budget to chars, 80% threshold
-  if (totalChars <= threshold) return;
-
-  // Summarize oldest tool result messages to 200 chars each
-  for (const msg of messages) {
-    if (msg.role === 'tool' && msg.content && msg.content.length > 200) {
-      try {
-        const parsed = JSON.parse(msg.content) as Record<string, unknown>;
-        msg.content = JSON.stringify({
-          success: parsed.success,
-          status: parsed.status,
-          summary: truncateText(String(parsed.message ?? parsed.output ?? ''), 150),
-          compacted: true,
-        });
-      } catch {
-        msg.content = truncateText(msg.content, 200);
-      }
-      // Check if we're now under budget
-      const newTotal = messages.reduce((sum, m2) => sum + (m2.content?.length ?? 0), 0);
-      if (newTotal <= threshold) return;
-    }
-  }
+  _compactMessagesIfOverBudget(messages, budget);
 }
 
 function formatToolResultForLLM(toolName: string, toolResult: unknown, threats: string[] = []): string {

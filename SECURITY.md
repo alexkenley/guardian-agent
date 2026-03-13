@@ -628,7 +628,7 @@ The policy engine replaces hard-coded `decide()` logic with declarative JSON rul
 
 Managed child processes spawned by tool execution are wrapped in OS-level isolation using [bubblewrap (bwrap)](https://github.com/containers/bubblewrap) on Linux, an optional native helper on Windows, and graceful fallback to `ulimit` + environment hardening when stronger backends are unavailable.
 
-The brokered chat worker is also launched through the managed sandbox layer. On strong hosts it uses the `agent-worker` profile. On degraded hosts it runs as a separate process with a hardened environment and dedicated workspace.
+The brokered chat worker is also launched through the managed sandbox layer with `networkAccess: false`. LLM API calls are proxied through the broker RPC (`llm.chat`), so the worker process never makes outbound network connections. On strong hosts the worker uses the `agent-worker` profile with full namespace isolation. On degraded hosts the worker uses the `workspace-write` profile with a hardened environment and dedicated workspace.
 
 #### Sandbox Profiles
 
@@ -636,7 +636,7 @@ The brokered chat worker is also launched through the managed sandbox layer. On 
 |---------|-----------|---------|----------|
 | `read-only` | Root bind (read-only), `/tmp` writable | Isolated by default | System info, document search, network probes |
 | `workspace-write` | Workspace writable, `.git`/`.env*` forced read-only | Isolated by default | `execute_command`, MCP servers, browser |
-| `agent-worker` | Dedicated worker workspace, remapped `HOME`/`TMPDIR` | Backend-dependent | Brokered chat/planner worker |
+| `agent-worker` | Dedicated worker workspace, remapped `HOME`/`TMPDIR` | Network-disabled (LLM proxied via broker) | Brokered chat/planner worker (strong hosts) |
 | `full-access` | No isolation (env hardening only) | Full access | Explicitly trusted operations |
 
 #### Isolation Mechanisms
@@ -677,6 +677,30 @@ When a strong sandbox backend is not available (macOS, Windows without helper, m
 In `permissive` mode this is a degraded-but-usable posture. In `strict` mode, risky subprocess-backed tool categories are disabled until a strong backend is available.
 
 Install bwrap on Debian/Ubuntu: `sudo apt install bubblewrap`
+
+#### Unified Operator Controls
+
+Three simplified top-level config aliases provide a clean mental model that maps to the internal config sections:
+
+```yaml
+# Top-level aliases (resolved at config load time)
+sandbox_mode: strict           # off | workspace-write | strict
+approval_policy: auto-approve  # on-request | auto-approve | autonomous
+writable_roots:                # merged into allowedPaths + sandbox additionalWritePaths
+  - /home/user/projects
+```
+
+| Alias | Internal Mapping |
+|-------|-----------------|
+| `sandbox_mode: off` | `runtime.agentIsolation.enabled: false`, sandbox disabled |
+| `sandbox_mode: workspace-write` | Brokered worker with workspace-write profile |
+| `sandbox_mode: strict` | Brokered worker with strict enforcement mode |
+| `approval_policy: on-request` | `assistant.tools.policyMode: approve_each` |
+| `approval_policy: auto-approve` | `assistant.tools.policyMode: approve_by_policy` |
+| `approval_policy: autonomous` | `assistant.tools.policyMode: autonomous` |
+| `writable_roots` | Merged into `allowedPaths` and `sandbox.additionalWritePaths` |
+
+These are convenience aliases. Internal config sections take precedence when set alongside the aliases.
 
 ---
 

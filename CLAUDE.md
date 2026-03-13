@@ -168,9 +168,15 @@ src/guardian/       — Capabilities, SecretScanner, PiiScanner, InputSanitizer,
 src/channels/       — CLI, Telegram, Web channel adapters
 src/policy/         — Policy-as-Code engine (types, matcher, compiler, engine, rules, shadow mode)
 src/tools/          — ToolExecutor, MCP client (MCPClient, MCPClientManager), approvals
+src/broker/         — BrokerServer/Client, capability tokens, provenance — JSON-RPC 2.0 bridge
+                      between supervisor and worker (tool calls, approvals, LLM chat proxy)
+src/supervisor/     — WorkerManager — spawns/manages sandboxed worker processes
+src/worker/         — Worker entry point, BrokeredWorkerSession, runLlmLoop
+src/sandbox/        — OS sandbox profiles, bwrap/ulimit/env hardening, capability detection
 src/eval/           — Evaluation framework (types, metrics, runner)
 src/prompts/        — System prompt composition (composeGuardianSystemPrompt)
-src/util/           — Backoff, logging (pino), crypto guardrails
+src/util/           — Backoff, logging (pino), crypto guardrails, memory-intent, response-quality,
+                      context-budget, tool-report (shared utilities for both execution paths)
 web/public/         — Static frontend (vanilla JS, no build step)
 examples/           — Demo scripts (single-agent, multi-agent, llm-chat)
 policies/           — Declarative JSON policy rule files (base tool rules shipped)

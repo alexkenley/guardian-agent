@@ -5,6 +5,7 @@ import type { CapabilityTokenManager } from './capability-token.js';
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from './types.js';
 import { assignProvenance } from './provenance.js';
 import type { ToolExecutionRequest } from '../tools/types.js';
+import type { ChatMessage, ChatOptions } from '../llm/types.js';
 
 const log = createLogger('broker-server');
 
@@ -112,6 +113,17 @@ export class BrokerServer {
           const toolName = String(request.params.toolName ?? '');
           const args = isRecord(request.params.args) ? request.params.args : {};
           const requestId = typeof request.params.requestId === 'string' ? request.params.requestId : undefined;
+
+          // memory_save supervisor safety net: deny unless explicitly allowed by the worker
+          if (toolName === 'memory_save' && request.params.allowImplicitMemorySave !== true) {
+            result = {
+              success: false,
+              status: 'denied',
+              message: 'memory_save is reserved for explicit remember/save requests.',
+            };
+            break;
+          }
+
           const executionRequest: ToolExecutionRequest = {
             origin: 'assistant',
             toolName,
@@ -189,6 +201,62 @@ export class BrokerServer {
           result = {
             status: approval?.status ?? 'not_found',
             decidedBy: approval?.decidedBy,
+          };
+          break;
+        }
+
+        case 'llm.chat': {
+          // Proxy LLM calls through the supervisor so the worker stays network-disabled.
+          const chatMessages = Array.isArray(request.params.messages)
+            ? request.params.messages as ChatMessage[]
+            : [];
+          const chatOptions = isRecord(request.params.options)
+            ? request.params.options as unknown as ChatOptions
+            : undefined;
+          const useFallback = request.params.useFallback === true;
+
+          const instance = this.runtime.registry.get(token.agentId);
+          const primaryName = instance?.definition.providerName ?? this.runtime.defaultProviderName;
+          let provider = this.runtime.getProvider(primaryName);
+
+          if (useFallback) {
+            // Find any provider different from the primary for quality-based retry
+            for (const name of this.runtime.getProviderNames()) {
+              if (name !== primaryName) {
+                const p = this.runtime.getProvider(name);
+                if (p) { provider = p; break; }
+              }
+            }
+          }
+
+          if (!provider) {
+            this.sendResponse({
+              jsonrpc: '2.0',
+              id: request.id,
+              error: { code: -32002, message: 'No LLM provider available for this agent' },
+            });
+            return;
+          }
+
+          const chatResponse = await provider.chat(chatMessages, chatOptions);
+          result = chatResponse;
+          break;
+        }
+
+        case 'job.list': {
+          const userId = typeof request.params.userId === 'string' ? request.params.userId : undefined;
+          const channel = typeof request.params.channel === 'string' ? request.params.channel : undefined;
+          const limit = typeof request.params.limit === 'number' ? request.params.limit : 50;
+          const jobs = this.tools.listJobs(limit)
+            .filter(job => (!userId || job.userId === userId) && (!channel || job.channel === channel));
+          result = {
+            jobs: jobs.map(j => ({
+              toolName: j.toolName,
+              status: j.status,
+              argsRedacted: j.argsRedacted,
+              completedAt: j.completedAt,
+              createdAt: j.createdAt,
+            })),
           };
           break;
         }

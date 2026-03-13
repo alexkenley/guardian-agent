@@ -190,6 +190,8 @@ export interface ToolJobRecord {
   requestId?: string;
   /** SHA-256 hash of redacted tool arguments for correlation without raw secrets. */
   argsHash?: string;
+  /** Redacted arguments for factual reporting/debugging. Never stores raw sensitive values. */
+  argsRedacted?: Record<string, unknown>;
   argsPreview: string;
   status: ToolJobStatus;
   createdAt: number;

@@ -961,6 +961,9 @@ export class ToolExecutor {
       channel: request.channel,
       requestId: request.requestId,
       argsHash: redactedArgs.hash,
+      argsRedacted: (redactedArgs.redacted && typeof redactedArgs.redacted === 'object')
+        ? redactedArgs.redacted as Record<string, unknown>
+        : undefined,
       argsPreview: sanitizePreview(JSON.stringify(redactedArgs.redacted)),
       status: 'running',
       createdAt: this.now(),

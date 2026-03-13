@@ -321,14 +321,15 @@ See [Google Workspace Integration Spec](../specs/GOOGLE-WORKSPACE-INTEGRATION-SP
 
 ## Brokered Execution Boundary
 
-GuardianAgent now defaults to brokered worker execution for the built-in chat/planner flow.
+GuardianAgent defaults to brokered worker execution for the built-in chat/planner flow. The worker process has **no network access** — LLM API calls are proxied through the broker RPC.
 
 Supervisor responsibilities:
 
 - config loading
 - Guardian admission checks
 - audit logging
-- tool execution
+- tool execution (all tool calls mediated via broker)
+- LLM provider calls (proxied via `llm.chat` RPC)
 - approval state
 - worker lifecycle
 
@@ -336,14 +337,16 @@ Worker responsibilities:
 
 - prompt assembly
 - conversation-context assembly from supervisor-provided state
-- LLM chat/tool loop
+- LLM chat/tool loop (via broker-proxied chat function)
 - pending-approval continuation
+- memory_save suppression (user intent detection)
+- context budget compaction
+- quality-based fallback (requests via broker with `useFallback` flag)
 
 What this does not mean:
 
 - orchestration agents are not moved into the worker
 - every arbitrary developer-authored code path is not automatically sandboxed
-- degraded hosts do not imply strong filesystem or network namespace isolation
 
 See [Brokered Agent Isolation Spec](../specs/BROKERED-AGENT-ISOLATION-SPEC.md).
 
@@ -354,6 +357,7 @@ The current subprocess sandbox layer now uses an explicit availability model:
 - detect whether strong sandboxing is available on the current host
 - fail closed for risky tool classes in strict mode
 - surface warnings and disable reasons in CLI, web, and chat paths
+- degraded hosts use `workspace-write` profile (not `full-access`) for brokered workers
 
 Next stage:
 

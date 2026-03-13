@@ -1,6 +1,15 @@
 import type { ChatMessage, ChatResponse, ChatOptions } from '../llm/types.js';
 import type { ToolCaller } from '../broker/types.js';
 import type { ToolDefinition } from '../tools/types.js';
+import { compactMessagesIfOverBudget } from '../util/context-budget.js';
+import { isResponseDegraded } from '../util/response-quality.js';
+
+export interface LlmLoopOptions {
+  /** When true, memory_save tool calls are allowed (user explicitly asked to remember). */
+  allowImplicitMemorySave?: boolean;
+  /** Optional fallback chat function for quality-based retry with an external provider. */
+  fallbackChatFn?: (msgs: ChatMessage[], opts?: ChatOptions) => Promise<ChatResponse>;
+}
 
 // Extracted LLM loop, which can run either in-process or in an isolated worker
 export async function runLlmLoop(
@@ -8,8 +17,9 @@ export async function runLlmLoop(
   chatFn: (msgs: ChatMessage[], opts?: ChatOptions) => Promise<ChatResponse>,
   toolCaller: ToolCaller | undefined,
   maxRounds: number,
-  _contextBudget: number,
-  onToolCalled?: (toolCall: { id: string; name: string }, result: Record<string, unknown>) => void
+  contextBudget: number,
+  onToolCalled?: (toolCall: { id: string; name: string }, result: Record<string, unknown>) => void,
+  options?: LlmLoopOptions,
 ): Promise<{ finalContent: string; messages: ChatMessage[]; hasPendingApprovals: boolean }> {
   let finalContent = '';
   let rounds = 0;
@@ -17,7 +27,7 @@ export async function runLlmLoop(
   let forcedPolicyRetryUsed = false;
 
   const allToolDefs = toolCaller ? toolCaller.listAlwaysLoaded() : [];
-  
+
   // Basic mock mapping function since we lack the full toLLMToolDef context here
   const toLLMToolDef = (def: ToolDefinition): import('../llm/types.js').ToolDefinition => ({
     name: def.name,
@@ -28,6 +38,9 @@ export async function runLlmLoop(
   let llmToolDefs = allToolDefs.map(toLLMToolDef);
 
   while (rounds < maxRounds) {
+    // Context window awareness: compact oldest tool results if approaching budget
+    compactMessagesIfOverBudget(messages, contextBudget);
+
     let response = await chatFn(messages, { tools: llmToolDefs });
     finalContent = response.content ?? '';
 
@@ -74,7 +87,20 @@ export async function runLlmLoop(
         if (tc.arguments?.trim()) {
           try { parsedArgs = JSON.parse(tc.arguments); } catch { /* empty */ }
         }
-        
+
+        // memory_save suppression: deny unless user explicitly asked to remember
+        if (tc.name === 'memory_save' && options?.allowImplicitMemorySave !== true) {
+          const denied = {
+            success: false,
+            status: 'denied',
+            message: 'memory_save is reserved for explicit remember/save requests from the user.',
+          };
+          if (onToolCalled) {
+            onToolCalled(tc, denied);
+          }
+          return { toolCall: tc, result: denied };
+        }
+
         const res = await toolCaller.callTool({
           origin: 'assistant',
           toolName: tc.name,
@@ -112,8 +138,8 @@ export async function runLlmLoop(
         });
 
         // Deferred tool loading simulation (simplified)
-        if (toolCall.name === 'find_tools' && result.success && result.output) {
-           const output = result.output as { tools?: ToolDefinition[] };
+        if (toolCall.name === 'find_tools' && result.success && (result as any).output) {
+           const output = (result as any).output as { tools?: ToolDefinition[] };
            if (output.tools) {
               for (const t of output.tools) {
                  if (!llmToolDefs.some(d => d.name === t.name)) {
@@ -133,12 +159,37 @@ export async function runLlmLoop(
       }
     }
 
+    // Partial approval handling: only break if EVERY tool in this round is
+    // pending approval. When some tools succeeded, the LLM already sees their
+    // results alongside the pending status, so it can compose a natural response
+    // that acknowledges what's waiting and what it plans to do next.
     if (roundHasPending) {
-       // Stop the loop if there are pending approvals, yielding control back to user
-       break;
+      const allPending = toolResults.every(
+        (s) => s.status === 'fulfilled' && (s.value as any).result?.status === 'pending_approval',
+      );
+      if (allPending) {
+        // Remove the pending tool result messages we just pushed so we don't
+        // send duplicate toolCallIds when resuming after approval.
+        messages.splice(-toolResults.length, toolResults.length);
+        break;
+      }
+      // Some tools succeeded — continue so LLM can use their results
     }
 
     rounds += 1;
+  }
+
+  // Quality-based fallback: if the primary LLM produced a degraded response
+  // and a fallback chat function was provided, retry with it.
+  if (isResponseDegraded(finalContent) && options?.fallbackChatFn) {
+    try {
+      const fbResponse = await options.fallbackChatFn(messages, { tools: llmToolDefs });
+      if (fbResponse.content?.trim()) {
+        finalContent = fbResponse.content;
+      }
+    } catch {
+      // Fallback also failed, keep original content
+    }
   }
 
   if (!finalContent) {

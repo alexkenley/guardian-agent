@@ -566,6 +566,16 @@ export class Runtime {
     return this.providers.get(name);
   }
 
+  /** Get the default provider name. */
+  get defaultProviderName(): string {
+    return this.config.defaultProvider;
+  }
+
+  /** Get all registered provider names. */
+  getProviderNames(): string[] {
+    return [...this.providers.keys()];
+  }
+
   /** Get the default provider. */
   getDefaultProvider(): LLMProvider | undefined {
     return this.providers.get(this.config.defaultProvider);
@@ -577,6 +587,18 @@ export class Runtime {
     if (!instance) return undefined;
     const providerName = instance.definition.providerName ?? this.config.defaultProvider;
     return this.config.llm[providerName];
+  }
+
+  /** Get a fallback provider config different from the agent's primary provider (for quality-based retry). */
+  getFallbackProviderConfig(agentId: string): LLMConfig | undefined {
+    const instance = this.registry.get(agentId);
+    if (!instance) return undefined;
+    const primaryName = instance.definition.providerName ?? this.config.defaultProvider;
+    // Look for any configured provider that is different from the primary
+    for (const [name, config] of Object.entries(this.config.llm)) {
+      if (name !== primaryName) return config;
+    }
+    return undefined;
   }
 
   /**

@@ -85,7 +85,8 @@ export function buildBwrapArgs(
     args.push('--die-with-parent');
     args.push('--new-session');
 
-    // Network is required for LLM API calls, egress restricted by app-level proxy or routing
+    // Network is disabled by default — LLM calls are proxied through the broker RPC.
+    // Only enable network access when explicitly required (e.g. MCP servers with outbound).
     if (opts.networkAccess) {
       args.push('--share-net');
     } else {
