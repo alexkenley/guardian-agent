@@ -4,6 +4,7 @@ import { BaseAgent, createAgentDefinition } from '../agent/agent.js';
 import type { AgentContext, AgentResponse, UserMessage, ScheduleContext } from '../agent/types.js';
 import { AgentState } from '../agent/types.js';
 import type { AgentEvent } from '../queue/event-bus.js';
+import { DEFAULT_CONFIG } from '../config/types.js';
 
 class EchoAgent extends BaseAgent {
   receivedMessages: UserMessage[] = [];
@@ -233,6 +234,35 @@ describe('Runtime', () => {
 
       const after = runtime.guardian.check(action);
       expect(after.allowed).toBe(true);
+    });
+
+    it('should apply guardian SSRF config from runtime configuration', () => {
+      const configuredRuntime = new Runtime({
+        guardian: {
+          ...DEFAULT_CONFIG.guardian,
+          ssrf: {
+            enabled: true,
+            allowlist: ['127.0.0.1'],
+          },
+        },
+      });
+
+      const allowed = configuredRuntime.guardian.check({
+        type: 'http_request',
+        agentId: 'test',
+        capabilities: ['network_access'],
+        params: { url: 'http://127.0.0.1:8080/health' },
+      });
+      expect(allowed.allowed).toBe(true);
+
+      const blocked = configuredRuntime.guardian.check({
+        type: 'http_request',
+        agentId: 'test',
+        capabilities: ['network_access'],
+        params: { url: 'http://localhost:8080/health' },
+      });
+      expect(blocked.allowed).toBe(false);
+      expect(blocked.controller).toBe('SsrfController');
     });
 
     it('should block prompt injection in message dispatch', async () => {

@@ -300,6 +300,49 @@ describe('validateConfig', () => {
     expect(validateConfig(config)).toEqual([]);
   });
 
+  it('should accept cPanel hosts entered as full root URLs', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'cloud.cpanel.primary': { source: 'env', env: 'CPANEL_TOKEN' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          cloud: {
+            enabled: true,
+            cpanelProfiles: [{
+              id: 'social',
+              name: 'Social WHM',
+              type: 'whm',
+              host: 'https://vmres13.web-servers.com.au/',
+              username: 'root',
+              credentialRef: 'cloud.cpanel.primary',
+            }],
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toEqual([]);
+  });
+
+  it('should validate llm baseUrl as a clean http(s) URL', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      llm: {
+        ...DEFAULT_CONFIG.llm,
+        local: { provider: 'ollama', model: 'qwen3:latest', baseUrl: 'https://gateway.example.com/v1?api-version=1' },
+      },
+      defaultProvider: 'local',
+    };
+
+    expect(validateConfig(config)).toContain('llm.local.baseUrl must not include a query string or fragment');
+  });
+
   it('should validate cloud Vercel credential refs', () => {
     const config: GuardianAgentConfig = {
       ...DEFAULT_CONFIG,
@@ -326,6 +369,98 @@ describe('validateConfig', () => {
     };
 
     expect(validateConfig(config)).toEqual([]);
+  });
+
+  it('loadConfigFromFile should normalize cloud, llm, and Moltbook URL-like inputs', () => {
+    const configPath = join(TEST_DIR, 'config.yaml');
+    const rawConfig: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      defaultProvider: 'local',
+      llm: {
+        ...DEFAULT_CONFIG.llm,
+        local: { provider: 'ollama', model: 'qwen3:latest', baseUrl: 'https://gateway.example.com/v1/' },
+      },
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          cloud: {
+            enabled: true,
+            cpanelProfiles: [{
+              id: 'social',
+              name: 'Social WHM',
+              type: 'whm',
+              host: 'https://vmres13.web-servers.com.au/',
+              username: 'root',
+              credentialRef: 'cloud.cpanel.primary',
+            }],
+            vercelProfiles: [{
+              id: 'vercel-main',
+              name: 'Vercel Main',
+              credentialRef: 'cloud.vercel.primary',
+              apiBaseUrl: 'https://api.vercel.com/',
+            }],
+            awsProfiles: [{
+              id: 'aws-main',
+              name: 'AWS Main',
+              region: 'us-east-1',
+              accessKeyIdCredentialRef: 'cloud.aws.access',
+              secretAccessKeyCredentialRef: 'cloud.aws.secret',
+              endpoints: { s3: 'http://localhost:4566/' },
+            }],
+            gcpProfiles: [{
+              id: 'gcp-main',
+              name: 'GCP Main',
+              projectId: 'guardian-prod',
+              serviceAccountCredentialRef: 'cloud.gcp.service',
+              endpoints: { storage: 'https://storage.googleapis.com/' },
+            }],
+            azureProfiles: [{
+              id: 'azure-main',
+              name: 'Azure Main',
+              subscriptionId: 'sub-123',
+              accessTokenCredentialRef: 'cloud.azure.token',
+              blobBaseUrl: 'https://account.blob.core.windows.net/',
+              endpoints: { management: 'https://management.azure.com/' },
+            }],
+          },
+        },
+        credentials: {
+          refs: {
+            ...DEFAULT_CONFIG.assistant.credentials.refs,
+            'cloud.cpanel.primary': { source: 'env', env: 'CPANEL_TOKEN' },
+            'cloud.vercel.primary': { source: 'env', env: 'VERCEL_TOKEN' },
+            'cloud.aws.access': { source: 'env', env: 'AWS_ACCESS_KEY_ID' },
+            'cloud.aws.secret': { source: 'env', env: 'AWS_SECRET_ACCESS_KEY' },
+            'cloud.gcp.service': { source: 'env', env: 'GCP_SERVICE_ACCOUNT_JSON' },
+            'cloud.azure.token': { source: 'env', env: 'AZURE_ACCESS_TOKEN' },
+          },
+        },
+        threatIntel: {
+          ...DEFAULT_CONFIG.assistant.threatIntel,
+          moltbook: {
+            ...DEFAULT_CONFIG.assistant.threatIntel.moltbook,
+            enabled: true,
+            mode: 'api',
+            baseUrl: 'https://moltbook.com/',
+            allowedHosts: ['moltbook.com'],
+          },
+        },
+      },
+    };
+
+    writeFileSync(configPath, JSON.stringify(rawConfig, null, 2));
+    const loaded = loadConfigFromFile(configPath);
+
+    expect(loaded.llm.local?.baseUrl).toBe('https://gateway.example.com/v1');
+    expect(loaded.assistant.tools.cloud?.cpanelProfiles?.[0]?.host).toBe('vmres13.web-servers.com.au');
+    expect(loaded.assistant.tools.cloud?.cpanelProfiles?.[0]?.ssl).toBe(true);
+    expect(loaded.assistant.tools.cloud?.vercelProfiles?.[0]?.apiBaseUrl).toBe('https://api.vercel.com');
+    expect(loaded.assistant.tools.cloud?.awsProfiles?.[0]?.endpoints?.s3).toBe('http://localhost:4566');
+    expect(loaded.assistant.tools.cloud?.gcpProfiles?.[0]?.endpoints?.storage).toBe('https://storage.googleapis.com');
+    expect(loaded.assistant.tools.cloud?.azureProfiles?.[0]?.blobBaseUrl).toBe('https://account.blob.core.windows.net');
+    expect(loaded.assistant.tools.cloud?.azureProfiles?.[0]?.endpoints?.management).toBe('https://management.azure.com');
+    expect(loaded.assistant.threatIntel.moltbook.baseUrl).toBe('https://moltbook.com');
   });
 
   it('should validate cloud Cloudflare credential refs', () => {

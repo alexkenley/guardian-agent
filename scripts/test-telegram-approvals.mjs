@@ -99,6 +99,78 @@ async function runChannelApprovalFlow() {
   console.log('PASS telegram channel approval flow');
 }
 
+async function runChannelEmptyFileApprovalFlow() {
+  const decisions = [];
+  const dispatches = [];
+  const channel = new TelegramChannel({
+    botToken: '123:abc',
+    async onToolsApprovalDecision({ approvalId, decision }) {
+      decisions.push({ approvalId, decision });
+      return {
+        success: true,
+        message: approvalId === 'approval-path-empty-1'
+          ? "Tool 'update_tool_policy' completed."
+          : "Tool 'fs_write' completed.",
+      };
+    },
+    async onDispatch(agentId, message) {
+      dispatches.push({ agentId, ...message });
+      if (dispatches.length === 1) {
+        return {
+          content: 'Waiting for approval to write S:\\Development\\Test100.',
+          metadata: {
+            pendingApprovals: [
+              {
+                id: 'approval-write-empty-1',
+                toolName: 'fs_write',
+                argsPreview: '{"path":"S:\\\\Development\\\\Test100","content":"","append":false}',
+              },
+            ],
+          },
+        };
+      }
+      return {
+        content: 'Done — created `S:\\Development\\Test100` as an empty file.',
+      };
+    },
+  });
+  const { ctx, replies } = createFakeCtx();
+
+  await channel.replyWithApprovalSupport(ctx, {
+    content: 'Waiting for approval to add S:\\Development to allowed paths.',
+    metadata: {
+      pendingApprovals: [
+        {
+          id: 'approval-path-empty-1',
+          toolName: 'update_tool_policy',
+          argsPreview: '{"action":"add_path","value":"S:\\\\Development"}',
+        },
+      ],
+    },
+  }, 'default');
+
+  await channel.handlePendingApprovalInput(ctx, 'approved', '1001:2002', '2002');
+  await channel.handlePendingApprovalInput(ctx, 'approved', '1001:2002', '2002');
+  await channel.handlePendingApprovalInput(ctx, 'approved', '1001:2002', '2002');
+
+  const output = replies.map((reply) => reply.text).join('\n');
+
+  assert.deepEqual(decisions, [
+    { approvalId: 'approval-path-empty-1', decision: 'approved' },
+    { approvalId: 'approval-write-empty-1', decision: 'approved' },
+  ]);
+  assert.equal(dispatches.length, 2);
+  assert.match(output, /Waiting for approval to add S:\\Development to allowed paths\./);
+  assert.match(output, /Waiting for approval to write S:\\Development\\Test100\./);
+  assert.match(output, /Done — created `S:\\Development\\Test100` as an empty file\./);
+  assert.match(output, /There are no pending approvals\./);
+  assert.ok(!output.includes("Tool 'fs_write' completed."));
+  assert.ok(!output.includes("Tool 'update_tool_policy' completed."));
+  assert.ok(!output.toLowerCase().includes('tool is unavailable'));
+
+  console.log('PASS telegram empty-file approval flow');
+}
+
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -316,6 +388,9 @@ assistant:
   tools:
     enabled: true
     providerRoutingEnabled: false
+runtime:
+  agentIsolation:
+    enabled: false
 guardian:
   enabled: true
 `;
@@ -370,6 +445,7 @@ guardian:
 
 async function run() {
   await runChannelApprovalFlow();
+  await runChannelEmptyFileApprovalFlow();
   await runAutomationFallbackHarness();
   process.exit(0);
 }

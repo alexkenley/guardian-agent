@@ -1,5 +1,6 @@
 import http from 'node:http';
 import https from 'node:https';
+import { normalizeCpanelConnectionConfig } from './cpanel-profile.js';
 
 export interface CpanelInstanceConfig {
   id: string;
@@ -35,10 +36,10 @@ export class CpanelClient {
   readonly config: CpanelInstanceConfig;
 
   constructor(config: CpanelInstanceConfig) {
-    this.config = {
+    this.config = normalizeCpanelConnectionConfig({
       ...config,
       ssl: config.ssl !== false,
-    };
+    });
   }
 
   async request(input: CpanelRequestInput): Promise<unknown> {

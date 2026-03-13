@@ -15,6 +15,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { loadConfig, DEFAULT_CONFIG_PATH, deepMerge, validateConfig } from './config/loader.js';
 import type { GuardianAgentConfig, MCPServerEntry, WebSearchConfig } from './config/types.js';
+import { normalizeHttpUrlRecord, normalizeOptionalHttpUrlInput } from './config/input-normalization.js';
 import yaml from 'js-yaml';
 import { Runtime } from './runtime/runtime.js';
 import { CLIChannel } from './channels/cli.js';
@@ -68,6 +69,7 @@ import { ToolExecutor } from './tools/executor.js';
 import type { ToolExecutorOptions } from './tools/executor.js';
 import type { ToolPolicySnapshot, ToolExecutionRequest } from './tools/types.js';
 import { MCPClientManager } from './tools/mcp-client.js';
+import { normalizeCpanelConnectionConfig } from './tools/cloud/cpanel-profile.js';
 import type { MCPServerConfig } from './tools/mcp-client.js';
 import { composeGuardianSystemPrompt } from './prompts/guardian-core.js';
 import { MessageRouter, type RouteDecision } from './runtime/message-router.js';
@@ -802,12 +804,28 @@ class ChatAgent extends BaseAgent {
       let llmToolDefs = allToolDefs.map((d) => toLLMToolDef(d, providerLocality));
       const pendingIds: string[] = [];
       const contextBudget = this.contextBudget;
+      let forcedPolicyRetryUsed = false;
       while (rounds < this.maxToolRounds) {
         // Context window awareness: if approaching budget, summarize oldest tool results
         compactMessagesIfOverBudget(llmMessages, contextBudget);
 
-        const response = await chatFn(llmMessages, { tools: llmToolDefs });
+        let response = await chatFn(llmMessages, { tools: llmToolDefs });
         finalContent = response.content;
+        if (
+          !forcedPolicyRetryUsed
+          && this.shouldRetryPolicyUpdateCorrection(llmMessages, finalContent, llmToolDefs)
+        ) {
+          forcedPolicyRetryUsed = true;
+          response = await chatFn(
+            [
+              ...llmMessages,
+              { role: 'assistant', content: response.content ?? '' },
+              { role: 'user', content: this.buildPolicyUpdateCorrectionPrompt() },
+            ],
+            { tools: llmToolDefs },
+          );
+          finalContent = response.content;
+        }
         if (!response.toolCalls || response.toolCalls.length === 0) {
           // Safety net for local models: if finishReason is 'stop' (no tool calls)
           // but the message clearly needed web search, pre-fetch results and re-prompt.
@@ -1247,6 +1265,45 @@ class ChatAgent extends BaseAgent {
       'as an ai, i cannot',
     ];
     return degradedPatterns.some(p => lower.includes(p));
+  }
+
+  private shouldRetryPolicyUpdateCorrection(
+    messages: ChatMessage[],
+    content: string | undefined,
+    toolDefs: Array<{ name: string }>,
+  ): boolean {
+    const lower = content?.trim().toLowerCase();
+    if (!lower) return false;
+    if (!toolDefs.some((tool) => tool.name === 'update_tool_policy')) return false;
+
+    const latestUser = [...messages].reverse().find((message) => message.role === 'user')?.content.toLowerCase() ?? '';
+    const claimsToolMissing = lower.includes('update_tool_policy') && (
+      lower.includes('not available')
+      || lower.includes('unavailable')
+      || lower.includes('no such tool')
+      || lower.includes('no equivalent tool')
+      || lower.includes('search returned no results')
+      || lower.includes('search returned no matches')
+    );
+    const pushesManualConfig = lower.includes('manually add')
+      || lower.includes('manually update')
+      || lower.includes('edit the configuration file')
+      || lower.includes('update your guardian agent config')
+      || lower.includes('you will need to manually');
+    const isPolicyScoped = /(allowlist|allow list|allowed domains|alloweddomains|allowed paths|allowed commands|outside the sandbox|blocked by policy|not in the allowed|not in alloweddomains)/.test(`${latestUser}\n${lower}`);
+
+    return isPolicyScoped && (claimsToolMissing || pushesManualConfig);
+  }
+
+  private buildPolicyUpdateCorrectionPrompt(): string {
+    return [
+      'System correction: update_tool_policy is available in your current tool list.',
+      'Do not tell the user to edit config manually for allowlist changes.',
+      'If the block is a filesystem path, call update_tool_policy with action "add_path".',
+      'If the block is a hostname/domain, call update_tool_policy with action "add_domain" using the normalized hostname only.',
+      'If the block is a command prefix, call update_tool_policy with action "add_command".',
+      'Use the tool now if policy is the blocker.',
+    ].join(' ');
   }
 
   private resolveToolResultProviderKind(
@@ -2394,6 +2451,11 @@ function sanitizeStringRecord(value: unknown): Record<string, string> | undefine
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+function sanitizeNormalizedUrlRecord(value: unknown): Record<string, string> | undefined {
+  const sanitized = sanitizeStringRecord(value);
+  return sanitized ? normalizeHttpUrlRecord(sanitized) : undefined;
+}
+
 function redactCloudConfig(cloud: GuardianAgentConfig['assistant']['tools']['cloud']): RedactedCloudConfig | undefined {
   if (!cloud) return undefined;
 
@@ -2403,6 +2465,7 @@ function redactCloudConfig(cloud: GuardianAgentConfig['assistant']['tools']['clo
   let customEndpointProfileCount = 0;
 
   const cpanelProfiles = (cloud.cpanelProfiles ?? []).map((profile) => {
+    const normalized = normalizeCpanelConnectionConfig(profile);
     const apiTokenConfigured = !!profile.apiToken?.trim();
     if (apiTokenConfigured) inlineSecretProfileCount += 1;
     if (profile.credentialRef?.trim()) credentialRefCount += 1;
@@ -2411,12 +2474,12 @@ function redactCloudConfig(cloud: GuardianAgentConfig['assistant']['tools']['clo
       id: profile.id,
       name: profile.name,
       type: profile.type,
-      host: profile.host,
-      port: profile.port,
+      host: normalized.host,
+      port: normalized.port,
       username: profile.username,
       credentialRef: profile.credentialRef,
       apiTokenConfigured,
-      ssl: profile.ssl !== false,
+      ssl: normalized.ssl !== false,
       allowSelfSigned: profile.allowSelfSigned === true,
       defaultCpanelUser: profile.defaultCpanelUser,
     };
@@ -2430,7 +2493,7 @@ function redactCloudConfig(cloud: GuardianAgentConfig['assistant']['tools']['clo
     return {
       id: profile.id,
       name: profile.name,
-      apiBaseUrl: profile.apiBaseUrl,
+      apiBaseUrl: normalizeOptionalHttpUrlInput(profile.apiBaseUrl),
       credentialRef: profile.credentialRef,
       apiTokenConfigured,
       teamId: profile.teamId,
@@ -2446,7 +2509,7 @@ function redactCloudConfig(cloud: GuardianAgentConfig['assistant']['tools']['clo
     return {
       id: profile.id,
       name: profile.name,
-      apiBaseUrl: profile.apiBaseUrl,
+      apiBaseUrl: normalizeOptionalHttpUrlInput(profile.apiBaseUrl),
       credentialRef: profile.credentialRef,
       apiTokenConfigured,
       accountId: profile.accountId,
@@ -2462,7 +2525,7 @@ function redactCloudConfig(cloud: GuardianAgentConfig['assistant']['tools']['clo
     if (profile.accessKeyIdCredentialRef?.trim()) credentialRefCount += 1;
     if (profile.secretAccessKeyCredentialRef?.trim()) credentialRefCount += 1;
     if (profile.sessionTokenCredentialRef?.trim()) credentialRefCount += 1;
-    const endpoints = sanitizeStringRecord(profile.endpoints);
+    const endpoints = sanitizeNormalizedUrlRecord(profile.endpoints);
     if (endpoints) customEndpointProfileCount += 1;
     return {
       id: profile.id,
@@ -2484,7 +2547,7 @@ function redactCloudConfig(cloud: GuardianAgentConfig['assistant']['tools']['clo
     if (accessTokenConfigured || serviceAccountConfigured) inlineSecretProfileCount += 1;
     if (profile.accessTokenCredentialRef?.trim()) credentialRefCount += 1;
     if (profile.serviceAccountCredentialRef?.trim()) credentialRefCount += 1;
-    const endpoints = sanitizeStringRecord(profile.endpoints);
+    const endpoints = sanitizeNormalizedUrlRecord(profile.endpoints);
     if (endpoints) customEndpointProfileCount += 1;
     return {
       id: profile.id,
@@ -2507,7 +2570,7 @@ function redactCloudConfig(cloud: GuardianAgentConfig['assistant']['tools']['clo
     if (profile.accessTokenCredentialRef?.trim()) credentialRefCount += 1;
     if (profile.clientIdCredentialRef?.trim()) credentialRefCount += 1;
     if (profile.clientSecretCredentialRef?.trim()) credentialRefCount += 1;
-    const endpoints = sanitizeStringRecord(profile.endpoints);
+    const endpoints = sanitizeNormalizedUrlRecord(profile.endpoints);
     if (endpoints || profile.blobBaseUrl?.trim()) customEndpointProfileCount += 1;
     return {
       id: profile.id,
@@ -2521,7 +2584,7 @@ function redactCloudConfig(cloud: GuardianAgentConfig['assistant']['tools']['clo
       clientSecretCredentialRef: profile.clientSecretCredentialRef,
       clientSecretConfigured,
       defaultResourceGroup: profile.defaultResourceGroup,
-      blobBaseUrl: profile.blobBaseUrl,
+      blobBaseUrl: normalizeOptionalHttpUrlInput(profile.blobBaseUrl),
       endpoints,
     };
   });
@@ -2587,7 +2650,7 @@ function mergeCloudConfigForValidation(
         return {
           ...existing,
           ...profile,
-          apiBaseUrl: hasOwnProp(profile, 'apiBaseUrl') ? trimOptionalString(profile.apiBaseUrl) : existing?.apiBaseUrl,
+          apiBaseUrl: hasOwnProp(profile, 'apiBaseUrl') ? normalizeOptionalHttpUrlInput(profile.apiBaseUrl) : existing?.apiBaseUrl,
           apiToken: hasOwnProp(profile, 'apiToken') ? trimOptionalString(profile.apiToken) : existing?.apiToken,
           credentialRef: hasOwnProp(profile, 'credentialRef') ? trimOptionalString(profile.credentialRef) : existing?.credentialRef,
           teamId: hasOwnProp(profile, 'teamId') ? trimOptionalString(profile.teamId) : existing?.teamId,
@@ -2601,7 +2664,7 @@ function mergeCloudConfigForValidation(
         return {
           ...existing,
           ...profile,
-          apiBaseUrl: hasOwnProp(profile, 'apiBaseUrl') ? trimOptionalString(profile.apiBaseUrl) : existing?.apiBaseUrl,
+          apiBaseUrl: hasOwnProp(profile, 'apiBaseUrl') ? normalizeOptionalHttpUrlInput(profile.apiBaseUrl) : existing?.apiBaseUrl,
           apiToken: hasOwnProp(profile, 'apiToken') ? trimOptionalString(profile.apiToken) : existing?.apiToken,
           credentialRef: hasOwnProp(profile, 'credentialRef') ? trimOptionalString(profile.credentialRef) : existing?.credentialRef,
           accountId: hasOwnProp(profile, 'accountId') ? trimOptionalString(profile.accountId) : existing?.accountId,
@@ -2621,7 +2684,7 @@ function mergeCloudConfigForValidation(
           secretAccessKeyCredentialRef: hasOwnProp(profile, 'secretAccessKeyCredentialRef') ? trimOptionalString(profile.secretAccessKeyCredentialRef) : existing?.secretAccessKeyCredentialRef,
           sessionToken: hasOwnProp(profile, 'sessionToken') ? trimOptionalString(profile.sessionToken) : existing?.sessionToken,
           sessionTokenCredentialRef: hasOwnProp(profile, 'sessionTokenCredentialRef') ? trimOptionalString(profile.sessionTokenCredentialRef) : existing?.sessionTokenCredentialRef,
-          endpoints: hasOwnProp(profile, 'endpoints') ? sanitizeStringRecord(profile.endpoints) : existing?.endpoints,
+          endpoints: hasOwnProp(profile, 'endpoints') ? sanitizeNormalizedUrlRecord(profile.endpoints) : existing?.endpoints,
         };
       })
       : current.awsProfiles,
@@ -2636,7 +2699,7 @@ function mergeCloudConfigForValidation(
           accessTokenCredentialRef: hasOwnProp(profile, 'accessTokenCredentialRef') ? trimOptionalString(profile.accessTokenCredentialRef) : existing?.accessTokenCredentialRef,
           serviceAccountJson: hasOwnProp(profile, 'serviceAccountJson') ? trimOptionalString(profile.serviceAccountJson) : existing?.serviceAccountJson,
           serviceAccountCredentialRef: hasOwnProp(profile, 'serviceAccountCredentialRef') ? trimOptionalString(profile.serviceAccountCredentialRef) : existing?.serviceAccountCredentialRef,
-          endpoints: hasOwnProp(profile, 'endpoints') ? sanitizeStringRecord(profile.endpoints) : existing?.endpoints,
+          endpoints: hasOwnProp(profile, 'endpoints') ? sanitizeNormalizedUrlRecord(profile.endpoints) : existing?.endpoints,
         };
       })
       : current.gcpProfiles,
@@ -2654,8 +2717,8 @@ function mergeCloudConfigForValidation(
           clientSecret: hasOwnProp(profile, 'clientSecret') ? trimOptionalString(profile.clientSecret) : existing?.clientSecret,
           clientSecretCredentialRef: hasOwnProp(profile, 'clientSecretCredentialRef') ? trimOptionalString(profile.clientSecretCredentialRef) : existing?.clientSecretCredentialRef,
           defaultResourceGroup: hasOwnProp(profile, 'defaultResourceGroup') ? trimOptionalString(profile.defaultResourceGroup) : existing?.defaultResourceGroup,
-          blobBaseUrl: hasOwnProp(profile, 'blobBaseUrl') ? trimOptionalString(profile.blobBaseUrl) : existing?.blobBaseUrl,
-          endpoints: hasOwnProp(profile, 'endpoints') ? sanitizeStringRecord(profile.endpoints) : existing?.endpoints,
+          blobBaseUrl: hasOwnProp(profile, 'blobBaseUrl') ? normalizeOptionalHttpUrlInput(profile.blobBaseUrl) : existing?.blobBaseUrl,
+          endpoints: hasOwnProp(profile, 'endpoints') ? sanitizeNormalizedUrlRecord(profile.endpoints) : existing?.endpoints,
         };
       })
       : current.azureProfiles,
@@ -4823,11 +4886,11 @@ function buildDashboardCallbacks(
                 if (trimmed) llmSection[name].credentialRef = trimmed;
                 else delete llmSection[name].credentialRef;
               }
-              if (providerUpdates.baseUrl !== undefined) {
-                const trimmed = providerUpdates.baseUrl.trim();
-                if (trimmed) llmSection[name].baseUrl = trimmed;
-                else delete llmSection[name].baseUrl;
-              }
+	              if (providerUpdates.baseUrl !== undefined) {
+	                const trimmed = normalizeOptionalHttpUrlInput(providerUpdates.baseUrl);
+	                if (trimmed) llmSection[name].baseUrl = trimmed;
+	                else delete llmSection[name].baseUrl;
+	              }
             }
             rawConfig.llm = llmSection;
           }
@@ -4944,15 +5007,28 @@ function buildDashboardCallbacks(
               const previous = existingProfilesById(rawCloud, 'cpanelProfiles');
               rawCloud.cpanelProfiles = cloudUpdate.cpanelProfiles.map((profile) => {
                 const current = previous.get(profile.id);
+                const normalized = normalizeCpanelConnectionConfig({
+                  host: profile.host.trim(),
+                  port: typeof profile.port === 'number' && Number.isFinite(profile.port)
+                    ? profile.port
+                    : typeof current?.port === 'number' && Number.isFinite(current.port)
+                      ? current.port
+                      : undefined,
+                  ssl: typeof profile.ssl === 'boolean'
+                    ? profile.ssl
+                    : typeof current?.ssl === 'boolean'
+                      ? current.ssl
+                      : undefined,
+                });
                 const next: Record<string, unknown> = {
                   id: profile.id.trim(),
                   name: profile.name.trim(),
                   type: profile.type,
-                  host: profile.host.trim(),
+                  host: normalized.host,
                   username: profile.username.trim(),
                 };
-                if (typeof profile.port === 'number' && Number.isFinite(profile.port)) next.port = profile.port;
-                if (typeof profile.ssl === 'boolean') next.ssl = profile.ssl;
+                if (normalized.port !== undefined) next.port = normalized.port;
+                if (normalized.ssl !== undefined) next.ssl = normalized.ssl;
                 if (typeof profile.allowSelfSigned === 'boolean') next.allowSelfSigned = profile.allowSelfSigned;
                 if (hasOwn(profile, 'defaultCpanelUser')) {
                   const trimmed = trimOrUndefined(profile.defaultCpanelUser);
@@ -4984,11 +5060,11 @@ function buildDashboardCallbacks(
                   id: profile.id.trim(),
                   name: profile.name.trim(),
                 };
-                if (hasOwn(profile, 'apiBaseUrl')) {
-                  const trimmed = trimOrUndefined(profile.apiBaseUrl);
-                  if (trimmed) next.apiBaseUrl = trimmed;
-                } else if (typeof current?.apiBaseUrl === 'string') {
-                  next.apiBaseUrl = current.apiBaseUrl;
+	                if (hasOwn(profile, 'apiBaseUrl')) {
+	                  const trimmed = normalizeOptionalHttpUrlInput(typeof profile.apiBaseUrl === 'string' ? profile.apiBaseUrl : undefined);
+	                  if (trimmed) next.apiBaseUrl = trimmed;
+	                } else if (typeof current?.apiBaseUrl === 'string') {
+	                  next.apiBaseUrl = current.apiBaseUrl;
                 }
                 if (hasOwn(profile, 'credentialRef')) {
                   const trimmed = trimOrUndefined(profile.credentialRef);
@@ -5026,11 +5102,11 @@ function buildDashboardCallbacks(
                   id: profile.id.trim(),
                   name: profile.name.trim(),
                 };
-                if (hasOwn(profile, 'apiBaseUrl')) {
-                  const trimmed = trimOrUndefined(profile.apiBaseUrl);
-                  if (trimmed) next.apiBaseUrl = trimmed;
-                } else if (typeof current?.apiBaseUrl === 'string') {
-                  next.apiBaseUrl = current.apiBaseUrl;
+	                if (hasOwn(profile, 'apiBaseUrl')) {
+	                  const trimmed = normalizeOptionalHttpUrlInput(typeof profile.apiBaseUrl === 'string' ? profile.apiBaseUrl : undefined);
+	                  if (trimmed) next.apiBaseUrl = trimmed;
+	                } else if (typeof current?.apiBaseUrl === 'string') {
+	                  next.apiBaseUrl = current.apiBaseUrl;
                 }
                 if (hasOwn(profile, 'credentialRef')) {
                   const trimmed = trimOrUndefined(profile.credentialRef);
@@ -5084,11 +5160,11 @@ function buildDashboardCallbacks(
                     next[field] = current[field];
                   }
                 }
-                if (hasOwn(profile, 'endpoints')) {
-                  const endpoints = sanitizeStringRecord(profile.endpoints);
-                  if (endpoints) next.endpoints = endpoints;
-                } else if (isRecord(current?.endpoints)) {
-                  next.endpoints = current.endpoints;
+	                if (hasOwn(profile, 'endpoints')) {
+	                  const endpoints = sanitizeNormalizedUrlRecord(profile.endpoints);
+	                  if (endpoints) next.endpoints = endpoints;
+	                } else if (isRecord(current?.endpoints)) {
+	                  next.endpoints = current.endpoints;
                 }
                 return next;
               });
@@ -5122,11 +5198,11 @@ function buildDashboardCallbacks(
                     next[field] = current[field];
                   }
                 }
-                if (hasOwn(profile, 'endpoints')) {
-                  const endpoints = sanitizeStringRecord(profile.endpoints);
-                  if (endpoints) next.endpoints = endpoints;
-                } else if (isRecord(current?.endpoints)) {
-                  next.endpoints = current.endpoints;
+	                if (hasOwn(profile, 'endpoints')) {
+	                  const endpoints = sanitizeNormalizedUrlRecord(profile.endpoints);
+	                  if (endpoints) next.endpoints = endpoints;
+	                } else if (isRecord(current?.endpoints)) {
+	                  next.endpoints = current.endpoints;
                 }
                 return next;
               });
@@ -5141,29 +5217,31 @@ function buildDashboardCallbacks(
                   name: profile.name.trim(),
                   subscriptionId: profile.subscriptionId.trim(),
                 };
-                for (const field of [
-                  'tenantId',
-                  'accessToken',
-                  'accessTokenCredentialRef',
-                  'clientId',
+	                for (const field of [
+	                  'tenantId',
+	                  'accessToken',
+	                  'accessTokenCredentialRef',
+	                  'clientId',
                   'clientIdCredentialRef',
                   'clientSecret',
                   'clientSecretCredentialRef',
                   'defaultResourceGroup',
                   'blobBaseUrl',
                 ] as const) {
-                  if (hasOwn(profile, field)) {
-                    const trimmed = trimOrUndefined(profile[field]);
-                    if (trimmed) next[field] = trimmed;
-                  } else if (typeof current?.[field] === 'string') {
-                    next[field] = current[field];
-                  }
-                }
-                if (hasOwn(profile, 'endpoints')) {
-                  const endpoints = sanitizeStringRecord(profile.endpoints);
-                  if (endpoints) next.endpoints = endpoints;
-                } else if (isRecord(current?.endpoints)) {
-                  next.endpoints = current.endpoints;
+	                  if (hasOwn(profile, field)) {
+	                    const trimmed = field === 'blobBaseUrl'
+	                      ? normalizeOptionalHttpUrlInput(typeof profile[field] === 'string' ? profile[field] : undefined)
+	                      : trimOrUndefined(profile[field]);
+	                    if (trimmed) next[field] = trimmed;
+	                  } else if (typeof current?.[field] === 'string') {
+	                    next[field] = current[field];
+	                  }
+	                }
+	                if (hasOwn(profile, 'endpoints')) {
+	                  const endpoints = sanitizeNormalizedUrlRecord(profile.endpoints);
+	                  if (endpoints) next.endpoints = endpoints;
+	                } else if (isRecord(current?.endpoints)) {
+	                  next.endpoints = current.endpoints;
                 }
                 return next;
               });
@@ -6504,12 +6582,16 @@ async function main(): Promise<void> {
 
   const toolExecutor = new ToolExecutor(toolExecutorOptions);
 
-  runtime.workerManager = new WorkerManager(
-    toolExecutor,
-    runtime,
-    config.runtime.agentIsolation,
-    DEFAULT_SANDBOX_CONFIG,
-  );
+  if (config.runtime.agentIsolation.enabled && config.runtime.agentIsolation.mode === 'brokered') {
+    runtime.workerManager = new WorkerManager(
+      toolExecutor,
+      runtime,
+      config.runtime.agentIsolation,
+      DEFAULT_SANDBOX_CONFIG,
+    );
+  } else {
+    runtime.workerManager = undefined;
+  }
 
   const initialSearchReload = await initialSearchReloadRef.current();
   if (!initialSearchReload.success) {

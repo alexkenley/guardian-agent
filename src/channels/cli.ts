@@ -464,7 +464,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write('\n' + resultMessages.join('\n') + '\n\n');
 
     // On approval, auto-continue so the LLM can complete the original task
-    if (decision === 'approved' && allSucceeded && agentId && this.dashboard?.onDispatch) {
+    if (decision === 'approved' && agentId && this.dashboard?.onDispatch) {
       const summary = resultMessages.map((r) => r.replace(/\x1b\[\d+m/g, '')).join('; ');
       try {
         const continuation = await this.dashboard.onDispatch(agentId, {

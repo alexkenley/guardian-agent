@@ -4136,12 +4136,83 @@ function renderAppearanceTab(panel) {
 }
 
 function createGenericHelpFactory(area) {
-  return (title) => ({
-    whatItIs: `${title} is a specific subsection inside ${area} for one part of setup, policy, integration, or system control.`,
-    whatSeeing: 'You are seeing the live settings, status indicators, or management controls that belong to this subsection.',
-    whatCanDo: 'Use the controls here to inspect or change the part of configuration this subsection owns.',
-    howLinks: `This section supports the broader ${area} workflow and affects related operational behavior elsewhere in the app.`,
-  });
+  const exact = {
+    'Credential Refs': {
+      whatItIs: 'This section is the registry for advanced environment-backed credential references used by providers, search, and integrations.',
+      whatSeeing: 'You are seeing the current ref list, the selected ref editor, and the environment-variable target each ref points at.',
+      whatCanDo: 'Create a new env-backed ref, review an existing one, or delete a ref that is no longer needed.',
+      howLinks: 'These refs are consumed by provider, search, Telegram, and other config panels when you do not want to paste secrets directly into the UI.',
+    },
+    'Local Provider Settings': {
+      whatItIs: 'This section is the editor for a local AI provider such as Ollama running on the same machine or network.',
+      whatSeeing: 'You are seeing the local provider name, provider type, model selection, base URL, and connection or save actions.',
+      whatCanDo: 'Configure a local model runtime, test whether Guardian can reach it, and save that provider into the available profile list.',
+      howLinks: 'Local providers become selectable model paths for chat, workflows, and tool-routing decisions elsewhere in the product.',
+    },
+    'External Provider Settings': {
+      whatItIs: 'This section is the editor for a hosted AI provider such as OpenAI, Anthropic, Groq, Google, or another external API family.',
+      whatSeeing: 'You are seeing provider identity, model selection, credential inputs or refs, optional base URL override, and test or save actions.',
+      whatCanDo: 'Configure a hosted provider, validate connectivity, rotate credentials, and save that provider for chat, fallback, or routing use.',
+      howLinks: 'External providers supply the hosted model paths used across assistant responses, automations, and failover behavior.',
+    },
+    'Cloud Configuration': {
+      whatItIs: 'This section is the advanced raw-config editor for `assistant.tools.cloud` rather than the guided Cloud page workflow.',
+      whatSeeing: 'You are seeing the global cloud-runtime toggle, security notes about inline secret markers, and provider-specific JSON blocks.',
+      whatCanDo: 'Inspect or edit the raw cloud config directly when you need an advanced path that is more flexible than the guided Cloud UI.',
+      howLinks: 'This is the advanced configuration counterpart to the Cloud page, which remains the primary guided editing surface.',
+    },
+    'cPanel / WHM': {
+      whatItIs: 'This section contains the raw profile array for cPanel and WHM cloud-tool connections.',
+      whatSeeing: 'You are seeing the saved cPanel or WHM profiles as JSON together with the field expectations for host, auth, TLS, and default user settings.',
+      whatCanDo: 'Review or edit cPanel and WHM profiles directly when you need a raw-config path.',
+      howLinks: 'These profiles are consumed by cPanel and WHM tools and mirror the same connection family shown on the Cloud page.',
+    },
+    Vercel: {
+      whatItIs: 'This section contains the raw profile array for Vercel connections used by the cloud-tool layer.',
+      whatSeeing: 'You are seeing saved Vercel profiles as JSON together with the keys expected for token, team, slug, and API base URL.',
+      whatCanDo: 'Review or edit Vercel profiles directly when you need to inspect or change raw config.',
+      howLinks: 'These profiles back Vercel tool calls and mirror the guided Vercel connection flow on the Cloud page.',
+    },
+    Cloudflare: {
+      whatItIs: 'This section contains the raw profile array for Cloudflare connections used by the cloud-tool layer.',
+      whatSeeing: 'You are seeing saved Cloudflare profiles as JSON together with the expected account, zone, token, and API URL fields.',
+      whatCanDo: 'Review or edit Cloudflare profiles directly when you need a raw-config path instead of the guided editor.',
+      howLinks: 'These profiles back Cloudflare tool execution and correspond to the Cloudflare connection family on the Cloud page.',
+    },
+    AWS: {
+      whatItIs: 'This section contains the raw profile array for AWS connections used by the cloud-tool layer.',
+      whatSeeing: 'You are seeing saved AWS profiles as JSON including region, credential-ref fields, optional inline credentials, and endpoint overrides.',
+      whatCanDo: 'Review or edit AWS profiles directly when you need to inspect advanced fields or override endpoints.',
+      howLinks: 'These profiles are used by AWS tools and correspond to the AWS connection workflow on the Cloud page.',
+    },
+    GCP: {
+      whatItIs: 'This section contains the raw profile array for GCP connections used by the cloud-tool layer.',
+      whatSeeing: 'You are seeing saved GCP profiles as JSON including project, location, token or service-account refs, and endpoint overrides.',
+      whatCanDo: 'Review or edit GCP profiles directly when you need to inspect or change advanced connection fields.',
+      howLinks: 'These profiles back GCP tool execution and mirror the GCP connection family on the Cloud page.',
+    },
+    Azure: {
+      whatItIs: 'This section contains the raw profile array for Azure connections used by the cloud-tool layer.',
+      whatSeeing: 'You are seeing saved Azure profiles as JSON including subscription, tenant, credential refs, blob URL, and endpoint overrides.',
+      whatCanDo: 'Review or edit Azure profiles directly when you need to work at the raw-config layer.',
+      howLinks: 'These profiles back Azure tool execution and correspond to the Azure connection workflow on the Cloud page.',
+    },
+  };
+
+  return (title) => {
+    if (exact[title]) return exact[title];
+    if (title === 'Add New Local Provider') return exact['Local Provider Settings'];
+    if (title === 'Add New External Provider') return exact['External Provider Settings'];
+    if (/^Edit\s+/.test(title)) {
+      return {
+        whatItIs: 'This section is the editor for the currently selected AI provider profile.',
+        whatSeeing: 'You are seeing the saved values for that provider together with the fields allowed for model, endpoint, and credential updates.',
+        whatCanDo: 'Adjust the selected provider, rotate credentials if needed, retest connectivity, and save the updated profile.',
+        howLinks: 'Changes made here update a provider profile that can be used by chat, automations, fallback, and routing elsewhere in Guardian.',
+      };
+    }
+    return null;
+  };
 }
 
 // ─── Helpers ────────────────────────────────────────────

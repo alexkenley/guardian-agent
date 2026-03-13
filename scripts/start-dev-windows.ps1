@@ -1,10 +1,10 @@
 ﻿# GuardianAgent — Local Development Script
-# Builds, tests, checks dependencies, and starts the system.
+# Cleans build artifacts, rebuilds, tests, checks dependencies, and starts the system.
 #
 # Usage:
-#   .\scripts\start-dev-windows.ps1              # Full build + test + start
-#   .\scripts\start-dev-windows.ps1 -SkipTests   # Build + start (skip tests)
-#   .\scripts\start-dev-windows.ps1 -BuildOnly   # Build + test only (don't start)
+#   .\scripts\start-dev-windows.ps1              # Clean build + test + start
+#   .\scripts\start-dev-windows.ps1 -SkipTests   # Clean build + start (skip tests)
+#   .\scripts\start-dev-windows.ps1 -BuildOnly   # Clean build + test only (don't start)
 #   .\scripts\start-dev-windows.ps1 -StartOnly   # Start without rebuilding
 
 param(
@@ -117,6 +117,24 @@ function Get-TestWaitMessages {
         "Confirming process shutdown hygiene...",
         "Almost there, stitching final reports..."
     )
+}
+
+function Remove-DevArtifacts {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ProjectRoot
+    )
+
+    $pathsToRemove = @(
+        (Join-Path $ProjectRoot "dist"),
+        (Join-Path $ProjectRoot "coverage")
+    )
+
+    foreach ($path in $pathsToRemove) {
+        if (Test-Path $path) {
+            Remove-Item -Recurse -Force $path
+        }
+    }
 }
 
 function Get-WebAuthTokenFromContent {
@@ -376,11 +394,8 @@ Write-Host "  Checking bundled tools..." -ForegroundColor DarkCyan
 if (-not $StartOnly) {
     # --- Step 3: Build ---
     Write-Host "[3/6] Building TypeScript..." -ForegroundColor DarkCyan
-    Write-WaitLine "Forging TypeScript into JavaScript..."
-    $distPath = Join-Path $Root "dist"
-    if (Test-Path $distPath) {
-        Remove-Item -Recurse -Force $distPath
-    }
+    Write-WaitLine "Cleaning old build artifacts and forging TypeScript into JavaScript..."
+    Remove-DevArtifacts -ProjectRoot $Root
     npm run build
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  ERROR: Build failed" -ForegroundColor Red

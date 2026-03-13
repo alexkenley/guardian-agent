@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { AddressInfo } from 'node:net';
 import { CpanelClient, unwrapUapiResponse, unwrapWhmResponse } from './cpanel-client.js';
+import { normalizeCpanelConnectionConfig } from './cpanel-profile.js';
 
 const servers: Server[] = [];
 
@@ -35,6 +36,24 @@ describe('cpanel-client', () => {
         reason: 'denied',
       },
     })).toThrow('denied');
+  });
+
+  it('normalizes full endpoint input into host, port, and ssl', () => {
+    expect(normalizeCpanelConnectionConfig({
+      host: 'https://vmres13.web-servers.com.au/',
+    })).toEqual({
+      host: 'vmres13.web-servers.com.au',
+      port: undefined,
+      ssl: true,
+    });
+
+    expect(normalizeCpanelConnectionConfig({
+      host: 'vmres13.web-servers.com.au:2087/',
+    })).toEqual({
+      host: 'vmres13.web-servers.com.au',
+      port: 2087,
+      ssl: undefined,
+    });
   });
 
   it('builds WHM requests with auth and query params', async () => {

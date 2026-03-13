@@ -77,6 +77,7 @@ export class Runtime {
       inputSanitization: guardianConfig.inputSanitization,
       piiRedaction: guardianConfig.piiRedaction,
       rateLimit: guardianConfig.rateLimit,
+      ssrf: guardianConfig.ssrf,
       allowedCommands: this.config.assistant?.tools?.allowedCommands,
     });
 

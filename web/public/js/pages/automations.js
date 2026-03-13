@@ -211,12 +211,7 @@ function reorderAutomationsForUi(automations) {
 }
 
 function createGenericHelpFactory(area) {
-  return (title) => ({
-    whatItIs: `${title} is a named section inside ${area} and exists to show or control one specific part of the automation workflow lifecycle.`,
-    whatSeeing: 'You are seeing the live rows, controls, or output that belong to this automation subsection rather than a generic placeholder panel.',
-    whatCanDo: 'Use the controls and records in this section to inspect current automation state or make the change that section is responsible for.',
-    howLinks: `This section supports the broader ${area} workflow, but related incident handling, provider setup, or domain-specific investigation may still live on other owner pages.`,
-  });
+  return () => null;
 }
 
 // ─── Data Model — merge workflows + scheduled tasks ──────

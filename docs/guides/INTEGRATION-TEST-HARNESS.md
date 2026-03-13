@@ -117,6 +117,13 @@ For planner-path bugs such as tool discovery regressions, "tool is unavailable" 
 
 For web approval UX regressions, assert both the positive action copy and the absence of internal schema chatter. A good write-to-new-path scenario should produce approval text like `Waiting for approval to add S:\Development to allowed paths.` followed by `Waiting for approval to write S:\Development\test26.txt.`, and should not contain phrases like `tool is unavailable`, `tool is available`, or `action and value`.
 
+When new configuration inputs are added, especially host fields, base URLs, endpoint override maps, or similar operator-entered connection targets, extend the harness to cover both:
+
+- validation failures for malformed input
+- normalization of acceptable input variants into the canonical runtime form
+
+Do not rely on UI placeholders alone for this. Add regression coverage so values like root URLs, trailing slashes, `host:port`, or provider-specific base paths are either normalized deliberately or rejected with a clear error.
+
 Example script generated during debugging (see `scripts/test-web-approvals.mjs`):
 ```bash
 node scripts/test-web-approvals.mjs

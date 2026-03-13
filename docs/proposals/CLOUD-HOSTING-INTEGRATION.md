@@ -101,6 +101,17 @@ This repository now also implements the core of **Phase 4**:
 
 The remaining work for this provider family is primarily deeper action coverage per AWS service, richer pagination/filter helpers, and live-environment verification against a staged AWS account.
 
+### Input Normalization Rule
+
+Cloud and hosting configuration inputs must not be treated as raw passthrough strings when the field semantics are known.
+
+- fields named `host` must accept sensible operator input such as hostname, `host:port`, or root `http(s)` URL when appropriate, then normalize to the canonical host form used by runtime checks
+- fields named `apiBaseUrl`, `blobBaseUrl`, `baseUrl`, or service endpoint overrides must validate and normalize full `http(s)` URLs before persistence and before runtime use
+- newly added provider fields must be reviewed at implementation time to decide whether they are identifiers, hosts, root URLs, or endpoint maps; each class needs the correct normalization and validation behavior
+- operator help text in the web UI and related docs must state the expected format explicitly so users are not forced to infer it from failures
+
+This requirement applies not only to the currently implemented cloud providers, but also to any future cloud, hosting, connector, or infrastructure configuration inputs added to GuardianAgent.
+
 ### Cloud Service Providers
 
 The current provider roadmap is:
@@ -785,6 +796,13 @@ The direct CLI commands should map to the same underlying tool handlers and outp
 
 ### Web UI Requirements
 
+Cloud section help must follow a strict usefulness rule:
+
+- every help affordance must explain the actual panel content the user is looking at right now
+- help text must describe concrete rows, controls, outputs, and next actions for that section
+- help text must not fall back to generic "this section is part of the cloud workflow" copy
+- if a section does not yet have useful, section-specific help text, the UI should omit the help affordance until it does
+
 #### Security Panel
 
 Add a **Cloud Security** section for provider security posture and monitoring.
@@ -812,6 +830,14 @@ It should support:
 - copy, text export, and HTML export for output blocks
 
 The UX should be designed for future multi-connection support, even if the initial release only exposes one active connection per provider.
+
+For provider configuration and management surfaces, the preferred pattern is:
+
+- provider families shown as separate sections
+- saved profiles listed on the left
+- selecting a saved profile opens its edit state on the right
+- `Add` switches the editor into a create-new-profile state
+- section help must explain whether the panel is showing posture, saved-profile selection, create state, edit state, or recent activity
 
 #### Automations
 

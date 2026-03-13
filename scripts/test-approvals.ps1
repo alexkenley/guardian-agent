@@ -9,9 +9,9 @@
     - Single-tool pending approval via direct API and LLM path
     - Multi-tool pending approval (multiple tools pending simultaneously)
     - Approve/deny single, approve/deny all
-    - Policy mode transitions (autonomous → approve_by_policy → approve_each)
+    - Policy mode transitions (autonomous -> approve_by_policy -> approve_each)
     - Post-approval result synthesis (LLM describes what happened, not just "Tool X completed")
-    - Double-approval flows (update_tool_policy → fs_write)
+    - Double-approval flows (update_tool_policy -> fs_write)
 
     Uses both POST /api/tools/run (deterministic, bypasses LLM) and
     POST /api/message (LLM path, tests real user experience).
@@ -49,7 +49,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-# ─── State ────────────────────────────────────────────────
+# --- State ------------------------------------------------
 $BaseUrl = "http://localhost:$Port"
 $TimeoutStartup = 30
 $TimeoutResponse = 120
@@ -61,7 +61,7 @@ $Results = @()
 $LogFile = Join-Path $env:TEMP "guardian-approvals-harness.log"
 $TestDir = "/tmp/harness-approvals-test"
 
-# ─── Helpers ─────────────────────────────────────────────
+# --- Helpers ---------------------------------------------
 function Write-Log($msg) { Write-Host "[approvals] $msg" -ForegroundColor Cyan }
 function Write-Pass($name) {
     Write-Host "  PASS " -ForegroundColor Green -NoNewline; Write-Host $name
@@ -126,6 +126,12 @@ function Test-Contains {
         Write-Fail $Name "expected '$Expected' in: $preview"
         return $false
     }
+}
+
+function Is-ProviderFailure {
+    param([string]$Message)
+    if (-not $Message) { return $false }
+    return ($Message -match "Internal Server Error") -or ($Message -match "\(\s*500\s*\)")
 }
 
 function Test-NotContains {
@@ -233,7 +239,7 @@ function Clear-AllPendingApprovals {
     }
 }
 
-# ─── Start the app ────────────────────────────────────────
+# --- Start the app ---------------------------------------
 if (-not $SkipStart) {
     $existing = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match "src[/\\]index\.ts|dist[/\\]index\.js" }
@@ -246,28 +252,13 @@ if (-not $SkipStart) {
     }
 
     $projectRoot = Split-Path -Parent $PSScriptRoot
-    $userConfig = Join-Path $env:USERPROFILE ".guardianagent\config.yaml"
     $harnessConfig = Join-Path $env:TEMP "guardian-approvals-harness-config.yaml"
 
     if (-not $Token -or $Token -match "^test-approvals-") {
         $Token = "harness-" + [guid]::NewGuid().ToString("N")
     }
 
-    if (Test-Path $userConfig) {
-        $configContent = Get-Content $userConfig -Raw
-        $configContent = $configContent -replace '(?m)^  web:\r?\n(    .*\r?\n)*', ''
-        $configContent = $configContent -replace '(?m)^\s*authToken:.*\r?\n?', ''
-        $webBlock = @"
-  web:
-    enabled: true
-    port: $Port
-    authToken: "$Token"
-"@
-        $configContent = $configContent -replace '(channels:\s*\r?\n)', "`$1$webBlock`n"
-        $configContent | Set-Content $harnessConfig -Encoding utf8
-    }
-    else {
-        @"
+    @"
 llm:
   ollama:
     provider: ollama
@@ -281,10 +272,15 @@ channels:
     enabled: true
     port: $Port
     authToken: "$Token"
+assistant:
+  setup:
+    completed: true
+runtime:
+  agentIsolation:
+    enabled: false
 guardian:
   enabled: true
 "@ | Set-Content $harnessConfig -Encoding utf8
-    }
 
     Write-Log "Starting GuardianAgent with token: $Token"
 
@@ -321,7 +317,7 @@ else {
     Write-Log "Skipping app startup (-SkipStart). Using $BaseUrl"
 }
 
-# ─── Cleanup on exit ─────────────────────────────────────
+# --- Cleanup on exit -------------------------------------
 $cleanupBlock = {
     if ($script:AppProcess -and -not $script:AppProcess.HasExited) {
         if ($script:Keep) {
@@ -338,7 +334,7 @@ $cleanupBlock = {
 
 try {
 
-# ─── LLM Provider Info ───────────────────────────────────
+# --- LLM Provider Info -----------------------------------
 Write-Host ""
 try {
     $providers = Invoke-RestMethod -Uri "$BaseUrl/api/providers" `
@@ -346,7 +342,7 @@ try {
     if ($providers -and $providers.Count -gt 0) {
         foreach ($p in $providers) {
             $locality = if ($p.locality) { $p.locality } else { "unknown" }
-            Write-Log "LLM Provider: $($p.name) ($($p.type)) — model: $($p.model), locality: $locality"
+            Write-Log "LLM Provider: $($p.name) ($($p.type)) - model: $($p.model), locality: $locality"
         }
     }
     else {
@@ -357,9 +353,9 @@ catch {
     Write-Log "LLM Provider: could not query /api/providers"
 }
 
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 # SETUP: Start in autonomous mode with a safe sandbox
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 Write-Host ""
 Write-Log "=== Setup ==="
 
@@ -376,11 +372,11 @@ Write-Pass "setup: autonomous policy + sandbox"
 # Clear any leftover pending approvals from previous runs
 Clear-AllPendingApprovals
 
-# ═══════════════════════════════════════════════════════════════
-# SECTION 1: Direct API — Single Tool Approval (Deterministic)
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
+# SECTION 1: Direct API - Single Tool Approval (Deterministic)
+# ===============================================================
 Write-Host ""
-Write-Log "=== Section 1: Direct API — Single Tool Approval ==="
+Write-Log "=== Section 1: Direct API - Single Tool Approval ==="
 
 # Switch to approve_by_policy, set fs_write to manual (forces approval)
 $null = Invoke-ToolPolicy @{
@@ -403,7 +399,7 @@ if ($runResult.status -eq "pending_approval") {
 # 1b. Verify the approval has toolName and args in the API response
 $approvalId1 = $runResult.approvalId
 if ($approvalId1) {
-    Write-Pass "s1: response includes approvalId ($($approvalId1.Substring(0,8))…)"
+    Write-Pass "s1: response includes approvalId ($($approvalId1.Substring(0,8))...)"
 
     $pending = Get-PendingApprovals
     $match = $pending | Where-Object { $_.id -eq $approvalId1 }
@@ -435,7 +431,7 @@ if ($approvalId1) {
     if ($decision.success -eq $true) {
         Write-Pass "s1: deny decision accepted"
     } else {
-        Write-Fail "s1: deny decision" ($decision.error ?? "unknown error")
+        Write-Fail "s1: deny decision" $(if ($decision.error) { $decision.error } else { "unknown error" })
     }
 } else {
     Write-Fail "s1: approvalId in response" "no approvalId returned"
@@ -455,7 +451,7 @@ if ($runResult2.status -eq "pending_approval" -and $runResult2.approvalId) {
     if ($decision2.success -eq $true) {
         Write-Pass "s1: approve decision accepted"
     } else {
-        Write-Fail "s1: approve decision" ($decision2.error ?? "unknown error")
+        Write-Fail "s1: approve decision" $(if ($decision2.error) { $decision2.error } else { "unknown error" })
     }
 
     # Check the job completed after approval
@@ -485,11 +481,11 @@ if ($readResult.status -eq "succeeded") {
     Write-Fail "s1: fs_list auto-execute" "got status: $($readResult.status)"
 }
 
-# ═══════════════════════════════════════════════════════════════
-# SECTION 2: Direct API — Multi-Tool Pending (Simultaneous)
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
+# SECTION 2: Direct API - Multi-Tool Pending (Simultaneous)
+# ===============================================================
 Write-Host ""
-Write-Log "=== Section 2: Direct API — Multiple Simultaneous Approvals ==="
+Write-Log "=== Section 2: Direct API - Multiple Simultaneous Approvals ==="
 
 # Clear slate
 Clear-AllPendingApprovals
@@ -541,7 +537,7 @@ if ($pending.Count -ge 2) {
     if ($denyDecision.success -eq $true) {
         Write-Pass "s2: denied 1 of $($pending.Count) ($($denyTarget.toolName))"
     } else {
-        Write-Fail "s2: deny one" ($denyDecision.error ?? "unknown")
+        Write-Fail "s2: deny one" $(if ($denyDecision.error) { $denyDecision.error } else { "unknown" })
     }
 
     Start-Sleep -Seconds 1
@@ -561,12 +557,12 @@ if ($pending.Count -ge 2) {
         Write-Fail "s2: approve remaining" "failed to approve"
     }
 } else {
-    Write-Fail "s2: multi pending list" "expected ≥2 pending, got $($pending.Count)"
+    Write-Fail "s2: multi pending list" "expected >=2 pending, got $($pending.Count)"
 }
 
-# ═══════════════════════════════════════════════════════════════
-# SECTION 3: Direct API — Policy Mode Transitions
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
+# SECTION 3: Direct API - Policy Mode Transitions
+# ===============================================================
 Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "=== Section 3: Policy Mode Transitions ==="
@@ -654,12 +650,12 @@ if ($manualDeleteRun.status -eq "pending_approval") {
     Write-Fail "s3: manual override" "expected pending_approval, got $($manualDeleteRun.status)"
 }
 
-# ═══════════════════════════════════════════════════════════════
-# SECTION 4: LLM Path — Contextual Approval Prompts
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
+# SECTION 4: LLM Path - Contextual Approval Prompts
+# ===============================================================
 Start-Sleep -Seconds 3
 Write-Host ""
-Write-Log "=== Section 4: LLM Path — Contextual Approval Prompts ==="
+Write-Log "=== Section 4: LLM Path - Contextual Approval Prompts ==="
 
 Clear-AllPendingApprovals
 
@@ -674,7 +670,7 @@ $null = Invoke-ToolPolicy @{
     }
 }
 
-# 4a. Ask LLM to write a file — should trigger approval with tool context in prompt
+# 4a. Ask LLM to write a file - should trigger approval with tool context in prompt
 $resp = Send-Message "write a file called test-context.txt in $TestDir with the content: approval context test"
 if ($resp.content) {
     Write-Pass "s4: LLM responded to write request"
@@ -684,7 +680,7 @@ if ($resp.content) {
     if ($content -match "fs_write|write|file|approv") {
         Write-Pass "s4: LLM response references the action (not generic)"
     } else {
-        Write-Skip "s4: contextual prompt" "LLM may not have mentioned tool — content: $($resp.content.Substring(0, [Math]::Min(150, $resp.content.Length)))"
+        Write-Skip "s4: contextual prompt" "LLM may not have mentioned tool - content: $($resp.content.Substring(0, [Math]::Min(150, $resp.content.Length)))"
     }
 
     # Check that the pending approval prompt includes tool name (from formatPendingApprovalPrompt)
@@ -700,7 +696,12 @@ if ($resp.content) {
         Write-Skip "s4: args in prompt" "LLM may not echo args"
     }
 } else {
-    Write-Fail "s4: LLM write request" ($resp.error ?? "no response")
+    $reason = if ($resp.error) { $resp.error } else { "no response" }
+    if (Is-ProviderFailure $reason) {
+        Write-Skip "s4: LLM write request" $reason
+    } else {
+        Write-Fail "s4: LLM write request" $reason
+    }
 }
 
 Start-Sleep -Seconds 2
@@ -735,11 +736,11 @@ if ($pendingBefore.Count -gt 0) {
 
 Start-Sleep -Seconds 3
 
-# ═══════════════════════════════════════════════════════════════
-# SECTION 5: LLM Path — Post-Approval Result Synthesis
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
+# SECTION 5: LLM Path - Post-Approval Result Synthesis
+# ===============================================================
 Write-Host ""
-Write-Log "=== Section 5: LLM Path — Post-Approval Result Synthesis ==="
+Write-Log "=== Section 5: LLM Path - Post-Approval Result Synthesis ==="
 
 Clear-AllPendingApprovals
 
@@ -757,12 +758,12 @@ if ($pending3.Count -gt 0) {
     if ($d3.success -eq $true) {
         Write-Pass "s5: approved fs_write via API"
     } else {
-        Write-Fail "s5: approve via API" ($d3.error ?? "unknown")
+        Write-Fail "s5: approve via API" $(if ($d3.error) { $d3.error } else { "unknown" })
     }
 
     Start-Sleep -Seconds 3
 
-    # Ask the LLM what happened — it should describe the result, not just "Tool X completed"
+    # Ask the LLM what happened - it should describe the result, not just "Tool X completed"
     $resp4 = Send-Message "what happened with that file?"
     if ($resp4.content) {
         Write-Pass "s5: LLM responded to follow-up"
@@ -777,23 +778,23 @@ if ($pending3.Count -gt 0) {
 
         # Negative check: should NOT be just "Tool 'X' completed."
         if ($followUp -match "^tool '.*' completed\.?$") {
-            Write-Fail "s5: poor synthesis" "LLM only said 'Tool X completed' — UX regression"
+            Write-Fail "s5: poor synthesis" "LLM only said 'Tool X completed' - UX regression"
         } else {
             Write-Pass "s5: response is more than 'Tool X completed'"
         }
     } else {
-        Write-Fail "s5: follow-up response" ($resp4.error ?? "no response")
+        Write-Fail "s5: follow-up response" $(if ($resp4.error) { $resp4.error } else { "no response" })
     }
 } else {
     Write-Skip "s5: synthesis test" "LLM didn't create a pending approval for fs_write"
 }
 
-# ═══════════════════════════════════════════════════════════════
-# SECTION 6: LLM Path — Double-Approval Flow (update_tool_policy → fs_write)
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
+# SECTION 6: LLM Path - Double-Approval Flow (update_tool_policy -> fs_write)
+# ===============================================================
 Start-Sleep -Seconds 3
 Write-Host ""
-Write-Log "=== Section 6: LLM Path — Double-Approval Flow ==="
+Write-Log "=== Section 6: LLM Path - Double-Approval Flow ==="
 
 Clear-AllPendingApprovals
 
@@ -811,7 +812,7 @@ Write-Pass "s6: sandbox restricted to '.' only (removed $TestDir)"
 
 Start-Sleep -Seconds 2
 
-# Ask LLM to write to a path outside the sandbox — should trigger
+# Ask LLM to write to a path outside the sandbox - should trigger
 # update_tool_policy first, then fs_write after the policy update is approved
 $resp5 = Send-Message "create a file at $TestDir/double-approval.txt with the text: testing double approval flow"
 
@@ -829,7 +830,7 @@ if ($resp5.content) {
 
     Start-Sleep -Seconds 2
 
-    # Check what's pending — could be update_tool_policy or fs_write
+    # Check what's pending - could be update_tool_policy or fs_write
     $pending5 = Get-PendingApprovals
     if ($pending5.Count -gt 0) {
         $policyApproval = $pending5 | Where-Object { $_.toolName -eq "update_tool_policy" } | Select-Object -First 1
@@ -883,12 +884,78 @@ if ($resp5.content) {
         Write-Skip "s6: double approval flow" "no pending approvals (LLM may have handled differently)"
     }
 } else {
-    Write-Fail "s6: out-of-sandbox write" ($resp5.error ?? "no response")
+    $reason = if ($resp5.error) { $resp5.error } else { "no response" }
+    if (Is-ProviderFailure $reason) {
+        Write-Skip "s6: out-of-sandbox write" $reason
+    } else {
+        Write-Fail "s6: out-of-sandbox write" $reason
+    }
 }
 
-# ═══════════════════════════════════════════════════════════════
-# SECTION 7: Direct API — Approval Expiry and Edge Cases
-# ═══════════════════════════════════════════════════════════════
+# 6b. Direct API regression - policy update approval followed by zero-byte fs_write
+Clear-AllPendingApprovals
+
+$null = Invoke-ToolPolicy @{
+    mode = "approve_by_policy"
+    toolPolicies = @{ fs_write = "policy" }
+    sandbox = @{
+        allowedPaths = @(".")
+        allowedCommands = @("node", "npm", "npx", "git", "ls", "dir", "pwd",
+            "echo", "cat", "head", "tail", "whoami", "hostname", "date")
+    }
+}
+
+$emptyFilePath = "$TestDir/empty-after-approval.txt"
+$policyRun6b = Invoke-ToolRun -ToolName "update_tool_policy" -ToolArgs @{
+    action = "add_path"
+    value = $TestDir
+}
+
+if ($policyRun6b.status -eq "pending_approval" -and $policyRun6b.approvalId) {
+    Write-Pass "s6b: update_tool_policy returned pending approval"
+    $decision6b = Invoke-ApprovalDecision $policyRun6b.approvalId "approved" "harness: add path for empty file"
+    if ($decision6b.success) {
+        Write-Pass "s6b: approved update_tool_policy for empty file path"
+    } else {
+        Write-Fail "s6b: approve update_tool_policy" $(if ($decision6b.error) { $decision6b.error } else { "unknown" })
+    }
+
+    Start-Sleep -Seconds 1
+
+    $emptyRun6b = Invoke-ToolRun -ToolName "fs_write" -ToolArgs @{
+        path = $emptyFilePath
+        content = ""
+        append = $false
+    }
+
+    if ($emptyRun6b.status -eq "pending_approval" -and $emptyRun6b.approvalId) {
+        Write-Pass "s6b: fs_write empty-content returned pending approval"
+        $emptyDecision6b = Invoke-ApprovalDecision $emptyRun6b.approvalId "approved" "harness: empty write"
+        if ($emptyDecision6b.success) {
+            Write-Pass "s6b: approved empty-content fs_write"
+            if (Test-Path $emptyFilePath) {
+                $item6b = Get-Item $emptyFilePath
+                if ($item6b.Length -eq 0) {
+                    Write-Pass "s6b: approved empty-content fs_write created a zero-byte file"
+                } else {
+                    Write-Fail "s6b: empty file size" "expected 0 bytes, got $($item6b.Length)"
+                }
+            } else {
+                Write-Fail "s6b: empty file exists" "file was not created"
+            }
+        } else {
+            Write-Fail "s6b: approve empty-content fs_write" $(if ($emptyDecision6b.error) { $emptyDecision6b.error } else { "unknown" })
+        }
+    } else {
+        Write-Fail "s6b: fs_write empty-content pending" "expected pending_approval, got $($emptyRun6b.status)"
+    }
+} else {
+    Write-Fail "s6b: update_tool_policy pending" "expected pending_approval, got $($policyRun6b.status)"
+}
+
+# ===============================================================
+# SECTION 7: Direct API - Approval Expiry and Edge Cases
+# ===============================================================
 Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "=== Section 7: Edge Cases ==="
@@ -905,7 +972,7 @@ $null = Invoke-ToolPolicy @{
     }
 }
 
-# 7a. Approve non-existent ID → should fail gracefully
+# 7a. Approve non-existent ID -> should fail gracefully
 $bogusDecision = Invoke-ApprovalDecision "00000000-0000-0000-0000-000000000000" "approved" "harness"
 if ($bogusDecision.success -eq $false -or $bogusDecision.error) {
     Write-Pass "s7: bogus approval ID rejected gracefully"
@@ -913,7 +980,7 @@ if ($bogusDecision.success -eq $false -or $bogusDecision.error) {
     Write-Fail "s7: bogus approval" "expected failure but got success"
 }
 
-# 7b. Deny an already-denied approval → should fail or no-op
+# 7b. Deny an already-denied approval -> should fail or no-op
 $run7 = Invoke-ToolRun -ToolName "fs_write" -ToolArgs @{
     path = "$TestDir/edge-case.txt"; content = "edge case"
 }
@@ -930,7 +997,7 @@ if ($run7.approvalId) {
     Write-Skip "s7: double-deny" "no approvalId from fs_write"
 }
 
-# 7c. Approve after deny → should fail
+# 7c. Approve after deny -> should fail
 $run7c = Invoke-ToolRun -ToolName "fs_write" -ToolArgs @{
     path = "$TestDir/flip-test.txt"; content = "flip"
 }
@@ -948,18 +1015,18 @@ if ($run7c.approvalId) {
 }
 
 # 7d. Tool with no approval needed returns no approvalId
-$readRun7 = Invoke-ToolRun -ToolName "sys_info" -ToolArgs @{}
+$readRun7 = Invoke-ToolRun -ToolName "fs_list" -ToolArgs @{ path = "." }
 if ($readRun7.status -eq "succeeded" -and -not $readRun7.approvalId) {
     Write-Pass "s7: auto-allowed tool has no approvalId"
 } elseif ($readRun7.status -eq "succeeded") {
-    Write-Pass "s7: sys_info succeeded (approvalId present but unused)"
+    Write-Pass "s7: fs_list succeeded (approvalId present but unused)"
 } else {
-    Write-Fail "s7: sys_info auto-execute" "got status: $($readRun7.status)"
+    Write-Fail "s7: fs_list auto-execute" "got status: $($readRun7.status)"
 }
 
-# ═══════════════════════════════════════════════════════════════
-# SECTION 8: Job History — Verify Approval Decisions Are Tracked
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
+# SECTION 8: Job History - Verify Approval Decisions Are Tracked
+# ===============================================================
 Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "=== Section 8: Job History & Approval Audit ==="
@@ -1009,9 +1076,9 @@ if ($state) {
     Write-Fail "s8: tools state" "could not query /api/tools"
 }
 
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 # CLEANUP: Restore policy, clear pending
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 Start-Sleep -Seconds 1
 Write-Host ""
 Write-Log "=== Cleanup ==="
@@ -1029,7 +1096,7 @@ $null = Invoke-ToolPolicy @{
 }
 Write-Pass "cleanup: policy restored to defaults"
 
-# ─── Summary ─────────────────────────────────────────────
+# --- Summary ---------------------------------------------
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  PASS: $Pass  " -ForegroundColor Green -NoNewline

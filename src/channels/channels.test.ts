@@ -885,6 +885,62 @@ describe('CLIChannel with DashboardCallbacks', () => {
     await cli.stop();
   });
 
+  it('continues after an approved CLI action fails so the next turn is not hijacked', async () => {
+    const decisions: Array<{ approvalId: string; decision: string }> = [];
+    const dispatches: Array<{ agentId: string; content: string }> = [];
+    const { input, output, cli } = makeCli({
+      onDispatch: async (agentId, msg) => {
+        dispatches.push({ agentId, content: msg.content });
+        if (dispatches.length === 1) {
+          return {
+            content: 'Waiting for approval to write S:/Development/Test100.',
+            metadata: {
+              pendingApprovals: [
+                {
+                  id: 'approval-empty-1',
+                  toolName: 'fs_write',
+                  argsPreview: '{"path":"S:/Development/Test100","content":"","append":false}',
+                },
+              ],
+            },
+          };
+        }
+        if (dispatches.length === 2) {
+          expect(msg.content).toContain('Some actions failed');
+          return {
+            content: 'The requested write failed. I have finished that request and will wait for your next instruction.',
+          };
+        }
+        return {
+          content: 'It used fs_write.',
+        };
+      },
+      onToolsApprovalDecision: async ({ approvalId, decision }) => {
+        decisions.push({ approvalId, decision });
+        return { success: false, message: "'content' must be a non-empty string." };
+      },
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/chat agent-1');
+    readOutput(output);
+    await sendCommand(input, 'Create an empty file called Test100 in the S Drive development directory.');
+    await sendCommand(input, 'y');
+    await new Promise(r => setTimeout(r, 100));
+    await sendCommand(input, 'What exact tool did you use?');
+    await new Promise(r => setTimeout(r, 100));
+
+    const text = readOutput(output);
+    expect(text).toContain('Waiting for approval to write S:/Development/Test100.');
+    expect(text).toContain("'content' must be a non-empty string.");
+    expect(text).toContain('The requested write failed. I have finished that request and will wait for your next instruction.');
+    expect(text).toContain('It used fs_write.');
+    expect(decisions).toEqual([{ approvalId: 'approval-empty-1', decision: 'approved' }]);
+    expect(dispatches[1]?.content).toContain('Some actions failed — adjust your approach accordingly. Focus only on the current request.');
+
+    await cli.stop();
+  });
+
   it('intercepts leaked yes/no input locally when an inline CLI approval is active', async () => {
     const decisions: Array<{ approvalId: string; decision: string }> = [];
     const dispatches: Array<string> = [];

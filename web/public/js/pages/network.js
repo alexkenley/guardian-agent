@@ -647,10 +647,10 @@ async function renderToolsTab(panel) {
     panel.insertAdjacentHTML('beforeend', renderGuidancePanel({
       kicker: 'Diagnostics',
       compact: true,
-      whatItIs: 'Diagnostics is the ad hoc tool runner for network operations.',
-      whatSeeing: 'You are seeing a selector for network tool groups and a runner for the currently selected tool.',
-      whatCanDo: 'Use it to run one tool immediately, inspect the result, and export output if needed.',
-      howLinks: 'Repeatable work belongs in Automations, and actionable findings should be followed into Security.',
+      whatItIs: 'Diagnostics is the manual network tool runner, not a shared output console.',
+      whatSeeing: 'You are seeing a category selector, a tool selector, parameter fields for the active tool, Run Tool and Clear actions, and the output for the tool run started from this tab.',
+      whatCanDo: 'Use it to run one network tool immediately, inspect the result, and export that single run if needed.',
+      howLinks: 'It does not stream output from Automations or unrelated tools. Repeatable work belongs in Automations, and actionable findings should be followed into Security.',
     }));
 
     const intro = document.createElement('div');
@@ -658,7 +658,7 @@ async function renderToolsTab(panel) {
     intro.innerHTML = `
       <div class="table-header"><h3>Diagnostics</h3></div>
       <div class="cfg-center-body">
-        <div class="ops-inline-help">Run one network tool at a time here. If you want a repeatable or scheduled workflow, create it in Automations. If the result should feed the unified alert queue, review it in Security.</div>
+        <div class="ops-inline-help">Run one network tool at a time here. This tab is only for the tool you select below, and the result panel only shows output from runs started here. If you want a repeatable or scheduled workflow, create it in Automations. If the result should feed the unified alert queue, review it in Security.</div>
       </div>
     `;
     panel.appendChild(intro);
@@ -1211,12 +1211,19 @@ function humanizeKey(key) {
 }
 
 function createGenericHelpFactory(area) {
-  return (title) => ({
-    whatItIs: `${title} is a specific subsection inside ${area} for one part of the network inventory, diagnostics, or history workflow.`,
-    whatSeeing: 'You are seeing the current network data, controls, or output that belong to this subsection.',
-    whatCanDo: 'Use the controls and results here to inspect state or perform the action this subsection is responsible for.',
-    howLinks: `This section supports the broader ${area} workflow and hands off to Security or Automations when deeper action is required.`,
-  });
+  const knownToolTitles = new Set(NETWORK_TOOL_ORDER.map((toolName) => networkToolLabel(toolName)));
+
+  return (title) => {
+    if (knownToolTitles.has(title)) {
+      return {
+        whatItIs: `This section is the input and run surface for the ${title} network tool.`,
+        whatSeeing: `You are seeing the arguments required by ${title}, the run and clear controls, and the result panel for runs started from this section.`,
+        whatCanDo: `Supply the parameters ${title} needs, execute it immediately, and inspect or export the returned output.`,
+        howLinks: 'This is an ad hoc one-tool runner inside Network Diagnostics, not a shared log and not a scheduled workflow.',
+      };
+    }
+    return null;
+  };
 }
 
 function severityClass(severity) {

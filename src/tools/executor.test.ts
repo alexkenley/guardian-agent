@@ -98,6 +98,56 @@ describe('ToolExecutor', () => {
     expect(alwaysLoaded).toContain('update_tool_policy');
   });
 
+  it('includes configured cloud profiles and tool discovery guidance in tool context', () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost', 'api.vercel.com', 'host.social.example'],
+      agentPolicyUpdates: {
+        allowedPaths: true,
+        allowedCommands: false,
+        allowedDomains: true,
+      },
+      cloudConfig: {
+        enabled: true,
+        cpanelProfiles: [{
+          id: 'social',
+          name: 'Social WHM',
+          type: 'whm',
+          host: 'https://host.social.example/',
+          username: 'root',
+          apiToken: 'secret',
+          defaultCpanelUser: 'socialuser',
+        }],
+        vercelProfiles: [{
+          id: 'web-prod',
+          name: 'Web Production',
+          apiToken: 'vercel-secret',
+        }],
+      },
+    });
+
+    const context = executor.getToolContext();
+    expect(context).toContain('Enabled tool categories:');
+    expect(context).toContain('Policy updates via chat: enabled via update_tool_policy (add_path, remove_path, add_domain, remove_domain)');
+    expect(context).toContain('Additional tools may be hidden by deferred loading. Use find_tools to discover tools that are not currently visible.');
+    expect(context).toContain('Cloud tools: enabled');
+    expect(context).toContain('Cloud tool families available via find_tools: cpanel_*, whm_*, vercel_*, cf_*, aws_*, gcp_*, azure_*');
+    expect(context).toContain('Use configured cloud profile ids exactly as listed below when calling cloud tools.');
+    expect(context).toContain('- social: provider=whm');
+    expect(context).toContain('endpoint=https://host.social.example:2087');
+    expect(context).toContain('credential=ready');
+    expect(context).toContain('hostAllowlisted=yes');
+    expect(context).toContain('suggestedReadOnlyTest=whm_status');
+    expect(context).toContain('defaultCpanelUser=socialuser');
+    expect(context).toContain('- web-prod: provider=vercel');
+    expect(context).toContain('suggestedReadOnlyTest=vercel_status');
+  });
+
   it('returns cPanel account summaries through a configured profile', async () => {
     const server = createServer((req, res) => {
       res.setHeader('content-type', 'application/json');
@@ -231,6 +281,73 @@ describe('ToolExecutor', () => {
       total: 2,
       returned: 1,
       accounts: [{ user: 'bob', domain: 'example.net', owner: 'root' }],
+    });
+  });
+
+  it('normalizes WHM profile hosts entered as full URLs before execution', async () => {
+    const server = createServer((req, res) => {
+      res.setHeader('content-type', 'application/json');
+      if (req.url?.includes('/json-api/gethostname')) {
+        res.end(JSON.stringify({
+          metadata: { result: 1 },
+          data: { hostname: 'whm.social.local' },
+        }));
+        return;
+      }
+      if (req.url?.includes('/json-api/version')) {
+        res.end(JSON.stringify({
+          metadata: { result: 1 },
+          data: { version: '124.0.1' },
+        }));
+        return;
+      }
+      if (req.url?.includes('/json-api/systemloadavg')) {
+        res.end(JSON.stringify({
+          metadata: { result: 1 },
+          data: [0.12, 0.08, 0.04],
+        }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+    testServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['127.0.0.1'],
+      cloudConfig: {
+        enabled: true,
+        cpanelProfiles: [{
+          id: 'social',
+          name: 'Social WHM',
+          type: 'whm',
+          host: `http://127.0.0.1:${address.port}/`,
+          username: 'root',
+          apiToken: 'secret',
+        }],
+      },
+    });
+
+    const result = await executor.runTool({
+      toolName: 'whm_status',
+      args: { profile: 'social', includeServices: false },
+      origin: 'cli',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({
+      profile: 'social',
+      host: '127.0.0.1',
+      hostname: { hostname: 'whm.social.local' },
+      version: { version: '124.0.1' },
     });
   });
 
@@ -2359,6 +2476,33 @@ describe('ToolExecutor', () => {
     expect(entries.some((entry) => entry.name === 'Testapp' && entry.type === 'dir')).toBe(true);
   });
 
+  it('creates empty files with fs_write after approval', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const run = await executor.runTool({
+      toolName: 'fs_write',
+      args: { path: 'empty.txt', content: '' },
+      origin: 'cli',
+    });
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('pending_approval');
+    expect(run.approvalId).toBeDefined();
+
+    const decided = await executor.decideApproval(run.approvalId!, 'approved', 'tester');
+    expect(decided.success).toBe(true);
+
+    const text = await readFile(join(root, 'empty.txt'), 'utf-8');
+    expect(text).toBe('');
+  });
+
   it('rejects invalid tool args before creating approval requests', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
@@ -3460,6 +3604,7 @@ describe('ToolExecutor', () => {
       });
 
       const names = executor.listToolDefinitions().map((t) => t.name);
+      expect(names).toContain('find_tools');
       expect(names).not.toContain('shell_safe');
       expect(names).not.toContain('net_ping');
       expect(names).not.toContain('doc_search');

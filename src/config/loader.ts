@@ -13,6 +13,8 @@ import type { GuardianAgentConfig } from './types.js';
 import { DEFAULT_CONFIG } from './types.js';
 import { isValidTrustPreset, applyTrustPreset } from '../guardian/trust-presets.js';
 import { ProviderRegistry } from '../llm/provider-registry.js';
+import { normalizeCpanelConnectionConfig } from '../tools/cloud/cpanel-profile.js';
+import { normalizeConfigInputs, normalizeHttpUrlInput } from './input-normalization.js';
 
 const SUPPORTED_LLM_PROVIDERS = new Set(new ProviderRegistry().listProviderNames());
 const SUPPORTED_LLM_PROVIDER_LIST = [...SUPPORTED_LLM_PROVIDERS].join(', ');
@@ -134,6 +136,13 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     assertCredentialRef(llm.credentialRef, `llm.${name}.credentialRef`);
     if (llm.provider !== 'ollama' && !llm.credentialRef) {
       errors.push(`llm.${name}.credentialRef is required for provider '${llm.provider}'`);
+    }
+    if (llm.baseUrl?.trim()) {
+      try {
+        normalizeHttpUrlInput(llm.baseUrl);
+      } catch (error) {
+        errors.push(`llm.${name}.baseUrl ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
   }
 
@@ -413,6 +422,18 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
       }
       if (!profile.host?.trim()) {
         errors.push(`assistant.tools.cloud.cpanelProfiles.${profile.id || '(unnamed)'}.host is required`);
+      } else {
+        try {
+          normalizeCpanelConnectionConfig({
+            host: profile.host,
+            port: profile.port,
+            ssl: profile.ssl,
+          });
+        } catch (error) {
+          errors.push(
+            `assistant.tools.cloud.cpanelProfiles.${profile.id || '(unnamed)'}.host ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
       if (!profile.username?.trim()) {
         errors.push(`assistant.tools.cloud.cpanelProfiles.${profile.id || '(unnamed)'}.username is required`);
@@ -448,12 +469,9 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
       }
       if (profile.apiBaseUrl?.trim()) {
         try {
-          const parsed = new URL(profile.apiBaseUrl);
-          if (!['http:', 'https:'].includes(parsed.protocol)) {
-            errors.push(`assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.apiBaseUrl must use http or https`);
-          }
-        } catch {
-          errors.push(`assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.apiBaseUrl must be a valid URL`);
+          normalizeHttpUrlInput(profile.apiBaseUrl);
+        } catch (error) {
+          errors.push(`assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.apiBaseUrl ${error instanceof Error ? error.message : String(error)}`);
         }
       }
       assertCredentialRef(
@@ -478,12 +496,9 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
       }
       if (profile.apiBaseUrl?.trim()) {
         try {
-          const parsed = new URL(profile.apiBaseUrl);
-          if (!['http:', 'https:'].includes(parsed.protocol)) {
-            errors.push(`assistant.tools.cloud.cloudflareProfiles.${profile.id || '(unnamed)'}.apiBaseUrl must use http or https`);
-          }
-        } catch {
-          errors.push(`assistant.tools.cloud.cloudflareProfiles.${profile.id || '(unnamed)'}.apiBaseUrl must be a valid URL`);
+          normalizeHttpUrlInput(profile.apiBaseUrl);
+        } catch (error) {
+          errors.push(`assistant.tools.cloud.cloudflareProfiles.${profile.id || '(unnamed)'}.apiBaseUrl ${error instanceof Error ? error.message : String(error)}`);
         }
       }
       assertCredentialRef(
@@ -526,12 +541,9 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
       for (const [service, endpoint] of Object.entries(profile.endpoints ?? {})) {
         if (!endpoint?.trim()) continue;
         try {
-          const parsed = new URL(endpoint);
-          if (!['http:', 'https:'].includes(parsed.protocol)) {
-            errors.push(`assistant.tools.cloud.awsProfiles.${profile.id || '(unnamed)'}.endpoints.${service} must use http or https`);
-          }
-        } catch {
-          errors.push(`assistant.tools.cloud.awsProfiles.${profile.id || '(unnamed)'}.endpoints.${service} must be a valid URL`);
+          normalizeHttpUrlInput(endpoint);
+        } catch (error) {
+          errors.push(`assistant.tools.cloud.awsProfiles.${profile.id || '(unnamed)'}.endpoints.${service} ${error instanceof Error ? error.message : String(error)}`);
         }
       }
     }
@@ -566,12 +578,9 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
       for (const [service, endpoint] of Object.entries(profile.endpoints ?? {})) {
         if (!endpoint?.trim()) continue;
         try {
-          const parsed = new URL(endpoint);
-          if (!['http:', 'https:'].includes(parsed.protocol)) {
-            errors.push(`assistant.tools.cloud.gcpProfiles.${profile.id || '(unnamed)'}.endpoints.${service} must use http or https`);
-          }
-        } catch {
-          errors.push(`assistant.tools.cloud.gcpProfiles.${profile.id || '(unnamed)'}.endpoints.${service} must be a valid URL`);
+          normalizeHttpUrlInput(endpoint);
+        } catch (error) {
+          errors.push(`assistant.tools.cloud.gcpProfiles.${profile.id || '(unnamed)'}.endpoints.${service} ${error instanceof Error ? error.message : String(error)}`);
         }
       }
     }
@@ -613,23 +622,17 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
       );
       if (profile.blobBaseUrl?.trim()) {
         try {
-          const parsed = new URL(profile.blobBaseUrl);
-          if (!['http:', 'https:'].includes(parsed.protocol)) {
-            errors.push(`assistant.tools.cloud.azureProfiles.${profile.id || '(unnamed)'}.blobBaseUrl must use http or https`);
-          }
-        } catch {
-          errors.push(`assistant.tools.cloud.azureProfiles.${profile.id || '(unnamed)'}.blobBaseUrl must be a valid URL`);
+          normalizeHttpUrlInput(profile.blobBaseUrl);
+        } catch (error) {
+          errors.push(`assistant.tools.cloud.azureProfiles.${profile.id || '(unnamed)'}.blobBaseUrl ${error instanceof Error ? error.message : String(error)}`);
         }
       }
       for (const [service, endpoint] of Object.entries(profile.endpoints ?? {})) {
         if (!endpoint?.trim()) continue;
         try {
-          const parsed = new URL(endpoint);
-          if (!['http:', 'https:'].includes(parsed.protocol)) {
-            errors.push(`assistant.tools.cloud.azureProfiles.${profile.id || '(unnamed)'}.endpoints.${service} must use http or https`);
-          }
-        } catch {
-          errors.push(`assistant.tools.cloud.azureProfiles.${profile.id || '(unnamed)'}.endpoints.${service} must be a valid URL`);
+          normalizeHttpUrlInput(endpoint);
+        } catch (error) {
+          errors.push(`assistant.tools.cloud.azureProfiles.${profile.id || '(unnamed)'}.endpoints.${service} ${error instanceof Error ? error.message : String(error)}`);
         }
       }
     }
@@ -737,7 +740,7 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
       errors.push('assistant.threatIntel.moltbook.baseUrl is required when Moltbook api mode is enabled');
     } else {
       try {
-        const parsed = new URL(moltbook.baseUrl);
+        const parsed = new URL(normalizeHttpUrlInput(moltbook.baseUrl));
         const host = parsed.hostname.toLowerCase();
         const allowedHosts = moltbook.allowedHosts.map((value) => value.trim().toLowerCase());
         if (!allowedHosts.includes(host)) {
@@ -748,8 +751,8 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
         if (insecure) {
           errors.push('assistant.threatIntel.moltbook.baseUrl must use https (or http for localhost)');
         }
-      } catch {
-        errors.push('assistant.threatIntel.moltbook.baseUrl must be a valid URL');
+      } catch (error) {
+        errors.push(`assistant.threatIntel.moltbook.baseUrl ${error instanceof Error ? error.message : String(error)}`);
       }
     }
   }
@@ -964,6 +967,8 @@ export function loadConfigFromFile(filePath: string): GuardianAgentConfig {
   if (merged.assistant.tools.search && !Array.isArray(merged.assistant.tools.search.sources)) {
     merged.assistant.tools.search.sources = [];
   }
+
+  merged = normalizeConfigInputs(merged);
 
   const errors = validateConfig(merged);
   if (errors.length > 0) {

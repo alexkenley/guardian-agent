@@ -8,6 +8,9 @@ import { createTabs } from '../components/tabs.js';
 import { applyInputTooltips } from '../tooltip.js';
 
 let currentContainer = null;
+const cloudUiState = {
+  selectedProfiles: {},
+};
 
 const CLOUD_HELP = {
   overview: {
@@ -88,7 +91,7 @@ const CLOUD_PROVIDER_DEFS = [
       { key: 'id', label: 'Profile ID', type: 'text', placeholder: 'cpanel-prod' },
       { key: 'name', label: 'Name', type: 'text', placeholder: 'Production WHM' },
       { key: 'type', label: 'Type', type: 'select', options: ['whm', 'cpanel'] },
-      { key: 'host', label: 'Host', type: 'text', placeholder: 'server.example.com' },
+      { key: 'host', label: 'Host', type: 'text', placeholder: 'server.example.com', help: 'Hostname, host:port, or a root http(s) URL. Do not include a path.' },
       { key: 'port', label: 'Port', type: 'number', placeholder: '2087' },
       { key: 'username', label: 'Username', type: 'text', placeholder: 'root' },
       { key: 'credentialRef', label: 'Credential Ref', type: 'text', placeholder: 'cloud.whm.prod' },
@@ -108,7 +111,7 @@ const CLOUD_PROVIDER_DEFS = [
       { key: 'apiToken', label: 'API Token', type: 'password', configuredKey: 'apiTokenConfigured', placeholder: 'Leave blank to keep existing token' },
       { key: 'teamId', label: 'Team ID', type: 'text', placeholder: 'team_123' },
       { key: 'slug', label: 'Default Team/Project Slug', type: 'text', placeholder: 'my-team' },
-      { key: 'apiBaseUrl', label: 'API Base URL', type: 'text', placeholder: 'https://api.vercel.com' },
+      { key: 'apiBaseUrl', label: 'API Base URL', type: 'text', placeholder: 'https://api.vercel.com', help: 'Full root URL for the API. Trailing slash is fine; queries and fragments are not.' },
     ],
   },
   {
@@ -121,7 +124,7 @@ const CLOUD_PROVIDER_DEFS = [
       { key: 'apiToken', label: 'API Token', type: 'password', configuredKey: 'apiTokenConfigured', placeholder: 'Leave blank to keep existing token' },
       { key: 'accountId', label: 'Account ID', type: 'text', placeholder: 'account-id' },
       { key: 'defaultZoneId', label: 'Default Zone ID', type: 'text', placeholder: 'zone-id' },
-      { key: 'apiBaseUrl', label: 'API Base URL', type: 'text', placeholder: 'https://api.cloudflare.com/client/v4' },
+      { key: 'apiBaseUrl', label: 'API Base URL', type: 'text', placeholder: 'https://api.cloudflare.com/client/v4', help: 'Full root URL for the API, including path segments like /client/v4 when needed.' },
     ],
   },
   {
@@ -137,7 +140,7 @@ const CLOUD_PROVIDER_DEFS = [
       { key: 'accessKeyId', label: 'Access Key ID', type: 'password', configuredKey: 'accessKeyIdConfigured', placeholder: 'Leave blank to keep existing key' },
       { key: 'secretAccessKey', label: 'Secret Access Key', type: 'password', configuredKey: 'secretAccessKeyConfigured', placeholder: 'Leave blank to keep existing secret' },
       { key: 'sessionToken', label: 'Session Token', type: 'password', configuredKey: 'sessionTokenConfigured', placeholder: 'Optional temporary token' },
-      { key: 'endpoints', label: 'Endpoint Overrides (JSON)', type: 'json', placeholder: '{\n  "s3": "http://localhost:4566"\n}' },
+      { key: 'endpoints', label: 'Endpoint Overrides (JSON)', type: 'json', placeholder: '{\n  "s3": "http://localhost:4566"\n}', help: 'JSON object mapping service names to full http(s) endpoint URLs.' },
     ],
   },
   {
@@ -152,7 +155,7 @@ const CLOUD_PROVIDER_DEFS = [
       { key: 'serviceAccountCredentialRef', label: 'Service Account Ref', type: 'text', placeholder: 'cloud.gcp.prod.service-account' },
       { key: 'accessToken', label: 'Access Token', type: 'password', configuredKey: 'accessTokenConfigured', placeholder: 'Leave blank to keep existing token' },
       { key: 'serviceAccountJson', label: 'Service Account JSON', type: 'textarea', configuredKey: 'serviceAccountConfigured', placeholder: '{\n  "type": "service_account"\n}' },
-      { key: 'endpoints', label: 'Endpoint Overrides (JSON)', type: 'json', placeholder: '{\n  "storage": "http://localhost:4443"\n}' },
+      { key: 'endpoints', label: 'Endpoint Overrides (JSON)', type: 'json', placeholder: '{\n  "storage": "http://localhost:4443"\n}', help: 'JSON object mapping service names to full http(s) endpoint URLs.' },
     ],
   },
   {
@@ -164,14 +167,14 @@ const CLOUD_PROVIDER_DEFS = [
       { key: 'subscriptionId', label: 'Subscription ID', type: 'text', placeholder: 'subscription-id' },
       { key: 'tenantId', label: 'Tenant ID', type: 'text', placeholder: 'tenant-id' },
       { key: 'defaultResourceGroup', label: 'Default Resource Group', type: 'text', placeholder: 'rg-main' },
-      { key: 'blobBaseUrl', label: 'Blob Base URL', type: 'text', placeholder: 'https://account.blob.core.windows.net' },
+      { key: 'blobBaseUrl', label: 'Blob Base URL', type: 'text', placeholder: 'https://account.blob.core.windows.net', help: 'Full root URL for blob storage. Do not add SAS query parameters here.' },
       { key: 'accessTokenCredentialRef', label: 'Access Token Ref', type: 'text', placeholder: 'cloud.azure.prod.token' },
       { key: 'clientIdCredentialRef', label: 'Client ID Ref', type: 'text', placeholder: 'cloud.azure.prod.client-id' },
       { key: 'clientSecretCredentialRef', label: 'Client Secret Ref', type: 'text', placeholder: 'cloud.azure.prod.client-secret' },
       { key: 'accessToken', label: 'Access Token', type: 'password', configuredKey: 'accessTokenConfigured', placeholder: 'Leave blank to keep existing token' },
       { key: 'clientId', label: 'Client ID', type: 'password', configuredKey: 'clientIdConfigured', placeholder: 'Leave blank to keep existing client ID' },
       { key: 'clientSecret', label: 'Client Secret', type: 'password', configuredKey: 'clientSecretConfigured', placeholder: 'Leave blank to keep existing secret' },
-      { key: 'endpoints', label: 'Endpoint Overrides (JSON)', type: 'json', placeholder: '{\n  "management": "https://management.azure.com"\n}' },
+      { key: 'endpoints', label: 'Endpoint Overrides (JSON)', type: 'json', placeholder: '{\n  "management": "https://management.azure.com"\n}', help: 'JSON object mapping service names to full http(s) endpoint URLs.' },
     ],
   },
 ];
@@ -363,7 +366,7 @@ async function renderConnectionsTab(panel) {
       <div class="table-header"><h3>Connection Model</h3></div>
       <div class="cfg-center-body" style="font-size:0.78rem;color:var(--text-secondary);line-height:1.6;">
         Save credentials here, then use the Cloud Activity surface or cloud-focused automations to act on them.
-        Leaving a secret field blank preserves any currently stored secret for that profile. Advanced endpoint overrides remain available as JSON fields for providers that support them.
+        Leaving a secret field blank preserves any currently stored secret for that profile. Host fields accept a hostname, host:port, or root URL; API base URL and endpoint override fields expect full http(s) URLs. Advanced endpoint overrides remain available as JSON fields for providers that support them.
       </div>
     `;
     panel.appendChild(info);
@@ -564,6 +567,9 @@ function createCloudConnectionSection(def, cloud) {
   const section = document.createElement('div');
   section.className = 'table-container';
   const profiles = Array.isArray(cloud[def.key]) ? cloud[def.key] : [];
+  let selectedProfileId = profiles.some((profile) => profile.id === cloudUiState.selectedProfiles[def.key])
+    ? cloudUiState.selectedProfiles[def.key]
+    : (profiles[0]?.id || null);
 
   section.innerHTML = `
     <div class="table-header">
@@ -571,97 +577,167 @@ function createCloudConnectionSection(def, cloud) {
       <span class="cfg-header-note">${profiles.length} profile${profiles.length === 1 ? '' : 's'}</span>
     </div>
     <div class="cfg-center-body">
-      <div class="cfg-form-grid">
-        <div class="cfg-field">
-          <label>Profile</label>
-          <select data-profile-select>
-            <option value="__new__">Create new profile...</option>
-            ${profiles.map((profile) => `<option value="${escAttr(profile.id)}">${esc(profile.name || profile.id)}</option>`).join('')}
-          </select>
+      <div class="cloud-profile-browser">
+        <div class="cloud-profile-sidebar">
+          <div class="cloud-profile-sidebar-header">
+            <div>
+              <div class="cloud-profile-sidebar-title">Saved Profiles</div>
+              <div class="cloud-profile-sidebar-note">Select one to edit or create a new ${esc(def.label)} profile.</div>
+            </div>
+            <button class="btn btn-secondary" type="button" data-cloud-add-profile>+ Add</button>
+          </div>
+          <div class="cloud-profile-list" data-cloud-profile-list></div>
         </div>
-      </div>
-      <div class="cfg-form-grid" data-fields-grid></div>
-      <div class="cfg-actions">
-        <button class="btn btn-primary" type="button" data-save-profile>Save Profile</button>
-        <button class="btn btn-secondary" type="button" data-delete-profile>Delete Profile</button>
-        <span class="cfg-save-status" data-profile-status></span>
+        <div class="cloud-profile-editor" data-cloud-profile-editor></div>
       </div>
     </div>
   `;
 
-  const selectEl = section.querySelector('[data-profile-select]');
-  const gridEl = section.querySelector('[data-fields-grid]');
-  const statusEl = section.querySelector('[data-profile-status]');
-  const deleteBtn = section.querySelector('[data-delete-profile]');
+  const listEl = section.querySelector('[data-cloud-profile-list]');
+  const editorEl = section.querySelector('[data-cloud-profile-editor]');
+  const addBtn = section.querySelector('[data-cloud-add-profile]');
 
-  function renderFields(profileId) {
-    const profile = profileId === '__new__'
+  function renderProfileList() {
+    listEl.innerHTML = profiles.length === 0
+      ? '<div class="cloud-profile-empty">No profiles saved yet. Use Add to create the first one.</div>'
+      : profiles.map((profile) => {
+        const isActive = profile.id === selectedProfileId;
+        const badges = summarizeCloudProfileBadges(def, profile);
+        return `
+          <button
+            class="cloud-profile-item${isActive ? ' active' : ''}"
+            type="button"
+            data-cloud-profile-id="${escAttr(profile.id)}"
+            title="${escAttr(profile.name || profile.id)}"
+          >
+            <span class="cloud-profile-item-title">${esc(profile.name || profile.id)}</span>
+            <span class="cloud-profile-item-meta">${esc(profile.id || 'Unsaved profile')}</span>
+            ${badges.length
+              ? `<span class="cloud-profile-item-badges">${badges.map((badge) => `<span class="cloud-profile-item-badge">${esc(badge)}</span>`).join('')}</span>`
+              : ''}
+          </button>
+        `;
+      }).join('');
+
+    listEl.querySelectorAll('[data-cloud-profile-id]').forEach((button) => {
+      button.addEventListener('click', () => {
+        selectedProfileId = button.getAttribute('data-cloud-profile-id');
+        cloudUiState.selectedProfiles[def.key] = selectedProfileId;
+        renderProfileList();
+        renderEditor();
+      });
+    });
+  }
+
+  function renderEditor() {
+    const isCreateMode = !selectedProfileId;
+    const profile = isCreateMode
       ? buildDefaultProfile(def)
-      : profiles.find((entry) => entry.id === profileId) || buildDefaultProfile(def);
-    gridEl.innerHTML = def.fields.map((field) => renderCloudField(def, field, profile)).join('');
-    deleteBtn.disabled = profileId === '__new__';
+      : profiles.find((entry) => entry.id === selectedProfileId) || buildDefaultProfile(def);
+    const profileLabel = profile.name || profile.id || def.label;
+    const introText = isCreateMode
+      ? `Create a new ${def.label} profile here. Stored secret fields are optional on first pass and can be rotated later.`
+      : `Editing ${profileLabel}. Leaving secret fields blank preserves any stored values already attached to this profile.`;
+
+    editorEl.innerHTML = `
+      <div class="table-header" style="padding-left:0;padding-right:0;">
+        <h3>${esc(isCreateMode ? `Create New ${def.label} Profile` : `Edit ${profileLabel}`)}</h3>
+        <span class="cfg-header-note">${esc(isCreateMode ? 'Create mode' : 'Edit mode')}</span>
+      </div>
+      <div class="ops-inline-help cloud-profile-editor-copy">${esc(introText)}</div>
+      <div class="cfg-form-grid" data-fields-grid>
+        ${def.fields.map((field) => renderCloudField(def, field, profile)).join('')}
+      </div>
+      <div class="cfg-actions">
+        <button class="btn btn-primary" type="button" data-save-profile>${isCreateMode ? 'Create Profile' : 'Save Profile'}</button>
+        <button class="btn btn-secondary" type="button" data-delete-profile ${isCreateMode ? 'style="display:none;"' : ''}>Delete Profile</button>
+        <span class="cfg-save-status" data-profile-status></span>
+      </div>
+    `;
+
+    const statusEl = editorEl.querySelector('[data-profile-status]');
+
+    editorEl.querySelector('[data-save-profile]')?.addEventListener('click', async () => {
+      statusEl.textContent = 'Saving...';
+      statusEl.style.color = 'var(--text-muted)';
+      try {
+        const nextProfile = collectCloudProfile(
+          editorEl,
+          def,
+          profiles.find((entry) => entry.id === selectedProfileId),
+        );
+        const hasConflictingId = profiles.some((entry) => entry.id === nextProfile.id && entry.id !== selectedProfileId);
+        if (hasConflictingId) {
+          throw new Error(`${def.label}: Profile ID '${nextProfile.id}' already exists.`);
+        }
+        const existingIndex = selectedProfileId
+          ? profiles.findIndex((entry) => entry.id === selectedProfileId)
+          : -1;
+        const nextProfiles = profiles.slice();
+        if (existingIndex >= 0) nextProfiles[existingIndex] = nextProfile;
+        else nextProfiles.push(nextProfile);
+
+        const result = await api.updateConfig({
+          assistant: {
+            tools: {
+              cloud: {
+                [def.key]: nextProfiles,
+              },
+            },
+          },
+        });
+        statusEl.textContent = result.message || 'Saved.';
+        statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+        if (result.success) {
+          cloudUiState.selectedProfiles[def.key] = nextProfile.id;
+          setTimeout(() => updateCloud(), 250);
+        }
+      } catch (err) {
+        statusEl.textContent = err instanceof Error ? err.message : String(err);
+        statusEl.style.color = 'var(--error)';
+      }
+    });
+
+    editorEl.querySelector('[data-delete-profile]')?.addEventListener('click', async () => {
+      if (!selectedProfileId) return;
+      if (!confirm(`Delete cloud profile '${selectedProfileId}'?`)) return;
+      statusEl.textContent = 'Deleting...';
+      statusEl.style.color = 'var(--text-muted)';
+      try {
+        const result = await api.updateConfig({
+          assistant: {
+            tools: {
+              cloud: {
+                [def.key]: profiles.filter((profile) => profile.id !== selectedProfileId),
+              },
+            },
+          },
+        });
+        statusEl.textContent = result.message || 'Deleted.';
+        statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+        if (result.success) {
+          const remaining = profiles.filter((profile) => profile.id !== selectedProfileId);
+          cloudUiState.selectedProfiles[def.key] = remaining[0]?.id || null;
+          setTimeout(() => updateCloud(), 250);
+        }
+      } catch (err) {
+        statusEl.textContent = err instanceof Error ? err.message : String(err);
+        statusEl.style.color = 'var(--error)';
+      }
+    });
+
     applyInputTooltips(section);
   }
 
-  selectEl.addEventListener('change', () => renderFields(selectEl.value));
-  renderFields(selectEl.value);
-
-  section.querySelector('[data-save-profile]')?.addEventListener('click', async () => {
-    statusEl.textContent = 'Saving...';
-    statusEl.style.color = 'var(--text-muted)';
-    try {
-      const nextProfile = collectCloudProfile(section, def, profiles);
-      const existingIndex = profiles.findIndex((profile) => profile.id === nextProfile.id);
-      const nextProfiles = profiles.slice();
-      if (existingIndex >= 0) nextProfiles[existingIndex] = nextProfile;
-      else nextProfiles.push(nextProfile);
-
-      const result = await api.updateConfig({
-        assistant: {
-          tools: {
-            cloud: {
-              [def.key]: nextProfiles,
-            },
-          },
-        },
-      });
-      statusEl.textContent = result.message || 'Saved.';
-      statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
-      if (result.success) {
-        setTimeout(() => updateCloud(), 250);
-      }
-    } catch (err) {
-      statusEl.textContent = err instanceof Error ? err.message : String(err);
-      statusEl.style.color = 'var(--error)';
-    }
+  addBtn?.addEventListener('click', () => {
+    selectedProfileId = null;
+    cloudUiState.selectedProfiles[def.key] = null;
+    renderProfileList();
+    renderEditor();
   });
 
-  deleteBtn?.addEventListener('click', async () => {
-    const profileId = selectEl.value;
-    if (!profileId || profileId === '__new__') return;
-    if (!confirm(`Delete cloud profile '${profileId}'?`)) return;
-    statusEl.textContent = 'Deleting...';
-    statusEl.style.color = 'var(--text-muted)';
-    try {
-      const result = await api.updateConfig({
-        assistant: {
-          tools: {
-            cloud: {
-              [def.key]: profiles.filter((profile) => profile.id !== profileId),
-            },
-          },
-        },
-      });
-      statusEl.textContent = result.message || 'Deleted.';
-      statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
-      if (result.success) {
-        setTimeout(() => updateCloud(), 250);
-      }
-    } catch (err) {
-      statusEl.textContent = err instanceof Error ? err.message : String(err);
-      statusEl.style.color = 'var(--error)';
-    }
-  });
+  renderProfileList();
+  renderEditor();
 
   return section;
 }
@@ -677,6 +753,7 @@ function renderCloudField(def, field, profile) {
     return `
       <div class="cfg-field">
         <label>${esc(field.label)}</label>
+        ${field.help ? `<div class="cfg-help-text" style="font-size:0.72rem;color:var(--text-muted);margin-top:0.2rem;">${esc(field.help)}</div>` : ''}
         <label style="display:flex;align-items:center;gap:0.5rem;margin-top:0.55rem;">
           <input data-cloud-field="${escAttr(field.key)}" type="checkbox" ${checked ? 'checked' : ''}>
           <span style="font-size:0.75rem;color:var(--text-secondary)">${checked ? 'Enabled' : 'Disabled'}</span>
@@ -689,6 +766,7 @@ function renderCloudField(def, field, profile) {
     return `
       <div class="cfg-field">
         <label>${esc(field.label)}</label>
+        ${field.help ? `<div class="cfg-help-text" style="font-size:0.72rem;color:var(--text-muted);margin-top:0.2rem;">${esc(field.help)}</div>` : ''}
         <select data-cloud-field="${escAttr(field.key)}">
           ${(field.options || []).map((option) => `<option value="${escAttr(option)}"${option === value ? ' selected' : ''}>${esc(option)}</option>`).join('')}
         </select>
@@ -700,6 +778,7 @@ function renderCloudField(def, field, profile) {
     return `
       <div class="cfg-field" style="grid-column: 1 / -1;">
         <label>${esc(field.label)}</label>
+        ${field.help ? `<div class="cfg-help-text" style="font-size:0.72rem;color:var(--text-muted);margin-top:0.2rem;margin-bottom:0.35rem;">${esc(field.help)}</div>` : ''}
         <textarea
           data-cloud-field="${escAttr(field.key)}"
           data-cloud-field-type="${escAttr(field.type)}"
@@ -714,6 +793,7 @@ function renderCloudField(def, field, profile) {
   return `
     <div class="cfg-field">
       <label>${esc(field.label)}</label>
+      ${field.help ? `<div class="cfg-help-text" style="font-size:0.72rem;color:var(--text-muted);margin-top:0.2rem;">${esc(field.help)}</div>` : ''}
       <input
         data-cloud-field="${escAttr(field.key)}"
         data-cloud-field-type="${escAttr(field.type || 'text')}"
@@ -725,11 +805,8 @@ function renderCloudField(def, field, profile) {
   `;
 }
 
-function collectCloudProfile(section, def, profiles) {
-  const selectedId = section.querySelector('[data-profile-select]')?.value;
-  const existing = selectedId && selectedId !== '__new__'
-    ? profiles.find((profile) => profile.id === selectedId)
-    : {};
+function collectCloudProfile(section, def, existingProfile) {
+  const existing = existingProfile || {};
   const nextProfile = { ...(existing || {}) };
 
   for (const field of def.fields) {
@@ -777,12 +854,35 @@ function collectCloudProfile(section, def, profiles) {
 }
 
 function createGenericHelpFactory(area) {
-  return (title) => ({
-    whatItIs: `${title} is a specific subsection inside ${area} that covers one cloud setup, posture, activity, or handoff concern.`,
-    whatSeeing: 'You are seeing the live cloud data, controls, or records that belong to this subsection rather than a generic placeholder panel.',
-    whatCanDo: 'Use the rows and controls here to inspect the current cloud state or make the change this subsection is responsible for.',
-    howLinks: `This section supports the broader ${area} workflow, while deeper incident handling, scheduling, or policy review may still live on related owner pages.`,
-  });
+  const providerTitles = new Set(['cPanel / WHM', 'Vercel', 'Cloudflare', 'AWS', 'GCP', 'Azure']);
+
+  return (title) => {
+    if (providerTitles.has(title)) {
+      return {
+        whatItIs: `This section is the saved-profile browser and editor for the ${title} provider family.`,
+        whatSeeing: `You are seeing the saved ${title} profiles on the left and the create or edit form for the currently active ${title} profile on the right.`,
+        whatCanDo: `Select an existing ${title} profile to edit it, start a new one, rotate credentials, and save or delete ${title} profiles.`,
+        howLinks: `The ${title} profiles managed here are later used by cloud tools, approvals, activity review, and cloud-focused automations.`,
+      };
+    }
+    if (/^Create New .+ Profile$/.test(title)) {
+      return {
+        whatItIs: 'This section is the create flow for a new cloud provider profile.',
+        whatSeeing: 'You are seeing the required identifiers, credential fields, and any advanced JSON or endpoint fields needed for that provider family.',
+        whatCanDo: 'Enter the provider details, leave secret fields blank until you are ready to store them, and create a new reusable cloud profile.',
+        howLinks: 'A profile created here becomes selectable for later cloud-tool runs, approvals, and automations.',
+      };
+    }
+    if (/^Edit\s+/.test(title)) {
+      return {
+        whatItIs: 'This section is the editor for the currently selected cloud provider profile.',
+        whatSeeing: 'You are seeing the saved profile values together with the fields that can be updated, including secret rotation fields when applicable.',
+        whatCanDo: 'Review the selected profile, update identifiers or endpoints, rotate credentials, and save or delete the profile.',
+        howLinks: 'Changes made here affect the profile used by later cloud actions, approvals, and automation runs.',
+      };
+    }
+    return null;
+  };
 }
 
 function buildDefaultProfile(def) {
@@ -791,6 +891,22 @@ function buildDefaultProfile(def) {
   if (def.key === 'awsProfiles') return { ...base, region: 'us-east-1' };
   if (def.key === 'gcpProfiles') return { ...base, location: 'us-central1' };
   return base;
+}
+
+function summarizeCloudProfileBadges(def, profile) {
+  const badges = [];
+  const configuredSecretCount = def.fields.filter((field) => field.configuredKey && profile[field.configuredKey]).length;
+  const credentialRefCount = def.fields.filter((field) => /credentialRef$/i.test(field.key) && profile[field.key]).length;
+
+  if (def.key === 'cpanelProfiles' && profile.type) badges.push(profile.type.toUpperCase());
+  if (profile.region) badges.push(profile.region);
+  if (profile.location) badges.push(profile.location);
+  if (configuredSecretCount > 0) badges.push(configuredSecretCount === 1 ? 'secret stored' : `${configuredSecretCount} secrets stored`);
+  if (credentialRefCount > 0) badges.push(credentialRefCount === 1 ? '1 credential ref' : `${credentialRefCount} credential refs`);
+  if (profile.allowSelfSigned) badges.push('self-signed TLS');
+  if (profile.apiBaseUrl || (profile.endpoints && Object.keys(profile.endpoints).length > 0) || profile.blobBaseUrl) badges.push('custom endpoint');
+
+  return badges;
 }
 
 function getCloudConfig(config) {

@@ -161,6 +161,18 @@ The section help content must answer:
 - `What they can do`
 - `How it links to other sections`
 
+Section help must be written for the **actual rendered section content**, not just the parent page, tab, or the literal title text.
+
+Examples:
+
+- a section titled `Automation Configuration` must explain the automation controls shown in that panel, not threat intel broadly
+- a section titled `Run Intelligence Scan` must explain the scan form and result behavior, not the entire Threat Intel tab
+- a section titled `Edit aws-prod` must explain that the user is editing the currently selected AWS profile, not AWS in general
+
+Generic fallback copy is not acceptable in shipped UI.
+
+If a section does not yet have useful section-specific help text, the UI should omit the section-help affordance until that copy exists.
+
 ### Recommended extra guidance fields
 
 When useful, section help should also include:
@@ -188,10 +200,13 @@ Guidance copy must be:
 - specific to the current surface
 - action-oriented
 - free of internal implementation jargon
+- anchored to the concrete rows, controls, outputs, or state shown in that exact panel
 
 Guidance copy must not:
 
 - restate the section title without adding meaning
+- describe the whole page when the help icon is attached to one subsection
+- use placeholder or generic fallback text such as "this section is part of X workflow"
 - dump raw schema details into normal-user help text
 - duplicate a full help manual inside the page
 
@@ -410,6 +425,15 @@ Cloud must include page, tab, and section guidance that clearly separates:
 
 Connection forms must also explain what credentials or identifiers are required before the user starts.
 
+Every Cloud section tooltip must describe the exact panel content currently visible:
+
+- posture tables describe posture tables
+- approvals tables describe approval rows and decisions
+- workflow sections describe workflow summaries and handoff
+- provider editors describe the saved-profile list, create state, edit state, secret-rotation behavior, and downstream tool usage
+
+Cloud must not ship generic section-help fallback copy.
+
 ### Required tabs
 
 - `Overview`
@@ -451,6 +475,13 @@ Every provider connection form must support:
 - optional endpoint overrides behind an advanced panel
 - `Test Connection`
 - `Save`
+
+The preferred provider-editing pattern is:
+
+- saved profiles listed on the left
+- selecting a saved profile opens an edit surface on the right
+- `Add` switches the right side into an explicit create flow
+- section help on both the provider-family panel and the active editor must describe that actual state
 
 ### `Activity`
 

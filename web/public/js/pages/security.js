@@ -64,13 +64,13 @@ const SECURITY_HELP = {
     },
   },
   intel: {
-    'Operations Configuration': {
-      whatItIs: 'This section is the control plane for local threat-intel posture, source coverage, and how intel work should be handled operationally.',
-      whatSeeing: 'You are seeing response mode, darkweb capability, connector posture, and any example or scheduled automation coverage relevant to threat-intel scans.',
-      whatCanDo: 'Change the operating mode, confirm which sources are actually available, and jump toward the automation path when you want recurring scans.',
-      howLinks: 'It provides the policy and automation context for the watchlist, manual scans, findings, and drafted actions below.',
+    'Automation Configuration': {
+      whatItIs: 'This section controls how the threat-intel workflow runs day to day, including response mode, source availability, and whether an automation preset already exists.',
+      whatSeeing: 'You are seeing the current response mode, darkweb-scan posture, connector coverage, last-scan timing, and a shortcut into Automations.',
+      whatCanDo: 'Adjust the operating mode, confirm whether the right scan sources are available, refresh the posture view, and jump into Automations when you want recurring runs.',
+      howLinks: 'It sets the operating context for the manual scan, watchlist, findings, and drafted-action sections that follow.',
     },
-    'Run Scan': {
+    'Run Intelligence Scan': {
       whatItIs: 'This is the manual execution surface for one-off threat-intel collection and investigation.',
       whatSeeing: 'You are seeing an optional single-use query, source selectors, darkweb controls when available, and the summary of the latest scan run.',
       whatCanDo: 'Run targeted searches for identity abuse, impersonation, fraud, leaks, or related threats and review the resulting findings here in Security.',
@@ -82,17 +82,23 @@ const SECURITY_HELP = {
       whatCanDo: 'Maintain the list of monitored identity targets without leaving the Security page.',
       howLinks: 'Watchlist entries feed manual scans, scheduled scans, findings, and drafted response actions.',
     },
-    Findings: {
+    'Active Findings': {
       whatItIs: 'This section contains the current threat-intel findings produced by watchlist or manual scans.',
       whatSeeing: 'You are seeing findings with severity, confidence, status, source context, and shortcuts for follow-up action.',
       whatCanDo: 'Triage findings, update their status, and create or review follow-up actions from the same page.',
       howLinks: 'Findings are the bridge between collection and response, driving drafted actions and the broader operating plan.',
     },
-    'Drafted Actions': {
+    'Drafted Intelligence Actions': {
       whatItIs: 'This section is the queue of drafted follow-up actions generated from threat-intel findings.',
       whatSeeing: 'You are seeing proposed response, reporting, or takedown actions together with their approval posture.',
       whatCanDo: 'Review the drafted actions, decide whether they are sensible, and determine whether they need approval or further editing.',
       howLinks: 'These actions are downstream of findings and should be evaluated against the operating plan before execution.',
+    },
+    'Latest Scan Result': {
+      whatItIs: 'This section is the most recent threat-intel scan summary, shown only when a manual or watchlist-driven scan has already run.',
+      whatSeeing: 'You are seeing whether the last scan succeeded, the message returned by the run, when it completed, and a short preview of any findings it created.',
+      whatCanDo: 'Use it to confirm the last scan actually ran and quickly gauge whether it produced useful findings before moving into the full findings table.',
+      howLinks: 'It is a compact recap of the last run, while the durable outcome of that run lives in Active Findings and any drafted actions below.',
     },
     'Operating Plan': {
       whatItIs: 'This section outlines the phased operating plan for how threat-intel work should progress from collection to response.',
@@ -1459,168 +1465,204 @@ async function renderIntelTab(panel) {
         </div>
       </div>
 
-      <div class="table-container">
-        <div class="table-header">
-          <h3>Operations Configuration</h3>
-          <button class="btn btn-secondary" id="intel-refresh" style="font-size:0.75rem;padding:0.35rem 0.65rem;">Refresh</button>
-        </div>
-        <div class="intel-controls">
-          <div class="intel-control-row">
-            <label>Response Mode</label>
-            <select id="intel-mode">
-              ${['manual', 'assisted', 'autonomous'].map((mode) => `
-                <option value="${mode}" ${summary.responseMode === mode ? 'selected' : ''}>${mode}</option>
-              `).join('')}
-            </select>
-            <span class="intel-muted">Darkweb scans: ${summary.darkwebEnabled ? 'enabled' : 'disabled'}</span>
-            <span class="intel-muted">Forum connectors: ${esc(connectorText || 'none')}</span>
-          </div>
-          <div class="intel-control-row" style="margin-top:0.75rem;">
-            <span class="intel-muted">${summary.lastScanAt ? `Last scan ${new Date(summary.lastScanAt).toLocaleString()}` : 'No scan has run yet.'}</span>
-            <span class="intel-muted">${scanPreset ? `Example automation available: ${esc(scanPreset.name)}` : 'No built-in threat-intel automation preset found.'}</span>
-            <a href="#/operations" class="btn btn-secondary btn-sm">Open Operations</a>
+      ${notice ? `
+        <div class="table-container" style="border-color: ${notice.tone === 'error' ? 'var(--error)' : notice.tone === 'warning' ? 'var(--warning)' : 'var(--success)'}; background: rgba(0,0,0,0.2);">
+          <div style="padding:0.8rem 1rem; color:${notice.tone === 'error' ? 'var(--error)' : notice.tone === 'warning' ? 'var(--warning)' : 'var(--success)'}; font-size: 0.85rem; display: flex; align-items: center; justify-content: space-between;">
+            <span>${esc(notice.message)}</span>
+            <button class="btn btn-secondary btn-sm" id="intel-notice-dismiss" style="padding: 0.2rem 0.5rem;">Dismiss</button>
           </div>
         </div>
-      </div>
+      ` : ''}
 
-      <div class="table-container">
-        <div class="table-header"><h3>Run Scan</h3></div>
-        <div style="padding:0.9rem 1rem;display:grid;gap:0.85rem;">
-          <div class="cfg-form-grid">
-            <div class="cfg-field">
-              <label>One-Off Query</label>
-              <input id="intel-scan-query" type="text" placeholder="name, handle, domain, brand, fraud phrase">
+      <div class="cfg-form-grid" style="align-items: start; margin-bottom: 1.5rem;">
+        <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+          <div class="table-container" style="margin-bottom:0;">
+            <div class="table-header">
+              <h3>Automation Configuration</h3>
+              <button class="btn btn-secondary" id="intel-refresh" style="font-size:0.7rem;padding:0.25rem 0.5rem;">Refresh</button>
             </div>
-            <div class="cfg-field">
-              <label>Darkweb</label>
-              <label style="display:flex;align-items:center;gap:0.5rem;height:100%;">
-                <input id="intel-scan-darkweb" type="checkbox" ${summary.darkwebEnabled ? '' : 'disabled'}>
-                <span>${summary.darkwebEnabled ? 'Include when this scan runs' : 'Disabled in config'}</span>
-              </label>
-            </div>
-          </div>
-          <div style="display:flex;flex-wrap:wrap;gap:0.75rem;">
-            ${['web', 'news', 'social', 'forum', 'darkweb'].map((source) => `
-              <label style="display:flex;align-items:center;gap:0.4rem;">
-                <input class="intel-source" type="checkbox" value="${source}" ${source === 'darkweb' && !summary.darkwebEnabled ? 'disabled' : ''} ${source !== 'darkweb' ? 'checked' : ''}>
-                <span>${source}</span>
-              </label>
-            `).join('')}
-          </div>
-          <div class="cfg-actions" style="justify-content:flex-start;">
-            <button class="btn btn-primary" id="intel-scan-run" type="button">Run Scan</button>
-            <span id="intel-scan-status" class="cfg-save-status"></span>
-          </div>
-          ${lastScan ? `
-            <div class="cfg-check-item ${lastScan.success ? 'complete' : 'warning'}">
-              <div class="cfg-check-head">
-                <span class="cfg-check-title">Latest Scan Output</span>
-                <span class="badge ${lastScan.success ? 'badge-running' : 'badge-queued'}">${lastScan.success ? 'completed' : 'needs attention'}</span>
+            <div class="intel-controls" style="padding: 1rem; display: grid; gap: 1rem;">
+              <div class="intel-control-row" style="grid-template-columns: 1fr auto; gap: 1rem; display: grid; align-items: center;">
+                <label style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase;">Response Mode</label>
+                <select id="intel-mode" style="width: 120px; padding: 0.3rem; background: var(--bg-input); border: 1px solid var(--border); color: var(--text-primary); border-radius: 4px;">
+                  ${['manual', 'assisted', 'autonomous'].map((mode) => `
+                    <option value="${mode}" ${summary.responseMode === mode ? 'selected' : ''}>${mode}</option>
+                  `).join('')}
+                </select>
               </div>
-              <div class="cfg-check-detail">${esc(lastScan.message)}</div>
-              <div class="cfg-check-detail">Created ${lastScan.findings?.length || 0} finding(s) at ${esc(new Date(lastScan.at).toLocaleString())}.</div>
-              ${Array.isArray(lastScan.findings) && lastScan.findings.length > 0 ? `
-                <div class="cfg-check-detail">${lastScan.findings.slice(0, 5).map((finding) => `${finding.target} (${finding.sourceType}/${finding.severity})`).join(' • ')}</div>
-              ` : ''}
+              <div style="font-size: 0.75rem; color: var(--text-muted); display: grid; gap: 0.4rem; background: var(--bg-input); padding: 0.75rem; border-radius: var(--radius); border: 1px solid var(--border);">
+                <div style="display: flex; justify-content: space-between;"><span>Darkweb Scans</span> <span style="color: ${summary.darkwebEnabled ? 'var(--success)' : 'var(--text-muted)'}">${summary.darkwebEnabled ? 'Enabled' : 'Disabled'}</span></div>
+                <div style="display: flex; justify-content: space-between;"><span>Connectors</span> <span style="color: var(--text-secondary)">${esc(connectorText || 'None')}</span></div>
+                <div style="display: flex; justify-content: space-between; margin-top: 0.25rem; border-top: 1px solid var(--border); padding-top: 0.4rem;"><span>Last Scan</span> <span>${summary.lastScanAt ? new Date(summary.lastScanAt).toLocaleString() : 'Never'}</span></div>
+              </div>
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem;">
+                <span class="intel-muted" style="flex: 1; font-size: 0.7rem;">${scanPreset ? `Preset: ${esc(scanPreset.name)}` : 'No automation preset found.'}</span>
+                <a href="#/automations" class="btn btn-secondary btn-sm" style="white-space: nowrap;">Open Automations</a>
+              </div>
+            </div>
+          </div>
+
+          <div class="table-container" style="margin-bottom:0;">
+            <div class="table-header"><h3>Watchlist</h3></div>
+            <div class="intel-watchlist-panel" style="padding: 1rem;">
+              <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                <input id="intel-watch-target" type="text" placeholder="person, handle, domain, brand..." style="flex: 1; min-width: 0; padding: 0.4rem; background: var(--bg-input); border: 1px solid var(--border); color: var(--text-primary); border-radius: 4px;">
+                <button class="btn btn-primary btn-sm" id="intel-watch-add" type="button">Add</button>
+              </div>
+              <div class="intel-watch-items" style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+                ${watchlist.length === 0
+                  ? '<span class="intel-muted">No watch targets configured.</span>'
+                  : watchlist.map(target => `
+                    <span class="intel-chip" style="background: var(--bg-surface); border: 1px solid var(--border); padding: 0.2rem 0.5rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.75rem;">
+                      ${esc(target)}
+                      <button class="intel-watch-remove" data-target="${escAttr(target)}" type="button" style="background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 0; font-size: 1.2rem; line-height: 1;">&times;</button>
+                    </span>
+                  `).join('')}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+          <div class="table-container" style="margin-bottom:0;">
+            <div class="table-header"><h3>Run Intelligence Scan</h3></div>
+            <div style="padding:1rem; display:grid; gap:1.2rem;">
+              <div class="cfg-field" style="display: grid; gap: 0.3rem;">
+                <label style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase;">One-Off Target Query</label>
+                <input id="intel-scan-query" type="text" placeholder="name, handle, domain, brand, fraud phrase" style="padding: 0.4rem; background: var(--bg-input); border: 1px solid var(--border); color: var(--text-primary); border-radius: 4px;">
+              </div>
+              
+              <div style="background: var(--bg-input); padding: 0.75rem; border-radius: var(--radius); border: 1px solid var(--border);">
+                <label style="font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; display: block; margin-bottom: 0.6rem;">Scan Sources</label>
+                <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 0.6rem;">
+                  ${['web', 'news', 'social', 'forum', 'darkweb'].map((source) => `
+                    <label style="display:flex;align-items:center;gap:0.4rem; font-size: 0.75rem; cursor: pointer;">
+                      <input class="intel-source" type="checkbox" value="${source}" ${source === 'darkweb' && !summary.darkwebEnabled ? 'disabled' : ''} ${source !== 'darkweb' ? 'checked' : ''}>
+                      <span>${source}</span>
+                    </label>
+                  `).join('')}
+                </div>
+              </div>
+
+              <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+                <label style="display:flex;align-items:center;gap:0.5rem; font-size: 0.75rem; cursor: pointer;">
+                  <input id="intel-scan-darkweb" type="checkbox" ${summary.darkwebEnabled ? '' : 'disabled'}>
+                  <span>Include Deep/Dark Web</span>
+                </label>
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                  <span id="intel-scan-status" class="cfg-save-status" style="font-size: 0.7rem;"></span>
+                  <button class="btn btn-primary" id="intel-scan-run" type="button" style="padding: 0.5rem 1.5rem;">Run Scan</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          ${lastScan ? `
+            <div class="table-container" style="margin-bottom:0; border-left: 3px solid ${lastScan.success ? 'var(--success)' : 'var(--warning)'};">
+              <div class="table-header">
+                <h3 style="display: flex; align-items: center; gap: 0.5rem;">
+                  Latest Scan Result
+                  <span class="badge ${lastScan.success ? 'badge-running' : 'badge-queued'}" style="font-size: 0.6rem; padding: 0.1rem 0.4rem;">${lastScan.success ? 'completed' : 'failed'}</span>
+                </h3>
+              </div>
+              <div style="padding:1rem;">
+                <div style="font-size: 0.8rem; margin-bottom: 0.6rem; color: var(--text-primary); line-height: 1.4;">${esc(lastScan.message)}</div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.7rem; color: var(--text-muted);">
+                  <span>Created <strong>${lastScan.findings?.length || 0}</strong> finding(s)</span>
+                  <span>${esc(new Date(lastScan.at).toLocaleString())}</span>
+                </div>
+                ${Array.isArray(lastScan.findings) && lastScan.findings.length > 0 ? `
+                  <div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 0.4rem;">
+                    ${lastScan.findings.slice(0, 4).map((finding) => `
+                      <span style="font-size: 0.65rem; background: var(--bg-elevated); padding: 0.1rem 0.4rem; border-radius: 3px; border: 1px solid var(--border);">
+                        ${esc(finding.target)} <span style="color: var(--text-muted)">(${finding.sourceType})</span>
+                      </span>
+                    `).join('')}
+                    ${lastScan.findings.length > 4 ? `<span style="font-size: 0.65rem; color: var(--text-muted); padding: 0.1rem;">+${lastScan.findings.length - 4} more</span>` : ''}
+                  </div>
+                ` : ''}
+              </div>
             </div>
           ` : ''}
         </div>
       </div>
 
       <div class="table-container">
-        <div class="table-header"><h3>Watchlist</h3></div>
-        <div class="intel-watchlist-panel">
-          <div class="cfg-actions" style="justify-content:flex-start;padding:0 0 0.85rem;">
-            <input id="intel-watch-target" type="text" placeholder="person, handle, domain, brand, keyword" style="min-width:18rem;max-width:100%;">
-            <button class="btn btn-primary" id="intel-watch-add" type="button">Add Target</button>
-          </div>
-          <div class="intel-watch-items">
-            ${watchlist.length === 0
-              ? '<span class="intel-muted">No watch targets configured.</span>'
-              : watchlist.map(target => `
-                <span class="intel-chip">
-                  ${esc(target)}
-                  <button class="btn btn-secondary btn-sm intel-watch-remove" data-target="${escAttr(target)}" type="button">Remove</button>
-                </span>
+        <div class="table-header"><h3>Active Findings</h3></div>
+        <div style="overflow-x: auto;">
+          <table style="min-width: 900px;">
+            <thead>
+              <tr><th>ID</th><th>Target</th><th>Source</th><th>Severity</th><th>Confidence</th><th>Status</th><th>Summary</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              ${findings.length === 0 ? '<tr><td colspan="8" style="text-align: center; padding: 2rem; color: var(--text-muted);">No findings yet. Run a scan to populate results.</td></tr>' : findings.map(finding => `
+                <tr>
+                  <td title="${esc(finding.id)}"><code style="font-size: 0.7rem; color: var(--accent);">${esc(shortId(finding.id))}</code></td>
+                  <td style="font-weight: 600;">${esc(finding.target)}</td>
+                  <td><span style="font-size: 0.7rem; text-transform: uppercase; color: var(--text-secondary);">${esc(finding.sourceType)}</span></td>
+                  <td><span class="badge ${severityClass(finding.severity)}">${esc(finding.severity)}</span></td>
+                  <td>
+                    <div style="display: flex; align-items: center; gap: 0.4rem;">
+                      <div style="width: 40px; height: 4px; background: var(--bg-input); border-radius: 2px; overflow: hidden;">
+                        <div style="width: ${Math.round((finding.confidence ?? 0) * 100)}%; height: 100%; background: var(--accent);"></div>
+                      </div>
+                      <span style="font-size: 0.7rem;">${Math.round((finding.confidence ?? 0) * 100)}%</span>
+                    </div>
+                  </td>
+                  <td>
+                    <select data-finding-status="${escAttr(finding.id)}" style="font-size: 0.75rem; padding: 0.2rem; border-radius: 4px; background: var(--bg-input); border: 1px solid var(--border); color: var(--text-primary);">
+                      ${['new', 'triaged', 'actioned', 'dismissed'].map(status => `
+                        <option value="${status}" ${finding.status === status ? 'selected' : ''}>${status}</option>
+                      `).join('')}
+                    </select>
+                  </td>
+                  <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escAttr(finding.summary)}">${esc(finding.summary)}</td>
+                  <td>
+                    <div class="intel-actions" style="display: flex; gap: 0.3rem;">
+                      <button class="btn btn-secondary btn-sm intel-action-btn" data-finding="${escAttr(finding.id)}" data-action="report" title="Generate Report">Report</button>
+                      <button class="btn btn-secondary btn-sm intel-action-btn" data-finding="${escAttr(finding.id)}" data-action="request_takedown" title="Request Takedown">Takedown</button>
+                    </div>
+                  </td>
+                </tr>
               `).join('')}
-          </div>
+            </tbody>
+          </table>
         </div>
       </div>
 
-      ${notice ? `
-        <div class="table-container">
-          <div style="padding:0.9rem 1rem;color:${notice.tone === 'error' ? 'var(--error)' : notice.tone === 'warning' ? 'var(--warning)' : 'var(--success)'};">
-            ${esc(notice.message)}
-          </div>
+      <div class="table-container">
+        <div class="table-header"><h3>Drafted Intelligence Actions</h3></div>
+        <div style="overflow-x: auto;">
+          <table style="min-width: 800px;">
+            <thead>
+              <tr><th>Action ID</th><th>Finding</th><th>Type</th><th>Status</th><th>Approval</th><th>Rationale</th></tr>
+            </thead>
+            <tbody>
+              ${actions.length === 0 ? '<tr><td colspan="6" style="text-align: center; padding: 2rem; color: var(--text-muted);">No drafted actions yet.</td></tr>' : actions.map(action => `
+                <tr>
+                  <td title="${esc(action.id)}"><code style="font-size: 0.7rem; color: var(--accent);">${esc(shortId(action.id))}</code></td>
+                  <td title="${esc(action.findingId)}"><code style="font-size: 0.7rem;">${esc(shortId(action.findingId))}</code></td>
+                  <td><span style="font-size: 0.7rem; text-transform: uppercase;">${esc(action.type)}</span></td>
+                  <td><span class="badge ${action.status === 'completed' ? 'badge-running' : 'badge-queued'}">${esc(action.status)}</span></td>
+                  <td><span style="font-size: 0.7rem; color: ${action.requiresApproval ? 'var(--warning)' : 'var(--text-muted)'}">${action.requiresApproval ? 'Required' : 'Optional'}</span></td>
+                  <td style="max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escAttr(action.rationale)}">${esc(action.rationale)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
         </div>
-      ` : ''}
-
-      <div class="table-container">
-        <div class="table-header"><h3>Findings</h3></div>
-        <table>
-          <thead>
-            <tr><th>ID</th><th>Target</th><th>Source</th><th>Severity</th><th>Confidence</th><th>Status</th><th>Summary</th><th>Actions</th></tr>
-          </thead>
-          <tbody>
-            ${findings.length === 0 ? '<tr><td colspan="8">No findings yet. Run a scan to populate results.</td></tr>' : findings.map(finding => `
-              <tr>
-                <td title="${esc(finding.id)}">${esc(shortId(finding.id))}</td>
-                <td>${esc(finding.target)}</td>
-                <td>${esc(finding.sourceType)}</td>
-                <td><span class="badge ${severityClass(finding.severity)}">${esc(finding.severity)}</span></td>
-                <td>${Math.round((finding.confidence ?? 0) * 100)}%</td>
-                <td>
-                  <select data-finding-status="${escAttr(finding.id)}">
-                    ${['new', 'triaged', 'actioned', 'dismissed'].map(status => `
-                      <option value="${status}" ${finding.status === status ? 'selected' : ''}>${status}</option>
-                    `).join('')}
-                  </select>
-                </td>
-                <td>${esc(finding.summary)}</td>
-                <td>
-                  <div class="intel-actions">
-                    <button class="btn btn-secondary intel-action-btn" data-finding="${escAttr(finding.id)}" data-action="report">Report</button>
-                    <button class="btn btn-secondary intel-action-btn" data-finding="${escAttr(finding.id)}" data-action="request_takedown">Takedown</button>
-                    <button class="btn btn-secondary intel-action-btn" data-finding="${escAttr(finding.id)}" data-action="draft_response">Draft Reply</button>
-                  </div>
-                </td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
-
-      <div class="table-container">
-        <div class="table-header"><h3>Drafted Actions</h3></div>
-        <table>
-          <thead>
-            <tr><th>Action ID</th><th>Finding</th><th>Type</th><th>Status</th><th>Approval</th><th>Rationale</th></tr>
-          </thead>
-          <tbody>
-            ${actions.length === 0 ? '<tr><td colspan="6">No drafted actions yet.</td></tr>' : actions.map(action => `
-              <tr>
-                <td title="${esc(action.id)}">${esc(shortId(action.id))}</td>
-                <td title="${esc(action.findingId)}">${esc(shortId(action.findingId))}</td>
-                <td>${esc(action.type)}</td>
-                <td>${esc(action.status)}</td>
-                <td>${action.requiresApproval ? 'required' : 'optional'}</td>
-                <td>${esc(action.rationale)}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
       </div>
 
       <div class="table-container">
         <div class="table-header"><h3>Operating Plan</h3></div>
-        <div class="intel-plan">
-          <p class="intel-muted">${esc(plan.title)}</p>
-          <div class="intel-plan-grid">
+        <div class="intel-plan" style="padding: 1rem;">
+          <p class="intel-muted" style="margin-bottom: 1rem; border-left: 2px solid var(--accent); padding-left: 0.75rem; font-size: 0.8rem;">${esc(plan.title)}</p>
+          <div class="intel-plan-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem;">
             ${plan.phases.map(phase => `
-              <div class="intel-plan-card">
-                <h4>${esc(phase.phase)}</h4>
-                <p>${esc(phase.objective)}</p>
-                <ul>
+              <div class="intel-plan-card" style="background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem;">
+                <h4 style="color: var(--accent); font-size: 0.8rem; text-transform: uppercase; margin-bottom: 0.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.4rem;">${esc(phase.phase)}</h4>
+                <p style="font-size: 0.75rem; margin-bottom: 0.75rem; color: var(--text-secondary); line-height: 1.4;">${esc(phase.objective)}</p>
+                <ul style="margin: 0; padding-left: 1.2rem; font-size: 0.7rem; color: var(--text-muted); display: grid; gap: 0.25rem;">
                   ${phase.deliverables.map(d => `<li>${esc(d)}</li>`).join('')}
                 </ul>
               </div>
@@ -1632,6 +1674,11 @@ async function renderIntelTab(panel) {
 
     // Event listeners
     panel.querySelector('#intel-refresh')?.addEventListener('click', () => renderIntelTab(panel));
+    panel.querySelector('#intel-notice-dismiss')?.addEventListener('click', () => {
+      intelUiState.notice = null;
+      renderIntelTab(panel);
+    });
+
     panel.querySelector('#intel-mode')?.addEventListener('change', async (event) => {
       const mode = event.target?.value;
       if (!mode) return;
@@ -1794,12 +1841,99 @@ function severityClass(severity) {
 }
 
 function createGenericHelpFactory(area) {
-  return (title) => ({
-    whatItIs: `${title} is a specific subsection inside ${area} for one part of the security triage, audit, or threat-intel workflow.`,
-    whatSeeing: 'You are seeing the live security data, controls, or actions that belong to this subsection.',
-    whatCanDo: 'Use the rows, controls, and links here to inspect state or perform the action this subsection is responsible for.',
-    howLinks: `This section supports the broader ${area} workflow and links outward to related owner pages when deeper work is needed.`,
-  });
+  const exact = {
+    'Provider Posture': {
+      whatItIs: 'This section summarizes the security posture of the configured cloud provider profiles rather than letting you edit them directly.',
+      whatSeeing: 'You are seeing per-provider counts for profiles, inline secrets, credential refs, custom endpoints, and any notable exceptions such as self-signed TLS.',
+      whatCanDo: 'Use it to spot risky cloud auth patterns or connection sprawl quickly before switching to the Cloud page for detailed editing.',
+      howLinks: 'It is a security-facing summary of cloud posture, while the authoritative connection editor remains on the Cloud page.',
+    },
+    'Cloud Security Guidance': {
+      whatItIs: 'This section is a short operator checklist for the cloud risks surfaced by the posture and audit sections around it.',
+      whatSeeing: 'You are seeing plain-language guidance about credential refs, self-signed TLS exceptions, custom endpoints, and how cloud-tool approvals still flow through policy.',
+      whatCanDo: 'Use it as a review checklist when you are deciding whether the current cloud posture looks intentionally configured or needs cleanup.',
+      howLinks: 'It interprets the posture and audit data nearby instead of replacing the Cloud connection editor or the main Audit ledger.',
+    },
+    'Recent Cloud Audit Activity': {
+      whatItIs: 'This section is the recent security-relevant audit trail for cloud actions, denials, and controller decisions.',
+      whatSeeing: 'You are seeing recent cloud-related events with timestamps, severity, tool names, controllers, and the reason or source attached to each event.',
+      whatCanDo: 'Use it to understand what cloud activity just happened and whether policy or approvals intervened.',
+      howLinks: 'It is the cloud-focused slice of the wider audit stream, with the full historical ledger still living on the Audit tab.',
+    },
+    'Network Threat Posture': {
+      whatItIs: 'This section is the summary strip for network-baseline readiness and current network-alert pressure.',
+      whatSeeing: 'You are seeing baseline readiness, known-device counts, active network-alert counts, and severity distribution cards.',
+      whatCanDo: 'Use it to decide whether the monitored network is still learning, broadly healthy, or currently generating suspicious activity that needs review.',
+      howLinks: 'It frames the Active Network Alerts table immediately below and feeds the broader security posture shown elsewhere on the page.',
+    },
+    'Active Network Alerts': {
+      whatItIs: 'This section is the live table of network-origin alerts promoted into Security for acknowledgement and review.',
+      whatSeeing: 'You are seeing timestamps, severity, alert type, affected host identity, descriptive detail, and acknowledgement controls.',
+      whatCanDo: 'Refresh the alert list, acknowledge handled items, and review the hosts or patterns that are currently driving network risk.',
+      howLinks: 'It is the actionable table behind the Network Threat Posture summary above and complements the deeper Network page.',
+    },
+    'Host Monitor Posture': {
+      whatItIs: 'This section summarizes the state of the local host monitor and the kinds of host-side signals it is collecting.',
+      whatSeeing: 'You are seeing cards for monitor enablement, active host-alert counts, suspicious processes, watched paths, and firewall posture.',
+      whatCanDo: 'Use it to check whether host monitoring is functioning and what broad classes of host evidence are currently contributing to alerts.',
+      howLinks: 'It provides the summary context for the Active Host Alerts table beneath it and for host-monitor findings that feed Security.',
+    },
+    'Active Host Alerts': {
+      whatItIs: 'This section is the live alert table for host-monitor detections such as suspicious processes, persistence, or network anomalies on the local machine.',
+      whatSeeing: 'You are seeing alert timestamps, severity, type, summarized evidence, descriptive detail, and acknowledgement controls.',
+      whatCanDo: 'Refresh host-monitor state, run a fresh host check, and acknowledge host alerts after reviewing the evidence.',
+      howLinks: 'It turns the host-monitor posture summary into an operator action queue inside Security.',
+    },
+    'Gateway Firewall Posture': {
+      whatItIs: 'This section summarizes the monitored gateway and firewall estate rather than showing every individual gateway detail row.',
+      whatSeeing: 'You are seeing cards for reachable monitors, active gateway-alert counts, default WAN policy, and port-forward exposure.',
+      whatCanDo: 'Use it to understand whether gateway monitoring is healthy and whether the current perimeter posture looks permissive or risky.',
+      howLinks: 'It provides context for the Active Gateway Alerts table beneath it and for firewall-related findings promoted into Security.',
+    },
+    'Active Gateway Alerts': {
+      whatItIs: 'This section is the live table of gateway and firewall alerts that need review or acknowledgement.',
+      whatSeeing: 'You are seeing timestamps, severity, gateway identity, alert type, descriptive detail, and acknowledgement controls.',
+      whatCanDo: 'Refresh the gateway view, run a new check, and acknowledge gateway alerts once the issue is understood or handled.',
+      howLinks: 'It is the operational table that sits underneath Gateway Firewall Posture and complements the Cloud and Network pages.',
+    },
+    'Live Event Stream': {
+      whatItIs: 'This section is the live append-only stream of incoming audit events while you stay on the page.',
+      whatSeeing: 'You are seeing new audit events arrive in near real time rather than only a static snapshot.',
+      whatCanDo: 'Use it when you want to watch changes happen live during testing, investigation, or policy tuning.',
+      howLinks: 'It is a live monitoring surface, while the durable searchable record still belongs to the Audit tab.',
+    },
+    'Agent States': {
+      whatItIs: 'This section is the current state board for the running agents known to the runtime.',
+      whatSeeing: 'You are seeing each agent\'s current lifecycle state and the compact runtime metadata associated with it.',
+      whatCanDo: 'Use it to confirm whether agents are idle, running, or stuck while you correlate that with alerts or budget pressure.',
+      howLinks: 'It complements the runtime and budget sections by showing the current agent-level state directly.',
+    },
+    'Resource Usage': {
+      whatItIs: 'This section groups the runtime-capacity and budget subsections used to understand whether the agent system is staying within bounds.',
+      whatSeeing: 'You are seeing budget tables, pending EventBus count, and optional analytics or overrun sections related to runtime load.',
+      whatCanDo: 'Use it to judge whether alerts or slowdowns may be caused by capacity pressure rather than only by security conditions.',
+      howLinks: 'It ties live agent behavior back to the budget and analytics panels that quantify runtime pressure.',
+    },
+    'Budget & Resources': {
+      whatItIs: 'This section is the per-agent resource and overrun summary for runtime budget enforcement.',
+      whatSeeing: 'You are seeing token-rate, concurrency, overrun counts, and the current EventBus pending count.',
+      whatCanDo: 'Use it to spot which agents are consuming the most capacity or repeatedly exceeding their runtime budgets.',
+      howLinks: 'It provides the numeric foundation for the wider Resource Usage view and helps explain degraded runtime behavior.',
+    },
+    'Interaction Analytics (60m)': {
+      whatItIs: 'This section is the last-hour analytics snapshot for cross-channel activity reaching the runtime.',
+      whatSeeing: 'You are seeing total event counts plus top channels, agents, and commands over the recent 60-minute window.',
+      whatCanDo: 'Use it to understand where demand is coming from and whether a particular channel or command is driving current system behavior.',
+      howLinks: 'It complements the budget tables by showing activity shape, not just capacity consumption.',
+    },
+    'Recent Budget Overruns': {
+      whatItIs: 'This section is the recent ledger of runs that exceeded their allocated budget window.',
+      whatSeeing: 'You are seeing which agent overran, what invocation type it was, and how much budget versus actual time it used.',
+      whatCanDo: 'Use it to identify expensive flows that may need prompt changes, routing changes, or tighter policy limits.',
+      howLinks: 'It is the historical evidence behind the overrun counts shown in the budget summary.',
+    },
+  };
+  return (title) => exact[title] || null;
 }
 
 function mapNetworkSeverityToAudit(severity) {

@@ -8,6 +8,7 @@ import { appendFile, copyFile, mkdir, readdir, readFile, rename, rm, stat, unlin
 import { isIP } from 'node:net';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { sanitizeShellArgs, scanWriteContent, validateArgSize } from '../guardian/argument-sanitizer.js';
+import { normalizeHttpUrlInput, normalizeHttpUrlRecord, normalizeOptionalHttpUrlInput } from '../config/input-normalization.js';
 import type { IntelActionType, IntelSourceType, IntelStatus, ThreatIntelService } from '../runtime/threat-intel.js';
 import { MarketingStore } from './marketing-store.js';
 import { ToolApprovalStore } from './approvals.js';
@@ -52,6 +53,7 @@ import { parseAirportWifi, parseNetshWifi, parseNmcliWifi, correlateWifiClients 
 import { AwsClient, type AwsInstanceConfig } from './cloud/aws-client.js';
 import { AzureClient, type AzureInstanceConfig, type AzureServiceName } from './cloud/azure-client.js';
 import { CpanelClient, type CpanelInstanceConfig } from './cloud/cpanel-client.js';
+import { normalizeCpanelConnectionConfig } from './cloud/cpanel-profile.js';
 import { CloudflareClient, type CloudflareInstanceConfig } from './cloud/cloudflare-client.js';
 import { GcpClient, type GcpInstanceConfig, type GcpServiceName } from './cloud/gcp-client.js';
 import { VercelClient, type VercelInstanceConfig } from './cloud/vercel-client.js';
@@ -407,16 +409,173 @@ export class ToolExecutor {
 
   /** Context summary for LLM system prompt — workspace root, allowed paths, policy mode. */
   getToolContext(): string {
+    const enabledCategories = this.getCategoryInfo()
+      .filter((category) => category.enabled)
+      .map((category) => `${category.category} (${category.toolCount})`);
+    const policyUpdateActions = this.describePolicyUpdateActions();
     const lines: string[] = [
       `Workspace root (default for file operations): ${this.options.workspaceRoot}`,
       `Policy mode: ${this.policy.mode}`,
       `Allowed paths: ${this.policy.sandbox.allowedPaths.join(', ') || '(workspace root only)'}`,
       `Allowed commands: ${this.policy.sandbox.allowedCommands.join(', ')}`,
+      `Enabled tool categories: ${enabledCategories.join(', ') || '(none)'}`,
+      policyUpdateActions,
+      'Additional tools may be hidden by deferred loading. Use find_tools to discover tools that are not currently visible.',
     ];
     if (this.policy.sandbox.allowedDomains.length > 0) {
       lines.push(`Allowed domains: ${this.policy.sandbox.allowedDomains.join(', ')}`);
     }
+    lines.push(...this.describeCloudContextLines());
     return lines.join('\n');
+  }
+
+  private describePolicyUpdateActions(): string {
+    const updates = this.options.agentPolicyUpdates;
+    const enabledActions: string[] = [];
+    if (updates?.allowedPaths) enabledActions.push('add_path', 'remove_path');
+    if (updates?.allowedCommands) enabledActions.push('add_command', 'remove_command');
+    if (updates?.allowedDomains) enabledActions.push('add_domain', 'remove_domain');
+    if (enabledActions.length === 0) {
+      return 'Policy updates via chat: disabled';
+    }
+    return `Policy updates via chat: enabled via update_tool_policy (${enabledActions.join(', ')})`;
+  }
+
+  private describeCloudContextLines(): string[] {
+    if (!this.cloudConfig.enabled) {
+      return ['Cloud tools: disabled'];
+    }
+
+    const lines: string[] = [
+      'Cloud tools: enabled',
+      'Cloud tool families available via find_tools: cpanel_*, whm_*, vercel_*, cf_*, aws_*, gcp_*, azure_*',
+      'Use configured cloud profile ids exactly as listed below when calling cloud tools. If a matching profile is listed, do not ask the user to repeat host or credential details.',
+    ];
+
+    const profileLines = [
+      ...this.describeCpanelProfilesForContext(),
+      ...this.describeVercelProfilesForContext(),
+      ...this.describeCloudflareProfilesForContext(),
+      ...this.describeAwsProfilesForContext(),
+      ...this.describeGcpProfilesForContext(),
+      ...this.describeAzureProfilesForContext(),
+    ];
+
+    if (profileLines.length === 0) {
+      lines.push('Configured cloud profiles: none');
+      return lines;
+    }
+
+    lines.push('Configured cloud profiles:');
+    lines.push(...profileLines);
+    return lines;
+  }
+
+  private describeCpanelProfilesForContext(): string[] {
+    return (this.cloudConfig.cpanelProfiles ?? []).map((profile) => {
+      const normalized = normalizeCpanelConnectionConfig({
+        id: profile.id,
+        name: profile.name,
+        host: profile.host,
+        port: profile.port,
+        username: profile.username,
+        apiToken: profile.apiToken ?? '',
+        type: profile.type,
+        ssl: profile.ssl,
+        allowSelfSigned: profile.allowSelfSigned,
+        defaultCpanelUser: profile.defaultCpanelUser,
+      });
+      const endpoint = this.describeCloudEndpoint(normalized);
+      const suggestedTool = profile.type === 'whm' ? 'whm_status' : 'cpanel_account';
+      const defaultAccount = profile.defaultCpanelUser?.trim()
+        ? ` defaultCpanelUser=${profile.defaultCpanelUser.trim()}`
+        : '';
+      return `- ${profile.id}: provider=${profile.type} label="${profile.name}" endpoint=${endpoint} username=${profile.username} credential=${profile.apiToken?.trim() ? 'ready' : 'missing'} hostAllowlisted=${this.isHostAllowed(normalized.host) ? 'yes' : 'no'} suggestedReadOnlyTest=${suggestedTool}${defaultAccount}`;
+    });
+  }
+
+  private describeVercelProfilesForContext(): string[] {
+    return (this.cloudConfig.vercelProfiles ?? []).map((profile) => {
+      const endpoint = this.describeVercelEndpoint({
+        id: profile.id,
+        name: profile.name,
+        apiBaseUrl: profile.apiBaseUrl,
+        apiToken: profile.apiToken ?? '',
+        teamId: profile.teamId,
+        slug: profile.slug,
+      });
+      const host = new URL(endpoint).hostname;
+      return `- ${profile.id}: provider=vercel label="${profile.name}" endpoint=${endpoint} credential=${profile.apiToken?.trim() ? 'ready' : 'missing'} hostAllowlisted=${this.isHostAllowed(host) ? 'yes' : 'no'} suggestedReadOnlyTest=vercel_status`;
+    });
+  }
+
+  private describeCloudflareProfilesForContext(): string[] {
+    return (this.cloudConfig.cloudflareProfiles ?? []).map((profile) => {
+      const endpoint = this.describeCloudflareEndpoint({
+        id: profile.id,
+        name: profile.name,
+        apiBaseUrl: profile.apiBaseUrl,
+        apiToken: profile.apiToken ?? '',
+        accountId: profile.accountId,
+        defaultZoneId: profile.defaultZoneId,
+      });
+      const host = new URL(endpoint).hostname;
+      return `- ${profile.id}: provider=cloudflare label="${profile.name}" endpoint=${endpoint} credential=${profile.apiToken?.trim() ? 'ready' : 'missing'} hostAllowlisted=${this.isHostAllowed(host) ? 'yes' : 'no'} suggestedReadOnlyTest=cf_status`;
+    });
+  }
+
+  private describeAwsProfilesForContext(): string[] {
+    return (this.cloudConfig.awsProfiles ?? []).map((profile) => {
+      const endpoint = this.describeAwsEndpoint({
+        id: profile.id,
+        name: profile.name,
+        region: profile.region,
+        accessKeyId: profile.accessKeyId,
+        secretAccessKey: profile.secretAccessKey,
+        sessionToken: profile.sessionToken,
+        endpoints: profile.endpoints,
+      }, 'sts');
+      const host = new URL(endpoint).hostname;
+      const hasCredential = !!profile.accessKeyId?.trim() && !!profile.secretAccessKey?.trim();
+      return `- ${profile.id}: provider=aws label="${profile.name}" region=${profile.region} endpoint=${endpoint} credential=${hasCredential || !!profile.sessionToken?.trim() ? 'ready' : 'ambient-or-missing'} hostAllowlisted=${this.isHostAllowed(host) ? 'yes' : 'no'} suggestedReadOnlyTest=aws_status`;
+    });
+  }
+
+  private describeGcpProfilesForContext(): string[] {
+    return (this.cloudConfig.gcpProfiles ?? []).map((profile) => {
+      const endpoint = this.describeGcpEndpoint({
+        id: profile.id,
+        name: profile.name,
+        projectId: profile.projectId,
+        location: profile.location,
+        accessToken: profile.accessToken,
+        serviceAccountJson: profile.serviceAccountJson,
+        endpoints: profile.endpoints,
+      }, 'cloudResourceManager');
+      const host = new URL(endpoint).hostname;
+      const hasCredential = !!profile.accessToken?.trim() || !!profile.serviceAccountJson?.trim();
+      return `- ${profile.id}: provider=gcp label="${profile.name}" project=${profile.projectId} endpoint=${endpoint} credential=${hasCredential ? 'ready' : 'missing'} hostAllowlisted=${this.isHostAllowed(host) ? 'yes' : 'no'} suggestedReadOnlyTest=gcp_status`;
+    });
+  }
+
+  private describeAzureProfilesForContext(): string[] {
+    return (this.cloudConfig.azureProfiles ?? []).map((profile) => {
+      const endpoint = this.describeAzureEndpoint({
+        id: profile.id,
+        name: profile.name,
+        subscriptionId: profile.subscriptionId,
+        tenantId: profile.tenantId,
+        accessToken: profile.accessToken,
+        clientId: profile.clientId,
+        clientSecret: profile.clientSecret,
+        defaultResourceGroup: profile.defaultResourceGroup,
+        blobBaseUrl: profile.blobBaseUrl,
+        endpoints: profile.endpoints,
+      }, 'management');
+      const host = new URL(endpoint).hostname;
+      const hasCredential = !!profile.accessToken?.trim() || (!!profile.clientId?.trim() && !!profile.clientSecret?.trim());
+      return `- ${profile.id}: provider=azure label="${profile.name}" subscription=${profile.subscriptionId} endpoint=${endpoint} credential=${hasCredential ? 'ready' : 'missing'} hostAllowlisted=${this.isHostAllowed(host) ? 'yes' : 'no'} suggestedReadOnlyTest=azure_status`;
+    });
   }
 
   getSandboxHealth(): SandboxHealth | undefined {
@@ -2454,7 +2613,7 @@ export class ToolExecutor {
       },
       async (args, request) => {
         const rawPath = requireString(args.path, 'path');
-        const content = requireString(args.content, 'content');
+        const content = requireStringAllowEmpty(args.content, 'content');
         const append = !!args.append;
         const contentScan = scanWriteContent(content);
         if (contentScan.secrets.length > 0 || contentScan.pii.length > 0) {
@@ -10424,22 +10583,28 @@ export class ToolExecutor {
     if (!profile.apiToken?.trim()) {
       throw new Error(`Cloud profile '${id}' does not have a resolved API token.`);
     }
-    if (!this.isHostAllowed(profile.host)) {
-      throw new Error(`Host '${profile.host}' is not in allowedDomains.`);
+    let normalized: CpanelInstanceConfig;
+    try {
+      normalized = normalizeCpanelConnectionConfig({
+        id: profile.id,
+        name: profile.name,
+        host: profile.host,
+        port: profile.port,
+        username: profile.username,
+        apiToken: profile.apiToken,
+        type: profile.type,
+        ssl: profile.ssl,
+        allowSelfSigned: profile.allowSelfSigned,
+        defaultCpanelUser: profile.defaultCpanelUser,
+      });
+    } catch (error) {
+      throw new Error(`Cloud profile '${id}' has an invalid host: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!this.isHostAllowed(normalized.host)) {
+      throw new Error(`Host '${normalized.host}' is not in allowedDomains.`);
     }
 
-    return {
-      id: profile.id,
-      name: profile.name,
-      host: profile.host,
-      port: profile.port,
-      username: profile.username,
-      apiToken: profile.apiToken,
-      type: profile.type,
-      ssl: profile.ssl,
-      allowSelfSigned: profile.allowSelfSigned,
-      defaultCpanelUser: profile.defaultCpanelUser,
-    };
+    return normalized;
   }
 
   private createVercelClient(profileId: string): VercelClient {
@@ -10488,7 +10653,7 @@ export class ToolExecutor {
 
     let baseUrl: URL;
     try {
-      baseUrl = new URL(profile.apiBaseUrl?.trim() || 'https://api.vercel.com');
+      baseUrl = new URL(normalizeOptionalHttpUrlInput(profile.apiBaseUrl) || 'https://api.vercel.com');
     } catch {
       throw new Error(`Vercel profile '${id}' has an invalid apiBaseUrl.`);
     }
@@ -10499,7 +10664,7 @@ export class ToolExecutor {
     return {
       id: profile.id,
       name: profile.name,
-      apiBaseUrl: baseUrl.toString(),
+      apiBaseUrl: normalizeHttpUrlInput(baseUrl.toString()),
       apiToken: profile.apiToken,
       teamId: profile.teamId,
       slug: profile.slug,
@@ -10524,7 +10689,7 @@ export class ToolExecutor {
 
     let baseUrl: URL;
     try {
-      baseUrl = new URL(profile.apiBaseUrl?.trim() || 'https://api.cloudflare.com/client/v4');
+      baseUrl = new URL(normalizeOptionalHttpUrlInput(profile.apiBaseUrl) || 'https://api.cloudflare.com/client/v4');
     } catch {
       throw new Error(`Cloudflare profile '${id}' has an invalid apiBaseUrl.`);
     }
@@ -10535,7 +10700,7 @@ export class ToolExecutor {
     return {
       id: profile.id,
       name: profile.name,
-      apiBaseUrl: baseUrl.toString(),
+      apiBaseUrl: normalizeHttpUrlInput(baseUrl.toString()),
       apiToken: profile.apiToken,
       accountId: profile.accountId,
       defaultZoneId: profile.defaultZoneId,
@@ -10567,7 +10732,7 @@ export class ToolExecutor {
       accessKeyId: profile.accessKeyId,
       secretAccessKey: profile.secretAccessKey,
       sessionToken: profile.sessionToken,
-      endpoints: profile.endpoints,
+      endpoints: normalizeHttpUrlRecord(profile.endpoints),
     };
     const host = this.describeAwsEndpoint(config, service ?? 'sts');
     const parsed = new URL(host);
@@ -10601,7 +10766,7 @@ export class ToolExecutor {
       location: profile.location,
       accessToken: profile.accessToken,
       serviceAccountJson: profile.serviceAccountJson,
-      endpoints: profile.endpoints,
+      endpoints: normalizeHttpUrlRecord(profile.endpoints),
     };
     const host = this.describeGcpEndpoint(config, service ?? 'cloudResourceManager');
     const parsed = new URL(host);
@@ -10657,8 +10822,8 @@ export class ToolExecutor {
       clientId: profile.clientId,
       clientSecret: profile.clientSecret,
       defaultResourceGroup: profile.defaultResourceGroup,
-      blobBaseUrl: profile.blobBaseUrl,
-      endpoints: profile.endpoints,
+      blobBaseUrl: normalizeOptionalHttpUrlInput(profile.blobBaseUrl),
+      endpoints: normalizeHttpUrlRecord(profile.endpoints),
     };
     const endpoint = this.describeAzureEndpoint(config, service ?? 'management');
     const endpointHost = new URL(endpoint).hostname;
@@ -10677,28 +10842,27 @@ export class ToolExecutor {
   }
 
   private describeCloudEndpoint(profile: CpanelInstanceConfig): string {
-    const ssl = profile.ssl !== false;
-    const defaultPort = profile.type === 'whm'
+    const normalized = normalizeCpanelConnectionConfig(profile);
+    const ssl = normalized.ssl !== false;
+    const defaultPort = normalized.type === 'whm'
       ? (ssl ? 2087 : 2086)
       : (ssl ? 2083 : 2082);
-    const port = profile.port ?? defaultPort;
-    return `${ssl ? 'https' : 'http'}://${profile.host}:${port}`;
+    const port = normalized.port ?? defaultPort;
+    return `${ssl ? 'https' : 'http'}://${normalized.host}:${port}`;
   }
 
   private describeVercelEndpoint(profile: VercelInstanceConfig): string {
-    const url = new URL(profile.apiBaseUrl?.trim() || 'https://api.vercel.com');
-    return url.origin;
+    return normalizeHttpUrlInput(profile.apiBaseUrl?.trim() || 'https://api.vercel.com');
   }
 
   private describeCloudflareEndpoint(profile: CloudflareInstanceConfig): string {
-    const url = new URL(profile.apiBaseUrl?.trim() || 'https://api.cloudflare.com/client/v4');
-    return url.origin;
+    return normalizeHttpUrlInput(profile.apiBaseUrl?.trim() || 'https://api.cloudflare.com/client/v4');
   }
 
   private describeAwsEndpoint(profile: AwsInstanceConfig, service: AwsServiceName): string {
     const override = profile.endpoints?.[service];
     if (override?.trim()) {
-      return override;
+      return normalizeHttpUrlInput(override);
     }
     const region = profile.region;
     switch (service) {
@@ -10722,7 +10886,7 @@ export class ToolExecutor {
   private describeGcpEndpoint(profile: GcpInstanceConfig, service: GcpServiceName): string {
     const override = profile.endpoints?.[service];
     if (override?.trim()) {
-      return override;
+      return normalizeHttpUrlInput(override);
     }
     switch (service) {
       case 'oauth2Token':
@@ -10748,12 +10912,15 @@ export class ToolExecutor {
     switch (service) {
       case 'oauth2Token':
         return profile.endpoints?.oauth2Token?.trim()
-          || `https://login.microsoftonline.com/${encodeURIComponent(profile.tenantId?.trim() || 'common')}/oauth2/v2.0/token`;
+          ? normalizeHttpUrlInput(profile.endpoints.oauth2Token)
+          : `https://login.microsoftonline.com/${encodeURIComponent(profile.tenantId?.trim() || 'common')}/oauth2/v2.0/token`;
       case 'blob':
-        return profile.blobBaseUrl?.trim() || `https://${accountName?.trim() || 'account'}.blob.core.windows.net`;
+        return normalizeOptionalHttpUrlInput(profile.blobBaseUrl) || `https://${accountName?.trim() || 'account'}.blob.core.windows.net`;
       case 'management':
       default:
-        return profile.endpoints?.management?.trim() || 'https://management.azure.com';
+        return profile.endpoints?.management?.trim()
+          ? normalizeHttpUrlInput(profile.endpoints.management)
+          : 'https://management.azure.com';
     }
   }
 
@@ -10900,6 +11067,10 @@ export class ToolExecutor {
     if (!health || !this.sandboxConfig.enabled) return null;
     if ((health.enforcementMode ?? 'permissive') !== 'strict') return null;
     if (health.availability === 'strong') return null;
+
+    if (toolName === 'find_tools' || toolName === 'update_tool_policy') {
+      return null;
+    }
 
     if (toolName.startsWith('mcp-')) {
       return `Tool '${toolName}' is blocked by strict sandbox mode because MCP server processes require a strong sandbox backend on ${health.platform}.`;
@@ -11304,6 +11475,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function requireString(value: unknown, field: string): string {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error(`'${field}' must be a non-empty string.`);
+  }
+  return value;
+}
+
+function requireStringAllowEmpty(value: unknown, field: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`'${field}' must be a string.`);
   }
   return value;
 }
