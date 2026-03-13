@@ -20,38 +20,6 @@
   <img src="https://img.shields.io/badge/CHANNELS-CLI%20%7C%20Web%20%7C%20Telegram-2496ED?style=for-the-badge" alt="Multi-Channel"/>
 </p>
 
-## Features
-
-- **Four-layer security defense** — proactive admission controls, inline LLM-powered action evaluation (Guardian Agent), output-time leak prevention, and Sentinel audit analysis, all mandatory at the Runtime level
-- **Brokered agent isolation by default** — the built-in chat/planner loop runs in a separate worker process with brokered tool and approval access, instead of executing the LLM/tool loop in the privileged supervisor
-- **Multi-provider LLM support** — Ollama (local), Anthropic (Claude), OpenAI (GPT), plus Groq, Mistral, DeepSeek, Together, xAI, and Google Gemini via curated ProviderRegistry — with interactive model selection, circuit breaker, automatic failover, and smart LLM routing that automatically directs tools to local or external models by category
-- **Multi-channel access** — CLI, Telegram bot, and Web UI with bearer token auth and cross-channel identity mapping
-- **Web dashboard** — real-time status, LLM providers, agent monitoring, session queue, scheduled jobs, integrated chat panel, and SSE-driven live refresh when config, automation, or network state changes
-- **Multi-agent orchestration** — Sequential, Parallel, Loop, and Conditional agents with per-step retry, fail-branch error handling, array iteration, and inter-step state passing through SharedState
-- **Guardian security pipeline** — per-agent capabilities, secret scanning (30+ credential and PII patterns), PII detection/redaction, prompt injection detection, rate limiting, sensitive path blocking, SSRF protection, and output redaction
-- **Tool governance** — approval workflows, per-tool policy overrides, path/command/domain allowlists, and risk-tiered tool classes with interactive policy editor
-- **MCP tool server integration** — JSON-RPC 2.0 over stdio with namespaced tools, inferred trust levels, optional per-server rate limits, and full Guardian admission on every call
-- **Connector and playbook framework** — declarative connector packs with host/path/command allowlists, bounded step execution, dry-run mode, and signed definitions
-- **Conversation memory** — SQLite-backed session history with FTS5 full-text search, per-agent knowledge base, automatic memory flush, and shared memory/session state across tier-routed local/external chat backends
-- **Native document search** — hybrid BM25 keyword + vector similarity search over directories, git repos, URLs, and files
-- **Scheduled task management** — CRUD scheduling for tools and playbooks with presets, run history, inspectable step output, and EventBus integration
-- **Security monitoring** — network threat posture plus host monitoring, host firewall drift, gateway firewall drift, active alerts, audit log integrity, and SQLite DB hardening
-- **Security alert routing** — configurable CLI, web, and Telegram notification delivery with severity filters, event-type filters, and alert-family suppression
-- **Threat intelligence** — watchlist scanning, findings triage, response drafts with human approval gates
-- **Campaign automation** — contact discovery and approval-gated Gmail send workflows
-- **Quick actions** — templated workflows for email, task, and calendar operations
-- **Analytics** — SQLite-backed usage tracking and channel analytics
-- **Agent evaluation framework** — content matchers, tool trajectory validation, safety metrics, and JSON test suites for CI
-- **SOUL personality system** — configurable personality profiles with primary/delegated injection modes
-- **Cryptographic audit trail** — SHA-256 hash-chained JSONL persistence, tamper-evident policy changes, and constant-time auth
-
-## Start Here
-
-- [Installation](INSTALLATION.md)
-- [Usage](USAGE.md)
-- [Security](SECURITY.md)
-- [Architecture](docs/architecture/OVERVIEW.md)
-
 ## Screenshots
 
 ### Dashboard
@@ -120,254 +88,265 @@
   </table>
 </details>
 
-## What This Is
+---
 
-GuardianAgent is a self-contained orchestrator for personal assistant AI. The Runtime manages agent lifecycle, admission checks, audit logging, tool execution, and approvals. The built-in chat/planner execution path runs in a brokered worker process by default.
+## Features
 
-The supervisor process owns config loading, admission, audit logging, tool execution, approvals, and orchestration. The worker process owns prompt assembly, conversation-context assembly, and the LLM chat/tool loop.
+**AI & LLM**
+- Multi-provider support — Ollama (local), Anthropic, OpenAI, plus Groq, Mistral, DeepSeek, Together, xAI, and Google Gemini
+- Smart LLM routing — automatically directs tools to local or external models by category
+- Circuit breaker, automatic failover, and quality-based fallback between providers
+- Prompt caching for Anthropic (reduced latency on repeated system prompts)
 
-Structured orchestration agents execute in the supervisor process. Their sub-agent dispatches pass through `Runtime.dispatchMessage()`, which routes built-in chat-agent execution into the brokered worker path.
+**Agent Orchestration**
+- Four orchestration primitives — Sequential, Parallel, Loop, and Conditional agents
+- Per-step retry with exponential backoff and fail-branch error handling
+- Inter-agent state passing through SharedState
+- SOUL personality system with configurable profiles
 
-All security enforcement is **mandatory at the Runtime level**. Agents cannot bypass it.
+**Security**
+- Four-layer defense — admission controls, inline LLM action evaluation, output leak prevention, and retrospective audit
+- Brokered agent isolation — the chat/planner loop runs in a separate worker process by default
+- Guardian admission pipeline — capabilities, secret/PII scanning, path blocking, SSRF protection, prompt injection detection, rate limiting
+- Policy-as-Code engine with shadow mode, hot-reload, and declarative JSON rules
+- Cryptographic audit trail — SHA-256 hash-chained, tamper-evident event log
 
-## Multi-Agent Orchestration
+**Tools & Integrations**
+- 70+ built-in tools with deferred loading and parallel execution
+- MCP tool server integration with namespaced tools and Guardian admission on every call
+- Connector and playbook framework with allowlists, bounded execution, and dry-run mode
+- Google Workspace integration (Gmail, Calendar, Drive, Docs, Sheets) via managed MCP
+- Tool governance — approval workflows, per-tool policy overrides, risk-tiered tool classes
 
-Four orchestration primitives compose sub-agents into structured workflows:
+**Channels & Dashboard**
+- CLI, Web UI, and Telegram bot with cross-channel identity mapping
+- Web dashboard — real-time status, providers, agents, sessions, jobs, alerts, and integrated chat
+- SSE-driven live refresh when config, automation, or network state changes
 
-- **SequentialAgent** — pipeline of steps with inter-step state passing via `inputKey`/`outputKey`
-- **ParallelAgent** — concurrent fan-out with optional `maxConcurrency` limit
-- **LoopAgent** — iterative refinement with configurable condition, mandatory `maxIterations` safety cap, and array iteration mode with configurable concurrency
-- **ConditionalAgent** — ordered branch evaluation where the first matching condition wins, with optional default steps
+**Memory & Search**
+- SQLite-backed conversation memory with FTS5 full-text search
+- Per-agent knowledge base with automatic memory flush
+- Native document search — hybrid BM25 keyword + vector similarity over directories, git repos, URLs, and files
 
-All orchestration steps support **per-step retry** (`StepRetryPolicy` with exponential backoff) and **fail-branch** error handling (`StepFailBranch` — alternative agent invoked when a step fails all retries). Shared orchestration utilities (`executeWithRetry`, `runStepsSequentially`, `runWithConcurrencyLimit`, `prepareStepInput`, `recordStepOutput`) are extracted as reusable module-level functions.
+**Monitoring & Operations**
+- Host workstation monitoring — process, persistence, path, network, and firewall drift detection
+- Gateway firewall monitoring for edge devices (OPNsense, pfSense, UniFi)
+- Security alert routing — CLI, web, and Telegram delivery with severity and event-type filters
+- Scheduled task management with presets, run history, and EventBus integration
+- Threat intelligence — watchlist scanning, findings triage, and approval-gated response actions
+- SQLite-backed analytics and usage tracking
 
-Every sub-agent dispatch passes through the full Guardian pipeline. Orchestration does not create a security bypass path. Inter-step data flows through `SharedState` — a per-invocation, orchestrator-owned key-value store that sub-agents cannot access.
+---
 
-For built-in chat agents, that dispatch path crosses the broker boundary into the worker process before the LLM/tool loop runs.
+## Security at a Glance
 
-## MCP Tool Server Integration
+GuardianAgent enforces security at the Runtime level — agents cannot bypass it. Every message, LLM call, tool action, and response passes through mandatory chokepoints.
 
-The MCP (Model Context Protocol) client consumes tools from external MCP-compatible servers over stdio transport. Tool names are namespaced (`mcp-<serverId>-<toolName>`) to prevent collisions. All MCP tool calls pass through Guardian admission, can infer `read_only` / `mutating` / `external_post` risk from MCP metadata, and support optional per-server `trustLevel` and `maxCallsPerMinute` overrides.
+| Layer | When | What It Does |
+|-------|------|--------------|
+| **1 — Admission** | Before the agent sees input | Prompt injection detection, rate limiting, capability checks, secret/PII scanning, path blocking, SSRF protection |
+| **1.5 — Process Sandbox** | During tool execution | OS-level isolation via bwrap namespaces (Linux), native helper (Windows), or ulimit/env hardening fallback |
+| **2 — Guardian Agent** | Before tool execution | Inline LLM evaluates every non-read-only tool action; blocks high/critical risk. Fail-closed by default |
+| **3 — Output Guardian** | After execution, before delivery | Scans all LLM responses and event payloads for secrets; redacts or blocks before output reaches anyone |
+| **4 — Sentinel Audit** | Retrospective (scheduled or on-demand) | Analyzes audit log for anomaly patterns: capability probing, volume spikes, repeated secret detections, error storms |
 
-## Agent Evaluation Framework
+The built-in chat/planner loop runs in a **brokered worker process** with no network access. Tools, approvals, and LLM API calls are mediated through broker RPC.
 
-Test agent behavior through the real Runtime with Guardian active:
+For the full security architecture, threat model, and configuration details, see [SECURITY.md](SECURITY.md).
 
-- 5 content matchers (exact, contains, not_contains, regex, not_empty)
-- Tool trajectory validation with ordered matching and optional steps
-- 4 independent safety metrics (secret scanning, blocked patterns, denial detection, injection scoring)
-- JSON-based test suites (`.eval.json`) for CI integration
-- Human-readable reports with per-metric pass rates
+---
 
-## Four-Layer Defense
+## Getting Started
 
-**Layer 1 — Proactive (before the agent sees input):**
-- Prompt injection detection with invisible Unicode stripping (18 signal patterns)
-- Per-agent rate limiting (burst, per-minute, per-hour sliding windows)
-- Capability enforcement (per-agent permission grants)
-- Secret scanning (30+ credential and PII patterns: AWS, GCP, GitHub, OpenAI, Stripe, Slack, and more)
-- High-signal PII scanning on tool arguments (addresses, DOB, MRN, passport, driver's license)
-- Sensitive path blocking with traversal normalization
-- SSRF protection — centralized blocking of private IPs (RFC1918), loopback, link-local, cloud metadata endpoints (169.254.169.254, metadata.google.internal), IPv4-mapped IPv6, and decimal/hex/octal IP obfuscation
-- **Policy-as-Code engine** — declarative JSON rules with deterministic evaluation, shadow mode for safe migration, and hot-reload
+### Requirements
 
-**Layer 2 — Guardian Agent (inline LLM evaluation before tool execution):**
-- Evaluates every non-read-only tool action via LLM before execution
-- Blocks high/critical risk actions; allows safe/low/medium with audit logging
-- Configurable LLM: local (Ollama), external (OpenAI/Anthropic), or auto (local-first fallback)
-- Fail-closed by default — actions blocked if LLM is unavailable (configurable: `failOpen: true` to override)
-- All evaluations logged to audit trail with `controller: 'GuardianAgent'`
+- **Node.js 20** or newer
+- A local or external **LLM provider** (Ollama, Anthropic, OpenAI, etc.)
 
-**Layer 3 — Output (after the agent responds, before output reaches anyone):**
-- GuardedLLMProvider scans every LLM response for secrets automatically
-- Response redaction replaces detected credentials with `[REDACTED]`
-- Inter-agent event payloads are scanned before dispatch
-- Tool results are wrapped as structured `<tool_result ...>` envelopes before they return to the model
-- Tool-result strings are stripped of invisible Unicode, checked for prompt-injection signals, and PII-redacted before reinjection
-- All detections logged to the audit trail
+SQLite-backed persistence and monitoring are enabled when the Node build includes `node:sqlite`. Otherwise, assistant memory and analytics run in-memory automatically.
 
-**Layer 4 — Sentinel Audit (retrospective, scheduled or on-demand):**
-- Analyzes the audit log on a cron schedule or on-demand via web UI / API
-- Detects anomaly patterns: capability probing, repeated secret detections, volume spikes, error storms
-- Optional LLM-enhanced analysis for deeper pattern recognition
+### Install & Start
 
-## Core Security Layers, Hardening, and AI Guardrails
+Clone the repository and use the platform start script:
 
-- Layered defense lifecycle: proactive admission controls, inline LLM action evaluation (Guardian Agent), output-time leak prevention, and Sentinel audit analysis.
-- Mandatory runtime chokepoints: every message, LLM call, response, and event is mediated by Runtime enforcement (not optional agent hooks).
-- Brokered worker boundary: the default chat/planner execution loop runs in a separate worker process with no network access. Tools, approvals, and LLM API calls are all mediated through broker RPC.
-- Prompt-injection resistance: invisible Unicode stripping plus weighted injection signal scoring before agent execution.
-- Least-privilege capability model: per-agent capability grants with immutable frozen context (`Object.freeze`).
-- Tool governance and sandboxing: approval workflows, per-tool policy overrides, path/command/domain allowlists, and risk-tiered tool classes.
-- Connector + playbook guardrails (Option 2): declarative connector packs with host/path/command/capability allowlists, bounded step execution, and signed/dry-run controls.
-- Secret exfiltration controls: multi-pattern secret scanning, response redaction/blocking, and inter-agent payload blocking.
-- Intent hardening via SOUL profile: configurable `assistant.soul` injection with primary/delegated modes (`full`, `summary`, `disabled`) to balance consistency vs token overhead.
-- Cryptographic correlation for tool actions: deterministic SHA-256 hashes of redacted tool args (`argsHash`) for approval/job traceability without raw secret retention.
-- Web auth hardening: constant-time bearer comparison plus short-lived signed privileged tickets for auth configuration/rotation/reveal/revoke endpoints.
-- Tamper-evident policy-change trail: SHA-256 config snapshots (`oldPolicyHash`/`newPolicyHash`) recorded as `policy_changed` audit events.
-- Audit integrity: SHA-256 hash-chained JSONL persistence with chain verification support.
-- SQLite integrity hardening: periodic `PRAGMA quick_check`, secure permissions, and hashed integrity checkpoints to detect storage drift/tampering.
-- Resource containment: invocation budgets, queue/concurrency controls, token-rate constraints, and stall/error recovery backoff.
+**Windows:**
+```powershell
+.\scripts\start-dev-windows.ps1
+```
 
-## Mandatory Enforcement
+**Linux / macOS:**
+```bash
+bash scripts/start-dev-unix.sh
+```
 
-The Runtime controls every chokepoint where data flows in or out of an agent:
+These scripts handle dependency installation, build, startup, and the initial configuration bootstrap.
 
-| Path | Enforcement |
-|------|-------------|
-| Message input | Guardian pipeline runs before agent sees it |
-| LLM access | Agents get GuardedLLMProvider, not the raw provider |
-| Response output | Scanned and redacted before reaching user |
-| Event emission | Payloads scanned for secrets before dispatch |
-| Resource limits | Concurrent, queue depth, token rate, wall-clock budgets |
-| Agent context | Frozen with Object.freeze — capabilities immutable |
+### First Run
 
-There is no `ctx.fs`, `ctx.http`, or `ctx.exec`. Framework-managed interaction points are `ctx.llm` (guarded), `ctx.emit()` (scanned), `ctx.dispatch()` (Guardian-checked per call), managed tools, and returning a response (scanned).
+After startup:
 
-For the built-in chat/planner path, those interactions occur inside the brokered worker process.
+1. **Open the web UI** and go to the **Configuration Center** (`#/config`)
+2. **Add your LLM provider** — select Ollama for local models, or add an API key for Anthropic/OpenAI/etc.
+3. **Review tool policy** — defaults to `approve_by_policy` (read-only tools auto-approved, mutating actions require approval)
+4. **Enable optional channels** — Telegram bot setup is in Settings > Telegram Channel
+5. **Set web auth** — a secure random token is generated by default; customize in Settings if needed
 
-## Policy-as-Code Engine
+Most configuration is done through the **web UI** or **CLI commands** (`/config`, `/auth`, `/tools`). Manual `config.yaml` editing is optional and intended for advanced use.
 
-Declarative JSON rule files replace hard-coded approval logic with an auditable, version-controlled policy engine.
+### Using GuardianAgent
 
-Policies are version-controlled, auditable, and hot-reloadable. They evaluate tool requests deterministically and support staged rollout through shadow and enforce modes.
+GuardianAgent is accessible through three channels:
 
-See [`docs/specs/POLICY-AS-CODE-SPEC.md`](docs/specs/POLICY-AS-CODE-SPEC.md) for the full specification.
+| Channel | Access | Best For |
+|---------|--------|----------|
+| **Web** | Browser at the configured port | Full dashboard, configuration, monitoring, and chat |
+| **CLI** | Terminal where GuardianAgent is running | Quick commands, scripting, and local development |
+| **Telegram** | Telegram bot (requires setup) | Mobile access and notifications |
 
-## Quick Start
+**What you can do:**
+- Chat with the built-in AI assistant
+- Run guarded filesystem, web, network, and automation tasks
+- Create and schedule automations (single-tool and multi-step pipelines)
+- Review audit logs, security alerts, and threat intelligence
+- Monitor host and gateway security posture
+- Search across documents, git repos, and web content
+- Manage connectors, playbooks, and scheduled jobs
 
-Requires Node.js `>=20.0.0`.
-SQLite persistence/security monitoring is enabled when the Node build includes `node:sqlite`; otherwise assistant memory/analytics automatically run in-memory.
+**Approvals and safety:** Depending on the tool policy and risk level, actions may run automatically, wait for your approval, or be denied before execution. Approval prompts appear natively in all channels (buttons in web/Telegram, interactive prompt in CLI).
 
-Start GuardianAgent from the repository root using the platform start script in `scripts/`.
+### Telegram Setup
 
-Then configure from web or CLI:
-- Web: open `#/config` (Configuration Center). Telegram setup is in `Settings` -> `Telegram Channel`.
-- CLI: use `/config`, `/auth`, `/tools`, `/connectors`, and `/playbooks` commands as needed
+1. Open Telegram, search for `@BotFather`, press **Start**, run `/newbot`
+2. Follow prompts for bot name and username (must end with `bot`), copy the bot token
+3. Add the token in the web Configuration Center or CLI configuration flow
+4. Restrict access with allowed chat IDs
+5. Restart GuardianAgent after Telegram channel changes
 
-This configures local/external LLM providers, optional Telegram, web auth, and tool policy.
+### Windows Portable Build (Optional)
+
+For additional native subprocess isolation on Windows:
+
+```powershell
+npm run portable:windows     # Portable zip with sandbox helper
+npm run installer:windows    # Traditional installer
+```
+
+See [INSTALLATION.md](INSTALLATION.md) for the full list of Windows packaging options.
+
+---
+
+## LLM Providers
+
+GuardianAgent supports 9 LLM providers through a curated ProviderRegistry:
+
+| Provider | Type | Notes |
+|----------|------|-------|
+| **Ollama** | Local | OpenAI-compatible API, runs models locally |
+| **Anthropic** | External | Claude models with prompt caching |
+| **OpenAI** | External | GPT models |
+| **Groq** | External | Fast inference |
+| **Mistral** | External | Mistral models |
+| **DeepSeek** | External | DeepSeek models |
+| **Together** | External | Open-source model hosting |
+| **xAI** | External | Grok models |
+| **Google Gemini** | External | Gemini models |
+
+### Smart Routing
+
+When both local and external providers are configured, tools automatically route by category:
+
+| Routes to **Local** model | Routes to **External** model |
+|---|---|
+| Filesystem, Shell, Network, System, Memory | Web, Browser, Workspace, Email, Contacts, Search, Automation |
+
+Single-provider setups work without configuration. Smart routing can be toggled off in Configuration > Tools. Per-tool and per-category overrides are available via the LLM column dropdowns.
+
+**Quality-based fallback:** When the local model produces a degraded response (empty, refusal, or boilerplate), the system automatically retries through the fallback chain.
+
+---
 
 ## Configuration
 
-Most users should configure the assistant via the web Config Center or CLI `/config`, `/auth`, and `/tools` commands.
-`config.yaml` is created/updated automatically by those flows.
-Manual editing is optional and intended only for advanced troubleshooting.
+Most users configure GuardianAgent through the **web Config Center** (`#/config`) or **CLI commands**. The `config.yaml` file at `~/.guardianagent/config.yaml` is created and updated automatically by those flows.
 
-Configuration details are documented in:
-
-- [`docs/specs/CONFIG-CENTER-SPEC.md`](docs/specs/CONFIG-CENTER-SPEC.md)
-- [`docs/specs/SETUP-WIZARD-SPEC.md`](docs/specs/SETUP-WIZARD-SPEC.md)
-
-By default, GuardianAgent keeps tool sandboxing in `strict` mode. If a host cannot provide strong subprocess isolation, risky tool classes stay blocked until you either run on Linux/Unix with bubblewrap, or use the Windows portable app that bundles `guardian-sandbox-win.exe`. Switching to `assistant.tools.sandbox.enforcementMode: permissive` is an explicit opt-in to higher host risk.
-
-Brokered agent isolation is enabled by default. LLM API calls are proxied through the broker — the worker has no network access. On strong hosts the worker uses the `agent-worker` sandbox profile with namespace isolation. On degraded hosts the worker uses the `workspace-write` profile with a hardened environment.
-
-Three simplified top-level config aliases map to the internal machinery:
+Three simplified top-level config aliases cover the most common settings:
 
 ```yaml
 sandbox_mode: strict           # off | workspace-write | strict
 approval_policy: auto-approve  # on-request | auto-approve | autonomous
-writable_roots:                # merged into allowedPaths + sandbox additionalWritePaths
+writable_roots:                # merged into allowedPaths + sandbox writePaths
   - /home/user/projects
 ```
 
-### Telegram Setup (Web + CLI)
+By default, tool sandboxing is `strict` — risky subprocess-backed tools are blocked unless a strong sandbox backend is available. Switching to `permissive` is an explicit opt-in.
 
-1. Open Telegram, search for `@BotFather`, press **Start**, then run `/newbot`.
-2. Follow prompts for bot name and username (username must end with `bot`), then copy the bot token.
-3. Add the token in the web Configuration Center or the CLI configuration flow.
-4. Restrict access with allowed chat IDs.
-5. Restart GuardianAgent after Telegram channel changes.
+For detailed configuration documentation:
+- [Config Center Spec](docs/specs/CONFIG-CENTER-SPEC.md)
+- [Setup Wizard Spec](docs/specs/SETUP-WIZARD-SPEC.md)
 
-## LLM Providers
+---
 
-- **Ollama** — local models via OpenAI-compatible API
-- **Anthropic** — Claude models via `@anthropic-ai/sdk`
-- **OpenAI** — GPT models via `openai` SDK
+## Architecture & Documentation
 
-### Using Local and External Providers Together
-
-When both a local (Ollama) and external (Anthropic/OpenAI) provider are configured, the system automatically splits work between them based on task type:
-
-| Routes to **Local** model | Routes to **External** model |
-|---|---|
-| Filesystem, Shell, Network, System, Memory | Web, Browser, Workspace, Email, Contacts, Forum, Threat Intel, Search, Automation |
-
-Local operations (file reads, shell commands, network scans) are fast and don't need a powerful model for result synthesis. External operations (Google Workspace, web search, email campaigns) benefit from the higher-quality reasoning of cloud models.
-
-**Single-provider setups** work without configuration — when only one provider type exists, all tools route through it.
-
-**Set the default provider** via the "Set as Default" button in Configuration > Providers. This controls which model handles general conversation and any tools without a routing preference.
-
-**Smart LLM Routing** can be toggled off in Configuration > Tools if you want all tools to use the default provider regardless of category. Per-tool and per-category overrides are available via the LLM column dropdowns in the same tab.
-
-**Quality-based fallback**: when the local model produces a degraded response (empty, refusal, or boilerplate), the system automatically retries through the fallback chain (typically the external provider). Configure explicitly with `fallbacks: [openai, anthropic]` or let it auto-detect from available providers.
-
-## Channel Adapters
-
-- **CLI** — interactive readline prompt
-- **Telegram** — grammy bot framework with chat ID filtering
-- **Web** — HTTP REST API with bearer token auth
-
-## Personal Assistant UX Features
-
-- Unified configuration center in web (`#/config`) and CLI (`/config`)
-- Web authentication control plane in web Config Center and CLI (`/auth`)
-- Cross-channel identity mapping (`single_user` or `channel_user` + aliases)
-- SQLite-persisted conversation memory with sessions
-- Tier-routed chat keeps one shared assistant conversation and knowledge base when switching between `auto`, `local-only`, and `external-only`
-- SQLite DB hardening + monitoring (permission enforcement + integrity quick checks)
-- Tools control plane in web (Configuration > Tools tab) and CLI (`/tools`) for approvals, policies, and workstation-safe actions
-- Interactive sandbox allowlist editor in web (Configuration > Policy tab) for paths, commands, and domains
-- Connector/playbook control plane in web (Network > Connectors tab) and CLI (`/connectors`, `/playbooks`) for pack governance, playbook registry, and guarded execution
-- Security alert routing controls in web (Configuration > Settings > Security > Security Alerts) for CLI/web/Telegram delivery, severity thresholds, event families, and noisy-alert suppression
-- Host and gateway monitoring in web (Security > Monitoring) with posture cards, active alerts, manual checks, and expanded raw audit details
-- Campaign automation tools for contact discovery and approval-gated Gmail send workflows (`/campaign`)
-- Quick actions for `email`, `task`, and `calendar` workflows
-- Threat-intel workflow in web (Security > Threat Intel tab) for watchlist scans, findings triage, and response action drafts (human approval-gated publishing)
-- Moltbook connector with hostile-site guardrails (strict host allowlist, timeout/size limits, payload sanitization)
-- Channel analytics and monitoring in web (Security > Monitoring tab) and CLI (`/analytics`)
-- Native document search (BM25 keyword + vector similarity) over user-defined collections — configure sources (directories, git repos, URLs, files) in web Config Center (`#/config` > Search Sources tab)
-
-## Development
-
-For local development, packaging, and platform-specific setup, use the scripts in `scripts/` and the architecture/spec documentation linked below. The README is intentionally kept high-level.
-
-## Architecture
-
-Full documentation in `docs/architecture/`:
+**Architecture:**
 - [Overview](docs/architecture/OVERVIEW.md) — system architecture and component map
-- [Security](SECURITY.md) — four-layer defense system details
+- [Security](SECURITY.md) — four-layer defense system, threat model, and security configuration
 - [Guardian API](docs/architecture/GUARDIAN-API.md) — complete API reference
 - [Decisions](docs/architecture/DECISIONS.md) — architecture decision records
-- [SOUL](SOUL.md) — non-negotiable operating intent and guardrail constitution
+- [SOUL](SOUL.md) — operating intent and guardrail constitution
 
-Implementation specs in `docs/specs/`:
+**Specs:**
 - [Brokered Agent Isolation](docs/specs/BROKERED-AGENT-ISOLATION-SPEC.md)
 - [Orchestration Agents](docs/specs/ORCHESTRATION-AGENTS-SPEC.md)
 - [MCP Client](docs/specs/MCP-CLIENT-SPEC.md)
-- [Native Skills](docs/specs/SKILLS-SPEC.md) — implemented local skills foundation and prompt injection model
-- [Google Workspace Integration](docs/specs/GOOGLE-WORKSPACE-INTEGRATION-SPEC.md) — managed `gws` MCP provider foundation and Google skill packs
+- [Native Skills](docs/specs/SKILLS-SPEC.md)
+- [Google Workspace](docs/specs/GOOGLE-WORKSPACE-INTEGRATION-SPEC.md)
 - [Evaluation Framework](docs/specs/EVAL-FRAMEWORK-SPEC.md)
+- [Policy-as-Code](docs/specs/POLICY-AS-CODE-SPEC.md)
+- [Tools Control Plane](docs/specs/TOOLS-CONTROL-PLANE-SPEC.md)
+- [Identity & Memory](docs/specs/IDENTITY-MEMORY-SPEC.md)
+- [Automation Framework](docs/specs/AUTOMATION-FRAMEWORK-SPEC.md)
+
+<details>
+<summary>All specs</summary>
+
 - [Shared State](docs/specs/SHARED-STATE-SPEC.md)
 - [Setup And Config Flow](docs/specs/SETUP-WIZARD-SPEC.md)
 - [Config Center](docs/specs/CONFIG-CENTER-SPEC.md)
 - [Assistant Orchestrator](docs/specs/ASSISTANT-ORCHESTRATOR-SPEC.md)
 - [Web Auth Configuration](docs/specs/WEB-AUTH-CONFIG-SPEC.md)
-- [Tools Control Plane](docs/specs/TOOLS-CONTROL-PLANE-SPEC.md)
 - [Marketing Campaign Automation](docs/specs/MARKETING-CAMPAIGN-SPEC.md)
-- [Identity & Memory](docs/specs/IDENTITY-MEMORY-SPEC.md)
 - [Analytics](docs/specs/ANALYTICS-SPEC.md)
 - [Quick Actions](docs/specs/QUICK-ACTIONS-SPEC.md)
 - [Threat Intel](docs/specs/THREAT-INTEL-SPEC.md)
 - [Threat Intel Research](docs/specs/THREAT-INTEL-RESEARCH.md)
 - [Hostile Forum Connectors](docs/specs/HOSTILE-FORUM-CONNECTORS-SPEC.md)
-- [Automation Framework](docs/specs/AUTOMATION-FRAMEWORK-SPEC.md)
 
-Proposals in `docs/proposals/`:
-- [Windows App Options](docs/proposals/WINDOWS-APP-OPTIONS.md) — deployment options for Windows local enforcement and native helper packaging
-- [Windows Portable Isolation Option](docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md) — optional portable zip distribution for Windows users who want the extra native isolation layer without a traditional installer
-- [Pipelock Comparison Roadmap](docs/proposals/PIPELOCK-COMPARISON-ROADMAP.md) — proposed MCP, egress, audit, and SIEM uplifts inspired by Pipelock's public architecture
+</details>
+
+**Proposals:**
+- [Windows App Options](docs/proposals/WINDOWS-APP-OPTIONS.md)
+- [Windows Portable Isolation](docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md)
+- [Pipelock Comparison Roadmap](docs/proposals/PIPELOCK-COMPARISON-ROADMAP.md)
+
+---
+
+## Development
+
+```bash
+npm test                              # Run all tests (vitest)
+npm run test:verbose                  # Verbose test output
+npm run test:coverage                 # Run with v8 coverage
+npx vitest run src/path/to.test.ts   # Run a single test file
+
+npm run check         # Type-check only (tsc --noEmit)
+npm run build         # TypeScript compilation → dist/
+npm run dev           # Run with tsx (starts CLI channel)
+```
+
+For local development, packaging, and platform-specific setup, use the scripts in `scripts/` and the architecture/spec documentation linked above.
+
+---
 
 ## Disclaimer
 
