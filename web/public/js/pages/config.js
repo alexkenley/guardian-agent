@@ -461,7 +461,7 @@ function createProviderPanel(config, providers, panel) {
                 <div class="cfg-field"><label>Provider Type</label><select id="cfg-ext-type">${externalProviderTypeOptions}</select></div>
                 <div class="cfg-field"><label>Model</label><select id="cfg-ext-model-select" style="display:none"></select><input id="cfg-ext-model" type="text" placeholder="claude-sonnet-4-6"></div>
                 <div class="cfg-field"><label>API Key</label><input id="cfg-ext-key" type="password" placeholder="${externalDefaultKeyPlaceholder}"></div>
-                <div class="cfg-field"><label>Credential Ref (Advanced)</label><input id="cfg-ext-credential-ref" type="text" list="cfg-credential-ref-options" placeholder="llm.openai.primary"></div>
+                <div class="cfg-field"><label style="display:flex;align-items:center;gap:0.35rem;justify-content:flex-start;cursor:pointer;"><input id="cfg-ext-credential-ref-enabled" type="checkbox" title="Use an environment-backed credential ref instead of the local secret store"> Enable Credential Ref</label><input id="cfg-ext-credential-ref" type="text" list="cfg-credential-ref-options" placeholder="llm.openai.primary" disabled></div>
                 <div class="cfg-field"><label>Base URL (optional)</label><input id="cfg-ext-url" type="text" placeholder="Optional custom endpoint"></div>
               </div>
               <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
@@ -529,6 +529,13 @@ function createProviderPanel(config, providers, panel) {
     const typeEl = section.querySelector(`#${prefix}-type`);
     const keyEl = isLocal ? null : section.querySelector('#cfg-ext-key');
     const credentialRefEl = isLocal ? null : section.querySelector('#cfg-ext-credential-ref');
+    const credentialRefCheckbox = isLocal ? null : section.querySelector('#cfg-ext-credential-ref-enabled');
+    if (credentialRefCheckbox && credentialRefEl) {
+      credentialRefCheckbox.addEventListener('change', () => {
+        credentialRefEl.disabled = !credentialRefCheckbox.checked;
+        if (!credentialRefCheckbox.checked) credentialRefEl.value = '';
+      });
+    }
     let selectedProfile = names.includes(configUiState.selectedProviderProfiles[side])
       ? configUiState.selectedProviderProfiles[side]
       : names.includes(config.defaultProvider)
@@ -750,7 +757,11 @@ function createProviderPanel(config, providers, panel) {
           keyEl.value = '';
           keyEl.placeholder = externalDefaultKeyPlaceholder;
         }
-        if (credentialRefEl) credentialRefEl.value = '';
+        if (credentialRefEl) {
+          credentialRefEl.value = '';
+          credentialRefEl.disabled = true;
+          if (credentialRefCheckbox) credentialRefCheckbox.checked = false;
+        }
         configUiState.selectedProviderProfiles[side] = null;
         activeNoteEl.textContent = isLocal
           ? 'Creating a new local provider. Choose the provider type from the dropdown, then set its name and model.'
@@ -774,7 +785,14 @@ function createProviderPanel(config, providers, panel) {
         keyEl.value = '';
         keyEl.placeholder = getSecretFieldPlaceholder(entry.credentialRef, externalDefaultKeyPlaceholder);
       }
-      if (credentialRefEl) credentialRefEl.value = getEditableCredentialRef(entry.credentialRef);
+      if (credentialRefEl) {
+        const editableRef = getEditableCredentialRef(entry.credentialRef);
+        credentialRefEl.value = editableRef;
+        if (credentialRefCheckbox) {
+          credentialRefCheckbox.checked = !!editableRef;
+          credentialRefEl.disabled = !editableRef;
+        }
+      }
       configUiState.selectedProviderProfiles[side] = name;
       activeNoteEl.textContent = `Editing ${name}. Provider type is shown explicitly in the dropdown; use New ${isLocal ? 'Local' : 'External'} Provider to start a fresh one.`;
       refreshSecretNote(entry.provider || '');
@@ -790,7 +808,11 @@ function createProviderPanel(config, providers, panel) {
 
     typeEl?.addEventListener('change', () => {
       if (!isLocal && isProviderTypeChanged(typeEl.value)) {
-        if (credentialRefEl) credentialRefEl.value = '';
+        if (credentialRefEl) {
+          credentialRefEl.value = '';
+          credentialRefEl.disabled = true;
+          if (credentialRefCheckbox) credentialRefCheckbox.checked = false;
+        }
         if (keyEl) keyEl.value = '';
       }
       if (!selectedProfile) {
@@ -858,7 +880,7 @@ function createProviderPanel(config, providers, panel) {
         return;
       }
       if (!model) { statusEl.textContent = 'Model is required.'; statusEl.style.color = 'var(--error)'; return; }
-      if (!isLocal && isProviderTypeChanged(providerType) && !keyEl?.value.trim() && !credentialRefEl?.value.trim()) {
+      if (!isLocal && isProviderTypeChanged(providerType) && !keyEl?.value.trim() && !(credentialRefCheckbox?.checked && credentialRefEl?.value.trim())) {
         statusEl.textContent = 'Provider type changed. Paste a new API key or choose an env-backed credential ref before saving.';
         statusEl.style.color = 'var(--error)';
         return;
@@ -869,7 +891,7 @@ function createProviderPanel(config, providers, panel) {
         providerName, providerType, model,
         baseUrl: baseUrl || undefined,
         apiKey: keyEl?.value.trim() || undefined,
-        credentialRef: credentialRefEl ? credentialRefEl.value.trim() : undefined,
+        credentialRef: credentialRefCheckbox?.checked && credentialRefEl ? credentialRefEl.value.trim() : undefined,
         setupCompleted: true,
       };
 
@@ -941,98 +963,108 @@ function createCredentialRefsPanel(settingsPanel) {
   const section = document.createElement('div');
   section.className = 'table-container';
   const refs = { ...getCredentialRefRegistry() };
-  const selectedNames = Object.keys(refs).sort((a, b) => a.localeCompare(b));
-  const selectedDefault = selectedNames[0] || '__new__';
+  const allNames = Object.keys(refs).sort((a, b) => a.localeCompare(b));
+  const localRefs = allNames.filter((n) => refs[n]?.source === 'local');
+  const envRefs = allNames.filter((n) => refs[n]?.source === 'env');
 
   section.innerHTML = `
     <div class="table-header">
       <h3>Credential Refs</h3>
-      <span class="cfg-header-note">Advanced path for environment-backed refs. Local secure-store refs are created automatically when you paste keys elsewhere in Config.</span>
+      <span class="cfg-header-note">Manage how secrets are stored. Most users never need this page &mdash; pasting keys elsewhere handles everything.</span>
     </div>
     <div class="cfg-center-body">
-      <div class="cfg-form-grid">
-        <div class="cfg-field">
-          <label>Ref</label>
-          <select id="cfg-cred-ref-select">
-            <option value="__new__">Create new ref...</option>
-            ${selectedNames.map((name) => `<option value="${escAttr(name)}">${esc(name)}</option>`).join('')}
-          </select>
-        </div>
-        <div class="cfg-field">
-          <label>Source</label>
-          <input id="cfg-cred-ref-source" type="text" value="Environment Variable" readonly>
-        </div>
-        <div class="cfg-field"><label>Ref Name</label><input id="cfg-cred-ref-name" type="text" placeholder="llm.openai.primary"></div>
-        <div class="cfg-field"><label id="cfg-cred-ref-target-label">Environment Variable</label><input id="cfg-cred-ref-env" type="text" placeholder="OPENAI_API_KEY"></div>
-        <div class="cfg-field"><label>Description (optional)</label><input id="cfg-cred-ref-description" type="text" placeholder="Primary OpenAI key for hosted fallback"></div>
-      </div>
-      <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
-        Average-user path: paste keys directly into provider, search, or Telegram settings and Guardian stores them in the encrypted local secret store. Advanced path: create an env-backed ref here, then point a provider or integration at that ref.
-      </div>
-      <div id="cfg-cred-ref-note" style="margin-top:0.35rem;font-size:0.72rem;color:var(--text-muted);"></div>
-      <div class="cfg-actions">
-        <button class="btn btn-primary" id="cfg-cred-ref-save" type="button">Save Env Ref</button>
-        <button class="btn btn-secondary" id="cfg-cred-ref-delete" type="button">Delete Ref</button>
-        <span id="cfg-cred-ref-status" class="cfg-save-status"></span>
-      </div>
-      <div class="cfg-divider"></div>
-      <table>
-        <thead><tr><th>Ref</th><th>Source</th><th>Target</th><th>Description</th></tr></thead>
-        <tbody>
-          ${selectedNames.length === 0
-            ? '<tr><td colspan="4">No credential refs configured.</td></tr>'
-            : selectedNames.map((name) => `
-              <tr>
-                <td>${esc(name)}</td>
-                <td>${esc(refs[name]?.source || 'env')}</td>
-                <td>${esc(refs[name]?.source === 'local' ? 'encrypted local secret store' : (refs[name]?.env || ''))}</td>
-                <td>${esc(refs[name]?.description || '-')}</td>
+
+      ${localRefs.length > 0 ? `
+      <div style="margin-bottom:1rem;">
+        <h4 style="margin:0 0 0.35rem;font-size:0.85rem;">Auto-managed (local secret store)</h4>
+        <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:0.5rem;">Created automatically when you paste keys in provider, search, or integration settings. Stored in the encrypted local secret store.</div>
+        <table>
+          <thead><tr><th>Ref</th><th>Used By</th><th>Description</th><th style="width:4rem;"></th></tr></thead>
+          <tbody>
+            ${localRefs.map((name) => `
+              <tr data-ref="${escAttr(name)}">
+                <td><code style="font-size:0.75rem;">${esc(name)}</code></td>
+                <td style="font-size:0.8rem;">${esc(describeRefUsage(name, sharedConfig))}</td>
+                <td style="font-size:0.8rem;">${esc(refs[name]?.description || '-')}</td>
+                <td><button class="btn btn-sm btn-danger cred-ref-delete-btn" data-ref="${escAttr(name)}" title="Delete this ref and its stored secret">Delete</button></td>
               </tr>
             `).join('')}
-        </tbody>
-      </table>
+          </tbody>
+        </table>
+      </div>
+      ` : ''}
+
+      <div style="margin-bottom:0.5rem;">
+        <h4 style="margin:0 0 0.35rem;font-size:0.85rem;">Environment-backed refs</h4>
+        <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:0.5rem;">Advanced: point a ref at a host environment variable. Use the credential ref checkboxes in provider/integration settings to activate.</div>
+        ${envRefs.length > 0 ? `
+        <table>
+          <thead><tr><th>Ref</th><th>Env Variable</th><th>Description</th><th style="width:4rem;"></th></tr></thead>
+          <tbody>
+            ${envRefs.map((name) => `
+              <tr data-ref="${escAttr(name)}">
+                <td><code style="font-size:0.75rem;">${esc(name)}</code></td>
+                <td style="font-size:0.8rem;"><code>${esc(refs[name]?.env || '')}</code></td>
+                <td style="font-size:0.8rem;">${esc(refs[name]?.description || '-')}</td>
+                <td><button class="btn btn-sm btn-danger cred-ref-delete-btn" data-ref="${escAttr(name)}" title="Delete this env ref">Delete</button></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        ` : '<div style="font-size:0.8rem;color:var(--text-muted);margin:0.5rem 0;">No environment-backed refs configured.</div>'}
+      </div>
+
+      <div class="cfg-divider"></div>
+      <h4 style="margin:0 0 0.35rem;font-size:0.85rem;">Create new environment ref</h4>
+      <div class="cfg-form-grid">
+        <div class="cfg-field"><label>Ref Name</label><input id="cfg-cred-ref-name" type="text" placeholder="llm.openai.primary"></div>
+        <div class="cfg-field"><label>Environment Variable</label><input id="cfg-cred-ref-env" type="text" placeholder="OPENAI_API_KEY"></div>
+        <div class="cfg-field"><label>Description (optional)</label><input id="cfg-cred-ref-description" type="text" placeholder="Primary OpenAI key for hosted fallback"></div>
+      </div>
+      <div class="cfg-actions">
+        <button class="btn btn-primary" id="cfg-cred-ref-save" type="button">Create Env Ref</button>
+        <span id="cfg-cred-ref-status" class="cfg-save-status"></span>
+      </div>
     </div>
   `;
 
-  const selectEl = section.querySelector('#cfg-cred-ref-select');
   const nameEl = section.querySelector('#cfg-cred-ref-name');
   const envEl = section.querySelector('#cfg-cred-ref-env');
   const descriptionEl = section.querySelector('#cfg-cred-ref-description');
-  const noteEl = section.querySelector('#cfg-cred-ref-note');
   const statusEl = section.querySelector('#cfg-cred-ref-status');
-  const saveBtn = section.querySelector('#cfg-cred-ref-save');
 
-  function applySelection(value) {
-    if (value === '__new__') {
-      nameEl.value = '';
-      envEl.value = '';
-      descriptionEl.value = '';
-      nameEl.disabled = false;
-      envEl.disabled = false;
-      descriptionEl.disabled = false;
-      saveBtn.disabled = false;
-      noteEl.textContent = 'Create an env-backed credential ref here. Local refs are managed automatically by the key fields in other configuration panels.';
-      return;
-    }
-    const ref = refs[value];
-    if (!ref) return;
-    nameEl.value = value;
-    envEl.value = ref.source === 'env' ? (ref.env || '') : '';
-    descriptionEl.value = ref.description || '';
-    const managedLocal = ref.source === 'local';
-    nameEl.disabled = managedLocal;
-    envEl.disabled = managedLocal;
-    descriptionEl.disabled = managedLocal;
-    saveBtn.disabled = managedLocal;
-    noteEl.textContent = managedLocal
-      ? 'This ref points at the encrypted local secret store and is managed by the paste-once fields in provider, search, or Telegram settings. Use Delete here only if you want to remove the mapping.'
-      : 'This ref is backed by an environment variable. Set the secret in the host environment, then use this ref name in provider or integration settings.';
-  }
+  // Delete buttons (inline per-row)
+  section.querySelectorAll('.cred-ref-delete-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const refName = btn.dataset.ref;
+      if (!refName) return;
+      const nextRefs = { ...(sharedConfig?.assistant?.credentials?.refs || {}) };
+      delete nextRefs[refName];
+      btn.disabled = true;
+      btn.textContent = '...';
+      try {
+        const result = await api.updateConfig({
+          assistant: { credentials: { refs: nextRefs } },
+        });
+        if (result.success) {
+          const row = btn.closest('tr');
+          if (row) row.remove();
+        } else {
+          statusEl.textContent = result.message;
+          statusEl.style.color = 'var(--warning)';
+          btn.disabled = false;
+          btn.textContent = 'Delete';
+        }
+      } catch (err) {
+        statusEl.textContent = err instanceof Error ? err.message : String(err);
+        statusEl.style.color = 'var(--error)';
+        btn.disabled = false;
+        btn.textContent = 'Delete';
+      }
+    });
+  });
 
-  selectEl.value = selectedDefault;
-  applySelection(selectedDefault);
-  selectEl.addEventListener('change', () => applySelection(selectEl.value));
-
+  // Create new env ref
   section.querySelector('#cfg-cred-ref-save')?.addEventListener('click', async () => {
     const refName = nameEl.value.trim();
     const env = envEl.value.trim();
@@ -1056,42 +1088,7 @@ function createCredentialRefsPanel(settingsPanel) {
     statusEl.style.color = 'var(--text-muted)';
     try {
       const result = await api.updateConfig({
-        assistant: {
-          credentials: {
-            refs: nextRefs,
-          },
-        },
-      });
-      statusEl.textContent = result.message;
-      statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
-      if (result.success) {
-        await updateConfig();
-      }
-    } catch (err) {
-      statusEl.textContent = err instanceof Error ? err.message : String(err);
-      statusEl.style.color = 'var(--error)';
-    }
-  });
-
-  section.querySelector('#cfg-cred-ref-delete')?.addEventListener('click', async () => {
-    const refName = selectEl.value === '__new__' ? nameEl.value.trim() : selectEl.value;
-    if (!refName || !refs[refName]) {
-      statusEl.textContent = 'Select an existing ref to delete.';
-      statusEl.style.color = 'var(--warning)';
-      return;
-    }
-    const nextRefs = { ...(sharedConfig?.assistant?.credentials?.refs || {}) };
-    delete nextRefs[refName];
-
-    statusEl.textContent = 'Removing...';
-    statusEl.style.color = 'var(--text-muted)';
-    try {
-      const result = await api.updateConfig({
-        assistant: {
-          credentials: {
-            refs: nextRefs,
-          },
-        },
+        assistant: { credentials: { refs: nextRefs } },
       });
       statusEl.textContent = result.message;
       statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
@@ -1106,6 +1103,20 @@ function createCredentialRefsPanel(settingsPanel) {
 
   applyInputTooltips(section);
   return section;
+}
+
+/** Describe what a credential ref is used by, based on current config. */
+function describeRefUsage(refName, config) {
+  const usages = [];
+  for (const [name, llm] of Object.entries(config?.llm || {})) {
+    if (llm?.credentialRef === refName) usages.push(`Provider: ${name}`);
+  }
+  if (config?.channels?.telegram?.botTokenCredentialRef === refName) usages.push('Telegram bot token');
+  const ws = config?.assistant?.tools?.webSearch || {};
+  if (ws.braveCredentialRef === refName) usages.push('Brave search');
+  if (ws.perplexityCredentialRef === refName) usages.push('Perplexity search');
+  if (ws.openRouterCredentialRef === refName) usages.push('OpenRouter search');
+  return usages.length > 0 ? usages.join(', ') : 'Unused';
 }
 
 function createProviderStatusTable(config, providers, panel) {
@@ -2706,7 +2717,11 @@ function createTelegramPanel(config, settingsPanel) {
   const credentialRefOptions = renderCredentialRefOptions(config?.assistant?.credentials?.refs || {});
   const enabled = !!telegram.enabled;
   const tokenConfigured = !!telegram.botTokenConfigured;
-  const credentialRef = telegram.botTokenCredentialRef || '';
+  const rawCredentialRef = telegram.botTokenCredentialRef || '';
+  const credentialRefMeta = getCredentialRefMeta(rawCredentialRef);
+  // Only show credential ref in the UI if it's an env-backed ref the user explicitly created.
+  // Auto-managed local refs are invisible plumbing — the user just sees "Configured" on the token field.
+  const credentialRef = credentialRefMeta?.source === 'env' ? rawCredentialRef : '';
   const tokenPlaceholder = tokenConfigured
     ? getSecretFieldPlaceholder(credentialRef, 'Configured. Paste to replace.')
     : 'Paste once to store securely';
@@ -2734,8 +2749,8 @@ function createTelegramPanel(config, settingsPanel) {
           <input id="cfg-telegram-token" type="password" placeholder="${escAttr(tokenPlaceholder)}">
         </div>
         <div class="cfg-field">
-          <label>Credential Ref</label>
-          <input id="cfg-telegram-credential-ref" type="text" list="cfg-telegram-credential-ref-options" value="${escAttr(credentialRef)}" placeholder="telegram.bot.primary">
+          <label style="display:flex;align-items:center;gap:0.35rem;justify-content:flex-start;cursor:pointer;"><input id="cfg-telegram-credential-ref-enabled" type="checkbox" title="Use an environment-backed credential ref instead of the local secret store" ${credentialRef ? 'checked' : ''}> Enable Credential Ref</label>
+          <input id="cfg-telegram-credential-ref" type="text" list="cfg-telegram-credential-ref-options" value="${escAttr(credentialRef)}" placeholder="telegram.bot.primary" ${credentialRef ? '' : 'disabled'}>
         </div>
         <div class="cfg-field">
           <label>Allowed Chat IDs</label>
@@ -2747,17 +2762,27 @@ function createTelegramPanel(config, settingsPanel) {
       </div>
       <div style="margin-top:0.35rem;font-size:0.72rem;color:var(--text-muted);">Telegram changes hot-reload when the token/ref and allowlist are valid.</div>
       <div class="cfg-actions">
+        <button class="btn btn-secondary" id="cfg-telegram-test" type="button">Test Connection</button>
         <button class="btn btn-primary" id="cfg-telegram-save" type="button">Save Telegram Settings</button>
         <span id="cfg-telegram-status" class="cfg-save-status"></span>
       </div>
     </div>
   `;
 
+  const tgCredRefCheckbox = section.querySelector('#cfg-telegram-credential-ref-enabled');
+  const tgCredRefInput = section.querySelector('#cfg-telegram-credential-ref');
+  if (tgCredRefCheckbox && tgCredRefInput) {
+    tgCredRefCheckbox.addEventListener('change', () => {
+      tgCredRefInput.disabled = !tgCredRefCheckbox.checked;
+      if (!tgCredRefCheckbox.checked) tgCredRefInput.value = '';
+    });
+  }
+
   const statusEl = section.querySelector('#cfg-telegram-status');
   section.querySelector('#cfg-telegram-save')?.addEventListener('click', async () => {
     const enabledVal = section.querySelector('#cfg-telegram-enabled')?.value === 'true';
     const token = section.querySelector('#cfg-telegram-token')?.value.trim() || undefined;
-    const botTokenCredentialRef = section.querySelector('#cfg-telegram-credential-ref')?.value.trim() || undefined;
+    const botTokenCredentialRef = tgCredRefCheckbox?.checked ? (tgCredRefInput?.value.trim() || undefined) : undefined;
     const chatIdsRaw = section.querySelector('#cfg-telegram-chatids')?.value || '';
 
     statusEl.textContent = 'Saving...';
@@ -2779,6 +2804,19 @@ function createTelegramPanel(config, settingsPanel) {
       if (result.success) {
         await refreshSettingsOverview(settingsPanel);
       }
+    } catch (err) {
+      statusEl.textContent = err instanceof Error ? err.message : String(err);
+      statusEl.style.color = 'var(--error)';
+    }
+  });
+
+  section.querySelector('#cfg-telegram-test')?.addEventListener('click', async () => {
+    statusEl.textContent = 'Testing Telegram connection...';
+    statusEl.style.color = 'var(--text-muted)';
+    try {
+      const result = await api.telegramTest();
+      statusEl.textContent = result.message || (result.success ? 'Connected' : 'Failed');
+      statusEl.style.color = result.success ? 'var(--success)' : 'var(--error)';
     } catch (err) {
       statusEl.textContent = err instanceof Error ? err.message : String(err);
       statusEl.style.color = 'var(--error)';
@@ -2942,6 +2980,11 @@ function createWebSearchPanel(config, panel) {
   const fallbacks = config.fallbacks || [];
   const providerNames = Object.keys(config.llm || {});
   const credentialRefOptions = renderCredentialRefOptions(config?.assistant?.credentials?.refs || {});
+  // Only show env-backed refs in the UI; auto-managed local refs are invisible plumbing.
+  const isEnvRef = (refName) => refName && getCredentialRefMeta(refName)?.source === 'env';
+  const braveRef = isEnvRef(ws.braveCredentialRef) ? ws.braveCredentialRef : '';
+  const perplexityRef = isEnvRef(ws.perplexityCredentialRef) ? ws.perplexityCredentialRef : '';
+  const openRouterRef = isEnvRef(ws.openRouterCredentialRef) ? ws.openRouterCredentialRef : '';
 
   section.innerHTML = `
     <div class="table-header">
@@ -2965,24 +3008,24 @@ function createWebSearchPanel(config, panel) {
           <input id="ws-brave-key" type="password" placeholder="${escAttr(ws.braveConfigured ? getSecretFieldPlaceholder(ws.braveCredentialRef, 'Configured. Paste to replace.') : 'BSA...')}">
         </div>
         <div class="cfg-field">
-          <label>Brave Credential Ref</label>
-          <input id="ws-brave-credential-ref" type="text" list="ws-credential-ref-options" value="${esc(ws.braveCredentialRef || '')}" placeholder="search.brave.primary">
+          <label style="display:flex;align-items:center;gap:0.35rem;justify-content:flex-start;cursor:pointer;"><input id="ws-brave-credential-ref-enabled" type="checkbox" title="Use an environment-backed credential ref instead of the local secret store" ${braveRef ? 'checked' : ''}> Enable Credential Ref</label>
+          <input id="ws-brave-credential-ref" type="text" list="ws-credential-ref-options" value="${esc(braveRef)}" placeholder="search.brave.primary" ${braveRef ? '' : 'disabled'}>
         </div>
         <div class="cfg-field">
           <label>Perplexity API Key</label>
           <input id="ws-perplexity-key" type="password" placeholder="${escAttr(ws.perplexityConfigured ? getSecretFieldPlaceholder(ws.perplexityCredentialRef, 'Configured. Paste to replace.') : 'pplx-...')}">
         </div>
         <div class="cfg-field">
-          <label>Perplexity Credential Ref</label>
-          <input id="ws-perplexity-credential-ref" type="text" list="ws-credential-ref-options" value="${esc(ws.perplexityCredentialRef || '')}" placeholder="search.perplexity.primary">
+          <label style="display:flex;align-items:center;gap:0.35rem;justify-content:flex-start;cursor:pointer;"><input id="ws-perplexity-credential-ref-enabled" type="checkbox" title="Use an environment-backed credential ref instead of the local secret store" ${perplexityRef ? 'checked' : ''}> Enable Credential Ref</label>
+          <input id="ws-perplexity-credential-ref" type="text" list="ws-credential-ref-options" value="${esc(perplexityRef)}" placeholder="search.perplexity.primary" ${perplexityRef ? '' : 'disabled'}>
         </div>
         <div class="cfg-field">
           <label>OpenRouter API Key</label>
           <input id="ws-openrouter-key" type="password" placeholder="${escAttr(ws.openRouterConfigured ? getSecretFieldPlaceholder(ws.openRouterCredentialRef, 'Configured. Paste to replace.') : 'sk-or-...')}">
         </div>
         <div class="cfg-field">
-          <label>OpenRouter Credential Ref</label>
-          <input id="ws-openrouter-credential-ref" type="text" list="ws-credential-ref-options" value="${esc(ws.openRouterCredentialRef || '')}" placeholder="search.openrouter.primary">
+          <label style="display:flex;align-items:center;gap:0.35rem;justify-content:flex-start;cursor:pointer;"><input id="ws-openrouter-credential-ref-enabled" type="checkbox" title="Use an environment-backed credential ref instead of the local secret store" ${openRouterRef ? 'checked' : ''}> Enable Credential Ref</label>
+          <input id="ws-openrouter-credential-ref" type="text" list="ws-credential-ref-options" value="${esc(openRouterRef)}" placeholder="search.openrouter.primary" ${openRouterRef ? '' : 'disabled'}>
         </div>
       </div>
       <div class="cfg-divider"></div>
@@ -3006,21 +3049,38 @@ function createWebSearchPanel(config, panel) {
 
   const statusEl = section.querySelector('#ws-save-status');
 
+  // Wire up credential ref checkboxes
+  for (const prefix of ['ws-brave', 'ws-perplexity', 'ws-openrouter']) {
+    const cb = section.querySelector(`#${prefix}-credential-ref-enabled`);
+    const inp = section.querySelector(`#${prefix}-credential-ref`);
+    if (cb && inp) {
+      cb.addEventListener('change', () => {
+        inp.disabled = !cb.checked;
+        if (!cb.checked) inp.value = '';
+      });
+    }
+  }
+
   section.querySelector('#ws-save')?.addEventListener('click', async () => {
     const provider = section.querySelector('#ws-provider').value;
     const fallbacksRaw = section.querySelector('#ws-fallbacks').value.trim();
     const fallbackList = fallbacksRaw ? fallbacksRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
     statusEl.textContent = 'Saving...';
     statusEl.style.color = 'var(--text-muted)';
+    const getRefVal = (id) => {
+      const cb = section.querySelector(`#${id}-enabled`);
+      const inp = section.querySelector(`#${id}`);
+      return cb?.checked ? (inp?.value.trim() || '') : '';
+    };
     try {
       const result = await api.saveSearchConfig({
         webSearchProvider: provider,
         perplexityApiKey: section.querySelector('#ws-perplexity-key').value.trim() || undefined,
-        perplexityCredentialRef: section.querySelector('#ws-perplexity-credential-ref').value.trim() || '',
+        perplexityCredentialRef: getRefVal('ws-perplexity-credential-ref'),
         openRouterApiKey: section.querySelector('#ws-openrouter-key').value.trim() || undefined,
-        openRouterCredentialRef: section.querySelector('#ws-openrouter-credential-ref').value.trim() || '',
+        openRouterCredentialRef: getRefVal('ws-openrouter-credential-ref'),
         braveApiKey: section.querySelector('#ws-brave-key').value.trim() || undefined,
-        braveCredentialRef: section.querySelector('#ws-brave-credential-ref').value.trim() || '',
+        braveCredentialRef: getRefVal('ws-brave-credential-ref'),
         fallbacks: fallbackList,
       });
       statusEl.textContent = result.message;

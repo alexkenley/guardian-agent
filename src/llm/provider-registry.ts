@@ -71,11 +71,19 @@ export class ProviderRegistry {
     return factory(config);
   }
 
-  /** Create all providers from a config map. */
+  /** Create all providers from a config map. Skips providers that fail to initialize (e.g. missing credentials). */
   createProviders(configs: Record<string, LLMConfig>): Map<string, LLMProvider> {
     const providers = new Map<string, LLMProvider>();
     for (const [name, config] of Object.entries(configs)) {
-      providers.set(name, this.createProvider(config));
+      // Skip non-Ollama providers with no API key — they'll start disconnected.
+      if (config.provider !== 'ollama' && !config.apiKey) {
+        continue;
+      }
+      try {
+        providers.set(name, this.createProvider(config));
+      } catch {
+        // Provider SDK threw on initialization (e.g. missing API key) — skip it.
+      }
     }
     return providers;
   }

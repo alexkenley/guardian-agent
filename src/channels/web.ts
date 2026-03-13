@@ -1734,6 +1734,22 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // POST /api/telegram/test — reload Telegram channel and report connection status
+      if (req.method === 'POST' && url.pathname === '/api/telegram/test') {
+        if (!this.dashboard.onTelegramReload) {
+          sendJSON(res, 404, { error: 'Telegram reload not available' });
+          return;
+        }
+        try {
+          const result = await this.dashboard.onTelegramReload();
+          sendJSON(res, 200, result);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Telegram test failed';
+          sendJSON(res, 500, { success: false, message });
+        }
+        return;
+      }
+
       // POST /api/setup/apply — apply setup/config selections
       if (req.method === 'POST' && url.pathname === '/api/setup/apply') {
         if (!this.dashboard.onSetupApply) {

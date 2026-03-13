@@ -33,6 +33,7 @@ const DEFAULT_TOOLTIPS = {
   '#cfg-local-save': 'Saves the local provider profile into config and makes it available for default or fallback routing.',
   '#cfg-ext-test': 'Checks whether the saved hosted provider is reachable with its current config and refreshes the live model list if the provider exposes one.',
   '#cfg-ext-save': 'Saves the hosted provider profile. Paste-once secrets are stored securely; only the profile and secret reference remain in config.',
+  '#cfg-telegram-test': 'Reloads the Telegram channel and validates the bot token by calling the Telegram API. Reports whether the connection succeeded.',
   '#cfg-telegram-enabled': 'Turns the Telegram channel on or off. If enabled, the bot token or credential ref and allowed chat IDs must be valid.',
   '#cfg-telegram-token': 'Paste the BotFather token once for simple setup. Guardian stores it securely and does not keep the raw token in config.yaml.',
   '#cfg-telegram-credential-ref': 'Advanced path for Telegram token management. Use this when the bot token lives in an environment variable instead of the app’s secret store.',

@@ -69,6 +69,65 @@ describe('resolveLLMCredentialConfig', () => {
 
     expect(resolved.openai.apiKey).toBe('sk-ref-openai');
   });
+
+  it('returns apiKey undefined instead of throwing when credential is unresolvable', () => {
+    const provider = new ConfigCredentialProvider({
+      refs: {
+        'llm.openai.local': { source: 'local', secretId: 'missing-secret' },
+      },
+    });
+
+    const resolved = resolveLLMCredentialConfig({
+      openai: {
+        provider: 'openai',
+        model: 'gpt-4o',
+        credentialRef: 'llm.openai.local',
+      },
+    }, provider);
+
+    expect(resolved.openai.apiKey).toBeUndefined();
+    expect(resolved.openai.provider).toBe('openai');
+  });
+
+  it('does not crash when credentialRef entry is missing entirely', () => {
+    const provider = new ConfigCredentialProvider({ refs: {} });
+
+    const resolved = resolveLLMCredentialConfig({
+      openai: {
+        provider: 'openai',
+        model: 'gpt-4o',
+        credentialRef: 'llm.openai.nonexistent',
+      },
+    }, provider);
+
+    expect(resolved.openai.apiKey).toBeUndefined();
+  });
+
+  it('resolves one provider even when another fails', () => {
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-anthropic-ok');
+    const provider = new ConfigCredentialProvider({
+      refs: {
+        'llm.anthropic.primary': { source: 'env', env: 'ANTHROPIC_API_KEY' },
+        'llm.openai.local': { source: 'local', secretId: 'missing-secret' },
+      },
+    });
+
+    const resolved = resolveLLMCredentialConfig({
+      anthropic: {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-20250514',
+        credentialRef: 'llm.anthropic.primary',
+      },
+      openai: {
+        provider: 'openai',
+        model: 'gpt-4o',
+        credentialRef: 'llm.openai.local',
+      },
+    }, provider);
+
+    expect(resolved.anthropic.apiKey).toBe('sk-anthropic-ok');
+    expect(resolved.openai.apiKey).toBeUndefined();
+  });
 });
 
 describe('resolveWebSearchCredentialConfig', () => {

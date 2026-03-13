@@ -221,7 +221,7 @@ describe('validateConfig', () => {
     );
   });
 
-  it('should fail when credentialRef points to an unknown ref', () => {
+  it('should tolerate a credentialRef that points to an unknown ref (auto-managed local refs may not be in config)', () => {
     const config: GuardianAgentConfig = {
       ...DEFAULT_CONFIG,
       llm: {
@@ -230,7 +230,7 @@ describe('validateConfig', () => {
       },
     };
     const errors = validateConfig(config);
-    expect(errors).toContain("llm.anthropic.credentialRef references unknown credential ref 'missing.ref'");
+    expect(errors).not.toContain("llm.anthropic.credentialRef references unknown credential ref 'missing.ref'");
   });
 
   it('should fail when a credential ref has no env name', () => {

@@ -274,7 +274,28 @@ async function refreshCurrentRoute() {
   const { route } = getRouteState();
   const updater = route?.update || route?.render;
   if (!updater) return;
+
+  // Preserve scroll position across hot reload
+  const scrollTop = content.scrollTop;
+  const activeEl = document.activeElement;
+  const focusId = activeEl?.id || null;
+  const focusSelector = activeEl && !focusId
+    ? activeEl.getAttribute('name') || activeEl.getAttribute('data-tab-id') || null
+    : null;
+
   await updater(content);
+
+  // Restore scroll position
+  content.scrollTop = scrollTop;
+
+  // Restore focus if possible
+  if (focusId) {
+    document.getElementById(focusId)?.focus();
+  } else if (focusSelector) {
+    const el = content.querySelector(`[name="${focusSelector}"]`)
+      || content.querySelector(`[data-tab-id="${focusSelector}"]`);
+    if (el) el.focus();
+  }
 }
 
 function scheduleCurrentRouteRefresh() {

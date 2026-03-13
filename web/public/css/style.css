@@ -981,7 +981,7 @@ tr:hover td {
   text-transform: uppercase;
 }
 
-.cfg-field input,
+.cfg-field input:not([type="checkbox"]),
 .cfg-field select,
 .cfg-field textarea {
   width: 100%;

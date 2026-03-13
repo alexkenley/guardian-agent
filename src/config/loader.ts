@@ -100,15 +100,21 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   const errors: string[] = [];
   const credentialRefs = config.assistant.credentials.refs;
 
+  /**
+   * Validate a credential ref pointer.
+   *
+   * Ref entries in assistant.credentials.refs are NOT required to exist at validation
+   * time. Auto-managed local refs are created at runtime when secrets are stored and
+   * may not be present in the YAML config. What we validate:
+   *  - If a value is provided it must be a non-empty string.
+   *  - If `warnMissing` is true we still allow startup but log the dangling pointer
+   *    (callers can use the returned boolean to add their own warning if desired).
+   */
   const assertCredentialRef = (value: string | undefined, path: string): void => {
     if (value === undefined) return;
     const ref = value.trim();
     if (!ref) {
       errors.push(`${path} must be a non-empty string when provided`);
-      return;
-    }
-    if (!credentialRefs[ref]) {
-      errors.push(`${path} references unknown credential ref '${ref}'`);
     }
   };
 

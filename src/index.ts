@@ -14,7 +14,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'node
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { loadConfig, DEFAULT_CONFIG_PATH, deepMerge, validateConfig } from './config/loader.js';
-import type { GuardianAgentConfig, MCPServerEntry, WebSearchConfig } from './config/types.js';
+import type { CredentialRefConfig, GuardianAgentConfig, MCPServerEntry, WebSearchConfig } from './config/types.js';
 import { normalizeHttpUrlRecord, normalizeOptionalHttpUrlInput } from './config/input-normalization.js';
 import yaml from 'js-yaml';
 import { Runtime } from './runtime/runtime.js';
@@ -4467,7 +4467,15 @@ function buildDashboardCallbacks(
           if (!model) {
             return { success: false, message: 'model is required' };
           }
-          const nextCredentialRefs = { ...(configRef.current.assistant.credentials.refs ?? {}) };
+          // Start from disk refs merged with in-memory to prevent drift
+          const diskRefsForSetup = (() => {
+            try {
+              const raw = loadRawConfig();
+              const creds = (raw?.assistant as Record<string, unknown>)?.credentials as Record<string, unknown> | undefined;
+              return (creds?.refs ?? {}) as Record<string, CredentialRefConfig>;
+            } catch { return {} as Record<string, CredentialRefConfig>; }
+          })();
+          const nextCredentialRefs = { ...diskRefsForSetup, ...(configRef.current.assistant.credentials.refs ?? {}) };
           const pendingLocalSecrets: Array<{ refName: string; secretId: string; value: string; description: string }> = [];
           let providerCredentialRef = input.credentialRef?.trim() || existingProvider?.credentialRef?.trim() || undefined;
           if (input.apiKey?.trim()) {
@@ -4522,6 +4530,22 @@ function buildDashboardCallbacks(
               value: input.telegramBotToken.trim(),
               description: 'Telegram bot token',
             });
+          } else if (telegramCredentialRef && !nextCredentialRefs[telegramCredentialRef]) {
+            // Ref name set but entry missing — recover from disk config
+            try {
+              const rawOnDisk = loadRawConfig();
+              const diskRefs = (rawOnDisk?.assistant as Record<string, unknown>)?.credentials as Record<string, unknown> | undefined;
+              const diskRef = (diskRefs?.refs as Record<string, Record<string, unknown>> | undefined)?.[telegramCredentialRef];
+              if (diskRef && typeof diskRef.secretId === 'string') {
+                nextCredentialRefs[telegramCredentialRef] = {
+                  source: (diskRef.source as string) || 'local',
+                  secretId: diskRef.secretId,
+                  description: (diskRef.description as string) || 'Telegram bot token',
+                } as typeof nextCredentialRefs[string];
+              }
+            } catch {
+              // Best-effort — validation will flag if still missing
+            }
           }
 
           const patch: Partial<GuardianAgentConfig> = {
@@ -4779,9 +4803,18 @@ function buildDashboardCallbacks(
         async () => {
           const currentConfig = configRef.current;
           let credentialRefsChanged = !!updates.assistant?.credentials?.refs;
+          // Start from disk refs so we never silently drop refs that exist on disk
+          // but drifted out of in-memory state.
+          const diskRefsForBase = (() => {
+            try {
+              const raw = loadRawConfig();
+              const creds = (raw?.assistant as Record<string, unknown>)?.credentials as Record<string, unknown> | undefined;
+              return (creds?.refs ?? {}) as Record<string, CredentialRefConfig>;
+            } catch { return {} as Record<string, CredentialRefConfig>; }
+          })();
           const nextCredentialRefs = updates.assistant?.credentials?.refs
             ? normalizeCredentialRefUpdates(updates.assistant.credentials.refs)
-            : { ...(currentConfig.assistant.credentials.refs ?? {}) };
+            : { ...diskRefsForBase, ...(currentConfig.assistant.credentials.refs ?? {}) };
           const llmPatch = updates.llm
             ? Object.fromEntries(Object.entries(updates.llm).map(([name, providerUpdates]) => {
               let credentialRef = providerUpdates.credentialRef;
@@ -4829,19 +4862,43 @@ function buildDashboardCallbacks(
             secretStore.set(secretId, telegramUpdates.botToken.trim());
             telegramUpdates.botTokenCredentialRef = refName;
             telegramUpdates.botToken = undefined;
+          } else if (telegramUpdates) {
+            // No new token — carry forward the existing credential ref entry so validation doesn't fail.
+            const existingRefName = telegramUpdates.botTokenCredentialRef?.trim()
+              || currentConfig.channels.telegram?.botTokenCredentialRef?.trim();
+            if (existingRefName && !nextCredentialRefs[existingRefName]) {
+              // Ref name is set but entry is missing (e.g. config YAML was edited manually,
+              // or previous save didn't persist the refs section). Try to recover the entry
+              // from the raw config file on disk.
+              try {
+                const rawOnDisk = loadRawConfig();
+                const diskRefs = (rawOnDisk?.assistant as Record<string, unknown>)?.credentials as Record<string, unknown> | undefined;
+                const diskRef = (diskRefs?.refs as Record<string, Record<string, unknown>> | undefined)?.[existingRefName];
+                if (diskRef && typeof diskRef.secretId === 'string') {
+                  nextCredentialRefs[existingRefName] = {
+                    source: (diskRef.source as string) || 'local',
+                    secretId: diskRef.secretId,
+                    description: (diskRef.description as string) || 'Telegram bot token',
+                  } as typeof nextCredentialRefs[string];
+                  credentialRefsChanged = true;
+                }
+              } catch {
+                // Best-effort recovery — validation will flag the missing ref
+              }
+            }
           }
           const cloudPatch = updates.assistant?.tools?.cloud
             ? mergeCloudConfigForValidation(currentConfig.assistant.tools.cloud, updates.assistant.tools.cloud)
             : undefined;
-          const assistantPatch = updates.assistant
+          const assistantPatch = updates.assistant || credentialRefsChanged
             ? {
-              ...updates.assistant,
-              credentials: credentialRefsChanged || updates.assistant.credentials
+              ...(updates.assistant ?? {}),
+              credentials: credentialRefsChanged || updates.assistant?.credentials
                 ? {
                   refs: nextCredentialRefs,
                 }
                 : undefined,
-              tools: updates.assistant.tools
+              tools: updates.assistant?.tools
                 ? {
                   ...updates.assistant.tools,
                   ...(cloudPatch ? { cloud: cloudPatch } : {}),
@@ -4943,7 +5000,8 @@ function buildDashboardCallbacks(
             const rawAssistant = rawConfig.assistant as Record<string, unknown>;
             rawAssistant.credentials = (rawAssistant.credentials as Record<string, unknown> | undefined) ?? {};
             const rawCredentials = rawAssistant.credentials as Record<string, unknown>;
-            rawCredentials.refs = nextCredentialRefs;
+            const existingDiskRefs = (rawCredentials.refs as Record<string, unknown>) ?? {};
+            rawCredentials.refs = { ...existingDiskRefs, ...nextCredentialRefs };
           }
 
           const notificationUpdates = updates.assistant?.notifications;
@@ -5709,6 +5767,14 @@ async function main(): Promise<void> {
   }
 
   const resolvedRuntimeCredentials = resolveRuntimeCredentialView(config, secretStore);
+
+  // Startup repair: log which LLM providers started disconnected due to unresolvable credentials.
+  for (const [name, llmCfg] of Object.entries(resolvedRuntimeCredentials.resolvedLLM)) {
+    if (llmCfg.provider !== 'ollama' && !llmCfg.apiKey) {
+      console.log(`  ⚠ LLM provider '${name}' started disconnected — credential could not be resolved`);
+    }
+  }
+
   threatIntelWebSearchConfigRef.current = resolvedRuntimeCredentials.resolvedWebSearch ?? {};
   const runtime = new Runtime({
     ...config,

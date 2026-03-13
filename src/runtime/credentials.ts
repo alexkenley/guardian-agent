@@ -14,6 +14,9 @@ import type {
   WebSearchConfig,
 } from '../config/types.js';
 import type { SecretResolver } from './secret-store.js';
+import { createLogger } from '../util/logging.js';
+
+const log = createLogger('credentials');
 
 export interface CredentialProvider {
   resolve(ref: string): string | undefined;
@@ -73,7 +76,14 @@ function resolveCredentialValue(
   purpose: string,
 ): string | undefined {
   const ref = credentialRef?.trim();
-  if (ref) return provider.require(ref, purpose);
+  if (ref) {
+    try {
+      return provider.require(ref, purpose);
+    } catch (err) {
+      log.warn({ purpose, ref, error: (err as Error).message }, 'Credential resolution failed — provider will start disconnected');
+      return undefined;
+    }
+  }
 
   const direct = directValue?.trim();
   return direct ? direct : undefined;
@@ -94,7 +104,7 @@ export function resolveLLMCredentialConfig(
           `llm.${name}`,
         );
         if (!resolved.apiKey) {
-          throw new Error(`No resolved credential available for llm.${name}`);
+          log.warn({ provider: name }, `Credential for llm.${name} could not be resolved — provider will start disconnected`);
         }
       }
       return [name, resolved];
