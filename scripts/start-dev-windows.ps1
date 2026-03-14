@@ -391,6 +391,29 @@ if ($needsInstall) {
 # Ensure bundled CLI tools are available
 Write-Host "  Checking bundled tools..." -ForegroundColor DarkCyan
 
+# Install Playwright browser if @playwright/mcp is a dependency and Chromium is missing
+$playwrightMcpPath = Join-Path $Root "node_modules\@playwright\mcp"
+if (Test-Path $playwrightMcpPath) {
+    Write-WaitLine "Checking Playwright Chromium browser..."
+    try {
+        $installCheck = & npx playwright install --dry-run chromium 2>&1 | Out-String
+        if ($installCheck -notmatch "already installed") {
+            Write-Host "  Installing Playwright Chromium browser..." -ForegroundColor DarkCyan
+            & npx playwright install chromium 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "  Playwright Chromium: OK" -ForegroundColor Green
+            } else {
+                Write-Host "  Playwright Chromium install failed — browser automation may not work." -ForegroundColor DarkCyan
+                Write-Host "  Run manually: npx playwright install chromium" -ForegroundColor DarkCyan
+            }
+        } else {
+            Write-Host "  Playwright Chromium: OK" -ForegroundColor Green
+        }
+    } catch {
+        Write-Host "  Playwright Chromium check skipped: $_" -ForegroundColor DarkCyan
+    }
+}
+
 if (-not $StartOnly) {
     # --- Step 3: Build ---
     Write-Host "[3/6] Building TypeScript..." -ForegroundColor DarkCyan

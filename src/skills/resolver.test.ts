@@ -130,4 +130,85 @@ describe('SkillResolver', () => {
       content: 'Investigate this incident.',
     })).toHaveLength(1);
   });
+
+  it('loads Anthropic-style frontmatter skills and strips metadata from summaries', async () => {
+    const root = createSkillRoot();
+    const skillDir = join(root, 'mcp-builder');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, 'SKILL.md'), `---
+name: mcp-builder
+description: Guide for building MCP servers and designing Model Context Protocol tools for external APIs.
+---
+
+# MCP Builder
+
+Start with the API surface, design clear tool names, and prefer structured outputs.
+`, 'utf-8');
+
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([root]);
+    const status = registry.listStatus();
+
+    expect(status).toMatchObject([
+      {
+        id: 'mcp-builder',
+        name: 'MCP Builder',
+        version: '0.0.0-compat',
+        description: 'Guide for building MCP servers and designing Model Context Protocol tools for external APIs.',
+      },
+    ]);
+    expect(registry.get('mcp-builder')?.summary).not.toContain('description:');
+  });
+
+  it('resolves frontmatter-only skills from explicit name mentions and description fallback', async () => {
+    const root = createSkillRoot();
+    const skillDir = join(root, 'skill-creator');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, 'SKILL.md'), `---
+name: skill-creator
+description: Create new skills, improve existing skills, and benchmark skill performance with evals.
+---
+
+# Skill Creator
+
+Capture intent first, then draft the skill, write eval prompts, and iterate.
+`, 'utf-8');
+
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([root]);
+    const resolver = new SkillResolver(registry);
+
+    expect(resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content: 'Use the skill-creator to help me benchmark this workflow.',
+    })[0]?.id).toBe('skill-creator');
+
+    expect(resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content: 'I want to improve an existing skill and add evals to benchmark it.',
+    })[0]?.id).toBe('skill-creator');
+  });
+
+  it('rejects frontmatter skills that omit required metadata', async () => {
+    const root = createSkillRoot();
+    const skillDir = join(root, 'broken-skill');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, 'SKILL.md'), `---
+name: broken-skill
+---
+
+# Broken Skill
+
+This should not load.
+`, 'utf-8');
+
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([root]);
+
+    expect(registry.list()).toHaveLength(0);
+  });
 });

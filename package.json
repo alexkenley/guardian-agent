@@ -82,10 +82,11 @@
     "grammy": "^1.40.0",
     "js-yaml": "^4.1.1",
     "openai": "^6.24.0",
+    "@playwright/mcp": "^0.0.68",
     "pino": "^10.3.1"
   },
   "optionalDependencies": {
-    "agent-browser": "^0.16.0"
+    "@lightpanda/browser": "^0.2.5"
   },
   "overrides": {
     "@appium/logger": {

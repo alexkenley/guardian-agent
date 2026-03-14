@@ -744,12 +744,20 @@ export interface AssistantConnectorPlaybookStepDefinition {
   id: string;
   /** Optional human label for operators. */
   name?: string;
+  /** Step type: 'tool' executes a registered tool, 'instruction' invokes the LLM. Default: 'tool'. */
+  type?: 'tool' | 'instruction';
   /** Optional access profile id used for this step. Empty/default means built-in tool access. */
   packId: string;
-  /** Tool name to execute. */
+  /** Tool name to execute (required for tool steps). */
   toolName: string;
   /** Tool arguments for this step. */
   args?: Record<string, unknown>;
+  /** Natural language prompt for the LLM (required for instruction steps). Prior step outputs injected as context. */
+  instruction?: string;
+  /** LLM provider override for instruction steps (e.g. 'anthropic', 'ollama'). Falls back to default. */
+  llmProvider?: string;
+  /** Max tokens for the LLM response in instruction steps. Default: 2048. */
+  maxTokens?: number;
   /** Continue playbook after this step fails. */
   continueOnError?: boolean;
   /** Optional per-step timeout override. */
@@ -868,18 +876,42 @@ export interface AssistantSkillsConfig {
 /** Search source protocol type. */
 export type SearchSourceType = 'directory' | 'git' | 'url' | 'file';
 
-/** Browser automation configuration (agent-browser). */
-export interface BrowserConfig {
-  /** Enable browser automation tools (default: false). */
+/**
+ * Native Google Workspace integration.
+ * Uses googleapis + google-auth-library directly (no external CLI).
+ * See also: GWSService (src/runtime/gws-service.ts) for the legacy CLI-based alternative.
+ */
+export interface GoogleConfig {
+  /** Enable native Google integration. Default: false. */
   enabled: boolean;
-  /** Path to agent-browser binary (default: 'agent-browser'). */
-  binaryPath?: string;
-  /** Close idle browser sessions after this many ms (default: 300000 = 5min). */
-  sessionIdleTimeoutMs?: number;
-  /** Maximum concurrent browser sessions (default: 3). */
-  maxSessions?: number;
-  /** Allowed domains for browser navigation (falls back to tools.allowedDomains). */
+  /** Backend mode: 'native' uses googleapis SDK directly, 'gws_cli' uses external gws CLI. Default: 'native'. */
+  mode: 'native' | 'gws_cli';
+  /** Enabled Google Workspace services (controls OAuth scope grants). */
+  services: string[];
+  /** Localhost port for OAuth callback server. Default: 18432. */
+  oauthCallbackPort: number;
+  /** Path to client_secret.json (can also be uploaded via web UI). */
+  credentialsPath: string;
+}
+
+/** Browser automation configuration (Playwright MCP + Lightpanda MCP). */
+export interface BrowserConfig {
+  /** Master switch for all browser tooling. Default: true */
+  enabled: boolean;
+  /** Enable Playwright MCP backend. Default: true */
+  playwrightEnabled?: boolean;
+  /** Enable Lightpanda MCP backend. Default: false */
+  lightpandaEnabled?: boolean;
+  /** Playwright browser engine. Default: 'chromium' */
+  playwrightBrowser?: 'chromium' | 'firefox' | 'webkit' | 'chrome' | 'msedge';
+  /** Playwright MCP capability groups (comma-separated). Default: 'network,storage' */
+  playwrightCaps?: string;
+  /** Domain allowlist for browser navigation. Falls back to tools.allowedDomains. */
   allowedDomains?: string[];
+  /** Extra Playwright CLI args (proxy, user-agent, viewport, etc.) */
+  playwrightArgs?: string[];
+  /** Lightpanda binary path override. Default: 'lightpanda' */
+  lightpandaBinaryPath?: string;
 }
 
 /** Web search provider configuration. */
@@ -1119,8 +1151,10 @@ export interface AssistantToolsConfig {
   mcp?: AssistantMCPConfig;
   /** Web search tool configuration. Auto-selects best available provider (Brave > Perplexity > DuckDuckGo). */
   webSearch?: WebSearchConfig;
-  /** Browser automation configuration (agent-browser). Enables JS-rendered page interaction. */
+  /** Browser automation configuration for the Playwright MCP and Lightpanda MCP backends. */
   browser?: BrowserConfig;
+  /** Native Google Workspace integration (googleapis SDK). Alternative to gws CLI via MCP managed providers. */
+  google?: GoogleConfig;
   /** Cloud and hosting provider integrations. */
   cloud?: AssistantCloudConfig;
   /** Native document search engine. Indexes local document collections for BM25 + vector hybrid search. */

@@ -677,7 +677,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /campaign ...                            Contact discovery + email campaign workflows\n');
     this.write('  /connectors [status|packs|settings|pack] Connector framework control plane\n');
     this.write('  /playbooks [list|run|upsert|delete|runs] Playbook registry + execution\n');
-    this.write('  /google [status]                        Google Workspace connection\n');
+    this.write('  /google [status|login]                   Google Workspace connection\n');
     this.write('\n');
     this.write(this.bold('Security & Audit\n'));
     this.write('  /audit [limit]                         Recent audit events\n');
@@ -1890,9 +1890,10 @@ export class CLIChannel implements ChannelAdapter {
         this.write('\n');
         this.write(this.bold('Browser Automation\n'));
         this.write(`  Enabled:          ${state.enabled ? this.green('yes') : this.yellow('no')}\n`);
+        this.write(`  Playwright:       ${state.playwrightEnabled ? this.green('yes') : this.yellow('no')} (${state.playwrightBrowser})\n`);
+        this.write(`  Lightpanda:       ${state.lightpandaEnabled ? this.green('yes') : this.yellow('no')}\n`);
+        this.write(`  Capabilities:     ${state.playwrightCaps}\n`);
         this.write(`  Allowed domains:  ${state.allowedDomains.join(', ') || '(uses global tools allowedDomains)'}\n`);
-        this.write(`  Idle timeout:     ${state.sessionIdleTimeoutMs / 1000}s\n`);
-        this.write(`  Max sessions:     ${state.maxSessions}\n`);
         this.write('\n');
       } else {
         this.write('\nBrowser config is not available.\n\n');
@@ -3349,9 +3350,42 @@ export class CLIChannel implements ChannelAdapter {
       return;
     }
 
-    this.write('\nUsage: /google [status]\n');
+    if (sub === 'login') {
+      this.write('\nStarting Google Workspace authentication...\n');
+      this.write('A browser window will open for OAuth consent.\n\n');
+      try {
+        const { execFile } = await import('node:child_process');
+        const child = execFile('gws', ['auth', 'login'], {
+          shell: process.platform === 'win32',
+        } as any);
+        child.stdout?.on('data', (data: Buffer) => this.write(data.toString()));
+        child.stderr?.on('data', (data: Buffer) => this.write(data.toString()));
+        await new Promise<void>((resolve) => {
+          child.on('close', (code) => {
+            if (code === 0) {
+              this.write(this.green('\nAuthentication successful.\n\n'));
+              resolve();
+            } else {
+              this.write(this.red(`\nAuthentication failed (exit code ${code}).\n\n`));
+              resolve(); // Don't reject — just report
+            }
+          });
+          child.on('error', (err) => {
+            this.write(this.red(`\nFailed to run gws: ${err.message}\n`));
+            this.write(`Make sure gws is installed: ${this.cyan('npm install -g @googleworkspace/cli')}\n\n`);
+            resolve();
+          });
+        });
+      } catch (err) {
+        this.write(this.red(`\nError: ${err instanceof Error ? err.message : String(err)}\n\n`));
+      }
+      return;
+    }
+
+    this.write('\nUsage: /google [status|login]\n');
     this.write('  /google status                  Show connection status\n');
-    this.write(`\n  To authenticate, run ${this.cyan('gws auth login')} directly in a terminal.\n\n`);
+    this.write('  /google login                   Re-authenticate Google Workspace (opens browser)\n');
+    this.write('\n');
   }
 
   // ─── /intel ──────────────────────────────────────────────────

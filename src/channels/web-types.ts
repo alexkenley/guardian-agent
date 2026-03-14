@@ -683,10 +683,12 @@ export interface DashboardCallbacks {
   onBrowserConfigUpdate?: (input: {
     enabled?: boolean;
     allowedDomains?: string[];
-    sessionIdleTimeoutMs?: number;
-    maxSessions?: number;
+    playwrightEnabled?: boolean;
+    lightpandaEnabled?: boolean;
+    playwrightBrowser?: string;
+    playwrightCaps?: string;
   }) => { success: boolean; message: string };
-  onBrowserConfigState?: () => { enabled: boolean; allowedDomains: string[]; sessionIdleTimeoutMs: number; maxSessions: number };
+  onBrowserConfigState?: () => { enabled: boolean; allowedDomains: string[]; playwrightEnabled: boolean; lightpandaEnabled: boolean; playwrightBrowser: string; playwrightCaps: string };
   onToolsApprovalDecision?: (input: {
     approvalId: string;
     decision: 'approved' | 'denied';

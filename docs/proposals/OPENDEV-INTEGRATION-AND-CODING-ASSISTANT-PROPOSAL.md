@@ -1,24 +1,27 @@
 # OpenDev/Koan Integration, Coding Assistant & Orchestration Improvements Proposal
 
 **Status:** Proposed
-**Date:** 2026-03-09 (updated 2026-03-12)
+**Date:** 2026-03-09 (updated 2026-03-14)
 **Informed by:**
 - [OpenDev](https://github.com/opendev-to/opendev) — open-source terminal coding agent (Python/MIT)
 - [Building AI Coding Agents for the Terminal](https://arxiv.org/html/2603.05344v1) — Nghi D. Q. Bui (2026)
 - [Koan](https://github.com/sukria/koan) — autonomous coding agent orchestrator (Python/GPL-3.0)
+- `gru-ai` — TypeScript autonomous coding workflow framework reviewed locally at `S:\Development\gru-ai`
+- `Broomy` — Electron multi-session coding workspace reviewed locally at `S:\Development\Broomy`
 - GuardianAgent specs: `ORCHESTRATION-AGENTS-SPEC.md`, `ASSISTANT-ORCHESTRATOR-SPEC.md`
 
 ---
 
 ## Executive Summary
 
-This proposal covers five areas informed by analysis of OpenDev, its accompanying research paper, and Koan:
+This proposal covers six areas informed by analysis of OpenDev, its accompanying research paper, Koan, gru-ai, and Broomy:
 
 1. **Orchestration & Smart Routing Improvements** — targeted upgrades to existing systems based on validated patterns from the paper
-2. **Coding Assistant Tab** — a new web UI tab with dedicated coding tools, LSP integration, and file-aware context, running through the full Guardian security pipeline
+2. **Coding Assistant Tab** — a new multi-session coding workspace with dedicated coding tools, file-aware context, embedded terminals, and full Guardian security
 3. **OpenDev Integration Assessment** — why direct dependency integration is not viable and what to borrow instead
 4. **Koan Integration Assessment** — architectural patterns from a production autonomous agent orchestrator
-5. **Autonomous Operation Improvements** — session tracking, budget-aware modes, graduated safety controls, and feedback loops informed by Koan's battle-tested patterns
+5. **Workflow State, Validation, and Operator UX** — durable work objects, mechanical workflow invariants, and live operations views informed by gru-ai and Broomy
+6. **Autonomous Operation Improvements** — session tracking, budget-aware modes, graduated safety controls, and feedback loops informed by Koan's battle-tested patterns
 
 ---
 
@@ -259,47 +262,47 @@ Add a dedicated **Code** tab to the web UI that provides an integrated coding as
 
 The current Chat panel is general-purpose. A dedicated coding tab provides:
 
-1. **Persistent file context** — file tree, open files, and edit history visible alongside the chat
-2. **Code-specific tools always loaded** — no need to discover coding tools via `find_tools`
-3. **Workspace-scoped security** — Guardian policies tuned for coding (allow file writes within project, block writes outside)
-4. **Visual diff and edit preview** — see proposed changes before applying them
-5. **Session isolation** — coding sessions don't pollute general assistant conversation history
+1. **Persistent file + terminal context** — open files, diffs, terminal tabs, and recent activity stay attached to the coding session
+2. **Multi-project session switching** — borrow Broomy's strongest idea: multiple active coding sessions across different repositories, each with isolated history and workspace state
+3. **Code-specific tools always loaded** — no need to discover coding tools via `find_tools`
+4. **Workspace-scoped security** — Guardian policies tuned for coding (allow file writes within project, block writes outside)
+5. **Visual diff and edit preview** — see proposed changes before applying them
+6. **Session isolation** — coding sessions don't pollute general assistant conversation history or approvals
 
 ### 4.3 Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Web UI — Code Tab                     │
-│  ┌──────────┐  ┌──────────────┐  ┌───────────────────┐  │
-│  │ File Tree │  │ Editor View  │  │  Code Chat Panel  │  │
-│  │ (read    │  │ (read-only   │  │  (messages +      │  │
-│  │  only)   │  │  + diff view)│  │   tool results)   │  │
-│  └────┬─────┘  └──────┬───────┘  └────────┬──────────┘  │
-│       │               │                    │             │
-│       └───────────────┼────────────────────┘             │
-│                       ▼                                  │
-│              POST /api/code/message                      │
-└───────────────────────┬─────────────────────────────────┘
-                        │
-                        ▼
-              ┌──────────────────┐
-              │   WebChannel     │
-              │   (existing)     │
-              │                  │
-              │  Routes to       │
-              │  coding agent    │
-              │  config          │
-              └────────┬─────────┘
-                       │
-                       ▼
-              ┌──────────────────┐
-              │   Runtime        │
-              │   (existing)     │
-              │                  │
-              │  Full Guardian   │
-              │  pipeline        │
-              └──────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                       Web UI — Code Workspace                        │
+│  ┌──────────────┐ ┌──────────────────────────────┐ ┌───────────────┐ │
+│  │ Session Rail │ │   Workspace Surface          │ │ Code Chat /   │ │
+│  │ repo/branch  │ │  ┌────────────────────────┐  │ │ approvals /   │ │
+│  │ status/unread│ │  │ File tree + editor/diff│  │ │ quality gates │ │
+│  │ waiting-input│ │  └────────────────────────┘  │ │ activity      │ │
+│  │ + new sess.  │ │  ┌────────────────────────┐  │ └──────┬────────┘ │
+│  └──────┬───────┘ │  │ Terminal dock          │  │        │          │
+│         │         │  │ Agent tab + user tabs  │  │        │          │
+│         └─────────┼──┴────────────────────────┴──┼────────┘          │
+│                   ▼                                ▼                   │
+│          POST /api/code/message          POST /api/code/terminals/*   │
+│          GET  /api/code/sessions         GET  /api/code/workspace     │
+└──────────────────────────────┬────────────────────────────────────────┘
+                               │
+                               ▼
+                     ┌──────────────────────┐
+                     │ Runtime + Code APIs  │
+                     │ session store        │
+                     │ terminal manager     │
+                     │ full Guardian stack  │
+                     └──────────────────────┘
 ```
+
+**Session model:**
+
+- Each `CodeSession` is bound to a single `workspaceRoot`, branch, agent configuration, approval history, terminal set, and UI layout state.
+- Multiple coding sessions can stay alive in parallel. Switching sessions does **not** discard chat history, open files, or terminal buffers.
+- Each session gets one primary **agent terminal** plus zero or more **user terminal** tabs for manual commands, background servers, or inspection work.
+- Global panels (session rail, settings) are shared; file viewer/editor state, terminal tabs, and layout sizes are persisted per session, following Broomy's global-vs-per-session panel split.
 
 ### 4.4 New Coding Tools
 
@@ -347,6 +350,7 @@ assistant:
   coding:
     enabled: true
     workspaceRoot: '.'              # Restrict file operations to this directory
+    maxOpenSessions: 8              # Concurrent coding sessions across repos/projects
     allowedCommands:                # Shell commands the coding assistant can run
       - 'npm test'
       - 'npm run build'
@@ -358,20 +362,45 @@ assistant:
     gitIntegration: true            # Enable git tools
     autoApproveReads: true          # Auto-approve read-only coding tools
     maxFileSize: 1048576            # Max file size to read (1MB)
+    persistSessionLayouts: true     # Save panel visibility, open files, terminal tabs
+    terminalTabs:
+      enabled: true
+      maxPerSession: 6
+      allowUserTerminals: true
 ```
 
 ### 4.7 Web UI Design
 
-**Layout:** Three-panel layout within the Code tab:
+Borrow the core interaction model from Broomy, but implement it as a Guardian web workspace rather than an Electron desktop shell.
 
-- **Left panel (250px):** File tree browser showing the workspace. Click to view file. Shows git status indicators (M/A/D/U) next to modified files.
-- **Center panel (flexible):** File viewer with syntax highlighting (highlight.js). Toggle between source view and diff view. Read-only — edits are made by the LLM through tools.
-- **Right panel (400px):** Code chat panel. Same message format as main chat, but with coding-specific system prompt and always-loaded coding tools.
+**Layout:** Four-region layout within the Code tab:
+
+- **Session rail (260px):** List of active coding sessions grouped by project/repo. Each row shows repo name, branch, agent, status, unread state, waiting-input badge, and changed-file count. Sessions remain open concurrently.
+- **Workspace left panel (240px):** File tree and git-aware explorer for the active session. Shows modified/untracked files and recent files.
+- **Workspace center (flexible):** Editor + diff surface above a terminal dock. The upper area shows file contents or diffs; the lower dock contains the **Agent** terminal and multiple **User** terminal tabs.
+- **Right panel (420px):** Code chat, approvals, plan/spec, quality reports, and activity timeline for the active session.
+
+**Terminal behavior:**
+
+- Every session has one persistent **Agent** terminal for tool-driven agent execution.
+- Users can open additional terminal tabs inside the same session for manual commands, dev servers, logs, or verification steps.
+- Background tasks detected by §5.2 appear as terminal tabs with stop/reconnect controls rather than blocking the chat loop.
+- Terminal output is session-scoped and survives tab switches so the user can move between projects without losing context.
+
+**Panel behavior:**
+
+- Session rail and settings are **global** panels.
+- Explorer, file viewer position, terminal dock, and right-side activity panels are **per-session** and persist across reloads.
+- Layout sizes are saved per session so a frontend-heavy workspace can keep a large preview, while a debugging session can bias toward terminals.
 
 **Key interactions:**
+
+- Click a session in the rail → restore its open files, terminal tabs, chat history, and pending approvals
 - Click file in tree → opens in center panel + injects file context into chat
 - LLM proposes edit → diff preview shown in center panel with Approve/Deny buttons
-- Test/build results → formatted output in chat panel with collapsible sections
+- Add user terminal tab → run manual validation without leaving the coding workspace
+- Test/build results → formatted output in chat panel with collapsible sections and linked terminal output
+- Waiting-input or error state in any non-active session → badge on the session rail, so the user can jump directly to the blocked project
 
 ### 4.8 Code-Specific System Prompt
 
@@ -414,10 +443,13 @@ The coding assistant runs through the **identical** Guardian pipeline as all oth
 - Workspace root enforcement: file operations outside `workspaceRoot` are denied at the tool level
 - Command allowlist: `code_test` and `code_build` only execute commands from the configured allowlist
 - Git operations require explicit capability grant
+- Each code session is bound to exactly one workspace root; no cross-session file access
+- Terminal actions are attributed as either `agent` or `human` in the audit log
+- Background terminal tasks receive explicit IDs and stop controls; they are not hidden side effects
 
 ---
 
-## Part 5: Additional Improvements from OpenDev Research
+## Part 5: Additional Product & Workflow Improvements
 
 ### 5.1 Approval Persistence with Pattern Learning
 
@@ -464,6 +496,96 @@ An evolution of the current `AgentMemoryStore` (raw markdown facts) toward curat
 - Effective strategies are promoted and included more often in context
 
 This is a larger effort that builds on the existing memory system. Flagged as future enhancement.
+
+### 5.5 Durable Work-State Model (Borrowed from gru-ai)
+
+**Problem:** The current proposal treats the coding assistant primarily as a session-oriented chat/tool loop. That is fine for small tasks, but larger efforts need a durable work object that survives session restarts, supports decomposition, and can be inspected outside the conversation transcript.
+
+**Proposal:** Introduce a first-class work-state model:
+
+```typescript
+interface WorkDirective {
+  id: string;
+  title: string;
+  status: 'pending' | 'in_progress' | 'awaiting_approval' | 'completed' | 'failed';
+  workspaceRoot: string;
+  branch?: string;
+  currentStep?: string;
+  projects: WorkProject[];
+}
+
+interface WorkProject {
+  id: string;
+  title: string;
+  reviewers: string[];
+  tasks: WorkTask[];
+}
+
+interface WorkTask {
+  id: string;
+  title: string;
+  ownerAgent?: string;
+  status: 'pending' | 'in_progress' | 'review' | 'done';
+  definitionOfDone: string[];
+  artifacts: string[];
+}
+```
+
+**Storage model:** SQLite-backed canonical state in Guardian, with optional export of human-readable markdown/json snapshots into the workspace for auditability and recovery.
+
+**Why this matters:** This captures the strongest practical idea from gru-ai: work should be represented as durable state, not just inferred from the chat log. The coding assistant, dashboard, scheduled jobs, and approvals UI all read the same source of truth.
+
+### 5.6 Workflow Invariant Validator (Borrowed from gru-ai)
+
+**Problem:** Prompting agents to "make sure another agent reviews this" is not enough. Review separation, DOD completion, and step transitions should be mechanically enforced.
+
+**Proposal:** Add a `WorkflowInvariantService` that validates workflow state transitions before a directive or task can advance:
+
+- Builder and reviewer cannot be the same agent
+- Required Definition of Done items must be checked before completion
+- Approval-gated steps cannot advance without explicit approval record
+- Required artifacts (diff, test result, review summary) must exist before wrap-up
+- Illegal state transitions are blocked with structured error messages
+
+This extends the quality-gate direction in §6.5 with workflow-level, non-LLM validation.
+
+### 5.7 Live Operations Monitor (Borrowed from gru-ai and Broomy)
+
+**Problem:** Once multiple coding sessions are active, the user needs an operator view, not just a single active chat.
+
+**Proposal:** Add a live operations monitor backed by the new `CodeSession` model:
+
+- Session list with status, branch, last activity, waiting-input/error badges, unread state, and active workspace
+- Fast intervention actions: focus session, send input, approve/deny pending action, stop background task
+- Event stream showing latest tool actions, file edits, test runs, and approval requests per session
+- Filters for active/blocked/review-ready sessions
+
+This should share backend state with the Code tab's session rail rather than becoming a second disconnected UI.
+
+### 5.8 Stratified Memory: Design vs Lessons (Borrowed from gru-ai)
+
+**Problem:** `AgentMemoryStore` currently trends toward a single pool of facts. That mixes stable design rationale with reactive "don't do this again" corrections, which harms retrieval quality.
+
+**Proposal:** Split long-lived memory into two strata:
+
+- **Design memory:** Architecture rationale, workflow principles, project constraints, and why the system is structured a certain way
+- **Lessons memory:** Failures, review feedback, user corrections, recurring pitfalls, and operational gotchas
+
+Retrieval can then be role- and workflow-aware. Planning/review flows prefer design memory; implementation/recovery flows prefer lessons memory.
+
+### 5.9 Platform Adapter Layer for External Coding Engines (Optional; Borrowed from gru-ai and Broomy)
+
+**Problem:** If Guardian continues to support multiple coding engines or shells, platform-specific session spawning and monitoring will sprawl through the runtime.
+
+**Proposal:** Define a narrow `CodingPlatformAdapter` boundary for:
+
+- session spawn/stop
+- terminal/session monitoring
+- identity resolution
+- platform capability flags
+- optional MCP/session metadata hooks
+
+This is not required for the first version of the Code tab, but it is the right abstraction if we want Claude/Codex/Gemini/Aider support without baking engine-specific behavior into the core runtime.
 
 ---
 
@@ -784,18 +906,24 @@ The spec is ephemeral (per-session, not persisted to memory), but the user can s
 | **P1** | Session outcome tracking (6.1) | Medium | High — enables staleness detection, feeds other systems |
 | **P1** | Coding tools registration (4.4) | Medium | High — enables coding assistant functionality |
 | **P1** | Fuzzy edit matching (4.5) | Medium | High — makes LLM-driven edits reliable |
+| **P1** | Durable work-state model (5.5) | Medium | High — makes complex coding work resumable and inspectable |
+| **P1** | Workflow invariant validator (5.6) | Medium | High — enforces review separation and DOD mechanically |
 | **P2** | Code tab web UI (4.7) | Large | Medium — UX layer on top of coding tools |
+| **P2** | Multi-session workspace UX + terminal tabs (4.3, 4.7) | Large | High — matches real coding workflows across projects |
 | **P2** | Parallel execution conflict detection (3.5) | Small | Medium — prevents file write races |
 | **P2** | Smart error classification (3.8) | Small | Medium — improves LLM error recovery |
 | **P2** | Per-workflow model roles (3.4) | Medium | Medium — cost optimization |
 | **P2** | Drift detection (6.4) | Small | Medium — prevents stale-context errors |
 | **P2** | Post-execution quality gates (6.5) | Medium | Medium — code quality safety net for coding assistant |
 | **P2** | Budget-aware mode adaptation (6.2) | Medium | Medium — cost optimization, graceful degradation |
+| **P2** | Live operations monitor (5.7) | Medium | Medium — makes multiple active sessions operable |
 | **P3** | Max dispatch depth (3.7) | Small | Low — safety net, already planned |
 | **P3** | Approval persistence (5.1) | Medium | Medium — reduces approval fatigue |
 | **P3** | Background task detection (5.2) | Small | Low — edge case improvement |
 | **P3** | Artifact index preservation (5.3) | Small | Medium — preserves awareness through compaction |
+| **P3** | Stratified memory (5.8) | Medium | Medium — improves retrieval quality over raw memory dumps |
 | **P3** | Feedback learning (6.6) | Medium | Medium — closes the feedback loop |
+| **P3** | Platform adapter layer (5.9) | Medium | Low — only needed if multi-engine support remains in scope |
 | **P3** | Pre-task specification (6.7) | Small | Medium — improves complex task outcomes |
 | **P4** | Playbook memory with scoring (5.4) | Large | Medium — longer-term memory evolution |
 
@@ -817,7 +945,10 @@ The spec is ephemeral (per-session, not persisted to memory), but the user can s
 | Adopt Koan's PR review learning? | **Yes — as optional integration** | Valuable feedback loop, but requires GitHub CLI. Make it opt-in |
 | Overhaul smart routing? | **No — extend it** | Our per-category routing is validated by the paper; add per-workflow roles as a complementary layer |
 | Overhaul orchestration agents? | **No — augment** | Add dispatch depth, doom-loop detection, schema-level enforcement. Core Sequential/Parallel/Loop design is sound |
-| Build coding assistant? | **Yes — as a new tab** | Dedicated UI + coding tools + workspace scoping, all through existing Guardian pipeline |
+| Adopt gru-ai's durable work-state model? | **Yes — but SQLite-first** | Valuable for resumability and operator visibility. Keep Guardian's event-driven runtime; use file exports as audit artifacts, not as IPC |
+| Adopt gru-ai's invariant-driven workflow checks? | **Yes** | Review separation, DOD completion, and approval checkpoints should be mechanically enforced |
+| Build coding assistant? | **Yes — as a multi-session workspace tab** | Dedicated UI + coding tools + workspace scoping + embedded terminals, all through existing Guardian pipeline |
+| Borrow Broomy's multi-session/terminal UX? | **Yes — in web form** | Multiple active project sessions and per-session terminal tabs match real coding workflows better than a single chat pane |
 | New security model for coding? | **No** | Use existing Guardian pipeline. Add workspace-root enforcement and command allowlist as tool-level policies |
 
 ---
@@ -827,6 +958,8 @@ The spec is ephemeral (per-session, not persisted to memory), but the user can s
 - [OpenDev GitHub](https://github.com/opendev-to/opendev) — MIT license, Python terminal coding agent
 - [Building AI Coding Agents for the Terminal](https://arxiv.org/html/2603.05344v1) — Nghi D. Q. Bui, 2026
 - [Koan GitHub](https://github.com/sukria/koan) — GPL-3.0, Python autonomous coding agent orchestrator
+- `gru-ai` local review — `S:\Development\gru-ai`
+- `Broomy` local review — `S:\Development\Broomy`
 - [GuardianAgent Orchestration Spec](../specs/ORCHESTRATION-AGENTS-SPEC.md)
 - [GuardianAgent Assistant Orchestrator Spec](../specs/ASSISTANT-ORCHESTRATOR-SPEC.md)
 - [GuardianAgent Brokered Isolation Proposal](./BROKERED-AGENT-ISOLATION-PROPOSAL.md)

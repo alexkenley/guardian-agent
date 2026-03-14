@@ -44,7 +44,7 @@ export interface ProvenanceMetadata {
   source: 'local' | 'remote';
   trust: 'internal' | 'external';
   tainted: boolean;
-  originTool: string;         // e.g. 'web_fetch', 'browser_task', 'mcp-server1-search'
+  originTool: string;         // e.g. 'web_fetch', 'mcp-playwright-browser_navigate', 'mcp-server1-search'
   originDomain?: string;      // For network-sourced content
   timestamp: number;
 }

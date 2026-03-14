@@ -47,8 +47,8 @@ Each skill is a versioned bundle stored locally under a managed directory such a
 ```text
 skills/
   incident-triage/
-    skill.json
     SKILL.md
+    skill.json
     references/
       escalation-matrix.md
     templates/
@@ -59,8 +59,14 @@ skills/
 
 ### Required Files
 
-- `skill.json` - machine-readable manifest
 - `SKILL.md` - human/model-readable primary instructions
+
+### Supported Metadata Formats
+
+- Guardian native: `skill.json` + `SKILL.md`
+- Anthropic-compatible import path: YAML frontmatter in `SKILL.md` when `skill.json` is absent
+
+Guardian-native manifests remain the richer format. Frontmatter-only skills are intended for reviewed third-party imports and use synthesized defaults for fields that are not present in frontmatter.
 
 ### Optional Files
 
@@ -175,6 +181,7 @@ assistant:
 ## Current Behavior
 
 - Local skill bundles are loaded from configured roots.
+- Both Guardian-native manifests and reviewed frontmatter-only imports are supported.
 - Chat requests can auto-activate matching skills.
 - Active skill summaries are injected into the system prompt.
 - Chat responses include `metadata.activeSkills` when one or more skills were applied.
@@ -188,7 +195,13 @@ The repository currently includes bundled local skills under `skills/`, includin
 - `google-calendar-assistant`
 - `google-drive-assistant`
 - `google-docs-sheets-assistant`
+- `network-recon`
+- `outreach-campaigns`
 - `security-triage`
+- `threat-intel`
+- `mcp-builder`
+- `skill-creator`
+- `webapp-testing`
 
 ### Chat Behavior
 
@@ -229,6 +242,7 @@ This is especially important for managed providers such as Google Workspace, whe
 ### Implemented
 
 - Local skill roots
+- Guardian-native manifest loading plus reviewed frontmatter-compatible import support
 - Read-only bundle loading
 - Prompt summary injection
 - Basic trigger resolution and ranking

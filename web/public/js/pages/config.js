@@ -3167,23 +3167,30 @@ function createBrowserPanel(config, panel) {
   section.className = 'table-container';
   const browser = config.assistant?.tools?.browser || {};
   const enabled = browser.enabled !== false;
+  const playwrightEnabled = browser.playwrightEnabled !== false;
+  const lightpandaEnabled = browser.lightpandaEnabled === true;
+  const playwrightBrowser = browser.playwrightBrowser || 'chromium';
+  const playwrightCaps = browser.playwrightCaps || 'network,storage';
   const domains = (browser.allowedDomains || config.assistant?.tools?.allowedDomains || []).join(', ');
-  const maxSessions = browser.maxSessions ?? 3;
-  const idleTimeout = browser.sessionIdleTimeoutMs ?? 300000;
+
+  const browserEngines = ['chromium', 'firefox', 'webkit', 'chrome', 'msedge'];
+  const browserOptions = browserEngines.map(b => `<option value="${b}" ${playwrightBrowser === b ? 'selected' : ''}>${b}</option>`).join('');
 
   section.innerHTML = `
     <div class="table-header">
       <h3>Browser Automation</h3>
-      <span class="cfg-header-note">Headless browser for JS-rendered pages</span>
+      <span class="cfg-header-note">MCP-based browser tools (Playwright + Lightpanda)</span>
     </div>
     <div class="cfg-center-body">
       <div class="cfg-form-grid">
         <div class="cfg-field"><label>Browser Tools</label><select id="browser-enabled"><option value="true" ${enabled ? 'selected' : ''}>Enabled</option><option value="false" ${!enabled ? 'selected' : ''}>Disabled</option></select></div>
+        <div class="cfg-field"><label>Playwright</label><select id="browser-playwright-enabled"><option value="true" ${playwrightEnabled ? 'selected' : ''}>Enabled</option><option value="false" ${!playwrightEnabled ? 'selected' : ''}>Disabled</option></select></div>
+        <div class="cfg-field"><label>Lightpanda</label><select id="browser-lightpanda-enabled"><option value="true" ${lightpandaEnabled ? 'selected' : ''}>Enabled</option><option value="false" ${!lightpandaEnabled ? 'selected' : ''}>Disabled</option></select></div>
+        <div class="cfg-field"><label>Browser Engine</label><select id="browser-playwright-browser">${browserOptions}</select></div>
+        <div class="cfg-field"><label>Capabilities</label><input id="browser-playwright-caps" type="text" value="${esc(playwrightCaps)}" placeholder="network,storage"></div>
         <div class="cfg-field"><label>Allowed Domains</label><input id="browser-domains" type="text" value="${esc(domains)}" placeholder="example.com, github.com"></div>
-        <div class="cfg-field"><label>Max Concurrent Sessions</label><input id="browser-max-sessions" type="number" min="1" max="10" value="${maxSessions}"></div>
-        <div class="cfg-field"><label>Idle Timeout (seconds)</label><input id="browser-idle-timeout" type="number" min="30" max="3600" value="${Math.round(idleTimeout / 1000)}"></div>
       </div>
-      <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">Changes require a restart to take effect.</div>
+      <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">Changes require a restart to take effect. Playwright provides full browser automation; Lightpanda is a lightweight reader (beta).</div>
       <div class="cfg-actions">
         <button class="btn btn-primary" id="browser-save" type="button">Save Browser Config</button>
         <span id="browser-save-status" class="cfg-save-status"></span>
@@ -3194,14 +3201,23 @@ function createBrowserPanel(config, panel) {
   const statusEl = section.querySelector('#browser-save-status');
   section.querySelector('#browser-save')?.addEventListener('click', async () => {
     const enabledVal = section.querySelector('#browser-enabled').value === 'true';
+    const pwEnabled = section.querySelector('#browser-playwright-enabled').value === 'true';
+    const lpEnabled = section.querySelector('#browser-lightpanda-enabled').value === 'true';
+    const pwBrowser = section.querySelector('#browser-playwright-browser').value;
+    const pwCaps = section.querySelector('#browser-playwright-caps').value.trim() || 'network,storage';
     const domainsRaw = section.querySelector('#browser-domains').value.trim();
     const domainList = domainsRaw ? domainsRaw.split(',').map(d => d.trim()).filter(Boolean) : [];
-    const maxSessionsVal = parseInt(section.querySelector('#browser-max-sessions').value, 10) || 3;
-    const idleTimeoutVal = (parseInt(section.querySelector('#browser-idle-timeout').value, 10) || 300) * 1000;
     statusEl.textContent = 'Saving...';
     statusEl.style.color = 'var(--text-muted)';
     try {
-      const result = await api.saveBrowserConfig({ enabled: enabledVal, allowedDomains: domainList.length > 0 ? domainList : undefined, maxSessions: maxSessionsVal, sessionIdleTimeoutMs: idleTimeoutVal });
+      const result = await api.saveBrowserConfig({
+        enabled: enabledVal,
+        playwrightEnabled: pwEnabled,
+        lightpandaEnabled: lpEnabled,
+        playwrightBrowser: pwBrowser,
+        playwrightCaps: pwCaps,
+        allowedDomains: domainList.length > 0 ? domainList : undefined,
+      });
       statusEl.textContent = result.message;
       statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
     } catch (err) { statusEl.textContent = err instanceof Error ? err.message : String(err); statusEl.style.color = 'var(--error)'; }
@@ -3805,6 +3821,7 @@ function createGoogleWorkspacePanel() {
         </div>
         <div style="margin-top:0.75rem;">
           <button class="btn btn-primary" id="gws-test-btn">Test Connection</button>
+          <button class="btn btn-secondary" id="gws-reauth-btn">Re-authenticate</button>
           <span id="gws-test-status" style="margin-left:0.5rem;font-size:0.8rem;"></span>
         </div>
       `;
@@ -3847,6 +3864,7 @@ function createGoogleWorkspacePanel() {
         </div>
         <div style="margin-top:0.75rem;">
           <button class="btn btn-primary" id="gws-test-btn">Test Connection</button>
+          <button class="btn btn-secondary" id="gws-reauth-btn">Re-authenticate</button>
           <span id="gws-test-status" style="margin-left:0.5rem;font-size:0.8rem;"></span>
         </div>
       `;
@@ -3895,6 +3913,7 @@ function createGoogleWorkspacePanel() {
         ` : ''}
         <div style="margin-top:0.75rem;">
           <button class="btn btn-secondary" id="gws-test-btn">Test Connection</button>
+          <button class="btn btn-secondary" id="gws-reauth-btn">Re-authenticate</button>
           <span id="gws-test-status" style="margin-left:0.5rem;font-size:0.8rem;"></span>
         </div>
       `;
@@ -3955,6 +3974,34 @@ function createGoogleWorkspacePanel() {
         status.textContent = err.message || 'Test failed.';
         status.style.color = 'var(--error)';
       }
+    });
+
+    // Re-authenticate handler
+    section.querySelector('#gws-reauth-btn')?.addEventListener('click', async () => {
+      const btn = section.querySelector('#gws-reauth-btn');
+      const status = section.querySelector('#gws-test-status');
+      btn.disabled = true;
+      btn.textContent = 'Authenticating...';
+      status.textContent = 'A browser window should open for Google OAuth consent...';
+      status.style.color = 'var(--text-muted)';
+      try {
+        const result = await api.gwsReauth();
+        if (result.success) {
+          status.textContent = 'Authentication successful.';
+          status.style.color = 'var(--success)';
+          // Refresh the panel to show updated state
+          const fresh = await api.gwsStatus();
+          renderStatus(fresh);
+        } else {
+          status.textContent = result.message || 'Authentication failed.';
+          status.style.color = 'var(--warning)';
+        }
+      } catch (err) {
+        status.textContent = err.message || 'Re-authentication failed.';
+        status.style.color = 'var(--error)';
+      }
+      btn.disabled = false;
+      btn.textContent = 'Re-authenticate';
     });
   }
 

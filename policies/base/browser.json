@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "rules": [
+    {
+      "id": "browser-deny-run-code",
+      "family": "tool",
+      "enabled": true,
+      "priority": 50,
+      "description": "Block arbitrary Playwright code execution",
+      "match": {
+        "action": "tool:mcp-playwright-browser_run_code"
+      },
+      "decision": {
+        "kind": "deny",
+        "reason": "Arbitrary Playwright code execution is blocked by policy"
+      }
+    },
+    {
+      "id": "browser-deny-install",
+      "family": "tool",
+      "enabled": true,
+      "priority": 50,
+      "description": "Block browser_install — managed by operator, not by the agent",
+      "match": {
+        "action": "tool:mcp-playwright-browser_install"
+      },
+      "decision": {
+        "kind": "deny",
+        "reason": "Browser installation is managed by the operator"
+      }
+    },
+    {
+      "id": "browser-approve-evaluate-playwright",
+      "family": "tool",
+      "enabled": true,
+      "priority": 80,
+      "description": "Require approval for Playwright JS evaluation",
+      "match": {
+        "action": "tool:mcp-playwright-browser_evaluate"
+      },
+      "decision": {
+        "kind": "require_approval",
+        "reason": "JavaScript evaluation on a web page requires approval"
+      }
+    },
+    {
+      "id": "browser-approve-evaluate-lightpanda",
+      "family": "tool",
+      "enabled": true,
+      "priority": 80,
+      "description": "Require approval for Lightpanda JS evaluation",
+      "match": {
+        "action": "tool:mcp-lightpanda-evaluate"
+      },
+      "decision": {
+        "kind": "require_approval",
+        "reason": "JavaScript evaluation on a web page requires approval"
+      }
+    },
+    {
+      "id": "browser-approve-file-upload",
+      "family": "tool",
+      "enabled": true,
+      "priority": 80,
+      "description": "Require approval for browser file uploads",
+      "match": {
+        "action": "tool:mcp-playwright-browser_file_upload"
+      },
+      "decision": {
+        "kind": "require_approval",
+        "reason": "File upload to a website requires approval"
+      }
+    },
+    {
+      "id": "browser-approve-storage-state",
+      "family": "tool",
+      "enabled": true,
+      "priority": 80,
+      "description": "Require approval for saving/restoring auth state",
+      "match": {
+        "action": {
+          "in": [
+            "tool:mcp-playwright-browser_storage_state",
+            "tool:mcp-playwright-browser_set_storage_state"
+          ]
+        }
+      },
+      "decision": {
+        "kind": "require_approval",
+        "reason": "Saving or restoring browser auth state requires approval"
+      }
+    }
+  ]
+}

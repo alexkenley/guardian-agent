@@ -90,6 +90,20 @@ fi
 # Ensure bundled CLI tools are available
 echo -e "${CYAN}    Checking bundled tools...${RESET}"
 
+# Install Playwright browser if @playwright/mcp is a dependency and Chromium is missing
+if [ -d "node_modules/@playwright/mcp" ]; then
+  if ! npx playwright install --dry-run chromium 2>/dev/null | grep -q "already installed" 2>/dev/null; then
+    echo "  Installing Playwright Chromium browser..."
+    npx playwright install chromium 2>/dev/null || {
+      echo -e "  ${DIM}Playwright Chromium install failed — browser automation may not work.${RESET}"
+      echo -e "  ${DIM}Run manually: npx playwright install chromium${RESET}"
+    }
+    echo -e "  ${GREEN}Playwright Chromium: OK${RESET}"
+  else
+    echo -e "  ${GREEN}Playwright Chromium: OK${RESET}"
+  fi
+fi
+
 if [ "$START_ONLY" = true ]; then
   echo -e "${CYAN}[3/6] Build: SKIPPED (--start-only)${RESET}"
   echo -e "${CYAN}[4/6] Tests: SKIPPED (--start-only)${RESET}"
