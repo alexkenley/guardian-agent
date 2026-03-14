@@ -4,7 +4,13 @@ export interface ScheduledEmailAutomationIntent {
   runOnce: boolean;
 }
 
+export interface ScheduledEmailScheduleIntent {
+  cron: string;
+  runOnce: boolean;
+}
+
 const EMAIL_ADDRESS_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+const SCHEDULE_SIGNAL_PATTERN = /\b(automation|task|schedule|scheduled|remind|reminder|recurring|every day|daily|tomorrow|hourly|every hour|each hour|every one hour|every minute|every \d+ minutes?)\b/i;
 
 export function parseScheduledEmailAutomationIntent(
   content: string,
@@ -13,17 +19,44 @@ export function parseScheduledEmailAutomationIntent(
   const text = content.trim();
   if (!text) return null;
   if (!/\b(send|email|gmail|mail)\b/i.test(text)) return null;
-  if (!/\b(automation|task|schedule|scheduled|remind|reminder|recurring|every day|daily|tomorrow)\b/i.test(text)) return null;
+  if (!SCHEDULE_SIGNAL_PATTERN.test(text)) return null;
 
   const to = extractRecipient(text);
   if (!to) return null;
+
+  const schedule = parseScheduledEmailScheduleIntent(text, now);
+  if (!schedule) return null;
+  return { to, ...schedule };
+}
+
+export function parseScheduledEmailScheduleIntent(
+  content: string,
+  now: Date = new Date(),
+): ScheduledEmailScheduleIntent | null {
+  const text = content.trim();
+  if (!text) return null;
+  if (!SCHEDULE_SIGNAL_PATTERN.test(text)) return null;
+
+  const everyMinutes = extractEveryMinutes(text);
+  if (everyMinutes) {
+    return {
+      cron: everyMinutes === 1 ? '* * * * *' : `*/${everyMinutes} * * * *`,
+      runOnce: false,
+    };
+  }
+
+  if (/\b(hourly|every hour|each hour|every one hour)\b/i.test(text)) {
+    return {
+      cron: '0 * * * *',
+      runOnce: false,
+    };
+  }
 
   const time = extractTime(text);
   if (!time) return null;
 
   if (/\b(every day|daily|recurring|each day)\b/i.test(text)) {
     return {
-      to,
       cron: `${time.minute} ${time.hour} * * *`,
       runOnce: false,
     };
@@ -33,7 +66,6 @@ export function parseScheduledEmailAutomationIntent(
     const target = new Date(now.getTime());
     target.setDate(target.getDate() + 1);
     return {
-      to,
       cron: `${time.minute} ${time.hour} ${target.getDate()} ${target.getMonth() + 1} *`,
       runOnce: true,
     };
@@ -70,6 +102,21 @@ function extractTime(text: string): { hour: number; minute: number } | null {
       return null;
     }
     return { hour, minute };
+  }
+
+  return null;
+}
+
+function extractEveryMinutes(text: string): number | null {
+  const digitMatch = text.match(/\bevery\s+(\d+)\s+minutes?\b/i);
+  if (digitMatch) {
+    const parsed = Number.parseInt(digitMatch[1], 10);
+    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 59) return parsed;
+    return null;
+  }
+
+  if (/\bevery minute\b/i.test(text)) {
+    return 1;
   }
 
   return null;

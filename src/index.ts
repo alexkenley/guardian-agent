@@ -63,7 +63,10 @@ import { AssistantJobTracker } from './runtime/assistant-jobs.js';
 import { NotificationService } from './runtime/notifications.js';
 import { promoteAutomationFindings } from './runtime/automation-output.js';
 import { buildGmailRawMessage, parseDirectGmailWriteIntent } from './runtime/gmail-compose.js';
-import { parseScheduledEmailAutomationIntent } from './runtime/email-automation-intent.js';
+import {
+  parseScheduledEmailAutomationIntent,
+  parseScheduledEmailScheduleIntent,
+} from './runtime/email-automation-intent.js';
 import { parseDirectFileSearchIntent } from './runtime/search-intent.js';
 import { ToolExecutor } from './tools/executor.js';
 import type { ToolExecutorOptions } from './tools/executor.js';
@@ -1740,6 +1743,21 @@ class ChatAgent extends BaseAgent {
   ): Promise<string | null> {
     if (!this.tools?.isEnabled() || !this.conversationService) return null;
 
+    const directScheduledIntent = parseScheduledEmailAutomationIntent(message.content);
+    const directScheduleOnlyIntent = parseScheduledEmailScheduleIntent(message.content);
+    const directDetailIntent = parseDirectGmailWriteIntent(message.content);
+    if (directScheduledIntent && directDetailIntent && directDetailIntent.subject && directDetailIntent.body) {
+      return this.createDirectScheduledEmailAutomation(
+        {
+          schedule: directScheduledIntent,
+          detail: directDetailIntent,
+          message,
+          ctx,
+          userKey,
+        },
+      );
+    }
+
     const history = this.conversationService.getHistoryForContext({
       agentId: stateAgentId,
       userId: message.userId,
@@ -1747,16 +1765,37 @@ class ChatAgent extends BaseAgent {
     });
     if (history.length === 0) return null;
 
-    const detailIntent = parseDirectGmailWriteIntent(message.content);
-    if (!detailIntent || (!detailIntent.subject && !detailIntent.body)) return null;
-
-    const priorUserRequest = [...history]
-      .reverse()
-      .find((entry) => entry.role === 'user' && parseScheduledEmailAutomationIntent(entry.content));
-    if (!priorUserRequest) return null;
-
-    const scheduledIntent = parseScheduledEmailAutomationIntent(priorUserRequest.content);
-    if (!scheduledIntent) return null;
+    const recentHistory = [...history].reverse();
+    const priorDetailedContext = recentHistory.find((entry) => {
+      const detail = parseDirectGmailWriteIntent(entry.content);
+      return Boolean(detail?.subject && detail.body);
+    });
+    const priorScheduleContext = recentHistory.find((entry) => (
+      parseScheduledEmailAutomationIntent(entry.content)
+      || parseScheduledEmailScheduleIntent(entry.content)
+    ));
+    const detailIntent = (directDetailIntent && (directDetailIntent.subject || directDetailIntent.body || directDetailIntent.to))
+      ? directDetailIntent
+      : priorDetailedContext
+        ? parseDirectGmailWriteIntent(priorDetailedContext.content)
+        : null;
+    const scheduledIntent = directScheduledIntent
+      ?? (directScheduleOnlyIntent && detailIntent?.to
+        ? { to: detailIntent.to, ...directScheduleOnlyIntent }
+        : null)
+      ?? (priorScheduleContext
+        ? parseScheduledEmailAutomationIntent(priorScheduleContext.content)
+          ?? (detailIntent?.to
+            ? { to: detailIntent.to, ...parseScheduledEmailScheduleIntent(priorScheduleContext.content)! }
+            : null)
+        : null);
+    const shouldTreatAsFollowUp = Boolean(
+      directScheduleOnlyIntent
+      || (directDetailIntent && (directDetailIntent.subject || directDetailIntent.body))
+      || isAffirmativeContinuation(message.content),
+    );
+    if (!shouldTreatAsFollowUp) return null;
+    if (!scheduledIntent || !detailIntent) return null;
 
     const subject = detailIntent.subject?.trim();
     const body = detailIntent.body?.trim();
@@ -1769,27 +1808,46 @@ class ChatAgent extends BaseAgent {
       return 'To schedule that email automation, I still need the recipient email address.';
     }
 
+    return this.createDirectScheduledEmailAutomation({
+      schedule: { ...scheduledIntent, to },
+      detail: { ...detailIntent, to, subject, body },
+      message,
+      ctx,
+      userKey,
+    });
+  }
+
+  private async createDirectScheduledEmailAutomation(input: {
+    schedule: { to: string; cron: string; runOnce: boolean };
+    detail: { to?: string; subject?: string; body?: string };
+    message: UserMessage;
+    ctx: AgentContext;
+    userKey: string;
+  }): Promise<string> {
+    const to = input.detail.to?.trim() || input.schedule.to;
+    const subject = input.detail.subject?.trim() || '';
+    const body = normalizeScheduledEmailBody(input.detail.body, subject);
     const raw = buildGmailRawMessage({ to, subject, body });
-    const taskName = scheduledIntent.runOnce
+    const taskName = input.schedule.runOnce
       ? `Scheduled Email to ${to}`
-      : `Daily Email to ${to}`;
+      : `Recurring Email to ${to}`;
     const toolRequest = {
       origin: 'assistant' as const,
       agentId: this.id,
-      userId: message.userId,
-      channel: message.channel,
-      requestId: message.id,
-      agentContext: { checkAction: ctx.checkAction },
+      userId: input.message.userId,
+      channel: input.message.channel,
+      requestId: input.message.id,
+      agentContext: { checkAction: input.ctx.checkAction },
     };
 
-    const toolResult = await this.tools.executeModelTool(
+    const toolResult = await this.tools!.executeModelTool(
       'task_create',
       {
         name: taskName,
         type: 'tool',
         target: 'gws',
-        cron: scheduledIntent.cron,
-        runOnce: scheduledIntent.runOnce,
+        cron: input.schedule.cron,
+        runOnce: input.schedule.runOnce,
         enabled: true,
         args: {
           service: 'gmail',
@@ -1806,11 +1864,11 @@ class ChatAgent extends BaseAgent {
       const status = toString(toolResult.status);
       if (status === 'pending_approval') {
         const approvalId = toString(toolResult.approvalId);
-        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
+        const existingIds = this.getPendingApprovals(input.userKey)?.ids ?? [];
         if (approvalId) {
-          this.setPendingApprovals(userKey, [...existingIds, approvalId]);
+          this.setPendingApprovals(input.userKey, [...existingIds, approvalId]);
           this.setApprovalFollowUp(approvalId, {
-            approved: scheduledIntent.runOnce
+            approved: input.schedule.runOnce
               ? `I created the one-shot email task to ${to}.`
               : `I created the recurring email task to ${to}.`,
             denied: 'I did not create the scheduled email task.',
@@ -1818,7 +1876,7 @@ class ChatAgent extends BaseAgent {
         }
         const prompt = this.formatPendingApprovalPrompt(approvalId ? [approvalId] : []);
         return [
-          `I prepared a ${scheduledIntent.runOnce ? 'one-shot' : 'recurring'} email task to ${to}${scheduledIntent.runOnce ? '' : ' with a daily schedule'}.`,
+          `I prepared a ${input.schedule.runOnce ? 'one-shot' : 'recurring'} email task to ${to}.`,
           prompt,
         ].filter(Boolean).join('\n\n');
       }
@@ -1826,9 +1884,9 @@ class ChatAgent extends BaseAgent {
       return `I tried to create the scheduled email task, but it failed: ${msg}`;
     }
 
-    return scheduledIntent.runOnce
+    return input.schedule.runOnce
       ? `I created a one-shot email task to ${to}. It will run on the next scheduled time.`
-      : `I created a recurring daily email task to ${to}.`;
+      : `I created a recurring email task to ${to}.`;
   }
 
   private async tryDirectGoogleWorkspaceRead(
@@ -2065,6 +2123,18 @@ class ChatAgent extends BaseAgent {
 
 function toString(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+function normalizeScheduledEmailBody(body: string | undefined, subject: string): string {
+  const trimmed = (body ?? '').trim();
+  if (!trimmed) return subject;
+  if (/^the same as the subject\.?$/i.test(trimmed)) return subject;
+  if (/^same as the subject\.?$/i.test(trimmed)) return subject;
+  return trimmed;
+}
+
+function isAffirmativeContinuation(content: string): boolean {
+  return /^(?:ok|okay|yes|yep|yeah|sure|please do|go ahead|do it|create it|make it so|proceed)\b/i.test(content.trim());
 }
 
 function summarizeToolRoundFallback(results: Array<{ toolName: string; result: Record<string, unknown> }>): string {
