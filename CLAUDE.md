@@ -87,7 +87,7 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 - **IdentityService** — cross-channel user mapping (`single_user` / `channel_user`)
 - **AnalyticsService** — SQLite-backed usage analytics
 - **ThreatIntelService** — watchlist scanning, findings triage
-- **ConnectorPlaybookService** — declarative connector packs + playbook execution
+- **ConnectorPlaybookService** — declarative connector packs + playbook execution; supports both tool steps and LLM instruction steps (instruction steps invoke the LLM with prior step outputs as context)
 - **AssistantOrchestrator** — routes messages, orchestrates tool calls, manages assistant behavior
 - **MessageRouter** — intent classification and route decisions
 - **ScheduledTaskService** — unified CRUD scheduling for tools/playbooks, persisted to JSON, preset templates, EventBus integration
@@ -98,6 +98,12 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 - **MCPClient** — JSON-RPC 2.0 over stdio to external MCP tool servers
 - **MCPClientManager** — multi-server with tool name namespacing (`mcp-<serverId>-<toolName>`)
 - MCP tool risk is inferred from tool metadata (`read_only`, `mutating`, `external_post`) with optional per-server trust overrides and rate limits
+
+### Google Workspace (`src/google/`)
+- **Native mode (default):** `GoogleAuth` (OAuth 2.0 PKCE, encrypted token storage) + `GoogleService` (direct googleapis SDK calls). Config: `assistant.tools.google` (enabled, mode: `native`, services, oauthCallbackPort, credentialsPath). 3-step setup.
+- **CLI mode (legacy):** `GWSService` (`src/runtime/gws-service.ts`) — subprocess wrapper for the `gws` CLI. Config: `assistant.tools.mcp.managedProviders.gws`.
+- Both backends share the same `gws` / `gws_schema` tool names. ToolExecutor routes to native first, CLI fallback.
+- Spec: `docs/specs/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-SPEC.md`
 
 ### Browser Automation (MCP-based)
 - **Playwright MCP** (`@playwright/mcp`) — managed MCP server providing 55+ browser automation tools via real Chromium/Firefox/WebKit. Registered as `mcp-playwright-*` tools. Config: `assistant.tools.browser.playwrightEnabled` (default: true), `playwrightBrowser`, `playwrightCaps`

@@ -1,0 +1,14 @@
+{
+  "id": "verification-before-completion",
+  "name": "Verification Before Completion",
+  "version": "0.1.0",
+  "description": "Use when about to claim work is complete, fixed, or passing, or before committing or handing off results.",
+  "role": "process",
+  "tags": ["verification", "completion", "testing", "handoff"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "risk": "informational"
+}

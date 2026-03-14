@@ -95,6 +95,7 @@ export interface ConnectorPlaybookRunInput {
   userId?: string;
   channel?: string;
   requestedBy?: string;
+  bypassApprovals?: boolean;
 }
 
 export interface ConnectorPlaybookRunResult {
@@ -477,6 +478,7 @@ export class ConnectorPlaybookService {
           userId: input.userId,
           channel: input.channel,
           dryRun: !!input.dryRun,
+          bypassApprovals: input.bypassApprovals === true,
         }),
         timeoutMs,
       );

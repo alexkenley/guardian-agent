@@ -130,6 +130,7 @@ const sseListeners = {
   metrics: [],
   watchdog: [],
   'security.alert': [],
+  'assistant.notice': [],
   'chat.thinking': [],
   'chat.tool_call': [],
   'chat.token': [],
@@ -213,6 +214,16 @@ function pushSecurityAlert(notification) {
   }, 15000);
 
   tray.classList.add('has-items');
+}
+
+function pushAssistantNotice(payload) {
+  pushSecurityAlert({
+    severity: 'info',
+    title: 'Assistant report',
+    sourceEventType: 'assistant.notice',
+    agentId: 'assistant',
+    description: payload?.text || 'No additional detail provided.',
+  });
 }
 
 // ─── Router ──────────────────────────────────────────────
@@ -369,6 +380,9 @@ function startApp() {
   });
   onSSE('security.alert', (payload) => {
     pushSecurityAlert(payload);
+  });
+  onSSE('assistant.notice', (payload) => {
+    pushAssistantNotice(payload);
   });
   startClock();
   initChatPanel(chatPanel);

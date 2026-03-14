@@ -1,18 +1,26 @@
-# Google Workspace Integration Specification
+# Google Workspace Integration Specification (CLI Mode)
 
-**Status:** Implemented
+**Status:** Implemented (legacy — see native mode below)
 **Depends on:** Native Skills, ToolExecutor policy model, Guardian capabilities
 **Primary External Runtime:** Google Workspace CLI (`gws`) via subprocess execution
+
+> **Native mode is now the default.** This spec covers the CLI-based backend (`mode: gws_cli`).
+> For the recommended native integration using the googleapis SDK directly, see
+> [`NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-SPEC.md`](./NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-SPEC.md).
+>
+> Both backends share the same `gws` tool name, Guardian policy pipeline, and native skills.
+> Switching between modes is transparent to the LLM, automations, and users.
+> Configure via `assistant.tools.google.mode` (`native` or `gws_cli`).
 
 ---
 
 ## Overview
 
-GuardianAgent integrates with Google Workspace (Gmail, Calendar, Drive, Docs, Sheets) through the **Google Workspace CLI** (`@googleworkspace/cli`) running as a subprocess.
+GuardianAgent integrates with Google Workspace (Gmail, Calendar, Drive, Docs, Sheets) through the **Google Workspace CLI** (`@googleworkspace/cli`) running as a subprocess. This is the **CLI mode** backend.
 
 The architecture:
 
-- `GWSService` executes the `gws` CLI directly via `child_process.execFile` for each tool call
+- `GWSService` (`src/runtime/gws-service.ts`) executes the `gws` CLI directly via `child_process.execFile` for each tool call
 - Native GuardianAgent skills provide procedural guidance for Gmail, Calendar, Drive, Docs, and Sheets
 - GuardianAgent remains the policy, approval, and audit boundary
 
@@ -316,17 +324,20 @@ Native skills accompany the managed provider.
 
 Implemented:
 
-- `google-gmail-assistant`
-- `google-calendar-assistant`
-- `google-drive-assistant`
-- `google-docs-sheets-assistant`
+- `google-workspace`
 
-Each skill:
+The Google Workspace skill follows the OpenCLAW pattern:
+
+- the system prompt exposes the skill's name, description, and `SKILL.md` location
+- the model is instructed to read the single relevant `SKILL.md` before acting
+- the skill then routes the model to only the needed reference file for Gmail, Calendar, or Drive/Docs/Sheets work
+
+The skill:
 
 - explains safe usage patterns
-- points to the relevant MCP tools
+- points to the relevant native Google tools
 - clarifies approval expectations
-- guides drafting before sending or mutating
+- reinforces that authentication is automatic and raw OAuth tokens should not be requested
 
 Skills are auto-exposed when `exposeSkills: true` (default) and the GWS provider is enabled. They report readiness through the skills CLI/API surfaces based on whether the required managed provider is active.
 

@@ -1,0 +1,18 @@
+{
+  "id": "web-research",
+  "name": "Web Research",
+  "version": "0.1.0",
+  "description": "Use when looking up current information on the public web, comparing sources, reading public pages, or extracting details from articles and documentation.",
+  "role": "domain",
+  "tags": ["web", "research", "search", "articles", "documentation", "compare sources"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["search the web", "look up", "current information", "latest information", "read this article", "compare sources", "web page", "documentation online"]
+  },
+  "tools": ["web_search", "web_fetch"],
+  "risk": "informational"
+}

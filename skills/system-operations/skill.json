@@ -1,0 +1,18 @@
+{
+  "id": "system-operations",
+  "name": "System Operations",
+  "version": "0.1.0",
+  "description": "Use when diagnosing local machine health, services, processes, resource pressure, host monitor posture, or gateway firewall state.",
+  "role": "domain",
+  "tags": ["system", "host", "processes", "services", "cpu", "memory", "disk", "firewall", "monitoring"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["cpu", "memory usage", "disk space", "service status", "processes", "machine is slow", "system health", "host monitor", "firewall status", "gateway firewall"]
+  },
+  "tools": ["sys_info", "sys_resources", "sys_processes", "sys_services", "host_monitor_status", "host_monitor_check", "gateway_firewall_status", "gateway_firewall_check"],
+  "risk": "informational"
+}

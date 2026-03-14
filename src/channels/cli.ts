@@ -2061,7 +2061,7 @@ export class CLIChannel implements ChannelAdapter {
       this.write('\n');
       this.write('Notes:\n');
       this.write('  - /campaign run is approval-gated before any email is sent.\n');
-      this.write('  - Provide Gmail OAuth token via tool args or GOOGLE_OAUTH_ACCESS_TOKEN env var.\n\n');
+      this.write('  - Gmail send uses the configured Google Workspace connection; connect it in Settings if needed.\n\n');
       return;
     }
 

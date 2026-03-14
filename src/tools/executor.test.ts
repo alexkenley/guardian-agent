@@ -75,6 +75,7 @@ describe('ToolExecutor', () => {
     expect(names).toContain('chrome_job');
     expect(names).toContain('campaign_create');
     expect(names).toContain('campaign_run');
+    expect(names).toContain('gmail_draft');
     expect(names).toContain('gmail_send');
   });
 
@@ -96,6 +97,32 @@ describe('ToolExecutor', () => {
 
     const alwaysLoaded = executor.listAlwaysLoadedDefinitions().map((tool) => tool.name);
     expect(alwaysLoaded).toContain('update_tool_policy');
+  });
+
+  it('surfaces Google Workspace tools in the initial model tool list when Google is configured', () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      googleService: {
+        execute: async () => ({ success: true, data: {} }),
+        schema: async () => ({ success: true, data: {} }),
+        sendGmailMessage: async () => ({ success: true, data: { messageId: 'mock-msg-id' } }),
+        isServiceEnabled: () => true,
+        getEnabledServices: () => ['gmail', 'calendar'],
+        isAuthenticated: () => true,
+        getAccessToken: async () => 'mock-token',
+      } as any,
+    });
+
+    const alwaysLoaded = executor.listAlwaysLoadedDefinitions().map((tool) => tool.name);
+    expect(alwaysLoaded).toContain('gws');
+    expect(alwaysLoaded).toContain('gws_schema');
+    expect(alwaysLoaded).toContain('gmail_draft');
   });
 
   it('includes configured cloud profiles and tool discovery guidance in tool context', () => {
@@ -146,6 +173,47 @@ describe('ToolExecutor', () => {
     expect(context).toContain('defaultCpanelUser=socialuser');
     expect(context).toContain('- web-prod: provider=vercel');
     expect(context).toContain('suggestedReadOnlyTest=vercel_status');
+  });
+
+  it('includes Google auth guidance in tool context when Google Workspace is configured', () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      googleService: {
+        execute: async () => ({ success: true, data: {} }),
+        schema: async () => ({ success: true, data: {} }),
+        sendGmailMessage: async () => ({ success: true, data: { messageId: 'mock-msg-id' } }),
+        isServiceEnabled: () => true,
+        getEnabledServices: () => ['gmail', 'calendar'],
+        isAuthenticated: () => true,
+        getAccessToken: async () => 'mock-token',
+      } as any,
+    });
+
+    const context = executor.getToolContext();
+    expect(context).toContain('Google Workspace: connected');
+    expect(context).toContain('Google Workspace services: gmail, calendar');
+    expect(context).toContain('Do not ask the user for OAuth access tokens.');
+  });
+
+  it('ranks gmail_draft above gmail_send for gmail draft discovery', () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const names = executor.searchTools('gmail draft', 5).map((tool) => tool.name);
+    expect(names[0]).toBe('gmail_draft');
   });
 
   it('returns cPanel account summaries through a configured profile', async () => {
@@ -2028,6 +2096,19 @@ describe('ToolExecutor', () => {
     ]);
   });
 
+  function mockGoogleService(overrides?: any): any {
+    return {
+      execute: async () => ({ success: true, data: {} }),
+      schema: async () => ({ success: true, data: {} }),
+      sendGmailMessage: async () => ({ success: true, data: { messageId: 'mock-msg-id' } }),
+      isServiceEnabled: (svc: string) => ['gmail', 'calendar', 'drive', 'docs', 'sheets', 'tasks'].includes(svc),
+      getEnabledServices: () => ['gmail', 'calendar', 'drive', 'docs', 'sheets', 'tasks'],
+      isAuthenticated: () => true,
+      getAccessToken: async () => 'mock-token',
+      ...overrides,
+    };
+  }
+
   it('hot-applies Google Workspace service availability without rebuilding the executor', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
@@ -2047,13 +2128,9 @@ describe('ToolExecutor', () => {
     expect(beforeEnable.success).toBe(false);
     expect(beforeEnable.message).toContain('Google Workspace is not enabled');
 
-    executor.setGwsService({
+    executor.setGoogleService(mockGoogleService({
       execute: async () => ({ success: true, data: { messages: [] } }),
-      schema: async () => ({ success: true, data: {} }),
-      authStatus: async () => ({ success: true, data: {} }),
-      isServiceEnabled: () => true,
-      getEnabledServices: () => ['gmail'],
-    } as unknown as import('../runtime/gws-service.js').GWSService);
+    }));
 
     const afterEnable = await executor.runTool({
       toolName: 'gws',
@@ -2063,7 +2140,7 @@ describe('ToolExecutor', () => {
     expect(afterEnable.success).toBe(true);
     expect(afterEnable.output).toEqual({ messages: [] });
 
-    executor.setGwsService(undefined);
+    executor.setGoogleService(undefined);
 
     const afterDisable = await executor.runTool({
       toolName: 'gws',
@@ -2083,13 +2160,9 @@ describe('ToolExecutor', () => {
       allowedPaths: [root],
       allowedCommands: ['echo'],
       allowedDomains: ['localhost'],
-      gwsService: {
+      googleService: mockGoogleService({
         execute: async () => ({ success: true, data: { id: 'draft-1' } }),
-        schema: async () => ({ success: true, data: {} }),
-        authStatus: async () => ({ success: true, data: {} }),
-        isServiceEnabled: () => true,
-        getEnabledServices: () => ['gmail'],
-      } as unknown as import('../runtime/gws-service.js').GWSService,
+      }),
     });
 
     const run = await executor.runTool({
@@ -2109,6 +2182,35 @@ describe('ToolExecutor', () => {
     expect(run.approvalId).toBeDefined();
   });
 
+  it('requires approval for gmail_draft in approve_by_policy mode', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      googleService: mockGoogleService({
+        execute: async () => ({ success: true, data: { id: 'draft-1' } }),
+      }),
+    });
+
+    const run = await executor.runTool({
+      toolName: 'gmail_draft',
+      args: {
+        to: 'alexanderkenley@gmail.com',
+        subject: 'Test Seven',
+        body: 'testicles',
+      },
+      origin: 'cli',
+    });
+
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('pending_approval');
+    expect(run.approvalId).toBeDefined();
+  });
+
   it('allows Gmail reads via gws without approval in approve_by_policy mode', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
@@ -2118,13 +2220,9 @@ describe('ToolExecutor', () => {
       allowedPaths: [root],
       allowedCommands: ['echo'],
       allowedDomains: ['localhost'],
-      gwsService: {
+      googleService: mockGoogleService({
         execute: async () => ({ success: true, data: { messages: [] } }),
-        schema: async () => ({ success: true, data: {} }),
-        authStatus: async () => ({ success: true, data: {} }),
-        isServiceEnabled: () => true,
-        getEnabledServices: () => ['gmail'],
-      } as unknown as import('../runtime/gws-service.js').GWSService,
+      }),
     });
 
     const run = await executor.runTool({
@@ -2152,13 +2250,9 @@ describe('ToolExecutor', () => {
       allowedPaths: [root],
       allowedCommands: ['echo'],
       allowedDomains: ['localhost'],
-      gwsService: {
+      googleService: mockGoogleService({
         execute: async () => ({ success: true, data: { id: 'event-1' } }),
-        schema: async () => ({ success: true, data: {} }),
-        authStatus: async () => ({ success: true, data: {} }),
-        isServiceEnabled: () => true,
-        getEnabledServices: () => ['gmail', 'calendar', 'drive', 'docs', 'sheets'],
-      } as unknown as import('../runtime/gws-service.js').GWSService,
+      }),
     });
 
     const run = await executor.runTool({
@@ -2187,13 +2281,9 @@ describe('ToolExecutor', () => {
       allowedPaths: [root],
       allowedCommands: ['echo'],
       allowedDomains: ['localhost'],
-      gwsService: {
+      googleService: mockGoogleService({
         execute: async () => ({ success: true, data: { items: [] } }),
-        schema: async () => ({ success: true, data: {} }),
-        authStatus: async () => ({ success: true, data: {} }),
-        isServiceEnabled: () => true,
-        getEnabledServices: () => ['gmail', 'calendar', 'drive', 'docs', 'sheets'],
-      } as unknown as import('../runtime/gws-service.js').GWSService,
+      }),
     });
 
     const run = await executor.runTool({
@@ -2220,13 +2310,9 @@ describe('ToolExecutor', () => {
       allowedPaths: [root],
       allowedCommands: ['echo'],
       allowedDomains: ['localhost'],
-      gwsService: {
+      googleService: mockGoogleService({
         execute: async () => ({ success: true, data: { id: 'file-1' } }),
-        schema: async () => ({ success: true, data: {} }),
-        authStatus: async () => ({ success: true, data: {} }),
-        isServiceEnabled: () => true,
-        getEnabledServices: () => ['gmail', 'calendar', 'drive', 'docs', 'sheets'],
-      } as unknown as import('../runtime/gws-service.js').GWSService,
+      }),
     });
 
     const run = await executor.runTool({
@@ -2254,13 +2340,9 @@ describe('ToolExecutor', () => {
       allowedPaths: [root],
       allowedCommands: ['echo'],
       allowedDomains: ['localhost'],
-      gwsService: {
+      googleService: mockGoogleService({
         execute: async () => ({ success: true, data: { files: [] } }),
-        schema: async () => ({ success: true, data: {} }),
-        authStatus: async () => ({ success: true, data: {} }),
-        isServiceEnabled: () => true,
-        getEnabledServices: () => ['gmail', 'calendar', 'drive', 'docs', 'sheets'],
-      } as unknown as import('../runtime/gws-service.js').GWSService,
+      }),
     });
 
     const run = await executor.runTool({
@@ -2287,13 +2369,9 @@ describe('ToolExecutor', () => {
       allowedPaths: [root],
       allowedCommands: ['echo'],
       allowedDomains: ['localhost'],
-      gwsService: {
+      googleService: mockGoogleService({
         execute: async () => ({ success: true, data: { documentId: 'doc-1' } }),
-        schema: async () => ({ success: true, data: {} }),
-        authStatus: async () => ({ success: true, data: {} }),
-        isServiceEnabled: () => true,
-        getEnabledServices: () => ['gmail', 'calendar', 'drive', 'docs', 'sheets'],
-      } as unknown as import('../runtime/gws-service.js').GWSService,
+      }),
     });
 
     const run = await executor.runTool({
@@ -2321,13 +2399,9 @@ describe('ToolExecutor', () => {
       allowedPaths: [root],
       allowedCommands: ['echo'],
       allowedDomains: ['localhost'],
-      gwsService: {
+      googleService: mockGoogleService({
         execute: async () => ({ success: true, data: {} }),
-        schema: async () => ({ success: true, data: {} }),
-        authStatus: async () => ({ success: true, data: {} }),
-        isServiceEnabled: () => true,
-        getEnabledServices: () => ['gmail', 'calendar', 'drive', 'docs', 'sheets'],
-      } as unknown as import('../runtime/gws-service.js').GWSService,
+      }),
     });
 
     const run = await executor.runTool({
@@ -2355,13 +2429,9 @@ describe('ToolExecutor', () => {
       allowedPaths: [root],
       allowedCommands: ['echo'],
       allowedDomains: ['localhost'],
-      gwsService: {
+      googleService: mockGoogleService({
         execute: async () => ({ success: true, data: { id: 'event-2' } }),
-        schema: async () => ({ success: true, data: {} }),
-        authStatus: async () => ({ success: true, data: {} }),
-        isServiceEnabled: () => true,
-        getEnabledServices: () => ['gmail', 'calendar', 'drive', 'docs', 'sheets'],
-      } as unknown as import('../runtime/gws-service.js').GWSService,
+      }),
     });
 
     const run = await executor.runTool({
@@ -2389,13 +2459,9 @@ describe('ToolExecutor', () => {
       allowedPaths: [root],
       allowedCommands: ['echo'],
       allowedDomains: ['localhost'],
-      gwsService: {
+      googleService: mockGoogleService({
         execute: async () => ({ success: true, data: {} }),
-        schema: async () => ({ success: true, data: {} }),
-        authStatus: async () => ({ success: true, data: {} }),
-        isServiceEnabled: () => true,
-        getEnabledServices: () => ['gmail', 'calendar', 'drive', 'docs', 'sheets', 'tasks'],
-      } as unknown as import('../runtime/gws-service.js').GWSService,
+      }),
     });
 
     const run = await executor.runTool({
@@ -2583,6 +2649,75 @@ describe('ToolExecutor', () => {
     const approvals = executor.listApprovals(1);
     expect(approvals[0].argsHash).toBe(jobs[0].argsHash);
     expect(String(approvals[0].args.access_token)).toBe('[REDACTED]');
+  });
+
+  it('executes approval-gated tools directly when bypassApprovals is set by trusted runtime code', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const run = await executor.runTool({
+      toolName: 'fs_write',
+      args: { path: 'note.txt', content: 'hello from scheduler' },
+      origin: 'web',
+      bypassApprovals: true,
+    });
+
+    expect(run.success).toBe(true);
+    expect(run.status).toBe('succeeded');
+    expect(executor.listApprovals(10, 'pending')).toHaveLength(0);
+    await expect(readFile(join(root, 'note.txt'), 'utf-8')).resolves.toBe('hello from scheduler');
+  });
+
+  it('summarizes one-shot Gmail scheduled tasks without exposing raw RFC822 payloads', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['gmail.googleapis.com'],
+    });
+
+    const raw = Buffer.from(
+      'To: alexanderkenley@gmail.com\r\nSubject: Test 100\r\n\r\nTest 100',
+      'utf-8',
+    ).toString('base64url');
+
+    const run = await executor.runTool({
+      toolName: 'task_create',
+      args: {
+        name: 'Send Email to Alexander Kenley',
+        type: 'tool',
+        target: 'gws',
+        cron: '3 22 * * *',
+        runOnce: true,
+        args: {
+          service: 'gmail',
+          resource: 'users messages',
+          method: 'send',
+          params: { userId: 'me' },
+          json: { raw },
+        },
+      },
+      origin: 'cli',
+    });
+
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('pending_approval');
+
+    const job = executor.listJobs(1)[0];
+    expect(job.argsPreview).toContain('one-shot');
+    expect(job.argsPreview).toContain('alexanderkenley@gmail.com');
+    expect(job.argsPreview).toContain('Test 100');
+    expect(job.argsPreview).not.toContain(raw);
   });
 
   it('lists pending approval IDs scoped to user/channel with optional unscoped fallback', async () => {
@@ -2819,6 +2954,7 @@ describe('ToolExecutor', () => {
         allowedPaths: [root],
         allowedCommands: ['echo'],
         allowedDomains: ['gmail.googleapis.com'],
+        googleService: mockGoogleService(),
       });
 
       const imported = await executor.runTool({

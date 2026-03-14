@@ -3706,306 +3706,232 @@ function createGoogleWorkspacePanel() {
   const section = document.createElement('div');
   section.className = 'table-container';
 
-  const codeStyle = 'display:block;background:var(--bg-tertiary);padding:0.5rem 0.75rem;border-radius:4px;font-size:0.8rem;user-select:all;';
   const inlineCode = 'background:var(--bg-tertiary);padding:0.1rem 0.3rem;border-radius:3px;';
-  const stepLabel = 'font-size:0.72rem;color:var(--text-muted);margin-bottom:0.25rem;';
 
   section.innerHTML = `
     <div class="table-header">
       <h3>Google Workspace</h3>
-      <span class="cfg-header-note">Gmail, Calendar, Drive, Docs, Sheets</span>
+      <span class="cfg-header-note">Gmail, Calendar, Drive, Docs, Sheets, Contacts</span>
     </div>
     <div class="cfg-center-body" id="gws-settings-body">
       <div style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem;">
-        Google Workspace integration provides access to Gmail, Calendar, Drive, Docs, and Sheets through the assistant
-        via the <a href="https://www.npmjs.com/package/@googleworkspace/cli" target="_blank" rel="noopener" style="color:var(--accent);">@googleworkspace/cli</a> command-line tool.
+        Google Workspace integration provides direct API access to Gmail, Calendar, Drive, Docs, Sheets, and Contacts.
+        The native integration uses direct API calls with OAuth 2.0 PKCE and encrypted token storage.
       </div>
-      <div id="gws-status-area">
-        <div class="loading" style="font-size:0.8rem;">Checking connectivity...</div>
-      </div>
-    </div>
-  `;
 
-  function renderStatus(gwsStatus) {
-    const area = section.querySelector('#gws-status-area');
-    if (!area) return;
-
-    if (!gwsStatus || !gwsStatus.installed) {
-      area.innerHTML = `
+      <div id="gws-native-section">
         <div style="padding:0.75rem;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);font-size:0.8rem;">
-          <strong style="color:var(--text-primary);">Setup Guide</strong>
-          <p style="margin:0.5rem 0;color:var(--text-secondary);">
-            The Google Workspace CLI needs to be installed and authenticated before use.
-          </p>
-          <div style="margin-bottom:0.6rem;">
-            <div style="${stepLabel}">Step 1 — Install the CLI globally</div>
-            <code style="${codeStyle}">npm install -g @googleworkspace/cli</code>
-          </div>
-          <div style="margin-bottom:0.6rem;">
-            <div style="${stepLabel}">Step 2 — Configure OAuth credentials</div>
-            <p style="font-size:0.8rem;color:var(--text-secondary);margin:0.25rem 0 0.4rem;">
-              You need a Google Cloud project with OAuth 2.0 credentials. Choose one method:
-            </p>
-            <div style="padding:0.5rem 0.6rem;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:0.5rem;">
-              <strong style="font-size:0.78rem;">Option A — Automatic (requires Google Cloud CLI)</strong>
-              <p style="font-size:0.78rem;color:var(--text-secondary);margin:0.25rem 0;">
-                1. Install the <a href="https://docs.cloud.google.com/sdk/docs/install-sdk" target="_blank" rel="noopener" style="color:var(--accent);">Google Cloud CLI (gcloud)</a><br>
-                2. Run <code style="${inlineCode}">gcloud auth login</code> to authenticate<br>
-                3. Run <code style="${inlineCode}">gws auth setup</code> to auto-create OAuth credentials
-              </p>
-            </div>
-            <div style="padding:0.5rem 0.6rem;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);">
-              <strong style="font-size:0.78rem;">Option B — Manual setup via Google Cloud Console</strong>
-              <ol style="font-size:0.78rem;color:var(--text-secondary);margin:0.25rem 0;padding-left:1.2rem;">
-                <li style="margin-bottom:0.3rem;">
-                  Go to the <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener" style="color:var(--accent);">Google Cloud Console</a>.
-                  Create a new project if you don't have one (top-left project selector &gt; <strong>New Project</strong>).
-                </li>
-                <li style="margin-bottom:0.3rem;">
-                  In the left sidebar, go to <strong>Google Auth Platform &gt; Audience</strong>.
-                  Set user type to <strong>External</strong>, fill in the app name (e.g. "Guardian Agent") and your email address, then save.
-                </li>
-                <li style="margin-bottom:0.3rem;">
-                  <strong style="color:var(--warning);">Important:</strong> On the Audience page, under <strong>Publishing status</strong>, click <strong>Publish App</strong>.
-                  Without this, only manually-added test users can authenticate and you'll get an "access_denied" error.
-                  This is safe — the OAuth credentials are only usable on your machine.
-                </li>
-                <li style="margin-bottom:0.3rem;">
-                  In the left sidebar, go to <strong>Credentials</strong>. Click <strong>+ Create Credentials</strong> &gt; <strong>OAuth client ID</strong>.
-                </li>
-                <li style="margin-bottom:0.3rem;">
-                  Set <strong>Application type</strong> to <strong style="color:var(--text-primary);">Desktop app</strong>
-                  <span style="color:var(--warning);"> (not "Web application")</span>.
-                  You do not need to fill in redirect URIs or JavaScript origins.
-                </li>
-                <li style="margin-bottom:0.3rem;">
-                  Give it any name (e.g. "Guardian Agent Desktop") and click <strong>Create</strong>.
-                </li>
-                <li style="margin-bottom:0.3rem;">
-                  On the confirmation dialog, click <strong>Download JSON</strong>.
-                </li>
-                <li style="margin-bottom:0.3rem;">
-                  Save the downloaded file as:<br>
-                  <code style="${codeStyle}">${navigator.platform?.startsWith('Win') ? '%USERPROFILE%\\.config\\gws\\client_secret.json' : '~/.config/gws/client_secret.json'}</code>
-                  <span style="font-size:0.72rem;color:var(--text-muted);">Create the <code style="${inlineCode}">.config${navigator.platform?.startsWith('Win') ? '\\\\' : '/'}gws</code> folder if it doesn't exist.</span>
-                </li>
-              </ol>
-            </div>
-          </div>
-          <div style="margin-bottom:0.6rem;">
-            <div style="${stepLabel}">Step 3 — Enable Google APIs</div>
-            <p style="font-size:0.78rem;color:var(--text-secondary);margin:0.25rem 0;">
-              In Cloud Console, go to <strong>APIs &amp; Services &gt; Library</strong>. Enable the APIs you want to use:
-              <strong>Gmail API</strong>, <strong>Google Calendar API</strong>, <strong>Google Drive API</strong>,
-              <strong>Google Docs API</strong>, <strong>Google Sheets API</strong>.
-              Only enable what you need — you can add more later.
-            </p>
-          </div>
-          <div style="margin-bottom:0.6rem;">
-            <div style="${stepLabel}">Step 4 — Sign in with your Google account</div>
-            <p style="font-size:0.78rem;color:var(--text-secondary);margin:0.25rem 0;">
-              After configuring OAuth credentials (either option above), run in your terminal:
-            </p>
-            <code style="${codeStyle}">gws auth login</code>
-            <p style="font-size:0.72rem;color:var(--text-muted);margin:0.3rem 0 0;">
-              A browser window will open for Google consent. If you see "access_denied", go back to
-              Google Auth Platform &gt; Audience and click <strong>Publish App</strong>.
-            </p>
-          </div>
-          <div style="margin-bottom:0.6rem;">
-            <div style="${stepLabel}">Step 5 — Enable in Guardian Agent</div>
-            <p style="font-size:0.8rem;color:var(--text-secondary);margin:0.25rem 0;">
-              Click <strong>Test Connection</strong> below to verify, then use the <strong>Enable</strong> button that appears to activate the integration. Tools become available immediately.
-            </p>
-          </div>
-        </div>
-        <div style="margin-top:0.75rem;">
-          <button class="btn btn-primary" id="gws-test-btn">Test Connection</button>
-          <button class="btn btn-secondary" id="gws-reauth-btn">Re-authenticate</button>
-          <span id="gws-test-status" style="margin-left:0.5rem;font-size:0.8rem;"></span>
-        </div>
-      `;
-    } else if (!gwsStatus.authenticated) {
-      area.innerHTML = `
-        <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:0.75rem;">
-          <div style="font-size:0.8rem;">
-            <span style="color:var(--text-secondary);">CLI:</span>
-            <span class="badge badge-running">Installed</span>
-            ${gwsStatus.version ? `<span style="color:var(--text-muted);margin-left:0.5rem;">${esc(gwsStatus.version)}</span>` : ''}
-          </div>
-          <div style="font-size:0.8rem;">
-            <span style="color:var(--text-secondary);">Auth:</span>
-            <span class="badge badge-errored">Not authenticated</span>
-          </div>
-        </div>
-        <div style="padding:0.75rem;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);font-size:0.8rem;">
-          <p style="margin:0 0 0.5rem;color:var(--text-secondary);">
-            The CLI is installed but not authenticated. You need OAuth credentials configured first, then sign in.
-          </p>
-          <div style="margin-bottom:0.5rem;">
-            <div style="${stepLabel}">1. Configure OAuth credentials (if not already done)</div>
-            <p style="font-size:0.78rem;color:var(--text-secondary);margin:0.2rem 0;">
-              <strong>With <a href="https://docs.cloud.google.com/sdk/docs/install-sdk" target="_blank" rel="noopener" style="color:var(--accent);">gcloud CLI</a>:</strong>
-              Run <code style="${inlineCode}">gws auth setup</code>
-            </p>
-            <p style="font-size:0.78rem;color:var(--text-secondary);margin:0.2rem 0;">
-              <strong>Without gcloud:</strong> Go to
-              <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener" style="color:var(--accent);">Cloud Console &gt; Credentials</a>,
-              click <strong>+ Create Credentials</strong> &gt; <strong>OAuth client ID</strong>,
-              set type to <strong>Desktop app</strong> <span style="color:var(--warning);">(not Web application)</span>,
-              download the JSON, and save it as:<br>
-              <code style="${inlineCode}">${navigator.platform?.startsWith('Win') ? '%USERPROFILE%\\.config\\gws\\client_secret.json' : '~/.config/gws/client_secret.json'}</code>
-            </p>
-          </div>
-          <div>
-            <div style="${stepLabel}">2. Sign in with Google</div>
-            <code style="${codeStyle}">gws auth login</code>
-          </div>
-        </div>
-        <div style="margin-top:0.75rem;">
-          <button class="btn btn-primary" id="gws-test-btn">Test Connection</button>
-          <button class="btn btn-secondary" id="gws-reauth-btn">Re-authenticate</button>
-          <span id="gws-test-status" style="margin-left:0.5rem;font-size:0.8rem;"></span>
-        </div>
-      `;
-    } else {
-      area.innerHTML = `
-        <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;font-size:0.8rem;">
-          <div>
-            <span style="color:var(--text-secondary);">CLI:</span>
-            <span class="badge badge-running">Installed</span>
-            ${gwsStatus.version ? `<span style="color:var(--text-muted);margin-left:0.5rem;">${esc(gwsStatus.version)}</span>` : ''}
-          </div>
-          <div>
-            <span style="color:var(--text-secondary);">Auth:</span>
-            <span class="badge badge-running">Connected</span>
-          </div>
-          ${gwsStatus.authMethod ? `<div><span style="color:var(--text-secondary);">Method:</span> <span style="color:var(--text-primary);">${esc(gwsStatus.authMethod)}</span></div>` : ''}
-          ${gwsStatus.services?.length ? `<div><span style="color:var(--text-secondary);">Services:</span> <span style="color:var(--text-primary);">${gwsStatus.services.map(s => esc(s)).join(', ')}</span></div>` : ''}
-          <div>
-            <span style="color:var(--text-secondary);">Integration:</span>
-            <span class="badge ${gwsStatus.enabled ? 'badge-running' : 'badge-dead'}">${gwsStatus.enabled ? 'Enabled' : 'Disabled'}</span>
-          </div>
-        </div>
-        ${!gwsStatus.enabled ? `
-        <div style="margin-top:0.75rem;padding:0.75rem;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);font-size:0.8rem;">
-          <p style="margin:0 0 0.5rem;color:var(--text-secondary);">
-            Authenticated but not enabled. Select the Google services you want and click Enable.
-          </p>
+          <strong style="color:var(--text-primary);">Native Google Setup (3 steps)</strong>
+          <ol style="font-size:0.78rem;color:var(--text-secondary);margin:0.5rem 0 0.5rem 1.2rem;padding:0;">
+            <li style="margin-bottom:0.4rem;">
+              <strong>Create OAuth credentials:</strong>
+              Go to the <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener" style="color:var(--accent);">Google Cloud Console</a>.
+              Create a new project if you don't have one (top-left project selector &gt; <strong>New Project</strong>).
+              <br>Navigate to <strong>Credentials</strong>. Click <strong>+ Create Credentials</strong> &gt; <strong>OAuth client ID</strong>.
+              <br>Set <strong>Application type</strong> to <strong style="color:var(--text-primary);">Desktop app</strong>
+              <span style="color:var(--warning);"> (not "Web application")</span>.
+              Name it anything (e.g. "Guardian Agent Desktop") and click <strong>Create</strong>.
+              <br>Click <strong>Download JSON</strong> on the confirmation dialog.
+              <br><span style="font-size:0.72rem;color:var(--text-muted);">
+                If this is a new project, first configure the consent screen:
+                Go to <strong>Google Auth Platform &gt; Audience</strong>, set user type to External,
+                fill in app name + email, save, then <strong>Publish App</strong>.
+                Also enable the APIs you need in <strong>APIs &amp; Services &gt; Library</strong>
+                (Gmail API, Calendar API, Drive API, etc.).
+              </span>
+            </li>
+            <li style="margin-bottom:0.3rem;">
+              <strong>Upload credentials:</strong>
+              Upload the <code style="${inlineCode}">client_secret.json</code> below, or place it at <code style="${inlineCode}">~/.guardianagent/google-credentials.json</code>.
+            </li>
+            <li>
+              <strong>Connect:</strong> Select services below and click <strong>Connect Google</strong>. A browser window opens for consent.
+            </li>
+          </ol>
           <div class="cfg-field" style="margin-bottom:0.5rem;">
-            <label style="font-size:0.78rem;">Services</label>
-            <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:0.25rem;" id="gws-service-checks">
-              ${['gmail', 'calendar', 'drive', 'docs', 'sheets'].map(s => `
+            <label style="font-size:0.72rem;">Upload client_secret.json</label>
+            <div style="display:flex;gap:0.5rem;align-items:center;">
+              <label for="gws-native-upload" class="btn btn-secondary" style="font-size:0.78rem;cursor:pointer;margin:0;padding:0.3rem 0.7rem;">Choose File</label>
+              <input type="file" id="gws-native-upload" accept=".json" style="display:none;">
+              <span id="gws-native-file-name" style="font-size:0.78rem;color:var(--text-muted);">No file selected</span>
+            </div>
+          </div>
+          <div class="cfg-field" style="margin-bottom:0.5rem;">
+            <label style="font-size:0.72rem;">Services</label>
+            <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:0.25rem;" id="gws-native-service-checks">
+              ${['gmail', 'calendar', 'drive', 'docs', 'sheets', 'contacts'].map(s => `
                 <label style="display:flex;align-items:center;gap:0.3rem;font-size:0.78rem;color:var(--text-primary);cursor:pointer;">
-                  <input type="checkbox" value="${s}" ${['gmail', 'calendar', 'drive'].includes(s) ? 'checked' : ''}> ${s}
+                  <input type="checkbox" value="${s}" checked> ${s}
                 </label>
               `).join('')}
             </div>
           </div>
-          <div style="display:flex;gap:0.5rem;align-items:center;">
-            <button class="btn btn-primary" id="gws-enable-btn">Enable Google Workspace</button>
-            <span id="gws-enable-status" style="font-size:0.8rem;"></span>
+          <div id="gws-native-status" style="margin-bottom:0.5rem;font-size:0.8rem;"></div>
+          <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+            <button class="btn btn-primary" id="gws-native-connect">Connect Google</button>
+            <button class="btn btn-secondary" id="gws-native-test">Test Connection</button>
+            <button class="btn btn-secondary" id="gws-native-disconnect" style="display:none;">Disconnect</button>
+            <span id="gws-native-status-badge" style="font-size:0.8rem;"></span>
           </div>
-          <p style="margin:0.4rem 0 0;color:var(--text-muted);font-size:0.72rem;">
-            Tools become available immediately after enabling.
-          </p>
         </div>
-        ` : ''}
-        <div style="margin-top:0.75rem;">
-          <button class="btn btn-secondary" id="gws-test-btn">Test Connection</button>
-          <button class="btn btn-secondary" id="gws-reauth-btn">Re-authenticate</button>
-          <span id="gws-test-status" style="margin-left:0.5rem;font-size:0.8rem;"></span>
-        </div>
-      `;
+      </div>
+    </div>
+  `;
+
+  // Helper: refresh native Google status display.
+  async function refreshNativeStatus() {
+    try {
+      const status = await api.googleStatus();
+      const badge = section.querySelector('#gws-native-status-badge');
+      const disconnectBtn = section.querySelector('#gws-native-disconnect');
+      const statusText = section.querySelector('#gws-native-status');
+
+      if (status.authenticated) {
+        if (badge) {
+          badge.textContent = 'Connected';
+          badge.className = 'badge badge-running';
+          badge.style.color = '';
+        }
+        if (disconnectBtn) disconnectBtn.style.display = '';
+        if (statusText) {
+          const expiry = status.tokenExpiry ? new Date(status.tokenExpiry).toLocaleString() : 'unknown';
+          statusText.innerHTML = `
+            <div style="color:var(--success);margin-bottom:0.25rem;">✓ Authenticated successfully.</div>
+            <div style="color:var(--text-muted);font-size:0.72rem;">Token expiry: ${expiry}</div>
+          `;
+        }
+      } else {
+        if (badge) {
+          badge.textContent = 'Not connected';
+          badge.className = 'badge badge-dead';
+          badge.style.color = '';
+        }
+        if (disconnectBtn) disconnectBtn.style.display = 'none';
+        if (statusText) statusText.innerHTML = '<div style="color:var(--text-muted);">Please connect your Google account.</div>';
+      }
+    } catch (err) {
+      console.warn('Failed to refresh Google status:', err);
     }
-
-    // Enable button handler
-    section.querySelector('#gws-enable-btn')?.addEventListener('click', async () => {
-      const btn = section.querySelector('#gws-enable-btn');
-      const statusEl = section.querySelector('#gws-enable-status');
-      const checks = section.querySelectorAll('#gws-service-checks input:checked');
-      const services = Array.from(checks).map(c => c.value);
-      if (services.length === 0) {
-        statusEl.textContent = 'Select at least one service.';
-        statusEl.style.color = 'var(--warning)';
-        return;
-      }
-      btn.disabled = true;
-      btn.textContent = 'Enabling...';
-      statusEl.textContent = '';
-      try {
-        await api.updateConfig({
-          assistant: { tools: { mcp: { enabled: true, managedProviders: { gws: { enabled: true, services } } } } },
-        });
-        statusEl.textContent = 'Enabled! Restart Guardian Agent for changes to take effect.';
-        statusEl.style.color = 'var(--success)';
-      } catch (err) {
-        btn.disabled = false;
-        btn.textContent = 'Enable Google Workspace';
-        statusEl.textContent = err.message || 'Failed to save.';
-        statusEl.style.color = 'var(--error)';
-      }
-    });
-
-    // Test connection handler
-    section.querySelector('#gws-test-btn')?.addEventListener('click', async () => {
-      const btn = section.querySelector('#gws-test-btn');
-      const status = section.querySelector('#gws-test-status');
-      btn.disabled = true;
-      btn.textContent = 'Testing...';
-      status.textContent = '';
-      try {
-        const fresh = await api.gwsStatus();
-        renderStatus(fresh);
-        const resultStatus = section.querySelector('#gws-test-status');
-        if (fresh.authenticated) {
-          resultStatus.textContent = 'Connection verified.';
-          resultStatus.style.color = 'var(--success)';
-        } else if (fresh.installed) {
-          resultStatus.textContent = 'CLI found but not authenticated.';
-          resultStatus.style.color = 'var(--warning)';
-        } else {
-          resultStatus.textContent = 'CLI not found on PATH.';
-          resultStatus.style.color = 'var(--error)';
-        }
-      } catch (err) {
-        btn.disabled = false;
-        btn.textContent = 'Test Connection';
-        status.textContent = err.message || 'Test failed.';
-        status.style.color = 'var(--error)';
-      }
-    });
-
-    // Re-authenticate handler
-    section.querySelector('#gws-reauth-btn')?.addEventListener('click', async () => {
-      const btn = section.querySelector('#gws-reauth-btn');
-      const status = section.querySelector('#gws-test-status');
-      btn.disabled = true;
-      btn.textContent = 'Authenticating...';
-      status.textContent = 'A browser window should open for Google OAuth consent...';
-      status.style.color = 'var(--text-muted)';
-      try {
-        const result = await api.gwsReauth();
-        if (result.success) {
-          status.textContent = 'Authentication successful.';
-          status.style.color = 'var(--success)';
-          // Refresh the panel to show updated state
-          const fresh = await api.gwsStatus();
-          renderStatus(fresh);
-        } else {
-          status.textContent = result.message || 'Authentication failed.';
-          status.style.color = 'var(--warning)';
-        }
-      } catch (err) {
-        status.textContent = err.message || 'Re-authentication failed.';
-        status.style.color = 'var(--error)';
-      }
-      btn.disabled = false;
-      btn.textContent = 'Re-authenticate';
-    });
   }
 
-  api.gwsStatus().catch(() => null).then(renderStatus);
+  // File upload handler
+  section.querySelector('#gws-native-upload')?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    section.querySelector('#gws-native-file-name').textContent = file.name;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const content = JSON.parse(reader.result);
+        await api.googleCredentials(content);
+        // We assume global notification function is available or we could use custom UI
+        const statusText = section.querySelector('#gws-native-status');
+        if (statusText) {
+          statusText.innerHTML = '<div style="color:var(--success);">✓ Credentials uploaded successfully.</div>';
+        }
+      } catch (err) {
+        const statusText = section.querySelector('#gws-native-status');
+        if (statusText) {
+          statusText.innerHTML = `<div style="color:var(--error);">${err.message || 'Failed to upload credentials.'}</div>`;
+        }
+      }
+    };
+    reader.readAsText(file);
+  });
+
+  // Connect button handler
+  section.querySelector('#gws-native-connect')?.addEventListener('click', async () => {
+    const btn = section.querySelector('#gws-native-connect');
+    const checks = section.querySelectorAll('#gws-native-service-checks input:checked');
+    const services = Array.from(checks).map(c => c.value);
+    const statusText = section.querySelector('#gws-native-status');
+
+    if (services.length === 0) {
+      if (statusText) statusText.innerHTML = '<div style="color:var(--warning);">Please select at least one service.</div>';
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Starting Auth...';
+
+    try {
+      const { authUrl } = await api.googleAuthStart(services);
+      // Open in a new tab/window
+      window.open(authUrl, '_blank', 'width=600,height=700');
+
+      if (statusText) statusText.innerHTML = '<div style="color:var(--text-muted);">Opening Google login in a new window. Please complete the flow there.</div>';
+
+      // Poll for completion
+      let attempts = 0;
+      const poll = setInterval(async () => {
+        attempts++;
+        const status = await api.googleStatus();
+        if (status.authenticated || attempts > 60) {
+          clearInterval(poll);
+          btn.disabled = false;
+          btn.textContent = 'Connect Google';
+          refreshNativeStatus();
+          if (status.authenticated) {
+            // Auto-enable integration if it wasn't
+            await api.updateConfig({ assistant: { tools: { google: { enabled: true, services } } } });
+          }
+        }
+      }, 2000);
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = 'Connect Google';
+      if (statusText) statusText.innerHTML = `<div style="color:var(--error);">${err.message || 'Failed to start Google auth.'}</div>`;
+    }
+  });
+
+  // Disconnect button handler
+  section.querySelector('#gws-native-disconnect')?.addEventListener('click', async () => {
+    if (!confirm('Disconnect from Google Workspace? This will revoke the tokens.')) return;
+
+    try {
+      await api.googleDisconnect();
+      refreshNativeStatus();
+    } catch (err) {
+      console.error('Failed to disconnect:', err);
+    }
+  });
+
+  // Test button handler
+  section.querySelector('#gws-native-test')?.addEventListener('click', async () => {
+    const btn = section.querySelector('#gws-native-test');
+    btn.disabled = true;
+    btn.textContent = 'Testing...';
+    const statusText = section.querySelector('#gws-native-status');
+
+    try {
+      // Test by attempting to list Gmail messages (read-only, minimal impact)
+      const result = await api.runTool({
+        toolName: 'gws',
+        args: {
+          service: 'gmail',
+          resource: 'users messages',
+          method: 'list',
+          params: { userId: 'me', maxResults: 1 }
+        }
+      });
+
+      if (result.success) {
+         if (statusText) statusText.innerHTML = '<div style="color:var(--success);">✓ Connection verified! Google APIs are reachable.</div>';
+      } else {
+         if (statusText) statusText.innerHTML = `<div style="color:var(--error);">${result.error || 'Connection failed.'}</div>`;
+      }
+    } catch (err) {
+      if (statusText) statusText.innerHTML = `<div style="color:var(--error);">${err.message || 'Test failed.'}</div>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Test Connection';
+    }
+  });
+
+  // Initial status refresh
+  refreshNativeStatus();
+
   return section;
 }
 

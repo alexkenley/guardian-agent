@@ -22,7 +22,7 @@ Expose a safe, auditable tool-execution plane so the assistant can perform works
 - Shell/browser: `shell_safe`, `chrome_job`, plus MCP-discovered browser tools (`mcp-playwright-*`, `mcp-lightpanda-*`)
 - Web: `web_search`, `web_fetch`
 - Campaign/email: `contacts_discover_browser`, `contacts_import_csv`, `contacts_list`, `campaign_create`, `campaign_list`, `campaign_add_contacts`, `campaign_dry_run`, `gmail_send`, `campaign_run`
-- Google Workspace: `gws`, `gws_schema`
+- Google Workspace: `gws`, `gws_schema` (native googleapis SDK by default, gws CLI fallback)
 - Threat intel: `intel_summary`, `intel_watch_add`, `intel_watch_remove`, `intel_scan`, `intel_findings`, `intel_draft_action`
 - External interaction: `forum_post` (restricted by policy)
 - Network: `net_ping`, `net_arp_scan`, `net_port_check`, `net_interfaces`, `net_connections`, `net_dns_lookup`, `net_traceroute`, `net_oui_lookup`, `net_classify`, `net_banner_grab`, `net_fingerprint`, `net_wifi_scan`, `net_wifi_clients`, `net_connection_profiles`, `net_baseline`, `net_anomaly_check`, `net_threat_summary`, `net_traffic_baseline`, `net_threat_check`
@@ -104,13 +104,16 @@ assistant:
 
 ## Conversational Automation Creation
 
-The assistant can create automations (playbooks + scheduled tasks) conversationally via the automation tools. The system prompt guides the assistant to:
+The assistant can create automations (playbooks + scheduled tasks, including scheduled assistant turns) conversationally via the automation tools. The system prompt guides the assistant to:
 
 1. **Detect intent**: When the user asks to "create an automation", "schedule a scan", "set up a recurring task", etc., the assistant calls `find_tools` with keyword "automation" to load the 8 automation tools.
 2. **Gather requirements**: The assistant asks for (a) what to automate (which tool or sequence), (b) tool arguments, (c) whether to schedule and how often. It asks for missing critical details but uses sensible defaults for the rest.
-3. **Create the playbook**: Calls `workflow_upsert` with id, name, mode, and steps. Single-tool automations use one step with mode "sequential". Multi-step pipelines use multiple steps.
+3. **Create the playbook when deterministic steps are needed**: Calls `workflow_upsert` with id, name, mode, and steps. Single-tool automations use one step with mode "sequential". Multi-step pipelines use multiple steps.
    Built-in tool steps can omit an access profile by using `packId: ""` or `packId: "default"`. That runs through the normal Guardian tool path without extra access-profile allowlists.
-4. **Optionally schedule**: If the user wants recurring execution, calls `task_create` with type "workflow", target set to the playbook id, and a cron expression.
+4. **Schedule the right task type**:
+   - Deterministic pipeline: `task_create` with type "workflow", target set to the playbook id, and a cron expression.
+   - Single recurring tool: `task_create` with type "tool" and target set to the tool name.
+   - Scheduled assistant check/report: `task_create` with type "agent", target set to an agent id (or `default`), `prompt`, and optionally `channel` / `deliver`.
 5. **Verify**: Calls `workflow_list` / `task_list` to confirm creation, and can `workflow_run` with `dryRun: true` to preview.
 
 The automation tools include `examples` arrays with concrete parameter patterns (single-tool, sequential pipeline, parallel pipeline, various cron expressions) so the LLM can construct valid payloads.

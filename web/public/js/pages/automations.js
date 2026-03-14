@@ -2,7 +2,7 @@
  * Automations page — unified view merging workflows + scheduled operations.
  *
  * Every item is an "automation": a workflow (1-step for single tools, N-step
- * for pipelines) with an optional linked scheduled task for cron execution.
+ * for pipelines) or a scheduled assistant task with cron execution.
  */
 
 import { api } from '../api.js';
@@ -56,13 +56,14 @@ export async function renderAutomations(container) {
   container.innerHTML = '<h2 class="page-title">Automations</h2><div class="loading">Loading...</div>';
 
   try {
-    const [connState, toolsState, tasks, presets, history, templates] = await Promise.all([
+    const [connState, toolsState, tasks, presets, history, templates, agentsState] = await Promise.all([
       api.connectorsState(40),
       api.toolsState(500).catch(() => ({ tools: [] })),
       api.scheduledTasks().catch(() => []),
       api.scheduledTaskPresets().catch(() => []),
       api.scheduledTaskHistory().catch(() => []),
       api.connectorsTemplates().catch(() => []),
+      api.agents().catch(() => []),
     ]);
 
     const summary = connState.summary || {};
@@ -72,6 +73,7 @@ export async function renderAutomations(container) {
     const workflowConfig = connState.playbooksConfig || {};
     const studio = connState.studio || {};
     const tools = Array.isArray(toolsState?.tools) ? toolsState.tools : [];
+    const agents = Array.isArray(agentsState) ? agentsState : [];
 
     const automations = reorderAutomationsForUi(
       buildAutomationList(playbooks, tasks, tools, templates, presets),
@@ -134,7 +136,7 @@ export async function renderAutomations(container) {
 
         <!-- Create form -->
         <div class="cfg-center-body" id="auto-create-form" style="display:none">
-          ${renderCreateForm(tools, packs)}
+          ${renderCreateForm(tools, packs, agents)}
         </div>
 
         <table>
@@ -170,7 +172,7 @@ export async function renderAutomations(container) {
       </div>
     `;
 
-    bindEvents(container, { automations, playbooks, tasks, presets, tools, packs, templates, workflowConfig, summary, studio, runs, history });
+    bindEvents(container, { automations, playbooks, tasks, presets, tools, packs, templates, workflowConfig, summary, studio, runs, history, agents });
     focusRequestedRun(container);
     applyInputTooltips(container);
     enhanceSectionHelp(container, AUTOMATION_HELP, createGenericHelpFactory('Automations'));
@@ -238,7 +240,7 @@ function buildAutomationList(playbooks, tasks, tools, templates = [], presets = 
   // 1. For each workflow, create an automation and find linked scheduled task
   for (const pb of playbooks) {
     const linkedTask = tasks.find(
-      (t) => (t.type === 'playbook' && t.target === pb.id) || (t.target === pb.id),
+      (t) => t.type === 'playbook' && t.target === pb.id,
     );
     if (linkedTask) matchedTaskIds.add(linkedTask.id);
 
@@ -253,6 +255,7 @@ function buildAutomationList(playbooks, tasks, tools, templates = [], presets = 
       packId: (pb.steps || [])[0]?.packId || null,
       enabled: pb.enabled !== false,
       cron: linkedTask?.cron || null,
+      runOnce: linkedTask?.runOnce === true,
       emitEvent: linkedTask?.emitEvent || '',
       outputHandling: normalizeOutputHandling(pb.outputHandling || linkedTask?.outputHandling),
       scheduleEnabled: linkedTask?.enabled || false,
@@ -272,11 +275,51 @@ function buildAutomationList(playbooks, tasks, tools, templates = [], presets = 
     // Check if already linked by workflow target
     if (automations.some((a) => a.taskId === task.id)) continue;
 
+    if (task.type === 'agent') {
+      automations.push({
+        id: task.id,
+        name: task.name || task.target,
+        description: task.prompt || 'Scheduled assistant task',
+        category: 'assistant',
+        kind: 'assistant',
+        mode: 'assistant',
+        steps: [{
+          id: `${task.id}-step-1`,
+          name: task.target,
+          toolName: `agent:${task.target}`,
+          packId: null,
+          args: {
+            prompt: task.prompt || '',
+            channel: task.channel || 'scheduled',
+            deliver: task.deliver !== false,
+          },
+        }],
+        packId: null,
+        enabled: task.enabled,
+        cron: task.cron || null,
+        runOnce: task.runOnce === true,
+        emitEvent: task.emitEvent || '',
+        outputHandling: normalizeOutputHandling(task.outputHandling),
+        scheduleEnabled: task.enabled,
+        taskId: task.id,
+        lastRunAt: task.lastRunAt || null,
+        lastRunStatus: task.lastRunStatus || null,
+        runCount: task.runCount || 0,
+        agentPrompt: task.prompt || '',
+        agentChannel: task.channel || 'scheduled',
+        agentDeliver: task.deliver !== false,
+        _source: 'task',
+        _playbook: null,
+        _task: task,
+      });
+      continue;
+    }
+
     const tool = tools.find((t) => t.name === task.target);
     automations.push({
       id: task.id,
       name: task.name || task.target,
-      description: tool?.description || '',
+      description: describeStandaloneAutomationTask(task, tool),
       category: tool?.category || 'uncategorized',
       kind: 'single',
       mode: 'sequential',
@@ -284,6 +327,7 @@ function buildAutomationList(playbooks, tasks, tools, templates = [], presets = 
       packId: null,
       enabled: task.enabled,
       cron: task.cron || null,
+      runOnce: task.runOnce === true,
       emitEvent: task.emitEvent || '',
       outputHandling: normalizeOutputHandling(task.outputHandling),
       scheduleEnabled: task.enabled,
@@ -312,6 +356,7 @@ function buildAutomationList(playbooks, tasks, tools, templates = [], presets = 
         packId: (pb.steps || [])[0]?.packId || null,
         enabled: false,
       cron: null,
+      runOnce: false,
       emitEvent: '',
       outputHandling: normalizeOutputHandling(pb.outputHandling),
       scheduleEnabled: false,
@@ -360,6 +405,7 @@ function buildAutomationList(playbooks, tasks, tools, templates = [], presets = 
       packId: steps[0]?.packId || null,
       enabled: false,
       cron: preset.cron || null,
+      runOnce: preset.runOnce === true,
       emitEvent: preset.emitEvent || '',
       outputHandling: normalizeOutputHandling(preset.outputHandling),
       scheduleEnabled: false,
@@ -400,35 +446,109 @@ function resolveCatalogCategory({ explicitCategory, steps, tools, fallbackText }
   return 'security';
 }
 
+function describeStandaloneAutomationTask(task, tool) {
+  if (task?.target === 'gws') {
+    const summary = summarizeGoogleWorkspaceTask(task.args || {});
+    if (summary) return summary;
+  }
+
+  if (task?.target === 'gmail_send' || task?.target === 'gmail_draft') {
+    const summary = summarizeDirectEmailTask(task.target, task.args || {});
+    if (summary) return summary;
+  }
+
+  return tool?.shortDescription || tool?.description || '';
+}
+
+function summarizeDirectEmailTask(toolName, args) {
+  const to = String(args?.to || '').trim();
+  const subject = String(args?.subject || '').trim();
+  if (!to && !subject) return '';
+  const action = toolName === 'gmail_draft' ? 'Draft Gmail' : 'Send Gmail';
+  return `${action}${to ? ` to ${to}` : ''}${subject ? ` with subject "${subject}"` : ''}`;
+}
+
+function summarizeGoogleWorkspaceTask(args) {
+  const service = String(args?.service || '').trim().toLowerCase();
+  const resource = String(args?.resource || '').trim().toLowerCase();
+  const method = String(args?.method || '').trim().toLowerCase();
+  if (!service || !method) return '';
+
+  if (service === 'gmail' && resource === 'users messages' && method === 'send') {
+    const summary = extractGoogleWorkspaceMessageSummary(args);
+    return summary
+      ? `Send Gmail to ${summary.to || '(unknown recipient)'}${summary.subject ? ` with subject "${summary.subject}"` : ''}`
+      : 'Send Gmail message';
+  }
+
+  if (service === 'gmail' && resource === 'users drafts' && method === 'create') {
+    const summary = extractGoogleWorkspaceMessageSummary(args);
+    return summary
+      ? `Draft Gmail to ${summary.to || '(unknown recipient)'}${summary.subject ? ` with subject "${summary.subject}"` : ''}`
+      : 'Create Gmail draft';
+  }
+
+  if (service === 'calendar' && resource === 'events' && method === 'list') return 'List calendar events';
+  if (service === 'calendar' && resource === 'events' && method === 'create') return 'Create calendar event';
+  if (service === 'drive' && resource === 'files' && method === 'list') return 'List Drive files';
+
+  return `${service} ${resource || 'request'} ${method}`.trim();
+}
+
+function extractGoogleWorkspaceMessageSummary(args) {
+  const json = isPlainObject(args?.json) ? args.json : {};
+  const message = isPlainObject(json.message) ? json.message : {};
+  const raw = String(json.raw || message.raw || '').trim();
+  if (!raw) return null;
+
+  try {
+    const decoded = decodeBase64Url(raw);
+    const lines = decoded.split(/\r?\n/);
+    const to = lines.find((line) => /^to:/i.test(line))?.replace(/^to:\s*/i, '').trim();
+    const subject = lines.find((line) => /^subject:/i.test(line))?.replace(/^subject:\s*/i, '').trim();
+    return { to: to || '', subject: subject || '' };
+  } catch {
+    return null;
+  }
+}
+
+function decodeBase64Url(value) {
+  const normalized = String(value).replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized + '='.repeat((4 - (normalized.length % 4 || 4)) % 4);
+  return atob(padded);
+}
+
+function isPlainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value);
+}
+
 // ─── Rendering helpers ──────────────────────────────────
 
 function renderAutomationRow(auto, tools, packs) {
   const isBuiltin = auto._builtin === true;
   const steps = auto.steps || [];
-  const kindLabel = auto.kind === 'pipeline' ? 'Pipeline' : 'Single';
+  const isAssistant = auto.kind === 'assistant';
+  const kindLabel = isAssistant ? 'Assistant' : auto.kind === 'pipeline' ? 'Pipeline' : 'Single';
   const modeLabel = auto.kind === 'pipeline' ? auto.mode : '';
-  const scheduleLabel = auto.cron ? cronToHuman(auto.cron) : 'Manual';
+  const scheduleLabel = auto.cron ? cronToHuman(auto.cron, auto.runOnce === true) : 'Manual';
   const statusLabel = isBuiltin ? 'Catalog' : (auto.enabled ? 'Enabled' : 'Disabled');
   const toggleDisabled = isBuiltin ? 'disabled' : '';
   const runDisabled = (!auto.enabled || isBuiltin) ? 'disabled' : '';
   const runTitle = isBuiltin
     ? 'Clone or edit this catalog entry to create a runnable automation.'
     : (!auto.enabled ? 'Enable first' : '');
+  const dryRunDisabled = isBuiltin || isAssistant ? 'disabled' : '';
+  const dryRunTitle = isAssistant ? 'Assistant automations do not support dry-run mode.' : (isBuiltin ? 'Clone or edit this catalog entry first' : '');
   const deleteDisabled = isBuiltin ? 'disabled title="Built-in catalog item"' : '';
-
-  return `
-    <tr class="auto-catalog-row" data-category="${escAttr(auto.category)}" data-auto-id="${escAttr(auto.id)}">
-      <td>
-        <div class="ops-task-title">${esc(auto.name)}</div>
-        <div class="ops-task-sub">${esc(auto.description || auto.id)}</div>
-        <span class="wf-category-tag">${esc(auto.category)}</span>
-        ${isBuiltin ? '<span class="badge badge-info" style="margin-left:0.4rem">Catalog</span>' : ''}
-      </td>
-      <td>
-        <span class="auto-kind-badge ${auto.kind}">${esc(kindLabel)}</span>
-        ${modeLabel ? `<span class="wf-pipeline-mode-badge ${auto.mode}" style="margin-left:0.3rem">${esc(modeLabel)}</span>` : ''}
-      </td>
-      <td>
+  const toolsCell = isAssistant
+    ? `
+        <div class="wf-catalog-tools">
+          <span class="wf-tool-chip"><span class="wf-tool-chip-num">A</span>${esc(auto._task?.target || 'default')}</span>
+        </div>
+        <div class="ops-task-sub" style="margin-top:0.35rem">${esc(auto.agentPrompt || auto.description || '')}</div>
+        <div class="ops-task-sub">Channel: ${esc(auto.agentChannel || 'scheduled')} · Delivery: ${auto.agentDeliver ? 'on' : 'off'}</div>
+      `
+    : `
         <div class="wf-catalog-tools">
           ${steps.length === 0
             ? '<span style="color:var(--text-muted);font-size:0.75rem">No steps</span>'
@@ -448,10 +568,25 @@ function renderAutomationRow(auto, tools, packs) {
             </button>
           </div>
         ` : ''}
+      `;
+
+  return `
+    <tr class="auto-catalog-row" data-category="${escAttr(auto.category)}" data-auto-id="${escAttr(auto.id)}">
+      <td>
+        <div class="ops-task-title">${esc(auto.name)}</div>
+        <div class="ops-task-sub">${esc(auto.description || auto.id)}</div>
+        <span class="wf-category-tag">${esc(auto.category)}</span>
+        ${isBuiltin ? '<span class="badge badge-info" style="margin-left:0.4rem">Catalog</span>' : ''}
       </td>
+      <td>
+        <span class="auto-kind-badge ${auto.kind}">${esc(kindLabel)}</span>
+        ${modeLabel ? `<span class="wf-pipeline-mode-badge ${auto.mode}" style="margin-left:0.3rem">${esc(modeLabel)}</span>` : ''}
+      </td>
+      <td>${toolsCell}</td>
       <td class="auto-schedule-cell">
         <div class="ops-task-title">${esc(scheduleLabel)}</div>
         ${auto.cron ? `<div class="ops-task-sub">${esc(auto.cron)}</div>` : ''}
+        ${auto.runOnce ? '<div class="ops-task-sub">Single shot: disables itself after the first run.</div>' : ''}
         ${auto.emitEvent ? `<div class="ops-task-sub">Output event: <code>${esc(auto.emitEvent)}</code></div>` : ''}
         <div class="ops-task-sub">${renderOutputHandlingBadges(auto.outputHandling)}</div>
       </td>
@@ -467,7 +602,7 @@ function renderAutomationRow(auto, tools, packs) {
       <td>
         <div class="ops-action-buttons">
           <button class="btn btn-primary btn-sm auto-run" data-auto-id="${escAttr(auto.id)}" ${runDisabled} ${runTitle ? `title="${escAttr(runTitle)}"` : ''}>Run</button>
-          <button class="btn btn-secondary btn-sm auto-dryrun" data-auto-id="${escAttr(auto.id)}" ${isBuiltin ? 'disabled title="Clone or edit this catalog entry first"' : ''}>Dry Run</button>
+          <button class="btn btn-secondary btn-sm auto-dryrun" data-auto-id="${escAttr(auto.id)}" ${dryRunDisabled} ${dryRunTitle ? `title="${escAttr(dryRunTitle)}"` : ''}>Dry Run</button>
           <button class="btn btn-secondary btn-sm auto-edit" data-auto-id="${escAttr(auto.id)}">Edit</button>
           <button class="btn btn-secondary btn-sm auto-clone" data-auto-id="${escAttr(auto.id)}">Clone</button>
           <button class="btn btn-secondary btn-sm auto-delete" data-auto-id="${escAttr(auto.id)}" data-label="${escAttr(auto.name)}" ${deleteDisabled}>Delete</button>
@@ -654,11 +789,15 @@ function renderPromotedFindings(promotedFindings) {
   `;
 }
 
-function renderCreateForm(tools, packs) {
+function renderCreateForm(tools, packs, agents) {
   const toolOptions = tools
     .slice()
     .sort((a, b) => (a.category || '').localeCompare(b.category || '') || a.name.localeCompare(b.name))
     .map((tool) => `<option value="${escAttr(tool.name)}">${esc(tool.category ? tool.name + ' (' + tool.category + ')' : tool.name)}</option>`)
+    .join('');
+  const assistantAgents = (agents || [])
+    .filter((agent) => agent?.canChat !== false && agent?.internal !== true)
+    .map((agent) => `<option value="${escAttr(agent.id)}">${esc(agent.name ? `${agent.name} (${agent.id})` : agent.id)}</option>`)
     .join('');
 
   return `
@@ -673,7 +812,7 @@ function renderCreateForm(tools, packs) {
         <label>Name</label>
         <input id="auto-create-name" type="text" placeholder="My Automation">
       </div>
-      <div class="cfg-field">
+      <div class="cfg-field" id="auto-id-field">
         <label>ID</label>
         <input id="auto-create-id" type="text" placeholder="my-automation">
       </div>
@@ -683,9 +822,10 @@ function renderCreateForm(tools, packs) {
           <option value="single">Single Tool</option>
           <option value="sequential">Sequential Pipeline</option>
           <option value="parallel">Parallel Pipeline</option>
+          <option value="assistant">Scheduled Assistant</option>
         </select>
       </div>
-      <div class="cfg-field">
+      <div class="cfg-field" id="auto-pack-field">
         <label>Tool Access</label>
         <select id="auto-create-pack" title="Built-in tools use the normal Guardian rules. Access profiles add extra host, path, and command limits.">
           <option value="">Built-in tools</option>
@@ -714,15 +854,54 @@ function renderCreateForm(tools, packs) {
       <label style="font-size:0.8rem;color:var(--text-secondary);display:block;margin-bottom:0.35rem;">Steps</label>
       <div id="auto-step-list"></div>
       <div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.5rem;">
-        <div class="cfg-field" style="flex:1;margin:0;">
+        <div class="cfg-field" style="width:120px;margin:0;flex-shrink:0;">
+          <select id="auto-step-type-select" title="Step type: Tool executes a registered tool, Instruction invokes the LLM to interpret prior step outputs.">
+            <option value="tool" selected>Tool</option>
+            <option value="instruction">Instruction (LLM)</option>
+          </select>
+        </div>
+        <div class="cfg-field" style="flex:1;margin:0;" id="auto-step-tool-field">
           <select id="auto-step-tool-select">
             <option value="">Select a tool to add...</option>
             ${toolOptions}
           </select>
         </div>
+        <div class="cfg-field" style="flex:1;margin:0;display:none;" id="auto-step-instruction-field">
+          <input id="auto-step-instruction-input" type="text" placeholder="Describe what the LLM should do with prior step outputs..." title="Natural language instruction for the LLM. Prior step outputs are injected as context.">
+        </div>
         <button class="btn btn-secondary" id="auto-step-add" type="button">Add Step</button>
       </div>
-      <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.35rem;">Add tools in the order they should execute. Use arrows to reorder.</div>
+      <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.35rem;">Add tool steps or LLM instruction steps. Instruction steps interpret prior step outputs using natural language.</div>
+    </div>
+
+    <div id="auto-assistant-section" style="margin-top:0.75rem;display:none;">
+      <div class="cfg-form-grid">
+        <div class="cfg-field">
+          <label>Assistant</label>
+          <select id="auto-agent-select">
+            <option value="default">Default Assistant</option>
+            ${assistantAgents}
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Session / Delivery Channel</label>
+          <select id="auto-agent-channel">
+            <option value="scheduled">Background only</option>
+            <option value="cli">CLI</option>
+            <option value="telegram">Telegram</option>
+            <option value="web">Web</option>
+          </select>
+        </div>
+      </div>
+      <div class="cfg-field" style="margin-top:0.5rem;">
+        <label>Assistant Prompt</label>
+        <textarea id="auto-agent-prompt" rows="5" placeholder="Check recent email, calendar, cloud/security alerts, and send me a concise briefing."></textarea>
+      </div>
+      <label style="display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem;cursor:pointer;">
+        <input type="checkbox" id="auto-agent-deliver" checked>
+        <span style="font-size:0.8rem;color:var(--text-primary);">Deliver the assistant response back to the selected channel after each run</span>
+      </label>
+      <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.35rem;">Assistant automations run a normal Guardian assistant turn with skills, memory, and tools. They are not just instruction steps.</div>
     </div>
 
     <!-- Schedule toggle -->
@@ -775,6 +954,10 @@ function renderCreateForm(tools, packs) {
         </div>
       </div>
       <div class="ops-inline-help" id="auto-schedule-preview"></div>
+      <label style="display:flex;align-items:center;gap:0.5rem;margin-top:0.55rem;cursor:pointer;">
+        <input type="checkbox" id="auto-run-once">
+        <span style="font-size:0.8rem;color:var(--text-primary);">Single shot: run once on the next matching schedule, then disable automatically</span>
+      </label>
     </div>
 
     <details class="ops-advanced" style="margin-top:0.75rem;">
@@ -858,7 +1041,11 @@ function renderRunHistory(playbookRuns, taskHistory) {
     merged.push({
       time: item.timestamp || 0,
       name: item.taskName || '',
-      source: item.taskType === 'playbook' ? 'scheduled workflow' : 'scheduled',
+      source: item.taskType === 'playbook'
+        ? 'scheduled workflow'
+        : item.taskType === 'agent'
+          ? 'scheduled assistant'
+          : 'scheduled',
       status: item.status || '',
       duration: item.durationMs || 0,
       message: item.message || '',
@@ -1011,7 +1198,7 @@ function renderEngineSettings(summary, workflowConfig, studio, packs) {
 // ─── Event binding ──────────────────────────────────────
 
 function bindEvents(container, ctx) {
-  const { automations, playbooks, tasks, tools, packs } = ctx;
+  const { automations, playbooks, tasks, tools, packs, agents } = ctx;
 
   // Refresh
   container.querySelector('#auto-refresh')?.addEventListener('click', () => renderAutomations(container));
@@ -1034,7 +1221,7 @@ function bindEvents(container, ctx) {
   });
 
   // Create/edit form
-  const formController = bindCreateForm(container, { tools, packs });
+  const formController = bindCreateForm(container, { tools, packs, agents });
 
   container.querySelectorAll('.auto-edit').forEach((button) => {
     button.addEventListener('click', () => {
@@ -1153,6 +1340,21 @@ function bindEvents(container, ctx) {
         if (auto._playbook) {
           const clonedPb = { ...auto._playbook, id: newId, name: newName, enabled: false };
           await api.upsertPlaybook(clonedPb);
+        } else if (auto._task?.type === 'agent') {
+          await api.createScheduledTask({
+            name: newName,
+            type: 'agent',
+            target: auto._task.target,
+            prompt: auto._task.prompt,
+            channel: auto._task.channel || 'scheduled',
+            userId: auto._task.userId,
+            deliver: auto._task.deliver !== false,
+            cron: auto.cron || '0 9 * * *',
+            runOnce: auto.runOnce === true,
+            enabled: false,
+            emitEvent: auto._task.emitEvent,
+            outputHandling: auto.outputHandling,
+          });
         } else {
           // Wrap orphaned task as playbook
           await api.upsertPlaybook({
@@ -1167,12 +1369,13 @@ function bindEvents(container, ctx) {
         }
 
         // Clone linked schedule if present
-        if (auto.cron && (auto._task || auto._source === 'preset')) {
+        if (auto.cron && auto._task?.type !== 'agent' && (auto._task || auto._source === 'preset')) {
           await api.createScheduledTask({
             name: newName,
             type: 'playbook',
             target: newId,
             cron: auto.cron,
+            runOnce: auto.runOnce === true,
             enabled: false,
             outputHandling: auto.outputHandling,
           });
@@ -1250,13 +1453,15 @@ function bindEvents(container, ctx) {
   bindEngineSettings(container, ctx);
 }
 
-function bindCreateForm(container, { tools, packs }) {
+function bindCreateForm(container, { tools, packs, agents }) {
   const createToggle = container.querySelector('#auto-create-toggle');
   const createForm = container.querySelector('#auto-create-form');
   const titleEl = container.querySelector('#auto-form-title');
   const subtitleEl = container.querySelector('#auto-form-subtitle');
   const saveButton = container.querySelector('#auto-create-save');
   const statusEl = container.querySelector('#auto-create-status');
+  const idField = container.querySelector('#auto-id-field');
+  const packField = container.querySelector('#auto-pack-field');
   const idInput = container.querySelector('#auto-create-id');
   const nameInput = container.querySelector('#auto-create-name');
   const descriptionInput = container.querySelector('#auto-create-description');
@@ -1266,11 +1471,18 @@ function bindCreateForm(container, { tools, packs }) {
   const singleToolSelect = container.querySelector('#auto-single-tool-select');
   const scheduleCheck = container.querySelector('#auto-schedule-enabled');
   const scheduleSection = container.querySelector('#auto-schedule-section');
+  const runOnceCheck = container.querySelector('#auto-run-once');
   const argsInput = container.querySelector('#auto-create-args');
+  const argsField = argsInput?.closest('.cfg-field');
   const eventInput = container.querySelector('#auto-create-event');
   const outputNotifySelect = container.querySelector('#auto-output-notify');
   const outputSecuritySelect = container.querySelector('#auto-output-security');
   const outputArtifactsSelect = container.querySelector('#auto-output-artifacts');
+  const assistantSection = container.querySelector('#auto-assistant-section');
+  const agentSelect = container.querySelector('#auto-agent-select');
+  const agentChannelSelect = container.querySelector('#auto-agent-channel');
+  const agentPromptInput = container.querySelector('#auto-agent-prompt');
+  const agentDeliverCheck = container.querySelector('#auto-agent-deliver');
   const editIdInput = container.querySelector('#auto-edit-id');
   const editSourceInput = container.querySelector('#auto-edit-source');
   const editTaskIdInput = container.querySelector('#auto-edit-task-id');
@@ -1358,11 +1570,17 @@ function bindCreateForm(container, { tools, packs }) {
     singleToolSelect.value = '';
     argsInput.value = '';
     eventInput.value = '';
+    if (agentSelect) agentSelect.value = 'default';
+    if (agentChannelSelect) agentChannelSelect.value = 'scheduled';
+    if (agentPromptInput) agentPromptInput.value = '';
+    if (agentDeliverCheck) agentDeliverCheck.checked = true;
     outputNotifySelect.value = 'off';
     outputSecuritySelect.value = 'off';
     outputArtifactsSelect.value = 'run_history_only';
     modeSelect.value = 'single';
     scheduleCheck.checked = false;
+    scheduleCheck.disabled = false;
+    if (runOnceCheck) runOnceCheck.checked = false;
     scheduleSection.style.display = 'none';
     applyScheduleToForm(container, parseCronToSchedule(''));
     wfSteps.splice(0, wfSteps.length);
@@ -1414,14 +1632,37 @@ function bindCreateForm(container, { tools, packs }) {
 
   function updateModeVisibility() {
     const mode = modeSelect.value;
+    const isAssistant = mode === 'assistant';
+    if (!editIdInput.value && !editTaskIdInput.value) {
+      subtitleEl.textContent = isAssistant
+        ? 'Create a recurring assistant task that wakes up on schedule, decides what to inspect, and reports back.'
+        : 'Build a one-off tool automation or a multi-step pipeline.';
+    }
     singleSection.style.display = mode === 'single' ? '' : 'none';
-    pipelineSection.style.display = mode !== 'single' ? '' : 'none';
+    pipelineSection.style.display = mode !== 'single' && !isAssistant ? '' : 'none';
+    if (assistantSection) assistantSection.style.display = isAssistant ? '' : 'none';
+    if (idField) idField.style.display = isAssistant ? 'none' : '';
+    if (packField) packField.style.display = isAssistant ? 'none' : '';
+    if (argsField) argsField.style.display = isAssistant ? 'none' : '';
+    if (isAssistant) {
+      scheduleCheck.checked = true;
+      scheduleCheck.disabled = true;
+      scheduleSection.style.display = '';
+    } else {
+      scheduleCheck.disabled = false;
+      scheduleSection.style.display = scheduleCheck.checked ? '' : 'none';
+    }
   }
   modeSelect?.addEventListener('change', updateModeVisibility);
   updateModeVisibility();
 
   // Schedule toggle
   scheduleCheck?.addEventListener('change', () => {
+    if (modeSelect.value === 'assistant') {
+      scheduleCheck.checked = true;
+      scheduleSection.style.display = '';
+      return;
+    }
     scheduleSection.style.display = scheduleCheck.checked ? '' : 'none';
   });
 
@@ -1441,6 +1682,7 @@ function bindCreateForm(container, { tools, packs }) {
     container.querySelector(sel)?.addEventListener('input', () => updateSchedulePreview(container));
     container.querySelector(sel)?.addEventListener('change', () => updateSchedulePreview(container));
   });
+  runOnceCheck?.addEventListener('change', () => updateSchedulePreview(container));
 
   updateScheduleFields(container);
   updateSchedulePreview(container);
@@ -1456,13 +1698,20 @@ function bindCreateForm(container, { tools, packs }) {
       return;
     }
     stepList.innerHTML = wfSteps.map((step, i) => {
-      const tool = tools.find((t) => t.name === step.toolName);
-      const desc = tool?.description || '';
+      const isInstruction = step.type === 'instruction';
+      const tool = !isInstruction ? tools.find((t) => t.name === step.toolName) : null;
+      const label = isInstruction ? 'LLM Instruction' : esc(step.toolName);
+      const desc = isInstruction
+        ? esc(step.instruction || '(no instruction)')
+        : esc(tool?.shortDescription || tool?.description || '');
+      const badge = isInstruction
+        ? '<span class="badge badge-info" style="font-size:0.65rem;margin-right:0.3rem;">LLM</span>'
+        : '';
       return `
         <div class="wf-step-row" data-index="${i}">
           <span class="wf-step-number">${i + 1}</span>
-          <span class="wf-step-name">${esc(step.toolName)}</span>
-          <span class="wf-step-desc">${esc(desc)}</span>
+          <span class="wf-step-name">${badge}${label}</span>
+          <span class="wf-step-desc">${desc}</span>
           <div class="wf-step-actions">
             <button class="btn btn-secondary btn-sm auto-step-up" data-index="${i}" ${i === 0 ? 'disabled' : ''} title="Move up">&uarr;</button>
             <button class="btn btn-secondary btn-sm auto-step-down" data-index="${i}" ${i === wfSteps.length - 1 ? 'disabled' : ''} title="Move down">&darr;</button>
@@ -1493,12 +1742,40 @@ function bindCreateForm(container, { tools, packs }) {
   }
   renderStepList();
 
+  // Step type toggle: show tool selector or instruction input.
+  const stepTypeSelect = container.querySelector('#auto-step-type-select');
+  const stepToolField = container.querySelector('#auto-step-tool-field');
+  const stepInstructionField = container.querySelector('#auto-step-instruction-field');
+  const stepInstructionInput = container.querySelector('#auto-step-instruction-input');
+
+  stepTypeSelect?.addEventListener('change', () => {
+    const isInstruction = stepTypeSelect.value === 'instruction';
+    if (stepToolField) stepToolField.style.display = isInstruction ? 'none' : '';
+    if (stepInstructionField) stepInstructionField.style.display = isInstruction ? '' : 'none';
+  });
+
   container.querySelector('#auto-step-add')?.addEventListener('click', () => {
-    const toolName = stepToolSelect.value;
-    if (!toolName) return;
+    const stepType = stepTypeSelect?.value || 'tool';
     const packId = packSelect?.value || '';
-    wfSteps.push({ id: `step-${wfSteps.length + 1}`, name: toolName, packId, toolName, args: {} });
-    stepToolSelect.value = '';
+
+    if (stepType === 'instruction') {
+      const instruction = stepInstructionInput?.value?.trim();
+      if (!instruction) return;
+      wfSteps.push({
+        id: `step-${wfSteps.length + 1}`,
+        type: 'instruction',
+        name: 'LLM Instruction',
+        packId: '',
+        toolName: '',
+        instruction,
+      });
+      if (stepInstructionInput) stepInstructionInput.value = '';
+    } else {
+      const toolName = stepToolSelect.value;
+      if (!toolName) return;
+      wfSteps.push({ id: `step-${wfSteps.length + 1}`, name: toolName, packId, toolName, args: {} });
+      stepToolSelect.value = '';
+    }
     renderStepList();
   });
 
@@ -1510,20 +1787,51 @@ function bindCreateForm(container, { tools, packs }) {
     const id = idInput.value.trim();
     const name = nameInput.value.trim();
     const mode = modeSelect.value;
+    const isAssistant = mode === 'assistant';
     const enabled = enabledSelect.value === 'true';
     const description = descriptionInput.value.trim();
     const packId = packSelect?.value || '';
     const scheduleEnabled = scheduleCheck.checked;
+    const runOnce = runOnceCheck?.checked === true;
 
-    if (!id || !name) {
-      statusEl.textContent = 'Name and ID are required.';
+    if (!name || (!isAssistant && !id)) {
+      statusEl.textContent = isAssistant ? 'Name is required.' : 'Name and ID are required.';
+      statusEl.style.color = 'var(--error)';
+      return;
+    }
+    if ((editSource === 'playbook' || editSource === 'task') && isAssistant) {
+      statusEl.textContent = 'Convert workflow/tool automations into assistant automations by cloning or creating a new one.';
+      statusEl.style.color = 'var(--error)';
+      return;
+    }
+    if (editSource === 'agent_task' && !isAssistant) {
+      statusEl.textContent = 'Convert assistant automations into workflow/tool automations by creating a new automation.';
       statusEl.style.color = 'var(--error)';
       return;
     }
 
     // Build steps
-    let steps;
-    if (mode === 'single') {
+    let steps = [];
+    if (isAssistant) {
+      const agentId = agentSelect?.value || 'default';
+      const prompt = agentPromptInput?.value?.trim() || '';
+      if (!prompt) {
+        statusEl.textContent = 'Assistant prompt is required.';
+        statusEl.style.color = 'var(--error)';
+        return;
+      }
+      steps = [{
+        id: `${editTaskId || 'assistant'}-step-1`,
+        name: agentId,
+        packId: '',
+        toolName: `agent:${agentId}`,
+        args: {
+          prompt,
+          channel: agentChannelSelect?.value || 'scheduled',
+          deliver: agentDeliverCheck?.checked !== false,
+        },
+      }];
+    } else if (mode === 'single') {
       const toolName = singleToolSelect.value;
       if (!toolName) {
         statusEl.textContent = 'Select a tool.';
@@ -1546,7 +1854,13 @@ function bindCreateForm(container, { tools, packs }) {
         statusEl.style.color = 'var(--error)';
         return;
       }
-      steps = wfSteps.map((step, i) => ({ ...step, id: `${id}-step-${i + 1}`, packId: packId || step.packId }));
+      steps = wfSteps.map((step, i) => {
+        const base = { ...step, id: `${id}-step-${i + 1}` };
+        if (step.type === 'instruction') {
+          return { ...base, packId: '', toolName: '' };
+        }
+        return { ...base, packId: packId || step.packId };
+      });
     }
 
     statusEl.textContent = 'Saving...';
@@ -1567,7 +1881,35 @@ function bindCreateForm(container, { tools, packs }) {
         return;
       }
 
-      if (editSource === 'task' && editTaskId) {
+      if (isAssistant) {
+        const cron = buildCronFromForm(container);
+        if (!cron) {
+          statusEl.textContent = 'Choose a valid schedule.';
+          statusEl.style.color = 'var(--error)';
+          return;
+        }
+        const input = {
+          name,
+          type: 'agent',
+          target: agentSelect?.value || 'default',
+          prompt: agentPromptInput?.value?.trim() || '',
+          channel: agentChannelSelect?.value || 'scheduled',
+          deliver: agentDeliverCheck?.checked !== false,
+          cron,
+          runOnce,
+          enabled,
+          emitEvent,
+          outputHandling,
+        };
+        const result = editTaskId
+          ? await api.updateScheduledTask(editTaskId, input)
+          : await api.createScheduledTask(input);
+        if (!result.success) {
+          statusEl.textContent = result.message || 'Failed.';
+          statusEl.style.color = 'var(--error)';
+          return;
+        }
+      } else if (editSource === 'task' && editTaskId) {
         const toolName = singleToolSelect.value;
         const args = steps[0]?.args || {};
         const result = await api.updateScheduledTask(editTaskId, {
@@ -1576,6 +1918,7 @@ function bindCreateForm(container, { tools, packs }) {
           target: toolName,
           args,
           cron,
+          runOnce,
           enabled,
           emitEvent,
           outputHandling,
@@ -1610,7 +1953,8 @@ function bindCreateForm(container, { tools, packs }) {
               type: 'playbook',
               target: editId || id,
               cron,
-              enabled: true,
+              runOnce,
+              enabled,
               emitEvent,
               outputHandling,
             });
@@ -1620,7 +1964,8 @@ function bindCreateForm(container, { tools, packs }) {
               type: 'playbook',
               target: editId || id,
               cron,
-              enabled: true,
+              runOnce,
+              enabled,
               emitEvent,
               outputHandling,
             });
@@ -1630,7 +1975,7 @@ function bindCreateForm(container, { tools, packs }) {
         }
       }
 
-      statusEl.textContent = editId ? 'Saved.' : 'Created.';
+      statusEl.textContent = editId || editTaskId ? 'Saved.' : 'Created.';
       statusEl.style.color = 'var(--success)';
       setTimeout(() => renderAutomations(container), 350);
     } catch (err) {
@@ -1641,6 +1986,7 @@ function bindCreateForm(container, { tools, packs }) {
 
   function editAutomation(auto) {
     const isStandaloneTask = auto._source === 'task' && !auto._playbook && auto._task;
+    const isAgentTask = auto._task?.type === 'agent';
     const firstStep = auto.steps?.[0] || null;
     const uniformPackId = auto.steps?.every((step) => step.packId === auto.steps?.[0]?.packId) ? (auto.steps?.[0]?.packId || '') : '';
 
@@ -1653,7 +1999,7 @@ function bindCreateForm(container, { tools, packs }) {
     clearStatus();
 
     editIdInput.value = auto.id || '';
-    editSourceInput.value = auto._source || '';
+    editSourceInput.value = isAgentTask ? 'agent_task' : (auto._source || '');
     editTaskIdInput.value = auto._task?.id || '';
 
     nameInput.value = auto.name || '';
@@ -1665,13 +2011,29 @@ function bindCreateForm(container, { tools, packs }) {
     outputSecuritySelect.value = auto.outputHandling?.sendToSecurity || 'off';
     outputArtifactsSelect.value = auto.outputHandling?.persistArtifacts || 'run_history_only';
     packSelect.value = uniformPackId;
+    if (runOnceCheck) runOnceCheck.checked = auto.runOnce === true;
 
     wfSteps.splice(0, wfSteps.length, ...(auto.steps || []).map((step) => ({
       ...step,
       args: step.args ? JSON.parse(JSON.stringify(step.args)) : {},
     })));
 
-    if (isStandaloneTask) {
+    if (isAgentTask) {
+      modeSelect.value = 'assistant';
+      modeSelect.disabled = false;
+      packSelect.value = '';
+      packSelect.disabled = true;
+      if (agentSelect) agentSelect.value = auto._task.target || 'default';
+      if (agentChannelSelect) agentChannelSelect.value = auto._task.channel || 'scheduled';
+      if (agentPromptInput) agentPromptInput.value = auto._task.prompt || auto.agentPrompt || '';
+      if (agentDeliverCheck) agentDeliverCheck.checked = auto._task.deliver !== false;
+      argsInput.value = '';
+      scheduleCheck.checked = true;
+      scheduleCheck.disabled = true;
+      scheduleSection.style.display = '';
+      enabledSelect.value = String(auto._task.enabled !== false);
+      setIdReadOnly(true);
+    } else if (isStandaloneTask) {
       modeSelect.value = 'single';
       modeSelect.disabled = true;
       packSelect.value = '';
@@ -1816,12 +2178,13 @@ function updateSchedulePreview(container) {
   const previewEl = container.querySelector('#auto-schedule-preview');
   if (!previewEl) return;
   const cron = buildCronFromForm(container);
+  const runOnce = container.querySelector('#auto-run-once')?.checked === true;
   if (!cron) {
     previewEl.textContent = 'Choose a valid schedule.';
     previewEl.style.color = 'var(--warning)';
     return;
   }
-  previewEl.textContent = `Schedule preview: ${cronToHuman(cron)}`;
+  previewEl.textContent = `${runOnce ? 'Single-shot preview' : 'Schedule preview'}: ${cronToHuman(cron, runOnce)}`;
   previewEl.style.color = 'var(--text-secondary)';
 }
 
@@ -1946,26 +2309,31 @@ function parseCronToSchedule(cron) {
 
 // ─── Cron display helpers ───────────────────────────────
 
-function cronToHuman(cron) {
+function cronToHuman(cron, runOnce = false) {
   if (!cron) return '-';
   const parts = cron.trim().split(/\s+/);
   if (parts.length !== 5) return cron;
   const [min, hour, dom, mon, dow] = parts;
 
-  if (min === '*' && hour === '*' && dom === '*' && mon === '*' && dow === '*') return 'Every minute';
-  if (min.startsWith('*/') && hour === '*' && dom === '*' && mon === '*' && dow === '*') {
+  let label = cron;
+  if (min === '*' && hour === '*' && dom === '*' && mon === '*' && dow === '*') {
+    label = 'Every minute';
+  } else if (min.startsWith('*/') && hour === '*' && dom === '*' && mon === '*' && dow === '*') {
     const n = Number.parseInt(min.slice(2), 10);
-    return n === 1 ? 'Every minute' : `Every ${n} minutes`;
-  }
-  if (/^\d+$/.test(min) && hour === '*' && dom === '*' && mon === '*' && dow === '*') return `Every hour at :${String(min).padStart(2, '0')}`;
-  if (/^\d+$/.test(min) && hour.startsWith('*/') && dom === '*' && mon === '*' && dow === '*') {
+    label = n === 1 ? 'Every minute' : `Every ${n} minutes`;
+  } else if (/^\d+$/.test(min) && hour === '*' && dom === '*' && mon === '*' && dow === '*') {
+    label = `Every hour at :${String(min).padStart(2, '0')}`;
+  } else if (/^\d+$/.test(min) && hour.startsWith('*/') && dom === '*' && mon === '*' && dow === '*') {
     const n = Number.parseInt(hour.slice(2), 10);
-    return n === 1 ? `Every hour at :${String(min).padStart(2, '0')}` : `Every ${n} hours at :${String(min).padStart(2, '0')}`;
+    label = n === 1 ? `Every hour at :${String(min).padStart(2, '0')}` : `Every ${n} hours at :${String(min).padStart(2, '0')}`;
+  } else if (/^\d+$/.test(min) && /^\d+$/.test(hour) && dom === '*' && mon === '*' && dow === '*') {
+    label = `Daily at ${fmtClock(hour, min)}`;
+  } else if (/^\d+$/.test(min) && /^\d+$/.test(hour) && dom === '*' && mon === '*' && dow === '1-5') {
+    label = `Weekdays at ${fmtClock(hour, min)}`;
+  } else if (/^\d+$/.test(min) && /^\d+$/.test(hour) && dom === '*' && mon === '*' && /^[0-6]$/.test(dow)) {
+    label = `${weekdayName(dow)} at ${fmtClock(hour, min)}`;
   }
-  if (/^\d+$/.test(min) && /^\d+$/.test(hour) && dom === '*' && mon === '*' && dow === '*') return `Daily at ${fmtClock(hour, min)}`;
-  if (/^\d+$/.test(min) && /^\d+$/.test(hour) && dom === '*' && mon === '*' && dow === '1-5') return `Weekdays at ${fmtClock(hour, min)}`;
-  if (/^\d+$/.test(min) && /^\d+$/.test(hour) && dom === '*' && mon === '*' && /^[0-6]$/.test(dow)) return `${weekdayName(dow)} at ${fmtClock(hour, min)}`;
-  return cron;
+  return runOnce ? `One shot at ${label}` : label;
 }
 
 function fmtClock(hour, min) { return `${String(hour).padStart(2, '0')}:${String(min).padStart(2, '0')}`; }

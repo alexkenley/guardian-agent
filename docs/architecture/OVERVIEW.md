@@ -145,7 +145,8 @@ Runtime (src/runtime/runtime.ts)
 ├── Shared State (src/runtime/shared-state.ts) — per-invocation inter-agent data passing
 ├── Document Search (src/search/) — native hybrid search (BM25 + vector) over document collections
 ├── MCP Client (src/tools/mcp-client.ts) — Model Context Protocol tool server consumption
-├── Managed MCP Providers               — curated provider wrappers, including Google Workspace via `gws`
+├── Native Google Service (src/google/)  — direct googleapis SDK integration (OAuth PKCE, encrypted tokens)
+├── Managed MCP Providers               — curated provider wrappers, including Google Workspace via `gws` CLI (legacy)
 ├── Eval Framework (src/eval/)           — agent evaluation with metrics and reporting
 │   ├── types.ts                        — test case, matcher, and result types
 │   ├── metrics.ts                      — content, trajectory, metadata, and safety metrics
@@ -154,7 +155,7 @@ Runtime (src/runtime/runtime.ts)
 ├── Budget (src/runtime/budget.ts)      — compute budget tracking
 ├── Watchdog (src/runtime/watchdog.ts)  — stall detection (timestamp-based)
 ├── Scheduler (src/runtime/scheduler.ts)— cron scheduling (croner)
-├── ScheduledTasks (src/runtime/scheduled-tasks.ts) — unified CRUD scheduling for tools/playbooks
+├── ScheduledTasks (src/runtime/scheduled-tasks.ts) — unified CRUD scheduling for tools, playbooks, and scheduled assistant turns
 └── Channels (src/channels/)            — CLI, Telegram, Web adapters
 ```
 
@@ -249,7 +250,7 @@ const router = new ConditionalAgent('route', 'Intent Router', {
 
 Key design: every sub-agent dispatch goes through `ctx.dispatch()` → `Runtime.dispatchMessage()` → full Guardian pipeline. When the target is a built-in chat agent, that dispatch then crosses into the brokered worker path. Orchestration does not create a bypass path.
 
-See [Orchestration Agents Spec](../specs/ORCHESTRATION-AGENTS-SPEC.md) for full details.
+See [Orchestration Spec](../specs/ORCHESTRATION-SPEC.md) for full details.
 
 ### MCP Client
 
@@ -285,11 +286,11 @@ Current implementation:
 - supports both Guardian-native `skill.json` manifests and reviewed frontmatter-only `SKILL.md` imports
 - `SkillResolver` auto-selects relevant skills for chat requests
 - resolver uses native triggers first, then compatibility fallback matching for imported skills
-- active skill summaries are injected into the system prompt
+- active skills are injected as a catalog, and the model reads the most relevant `SKILL.md` before acting
 - active skill IDs are included in chat response metadata
 - runtime skill inspection and toggling are available via `/skills` in CLI and `GET/POST /api/skills`
 - skill enable/disable updates persist to `assistant.skills.disabledSkills`
-- bundled skills now include Google Workspace guidance plus `security-triage`, `mcp-builder`, `skill-creator`, and `webapp-testing`
+- bundled skills now span personal assistant work, IT operations, and security workflows, including Google Workspace, cloud operations, automations, file workflows, web research, host and network operations, triage, and threat intel
 
 Not yet implemented:
 
@@ -301,26 +302,30 @@ See [Native Skills Spec](../specs/SKILLS-SPEC.md).
 
 GuardianAgent includes a managed MCP provider foundation for complex ecosystems where both tool schemas and procedural guidance matter.
 
-The first managed provider is Google Workspace:
+Google Workspace integration supports two backends:
 
-- execution via `gws mcp`
+**Native mode (default, recommended):**
+
+- `src/google/` module calls Google APIs directly via `googleapis` SDK
+- OAuth 2.0 PKCE with localhost callback, tokens encrypted at `~/.guardianagent/secrets.enc.json`
+- 3-step setup: create Cloud Console credentials → upload JSON → click Connect
+- No external CLI dependency, no subprocess overhead
+- Config: `assistant.tools.google` (enabled, mode: `native`, services, oauthCallbackPort, credentialsPath)
+
+**CLI mode (legacy, power users):**
+
+- execution via `gws` CLI subprocess (`@googleworkspace/cli`)
+- separate install and terminal auth required
+- Config: `assistant.tools.mcp.managedProviders.gws`
+
+Both modes:
+
+- use the same `gws` and `gws_schema` tool names (transparent routing in ToolExecutor)
 - safety and approvals via ToolExecutor + Guardian
 - workflow guidance via native Google skills
+- Google Workspace tools mapped into Gmail/Calendar/Drive/Docs/Sheets capability checks before execution
 
-Current implementation:
-
-- config-driven managed provider materialization for `gws`
-- default service scope of Gmail, Calendar, and Drive
-- optional skill exposure tied to successful managed-provider enablement
-- provider-linked Google skills expose readiness state through the skills CLI/API
-- Google Workspace MCP tools are mapped into Gmail/Calendar/Drive/Docs/Sheets capability checks before execution
-
-Not yet implemented:
-
-- richer provider diagnostics in UI
-- multi-account selection flow
-
-See [Google Workspace Integration Spec](../specs/GOOGLE-WORKSPACE-INTEGRATION-SPEC.md).
+See [Native Google Integration Spec](../specs/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-SPEC.md) and [Google Workspace CLI Spec](../specs/GOOGLE-WORKSPACE-INTEGRATION-SPEC.md).
 
 ## Brokered Execution Boundary
 

@@ -8,7 +8,7 @@
 - [Koan](https://github.com/sukria/koan) — autonomous coding agent orchestrator (Python/GPL-3.0)
 - `gru-ai` — TypeScript autonomous coding workflow framework reviewed locally at `S:\Development\gru-ai`
 - `Broomy` — Electron multi-session coding workspace reviewed locally at `S:\Development\Broomy`
-- GuardianAgent specs: `ORCHESTRATION-AGENTS-SPEC.md`, `ASSISTANT-ORCHESTRATOR-SPEC.md`
+- GuardianAgent spec: `ORCHESTRATION-SPEC.md`
 
 ---
 
@@ -960,6 +960,5 @@ The spec is ephemeral (per-session, not persisted to memory), but the user can s
 - [Koan GitHub](https://github.com/sukria/koan) — GPL-3.0, Python autonomous coding agent orchestrator
 - `gru-ai` local review — `S:\Development\gru-ai`
 - `Broomy` local review — `S:\Development\Broomy`
-- [GuardianAgent Orchestration Spec](../specs/ORCHESTRATION-AGENTS-SPEC.md)
-- [GuardianAgent Assistant Orchestrator Spec](../specs/ASSISTANT-ORCHESTRATOR-SPEC.md)
+- [GuardianAgent Orchestration Spec](../specs/ORCHESTRATION-SPEC.md)
 - [GuardianAgent Brokered Isolation Proposal](./BROKERED-AGENT-ISOLATION-PROPOSAL.md)

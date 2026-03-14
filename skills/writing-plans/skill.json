@@ -1,0 +1,17 @@
+{
+  "id": "writing-plans",
+  "name": "Writing Plans",
+  "version": "0.1.0",
+  "description": "Use when the user asks for an implementation plan or when a coding task is large enough that it should be decomposed before editing.",
+  "role": "process",
+  "tags": ["planning", "implementation plan", "roadmap", "decomposition"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["implementation plan", "write a plan", "plan this", "roadmap", "break this down", "decompose this"]
+  },
+  "risk": "informational"
+}

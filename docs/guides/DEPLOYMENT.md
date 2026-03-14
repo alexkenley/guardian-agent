@@ -78,15 +78,33 @@ Same pipeline as Unix, plus: detects cross-platform node_modules (WSL vs Windows
 
 External CLI tools used by the system:
 
-### Google Workspace CLI (`@googleworkspace/cli`)
+### Google Workspace
 
-Unified CLI for Google Drive, Gmail, Calendar, Sheets, Docs, Chat, and Admin APIs. GuardianAgent invokes the `gws` CLI via subprocess for each Google Workspace tool call.
+GuardianAgent supports two backends for Google Workspace. **Native mode is the default** — it requires no external CLI.
+
+#### Native Mode (Default)
+
+Calls Google APIs directly via the `googleapis` SDK. OAuth 2.0 PKCE handled within GuardianAgent.
+
+- **No external dependency** — no CLI install needed
+- **Config:** `assistant.tools.google` in config.yaml (enabled, mode: `native`, services, credentialsPath)
+- **Auth:** Upload `client_secret.json` via web UI, click Connect Google (browser opens for consent)
+- **Tokens:** Encrypted at rest in `~/.guardianagent/secrets.enc.json`
+- **Web UI:** Configuration > Integrations > Google Workspace (select Native mode)
+
+Native mode is recommended because it reduces setup from 7 steps to 3 and eliminates subprocess latency.
+
+#### CLI Mode (Legacy)
+
+Uses the external `@googleworkspace/cli` tool via subprocess. Retained for users with existing gws setups.
 
 - **Bundled** as a project dependency (`npm install` installs it)
 - **Binary:** `node_modules/.bin/gws` (or `gws.cmd` on Windows)
 - **Config:** `assistant.tools.mcp.managedProviders.gws` in config.yaml
 - **Auth:** Run `gws auth setup` then `gws auth login` in a terminal (requires interactive browser OAuth)
-- **Web UI:** See Settings > Google Workspace for full setup instructions
+- **Web UI:** Configuration > Integrations > Google Workspace (select CLI mode)
+
+Both modes use the same `gws` tool name — the LLM interface is identical. Switching modes does not affect automations or skills.
 
 ---
 

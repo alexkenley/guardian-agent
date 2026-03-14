@@ -1,0 +1,18 @@
+{
+  "id": "cloud-operations",
+  "name": "Cloud Operations",
+  "version": "0.1.0",
+  "description": "Use for cloud and hosting tasks such as checking provider status, deployments, DNS, SSL, logs, accounts, backups, costs, and resource inventories across Vercel, Cloudflare, AWS, GCP, Azure, cPanel, and WHM.",
+  "role": "domain",
+  "tags": ["cloud", "hosting", "vercel", "cloudflare", "aws", "gcp", "azure", "cpanel", "whm", "dns", "ssl"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["cloud", "hosting", "vercel", "cloudflare", "aws", "gcp", "azure", "cpanel", "whm", "deployment", "dns", "ssl", "backup", "cost", "cloud logs"]
+  },
+  "tools": ["find_tools", "vercel_status", "cf_status", "aws_status", "gcp_status", "azure_status", "cpanel_account", "whm_status"],
+  "risk": "operational"
+}

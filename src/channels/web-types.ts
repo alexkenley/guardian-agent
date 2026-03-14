@@ -556,7 +556,7 @@ export interface ScheduledTaskHistoryStep {
 
 /** SSE event pushed to dashboard clients. */
 export interface SSEEvent {
-  type: 'audit' | 'metrics' | 'watchdog' | 'security.alert' | 'chat.thinking' | 'chat.tool_call' | 'chat.token' | 'chat.done' | 'chat.error' | 'ui.invalidate';
+  type: 'audit' | 'metrics' | 'watchdog' | 'security.alert' | 'assistant.notice' | 'chat.thinking' | 'chat.tool_call' | 'chat.token' | 'chat.done' | 'chat.error' | 'ui.invalidate';
   data: unknown;
 }
 
@@ -579,7 +579,12 @@ export interface DashboardCallbacks {
   onProviderModels?: (input: DashboardProviderModelsInput) => Promise<{ models: string[] }>;
   onAssistantState?: () => DashboardAssistantState;
   onSSESubscribe?: (listener: SSEListener) => () => void;
-  onDispatch?: (agentId: string, message: { content: string; userId?: string; channel?: string }, routeDecision?: { fallbackAgentId?: string; complexityScore?: number; tier?: string }) => Promise<{ content: string; metadata?: Record<string, unknown> }>;
+  onDispatch?: (
+    agentId: string,
+    message: { content: string; userId?: string; channel?: string },
+    routeDecision?: { fallbackAgentId?: string; complexityScore?: number; tier?: string },
+    options?: { priority?: 'high' | 'normal' | 'low'; requestType?: string },
+  ) => Promise<{ content: string; metadata?: Record<string, unknown> }>;
   onConfigUpdate?: (updates: ConfigUpdate) => Promise<{ success: boolean; message: string }>;
   onConversationReset?: (args: {
     agentId: string;
@@ -814,7 +819,7 @@ export interface DashboardCallbacks {
     id: string;
     taskId: string;
     taskName: string;
-    taskType: 'tool' | 'playbook';
+    taskType: 'tool' | 'playbook' | 'agent';
     target: string;
     timestamp: number;
     status: ScheduledTaskStatus;
@@ -836,6 +841,24 @@ export interface DashboardCallbacks {
     message: string;
   }>;
   onGwsStatus?: () => Promise<GwsConnectionStatus>;
+  /** Native Google Workspace status. */
+  onGoogleStatus?: () => Promise<{
+    authenticated: boolean;
+    tokenExpiry?: number;
+    services: string[];
+    mode: 'native';
+  }>;
+  /** Start native Google OAuth flow. */
+  onGoogleAuthStart?: (services: string[]) => Promise<{
+    success: boolean;
+    authUrl?: string;
+    state?: string;
+    message?: string;
+  }>;
+  /** Upload client_secret.json credentials. */
+  onGoogleCredentials?: (credentials: string) => Promise<{ success: boolean; message: string }>;
+  /** Disconnect native Google integration. */
+  onGoogleDisconnect?: () => Promise<{ success: boolean; message: string }>;
   /** Guardian Agent inline evaluation config and status. */
   onGuardianAgentStatus?: () => {
     enabled: boolean;

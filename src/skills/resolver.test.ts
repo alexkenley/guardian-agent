@@ -47,6 +47,7 @@ describe('SkillResolver', () => {
 
     expect(resolved).toHaveLength(1);
     expect(resolved[0].id).toBe('security-triage');
+    expect(resolved[0].description).toBe('Triage incidents');
     expect(resolved[0].summary).toContain('Summarize the incident first.');
   });
 
@@ -210,5 +211,59 @@ This should not load.
     await registry.loadFromRoots([root]);
 
     expect(registry.list()).toHaveLength(0);
+  });
+
+  it('ignores empty directories in a skills root', async () => {
+    const root = createSkillRoot();
+    mkdirSync(join(root, 'empty-dir'), { recursive: true });
+
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([root]);
+
+    expect(registry.list()).toHaveLength(0);
+  });
+
+  it('prefers process skills first when scores are otherwise equal', async () => {
+    const root = createSkillRoot();
+
+    const processDir = join(root, 'systematic-debugging');
+    mkdirSync(processDir, { recursive: true });
+    writeFileSync(join(processDir, 'skill.json'), JSON.stringify({
+      id: 'systematic-debugging',
+      name: 'Systematic Debugging',
+      version: '0.1.0',
+      description: 'Debug bugs methodically',
+      role: 'process',
+      triggers: { keywords: ['bug'] },
+    }), 'utf-8');
+    writeFileSync(join(processDir, 'SKILL.md'), '# Systematic Debugging\n\nFind root cause before fixing.', 'utf-8');
+
+    const domainDir = join(root, 'webapp-testing');
+    mkdirSync(domainDir, { recursive: true });
+    writeFileSync(join(domainDir, 'skill.json'), JSON.stringify({
+      id: 'webapp-testing',
+      name: 'Webapp Testing',
+      version: '0.1.0',
+      description: 'Test browser flows',
+      role: 'domain',
+      triggers: { keywords: ['bug'] },
+    }), 'utf-8');
+    writeFileSync(join(domainDir, 'SKILL.md'), '# Webapp Testing\n\nTest the broken flow.', 'utf-8');
+
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([root]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 2 });
+    const resolved = resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content: 'Please fix this bug.',
+    });
+
+    expect(resolved).toHaveLength(2);
+    expect(resolved[0]?.id).toBe('systematic-debugging');
+    expect(resolved[0]?.role).toBe('process');
+    expect(resolved[1]?.id).toBe('webapp-testing');
+    expect(resolved[1]?.role).toBe('domain');
   });
 });

@@ -1,0 +1,18 @@
+{
+  "id": "knowledge-search",
+  "name": "Knowledge Search",
+  "version": "0.1.0",
+  "description": "Use when searching indexed local documents, repo docs, notes, or wikis through Guardian's document search tools.",
+  "role": "domain",
+  "tags": ["docs", "search", "knowledge base", "wiki", "indexed documents"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["search docs", "search documentation", "find in docs", "knowledge base", "wiki", "indexed documents", "doc search"]
+  },
+  "tools": ["doc_search", "doc_search_status", "doc_search_reindex", "fs_read"],
+  "risk": "informational"
+}

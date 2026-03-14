@@ -1,0 +1,17 @@
+{
+  "id": "receiving-code-review",
+  "name": "Receiving Code Review",
+  "version": "0.1.0",
+  "description": "Use when addressing code review or QA feedback, especially when the feedback is unclear, broad, or technically questionable.",
+  "role": "process",
+  "tags": ["code review", "qa", "feedback", "pull request"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["review feedback", "code review", "pr comments", "address comments", "reviewer said", "qa feedback"]
+  },
+  "risk": "informational"
+}

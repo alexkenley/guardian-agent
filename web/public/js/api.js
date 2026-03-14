@@ -369,6 +369,18 @@ export const api = {
   gwsStatus: () => request('/api/gws/status'),
   gwsReauth: () => request('/api/gws/reauth', { method: 'POST' }),
 
+  // Native Google integration
+  googleStatus: () => request('/api/google/status'),
+  googleAuthStart: (services) => request('/api/google/auth/start', {
+    method: 'POST',
+    body: JSON.stringify({ services }),
+  }),
+  googleCredentials: (credentials) => request('/api/google/credentials', {
+    method: 'POST',
+    body: JSON.stringify({ credentials }),
+  }),
+  googleDisconnect: () => request('/api/google/disconnect', { method: 'POST' }),
+
   // Policy-as-Code Engine
   policyStatus: () => request('/api/policy/status'),
   updatePolicy: (payload) => request('/api/policy/config', {

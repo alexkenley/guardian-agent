@@ -4,7 +4,7 @@ import type { ChatMessage, ChatOptions, ChatResponse } from '../llm/types.js';
 import type { ToolCaller, ToolResult } from '../broker/types.js';
 
 describe('runLlmLoop', () => {
-  it('returns a fallback message when a post-tool LLM round produces empty content', async () => {
+  it('returns a tool-result summary when a post-tool LLM round produces empty content', async () => {
     const messages: ChatMessage[] = [{ role: 'user', content: 'Resolve the WHM hostname IP.' }];
     const responses: ChatResponse[] = [
       {
@@ -59,7 +59,7 @@ describe('runLlmLoop', () => {
       32_000,
     );
 
-    expect(result.finalContent).toBe('I could not generate a final response for that request.');
+    expect(result.finalContent).toBe('Completed net_dns_lookup.');
   });
 
   it('re-prompts when the model falsely claims update_tool_policy is unavailable', async () => {

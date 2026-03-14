@@ -1,0 +1,19 @@
+{
+  "id": "google-workspace",
+  "name": "Google Workspace",
+  "version": "0.1.0",
+  "description": "Expert guidance for Gmail, Calendar, Drive, Docs, Sheets, and Contacts using the native Google Workspace tools.",
+  "role": "domain",
+  "tags": ["gmail", "email", "calendar", "google workspace", "drive", "docs", "sheets", "contacts"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["gmail", "email", "calendar", "google drive", "google docs", "google sheets", "contacts", "workspace", "draft email", "send email", "google calendar", "drive file", "spreadsheet", "google doc"]
+  },
+  "tools": ["gws", "gws_schema", "gmail_draft", "gmail_send"],
+  "requiredManagedProvider": "gws",
+  "risk": "operational"
+}

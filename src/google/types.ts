@@ -1,10 +1,8 @@
 /**
  * Types for native Google Workspace integration.
  *
- * The native integration uses `googleapis` + `google-auth-library` directly
- * instead of the external gws CLI subprocess.
+ * The native integration uses direct API calls with OAuth 2.0 PKCE.
  *
- * See also: GWSService (src/runtime/gws-service.ts) for the legacy CLI-based alternative.
  * Spec: docs/specs/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-SPEC.md
  */
 
@@ -50,7 +48,7 @@ export interface GoogleExecuteParams {
 /** Result from a Google API call (mirrors GWSResult shape). */
 export interface GoogleResult {
   success: boolean;
-  data?: unknown;
+  data?: any;
   error?: string;
 }
 
@@ -71,7 +69,7 @@ export const GOOGLE_SERVICE_SCOPES: Record<string, string> = {
 export const GOOGLE_SUPPORTED_SERVICES = Object.keys(GOOGLE_SERVICE_SCOPES);
 
 /** Default services enabled when not configured. */
-export const GOOGLE_DEFAULT_SERVICES = ['gmail', 'calendar', 'drive'];
+export const GOOGLE_DEFAULT_SERVICES = ['gmail', 'calendar', 'drive', 'docs', 'sheets', 'contacts'];
 
 /** Default OAuth callback port. */
 export const GOOGLE_DEFAULT_CALLBACK_PORT = 18432;

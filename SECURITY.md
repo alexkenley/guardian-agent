@@ -646,14 +646,29 @@ Skills are a **knowledge and workflow layer**, not a privileged execution layer.
 
 ### Google Workspace
 
-Integration with Gmail, Calendar, Drive, Docs, and Sheets via managed MCP server (`@googleworkspace/cli`).
+Integration with Gmail, Calendar, Drive, Docs, and Sheets. Two backends:
+
+**Native mode (default):** Uses `googleapis` SDK directly — no external CLI dependency.
+
+- OAuth 2.0 PKCE with localhost callback, handled entirely within GuardianAgent
+- Tokens encrypted at rest in `~/.guardianagent/secrets.enc.json` (AES-256-GCM, machine-specific key)
+- Callback server binds `127.0.0.1` only and closes immediately after receiving the authorization code
+- Each service maps to the narrowest OAuth scope (e.g. `gmail.modify` not `gmail.full`)
+- Token refresh is transparent; refresh tokens never logged
+
+**CLI mode (legacy):** Uses external `@googleworkspace/cli` via subprocess.
 
 - The GWS CLI is **not bundled** — installed separately by the user
 - OAuth 2.0 requires an interactive browser flow (`gws auth login`) — cannot be initiated headlessly
 - Credentials stored in the OS keyring by `gws`, not by GuardianAgent
+
+**Shared security properties (both modes):**
+
 - Only configured Google services are exposed (opt-in via `services` array)
 - External send/post actions (e.g. `gmail_send`) remain approval-gated
+- All Google API calls logged to audit trail with service/method/resource
 - Email addresses exempted only in addressing fields for email/calendar tools (see PII Exemptions above)
+- Access token and refresh token patterns covered by SecretScanController
 
 ### MCP Tool Servers
 

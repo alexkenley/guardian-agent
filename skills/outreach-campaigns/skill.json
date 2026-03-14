@@ -3,6 +3,7 @@
   "name": "Outreach Campaigns",
   "version": "0.1.0",
   "description": "Guidance for safe contact management and campaign execution with mandatory dry-run and approval steps.",
+  "role": "domain",
   "tags": ["contacts", "campaign", "outreach", "email"],
   "enabled": true,
   "appliesTo": {

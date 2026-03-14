@@ -228,9 +228,16 @@ export class WebChannel implements ChannelAdapter {
     });
   }
 
-  async send(_userId: string, _text: string): Promise<void> {
-    // Web channel is request/response — no push capability without WebSocket
-    log.warn('WebChannel.send() called but push is not supported without WebSocket');
+  async send(_userId: string, text: string): Promise<void> {
+    if (!text.trim()) return;
+    this.emitSSE({
+      type: 'assistant.notice',
+      data: {
+        id: randomUUID(),
+        timestamp: Date.now(),
+        text,
+      },
+    });
   }
 
   private emitSSE(event: SSEEvent): void {
@@ -2941,6 +2948,55 @@ export class WebChannel implements ChannelAdapter {
         } catch (err) {
           sendJSON(res, 500, { success: false, message: err instanceof Error ? err.message : 'Failed to start auth flow' });
         }
+        return;
+      }
+
+      // ── Native Google integration routes ───────────────────
+      // GET /api/google/status — Native Google auth status
+      if (req.method === 'GET' && url.pathname === '/api/google/status') {
+        if (!this.dashboard.onGoogleStatus) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, await this.dashboard.onGoogleStatus());
+        return;
+      }
+
+      // POST /api/google/auth/start — Start native OAuth flow
+      if (req.method === 'POST' && url.pathname === '/api/google/auth/start') {
+        if (!this.dashboard.onGoogleAuthStart) {
+          sendJSON(res, 404, { error: 'Native Google integration not enabled' });
+          return;
+        }
+        const body = await readBody(req, this.maxBodyBytes);
+        const parsed = JSON.parse(body || '{}') as { services?: string[] };
+        sendJSON(res, 200, await this.dashboard.onGoogleAuthStart(parsed.services ?? []));
+        return;
+      }
+
+      // POST /api/google/credentials — Upload client_secret.json
+      if (req.method === 'POST' && url.pathname === '/api/google/credentials') {
+        if (!this.dashboard.onGoogleCredentials) {
+          sendJSON(res, 404, { error: 'Native Google integration not enabled' });
+          return;
+        }
+        const body = await readBody(req, this.maxBodyBytes);
+        const parsed = JSON.parse(body || '{}') as { credentials?: string };
+        if (!parsed.credentials) {
+          sendJSON(res, 400, { success: false, message: 'Missing credentials field.' });
+          return;
+        }
+        sendJSON(res, 200, await this.dashboard.onGoogleCredentials(parsed.credentials));
+        return;
+      }
+
+      // POST /api/google/disconnect — Revoke and clear tokens
+      if (req.method === 'POST' && url.pathname === '/api/google/disconnect') {
+        if (!this.dashboard.onGoogleDisconnect) {
+          sendJSON(res, 404, { error: 'Native Google integration not enabled' });
+          return;
+        }
+        sendJSON(res, 200, await this.dashboard.onGoogleDisconnect());
         return;
       }
 

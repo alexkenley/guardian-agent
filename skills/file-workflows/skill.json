@@ -1,0 +1,18 @@
+{
+  "id": "file-workflows",
+  "name": "File Workflows",
+  "version": "0.1.0",
+  "description": "Use when creating, editing, organizing, or moving local files, folders, notes, and reports within allowed paths.",
+  "role": "domain",
+  "tags": ["files", "folders", "documents", "notes", "reports", "filesystem"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["create file", "write file", "create folder", "directory", "move file", "copy file", "delete file", "local document", "write a report"]
+  },
+  "tools": ["fs_list", "fs_search", "fs_read", "fs_write", "fs_mkdir", "fs_move", "fs_copy", "fs_delete", "doc_create"],
+  "risk": "operational"
+}

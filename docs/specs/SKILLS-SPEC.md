@@ -1,7 +1,7 @@
 # Native Skills Specification
 
 **Status:** Implemented foundation
-**Current Files:** `src/skills/registry.ts`, `src/skills/resolver.ts`, `src/skills/types.ts`
+**Current Files:** `src/skills/registry.ts`, `src/skills/resolver.ts`, `src/skills/prompt.ts`, `src/skills/types.ts`
 **Depends on:** ToolExecutor, MCP Client, Guardian prompt composition, channel config surfaces
 
 ---
@@ -84,6 +84,7 @@ Guardian-native manifests remain the richer format. Frontmatter-only skills are 
   "name": "Incident Triage",
   "version": "0.1.0",
   "description": "Guide for triaging and summarizing security incidents.",
+  "role": "domain",
   "tags": ["security", "triage"],
   "enabled": true,
   "appliesTo": {
@@ -104,6 +105,7 @@ Guardian-native manifests remain the richer format. Frontmatter-only skills are 
 
 ### Key Fields
 
+- `role` indicates whether the skill is primarily a `process` skill or a `domain` skill.
 - `appliesTo` controls where the skill may be considered.
 - `triggers` controls automatic selection.
 - `tools` declares tool dependencies for planning and validation.
@@ -118,20 +120,23 @@ Guardian-native manifests remain the richer format. Frontmatter-only skills are 
 
 - `SkillRegistry` - loads manifests and bundle metadata from configured roots
 - `SkillResolver` - selects relevant skills for a request
-- prompt composition in `src/index.ts` - injects compact active-skill summaries into the system prompt
+- prompt composition in `src/index.ts` - injects an active-skill catalog into the system prompt
 
 ### Dispatch Flow
 
-1. Runtime receives a user message or scheduled task.
+1. Runtime receives a user message or a scheduled task (tool, playbook, or assistant turn).
 2. `SkillResolver` ranks candidate skills using explicit enablement, trigger matches, agent, channel, and request type.
-3. Selected skills are reduced to compact summaries by default.
-4. The prompt builder injects the active skill summaries into the system/planning context.
+3. Selected skills are exposed to the model as a compact catalog: skill name, description, role, and `SKILL.md` path.
+4. The prompt builder instructs the model to read relevant `SKILL.md` files with `fs_read` before acting.
 5. If the model decides to act, it still must call built-in tools or MCP tools through `ToolExecutor`.
 
 ### Prompt Discipline
 
-- Default to summaries, not full `SKILL.md` bodies.
-- Only load full references/templates when the task clearly requires them.
+- Default to metadata catalog injection, not full `SKILL.md` body injection.
+- The model should read relevant skills before replying, asking clarifying questions, or calling tools.
+- The model should read at most two `SKILL.md` files up front: one `process` skill and one `domain` skill.
+- If both a process skill and a domain skill are relevant, the process skill should be read first.
+- Referenced files should be loaded only when needed.
 - Record active skill IDs in response metadata for debuggability.
 
 ---
@@ -151,6 +156,7 @@ Skills are treated as **untrusted advisory content** until reviewed.
 
 - Skills are loaded only from configured local roots by default.
 - Third-party skills must be imported into a reviewed local directory before activation.
+- Imported or adapted third-party skills must preserve upstream license and notice text in `THIRD_PARTY_NOTICES.md`.
 - Any future `installSteps` or mutating setup flow must require explicit human approval.
 
 ### Audit
@@ -183,7 +189,7 @@ assistant:
 - Local skill bundles are loaded from configured roots.
 - Both Guardian-native manifests and reviewed frontmatter-only imports are supported.
 - Chat requests can auto-activate matching skills.
-- Active skill summaries are injected into the system prompt.
+- Active skills are injected as a catalog with descriptions, optional roles, and `SKILL.md` locations.
 - Chat responses include `metadata.activeSkills` when one or more skills were applied.
 - Skills can be inspected and toggled through CLI and web API surfaces.
 
@@ -191,21 +197,36 @@ assistant:
 
 The repository currently includes bundled local skills under `skills/`, including:
 
-- `google-gmail-assistant`
-- `google-calendar-assistant`
-- `google-drive-assistant`
-- `google-docs-sheets-assistant`
+- `automation-builder`
+- `cloud-operations`
+- `file-workflows`
+- `google-workspace`
+- `knowledge-search`
+- `preferences-memory`
+- `receiving-code-review`
 - `network-recon`
 - `outreach-campaigns`
 - `security-triage`
+- `system-operations`
+- `systematic-debugging`
+- `test-driven-development`
 - `threat-intel`
 - `mcp-builder`
 - `skill-creator`
+- `verification-before-completion`
 - `webapp-testing`
+- `web-research`
+- `writing-plans`
+
+This bundled suite is intentionally mixed:
+
+- personal assistant skills for email, calendar, files, web research, memory, and document search
+- IT operations skills for cloud, host, network, and automation work
+- security skills for triage, threat intel, monitoring interpretation, and disciplined investigation
 
 ### Chat Behavior
 
-Internally, the prompt context receives active-skill summaries. Response metadata can include:
+Internally, the prompt context receives an active-skill catalog. Response metadata can include:
 
 ```text
 Using skills: incident-triage, gmail-draft-review
@@ -244,7 +265,7 @@ This is especially important for managed providers such as Google Workspace, whe
 - Local skill roots
 - Guardian-native manifest loading plus reviewed frontmatter-compatible import support
 - Read-only bundle loading
-- Prompt summary injection
+- Prompt catalog injection with process/domain role hints and read-before-action guidance
 - Basic trigger resolution and ranking
 - CLI and web API management surfaces for skill inspection and runtime toggling
 

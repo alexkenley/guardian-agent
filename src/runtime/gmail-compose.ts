@@ -76,10 +76,10 @@ function extractLabeledValue(
   options?: { stripLeadIn?: boolean },
 ): string {
   const stopPattern = stopLabels.length > 0
-    ? `(?=(?:,?\\s*(?:and\\s+)?(?:in\\s+the\\s+)?)?\\b(?:${stopLabels.join('|')})\\b(?:\\s+is|\\s*:|\\s*=)?\\s*|$)`
+    ? `(?=(?:,?\\s*(?:and\\s+)?(?:in\\s+the\\s+)?)?\\b(?:${stopLabels.join('|')})\\b(?:\\s+of|\\s+is|\\s*:|\\s*=)?\\s*|$)`
     : '$';
   const pattern = new RegExp(
-    `\\b${label}\\b(?:\\s+is|\\s*:|\\s*=)?\\s*([\\s\\S]+?)${stopPattern}`,
+    `\\b${label}\\b(?:\\s+of|\\s+is|\\s*:|\\s*=)?\\s*([\\s\\S]+?)${stopPattern}`,
     'i',
   );
   const match = text.match(pattern);

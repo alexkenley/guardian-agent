@@ -1,0 +1,17 @@
+{
+  "id": "systematic-debugging",
+  "name": "Systematic Debugging",
+  "version": "0.1.0",
+  "description": "Use when encountering a bug, failing test, broken integration, or unexpected behavior, before proposing fixes.",
+  "role": "process",
+  "tags": ["debugging", "bugs", "root cause", "tests", "failures"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["debug", "bug", "failing test", "broken integration", "unexpected behavior", "root cause", "investigate failure"]
+  },
+  "risk": "informational"
+}

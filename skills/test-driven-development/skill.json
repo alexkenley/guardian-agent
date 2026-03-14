@@ -1,0 +1,17 @@
+{
+  "id": "test-driven-development",
+  "name": "Test-Driven Development",
+  "version": "0.1.0",
+  "description": "Use when implementing or changing code behavior, before writing production code.",
+  "role": "process",
+  "tags": ["tdd", "tests", "implementation", "features", "bugfixes"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["implement", "implementation", "feature", "bugfix", "bug fix", "write code", "add support"]
+  },
+  "risk": "informational"
+}

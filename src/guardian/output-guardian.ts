@@ -55,6 +55,17 @@ const SECRET_PATTERNS_HANDLED_AS_PII = new Set([
 ]);
 
 /**
+ * Patterns excluded from outbound LLM response scanning.
+ * Email addresses are not credentials — redacting them in prose responses
+ * breaks the UX for email/calendar workflows where addresses are user-provided.
+ * Email addresses are still gated by the admission controller (SecretScanController)
+ * with context-aware exemptions for email/calendar tool actions.
+ */
+const OUTPUT_EXCLUDED_PATTERNS = new Set([
+  'Email Address',
+]);
+
+/**
  * Output guardian for scanning and redacting secrets in outbound content.
  *
  * Reuses SecretScanner for pattern matching, but adds redaction logic.
@@ -85,9 +96,11 @@ export class OutputGuardian {
     this.injectionThreshold = injectionThreshold;
   }
 
-  /** Scan outbound content. Returns cleaned content + any detected secrets. */
+  /** Scan outbound content. Returns cleaned content + any detected secrets.
+   *  Email addresses are excluded — they are PII, not credentials, and are
+   *  handled separately by the admission controller with context-aware exemptions. */
   scanResponse(content: string): ScanResult {
-    const { matches: secrets, sanitized } = this.redactSecrets(content);
+    const { matches: secrets, sanitized } = this.redactSecrets(content, OUTPUT_EXCLUDED_PATTERNS);
     return { clean: secrets.length === 0, secrets, sanitized };
   }
 

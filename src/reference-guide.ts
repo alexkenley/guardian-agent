@@ -241,25 +241,24 @@ export function getReferenceGuide(): ReferenceGuide {
           {
             id: 'google-workspace',
             title: 'Google Workspace',
-            summary: 'Enable Gmail, Calendar, Drive, Docs, and Sheets through the `gws` CLI path.',
+            summary: 'Enable Gmail, Calendar, Drive, Docs, Sheets, and Contacts via native integration.',
             sections: [
               {
-                title: 'Credential Prerequisites',
+                title: 'Integration',
                 items: [
-                  'Install the Google Workspace CLI (`gws`) and create Google Cloud OAuth desktop credentials.',
-                  'Quick path: install `gcloud`, run `gcloud auth login`, then `gws auth setup`.',
-                  'Manual path: create a Google Cloud project, configure an External app in Google Auth Platform, publish it, create a Desktop OAuth client, and save the downloaded secret to `~/.config/gws/client_secret.json`.',
+                  'Native integration (default): GuardianAgent calls Google APIs directly. No external CLI dependency. OAuth handled within the app via a localhost callback with PKCE. Tokens stored encrypted at rest.',
+                  'Uses the `gws` and `gws_schema` tool names. The LLM interface is direct — no separate CLI authentication needed.',
                 ],
               },
               {
-                title: 'Enable And Verify',
+                title: 'Setup (3 Steps)',
                 items: [
-                  'After credentials are in place, run `gws auth login` to complete the browser sign-in flow.',
-                  'Enable only the Google APIs you need in Google Cloud Console.',
-                  'In Guardian Agent, open Configuration > Integrations > Google Workspace, choose services, enable the integration, and restart if the tools are not already loaded.',
-                  'Verify with the Integrations panel or CLI `/google status`.',
+                  'Step 1 — Create OAuth credentials: Go to the Google Cloud Console (console.cloud.google.com). Create a new project if needed (top-left project selector > New Project). Navigate to APIs & Services > Credentials. Click "+ Create Credentials" > "OAuth client ID". IMPORTANT: Set Application type to "Desktop app" (not "Web application"). Give it any name (e.g. "Guardian Agent Desktop") and click Create. On the confirmation dialog, click "Download JSON" to get your client_secret.json file.',
+                  'Before creating credentials you may need to configure the OAuth consent screen: Go to Google Auth Platform > Audience (or OAuth consent screen). Set user type to External, fill in the app name and your email, save. Then under Publishing status click "Publish App" — without this, only manually-added test users can authenticate.',
+                  'Enable the Google APIs you plan to use: Go to APIs & Services > Library. Search for and enable: Gmail API, Google Calendar API, Google Drive API, Google Docs API, Google Sheets API. Only enable what you need.',
+                  'Step 2 — Upload credentials: In Guardian Agent, go to Configuration > Integrations > Google Workspace. Select Native mode. Upload the client_secret.json file you downloaded, or manually place it at ~/.guardianagent/google-credentials.json.',
+                  'Step 3 — Connect: Select the Google services you want (Gmail, Calendar, Drive, Docs, Sheets, Contacts). Click "Connect Google". A browser window opens for Google consent. Approve access, and the connection is live immediately.',
                 ],
-                note: 'If Google shows `access_denied` or `app not verified`, return to the Google Auth Platform Audience settings and either publish the app or add yourself as a test user.',
               },
             ],
           },
@@ -320,13 +319,13 @@ export function getReferenceGuide(): ReferenceGuide {
           {
             id: 'automations',
             title: 'Automations',
-            summary: 'Build single-tool jobs or multi-step pipelines, then run them manually or on a cron schedule.',
+            summary: 'Build deterministic workflows or scheduled assistant reports, then run them manually or on a cron schedule.',
             sections: [
               {
                 title: 'Create And Run',
                 items: [
                   'The Automations page is the unified home for playbooks and scheduled tasks.',
-                  'Automations can run a single tool or multiple tools in sequential or parallel mode.',
+                  'Automations can run a single tool, multiple tools in sequential or parallel mode, or a scheduled assistant turn that uses normal Guardian skills and tools.',
                   'Use Edit for normal updates such as names, tools, steps, and schedules without dropping into raw JSON.',
                   'Use Examples to install starter automations such as Agent Host Guard and Firewall Sentry, then Clone to fork an existing workflow.',
                   'Use Dry Run before live execution when you want a safe preview path.',
@@ -336,6 +335,9 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Scheduling And Limits',
                 items: [
                   'Any automation can be given a cron schedule and turned into a recurring task.',
+                  'Use Single shot when you want the task to run once on the next matching schedule and then disable itself automatically.',
+                  'Scheduled assistant tasks need a prompt plus a target agent. They are best for recurring briefs, watchlists, and open-ended checks that should decide what to inspect at runtime.',
+                  'Scheduled task creation is the approval checkpoint. After the task is saved, later cron runs do not re-prompt for the same action.',
                   'Power-user options remain available through the advanced JSON/config sections when you need direct definition edits.',
                   'Engine Settings control max steps, max parallelism, timeout defaults, and execution mode.',
                   'Permission policies restrict what hosts, file paths, and commands an automation can touch.',
@@ -345,7 +347,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Inspect Results',
                 items: [
                   'Run history now keeps per-step output, not just status text.',
-                  'Scheduled tool runs and scheduled playbook runs can be expanded in Automations to inspect captured output.',
+                  'Scheduled tool runs, scheduled playbook runs, and scheduled assistant runs can be expanded in Automations to inspect captured output.',
                   'Where output is shown in the UI, operators can copy it directly or export it as plain text or HTML for sharing and review.',
                   'Live UI invalidation updates the Automations page when runs finish, schedules change, or playbooks are edited.',
                 ],

@@ -3,6 +3,7 @@
   "name": "Network Reconnaissance",
   "version": "0.1.0",
   "description": "Guidance for scoped, methodical network discovery and diagnostics.",
+  "role": "domain",
   "tags": ["network", "scan", "recon", "diagnostics", "wifi", "fingerprint"],
   "enabled": true,
   "appliesTo": {

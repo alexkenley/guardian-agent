@@ -25,6 +25,7 @@ export async function runLlmLoop(
   let rounds = 0;
   let hasPendingApprovals = false;
   let forcedPolicyRetryUsed = false;
+  let lastToolRoundResults: Array<{ toolName: string; result: Record<string, unknown> }> = [];
 
   const allToolDefs = toolCaller ? toolCaller.listAlwaysLoaded() : [];
 
@@ -114,6 +115,14 @@ export async function runLlmLoop(
         return { toolCall: tc, result: res };
       })
     );
+    lastToolRoundResults = toolResults.reduce<Array<{ toolName: string; result: Record<string, unknown> }>>((acc, settled) => {
+      if (settled.status !== 'fulfilled') return acc;
+      acc.push({
+        toolName: settled.value.toolCall.name,
+        result: settled.value.result as Record<string, unknown>,
+      });
+      return acc;
+    }, []);
 
     let roundHasPending = false;
     for (const settled of toolResults) {
@@ -192,6 +201,10 @@ export async function runLlmLoop(
     }
   }
 
+  if (!finalContent && lastToolRoundResults.length > 0) {
+    finalContent = summarizeToolRoundFallback(lastToolRoundResults);
+  }
+
   if (!finalContent) {
     finalContent = 'I could not generate a final response for that request.';
   }
@@ -236,4 +249,33 @@ function buildPolicyUpdateCorrectionPrompt(): string {
     'If the block is a command prefix, call update_tool_policy with action "add_command".',
     'Use the tool now if policy is the blocker.',
   ].join(' ');
+}
+
+function summarizeToolRoundFallback(results: Array<{ toolName: string; result: Record<string, unknown> }>): string {
+  const summaries = results
+    .map(({ toolName, result }) => summarizeSingleToolFallback(toolName, result))
+    .filter((summary): summary is string => !!summary);
+  if (summaries.length === 0) return '';
+  if (summaries.length === 1) return summaries[0];
+  return `Completed the requested actions:\n${summaries.map((summary) => `- ${summary}`).join('\n')}`;
+}
+
+function summarizeSingleToolFallback(toolName: string, result: Record<string, unknown>): string {
+  const message = readString(result.message) || extractToolOutputMessage(result);
+  if (message) return message;
+
+  const status = readString(result.status).toLowerCase();
+  if (status === 'pending_approval') return `${toolName} is awaiting approval.`;
+  if (result.success === true || status === 'succeeded' || status === 'completed') return `Completed ${toolName}.`;
+  return `Attempted ${toolName}, but it did not complete successfully.`;
+}
+
+function extractToolOutputMessage(result: Record<string, unknown>): string {
+  const output = result.output;
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return '';
+  return readString((output as Record<string, unknown>).message);
+}
+
+function readString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
 }

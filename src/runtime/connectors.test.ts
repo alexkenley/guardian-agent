@@ -252,4 +252,279 @@ describe('ConnectorPlaybookService', () => {
     expect(runTool).toHaveBeenCalledTimes(1);
     expect(result.run.steps[0].packId).toBe('');
   });
+
+  // ─── Instruction step tests ─────────────────────────────
+
+  it('executes instruction step with prior results as context', async () => {
+    const config = makeConfig();
+    config.playbooks.requireDryRunOnFirstExecution = false;
+    config.playbooks.requireSignedDefinitions = false;
+    config.playbooks.definitions = [
+      {
+        id: 'instruction-pipeline',
+        name: 'Instruction Pipeline',
+        enabled: true,
+        mode: 'sequential',
+        steps: [
+          { id: 'fetch-data', packId: '', toolName: 'fs_list', args: { path: './docs' } },
+          {
+            id: 'summarize',
+            type: 'instruction',
+            packId: '',
+            toolName: '',
+            instruction: 'Summarize the files listed above.',
+          },
+        ],
+      },
+    ];
+
+    const runTool = vi.fn(async (): Promise<ToolRunResponse> => ({
+      success: true,
+      status: 'succeeded',
+      jobId: 'job-1',
+      message: 'ok',
+      output: ['file1.md', 'file2.md'],
+    }));
+    const runInstruction = vi.fn(async (prompt: string) => {
+      return 'Summary: 2 markdown files found.';
+    });
+
+    const service = new ConnectorPlaybookService({
+      config,
+      runTool,
+      runInstruction,
+    });
+
+    const result = await service.runPlaybook({
+      playbookId: 'instruction-pipeline',
+      origin: 'web',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.run.steps).toHaveLength(2);
+    expect(result.run.steps[0].toolName).toBe('fs_list');
+    expect(result.run.steps[0].status).toBe('succeeded');
+    expect(result.run.steps[1].toolName).toBe('_instruction');
+    expect(result.run.steps[1].status).toBe('succeeded');
+    expect(result.run.steps[1].output).toBe('Summary: 2 markdown files found.');
+    expect(runInstruction).toHaveBeenCalledTimes(1);
+
+    // Verify the LLM prompt contains prior step output.
+    const prompt = runInstruction.mock.calls[0][0];
+    expect(prompt).toContain('file1.md');
+    expect(prompt).toContain('Summarize the files listed above.');
+  });
+
+  it('fails instruction step when no instruction text provided', async () => {
+    const config = makeConfig();
+    config.playbooks.requireDryRunOnFirstExecution = false;
+    config.playbooks.requireSignedDefinitions = false;
+    config.playbooks.definitions = [
+      {
+        id: 'empty-instruction',
+        name: 'Empty Instruction',
+        enabled: true,
+        mode: 'sequential',
+        steps: [
+          {
+            id: 'bad-step',
+            type: 'instruction',
+            packId: '',
+            toolName: '',
+            instruction: '',
+          },
+        ],
+      },
+    ];
+
+    const service = new ConnectorPlaybookService({
+      config,
+      runTool: async () => ({ success: true, status: 'succeeded', jobId: 'j', message: 'ok' }),
+      runInstruction: async () => 'should not be called',
+    });
+
+    const result = await service.runPlaybook({
+      playbookId: 'empty-instruction',
+      origin: 'cli',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.run.steps[0].status).toBe('failed');
+    expect(result.run.steps[0].message).toContain('no instruction text');
+  });
+
+  it('fails instruction step when no runInstruction callback provided', async () => {
+    const config = makeConfig();
+    config.playbooks.requireDryRunOnFirstExecution = false;
+    config.playbooks.requireSignedDefinitions = false;
+    config.playbooks.definitions = [
+      {
+        id: 'no-llm',
+        name: 'No LLM',
+        enabled: true,
+        mode: 'sequential',
+        steps: [
+          {
+            id: 'orphan',
+            type: 'instruction',
+            packId: '',
+            toolName: '',
+            instruction: 'Do something.',
+          },
+        ],
+      },
+    ];
+
+    const service = new ConnectorPlaybookService({
+      config,
+      runTool: async () => ({ success: true, status: 'succeeded', jobId: 'j', message: 'ok' }),
+      // runInstruction intentionally omitted
+    });
+
+    const result = await service.runPlaybook({
+      playbookId: 'no-llm',
+      origin: 'cli',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.run.steps[0].status).toBe('failed');
+    expect(result.run.steps[0].message).toContain('LLM provider');
+  });
+
+  it('instruction step returns dry-run output without calling LLM', async () => {
+    const config = makeConfig();
+    config.playbooks.requireDryRunOnFirstExecution = false;
+    config.playbooks.requireSignedDefinitions = false;
+    config.playbooks.definitions = [
+      {
+        id: 'dry-instruction',
+        name: 'Dry Instruction',
+        enabled: true,
+        mode: 'sequential',
+        steps: [
+          {
+            id: 'summarize',
+            type: 'instruction',
+            packId: '',
+            toolName: '',
+            instruction: 'Summarize.',
+          },
+        ],
+      },
+    ];
+
+    const runInstruction = vi.fn(async () => 'should not be called');
+    const service = new ConnectorPlaybookService({
+      config,
+      runTool: async () => ({ success: true, status: 'succeeded', jobId: 'j', message: 'ok' }),
+      runInstruction,
+    });
+
+    const result = await service.runPlaybook({
+      playbookId: 'dry-instruction',
+      origin: 'cli',
+      dryRun: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.run.steps[0].status).toBe('succeeded');
+    expect(result.run.steps[0].toolName).toBe('_instruction');
+    expect(result.run.steps[0].output).toContain('dry-run');
+    expect(runInstruction).not.toHaveBeenCalled();
+  });
+
+  it('instruction step output is scanned when scanOutput is provided', async () => {
+    const config = makeConfig();
+    config.playbooks.requireDryRunOnFirstExecution = false;
+    config.playbooks.requireSignedDefinitions = false;
+    config.playbooks.definitions = [
+      {
+        id: 'scanned-instruction',
+        name: 'Scanned Instruction',
+        enabled: true,
+        mode: 'sequential',
+        steps: [
+          {
+            id: 'gen',
+            type: 'instruction',
+            packId: '',
+            toolName: '',
+            instruction: 'Generate output.',
+          },
+        ],
+      },
+    ];
+
+    const scanOutput = vi.fn(async (text: string) => text.replace('SECRET', '[REDACTED]'));
+    const service = new ConnectorPlaybookService({
+      config,
+      runTool: async () => ({ success: true, status: 'succeeded', jobId: 'j', message: 'ok' }),
+      runInstruction: async () => 'The password is SECRET',
+      scanOutput,
+    });
+
+    const result = await service.runPlaybook({
+      playbookId: 'scanned-instruction',
+      origin: 'web',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.run.steps[0].output).toBe('The password is [REDACTED]');
+    expect(scanOutput).toHaveBeenCalledWith('The password is SECRET');
+  });
+
+  it('mixes tool and instruction steps in sequential pipeline', async () => {
+    const config = makeConfig();
+    config.playbooks.requireDryRunOnFirstExecution = false;
+    config.playbooks.requireSignedDefinitions = false;
+    config.playbooks.definitions = [
+      {
+        id: 'mixed-pipeline',
+        name: 'Mixed Pipeline',
+        enabled: true,
+        mode: 'sequential',
+        steps: [
+          { id: 'step-1', packId: '', toolName: 'net_arp_scan', args: {} },
+          {
+            id: 'step-2',
+            type: 'instruction',
+            packId: '',
+            toolName: '',
+            instruction: 'Analyze network scan results.',
+          },
+          { id: 'step-3', packId: '', toolName: 'memory_save', args: { key: 'scan-analysis' } },
+        ],
+      },
+    ];
+
+    const toolCalls: string[] = [];
+    const runTool = vi.fn(async (req: ToolExecutionRequest): Promise<ToolRunResponse> => {
+      toolCalls.push(req.toolName);
+      return {
+        success: true,
+        status: 'succeeded',
+        jobId: `job-${req.toolName}`,
+        message: 'ok',
+        output: { devices: ['192.168.1.1', '192.168.1.2'] },
+      };
+    });
+    const runInstruction = vi.fn(async () => 'Found 2 devices on the network.');
+
+    const service = new ConnectorPlaybookService({
+      config,
+      runTool,
+      runInstruction,
+    });
+
+    const result = await service.runPlaybook({
+      playbookId: 'mixed-pipeline',
+      origin: 'cli',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.run.steps).toHaveLength(3);
+    expect(toolCalls).toEqual(['net_arp_scan', 'memory_save']);
+    expect(result.run.steps[1].toolName).toBe('_instruction');
+    expect(runInstruction).toHaveBeenCalledTimes(1);
+  });
 });

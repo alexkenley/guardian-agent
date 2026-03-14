@@ -143,12 +143,20 @@ export class SecretScanController implements AdmissionController {
    * Only these specific fields get the Email Address exemption — email in
    * any other param (e.g. body, notes, description) is still flagged.
    */
-  private static readonly EMAIL_ALLOWED_FIELDS = new Set([
+  /** @internal Exposed for the helper function `isEmailExemptPath`. */
+  static readonly EMAIL_ALLOWED_FIELDS_SET = new Set([
     'params.to', 'params.from', 'params.cc', 'params.bcc',
     'params.sender', 'params.recipient', 'params.recipients',
     'params.attendees', 'params.organizer',
     'params.replyTo', 'params.reply_to',
     'params.content',
+    // GWS / native Google tool: email addresses appear in nested json/params structures.
+    'params.json.to', 'params.json.from', 'params.json.cc', 'params.json.bcc',
+    'params.json.sender', 'params.json.recipient', 'params.json.recipients',
+    'params.json.attendees', 'params.json.organizer',
+    'params.json.message.raw',           // Gmail: base64-encoded RFC 822 message (contains To/From)
+    'params.params.q',                    // Gmail: search query (e.g. "from:user@example.com")
+    'params.params.to', 'params.params.from',
   ]);
 
   /** Action types where the EMAIL_ALLOWED_FIELDS exemption applies. */
@@ -166,7 +174,7 @@ export class SecretScanController implements AdmissionController {
     for (const leaf of stringLeaves) {
       const secrets = this.scanner.scanContent(leaf.value);
       if (secrets.length > 0) {
-        const isAllowedField = canExemptFields && SecretScanController.EMAIL_ALLOWED_FIELDS.has(leaf.path);
+        const isAllowedField = canExemptFields && isEmailExemptPath(leaf.path);
         const filtered = isAllowedField
           ? secrets.filter((s) => s.pattern !== 'Email Address')
           : secrets;
@@ -405,6 +413,20 @@ function filterValidationPiiEntities(entities?: readonly PiiEntityType[]): PiiEn
   const input = entities ?? DEFAULT_VALIDATION_PII_ENTITIES;
   const allowed = new Set(DEFAULT_VALIDATION_PII_ENTITIES);
   return input.filter((entity): entity is PiiEntityType => allowed.has(entity));
+}
+
+/**
+ * Check if a leaf path is exempt from Email Address PII detection.
+ * Uses exact match for simple fields and prefix match for nested structures
+ * (e.g. params.json.attendees.0.email matches prefix "params.json.attendees").
+ */
+function isEmailExemptPath(path: string): boolean {
+  if (SecretScanController.EMAIL_ALLOWED_FIELDS_SET.has(path)) return true;
+  // Prefix match: params.json.attendees.0.email starts with "params.json.attendees"
+  for (const prefix of SecretScanController.EMAIL_ALLOWED_FIELDS_SET) {
+    if (path.startsWith(prefix + '.')) return true;
+  }
+  return false;
 }
 
 function collectStringLeaves(

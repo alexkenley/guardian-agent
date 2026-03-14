@@ -63,8 +63,8 @@ import { AssistantJobTracker } from './runtime/assistant-jobs.js';
 import { NotificationService } from './runtime/notifications.js';
 import { promoteAutomationFindings } from './runtime/automation-output.js';
 import { buildGmailRawMessage, parseDirectGmailWriteIntent } from './runtime/gmail-compose.js';
+import { parseScheduledEmailAutomationIntent } from './runtime/email-automation-intent.js';
 import { parseDirectFileSearchIntent } from './runtime/search-intent.js';
-import { GWSService } from './runtime/gws-service.js';
 import { ToolExecutor } from './tools/executor.js';
 import type { ToolExecutorOptions } from './tools/executor.js';
 import type { ToolPolicySnapshot, ToolExecutionRequest } from './tools/types.js';
@@ -90,6 +90,7 @@ import { detectCapabilities as detectSandboxCapabilities, detectSandboxHealth, D
 import { SkillRegistry } from './skills/registry.js';
 import { SkillResolver } from './skills/resolver.js';
 import type { ResolvedSkill } from './skills/types.js';
+import { formatAvailableSkillsPrompt } from './skills/prompt.js';
 import { resolveRuntimeCredentialView } from './runtime/credentials.js';
 import { LocalSecretStore } from './runtime/secret-store.js';
 import { WorkerManager } from './supervisor/worker-manager.js';
@@ -238,15 +239,8 @@ function selectSoulPrompt(profile: LoadedSoulProfile | null, mode: SoulInjection
   return mode === 'summary' ? profile.summary : profile.full;
 }
 
-function formatResolvedSkills(skills: readonly ResolvedSkill[]): string {
-  return skills.map((skill) => (
-    `Skill: ${skill.name} (${skill.id})\n` +
-    `Summary:\n${skill.summary}`
-  )).join('\n\n');
-}
-
 function buildManagedMCPServers(_config: GuardianAgentConfig): Array<MCPServerEntry & { managedProviderId: string }> {
-  // GWS is now handled as a direct subprocess tool (GWSService), not via MCP.
+  // Google Workspace is handled by native built-in tools, not via MCP.
   // This function builds MCP server entries for any other managed providers.
   return [];
 }
@@ -643,10 +637,6 @@ class ChatAgent extends BaseAgent {
           content: JSON.stringify(resultObj),
         });
       }
-      llmMessages.push({
-        role: 'user',
-        content: message.content,
-      });
       this.suspendedSessions.delete(userKey);
       skipDirectTools = true;
     } else {
@@ -671,7 +661,7 @@ class ChatAgent extends BaseAgent {
         }
       }
       if (activeSkills.length > 0) {
-        enrichedSystemPrompt += `\n\n<active-skills>\n${formatResolvedSkills(activeSkills)}\n</active-skills>`;
+        enrichedSystemPrompt += `\n\n${formatAvailableSkillsPrompt(activeSkills, 'fs_read')}`;
       }
       if (this.tools) {
         enrichedSystemPrompt += `\n\n<tool-context>\n${this.tools.getToolContext()}\n</tool-context>`;
@@ -698,12 +688,29 @@ class ChatAgent extends BaseAgent {
 
     let finalContent = '';
     let pendingApprovalMeta: Array<{ id: string; toolName: string; argsPreview: string }> | undefined;
+    let lastToolRoundResults: Array<{ toolName: string; result: Record<string, unknown> }> = [];
     const defaultToolResultProviderKind = this.resolveToolResultProviderKind(ctx);
     
     if (!skipDirectTools) {
       const directSearch = await this.tryDirectFilesystemSearch(message, ctx);
       if (directSearch) {
         finalContent = directSearch;
+        if (this.conversationService) {
+          this.conversationService.recordTurn(
+            { agentId: stateAgentId, userId: message.userId, channel: message.channel },
+            message.content,
+            finalContent,
+          );
+        }
+        return {
+          content: finalContent,
+          metadata: this.buildImmediateResponseMetadata(activeSkills, userKey),
+        };
+      }
+
+      const directScheduledEmailAutomation = await this.tryDirectScheduledEmailAutomation(message, ctx, userKey, stateAgentId);
+      if (directScheduledEmailAutomation) {
+        finalContent = directScheduledEmailAutomation;
         if (this.conversationService) {
           this.conversationService.recordTurn(
             { agentId: stateAgentId, userId: message.userId, channel: message.channel },
@@ -940,6 +947,14 @@ class ChatAgent extends BaseAgent {
         const toolResults = await Promise.allSettled(
           this.executeToolsConflictAware(response.toolCalls, toolExecOrigin, { allowImplicitMemorySave })
         );
+        lastToolRoundResults = toolResults.reduce<Array<{ toolName: string; result: Record<string, unknown> }>>((acc, settled) => {
+          if (settled.status !== 'fulfilled') return acc;
+          acc.push({
+            toolName: settled.value.toolCall.name,
+            result: settled.value.result,
+          });
+          return acc;
+        }, []);
 
         let hasPending = false;
         for (const settled of toolResults) {
@@ -1037,7 +1052,7 @@ class ChatAgent extends BaseAgent {
               userKey,
               llmMessages: [...llmMessages],
               pendingTools,
-              originalMessage: message,
+              originalMessage: suspended?.originalMessage ?? message,
               ctx,
             });
             break;
@@ -1191,7 +1206,7 @@ class ChatAgent extends BaseAgent {
                   userKey,
                   llmMessages: [...fbMessages],
                   pendingTools,
-                  originalMessage: message,
+                  originalMessage: suspended?.originalMessage ?? message,
                   ctx,
                 });
               } else {
@@ -1236,6 +1251,10 @@ class ChatAgent extends BaseAgent {
         if (shouldUseStructuredPendingApprovalMessage(finalContent) || this.isResponseDegraded(finalContent)) {
           finalContent = formatPendingApprovalMessage(pendingApprovalMeta);
         }
+      }
+
+      if (!finalContent && lastToolRoundResults.length > 0) {
+        finalContent = summarizeToolRoundFallback(lastToolRoundResults);
       }
 
       if (!finalContent) {
@@ -1713,6 +1732,105 @@ class ChatAgent extends BaseAgent {
       : `I drafted a Gmail message to ${to} with subject "${subject}".`;
   }
 
+  private async tryDirectScheduledEmailAutomation(
+    message: UserMessage,
+    ctx: AgentContext,
+    userKey: string,
+    stateAgentId: string,
+  ): Promise<string | null> {
+    if (!this.tools?.isEnabled() || !this.conversationService) return null;
+
+    const history = this.conversationService.getHistoryForContext({
+      agentId: stateAgentId,
+      userId: message.userId,
+      channel: message.channel,
+    });
+    if (history.length === 0) return null;
+
+    const detailIntent = parseDirectGmailWriteIntent(message.content);
+    if (!detailIntent || (!detailIntent.subject && !detailIntent.body)) return null;
+
+    const priorUserRequest = [...history]
+      .reverse()
+      .find((entry) => entry.role === 'user' && parseScheduledEmailAutomationIntent(entry.content));
+    if (!priorUserRequest) return null;
+
+    const scheduledIntent = parseScheduledEmailAutomationIntent(priorUserRequest.content);
+    if (!scheduledIntent) return null;
+
+    const subject = detailIntent.subject?.trim();
+    const body = detailIntent.body?.trim();
+    if (!subject || !body) {
+      return 'To schedule that email automation, I still need both the subject and the body text.';
+    }
+
+    const to = detailIntent.to?.trim() || scheduledIntent.to;
+    if (!to) {
+      return 'To schedule that email automation, I still need the recipient email address.';
+    }
+
+    const raw = buildGmailRawMessage({ to, subject, body });
+    const taskName = scheduledIntent.runOnce
+      ? `Scheduled Email to ${to}`
+      : `Daily Email to ${to}`;
+    const toolRequest = {
+      origin: 'assistant' as const,
+      agentId: this.id,
+      userId: message.userId,
+      channel: message.channel,
+      requestId: message.id,
+      agentContext: { checkAction: ctx.checkAction },
+    };
+
+    const toolResult = await this.tools.executeModelTool(
+      'task_create',
+      {
+        name: taskName,
+        type: 'tool',
+        target: 'gws',
+        cron: scheduledIntent.cron,
+        runOnce: scheduledIntent.runOnce,
+        enabled: true,
+        args: {
+          service: 'gmail',
+          resource: 'users messages',
+          method: 'send',
+          params: { userId: 'me' },
+          json: { raw },
+        },
+      },
+      toolRequest,
+    );
+
+    if (!toBoolean(toolResult.success)) {
+      const status = toString(toolResult.status);
+      if (status === 'pending_approval') {
+        const approvalId = toString(toolResult.approvalId);
+        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
+        if (approvalId) {
+          this.setPendingApprovals(userKey, [...existingIds, approvalId]);
+          this.setApprovalFollowUp(approvalId, {
+            approved: scheduledIntent.runOnce
+              ? `I created the one-shot email task to ${to}.`
+              : `I created the recurring email task to ${to}.`,
+            denied: 'I did not create the scheduled email task.',
+          });
+        }
+        const prompt = this.formatPendingApprovalPrompt(approvalId ? [approvalId] : []);
+        return [
+          `I prepared a ${scheduledIntent.runOnce ? 'one-shot' : 'recurring'} email task to ${to}${scheduledIntent.runOnce ? '' : ' with a daily schedule'}.`,
+          prompt,
+        ].filter(Boolean).join('\n\n');
+      }
+      const msg = toString(toolResult.message) || toString(toolResult.error) || 'Scheduled email task creation failed.';
+      return `I tried to create the scheduled email task, but it failed: ${msg}`;
+    }
+
+    return scheduledIntent.runOnce
+      ? `I created a one-shot email task to ${to}. It will run on the next scheduled time.`
+      : `I created a recurring daily email task to ${to}.`;
+  }
+
   private async tryDirectGoogleWorkspaceRead(
     message: UserMessage,
     ctx: AgentContext,
@@ -1947,6 +2065,30 @@ class ChatAgent extends BaseAgent {
 
 function toString(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+function summarizeToolRoundFallback(results: Array<{ toolName: string; result: Record<string, unknown> }>): string {
+  const summaries = results
+    .map(({ toolName, result }) => summarizeSingleToolFallback(toolName, result))
+    .filter((summary): summary is string => !!summary);
+  if (summaries.length === 0) return '';
+  if (summaries.length === 1) return summaries[0];
+  return `Completed the requested actions:\n${summaries.map((summary) => `- ${summary}`).join('\n')}`;
+}
+
+function summarizeSingleToolFallback(toolName: string, result: Record<string, unknown>): string {
+  const message = toString(result.message).trim() || extractToolFallbackOutputMessage(result);
+  if (message) return message;
+
+  const status = toString(result.status).trim().toLowerCase();
+  if (status === 'pending_approval') return `${toolName} is awaiting approval.`;
+  if (result.success === true || status === 'succeeded' || status === 'completed') return `Completed ${toolName}.`;
+  return `Attempted ${toolName}, but it did not complete successfully.`;
+}
+
+function extractToolFallbackOutputMessage(result: Record<string, unknown>): string {
+  if (!isRecord(result.output)) return '';
+  return toString(result.output.message).trim();
 }
 
 function toBoolean(value: unknown): boolean {
@@ -3025,6 +3167,8 @@ function buildDashboardCallbacks(
   guardianAgentService: GuardianAgentService,
   sentinelAuditService: SentinelAuditService,
   policyState: PolicyState,
+  googleAuthRef: { current: import('./google/google-auth.js').GoogleAuth | null },
+  googleServiceRef: { current: import('./google/google-service.js').GoogleService | null },
 ): DashboardCallbacks & {
   telegramReloadRef: { current: (() => Promise<{ success: boolean; message: string }>) | null };
   reloadSearchRef: { current: (() => Promise<{ success: boolean; message: string }>) | null };
@@ -3092,18 +3236,6 @@ function buildDashboardCallbacks(
       toolExecutor.updateWebSearchConfig(resolvedNextCredentials.resolvedWebSearch ?? {});
       threatIntelWebSearchConfigRef.current = resolvedNextCredentials.resolvedWebSearch ?? {};
       toolExecutor.setCloudConfig(resolvedNextCredentials.resolvedCloud);
-      const nextGwsConfig = nextConfig.assistant.tools.mcp?.managedProviders?.gws;
-      if (nextGwsConfig?.enabled) {
-        toolExecutor.setGwsService(new GWSService({
-          command: nextGwsConfig.command,
-          timeoutMs: nextGwsConfig.timeoutMs,
-          services: nextGwsConfig.services,
-        }));
-        enabledManagedProviders.add('gws');
-      } else {
-        toolExecutor.setGwsService(undefined);
-        enabledManagedProviders.delete('gws');
-      }
       const persistedToken = nextConfig.channels.web?.auth?.token?.trim()
         || nextConfig.channels.web?.authToken?.trim();
       webAuthStateRef.current = {
@@ -4263,10 +4395,12 @@ function buildDashboardCallbacks(
       };
     },
 
-    onDispatch: async (agentId, msg, routeDecision) => {
+    onDispatch: async (agentId, msg, routeDecision, options) => {
       const channel = msg.channel ?? 'web';
       const channelUserId = msg.userId ?? `${channel}-user`;
       const canonicalUserId = identity.resolveCanonicalUserId(channel, channelUserId);
+      const priority = options?.priority ?? 'high';
+      const requestType = options?.requestType?.trim() || 'chat';
       analytics.track({
         type: 'message_sent',
         channel,
@@ -4282,8 +4416,8 @@ function buildDashboardCallbacks(
           userId: canonicalUserId,
           channel,
           content: msg.content,
-          priority: 'high',
-          requestType: 'chat',
+          priority,
+          requestType,
         },
         async (dispatchCtx) => {
           const message: UserMessage = {
@@ -5601,6 +5735,65 @@ function buildDashboardCallbacks(
         enabled: gwsConfig?.enabled ?? false,
       };
     },
+    onGoogleStatus: async () => {
+      const auth = googleAuthRef.current;
+      const svc = googleServiceRef.current;
+      if (!auth) return { authenticated: false, services: [], mode: 'native' as const };
+      return {
+        authenticated: auth.isAuthenticated(),
+        tokenExpiry: auth.getTokenExpiry(),
+        services: svc?.getEnabledServices() ?? [],
+        mode: 'native' as const,
+      };
+    },
+    onGoogleAuthStart: async (services: string[]) => {
+      const auth = googleAuthRef.current;
+      if (!auth) return { success: false, message: 'Google auth not initialized. Restart the application.' };
+      try {
+        // Auto-enable native Google in config when user clicks Connect.
+        const rawConfig = loadRawConfig();
+        const rawAssistant = (rawConfig.assistant as Record<string, unknown>) ?? {};
+        const rawTools = (rawAssistant.tools as Record<string, unknown>) ?? {};
+        rawTools.google = {
+          ...(rawTools.google as Record<string, unknown> ?? {}),
+          enabled: true,
+          mode: 'native',
+          services: services.length ? services : ['gmail', 'calendar', 'drive', 'docs', 'sheets', 'contacts'],
+        };
+        rawAssistant.tools = rawTools;
+        rawConfig.assistant = rawAssistant;
+        persistAndApplyConfig(rawConfig, { reason: 'Enable native Google integration' });
+
+        enabledManagedProviders.add('gws');
+        const { authUrl, state } = await auth.startAuth();
+        return { success: true, authUrl, state };
+      } catch (err) {
+        return { success: false, message: err instanceof Error ? err.message : String(err) };
+      }
+    },
+    onGoogleCredentials: async (credentials: string) => {
+      const googleCfg = configRef.current.assistant.tools.google;
+      const credPath = googleCfg?.credentialsPath?.replace(/^~/, homedir()) || `${homedir()}/.guardianagent/google-credentials.json`;
+      try {
+        const { mkdir: mkdirAsync, writeFile: writeFileAsync } = await import('node:fs/promises');
+        const { dirname } = await import('node:path');
+        await mkdirAsync(dirname(credPath), { recursive: true });
+        await writeFileAsync(credPath, credentials, { mode: 0o600 });
+        return { success: true, message: 'Credentials saved.' };
+      } catch (err) {
+        return { success: false, message: err instanceof Error ? err.message : String(err) };
+      }
+    },
+    onGoogleDisconnect: async () => {
+      const auth = googleAuthRef.current;
+      if (!auth) return { success: false, message: 'Native Google integration is not enabled.' };
+      try {
+        await auth.disconnect();
+        return { success: true, message: 'Disconnected.' };
+      } catch (err) {
+        return { success: false, message: err instanceof Error ? err.message : String(err) };
+      }
+    },
     onGuardianAgentStatus: () => {
       const cfg = guardianAgentService.getConfig();
       return {
@@ -6196,29 +6389,50 @@ async function main(): Promise<void> {
     },
   };
 
-  // ─── Google Workspace CLI Service ──────────────────────
-  let gwsService: GWSService | undefined;
-  const gwsConfig = config.assistant.tools.mcp?.managedProviders?.gws;
-  if (gwsConfig?.enabled) {
-    gwsService = new GWSService({
-      command: gwsConfig.command,
-      timeoutMs: gwsConfig.timeoutMs,
-      services: gwsConfig.services,
-    });
-    // Quick auth check — always enable GWS tools when the CLI is available so
-    // individual API calls return clear errors rather than silently disabling.
-    enabledManagedProviders.add('gws');
-    const authResult = await gwsService.authStatus();
-    if (authResult.success) {
-      const authData = authResult.data as { auth_method?: string } | undefined;
-      const method = authData?.auth_method;
-      if (method && method !== 'none') {
-        console.log(`  Google Workspace: connected (auth: ${method}, services: ${gwsService.getEnabledServices().join(', ')})`);
-      } else {
-        console.log('  Google Workspace: tools enabled but not authenticated. Run `gws auth login` to connect.');
+  // ─── Native Google Workspace Service ──────────────────
+  // Always initialize GoogleAuth/GoogleService so the web UI can trigger
+  // the OAuth flow even when native mode isn't explicitly enabled yet.
+  const googleAuthRef: { current: import('./google/google-auth.js').GoogleAuth | null } = { current: null };
+  const googleServiceRef: { current: import('./google/google-service.js').GoogleService | null } = { current: null };
+  let googleService: import('./google/google-service.js').GoogleService | undefined;
+  let googleAuth: import('./google/google-auth.js').GoogleAuth | undefined;
+  const googleConfig = config.assistant.tools.google;
+  {
+    try {
+      const { GoogleAuth, GoogleService, GOOGLE_SERVICE_SCOPES } = await import('./google/index.js');
+      const services = googleConfig?.services?.length ? googleConfig.services : ['gmail', 'calendar', 'drive', 'docs', 'sheets', 'contacts'];
+      const scopes = services
+        .map((s: string) => GOOGLE_SERVICE_SCOPES[s.toLowerCase()])
+        .filter(Boolean);
+      const credPath = (googleConfig?.credentialsPath ?? '').replace(/^~/, homedir()) || `${homedir()}/.guardianagent/google-credentials.json`;
+
+      googleAuth = new GoogleAuth({
+        credentialsPath: credPath,
+        callbackPort: googleConfig?.oauthCallbackPort ?? 18432,
+        scopes,
+      });
+
+      await googleAuth.loadStoredTokens();
+      googleService = new GoogleService(googleAuth, {
+        services,
+        timeoutMs: googleConfig?.timeoutMs,
+      });
+
+      // Populate refs for dashboard callback closures.
+      googleAuthRef.current = googleAuth;
+      googleServiceRef.current = googleService;
+
+      // Enable tool routing to native backend if configured.
+      if (googleConfig?.enabled || googleAuth.isAuthenticated()) {
+        enabledManagedProviders.add('gws');
+        if (googleAuth.isAuthenticated()) {
+          console.log(`  Google Workspace: connected (services: ${services.join(', ')})`);
+        } else {
+          console.log('  Google Workspace: ready — connect via web UI.');
+        }
       }
-    } else {
-      console.log(`  Google Workspace: tools enabled but CLI auth check failed — ${authResult.error}`);
+    } catch (err) {
+      console.log(`  Google Workspace (native): failed to initialize — ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -6592,7 +6806,7 @@ async function main(): Promise<void> {
     agentMemoryStore,
     resolveStateAgentId: resolveSharedStateAgentId,
     docSearch,
-    gwsService,
+    googleService,
     deviceInventory,
     networkBaseline,
     networkTraffic,
@@ -6751,6 +6965,17 @@ async function main(): Promise<void> {
   const connectors = new ConnectorPlaybookService({
     config: config.assistant.connectors,
     runTool: async (request) => toolExecutor.runTool(request),
+    runInstruction: async (prompt, providerName, maxTokens) => {
+      const provider = providerName
+        ? runtime.getProvider(providerName)
+        : runtime.getDefaultProvider();
+      if (!provider) throw new Error('No LLM provider available for instruction step.');
+      const response = await provider.chat(
+        [{ role: 'user', content: prompt }],
+        { maxTokens: maxTokens ?? 2048, temperature: 0.3, tools: [] },
+      );
+      return response.content;
+    },
   });
 
   const getPlaybookOutputHandling = (playbookId: string) => (
@@ -6788,6 +7013,50 @@ async function main(): Promise<void> {
       if (task.type !== 'playbook' || task.target !== playbookId) continue;
       scheduledTasks.update(task.id, { outputHandling });
     }
+  }
+
+  function syncPlaybookScheduleToTasks(playbook: { id: string; name: string; enabled: boolean; schedule?: string }): void {
+    const linkedTasks = scheduledTasks.list().filter((task) => task.type === 'playbook' && task.target === playbook.id);
+    for (const linkedTask of linkedTasks) {
+      scheduledTasks.update(linkedTask.id, {
+        name: playbook.name,
+        enabled: playbook.enabled !== false,
+      });
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(playbook, 'schedule')) {
+      return;
+    }
+
+    const normalizedSchedule = playbook.schedule?.trim() || '';
+
+    if (!normalizedSchedule) {
+      if (linkedTasks.length === 1) {
+        scheduledTasks.delete(linkedTasks[0].id);
+      }
+      return;
+    }
+
+    const outputHandling = getPlaybookOutputHandling(playbook.id);
+    const linkedTask = linkedTasks[0];
+    if (linkedTask) {
+      scheduledTasks.update(linkedTask.id, {
+        name: playbook.name,
+        cron: normalizedSchedule,
+        enabled: playbook.enabled !== false,
+        outputHandling,
+      });
+      return;
+    }
+
+    scheduledTasks.create({
+      name: playbook.name,
+      type: 'playbook',
+      target: playbook.id,
+      cron: normalizedSchedule,
+      enabled: playbook.enabled !== false,
+      outputHandling,
+    });
   }
 
   function attachPlaybookPromotions(result: {
@@ -6932,7 +7201,7 @@ async function main(): Promise<void> {
     return runtime.getProvider(externalName);
   };
   // Log initial resolution at startup
-  if (gwsService && enabledManagedProviders.has('gws')) {
+  if (googleService && enabledManagedProviders.has('gws')) {
     const initialGws = resolveGwsProvider();
     if (initialGws) {
       const gwsModelName = config.assistant.tools.mcp?.managedProviders?.gws?.model;
@@ -7380,6 +7649,8 @@ async function main(): Promise<void> {
     guardianAgentService,
     sentinelAuditService,
     policyState,
+    googleAuthRef,
+    googleServiceRef,
   );
 
   const basePlaybookUpsert = dashboardCallbacks.onPlaybookUpsert;
@@ -7387,6 +7658,7 @@ async function main(): Promise<void> {
     dashboardCallbacks.onPlaybookUpsert = (playbook) => {
       const result = basePlaybookUpsert(playbook);
       if (result.success) {
+        syncPlaybookScheduleToTasks(playbook);
         syncPlaybookOutputHandlingToSchedules(playbook.id);
       }
       return result;
@@ -7958,6 +8230,88 @@ async function main(): Promise<void> {
     const webUrl = `http://${config.channels.web.host ?? 'localhost'}:${config.channels.web.port ?? 3000}`;
     log.info({ url: webUrl }, 'Dashboard available at');
   }
+
+  scheduledTasks.setAgentExecutor({
+    runAgentTask: async (input) => {
+      const requestedAgentId = input.agentId.trim();
+      const resolvedAgentId = requestedAgentId === 'default' ? defaultAgentId : requestedAgentId;
+      const channel = input.channel?.trim() || 'scheduled';
+      const userId = input.userId?.trim() || configRef.current.assistant.identity.primaryUserId;
+      const shouldDeliver = input.deliver ?? channel !== 'scheduled';
+
+      const response = await jobTracker.run(
+        {
+          type: 'scheduled-agent-task',
+          source: 'scheduled',
+          detail: input.taskName,
+          metadata: {
+            taskId: input.taskId,
+            agentId: resolvedAgentId,
+            channel,
+          },
+        },
+        async () => {
+          if (!dashboardCallbacks.onDispatch) {
+            throw new Error('Assistant dispatch is not available.');
+          }
+          return dashboardCallbacks.onDispatch(
+            resolvedAgentId,
+            { content: input.prompt, userId, channel },
+            undefined,
+            { priority: 'normal', requestType: 'scheduled_task' },
+          );
+        },
+      );
+
+      const deliveryText = `Scheduled assistant report: ${input.taskName}\n\n${response.content}`.trim();
+      let deliveryMessage = 'Agent task completed.';
+      const deliveryMeta: Record<string, unknown> = {
+        attempted: false,
+        delivered: false,
+        channel,
+      };
+
+      if (shouldDeliver) {
+        deliveryMeta.attempted = true;
+        try {
+          if (channel === 'cli') {
+            if (!cliChannel) throw new Error('CLI channel is not available.');
+            await cliChannel.send(configRef.current.assistant.identity.primaryUserId, deliveryText);
+          } else if (channel === 'telegram') {
+            const chatIds = configRef.current.channels.telegram?.allowedChatIds ?? [];
+            if (!activeTelegram || chatIds.length === 0) {
+              throw new Error('Telegram delivery is not configured.');
+            }
+            for (const chatId of chatIds) {
+              await activeTelegram.send(String(chatId), deliveryText);
+            }
+          } else if (channel === 'web') {
+            if (!activeWebChannel) throw new Error('Web channel is not available.');
+            await activeWebChannel.send(configRef.current.assistant.identity.primaryUserId, deliveryText);
+          } else {
+            throw new Error(`Channel '${channel}' does not support scheduled delivery.`);
+          }
+          deliveryMeta.delivered = true;
+          deliveryMessage = `Agent task completed and delivered to ${channel}.`;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          deliveryMeta.error = message;
+          deliveryMessage = `Agent task completed, but delivery failed: ${message}`;
+        }
+      }
+
+      return {
+        success: true,
+        status: 'succeeded',
+        message: deliveryMessage,
+        output: {
+          content: response.content,
+          metadata: response.metadata,
+          delivery: deliveryMeta,
+        },
+      };
+    },
+  });
 
   const notificationService = new NotificationService({
     getConfig: () => configRef.current.assistant.notifications,

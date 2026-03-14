@@ -4,7 +4,6 @@
  * Handles the full OAuth lifecycle: authorization URL generation, localhost
  * callback, token exchange, encrypted storage, and transparent refresh.
  *
- * See also: GWSService (src/runtime/gws-service.ts) for the legacy CLI auth.
  * Spec: docs/specs/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-SPEC.md
  */
 
@@ -14,7 +13,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { homedir, hostname, userInfo } from 'node:os';
 import { createLogger } from '../util/logging.js';
-import type { GoogleTokens, GoogleAuthState } from './types.js';
+import type { GoogleTokens } from './types.js';
 
 const log = createLogger('google-auth');
 
@@ -219,7 +218,7 @@ export class GoogleAuth {
 
   private async startCallbackServer(state: string, codeVerifier: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const server = createServer((req, res) => {
+      const server = createServer(async (req, res) => {
         const url = new URL(req.url ?? '/', `http://127.0.0.1:${this.callbackPort}`);
 
         if (url.pathname !== '/callback') {
@@ -246,10 +245,25 @@ export class GoogleAuth {
           return;
         }
 
-        res.writeHead(200, { 'Content-Type': 'text/html' }).end(
-          '<h2>Connected!</h2><p>Google account linked. You can close this window.</p>',
-        );
-        this.pending?.resolve(code);
+        // Exchange the authorization code for tokens immediately.
+        try {
+          await this.exchangeCode(code, codeVerifier);
+          res.writeHead(200, { 'Content-Type': 'text/html' }).end(
+            '<h2>Connected!</h2><p>Google account linked successfully. You can close this window.</p>',
+          );
+          log.info('OAuth callback received and tokens exchanged successfully');
+          this.pending?.resolve(code);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error({ err: msg }, 'Token exchange failed in OAuth callback');
+          res.writeHead(200, { 'Content-Type': 'text/html' }).end(
+            `<h2>Connection failed</h2><p>${msg}</p><p>Please try again.</p>`,
+          );
+          this.pending?.reject(err instanceof Error ? err : new Error(msg));
+        }
+
+        // Close the callback server after handling.
+        this.stopCallbackServer();
       });
 
       server.listen(this.callbackPort, '127.0.0.1', () => {

@@ -23,17 +23,27 @@ export class SkillResolver {
     const scored = this.registry.list()
       .map((skill) => ({ skill, score: scoreSkill(skill, input) }))
       .filter((entry) => entry.score > 0)
-      .sort((a, b) => b.score - a.score || a.skill.manifest.name.localeCompare(b.skill.manifest.name))
+      .sort((a, b) => (
+        b.score - a.score
+        || skillRolePriority(b.skill.manifest.role) - skillRolePriority(a.skill.manifest.role)
+        || a.skill.manifest.name.localeCompare(b.skill.manifest.name)
+      ))
       .slice(0, this.maxActivePerRequest);
 
     return scored.map(({ skill, score }) => ({
       id: skill.manifest.id,
       name: skill.manifest.name,
+      description: skill.manifest.description,
+      role: skill.manifest.role,
       summary: skill.summary,
       sourcePath: skill.instructionPath,
       score,
     }));
   }
+}
+
+function skillRolePriority(role: LoadedSkill['manifest']['role']): number {
+  return role === 'process' ? 1 : 0;
 }
 
 function scoreSkill(skill: LoadedSkill, input: SkillResolutionInput): number {

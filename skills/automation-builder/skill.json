@@ -1,0 +1,18 @@
+{
+  "id": "automation-builder",
+  "name": "Automation Builder",
+  "version": "0.1.0",
+  "description": "Use when creating, updating, scheduling, or debugging automations, recurring workflows, or monitoring playbooks.",
+  "role": "process",
+  "tags": ["automation", "workflow", "schedule", "cron", "monitoring"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["automation", "workflow", "schedule", "cron", "recurring", "run every", "monitor this", "set up monitoring"]
+  },
+  "tools": ["workflow_list", "workflow_upsert", "workflow_run", "task_list", "task_create", "task_update", "task_delete"],
+  "risk": "operational"
+}

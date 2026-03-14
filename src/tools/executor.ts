@@ -51,6 +51,7 @@ import { normalizeCpanelConnectionConfig } from './cloud/cpanel-profile.js';
 import { CloudflareClient, type CloudflareInstanceConfig } from './cloud/cloudflare-client.js';
 import { GcpClient, type GcpInstanceConfig, type GcpServiceName } from './cloud/gcp-client.js';
 import { VercelClient, type VercelInstanceConfig } from './cloud/vercel-client.js';
+import { buildGmailRawMessage } from '../runtime/gmail-compose.js';
 
 const MAX_JOBS = 200;
 const MAX_APPROVALS = 200;
@@ -123,8 +124,8 @@ export interface ToolExecutorOptions {
   resolveStateAgentId?: (agentId?: string) => string | undefined;
   /** Document search service for indexed document collections (hybrid BM25 + vector). */
   docSearch?: import('../search/search-service.js').SearchService;
-  /** Google Workspace CLI service for Gmail, Calendar, Drive, Docs, Sheets. */
-  gwsService?: import('../runtime/gws-service.js').GWSService;
+  /** Native Google Workspace service (googleapis SDK, replaces gws CLI). */
+  googleService?: import('../google/google-service.js').GoogleService;
   /** Device inventory for network intelligence/baseline tools. */
   deviceInventory?: DeviceInventoryService;
   /** Network baseline and anomaly service. */
@@ -208,11 +209,16 @@ interface AutomationWorkflowSummary {
 interface AutomationTaskSummary {
   id: string;
   name: string;
-  type: 'tool' | 'playbook';
+  type: 'tool' | 'playbook' | 'agent';
   target: string;
   cron: string;
   enabled: boolean;
   args?: Record<string, unknown>;
+  prompt?: string;
+  channel?: string;
+  userId?: string;
+  deliver?: boolean;
+  runOnce?: boolean;
   emitEvent?: string;
 }
 
@@ -369,7 +375,15 @@ export class ToolExecutor {
 
   /** Return only always-loaded (non-deferred) tool definitions, respecting category/sandbox filters. */
   listAlwaysLoadedDefinitions(): ToolDefinition[] {
-    return this.registry.listAlwaysLoaded().filter(
+    const definitions = [...this.registry.listAlwaysLoaded()];
+    if (this.options.googleService) {
+      for (const toolName of ['gws', 'gws_schema', 'gmail_draft']) {
+        const def = this.registry.get(toolName)?.definition;
+        if (def) definitions.push(def);
+      }
+    }
+
+    return uniqueBy(definitions, (def) => def.name).filter(
       (def) => this.isCategoryEnabled(def.category) && !this.getSandboxBlockReason(def.name, def.category),
     );
   }
@@ -385,8 +399,8 @@ export class ToolExecutor {
     return [...this.runtimeNotices];
   }
 
-  setGwsService(gwsService: import('../runtime/gws-service.js').GWSService | undefined): void {
-    this.options.gwsService = gwsService;
+  setGoogleService(googleService: import('../google/google-service.js').GoogleService | undefined): void {
+    this.options.googleService = googleService;
   }
 
   setCloudConfig(cloudConfig: AssistantCloudConfig | undefined): void {
@@ -415,6 +429,7 @@ export class ToolExecutor {
     if (this.policy.sandbox.allowedDomains.length > 0) {
       lines.push(`Allowed domains: ${this.policy.sandbox.allowedDomains.join(', ')}`);
     }
+    lines.push(...this.describeGoogleContextLines());
     lines.push(...this.describeCloudContextLines());
     return lines.join('\n');
   }
@@ -458,6 +473,25 @@ export class ToolExecutor {
 
     lines.push('Configured cloud profiles:');
     lines.push(...profileLines);
+    return lines;
+  }
+
+  private describeGoogleContextLines(): string[] {
+    const googleSvc = this.options.googleService;
+    if (!googleSvc) {
+      return ['Google Workspace: unavailable'];
+    }
+
+    const services = googleSvc.getEnabledServices();
+    const status = googleSvc.isAuthenticated() ? 'connected' : 'not connected';
+    const lines = [
+      `Google Workspace: ${status}`,
+      `Google Workspace services: ${services.join(', ') || '(none)'}`,
+      'Google Workspace authentication is automatic for gws/gmail tools. Do not ask the user for OAuth access tokens.',
+    ];
+    if (!googleSvc.isAuthenticated()) {
+      lines.push('If a Google action fails for auth, tell the user to connect Google Workspace in Settings instead of asking for raw tokens.');
+    }
     return lines;
   }
 
@@ -808,6 +842,10 @@ export class ToolExecutor {
     }
 
     if (decision === 'require_approval') {
+      if (request.bypassApprovals) {
+        return await this.execute(job, request, args, entry.handler);
+      }
+
       // Caching / Retry Loop Fix: If the LLM just retried the exact same tool
       // call after it was already approved and executed, return the previous result.
       if (job.argsHash) {
@@ -941,6 +979,7 @@ export class ToolExecutor {
     args: Record<string, unknown>,
   ): ToolJobRecord {
     const redactedArgs = hashRedactedObject(args);
+    const argsPreview = formatToolArgsPreview(definition.name, redactedArgs.redacted);
     const job: ToolJobRecord = {
       id: randomUUID(),
       toolName: definition.name,
@@ -954,7 +993,7 @@ export class ToolExecutor {
       argsRedacted: (redactedArgs.redacted && typeof redactedArgs.redacted === 'object')
         ? redactedArgs.redacted as Record<string, unknown>
         : undefined,
-      argsPreview: sanitizePreview(JSON.stringify(redactedArgs.redacted)),
+      argsPreview,
       status: 'running',
       createdAt: this.now(),
       requiresApproval: false,
@@ -3438,9 +3477,55 @@ export class ToolExecutor {
 
     this.registry.register(
       {
+        name: 'gmail_draft',
+        description: 'Create one plain-text Gmail draft using the configured Google Workspace connection. Authentication is automatic. Mutating — requires approval outside autonomous mode. Requires draft_email capability.',
+        shortDescription: 'Create one Gmail draft with automatic Google auth.',
+        risk: 'mutating',
+        category: 'email',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            to: { type: 'string' },
+            subject: { type: 'string' },
+            body: { type: 'string' },
+          },
+          required: ['to', 'subject', 'body'],
+        },
+      },
+      async (args, request) => {
+        const to = requireString(args.to, 'to');
+        const subject = requireString(args.subject, 'subject');
+        const body = requireString(args.body, 'body');
+        const googleSvc = this.options.googleService;
+        if (!googleSvc) {
+          return { success: false, error: 'Google Workspace is not enabled.' };
+        }
+
+        this.guardAction(request, 'draft_email', { to, subject, provider: 'gmail' });
+
+        const raw = buildGmailRawMessage({ to, subject, body });
+        const drafted = await googleSvc.execute({
+          service: 'gmail',
+          resource: 'users drafts',
+          method: 'create',
+          params: { userId: 'me' },
+          json: { message: { raw } },
+        });
+
+        return {
+          success: drafted.success,
+          output: drafted.data,
+          error: drafted.error,
+        };
+      },
+    );
+
+    this.registry.register(
+      {
         name: 'gmail_send',
-        description: 'Send one email via Gmail API using an OAuth access token with gmail.send scope. Security: gmail.googleapis.com must be in allowedDomains. external_post risk — always requires manual approval. Requires send_email capability.',
-        shortDescription: 'Send one email via Gmail API.',
+        description: 'Send one email via the configured Google Workspace Gmail connection. Authentication is automatic. Security: gmail.googleapis.com must be in allowedDomains. external_post risk — always requires manual approval. Requires send_email capability.',
+        shortDescription: 'Send one email through Gmail with automatic Google auth.',
         risk: 'external_post',
         category: 'email',
         deferLoading: true,
@@ -3450,7 +3535,6 @@ export class ToolExecutor {
             to: { type: 'string' },
             subject: { type: 'string' },
             body: { type: 'string' },
-            accessToken: { type: 'string', description: 'OAuth access token with gmail.send scope.' },
           },
           required: ['to', 'subject', 'body'],
         },
@@ -3459,24 +3543,18 @@ export class ToolExecutor {
         const to = requireString(args.to, 'to');
         const subject = requireString(args.subject, 'subject');
         const body = requireString(args.body, 'body');
-        const accessToken = this.resolveGmailAccessToken(args);
-        if (!accessToken) {
-          return {
-            success: false,
-            error: 'Missing Gmail OAuth access token. Provide accessToken arg or set GOOGLE_OAUTH_ACCESS_TOKEN.',
-          };
+        const googleSvc = this.options.googleService;
+        if (!googleSvc) {
+          return { success: false, error: 'Google Workspace is not enabled.' };
         }
         this.assertGmailHostAllowed();
         this.guardAction(request, 'send_email', { to, subject, provider: 'gmail' });
-        const sent = await this.sendGmailMessage(accessToken, { to, subject, body });
+
+        const sent = await googleSvc.sendGmailMessage({ to, subject, body });
         return {
           success: sent.success,
-          output: {
-            to,
-            status: sent.status,
-            messageId: sent.messageId,
-          },
-          error: sent.success ? undefined : sent.error,
+          output: sent.data,
+          error: sent.error,
         };
       },
     );
@@ -3493,7 +3571,6 @@ export class ToolExecutor {
           type: 'object',
           properties: {
             campaignId: { type: 'string' },
-            accessToken: { type: 'string' },
             maxRecipients: { type: 'number' },
           },
           required: ['campaignId'],
@@ -3501,12 +3578,9 @@ export class ToolExecutor {
       },
       async (args, request) => {
         const campaignId = requireString(args.campaignId, 'campaignId');
-        const accessToken = this.resolveGmailAccessToken(args);
-        if (!accessToken) {
-          return {
-            success: false,
-            error: 'Missing Gmail OAuth access token. Provide accessToken arg or set GOOGLE_OAUTH_ACCESS_TOKEN.',
-          };
+        const googleSvc = this.options.googleService;
+        if (!googleSvc) {
+          return { success: false, error: 'Google Workspace is not enabled.' };
         }
         this.assertGmailHostAllowed();
 
@@ -3533,7 +3607,7 @@ export class ToolExecutor {
           error?: string;
         }> = [];
         for (const draft of drafts) {
-          const sent = await this.sendGmailMessage(accessToken, {
+          const sent = await googleSvc.sendGmailMessage({
             to: draft.email,
             subject: draft.subject,
             body: draft.body,
@@ -3542,7 +3616,7 @@ export class ToolExecutor {
             contactId: draft.contactId,
             email: draft.email,
             status: sent.success ? 'sent' : 'failed',
-            messageId: sent.messageId,
+            messageId: sent.data?.messageId,
             error: sent.error,
           });
         }
@@ -9436,8 +9510,9 @@ export class ToolExecutor {
       {
         name: 'gws',
         description:
-          'Execute a Google Workspace API call via the gws CLI. ' +
-          'Supports Gmail, Calendar, Drive, Docs, Sheets, and more. ' +
+          'Execute a Google Workspace API call (Gmail, Calendar, Drive, Docs, Sheets). ' +
+          'Supports direct API calls with OAuth 2.0 PKCE. ' +
+          'AUTHENTICATION IS AUTOMATIC. Do NOT ask the user for an access token or credentials. ' +
           'IMPORTANT: resource uses spaces (not dots) for nested paths. ' +
           'Common calls:\n' +
           '  List emails:    service="gmail", resource="users messages", method="list", params={"userId":"me","maxResults":10}\n' +
@@ -9503,33 +9578,32 @@ export class ToolExecutor {
                     ? (isWrite ? 'write_sheets' : 'read_sheets')
                     : 'mcp_tool';
 
+        const googleSvc = this.options.googleService;
+
         this.guardAction(request, actionType, {
           service,
           resource,
           method,
-          provider: 'gws',
+          provider: 'google-native',
         });
 
-        const gws = this.options.gwsService;
-        if (!gws) {
+        if (!googleSvc?.isServiceEnabled(service)) {
           return {
             success: false,
-            error: 'Google Workspace is not enabled. Enable it in Settings > Google Workspace.',
+            error: 'Google Workspace is not enabled or not connected. Enable it in Settings > Google Workspace.',
           };
         }
 
         // ── Normalize params vs json ────────────────────────────
-        // LLMs frequently put body fields (name, mimeType, summary, values, raw)
-        // into params instead of json, and vice versa for resource IDs.
-        // Fix these misplacements before calling the gws CLI.
+        // LLMs frequently put body fields into params instead of json, and vice versa.
         let params = args.params as Record<string, unknown> | undefined;
-        let json = args.json as Record<string, unknown> | undefined;
+        let json = (args.json ?? args.body) as Record<string, unknown> | undefined;
 
         const PATH_PARAM_KEYS = new Set([
           'fileId', 'spreadsheetId', 'documentId', 'userId', 'calendarId',
           'messageId', 'id', 'eventId', 'labelId', 'threadId', 'draftId',
-          'pageSize', 'maxResults', 'pageToken', 'q', 'orderBy', 'fields',
-          'timeMin', 'timeMax', 'format', 'range', 'valueInputOption',
+          'resourceName', 'pageSize', 'maxResults', 'pageToken', 'q', 'orderBy',
+          'fields', 'timeMin', 'timeMax', 'format', 'range', 'valueInputOption',
           'includeSpamTrash', 'showDeleted', 'singleEvents',
         ]);
         const BODY_FIELD_KEYS = new Set([
@@ -9540,7 +9614,8 @@ export class ToolExecutor {
           'resource',
         ]);
 
-        if (params && /\b(create|update|patch|send|insert)\b/i.test(method)) {
+        // Move body fields from params to json for mutating methods
+        if (params && /\b(create|update|patch|send|insert|copy|move|import)\b/i.test(method)) {
           const misplaced: Record<string, unknown> = {};
           for (const [key, val] of Object.entries(params)) {
             if (BODY_FIELD_KEYS.has(key) && !PATH_PARAM_KEYS.has(key)) {
@@ -9548,7 +9623,6 @@ export class ToolExecutor {
             }
           }
           if (Object.keys(misplaced).length > 0) {
-            // If the 'resource' key is a nested object, unwrap it into json directly
             if (misplaced.resource && typeof misplaced.resource === 'object' && !Array.isArray(misplaced.resource)) {
               json = { ...(json ?? {}), ...(misplaced.resource as Record<string, unknown>) };
               delete misplaced.resource;
@@ -9563,10 +9637,11 @@ export class ToolExecutor {
           }
         }
 
-        // Move resource IDs from json to params
-        if (json && /\b(get|update|patch|delete)\b/i.test(method)) {
+        // Always move resource IDs from json to params regardless of method.
+        // This ensures the URL builder can interpolate them correctly.
+        if (json) {
           const idMoves: Record<string, unknown> = {};
-          for (const key of ['fileId', 'spreadsheetId', 'documentId', 'id', 'eventId', 'messageId', 'draftId', 'labelId']) {
+          for (const key of PATH_PARAM_KEYS) {
             if (key in json) {
               idMoves[key] = json[key];
             }
@@ -9579,7 +9654,7 @@ export class ToolExecutor {
           }
         }
 
-        const result = await gws.execute({
+        const execParams = {
           service,
           resource,
           subResource: args.subResource ? asString(args.subResource) : undefined,
@@ -9589,7 +9664,9 @@ export class ToolExecutor {
           format: args.format as 'json' | 'table' | 'yaml' | 'csv' | undefined,
           pageAll: args.pageAll === true,
           pageLimit: args.pageLimit ? asNumber(args.pageLimit, 10) : undefined,
-        });
+        };
+
+        const result = await googleSvc.execute(execParams);
 
         return {
           success: result.success,
@@ -9624,18 +9701,18 @@ export class ToolExecutor {
       },
       async (args, request) => {
         const schemaPath = requireString(args.schemaPath, 'schemaPath');
-
         this.guardAction(request, 'read_docs', { path: `gws:schema:${schemaPath}` });
 
-        const gws = this.options.gwsService;
-        if (!gws) {
+        const googleSvc = this.options.googleService;
+        if (!googleSvc) {
           return {
             success: false,
             error: 'Google Workspace is not enabled. Enable it in Settings > Google Workspace.',
           };
         }
 
-        const result = await gws.schema(schemaPath);
+        // Native GoogleService schema lookup (uses Discovery API).
+        const result = await googleSvc.schema(schemaPath);
         return {
           success: result.success,
           output: result.data,
@@ -9675,7 +9752,7 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'workflow_upsert',
-        description: 'Create or update an automation (playbook). Requires id, name, mode ("sequential" or "parallel"), and a steps array. Each step must have id, toolName, and optionally args. For a single-tool automation, provide one step with mode "sequential". To schedule it, also create a task with task_create after this call. Mutating - requires approval.',
+        description: 'Create or update an automation (playbook). Requires id, name, mode ("sequential" or "parallel"), and a steps array. Each step must have id, toolName, and optionally args. For a single-tool automation, provide one step with mode "sequential". Preferred scheduling flow: create/update a separate scheduled task with task_create/task_update. Legacy convenience: if schedule is included here, Guardian syncs one linked scheduled playbook task immediately. Mutating - requires approval.',
         shortDescription: 'Create or update an automation (playbook).',
         risk: 'mutating',
         category: 'automation',
@@ -9706,7 +9783,7 @@ export class ToolExecutor {
             enabled: { type: 'boolean', description: 'Whether this automation can be run (default: true)' },
             mode: { type: 'string', description: '"sequential" (steps run in order) or "parallel" (steps run concurrently)' },
             description: { type: 'string', description: 'What this automation does' },
-            schedule: { type: 'string', description: 'Optional cron expression (prefer using task_create for scheduling instead)' },
+            schedule: { type: 'string', description: 'Optional cron expression. Prefer task_create/task_update for explicit scheduling; if provided here, Guardian syncs a linked scheduled playbook task.' },
             steps: {
               type: 'array',
               description: 'Ordered list of steps to execute',
@@ -9800,7 +9877,7 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'task_list',
-        description: 'List all scheduled recurring tasks. Returns name, type (tool or playbook), target, cron schedule, enabled status, last run info, and run count.',
+        description: 'List all scheduled recurring tasks. Returns name, type (tool, playbook, or agent), target, cron schedule, enabled status, last run info, and run count.',
         shortDescription: 'List scheduled recurring tasks.',
         risk: 'read_only',
         category: 'automation',
@@ -9828,8 +9905,8 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'task_create',
-        description: 'Schedule a recurring task. Use type "tool" to run a single tool on cron, or type "workflow" to run an automation playbook on cron. The target is the tool name or playbook id. Mutating - requires approval.',
-        shortDescription: 'Schedule a recurring tool or automation on cron.',
+        description: 'Schedule a task. Use type "tool" to run a single tool on cron, type "workflow" to run an automation playbook on cron, or type "agent" to trigger a scheduled assistant turn that can use skills, memory, and tools. For type "agent", target is the agent id (or "default"), prompt is required, and channel controls the session/delivery path. Set runOnce:true for a one-shot schedule that disables itself after the first execution. Scheduled tasks are considered approved once created, so later cron runs do not pause for the same approval again. Mutating - requires approval.',
+        shortDescription: 'Schedule a tool, workflow, or assistant turn on cron.',
         risk: 'mutating',
         category: 'automation',
         deferLoading: true,
@@ -9846,14 +9923,50 @@ export class ToolExecutor {
             description: 'Schedule system health check on weekdays at 8 AM',
             input: { name: 'Weekday Health', type: 'tool', target: 'sys_resources', cron: '0 8 * * 1-5', enabled: true },
           },
+          {
+            description: 'Schedule a morning assistant briefing over Telegram',
+            input: {
+              name: 'Morning Briefing',
+              type: 'agent',
+              target: 'default',
+              prompt: 'Check recent email, calendar, and open tasks, then send me a concise morning briefing.',
+              channel: 'telegram',
+              deliver: true,
+              cron: '0 8 * * 1-5',
+              enabled: true,
+            },
+          },
+          {
+            description: 'Schedule a one-shot Gmail send for tonight and disable it after it runs',
+            input: {
+              name: 'Send Test Email Tonight',
+              type: 'tool',
+              target: 'gws',
+              cron: '3 22 * * *',
+              runOnce: true,
+              enabled: true,
+              args: {
+                service: 'gmail',
+                resource: 'users messages',
+                method: 'send',
+                params: { userId: 'me' },
+                json: { raw: 'BASE64URL_RFC822' },
+              },
+            },
+          },
         ],
         parameters: {
           type: 'object',
           properties: {
             name: { type: 'string', description: 'Human-readable task name' },
-            type: { type: 'string', description: '"tool" (run a single tool) or "workflow" (run a playbook)' },
-            target: { type: 'string', description: 'Tool name (e.g. "net_arp_scan") or playbook ID (e.g. "net-discovery")' },
+            type: { type: 'string', description: '"tool" (run a single tool), "workflow" (run a playbook), or "agent" (run a scheduled assistant turn)' },
+            target: { type: 'string', description: 'Tool name, playbook ID, or agent ID. Use "default" to target the primary assistant.' },
+            prompt: { type: 'string', description: 'Required when type="agent". The scheduled instruction for the assistant.' },
+            channel: { type: 'string', description: 'Optional for type="agent". Session and delivery channel: "scheduled", "cli", "telegram", or "web". Default: "scheduled".' },
+            userId: { type: 'string', description: 'Optional for type="agent". Canonical user id for the assistant session. Defaults to the primary user.' },
+            deliver: { type: 'boolean', description: 'Optional for type="agent". Deliver the assistant response back to the selected channel after the run.' },
             cron: { type: 'string', description: 'Cron expression: "minute hour day month weekday" (e.g. "*/30 * * * *")' },
+            runOnce: { type: 'boolean', description: 'Optional. If true, run on the next matching cron time once, then disable the task automatically.' },
             enabled: { type: 'boolean', description: 'Start enabled (default: true)' },
             args: { type: 'object', description: 'Optional tool arguments as key-value pairs' },
             emitEvent: { type: 'string', description: 'Optional event name to emit on completion' },
@@ -9873,7 +9986,7 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'task_update',
-        description: 'Update an existing scheduled task by id. Can change name, schedule (cron), enabled status, target, or args. Mutating - requires approval.',
+        description: 'Update an existing scheduled task by id. Can change name, schedule (cron), enabled status, target, args, runOnce behavior, or agent-task prompt/channel settings. Scheduled tasks remain approved for later cron runs after creation/update. Mutating - requires approval.',
         shortDescription: 'Update a scheduled task (cron, enabled, args).',
         risk: 'mutating',
         category: 'automation',
@@ -9883,9 +9996,14 @@ export class ToolExecutor {
           properties: {
             taskId: { type: 'string' },
             name: { type: 'string' },
-            type: { type: 'string', description: "Use 'tool' or 'workflow'." },
+            type: { type: 'string', description: "Use 'tool', 'workflow', or 'agent'." },
             target: { type: 'string' },
+            prompt: { type: 'string' },
+            channel: { type: 'string' },
+            userId: { type: 'string' },
+            deliver: { type: 'boolean' },
             cron: { type: 'string' },
+            runOnce: { type: 'boolean', description: 'If true, disable the task automatically after its next execution.' },
             enabled: { type: 'boolean' },
             args: { type: 'object' },
             emitEvent: { type: 'string' },
@@ -10049,67 +10167,11 @@ export class ToolExecutor {
     }
   }
 
-  private resolveGmailAccessToken(args: Record<string, unknown>): string | undefined {
-    const inline = asString(args.accessToken).trim();
-    if (inline) return inline;
-    const envToken = process.env['GOOGLE_OAUTH_ACCESS_TOKEN']?.trim();
-    return envToken || undefined;
-  }
-
   private assertGmailHostAllowed(): void {
     const host = 'gmail.googleapis.com';
     if (!this.isHostAllowed(host)) {
       throw new Error(`Host '${host}' is not in allowedDomains. Add it in tools policy before sending.`);
     }
-  }
-
-  private async sendGmailMessage(
-    accessToken: string,
-    message: { to: string; subject: string; body: string },
-  ): Promise<{ success: boolean; status: number; messageId?: string; error?: string }> {
-    const rawMessage = [
-      `To: ${message.to}`,
-      `Subject: ${message.subject}`,
-      'MIME-Version: 1.0',
-      'Content-Type: text/plain; charset=UTF-8',
-      '',
-      message.body,
-      '',
-    ].join('\r\n');
-    const encoded = Buffer.from(rawMessage, 'utf-8')
-      .toString('base64')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/g, '');
-
-    const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-        'User-Agent': 'GuardianAgent-Tools/1.0',
-      },
-      body: JSON.stringify({ raw: encoded }),
-    });
-
-    if (response.ok) {
-      const payload = await response.json().catch(() => ({} as unknown));
-      const messageId = typeof payload === 'object' && payload !== null && typeof (payload as { id?: unknown }).id === 'string'
-        ? (payload as { id: string }).id
-        : undefined;
-      return {
-        success: true,
-        status: response.status,
-        messageId,
-      };
-    }
-
-    const detail = await response.text().catch(() => '');
-    return {
-      success: false,
-      status: response.status,
-      error: `Gmail send failed (${response.status}): ${truncateOutput(detail) || 'unknown error'}`,
-    };
   }
 
   private async resolveAllowedPath(inputPath: string): Promise<string> {
@@ -11221,6 +11283,18 @@ function uniqueNonEmpty(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
+function uniqueBy<T>(values: T[], key: (value: T) => string): T[] {
+  const seen = new Set<string>();
+  const result: T[] = [];
+  for (const value of values) {
+    const id = key(value);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    result.push(value);
+  }
+  return result;
+}
+
 function isPathInside(candidate: string, root: string): boolean {
   const normalizedCandidate = sep === '\\' ? candidate.toLowerCase() : candidate;
   const normalizedRoot = sep === '\\' ? root.toLowerCase() : root;
@@ -12267,4 +12341,103 @@ function inferGoogleWorkspaceCapabilityAction(toolName: string, description: str
   }
 
   return null;
+}
+
+function formatToolArgsPreview(toolName: string, redactedArgs: unknown): string {
+  if (toolName === 'task_create' || toolName === 'task_update') {
+    const summary = summarizeScheduledTaskPreview(isRecord(redactedArgs) ? redactedArgs : {});
+    if (summary) return sanitizePreview(summary);
+  }
+  if (toolName === 'workflow_upsert') {
+    const summary = summarizeWorkflowPreview(isRecord(redactedArgs) ? redactedArgs : {});
+    if (summary) return sanitizePreview(summary);
+  }
+  if (toolName === 'gws') {
+    const summary = summarizeGwsPreview(isRecord(redactedArgs) ? redactedArgs : {});
+    if (summary) return sanitizePreview(summary);
+  }
+  return sanitizePreview(JSON.stringify(redactedArgs));
+}
+
+function summarizeWorkflowPreview(args: Record<string, unknown>): string | null {
+  const id = asString(args.id).trim();
+  const name = asString(args.name).trim();
+  const mode = asString(args.mode).trim();
+  const schedule = asString(args.schedule).trim();
+  const steps = Array.isArray(args.steps) ? args.steps : [];
+  if (!id && !name) return null;
+  return `workflow ${name || id} (${mode || 'sequential'}, ${steps.length} step${steps.length === 1 ? '' : 's'}${schedule ? `, schedule ${schedule}` : ''})`;
+}
+
+function summarizeScheduledTaskPreview(args: Record<string, unknown>): string | null {
+  const name = asString(args.name).trim() || 'scheduled task';
+  const type = asString(args.type).trim();
+  const cron = asString(args.cron).trim();
+  const runOnce = args.runOnce === true;
+  if (type === 'agent') {
+    const target = asString(args.target).trim() || 'default';
+    return `${runOnce ? 'one-shot' : 'scheduled'} assistant task "${name}" for agent ${target} on ${cron || '(no cron)'}`;
+  }
+  if (type === 'workflow' || type === 'playbook') {
+    const target = asString(args.target).trim();
+    return `${runOnce ? 'one-shot' : 'scheduled'} workflow "${name}" targeting ${target || '(no target)'} on ${cron || '(no cron)'}`;
+  }
+  if (type === 'tool') {
+    const target = asString(args.target).trim();
+    if (target === 'gws') {
+      const gwsSummary = summarizeGwsPreview(isRecord(args.args) ? args.args : {});
+      if (gwsSummary) {
+        return `${runOnce ? 'one-shot' : 'scheduled'} "${name}": ${gwsSummary} on ${cron || '(no cron)'}`;
+      }
+    }
+    return `${runOnce ? 'one-shot' : 'scheduled'} tool task "${name}" targeting ${target || '(no target)'} on ${cron || '(no cron)'}`;
+  }
+  return null;
+}
+
+function summarizeGwsPreview(args: Record<string, unknown>): string | null {
+  const service = asString(args.service).trim().toLowerCase();
+  const resource = asString(args.resource).trim().toLowerCase();
+  const method = asString(args.method).trim().toLowerCase();
+  if (!service || !method) return null;
+
+  if (service === 'gmail' && resource === 'users messages' && method === 'send') {
+    const payload = extractRawMessageSummary(args);
+    if (payload) {
+      return `send Gmail to ${payload.to || '(unknown recipient)'}${payload.subject ? ` with subject "${payload.subject}"` : ''}`;
+    }
+    return 'send Gmail message';
+  }
+
+  if (service === 'gmail' && resource === 'users drafts' && method === 'create') {
+    const payload = extractRawMessageSummary(args);
+    if (payload) {
+      return `draft Gmail to ${payload.to || '(unknown recipient)'}${payload.subject ? ` with subject "${payload.subject}"` : ''}`;
+    }
+    return 'create Gmail draft';
+  }
+
+  if (service === 'calendar' && resource === 'events' && method === 'list') {
+    return 'list calendar events';
+  }
+
+  return `${service} ${resource || 'request'} ${method}`.trim();
+}
+
+function extractRawMessageSummary(args: Record<string, unknown>): { to?: string; subject?: string } | null {
+  const json = isRecord(args.json) ? args.json : {};
+  const raw = asString(json.raw) || asString(isRecord(json.message) ? json.message.raw : undefined);
+  if (!raw) return null;
+  try {
+    const normalized = raw.replace(/-/g, '+').replace(/_/g, '/');
+    const padLength = (4 - (normalized.length % 4 || 4)) % 4;
+    const padded = normalized + '='.repeat(padLength);
+    const decoded = Buffer.from(padded, 'base64').toString('utf-8');
+    const lines = decoded.split(/\r?\n/);
+    const to = lines.find((line) => /^to:/i.test(line))?.replace(/^to:\s*/i, '').trim();
+    const subject = lines.find((line) => /^subject:/i.test(line))?.replace(/^subject:\s*/i, '').trim();
+    return { to: to || undefined, subject: subject || undefined };
+  } catch {
+    return null;
+  }
 }

@@ -30,10 +30,9 @@ Provide a safe, approval-gated workflow for:
 - Guardian `send_email` action checks are executed before outbound send
 
 ## Gmail Authentication
-- Uses OAuth access token provided as:
-  - tool arg `accessToken`, or
-  - env var `GOOGLE_OAUTH_ACCESS_TOKEN`
-- Expected scope: `https://www.googleapis.com/auth/gmail.send`
+- Uses the configured native Google Workspace connection.
+- OAuth is handled by Guardian Agent; operators connect Google once in the Google Workspace settings UI.
+- Expected Gmail send scope is covered by the native integration.
 
 ## Persistence
 - Local JSON file: `.guardianagent/marketing-state.json`

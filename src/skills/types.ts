@@ -1,4 +1,5 @@
 export type SkillRisk = 'informational' | 'operational';
+export type SkillRole = 'process' | 'domain';
 
 export interface SkillAppliesTo {
   agents?: string[];
@@ -17,6 +18,7 @@ export interface SkillManifest {
   name: string;
   version: string;
   description: string;
+  role?: SkillRole;
   tags?: string[];
   enabled?: boolean;
   appliesTo?: SkillAppliesTo;
@@ -40,6 +42,7 @@ export interface SkillStatus {
   name: string;
   version: string;
   description: string;
+  role?: SkillRole;
   tags: string[];
   enabled: boolean;
   rootDir: string;
@@ -61,6 +64,8 @@ export interface SkillResolutionInput {
 export interface ResolvedSkill {
   id: string;
   name: string;
+  description: string;
+  role?: SkillRole;
   summary: string;
   sourcePath: string;
   score: number;

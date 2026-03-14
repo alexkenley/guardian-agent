@@ -52,6 +52,19 @@ describe('gmail-compose helpers', () => {
     });
   });
 
+  it('parses draft phrasing that uses "subject of"', () => {
+    const intent = parseDirectGmailWriteIntent(
+      'Draft an email to alexanderkenley@gmail.com with the subject of Test Seven and in the body put testicles.',
+    );
+
+    expect(intent).toEqual({
+      mode: 'draft',
+      to: 'alexanderkenley@gmail.com',
+      subject: 'Test Seven',
+      body: 'testicles.',
+    });
+  });
+
   it('does not treat mailbox read requests as compose requests', () => {
     expect(parseDirectGmailWriteIntent('Who sent the latest Gmail email?')).toBeNull();
   });

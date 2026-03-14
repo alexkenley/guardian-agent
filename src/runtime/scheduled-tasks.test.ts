@@ -47,6 +47,20 @@ function createMockPlaybookExecutor() {
   };
 }
 
+function createMockAgentExecutor() {
+  return {
+    runAgentTask: vi.fn().mockResolvedValue({
+      success: true,
+      status: 'succeeded',
+      message: 'Agent task completed',
+      output: {
+        content: 'Morning briefing ready',
+        delivered: true,
+      },
+    }),
+  };
+}
+
 function createMockDeviceInventory() {
   return {
     ingestPlaybookResults: vi.fn(),
@@ -64,6 +78,7 @@ function createDeps(overrides?: Partial<ScheduledTaskServiceDeps>): ScheduledTas
     scheduler: createMockScheduler(),
     toolExecutor: createMockToolExecutor(),
     playbookExecutor: createMockPlaybookExecutor(),
+    agentExecutor: createMockAgentExecutor(),
     deviceInventory: createMockDeviceInventory() as unknown as ScheduledTaskServiceDeps['deviceInventory'],
     eventBus: createMockEventBus() as unknown as ScheduledTaskServiceDeps['eventBus'],
     persistPath: '/tmp/test-scheduled-tasks.json',
@@ -101,6 +116,7 @@ describe('ScheduledTaskService', () => {
       expect(result.task!.target).toBe('net_arp_scan');
       expect(result.task!.cron).toBe('*/30 * * * *');
       expect(result.task!.enabled).toBe(true);
+      expect(result.task!.preApproved).toBe(true);
       expect(result.task!.runCount).toBe(0);
     });
 
@@ -124,6 +140,37 @@ describe('ScheduledTaskService', () => {
       const result = service.create({ ...validInput, type: 'invalid' as 'tool' });
       expect(result.success).toBe(false);
       expect(result.message).toContain('type');
+    });
+
+    it('should create an agent task with prompt metadata', () => {
+      const result = service.create({
+        name: 'Morning Briefing',
+        type: 'agent',
+        target: 'default',
+        prompt: 'Summarize my morning priorities.',
+        channel: 'telegram',
+        deliver: true,
+        cron: '0 8 * * *',
+      });
+      expect(result.success).toBe(true);
+      expect(result.task).toMatchObject({
+        type: 'agent',
+        target: 'default',
+        prompt: 'Summarize my morning priorities.',
+        channel: 'telegram',
+        deliver: true,
+      });
+    });
+
+    it('should reject agent tasks without a prompt', () => {
+      const result = service.create({
+        name: 'Broken Agent Task',
+        type: 'agent',
+        target: 'default',
+        cron: '0 8 * * *',
+      } as ScheduledTaskCreateInput);
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('prompt');
     });
 
     it('should reject missing target', () => {
@@ -213,6 +260,13 @@ describe('ScheduledTaskService', () => {
       const result = service.update('nonexistent', { name: 'x' });
       expect(result.success).toBe(false);
     });
+
+    it('should reject converting a task to agent without a prompt', () => {
+      const { task } = service.create(validInput);
+      const result = service.update(task!.id, { type: 'agent' });
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('prompt');
+    });
   });
 
   describe('delete', () => {
@@ -239,6 +293,7 @@ describe('ScheduledTaskService', () => {
         expect.objectContaining({
           toolName: 'net_arp_scan',
           origin: 'web',
+          bypassApprovals: true,
         }),
       );
       // Check task state updated
@@ -257,8 +312,39 @@ describe('ScheduledTaskService', () => {
           playbookId: 'home-network',
           origin: 'web',
           requestedBy: 'scheduled-tasks',
+          bypassApprovals: true,
         }),
       );
+    });
+
+    it('should execute an agent task immediately', async () => {
+      const { task } = service.create({
+        name: 'Morning Briefing',
+        type: 'agent',
+        target: 'default',
+        prompt: 'Summarize my morning priorities.',
+        channel: 'cli',
+        deliver: true,
+        cron: '0 8 * * *',
+      });
+      const result = await service.runNow(task!.id);
+      expect(result.success).toBe(true);
+      expect(deps.agentExecutor?.runAgentTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: 'default',
+          prompt: 'Summarize my morning priorities.',
+          channel: 'cli',
+          deliver: true,
+        }),
+      );
+      const history = service.getHistory();
+      expect(history[0].taskType).toBe('agent');
+      expect(history[0].steps).toEqual([
+        expect.objectContaining({
+          toolName: 'agent:default',
+          status: 'succeeded',
+        }),
+      ]);
     });
 
     it('should feed network tool results to device inventory', async () => {
@@ -349,6 +435,15 @@ describe('ScheduledTaskService', () => {
     it('should return error for unknown id', async () => {
       const result = await service.runNow('nonexistent');
       expect(result.success).toBe(false);
+    });
+
+    it('should disable a run-once task after its first execution', async () => {
+      const { task } = service.create({ ...validInput, runOnce: true });
+      const result = await service.runNow(task!.id);
+      expect(result.success).toBe(true);
+      expect(service.get(task!.id)?.enabled).toBe(false);
+      expect(service.get(task!.id)?.lastRunMessage).toContain('One-shot task disabled after execution.');
+      expect(deps.scheduler.unschedule).toHaveBeenCalled();
     });
 
     it('should record run in history', async () => {

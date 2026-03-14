@@ -449,7 +449,7 @@ Local code and docs:
 - `src/agent/types.ts`
 - `src/runtime/conversation.ts`
 - `src/config/types.ts`
-- `docs/specs/ORCHESTRATION-AGENTS-SPEC.md`
+- `docs/specs/ORCHESTRATION-SPEC.md`
 
 External sources:
 

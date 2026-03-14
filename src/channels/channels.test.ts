@@ -2557,6 +2557,39 @@ describe('WebChannel', () => {
       controller.abort();
       await new Promise(r => setTimeout(r, 50));
     });
+
+    it('WebChannel.send should emit assistant.notice over SSE', async () => {
+      const dashboard: DashboardCallbacks = {
+        onSSESubscribe: () => () => {},
+      };
+
+      web = new WebChannel({ port: 18967, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const controller = new AbortController();
+      const res = await fetch('http://localhost:18967/sse', {
+        signal: controller.signal,
+        headers: authHeaders,
+      });
+
+      expect(res.status).toBe(200);
+      const reader = res.body?.getReader();
+      expect(reader).toBeDefined();
+
+      const firstChunk = await reader!.read();
+      const firstPayload = new TextDecoder().decode(firstChunk.value);
+      expect(firstPayload).toContain(':connected');
+
+      await web.send('owner', 'Scheduled assistant report');
+
+      const chunk = await reader!.read();
+      const payload = new TextDecoder().decode(chunk.value);
+      expect(payload).toContain('event: assistant.notice');
+      expect(payload).toContain('Scheduled assistant report');
+
+      controller.abort();
+      await new Promise(r => setTimeout(r, 50));
+    });
   });
 
   // ─── Static File Serving ──────────────────────────────────

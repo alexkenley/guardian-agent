@@ -2,15 +2,16 @@
   "id": "security-triage",
   "name": "Security Triage",
   "version": "0.1.0",
-  "description": "Guidance for concise, structured incident and alert triage.",
-  "tags": ["security", "triage", "incident", "alert"],
+  "description": "Use when reviewing a security alert, posture change, suspicious network or cloud behavior, firewall finding, or correlated monitoring output.",
+  "role": "domain",
+  "tags": ["security", "triage", "incident", "alert", "monitoring", "firewall", "posture"],
   "enabled": true,
   "appliesTo": {
     "channels": ["cli", "web", "telegram"],
     "requestTypes": ["chat"]
   },
   "triggers": {
-    "keywords": ["incident", "triage", "alert", "ioc", "threat", "investigate"]
+    "keywords": ["incident", "triage", "alert", "ioc", "threat", "investigate", "security alert", "posture change", "firewall alert", "suspicious activity"]
   },
   "risk": "informational"
 }

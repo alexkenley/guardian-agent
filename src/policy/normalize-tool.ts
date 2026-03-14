@@ -88,6 +88,7 @@ function extractResourceAttrs(
       break;
 
     // Email: extract recipient
+    case 'gmail_draft':
     case 'gmail_send':
       if (typeof args.to === 'string') attrs.to = args.to;
       break;

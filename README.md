@@ -116,7 +116,7 @@
 - MCP tool server integration with namespaced tools and Guardian admission on every call
 - Native skills layer with Guardian manifests plus frontmatter-compatible reviewed imports for reusable workflow guidance
 - Connector and playbook framework with allowlists, bounded execution, and dry-run mode
-- Google Workspace integration (Gmail, Calendar, Drive, Docs, Sheets) via managed MCP
+- Google Workspace integration (Gmail, Calendar, Drive, Docs, Sheets) — native googleapis SDK (default) or gws CLI
 - Tool governance — approval workflows, per-tool policy overrides, risk-tiered tool classes
 
 **Channels & Dashboard**

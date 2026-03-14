@@ -1,0 +1,18 @@
+{
+  "id": "preferences-memory",
+  "name": "Preferences Memory",
+  "version": "0.1.0",
+  "description": "Use when the user explicitly wants Guardian to remember a stable preference, instruction, fact, or profile detail for future conversations.",
+  "role": "domain",
+  "tags": ["memory", "preferences", "remember", "profile"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["remember this", "don't forget", "save this preference", "for future conversations", "my preference", "remember that I"]
+  },
+  "tools": ["memory_search", "memory_recall", "memory_save"],
+  "risk": "informational"
+}

@@ -1,7 +1,7 @@
 /**
- * Scheduled Tasks Service — unified CRUD scheduling for tools and playbooks.
+ * Scheduled Tasks Service — unified CRUD scheduling for tools, playbooks, and agent turns.
  *
- * Any tool or playbook can be scheduled to run at intervals or specific times.
+ * Any tool, playbook, or assistant turn can be scheduled to run at intervals or specific times.
  * Results trigger events on the EventBus and feed into DeviceInventoryService.
  * Definitions are persisted to ~/.guardianagent/scheduled-tasks.json.
  */
@@ -23,14 +23,21 @@ const log = createLogger('scheduled-tasks');
 // ─── Types ────────────────────────────────────────────────
 
 export type ScheduledTaskStatus = 'succeeded' | 'failed' | 'pending_approval';
+export type ScheduledTaskType = 'tool' | 'playbook' | 'agent';
 
 export interface ScheduledTaskDefinition {
   id: string;
   name: string;
-  type: 'tool' | 'playbook';
+  type: ScheduledTaskType;
   target: string;
   presetId?: string;
   args?: Record<string, unknown>;
+  prompt?: string;
+  channel?: string;
+  userId?: string;
+  deliver?: boolean;
+  runOnce?: boolean;
+  preApproved?: boolean;
   cron: string;
   enabled: boolean;
   createdAt: number;
@@ -44,10 +51,15 @@ export interface ScheduledTaskDefinition {
 
 export interface ScheduledTaskCreateInput {
   name: string;
-  type: 'tool' | 'playbook';
+  type: ScheduledTaskType;
   target: string;
   presetId?: string;
   args?: Record<string, unknown>;
+  prompt?: string;
+  channel?: string;
+  userId?: string;
+  deliver?: boolean;
+  runOnce?: boolean;
   cron: string;
   enabled?: boolean;
   emitEvent?: string;
@@ -56,9 +68,14 @@ export interface ScheduledTaskCreateInput {
 
 export interface ScheduledTaskUpdateInput {
   name?: string;
-  type?: 'tool' | 'playbook';
+  type?: ScheduledTaskType;
   target?: string;
   args?: Record<string, unknown>;
+  prompt?: string;
+  channel?: string;
+  userId?: string;
+  deliver?: boolean;
+  runOnce?: boolean;
   cron?: string;
   enabled?: boolean;
   emitEvent?: string;
@@ -87,9 +104,14 @@ export interface ScheduledTaskPreset {
   id: string;
   name: string;
   description: string;
-  type: 'tool' | 'playbook';
+  type: ScheduledTaskType;
   target: string;
   args?: Record<string, unknown>;
+  prompt?: string;
+  channel?: string;
+  userId?: string;
+  deliver?: boolean;
+  runOnce?: boolean;
   cron: string;
   emitEvent?: string;
   outputHandling?: AutomationOutputHandlingConfig;
@@ -102,6 +124,7 @@ export interface ScheduledTaskToolExecutor {
     args: Record<string, unknown>;
     origin: 'assistant' | 'cli' | 'web';
     agentId?: string;
+    bypassApprovals?: boolean;
   }): Promise<{ success: boolean; status: string; message: string; output?: unknown }>;
 }
 
@@ -111,6 +134,7 @@ export interface ScheduledTaskPlaybookExecutor {
     playbookId: string;
     origin: 'assistant' | 'cli' | 'web';
     requestedBy?: string;
+    bypassApprovals?: boolean;
   }): Promise<{
     success: boolean;
     status: string;
@@ -127,6 +151,23 @@ export interface ScheduledTaskPlaybookExecutor {
         output?: unknown;
       }>;
     };
+  }>;
+}
+
+export interface ScheduledTaskAgentExecutor {
+  runAgentTask(input: {
+    agentId: string;
+    prompt: string;
+    taskId: string;
+    taskName: string;
+    userId?: string;
+    channel?: string;
+    deliver?: boolean;
+  }): Promise<{
+    success: boolean;
+    status: ScheduledTaskStatus;
+    message: string;
+    output?: unknown;
   }>;
 }
 
@@ -390,6 +431,7 @@ export interface ScheduledTaskServiceDeps {
   scheduler: CronScheduler;
   toolExecutor: ScheduledTaskToolExecutor;
   playbookExecutor: ScheduledTaskPlaybookExecutor;
+  agentExecutor?: ScheduledTaskAgentExecutor;
   deviceInventory: DeviceInventoryService;
   eventBus: EventBus;
   auditLog?: AuditLog;
@@ -408,7 +450,7 @@ export interface ScheduledTaskHistoryEntry {
   id: string;
   taskId: string;
   taskName: string;
-  taskType: 'tool' | 'playbook';
+  taskType: ScheduledTaskType;
   target: string;
   timestamp: number;
   status: ScheduledTaskStatus;
@@ -425,6 +467,7 @@ export class ScheduledTaskService {
   private readonly scheduler: CronScheduler;
   private readonly toolExecutor: ScheduledTaskToolExecutor;
   private readonly playbookExecutor: ScheduledTaskPlaybookExecutor;
+  private agentExecutor?: ScheduledTaskAgentExecutor;
   private readonly deviceInventory: DeviceInventoryService;
   private readonly eventBus: EventBus;
   private readonly auditLog?: AuditLog;
@@ -440,6 +483,7 @@ export class ScheduledTaskService {
     this.scheduler = deps.scheduler;
     this.toolExecutor = deps.toolExecutor;
     this.playbookExecutor = deps.playbookExecutor;
+    this.agentExecutor = deps.agentExecutor;
     this.deviceInventory = deps.deviceInventory;
     this.eventBus = deps.eventBus;
     this.auditLog = deps.auditLog;
@@ -447,6 +491,10 @@ export class ScheduledTaskService {
     this.resolvePlaybookOutputHandling = deps.resolvePlaybookOutputHandling;
     this.persistPath = deps.persistPath ?? DEFAULT_PERSIST_PATH;
     this.now = deps.now ?? Date.now;
+  }
+
+  setAgentExecutor(agentExecutor: ScheduledTaskAgentExecutor | undefined): void {
+    this.agentExecutor = agentExecutor;
   }
 
   // ─── Persistence ──────────────────────────────────────
@@ -487,11 +535,14 @@ export class ScheduledTaskService {
     if (!input.name?.trim()) {
       return { success: false, message: 'name is required' };
     }
-    if (!input.type || (input.type !== 'tool' && input.type !== 'playbook')) {
-      return { success: false, message: "type must be 'tool' or 'playbook'" };
+    if (!input.type || !isScheduledTaskType(input.type)) {
+      return { success: false, message: "type must be 'tool', 'playbook', or 'agent'" };
     }
     if (!input.target?.trim()) {
       return { success: false, message: 'target is required' };
+    }
+    if (input.type === 'agent' && !input.prompt?.trim()) {
+      return { success: false, message: 'prompt is required for agent tasks' };
     }
     if (!input.cron?.trim()) {
       return { success: false, message: 'cron is required' };
@@ -504,6 +555,12 @@ export class ScheduledTaskService {
       target: input.target.trim(),
       presetId: input.presetId?.trim() || undefined,
       args: input.args,
+      prompt: input.prompt?.trim() || undefined,
+      channel: input.channel?.trim() || undefined,
+      userId: input.userId?.trim() || undefined,
+      deliver: input.deliver,
+      runOnce: input.runOnce === true,
+      preApproved: true,
       cron: input.cron.trim(),
       enabled: input.enabled !== false,
       createdAt: this.now(),
@@ -549,8 +606,8 @@ export class ScheduledTaskService {
       task.name = input.name.trim();
     }
     if (input.type !== undefined) {
-      if (input.type !== 'tool' && input.type !== 'playbook') {
-        return { success: false, message: "type must be 'tool' or 'playbook'" };
+      if (!isScheduledTaskType(input.type)) {
+        return { success: false, message: "type must be 'tool', 'playbook', or 'agent'" };
       }
       task.type = input.type;
     }
@@ -559,10 +616,25 @@ export class ScheduledTaskService {
       task.target = input.target.trim();
     }
     if (input.args !== undefined) task.args = input.args;
+    if (input.prompt !== undefined) task.prompt = input.prompt?.trim() || undefined;
+    if (input.channel !== undefined) task.channel = input.channel?.trim() || undefined;
+    if (input.userId !== undefined) task.userId = input.userId?.trim() || undefined;
+    if (input.deliver !== undefined) task.deliver = input.deliver;
+    if (input.runOnce !== undefined) task.runOnce = input.runOnce === true;
     if (input.cron !== undefined) task.cron = input.cron.trim();
     if (input.enabled !== undefined) task.enabled = input.enabled;
     if (input.emitEvent !== undefined) task.emitEvent = input.emitEvent?.trim() || undefined;
     if (input.outputHandling !== undefined) task.outputHandling = input.outputHandling;
+
+    if (task.type === 'agent' && !task.prompt?.trim()) {
+      return { success: false, message: 'prompt is required for agent tasks' };
+    }
+    if (task.type !== 'agent') {
+      task.prompt = undefined;
+      task.channel = undefined;
+      task.userId = undefined;
+      task.deliver = undefined;
+    }
 
     if (task.presetId) {
       const preset = BUILT_IN_PRESETS.find((candidate) => candidate.id === task.presetId);
@@ -633,8 +705,10 @@ export class ScheduledTaskService {
     try {
       if (task.type === 'tool') {
         result = await this.executeTool(task);
-      } else {
+      } else if (task.type === 'playbook') {
         result = await this.executePlaybook(task);
+      } else {
+        result = await this.executeAgent(task);
       }
     } catch (err) {
       const durationMs = this.now() - start;
@@ -655,6 +729,13 @@ export class ScheduledTaskService {
     task.runCount++;
     result.outputHandling = result.outputHandling ?? task.outputHandling;
     result.promotedFindings = this.promoteRunFindings(task, result);
+
+    if (task.runOnce) {
+      task.enabled = false;
+      this.unregisterCron(task);
+      task.lastRunMessage = `${result.message}${result.message.endsWith('.') ? '' : '.'} One-shot task disabled after execution.`;
+      result.message = task.lastRunMessage;
+    }
 
     // Record history
     this.history.unshift({
@@ -689,6 +770,7 @@ export class ScheduledTaskService {
       args: task.args ?? {},
       origin: 'web',
       agentId: `sched-task:${task.id}`,
+      bypassApprovals: task.preApproved !== false,
     });
 
     const status: ScheduledTaskStatus = toolResult.status === 'pending_approval'
@@ -731,6 +813,7 @@ export class ScheduledTaskService {
       playbookId: task.target,
       origin: 'web',
       requestedBy: 'scheduled-tasks',
+      bypassApprovals: task.preApproved !== false,
     });
 
     const status: ScheduledTaskStatus = pbResult.status === 'awaiting_approval'
@@ -766,6 +849,52 @@ export class ScheduledTaskService {
         durationMs: step.durationMs ?? 0,
         output: step.output,
       })),
+    };
+  }
+
+  private async executeAgent(task: ScheduledTaskDefinition): Promise<ScheduledTaskRunResult> {
+    if (!this.agentExecutor) {
+      return {
+        success: false,
+        status: 'failed',
+        message: 'Agent task execution is not available.',
+        durationMs: 0,
+      };
+    }
+    if (!task.prompt?.trim()) {
+      return {
+        success: false,
+        status: 'failed',
+        message: 'Agent task is missing a prompt.',
+        durationMs: 0,
+      };
+    }
+
+    const agentResult = await this.agentExecutor.runAgentTask({
+      agentId: task.target,
+      prompt: task.prompt,
+      taskId: task.id,
+      taskName: task.name,
+      userId: task.userId,
+      channel: task.channel,
+      deliver: task.deliver,
+    });
+
+    return {
+      success: agentResult.success,
+      status: agentResult.status,
+      message: agentResult.message,
+      durationMs: 0,
+      output: agentResult.output,
+      outputHandling: task.outputHandling,
+      steps: [{
+        stepId: `${task.id}-step-1`,
+        toolName: `agent:${task.target}`,
+        status: agentResult.status,
+        message: agentResult.message,
+        durationMs: 0,
+        output: agentResult.output,
+      }],
     };
   }
 
@@ -888,6 +1017,7 @@ export class ScheduledTaskService {
       target: preset.target,
       presetId: preset.id,
       args: preset.args,
+      runOnce: preset.runOnce,
       cron: preset.cron,
       enabled: false,
       emitEvent: preset.emitEvent,
@@ -963,4 +1093,8 @@ function normalizeStepStatus(status: string | undefined): ScheduledTaskStatus {
     return 'pending_approval';
   }
   return status === 'succeeded' ? 'succeeded' : 'failed';
+}
+
+function isScheduledTaskType(value: string): value is ScheduledTaskType {
+  return value === 'tool' || value === 'playbook' || value === 'agent';
 }

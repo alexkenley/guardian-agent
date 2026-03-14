@@ -3,6 +3,7 @@
   "name": "Threat Intelligence",
   "version": "0.1.0",
   "description": "Guidance for structured threat intelligence gathering, watchlist management, and findings triage.",
+  "role": "domain",
   "tags": ["threat", "intel", "ioc", "watchlist", "findings"],
   "enabled": true,
   "appliesTo": {

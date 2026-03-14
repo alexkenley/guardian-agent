@@ -878,20 +878,19 @@ export type SearchSourceType = 'directory' | 'git' | 'url' | 'file';
 
 /**
  * Native Google Workspace integration.
- * Uses googleapis + google-auth-library directly (no external CLI).
- * See also: GWSService (src/runtime/gws-service.ts) for the legacy CLI-based alternative.
+ * Uses direct API calls with OAuth 2.0 PKCE and encrypted token storage.
  */
 export interface GoogleConfig {
   /** Enable native Google integration. Default: false. */
   enabled: boolean;
-  /** Backend mode: 'native' uses googleapis SDK directly, 'gws_cli' uses external gws CLI. Default: 'native'. */
-  mode: 'native' | 'gws_cli';
   /** Enabled Google Workspace services (controls OAuth scope grants). */
   services: string[];
   /** Localhost port for OAuth callback server. Default: 18432. */
   oauthCallbackPort: number;
   /** Path to client_secret.json (can also be uploaded via web UI). */
   credentialsPath: string;
+  /** Request timeout in ms. */
+  timeoutMs?: number;
 }
 
 /** Browser automation configuration (Playwright MCP + Lightpanda MCP). */

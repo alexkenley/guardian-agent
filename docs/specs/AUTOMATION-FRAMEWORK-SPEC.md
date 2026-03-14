@@ -18,6 +18,16 @@ Option 2 favors:
 ### Tool Access
 Automation steps use built-in tools by default. An optional access profile can add tighter boundaries for specific workflows.
 
+### Scheduled Assistant Task
+A scheduled assistant task is a recurring agent turn, not a playbook step. It stores:
+- `target` agent id (or `default`)
+- `prompt`
+- cron schedule
+- optional `runOnce` flag for a single-shot run that disables itself after the first execution
+- optional `channel` / `deliver` routing for user-facing reports
+
+Use this when the automation should decide what to inspect at runtime with the normal assistant stack: skills, memory, tool calling, and Guardian policy.
+
 ### Access Profile
 An access profile (internally still stored as a connector pack) is a bounded integration profile:
 - `id`, `name`, `enabled`
@@ -51,9 +61,10 @@ Operator-facing visual mode:
 ### Mandatory Controls
 1. Connector calls map to Guardian action checks (`read_file`, `write_file`, `http_request`, `execute_command`, etc.).
 2. Existing tool approval model remains authoritative for mutating/external actions.
-3. Access profile boundaries are explicit allowlists (hosts/paths/commands/capabilities) when a step opts into one.
-4. Playbook step budgets enforce bounded execution and reduce runaway workflows.
-5. Playbook metadata and results flow into existing audit + hash-chain persistence.
+3. Creating or updating a scheduled task is the approval checkpoint for that automation definition. Later cron executions of the same saved task do not re-prompt for the identical action.
+4. Access profile boundaries are explicit allowlists (hosts/paths/commands/capabilities) when a step opts into one.
+5. Playbook step budgets enforce bounded execution and reduce runaway workflows.
+6. Playbook metadata and results flow into existing audit + hash-chain persistence.
 
 ### Cryptographic and Audit Alignment
 - Connector-triggered operations inherit tool/job argument hashing (`argsHash`).
@@ -108,6 +119,9 @@ Validation guarantees:
 ### Phase 4 (Implemented — unified Automations)
 - Web `#/automations` page merges playbooks + scheduled tasks into a single "Automations" UI. Old `#/workflows` and `#/operations` routes redirect.
 - Conversational automation creation: the assistant can create playbooks and schedule tasks via `workflow_upsert` and `task_create` tools, guided by system prompt instructions and tool examples.
+- Scheduled assistant tasks are first-class in the runtime and UI for recurring briefings, monitoring reports, and other open-ended agent activities.
+- Scheduled tasks can be marked `runOnce: true` for one-shot execution; the runtime disables them after the first run.
+- When a playbook is upserted with a `schedule`, Guardian immediately syncs a linked scheduled task instead of waiting for a restart migration.
 - Clone, example catalog (templates + presets), and merged run history in the unified page.
 - The main web edit path is now intentionally simple for common changes; raw definition editing remains available in an advanced section for power users.
 - Pipeline rows use a centered disclosure control so multi-step workflows are easier to spot and expand from the catalog view.

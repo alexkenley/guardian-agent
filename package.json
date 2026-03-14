@@ -21,7 +21,6 @@
     "check": "tsc --noEmit",
     "build": "tsc",
     "clean": "rm -rf dist",
-
     "dev": "tsx src/index.ts",
     "dev:unix": "bash scripts/start-dev-unix.sh",
     "dev:sh": "bash scripts/start-dev-unix.sh",
@@ -76,7 +75,6 @@
     "@aws-sdk/client-route-53": "^3.1006.0",
     "@aws-sdk/client-s3": "^3.1006.0",
     "@aws-sdk/client-sts": "^3.1006.0",
-    "@googleworkspace/cli": "^0.4.4",
     "ajv": "^8.18.0",
     "croner": "^10.0.1",
     "grammy": "^1.40.0",

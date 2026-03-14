@@ -21,6 +21,7 @@ export class SkillRegistry {
         name: skill.manifest.name,
         version: skill.manifest.version,
         description: skill.manifest.description,
+        role: skill.manifest.role,
         tags: [...(skill.manifest.tags ?? [])],
         enabled: !this.runtimeDisabled.has(skill.manifest.id),
         rootDir: skill.rootDir,
@@ -123,6 +124,9 @@ async function loadSkill(skillDir: string): Promise<LoadedSkill | null> {
       summary: summarizeSkill(normalizedInstruction, 700),
     };
   } catch (err) {
+    if ((err as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
+      return null;
+    }
     log.warn({ skillDir, err: err instanceof Error ? err.message : String(err) }, 'Failed to load skill');
     return null;
   }
