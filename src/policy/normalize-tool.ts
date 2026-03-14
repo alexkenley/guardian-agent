@@ -87,12 +87,6 @@ function extractResourceAttrs(
       if (typeof args.query === 'string') attrs.query = args.query;
       break;
 
-    // Browser: extract URL
-    case 'browser_open':
-    case 'browser_task':
-      if (typeof args.url === 'string') attrs.url = args.url;
-      break;
-
     // Email: extract recipient
     case 'gmail_send':
       if (typeof args.to === 'string') attrs.to = args.to;

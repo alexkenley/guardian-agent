@@ -1,5 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import yaml from 'js-yaml';
 import { createLogger } from '../util/logging.js';
 import type { LoadedSkill, SkillManifest, SkillStatus } from './types.js';
 
@@ -89,11 +90,19 @@ async function loadSkill(skillDir: string): Promise<LoadedSkill | null> {
   const instructionPath = join(skillDir, 'SKILL.md');
 
   try {
-    const [manifestRaw, instruction] = await Promise.all([
-      readFile(manifestPath, 'utf-8'),
-      readFile(instructionPath, 'utf-8'),
-    ]);
-    const manifest = JSON.parse(manifestRaw) as SkillManifest;
+    const instructionRaw = await readFile(instructionPath, 'utf-8');
+    const nativeManifestRaw = await readFile(manifestPath, 'utf-8').catch((err: NodeJS.ErrnoException) => {
+      if (err?.code === 'ENOENT') return null;
+      throw err;
+    });
+    const loaded = nativeManifestRaw
+      ? loadNativeSkill(nativeManifestRaw, instructionRaw)
+      : loadFrontmatterSkill(instructionRaw);
+    if (!loaded) {
+      log.warn({ skillDir }, 'Skipping skill with invalid manifest or frontmatter');
+      return null;
+    }
+    const { manifest, instruction } = loaded;
     if (!manifest.id?.trim() || !manifest.name?.trim()) {
       log.warn({ skillDir }, 'Skipping skill with missing id or name');
       return null;
@@ -131,4 +140,69 @@ function summarizeSkill(text: string, maxChars: number): string {
     out = next;
   }
   return out || text.slice(0, maxChars);
+}
+
+function loadNativeSkill(manifestRaw: string, instructionRaw: string): { manifest: SkillManifest; instruction: string } | null {
+  const manifest = JSON.parse(manifestRaw) as SkillManifest;
+  const instruction = stripFrontmatter(instructionRaw).trim();
+  return { manifest, instruction };
+}
+
+function loadFrontmatterSkill(instructionRaw: string): { manifest: SkillManifest; instruction: string } | null {
+  const parsed = parseFrontmatter(instructionRaw);
+  if (!parsed) return null;
+  const id = normalizeIdentifier(parsed.data.name);
+  const description = typeof parsed.data.description === 'string' ? parsed.data.description.trim() : '';
+  if (!id || !description) return null;
+  const instruction = parsed.body.trim();
+  const heading = extractFirstHeading(instruction);
+  return {
+    manifest: {
+      id,
+      name: heading || humanizeIdentifier(id),
+      version: '0.0.0-compat',
+      description,
+      enabled: true,
+      risk: 'informational',
+      appliesTo: {
+        requestTypes: ['chat'],
+      },
+    },
+    instruction,
+  };
+}
+
+function parseFrontmatter(instructionRaw: string): { data: Record<string, unknown>; body: string } | null {
+  const match = instructionRaw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+  if (!match) return null;
+  const data = yaml.load(match[1]);
+  if (!data || typeof data !== 'object') return null;
+  return {
+    data: data as Record<string, unknown>,
+    body: instructionRaw.slice(match[0].length),
+  };
+}
+
+function stripFrontmatter(instructionRaw: string): string {
+  return parseFrontmatter(instructionRaw)?.body ?? instructionRaw;
+}
+
+function extractFirstHeading(instruction: string): string {
+  for (const line of instruction.split(/\r?\n/g)) {
+    const match = line.match(/^#\s+(.+?)\s*$/);
+    if (match?.[1]) return match[1].trim();
+  }
+  return '';
+}
+
+function normalizeIdentifier(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function humanizeIdentifier(id: string): string {
+  return id
+    .split(/[-_]+/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 }

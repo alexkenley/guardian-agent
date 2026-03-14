@@ -99,6 +99,14 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 - **MCPClientManager** — multi-server with tool name namespacing (`mcp-<serverId>-<toolName>`)
 - MCP tool risk is inferred from tool metadata (`read_only`, `mutating`, `external_post`) with optional per-server trust overrides and rate limits
 
+### Browser Automation (MCP-based)
+- **Playwright MCP** (`@playwright/mcp`) — managed MCP server providing 55+ browser automation tools via real Chromium/Firefox/WebKit. Registered as `mcp-playwright-*` tools. Config: `assistant.tools.browser.playwrightEnabled` (default: true), `playwrightBrowser`, `playwrightCaps`
+- **Lightpanda** (`@lightpanda/browser`) — optional lightweight MCP server for fast page reads (7 tools: goto, markdown, links, evaluate, semantic_tree, interactiveElements, structuredData). Registered as `mcp-lightpanda-*` tools. Config: `assistant.tools.browser.lightpandaEnabled` (default: false)
+- Both run as stdio subprocesses via MCPClientManager — no custom session management
+- Policy rules in `policies/base/browser.json`: `browser_run_code` denied, `browser_evaluate` requires approval, `browser_file_upload` and `browser_storage_state` require approval
+- Start scripts auto-install Playwright Chromium binary on first run
+- Spec: `docs/specs/BROWSER-AUTOMATION-SPEC.md`
+
 ### Channel Adapters
 - **CLI** (`src/channels/cli.ts`) — readline prompt with `/help`, `/agents`, `/status`, `/config`, `/tools`, `/connectors`, etc. Structured approval prompts via interactive `Approve (y) / Deny (n):` readline question with auto-continuation.
 - **Telegram** (`src/channels/telegram.ts`) — grammy bot, polling mode, `allowed_chat_ids` filtering. Inline keyboard buttons for tool approvals with callback query handling and auto-continuation.

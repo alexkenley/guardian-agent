@@ -1,7 +1,7 @@
 /**
  * Centralized SSRF protection — blocks requests to private/internal addresses.
  *
- * Replaces fragmented isPrivateHost() copies in executor.ts and browser-session.ts.
+ * Replaces fragmented isPrivateHost() copies that were previously in executor.ts.
  * Covers:
  *   - RFC1918 private ranges (10.x, 172.16-31.x, 192.168.x)
  *   - Loopback (127.x, ::1, localhost)
@@ -235,7 +235,6 @@ export async function validateUrlForSsrf(
 const HTTP_ACTION_TYPES = new Set([
   'http_request',
   'browser_navigate',
-  'browser_task',
 ]);
 
 /**

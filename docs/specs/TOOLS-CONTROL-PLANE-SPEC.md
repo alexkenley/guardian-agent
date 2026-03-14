@@ -19,7 +19,7 @@ Expose a safe, auditable tool-execution plane so the assistant can perform works
 ## Tool Catalog
 - **System**: `find_tools` (meta-tool for discovering deferred tools)
 - Filesystem/document: `fs_list`, `fs_search`, `fs_read`, `fs_write`, `fs_mkdir`, `fs_delete`, `fs_move`, `fs_copy`, `doc_create`
-- Shell/browser: `shell_safe`, `chrome_job`, `browser_open`, `browser_action`, `browser_snapshot`, `browser_close`, `browser_task`
+- Shell/browser: `shell_safe`, `chrome_job`, plus MCP-discovered browser tools (`mcp-playwright-*`, `mcp-lightpanda-*`)
 - Web: `web_search`, `web_fetch`
 - Campaign/email: `contacts_discover_browser`, `contacts_import_csv`, `contacts_list`, `campaign_create`, `campaign_list`, `campaign_add_contacts`, `campaign_dry_run`, `gmail_send`, `campaign_run`
 - Google Workspace: `gws`, `gws_schema`

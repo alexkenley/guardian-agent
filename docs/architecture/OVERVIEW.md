@@ -282,11 +282,14 @@ Design intent:
 Current implementation:
 
 - `SkillRegistry` loads local skill bundles from configured roots
+- supports both Guardian-native `skill.json` manifests and reviewed frontmatter-only `SKILL.md` imports
 - `SkillResolver` auto-selects relevant skills for chat requests
+- resolver uses native triggers first, then compatibility fallback matching for imported skills
 - active skill summaries are injected into the system prompt
 - active skill IDs are included in chat response metadata
 - runtime skill inspection and toggling are available via `/skills` in CLI and `GET/POST /api/skills`
 - skill enable/disable updates persist to `assistant.skills.disabledSkills`
+- bundled skills now include Google Workspace guidance plus `security-triage`, `mcp-builder`, `skill-creator`, and `webapp-testing`
 
 Not yet implemented:
 

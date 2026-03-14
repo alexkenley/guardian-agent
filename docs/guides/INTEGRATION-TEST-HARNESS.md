@@ -493,32 +493,37 @@ Tests contacts management, campaign lifecycle, and `gmail_send` approval gating.
 | `gmail_send` | approve_by_policy | pending_approval → deny | External_post always gated |
 | `gmail_send` | autonomous | pending_approval → deny | External_post still gated in autonomous |
 
-### Browser Automation Suite (`test-browser.ps1`, ~15 assertions)
+### Browser Automation Suite (MCP-based)
 
-Tests browser automation tools. Requires Chromium/Puppeteer — uses a two-tier availability check: tool registered (basic tests) vs browser binary available (full lifecycle tests). All browser tools are `network` risk — auto-allowed in `approve_by_policy`.
+Browser automation is now provided via managed MCP servers (Playwright MCP and Lightpanda MCP) rather than built-in tools. Browser tools are registered as `mcp-playwright-*` and `mcp-lightpanda-*` by MCPClientManager. This browser path does not require `assistant.tools.mcp.enabled: true`; it can initialize its own MCP manager when browser tooling is enabled. Tests still require the respective MCP server binaries to be installed.
 
-#### Full Lifecycle (if browser available)
+#### Playwright MCP Lifecycle
 | Step | Tool | What It Validates |
 |------|------|-------------------|
-| 1 | `browser_open` | Opens URL, captures sessionId |
-| 2 | `browser_snapshot` | Takes page snapshot |
-| 3 | `browser_action` | Evaluates JS expression |
-| 4 | `browser_close` | Closes session |
-| 5 | `browser_task` | High-level browser task |
+| 1 | `mcp-playwright-browser_navigate` | Navigates to URL, returns snapshot |
+| 2 | `mcp-playwright-browser_snapshot` | Captures accessibility tree |
+| 3 | `mcp-playwright-browser_click` | Clicks element by ref (mutating — requires approval) |
+| 4 | `mcp-playwright-browser_close` | Closes page |
 
-#### Registration Verification (if registered but no binary)
-| Tool | Expected | What It Validates |
-|------|----------|-------------------|
-| `browser_open` | executed (failed OK) | Tool registered, handler ran |
-| `browser_close` | executed (failed OK) | Tool registered, handler ran |
-| `browser_task` | executed (failed OK) | Tool registered, handler ran |
+#### Lightpanda MCP Lifecycle
+| Step | Tool | What It Validates |
+|------|------|-------------------|
+| 1 | `mcp-lightpanda-goto` | Navigates to URL |
+| 2 | `mcp-lightpanda-markdown` | Extracts page as markdown |
+| 3 | `mcp-lightpanda-links` | Lists page links |
+| 4 | `mcp-lightpanda-structuredData` | Extracts JSON-LD/OpenGraph |
 
-#### Network Risk Policy (approve_by_policy)
-| Tool | Expected | What It Validates |
-|------|----------|-------------------|
-| `browser_open` | NOT pending_approval | Network tools auto-allowed |
-| `browser_task` | NOT pending_approval | Network tools auto-allowed |
-| `browser_close` | NOT pending_approval | Network tools auto-allowed |
+#### Policy Enforcement
+| Tool | Risk | Expected (approve_by_policy) |
+|------|------|------------------------------|
+| `mcp-playwright-browser_navigate` | network | Auto-allowed |
+| `mcp-playwright-browser_snapshot` | read_only | Auto-allowed |
+| `mcp-playwright-browser_click` | mutating | Requires approval |
+| `mcp-playwright-browser_evaluate` | mutating | Requires approval (policy rule) |
+| `mcp-playwright-browser_run_code` | mutating | Denied (policy rule) |
+| `mcp-lightpanda-goto` | network | Auto-allowed |
+| `mcp-lightpanda-markdown` | read_only | Auto-allowed |
+| `mcp-lightpanda-evaluate` | mutating | Requires approval (policy rule) |
 
 ### Approval UX Suite (`test-approvals.ps1`, ~45+ assertions)
 

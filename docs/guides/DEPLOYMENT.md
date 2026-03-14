@@ -153,7 +153,7 @@ The zip contains a self-contained app with:
 - `node.exe` — bundled Node.js runtime
 - `dist/` — compiled JavaScript
 - `web/public/` — dashboard static assets
-- `skills/` — bundled skill packs
+- `skills/` — bundled skill packs (native manifests and frontmatter-compatible reviewed imports)
 - `node_modules/` — production dependencies
 - `bin/guardian-sandbox-win.exe` — AppContainer sandbox helper (if built)
 - `config/portable-config.yaml` — default config with sandbox enabled
@@ -241,7 +241,7 @@ build/
         windows-portable-isolation.example.yaml
       dist/                       # Compiled JS
       node_modules/               # Production deps
-      skills/                     # Skill packs
+      skills/                     # Skill packs (native + reviewed imports)
       web/public/                 # Dashboard assets
       guardianagent.cmd           # Launcher
       node.exe                    # Bundled Node.js

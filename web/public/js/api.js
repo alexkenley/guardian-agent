@@ -367,6 +367,7 @@ export const api = {
   }),
 
   gwsStatus: () => request('/api/gws/status'),
+  gwsReauth: () => request('/api/gws/reauth', { method: 'POST' }),
 
   // Policy-as-Code Engine
   policyStatus: () => request('/api/policy/status'),

@@ -14,7 +14,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'node
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { loadConfig, DEFAULT_CONFIG_PATH, deepMerge, validateConfig } from './config/loader.js';
-import type { CredentialRefConfig, GuardianAgentConfig, MCPServerEntry, WebSearchConfig } from './config/types.js';
+import type { BrowserConfig, CredentialRefConfig, GuardianAgentConfig, MCPServerEntry, WebSearchConfig } from './config/types.js';
 import { normalizeHttpUrlRecord, normalizeOptionalHttpUrlInput } from './config/input-normalization.js';
 import yaml from 'js-yaml';
 import { Runtime } from './runtime/runtime.js';
@@ -3814,8 +3814,10 @@ function buildDashboardCallbacks(
       return {
         enabled: browser?.enabled ?? true,
         allowedDomains: browser?.allowedDomains ?? configRef.current.assistant.tools.allowedDomains ?? [],
-        sessionIdleTimeoutMs: browser?.sessionIdleTimeoutMs ?? 300_000,
-        maxSessions: browser?.maxSessions ?? 3,
+        playwrightEnabled: browser?.playwrightEnabled ?? true,
+        lightpandaEnabled: browser?.lightpandaEnabled ?? false,
+        playwrightBrowser: browser?.playwrightBrowser ?? 'chromium',
+        playwrightCaps: browser?.playwrightCaps ?? 'network,storage',
       };
     },
 
@@ -3825,8 +3827,10 @@ function buildDashboardCallbacks(
         ...current,
         ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
         ...(input.allowedDomains ? { allowedDomains: input.allowedDomains } : {}),
-        ...(input.sessionIdleTimeoutMs !== undefined ? { sessionIdleTimeoutMs: input.sessionIdleTimeoutMs } : {}),
-        ...(input.maxSessions !== undefined ? { maxSessions: input.maxSessions } : {}),
+        ...(input.playwrightEnabled !== undefined ? { playwrightEnabled: input.playwrightEnabled } : {}),
+        ...(input.lightpandaEnabled !== undefined ? { lightpandaEnabled: input.lightpandaEnabled } : {}),
+        ...(input.playwrightBrowser ? { playwrightBrowser: input.playwrightBrowser as BrowserConfig['playwrightBrowser'] } : {}),
+        ...(input.playwrightCaps ? { playwrightCaps: input.playwrightCaps } : {}),
       };
       configRef.current.assistant.tools.browser = updated;
       const persisted = persistToolsState(toolExecutor.getPolicy());
@@ -6081,6 +6085,61 @@ async function main(): Promise<void> {
     }
   }
 
+  // ── Browser MCP Providers ──────────────────────────────────
+  // Browser tools are MCP-based but should work out of the box without requiring
+  // explicit mcp.enabled in config. Create mcpManager if it doesn't exist yet.
+  const browserConfig = config.assistant?.tools?.browser;
+  if (browserConfig?.enabled !== false && !mcpBlockedBySandbox) {
+    if (!mcpManager) {
+      mcpManager = new MCPClientManager(sandboxConfig);
+    }
+    // Playwright MCP
+    if (browserConfig?.playwrightEnabled !== false) {
+      const playwrightArgs: string[] = [
+        '@playwright/mcp@latest',
+        '--headless',
+        '--browser', browserConfig?.playwrightBrowser ?? 'chromium',
+        '--caps', browserConfig?.playwrightCaps ?? 'network,storage',
+        '--snapshot-mode', 'incremental',
+        ...(browserConfig?.playwrightArgs ?? []),
+      ];
+      try {
+        await mcpManager.addServer({
+          id: 'playwright',
+          name: 'Playwright Browser',
+          transport: 'stdio' as const,
+          command: 'npx',
+          args: playwrightArgs,
+          timeoutMs: 60_000,
+          maxCallsPerMinute: 60,
+        });
+        const pwTools = mcpManager.getClient('playwright')?.getTools().length ?? 0;
+        log.info({ tools: pwTools }, 'Playwright MCP browser connected');
+      } catch (err) {
+        log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Playwright MCP failed to start — browser automation unavailable');
+      }
+    }
+
+    // Lightpanda MCP (Phase 2 — opt-in)
+    if (browserConfig?.lightpandaEnabled) {
+      try {
+        await mcpManager.addServer({
+          id: 'lightpanda',
+          name: 'Lightpanda Browser',
+          transport: 'stdio' as const,
+          command: browserConfig?.lightpandaBinaryPath ?? 'lightpanda',
+          args: ['mcp'],
+          timeoutMs: 30_000,
+          maxCallsPerMinute: 120,
+        });
+        const lpTools = mcpManager.getClient('lightpanda')?.getTools().length ?? 0;
+        log.info({ tools: lpTools }, 'Lightpanda MCP browser connected');
+      } catch (err) {
+        log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Lightpanda MCP failed to start — lightweight browser reads unavailable');
+      }
+    }
+  }
+
   // ─── Native Skills ───────────────────────────────────────────
   let skillRegistry: SkillRegistry | undefined;
   let skillResolver: SkillResolver | undefined;
@@ -6474,7 +6533,13 @@ async function main(): Promise<void> {
         });
       }
 
-      const hostRelevant = new Set(['shell_safe', 'browser_open', 'browser_action', 'browser_task', 'net_connections', 'sys_processes']);
+      const hostRelevant = new Set([
+        'shell_safe', 'net_connections', 'sys_processes',
+        'mcp-playwright-browser_navigate', 'mcp-playwright-browser_click',
+        'mcp-playwright-browser_type', 'mcp-playwright-browser_evaluate',
+        'mcp-playwright-browser_run_code', 'mcp-playwright-browser_file_upload',
+        'mcp-lightpanda-goto', 'mcp-lightpanda-evaluate',
+      ]);
       const now = Date.now();
       if (
         configRef.current.assistant.hostMonitoring.enabled

@@ -104,15 +104,28 @@ export interface ConnectorPlaybookRunResult {
   run: PlaybookRunRecord;
 }
 
+/** Callback that sends a prompt to an LLM and returns the text response. */
+export type RunInstructionFn = (
+  prompt: string,
+  provider?: string,
+  maxTokens?: number,
+) => Promise<string>;
+
 interface ConnectorPlaybookServiceOptions {
   config: AssistantConnectorsConfig;
   runTool: (request: ToolExecutionRequest) => Promise<ToolRunResponse>;
+  /** Optional LLM callback for instruction steps. Required if playbooks use instruction steps. */
+  runInstruction?: RunInstructionFn;
+  /** Optional output scanner (e.g. OutputGuardian) for instruction step responses. */
+  scanOutput?: (text: string) => Promise<string>;
   now?: () => number;
 }
 
 export class ConnectorPlaybookService {
   private config: AssistantConnectorsConfig;
   private readonly runTool: (request: ToolExecutionRequest) => Promise<ToolRunResponse>;
+  private readonly runInstruction?: RunInstructionFn;
+  private readonly scanOutput?: (text: string) => Promise<string>;
   private readonly now: () => number;
   private readonly runs: PlaybookRunRecord[] = [];
   private readonly dryRunQualified = new Set<string>();
@@ -120,6 +133,8 @@ export class ConnectorPlaybookService {
   constructor(options: ConnectorPlaybookServiceOptions) {
     this.config = cloneConnectorsConfig(options.config);
     this.runTool = options.runTool;
+    this.runInstruction = options.runInstruction;
+    this.scanOutput = options.scanOutput;
     this.now = options.now ?? Date.now;
   }
 
@@ -334,7 +349,7 @@ export class ConnectorPlaybookService {
   ): Promise<PlaybookStepRunResult[]> {
     const results: PlaybookStepRunResult[] = [];
     for (const step of steps) {
-      const result = await this.executeStep(step, input);
+      const result = await this.executeStep(step, input, results);
       results.push(result);
 
       if (result.status === 'pending_approval') {
@@ -378,7 +393,12 @@ export class ConnectorPlaybookService {
   private async executeStep(
     step: AssistantConnectorPlaybookStepDefinition,
     input: ConnectorPlaybookRunInput,
+    priorResults?: PlaybookStepRunResult[],
   ): Promise<PlaybookStepRunResult> {
+    if (step.type === 'instruction') {
+      return this.executeInstructionStep(step, input, priorResults ?? []);
+    }
+
     const startedAt = this.now();
     const scopedPackId = normalizeStepPackId(step.packId);
     const pack = scopedPackId
@@ -483,6 +503,95 @@ export class ConnectorPlaybookService {
         stepId: step.id,
         toolName: step.toolName,
         packId: scopedPackId,
+        status: 'failed',
+        message: err instanceof Error ? err.message : String(err),
+        durationMs: this.now() - startedAt,
+      };
+    }
+  }
+
+  private async executeInstructionStep(
+    step: AssistantConnectorPlaybookStepDefinition,
+    input: ConnectorPlaybookRunInput,
+    priorResults: PlaybookStepRunResult[],
+  ): Promise<PlaybookStepRunResult> {
+    const startedAt = this.now();
+
+    if (!step.instruction?.trim()) {
+      return {
+        stepId: step.id,
+        toolName: '_instruction',
+        packId: '',
+        status: 'failed',
+        message: 'Instruction step has no instruction text.',
+        durationMs: this.now() - startedAt,
+      };
+    }
+
+    if (!this.runInstruction) {
+      return {
+        stepId: step.id,
+        toolName: '_instruction',
+        packId: '',
+        status: 'failed',
+        message: 'Instruction steps require an LLM provider but none is configured.',
+        durationMs: this.now() - startedAt,
+      };
+    }
+
+    // Dry-run: return synthetic success without calling the LLM.
+    if (input.dryRun) {
+      return {
+        stepId: step.id,
+        toolName: '_instruction',
+        packId: '',
+        status: 'succeeded',
+        message: 'Instruction step (dry-run — LLM not called).',
+        durationMs: this.now() - startedAt,
+        output: '[dry-run: instruction output would appear here]',
+      };
+    }
+
+    // Build context from prior step outputs.
+    const context = priorResults
+      .filter((r) => r.output != null)
+      .map((r) => `### Step "${r.stepId}" (${r.toolName}) — ${r.status}\n${formatStepOutput(r.output)}`)
+      .join('\n\n');
+
+    const prompt = [
+      'You are processing an automation pipeline step.',
+      'Below are the outputs from prior steps in this automation:\n',
+      context || '(no prior step outputs)',
+      '\n---\n',
+      'Your instruction for this step:\n',
+      step.instruction,
+      '\nRespond with the requested output only. Do not explain the automation or reference these instructions.',
+    ].join('\n');
+
+    const timeoutMs = step.timeoutMs ?? this.config.playbooks.defaultStepTimeoutMs;
+    try {
+      const raw = await withTimeout(
+        this.runInstruction(prompt, step.llmProvider, step.maxTokens ?? 2048),
+        timeoutMs,
+      );
+
+      // Optionally scan LLM output (e.g. OutputGuardian secret/PII redaction).
+      const output = this.scanOutput ? await this.scanOutput(raw) : raw;
+
+      return {
+        stepId: step.id,
+        toolName: '_instruction',
+        packId: '',
+        status: 'succeeded',
+        message: 'Instruction completed.',
+        durationMs: this.now() - startedAt,
+        output,
+      };
+    } catch (err) {
+      return {
+        stepId: step.id,
+        toolName: '_instruction',
+        packId: '',
         status: 'failed',
         message: err instanceof Error ? err.message : String(err),
         durationMs: this.now() - startedAt,
@@ -683,4 +792,14 @@ function cloneStep(step: AssistantConnectorPlaybookStepDefinition): AssistantCon
     ...step,
     args: step.args ? { ...step.args } : undefined,
   };
+}
+
+function formatStepOutput(output: unknown): string {
+  if (output === null || output === undefined) return '';
+  if (typeof output === 'string') return output;
+  try {
+    return JSON.stringify(output, null, 2);
+  } catch {
+    return String(output);
+  }
 }

@@ -32,12 +32,6 @@ import { MCPClientManager } from './mcp-client.js';
 import type { AssistantCloudConfig, AssistantNetworkConfig, BrowserConfig, WebSearchConfig } from '../config/types.js';
 import type { ConversationService } from '../runtime/conversation.js';
 import type { AgentMemoryStore } from '../runtime/agent-memory-store.js';
-import {
-  BrowserSessionManager,
-  validateBrowserAction,
-  validateBrowserUrl,
-  validateElementRef,
-} from './browser-session.js';
 import { isPrivateAddress } from '../guardian/ssrf-protection.js';
 import { sandboxedExec, type SandboxConfig, DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
 import type { SandboxHealth, SandboxProfile } from '../sandbox/types.js';
@@ -115,7 +109,7 @@ export interface ToolExecutorOptions {
   mcpManager?: MCPClientManager;
   /** Web search configuration. Auto-selects best available provider (Brave > Perplexity > DuckDuckGo). */
   webSearch?: WebSearchConfig;
-  /** Browser automation configuration (agent-browser). */
+  /** Browser automation configuration (Playwright MCP + Lightpanda MCP). */
   browserConfig?: BrowserConfig;
   /** Cloud and hosting provider integrations. */
   cloudConfig?: AssistantCloudConfig;
@@ -254,7 +248,6 @@ export class ToolExecutor {
   private webSearchConfig: WebSearchConfig;
   private readonly searchCache = new Map<string, { results: unknown; timestamp: number }>();
   private readonly now: () => number;
-  private readonly browserSession?: BrowserSessionManager;
   private readonly disabledCategories: Set<string>;
   private readonly sandboxConfig: SandboxConfig;
   private readonly sandboxHealth?: SandboxHealth;
@@ -317,9 +310,6 @@ export class ToolExecutor {
           : ['localhost', '127.0.0.1', 'moltbook.com'],
       },
     };
-    if (options.browserConfig?.enabled) {
-      this.browserSession = new BrowserSessionManager(options.browserConfig, this.now, this.sandboxConfig);
-    }
     this.initializeSandboxNotices();
     this.registerBuiltinTools();
     if (this.mcpManager) {
@@ -663,9 +653,9 @@ export class ToolExecutor {
     }
   }
 
-  /** Dispose browser sessions and other resources. Call on shutdown. */
+  /** Dispose resources. Call on shutdown. */
   async dispose(): Promise<void> {
-    await this.browserSession?.dispose();
+    // Browser sessions are now managed by MCP servers (no local cleanup needed)
   }
 
   listJobs(limit = 50): ToolJobRecord[] {
@@ -2067,12 +2057,6 @@ export class ToolExecutor {
         return `Would post to forum thread '${args.threadId}'`;
       case 'intel_action':
         return `Would perform intel action '${args.action}' on finding '${args.findingId}'`;
-      case 'browser_open':
-        return `Would open browser at: ${args.url}`;
-      case 'browser_action':
-        return `Would perform browser ${args.action} on ${args.ref}${args.value ? ` with value '${args.value}'` : ''}`;
-      case 'browser_task':
-        return `Would render and read: ${args.url}`;
       case 'whm_accounts': {
         const action = asString(args.action, 'list').trim().toLowerCase();
         if (action === 'create') {
@@ -9204,257 +9188,6 @@ export class ToolExecutor {
       },
     );
 
-    // ── Browser Automation Tools (agent-browser) ─────────────────
-    if (this.browserSession) {
-      const browserMgr = this.browserSession;
-      const browserAllowedDomains = this.options.browserConfig?.allowedDomains
-        ?? this.policy.sandbox.allowedDomains;
-
-      const isBrowserDomainAllowed = (host: string): boolean => {
-        const normalized = host.trim().toLowerCase();
-        if (!normalized) return false;
-        return browserAllowedDomains.some((allowed) => {
-          const a = allowed.trim().toLowerCase();
-          return normalized === a || normalized.endsWith(`.${a}`);
-        });
-      };
-
-      const makeBrowserSessionKey = (request: ToolExecutionRequest): string => {
-        return `${request.userId ?? 'anon'}:${request.channel ?? 'unknown'}`;
-      };
-
-      this.registry.register(
-        {
-          name: 'browser_open',
-          description: 'Open a URL in a headless browser with full JavaScript rendering. Returns an accessibility snapshot of interactive elements (links, buttons, inputs) with reference IDs (@e1, @e2) for use with browser_action. Use this when pages require JS to load content (SPAs, dashboards, search forms). Security: URL validated against domain allowlist and SSRF blocklist. All page content is untrusted. Requires network_access capability.',
-          shortDescription: 'Open a URL in a headless browser with JavaScript rendering.',
-          risk: 'network',
-          category: 'browser',
-          deferLoading: true,
-          parameters: {
-            type: 'object',
-            properties: {
-              url: { type: 'string', description: 'URL to open in the browser.' },
-            },
-            required: ['url'],
-          },
-        },
-        async (args, request) => {
-          const urlText = requireString(args.url, 'url').trim();
-          const parsed = validateBrowserUrl(urlText);
-          const host = parsed.hostname.toLowerCase();
-          if (isPrivateAddress(host)) {
-            return { success: false, error: `Blocked: ${host} is a private/internal address (SSRF protection).` };
-          }
-          if (!isBrowserDomainAllowed(host)) {
-            return { success: false, error: `Host '${host}' is not in browser allowedDomains.` };
-          }
-          this.guardAction(request, 'http_request', { url: parsed.toString(), method: 'GET', tool: 'browser_open' });
-          try {
-            await browserMgr.checkInstalled();
-          } catch (err) {
-            return { success: false, error: err instanceof Error ? err.message : String(err) };
-          }
-          const sessionKey = makeBrowserSessionKey(request);
-          const session = browserMgr.getOrCreateSession(sessionKey);
-          const result = await browserMgr.runCommand('open', session.sessionId, [parsed.toString()]);
-          if (!result.success) {
-            return { success: false, error: result.error ?? 'Failed to open URL in browser.' };
-          }
-          session.currentUrl = parsed.toString();
-          return {
-            success: true,
-            output: {
-              url: parsed.toString(),
-              host,
-              snapshot: result.snapshot,
-              _untrusted: true,
-            },
-          };
-        },
-      );
-
-      this.registry.register(
-        {
-          name: 'browser_action',
-          description: 'Perform an action on a browser element by reference ID (@e1, @e2) from a browser_open snapshot. Actions: click (navigate/submit), fill (type into inputs), select (dropdowns), press (keyboard keys), scroll, hover. This is a mutating tool — it can submit forms, trigger navigation, and interact with external sites. Security: element refs validated against injection; values passed via subprocess args array (no shell). Requires an active browser session from browser_open.',
-          shortDescription: 'Perform an action on a browser element by reference.',
-          risk: 'mutating',
-          category: 'browser',
-          deferLoading: true,
-          parameters: {
-            type: 'object',
-            properties: {
-              action: { type: 'string', description: 'Action: click, fill, select, press, scroll, hover.' },
-              ref: { type: 'string', description: 'Element reference ID from snapshot (e.g. @e1, @btn_submit).' },
-              value: { type: 'string', description: 'Value for fill/select/press actions.' },
-            },
-            required: ['action', 'ref'],
-          },
-        },
-        async (args, request) => {
-          const action = validateBrowserAction(requireString(args.action, 'action'));
-          const ref = validateElementRef(requireString(args.ref, 'ref'));
-          const value = asString(args.value);
-          const sessionKey = makeBrowserSessionKey(request);
-          const session = browserMgr.getSession(sessionKey);
-          if (!session) {
-            return { success: false, error: 'No active browser session. Use browser_open first.' };
-          }
-          this.guardAction(request, 'http_request', {
-            url: session.currentUrl ?? 'browser_action',
-            method: 'POST',
-            tool: 'browser_action',
-            action,
-            ref,
-          });
-          const cmdArgs = [action, ref];
-          if (value && (action === 'fill' || action === 'select' || action === 'press')) {
-            cmdArgs.push(value);
-          }
-          const result = await browserMgr.runCommand('action', session.sessionId, cmdArgs);
-          if (!result.success) {
-            return { success: false, error: result.error ?? 'Browser action failed.' };
-          }
-          if (result.url) {
-            session.currentUrl = result.url;
-          }
-          return {
-            success: true,
-            output: {
-              action,
-              ref,
-              url: session.currentUrl,
-              snapshot: result.snapshot,
-              _untrusted: true,
-            },
-          };
-        },
-      );
-
-      this.registry.register(
-        {
-          name: 'browser_snapshot',
-          description: 'Get the current accessibility snapshot of the active browser page. Returns interactive elements (links, buttons, inputs, text) with reference IDs (@e1, @e2). Use after browser_action to see updated page state. Read-only — does not navigate or interact. Output capped at 8000 chars and marked as untrusted external content.',
-          shortDescription: 'Get the accessibility snapshot of the active browser page.',
-          risk: 'read_only',
-          category: 'browser',
-          deferLoading: true,
-          parameters: {
-            type: 'object',
-            properties: {},
-          },
-        },
-        async (_args, request) => {
-          const sessionKey = makeBrowserSessionKey(request);
-          const session = browserMgr.getSession(sessionKey);
-          if (!session) {
-            return { success: false, error: 'No active browser session. Use browser_open first.' };
-          }
-          this.guardAction(request, 'http_request', {
-            url: session.currentUrl ?? 'browser_snapshot',
-            method: 'GET',
-            tool: 'browser_snapshot',
-          });
-          const result = await browserMgr.runCommand('snapshot', session.sessionId);
-          if (!result.success) {
-            return { success: false, error: result.error ?? 'Failed to capture browser snapshot.' };
-          }
-          return {
-            success: true,
-            output: {
-              url: session.currentUrl,
-              snapshot: result.snapshot,
-              _untrusted: true,
-            },
-          };
-        },
-      );
-
-      this.registry.register(
-        {
-          name: 'browser_close',
-          description: 'Close the current headless browser session and release resources. Clears approved domains for the session. Use when done browsing to free memory. Safe to call even without an active session.',
-          shortDescription: 'Close the current headless browser session.',
-          risk: 'read_only',
-          category: 'browser',
-          deferLoading: true,
-          parameters: {
-            type: 'object',
-            properties: {},
-          },
-        },
-        async (_args, request) => {
-          const sessionKey = makeBrowserSessionKey(request);
-          const session = browserMgr.getSession(sessionKey);
-          if (!session) {
-            return { success: true, output: { message: 'No active browser session.' } };
-          }
-          await browserMgr.closeSession(sessionKey);
-          return {
-            success: true,
-            output: { message: 'Browser session closed.' },
-          };
-        },
-      );
-
-      this.registry.register(
-        {
-          name: 'browser_task',
-          description: 'One-shot browser tool: opens a URL, waits for JavaScript to render, captures the full page content, and closes the session. Use for reading JS-heavy pages (SPAs, dashboards) that web_fetch cannot render. No interaction — just render and read. Security: same URL validation, SSRF blocking, and domain allowlist as browser_open. Output marked as untrusted external content.',
-          shortDescription: 'One-shot browser: open URL, extract content, close.',
-          risk: 'network',
-          category: 'browser',
-          deferLoading: true,
-          parameters: {
-            type: 'object',
-            properties: {
-              url: { type: 'string', description: 'URL to render and read.' },
-            },
-            required: ['url'],
-          },
-        },
-        async (args, request) => {
-          const urlText = requireString(args.url, 'url').trim();
-          const parsed = validateBrowserUrl(urlText);
-          const host = parsed.hostname.toLowerCase();
-          if (isPrivateAddress(host)) {
-            return { success: false, error: `Blocked: ${host} is a private/internal address (SSRF protection).` };
-          }
-          if (!isBrowserDomainAllowed(host)) {
-            return { success: false, error: `Host '${host}' is not in browser allowedDomains.` };
-          }
-          this.guardAction(request, 'http_request', { url: parsed.toString(), method: 'GET', tool: 'browser_task' });
-          try {
-            await browserMgr.checkInstalled();
-          } catch (err) {
-            return { success: false, error: err instanceof Error ? err.message : String(err) };
-          }
-          // Use a temporary session for the one-shot task
-          const tempSessionId = `_task_${Date.now()}`;
-          const session = browserMgr.getOrCreateSession(tempSessionId);
-          try {
-            const openResult = await browserMgr.runCommand('open', session.sessionId, [parsed.toString()]);
-            if (!openResult.success) {
-              return { success: false, error: openResult.error ?? 'Failed to open URL.' };
-            }
-            const snapshotResult = await browserMgr.runCommand('snapshot', session.sessionId);
-            return {
-              success: true,
-              output: {
-                url: parsed.toString(),
-                host,
-                content: snapshotResult.snapshot ?? openResult.snapshot,
-                _untrusted: true,
-              },
-            };
-          } finally {
-            await browserMgr.closeSession(tempSessionId);
-          }
-        },
-      );
-    }
-
     // ── Memory Tools ────────────────────────────────────────────────
     this.registry.register(
       {
@@ -9711,8 +9444,16 @@ export class ToolExecutor {
           '  Read email:     service="gmail", resource="users messages", method="get", params={"userId":"me","id":"MESSAGE_ID","format":"full"}\n' +
           '  Send email:     service="gmail", resource="users messages", method="send", params={"userId":"me"}, json={"raw":"BASE64_RFC822"}\n' +
           '  List events:    service="calendar", resource="events", method="list", params={"calendarId":"primary"}\n' +
+          '  Create event:   service="calendar", resource="events", method="create", params={"calendarId":"primary"}, json={"summary":"Meeting","start":{"dateTime":"..."},"end":{"dateTime":"..."}}\n' +
           '  List files:     service="drive", resource="files", method="list", params={"pageSize":10}\n' +
           '  Search files:   service="drive", resource="files", method="list", params={"q":"name contains \'report\'"}\n' +
+          '  Create file:    service="drive", resource="files", method="create", json={"name":"My Doc","mimeType":"application/vnd.google-apps.document"}\n' +
+          '  Get file:       service="drive", resource="files", method="get", params={"fileId":"FILE_ID"}\n' +
+          '  Update file:    service="drive", resource="files", method="update", params={"fileId":"FILE_ID"}, json={"name":"New Name"}\n' +
+          '  Delete file:    service="drive", resource="files", method="delete", params={"fileId":"FILE_ID"}\n' +
+          '  Update sheet:   service="sheets", resource="spreadsheets values", method="update", params={"spreadsheetId":"SHEET_ID","range":"Sheet1!A1:B2","valueInputOption":"USER_ENTERED"}, json={"values":[["Header1","Header2"],["val1","val2"]]}\n' +
+          'CRITICAL: Resource IDs (fileId, spreadsheetId, documentId, messageId, etc.) MUST go in params, never in json. ' +
+          'The json field is only for the request body (data to create or update). ' +
           'Use gws_schema to discover all available methods and parameters.',
         shortDescription: 'Execute a Google Workspace API call (Gmail, Calendar, Drive, etc.).',
         risk: 'network',
@@ -9721,6 +9462,9 @@ export class ToolExecutor {
         examples: [
           { input: { service: 'gmail', method: 'list', resource: 'users messages', params: { userId: 'me', q: 'from:boss@company.com newer_than:7d' } }, description: 'List recent emails from a specific sender' },
           { input: { service: 'calendar', method: 'list', resource: 'events', params: { calendarId: 'primary', timeMin: '2026-03-01T00:00:00Z' } }, description: 'List calendar events from a date' },
+          { input: { service: 'drive', method: 'create', resource: 'files', json: { name: 'Meeting Notes', mimeType: 'application/vnd.google-apps.document' } }, description: 'Create a Google Doc in Drive' },
+          { input: { service: 'drive', method: 'update', resource: 'files', params: { fileId: 'abc123' }, json: { name: 'Renamed Document' } }, description: 'Rename a Drive file (fileId in params, new name in json)' },
+          { input: { service: 'sheets', method: 'update', resource: 'spreadsheets values', params: { spreadsheetId: 'abc123', range: 'Sheet1!A1:B2', valueInputOption: 'USER_ENTERED' }, json: { values: [['Name', 'Score'], ['Alice', '95']] } }, description: 'Write data to a Google Sheet' },
         ],
         parameters: {
           type: 'object',
@@ -9729,8 +9473,8 @@ export class ToolExecutor {
             resource: { type: 'string', description: 'API resource path with spaces for nesting. Gmail: "users messages", "users labels", "users drafts". Calendar: "events", "calendarList". Drive: "files". Docs: "documents". Sheets: "spreadsheets".' },
             subResource: { type: 'string', description: 'Optional sub-resource (e.g. "attachments").' },
             method: { type: 'string', description: 'API method: list, get, create, update, delete, send, etc.' },
-            params: { type: 'object', description: 'URL/query parameters. Gmail requires {"userId":"me"} for most calls. Calendar uses {"calendarId":"primary"}.' },
-            json: { type: 'object', description: 'Request body as JSON (for POST/PATCH/PUT methods like send, create, update).' },
+            params: { type: 'object', description: 'URL/path/query parameters — includes resource IDs (fileId, spreadsheetId, documentId, calendarId, userId) and query filters. Gmail requires {"userId":"me"}. Drive get/update/delete requires {"fileId":"..."}. Sheets requires {"spreadsheetId":"..."}.' },
+            json: { type: 'object', description: 'Request body as JSON (for create/update/send methods). Contains the data to create or modify — NOT resource IDs. IDs go in params.' },
             format: { type: 'string', enum: ['json', 'table', 'yaml', 'csv'], description: 'Output format. Default: json.' },
             pageAll: { type: 'boolean', description: 'Auto-paginate all results.' },
             pageLimit: { type: 'number', description: 'Max pages when using pageAll.' },
@@ -9774,13 +9518,74 @@ export class ToolExecutor {
           };
         }
 
+        // ── Normalize params vs json ────────────────────────────
+        // LLMs frequently put body fields (name, mimeType, summary, values, raw)
+        // into params instead of json, and vice versa for resource IDs.
+        // Fix these misplacements before calling the gws CLI.
+        let params = args.params as Record<string, unknown> | undefined;
+        let json = args.json as Record<string, unknown> | undefined;
+
+        const PATH_PARAM_KEYS = new Set([
+          'fileId', 'spreadsheetId', 'documentId', 'userId', 'calendarId',
+          'messageId', 'id', 'eventId', 'labelId', 'threadId', 'draftId',
+          'pageSize', 'maxResults', 'pageToken', 'q', 'orderBy', 'fields',
+          'timeMin', 'timeMax', 'format', 'range', 'valueInputOption',
+          'includeSpamTrash', 'showDeleted', 'singleEvents',
+        ]);
+        const BODY_FIELD_KEYS = new Set([
+          'name', 'mimeType', 'summary', 'description', 'location',
+          'start', 'end', 'attendees', 'recurrence', 'reminders',
+          'raw', 'message', 'labelIds', 'addLabelIds', 'removeLabelIds',
+          'values', 'requests', 'title', 'body', 'content', 'parents',
+          'resource',
+        ]);
+
+        if (params && /\b(create|update|patch|send|insert)\b/i.test(method)) {
+          const misplaced: Record<string, unknown> = {};
+          for (const [key, val] of Object.entries(params)) {
+            if (BODY_FIELD_KEYS.has(key) && !PATH_PARAM_KEYS.has(key)) {
+              misplaced[key] = val;
+            }
+          }
+          if (Object.keys(misplaced).length > 0) {
+            // If the 'resource' key is a nested object, unwrap it into json directly
+            if (misplaced.resource && typeof misplaced.resource === 'object' && !Array.isArray(misplaced.resource)) {
+              json = { ...(json ?? {}), ...(misplaced.resource as Record<string, unknown>) };
+              delete misplaced.resource;
+            }
+            if (Object.keys(misplaced).length > 0) {
+              json = { ...(json ?? {}), ...misplaced };
+            }
+            params = { ...params };
+            for (const key of Object.keys(misplaced)) delete params[key];
+            if ('resource' in params) delete params['resource'];
+            if (Object.keys(params).length === 0) params = undefined;
+          }
+        }
+
+        // Move resource IDs from json to params
+        if (json && /\b(get|update|patch|delete)\b/i.test(method)) {
+          const idMoves: Record<string, unknown> = {};
+          for (const key of ['fileId', 'spreadsheetId', 'documentId', 'id', 'eventId', 'messageId', 'draftId', 'labelId']) {
+            if (key in json) {
+              idMoves[key] = json[key];
+            }
+          }
+          if (Object.keys(idMoves).length > 0) {
+            params = { ...(params ?? {}), ...idMoves };
+            json = { ...json };
+            for (const key of Object.keys(idMoves)) delete (json as Record<string, unknown>)[key];
+            if (Object.keys(json).length === 0) json = undefined;
+          }
+        }
+
         const result = await gws.execute({
           service,
           resource,
           subResource: args.subResource ? asString(args.subResource) : undefined,
           method,
-          params: args.params as Record<string, unknown> | undefined,
-          json: args.json as Record<string, unknown> | undefined,
+          params,
+          json,
           format: args.format as 'json' | 'table' | 'yaml' | 'csv' | undefined,
           pageAll: args.pageAll === true,
           pageLimit: args.pageLimit ? asNumber(args.pageLimit, 10) : undefined,

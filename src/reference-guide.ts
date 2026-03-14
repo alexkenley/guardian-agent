@@ -136,9 +136,10 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Browser Automation',
                 items: [
-                  'Browser tools open managed sessions through the `agent-browser` binary and keep them scoped to the current user and channel.',
+                  'Browser automation is provided through managed MCP servers: Playwright for full interaction and Lightpanda for fast read-only page analysis.',
                   'Browser navigation only supports HTTP and HTTPS targets, and private hosts are blocked for SSRF protection.',
-                  'Close stale browser sessions or let idle cleanup remove them automatically when they are no longer needed.',
+                  'Browser MCP startup does not require the general MCP toggle to be enabled; if browser tooling is on and the binaries are available, GuardianAgent registers the browser servers automatically.',
+                  'Use Lightpanda first for page reading and structure extraction; use Playwright when you need clicks, typing, screenshots, uploads, or richer interaction.',
                 ],
               },
             ],
