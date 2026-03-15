@@ -26,7 +26,7 @@ Linux or macOS:
 bash scripts/start-dev-unix.sh
 ```
 
-These scripts handle dependency checks, build, browser binary installation (Playwright Chromium), startup, and the initial config bootstrap flow.
+These scripts handle dependency checks, native Node dependencies such as `node-pty`, build, browser binary installation (Playwright Chromium), startup, and the initial config bootstrap flow.
 
 ## Windows Portable Isolation Build
 

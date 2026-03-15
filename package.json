@@ -75,12 +75,15 @@
     "@aws-sdk/client-route-53": "^3.1006.0",
     "@aws-sdk/client-s3": "^3.1006.0",
     "@aws-sdk/client-sts": "^3.1006.0",
+    "@playwright/mcp": "^0.0.68",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "ajv": "^8.18.0",
     "croner": "^10.0.1",
     "grammy": "^1.40.0",
     "js-yaml": "^4.1.1",
+    "node-pty": "^1.1.0",
     "openai": "^6.24.0",
-    "@playwright/mcp": "^0.0.68",
     "pino": "^10.3.1"
   },
   "optionalDependencies": {

@@ -318,6 +318,7 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     'policy_rules_reloaded',
     'policy_shadow_mismatch',
     'automation_finding',
+    'auth_failure',
   ]);
   for (const eventType of assistant.notifications.auditEventTypes ?? []) {
     if (!validNotificationAuditTypes.has(eventType)) {
@@ -898,11 +899,30 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
       } else {
         seenStepIds.add(step.id);
       }
-      if (!step.toolName?.trim()) {
-        errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id || '(unnamed)'}' toolName is required`);
+      const stepType = step.type ?? 'tool';
+      if (!['tool', 'instruction', 'delay'].includes(stepType)) {
+        errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id || '(unnamed)'}' type must be tool, instruction, or delay`);
+      } else if (stepType === 'tool') {
+        if (!step.toolName?.trim()) {
+          errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id || '(unnamed)'}' toolName is required`);
+        }
+      } else if (stepType === 'instruction') {
+        if (!step.instruction?.trim()) {
+          errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id || '(unnamed)'}' instruction is required`);
+        }
+      } else if (stepType === 'delay') {
+        if (typeof step.delayMs !== 'number' || step.delayMs <= 0) {
+          errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id || '(unnamed)'}' delayMs must be > 0`);
+        }
+        if (playbook.mode === 'parallel') {
+          errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id || '(unnamed)'}' delay steps are only allowed in sequential mode`);
+        }
       }
       if (step.timeoutMs !== undefined && step.timeoutMs < 1000) {
         errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id}' timeoutMs must be >= 1000`);
+      }
+      if (playbook.mode === 'parallel' && stepType === 'instruction') {
+        errors.push(`assistant.connectors.playbook '${playbook.id}' step '${step.id || '(unnamed)'}' instruction steps are only allowed in sequential mode`);
       }
     }
   }

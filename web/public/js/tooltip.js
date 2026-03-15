@@ -114,6 +114,23 @@ const DEFAULT_TOOLTIPS = {
   '#quick-action-run': 'Runs the selected quick action immediately using the details you entered.',
   '#chat-agent-select': 'Pick which agent should answer in this chat. Useful when you want to force work through a specific persona or provider path.',
   '#chat-input': 'Message sent to the currently selected assistant agent. Tool calls, approvals, and streamed output all start from this field.',
+  '[data-code-new-session]': 'Create a new coding session with its own workspace root and conversation.',
+  '[data-code-reset-chat]': 'Clear the conversation and start fresh. Session and workspace remain intact.',
+  '[data-code-toggle-diff]': 'Toggle between source-only and side-by-side split diff view.',
+  '#auto-create-name': 'Operator-friendly name shown in the catalog and run history.',
+  '#auto-create-id': 'Unique machine ID used in API calls and scheduling. Auto-generated from name. Cannot change after creation.',
+  '#auto-create-mode': 'Single Tool: one tool execution. Sequential: steps run in order, each can use prior outputs. Parallel: tasks run concurrently.',
+  '#auto-agent-mode': 'Instead of running tools deterministically, wake the assistant with the prompt below. The assistant has full access to tools, memory, and skills.',
+  '#auto-single-tool-select': 'The tool this automation executes. Use Browse to see descriptions and requirements.',
+  '#auto-llm-provider': 'Which LLM handles instruction steps and agent tasks. Auto uses smart routing. Local/External force a specific provider type.',
+  '#auto-step-type-select': 'Tool: execute a registered tool. Instruction: invoke LLM to process prior step outputs. Delay: pause pipeline for a duration.',
+  '#auto-step-delay-value': 'How long to pause. Combine with the unit selector (seconds/minutes/hours/days).',
+  '#auto-agent-select': 'Which agent handles this automation. Default uses your main assistant.',
+  '#auto-agent-channel': 'Where the response is delivered. Background: logged only. CLI/Telegram/Web: sent to that channel.',
+  '#auto-agent-prompt': 'The instruction given to the agent each run. Write as if sending a chat message — the agent has full tool/memory/skill access.',
+  '#auto-agent-deliver': 'When checked, sends the response to the delivery channel. Uncheck for silent runs (results still in history).',
+  '#auto-single-prompt': 'Optional instruction wrapped around the tool result. Adding this auto-converts to a 2-step pipeline (tool + LLM instruction).',
+  '#auto-schedule-kind': 'Preset schedule builder. Use Advanced cron for complex patterns like "first Monday of each month."',
 };
 
 export function applyInputTooltips(root = document, extraTooltips = {}) {
@@ -130,6 +147,23 @@ export function applyInputTooltips(root = document, extraTooltips = {}) {
     const derived = deriveTooltip(el);
     if (derived) {
       setTooltip(el, derived);
+    }
+  });
+
+  // Propagate tooltips to info icons: find any .code-tooltip-icon with an empty
+  // or missing title and copy the tooltip from the nearest input/select/textarea.
+  root.querySelectorAll('.code-tooltip-icon').forEach((icon) => {
+    if (icon.getAttribute('title')) return;
+    // Try .cfg-field first, then walk up to parent/grandparent div
+    const containers = [
+      icon.closest('.cfg-field'),
+      icon.parentElement,
+      icon.parentElement?.parentElement,
+    ].filter(Boolean);
+    for (const container of containers) {
+      const input = container.querySelector('input:not([type="hidden"]), select, textarea');
+      const title = input?.getAttribute('title');
+      if (title) { setTooltip(icon, title); break; }
     }
   });
 }

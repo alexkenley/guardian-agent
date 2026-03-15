@@ -30,7 +30,9 @@ This is the recurring automation layer.
 
 Important distinction:
 
+- Playbook `tool` steps execute a built-in tool or connector action
 - Playbook `instruction` steps are text-only LLM synthesis inside a deterministic workflow
+- Playbook `delay` steps pause the sequential pipeline for a specified duration (`delayMs`), useful for rate-limiting or cooldown between steps. In dry-run mode, delay steps return synthetic success without sleeping.
 - Agent tasks dispatch a real assistant turn, so they can use skills, memory, tools, and the normal Guardian/runtime path
 
 This is the right layer for:
@@ -77,6 +79,6 @@ For scheduled assistant automations, Guardian now follows the OpenClaw-style pat
 
 ## Guidance
 
-- Use **playbooks** when the steps should be explicit and repeatable
+- Use **playbooks** when the steps should be explicit and repeatable (tool steps for actions, instruction steps for LLM synthesis, delay steps for pacing)
 - Use **agent tasks** when the assistant should decide what to inspect at runtime and produce a report
 - Use **orchestration agents** when developers need reusable multi-agent control flow inside one request

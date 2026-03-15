@@ -10,12 +10,14 @@ import { renderReference } from './pages/reference.js';
 import { renderNetwork, updateNetwork } from './pages/network.js';
 import { renderAutomations, updateAutomations } from './pages/automations.js';
 import { renderCloud, updateCloud } from './pages/cloud.js';
+import { renderCode, updateCode } from './pages/code.js';
 import { initChatPanel, setChatContext } from './chat-panel.js';
 import { applyInputTooltips } from './tooltip.js';
 import { initTheme } from './theme.js';
 
 const content = document.getElementById('content');
 const chatPanel = document.getElementById('chat-panel');
+const layout = document.querySelector('.layout');
 const authModal = document.getElementById('auth-modal');
 const app = document.getElementById('app');
 const indicator = document.getElementById('connection-indicator');
@@ -137,6 +139,8 @@ const sseListeners = {
   'chat.done': [],
   'chat.error': [],
   'ui.invalidate': [],
+  'terminal.output': [],
+  'terminal.exit': [],
 };
 
 export function onSSE(type, fn) {
@@ -259,6 +263,12 @@ const routes = {
     name: 'automations',
     invalidateTags: ['automations', 'network', 'tools', 'config'],
   },
+  '/code': {
+    render: renderCode,
+    update: updateCode,
+    name: 'code',
+    invalidateTags: [],
+  },
   '/config': {
     render: renderConfig,
     update: updateConfig,
@@ -349,7 +359,16 @@ function navigate() {
   const route = routes[path] || routes['/'];
 
   currentPage = route.name;
-  setChatContext(currentPage);
+  if (currentPage !== 'code') {
+    setChatContext(currentPage);
+  }
+
+  const isCodeRoute = currentPage === 'code';
+  layout?.classList.toggle('layout-code-page', isCodeRoute);
+  content.classList.toggle('content-code-page', isCodeRoute);
+  if (chatPanel) {
+    chatPanel.hidden = isCodeRoute;
+  }
 
   // Update nav
   document.querySelectorAll('.nav-item').forEach(item => {
@@ -386,6 +405,27 @@ function startApp() {
   });
   startClock();
   initChatPanel(chatPanel);
+
+  // ── Collapsible sidebar ──
+  const sidebarToggle = document.getElementById('sidebar-toggle');
+  const sidebar = document.getElementById('app-sidebar');
+  const SIDEBAR_COLLAPSED_KEY = 'guardianagent_sidebar_collapsed';
+  if (sidebarToggle && sidebar) {
+    if (localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true') {
+      sidebar.classList.add('is-collapsed');
+      layout?.style.setProperty('--sidebar-width', '48px');
+      sidebarToggle.innerHTML = '&#x276F;';
+      sidebarToggle.title = 'Expand sidebar';
+    }
+    sidebarToggle.addEventListener('click', () => {
+      const isCollapsed = sidebar.classList.toggle('is-collapsed');
+      layout?.style.setProperty('--sidebar-width', isCollapsed ? '48px' : '200px');
+      sidebarToggle.innerHTML = isCollapsed ? '&#x276F;' : '&#x276E;';
+      sidebarToggle.title = isCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(isCollapsed));
+    });
+  }
+
   window.addEventListener('hashchange', navigate);
   navigate();
 

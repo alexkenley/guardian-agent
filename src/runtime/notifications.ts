@@ -229,6 +229,8 @@ function summarizeTitle(event: AuditEvent): string {
       return 'Agent error requires attention';
     case 'agent_stalled':
       return 'Agent stalled';
+    case 'auth_failure':
+      return 'Authentication failure requires attention';
     case 'automation_finding':
       return `Automation finding: ${extractAutomationName(event.details)}`;
     default:

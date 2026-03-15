@@ -110,6 +110,7 @@ The assistant can create automations (playbooks + scheduled tasks, including sch
 2. **Gather requirements**: The assistant asks for (a) what to automate (which tool or sequence), (b) tool arguments, (c) whether to schedule and how often. It asks for missing critical details but uses sensible defaults for the rest.
 3. **Create the playbook when deterministic steps are needed**: Calls `workflow_upsert` with id, name, mode, and steps. Single-tool automations use one step with mode "sequential". Multi-step pipelines use multiple steps.
    Built-in tool steps can omit an access profile by using `packId: ""` or `packId: "default"`. That runs through the normal Guardian tool path without extra access-profile allowlists.
+   Steps support three types: `tool` (default, executes a tool), `instruction` (invokes LLM for text synthesis), and `delay` (pauses the pipeline for `delayMs` milliseconds — useful for rate-limiting or cooldown between steps). The `workflow_upsert` step schema accepts `type`, `delayMs`, `instruction`, and `llmProvider` fields.
 4. **Schedule the right task type**:
    - Deterministic pipeline: `task_create` with type "workflow", target set to the playbook id, and a cron expression.
    - Single recurring tool: `task_create` with type "tool" and target set to the tool name.

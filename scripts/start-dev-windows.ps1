@@ -374,6 +374,9 @@ if (-not (Test-Path (Join-Path $Root "node_modules"))) {
 } elseif (-not (Test-Path (Join-Path $Root "node_modules\@rollup\rollup-win32-x64-msvc"))) {
     $needsInstall = $true
     Write-Host "  Dependencies installed from WSL/Linux - reinstalling for Windows..." -ForegroundColor DarkCyan
+} elseif (-not (Test-Path (Join-Path $Root "node_modules\node-pty"))) {
+    $needsInstall = $true
+    Write-Host "  node-pty not found in node_modules - reinstalling dependencies..." -ForegroundColor DarkCyan
 }
 
 if ($needsInstall) {

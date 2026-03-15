@@ -192,6 +192,14 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(payload),
   }),
+  preflightTools: (payload) => request('/api/tools/preflight', {
+    method: 'POST',
+    body: JSON.stringify(Array.isArray(payload) ? { tools: payload } : payload),
+  }),
+  pendingToolApprovals: (userId = 'web-user', channel = 'web', limit = 20) => {
+    const qs = new URLSearchParams({ userId, channel, limit: String(limit) });
+    return request(`/api/tools/approvals/pending?${qs.toString()}`);
+  },
   decideToolApproval: (payload) => request('/api/tools/approvals/decision', {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -402,6 +410,39 @@ export const api = {
   reloadPolicy: () => request('/api/policy/reload', {
     method: 'POST',
     body: '{}',
+  }),
+
+  // User shell (unrestricted, auth-gated)
+  shellExec: (payload) => request('/api/shell/exec', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  codeTerminalOpen: (payload) => request('/api/code/terminals', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  codeTerminalInput: (terminalId, payload) => request(`/api/code/terminals/${encodeURIComponent(terminalId)}/input`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  codeTerminalResize: (terminalId, payload) => request(`/api/code/terminals/${encodeURIComponent(terminalId)}/resize`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  codeTerminalClose: (terminalId) => request(`/api/code/terminals/${encodeURIComponent(terminalId)}`, {
+    method: 'DELETE',
+  }),
+  codeFsList: (payload) => request('/api/code/fs/list', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  codeFsRead: (payload) => request('/api/code/fs/read', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  codeGitDiff: (payload) => request('/api/code/git/diff', {
+    method: 'POST',
+    body: JSON.stringify(payload),
   }),
 
   // Guardian Agent + Sentinel Audit

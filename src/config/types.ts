@@ -744,8 +744,10 @@ export interface AssistantConnectorPlaybookStepDefinition {
   id: string;
   /** Optional human label for operators. */
   name?: string;
-  /** Step type: 'tool' executes a registered tool, 'instruction' invokes the LLM. Default: 'tool'. */
-  type?: 'tool' | 'instruction';
+  /** Step type: 'tool' executes a registered tool, 'instruction' invokes the LLM, 'delay' pauses the pipeline. Default: 'tool'. */
+  type?: 'tool' | 'instruction' | 'delay';
+  /** Delay duration in milliseconds (required for delay steps). E.g. 60000 = 1 minute. */
+  delayMs?: number;
   /** Optional access profile id used for this step. Empty/default means built-in tool access. */
   packId: string;
   /** Tool name to execute (required for tool steps). */
@@ -1394,6 +1396,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         'policy_mode_changed',
         'policy_shadow_mismatch',
         'automation_finding',
+        'auth_failure',
         'agent_error',
         'agent_stalled',
       ],

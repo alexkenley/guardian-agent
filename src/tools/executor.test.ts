@@ -1,4 +1,5 @@
 import { mkdirSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { AddressInfo } from 'node:net';
@@ -72,6 +73,12 @@ describe('ToolExecutor', () => {
     expect(names).toContain('fs_write');
     expect(names).toContain('fs_mkdir');
     expect(names).toContain('shell_safe');
+    expect(names).toContain('code_edit');
+    expect(names).toContain('code_patch');
+    expect(names).toContain('code_create');
+    expect(names).toContain('code_plan');
+    expect(names).toContain('code_git_diff');
+    expect(names).toContain('code_git_commit');
     expect(names).toContain('chrome_job');
     expect(names).toContain('campaign_create');
     expect(names).toContain('campaign_run');
@@ -2053,6 +2060,163 @@ describe('ToolExecutor', () => {
     expect(result.message).toContain('shell control operators');
   });
 
+  it('runs shell_safe inside an allowed cwd override', async () => {
+    const root = createWorkspaceExecutorRoot();
+    const nested = join(root, 'packages', 'app');
+    mkdirSync(nested, { recursive: true });
+    const cwdCommand = process.platform === 'win32' ? 'cd' : 'pwd';
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: [cwdCommand],
+      allowedDomains: ['localhost'],
+    });
+
+    const result = await executor.runTool({
+      toolName: 'shell_safe',
+      args: { command: cwdCommand, cwd: nested },
+      origin: 'cli',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({ command: cwdCommand, cwd: nested });
+    const stdout = String(result.output?.stdout || '').trim();
+    // On Windows `cd` returns the Windows-style path; normalize for comparison
+    expect(stdout.toLowerCase().replace(/\//g, '\\')).toBe(nested.toLowerCase().replace(/\//g, '\\'));
+  });
+
+  it('applies code_edit with exact block matching', async () => {
+    const root = createExecutorRoot();
+    await writeFile(join(root, 'sample.ts'), 'const answer = 41;\n', 'utf-8');
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const result = await executor.runTool({
+      toolName: 'code_edit',
+      args: {
+        path: 'sample.ts',
+        oldString: 'const answer = 41;\n',
+        newString: 'const answer = 42;\n',
+      },
+      origin: 'cli',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({ strategy: 'exact' });
+    await expect(readFile(join(root, 'sample.ts'), 'utf-8')).resolves.toBe('const answer = 42;\n');
+  });
+
+  it('applies code_edit with progressive trimmed-line matching', async () => {
+    const root = createExecutorRoot();
+    await writeFile(join(root, 'sample.ts'), [
+      'function test() {',
+      '  if (ready) {',
+      '    return true;',
+      '  }',
+      '}',
+      '',
+    ].join('\n'), 'utf-8');
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const result = await executor.runTool({
+      toolName: 'code_edit',
+      args: {
+        path: 'sample.ts',
+        oldString: 'if (ready) {\n  return true;\n}',
+        newString: 'if (ready) {\n    return false;\n  }',
+      },
+      origin: 'cli',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({ strategy: 'trimmed-lines' });
+    await expect(readFile(join(root, 'sample.ts'), 'utf-8')).resolves.toContain('    return false;');
+  });
+
+  it('returns a structured code_plan for complex work', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const result = await executor.runTool({
+      toolName: 'code_plan',
+      args: {
+        task: 'Refactor the auth middleware and add regression coverage for token parsing failures.',
+        cwd: root,
+        selectedFiles: ['src/auth/middleware.ts', 'src/auth/middleware.test.ts'],
+      },
+      origin: 'cli',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({
+      goal: 'Refactor the auth middleware and add regression coverage for token parsing failures.',
+      inspect: ['src/auth/middleware.ts', 'src/auth/middleware.test.ts'],
+    });
+    expect(Array.isArray((result.output as any).plan)).toBe(true);
+  });
+
+  it('applies code_patch and returns a quality report', async () => {
+    const root = createExecutorRoot();
+    execFileSync('git', ['init'], { cwd: root, stdio: 'ignore' });
+    await writeFile(join(root, 'sample.ts'), 'export const answer = 41;\n', 'utf-8');
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const patch = [
+      'diff --git a/sample.ts b/sample.ts',
+      'index 0000000..1111111 100644',
+      '--- a/sample.ts',
+      '+++ b/sample.ts',
+      '@@ -1 +1 @@',
+      '-export const answer = 41;',
+      '+export const answer = 42;',
+      '',
+    ].join('\n');
+
+    const result = await executor.runTool({
+      toolName: 'code_patch',
+      args: { cwd: root, patch },
+      origin: 'cli',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({
+      cwd: root,
+      files: ['sample.ts'],
+    });
+    expect((result.output as any).qualityReport).toBeDefined();
+    const patched = await readFile(join(root, 'sample.ts'), 'utf-8');
+    expect(patched.replace(/\r\n/g, '\n')).toBe('export const answer = 42;\n');
+  });
+
   it('enforces Google Workspace service-specific capabilities for managed MCP tools', async () => {
     const root = createExecutorRoot();
     const checked: Array<{ type: string; params: Record<string, unknown> }> = [];
@@ -3445,6 +3609,37 @@ describe('ToolExecutor', () => {
         globalThis.fetch = originalFetch;
       }
     });
+
+    it('accepts bare hostnames by normalizing to https', async () => {
+      const root = createExecutorRoot();
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async (input) => {
+        expect(String(input)).toBe('https://www.webjet.com.au/');
+        return new Response('<html><body><main>ok</main></body></html>', {
+          status: 200,
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      }) as typeof fetch;
+      try {
+        const executor = new ToolExecutor({
+          enabled: true,
+          workspaceRoot: root,
+          policyMode: 'autonomous',
+          allowedPaths: [root],
+          allowedCommands: [],
+          allowedDomains: ['www.webjet.com.au'],
+        });
+        const run = await executor.runTool({
+          toolName: 'web_fetch',
+          args: { url: 'www.webjet.com.au' },
+          origin: 'web',
+        });
+        expect(run.success).toBe(true);
+        expect((run.output as { host: string }).host).toBe('www.webjet.com.au');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
   });
 
   describe('Browser tools (MCP-based)', () => {
@@ -3540,8 +3735,9 @@ describe('ToolExecutor', () => {
         policyMode: 'autonomous',
       });
       const info = executor.getCategoryInfo();
-      expect(info.length).toBe(15);
+      expect(info.length).toBe(16);
       const names = info.map((c) => c.category);
+      expect(names).toContain('coding');
       expect(names).toContain('filesystem');
       expect(names).toContain('shell');
       expect(names).toContain('web');
@@ -3681,6 +3877,139 @@ describe('ToolExecutor', () => {
       });
       expect(result.success).toBe(false);
       expect(result.message).toContain('not configured');
+    });
+  });
+
+  describe('preflightTools', () => {
+    it('returns allow for read-only tools and require_approval for mutating tools', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: ['html.duckduckgo.com'],
+        webSearch: { provider: 'duckduckgo' },
+        agentCapabilities: {},
+        enabled: true,
+      });
+
+      const results = executor.preflightTools(['fs_read', 'fs_write', 'web_search']);
+      expect(results).toHaveLength(3);
+
+      const fsRead = results.find((r) => r.name === 'fs_read');
+      expect(fsRead?.decision).toBe('allow');
+      expect(fsRead?.found).toBe(true);
+
+      const fsWrite = results.find((r) => r.name === 'fs_write');
+      expect(fsWrite?.decision).toBe('require_approval');
+      expect(fsWrite?.found).toBe(true);
+      expect(fsWrite?.fixes).toHaveLength(1);
+      expect(fsWrite?.fixes[0]?.type).toBe('tool_policy');
+
+      const webSearch = results.find((r) => r.name === 'web_search');
+      expect(webSearch?.decision).toBe('allow');
+    });
+
+    it('returns not found for unknown tools', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: [],
+        agentCapabilities: {},
+        enabled: true,
+      });
+
+      const results = executor.preflightTools(['nonexistent_tool']);
+      expect(results).toHaveLength(1);
+      expect(results[0].found).toBe(false);
+      expect(results[0].decision).toBe('deny');
+    });
+
+    it('respects per-tool auto policy overrides', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: [],
+        toolPolicies: { fs_write: 'auto' },
+        agentCapabilities: {},
+        enabled: true,
+      });
+
+      const results = executor.preflightTools(['fs_write']);
+      expect(results[0].decision).toBe('allow');
+      expect(results[0].fixes).toHaveLength(0);
+    });
+
+    it('surfaces blocked domains from tool args during preflight', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: ['localhost'],
+        agentCapabilities: {},
+        enabled: true,
+      });
+
+      const [result] = executor.preflightTools([
+        { name: 'web_fetch', args: { url: 'https://example.com/status' } },
+      ]);
+
+      expect(result.decision).toBe('deny');
+      expect(result.reason).toContain("Host 'example.com' is not in allowedDomains.");
+      expect(result.fixes).toEqual([
+        expect.objectContaining({
+          type: 'domain',
+          value: 'example.com',
+        }),
+      ]);
+    });
+
+    it('surfaces blocked domains from bare hostnames during preflight', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: ['localhost'],
+        agentCapabilities: {},
+        enabled: true,
+      });
+
+      const [result] = executor.preflightTools([
+        { name: 'web_fetch', args: { url: 'www.webjet.com.au' } },
+      ]);
+
+      expect(result.decision).toBe('deny');
+      expect(result.reason).toContain("Host 'www.webjet.com.au' is not in allowedDomains.");
+      expect(result.fixes[0]?.value).toBe('www.webjet.com.au');
+    });
+
+    it('marks all mutating tools as allow in autonomous mode', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: [],
+        agentCapabilities: {},
+        enabled: true,
+      });
+
+      const results = executor.preflightTools(['fs_write', 'fs_mkdir', 'shell_safe']);
+      for (const r of results) {
+        expect(r.decision).toBe('allow');
+      }
     });
   });
 });

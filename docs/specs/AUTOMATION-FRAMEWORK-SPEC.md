@@ -126,6 +126,10 @@ Validation guarantees:
 - The main web edit path is now intentionally simple for common changes; raw definition editing remains available in an advanced section for power users.
 - Pipeline rows use a centered disclosure control so multi-step workflows are easier to spot and expand from the catalog view.
 - Web labels use `Tool Access` / `Built-in tools` language for default steps. Access-profile names only appear when an operator deliberately assigns one.
+- Three step types supported in pipeline definitions:
+  - `tool` (default) — executes a built-in tool or connector action
+  - `instruction` — invokes the LLM with prior step outputs as context for text-only synthesis
+  - `delay` — pauses the sequential pipeline for a specified duration (`delayMs`). Useful for rate-limiting, cooldown periods, or waiting for external state to settle between steps. In dry-run mode, returns synthetic success without sleeping. Only meaningful in sequential mode.
 
 ## Out of Scope (Current Phase)
 - Distributed multi-node workflow scheduler.

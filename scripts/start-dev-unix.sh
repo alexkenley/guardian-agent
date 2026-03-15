@@ -79,7 +79,16 @@ fi
 
 # ── Step 2: Install dependencies ──────────────────────────────
 echo -e "${CYAN}[2/6] Checking dependencies...${RESET}"
+NEEDS_INSTALL=false
 if [ ! -d "node_modules" ]; then
+  NEEDS_INSTALL=true
+  echo "  node_modules not found"
+elif [ ! -d "node_modules/node-pty" ]; then
+  NEEDS_INSTALL=true
+  echo "  node-pty not found in node_modules — reinstalling dependencies..."
+fi
+
+if [ "$NEEDS_INSTALL" = true ]; then
   echo "  Running npm install..."
   npm install
   echo -e "  ${GREEN}Dependencies installed${RESET}"

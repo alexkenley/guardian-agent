@@ -10,12 +10,13 @@
 
 Two independent features shipped in phases:
 
-1. **LLM Instruction Steps** (Phase 1) — new `instruction` step type in automations/playbooks. Invokes the LLM with prior step outputs as context, enabling pipelines that interpret intermediate results.
-2. **Native Google Integration** (Phase 2) — replace the `gws` CLI subprocess wrapper with direct `googleapis` + `google-auth-library` SDK calls. OAuth PKCE handled within GuardianAgent.
+1. **LLM Instruction Steps** (Phase 1a) — new `instruction` step type in automations/playbooks. Invokes the LLM with prior step outputs as context, enabling pipelines that interpret intermediate results.
+2. **Delay Steps** (Phase 1b) — new `delay` step type that pauses a sequential pipeline for a specified duration. Useful for rate-limiting, cooldown periods, or waiting for external state to settle between tool steps.
+3. **Native Google Integration** (Phase 2) — replace the `gws` CLI subprocess wrapper with direct `googleapis` + `google-auth-library` SDK calls. OAuth PKCE handled within GuardianAgent.
 
 ---
 
-## Phase 1: LLM Instruction Steps
+## Phase 1: LLM Instruction Steps + Delay Steps
 
 ### Type Changes (`src/config/types.ts`)
 
@@ -25,7 +26,7 @@ Extend `AssistantConnectorPlaybookStepDefinition`:
 export interface AssistantConnectorPlaybookStepDefinition {
   id: string;
   name?: string;
-  type?: 'tool' | 'instruction';    // default: 'tool'
+  type?: 'tool' | 'instruction' | 'delay';    // default: 'tool'
   // Tool step fields:
   packId: string;
   toolName: string;
@@ -34,6 +35,8 @@ export interface AssistantConnectorPlaybookStepDefinition {
   instruction?: string;
   llmProvider?: string;
   maxTokens?: number;
+  // Delay step fields:
+  delayMs?: number;
   // Shared:
   continueOnError?: boolean;
   timeoutMs?: number;
@@ -54,13 +57,16 @@ type RunInstructionFn = (
 
 2. **`executeStep()` branches** on `step.type`:
    - `'instruction'` → `executeInstructionStep(step, input, priorResults)`
+   - `'delay'` → `executeDelayStep(step)`
    - `'tool'` (or omitted) → existing tool execution path
 
 3. **Prior results threading**: `runSequential()` passes accumulated `results` array to each `executeStep()` call. `runParallel()` does not pass prior results (parallel steps cannot depend on siblings).
 
 4. **`executeInstructionStep()`**: Builds a prompt from `step.instruction` + formatted prior step outputs, calls `runInstruction()`, returns result with `toolName: '_instruction'`.
 
-5. **Dry run behavior**: Instruction steps in dry-run mode return a synthetic success without calling the LLM.
+5. **`executeDelayStep()`**: Validates `delayMs > 0`, auto-sets `timeoutMs` to `delayMs + 5000` to prevent the step from being killed by the watchdog during the pause, sleeps for the specified duration, and returns result with `toolName: '_delay'`. Only meaningful in sequential mode (parallel steps run concurrently, so a delay step would just block one lane without affecting sibling steps).
+
+6. **Dry run behavior**: Instruction steps in dry-run mode return a synthetic success without calling the LLM. Delay steps in dry-run mode return a synthetic success without sleeping.
 
 ### Step Result Shape
 
@@ -74,6 +80,17 @@ type RunInstructionFn = (
   message: 'Instruction completed.',
   durationMs: 1234,
   output: 'The LLM response text...',
+}
+
+// Delay step result:
+{
+  stepId: 'cooldown',
+  toolName: '_delay',          // reserved name
+  packId: '',
+  status: 'succeeded',
+  message: 'Delayed 5000ms.',
+  durationMs: 5003,
+  output: '',
 }
 ```
 
@@ -91,17 +108,19 @@ Automations section updated to document instruction steps and provide usage guid
 ### Web UI (`web/public/js/pages/automations.js`)
 
 Pipeline step builder gets:
-- Step type toggle: "Tool" / "Instruction (LLM)"
-- Conditional visibility: tool selector vs instruction textarea
-- Instruction steps rendered with distinct styling in the step list
+- Step type toggle: "Tool" / "Instruction (LLM)" / "Delay"
+- Conditional visibility: tool selector vs instruction textarea vs delay input
+- Tool picker with Browse button showing tool descriptions and requirements
+- LLM provider selector for all modes, optional prompt for single-tool mode
+- Instruction and delay steps rendered with distinct styling in the step list
 
 ### Security
 
 - Instruction steps call LLM with **empty tools array** — no tool calling possible
 - LLM output scanned by `OutputGuardian` if available (via `scanOutput` closure)
-- No approval needed — instruction steps are text-only generation
-- Instruction step execution logged to audit log
-- Token usage counted in `BudgetTracker`
+- No approval needed — instruction steps are text-only generation, delay steps are inert pauses
+- Instruction and delay step execution logged to audit log
+- Token usage counted in `BudgetTracker` (instruction steps only; delay steps have no token cost)
 
 ---
 
@@ -199,15 +218,15 @@ GET    /api/google/status          — Auth state, services, token expiry
 
 ## Files Changed
 
-### Phase 1 (Instruction Steps)
+### Phase 1 (Instruction Steps + Delay Steps)
 
 | File | Change |
 |------|--------|
-| `src/config/types.ts` | Add `type`, `instruction`, `llmProvider`, `maxTokens` to step definition |
-| `src/runtime/connectors.ts` | Add `runInstruction` option, `executeInstructionStep()`, thread prior results |
-| `src/runtime/connectors.test.ts` | Add instruction step tests |
-| `src/prompts/guardian-core.ts` | Add instruction step guidance |
-| `web/public/js/pages/automations.js` | Step type selector, instruction textarea |
+| `src/config/types.ts` | Add `type`, `instruction`, `llmProvider`, `maxTokens`, `delayMs` to step definition |
+| `src/runtime/connectors.ts` | Add `runInstruction` option, `executeInstructionStep()`, `executeDelayStep()`, thread prior results |
+| `src/runtime/connectors.test.ts` | Add instruction step and delay step tests |
+| `src/prompts/guardian-core.ts` | Add instruction step and delay step guidance |
+| `web/public/js/pages/automations.js` | Step type selector, instruction textarea, delay input, tool picker with Browse |
 
 ### Phase 2 (Native Google)
 

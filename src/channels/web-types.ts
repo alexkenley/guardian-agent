@@ -556,7 +556,7 @@ export interface ScheduledTaskHistoryStep {
 
 /** SSE event pushed to dashboard clients. */
 export interface SSEEvent {
-  type: 'audit' | 'metrics' | 'watchdog' | 'security.alert' | 'assistant.notice' | 'chat.thinking' | 'chat.tool_call' | 'chat.token' | 'chat.done' | 'chat.error' | 'ui.invalidate';
+  type: 'audit' | 'metrics' | 'watchdog' | 'security.alert' | 'assistant.notice' | 'chat.thinking' | 'chat.tool_call' | 'chat.token' | 'chat.done' | 'chat.error' | 'ui.invalidate' | 'terminal.output' | 'terminal.exit';
   data: unknown;
 }
 
@@ -676,6 +676,17 @@ export interface DashboardCallbacks {
     userId?: string;
     channel?: string;
   }) => Promise<ToolRunResponse> | ToolRunResponse;
+  onToolsPreflight?: (input: { tools?: string[]; requests?: Array<{ name: string; args?: Record<string, unknown> }> }) => {
+    results: Array<{
+      name: string;
+      found: boolean;
+      risk: string;
+      decision: 'allow' | 'deny' | 'require_approval';
+      reason: string;
+      fixes: Array<{ type: 'tool_policy' | 'domain' | 'command' | 'path'; value: string; description: string }>;
+    }>;
+    policy: { mode: string; allowedPaths?: string[]; allowedCommands?: string[]; allowedDomains?: string[] };
+  };
   onToolsPolicyUpdate?: (input: {
     mode?: 'approve_each' | 'approve_by_policy' | 'autonomous';
     toolPolicies?: Record<string, 'auto' | 'policy' | 'manual' | 'deny'>;

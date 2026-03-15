@@ -248,4 +248,32 @@ describe('NotificationService', () => {
     expect(text).toContain('Dangerous action blocked');
     expect(text).toContain('Blocked by policy.');
   });
+
+  it('emits auth failure notifications when configured', async () => {
+    const auditLog = new AuditLog();
+    const eventBus = { emit: vi.fn().mockResolvedValue(true) } as unknown as EventBus;
+    const sendCli = vi.fn().mockResolvedValue(undefined);
+    const service = new NotificationService({
+      config: makeConfig({ auditEventTypes: ['auth_failure'] }),
+      auditLog,
+      eventBus,
+      senders: { sendCli },
+    });
+
+    service.start();
+    auditLog.record({
+      type: 'auth_failure',
+      severity: 'warn',
+      agentId: 'system',
+      details: { description: 'Google token refresh failed: invalid_grant' },
+    });
+    await flushAsyncWork();
+
+    expect(vi.mocked(eventBus.emit)).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({
+        title: 'Authentication failure requires attention',
+      }),
+    }));
+    expect(sendCli).toHaveBeenCalledTimes(1);
+  });
 });

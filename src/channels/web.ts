@@ -13,8 +13,11 @@
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
-import { join, normalize, extname } from 'node:path';
-import { readFile, stat } from 'node:fs/promises';
+import { join, normalize, extname, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { spawn as spawnPty, type IPty } from 'node-pty';
 import type { ChannelAdapter, MessageCallback } from './types.js';
 import type { DashboardCallbacks, SSEEvent, SSEListener, UIInvalidationEvent } from './web-types.js';
 import type { AuditEventType, AuditSeverity } from '../guardian/audit-log.js';
@@ -36,6 +39,7 @@ const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
   '.css': 'text/css',
   '.js': 'application/javascript',
+  '.mjs': 'application/javascript',
   '.json': 'application/json',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -102,6 +106,22 @@ const SESSION_COOKIE_NAME = 'guardianagent_sid';
 const DEFAULT_SESSION_TTL_MINUTES = 480; // 8 hours
 const SESSION_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
+interface ShellOptionDescriptor {
+  id: string;
+  label: string;
+  detail: string;
+}
+
+interface TerminalSessionRecord {
+  id: string;
+  ownerSessionId: string | null;
+  pty: IPty;
+  shell: string;
+  cwd: string;
+  cols: number;
+  rows: number;
+}
+
 export class WebChannel implements ChannelAdapter {
   readonly name = 'web';
   private server: Server | null = null;
@@ -118,6 +138,7 @@ export class WebChannel implements ChannelAdapter {
   private staticDir: string | undefined;
   private dashboard: DashboardCallbacks;
   private sseClients: Set<ServerResponse> = new Set();
+  private readonly terminalSessions = new Map<string, TerminalSessionRecord>();
   private readonly privilegedTicketSecret = randomBytes(32);
   private readonly usedPrivilegedTicketNonces = new Map<string, number>();
   private readonly sessions = new Map<string, CookieSession>();
@@ -203,6 +224,14 @@ export class WebChannel implements ChannelAdapter {
       client.end();
     }
     this.sseClients.clear();
+    for (const session of this.terminalSessions.values()) {
+      try {
+        session.pty.kill();
+      } catch {
+        // Best effort cleanup.
+      }
+    }
+    this.terminalSessions.clear();
 
     return new Promise((resolve) => {
       if (this.server) {
@@ -626,7 +655,12 @@ export class WebChannel implements ChannelAdapter {
 
       // GET /api/status — Runtime status
       if (req.method === 'GET' && url.pathname === '/api/status') {
-        sendJSON(res, 200, { status: 'running', timestamp: Date.now() });
+        sendJSON(res, 200, {
+          status: 'running',
+          timestamp: Date.now(),
+          platform: process.platform,
+          shellOptions: getShellOptionsForPlatform(process.platform),
+        });
         return;
       }
 
@@ -913,6 +947,42 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // POST /api/tools/preflight — pre-flight approval check for automation tools
+      if (req.method === 'POST' && url.pathname === '/api/tools/preflight') {
+        if (!this.dashboard.onToolsPreflight) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { tools?: string[]; requests?: Array<{ name?: string; args?: Record<string, unknown> }> };
+        try {
+          parsed = body.trim() ? (JSON.parse(body) as { tools?: string[]; requests?: Array<{ name?: string; args?: Record<string, unknown> }> }) : {};
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        const tools = Array.isArray(parsed.tools) ? parsed.tools.filter((t): t is string => typeof t === 'string') : [];
+        const requests = Array.isArray(parsed.requests)
+          ? parsed.requests
+            .filter((item): item is { name: string; args?: Record<string, unknown> } =>
+              !!item && typeof item.name === 'string' && item.name.trim().length > 0)
+            .map((item) => ({ name: item.name, ...(item.args && typeof item.args === 'object' ? { args: item.args } : {}) }))
+          : [];
+        if (tools.length === 0 && requests.length === 0) {
+          sendJSON(res, 400, { error: 'tools array or requests array is required' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onToolsPreflight({ tools, requests }));
+        return;
+      }
+
       // POST /api/tools/policy — update tool policy/sandbox
       if (req.method === 'POST' && url.pathname === '/api/tools/policy') {
         if (!this.dashboard.onToolsPolicyUpdate) {
@@ -955,6 +1025,20 @@ export class WebChannel implements ChannelAdapter {
         const result = this.dashboard.onToolsPolicyUpdate(parsed);
         sendJSON(res, 200, result);
         this.maybeEmitUIInvalidation(result, ['config', 'tools', 'security'], 'tools.policy.updated', url.pathname);
+        return;
+      }
+
+      // GET /api/tools/approvals/pending — list pending approvals scoped to user/channel
+      if (req.method === 'GET' && url.pathname === '/api/tools/approvals/pending') {
+        if (!this.dashboard.onToolsPendingApprovals) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const userId = url.searchParams.get('userId') ?? 'web-user';
+        const channel = url.searchParams.get('channel') ?? 'web';
+        const limitValue = Number(url.searchParams.get('limit') ?? '20');
+        const limit = Number.isFinite(limitValue) ? Math.max(1, Math.min(100, limitValue)) : 20;
+        sendJSON(res, 200, this.dashboard.onToolsPendingApprovals({ userId, channel, limit }));
         return;
       }
 
@@ -3175,6 +3259,274 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // POST /api/code/fs/list — direct user directory listing for Code UI
+      if (req.method === 'POST' && url.pathname === '/api/code/fs/list') {
+        const body = await readBody(req, this.maxBodyBytes);
+        const parsed = JSON.parse(body || '{}') as { path?: string };
+        const targetPath = resolve(parsed.path || '.');
+        try {
+          const entries = await readdir(targetPath, { withFileTypes: true });
+          sendJSON(res, 200, {
+            success: true,
+            path: targetPath,
+            entries: entries
+              .filter((entry) => entry.isDirectory() || entry.isFile())
+              .map((entry) => ({
+                name: entry.name,
+                type: entry.isDirectory() ? 'dir' : 'file',
+              })),
+          });
+        } catch (err) {
+          sendJSON(res, 200, { success: false, error: err instanceof Error ? err.message : 'Failed to list directory' });
+        }
+        return;
+      }
+
+      // POST /api/code/fs/read — direct user file read for Code UI
+      if (req.method === 'POST' && url.pathname === '/api/code/fs/read') {
+        const body = await readBody(req, this.maxBodyBytes);
+        const parsed = JSON.parse(body || '{}') as { path?: string; maxBytes?: number };
+        const targetPath = resolve(parsed.path || '.');
+        const maxBytes = Math.max(1024, Math.min(500_000, Number(parsed.maxBytes) || 250_000));
+        try {
+          const content = await readFile(targetPath, 'utf-8');
+          sendJSON(res, 200, {
+            success: true,
+            path: targetPath,
+            content: content.length > maxBytes ? content.slice(0, maxBytes) : content,
+          });
+        } catch (err) {
+          sendJSON(res, 200, { success: false, error: err instanceof Error ? err.message : 'Failed to read file' });
+        }
+        return;
+      }
+
+      // POST /api/code/git/diff — direct user git diff for Code UI
+      if (req.method === 'POST' && url.pathname === '/api/code/git/diff') {
+        const body = await readBody(req, this.maxBodyBytes);
+        const parsed = JSON.parse(body || '{}') as { cwd?: string; path?: string; staged?: boolean };
+        const cwd = resolve(parsed.cwd || '.');
+        const args = ['diff'];
+        if (parsed.staged) args.push('--staged');
+        if (parsed.path) args.push('--', parsed.path);
+        try {
+          const { execFile } = await import('node:child_process');
+          const result = await new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolveResult) => {
+            execFile('git', args, { cwd, windowsHide: true, maxBuffer: 2 * 1024 * 1024 }, (error: any, stdout: string, stderr: string) => {
+              resolveResult({
+                stdout: stdout || '',
+                stderr: stderr || '',
+                exitCode: error ? (error.code ?? 1) : 0,
+              });
+            });
+          });
+          sendJSON(res, 200, { success: result.exitCode === 0, stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode });
+        } catch (err) {
+          sendJSON(res, 200, { success: false, error: err instanceof Error ? err.message : 'Git diff failed' });
+        }
+        return;
+      }
+
+      // POST /api/code/terminals — Open a PTY-backed terminal session
+      if (req.method === 'POST' && url.pathname === '/api/code/terminals') {
+        const body = await readBody(req, this.maxBodyBytes);
+        const parsed = JSON.parse(body || '{}') as {
+          cwd?: string;
+          shell?: string;
+          cols?: number;
+          rows?: number;
+        };
+        const platform = process.platform;
+        const shellType = parsed.shell || getDefaultShellForPlatform(platform);
+        const launch = getPtyShellLaunch(shellType, platform, parsed.cwd || process.cwd());
+        const cols = Math.max(40, Math.min(240, Number(parsed.cols) || 120));
+        const rows = Math.max(12, Math.min(120, Number(parsed.rows) || 30));
+        const ownerSessionId = this.parseCookie(req, SESSION_COOKIE_NAME) || null;
+        try {
+          const terminalId = randomUUID();
+          const pty = spawnPty(launch.file, launch.args, {
+            name: 'xterm-color',
+            cols,
+            rows,
+            cwd: launch.cwd || parsed.cwd || process.cwd(),
+            env: {
+              ...process.env,
+              ...launch.env,
+            },
+          });
+          const session: TerminalSessionRecord = {
+            id: terminalId,
+            ownerSessionId,
+            pty,
+            shell: shellType,
+            cwd: parsed.cwd || process.cwd(),
+            cols,
+            rows,
+          };
+          this.terminalSessions.set(terminalId, session);
+          pty.onData((data) => {
+            this.emitSSE({
+              type: 'terminal.output',
+              data: { terminalId, data },
+            });
+          });
+          pty.onExit((event) => {
+            this.terminalSessions.delete(terminalId);
+            this.emitSSE({
+              type: 'terminal.exit',
+              data: { terminalId, exitCode: event.exitCode, signal: event.signal },
+            });
+          });
+          sendJSON(res, 200, {
+            success: true,
+            terminalId,
+            shell: shellType,
+            cwd: session.cwd,
+          });
+        } catch (err) {
+          sendJSON(res, 500, { success: false, error: err instanceof Error ? err.message : 'Failed to open terminal' });
+        }
+        return;
+      }
+
+      const terminalInputMatch = req.method === 'POST' ? url.pathname.match(/^\/api\/code\/terminals\/([^/]+)\/input$/) : null;
+      if (terminalInputMatch) {
+        const terminalId = decodeURIComponent(terminalInputMatch[1]);
+        const session = this.terminalSessions.get(terminalId);
+        if (!session || !this.canAccessTerminal(req, session)) {
+          sendJSON(res, 404, { success: false, error: 'Terminal not found' });
+          return;
+        }
+        const body = await readBody(req, this.maxBodyBytes);
+        const parsed = JSON.parse(body || '{}') as { input?: string };
+        if (typeof parsed.input !== 'string') {
+          sendJSON(res, 400, { success: false, error: 'input is required' });
+          return;
+        }
+        session.pty.write(parsed.input);
+        sendJSON(res, 200, { success: true });
+        return;
+      }
+
+      const terminalResizeMatch = req.method === 'POST' ? url.pathname.match(/^\/api\/code\/terminals\/([^/]+)\/resize$/) : null;
+      if (terminalResizeMatch) {
+        const terminalId = decodeURIComponent(terminalResizeMatch[1]);
+        const session = this.terminalSessions.get(terminalId);
+        if (!session || !this.canAccessTerminal(req, session)) {
+          sendJSON(res, 404, { success: false, error: 'Terminal not found' });
+          return;
+        }
+        const body = await readBody(req, this.maxBodyBytes);
+        const parsed = JSON.parse(body || '{}') as { cols?: number; rows?: number };
+        const cols = Math.max(40, Math.min(240, Number(parsed.cols) || session.cols));
+        const rows = Math.max(12, Math.min(120, Number(parsed.rows) || session.rows));
+        session.cols = cols;
+        session.rows = rows;
+        session.pty.resize(cols, rows);
+        sendJSON(res, 200, { success: true });
+        return;
+      }
+
+      const terminalDeleteMatch = req.method === 'DELETE' ? url.pathname.match(/^\/api\/code\/terminals\/([^/]+)$/) : null;
+      if (terminalDeleteMatch) {
+        const terminalId = decodeURIComponent(terminalDeleteMatch[1]);
+        const session = this.terminalSessions.get(terminalId);
+        if (!session || !this.canAccessTerminal(req, session)) {
+          sendJSON(res, 404, { success: false, error: 'Terminal not found' });
+          return;
+        }
+        this.terminalSessions.delete(terminalId);
+        try {
+          session.pty.kill();
+        } catch {
+          // Best effort close.
+        }
+        sendJSON(res, 200, { success: true });
+        return;
+      }
+
+      // POST /api/shell/exec — Unrestricted user shell (auth-gated, not agent allowlist)
+      if (req.method === 'POST' && url.pathname === '/api/shell/exec') {
+        const body = await readBody(req, this.maxBodyBytes);
+        const parsed = JSON.parse(body || '{}') as {
+          command?: string;
+          cwd?: string;
+          shell?: string;
+          timeoutMs?: number;
+        };
+        if (!parsed.command || typeof parsed.command !== 'string') {
+          sendJSON(res, 400, { error: 'command is required' });
+          return;
+        }
+        const timeoutMs = Math.max(1000, Math.min(120_000, Number(parsed.timeoutMs) || 30_000));
+        const maxBuffer = 2 * 1024 * 1024; // 2 MB
+        const platform = process.platform;
+        const shellType = parsed.shell || (platform === 'win32' ? 'powershell' : 'bash');
+
+        let shellCmd: string;
+        let shellArgs: string[];
+        switch (shellType) {
+          case 'powershell':
+            shellCmd = platform === 'win32' ? 'powershell.exe' : 'pwsh';
+            shellArgs = ['-NoProfile', '-NonInteractive', '-Command', parsed.command];
+            break;
+          case 'cmd':
+            shellCmd = 'cmd.exe';
+            shellArgs = ['/c', parsed.command];
+            break;
+          case 'wsl':
+            shellCmd = 'wsl';
+            shellArgs = ['--', 'bash', '-c', parsed.command];
+            break;
+          case 'git-bash': {
+            const gitBashPath = 'C:\\Program Files\\Git\\bin\\bash.exe';
+            shellCmd = gitBashPath;
+            shellArgs = ['-c', parsed.command];
+            break;
+          }
+          case 'zsh':
+            shellCmd = 'zsh';
+            shellArgs = ['-c', parsed.command];
+            break;
+          case 'sh':
+            shellCmd = 'sh';
+            shellArgs = ['-c', parsed.command];
+            break;
+          case 'bash':
+          default:
+            shellCmd = 'bash';
+            shellArgs = ['-c', parsed.command];
+            break;
+        }
+
+        try {
+          const { execFile } = await import('node:child_process');
+          const result = await new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+            execFile(shellCmd, shellArgs, {
+              cwd: parsed.cwd || undefined,
+              timeout: timeoutMs,
+              maxBuffer,
+              windowsHide: true,
+            } as any, (error: any, stdout: string, stderr: string) => {
+              resolve({
+                stdout: stdout || '',
+                stderr: stderr || '',
+                exitCode: error ? (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 2 : (error.killed ? 124 : (error.code ?? 1))) : 0,
+              });
+            });
+          });
+          sendJSON(res, 200, {
+            success: result.exitCode === 0,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            exitCode: result.exitCode,
+          });
+        } catch (err) {
+          sendJSON(res, 500, { success: false, error: err instanceof Error ? err.message : 'Shell execution failed' });
+        }
+        return;
+      }
+
       // API 404
       sendJSON(res, 404, { error: 'Not found' });
       return;
@@ -3233,9 +3585,34 @@ export class WebChannel implements ChannelAdapter {
     res.on('close', cleanup);
   }
 
+  private canAccessTerminal(req: IncomingMessage, session: TerminalSessionRecord): boolean {
+    const requester = this.parseCookie(req, SESSION_COOKIE_NAME) || null;
+    return session.ownerSessionId === requester;
+  }
+
   /** Serve a static file from staticDir. Returns true if served. */
   private async serveStatic(pathname: string, res: ServerResponse): Promise<boolean> {
     if (!this.staticDir) return false;
+
+    if (pathname.startsWith('/vendor/xterm/')) {
+      const vendorFile = pathname.slice('/vendor/xterm/'.length);
+      const vendorRoot = normalize(join(this.staticDir, '..', '..', 'node_modules'));
+      let vendorPath: string | null = null;
+      if (vendorFile === 'xterm.mjs') vendorPath = normalize(join(vendorRoot, '@xterm', 'xterm', 'lib', 'xterm.mjs'));
+      else if (vendorFile === 'addon-fit.mjs') vendorPath = normalize(join(vendorRoot, '@xterm', 'addon-fit', 'lib', 'addon-fit.mjs'));
+      else if (vendorFile === 'xterm.css') vendorPath = normalize(join(vendorRoot, '@xterm', 'xterm', 'css', 'xterm.css'));
+      if (!vendorPath || !vendorPath.startsWith(vendorRoot)) return false;
+      try {
+        const ext = extname(vendorPath);
+        const contentType = MIME_TYPES[ext] ?? 'application/octet-stream';
+        const content = await readFile(vendorPath);
+        res.writeHead(200, { 'Content-Type': contentType });
+        res.end(content);
+        return true;
+      } catch {
+        return false;
+      }
+    }
 
     // Normalize and prevent path traversal
     let filePath = normalize(join(this.staticDir, pathname));
@@ -3290,6 +3667,123 @@ function sendJSON(res: ServerResponse, status: number, data: unknown): void {
   if (res.headersSent) return;
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
+}
+
+function getShellOptionsForPlatform(platform: NodeJS.Platform): ShellOptionDescriptor[] {
+  switch (platform) {
+    case 'win32':
+      return [
+        { id: 'powershell', label: 'PowerShell (Windows)', detail: 'powershell.exe' },
+        { id: 'cmd', label: 'Command Prompt (cmd.exe)', detail: 'cmd.exe' },
+        { id: 'git-bash', label: 'Git Bash', detail: 'C:\\Program Files\\Git\\bin\\bash.exe' },
+        { id: 'wsl', label: 'WSL', detail: 'wsl.exe' },
+        { id: 'bash', label: 'Bash', detail: 'bash' },
+      ];
+    case 'darwin':
+      return [
+        { id: 'zsh', label: 'Zsh', detail: 'zsh' },
+        { id: 'bash', label: 'Bash', detail: 'bash' },
+        { id: 'sh', label: 'POSIX sh', detail: 'sh' },
+      ];
+    default:
+      return [
+        { id: 'bash', label: 'Bash', detail: 'bash' },
+        { id: 'zsh', label: 'Zsh', detail: 'zsh' },
+        { id: 'sh', label: 'POSIX sh', detail: 'sh' },
+      ];
+  }
+}
+
+function getDefaultShellForPlatform(platform: NodeJS.Platform): string {
+  return getShellOptionsForPlatform(platform)[0]?.id || 'bash';
+}
+
+function resolveWindowsExecutable(command: string, fallbackPaths: string[] = []): string {
+  for (const candidate of fallbackPaths) {
+    if (candidate && existsSync(candidate)) return candidate;
+  }
+
+  try {
+    const output = execFileSync('where', [command], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
+    const first = output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean);
+    if (first) return first;
+  } catch {
+    // Fall back to known paths or the raw command name.
+  }
+
+  return fallbackPaths[0] || command;
+}
+
+function getPtyShellLaunch(shellType: string, platform: NodeJS.Platform, requestedCwd?: string): {
+  file: string;
+  args: string[];
+  env: Record<string, string>;
+  cwd?: string;
+} {
+  switch (shellType) {
+    case 'powershell':
+      return {
+        file: platform === 'win32' ? 'powershell.exe' : 'pwsh',
+        args: ['-NoLogo', '-NoProfile'],
+        env: { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0' },
+        cwd: requestedCwd,
+      };
+    case 'cmd':
+      return {
+        file: 'cmd.exe',
+        args: [],
+        env: { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0' },
+        cwd: requestedCwd,
+      };
+    case 'wsl': {
+      const systemRoot = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
+      const wslExe = platform === 'win32'
+        ? resolveWindowsExecutable('wsl.exe', [join(systemRoot, 'System32', 'wsl.exe')])
+        : 'wsl';
+      return {
+        file: wslExe,
+        args: [],
+        env: { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0' },
+        cwd: requestedCwd,
+      };
+    }
+    case 'git-bash':
+      return {
+        file: 'C:\\Program Files\\Git\\bin\\bash.exe',
+        args: ['--noprofile', '--norc', '-i'],
+        env: { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0', PS1: '\\w$ ' },
+        cwd: requestedCwd,
+      };
+    case 'zsh':
+      return {
+        file: 'zsh',
+        args: ['-f', '-i'],
+        env: { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0', PS1: '%~ %# ' },
+        cwd: requestedCwd,
+      };
+    case 'sh':
+      return {
+        file: 'sh',
+        args: ['-i'],
+        env: { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0', PS1: '$ ' },
+        cwd: requestedCwd,
+      };
+    case 'bash':
+    default:
+      return {
+        file: 'bash',
+        args: ['--noprofile', '--norc', '-i'],
+        env: { TERM: 'xterm-256color', NO_COLOR: '1', FORCE_COLOR: '0', PS1: '\\w$ ' },
+        cwd: requestedCwd,
+      };
+  }
 }
 
 function readBody(req: IncomingMessage, maxBytes: number): Promise<string> {

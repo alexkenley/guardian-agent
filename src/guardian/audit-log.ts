@@ -34,7 +34,8 @@ export type AuditEventType =
   | 'policy_mode_changed'
   | 'policy_rules_reloaded'
   | 'policy_shadow_mismatch'
-  | 'automation_finding';
+  | 'automation_finding'
+  | 'auth_failure';
 
 /** Severity levels for audit events. */
 export type AuditSeverity = 'info' | 'warn' | 'critical';

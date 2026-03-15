@@ -169,6 +169,9 @@ export class GoogleAuth {
     return this.tokens?.expiry_date;
   }
 
+  /** Callback invoked when token refresh fails so the host can alert the user. */
+  onAuthFailure?: (service: string, error: string) => void;
+
   /** Load tokens from encrypted storage (called lazily). */
   async loadStoredTokens(): Promise<void> {
     try {
@@ -180,6 +183,18 @@ export class GoogleAuth {
       const decrypted = decrypt(encrypted);
       this.tokens = JSON.parse(decrypted) as GoogleTokens;
       log.debug('Loaded stored Google tokens');
+
+      // Proactively refresh if token is expired or about to expire
+      if (this.tokens.expiry_date - Date.now() < 5 * 60 * 1000) {
+        try {
+          await this.refreshAccessToken();
+          log.info('Proactively refreshed expired Google access token at startup');
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error({ err: msg }, 'Failed to refresh Google token at startup — user will need to re-authenticate');
+          this.onAuthFailure?.('google', msg);
+        }
+      }
     } catch {
       // No stored tokens — that's fine.
     }
@@ -349,7 +364,9 @@ export class GoogleAuth {
     if (!response.ok) {
       const errBody = await response.text();
       log.error({ status: response.status, body: errBody }, 'Token refresh failed');
-      throw new Error(`Token refresh failed (${response.status}). Please re-authenticate.`);
+      const error = `Token refresh failed (${response.status}). Please re-authenticate.`;
+      this.onAuthFailure?.('google', error);
+      throw new Error(error);
     }
 
     const data = await response.json() as Record<string, unknown>;

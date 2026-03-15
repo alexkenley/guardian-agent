@@ -51,6 +51,13 @@ function getRequestedRunId() {
 
 // ─── Public API ───────────────────────────────────────────
 
+async function renderAutomationsPreserveScroll(container) {
+  const scrollParent = document.getElementById('content') || container.parentElement || document.documentElement;
+  const savedScroll = scrollParent.scrollTop;
+  await renderAutomations(container);
+  requestAnimationFrame(() => { scrollParent.scrollTop = savedScroll; });
+}
+
 export async function renderAutomations(container) {
   currentContainer = container;
   container.innerHTML = '<h2 class="page-title">Automations</h2><div class="loading">Loading...</div>';
@@ -134,13 +141,24 @@ export async function renderAutomations(container) {
         </div>
         ` : ''}
 
+        <div style="padding:0.5rem 1rem;">
+          <input type="text" id="auto-catalog-search" placeholder="Search automations..." style="width:100%;padding:0.4rem 0.6rem;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-primary);font-size:0.8rem;">
+        </div>
+
         <!-- Create form -->
         <div class="cfg-center-body" id="auto-create-form" style="display:none">
           ${renderCreateForm(tools, packs, agents)}
         </div>
 
         <table>
-          <thead><tr><th>Name</th><th>Type</th><th>Tools</th><th>Schedule</th><th>Status</th><th>Actions</th></tr></thead>
+          <thead><tr>
+            <th class="auto-sortable" data-sort="name" style="cursor:pointer;">Name <span class="auto-sort-arrow"></span></th>
+            <th class="auto-sortable" data-sort="type" style="cursor:pointer;">Type <span class="auto-sort-arrow"></span></th>
+            <th>Tools</th>
+            <th class="auto-sortable" data-sort="schedule" style="cursor:pointer;">Schedule <span class="auto-sort-arrow"></span></th>
+            <th class="auto-sortable" data-sort="status" style="cursor:pointer;">Status <span class="auto-sort-arrow"></span></th>
+            <th>Actions</th>
+          </tr></thead>
           <tbody>
             ${automations.length === 0
               ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No automations configured.</td></tr>'
@@ -773,11 +791,6 @@ function renderPromotedFindings(promotedFindings) {
 }
 
 function renderCreateForm(tools, packs, agents) {
-  const toolOptions = tools
-    .slice()
-    .sort((a, b) => (a.category || '').localeCompare(b.category || '') || a.name.localeCompare(b.name))
-    .map((tool) => `<option value="${escAttr(tool.name)}">${esc(tool.category ? tool.name + ' (' + tool.category + ')' : tool.name)}</option>`)
-    .join('');
   const assistantAgents = (agents || [])
     .filter((agent) => agent?.canChat !== false && agent?.internal !== true)
     .map((agent) => `<option value="${escAttr(agent.id)}">${esc(agent.name ? `${agent.name} (${agent.id})` : agent.id)}</option>`)
@@ -800,12 +813,19 @@ function renderCreateForm(tools, packs, agents) {
         <input id="auto-create-id" type="text" placeholder="my-automation">
       </div>
       <div class="cfg-field">
-        <label>Mode</label>
+        <label>Mode <span class="code-tooltip-icon" title="">&#9432;</span></label>
         <select id="auto-create-mode">
           <option value="single">Single Tool</option>
           <option value="sequential">Sequential Pipeline</option>
           <option value="parallel">Parallel Pipeline</option>
-          <option value="assistant">Scheduled Assistant</option>
+        </select>
+      </div>
+      <div class="cfg-field">
+        <label>LLM Provider <span class="code-tooltip-icon" title="">&#9432;</span></label>
+        <select id="auto-llm-provider">
+          <option value="auto">Auto (smart routing)</option>
+          <option value="local">Local model</option>
+          <option value="external">External model</option>
         </select>
       </div>
       <input type="hidden" id="auto-create-pack" value="">
@@ -817,68 +837,57 @@ function renderCreateForm(tools, packs, agents) {
 
     <!-- Single tool selector (shown when mode=single) -->
     <div id="auto-single-tool-section" style="margin-top:0.75rem;">
-      <label style="font-size:0.8rem;color:var(--text-secondary);display:block;margin-bottom:0.35rem;">Tool</label>
-      <div class="cfg-field" style="margin:0;">
-        <select id="auto-single-tool-select">
-          <option value="">Select a tool...</option>
-          ${toolOptions}
-        </select>
+      <label style="font-size:0.8rem;color:var(--text-secondary);display:block;margin-bottom:0.35rem;">Tool <span class="code-tooltip-icon" title="">&#9432;</span></label>
+      <div style="display:flex;align-items:center;gap:0.35rem;">
+        <input type="hidden" id="auto-single-tool-select" value="">
+        <span id="auto-single-tool-display" class="auto-tool-display">No tool selected</span>
+        <button class="btn btn-secondary btn-sm" id="auto-single-tool-browse" type="button" style="white-space:nowrap;">Browse</button>
+      </div>
+      <div id="auto-single-tool-picker-panel" style="display:none;"></div>
+      <div id="auto-single-tool-params" style="margin-top:0.5rem;"></div>
+      <div class="cfg-field" style="margin-top:0.5rem;">
+        <label>Prompt (optional) <span class="code-tooltip-icon" title="">&#9432;</span></label>
+        <textarea id="auto-single-prompt" rows="3" placeholder="After running the tool, summarize key findings..."></textarea>
       </div>
     </div>
 
     <!-- Pipeline step builder (shown when mode=sequential|parallel) -->
     <div id="auto-pipeline-section" style="margin-top:0.75rem;display:none;">
-      <label style="font-size:0.8rem;color:var(--text-secondary);display:block;margin-bottom:0.35rem;">Steps</label>
+      <label style="font-size:0.8rem;color:var(--text-secondary);display:block;margin-bottom:0.35rem;"><span id="auto-pipeline-label">Steps</span> <span class="code-tooltip-icon" title="">&#9432;</span></label>
       <div id="auto-step-list"></div>
       <div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.5rem;">
-        <div class="cfg-field" style="width:120px;margin:0;flex-shrink:0;">
-          <select id="auto-step-type-select" title="Step type: Tool executes a registered tool, Instruction invokes the LLM to interpret prior step outputs.">
+        <div class="cfg-field" style="width:140px;margin:0;flex-shrink:0;">
+          <select id="auto-step-type-select">
             <option value="tool" selected>Tool</option>
             <option value="instruction">Instruction (LLM)</option>
+            <option value="delay">Delay</option>
           </select>
         </div>
-        <div class="cfg-field" style="flex:1;margin:0;" id="auto-step-tool-field">
-          <select id="auto-step-tool-select">
-            <option value="">Select a tool to add...</option>
-            ${toolOptions}
-          </select>
+        <div style="flex:1;display:flex;align-items:center;gap:0.35rem;" id="auto-step-tool-field">
+          <input type="hidden" id="auto-step-tool-select" value="">
+          <span id="auto-step-tool-display" class="auto-tool-display">No tool selected</span>
+          <button class="btn btn-secondary btn-sm" id="auto-step-tool-browse" type="button" style="white-space:nowrap;">Browse</button>
         </div>
         <div class="cfg-field" style="flex:1;margin:0;display:none;" id="auto-step-instruction-field">
-          <input id="auto-step-instruction-input" type="text" placeholder="Describe what the LLM should do with prior step outputs..." title="Natural language instruction for the LLM. Prior step outputs are injected as context.">
+          <input id="auto-step-instruction-input" type="text" placeholder="Describe what the LLM should do with prior step outputs...">
         </div>
+        <div class="cfg-field" id="auto-step-delay-field" style="display:none;margin:0;">
+          <div style="display:flex;align-items:center;gap:0.35rem;">
+            <input id="auto-step-delay-value" type="number" min="1" value="5" style="width:70px;">
+            <select id="auto-step-delay-unit" style="width:auto;">
+              <option value="seconds">Seconds</option>
+              <option value="minutes" selected>Minutes</option>
+              <option value="hours">Hours</option>
+              <option value="days">Days</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn btn-secondary" id="auto-step-cancel" type="button">Cancel</button>
         <button class="btn btn-secondary" id="auto-step-add" type="button">Add Step</button>
       </div>
-      <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.35rem;">Add tool steps or LLM instruction steps. Instruction steps interpret prior step outputs using natural language.</div>
-    </div>
-
-    <div id="auto-assistant-section" style="margin-top:0.75rem;display:none;">
-      <div class="cfg-form-grid">
-        <div class="cfg-field">
-          <label>Assistant</label>
-          <select id="auto-agent-select">
-            <option value="default">Default Assistant</option>
-            ${assistantAgents}
-          </select>
-        </div>
-        <div class="cfg-field">
-          <label>Session / Delivery Channel</label>
-          <select id="auto-agent-channel">
-            <option value="scheduled">Background only</option>
-            <option value="cli">CLI</option>
-            <option value="telegram">Telegram</option>
-            <option value="web">Web</option>
-          </select>
-        </div>
-      </div>
-      <div class="cfg-field" style="margin-top:0.5rem;">
-        <label>Assistant Prompt</label>
-        <textarea id="auto-agent-prompt" rows="5" placeholder="Check recent email, calendar, cloud/security alerts, and send me a concise briefing."></textarea>
-      </div>
-      <label style="display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem;cursor:pointer;">
-        <input type="checkbox" id="auto-agent-deliver" checked>
-        <span style="font-size:0.8rem;color:var(--text-primary);">Deliver the assistant response back to the selected channel after each run</span>
-      </label>
-      <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.35rem;">Assistant automations run a normal Guardian assistant turn with skills, memory, and tools. They are not just instruction steps.</div>
+      <div id="auto-step-tool-picker-panel" style="display:none;"></div>
+      <div id="auto-step-tool-params" style="margin-top:0.5rem;"></div>
+      <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.35rem;">Add tool, LLM instruction, or delay steps. Instruction steps interpret prior step outputs. Delay steps pause sequential pipelines.</div>
     </div>
 
     <!-- Schedule toggle -->
@@ -935,6 +944,46 @@ function renderCreateForm(tools, packs, agents) {
         <input type="checkbox" id="auto-run-once">
         <span style="font-size:0.8rem;color:var(--text-primary);">Single shot: run once on the next matching schedule, then disable automatically</span>
       </label>
+
+      <!-- Assistant turn toggle (inside schedule section) -->
+      <div style="margin-top:0.75rem;border-top:1px solid var(--border);padding-top:0.75rem;">
+        <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
+          <input type="checkbox" id="auto-agent-mode">
+          <span style="font-size:0.85rem;font-weight:500;">Run as assistant turn</span>
+        </label>
+        <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.2rem;">
+          Instead of running tools deterministically, wake the assistant with this prompt.
+          The assistant has full access to tools, memory, and skills.
+        </div>
+        <div id="auto-assistant-fields" style="display:none;margin-top:0.5rem;">
+          <div class="cfg-form-grid">
+            <div class="cfg-field">
+              <label>Assistant</label>
+              <select id="auto-agent-select">
+                <option value="default">Default Assistant</option>
+                ${assistantAgents}
+              </select>
+            </div>
+            <div class="cfg-field">
+              <label>Delivery Channel</label>
+              <select id="auto-agent-channel">
+                <option value="scheduled">Background only</option>
+                <option value="cli">CLI</option>
+                <option value="telegram">Telegram</option>
+                <option value="web">Web</option>
+              </select>
+            </div>
+          </div>
+          <div class="cfg-field" style="margin-top:0.5rem;">
+            <label>Assistant Prompt <span class="code-tooltip-icon" title="">&#9432;</span></label>
+            <textarea id="auto-agent-prompt" rows="4" placeholder="Check recent email, calendar, cloud/security alerts, and send me a concise briefing."></textarea>
+          </div>
+          <label style="display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem;cursor:pointer;">
+            <input type="checkbox" id="auto-agent-deliver" checked>
+            <span style="font-size:0.8rem;color:var(--text-primary);">Deliver response to channel</span>
+          </label>
+        </div>
+      </div>
     </div>
 
     <details class="ops-advanced" style="margin-top:0.75rem;">
@@ -951,8 +1000,8 @@ function renderCreateForm(tools, packs, agents) {
         <div class="cfg-field">
           <label>Enabled</label>
           <select id="auto-create-enabled">
-            <option value="true">Yes</option>
-            <option value="false" selected>No</option>
+            <option value="true" selected>Yes</option>
+            <option value="false">No</option>
           </select>
         </div>
         <div class="cfg-field">
@@ -984,6 +1033,8 @@ function renderCreateForm(tools, packs, agents) {
     <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);line-height:1.5;">
       Automation output is always available in run history. Notifications and Security receive normalized findings only, not raw logs. <code>Output Event</code> is optional and lets scheduled runs emit a named downstream event.
     </div>
+
+    <div id="auto-preflight-panel" style="display:none;margin-top:0.75rem;"></div>
 
     <div class="cfg-actions">
       <button class="btn btn-primary" id="auto-create-save">Create Automation</button>
@@ -1189,6 +1240,69 @@ function bindEvents(container, ctx) {
   // Refresh
   container.querySelector('#auto-refresh')?.addEventListener('click', () => renderAutomations(container));
 
+  // Catalog search
+  const catalogSearch = container.querySelector('#auto-catalog-search');
+  catalogSearch?.addEventListener('input', () => {
+    const q = (catalogSearch.value || '').toLowerCase();
+    container.querySelectorAll('.auto-catalog-row').forEach((row) => {
+      if (row.classList.contains('wf-pipeline-row')) return; // pipeline detail rows follow their parent
+      const text = (row.textContent || '').toLowerCase();
+      const match = !q || text.includes(q);
+      row.style.display = match ? '' : 'none';
+      // Also hide/show the associated pipeline detail row
+      const autoId = row.getAttribute('data-auto-id');
+      if (autoId) {
+        const pipelineRow = container.querySelector(`#auto-pipeline-${CSS.escape(autoId)}`);
+        if (pipelineRow) pipelineRow.classList.toggle('wf-filtered-out', !match);
+      }
+    });
+  });
+
+  // Column sorting
+  let currentSort = { key: '', dir: 'asc' };
+  container.querySelectorAll('.auto-sortable').forEach((th) => {
+    th.addEventListener('click', () => {
+      const key = th.getAttribute('data-sort');
+      if (currentSort.key === key) {
+        currentSort.dir = currentSort.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        currentSort = { key, dir: 'asc' };
+      }
+      // Update arrows
+      container.querySelectorAll('.auto-sortable .auto-sort-arrow').forEach((arrow) => { arrow.textContent = ''; });
+      th.querySelector('.auto-sort-arrow').textContent = currentSort.dir === 'asc' ? ' \u25B2' : ' \u25BC';
+
+      const tbody = container.querySelector('.table-container table tbody');
+      if (!tbody) return;
+      const rows = Array.from(tbody.querySelectorAll('tr.auto-catalog-row:not(.wf-pipeline-row)'));
+      rows.sort((a, b) => {
+        const valA = getSortValue(a, key);
+        const valB = getSortValue(b, key);
+        const cmp = valA.localeCompare(valB, undefined, { numeric: true, sensitivity: 'base' });
+        return currentSort.dir === 'asc' ? cmp : -cmp;
+      });
+      // Re-append rows in sorted order (each main row followed by its pipeline row if any)
+      for (const row of rows) {
+        tbody.appendChild(row);
+        const autoId = row.getAttribute('data-auto-id');
+        if (autoId) {
+          const pipelineRow = container.querySelector(`#auto-pipeline-${CSS.escape(autoId)}`);
+          if (pipelineRow) tbody.appendChild(pipelineRow);
+        }
+      }
+    });
+  });
+
+  function getSortValue(row, key) {
+    switch (key) {
+      case 'name': return row.querySelector('.ops-task-title')?.textContent?.trim() || '';
+      case 'type': return row.querySelector('.auto-kind-badge')?.textContent?.trim() || '';
+      case 'schedule': return row.querySelector('.auto-schedule-cell .ops-task-title')?.textContent?.trim() || '';
+      case 'status': return row.querySelector('.badge')?.textContent?.trim() || '';
+      default: return '';
+    }
+  }
+
   // Category filter
   container.querySelectorAll('.wf-category-chip').forEach((chip) => {
     chip.addEventListener('click', () => {
@@ -1247,7 +1361,7 @@ function bindEvents(container, ctx) {
         } else if (auto._task) {
           await api.updateScheduledTask(auto._task.id, { enabled: toggle.checked });
         }
-        await renderAutomations(container);
+        await renderAutomationsPreserveScroll(container);
       } catch {
         toggle.checked = !toggle.checked;
         toggle.disabled = false;
@@ -1297,7 +1411,7 @@ function bindEvents(container, ctx) {
           }
           button.textContent = dryRun ? 'Dry Run' : 'Run';
         }
-        setTimeout(() => renderAutomations(container), 900);
+        setTimeout(() => renderAutomationsPreserveScroll(container), 900);
       } catch (err) {
         const resultsDiv = container.querySelector('#auto-run-results');
         if (resultsDiv) {
@@ -1397,7 +1511,7 @@ function bindEvents(container, ctx) {
       try {
         if (auto._playbook) await api.deletePlaybook(auto.id);
         if (auto._task) await api.deleteScheduledTask(auto._task.id);
-        await renderAutomations(container);
+        await renderAutomationsPreserveScroll(container);
       } catch { /* keep UI */ }
     });
   });
@@ -1427,7 +1541,7 @@ function bindEvents(container, ctx) {
         const result = await api.upsertPlaybook(JSON.parse(textarea.value.trim()));
         statusEl.textContent = result.message || (result.success ? 'Saved.' : 'Failed.');
         statusEl.style.color = result.success ? 'var(--success)' : 'var(--error)';
-        if (result.success) setTimeout(() => renderAutomations(container), 500);
+        if (result.success) setTimeout(() => renderAutomationsPreserveScroll(container), 500);
       } catch (err) {
         statusEl.textContent = err instanceof Error ? err.message : String(err);
         statusEl.style.color = 'var(--error)';
@@ -1462,7 +1576,8 @@ function bindCreateForm(container, { tools, packs, agents }) {
   const outputNotifySelect = container.querySelector('#auto-output-notify');
   const outputSecuritySelect = container.querySelector('#auto-output-security');
   const outputArtifactsSelect = container.querySelector('#auto-output-artifacts');
-  const assistantSection = container.querySelector('#auto-assistant-section');
+  const agentModeCheck = container.querySelector('#auto-agent-mode');
+  const assistantFields = container.querySelector('#auto-assistant-fields');
   const agentSelect = container.querySelector('#auto-agent-select');
   const agentChannelSelect = container.querySelector('#auto-agent-channel');
   const agentPromptInput = container.querySelector('#auto-agent-prompt');
@@ -1473,6 +1588,11 @@ function bindCreateForm(container, { tools, packs, agents }) {
   const defaultFormMarker = document.createElement('div');
   let activeInlineAutoId = null;
   createForm.insertAdjacentElement('afterend', defaultFormMarker);
+
+  function updateSingleToolDisplay(toolName) {
+    const displayEl = container.querySelector('#auto-single-tool-display');
+    if (displayEl) displayEl.textContent = toolName || 'No tool selected';
+  }
 
   function setFormMode(mode, subtitle) {
     titleEl.textContent = mode;
@@ -1548,14 +1668,28 @@ function bindCreateForm(container, { tools, packs, agents }) {
     nameInput.value = '';
     idInput.value = '';
     descriptionInput.value = '';
-    enabledSelect.value = 'false';
+    enabledSelect.value = 'true';
     singleToolSelect.value = '';
     argsInput.value = '';
     eventInput.value = '';
+    if (agentModeCheck) agentModeCheck.checked = false;
+    if (assistantFields) assistantFields.style.display = 'none';
     if (agentSelect) agentSelect.value = 'default';
     if (agentChannelSelect) agentChannelSelect.value = 'scheduled';
     if (agentPromptInput) agentPromptInput.value = '';
     if (agentDeliverCheck) agentDeliverCheck.checked = true;
+    if (llmProviderSelect) llmProviderSelect.value = 'auto';
+    const singlePromptReset = container.querySelector('#auto-single-prompt');
+    if (singlePromptReset) singlePromptReset.value = '';
+    // Reset tool display spans and param panels
+    const singleToolDisplay = container.querySelector('#auto-single-tool-display');
+    if (singleToolDisplay) singleToolDisplay.textContent = 'No tool selected';
+    const stepToolDisplay = container.querySelector('#auto-step-tool-display');
+    if (stepToolDisplay) stepToolDisplay.textContent = 'No tool selected';
+    const stp = container.querySelector('#auto-single-tool-params');
+    if (stp) { stp.innerHTML = ''; stp.style.display = 'none'; }
+    const stpp = container.querySelector('#auto-step-tool-params');
+    if (stpp) { stpp.innerHTML = ''; stpp.style.display = 'none'; }
     outputNotifySelect.value = 'off';
     outputSecuritySelect.value = 'off';
     outputArtifactsSelect.value = 'run_history_only';
@@ -1570,6 +1704,9 @@ function bindCreateForm(container, { tools, packs, agents }) {
     updateModeVisibility();
     updateScheduleFields(container);
     updateSchedulePreview(container);
+    preflightBypass = false;
+    preflightPolicySnapshot = { allowedPaths: [], allowedCommands: [], allowedDomains: [] };
+    if (preflightPanel) { preflightPanel.style.display = 'none'; preflightPanel.innerHTML = ''; }
     clearStatus();
   }
 
@@ -1614,37 +1751,27 @@ function bindCreateForm(container, { tools, packs, agents }) {
 
   function updateModeVisibility() {
     const mode = modeSelect.value;
-    const isAssistant = mode === 'assistant';
-    if (!editIdInput.value && !editTaskIdInput.value) {
-      subtitleEl.textContent = isAssistant
-        ? 'Create a recurring assistant task that wakes up on schedule, decides what to inspect, and reports back.'
-        : 'Build a one-off tool automation or a multi-step pipeline.';
-    }
     singleSection.style.display = mode === 'single' ? '' : 'none';
-    pipelineSection.style.display = mode !== 'single' && !isAssistant ? '' : 'none';
-    if (assistantSection) assistantSection.style.display = isAssistant ? '' : 'none';
-    if (idField) idField.style.display = isAssistant ? 'none' : '';
-    if (argsField) argsField.style.display = isAssistant ? 'none' : '';
-    if (isAssistant) {
-      scheduleCheck.checked = true;
-      scheduleCheck.disabled = true;
-      scheduleSection.style.display = '';
-    } else {
-      scheduleCheck.disabled = false;
-      scheduleSection.style.display = scheduleCheck.checked ? '' : 'none';
-    }
+    pipelineSection.style.display = mode !== 'single' ? '' : 'none';
+    // Update pipeline label: "Tasks" for parallel, "Steps" for sequential
+    const stepLabel = container.querySelector('#auto-pipeline-label');
+    if (stepLabel) stepLabel.textContent = mode === 'parallel' ? 'Tasks' : 'Steps';
+    // ID field always visible
+    // Schedule section controlled by checkbox only
+    scheduleCheck.disabled = false;
+    scheduleSection.style.display = scheduleCheck.checked ? '' : 'none';
   }
   modeSelect?.addEventListener('change', updateModeVisibility);
   updateModeVisibility();
 
   // Schedule toggle
   scheduleCheck?.addEventListener('change', () => {
-    if (modeSelect.value === 'assistant') {
-      scheduleCheck.checked = true;
-      scheduleSection.style.display = '';
-      return;
-    }
     scheduleSection.style.display = scheduleCheck.checked ? '' : 'none';
+  });
+
+  // Agent mode toggle (inside schedule section)
+  agentModeCheck?.addEventListener('change', () => {
+    if (assistantFields) assistantFields.style.display = agentModeCheck.checked ? '' : 'none';
   });
 
   // Schedule field visibility
@@ -1680,14 +1807,25 @@ function bindCreateForm(container, { tools, packs, agents }) {
     }
     stepList.innerHTML = wfSteps.map((step, i) => {
       const isInstruction = step.type === 'instruction';
-      const tool = !isInstruction ? tools.find((t) => t.name === step.toolName) : null;
-      const label = isInstruction ? 'LLM Instruction' : esc(step.toolName);
-      const desc = isInstruction
-        ? esc(step.instruction || '(no instruction)')
-        : esc(tool?.shortDescription || tool?.description || '');
-      const badge = isInstruction
-        ? '<span class="badge badge-info" style="font-size:0.65rem;margin-right:0.3rem;">LLM</span>'
+      const isDelay = step.type === 'delay';
+      const tool = !isInstruction && !isDelay ? tools.find((t) => t.name === step.toolName) : null;
+      const label = isDelay ? formatDelayMs(step.delayMs || 0) : isInstruction ? 'LLM Instruction' : esc(step.toolName);
+      const stepArgKeys = !isInstruction && !isDelay && step.args ? Object.keys(step.args).filter((k) => step.args[k] != null && step.args[k] !== '') : [];
+      const argSummary = stepArgKeys.length > 0
+        ? stepArgKeys.map((k) => `${k}=${summarizeArgValue(k, step.args[k])}`).join(', ')
         : '';
+      const desc = isDelay
+        ? 'Pause pipeline'
+        : isInstruction
+          ? esc(step.instruction || '(no instruction)')
+          : argSummary
+            ? esc(argSummary)
+            : esc(tool?.shortDescription || tool?.description || '');
+      const badge = isDelay
+        ? '<span class="badge badge-warning" style="font-size:0.65rem;margin-right:0.3rem;">&#9202;</span>'
+        : isInstruction
+          ? '<span class="badge badge-info" style="font-size:0.65rem;margin-right:0.3rem;">LLM</span>'
+          : '';
       return `
         <div class="wf-step-row" data-index="${i}">
           <span class="wf-step-number">${i + 1}</span>
@@ -1729,14 +1867,56 @@ function bindCreateForm(container, { tools, packs, agents }) {
   const stepInstructionField = container.querySelector('#auto-step-instruction-field');
   const stepInstructionInput = container.querySelector('#auto-step-instruction-input');
 
+  const stepDelayField = container.querySelector('#auto-step-delay-field');
+  const stepCancelButton = container.querySelector('#auto-step-cancel');
+  const stepToolPickerPanel = container.querySelector('#auto-step-tool-picker-panel');
+  const stepToolParamsPanel = container.querySelector('#auto-step-tool-params');
+
+  function resetPendingStepDraft() {
+    if (stepToolSelect) stepToolSelect.value = '';
+    const stepToolDisplay = container.querySelector('#auto-step-tool-display');
+    if (stepToolDisplay) stepToolDisplay.textContent = 'No tool selected';
+    if (stepToolPickerPanel) {
+      stepToolPickerPanel.style.display = 'none';
+      stepToolPickerPanel.innerHTML = '';
+    }
+    if (stepToolParamsPanel) {
+      stepToolParamsPanel.innerHTML = '';
+      stepToolParamsPanel.style.display = 'none';
+    }
+    if (stepInstructionInput) stepInstructionInput.value = '';
+    const delayValueInput = container.querySelector('#auto-step-delay-value');
+    const delayUnitInput = container.querySelector('#auto-step-delay-unit');
+    if (delayValueInput) delayValueInput.value = '5';
+    if (delayUnitInput) delayUnitInput.value = 'minutes';
+    clearStatus();
+  }
+
   stepTypeSelect?.addEventListener('change', () => {
-    const isInstruction = stepTypeSelect.value === 'instruction';
-    if (stepToolField) stepToolField.style.display = isInstruction ? 'none' : '';
-    if (stepInstructionField) stepInstructionField.style.display = isInstruction ? '' : 'none';
+    const val = stepTypeSelect.value;
+    if (stepToolField) stepToolField.style.display = val === 'tool' ? '' : 'none';
+    if (stepInstructionField) stepInstructionField.style.display = val === 'instruction' ? '' : 'none';
+    if (stepDelayField) stepDelayField.style.display = val === 'delay' ? '' : 'none';
+  });
+
+  stepCancelButton?.addEventListener('click', () => {
+    resetPendingStepDraft();
   });
 
   container.querySelector('#auto-step-add')?.addEventListener('click', () => {
     const stepType = stepTypeSelect?.value || 'tool';
+    const mode = modeSelect.value;
+
+    if (mode === 'parallel' && stepType === 'instruction') {
+      statusEl.textContent = 'Instruction steps are only supported in sequential pipelines.';
+      statusEl.style.color = 'var(--error)';
+      return;
+    }
+    if (mode === 'parallel' && stepType === 'delay') {
+      statusEl.textContent = 'Delay steps are only supported in sequential pipelines.';
+      statusEl.style.color = 'var(--error)';
+      return;
+    }
 
     if (stepType === 'instruction') {
       const instruction = stepInstructionInput?.value?.trim();
@@ -1750,14 +1930,224 @@ function bindCreateForm(container, { tools, packs, agents }) {
         instruction,
       });
       if (stepInstructionInput) stepInstructionInput.value = '';
+    } else if (stepType === 'delay') {
+      const delayVal = Number(container.querySelector('#auto-step-delay-value')?.value) || 5;
+      const delayUnit = container.querySelector('#auto-step-delay-unit')?.value || 'minutes';
+      const delayMs = delayToMs(delayVal, delayUnit);
+      if (delayMs <= 0) return;
+      wfSteps.push({
+        id: `step-${wfSteps.length + 1}`,
+        type: 'delay',
+        name: 'Delay',
+        packId: '',
+        toolName: '',
+        delayMs,
+      });
     } else {
       const toolName = stepToolSelect.value;
       if (!toolName) return;
-      wfSteps.push({ id: `step-${wfSteps.length + 1}`, name: toolName, packId: '', toolName, args: {} });
-      stepToolSelect.value = '';
+      const { args: stepArgs, errors } = readToolParamValues(stepToolParamsPanel);
+      if (errors.length > 0) {
+        statusEl.textContent = errors[0];
+        statusEl.style.color = 'var(--error)';
+        return;
+      }
+      wfSteps.push({ id: `step-${wfSteps.length + 1}`, name: toolName, packId: '', toolName, args: stepArgs });
+      resetPendingStepDraft();
     }
     renderStepList();
+    clearStatus();
   });
+
+  // Tool picker browse buttons
+  const singleToolPickerPanel = container.querySelector('#auto-single-tool-picker-panel');
+  const singleToolParamsPanel = container.querySelector('#auto-single-tool-params');
+  container.querySelector('#auto-single-tool-browse')?.addEventListener('click', () => {
+    if (singleToolPickerPanel?.style.display !== 'none' && singleToolPickerPanel?.innerHTML) {
+      singleToolPickerPanel.style.display = 'none';
+      singleToolPickerPanel.innerHTML = '';
+      return;
+    }
+    renderToolPicker(singleToolPickerPanel, tools, singleToolSelect, (toolName) => {
+      const tool = tools.find((t) => t.name === toolName);
+      renderToolParamFields(singleToolParamsPanel, tool, {});
+    });
+  });
+
+  container.querySelector('#auto-step-tool-browse')?.addEventListener('click', () => {
+    if (stepToolPickerPanel?.style.display !== 'none' && stepToolPickerPanel?.innerHTML) {
+      stepToolPickerPanel.style.display = 'none';
+      stepToolPickerPanel.innerHTML = '';
+      return;
+    }
+    renderToolPicker(stepToolPickerPanel, tools, stepToolSelect, (toolName) => {
+      const tool = tools.find((t) => t.name === toolName);
+      renderToolParamFields(stepToolParamsPanel, tool, {});
+    });
+  });
+
+  // LLM provider selector
+  const llmProviderSelect = container.querySelector('#auto-llm-provider');
+
+  // Pre-flight validation panel
+  const preflightPanel = container.querySelector('#auto-preflight-panel');
+  let preflightBypass = false;
+  let preflightPolicySnapshot = { allowedPaths: [], allowedCommands: [], allowedDomains: [] };
+
+  async function runPreflightCheck(requests) {
+    if (!preflightPanel || requests.length === 0) return true;
+    try {
+      const data = await api.preflightTools({ requests });
+      preflightPolicySnapshot = {
+        allowedPaths: Array.isArray(data.policy?.allowedPaths) ? data.policy.allowedPaths.slice() : [],
+        allowedCommands: Array.isArray(data.policy?.allowedCommands) ? data.policy.allowedCommands.slice() : [],
+        allowedDomains: Array.isArray(data.policy?.allowedDomains) ? data.policy.allowedDomains.slice() : [],
+      };
+      const issues = (data.results || []).filter((r) => r.decision !== 'allow');
+      if (issues.length === 0) {
+        preflightPanel.style.display = 'none';
+        preflightPanel.innerHTML = '';
+        return true;
+      }
+      renderPreflightResults(issues, data.policy?.mode || 'approve_by_policy');
+      return false;
+    } catch {
+      // If preflight API unavailable, allow save
+      return true;
+    }
+  }
+
+  function continueSaveAfterPreflight() {
+    preflightBypass = true;
+    preflightPanel.style.display = 'none';
+    container.querySelector('#auto-create-save')?.click();
+  }
+
+  function renderPreflightResults(issues, policyMode) {
+    preflightPanel.style.display = '';
+    preflightPanel.innerHTML = `
+      <div style="border:1px solid var(--warning);border-radius:var(--radius);padding:0.75rem;background:color-mix(in srgb, var(--warning) 6%, var(--bg-surface));">
+        <div style="font-weight:600;font-size:0.85rem;margin-bottom:0.5rem;color:var(--warning);">Approval Check</div>
+        <div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:0.5rem;">
+          These tools are blocked by current approval or sandbox policy.
+          Policy mode: <strong>${esc(policyMode)}</strong>. Fix each one to allow unattended execution.
+        </div>
+        ${issues.map((issue) => `
+          <div class="auto-preflight-issue" style="display:flex;align-items:center;gap:0.5rem;padding:0.4rem 0;border-top:1px solid var(--border);font-size:0.78rem;">
+            <span style="color:${issue.decision === 'deny' ? 'var(--error)' : 'var(--warning)'};font-weight:600;min-width:14px;">
+              ${issue.decision === 'deny' ? '&#10007;' : '&#9888;'}
+            </span>
+            <span style="font-weight:500;min-width:120px;flex-shrink:0;">${esc(issue.name)}</span>
+            <span style="flex:1;color:var(--text-muted);font-size:0.72rem;">${esc(issue.reason)}</span>
+            ${issue.fixes && issue.fixes.length > 0 ? issue.fixes.map((fix) => `
+              <button class="btn btn-primary btn-sm auto-preflight-fix"
+                data-fix-type="${escAttr(fix.type)}"
+                data-fix-value="${escAttr(fix.value)}"
+                style="white-space:nowrap;font-size:0.7rem;padding:0.2rem 0.5rem;">
+                ${esc(preflightFixLabel(fix.type))}
+              </button>
+            `).join('') : ''}
+          </div>
+        `).join('')}
+        <div style="margin-top:0.5rem;display:flex;gap:0.5rem;align-items:center;">
+          <button class="btn btn-secondary btn-sm" id="auto-preflight-skip" style="font-size:0.72rem;">
+            Save anyway (approval needed each run)
+          </button>
+          <span style="font-size:0.7rem;color:var(--text-muted);">
+            Or fix issues above to enable unattended execution.
+          </span>
+        </div>
+      </div>
+    `;
+
+    // Fix button handlers — add per-tool auto policy
+    preflightPanel.querySelectorAll('.auto-preflight-fix').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const fixType = btn.getAttribute('data-fix-type');
+        const fixValue = btn.getAttribute('data-fix-value');
+        btn.disabled = true;
+        btn.textContent = 'Applying...';
+        try {
+          if (fixType === 'tool_policy') {
+            const result = await api.updateToolPolicy({
+              toolPolicies: { [fixValue]: 'auto' },
+            });
+            if (result.success) {
+              btn.textContent = 'Applied';
+              btn.style.background = 'var(--success)';
+              btn.style.borderColor = 'var(--success)';
+              // Mark the issue as resolved visually
+              const issueRow = btn.closest('.auto-preflight-issue');
+              if (issueRow) {
+                issueRow.querySelector('span').innerHTML = '&#10003;';
+                issueRow.querySelector('span').style.color = 'var(--success)';
+              }
+              // Re-run preflight to check if all fixed
+              const requests = collectFormToolRequests();
+              const data = await api.preflightTools({ requests });
+              const remaining = (data.results || []).filter((r) => r.decision !== 'allow');
+              if (remaining.length === 0) {
+                continueSaveAfterPreflight();
+              }
+            }
+          } else if (fixType === 'domain' || fixType === 'path' || fixType === 'command') {
+            const sandboxKey = fixType === 'domain' ? 'allowedDomains' : fixType === 'path' ? 'allowedPaths' : 'allowedCommands';
+            const currentValues = Array.isArray(preflightPolicySnapshot[sandboxKey]) ? preflightPolicySnapshot[sandboxKey] : [];
+            const nextValues = [...new Set([...currentValues, fixValue])];
+            const result = await api.updateToolPolicy({
+              sandbox: { [sandboxKey]: nextValues },
+            });
+            if (result.success) {
+              btn.textContent = 'Applied';
+              btn.style.background = 'var(--success)';
+              btn.style.borderColor = 'var(--success)';
+              preflightPolicySnapshot[sandboxKey] = nextValues;
+              const requests = collectFormToolRequests();
+              const data = await api.preflightTools({ requests });
+              const remaining = (data.results || []).filter((r) => r.decision !== 'allow');
+              if (remaining.length === 0) {
+                continueSaveAfterPreflight();
+              }
+            }
+          }
+        } catch (err) {
+          btn.textContent = 'Failed';
+          btn.style.background = 'var(--error)';
+        }
+      });
+    });
+
+    // Skip button
+    preflightPanel.querySelector('#auto-preflight-skip')?.addEventListener('click', () => {
+      preflightBypass = true;
+      preflightPanel.style.display = 'none';
+      container.querySelector('#auto-create-save')?.click();
+    });
+  }
+
+  function collectFormToolRequests() {
+    const mode = modeSelect.value;
+    const requests = [];
+    if (mode === 'single') {
+      const tool = singleToolSelect.value;
+      if (tool) {
+        const argsRaw = argsInput.value.trim();
+        let jsonArgs = {};
+        if (argsRaw) {
+          try { jsonArgs = JSON.parse(argsRaw); } catch { jsonArgs = {}; }
+        }
+        const paramArgs = collectToolParamValues(singleToolParamsPanel);
+        requests.push({ name: tool, args: { ...paramArgs, ...jsonArgs } });
+      }
+    } else {
+      for (const step of wfSteps) {
+        if (step.toolName && step.type !== 'instruction' && step.type !== 'delay') {
+          requests.push({ name: step.toolName, args: step.args || {} });
+        }
+      }
+    }
+    return requests;
+  }
 
   // Save
   container.querySelector('#auto-create-save')?.addEventListener('click', async () => {
@@ -1767,77 +2157,97 @@ function bindCreateForm(container, { tools, packs, agents }) {
     const id = idInput.value.trim();
     const name = nameInput.value.trim();
     const mode = modeSelect.value;
-    const isAssistant = mode === 'assistant';
     const enabled = enabledSelect.value === 'true';
     const description = descriptionInput.value.trim();
     const scheduleEnabled = scheduleCheck.checked;
     const runOnce = runOnceCheck?.checked === true;
+    const isAgentMode = scheduleEnabled && agentModeCheck?.checked;
 
-    if (!name || (!isAssistant && !id)) {
-      statusEl.textContent = isAssistant ? 'Name is required.' : 'Name and ID are required.';
-      statusEl.style.color = 'var(--error)';
-      return;
-    }
-    if ((editSource === 'playbook' || editSource === 'task') && isAssistant) {
-      statusEl.textContent = 'Convert workflow/tool automations into assistant automations by cloning or creating a new one.';
-      statusEl.style.color = 'var(--error)';
-      return;
-    }
-    if (editSource === 'agent_task' && !isAssistant) {
-      statusEl.textContent = 'Convert assistant automations into workflow/tool automations by creating a new automation.';
+    if (!name || (!isAgentMode && !id)) {
+      statusEl.textContent = isAgentMode ? 'Name is required.' : 'Name and ID are required.';
       statusEl.style.color = 'var(--error)';
       return;
     }
 
-    // Build steps
+    // Build steps (single / pipeline — no assistant branch)
     let steps = [];
-    if (isAssistant) {
-      const agentId = agentSelect?.value || 'default';
-      const prompt = agentPromptInput?.value?.trim() || '';
-      if (!prompt) {
-        statusEl.textContent = 'Assistant prompt is required.';
-        statusEl.style.color = 'var(--error)';
-        return;
-      }
-      steps = [{
-        id: `${editTaskId || 'assistant'}-step-1`,
-        name: agentId,
-        packId: '',
-        toolName: `agent:${agentId}`,
-        args: {
-          prompt,
-          channel: agentChannelSelect?.value || 'scheduled',
-          deliver: agentDeliverCheck?.checked !== false,
-        },
-      }];
-    } else if (mode === 'single') {
+    if (mode === 'single') {
       const toolName = singleToolSelect.value;
       if (!toolName) {
         statusEl.textContent = 'Select a tool.';
         statusEl.style.color = 'var(--error)';
         return;
       }
-      let args;
+      // Collect args: dynamic param fields first, then JSON textarea as override
+      const { args: paramArgs, errors: paramErrors } = readToolParamValues(singleToolParamsPanel);
+      if (paramErrors.length > 0) {
+        statusEl.textContent = paramErrors[0];
+        statusEl.style.color = 'var(--error)';
+        return;
+      }
+      let jsonArgs = {};
       const argsRaw = argsInput.value.trim();
       if (argsRaw) {
-        try { args = JSON.parse(argsRaw); } catch {
+        try { jsonArgs = JSON.parse(argsRaw); } catch {
           statusEl.textContent = 'Tool inputs must be valid JSON.';
           statusEl.style.color = 'var(--error)';
           return;
         }
       }
-      steps = [{ id: `${id}-step-1`, name: toolName, packId: '', toolName, args: args || {} }];
+      const args = { ...paramArgs, ...jsonArgs };
+      steps = [{ id: `${id}-step-1`, name: toolName, packId: '', toolName, args }];
+      // Optional prompt → auto-convert to 2-step sequential (tool + instruction)
+      const singlePrompt = container.querySelector('#auto-single-prompt')?.value?.trim();
+      if (singlePrompt) {
+        const llmProv = llmProviderSelect?.value;
+        const instrStep = {
+          id: `${id}-step-2`,
+          type: 'instruction',
+          name: 'LLM Instruction',
+          packId: '',
+          toolName: '',
+          instruction: singlePrompt,
+        };
+        if (llmProv && llmProv !== 'auto') instrStep.llmProvider = llmProv;
+        steps.push(instrStep);
+      }
     } else {
       if (wfSteps.length === 0) {
         statusEl.textContent = 'Add at least one step.';
         statusEl.style.color = 'var(--error)';
         return;
       }
+      if (mode === 'parallel' && wfSteps.some((step) => step.type === 'instruction' || step.type === 'delay')) {
+        statusEl.textContent = 'Parallel pipelines can only contain tool steps.';
+        statusEl.style.color = 'var(--error)';
+        return;
+      }
+      // Apply LLM provider to instruction steps
+      const llmProv = llmProviderSelect?.value;
       steps = wfSteps.map((step, i) => {
-        const base = { ...step, id: `${id}-step-${i + 1}` };
-        return { ...base, packId: '' };
+        const base = { ...step, id: `${id}-step-${i + 1}`, packId: '' };
+        if (base.type === 'instruction' && llmProv && llmProv !== 'auto') {
+          base.llmProvider = llmProv;
+        }
+        return base;
       });
     }
+
+    // Pre-flight approval check for scheduled automations
+    if ((scheduleEnabled || editId || editTaskId) && !isAgentMode && !preflightBypass) {
+      const requests = collectFormToolRequests();
+      if (requests.length > 0) {
+        statusEl.textContent = 'Checking approval requirements...';
+        statusEl.style.color = 'var(--text-muted)';
+        const pass = await runPreflightCheck(requests);
+        if (!pass) {
+          statusEl.textContent = 'Some tools require approval. Fix or skip above.';
+          statusEl.style.color = 'var(--warning)';
+          return;
+        }
+      }
+    }
+    preflightBypass = false;
 
     statusEl.textContent = 'Saving...';
     statusEl.style.color = 'var(--text-muted)';
@@ -1857,18 +2267,20 @@ function bindCreateForm(container, { tools, packs, agents }) {
         return;
       }
 
-      if (isAssistant) {
-        const cron = buildCronFromForm(container);
-        if (!cron) {
-          statusEl.textContent = 'Choose a valid schedule.';
+      if (isAgentMode) {
+        // Save as agent scheduled task
+        const prompt = agentPromptInput?.value?.trim() || '';
+        if (!prompt) {
+          statusEl.textContent = 'Assistant prompt is required.';
           statusEl.style.color = 'var(--error)';
           return;
         }
+        const llmProv = llmProviderSelect?.value;
         const input = {
           name,
           type: 'agent',
           target: agentSelect?.value || 'default',
-          prompt: agentPromptInput?.value?.trim() || '',
+          prompt,
           channel: agentChannelSelect?.value || 'scheduled',
           deliver: agentDeliverCheck?.checked !== false,
           cron,
@@ -1877,6 +2289,7 @@ function bindCreateForm(container, { tools, packs, agents }) {
           emitEvent,
           outputHandling,
         };
+        if (llmProv && llmProv !== 'auto') input.args = { ...input.args, llmProvider: llmProv };
         const result = editTaskId
           ? await api.updateScheduledTask(editTaskId, input)
           : await api.createScheduledTask(input);
@@ -1953,7 +2366,7 @@ function bindCreateForm(container, { tools, packs, agents }) {
 
       statusEl.textContent = editId || editTaskId ? 'Saved.' : 'Created.';
       statusEl.style.color = 'var(--success)';
-      setTimeout(() => renderAutomations(container), 350);
+      setTimeout(() => renderAutomationsPreserveScroll(container), 350);
     } catch (err) {
       statusEl.textContent = err instanceof Error ? err.message : String(err);
       statusEl.style.color = 'var(--error)';
@@ -1992,38 +2405,79 @@ function bindCreateForm(container, { tools, packs, agents }) {
       args: step.args ? JSON.parse(JSON.stringify(step.args)) : {},
     })));
 
+    // Detect LLM provider from instruction steps or agent task args
+    const instrStep = (auto.steps || []).find((s) => s.type === 'instruction' && s.llmProvider);
+    const detectedLlmProv = instrStep?.llmProvider || auto._task?.args?.llmProvider || '';
+    if (llmProviderSelect) llmProviderSelect.value = detectedLlmProv || 'auto';
+
+    // Detect single-tool-with-prompt pattern: 2 steps where step 2 is instruction
+    const isSingleWithPrompt = !isAgentTask && !isStandaloneTask && auto.steps?.length === 2
+      && (!auto.steps[0].type || auto.steps[0].type === 'tool')
+      && auto.steps[1].type === 'instruction';
+
+    const singlePromptEl = container.querySelector('#auto-single-prompt');
+
     if (isAgentTask) {
-      modeSelect.value = 'assistant';
+      modeSelect.value = 'single';
       modeSelect.disabled = false;
+      // Check schedule toggle + agent mode toggle
+      scheduleCheck.checked = true;
+      scheduleSection.style.display = '';
+      if (agentModeCheck) agentModeCheck.checked = true;
+      if (assistantFields) assistantFields.style.display = '';
       if (agentSelect) agentSelect.value = auto._task.target || 'default';
       if (agentChannelSelect) agentChannelSelect.value = auto._task.channel || 'scheduled';
       if (agentPromptInput) agentPromptInput.value = auto._task.prompt || auto.agentPrompt || '';
       if (agentDeliverCheck) agentDeliverCheck.checked = auto._task.deliver !== false;
       argsInput.value = '';
-      scheduleCheck.checked = true;
-      scheduleCheck.disabled = true;
-      scheduleSection.style.display = '';
       enabledSelect.value = String(auto._task.enabled !== false);
+      idInput.value = auto.id || '';
       setIdReadOnly(true);
+      if (singlePromptEl) singlePromptEl.value = '';
     } else if (isStandaloneTask) {
       modeSelect.value = 'single';
       modeSelect.disabled = true;
       singleToolSelect.value = auto._task.target || '';
+      updateSingleToolDisplay(auto._task.target || '');
+      const editTool = tools.find((t) => t.name === auto._task.target);
+      renderToolParamFields(singleToolParamsPanel, editTool, auto._task.args || {});
       argsInput.value = auto._task.args ? JSON.stringify(auto._task.args, null, 2) : '';
       scheduleCheck.checked = true;
       scheduleCheck.disabled = true;
       scheduleSection.style.display = '';
       enabledSelect.value = String(auto._task.enabled !== false);
       setIdReadOnly(true);
+      if (singlePromptEl) singlePromptEl.value = '';
+    } else if (isSingleWithPrompt) {
+      // Show as single-tool mode with prompt populated
+      modeSelect.disabled = false;
+      modeSelect.value = 'single';
+      singleToolSelect.value = auto.steps[0]?.toolName || '';
+      updateSingleToolDisplay(auto.steps[0]?.toolName || '');
+      const editTool = tools.find((t) => t.name === auto.steps[0]?.toolName);
+      renderToolParamFields(singleToolParamsPanel, editTool, auto.steps[0]?.args || {});
+      argsInput.value = auto.steps[0]?.args ? JSON.stringify(auto.steps[0].args, null, 2) : '';
+      if (singlePromptEl) singlePromptEl.value = auto.steps[1].instruction || '';
+      scheduleCheck.checked = !!auto.cron;
+      scheduleCheck.disabled = false;
+      scheduleSection.style.display = auto.cron ? '' : 'none';
+      setIdReadOnly(true);
+      wfSteps.splice(0, wfSteps.length); // clear pipeline steps for single mode
     } else {
       modeSelect.disabled = false;
       modeSelect.value = auto.kind === 'pipeline' ? auto.mode : 'single';
       singleToolSelect.value = firstStep?.toolName || '';
+      updateSingleToolDisplay(firstStep?.toolName || '');
+      if (auto.kind === 'single' && firstStep?.toolName) {
+        const editTool = tools.find((t) => t.name === firstStep.toolName);
+        renderToolParamFields(singleToolParamsPanel, editTool, firstStep?.args || {});
+      }
       argsInput.value = auto.kind === 'single' && firstStep?.args ? JSON.stringify(firstStep.args, null, 2) : '';
       scheduleCheck.checked = !!auto.cron;
       scheduleCheck.disabled = false;
       scheduleSection.style.display = auto.cron ? '' : 'none';
       setIdReadOnly(true);
+      if (singlePromptEl) singlePromptEl.value = '';
     }
 
     renderStepList();
@@ -2091,7 +2545,7 @@ function bindEngineSettings(container, ctx) {
       const result = await api.upsertConnectorPack(JSON.parse(raw));
       statusEl.textContent = result.message;
       statusEl.style.color = result.success ? 'var(--success)' : 'var(--error)';
-      if (result.success) await renderAutomations(container);
+      if (result.success) await renderAutomationsPreserveScroll(container);
     } catch (err) {
       statusEl.textContent = err instanceof Error ? err.message : String(err);
       statusEl.style.color = 'var(--error)';
@@ -2104,7 +2558,7 @@ function bindEngineSettings(container, ctx) {
       const packId = button.getAttribute('data-pack-id');
       if (!packId || !confirm(`Delete access profile '${packId}'?`)) return;
       await api.deleteConnectorPack(packId);
-      await renderAutomations(container);
+      await renderAutomationsPreserveScroll(container);
     });
   });
 
@@ -2344,6 +2798,394 @@ function statusColor(status) {
 function formatTime(ts) {
   if (!ts) return '-';
   try { return new Date(ts).toLocaleString(); } catch { return '-'; }
+}
+
+// ─── Delay Helpers ─────────────────────────────────────────
+
+function delayToMs(value, unit) {
+  const v = Number(value) || 0;
+  switch (unit) {
+    case 'seconds': return v * 1000;
+    case 'minutes': return v * 60 * 1000;
+    case 'hours': return v * 3600 * 1000;
+    case 'days': return v * 86400 * 1000;
+    default: return v * 60 * 1000;
+  }
+}
+
+function formatDelayMs(ms) {
+  if (ms <= 0) return '0s';
+  if (ms < 60000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 3600000) return `${Math.round(ms / 60000)}m`;
+  if (ms < 86400000) {
+    const h = Math.floor(ms / 3600000);
+    const m = Math.round((ms % 3600000) / 60000);
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  }
+  const d = Math.floor(ms / 86400000);
+  const h = Math.round((ms % 86400000) / 3600000);
+  return h > 0 ? `${d}d ${h}h` : `${d}d`;
+}
+
+// ─── Tool Requirement Helpers ──────────────────────────────
+
+const TOOL_REQUIREMENTS = {
+  workspace: 'Google Workspace connected',
+  email: 'Google Workspace connected',
+  cloud: 'Cloud provider configured',
+  browser: 'Browser automation enabled',
+  search: 'Search sources configured',
+  intel: 'Threat intel configured',
+  contacts: 'Contacts imported',
+};
+
+const TOOL_REQUIREMENTS_BY_PREFIX = {
+  m365: 'Microsoft 365 connected',
+  outlook: 'Microsoft 365 connected',
+  gws: 'Google Workspace connected',
+  gmail: 'Google Workspace connected',
+  cpanel: 'cPanel profile configured',
+  whm: 'WHM profile configured',
+  vercel: 'Vercel profile configured',
+  cf_: 'Cloudflare profile configured',
+  aws: 'AWS profile configured',
+  gcp: 'GCP profile configured',
+  azure: 'Azure profile configured',
+};
+
+function getToolRequirement(tool) {
+  for (const [prefix, req] of Object.entries(TOOL_REQUIREMENTS_BY_PREFIX)) {
+    if (tool.name.startsWith(prefix)) return req;
+  }
+  if (tool.category && TOOL_REQUIREMENTS[tool.category]) return TOOL_REQUIREMENTS[tool.category];
+  return '';
+}
+
+// ─── Tool Picker Panel ─────────────────────────────────────
+
+function renderToolPicker(panelEl, tools, targetSelect, onSelect) {
+  const sorted = tools.slice().sort((a, b) =>
+    (a.category || '').localeCompare(b.category || '') || a.name.localeCompare(b.name));
+
+  const categories = [...new Set(sorted.map((t) => t.category || 'other'))];
+
+  panelEl.innerHTML = `
+    <div class="auto-tool-picker">
+      <input class="auto-tool-picker-search" type="text" placeholder="Search tools..." style="width:100%;margin-bottom:0.5rem;padding:0.35rem 0.5rem;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-primary);font-size:0.8rem;">
+      <div class="auto-tool-picker-list" style="max-height:260px;overflow-y:auto;">
+        ${categories.map((cat) => {
+          const catTools = sorted.filter((t) => (t.category || 'other') === cat);
+          return `
+            <div class="auto-tool-picker-category">${esc(cat)}</div>
+            ${catTools.map((t) => {
+              const req = getToolRequirement(t);
+              const reqLabel = req ? `Requires: ${req}` : 'No requirements';
+              const reqClass = req ? 'auto-tool-picker-req' : 'auto-tool-picker-req auto-tool-picker-req-none';
+              return `<div class="auto-tool-picker-row" data-tool="${escAttr(t.name)}">
+                <span class="auto-tool-picker-name">${esc(t.name)}</span>
+                <span class="auto-tool-picker-desc">${esc(t.shortDescription || t.description || '')}</span>
+                <span class="${reqClass}">${esc(reqLabel)}</span>
+              </div>`;
+            }).join('')}
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+  panelEl.style.display = '';
+
+  const searchInput = panelEl.querySelector('.auto-tool-picker-search');
+  const listEl = panelEl.querySelector('.auto-tool-picker-list');
+
+  searchInput?.addEventListener('input', () => {
+    const q = (searchInput.value || '').toLowerCase();
+    listEl.querySelectorAll('.auto-tool-picker-row').forEach((row) => {
+      const name = (row.dataset.tool || '').toLowerCase();
+      const desc = (row.querySelector('.auto-tool-picker-desc')?.textContent || '').toLowerCase();
+      row.style.display = !q || name.includes(q) || desc.includes(q) ? '' : 'none';
+    });
+    listEl.querySelectorAll('.auto-tool-picker-category').forEach((catEl) => {
+      let next = catEl.nextElementSibling;
+      let hasVisible = false;
+      while (next && !next.classList.contains('auto-tool-picker-category')) {
+        if (next.style.display !== 'none') hasVisible = true;
+        next = next.nextElementSibling;
+      }
+      catEl.style.display = hasVisible ? '' : 'none';
+    });
+  });
+
+  listEl.querySelectorAll('.auto-tool-picker-row').forEach((row) => {
+    row.addEventListener('click', () => {
+      const toolName = row.dataset.tool;
+      if (targetSelect) targetSelect.value = toolName;
+      // Update display span (sibling of hidden input)
+      const displayEl = targetSelect?.parentElement?.querySelector('.auto-tool-display');
+      if (displayEl) displayEl.textContent = toolName || 'No tool selected';
+      panelEl.style.display = 'none';
+      if (onSelect) onSelect(toolName);
+    });
+  });
+
+  setTimeout(() => searchInput?.focus(), 50);
+}
+
+// ─── Dynamic Tool Parameter Fields ─────────────────────────
+
+const SENSITIVE_ARG_KEY_RE = /(password|secret|token|private|api[-_]?key|auth|credential|cookie|cert|certificate|passphrase|clientsecret|privatekey)/i;
+
+/**
+ * Render input fields for a tool's parameter schema into a container.
+ * Returns nothing — use collectToolParamValues() to read the values.
+ */
+function renderToolParamFields(containerEl, tool, existingArgs) {
+  if (!containerEl) return;
+  const schema = tool?.parameters;
+  const properties = schema?.properties;
+  if (!properties || typeof properties !== 'object') {
+    containerEl.innerHTML = '';
+    containerEl.style.display = 'none';
+    return;
+  }
+
+  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  const entries = Object.entries(properties);
+  if (entries.length === 0) {
+    containerEl.innerHTML = '';
+    containerEl.style.display = 'none';
+    return;
+  }
+
+  const args = existingArgs || {};
+  containerEl.style.display = '';
+  containerEl.innerHTML = `
+    <div class="auto-tool-params-grid cfg-form-grid">
+      ${entries.map(([key, prop]) => {
+        const p = prop || {};
+        const type = p.type || 'string';
+        const desc = p.description || '';
+        const isRequired = required.has(key);
+        const label = `${esc(key)}${isRequired ? ' *' : ''}`;
+        const existing = args[key];
+        const requiredAttr = isRequired ? 'data-param-required="true"' : '';
+
+        if (type === 'boolean') {
+          const checked = existing === true ? 'checked' : '';
+          return `
+            <div class="cfg-field">
+              <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
+                <input type="checkbox" class="auto-param-input" data-param-name="${escAttr(key)}" data-param-type="boolean" ${requiredAttr} ${checked}>
+                <span>${label}</span>
+              </label>
+              ${desc ? `<div style="font-size:0.68rem;color:var(--text-muted);">${esc(desc)}</div>` : ''}
+            </div>
+          `;
+        }
+
+        if (p.enum && Array.isArray(p.enum)) {
+          const options = p.enum.map((v) => `<option value="${escAttr(String(v))}" ${existing === v ? 'selected' : ''}>${esc(String(v))}</option>`).join('');
+          return `
+            <div class="cfg-field">
+              <label>${label}</label>
+              <select class="auto-param-input" data-param-name="${escAttr(key)}" data-param-type="enum" ${requiredAttr}>
+                <option value="">—</option>
+                ${options}
+              </select>
+              ${desc ? `<div style="font-size:0.68rem;color:var(--text-muted);">${esc(desc)}</div>` : ''}
+            </div>
+          `;
+        }
+
+        if (type === 'number') {
+          return `
+            <div class="cfg-field">
+              <label>${label}</label>
+              <input type="number" class="auto-param-input" data-param-name="${escAttr(key)}" data-param-type="number" ${requiredAttr}
+                value="${existing != null ? escAttr(String(existing)) : ''}"
+                placeholder="${escAttr(desc)}">
+            </div>
+          `;
+        }
+
+        if (type === 'array') {
+          const val = Array.isArray(existing) ? JSON.stringify(existing, null, 2) : '';
+          return `
+            <div class="cfg-field">
+              <label>${label}</label>
+              <textarea class="auto-param-input" data-param-name="${escAttr(key)}" data-param-type="array" ${requiredAttr}
+                rows="3" placeholder="${escAttr(desc || 'JSON array or comma-separated values')}">${esc(val)}</textarea>
+            </div>
+          `;
+        }
+
+        if (type === 'object') {
+          const val = existing != null ? JSON.stringify(existing, null, 2) : '';
+          return `
+            <div class="cfg-field">
+              <label>${label}</label>
+              <textarea class="auto-param-input" data-param-name="${escAttr(key)}" data-param-type="object" ${requiredAttr}
+                rows="3" placeholder="${escAttr(desc || 'JSON object')}">${esc(val)}</textarea>
+            </div>
+          `;
+        }
+
+        // Default: string
+        const isLong = desc.length > 80 || key === 'content' || key === 'body' || key === 'prompt';
+        if (isLong) {
+          return `
+            <div class="cfg-field">
+              <label>${label}</label>
+              <textarea class="auto-param-input" data-param-name="${escAttr(key)}" data-param-type="string" ${requiredAttr}
+                rows="3" placeholder="${escAttr(desc)}">${esc(existing != null ? String(existing) : '')}</textarea>
+            </div>
+          `;
+        }
+        return `
+          <div class="cfg-field">
+            <label>${label}</label>
+            <input type="text" class="auto-param-input" data-param-name="${escAttr(key)}" data-param-type="string" ${requiredAttr}
+              value="${existing != null ? escAttr(String(existing)) : ''}"
+              placeholder="${escAttr(desc)}">
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+/**
+ * Collect values from rendered param fields into an args object.
+ * Skips empty optional fields.
+ */
+function collectToolParamValues(containerEl) {
+  const args = {};
+  if (!containerEl) return args;
+  containerEl.querySelectorAll('.auto-param-input').forEach((input) => {
+    const name = input.getAttribute('data-param-name');
+    const type = input.getAttribute('data-param-type');
+    if (!name) return;
+
+    if (type === 'boolean') {
+      if (input.checked) args[name] = true;
+      return;
+    }
+    if (type === 'number') {
+      const v = input.value.trim();
+      if (v !== '') args[name] = Number(v);
+      return;
+    }
+    if (type === 'object') {
+      const v = input.value.trim();
+      if (v) {
+        try { args[name] = JSON.parse(v); } catch { args[name] = v; }
+      }
+      return;
+    }
+    if (type === 'array') {
+      const v = input.value.trim();
+      if (!v) return;
+      if (v.startsWith('[')) {
+        try { args[name] = JSON.parse(v); } catch { args[name] = v; }
+        return;
+      }
+      args[name] = v.split(/\r?\n|,/).map((value) => value.trim()).filter(Boolean);
+      return;
+    }
+    // string / enum
+    const v = input.value.trim();
+    if (v !== '') args[name] = v;
+  });
+  return args;
+}
+
+function readToolParamValues(containerEl) {
+  const args = {};
+  const errors = [];
+  if (!containerEl) return { args, errors };
+  containerEl.querySelectorAll('.auto-param-input').forEach((input) => {
+    const name = input.getAttribute('data-param-name');
+    const type = input.getAttribute('data-param-type');
+    const isRequired = input.getAttribute('data-param-required') === 'true';
+    if (!name) return;
+
+    if (type === 'boolean') {
+      if (input.checked || isRequired) args[name] = input.checked;
+      return;
+    }
+
+    const raw = input.value.trim();
+    if (!raw) {
+      if (isRequired) errors.push(`'${name}' is required.`);
+      return;
+    }
+
+    if (type === 'number') {
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed)) {
+        errors.push(`'${name}' must be a valid number.`);
+        return;
+      }
+      args[name] = parsed;
+      return;
+    }
+
+    if (type === 'object') {
+      try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          errors.push(`'${name}' must be a JSON object.`);
+          return;
+        }
+        args[name] = parsed;
+      } catch {
+        errors.push(`'${name}' must be valid JSON.`);
+      }
+      return;
+    }
+
+    if (type === 'array') {
+      if (raw.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed)) {
+            errors.push(`'${name}' must be a JSON array.`);
+            return;
+          }
+          args[name] = parsed;
+        } catch {
+          errors.push(`'${name}' must be a JSON array or comma-separated list.`);
+        }
+        return;
+      }
+      args[name] = raw
+        .split(/\r?\n|,/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+      return;
+    }
+
+    args[name] = raw;
+  });
+  return { args, errors };
+}
+
+function preflightFixLabel(type) {
+  if (type === 'domain') return 'Add domain';
+  if (type === 'path') return 'Add path';
+  if (type === 'command') return 'Add command';
+  return 'Auto-approve';
+}
+
+function summarizeArgValue(key, value) {
+  if (isSensitiveArgKey(key)) return '[hidden]';
+  if (Array.isArray(value)) return `array(${value.length})`;
+  if (value && typeof value === 'object') return `object(${Object.keys(value).length})`;
+  if (typeof value === 'string') return value.length > 30 ? `${value.slice(0, 30)}...` : value;
+  return String(value);
+}
+
+function isSensitiveArgKey(key) {
+  return SENSITIVE_ARG_KEY_RE.test(String(key || ''));
 }
 
 function esc(value) {

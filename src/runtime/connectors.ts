@@ -400,6 +400,10 @@ export class ConnectorPlaybookService {
       return this.executeInstructionStep(step, input, priorResults ?? []);
     }
 
+    if (step.type === 'delay') {
+      return this.executeDelayStep(step, input);
+    }
+
     const startedAt = this.now();
     const scopedPackId = normalizeStepPackId(step.packId);
     const pack = scopedPackId
@@ -599,6 +603,53 @@ export class ConnectorPlaybookService {
         durationMs: this.now() - startedAt,
       };
     }
+  }
+
+  private async executeDelayStep(
+    step: AssistantConnectorPlaybookStepDefinition,
+    input: ConnectorPlaybookRunInput,
+  ): Promise<PlaybookStepRunResult> {
+    const startedAt = this.now();
+    const delayMs = step.delayMs;
+    if (!delayMs || delayMs <= 0) {
+      return {
+        stepId: step.id,
+        toolName: '_delay',
+        packId: '',
+        status: 'failed',
+        message: 'Delay step requires delayMs > 0.',
+        durationMs: this.now() - startedAt,
+      };
+    }
+
+    // Ensure per-step timeout won't kill a valid delay
+    if (!step.timeoutMs) {
+      step.timeoutMs = delayMs + 5000;
+    }
+
+    if (input.dryRun) {
+      return {
+        stepId: step.id,
+        toolName: '_delay',
+        packId: '',
+        status: 'succeeded',
+        message: `Delay step: would pause for ${delayMs}ms (skipped in dry run).`,
+        durationMs: this.now() - startedAt,
+        output: `Dry run — skipped ${delayMs}ms delay.`,
+      };
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+    return {
+      stepId: step.id,
+      toolName: '_delay',
+      packId: '',
+      status: 'succeeded',
+      message: `Paused for ${delayMs}ms.`,
+      durationMs: this.now() - startedAt,
+      output: `Delay completed (${delayMs}ms).`,
+    };
   }
 
   private buildDeniedRun(

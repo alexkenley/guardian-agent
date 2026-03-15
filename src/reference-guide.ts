@@ -358,7 +358,11 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Create And Run',
                 items: [
                   'The Automations page is the unified home for playbooks and scheduled tasks.',
-                  'Automations can run a single tool, multiple tools in sequential or parallel mode, or a scheduled assistant turn that uses normal Guardian skills and tools.',
+                  'Automations can run a single tool, multiple tools in sequential or parallel pipelines, or a scheduled assistant turn. The assistant turn option is inside the schedule section — check "Run as assistant turn" to create a full agent task with tools, memory, and skills.',
+                  'Pipeline steps can be tool steps, LLM instruction steps (text synthesis from prior step outputs), or delay steps (pause the pipeline for a set duration). Delay steps are only meaningful in sequential mode.',
+                  'The tool picker (Browse button) lets you search tools by name or description and shows integration requirements (e.g. Google Workspace connected, AWS profile configured).',
+                  'An optional prompt on single-tool automations auto-converts the automation into a 2-step sequential pipeline (tool + LLM instruction).',
+                  'The LLM Provider selector controls which model handles instruction steps and agent tasks. Auto uses smart routing; Local/External force a specific provider type.',
                   'Use Edit for normal updates such as names, tools, steps, and schedules without dropping into raw JSON.',
                   'Use Examples to install starter automations such as Agent Host Guard and Firewall Sentry, then Clone to fork an existing workflow.',
                   'Use Dry Run before live execution when you want a safe preview path.',
@@ -369,7 +373,8 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Any automation can be given a cron schedule and turned into a recurring task.',
                   'Use Single shot when you want the task to run once on the next matching schedule and then disable itself automatically.',
-                  'Scheduled assistant tasks need a prompt plus a target agent. They are best for recurring briefs, watchlists, and open-ended checks that should decide what to inspect at runtime.',
+                  'Scheduled assistant tasks need a prompt plus a target agent. Enable "Run as assistant turn" inside the schedule section to create one. They are best for recurring briefs, watchlists, and open-ended checks that should decide what to inspect at runtime.',
+                  'Pre-flight approval check: when scheduling an automation, the system checks whether any tools will require manual approval at runtime. If so, a validation panel shows the issues with one-click "Auto-approve" buttons that set per-tool auto policies. You can also skip the check and accept that each run may need manual approval.',
                   'Scheduled task creation is the approval checkpoint. After the task is saved, later cron runs do not re-prompt for the same action.',
                   'Power-user options remain available through the advanced JSON/config sections when you need direct definition edits.',
                   'Engine Settings control max steps, max parallelism, timeout defaults, and execution mode.',

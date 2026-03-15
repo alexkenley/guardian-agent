@@ -12,6 +12,7 @@ export type ToolDecision = 'allow' | 'deny' | 'require_approval';
 /** Tool category for enable/disable gating. */
 export type ToolCategory =
   | 'filesystem'
+  | 'coding'
   | 'shell'
   | 'web'
   | 'browser'
@@ -30,6 +31,7 @@ export type ToolCategory =
 /** Metadata for each tool category. */
 export const TOOL_CATEGORIES: Record<ToolCategory, { label: string; description: string }> = {
   filesystem: { label: 'Filesystem', description: 'Read, write, search, and create files within allowed workspace paths.' },
+  coding: { label: 'Coding', description: 'Code-aware editing, diffing, search, and verification tools inspired by terminal coding agents.' },
   shell: { label: 'Shell', description: 'Execute allowlisted shell commands from the workspace root.' },
   web: { label: 'Web', description: 'Fetch web pages and search the internet via HTTP.' },
   browser: { label: 'Browser', description: 'Browser automation and page inspection via MCP-backed Playwright and Lightpanda tools.' },
@@ -49,6 +51,7 @@ export const TOOL_CATEGORIES: Record<ToolCategory, { label: string; description:
 /** Mapping of each category to its tool names. */
 export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
   filesystem: ['fs_list', 'fs_search', 'fs_read', 'fs_write', 'fs_mkdir', 'doc_create'],
+  coding: ['code_symbol_search', 'code_edit', 'code_patch', 'code_create', 'code_plan', 'code_git_diff', 'code_git_commit', 'code_test', 'code_build', 'code_lint'],
   shell: ['shell_safe'],
   web: ['chrome_job', 'web_search', 'web_fetch'],
   browser: [],

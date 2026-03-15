@@ -96,6 +96,193 @@ function emptyCloudConfig(): AssistantCloudConfig {
   };
 }
 
+function normalizeCodeText(value: string): string {
+  return value.replace(/\r\n/g, '\n');
+}
+
+function shellEscapeArg(value: string): string {
+  if (process.platform === 'win32') {
+    return `"${value.replace(/"/g, '\\"')}"`;
+  }
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function normalizeHttpUrlLikeInput(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return trimmed;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
+function buildNormalizedIndexMap(original: string): number[] {
+  const map: number[] = [];
+  for (let i = 0; i < original.length; i++) {
+    if (original[i] === '\r' && original[i + 1] === '\n') continue;
+    map.push(i);
+  }
+  map.push(original.length);
+  return map;
+}
+
+function lineOffsets(value: string): number[] {
+  const offsets = [0];
+  for (let i = 0; i < value.length; i++) {
+    if (value[i] === '\n') offsets.push(i + 1);
+  }
+  return offsets;
+}
+
+function normalizeLineRange(
+  haystack: string,
+  needle: string,
+  normalizer: (value: string) => string,
+): { start: number; end: number } | null {
+  const haystackLines = haystack.split('\n');
+  const needleLines = needle.split('\n');
+  if (needleLines.length === 0 || haystackLines.length < needleLines.length) {
+    return null;
+  }
+
+  const offsets = lineOffsets(haystack);
+  const normalizedNeedle = normalizer(needle);
+  for (let i = 0; i <= haystackLines.length - needleLines.length; i++) {
+    const segment = haystackLines.slice(i, i + needleLines.length).join('\n');
+    if (normalizer(segment) === normalizedNeedle) {
+      const start = offsets[i] ?? 0;
+      const end = i + needleLines.length < offsets.length
+        ? offsets[i + needleLines.length] - 1
+        : haystack.length;
+      return { start, end };
+    }
+  }
+  return null;
+}
+
+function findCodeEditRange(
+  original: string,
+  oldString: string,
+): { start: number; end: number; strategy: string } | null {
+  if (!oldString) return null;
+
+  const exact = original.indexOf(oldString);
+  if (exact >= 0) {
+    return { start: exact, end: exact + oldString.length, strategy: 'exact' };
+  }
+
+  const normalizedOriginal = normalizeCodeText(original);
+  const normalizedTarget = normalizeCodeText(oldString);
+  const indexMap = buildNormalizedIndexMap(original);
+
+  const normalizedExact = normalizedOriginal.indexOf(normalizedTarget);
+  if (normalizedExact >= 0) {
+    return {
+      start: indexMap[normalizedExact] ?? 0,
+      end: indexMap[normalizedExact + normalizedTarget.length] ?? original.length,
+      strategy: 'line-ending-normalized',
+    };
+  }
+
+  const trimmed = normalizeLineRange(
+    normalizedOriginal,
+    normalizedTarget,
+    (value) => value.split('\n').map((line) => line.trim()).join('\n'),
+  );
+  if (trimmed) {
+    return {
+      start: indexMap[trimmed.start] ?? 0,
+      end: indexMap[trimmed.end] ?? original.length,
+      strategy: 'trimmed-lines',
+    };
+  }
+
+  const indentInsensitive = normalizeLineRange(
+    normalizedOriginal,
+    normalizedTarget,
+    (value) => value.split('\n').map((line) => line.trimStart()).join('\n'),
+  );
+  if (indentInsensitive) {
+    return {
+      start: indexMap[indentInsensitive.start] ?? 0,
+      end: indexMap[indentInsensitive.end] ?? original.length,
+      strategy: 'indentation-insensitive',
+    };
+  }
+
+  const collapsedWhitespace = normalizeLineRange(
+    normalizedOriginal,
+    normalizedTarget,
+    (value) => value.replace(/[ \t]+/g, ' ').trim(),
+  );
+  if (collapsedWhitespace) {
+    return {
+      start: indexMap[collapsedWhitespace.start] ?? 0,
+      end: indexMap[collapsedWhitespace.end] ?? original.length,
+      strategy: 'whitespace-collapsed',
+    };
+  }
+
+  return null;
+}
+
+interface CodingQualityCheck {
+  name: string;
+  status: 'pass' | 'warn' | 'fail' | 'not_run';
+  details: string;
+}
+
+interface CodingQualityReport {
+  passed: boolean;
+  checks: CodingQualityCheck[];
+}
+
+type ToolPreflightRequest = string | { name: string; args?: Record<string, unknown> };
+
+type ToolPreflightFix = {
+  type: 'tool_policy' | 'domain' | 'command' | 'path';
+  value: string;
+  description: string;
+};
+
+type ToolPreflightResult = {
+  name: string;
+  found: boolean;
+  risk: string;
+  decision: 'allow' | 'deny' | 'require_approval';
+  reason: string;
+  fixes: ToolPreflightFix[];
+};
+
+function collectDebugArtifactMatches(content: string): string[] {
+  const patterns: Array<{ label: string; regex: RegExp }> = [
+    { label: 'console.log', regex: /\bconsole\.log\s*\(/g },
+    { label: 'debugger', regex: /\bdebugger\b/g },
+    { label: 'print()', regex: /\bprint\s*\(/g },
+    { label: 'dump()', regex: /\bdump\s*\(/g },
+  ];
+  const matches: string[] = [];
+  for (const pattern of patterns) {
+    if (pattern.regex.test(content)) matches.push(pattern.label);
+  }
+  return matches;
+}
+
+function collectIncompleteMarkers(content: string): string[] {
+  const markers = ['TODO', 'FIXME', 'HACK', 'XXX'];
+  return markers.filter((marker) => content.includes(marker));
+}
+
+function extractPatchTargets(patch: string): string[] {
+  const targets = new Set<string>();
+  for (const line of patch.split(/\r?\n/g)) {
+    if (!line.startsWith('+++ ')) continue;
+    const raw = line.slice(4).trim();
+    if (!raw || raw === '/dev/null') continue;
+    const normalized = raw.replace(/^[ab]\//, '').trim();
+    if (normalized) targets.add(normalized);
+  }
+  return [...targets];
+}
+
 export interface ToolExecutorOptions {
   enabled: boolean;
   workspaceRoot: string;
@@ -650,6 +837,199 @@ export class ToolExecutor {
       this.policy.sandbox.allowedDomains = uniqueNonEmpty(update.sandbox.allowedDomains.map((host) => host.toLowerCase()));
     }
     return this.getPolicy();
+  }
+
+  /**
+   * Pre-flight validation: check what approval decision each tool would get
+   * under the current policy, and suggest fixes the user can apply.
+   */
+  preflightTools(requests: ToolPreflightRequest[]): ToolPreflightResult[] {
+    return requests.map((request) => {
+      const name = typeof request === 'string' ? request : request.name;
+      const args = isRecord(request) && isRecord(request.args) ? request.args : {};
+      const entry = this.registry.get(name);
+      if (!entry) {
+        return { name, found: false, risk: 'unknown', decision: 'deny' as const, reason: 'Tool not found', fixes: [] };
+      }
+      const def = entry.definition;
+      const baseDecision = this.decide(def, args);
+      let decision = baseDecision;
+      const fixes: ToolPreflightFix[] = [];
+
+      if (baseDecision === 'require_approval') {
+        // Suggest per-tool auto policy override
+        fixes.push({
+          type: 'tool_policy',
+          value: name,
+          description: `Set per-tool policy for "${name}" to auto-approve`,
+        });
+      }
+
+      const sandboxCheck = this.preflightSandbox(def.name, args);
+      let reason = this.describePreflightDecision(def, name, baseDecision);
+      if (sandboxCheck) {
+        decision = 'deny';
+        reason = baseDecision === 'require_approval'
+          ? `${sandboxCheck.reason} Also requires approval under the current tool policy.`
+          : sandboxCheck.reason;
+        if (sandboxCheck.fix) fixes.push(sandboxCheck.fix);
+      }
+
+      return { name, found: true, risk: def.risk, decision, reason, fixes };
+    });
+  }
+
+  private describePreflightDecision(definition: ToolDefinition, name: string, decision: ToolDecision): string {
+    if (decision === 'allow') {
+      return definition.risk === 'read_only' ? 'Read-only tool, auto-approved' : 'Approved by current policy';
+    }
+    if (decision === 'deny') {
+      const explicit = this.policy.toolPolicies[name];
+      return explicit === 'deny' ? 'Explicitly denied by per-tool policy' : 'Blocked by tool policy';
+    }
+    if (definition.risk === 'external_post') {
+      return 'External post tools always require approval';
+    }
+    if (definition.risk === 'mutating') {
+      return `Mutating tool requires approval in "${this.policy.mode}" mode`;
+    }
+    return `Tool risk "${definition.risk}" requires approval in "${this.policy.mode}" mode`;
+  }
+
+  private preflightSandbox(toolName: string, args: Record<string, unknown>): { reason: string; fix?: ToolPreflightFix } | null {
+    const pathCheck = this.preflightPathArgs(args);
+    if (pathCheck) return pathCheck;
+
+    const commandCheck = this.preflightCommandArgs(args);
+    if (commandCheck) return commandCheck;
+
+    const hostCheck = this.preflightHostArgs(toolName, args);
+    if (hostCheck) return hostCheck;
+
+    return null;
+  }
+
+  private preflightPathArgs(args: Record<string, unknown>): { reason: string; fix?: ToolPreflightFix } | null {
+    const keys = ['path', 'filePath', 'targetPath', 'outputPath', 'workspacePath', 'csvPath'];
+    for (const key of keys) {
+      const value = args[key];
+      if (typeof value !== 'string' || !value.trim()) continue;
+      if (this.isPathAllowedForPreflight(value)) continue;
+      return {
+        reason: `Path '${value}' is not in allowedPaths.`,
+        fix: {
+          type: 'path',
+          value,
+          description: `Add '${value}' to allowed paths`,
+        },
+      };
+    }
+    return null;
+  }
+
+  private preflightCommandArgs(args: Record<string, unknown>): { reason: string; fix?: ToolPreflightFix } | null {
+    const keys = ['command', 'cmd'];
+    for (const key of keys) {
+      const value = args[key];
+      if (typeof value !== 'string' || !value.trim()) continue;
+      const normalized = value.trim();
+      const allowed = this.policy.sandbox.allowedCommands.some((prefix) =>
+        normalized === prefix || normalized.startsWith(`${prefix} `),
+      );
+      if (allowed) continue;
+      return {
+        reason: `Command '${normalized}' is not in allowedCommands.`,
+        fix: {
+          type: 'command',
+          value: normalized,
+          description: `Add '${normalized}' to allowed commands`,
+        },
+      };
+    }
+    return null;
+  }
+
+  private preflightHostArgs(toolName: string, args: Record<string, unknown>): { reason: string; fix?: ToolPreflightFix } | null {
+    const explicitHost = this.extractHostFromArgs(args);
+    if (explicitHost) {
+      if (explicitHost.invalidValue) {
+        return {
+          reason: `Invalid URL '${explicitHost.invalidValue}'.`,
+        };
+      }
+      const host = explicitHost.host;
+      if (!host) return null;
+      if (!this.isHostAllowed(host)) {
+        return {
+          reason: `Host '${host}' is not in allowedDomains.`,
+          fix: {
+            type: 'domain',
+            value: host,
+            description: `Add '${host}' to allowed domains`,
+          },
+        };
+      }
+      return null;
+    }
+
+    if (toolName === 'web_search') {
+      const provider = this.resolveSearchProvider(asString(args.provider, 'auto'));
+      const blocked = this.getWebSearchRequiredHosts(provider).find((host) => !this.isHostAllowed(host));
+      if (blocked) {
+        return {
+          reason: `Web search provider '${provider}' is blocked by allowedDomains.`,
+          fix: {
+            type: 'domain',
+            value: blocked,
+            description: `Add '${blocked}' to allowed domains`,
+          },
+        };
+      }
+    }
+
+    return null;
+  }
+
+  private extractHostFromArgs(args: Record<string, unknown>): { host: string; invalidValue?: undefined } | { host?: undefined; invalidValue: string } | null {
+    const keys = ['url', 'baseUrl', 'endpoint', 'targetUrl'];
+    for (const key of keys) {
+      const value = args[key];
+      if (typeof value !== 'string' || !value.trim()) continue;
+      try {
+        return { host: new URL(normalizeHttpUrlLikeInput(value)).hostname.toLowerCase() };
+      } catch {
+        return { invalidValue: value };
+      }
+    }
+    return null;
+  }
+
+  private isPathAllowedForPreflight(candidate: string): boolean {
+    const trimmed = candidate.trim();
+    if (!trimmed) return false;
+    const normalizedCandidate = this.normalizePreflightPath(trimmed);
+    const roots = this.policy.sandbox.allowedPaths.length > 0
+      ? this.policy.sandbox.allowedPaths
+      : [this.options.workspaceRoot];
+    return roots.some((root) => {
+      const normalizedRoot = this.normalizePreflightPath(root);
+      return normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(`${normalizedRoot}/`);
+    });
+  }
+
+  private normalizePreflightPath(value: string): string {
+    const resolvedPath = isAbsolute(value) ? resolve(value) : resolve(this.options.workspaceRoot, value);
+    return resolvedPath.replaceAll('\\', '/').toLowerCase();
+  }
+
+  private getWebSearchRequiredHosts(provider: 'duckduckgo' | 'brave' | 'perplexity'): string[] {
+    return provider === 'duckduckgo'
+      ? ['html.duckduckgo.com']
+      : provider === 'brave'
+        ? ['api.search.brave.com']
+        : this.webSearchConfig.perplexityApiKey
+          ? ['api.perplexity.ai']
+          : ['openrouter.ai'];
   }
 
   updateWebSearchConfig(cfg: WebSearchConfig): void {
@@ -2397,6 +2777,125 @@ export class ToolExecutor {
     }
   }
 
+  private buildCodingPlan(task: string, cwd: string, selectedFiles: string[]): Record<string, unknown> {
+    const normalizedTask = task.trim();
+    const lower = normalizedTask.toLowerCase();
+    const inspect = selectedFiles.length > 0 ? selectedFiles : ['relevant source files', 'tests', 'config'];
+    const changes: string[] = [];
+    const verification: string[] = [];
+    const risks: string[] = [];
+
+    if (/refactor|cleanup|restructure/.test(lower)) {
+      changes.push('Restructure implementation while preserving behavior.');
+      verification.push('Run targeted tests covering affected flows.');
+      risks.push('Behavior regressions caused by broad mechanical edits.');
+    }
+    if (/fix|bug|issue|error|fail/.test(lower)) {
+      changes.push('Patch the failing logic and add or update regression coverage.');
+      verification.push('Reproduce the original failure, then rerun the failing checks.');
+      risks.push('Fixing symptoms without addressing the root cause.');
+    }
+    if (/feature|implement|add support|introduce/.test(lower)) {
+      changes.push('Add the requested functionality and integrate it with existing patterns.');
+      verification.push('Run focused tests and a build/lint pass if available.');
+      risks.push('Scope creep into unrelated modules.');
+    }
+
+    if (changes.length === 0) {
+      changes.push('Inspect the relevant code paths and make the minimum safe change needed.');
+    }
+    if (verification.length === 0) {
+      verification.push('Run the narrowest available verification for the touched area.');
+    }
+    if (risks.length === 0) {
+      risks.push('Unknown constraints until the relevant files are inspected.');
+    }
+
+    return {
+      goal: normalizedTask,
+      cwd,
+      inspect,
+      changes,
+      verification,
+      risks,
+      plan: [
+        'Inspect the files and tests most likely to be affected.',
+        'Confirm the intended change boundary before editing.',
+        'Make the smallest coherent code change.',
+        'Review the diff and run targeted verification.',
+      ],
+    };
+  }
+
+  private async buildCodingQualityReportForFiles(paths: string[], cwd?: string): Promise<CodingQualityReport> {
+    const checks: CodingQualityCheck[] = [];
+    let largeChangeDetected = false;
+
+    for (const path of paths) {
+      try {
+        const content = await readFile(path, 'utf-8');
+        const debugArtifacts = collectDebugArtifactMatches(content);
+        const incompleteMarkers = collectIncompleteMarkers(content);
+        const lineCount = content.split('\n').length;
+
+        checks.push({
+          name: `debug_artifacts:${path}`,
+          status: debugArtifacts.length > 0 ? 'warn' : 'pass',
+          details: debugArtifacts.length > 0
+            ? `Detected debug-oriented patterns: ${debugArtifacts.join(', ')}.`
+            : 'No obvious debug artifacts detected.',
+        });
+        checks.push({
+          name: `incomplete_markers:${path}`,
+          status: incompleteMarkers.length > 0 ? 'warn' : 'pass',
+          details: incompleteMarkers.length > 0
+            ? `Detected incomplete markers: ${incompleteMarkers.join(', ')}.`
+            : 'No TODO/FIXME markers detected.',
+        });
+        if (lineCount > 500) {
+          largeChangeDetected = true;
+        }
+      } catch {
+        checks.push({
+          name: `file_read:${path}`,
+          status: 'warn',
+          details: 'Unable to re-read file for quality inspection.',
+        });
+      }
+    }
+
+    checks.push({
+      name: 'large_change',
+      status: largeChangeDetected ? 'warn' : 'pass',
+      details: largeChangeDetected
+        ? 'At least one touched file exceeds 500 lines after the change. Review scope carefully.'
+        : 'No large-file warning triggered.',
+    });
+
+    if (cwd) {
+      try {
+        const { stdout, stderr } = await this.sandboxExec('git diff --stat', 'read-only', { cwd, timeout: 15_000, maxBuffer: 200_000 });
+        const diffSummary = truncateOutput(stdout || stderr || '').trim();
+        checks.push({
+          name: 'git_diff_stat',
+          status: diffSummary ? 'pass' : 'not_run',
+          details: diffSummary || 'git diff --stat returned no output.',
+        });
+      } catch {
+        checks.push({
+          name: 'git_diff_stat',
+          status: 'not_run',
+          details: 'git diff --stat unavailable for this workspace.',
+        });
+      }
+    }
+
+    return {
+      passed: checks.every((check) => check.status !== 'fail'),
+      checks,
+    };
+  }
+
   private registerBuiltinTools(): void {
     // ── find_tools meta-tool (always loaded) ──
     this.registry.register(
@@ -2921,6 +3420,7 @@ export class ToolExecutor {
           type: 'object',
           properties: {
             command: { type: 'string', description: 'Command line to execute.' },
+            cwd: { type: 'string', description: 'Optional working directory inside allowed paths. Defaults to workspace root.' },
             timeoutMs: { type: 'number', description: 'Timeout in milliseconds (max 60000).' },
           },
           required: ['command'],
@@ -2935,10 +3435,12 @@ export class ToolExecutor {
             error: shellCheck.reason ?? `Command is not allowlisted: '${command}'.`,
           };
         }
-        this.guardAction(request, 'execute_command', { command });
+        const cwd = args.cwd ? await this.resolveAllowedPath(requireString(args.cwd, 'cwd')) : this.options.workspaceRoot;
+        this.guardAction(request, 'execute_command', { command, cwd });
         const timeoutMs = Math.max(500, Math.min(60_000, asNumber(args.timeoutMs, 15_000)));
         try {
           const { stdout, stderr } = await this.sandboxExec(command, 'workspace-write', {
+            cwd,
             timeout: timeoutMs,
             maxBuffer: 1_000_000,
           });
@@ -2946,6 +3448,7 @@ export class ToolExecutor {
             success: true,
             output: {
               command,
+              cwd,
               stdout: truncateOutput(stdout),
               stderr: truncateOutput(stderr),
             },
@@ -2957,6 +3460,430 @@ export class ToolExecutor {
             error: `Command failed: ${message}`,
           };
         }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'code_symbol_search',
+        description: 'Search code symbols, identifiers, or text patterns inside a project tree. Delegates to filesystem search with code-oriented defaults.',
+        shortDescription: 'Search symbols or identifiers in source trees.',
+        risk: 'read_only',
+        category: 'coding',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Project or source root to search.' },
+            query: { type: 'string', description: 'Symbol, identifier, or text to search for.' },
+            mode: { type: 'string', description: "Search mode: 'name', 'content', or 'auto' (default: auto)." },
+            maxResults: { type: 'number', description: 'Maximum matches to return (default 25).' },
+          },
+          required: ['query'],
+        },
+      },
+      async (args, request) => {
+        const delegate = this.registry.get('fs_search');
+        if (!delegate) return { success: false, error: 'fs_search is not available' };
+        return delegate.handler({
+          path: asString(args.path, '.'),
+          query: args.query,
+          mode: asString(args.mode, 'auto'),
+          maxResults: asNumber(args.maxResults, 25),
+          maxDepth: 20,
+          maxFiles: 25_000,
+          maxFileBytes: 250_000,
+        }, request);
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'code_edit',
+        description: 'Apply a targeted code edit using OpenDev-style progressive matching. Tries exact, line-ending-normalized, trimmed-line, indentation-insensitive, and whitespace-collapsed matching before failing.',
+        shortDescription: 'Apply a targeted code edit with progressive block matching.',
+        risk: 'mutating',
+        category: 'coding',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'File to edit.' },
+            oldString: { type: 'string', description: 'Existing code block to replace.' },
+            newString: { type: 'string', description: 'Replacement code block.' },
+          },
+          required: ['path', 'oldString', 'newString'],
+        },
+      },
+      async (args, request) => {
+        const rawPath = requireString(args.path, 'path');
+        const oldString = requireStringAllowEmpty(args.oldString, 'oldString');
+        const newString = requireStringAllowEmpty(args.newString, 'newString');
+        const safePath = await this.resolveAllowedPath(rawPath);
+        const source = await readFile(safePath, 'utf-8');
+        const match = findCodeEditRange(source, oldString);
+        if (!match) {
+          return {
+            success: false,
+            error: 'Unable to match oldString in target file after progressive code matching passes.',
+          };
+        }
+        const next = source.slice(0, match.start) + newString + source.slice(match.end);
+        const contentScan = scanWriteContent(next);
+        if (contentScan.secrets.length > 0 || contentScan.pii.length > 0) {
+          const findings = [
+            ...new Set(contentScan.secrets.map((entry) => entry.pattern)),
+            ...new Set(contentScan.pii.map((entry) => entry.label)),
+          ];
+          return {
+            success: false,
+            error: `Edited file rejected by security policy: ${findings.join(', ')}.`,
+          };
+        }
+        this.guardAction(request, 'write_file', { path: rawPath, content: next });
+        await writeFile(safePath, next, 'utf-8');
+        const qualityReport = await this.buildCodingQualityReportForFiles([safePath], dirname(safePath));
+        return {
+          success: true,
+          output: {
+            path: safePath,
+            strategy: match.strategy,
+            bytes: Buffer.byteLength(next, 'utf-8'),
+            qualityReport,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'code_patch',
+        description: 'Apply a unified diff patch inside the workspace. Validates patch target paths and uses git apply semantics when available.',
+        shortDescription: 'Apply a unified diff patch in the workspace.',
+        risk: 'mutating',
+        category: 'coding',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            cwd: { type: 'string', description: 'Project root to apply the patch from. Defaults to workspace root.' },
+            patch: { type: 'string', description: 'Unified diff patch to apply.' },
+          },
+          required: ['patch'],
+        },
+      },
+      async (args, request) => {
+        const patch = requireString(args.patch, 'patch');
+        const cwd = args.cwd ? await this.resolveAllowedPath(requireString(args.cwd, 'cwd')) : this.options.workspaceRoot;
+        const targets = extractPatchTargets(patch);
+        if (targets.length === 0) {
+          return { success: false, error: 'Patch did not contain any target files.' };
+        }
+        const resolvedTargets = await Promise.all(targets.map((target) => this.resolveAllowedPath(resolve(cwd, target))));
+        this.guardAction(request, 'write_file', { cwd, files: targets, patch });
+
+        const patchDir = resolve(this.options.workspaceRoot, '.guardianagent', 'tmp');
+        await mkdir(patchDir, { recursive: true });
+        const patchFile = resolve(patchDir, `patch-${randomUUID()}.diff`);
+        await writeFile(patchFile, patch, 'utf-8');
+        try {
+          await this.sandboxExec(`git apply --whitespace=nowarn ${shellEscapeArg(patchFile)}`, 'workspace-write', {
+            cwd,
+            timeout: 30_000,
+            maxBuffer: 500_000,
+          });
+        } catch (err) {
+          return {
+            success: false,
+            error: `Patch failed: ${err instanceof Error ? err.message : String(err)}`,
+          };
+        } finally {
+          await rm(patchFile, { force: true }).catch(() => undefined);
+        }
+
+        const qualityReport = await this.buildCodingQualityReportForFiles(resolvedTargets, cwd);
+        return {
+          success: true,
+          output: {
+            cwd,
+            files: targets,
+            qualityReport,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'code_create',
+        description: 'Create a new source file inside the allowed workspace. Fails if the file already exists unless overwrite=true is provided.',
+        shortDescription: 'Create a new source file in the workspace.',
+        risk: 'mutating',
+        category: 'coding',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'File to create.' },
+            content: { type: 'string', description: 'Initial file contents.' },
+            overwrite: { type: 'boolean', description: 'Allow replacing an existing file.' },
+          },
+          required: ['path', 'content'],
+        },
+      },
+      async (args, request) => {
+        const rawPath = requireString(args.path, 'path');
+        const overwrite = !!args.overwrite;
+        const safePath = await this.resolveAllowedPath(rawPath);
+        try {
+          await stat(safePath);
+          if (!overwrite) {
+            return {
+              success: false,
+              error: 'Target file already exists. Pass overwrite=true to replace it.',
+            };
+          }
+        } catch {
+          // File does not exist yet.
+        }
+
+        const delegate = this.registry.get('fs_write');
+        if (!delegate) return { success: false, error: 'fs_write is not available' };
+        const result = await delegate.handler({
+          path: rawPath,
+          content: requireStringAllowEmpty(args.content, 'content'),
+          append: false,
+        }, request);
+        if (!result.success) return result;
+        const qualityReport = await this.buildCodingQualityReportForFiles([safePath], dirname(safePath));
+        return {
+          ...result,
+          output: {
+            ...(isRecord(result.output) ? result.output : {}),
+            qualityReport,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'code_plan',
+        description: 'Generate a structured implementation plan for a coding task before making changes. Read-only helper for complex tasks.',
+        shortDescription: 'Generate a structured coding plan.',
+        risk: 'read_only',
+        category: 'coding',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            task: { type: 'string', description: 'Task or coding objective to plan.' },
+            cwd: { type: 'string', description: 'Project root or working directory.' },
+            selectedFiles: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional list of files already identified as relevant.',
+            },
+          },
+          required: ['task'],
+        },
+      },
+      async (args) => {
+        const task = requireString(args.task, 'task');
+        const cwd = args.cwd ? await this.resolveAllowedPath(requireString(args.cwd, 'cwd')) : this.options.workspaceRoot;
+        const selectedFiles = Array.isArray(args.selectedFiles)
+          ? args.selectedFiles.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+          : [];
+        return {
+          success: true,
+          output: this.buildCodingPlan(task, cwd, selectedFiles),
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'code_git_diff',
+        description: 'Show git diff output for the current project or a specific file path. Executes from a validated working directory.',
+        shortDescription: 'Show git diff for a project or file.',
+        risk: 'read_only',
+        category: 'coding',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            cwd: { type: 'string', description: 'Project root to run git diff from.' },
+            path: { type: 'string', description: 'Optional path to limit diff to a file or directory.' },
+            staged: { type: 'boolean', description: 'Use --staged when true.' },
+          },
+          required: ['cwd'],
+        },
+      },
+      async (args, request) => {
+        const delegate = this.registry.get('shell_safe');
+        if (!delegate) return { success: false, error: 'shell_safe is not available' };
+        const staged = !!args.staged;
+        const maybePath = asString(args.path, '').trim();
+        const command = `git diff${staged ? ' --staged' : ''}${maybePath ? ` -- ${shellEscapeArg(maybePath)}` : ''}`;
+        return delegate.handler({
+          command,
+          cwd: requireString(args.cwd, 'cwd'),
+          timeoutMs: asNumber(args.timeoutMs, 15_000),
+        }, request);
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'code_git_commit',
+        description: 'Stage changes and create a git commit from a validated project directory. Mutating and approval-gated.',
+        shortDescription: 'Stage changes and create a git commit.',
+        risk: 'mutating',
+        category: 'coding',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            cwd: { type: 'string', description: 'Project root to commit from.' },
+            message: { type: 'string', description: 'Commit message.' },
+            paths: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional relative paths to stage. Defaults to all changes.',
+            },
+          },
+          required: ['cwd', 'message'],
+        },
+      },
+      async (args, request) => {
+        const cwd = await this.resolveAllowedPath(requireString(args.cwd, 'cwd'));
+        const message = requireString(args.message, 'message').trim();
+        const paths = Array.isArray(args.paths)
+          ? args.paths.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+          : [];
+        if (!message) {
+          return { success: false, error: 'Commit message is required.' };
+        }
+        for (const target of paths) {
+          await this.resolveAllowedPath(resolve(cwd, target));
+        }
+        this.guardAction(request, 'execute_command', { command: 'git commit', cwd, message, paths });
+        const addCommand = paths.length > 0
+          ? `git add -- ${paths.map((target) => shellEscapeArg(target)).join(' ')}`
+          : 'git add -A';
+        try {
+          await this.sandboxExec(addCommand, 'workspace-write', {
+            cwd,
+            timeout: 30_000,
+            maxBuffer: 500_000,
+          });
+          const { stdout, stderr } = await this.sandboxExec(`git commit -m ${shellEscapeArg(message)}`, 'workspace-write', {
+            cwd,
+            timeout: 30_000,
+            maxBuffer: 500_000,
+          });
+          return {
+            success: true,
+            output: {
+              cwd,
+              message,
+              stdout: truncateOutput(stdout),
+              stderr: truncateOutput(stderr),
+            },
+          };
+        } catch (err) {
+          return {
+            success: false,
+            error: `git commit failed: ${err instanceof Error ? err.message : String(err)}`,
+          };
+        }
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'code_test',
+        description: 'Run an allowlisted test command inside a validated project directory.',
+        shortDescription: 'Run tests from a project directory.',
+        risk: 'read_only',
+        category: 'coding',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            cwd: { type: 'string', description: 'Project root to run tests from.' },
+            command: { type: 'string', description: 'Allowlisted test command to execute.' },
+            timeoutMs: { type: 'number', description: 'Timeout in milliseconds (max 60000).' },
+          },
+          required: ['cwd', 'command'],
+        },
+      },
+      async (args, request) => {
+        const delegate = this.registry.get('shell_safe');
+        if (!delegate) return { success: false, error: 'shell_safe is not available' };
+        return delegate.handler({
+          command: requireString(args.command, 'command'),
+          cwd: requireString(args.cwd, 'cwd'),
+          timeoutMs: asNumber(args.timeoutMs, 30_000),
+        }, request);
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'code_build',
+        description: 'Run an allowlisted build command inside a validated project directory.',
+        shortDescription: 'Run a build command from a project directory.',
+        risk: 'read_only',
+        category: 'coding',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            cwd: { type: 'string', description: 'Project root to run the build from.' },
+            command: { type: 'string', description: 'Allowlisted build command to execute.' },
+            timeoutMs: { type: 'number', description: 'Timeout in milliseconds (max 60000).' },
+          },
+          required: ['cwd', 'command'],
+        },
+      },
+      async (args, request) => {
+        const delegate = this.registry.get('shell_safe');
+        if (!delegate) return { success: false, error: 'shell_safe is not available' };
+        return delegate.handler({
+          command: requireString(args.command, 'command'),
+          cwd: requireString(args.cwd, 'cwd'),
+          timeoutMs: asNumber(args.timeoutMs, 30_000),
+        }, request);
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'code_lint',
+        description: 'Run an allowlisted lint or static analysis command inside a validated project directory.',
+        shortDescription: 'Run lint or static analysis from a project directory.',
+        risk: 'read_only',
+        category: 'coding',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            cwd: { type: 'string', description: 'Project root to run the command from.' },
+            command: { type: 'string', description: 'Allowlisted lint command to execute.' },
+            timeoutMs: { type: 'number', description: 'Timeout in milliseconds (max 60000).' },
+          },
+          required: ['cwd', 'command'],
+        },
+      },
+      async (args, request) => {
+        const delegate = this.registry.get('shell_safe');
+        if (!delegate) return { success: false, error: 'shell_safe is not available' };
+        return delegate.handler({
+          command: requireString(args.command, 'command'),
+          cwd: requireString(args.cwd, 'cwd'),
+          timeoutMs: asNumber(args.timeoutMs, 30_000),
+        }, request);
       },
     );
 
@@ -2978,7 +3905,7 @@ export class ToolExecutor {
         },
       },
       async (args, request) => {
-        const urlText = requireString(args.url, 'url').trim();
+        const urlText = normalizeHttpUrlLikeInput(requireString(args.url, 'url').trim());
         const parsed = new URL(urlText);
         const host = parsed.hostname.toLowerCase();
         if (!this.isHostAllowed(host)) {
@@ -2987,7 +3914,7 @@ export class ToolExecutor {
             error: `Host '${host}' is not in allowedDomains.`,
           };
         }
-        this.guardAction(request, 'http_request', { url: urlText, method: 'GET' });
+        this.guardAction(request, 'http_request', { url: parsed.toString(), method: 'GET' });
         const timeoutMs = Math.max(500, Math.min(30_000, asNumber(args.timeoutMs, 10_000)));
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -3135,7 +4062,7 @@ export class ToolExecutor {
         },
       },
       async (args, request) => {
-        const urlText = requireString(args.url, 'url').trim();
+        const urlText = normalizeHttpUrlLikeInput(requireString(args.url, 'url').trim());
         let parsed: URL;
         try {
           parsed = new URL(urlText);
@@ -3906,15 +4833,16 @@ export class ToolExecutor {
         requireLocalNetwork(host);
         const count = Math.max(1, Math.min(10, asNumber(args.count, 4)));
         this.guardAction(request, 'network_probe', { host, count });
-        const platform = process.platform;
+        const isWsl = process.platform === 'win32' && !!(process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP);
+        const effectivePlatform = isWsl ? 'linux' : process.platform;
         let cmd: string;
-        if (platform === 'win32') {
+        if (effectivePlatform === 'win32') {
           cmd = `ping -n ${count} ${host}`;
-        } else if (platform === 'darwin') {
+        } else if (effectivePlatform === 'darwin') {
           // macOS: -W is wait time in milliseconds per packet
           cmd = `ping -c ${count} -W 3000 ${host}`;
         } else {
-          // Linux: -W is overall deadline in seconds
+          // Linux / WSL2: -W is overall deadline in seconds
           cmd = `ping -c ${count} -W 3 ${host}`;
         }
         try {
@@ -4170,26 +5098,39 @@ export class ToolExecutor {
         this.guardAction(request, 'network_probe', { target, type: recordType });
         const dns = await import('node:dns');
         const dnsPromises = dns.promises;
-        try {
-          let records: string[];
-          switch (recordType) {
-            case 'AAAA':
-              records = (await dnsPromises.resolve6(target));
-              break;
-            case 'MX':
-              records = (await dnsPromises.resolveMx(target)).map((r) => `${r.priority} ${r.exchange}`);
-              break;
-            case 'PTR':
-              records = await dnsPromises.reverse(target);
-              break;
-            default:
-              records = (await dnsPromises.resolve4(target));
-              break;
+
+        // Try system resolver first, fall back to well-known public DNS
+        const resolverConfigs: Array<string[] | null> = [null, ['8.8.8.8', '1.1.1.1']];
+        for (const servers of resolverConfigs) {
+          const resolver = new dnsPromises.Resolver();
+          if (servers) resolver.setServers(servers);
+          try {
+            let records: string[];
+            switch (recordType) {
+              case 'AAAA':
+                records = await resolver.resolve6(target);
+                break;
+              case 'MX':
+                records = (await resolver.resolveMx(target)).map((r) => `${r.priority} ${r.exchange}`);
+                break;
+              case 'PTR':
+                records = await resolver.reverse(target);
+                break;
+              default:
+                records = await resolver.resolve4(target);
+                break;
+            }
+            return { success: true, output: { target, type: recordType, records, ...(servers ? { resolver: 'fallback' } : {}) } };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            // If system DNS refused/timed out, try fallback servers
+            if (servers || (!msg.includes('ECONNREFUSED') && !msg.includes('ETIMEOUT') && !msg.includes('EAI_AGAIN'))) {
+              return { success: false, error: `DNS lookup failed: ${msg}` };
+            }
+            // Continue to fallback
           }
-          return { success: true, output: { target, type: recordType, records } };
-        } catch (err) {
-          return { success: false, error: `DNS lookup failed: ${err instanceof Error ? err.message : String(err)}` };
         }
+        return { success: false, error: 'DNS lookup failed: all resolvers exhausted' };
       },
     );
 
@@ -10063,7 +11004,7 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'workflow_upsert',
-        description: 'Create or update an automation (playbook). Requires id, name, mode ("sequential" or "parallel"), and a steps array. Each step must have id, toolName, and optionally args. For a single-tool automation, provide one step with mode "sequential". Preferred scheduling flow: create/update a separate scheduled task with task_create/task_update. Legacy convenience: if schedule is included here, Guardian syncs one linked scheduled playbook task immediately. Mutating - requires approval.',
+        description: 'Create or update an automation (playbook). Requires id, name, mode ("sequential" or "parallel"), and a steps array. Each step needs id and either toolName (tool step), instruction (instruction step), or delayMs (delay step). Set type accordingly: "tool", "instruction", or "delay". For a single-tool automation, provide one step with mode "sequential". Preferred scheduling flow: create/update a separate scheduled task with task_create/task_update. Legacy convenience: if schedule is included here, Guardian syncs one linked scheduled playbook task immediately. Mutating - requires approval.',
         shortDescription: 'Create or update an automation (playbook).',
         risk: 'mutating',
         category: 'automation',
@@ -10085,6 +11026,14 @@ export class ToolExecutor {
             description: 'HTTP monitoring: check port then fetch URL',
             input: { id: 'http-monitor', name: 'HTTP Monitor', mode: 'sequential', enabled: true, description: 'Check HTTP service availability', steps: [{ id: 'step-1', toolName: 'net_port_check', args: { host: '192.168.1.1', port: 80 } }, { id: 'step-2', toolName: 'web_fetch', args: { url: 'http://192.168.1.1/' }, continueOnError: true }] },
           },
+          {
+            description: 'Sequential pipeline with delay between steps',
+            input: { id: 'scan-wait-report', name: 'Scan then Report', mode: 'sequential', steps: [
+              { id: 'step-1', toolName: 'net_arp_scan', args: {} },
+              { id: 'step-2', type: 'delay', delayMs: 60000 },
+              { id: 'step-3', type: 'instruction', instruction: 'Summarize the scan results.' },
+            ]},
+          },
         ],
         parameters: {
           type: 'object',
@@ -10103,9 +11052,13 @@ export class ToolExecutor {
                 properties: {
                   id: { type: 'string', description: 'Unique step ID within this automation' },
                   name: { type: 'string', description: 'Optional human label' },
+                  type: { type: 'string', description: 'Step type: "tool" (default), "instruction" (LLM), or "delay" (pause pipeline)' },
                   packId: { type: 'string', description: 'Permission policy ID (optional)' },
-                  toolName: { type: 'string', description: 'Name of the tool to execute' },
+                  toolName: { type: 'string', description: 'Name of the tool to execute (required for tool steps)' },
                   args: { type: 'object', description: 'Tool arguments as key-value pairs' },
+                  instruction: { type: 'string', description: 'LLM prompt text (required for instruction steps). Prior step outputs injected as context.' },
+                  delayMs: { type: 'number', description: 'Delay duration in ms (required for delay steps). E.g. 60000 = 1 minute.' },
+                  llmProvider: { type: 'string', description: 'LLM provider override for instruction steps (e.g. "anthropic", "ollama")' },
                   continueOnError: { type: 'boolean', description: 'Continue pipeline if this step fails' },
                   timeoutMs: { type: 'number', description: 'Per-step timeout override in milliseconds' },
                 },
@@ -10705,13 +11658,7 @@ export class ToolExecutor {
   }
 
   private assertWebSearchHostsAllowed(provider: 'duckduckgo' | 'brave' | 'perplexity'): void {
-    const requiredHosts = provider === 'duckduckgo'
-      ? ['html.duckduckgo.com']
-      : provider === 'brave'
-        ? ['api.search.brave.com']
-        : this.webSearchConfig.perplexityApiKey
-          ? ['api.perplexity.ai']
-          : ['openrouter.ai'];
+    const requiredHosts = this.getWebSearchRequiredHosts(provider);
     const blocked = requiredHosts.filter((host) => !this.isHostAllowed(host));
     if (blocked.length > 0) {
       throw new Error(

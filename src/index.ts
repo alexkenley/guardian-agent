@@ -3981,6 +3981,21 @@ function buildDashboardCallbacks(
       return result;
     },
 
+    onToolsPreflight: ({ tools, requests }) => {
+      const inputs = Array.isArray(requests) && requests.length > 0 ? requests : (tools ?? []);
+      const results = toolExecutor.preflightTools(inputs);
+      const policy = toolExecutor.getPolicy();
+      return {
+        results,
+        policy: {
+          mode: policy.mode,
+          allowedPaths: [...policy.sandbox.allowedPaths],
+          allowedCommands: [...policy.sandbox.allowedCommands],
+          allowedDomains: [...policy.sandbox.allowedDomains],
+        },
+      };
+    },
+
     onToolsPolicyUpdate: (input) => {
       const policy = toolExecutor.updatePolicy(input);
       runtime.applyShellAllowedCommands(policy.sandbox.allowedCommands);
@@ -5812,9 +5827,11 @@ function buildDashboardCallbacks(
       const auth = googleAuthRef.current;
       const svc = googleServiceRef.current;
       if (!auth) return { authenticated: false, services: [], mode: 'native' as const };
+      const expiry = auth.getTokenExpiry();
       return {
         authenticated: auth.isAuthenticated(),
-        tokenExpiry: auth.getTokenExpiry(),
+        tokenExpiry: expiry,
+        tokenExpired: expiry ? expiry < Date.now() : false,
         services: svc?.getEnabledServices() ?? [],
         mode: 'native' as const,
       };
@@ -5872,9 +5889,11 @@ function buildDashboardCallbacks(
       const svc = microsoftServiceRef.current;
       const msConfig = configRef.current.assistant.tools.microsoft;
       if (!auth) return { authenticated: false, services: [], clientId: msConfig?.clientId, tenantId: msConfig?.tenantId };
+      const expiry = auth.getTokenExpiry();
       return {
         authenticated: auth.isAuthenticated(),
-        tokenExpiry: auth.getTokenExpiry(),
+        tokenExpiry: expiry,
+        tokenExpired: expiry ? expiry < Date.now() : false,
         services: svc?.getEnabledServices() ?? [],
         clientId: msConfig?.clientId,
         tenantId: msConfig?.tenantId,
@@ -6579,6 +6598,19 @@ async function main(): Promise<void> {
         scopes,
       });
 
+      googleAuth.onAuthFailure = (_service, error) => {
+        runtime.auditLog.record({
+          type: 'auth_failure',
+          severity: 'warn',
+          agentId: 'system',
+          details: {
+            controller: 'GoogleAuth',
+            description: `Google token refresh failed: ${error}`,
+            service: _service,
+            action: 'token_refresh',
+          },
+        });
+      };
       await googleAuth.loadStoredTokens();
       googleService = new GoogleService(googleAuth, {
         services,
@@ -6625,6 +6657,19 @@ async function main(): Promise<void> {
         scopes,
       });
 
+      microsoftAuth.onAuthFailure = (_service, error) => {
+        runtime.auditLog.record({
+          type: 'auth_failure',
+          severity: 'warn',
+          agentId: 'system',
+          details: {
+            controller: 'MicrosoftAuth',
+            description: `Microsoft token refresh failed: ${error}`,
+            service: _service,
+            action: 'token_refresh',
+          },
+        });
+      };
       await microsoftAuth.loadStoredTokens();
       microsoftService = new MicrosoftService(microsoftAuth, {
         services,
