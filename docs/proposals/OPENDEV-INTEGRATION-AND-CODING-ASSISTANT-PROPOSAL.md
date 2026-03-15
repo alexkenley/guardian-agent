@@ -6,6 +6,7 @@
 - [OpenDev](https://github.com/opendev-to/opendev) — open-source terminal coding agent (Python/MIT)
 - [Building AI Coding Agents for the Terminal](https://arxiv.org/html/2603.05344v1) — Nghi D. Q. Bui (2026)
 - [Koan](https://github.com/sukria/koan) — autonomous coding agent orchestrator (Python/GPL-3.0)
+- [deepagents](https://github.com/langchain-ai/deepagents) — agent harness with strong patterns for context compaction, task subagents, and behavioral evals
 - `gru-ai` — TypeScript autonomous coding workflow framework reviewed locally at `S:\Development\gru-ai`
 - `Broomy` — Electron multi-session coding workspace reviewed locally at `S:\Development\Broomy`
 - GuardianAgent spec: `ORCHESTRATION-SPEC.md`
@@ -14,7 +15,7 @@
 
 ## Executive Summary
 
-This proposal covers six areas informed by analysis of OpenDev, its accompanying research paper, Koan, gru-ai, and Broomy:
+This proposal covers six areas informed by analysis of OpenDev, its accompanying research paper, Koan, deepagents, gru-ai, and Broomy:
 
 1. **Orchestration & Smart Routing Improvements** — targeted upgrades to existing systems based on validated patterns from the paper
 2. **Coding Assistant Tab** — a new multi-session coding workspace with dedicated coding tools, file-aware context, embedded terminals, and full Guardian security
@@ -144,20 +145,38 @@ The following Koan patterns are directly applicable and are detailed in Parts 3 
 
 **Problem:** Our current context budget system does a single-pass compaction at 80% capacity — summarize oldest tool results to 200 chars. This is blunt and loses important context.
 
-**Proposal:** Replace with a graduated five-stage pipeline:
+**Proposal:** Replace with a graduated five-stage pipeline, borrowing deepagents' stronger compaction model: pre-summary argument truncation, explicit conversation offload, and agent-invokable compaction when the thread becomes stale.
 
 | Stage | Threshold | Action | Token Reduction |
 |-------|-----------|--------|-----------------|
 | 1 | 70% | Warning logged, no action. Preserve recent N turns verbatim. | 0% |
-| 2 | 80% | Summarize old tool results (current behavior, refined) | ~20% |
-| 3 | 85% | Collapse multi-turn tool call threads into brief summaries | ~40% |
-| 4 | 90% | Extract key learnings to agent memory (AgentMemoryStore) before discarding | ~10% |
-| 5 | 95% | Aggressive trim — keep system prompt + last 5 messages + extracted memory | remainder |
+| 2 | 80% | Truncate oversized historical tool arguments, diffs, and command outputs before full summarization | ~10-20% |
+| 3 | 85% | Summarize old tool results and collapse multi-turn tool threads into brief summaries | ~30-40% |
+| 4 | 90% | Extract key learnings to agent memory (AgentMemoryStore) and preserve compacted state envelope before discarding | ~10% |
+| 5 | 95% | Aggressive trim — keep system prompt + last 5 messages + compacted-state envelope + extracted memory | remainder |
 
 **Key additions over current system:**
+- **Pre-summary argument truncation** — shrink oversized `code_patch`, `code_create`, shell output, and tool payloads before paying for full summarization
 - **Artifact index preservation** — maintain a metadata summary of all file operations performed (file path, operation type, timestamp) that survives compaction
 - **Memory extraction before discard** — stage 4 uses the existing `memory_save` pathway to persist important findings before they're trimmed, rather than losing them
-- **Full conversation archival** — before stage 5, serialize the full conversation to disk for potential recovery
+- **Full conversation archival** — before stage 5, serialize the full conversation to disk or SQLite blob storage for potential recovery
+- **Compaction as an explicit tool** — expose `compact_conversation` so the coding assistant or autonomous flows can compact proactively after finishing a large branch of work or when the user moves to a new objective
+- **Workflow-role routing** — use §3.4 `compaction` routing for stage 3+ summaries so expensive reasoning models are not wasted on thread maintenance
+
+**Compacted-state envelope:** After stage 4, preserve a structured summary object alongside the trimmed message list:
+
+```typescript
+interface CompactedStateEnvelope {
+  summary: string;
+  artifactIndex: ArtifactIndex;
+  activePlan: Array<{ id: string; title: string; status: string }>;
+  changedFiles: string[];
+  verification: Array<{ kind: 'test' | 'lint' | 'build'; status: string; summary: string }>;
+  archivePointer?: string;
+}
+```
+
+This keeps the agent aware of what it already touched, what remains in flight, and where the full history lives.
 
 ### 3.3 Schema-Level Tool Enforcement for Sub-Agents (High Priority)
 
@@ -174,7 +193,39 @@ This is a **defense-in-depth** addition, not a replacement. The runtime check re
 
 **Implementation:** Add a `filterToolsByCapabilities(tools, capabilities)` step in the agent context setup within `Runtime.createAgentContext()`.
 
-### 3.4 Per-Workflow Model Roles (Medium Priority)
+### 3.3A Ephemeral Task Subagents for Coding and Research Work (High Priority)
+
+**Problem:** Our current proposal assumes most coding work happens in a single chat/tool loop. That is fine for small edits, but it is the wrong shape for repository-wide audits, large refactors, parallel investigations, and review passes. The main thread gets bloated, and follow-up questions inherit too much noisy history.
+
+**Proposal:** Add a first-class `task`-style subagent primitive for isolated, bounded work. This borrows the strongest architectural idea from deepagents: use ephemeral subagents when the main agent only needs a concise result, not the full intermediate trajectory.
+
+**When to use task subagents:**
+- Repo-wide codebase analysis or security review
+- Parallel investigation of independent failures or subsystems
+- Focused research before implementation
+- Post-implementation review and critique passes
+- Long-running content synthesis where the parent only needs the final report
+
+**When not to use them:**
+- Trivial tasks that are only a few tool calls
+- Cases where the user needs to see every intermediate step live
+- Situations where splitting the work would add latency without reducing context pressure
+
+**Execution model:**
+- Parent agent owns user interaction, approvals, durable work-state updates, and final synthesis
+- Child subagent gets a scoped brief, limited tool schema, dedicated context window, and a clear deliverable
+- Child returns exactly one structured result to the parent
+- Parent decides whether to launch multiple child tasks in parallel
+
+**Suggested built-in coding subagent roles:**
+- `researcher` — repository or web research only
+- `implementer` — focused code changes in a bounded area
+- `reviewer` — critique, test, and quality-check a completed change
+- `triager` — failure analysis across logs/tests/diffs
+
+**Implementation:** Add a `task` tool for the coding assistant and orchestration agents. Subagent invocations should inherit Guardian runtime checks but receive a schema-filtered tool set per §3.3 and their own compaction policy per §3.2.
+
+### 3.4 Per-Workflow Model Roles (High Priority)
 
 **Problem:** Our smart routing maps tool **categories** to providers (local/external). The paper identifies five distinct **workflow roles** that benefit from independent model selection, which is orthogonal to per-tool routing.
 
@@ -256,7 +307,7 @@ Default `MAX_DISPATCH_DEPTH`: 5.
 
 ### 4.1 Overview
 
-Add a dedicated **Code** tab to the web UI that provides an integrated coding assistant experience. This is not a separate agent — it's a specialized UI and tool configuration layered on top of the existing ChatAgent, with coding-specific tools enabled and Guardian security fully active.
+Add a dedicated **Code** tab to the web UI that provides an integrated coding assistant experience. This is not a separate runtime — it's a specialized workspace, tool profile, and orchestration layer on top of the existing ChatAgent, with coding-specific tools, task subagents, durable work-state, and full Guardian security active by default.
 
 ### 4.2 Why a Separate Tab?
 
@@ -268,6 +319,7 @@ The current Chat panel is general-purpose. A dedicated coding tab provides:
 4. **Workspace-scoped security** — Guardian policies tuned for coding (allow file writes within project, block writes outside)
 5. **Visual diff and edit preview** — see proposed changes before applying them
 6. **Session isolation** — coding sessions don't pollute general assistant conversation history or approvals
+7. **Subagent-backed deep work** — complex analysis/refactor/review work can be delegated into bounded child runs instead of polluting the main session
 
 ### 4.3 Architecture
 
@@ -303,6 +355,7 @@ The current Chat panel is general-purpose. A dedicated coding tab provides:
 - Multiple coding sessions can stay alive in parallel. Switching sessions does **not** discard chat history, open files, or terminal buffers.
 - Each session gets one primary **agent terminal** plus zero or more **user terminal** tabs for manual commands, background servers, or inspection work.
 - Global panels (session rail, settings) are shared; file viewer/editor state, terminal tabs, and layout sizes are persisted per session, following Broomy's global-vs-per-session panel split.
+- Each session may also own zero or more **ephemeral task runs** linked to the parent session. Task runs are visible in the activity panel and durable work-state, but their intermediate histories are not merged back into the main chat transcript.
 
 ### 4.4 New Coding Tools
 
@@ -319,6 +372,8 @@ Register a `coding` tool category with these tools:
 | `code_build` | read_only | Run build command and return results |
 | `code_git_diff` | read_only | Show git diff for working tree or staged changes |
 | `code_git_commit` | mutating | Stage and commit changes with a message |
+| `task` | orchestrating | Launch an ephemeral coding/research/review subagent with isolated context and a structured deliverable |
+| `compact_conversation` | maintenance | Proactively compact stale context and archive prior history |
 
 **Security considerations:**
 - All tools pass through the full Guardian admission pipeline
@@ -327,6 +382,22 @@ Register a `coding` tool category with these tools:
 - File operations scoped to a configurable workspace root (default: cwd)
 - DeniedPathController blocks edits to `.env`, `*.pem`, credentials files
 - SecretScanController scans file content being written for leaked credentials
+- `task` subagents inherit the same Guardian runtime checks, but only receive tools visible to their capability and role
+
+### 4.4A Task Subagent UX
+
+The Code tab should surface task delegation as a first-class concept rather than hiding it inside generic orchestration.
+
+**Examples:**
+- "Audit the auth layer for unsafe file writes" → launch a `reviewer` task
+- "Investigate these three failing tests" → launch three `triager` tasks in parallel
+- "Refactor API handlers and then review the patch" → `implementer` task followed by `reviewer` task
+
+**UI expectations:**
+- Task runs appear in the right-side activity panel with status, owner role, and summary
+- Users can inspect the task brief, final report, artifacts, and approval history
+- Parent session remains readable; only the task summary and referenced artifacts are brought back into the main thread
+- Task outputs attach to `WorkDirective` / `WorkTask` state so they survive reloads
 
 ### 4.5 Fuzzy Edit Matching (Ported from Paper)
 
@@ -402,9 +473,9 @@ Borrow the core interaction model from Broomy, but implement it as a Guardian we
 - Test/build results → formatted output in chat panel with collapsible sections and linked terminal output
 - Waiting-input or error state in any non-active session → badge on the session rail, so the user can jump directly to the blocked project
 
-### 4.8 Code-Specific System Prompt
+### 4.8 Code-Specific Operating Prompt
 
-A coding-focused system prompt injected when the coding tab is active:
+A coding-focused operating prompt injected when the coding tab is active:
 
 ```
 You are a coding assistant with access to the project workspace at {workspaceRoot}.
@@ -416,14 +487,23 @@ Available capabilities:
 - Search for code symbols and references (code_symbol_search)
 - Run tests, builds, and linters
 - Git operations (diff, status, commit)
+- Launch task subagents for isolated research, implementation, or review work
+- Compact stale context while preserving archived history
 
 Guidelines:
+- Follow this loop: understand first, act second, verify third
 - Always read a file before editing it
 - Use code_symbol_search to understand code structure before making changes
 - Run tests after making changes to verify correctness
 - Show diffs for review before committing
 - Never modify files outside the workspace root
+- Use a task subagent when work is complex, independent, or likely to bloat the main thread
+- Do not use a task subagent for trivial work that can be completed directly
+- After completing a major branch of work, summarize progress and compact context if the thread is getting stale
+- If you are stuck repeating the same action, stop and change approach instead of retrying blindly
 ```
+
+**Prompt structure note:** This prompt should be assembled from reusable sections: core coding behavior, delegation rules, verification rules, budget mode reminders (§6.2), drift warnings (§6.4), and active skills. The goal is to keep reminders targeted and refreshable rather than relying on one monolithic static prompt.
 
 ### 4.9 Security Integration
 
@@ -467,7 +547,7 @@ The coding assistant runs through the **identical** Guardian pipeline as all oth
 
 ### 5.3 Artifact Index Preservation
 
-When context compaction occurs, maintain a lightweight metadata index of all tool operations performed during the session:
+When context compaction occurs, maintain a lightweight metadata index of all tool operations performed during the session and store it as part of the compacted-state envelope from §3.2:
 
 ```typescript
 interface ArtifactIndex {
@@ -481,10 +561,21 @@ interface ArtifactIndex {
     exitCode: number;
     timestamp: number;
   }>;
+  tasks: Array<{
+    id: string;
+    role: string;
+    status: 'pending' | 'running' | 'completed' | 'failed';
+    summary: string;
+  }>;
+  verification: Array<{
+    kind: 'test' | 'lint' | 'build';
+    status: 'pass' | 'warn' | 'fail';
+    timestamp: number;
+  }>;
 }
 ```
 
-This index survives compaction and is injected into the system prompt, preserving workspace awareness even after aggressive context trimming.
+This index survives compaction and is injected into the system prompt, preserving workspace awareness even after aggressive context trimming. The index should point at durable artifacts rather than embed full outputs.
 
 ### 5.4 Playbook Memory with Effectiveness Scoring (Future)
 
@@ -511,6 +602,7 @@ interface WorkDirective {
   workspaceRoot: string;
   branch?: string;
   currentStep?: string;
+  plan: Array<{ id: string; title: string; status: 'pending' | 'in_progress' | 'done' }>;
   projects: WorkProject[];
 }
 
@@ -525,15 +617,19 @@ interface WorkTask {
   id: string;
   title: string;
   ownerAgent?: string;
+  ownerRole?: 'parent' | 'researcher' | 'implementer' | 'reviewer' | 'triager';
   status: 'pending' | 'in_progress' | 'review' | 'done';
   definitionOfDone: string[];
   artifacts: string[];
+  summary?: string;
 }
 ```
 
 **Storage model:** SQLite-backed canonical state in Guardian, with optional export of human-readable markdown/json snapshots into the workspace for auditability and recovery.
 
-**Why this matters:** This captures the strongest practical idea from gru-ai: work should be represented as durable state, not just inferred from the chat log. The coding assistant, dashboard, scheduled jobs, and approvals UI all read the same source of truth.
+**Why this matters:** This captures the strongest practical idea from gru-ai: work should be represented as durable state, not just inferred from the chat log. It also gives us a better home for deepagents-style planning and task delegation: parent sessions, subagent tasks, summaries, and verification artifacts all land in one source of truth.
+
+**Planning rule:** Every complex coding directive should be decomposed into an explicit visible plan before heavy execution begins. The plan is durable state, not transient chat text.
 
 ### 5.6 Workflow Invariant Validator (Borrowed from gru-ai)
 
@@ -760,9 +856,9 @@ assistant:
     checkBranchDivergence: true
 ```
 
-### 6.5 Post-Execution Quality Gates (Medium Priority)
+### 6.5 Post-Execution Quality Gates and Behavioral Evals (High Priority)
 
-**Problem:** When the coding assistant (Part 4) or autonomous agents make changes, there's no automated quality check before the changes are presented to the user or auto-committed. The Guardian pipeline validates *security* (secrets, PII, capabilities) but not *code quality*.
+**Problem:** When the coding assistant (Part 4) or autonomous agents make changes, there's no automated quality check before the changes are presented to the user or auto-committed. The Guardian pipeline validates *security* (secrets, PII, capabilities) but not *code quality*, and our current eval framing is still too binary to catch behavioral regressions efficiently.
 
 **Koan's approach:** Post-mission quality pipeline scans for debug patterns (`console.log`, `debugger`, `TODO`, `FIXME`), validates branch hygiene, checks commit messages, optionally runs tests (120s timeout), and gates auto-merge on three independent checks (quality/lint/verification).
 
@@ -778,6 +874,10 @@ interface QualityReport {
   }>;
 }
 ```
+
+Add a companion **behavioral eval suite** for the coding assistant that distinguishes:
+- **Correctness assertions** — must pass
+- **Efficiency expectations** — tracked and reported, but do not fail the suite by themselves
 
 **Quality checks:**
 
@@ -796,6 +896,18 @@ interface QualityReport {
 - `fail` checks block auto-commit (require explicit user override)
 - `warn` checks are informational — shown but don't block
 - Quality reports logged to analytics for trend analysis
+- Behavioral evals run in CI and optionally in scheduled canary jobs against representative coding tasks
+
+**Behavioral eval dimensions:**
+
+| Category | Type | Examples |
+|----------|------|----------|
+| Correctness | hard fail | intended files changed, tests pass, no secret leakage, approval flow respected |
+| Efficiency | soft expectation | total tool calls, repeated file reads, repeated failed edits, unnecessary subagent launches |
+| Orchestration | soft expectation | parallelizes only independent work, uses review task after substantial implementation, compacts stale context |
+| Recovery | soft expectation | changes strategy after repeated failures, avoids doom loops, re-reads before retrying edit mismatches |
+
+**Why the split matters:** A single extra tool call should not fail the suite, but a regression that breaks tests or leaks secrets must. This gives us a way to improve agent behavior without creating brittle CI.
 
 **Config:**
 ```yaml
