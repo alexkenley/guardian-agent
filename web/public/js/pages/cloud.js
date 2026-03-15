@@ -34,6 +34,18 @@ const CLOUD_HELP = {
       whatCanDo: 'Turn cloud tooling on before operators or workflows try to use saved credentials, or disable it entirely when cloud actions should be blocked.',
       howLinks: 'The provider-specific connection forms below only matter when this overall cloud runtime is enabled.',
     },
+    'Google Workspace': {
+      whatItIs: 'This section configures OAuth-based access to Google Workspace services (Gmail, Calendar, Drive, Docs, Sheets, Contacts).',
+      whatSeeing: 'You are seeing the 3-step OAuth setup flow: create credentials in Google Cloud Console, upload the client_secret.json, and connect with service selection.',
+      whatCanDo: 'Connect or disconnect your Google account, select which services to authorize, and test the connection.',
+      howLinks: 'Once connected, Google Workspace tools (gws, gmail_send, gmail_draft) become available in chat, automations, and CLI.',
+    },
+    'Microsoft 365': {
+      whatItIs: 'This section configures OAuth-based access to Microsoft 365 services (Outlook Mail, Calendar, OneDrive, Contacts) via Microsoft Graph API.',
+      whatSeeing: 'You are seeing the 3-step OAuth setup flow: register an app in Microsoft Entra, enter the client ID, and connect with service selection.',
+      whatCanDo: 'Connect or disconnect your Microsoft account, select which services to authorize, and test the connection.',
+      howLinks: 'Once connected, Microsoft 365 tools (m365, outlook_send, outlook_draft) become available in chat, automations, and CLI.',
+    },
     'Connection Model': {
       whatItIs: 'This section explains the data model for saved cloud profiles, including how credentials and advanced endpoint settings are treated.',
       whatSeeing: 'You are seeing guidance on stored credentials, preserved secrets, profile reuse, and when advanced endpoint overrides are appropriate.',
@@ -307,9 +319,9 @@ async function renderConnectionsTab(panel) {
     panel.innerHTML = renderGuidancePanel({
       kicker: 'Connections',
       compact: true,
-      whatItIs: 'Connections is the guided setup surface for supported cloud providers.',
-      whatSeeing: 'You are seeing the global cloud runtime toggle plus provider-specific connection forms.',
-      whatCanDo: 'Create, update, test, and delete cloud profiles without dropping into raw JSON as the primary flow.',
+      whatItIs: 'Connections is the guided setup surface for workspace integrations and cloud providers.',
+      whatSeeing: 'You are seeing workspace integrations (Google Workspace, Microsoft 365) at the top, followed by the global cloud runtime toggle and infrastructure provider connection forms.',
+      whatCanDo: 'Connect workspace accounts via OAuth, create cloud profiles, test connections, and manage credentials without dropping into raw JSON.',
       howLinks: 'Saved profiles here are used later by cloud activity views and cloud-focused automations.',
     });
 
@@ -371,6 +383,11 @@ async function renderConnectionsTab(panel) {
     `;
     panel.appendChild(info);
 
+    // Workspace integrations (OAuth PKCE) — above infrastructure providers
+    panel.appendChild(createGoogleWorkspacePanel());
+    panel.appendChild(createMicrosoft365Panel());
+
+    // Infrastructure providers (token/credential based)
     for (const def of CLOUD_PROVIDER_DEFS) {
       panel.appendChild(createCloudConnectionSection(def, cloud));
     }
@@ -1041,4 +1058,308 @@ function esc(str) {
 
 function escAttr(input) {
   return esc(input).replace(/"/g, '&quot;');
+}
+
+// ---------------------------------------------------------------------------
+// Workspace Integration Panels (OAuth PKCE)
+// ---------------------------------------------------------------------------
+
+function createGoogleWorkspacePanel() {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+
+  const inlineCode = 'background:var(--bg-tertiary);padding:0.1rem 0.3rem;border-radius:3px;';
+
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Google Workspace</h3>
+      <span class="cfg-header-note">Gmail, Calendar, Drive, Docs, Sheets, Contacts</span>
+    </div>
+    <div class="cfg-center-body" id="gws-settings-body">
+      <div style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem;">
+        Google Workspace integration provides direct API access to Gmail, Calendar, Drive, Docs, Sheets, and Contacts.
+        The native integration uses direct API calls with OAuth 2.0 PKCE and encrypted token storage.
+      </div>
+
+      <div id="gws-native-section">
+        <div style="padding:0.75rem;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);font-size:0.8rem;">
+          <strong style="color:var(--text-primary);">Native Google Setup (3 steps)</strong>
+          <ol style="font-size:0.78rem;color:var(--text-secondary);margin:0.5rem 0 0.5rem 1.2rem;padding:0;">
+            <li style="margin-bottom:0.4rem;">
+              <strong>Create OAuth credentials:</strong>
+              Go to the <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener" style="color:var(--accent);">Google Cloud Console</a>.
+              Create a new project if you don't have one (top-left project selector &gt; <strong>New Project</strong>).
+              <br>Navigate to <strong>Credentials</strong>. Click <strong>+ Create Credentials</strong> &gt; <strong>OAuth client ID</strong>.
+              <br>Set <strong>Application type</strong> to <strong style="color:var(--text-primary);">Desktop app</strong>
+              <span style="color:var(--warning);"> (not "Web application")</span>.
+              Name it anything (e.g. "Guardian Agent Desktop") and click <strong>Create</strong>.
+              <br>Click <strong>Download JSON</strong> on the confirmation dialog.
+              <br><span style="font-size:0.72rem;color:var(--text-muted);">
+                If this is a new project, first configure the consent screen:
+                Go to <strong>Google Auth Platform &gt; Audience</strong>, set user type to External,
+                fill in app name + email, save, then <strong>Publish App</strong>.
+                Also enable the APIs you need in <strong>APIs &amp; Services &gt; Library</strong>
+                (Gmail API, Calendar API, Drive API, etc.).
+              </span>
+            </li>
+            <li style="margin-bottom:0.3rem;">
+              <strong>Upload credentials:</strong>
+              Upload the <code style="${inlineCode}">client_secret.json</code> below, or place it at <code style="${inlineCode}">~/.guardianagent/google-credentials.json</code>.
+            </li>
+            <li>
+              <strong>Connect:</strong> Select services below and click <strong>Connect Google</strong>. A browser window opens for consent.
+            </li>
+          </ol>
+          <div class="cfg-field" style="margin-bottom:0.5rem;">
+            <label style="font-size:0.72rem;">Upload client_secret.json</label>
+            <div style="display:flex;gap:0.5rem;align-items:center;">
+              <label for="gws-native-upload" class="btn btn-secondary" style="font-size:0.78rem;cursor:pointer;margin:0;padding:0.3rem 0.7rem;">Choose File</label>
+              <input type="file" id="gws-native-upload" accept=".json" style="display:none;">
+              <span id="gws-native-file-name" style="font-size:0.78rem;color:var(--text-muted);">No file selected</span>
+            </div>
+          </div>
+          <div class="cfg-field" style="margin-bottom:0.5rem;">
+            <label style="font-size:0.72rem;">Services</label>
+            <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:0.25rem;" id="gws-native-service-checks">
+              ${['gmail', 'calendar', 'drive', 'docs', 'sheets', 'contacts'].map(s => `
+                <label style="display:flex;align-items:center;gap:0.3rem;font-size:0.78rem;color:var(--text-primary);cursor:pointer;">
+                  <input type="checkbox" value="${s}" checked> ${s}
+                </label>
+              `).join('')}
+            </div>
+          </div>
+          <div id="gws-native-status" style="margin-bottom:0.5rem;font-size:0.8rem;"></div>
+          <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+            <button class="btn btn-primary" id="gws-native-connect">Connect Google</button>
+            <button class="btn btn-secondary" id="gws-native-test">Test Connection</button>
+            <button class="btn btn-secondary" id="gws-native-disconnect" style="display:none;">Disconnect</button>
+            <span id="gws-native-status-badge" style="font-size:0.8rem;"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  async function refreshNativeStatus() {
+    try {
+      const status = await api.googleStatus();
+      const badge = section.querySelector('#gws-native-status-badge');
+      const disconnectBtn = section.querySelector('#gws-native-disconnect');
+      const statusText = section.querySelector('#gws-native-status');
+
+      if (status.authenticated) {
+        if (badge) {
+          badge.textContent = 'Connected';
+          badge.className = 'badge badge-running';
+          badge.style.color = '';
+        }
+        if (disconnectBtn) disconnectBtn.style.display = '';
+        if (statusText) {
+          const expiry = status.tokenExpiry ? new Date(status.tokenExpiry).toLocaleString() : 'unknown';
+          statusText.innerHTML = `
+            <div style="color:var(--success);margin-bottom:0.25rem;">✓ Authenticated successfully.</div>
+            <div style="color:var(--text-muted);font-size:0.72rem;">Token expiry: ${expiry}</div>
+          `;
+        }
+      } else {
+        if (badge) {
+          badge.textContent = 'Not connected';
+          badge.className = 'badge badge-dead';
+          badge.style.color = '';
+        }
+        if (disconnectBtn) disconnectBtn.style.display = 'none';
+        if (statusText) statusText.innerHTML = '<div style="color:var(--text-muted);">Please connect your Google account.</div>';
+      }
+    } catch (err) {
+      console.warn('Failed to refresh Google status:', err);
+    }
+  }
+
+  section.querySelector('#gws-native-upload')?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    section.querySelector('#gws-native-file-name').textContent = file.name;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const content = JSON.parse(reader.result);
+        await api.googleCredentials(content);
+        const statusText = section.querySelector('#gws-native-status');
+        if (statusText) {
+          statusText.innerHTML = '<div style="color:var(--success);">✓ Credentials uploaded successfully.</div>';
+        }
+      } catch (err) {
+        const statusText = section.querySelector('#gws-native-status');
+        if (statusText) {
+          statusText.innerHTML = `<div style="color:var(--error);">${err.message || 'Failed to upload credentials.'}</div>`;
+        }
+      }
+    };
+    reader.readAsText(file);
+  });
+
+  section.querySelector('#gws-native-connect')?.addEventListener('click', async () => {
+    const btn = section.querySelector('#gws-native-connect');
+    const checks = section.querySelectorAll('#gws-native-service-checks input:checked');
+    const services = Array.from(checks).map(c => c.value);
+    const statusText = section.querySelector('#gws-native-status');
+
+    if (services.length === 0) {
+      if (statusText) statusText.innerHTML = '<div style="color:var(--warning);">Please select at least one service.</div>';
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Starting Auth...';
+
+    try {
+      const { authUrl } = await api.googleAuthStart(services);
+      window.open(authUrl, '_blank', 'width=600,height=700');
+
+      if (statusText) statusText.innerHTML = '<div style="color:var(--text-muted);">Opening Google login in a new window. Please complete the flow there.</div>';
+
+      let attempts = 0;
+      const poll = setInterval(async () => {
+        attempts++;
+        const status = await api.googleStatus();
+        if (status.authenticated || attempts > 60) {
+          clearInterval(poll);
+          btn.disabled = false;
+          btn.textContent = 'Connect Google';
+          refreshNativeStatus();
+          if (status.authenticated) {
+            await api.updateConfig({ assistant: { tools: { google: { enabled: true, services } } } });
+          }
+        }
+      }, 2000);
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = 'Connect Google';
+      if (statusText) statusText.innerHTML = `<div style="color:var(--error);">${err.message || 'Failed to start Google auth.'}</div>`;
+    }
+  });
+
+  section.querySelector('#gws-native-disconnect')?.addEventListener('click', async () => {
+    if (!confirm('Disconnect from Google Workspace? This will revoke the tokens.')) return;
+
+    try {
+      await api.googleDisconnect();
+      refreshNativeStatus();
+    } catch (err) {
+      console.error('Failed to disconnect:', err);
+    }
+  });
+
+  section.querySelector('#gws-native-test')?.addEventListener('click', async () => {
+    const btn = section.querySelector('#gws-native-test');
+    btn.disabled = true;
+    btn.textContent = 'Testing...';
+    const statusText = section.querySelector('#gws-native-status');
+
+    try {
+      const result = await api.runTool({
+        toolName: 'gws',
+        args: {
+          service: 'gmail',
+          resource: 'users messages',
+          method: 'list',
+          params: { userId: 'me', maxResults: 1 }
+        }
+      });
+
+      if (result.success) {
+         if (statusText) statusText.innerHTML = '<div style="color:var(--success);">✓ Connection verified! Google APIs are reachable.</div>';
+      } else {
+         if (statusText) statusText.innerHTML = `<div style="color:var(--error);">${result.error || 'Connection failed.'}</div>`;
+      }
+    } catch (err) {
+      if (statusText) statusText.innerHTML = `<div style="color:var(--error);">${err.message || 'Test failed.'}</div>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Test Connection';
+    }
+  });
+
+  refreshNativeStatus();
+
+  return section;
+}
+
+function createMicrosoft365Panel() {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+
+  const inlineCode = 'background:var(--bg-tertiary);padding:0.1rem 0.3rem;border-radius:3px;';
+
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Microsoft 365</h3>
+      <span class="cfg-header-note">Outlook Mail, Calendar, OneDrive, Contacts</span>
+    </div>
+    <div class="cfg-center-body" id="m365-settings-body">
+      <div style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem;">
+        Microsoft 365 integration provides direct API access to Outlook Mail, Calendar, OneDrive, and Contacts
+        via the Microsoft Graph API. Uses OAuth 2.0 PKCE with encrypted token storage.
+      </div>
+
+      <div id="m365-native-section">
+        <div style="padding:0.75rem;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);font-size:0.8rem;">
+          <strong style="color:var(--text-primary);">Microsoft 365 Setup (3 steps)</strong>
+          <ol style="font-size:0.78rem;color:var(--text-secondary);margin:0.5rem 0 0.5rem 1.2rem;padding:0;">
+            <li style="margin-bottom:0.4rem;">
+              <strong>Register app:</strong>
+              Go to the <a href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener" style="color:var(--accent);">Microsoft Entra admin center</a>.
+              Click <strong>New registration</strong>.
+              <br>Name it anything (e.g. "Guardian Agent").
+              Set <strong>Supported account types</strong> to <strong style="color:var(--text-primary);">"Accounts in any organizational directory and personal Microsoft accounts"</strong>.
+              <br>Under <strong>Redirect URI</strong>, select <strong>Mobile and desktop applications</strong>
+              and enter <code style="${inlineCode}">http://localhost:18433/callback</code>.
+              <br>Click <strong>Register</strong>. Then go to <strong>Authentication</strong> and enable
+              <strong style="color:var(--text-primary);">"Allow public client flows"</strong>.
+              <br>Copy the <strong>Application (client) ID</strong> from the Overview page.
+            </li>
+            <li style="margin-bottom:0.3rem;">
+              <strong>Enter Client ID:</strong>
+              Paste the Application (client) ID below. Optionally set a Tenant ID (defaults to <code style="${inlineCode}">common</code>).
+            </li>
+            <li>
+              <strong>Connect:</strong> Select services below and click <strong>Connect Microsoft</strong>. A browser window opens for consent.
+            </li>
+          </ol>
+          <div class="cfg-form-grid" style="margin-bottom:0.5rem;">
+            <div class="cfg-field">
+              <label style="font-size:0.72rem;">Application (Client) ID</label>
+              <input type="text" id="m365-client-id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" style="font-size:0.78rem;">
+            </div>
+            <div class="cfg-field">
+              <label style="font-size:0.72rem;">Tenant ID <span style="color:var(--text-muted);">(optional, defaults to "common")</span></label>
+              <input type="text" id="m365-tenant-id" placeholder="common" style="font-size:0.78rem;">
+            </div>
+          </div>
+          <div class="cfg-field" style="margin-bottom:0.5rem;">
+            <label style="font-size:0.72rem;">Services</label>
+            <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:0.25rem;" id="m365-service-checks">
+              ${['mail', 'calendar', 'onedrive', 'contacts'].map(s => `
+                <label style="display:flex;align-items:center;gap:0.3rem;font-size:0.78rem;color:var(--text-primary);cursor:pointer;">
+                  <input type="checkbox" value="${s}" checked> ${s}
+                </label>
+              `).join('')}
+            </div>
+          </div>
+          <div id="m365-status" style="margin-bottom:0.5rem;font-size:0.8rem;">
+            <div style="color:var(--text-muted);">Not yet implemented. See <code style="${inlineCode}">docs/specs/MICROSOFT-365-INTEGRATION-SPEC.md</code> for the implementation plan.</div>
+          </div>
+          <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+            <button class="btn btn-primary" id="m365-connect" disabled>Connect Microsoft</button>
+            <button class="btn btn-secondary" id="m365-test" disabled>Test Connection</button>
+            <button class="btn btn-secondary" id="m365-disconnect" style="display:none;">Disconnect</button>
+            <span id="m365-status-badge" style="font-size:0.8rem;color:var(--text-muted);">Coming soon</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  return section;
 }

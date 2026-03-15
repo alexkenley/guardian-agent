@@ -22,7 +22,7 @@ This spec mirrors the established Google Workspace integration pattern for consi
 | Tools | `gws` (generic) + `gmail_send`/`gmail_draft` (convenience) | `m365` (generic) + `outlook_send`/`outlook_draft` (convenience) |
 | Discovery | `gws_schema` via Google Discovery API | `m365_schema` via Graph metadata |
 | Skill | `skills/google-workspace/` | `skills/microsoft-365/` |
-| Config UI | Config > Tools tab, 3-step setup | Config > Tools tab, 3-step setup |
+| Config UI | Cloud > Connections tab, 3-step setup | Cloud > Connections tab, 3-step setup |
 
 ---
 
@@ -359,7 +359,7 @@ assistant:
 
 ## Web UI Setup Flow
 
-3-step flow on Config > Tools tab, mirroring Google's:
+3-step flow on Cloud > Connections tab, directly below Google Workspace and above the infrastructure providers (cPanel/WHM, Vercel, etc.):
 
 ### Step 1: Register App
 - Instructions to go to [Microsoft Entra admin center](https://entra.microsoft.com)
@@ -483,11 +483,12 @@ POST /api/microsoft/disconnect    → clear tokens
 9. Wire API routes (`/api/microsoft/*`)
 10. Add to `enabledManagedProviders` conditionally
 
-#### Step 4: Web UI (~200 lines in config.js)
+#### Step 4: Web UI (~200 lines in cloud.js)
 
-11. Add "Microsoft 365" panel to Config > Tools tab
+11. Add "Microsoft 365" panel to Cloud > Connections tab (below Google Workspace, above cPanel/WHM)
 12. 3-step setup flow (register app, enter client ID, connect)
 13. Service toggles (Mail, Calendar, OneDrive, Contacts), status display, disconnect button
+14. Wire up API routes for status polling, auth start, config save, disconnect
 
 #### Step 5: Skill (5 files)
 

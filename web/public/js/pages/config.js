@@ -305,14 +305,13 @@ function renderIntegrationsTab(panel) {
     kicker: 'Integrations',
     compact: true,
     whatItIs: 'This tab configures external service integrations and operator channels.',
-    whatSeeing: 'You are seeing integration-specific setup for Telegram, browser automation, and Google Workspace.',
+    whatSeeing: 'You are seeing integration-specific setup for Telegram and browser automation.',
     whatCanDo: 'Connect or validate external integrations before the assistant or automations use them.',
     howLinks: 'These integrations extend what the product can reach, but they are configured here rather than in operational pages.',
   }));
 
   panel.appendChild(createTelegramPanel(sharedConfig, panel));
   panel.appendChild(createBrowserPanel(sharedConfig, panel));
-  panel.appendChild(createGoogleWorkspacePanel());
 
   applyInputTooltips(panel);
   enhanceSectionHelp(panel, CONFIG_HELP.integrations, createGenericHelpFactory('Configuration Integrations'));
@@ -2685,9 +2684,13 @@ function renderSettingsTab(panel) {
     },
     {
       title: 'Google Workspace',
-      badge: 'Gmail, Calendar, Drive',
-      panel: createGoogleWorkspacePanel(),
-      fullWidth: true,
+      badge: 'Cloud > Connections',
+      panel: (() => {
+        const el = document.createElement('div');
+        el.className = 'table-container';
+        el.innerHTML = '<div class="cfg-center-body" style="font-size:0.8rem;color:var(--text-secondary);">Google Workspace setup has moved to <strong>Cloud &gt; Connections</strong>.</div>';
+        return el;
+      })(),
     },
   ]));
 
@@ -3699,239 +3702,6 @@ function createTrustPresetPanel(config) {
       <div style="margin-top:0.75rem;font-size:0.74rem;color:var(--text-muted);">Presets set baseline capabilities, rate limits, and tool policies. Changes require a restart.</div>
     </div>
   `;
-  return section;
-}
-
-function createGoogleWorkspacePanel() {
-  const section = document.createElement('div');
-  section.className = 'table-container';
-
-  const inlineCode = 'background:var(--bg-tertiary);padding:0.1rem 0.3rem;border-radius:3px;';
-
-  section.innerHTML = `
-    <div class="table-header">
-      <h3>Google Workspace</h3>
-      <span class="cfg-header-note">Gmail, Calendar, Drive, Docs, Sheets, Contacts</span>
-    </div>
-    <div class="cfg-center-body" id="gws-settings-body">
-      <div style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.75rem;">
-        Google Workspace integration provides direct API access to Gmail, Calendar, Drive, Docs, Sheets, and Contacts.
-        The native integration uses direct API calls with OAuth 2.0 PKCE and encrypted token storage.
-      </div>
-
-      <div id="gws-native-section">
-        <div style="padding:0.75rem;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);font-size:0.8rem;">
-          <strong style="color:var(--text-primary);">Native Google Setup (3 steps)</strong>
-          <ol style="font-size:0.78rem;color:var(--text-secondary);margin:0.5rem 0 0.5rem 1.2rem;padding:0;">
-            <li style="margin-bottom:0.4rem;">
-              <strong>Create OAuth credentials:</strong>
-              Go to the <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener" style="color:var(--accent);">Google Cloud Console</a>.
-              Create a new project if you don't have one (top-left project selector &gt; <strong>New Project</strong>).
-              <br>Navigate to <strong>Credentials</strong>. Click <strong>+ Create Credentials</strong> &gt; <strong>OAuth client ID</strong>.
-              <br>Set <strong>Application type</strong> to <strong style="color:var(--text-primary);">Desktop app</strong>
-              <span style="color:var(--warning);"> (not "Web application")</span>.
-              Name it anything (e.g. "Guardian Agent Desktop") and click <strong>Create</strong>.
-              <br>Click <strong>Download JSON</strong> on the confirmation dialog.
-              <br><span style="font-size:0.72rem;color:var(--text-muted);">
-                If this is a new project, first configure the consent screen:
-                Go to <strong>Google Auth Platform &gt; Audience</strong>, set user type to External,
-                fill in app name + email, save, then <strong>Publish App</strong>.
-                Also enable the APIs you need in <strong>APIs &amp; Services &gt; Library</strong>
-                (Gmail API, Calendar API, Drive API, etc.).
-              </span>
-            </li>
-            <li style="margin-bottom:0.3rem;">
-              <strong>Upload credentials:</strong>
-              Upload the <code style="${inlineCode}">client_secret.json</code> below, or place it at <code style="${inlineCode}">~/.guardianagent/google-credentials.json</code>.
-            </li>
-            <li>
-              <strong>Connect:</strong> Select services below and click <strong>Connect Google</strong>. A browser window opens for consent.
-            </li>
-          </ol>
-          <div class="cfg-field" style="margin-bottom:0.5rem;">
-            <label style="font-size:0.72rem;">Upload client_secret.json</label>
-            <div style="display:flex;gap:0.5rem;align-items:center;">
-              <label for="gws-native-upload" class="btn btn-secondary" style="font-size:0.78rem;cursor:pointer;margin:0;padding:0.3rem 0.7rem;">Choose File</label>
-              <input type="file" id="gws-native-upload" accept=".json" style="display:none;">
-              <span id="gws-native-file-name" style="font-size:0.78rem;color:var(--text-muted);">No file selected</span>
-            </div>
-          </div>
-          <div class="cfg-field" style="margin-bottom:0.5rem;">
-            <label style="font-size:0.72rem;">Services</label>
-            <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:0.25rem;" id="gws-native-service-checks">
-              ${['gmail', 'calendar', 'drive', 'docs', 'sheets', 'contacts'].map(s => `
-                <label style="display:flex;align-items:center;gap:0.3rem;font-size:0.78rem;color:var(--text-primary);cursor:pointer;">
-                  <input type="checkbox" value="${s}" checked> ${s}
-                </label>
-              `).join('')}
-            </div>
-          </div>
-          <div id="gws-native-status" style="margin-bottom:0.5rem;font-size:0.8rem;"></div>
-          <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
-            <button class="btn btn-primary" id="gws-native-connect">Connect Google</button>
-            <button class="btn btn-secondary" id="gws-native-test">Test Connection</button>
-            <button class="btn btn-secondary" id="gws-native-disconnect" style="display:none;">Disconnect</button>
-            <span id="gws-native-status-badge" style="font-size:0.8rem;"></span>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
-
-  // Helper: refresh native Google status display.
-  async function refreshNativeStatus() {
-    try {
-      const status = await api.googleStatus();
-      const badge = section.querySelector('#gws-native-status-badge');
-      const disconnectBtn = section.querySelector('#gws-native-disconnect');
-      const statusText = section.querySelector('#gws-native-status');
-
-      if (status.authenticated) {
-        if (badge) {
-          badge.textContent = 'Connected';
-          badge.className = 'badge badge-running';
-          badge.style.color = '';
-        }
-        if (disconnectBtn) disconnectBtn.style.display = '';
-        if (statusText) {
-          const expiry = status.tokenExpiry ? new Date(status.tokenExpiry).toLocaleString() : 'unknown';
-          statusText.innerHTML = `
-            <div style="color:var(--success);margin-bottom:0.25rem;">✓ Authenticated successfully.</div>
-            <div style="color:var(--text-muted);font-size:0.72rem;">Token expiry: ${expiry}</div>
-          `;
-        }
-      } else {
-        if (badge) {
-          badge.textContent = 'Not connected';
-          badge.className = 'badge badge-dead';
-          badge.style.color = '';
-        }
-        if (disconnectBtn) disconnectBtn.style.display = 'none';
-        if (statusText) statusText.innerHTML = '<div style="color:var(--text-muted);">Please connect your Google account.</div>';
-      }
-    } catch (err) {
-      console.warn('Failed to refresh Google status:', err);
-    }
-  }
-
-  // File upload handler
-  section.querySelector('#gws-native-upload')?.addEventListener('change', async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    section.querySelector('#gws-native-file-name').textContent = file.name;
-    const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        const content = JSON.parse(reader.result);
-        await api.googleCredentials(content);
-        // We assume global notification function is available or we could use custom UI
-        const statusText = section.querySelector('#gws-native-status');
-        if (statusText) {
-          statusText.innerHTML = '<div style="color:var(--success);">✓ Credentials uploaded successfully.</div>';
-        }
-      } catch (err) {
-        const statusText = section.querySelector('#gws-native-status');
-        if (statusText) {
-          statusText.innerHTML = `<div style="color:var(--error);">${err.message || 'Failed to upload credentials.'}</div>`;
-        }
-      }
-    };
-    reader.readAsText(file);
-  });
-
-  // Connect button handler
-  section.querySelector('#gws-native-connect')?.addEventListener('click', async () => {
-    const btn = section.querySelector('#gws-native-connect');
-    const checks = section.querySelectorAll('#gws-native-service-checks input:checked');
-    const services = Array.from(checks).map(c => c.value);
-    const statusText = section.querySelector('#gws-native-status');
-
-    if (services.length === 0) {
-      if (statusText) statusText.innerHTML = '<div style="color:var(--warning);">Please select at least one service.</div>';
-      return;
-    }
-
-    btn.disabled = true;
-    btn.textContent = 'Starting Auth...';
-
-    try {
-      const { authUrl } = await api.googleAuthStart(services);
-      // Open in a new tab/window
-      window.open(authUrl, '_blank', 'width=600,height=700');
-
-      if (statusText) statusText.innerHTML = '<div style="color:var(--text-muted);">Opening Google login in a new window. Please complete the flow there.</div>';
-
-      // Poll for completion
-      let attempts = 0;
-      const poll = setInterval(async () => {
-        attempts++;
-        const status = await api.googleStatus();
-        if (status.authenticated || attempts > 60) {
-          clearInterval(poll);
-          btn.disabled = false;
-          btn.textContent = 'Connect Google';
-          refreshNativeStatus();
-          if (status.authenticated) {
-            // Auto-enable integration if it wasn't
-            await api.updateConfig({ assistant: { tools: { google: { enabled: true, services } } } });
-          }
-        }
-      }, 2000);
-    } catch (err) {
-      btn.disabled = false;
-      btn.textContent = 'Connect Google';
-      if (statusText) statusText.innerHTML = `<div style="color:var(--error);">${err.message || 'Failed to start Google auth.'}</div>`;
-    }
-  });
-
-  // Disconnect button handler
-  section.querySelector('#gws-native-disconnect')?.addEventListener('click', async () => {
-    if (!confirm('Disconnect from Google Workspace? This will revoke the tokens.')) return;
-
-    try {
-      await api.googleDisconnect();
-      refreshNativeStatus();
-    } catch (err) {
-      console.error('Failed to disconnect:', err);
-    }
-  });
-
-  // Test button handler
-  section.querySelector('#gws-native-test')?.addEventListener('click', async () => {
-    const btn = section.querySelector('#gws-native-test');
-    btn.disabled = true;
-    btn.textContent = 'Testing...';
-    const statusText = section.querySelector('#gws-native-status');
-
-    try {
-      // Test by attempting to list Gmail messages (read-only, minimal impact)
-      const result = await api.runTool({
-        toolName: 'gws',
-        args: {
-          service: 'gmail',
-          resource: 'users messages',
-          method: 'list',
-          params: { userId: 'me', maxResults: 1 }
-        }
-      });
-
-      if (result.success) {
-         if (statusText) statusText.innerHTML = '<div style="color:var(--success);">✓ Connection verified! Google APIs are reachable.</div>';
-      } else {
-         if (statusText) statusText.innerHTML = `<div style="color:var(--error);">${result.error || 'Connection failed.'}</div>`;
-      }
-    } catch (err) {
-      if (statusText) statusText.innerHTML = `<div style="color:var(--error);">${err.message || 'Test failed.'}</div>`;
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Test Connection';
-    }
-  });
-
-  // Initial status refresh
-  refreshNativeStatus();
-
   return section;
 }
 
