@@ -2,7 +2,7 @@
 
 ## Overview
 
-Use `slack` to react, manage pins, send/edit/delete messages, and fetch member info through Guardian's configured Slack provider.
+Use `slack` to react, manage pins, send/edit/delete messages, and fetch member info through the configured Slack provider.
 
 ## Inputs to collect
 

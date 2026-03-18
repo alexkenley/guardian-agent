@@ -15,7 +15,7 @@ The Coding Assistant is Guardian’s repo-scoped coding workflow surface.
 It provides:
 
 - backend-owned coding sessions
-- repo-aware assistant chat with backend workspace profiling
+- repo-aware assistant chat with backend workspace profiling, bounded repo indexing, and retrieval-backed working context
 - explorer and source/diff inspection
 - approval-aware coding execution
 - PTY terminals for manual operator shell work
@@ -33,7 +33,7 @@ The browser no longer owns the authoritative coding session. The browser is now 
 Core layers:
 
 - backend `CodeSessionStore` persists coding sessions and surface attachments
-- backend workspace profiling builds durable repo identity for each session
+- backend workspace profiling and repo indexing build durable repo identity plus retrievable workspace context for each session
 - `ConversationService` stores the coding transcript for each session conversation identity
 - `ChatAgent` resolves attached or explicit coding sessions before prompt assembly and tool execution
 - `ToolExecutor` exposes coding-session tools and enforces repo-scoped coding sandbox rules
@@ -75,6 +75,8 @@ Primary persisted shape:
   - `planSummary`
   - `compactedSummary`
   - `workspaceProfile`
+  - `workspaceMap`
+  - `workingSet`
   - `activeSkills`
   - `pendingApprovals`
   - `recentJobs`
@@ -107,12 +109,20 @@ Each backend `CodeSession` carries durable workspace awareness state:
   - top-level entries
   - likely entry/focus points
   - summary of what the repo appears to be
+- `workspaceMap`
+  - bounded backend index of the attached repo
+  - indexed file count, notable files, and directory summaries
+  - compact file-level summaries and symbol/import hints for prompt-time retrieval
+- `workingSet`
+  - per-turn retrieved repo files for the current request
+  - bounded excerpts from the most relevant files
+  - survives vague follow-up questions so the assistant keeps answering from the same repo evidence
 - `focusSummary`
   - short durable summary of the current coding objective for that session
 
-Workspace profiling is built from lightweight backend inspection of the session root, `README`, and primary manifest/config files. That profile is then injected into the coding-session prompt on later turns.
+Workspace profiling is still built from lightweight backend inspection of the session root, `README`, and primary manifest/config files, but Code sessions now also maintain a bounded repo map and a per-turn working set. The coding-session prompt gets the repo profile plus the current working-set evidence, so the model starts from actual repo files rather than generic host-app context or ad hoc prompt wording.
 
-This is the mechanism that makes the Coding Assistant feel project-aware in the same way a dedicated coding agent should, rather than behaving like a general chat that merely has file tools.
+This is the mechanism that moves the Coding Assistant closer to a dedicated coding agent: not “all file contents in one prompt,” but backend repo awareness plus retrieval-backed working context.
 
 ## Conversation Model
 
@@ -126,6 +136,7 @@ That means:
 - a coding session has one durable coding transcript
 - the transcript is separate from the normal main-chat transcript
 - web Code, main chat, CLI, and Telegram can all attach to the same coding session and continue that same coding transcript
+- sharing the same backend coding transcript does not make those clients equivalent; the web Code page remains the dedicated coding-session client, while main chat, CLI, and Telegram remain their own chat surfaces
 
 The Code page is still a separate coding conversation surface in UX terms, but it is no longer a browser-only conversation.
 
@@ -134,7 +145,7 @@ The Code page is still a separate coding conversation surface in UX terms, but i
 Guardian supports two ways to enter a coding session:
 
 1. Explicit session targeting  
-   The client sends `metadata.codeContext.sessionId`.
+   A client targets a backend coding session directly. The web Code page does this with `POST /api/code/sessions/:id/message`. Other surfaces can still use `metadata.codeContext.sessionId`.
 
 2. Surface attachment  
    A chat surface is attached to a `CodeSession`, and later messages on that surface inherit it automatically.
@@ -143,9 +154,10 @@ Surface attachment is tracked in `CodeSessionStore`.
 
 Current behavior:
 
-- the Code page sends explicit `sessionId` metadata on chat requests
+- the Code page sends turns through `POST /api/code/sessions/:id/message`
 - main chat, CLI, and Telegram can use `code_session_attach`
 - once attached, later messages on that surface resolve to the same coding session
+- cross-surface reuse shares the backend session and transcript, not the full Code-page explorer/tasks/approvals/checks/terminal UI
 
 ## Routing Behavior
 
@@ -162,15 +174,19 @@ This prevents “continue that coding session” style follow-ups from being rou
 
 ## Capability Model
 
-The Coding Assistant is workspace-centered, not coding-only.
+The Coding Assistant is session-grounded, not host-app-grounded.
 
 That means:
 
+- the default reasoning context comes from the active backend code session: workspace root, workspace profile, indexed repo map, current working set, focus summary, selected file, recent work, approvals, and checks
+- Guardian's own host-app repo/application context is not part of the default Code-session context
+- Code uses a dedicated Code-session prompt architecture rather than inheriting the main Guardian host prompt and trying to rewrite it after the fact
+- Code sessions use a separate durable long-term memory store instead of preloading Guardian's global memory
 - repo-local actions such as file edits, shell commands, git operations, tests, builds, and lint runs stay scoped to the active `workspaceRoot`
-- the assistant may still use broader Guardian capabilities when they directly support the coding session, such as research, web/docs lookup, or creating automations
-- unrelated general-assistant tasks should remain in the main chat instead of diluting the coding session
+- broader Guardian capabilities remain available from within the Coding Assistant, including research, web/docs lookup, automation creation, and unrelated assistant tasks
+- using broader capabilities does not replace the session's repo identity or current focus unless the user explicitly changes sessions or retargets the work
 
-In practice, the coding session is the anchor. Broader tools are allowed when they serve that anchored workspace task.
+In practice, Code and main chat differ by contextual grounding rather than by tool inventory. The active code session stays the anchor even when the user does something broader from that surface.
 
 ## Code Page UI Model
 
@@ -192,7 +208,7 @@ The assistant sidebar remains tabbed:
 Behavior:
 
 - `Chat` is the main back-and-forth coding conversation
-- `Tasks` shows plan and recent coding activity
+- `Tasks` shows workspace profile, indexed repo map, current working set, plan state, and recent coding activity
 - `Approvals` shows queued coding approvals
 - `Checks` shows recent verification outcomes
 - the UI does not auto-switch tabs when approvals appear
@@ -206,6 +222,8 @@ Authoritative server state:
 - session metadata
 - workspace root and resolved root
 - workspace profile
+- workspace map
+- working set
 - focus summary
 - coding transcript
 - conversation identity
@@ -244,6 +262,10 @@ Primary backend-owned session methods:
   - detaches the current surface
 - `POST /api/code/sessions/:id/reset`
   - resets the coding transcript for that session
+- `POST /api/code/sessions/:id/message`
+  - sends a chat turn through the authoritative backend coding session
+- `POST /api/code/sessions/:id/approvals/:approvalId`
+  - approves or denies an approval that belongs to that coding session
 
 Session-backed direct Code UI methods:
 
@@ -257,21 +279,28 @@ Session-backed direct Code UI methods:
 
 For `fs`, `diff`, and terminal open requests, the client can supply `sessionId`. The backend resolves the session and enforces the workspace root from the session record instead of trusting a browser-supplied root path.
 
-## Chat Request Metadata
+## Code Session Messaging
 
-The authoritative coding-session request hook is:
+Authoritative Code-page messaging uses:
 
-- `metadata.codeContext.sessionId`
+- `POST /api/code/sessions/:id/message`
 
-`workspaceRoot` may still appear for compatibility, but backend session resolution is the real authority.
+The generic chat path can still carry coding context through `metadata.codeContext`, but it now follows stricter rules:
+
+- `metadata.codeContext.sessionId` is authoritative when present
+- if that `sessionId` cannot be resolved, the request fails closed with `CODE_SESSION_UNAVAILABLE`
+- `workspaceRoot` may still appear for compatibility or for ad hoc workspace-aware chat outside the Code page, but backend session resolution is the real authority whenever a session id is present
 
 Chat flow:
 
-- the Code page sends a normal `/api/message` request
-- it includes `metadata.codeContext.sessionId`
-- `ChatAgent` resolves the backend session
+- the Code page resolves a backend session id and sends the turn through the dedicated Code-session message endpoint
+- the backend resolves that session before routing or prompt assembly
+- if the session is missing or stale, the request returns a structured error instead of silently falling back to normal Guardian chat
+- `ChatAgent` and tool dispatch receive the authoritative backend session context
 - prompt assembly includes structured coding-session context plus the durable workspace profile and focus summary
+- prompt assembly for Code uses Code-session memory only; Guardian global memory is not injected into Code-session turns
 - tool execution gets a repo-scoped `codeContext`
+- session snapshots expose `pendingApprovals` and `recentJobs` derived from records bound to that code session id
 
 ## Main Chat And Remote Channels
 
@@ -289,6 +318,7 @@ That means:
 - main chat can attach to one and continue it
 - CLI and Telegram can do the same
 - all of them can continue the same backend coding transcript
+- CLI and Telegram do this through their normal chat transports plus code-session attach/resume tools; they are not the same client as the web Code page
 
 The web Code page is still the richest coding client, but it is no longer the only client.
 
@@ -301,6 +331,12 @@ Built-in coding session tools:
 - `code_session_create`
 - `code_session_attach`
 - `code_session_detach`
+
+Memory behavior:
+
+- `memory_recall` and `memory_save` bind to Code-session memory when the current request is inside a Code session
+- `memory_search` continues to search the current conversation history, which is already Code-session-scoped for Code turns
+- `memory_bridge_search` provides explicit read-only lookup across the global/code-session memory boundary without changing the current session context or objective
 
 Built-in coding implementation tools:
 
@@ -361,6 +397,13 @@ General memory system:
 - normal conversation sessions
 - memory flush/compaction support
 
+Code-session memory system:
+
+- durable long-term memory keyed by `codeSessionId`
+- prompt-time memory injection only for that Code session
+- Code-session-only memory flush/compaction targets
+- explicit read-only bridge lookup into global memory when requested
+
 Backend `CodeSessionStore`:
 
 - active coding session records
@@ -369,7 +412,7 @@ Backend `CodeSessionStore`:
 - coding work state
 - shared coding conversation identity
 
-The memory system is not the live coding session state machine. The backend `CodeSessionStore` is.
+The global memory system is not the live coding session state machine. The backend `CodeSessionStore` is, and Code-session long-term memory remains separate from global memory by default.
 
 ## Current Limitations
 

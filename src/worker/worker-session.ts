@@ -309,7 +309,13 @@ export class BrokeredWorkerSession {
     const result = await tryAutomationPreRoute({
       agentId: 'brokered-worker',
       message,
-      executeTool: (toolName, args, request) => toolExecutor.executeModelTool(toolName, args, request),
+      executeTool: (toolName, args, request) => {
+        const codeContext = message.metadata?.codeContext as { workspaceRoot: string; sessionId?: string } | undefined;
+        return toolExecutor.executeModelTool(toolName, args, {
+          ...request,
+          ...(codeContext ? { codeContext } : {}),
+        });
+      },
       trackPendingApproval: (approvalId) => {
         trackedPendingApprovalIds.push(approvalId);
         const existingIds = this.getPendingApprovalIds();
@@ -391,7 +397,11 @@ export class BrokeredWorkerSession {
         listAlwaysLoaded: () => toolExecutor.listAlwaysLoadedDefinitions(),
         searchTools: () => [],
         callTool: async (request) => {
-          const runResult = await toolExecutor.executeModelTool(request.toolName, request.args, request);
+          const codeContext = params.message.metadata?.codeContext as { workspaceRoot: string; sessionId?: string } | undefined;
+          const runResult = await toolExecutor.executeModelTool(request.toolName, request.args, {
+            ...request,
+            ...(codeContext ? { codeContext } : {}),
+          });
           return runResult as unknown as ToolRunResponse;
         },
       },

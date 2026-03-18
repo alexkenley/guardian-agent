@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve, sep } from 'node:path';
 import {
   hasSQLiteDriver,
   openSQLiteDatabase,
@@ -8,6 +8,12 @@ import {
   type SQLiteStatement,
 } from './sqlite-driver.js';
 import { inspectCodeWorkspaceSync, type CodeWorkspaceProfile } from './code-workspace-profile.js';
+import {
+  cloneWorkspaceMap,
+  cloneWorkspaceWorkingSet,
+  type CodeWorkspaceMap,
+  type CodeWorkspaceWorkingSet,
+} from './code-workspace-map.js';
 import { SQLiteSecurityMonitor, type SQLiteSecurityEvent } from './sqlite-security.js';
 
 export type CodeSessionStatus =
@@ -47,6 +53,8 @@ export interface CodeSessionWorkState {
   planSummary: string;
   compactedSummary: string;
   workspaceProfile: CodeWorkspaceProfile | null;
+  workspaceMap: CodeWorkspaceMap | null;
+  workingSet: CodeWorkspaceWorkingSet | null;
   activeSkills: string[];
   pendingApprovals: CodeSessionPendingApproval[];
   recentJobs: CodeSessionRecentJob[];
@@ -193,6 +201,8 @@ function defaultWorkState(): CodeSessionWorkState {
     planSummary: '',
     compactedSummary: '',
     workspaceProfile: null,
+    workspaceMap: null,
+    workingSet: null,
     activeSkills: [],
     pendingApprovals: [],
     recentJobs: [],
@@ -217,9 +227,71 @@ function cloneWorkspaceProfile(profile: CodeWorkspaceProfile | null | undefined)
   };
 }
 
-function normalizePath(value: string): string {
+function normalizePathForHost(value: string): string {
   const trimmed = value.trim();
-  return resolve(trimmed || '.');
+  if (!trimmed) return trimmed;
+
+  if (sep === '/') {
+    const driveMatch = trimmed.match(/^([a-zA-Z]):[\\/](.*)$/);
+    if (driveMatch) {
+      const drive = driveMatch[1].toLowerCase();
+      const rest = driveMatch[2].replace(/\\/g, '/');
+      return `/mnt/${drive}/${rest}`;
+    }
+    return trimmed.replace(/\\/g, '/');
+  }
+
+  const mntMatch = trimmed.match(/^\/mnt\/([a-zA-Z])\/(.*)$/);
+  if (mntMatch) {
+    const drive = mntMatch[1].toUpperCase();
+    const rest = mntMatch[2].replace(/\//g, '\\');
+    return `${drive}:\\${rest}`;
+  }
+  return trimmed.replace(/\//g, '\\');
+}
+
+function normalizePath(value: string): string {
+  const normalized = normalizePathForHost(value.trim() || '.');
+  return isAbsolute(normalized)
+    ? resolve(normalized)
+    : resolve(normalized || '.');
+}
+
+function isPathInside(candidate: string, root: string): boolean {
+  const normalizedCandidate = sep === '\\' ? candidate.toLowerCase() : candidate;
+  const normalizedRoot = sep === '\\' ? root.toLowerCase() : root;
+  if (normalizedCandidate === normalizedRoot) return true;
+  return normalizedCandidate.startsWith(
+    normalizedRoot.endsWith(sep) ? normalizedRoot : `${normalizedRoot}${sep}`,
+  );
+}
+
+function normalizeUiStatePath(value: string | null | undefined, workspaceRoot: string): string | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const normalized = normalizePathForHost(value);
+  const resolvedPath = isAbsolute(normalized)
+    ? resolve(normalized)
+    : resolve(workspaceRoot, normalized);
+  return isPathInside(resolvedPath, workspaceRoot) ? resolvedPath : null;
+}
+
+function sameStringArray(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
+}
+
+function sanitizeUiState(uiState: CodeSessionUiState, workspaceRoot: string): CodeSessionUiState {
+  const expandedDirs = Array.from(new Set(
+    (Array.isArray(uiState.expandedDirs) ? uiState.expandedDirs : [])
+      .map((value) => normalizeUiStatePath(value, workspaceRoot))
+      .filter((value): value is string => typeof value === 'string' && value.length > 0),
+  ));
+  return {
+    ...uiState,
+    currentDirectory: normalizeUiStatePath(uiState.currentDirectory, workspaceRoot),
+    selectedFilePath: normalizeUiStatePath(uiState.selectedFilePath, workspaceRoot),
+    expandedDirs,
+  };
 }
 
 function conversationUserIdForSession(sessionId: string): string {
@@ -288,15 +360,49 @@ export class CodeSessionStore {
     this.securityMonitor = null;
   }
 
+  private persistCanonicalRecord(record: CodeSessionRecord): void {
+    if (this.mode === 'sqlite' && this.db && this.updateSessionStmt) {
+      this.updateSessionStmt.run(...this.toUpdateStoredValues(record));
+      this.securityMonitor?.maybeCheck();
+      return;
+    }
+
+    this.memory.sessions.set(record.id, clone(record));
+  }
+
   private withDerivedWorkspaceProfile(record: CodeSessionRecord): CodeSessionRecord {
-    if (record.workState.workspaceProfile) return record;
-    return {
+    const canonicalResolvedRoot = normalizePath(record.workspaceRoot);
+    const canonicalUiState = sanitizeUiState(record.uiState, canonicalResolvedRoot);
+    const resolvedRootChanged = canonicalResolvedRoot !== record.resolvedRoot;
+    const workspaceMap = cloneWorkspaceMap(record.workState.workspaceMap);
+    const workspaceMapChanged = !!workspaceMap && workspaceMap.workspaceRoot !== canonicalResolvedRoot;
+    const uiStateChanged = (
+      canonicalUiState.currentDirectory !== record.uiState.currentDirectory
+      || canonicalUiState.selectedFilePath !== record.uiState.selectedFilePath
+      || !sameStringArray(canonicalUiState.expandedDirs, record.uiState.expandedDirs)
+    );
+    const workspaceProfile = resolvedRootChanged || !record.workState.workspaceProfile
+      ? inspectCodeWorkspaceSync(canonicalResolvedRoot, this.now())
+      : cloneWorkspaceProfile(record.workState.workspaceProfile);
+    const canonicalRecord: CodeSessionRecord = {
       ...record,
+      resolvedRoot: canonicalResolvedRoot,
+      uiState: canonicalUiState,
       workState: {
         ...record.workState,
-        workspaceProfile: inspectCodeWorkspaceSync(record.resolvedRoot, this.now()),
+        workspaceProfile,
+        workspaceMap: resolvedRootChanged || workspaceMapChanged
+          ? null
+          : workspaceMap,
+        workingSet: resolvedRootChanged || workspaceMapChanged
+          ? null
+          : cloneWorkspaceWorkingSet(record.workState.workingSet),
       },
     };
+    if (resolvedRootChanged || workspaceMapChanged || uiStateChanged || !record.workState.workspaceProfile) {
+      this.persistCanonicalRecord(canonicalRecord);
+    }
+    return canonicalRecord;
   }
 
   listSessionsForUser(ownerUserId: string): CodeSessionRecord[] {
@@ -378,11 +484,28 @@ export class CodeSessionStore {
 
     const now = this.now();
     const nextResolvedRoot = input.workspaceRoot !== undefined ? normalizePath(input.workspaceRoot) : existing.resolvedRoot;
+    const workspaceRootChanged = nextResolvedRoot !== existing.resolvedRoot;
     const nextWorkspaceProfile = input.workState?.workspaceProfile !== undefined
       ? cloneWorkspaceProfile(input.workState.workspaceProfile)
       : (input.workspaceRoot !== undefined
         ? inspectCodeWorkspaceSync(nextResolvedRoot, now)
         : cloneWorkspaceProfile(existing.workState.workspaceProfile));
+    const nextWorkspaceMap = input.workState?.workspaceMap !== undefined
+      ? cloneWorkspaceMap(input.workState.workspaceMap)
+      : (workspaceRootChanged ? null : cloneWorkspaceMap(existing.workState.workspaceMap));
+    const nextWorkingSet = input.workState?.workingSet !== undefined
+      ? cloneWorkspaceWorkingSet(input.workState.workingSet)
+      : (workspaceRootChanged ? null : cloneWorkspaceWorkingSet(existing.workState.workingSet));
+    const mergedUiState = {
+      ...existing.uiState,
+      ...(input.uiState ?? {}),
+      expandedDirs: Array.isArray(input.uiState?.expandedDirs)
+        ? [...input.uiState.expandedDirs]
+        : [...existing.uiState.expandedDirs],
+      terminalTabs: Array.isArray(input.uiState?.terminalTabs)
+        ? input.uiState.terminalTabs.map((tab) => ({ ...tab }))
+        : existing.uiState.terminalTabs.map((tab) => ({ ...tab })),
+    };
     const next: CodeSessionRecord = {
       ...existing,
       title: input.title !== undefined ? (input.title.trim() || existing.title) : existing.title,
@@ -392,38 +515,31 @@ export class CodeSessionStore {
       resolvedRoot: nextResolvedRoot,
       updatedAt: now,
       lastActivityAt: now,
-      uiState: {
-        ...existing.uiState,
-        ...(input.uiState ?? {}),
-        expandedDirs: Array.isArray(input.uiState?.expandedDirs)
-          ? [...input.uiState.expandedDirs]
-          : [...existing.uiState.expandedDirs],
-        terminalTabs: Array.isArray(input.uiState?.terminalTabs)
-          ? input.uiState.terminalTabs.map((tab) => ({ ...tab }))
-          : existing.uiState.terminalTabs.map((tab) => ({ ...tab })),
-      },
+      uiState: sanitizeUiState(mergedUiState, nextResolvedRoot),
       workState: {
-        ...existing.workState,
+        ...(workspaceRootChanged ? defaultWorkState() : existing.workState),
         ...(input.workState ?? {}),
         focusSummary: input.workState?.focusSummary !== undefined
           ? input.workState.focusSummary
-          : existing.workState.focusSummary,
+          : (workspaceRootChanged ? '' : existing.workState.focusSummary),
         workspaceProfile: nextWorkspaceProfile,
+        workspaceMap: nextWorkspaceMap,
+        workingSet: nextWorkingSet,
         activeSkills: Array.isArray(input.workState?.activeSkills)
           ? [...input.workState.activeSkills]
-          : [...existing.workState.activeSkills],
+          : (workspaceRootChanged ? [] : [...existing.workState.activeSkills]),
         pendingApprovals: Array.isArray(input.workState?.pendingApprovals)
           ? input.workState.pendingApprovals.map((approval) => ({ ...approval }))
-          : existing.workState.pendingApprovals.map((approval) => ({ ...approval })),
+          : (workspaceRootChanged ? [] : existing.workState.pendingApprovals.map((approval) => ({ ...approval }))),
         recentJobs: Array.isArray(input.workState?.recentJobs)
           ? input.workState.recentJobs.map((job) => ({ ...job }))
-          : existing.workState.recentJobs.map((job) => ({ ...job })),
+          : (workspaceRootChanged ? [] : existing.workState.recentJobs.map((job) => ({ ...job }))),
         changedFiles: Array.isArray(input.workState?.changedFiles)
           ? [...input.workState.changedFiles]
-          : [...existing.workState.changedFiles],
+          : (workspaceRootChanged ? [] : [...existing.workState.changedFiles]),
         verification: Array.isArray(input.workState?.verification)
           ? input.workState.verification.map((entry) => ({ ...entry }))
-          : existing.workState.verification.map((entry) => ({ ...entry })),
+          : (workspaceRootChanged ? [] : existing.workState.verification.map((entry) => ({ ...entry }))),
       },
     };
 
@@ -622,6 +738,8 @@ export class CodeSessionStore {
         ...defaultWorkState(),
         ...(payload.workState ?? {}),
         workspaceProfile: cloneWorkspaceProfile(payload.workState?.workspaceProfile as CodeWorkspaceProfile | null | undefined),
+        workspaceMap: cloneWorkspaceMap(payload.workState?.workspaceMap as CodeWorkspaceMap | null | undefined),
+        workingSet: cloneWorkspaceWorkingSet(payload.workState?.workingSet as CodeWorkspaceWorkingSet | null | undefined),
       },
     };
   }

@@ -1,6 +1,6 @@
 # File Workflows
 
-Use Guardian's filesystem and document tools for local file work inside allowed paths.
+Use the filesystem and document tools for local file work inside allowed paths.
 
 ## Workflow
 
@@ -23,5 +23,5 @@ Use Guardian's filesystem and document tools for local file work inside allowed 
 
 - Prefer editing existing files over creating duplicates when the intent is an update.
 - For destructive operations, confirm scope if the request is ambiguous.
-- If the path is outside current policy roots, let Guardian handle the approval flow rather than telling the user to do it manually.
+- If the path is outside current policy roots, let the approval flow handle it rather than telling the user to do it manually.
 - When the user wants a durable plan or report, write it to the repo or target folder instead of only describing it in chat.

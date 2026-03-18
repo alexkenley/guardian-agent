@@ -15,7 +15,7 @@ Use this when the user wants a recurring check, scheduled task, monitoring workf
    - Sequential workflow when later steps depend on earlier output.
    - Parallel workflow only when checks are independent.
    - Instruction step only for summarization or prioritization, not for hidden tool execution.
-   - Scheduled assistant task when the user wants Guardian to wake up, inspect the environment with its normal skills/tools, and report back.
+   - Scheduled assistant task when the assistant should wake up, inspect the environment with its normal skills/tools, and report back.
    - Choose one shape unless the user explicitly wants both. Do not create both a scheduled playbook and a scheduled assistant task for the same job by default.
 4. Keep monitoring automations read-only by default.
    - Prefer status, list, fetch, and diagnostic tools unless the user explicitly wants a mutating action.

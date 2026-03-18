@@ -16,6 +16,7 @@ import { ToolApprovalStore } from './approvals.js';
 import { ToolRegistry } from './registry.js';
 import { hashRedactedObject, normalizeSensitiveKeyName, redactSensitiveValue } from '../util/crypto-guardrails.js';
 import type {
+  ToolApprovalRequest,
   ToolCategory,
   ToolDecision,
   ToolDefinition,
@@ -392,6 +393,8 @@ export interface ToolExecutorOptions {
   conversationService?: ConversationService;
   /** Agent memory store for memory_get/memory_save tools. */
   agentMemoryStore?: AgentMemoryStore;
+  /** Dedicated memory store for backend-owned coding sessions. */
+  codeSessionMemoryStore?: AgentMemoryStore;
   /** Backend-owned coding session store for multi-surface coding workflows. */
   codeSessionStore?: CodeSessionStore;
   /** Resolve logical state identity for chat memory/session operations. */
@@ -1021,6 +1024,81 @@ export class ToolExecutor {
     return this.options.codeSessionStore.getSession(sessionId, ownerUserId);
   }
 
+  private getCurrentCodeSessionMemoryContext(
+    request?: Partial<ToolExecutionRequest>,
+  ): { sessionId: string; store?: AgentMemoryStore } | null {
+    const sessionId = request?.codeContext?.sessionId?.trim();
+    if (!sessionId) return null;
+    return {
+      sessionId,
+      store: this.options.codeSessionMemoryStore,
+    };
+  }
+
+  private resolveCodeSessionMemoryContext(
+    sessionId: string | undefined,
+    request?: Partial<ToolExecutionRequest>,
+  ): { sessionId: string; store?: AgentMemoryStore } | null {
+    const trimmed = sessionId?.trim();
+    if (!trimmed) {
+      return this.getCurrentCodeSessionMemoryContext(request);
+    }
+    if (request?.codeContext?.sessionId?.trim() === trimmed) {
+      return {
+        sessionId: trimmed,
+        store: this.options.codeSessionMemoryStore,
+      };
+    }
+    const owned = this.getOwnedCodeSession(trimmed, request);
+    if (!owned) return null;
+    return {
+      sessionId: trimmed,
+      store: this.options.codeSessionMemoryStore,
+    };
+  }
+
+  private getGlobalMemoryContext(
+    request?: Partial<ToolExecutionRequest>,
+    explicitAgentId?: string,
+  ): {
+    agentId: string;
+    store?: AgentMemoryStore;
+  } {
+    const requestAgentId = explicitAgentId?.trim() || asString(request?.agentId);
+    const stateAgentId = this.options.resolveStateAgentId?.(requestAgentId) ?? requestAgentId;
+    return {
+      agentId: stateAgentId || 'default',
+      store: this.options.agentMemoryStore,
+    };
+  }
+
+  private searchPersistentMemoryEntries(
+    store: AgentMemoryStore,
+    targetId: string,
+    query: string,
+    limit: number,
+  ): Array<{
+    id: string;
+    createdAt: string;
+    category?: string;
+    content: string;
+    trustLevel?: string;
+    status?: string;
+    tags?: string[];
+    provenance?: Record<string, unknown>;
+  }> {
+    return store.searchEntries(targetId, query, { limit }).map((entry) => ({
+      id: entry.id,
+      createdAt: entry.createdAt,
+      category: entry.category,
+      content: entry.content.length > 500 ? `${entry.content.slice(0, 500)}...` : entry.content,
+      trustLevel: entry.trustLevel,
+      status: entry.status,
+      tags: entry.tags ? [...entry.tags] : undefined,
+      provenance: entry.provenance ? { ...entry.provenance } as Record<string, unknown> : undefined,
+    }));
+  }
+
   private summarizeCodeSession(session: {
     id: string;
     title: string;
@@ -1041,6 +1119,17 @@ export class ToolExecutor {
         repoKind?: string;
         summary?: string;
         stack?: string[];
+      } | null;
+      workspaceMap?: {
+        indexedFileCount?: number;
+        totalDiscoveredFiles?: number;
+        truncated?: boolean;
+        notableFiles?: string[];
+      } | null;
+      workingSet?: {
+        query?: string;
+        rationale?: string;
+        files?: Array<{ path?: string }>;
       } | null;
     };
   }) {
@@ -1071,6 +1160,25 @@ export class ToolExecutor {
             summary: session.workState.workspaceProfile.summary || '',
             stack: Array.isArray(session.workState.workspaceProfile.stack)
               ? [...session.workState.workspaceProfile.stack]
+              : [],
+          }
+        : null,
+      workspaceMap: session.workState.workspaceMap
+        ? {
+            indexedFileCount: Number(session.workState.workspaceMap.indexedFileCount) || 0,
+            totalDiscoveredFiles: Number(session.workState.workspaceMap.totalDiscoveredFiles) || 0,
+            truncated: !!session.workState.workspaceMap.truncated,
+            notableFiles: Array.isArray(session.workState.workspaceMap.notableFiles)
+              ? [...session.workState.workspaceMap.notableFiles]
+              : [],
+          }
+        : null,
+      workingSet: session.workState.workingSet
+        ? {
+            query: session.workState.workingSet.query || '',
+            rationale: session.workState.workingSet.rationale || '',
+            files: Array.isArray(session.workState.workingSet.files)
+              ? session.workState.workingSet.files.map((entry) => ({ path: entry.path || '' }))
               : [],
           }
         : null,
@@ -1448,6 +1556,54 @@ export class ToolExecutor {
     return ids;
   }
 
+  listJobsForCodeSession(codeSessionId: string, limit = 50): ToolJobRecord[] {
+    const normalizedCodeSessionId = codeSessionId.trim();
+    if (!normalizedCodeSessionId) return [];
+    return this.jobs
+      .filter((job) => job.codeSessionId === normalizedCodeSessionId)
+      .slice(0, Math.max(1, limit));
+  }
+
+  listPendingApprovalsForCodeSession(
+    codeSessionId: string,
+    limit = 50,
+  ): Array<{
+    id: string;
+    toolName: string;
+    argsPreview: string;
+    createdAt: number;
+    risk: ToolDefinition['risk'];
+    origin: ToolApprovalRequest['origin'];
+  }> {
+    const normalizedCodeSessionId = codeSessionId.trim();
+    if (!normalizedCodeSessionId) return [];
+    return this.approvals
+      .list(Math.min(MAX_APPROVALS, Math.max(1, limit)), 'pending')
+      .filter((approval) => approval.codeSessionId === normalizedCodeSessionId)
+      .map((approval) => {
+        const job = this.jobsById.get(approval.jobId);
+        return {
+          id: approval.id,
+          toolName: approval.toolName,
+          argsPreview: job?.argsPreview ?? JSON.stringify(approval.args).slice(0, 120),
+          createdAt: approval.createdAt,
+          risk: approval.risk,
+          origin: approval.origin,
+        };
+      });
+  }
+
+  approvalBelongsToCodeSession(approvalId: string, codeSessionId: string): boolean {
+    const normalizedApprovalId = approvalId.trim();
+    const normalizedCodeSessionId = codeSessionId.trim();
+    if (!normalizedApprovalId || !normalizedCodeSessionId) return false;
+    const approval = this.approvals.get(normalizedApprovalId);
+    if (!approval) return false;
+    if (approval.codeSessionId) return approval.codeSessionId === normalizedCodeSessionId;
+    const job = this.jobsById.get(approval.jobId);
+    return job?.codeSessionId === normalizedCodeSessionId;
+  }
+
   /** Return approval ID → tool name + args preview for display in approval prompts. */
   getApprovalSummaries(approvalIds: string[]): Map<string, { toolName: string; argsPreview: string }> {
     const result = new Map<string, { toolName: string; argsPreview: string }>();
@@ -1585,7 +1741,11 @@ export class ToolExecutor {
       // call after it was already approved and executed, return the previous result.
       if (job.argsHash) {
         const recentApproved = this.approvals.list(50, 'approved').find(
-          (a) => a.toolName === job.toolName && a.argsHash === job.argsHash && a.decidedAt && (this.now() - a.decidedAt) < 5 * 60_000
+          (a) => a.toolName === job.toolName
+            && a.argsHash === job.argsHash
+            && (a.codeSessionId ?? '') === (job.codeSessionId ?? '')
+            && a.decidedAt
+            && (this.now() - a.decidedAt) < 5 * 60_000
         );
         if (recentApproved) {
           const oldJob = this.jobsById.get(recentApproved.jobId);
@@ -1731,6 +1891,7 @@ export class ToolExecutor {
       toolName: definition.name,
       risk: definition.risk,
       origin: request.origin,
+      ...(request.codeContext?.sessionId?.trim() ? { codeSessionId: request.codeContext.sessionId.trim() } : {}),
       agentId: request.agentId,
       userId: request.userId,
       principalId: request.principalId,
@@ -11073,8 +11234,8 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'memory_recall',
-        description: 'Retrieve the persistent knowledge base for the current agent. Returns the curated long-term memory file containing facts, preferences, and summaries that persist across conversations.',
-        shortDescription: 'Retrieve the persistent knowledge base for the current agent.',
+        description: 'Retrieve persistent long-term memory. In a Code session, this reads the session-specific coding memory. Outside Code, it reads the current agent knowledge base.',
+        shortDescription: 'Retrieve the current scope\'s persistent long-term memory.',
         risk: 'read_only',
         category: 'memory',
         deferLoading: true,
@@ -11086,24 +11247,41 @@ export class ToolExecutor {
         },
       },
       async (args, request) => {
+        const codeMemory = this.getCurrentCodeSessionMemoryContext(request);
+        if (codeMemory) {
+          this.guardAction(request, 'read_file', { path: `memory:code_session:${codeMemory.sessionId}` });
+          if (!codeMemory.store) {
+            return { success: false, error: 'Code-session memory is not enabled.' };
+          }
+          const content = codeMemory.store.load(codeMemory.sessionId);
+          return {
+            success: true,
+            output: {
+              scope: 'code_session',
+              codeSessionId: codeMemory.sessionId,
+              exists: codeMemory.store.exists(codeMemory.sessionId),
+              sizeChars: codeMemory.store.size(codeMemory.sessionId),
+              content: content || '(empty — no coding memories stored yet)',
+            },
+          };
+        }
+
         this.guardAction(request, 'read_file', { path: 'memory:knowledge_base' });
 
-        const memoryStore = this.options.agentMemoryStore;
-        if (!memoryStore) {
+        const globalMemory = this.getGlobalMemoryContext(request, asString(args.agentId));
+        if (!globalMemory.store) {
           return { success: false, error: 'Knowledge base is not enabled.' };
         }
 
-        const requestAgentId = asString(request.agentId);
-        const stateAgentId = this.options.resolveStateAgentId?.(requestAgentId) ?? requestAgentId;
-        const targetAgent = asString(args.agentId) || stateAgentId || 'default';
-        const content = memoryStore.load(targetAgent);
-        const size = memoryStore.size(targetAgent);
+        const content = globalMemory.store.load(globalMemory.agentId);
+        const size = globalMemory.store.size(globalMemory.agentId);
 
         return {
           success: true,
           output: {
-            agentId: targetAgent,
-            exists: memoryStore.exists(targetAgent),
+            scope: 'global',
+            agentId: globalMemory.agentId,
+            exists: globalMemory.store.exists(globalMemory.agentId),
             sizeChars: size,
             content: content || '(empty — no memories stored yet)',
           },
@@ -11114,8 +11292,8 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'memory_save',
-        description: 'Save a fact, preference, decision, or summary to the persistent knowledge base. Use this when the user says "remember this" or when important context should survive across conversations. Organize entries by category for easy retrieval.',
-        shortDescription: 'Save a fact or summary to the persistent knowledge base.',
+        description: 'Save a fact, preference, decision, or summary to persistent long-term memory. In a Code session, this writes to the session-specific coding memory. Outside Code, it writes to the current agent knowledge base.',
+        shortDescription: 'Save a fact or summary to the current scope\'s persistent memory.',
         risk: 'mutating',
         category: 'memory',
         parameters: {
@@ -11130,23 +11308,60 @@ export class ToolExecutor {
       async (args, request) => {
         const content = asString(args.content).trim();
         if (!content) return { success: false, error: 'Content is required.' };
-
-        this.guardAction(request, 'write_file', { path: 'memory:knowledge_base', content });
-
-        const memoryStore = this.options.agentMemoryStore;
-        if (!memoryStore) {
-          return { success: false, error: 'Knowledge base is not enabled.' };
-        }
-
-        const requestAgentId = asString(request.agentId);
-        const targetAgent = (this.options.resolveStateAgentId?.(requestAgentId) ?? requestAgentId) || 'default';
         const category = asString(args.category).trim() || undefined;
         const requestTrustLevel = request.contentTrustLevel ?? 'trusted';
         const trustLevel = requestTrustLevel === 'trusted' ? 'trusted' : 'untrusted';
         const status = requestTrustLevel === 'trusted' && !request.derivedFromTaintedContent
           ? 'active'
           : 'quarantined';
-        const stored = memoryStore.append(targetAgent, {
+
+        const codeMemory = this.getCurrentCodeSessionMemoryContext(request);
+        if (codeMemory) {
+          this.guardAction(request, 'write_file', { path: `memory:code_session:${codeMemory.sessionId}`, content });
+          if (!codeMemory.store) {
+            return { success: false, error: 'Code-session memory is not enabled.' };
+          }
+          const stored = codeMemory.store.append(codeMemory.sessionId, {
+            content,
+            createdAt: new Date().toISOString().slice(0, 10),
+            category,
+            sourceType: requestTrustLevel === 'trusted' ? 'user' : 'remote_tool',
+            trustLevel,
+            status,
+            createdByPrincipal: request.principalId ?? request.userId,
+            provenance: {
+              sessionId: codeMemory.sessionId,
+              taintReasons: request.taintReasons,
+            },
+          });
+
+          return {
+            success: true,
+            output: {
+              scope: 'code_session',
+              codeSessionId: codeMemory.sessionId,
+              entryId: stored.id,
+              saved: content,
+              category: category ?? '(uncategorized)',
+              status: stored.status,
+              trustLevel: stored.trustLevel,
+              totalSizeChars: codeMemory.store.size(codeMemory.sessionId),
+            },
+            verificationStatus: codeMemory.store.isEntryActive(codeMemory.sessionId, stored.id) ? 'verified' : 'unverified',
+            verificationEvidence: codeMemory.store.isEntryActive(codeMemory.sessionId, stored.id)
+              ? `Code-session memory entry ${stored.id} is active.`
+              : `Code-session memory entry ${stored.id} was persisted as ${stored.status}.`,
+          };
+        }
+
+        this.guardAction(request, 'write_file', { path: 'memory:knowledge_base', content });
+
+        const globalMemory = this.getGlobalMemoryContext(request);
+        if (!globalMemory.store) {
+          return { success: false, error: 'Knowledge base is not enabled.' };
+        }
+
+        const stored = globalMemory.store.append(globalMemory.agentId, {
           content,
           createdAt: new Date().toISOString().slice(0, 10),
           category,
@@ -11163,18 +11378,103 @@ export class ToolExecutor {
         return {
           success: true,
           output: {
-            agentId: targetAgent,
+            scope: 'global',
+            agentId: globalMemory.agentId,
             entryId: stored.id,
             saved: content,
             category: category ?? '(uncategorized)',
             status: stored.status,
             trustLevel: stored.trustLevel,
-            totalSizeChars: memoryStore.size(targetAgent),
+            totalSizeChars: globalMemory.store.size(globalMemory.agentId),
           },
-          verificationStatus: memoryStore.isEntryActive(targetAgent, stored.id) ? 'verified' : 'unverified',
-          verificationEvidence: memoryStore.isEntryActive(targetAgent, stored.id)
+          verificationStatus: globalMemory.store.isEntryActive(globalMemory.agentId, stored.id) ? 'verified' : 'unverified',
+          verificationEvidence: globalMemory.store.isEntryActive(globalMemory.agentId, stored.id)
             ? `Memory entry ${stored.id} is active in the knowledge base.`
             : `Memory entry ${stored.id} was persisted as ${stored.status}.`,
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'memory_bridge_search',
+        description: 'Read-only search across the other persistent memory scope. Use this to search global memory from a Code session, or to search a Code-session memory from outside it, without changing the current context or objective.',
+        shortDescription: 'Read-only search across another persistent memory scope.',
+        risk: 'read_only',
+        category: 'memory',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            targetScope: {
+              type: 'string',
+              enum: ['global', 'code_session'],
+              description: 'Which persistent memory scope to search.',
+            },
+            query: { type: 'string', description: 'The text to search for.' },
+            sessionId: { type: 'string', description: 'Required when searching a specific code-session memory from outside that session.' },
+            limit: { type: 'number', description: 'Maximum number of results to return (default 10).' },
+          },
+          required: ['targetScope', 'query'],
+        },
+      },
+      async (args, request) => {
+        const targetScope = asString(args.targetScope).trim().toLowerCase();
+        const query = asString(args.query).trim();
+        if (targetScope !== 'global' && targetScope !== 'code_session') {
+          return { success: false, error: 'targetScope must be "global" or "code_session".' };
+        }
+        if (!query) {
+          return { success: false, error: 'Query is required.' };
+        }
+
+        const limit = Math.min(Math.max(asNumber(args.limit, 10), 1), 20);
+
+        if (targetScope === 'global') {
+          this.guardAction(request, 'read_file', { path: 'memory:bridge:global', query });
+          const globalMemory = this.getGlobalMemoryContext(request);
+          if (!globalMemory.store) {
+            return { success: false, error: 'Knowledge base is not enabled.' };
+          }
+          const results = this.searchPersistentMemoryEntries(globalMemory.store, globalMemory.agentId, query, limit);
+          return {
+            success: true,
+            output: {
+              referenceOnly: true,
+              sourceScope: 'global',
+              agentId: globalMemory.agentId,
+              query,
+              resultCount: results.length,
+              results,
+            },
+            message: results.length > 0
+              ? `Found ${results.length} reference memory entr${results.length === 1 ? 'y' : 'ies'} in global memory.`
+              : 'No matching entries found in global memory.',
+          };
+        }
+
+        const codeMemory = this.resolveCodeSessionMemoryContext(asString(args.sessionId), request);
+        if (!codeMemory) {
+          return { success: false, error: 'A reachable code session is required to search code-session memory.' };
+        }
+        this.guardAction(request, 'read_file', { path: `memory:bridge:code_session:${codeMemory.sessionId}`, query });
+        if (!codeMemory.store) {
+          return { success: false, error: 'Code-session memory is not enabled.' };
+        }
+        const results = this.searchPersistentMemoryEntries(codeMemory.store, codeMemory.sessionId, query, limit);
+        return {
+          success: true,
+          output: {
+            referenceOnly: true,
+            sourceScope: 'code_session',
+            codeSessionId: codeMemory.sessionId,
+            query,
+            resultCount: results.length,
+            results,
+          },
+          message: results.length > 0
+            ? `Found ${results.length} reference memory entr${results.length === 1 ? 'y' : 'ies'} in code-session memory.`
+            : 'No matching entries found in code-session memory.',
         };
       },
     );

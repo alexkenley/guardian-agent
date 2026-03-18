@@ -43,7 +43,12 @@ async function request(path, options = {}) {
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.error || `HTTP ${res.status}`);
+    const error = new Error(body.error || `HTTP ${res.status}`);
+    error.status = res.status;
+    if (typeof body.errorCode === 'string' && body.errorCode.trim()) {
+      error.code = body.errorCode.trim();
+    }
+    throw error;
   }
 
   return res.json();
@@ -465,6 +470,14 @@ export const api = {
     body: JSON.stringify(payload),
   }),
   codeSessionDetach: (payload = {}) => request('/api/code/sessions/detach', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  codeSessionSendMessage: (sessionId, payload) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/message`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  codeSessionDecideApproval: (sessionId, approvalId, payload) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`, {
     method: 'POST',
     body: JSON.stringify(payload),
   }),

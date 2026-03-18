@@ -192,6 +192,21 @@ async function startFakeProvider(workspaceRoot) {
 
 function setupWorkspace(workspaceRoot) {
   fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(workspaceRoot, 'README.md'), [
+    '# UI Harness Workspace',
+    '',
+    'A small routine planner used by the Code UI smoke test.',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(workspaceRoot, 'package.json'), JSON.stringify({
+    name: 'code-ui-harness-workspace',
+    version: '1.0.0',
+    description: 'A small routine planner used by the Code UI smoke test.',
+    dependencies: {
+      react: '^18.0.0',
+      vite: '^5.0.0',
+    },
+  }, null, 2));
   fs.writeFileSync(path.join(workspaceRoot, 'src', 'example.ts'), [
     'export function getAnswer() {',
     '  const answerValue = 41;',
@@ -303,6 +318,32 @@ guardian:
       return Array.from(document.querySelectorAll('.code-session__meta')).some((node) => (node.textContent || '').includes(expected));
     }, workspaceRoot);
 
+    const poisonedCurrentDirectory = path.join(tmpDir, 'poisoned-workspace');
+    await page.evaluate((poisonPath) => {
+      const key = 'guardianagent_code_sessions_v2';
+      const raw = JSON.parse(localStorage.getItem(key) || '{}');
+      if (Array.isArray(raw.sessions) && raw.sessions[0]) {
+        raw.sessions[0].currentDirectory = poisonPath;
+        raw.sessions[0].selectedFilePath = `${poisonPath}/ghost.ts`;
+        localStorage.setItem(key, JSON.stringify(raw));
+      }
+    }, poisonedCurrentDirectory);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.code-page');
+    await page.waitForFunction((expected) => {
+      return Array.from(document.querySelectorAll('.code-session__meta')).some((node) => (node.textContent || '').includes(expected));
+    }, workspaceRoot);
+    const repairedSessionState = await page.evaluate(() => {
+      const raw = JSON.parse(localStorage.getItem('guardianagent_code_sessions_v2') || '{}');
+      const session = Array.isArray(raw.sessions) ? raw.sessions[0] : null;
+      return session ? {
+        currentDirectory: session.currentDirectory,
+        selectedFilePath: session.selectedFilePath,
+      } : null;
+    });
+    assert.equal(repairedSessionState?.currentDirectory, workspaceRoot, 'Code UI should replace stale local currentDirectory with the backend workspace root');
+    assert.equal(repairedSessionState?.selectedFilePath, null, 'Code UI should not preserve a stale selected file outside the workspace');
+
     const chatTab = page.locator('[data-code-assistant-tab="chat"]');
     const tasksTab = page.locator('[data-code-assistant-tab="tasks"]');
     const approvalsTab = page.locator('[data-code-assistant-tab="approvals"]');
@@ -390,6 +431,14 @@ guardian:
     });
     assert.equal(await page.locator('.code-chat__history').textContent().then((text) => text.includes('[Code Workspace Context]')), false, 'Code chat should not render internal prompt wrapper text');
     assert.equal(await chatTab.getAttribute('aria-selected'), 'true', 'Chat tab should stay active after a normal coding reply');
+
+    await tasksTab.click();
+    await page.waitForFunction(() => {
+      return Array.from(document.querySelectorAll('.code-status-card strong')).some((node) => (node.textContent || '').includes('Indexed repo map'));
+    });
+    assert.match(await page.locator('.code-assistant-panel__body').textContent(), /Current working set|Indexed repo map/);
+    await chatTab.click();
+    await page.waitForSelector('.code-chat__history');
 
     await page.fill('[data-code-chat-form] textarea[name="message"]', 'Give me a slow repo summary.');
     await page.click('[data-code-chat-form] button[type="submit"]');

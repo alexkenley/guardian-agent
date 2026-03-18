@@ -1,11 +1,11 @@
 ---
 name: webapp-testing
-description: Toolkit for testing local web applications and browser workflows with GuardianAgent's MCP browser tools. Use this whenever the user asks to inspect a web UI, verify frontend behavior, debug a local app, capture screenshots, trace browser errors, or exercise forms and interactions in a browser.
+description: Toolkit for testing local web applications and browser workflows with MCP browser tools. Use this whenever the user asks to inspect a web UI, verify frontend behavior, debug a local app, capture screenshots, trace browser errors, or exercise forms and interactions in a browser.
 ---
 
 # Webapp Testing
 
-Use GuardianAgent's MCP browser tools for browser work. Prefer Lightpanda for fast read-only inspection and Playwright for interaction, screenshots, uploads, and complex app behavior.
+Use the MCP browser tools for browser work. Prefer Lightpanda for fast read-only inspection and Playwright for interaction, screenshots, uploads, and complex app behavior.
 
 ## Backend Selection
 

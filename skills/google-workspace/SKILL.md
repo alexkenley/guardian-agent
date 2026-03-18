@@ -1,6 +1,6 @@
 # Google Workspace
 
-Use Guardian Agent's native Google Workspace tools for Gmail, Calendar, Drive, Docs, and Sheets.
+Use the native Google Workspace tools for Gmail, Calendar, Drive, Docs, and Sheets.
 
 Core rules:
 - Authentication is handled by the connected Google Workspace integration. Never ask the user for OAuth access tokens.

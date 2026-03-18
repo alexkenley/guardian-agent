@@ -1,6 +1,6 @@
 # Microsoft 365
 
-Use Guardian Agent's native Microsoft 365 tools for Outlook Mail, Calendar, OneDrive, and Contacts via the Microsoft Graph API.
+Use the native Microsoft 365 tools for Outlook Mail, Calendar, OneDrive, and Contacts via the Microsoft Graph API.
 
 Core rules:
 - Authentication is handled by the connected Microsoft 365 integration. Never ask the user for OAuth access tokens.

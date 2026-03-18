@@ -2,7 +2,7 @@
   "id": "coding-workspace",
   "name": "Coding Workspace",
   "version": "0.2.0",
-  "description": "Workflow guidance for backend-owned Guardian coding sessions, including workspace-aware repo understanding, attach/resume across surfaces, and broader Guardian actions performed from the active workspace context.",
+  "description": "Workflow guidance for backend-owned coding sessions, including workspace-aware repo understanding, attach/resume across surfaces, and broader actions performed from the active workspace context.",
   "tags": [
     "coding",
     "code",

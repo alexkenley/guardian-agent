@@ -20,7 +20,10 @@ export class ToolApprovalStore {
     // Dedup: if an identical pending approval already exists (same tool + argsHash), return it
     if (argsHash) {
       const existing = this.requests.find(
-        (r) => r.status === 'pending' && r.toolName === job.toolName && r.argsHash === argsHash,
+        (r) => r.status === 'pending'
+          && r.toolName === job.toolName
+          && r.argsHash === argsHash
+          && (r.codeSessionId ?? '') === (job.codeSessionId ?? ''),
       );
       if (existing) return existing;
     }
@@ -31,6 +34,7 @@ export class ToolApprovalStore {
       toolName: job.toolName,
       risk: job.risk,
       origin: job.origin,
+      ...(job.codeSessionId ? { codeSessionId: job.codeSessionId } : {}),
       requestedByPrincipal,
       requestedByRole,
       approvableByPrincipals: requestedByPrincipal ? [requestedByPrincipal] : undefined,

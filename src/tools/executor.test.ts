@@ -12,6 +12,7 @@ import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
 import { AgentMemoryStore } from '../runtime/agent-memory-store.js';
 import { ConversationService } from '../runtime/conversation.js';
 import { SHARED_TIER_AGENT_STATE_ID } from '../runtime/agent-state-context.js';
+import { CodeSessionStore } from '../runtime/code-sessions.js';
 
 const testDirs: string[] = [];
 const testServers: Server[] = [];
@@ -3582,6 +3583,162 @@ describe('ToolExecutor', () => {
     expect(recalled.success).toBe(true);
     const output = recalled.output as { content: string };
     expect(output.content).toContain('concise status updates');
+  });
+
+  it('retargets persistent memory tools to code-session memory inside Code sessions', async () => {
+    const root = createExecutorRoot();
+    const globalMemoryStore = new AgentMemoryStore({
+      enabled: true,
+      basePath: join(root, 'memory-global'),
+      maxContextChars: 4000,
+      maxFileChars: 20000,
+    });
+    const codeMemoryStore = new AgentMemoryStore({
+      enabled: true,
+      basePath: join(root, 'memory-code'),
+      maxContextChars: 4000,
+      maxFileChars: 20000,
+    });
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      agentMemoryStore: globalMemoryStore,
+      codeSessionMemoryStore: codeMemoryStore,
+      resolveStateAgentId: (agentId) => agentId === 'local' || agentId === 'external'
+        ? SHARED_TIER_AGENT_STATE_ID
+        : agentId,
+    });
+
+    const saved = await executor.runTool({
+      toolName: 'memory_save',
+      args: { content: 'Remember the current refactor focus is the parser.' },
+      origin: 'web',
+      agentId: 'local',
+      userId: 'web-code-harness',
+      channel: 'code-session',
+      codeContext: {
+        workspaceRoot: root,
+        sessionId: 'code-session-1',
+      },
+    });
+    expect(saved.success).toBe(true);
+    expect(globalMemoryStore.exists(SHARED_TIER_AGENT_STATE_ID)).toBe(false);
+    expect(codeMemoryStore.load('code-session-1')).toContain('parser');
+
+    const recalled = await executor.runTool({
+      toolName: 'memory_recall',
+      args: {},
+      origin: 'web',
+      agentId: 'external',
+      userId: 'web-code-harness',
+      channel: 'code-session',
+      codeContext: {
+        workspaceRoot: root,
+        sessionId: 'code-session-1',
+      },
+    });
+    expect(recalled.success).toBe(true);
+    expect(recalled.output).toMatchObject({
+      scope: 'code_session',
+      codeSessionId: 'code-session-1',
+    });
+    expect(String((recalled.output as { content: string }).content)).toContain('parser');
+  });
+
+  it('supports read-only bridge searches between global and code-session memory', async () => {
+    const root = createExecutorRoot();
+    const globalMemoryStore = new AgentMemoryStore({
+      enabled: true,
+      basePath: join(root, 'memory-global'),
+      maxContextChars: 4000,
+      maxFileChars: 20000,
+    });
+    const codeMemoryStore = new AgentMemoryStore({
+      enabled: true,
+      basePath: join(root, 'memory-code'),
+      maxContextChars: 4000,
+      maxFileChars: 20000,
+    });
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(root, 'code-sessions.sqlite'),
+    });
+    const session = codeSessionStore.createSession({
+      ownerUserId: 'u1',
+      title: 'Harness Session',
+      workspaceRoot: root,
+    });
+    globalMemoryStore.append(SHARED_TIER_AGENT_STATE_ID, {
+      content: 'The user prefers concise status updates.',
+      createdAt: '2026-03-18',
+      category: 'Preferences',
+    });
+    codeMemoryStore.append(session.id, {
+      content: 'Current coding objective: isolate prompt and memory scope.',
+      createdAt: '2026-03-18',
+      category: 'Project Notes',
+    });
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      agentMemoryStore: globalMemoryStore,
+      codeSessionMemoryStore: codeMemoryStore,
+      codeSessionStore,
+      resolveStateAgentId: (agentId) => agentId === 'local' || agentId === 'external'
+        ? SHARED_TIER_AGENT_STATE_ID
+        : agentId,
+    });
+
+    const fromCodeToGlobal = await executor.runTool({
+      toolName: 'memory_bridge_search',
+      args: {
+        targetScope: 'global',
+        query: 'concise status',
+      },
+      origin: 'web',
+      agentId: 'local',
+      userId: 'u1',
+      channel: 'code-session',
+      codeContext: {
+        workspaceRoot: root,
+        sessionId: session.id,
+      },
+    });
+    expect(fromCodeToGlobal.success).toBe(true);
+    expect(fromCodeToGlobal.output).toMatchObject({
+      referenceOnly: true,
+      sourceScope: 'global',
+    });
+    expect(JSON.stringify(fromCodeToGlobal.output)).toContain('concise status');
+
+    const fromGlobalToCode = await executor.runTool({
+      toolName: 'memory_bridge_search',
+      args: {
+        targetScope: 'code_session',
+        sessionId: session.id,
+        query: 'isolate prompt',
+      },
+      origin: 'web',
+      agentId: 'external',
+      userId: 'u1',
+      channel: 'web',
+    });
+    expect(fromGlobalToCode.success).toBe(true);
+    expect(fromGlobalToCode.output).toMatchObject({
+      referenceOnly: true,
+      sourceScope: 'code_session',
+      codeSessionId: session.id,
+    });
+    expect(JSON.stringify(fromGlobalToCode.output)).toContain('isolate prompt');
   });
 
   it('searches shared conversation history across tier-routed local and external agents', async () => {

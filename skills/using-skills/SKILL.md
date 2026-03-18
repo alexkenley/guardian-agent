@@ -12,7 +12,7 @@ Use this as a bootstrap workflow when the user explicitly wants help choosing or
 ## Selection Rules
 
 - Prefer the narrowest skill that matches the user’s actual request.
-- Prefer native Guardian skills and managed-provider integrations over reviewed third-party skills when both cover the same area.
+- Prefer native skills and managed-provider integrations over reviewed third-party skills when both cover the same area.
 - Keep reviewed third-party operational skills disabled unless the runtime, provider, and reviewer have approved them.
 - Do not treat marketplace popularity as a reason to use a skill.
 

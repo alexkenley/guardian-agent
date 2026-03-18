@@ -2,7 +2,7 @@
   "id": "preferences-memory",
   "name": "Preferences Memory",
   "version": "0.1.0",
-  "description": "Use when the user explicitly wants Guardian to remember a stable preference, instruction, fact, or profile detail for future conversations.",
+  "description": "Use when the user explicitly wants to remember a stable preference, instruction, fact, or profile detail for future conversations.",
   "role": "domain",
   "tags": ["memory", "preferences", "remember", "profile"],
   "enabled": true,

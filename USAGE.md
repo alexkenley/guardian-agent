@@ -27,15 +27,21 @@ On Windows, if you want the extra native isolation layer for risky subprocess-ba
 
 ## Coding Assistant
 
-The web `Code` page is a dedicated coding workspace rather than a variant of the main chat panel.
+The web `Code` page is the dedicated client for backend-owned coding sessions rather than a variant of the main chat panel.
 
 - each Code session has its own coding chat history, separate from the general web chat
-- each Code session also keeps backend-owned workspace identity and focus state derived from repo inspection
+- each Code session also keeps backend-owned workspace identity, an indexed repo map, a per-turn working set, and focus state derived from repo inspection and retrieval
+- repo/app answers are retrieval-backed from that repo map and working set rather than relying on generic host-app context or keyword shortcuts
+- the assistant's default reasoning context is the active Code session and attached repo, not GuardianAgent's own host-app repo/app context
+- each Code session also keeps separate durable long-term memory rather than reusing Guardian's global memory
+- the Code page sends chat and approval actions through dedicated session routes and fails closed if the targeted backend session is unavailable
 - the workspace includes a session rail, repo explorer, file/diff viewer, and PTY-backed `xterm.js` terminals
 - the assistant sidebar is split into `Chat`, `Tasks`, `Approvals`, and `Checks`
 - coding approvals stay in their own tab and appear in chat only as a small notice, which keeps the transcript readable during longer edit/review flows
 - assistant-driven file and shell actions are scoped to the active Code workspace root instead of widening the main chat shell policy
-- broader Guardian actions such as research or automation creation can still be performed from the Coding Assistant when they directly support the active workspace task
+- global memory is not injected into Code by default; use `memory_bridge_search` for explicit read-only cross-memory lookups
+- broader Guardian actions such as research, automation creation, and other assistant tasks can still be performed from the Coding Assistant without replacing the session's repo anchor
+- main chat, CLI, and Telegram can attach to the same backend coding session and continue its transcript, but they remain their own chat surfaces rather than the full Code-page workspace UI
 
 Current implementation details are documented in [docs/specs/CODING-ASSISTANT-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODING-ASSISTANT-SPEC.md).
 

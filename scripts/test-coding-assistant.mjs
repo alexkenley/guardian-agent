@@ -291,10 +291,12 @@ async function startFakeProvider(workspaceRoot, scenarioLog) {
         : [];
       const toolMessages = messages.filter((message) => message.role === 'tool');
       const latestUser = String([...messages].reverse().find((message) => message.role === 'user')?.content ?? '');
+      const systemPrompt = String(messages.find((message) => message.role === 'system')?.content ?? '');
 
       scenarioLog.push({
         latestUser,
         tools,
+        systemPrompt,
         toolMessages: toolMessages.map((message) => String(message.content ?? '')),
       });
 
@@ -365,6 +367,18 @@ async function startFakeProvider(workspaceRoot, scenarioLog) {
         res.end(JSON.stringify(createChatCompletionResponse({
           model: 'coding-harness-model',
           content: 'Git status ran inside the active coding workspace.',
+        })));
+        return;
+      }
+
+      if (/brief overview of this repo|what type of application is it|describe this app|overview of this app/i.test(latestUser)) {
+        const domainSummary = /habit planning dashboard|weekly goals|daily check-ins/i.test(systemPrompt)
+          ? 'This is Accomplish, a habit planning dashboard for routines, streaks, and weekly goals. Files inspected: README.md, package.json, src/App.tsx, src/routes/Dashboard.tsx.'
+          : 'This looks like a small TypeScript test application workspace. Files inspected: README.md, package.json, tsconfig.json.';
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(createChatCompletionResponse({
+          model: 'coding-harness-model',
+          content: domainSummary,
         })));
         return;
       }
@@ -480,10 +494,55 @@ async function runHarness() {
   const scenarioLog = [];
 
   fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(workspaceRoot, 'README.md'), [
+    '# Accomplish',
+    '',
+    'Accomplish is a habit planning dashboard for tracking routines, streaks, and weekly goals.',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(workspaceRoot, 'package.json'), JSON.stringify({
+    name: 'accomplish-app',
+    version: '1.0.0',
+    description: 'A habit planning dashboard for routines and weekly goals.',
+    dependencies: {
+      react: '^18.0.0',
+      'react-router-dom': '^6.0.0',
+      vite: '^5.0.0',
+    },
+    scripts: {
+      dev: 'vite',
+      build: 'vite build',
+      test: 'vitest',
+    },
+  }, null, 2));
+  fs.writeFileSync(path.join(workspaceRoot, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: {
+      target: 'ES2022',
+      module: 'NodeNext',
+    },
+  }, null, 2));
+  fs.writeFileSync(path.join(workspaceRoot, 'vite.config.ts'), [
+    'import { defineConfig } from "vite";',
+    'export default defineConfig({});',
+    '',
+  ].join('\n'));
   fs.writeFileSync(path.join(workspaceRoot, 'src', 'example.ts'), [
     'export function getAnswer() {',
     '  const answerValue = 41;',
     '  return answerValue;',
+    '}',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(workspaceRoot, 'src', 'App.tsx'), [
+    'export function App() {',
+    '  return <main>Accomplish helps users plan habits, track streaks, and review weekly goals.</main>;',
+    '}',
+    '',
+  ].join('\n'));
+  fs.mkdirSync(path.join(workspaceRoot, 'src', 'routes'), { recursive: true });
+  fs.writeFileSync(path.join(workspaceRoot, 'src', 'routes', 'Dashboard.tsx'), [
+    'export function Dashboard() {',
+    '  return <section>Daily check-ins, streak charts, and routine planning.</section>;',
     '}',
     '',
   ].join('\n'));
@@ -528,6 +587,10 @@ runtime:
     enabled: false
 guardian:
   enabled: true
+  rateLimit:
+    enabled: true
+    burstAllowed: 12
+    burstWindowMs: 10000
 `;
   fs.writeFileSync(configPath, config);
 
@@ -559,12 +622,39 @@ guardian:
       attach: true,
     });
     assert.ok(codeSessionCreate?.session?.id, `Expected backend code session creation to return a session id: ${JSON.stringify(codeSessionCreate)}`);
-    const codeSessionMetadata = {
+    const codeSessionId = codeSessionCreate.session.id;
+    const codeSessionPath = `/api/code/sessions/${encodeURIComponent(codeSessionId)}`;
+    const getCodeSessionSnapshot = async (historyLimit = 20) => requestJson(
+      baseUrl,
+      harnessToken,
+      'GET',
+      `${codeSessionPath}?channel=web&historyLimit=${historyLimit}`,
+    );
+    const codeToolMetadata = {
       codeContext: {
-        sessionId: codeSessionCreate.session.id,
+        sessionId: codeSessionId,
         workspaceRoot,
       },
     };
+    const codeSessionMessageMetadata = {
+      codeContext: {
+        sessionId: codeSessionId,
+      },
+    };
+    const staleOutsideRoot = path.join(tmpDir, 'outside-workspace');
+    fs.mkdirSync(staleOutsideRoot, { recursive: true });
+    const staleUiSnapshot = await requestJson(baseUrl, harnessToken, 'PATCH', codeSessionPath, {
+      userId: 'web-code-harness',
+      channel: 'web',
+      uiState: {
+        currentDirectory: staleOutsideRoot,
+        selectedFilePath: path.join(staleOutsideRoot, 'ghost.ts'),
+        expandedDirs: [workspaceRoot, staleOutsideRoot],
+      },
+    });
+    assert.equal(staleUiSnapshot?.session?.uiState?.currentDirectory, null);
+    assert.equal(staleUiSnapshot?.session?.uiState?.selectedFilePath, null);
+    assert.deepEqual(staleUiSnapshot?.session?.uiState?.expandedDirs ?? [], [workspaceRoot]);
 
     const codeEditPending = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {
       toolName: 'code_edit',
@@ -576,27 +666,37 @@ guardian:
       origin: 'web',
       userId: 'web-code-harness',
       channel: 'web',
+      metadata: codeToolMetadata,
     });
     assert.equal(codeEditPending.status, 'pending_approval');
     assert.ok(codeEditPending.approvalId, `Expected approvalId from code_edit: ${JSON.stringify(codeEditPending)}`);
 
-    const pendingApprovals = await requestJson(
-      baseUrl,
-      harnessToken,
-      'GET',
-      '/api/tools/approvals/pending?userId=web-code-harness&channel=web&limit=10',
-    );
-    assert.ok(Array.isArray(pendingApprovals) && pendingApprovals.length > 0, 'Expected pending approvals for code session');
+    const pendingCodeSession = await getCodeSessionSnapshot(5);
+    const pendingApprovals = pendingCodeSession?.session?.workState?.pendingApprovals;
+    assert.ok(Array.isArray(pendingApprovals) && pendingApprovals.length > 0, 'Expected code-session snapshot to expose pending approvals');
     assert.equal(pendingApprovals[0].toolName, 'code_edit');
     assert.equal(pendingApprovals[0].id, codeEditPending.approvalId);
 
-    const codeEditDecision = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/approvals/decision', {
-      approvalId: codeEditPending.approvalId,
-      decision: 'approved',
-      actor: 'web-code-harness',
-    });
+    const codeEditDecision = await requestJson(
+      baseUrl,
+      harnessToken,
+      'POST',
+      `${codeSessionPath}/approvals/${encodeURIComponent(codeEditPending.approvalId)}`,
+      {
+        decision: 'approved',
+        userId: 'web-code-harness',
+        channel: 'web',
+      },
+    );
     assert.equal(codeEditDecision.success, true);
     assert.match(fs.readFileSync(path.join(workspaceRoot, 'src', 'example.ts'), 'utf-8'), /answerValue = 42/);
+    const postEditSession = await getCodeSessionSnapshot(5);
+    assert.equal(postEditSession?.session?.workState?.pendingApprovals?.length ?? 0, 0);
+    assert.ok(
+      Array.isArray(postEditSession?.session?.workState?.recentJobs)
+      && postEditSession.session.workState.recentJobs.some((job) => job.toolName === 'code_edit'),
+      `Expected code-session recent jobs to include code_edit: ${JSON.stringify(postEditSession)}`,
+    );
 
     const codeShellPending = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {
       toolName: 'shell_safe',
@@ -607,17 +707,23 @@ guardian:
       origin: 'web',
       userId: 'web-code-harness',
       channel: 'web',
-      metadata: codeSessionMetadata,
+      metadata: codeToolMetadata,
     });
     assert.equal(codeShellPending.success, false);
     assert.equal(codeShellPending.status, 'pending_approval');
     assert.ok(codeShellPending.approvalId, `Expected approvalId from shell_safe git init: ${JSON.stringify(codeShellPending)}`);
 
-    const codeShellDecision = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/approvals/decision', {
-      approvalId: codeShellPending.approvalId,
-      decision: 'approved',
-      actor: 'web-code-harness',
-    });
+    const codeShellDecision = await requestJson(
+      baseUrl,
+      harnessToken,
+      'POST',
+      `${codeSessionPath}/approvals/${encodeURIComponent(codeShellPending.approvalId)}`,
+      {
+        decision: 'approved',
+        userId: 'web-code-harness',
+        channel: 'web',
+      },
+    );
     assert.equal(codeShellDecision.success, true, `Expected approved shell_safe continuation to succeed: ${JSON.stringify(codeShellDecision)}`);
     assert.equal(fs.existsSync(path.join(workspaceRoot, 'nested-repo', '.git')), true);
 
@@ -630,7 +736,7 @@ guardian:
       origin: 'web',
       userId: 'web-code-harness',
       channel: 'web',
-      metadata: codeSessionMetadata,
+      metadata: codeToolMetadata,
     });
     assert.equal(blockedShellEscape.success, false);
     assert.equal(blockedShellEscape.status, 'failed');
@@ -654,6 +760,7 @@ guardian:
       origin: 'web',
       userId: 'web-code-harness',
       channel: 'web',
+      metadata: codeToolMetadata,
     });
     assert.equal(codeCreate.success, true);
     assert.equal(fs.existsSync(path.join(workspaceRoot, 'src', 'generated.ts')), true);
@@ -669,6 +776,7 @@ guardian:
       origin: 'web',
       userId: 'web-code-harness',
       channel: 'web',
+      metadata: codeToolMetadata,
     });
     assert.equal(codeSearch.success, true);
     assert.ok(Array.isArray(codeSearch.output?.matches) && codeSearch.output.matches.some((match) => match.relativePath === 'src/example.ts'));
@@ -682,10 +790,83 @@ guardian:
       origin: 'web',
       userId: 'web-code-harness',
       channel: 'web',
-      metadata: codeSessionMetadata,
+      metadata: codeToolMetadata,
     });
     assert.equal(codeDiff.success, true);
     assert.match(String(codeDiff.output?.stdout ?? ''), /answerValue = 42/);
+
+    const overviewResponse = await requestJson(
+      baseUrl,
+      harnessToken,
+      'POST',
+      `${codeSessionPath}/message`,
+      {
+        content: 'Give me a brief overview of this repo.',
+        userId: 'web-code-harness',
+        channel: 'web',
+      },
+    );
+    assert.ok(String(overviewResponse.content ?? '').trim().length > 0, `Expected non-empty direct repo overview response: ${JSON.stringify(overviewResponse)}`);
+    assert.equal(/GuardianAgent/i.test(String(overviewResponse.content ?? '')), false, `Expected repo overview to stay grounded in the attached workspace: ${JSON.stringify(overviewResponse)}`);
+    assert.match(String(overviewResponse.content ?? ''), /Accomplish|habit|routine|weekly goals|dashboard/i);
+    assert.match(String(overviewResponse.content ?? ''), /README\.md|package\.json|src\/App\.tsx|Dashboard\.tsx/i);
+    if (provider.mode === 'fake') {
+      const overviewScenario = [...scenarioLog].reverse().find((entry) => entry.latestUser === 'Give me a brief overview of this repo.');
+      assert.ok(overviewScenario, 'Expected overview scenario to be captured');
+      assert.equal(overviewScenario.systemPrompt.includes(staleOutsideRoot), false, 'Did not expect stale outside-workspace paths in the Code-session system prompt');
+      assert.match(overviewScenario.systemPrompt, /currentDirectory: \./);
+      assert.match(overviewScenario.systemPrompt, /workspaceMap\.indexedFileCount:/);
+      assert.match(overviewScenario.systemPrompt, /workingSet\.files:/);
+      assert.match(overviewScenario.systemPrompt, /Accomplish|habit planning dashboard|weekly goals/i);
+    }
+
+    const appTypeResponse = await requestJson(
+      baseUrl,
+      harnessToken,
+      'POST',
+      `${codeSessionPath}/message`,
+      {
+        content: 'Yeah but what type of application is it?',
+        userId: 'web-code-harness',
+        channel: 'web',
+      },
+    );
+    assert.ok(String(appTypeResponse.content ?? '').trim().length > 0, `Expected non-empty app type response: ${JSON.stringify(appTypeResponse)}`);
+    assert.equal(/GuardianAgent/i.test(String(appTypeResponse.content ?? '')), false, `Expected app type response to stay grounded in the attached workspace: ${JSON.stringify(appTypeResponse)}`);
+    assert.equal(/allowed paths/i.test(String(appTypeResponse.content ?? '')), false, `Did not expect an allowed-path approval prompt for the active coding workspace: ${JSON.stringify(appTypeResponse)}`);
+    assert.match(String(appTypeResponse.content ?? ''), /Accomplish|habit|routine|weekly goals|dashboard/i);
+    const appTypeSession = await getCodeSessionSnapshot(10);
+    assert.ok((appTypeSession?.session?.workState?.workspaceMap?.indexedFileCount ?? 0) > 0, 'Expected code-session workspace map after repo-aware turns');
+    assert.ok(
+      Array.isArray(appTypeSession?.session?.workState?.workingSet?.files)
+      && appTypeSession.session.workState.workingSet.files.some((entry) => /README\.md|src\/App\.tsx/.test(String(entry.path ?? ''))),
+      `Expected working set files in code-session snapshot: ${JSON.stringify(appTypeSession)}`,
+    );
+
+    const describeAppResponse = await requestJson(
+      baseUrl,
+      harnessToken,
+      'POST',
+      `${codeSessionPath}/message`,
+      {
+        content: 'Describe this app.',
+        userId: 'web-code-harness',
+        channel: 'web',
+      },
+    );
+    assert.ok(String(describeAppResponse.content ?? '').trim().length > 0, `Expected non-empty describe-app response: ${JSON.stringify(describeAppResponse)}`);
+    assert.equal(/GuardianAgent|Guardian Agent/i.test(String(describeAppResponse.content ?? '')), false, `Expected "Describe this app" to stay grounded in the attached workspace: ${JSON.stringify(describeAppResponse)}`);
+    assert.match(String(describeAppResponse.content ?? ''), /Accomplish|habit|routine|weekly goals|dashboard/i);
+    if (provider.mode === 'fake') {
+      const describeScenario = [...scenarioLog].reverse().find((entry) => entry.latestUser === 'Describe this app.');
+      assert.ok(describeScenario, 'Expected describe-app scenario to be captured');
+      assert.equal(
+        /Guardian Agent|Guardian global memory|broader Guardian tools|assistant's global memory|host-application context|Guardian coding sessions|Guardian capabilities|Guardian's/i
+          .test(describeScenario.systemPrompt),
+        false,
+        'Did not expect host-assistant or skill-level Guardian leakage in the Code-session prompt',
+      );
+    }
 
     const toolsStateBeforeMessage = await requestJson(baseUrl, harnessToken, 'GET', '/api/tools?limit=40');
     const previousJobIds = new Set(
@@ -694,17 +875,27 @@ guardian:
         .filter(Boolean),
     );
 
-    const messageResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
-      content: 'Search the workspace for answerValue and tell me where it is defined.',
-      userId: 'web-code-harness',
-      channel: 'web',
-      metadata: codeSessionMetadata,
-    });
+    const messageResponse = await requestJson(
+      baseUrl,
+      harnessToken,
+      'POST',
+      `${codeSessionPath}/message`,
+      {
+        content: 'Search the workspace for answerValue and tell me where it is defined.',
+        userId: 'web-code-harness',
+        channel: 'web',
+      },
+    );
     assert.ok(String(messageResponse.content ?? '').trim().length > 0, `Expected non-empty coding response: ${JSON.stringify(messageResponse)}`);
     if (provider.mode === 'fake') {
       assert.match(String(messageResponse.content ?? ''), /answerValue/);
       assert.match(String(messageResponse.content ?? ''), /src\/example\.ts/);
     }
+    const postMessageSession = await getCodeSessionSnapshot(10);
+    assert.ok(
+      String(postMessageSession?.session?.workState?.focusSummary ?? '').trim().length > 0,
+      `Expected code-session focus summary after coding turn: ${JSON.stringify(postMessageSession)}`,
+    );
 
     const toolsStateAfter = await requestJson(baseUrl, harnessToken, 'GET', '/api/tools?limit=40');
     const recentJobs = Array.isArray(toolsStateAfter?.jobs) ? toolsStateAfter.jobs : [];
@@ -731,7 +922,7 @@ guardian:
         .filter(Boolean),
     );
 
-    const staleSessionFallbackResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+    const invalidSessionResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
       content: 'Search the workspace for answerValue and tell me where it is defined.',
       userId: 'web-code-harness',
       channel: 'web',
@@ -742,21 +933,34 @@ guardian:
         },
       },
     });
-    assert.ok(String(staleSessionFallbackResponse.content ?? '').trim().length > 0, `Expected non-empty fallback coding response: ${JSON.stringify(staleSessionFallbackResponse)}`);
+    assert.equal(invalidSessionResponse.errorCode, 'CODE_SESSION_UNAVAILABLE');
+    assert.match(String(invalidSessionResponse.error ?? ''), /code session/i);
+
+    const workspaceOnlyFallbackResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: 'Search the workspace for answerValue and tell me where it is defined.',
+      userId: 'web-code-harness',
+      channel: 'web',
+      metadata: {
+        codeContext: {
+          workspaceRoot,
+        },
+      },
+    });
+    assert.ok(String(workspaceOnlyFallbackResponse.content ?? '').trim().length > 0, `Expected non-empty workspace-root fallback coding response: ${JSON.stringify(workspaceOnlyFallbackResponse)}`);
 
     const toolsStateAfterFallback = await requestJson(baseUrl, harnessToken, 'GET', '/api/tools?limit=40');
     const fallbackJobs = (Array.isArray(toolsStateAfterFallback?.jobs) ? toolsStateAfterFallback.jobs : [])
       .filter((job) => job?.id && !previousFallbackMessageJobIds.has(job.id));
 
     if (provider.mode === 'fake') {
-      assert.match(String(staleSessionFallbackResponse.content ?? ''), /answerValue/);
-      assert.ok(fallbackJobs.some((job) => job.toolName === 'find_tools'), 'Expected find_tools job from stale-session workspace fallback flow');
-      assert.ok(fallbackJobs.some((job) => job.toolName === 'code_symbol_search'), 'Expected code_symbol_search job from stale-session workspace fallback flow');
+      assert.match(String(workspaceOnlyFallbackResponse.content ?? ''), /answerValue/);
+      assert.ok(fallbackJobs.some((job) => job.toolName === 'find_tools'), 'Expected find_tools job from workspace-root fallback flow');
+      assert.ok(fallbackJobs.some((job) => job.toolName === 'code_symbol_search'), 'Expected code_symbol_search job from workspace-root fallback flow');
     } else {
       const acceptableFallbackToolNames = new Set(['find_tools', 'code_symbol_search', 'fs_search', 'fs_read', 'shell_safe']);
       assert.ok(
         fallbackJobs.some((job) => acceptableFallbackToolNames.has(job.toolName)),
-        `Expected a coding tool call from the stale-session workspace fallback flow, got ${JSON.stringify(fallbackJobs)}`,
+        `Expected a coding tool call from the workspace-root fallback flow, got ${JSON.stringify(fallbackJobs)}`,
       );
     }
 
@@ -771,7 +975,7 @@ guardian:
       content: 'Run git status for this coding workspace and summarize it briefly.',
       userId: 'web-code-harness',
       channel: 'web',
-      metadata: codeSessionMetadata,
+      metadata: codeSessionMessageMetadata,
     });
     assert.ok(String(gitStatusResponse.content ?? '').trim().length > 0, `Expected non-empty git status response: ${JSON.stringify(gitStatusResponse)}`);
 
@@ -780,8 +984,8 @@ guardian:
       .filter((job) => job?.id && !previousGitMessageJobIds.has(job.id));
 
     if (provider.mode === 'fake') {
-      assert.ok(newGitJobs.some((job) => job.toolName === 'shell_safe'), 'Expected shell_safe job from git status coding message flow');
       assert.match(String(gitStatusResponse.content ?? ''), /Git status/i);
+      assert.equal(/GuardianAgent/i.test(String(gitStatusResponse.content ?? '')), false, `Expected git status response to stay out of host-app context: ${JSON.stringify(gitStatusResponse)}`);
     }
 
     console.log(`PASS coding assistant harness (${provider.mode})`);

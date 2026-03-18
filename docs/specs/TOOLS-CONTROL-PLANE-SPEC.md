@@ -27,12 +27,18 @@ Expose a safe, auditable tool-execution plane so the assistant can perform works
 - External interaction: `forum_post` (restricted by policy)
 - Network: `net_ping`, `net_arp_scan`, `net_port_check`, `net_interfaces`, `net_connections`, `net_dns_lookup`, `net_traceroute`, `net_oui_lookup`, `net_classify`, `net_banner_grab`, `net_fingerprint`, `net_wifi_scan`, `net_wifi_clients`, `net_connection_profiles`, `net_baseline`, `net_anomaly_check`, `net_threat_summary`, `net_traffic_baseline`, `net_threat_check`
 - System: `sys_info`, `sys_resources`, `sys_processes`, `sys_services`
-- Memory: `memory_search`, `memory_recall`, `memory_save`
+- Memory: `memory_search`, `memory_recall`, `memory_save`, `memory_bridge_search`
 - Search: `doc_search`, `doc_search_status`, `doc_search_reindex`
 - Automation: `workflow_list`, `workflow_upsert`, `workflow_delete`, `workflow_run`, `task_list`, `task_create`, `task_update`, `task_delete` — managed via web Automations page (`#/automations`) or chat through the automation authoring compiler
 - Policy: `update_tool_policy`
 
 ## Deferred Tool Loading
+
+Memory scope note:
+
+- outside Code, `memory_recall` and `memory_save` target the current agent's global memory
+- inside a backend Code session, those same tools target Code-session memory keyed by `codeSessionId`
+- `memory_bridge_search` is the explicit read-only cross-scope lookup path and does not switch the current context
 
 By default, 11 tools are sent to the LLM on every request (**always-loaded**) when agent policy updates are enabled:
 `find_tools`, `update_tool_policy`, `web_search`, `fs_read`, `fs_list`, `fs_search`, `shell_safe`, `memory_search`, `memory_save`, `sys_info`, `sys_resources`

@@ -1,6 +1,6 @@
 # Knowledge Search
 
-Use indexed search when the user wants answers from local docs, notes, wikis, or repository content that has already been ingested into Guardian's search service.
+Use indexed search when the user wants answers from local docs, notes, wikis, or repository content that has already been ingested into the search service.
 
 ## Workflow
 

@@ -2,7 +2,7 @@
   "id": "notion",
   "name": "Notion",
   "version": "0.1.0",
-  "description": "Use the Guardian-managed Notion integration to work with pages, data sources, and blocks.",
+  "description": "Use the managed Notion integration to work with pages, data sources, and blocks.",
   "role": "domain",
   "tags": [
     "notion",

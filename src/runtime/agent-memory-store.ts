@@ -286,16 +286,36 @@ export class AgentMemoryStore {
     return this.findEntry(agentId, entryId)?.status === 'active';
   }
 
-  search(agentId: string, query: string, options?: { includeInactive?: boolean }): string[] {
-    const lowerQuery = query.toLowerCase();
+  searchEntries(
+    agentId: string,
+    query: string,
+    options?: { includeInactive?: boolean; limit?: number },
+  ): StoredMemoryEntry[] {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) return [];
 
+    const limit = Math.max(1, Math.min(options?.limit ?? 10, 50));
+    const entries = this.getEntries(agentId, options?.includeInactive);
+
+    return entries
+      .filter((entry) => {
+        const category = entry.category?.toLowerCase() ?? '';
+        const tags = Array.isArray(entry.tags) ? entry.tags.join(' ').toLowerCase() : '';
+        return entry.content.toLowerCase().includes(normalizedQuery)
+          || category.includes(normalizedQuery)
+          || tags.includes(normalizedQuery);
+      })
+      .slice(0, limit)
+      .map((entry) => ({ ...entry }));
+  }
+
+  search(agentId: string, query: string, options?: { includeInactive?: boolean }): string[] {
+    const matchedEntries = this.searchEntries(agentId, query, options);
     if (options?.includeInactive) {
-      return this.readIndex(agentId).entries
-        .filter((entry) => entry.content.toLowerCase().includes(lowerQuery))
-        .map((entry) => {
-          const category = entry.category?.trim() || 'General';
-          return `## ${category}\n- [${entry.status}] ${entry.content} _(${entry.createdAt})_`;
-        });
+      return matchedEntries.map((entry) => {
+        const category = entry.category?.trim() || 'General';
+        return `## ${category}\n- [${entry.status}] ${entry.content} _(${entry.createdAt})_`;
+      });
     }
 
     const content = this.load(agentId);
@@ -304,7 +324,7 @@ export class AgentMemoryStore {
     const lines = content.split('\n');
     const matches: string[] = [];
     for (let i = 0; i < lines.length; i++) {
-      if (lines[i].toLowerCase().includes(lowerQuery)) {
+      if (lines[i].toLowerCase().includes(query.trim().toLowerCase())) {
         const start = Math.max(0, i - 1);
         const end = Math.min(lines.length - 1, i + 1);
         matches.push(lines.slice(start, end + 1).join('\n'));

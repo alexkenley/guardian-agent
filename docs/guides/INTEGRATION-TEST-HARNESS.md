@@ -4,9 +4,9 @@ Automated black-box testing against a running GuardianAgent instance via its RES
 
 ## Overview
 
-The test harness sends messages to the agent through the Web channel's `POST /api/message` endpoint and validates responses. It tests both functional behavior (tool calling, conversation) and security controls (PII scanning, shell injection defense, output guardian, contextual trust enforcement, bounded automation authority).
+Most general chat harnesses send messages through the Web channel's `POST /api/message` endpoint. Code-session harnesses use the dedicated `/api/code/sessions/:id/*` routes. Together they validate functional behavior (tool calling, conversation) and security controls (PII scanning, shell injection defense, output guardian, contextual trust enforcement, bounded automation authority).
 
-Nineteen scripts are provided:
+Core harness scripts include:
 
 | Script | Purpose | Assertions |
 |--------|---------|------------|
@@ -28,6 +28,8 @@ Nineteen scripts are provided:
 | **`scripts/test-cli-approvals.mjs`** | CLI approval UX regression harness: readline prompt capture, chained approvals, continuation flow, stale approval-ID refresh (Node.js) | ~10 |
 | **`scripts/test-contextual-security-uplifts.mjs`** | Contextual-security regression harness: quarantined remote content, trust-aware memory, principal-bound approvals, bounded schedules, runaway controls (Node.js) | ~20 |
 | **`scripts/test-automation-authoring-compiler.mjs`** | Conversational automation compiler harness: native task/workflow compilation, dedupe, and no-script drift (Node.js) | ~12 |
+| **`scripts/test-coding-assistant.mjs`** | Coding-session transport + repo-grounding harness against the dedicated Code-session API, including approval scoping, memory-scope isolation, and optional real Ollama smoke lane (Node.js) | focused Code-session assertions |
+| **`scripts/test-code-ui-smoke.mjs`** | Browser smoke for the `#/code` workspace: explorer refresh, focused chat, approval tab UX, and code-session persistence (Node.js + Playwright) | focused Code UI assertions |
 | **`scripts/test-llmmap-security.mjs`** | External `LLMMap` prompt-injection harness against `POST /api/message` using a real Ollama model (Node.js + Python) | preflight + LLMMap findings |
 
 Unlike unit tests (vitest), these exercise the full stack: config loading, Guardian pipeline, LLM provider, tool execution, and response formatting — exactly as a real user would experience it.
@@ -126,6 +128,26 @@ The **preferred method** for automated testing and bug reproduction is to write 
 6. **Assert and Cleanup:** Evaluate the API responses programmatically. Regardless of pass or fail, ensure `appProcess.kill()` is called in a `finally` block or `catch` handler so the port is properly released.
 
 For planner-path bugs such as tool discovery regressions, "tool is unavailable" chatter, or approval preamble wording, drive the scenario through `POST /api/message`. Direct `POST /api/tools/run` tests validate the approval transport, but they bypass the LLM's tool-selection and response-copy path.
+
+For Coding Assistant regressions, create a backend Code session first and drive chat through `POST /api/code/sessions/:id/message`, approvals through `POST /api/code/sessions/:id/approvals/:approvalId`, and session-state assertions through `GET /api/code/sessions/:id`. Keep `/api/message` coverage for two specific cases: ad hoc `workspaceRoot`-only coding context and fail-closed handling when a caller supplies an unresolved `metadata.codeContext.sessionId`.
+
+Recommended Coding Assistant regression loop:
+
+```bash
+node scripts/test-coding-assistant.mjs
+node scripts/test-code-ui-smoke.mjs
+HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=<your-model> node scripts/test-coding-assistant.mjs --use-ollama
+```
+
+When validating the current Coding Assistant architecture, also assert:
+
+- Code turns do not preload Guardian global memory
+- `memory_recall` and `memory_save` bind to Code-session memory while inside Code
+- `memory_bridge_search` is the only built-in cross-memory path, and it remains read-only
+- Code-session prompts stay grounded in the active repo/session without reusing Guardian host-app prompt identity
+- Code-session snapshots expose a non-empty `workspaceMap` after repo-aware turns
+- Code-session snapshots expose a `workingSet` with actual repo files for overview and follow-up questions
+- repo/app answers mention evidence from retrieved files, not just stack detection from manifests
 
 For web approval UX regressions, assert both the positive action copy and the absence of internal schema chatter. A good write-to-new-path scenario should produce approval text like `Waiting for approval to add S:\Development to allowed paths.` followed by `Waiting for approval to write S:\Development\test26.txt.`, and should not contain phrases like `tool is unavailable`, `tool is available`, or `action and value`.
 
@@ -391,9 +413,10 @@ Also tests the **approval flow** by switching between policy modes and approving
 #### Memory Tools
 | Prompt | Expected Tool | What It Validates |
 |--------|--------------|-------------------|
-| "save this to your memory" | `memory_save` | Persist knowledge |
-| "show your knowledge base" | `memory_recall` | Retrieve persisted knowledge |
-| "search memory for X" | `memory_search` | FTS5 search over knowledge |
+| "save this to your memory" | `memory_save` | Persist knowledge into the current memory scope |
+| "show your long-term memory" | `memory_recall` | Retrieve persistent memory for the current scope; inside Code this is Code-session memory |
+| "search memory for X" | `memory_search` | FTS5 search over the current conversation history |
+| "search global memory for X without changing context" | `memory_bridge_search` | Read-only lookup across the global/code-session memory boundary |
 
 #### Web, Threat Intel, Tasks
 | Prompt | Expected Tool | What It Validates |

@@ -3,7 +3,6 @@ import { onSSE } from '../app.js';
 
 const STORAGE_KEY = 'guardianagent_code_sessions_v2';
 const DEFAULT_USER_CHANNEL = 'web';
-const DEFAULT_CODE_USER_ID = 'web-user';
 const MAX_TERMINAL_PANES = 3;
 const APPROVAL_BACKLOG_SOFT_CAP = 3;
 const MAX_SESSION_JOBS = 20;
@@ -563,6 +562,11 @@ function isApprovalNotFoundMessage(value) {
   return /approval\s+'[^']+'\s+not\s+found/i.test(String(value || ''));
 }
 
+function isCodeSessionUnavailableError(value) {
+  return value?.code === 'CODE_SESSION_UNAVAILABLE'
+    || /code session\b.*\bunavailable\b/i.test(String(value?.message || value || ''));
+}
+
 function getApprovalBacklogState(session) {
   const count = Array.isArray(session?.pendingApprovals) ? session.pendingApprovals.length : 0;
   return {
@@ -573,8 +577,13 @@ function getApprovalBacklogState(session) {
 
 function isSessionJob(job, session) {
   return !!job
-    && job.userId === session.conversationUserId
-    && job.channel === (session.conversationChannel || 'code-session');
+    && (
+      (job.codeSessionId && job.codeSessionId === session.id)
+      || (
+        job.userId === session.conversationUserId
+        && job.channel === (session.conversationChannel || 'code-session')
+      )
+    );
 }
 
 function isCodeAssistantJob(job) {
@@ -637,6 +646,8 @@ function deriveTaskItems(session) {
   const backlog = getApprovalBacklogState(session);
   const recentJobs = Array.isArray(session?.recentJobs) ? session.recentJobs.filter(isCodeAssistantJob) : [];
   const workspaceProfile = session?.workspaceProfile || null;
+  const workspaceMap = session?.workspaceMap || null;
+  const workingSet = session?.workingSet || null;
 
   if (backlog.count > 0) {
     items.push({
@@ -663,12 +674,37 @@ function deriveTaskItems(session) {
     });
   }
 
+  if (workspaceMap?.indexedFileCount) {
+    const directoryPreview = Array.isArray(workspaceMap.directories)
+      ? workspaceMap.directories.slice(0, 3).map((entry) => `${entry.path} (${entry.fileCount})`).join(', ')
+      : '';
+    items.push({
+      id: 'workspace-map',
+      title: 'Indexed repo map',
+      status: 'info',
+      detail: `${workspaceMap.indexedFileCount} indexed files${workspaceMap.truncated ? ' (truncated)' : ''}${directoryPreview ? `. Directories: ${directoryPreview}.` : '.'}`,
+      meta: Array.isArray(workspaceMap.notableFiles) && workspaceMap.notableFiles.length > 0
+        ? workspaceMap.notableFiles.slice(0, 4).join(', ')
+        : '',
+    });
+  }
+
   if (session?.focusSummary) {
     items.push({
       id: 'focus-summary',
       title: 'Current focus',
       status: 'info',
       detail: session.focusSummary,
+    });
+  }
+
+  if (Array.isArray(workingSet?.files) && workingSet.files.length > 0) {
+    items.push({
+      id: 'working-set',
+      title: 'Current working set',
+      status: 'info',
+      detail: workingSet.rationale || 'Prepared repo files for the latest coding turn.',
+      meta: workingSet.files.slice(0, 4).map((entry) => entry.path).join(', '),
     });
   }
 
@@ -710,7 +746,7 @@ function deriveCheckItems(session) {
 function getTaskBadgeCount(session) {
   return deriveTaskItems(session)
     .filter((item) => item.status !== 'completed')
-    .filter((item) => item.id !== 'workspace-profile' && item.id !== 'focus-summary')
+    .filter((item) => item.id !== 'workspace-profile' && item.id !== 'workspace-map' && item.id !== 'working-set' && item.id !== 'focus-summary')
     .length;
 }
 
@@ -919,16 +955,54 @@ function normalizeWorkspaceProfile(profile) {
   };
 }
 
+function normalizeWorkspaceMap(map) {
+  if (!map || typeof map !== 'object') return null;
+  return {
+    indexedFileCount: Number(map.indexedFileCount) || 0,
+    totalDiscoveredFiles: Number(map.totalDiscoveredFiles) || 0,
+    truncated: !!map.truncated,
+    notableFiles: Array.isArray(map.notableFiles) ? map.notableFiles.map((value) => String(value)) : [],
+    directories: Array.isArray(map.directories)
+      ? map.directories.map((entry) => ({
+        path: entry?.path ? String(entry.path) : '.',
+        fileCount: Number(entry?.fileCount) || 0,
+        sampleFiles: Array.isArray(entry?.sampleFiles) ? entry.sampleFiles.map((value) => String(value)) : [],
+      }))
+      : [],
+    lastIndexedAt: Number(map.lastIndexedAt) || 0,
+  };
+}
+
+function normalizeWorkspaceWorkingSet(workingSet) {
+  if (!workingSet || typeof workingSet !== 'object') return null;
+  return {
+    query: workingSet.query || '',
+    rationale: workingSet.rationale || '',
+    retrievedAt: Number(workingSet.retrievedAt) || 0,
+    files: Array.isArray(workingSet.files)
+      ? workingSet.files.map((entry) => ({
+        path: entry?.path ? String(entry.path) : '',
+        category: entry?.category ? String(entry.category) : '',
+        reason: entry?.reason ? String(entry.reason) : '',
+        summary: entry?.summary ? String(entry.summary) : '',
+      })).filter((entry) => entry.path)
+      : [],
+  };
+}
+
 function normalizeServerSession(record, existing = {}) {
   const uiState = record?.uiState || {};
   const workState = record?.workState || {};
+  const hasWorkspaceProfile = Object.prototype.hasOwnProperty.call(workState, 'workspaceProfile');
+  const hasWorkspaceMap = Object.prototype.hasOwnProperty.call(workState, 'workspaceMap');
+  const hasWorkingSet = Object.prototype.hasOwnProperty.call(workState, 'workingSet');
   return {
     ...existing,
     id: record.id,
     title: record.title || 'Coding Session',
     workspaceRoot: record.workspaceRoot || '.',
     resolvedRoot: record.resolvedRoot || record.workspaceRoot || '.',
-    currentDirectory: uiState.currentDirectory || existing.currentDirectory || record.resolvedRoot || record.workspaceRoot || '.',
+    currentDirectory: uiState.currentDirectory || record.resolvedRoot || record.workspaceRoot || '.',
     selectedFilePath: uiState.selectedFilePath || null,
     showDiff: !!uiState.showDiff,
     agentId: record.agentId || null,
@@ -946,10 +1020,19 @@ function normalizeServerSession(record, existing = {}) {
     focusSummary: workState.focusSummary || '',
     planSummary: workState.planSummary || '',
     compactedSummary: workState.compactedSummary || '',
-    workspaceProfile: normalizeWorkspaceProfile(workState.workspaceProfile) || existing.workspaceProfile || null,
+    workspaceProfile: hasWorkspaceProfile ? normalizeWorkspaceProfile(workState.workspaceProfile) : (existing.workspaceProfile || null),
+    workspaceMap: hasWorkspaceMap ? normalizeWorkspaceMap(workState.workspaceMap) : (existing.workspaceMap || null),
+    workingSet: hasWorkingSet ? normalizeWorkspaceWorkingSet(workState.workingSet) : (existing.workingSet || null),
     activeAssistantTab: isAssistantTab(uiState.activeAssistantTab) ? uiState.activeAssistantTab : (existing.activeAssistantTab || 'chat'),
     lastExplorerPath: existing.lastExplorerPath || null,
   };
+}
+
+function mergeCodeSessionRecord(snapshot, existing = {}) {
+  if (!snapshot?.session) return null;
+  const merged = normalizeServerSession(snapshot.session, existing);
+  upsertSession(merged);
+  return merged;
 }
 
 function upsertSession(session) {
@@ -980,9 +1063,9 @@ function mergeSessionsFromServer(payload) {
 function applyCodeSessionSnapshot(snapshot) {
   if (!snapshot?.session) return null;
   const existing = codeState.sessions.find((session) => session.id === snapshot.session.id) || {};
-  const merged = normalizeServerSession(snapshot.session, existing);
+  const merged = mergeCodeSessionRecord(snapshot, existing);
+  if (!merged) return null;
   merged.chat = mapServerHistory(snapshot.history);
-  upsertSession(merged);
   return merged;
 }
 
@@ -1004,54 +1087,11 @@ async function refreshSessionSnapshot(sessionId, { historyLimit = 120 } = {}) {
 }
 
 async function ensureBackendSession(session) {
-  if (!session) return null;
-
-  if (session.id) {
-    const fresh = await refreshSessionSnapshot(session.id).catch(() => null);
-    if (fresh) {
-      await api.codeSessionAttach(fresh.id, { channel: DEFAULT_USER_CHANNEL }).catch(() => {});
-      return fresh;
-    }
-  }
-
-  await refreshSessionsIndex().catch(() => []);
-
-  const desiredRoot = normalizeComparablePath(session.resolvedRoot || session.workspaceRoot || '.');
-  const desiredTitle = String(session.title || '').trim().toLowerCase();
-  const matched = codeState.sessions.find((candidate) => {
-    const candidateRoot = normalizeComparablePath(candidate.resolvedRoot || candidate.workspaceRoot || '.');
-    if (!candidateRoot || candidateRoot !== desiredRoot) return false;
-    if (!desiredTitle) return true;
-    return String(candidate.title || '').trim().toLowerCase() === desiredTitle;
-  }) || null;
-
-  if (matched) {
-    await api.codeSessionAttach(matched.id, { channel: DEFAULT_USER_CHANNEL }).catch(() => {});
-    return refreshSessionSnapshot(matched.id).catch(() => matched);
-  }
-
-  const createdSnapshot = await api.codeSessionCreate({
-    channel: DEFAULT_USER_CHANNEL,
-    title: session.title || basename(session.resolvedRoot || session.workspaceRoot || '.') || 'Coding Session',
-    workspaceRoot: session.resolvedRoot || session.workspaceRoot || '.',
-    agentId: session.agentId || undefined,
-    attach: true,
-  });
-  const created = applyCodeSessionSnapshot(createdSnapshot);
-  if (!created) return session;
-
-  created.chat = Array.isArray(session.chat) ? [...session.chat] : created.chat;
-  created.chatDraft = session.chatDraft || created.chatDraft || '';
-  created.currentDirectory = session.currentDirectory || created.currentDirectory;
-  created.selectedFilePath = session.selectedFilePath || created.selectedFilePath;
-  created.expandedDirs = Array.isArray(session.expandedDirs) ? [...session.expandedDirs] : created.expandedDirs;
-  created.activeAssistantTab = isAssistantTab(session.activeAssistantTab) ? session.activeAssistantTab : created.activeAssistantTab;
-  created.terminalTabs = normalizeTerminalTabs(created.terminalTabs, session.terminalTabs);
-  upsertSession(created);
-  codeState.activeSessionId = created.id;
-  saveState(codeState);
-  queueSessionPersist(created);
-  return created;
+  if (!session?.id) return null;
+  const fresh = await refreshSessionSnapshot(session.id).catch(() => null);
+  if (!fresh) return null;
+  await api.codeSessionAttach(fresh.id, { channel: DEFAULT_USER_CHANNEL }).catch(() => {});
+  return fresh;
 }
 
 function buildCodeSessionUiState(session) {
@@ -1380,6 +1420,8 @@ function getSessionRenderSignature(session) {
     planSummary: session.planSummary || '',
     compactedSummary: session.compactedSummary || '',
     workspaceProfile: normalizeWorkspaceProfile(session.workspaceProfile),
+    workspaceMap: normalizeWorkspaceMap(session.workspaceMap),
+    workingSet: normalizeWorkspaceWorkingSet(session.workingSet),
     activeAssistantTab: session.activeAssistantTab || 'chat',
     terminalCollapsed: !!session.terminalCollapsed,
     terminalTabs: Array.isArray(session.terminalTabs)
@@ -1552,7 +1594,7 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
               <h3 class="code-chat__title"><span class="code-chat__title-icon">&#x1F4BB;</span><span>Coding Assistant</span></h3>
               ${activeSession ? `
                 <div class="panel__actions">
-                  <button class="btn btn-secondary btn-sm" type="button" data-code-reset-chat title="Clear conversation and start fresh">Reset</button>
+                  <button class="btn btn-secondary btn-sm" type="button" data-code-reset-chat title="Clear conversation and start fresh">Clear Chat</button>
                 </div>
               ` : ''}
             </div>
@@ -2020,6 +2062,7 @@ function renderSessionForm() {
       <div class="code-session-form__actions">
         <button class="btn btn-primary btn-sm" type="submit">${submitLabel}</button>
         <button class="btn btn-secondary btn-sm" type="button" ${cancelAttr}>Cancel</button>
+        ${isEdit ? `<button class="btn btn-danger btn-sm" type="button" data-code-clear-history="${escAttr(codeState.editingSessionId)}" style="margin-left:auto" title="Permanently clears all chat history for this session. This cannot be undone.">Clear History</button>` : ''}
       </div>
     </form>
   `;
@@ -2138,42 +2181,21 @@ async function loadFileView(session) {
 }
 
 async function loadAssistantState(session) {
-  const userId = session.conversationUserId;
-  const channel = session.conversationChannel || 'code-session';
-  if (!userId) {
+  if (!session?.id) {
     return {
       pendingApprovals: normalizePendingApprovals(session.pendingApprovals, session.pendingApprovals),
       recentJobs: Array.isArray(session.recentJobs) ? session.recentJobs.slice(0, MAX_SESSION_JOBS) : [],
     };
   }
-  const [pendingResult, toolsState] = await Promise.all([
-    api.pendingToolApprovals(userId, channel, 100).catch(() => []),
-    api.toolsState(100).catch(() => ({ approvals: [], jobs: [] })),
-  ]);
-
-  const approvalsById = new Map(
-    (Array.isArray(toolsState?.approvals) ? toolsState.approvals : [])
-      .filter((approval) => approval && typeof approval.id === 'string')
-      .map((approval) => [approval.id, approval]),
-  );
-
-  const pendingApprovals = normalizePendingApprovals(
-    Array.isArray(pendingResult)
-      ? pendingResult.map((approval) => ({
-        ...approval,
-        ...(approvalsById.get(approval.id) || {}),
-      }))
-      : [],
-    session.pendingApprovals,
-  );
-
-  const recentJobs = (Array.isArray(toolsState?.jobs) ? toolsState.jobs : [])
-    .filter((job) => isSessionJob(job, session))
-    .slice(0, MAX_SESSION_JOBS);
+  const snapshot = await api.codeSessionGet(session.id, {
+    channel: DEFAULT_USER_CHANNEL,
+    historyLimit: 1,
+  });
+  const refreshedSession = mergeCodeSessionRecord(snapshot, resolveLiveSession(session.id, session) || session) || session;
 
   return {
-    pendingApprovals,
-    recentJobs,
+    pendingApprovals: normalizePendingApprovals(refreshedSession.pendingApprovals, session.pendingApprovals),
+    recentJobs: Array.isArray(refreshedSession.recentJobs) ? refreshedSession.recentJobs.slice(0, MAX_SESSION_JOBS) : [],
   };
 }
 
@@ -2197,7 +2219,10 @@ async function decideCodeApprovalWithRetry(session, approvalId, decision) {
   let lastError = null;
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
-      const result = await api.decideToolApproval({ approvalId, decision, actor: session.conversationUserId || DEFAULT_CODE_USER_ID });
+      const result = await api.codeSessionDecideApproval(session.id, approvalId, {
+        decision,
+        channel: DEFAULT_USER_CHANNEL,
+      });
       if (result?.success === false && isApprovalNotFoundMessage(result.message) && attempt < 4) {
         lastError = new Error(result.message);
       } else {
@@ -2270,15 +2295,17 @@ async function handleCodeApprovalDecision(session, approvalIds, decision) {
     ].join('\n');
     try {
       const outboundSession = await ensureBackendSession(currentSession || session);
-      const outboundSessionId = outboundSession?.id || sessionId;
+      if (!outboundSession?.id) {
+        throw Object.assign(new Error('This coding session is no longer available. Refresh the session list and reopen the workspace before retrying.'), {
+          code: 'CODE_SESSION_UNAVAILABLE',
+        });
+      }
+      const outboundSessionId = outboundSession.id;
       refreshSessionId = outboundSessionId;
-      const response = await api.sendMessage(
-        continuationMessage,
-        outboundSession?.agentId || currentSession?.agentId || session.agentId || undefined,
-        DEFAULT_CODE_USER_ID,
-        DEFAULT_USER_CHANNEL,
-        buildCodeMessageMetadata(outboundSession || currentSession || session),
-      );
+      const response = await api.codeSessionSendMessage(outboundSessionId, {
+        content: continuationMessage,
+        channel: DEFAULT_USER_CHANNEL,
+      });
       const liveSession = resolveLiveSession(outboundSessionId, outboundSession || currentSession || session);
       if (Array.isArray(response?.metadata?.activeSkills)) {
         liveSession.activeSkills = response.metadata.activeSkills.map((value) => String(value));
@@ -2289,12 +2316,6 @@ async function handleCodeApprovalDecision(session, approvalIds, decision) {
       if (responsePendingApprovals) {
         continuationPendingApprovals = responsePendingApprovals;
         liveSession.pendingApprovals = normalizePendingApprovals(responsePendingApprovals, liveSession.pendingApprovals);
-      }
-      // Detect session drift on continuation
-      if (response?.metadata?.codeSessionResolved === false && outboundSessionId) {
-        appendChatMessage(liveSession, 'error',
-          'Session drift detected on continuation — re-attaching.');
-        await api.codeSessionAttach(outboundSessionId, { channel: DEFAULT_USER_CHANNEL }).catch(() => {});
       }
       appendChatMessage(liveSession, 'agent', response.content || 'Approval processed.');
     } catch (err) {
@@ -2347,6 +2368,27 @@ function bindEvents(container) {
     codeState.editingSessionId = null;
     codeState.editDraft = null;
     closeDirPicker();
+    saveState(codeState);
+    rerenderFromState();
+  });
+
+  container.querySelector('[data-code-clear-history]')?.addEventListener('click', async () => {
+    const sessionId = container.querySelector('[data-code-clear-history]')?.dataset?.codeClearHistory;
+    const session = codeState.sessions.find((s) => s.id === sessionId);
+    if (!session) return;
+    if (!confirm(`Clear all conversation history for "${session.title}"? This cannot be undone.`)) return;
+    session.chat = [];
+    session.pendingResponse = null;
+    saveState(codeState);
+    try {
+      await api.codeSessionResetConversation(session.id, { channel: DEFAULT_USER_CHANNEL });
+    } catch {
+      // Keep local clear even if server reset fails.
+    }
+    const refreshedSession = await refreshSessionSnapshot(session.id).catch(() => session);
+    await refreshAssistantState(refreshedSession || session, { rerender: false });
+    codeState.editingSessionId = null;
+    codeState.editDraft = null;
     saveState(codeState);
     rerenderFromState();
   });
@@ -2714,14 +2756,16 @@ function bindEvents(container) {
 
     try {
       const outboundSession = await ensureBackendSession(session);
-      const outboundSessionId = outboundSession?.id || sessionId;
-      const response = await api.sendMessage(
-        message,
-        outboundSession?.agentId || session.agentId || undefined,
-        DEFAULT_CODE_USER_ID,
-        DEFAULT_USER_CHANNEL,
-        buildCodeMessageMetadata(outboundSession || session),
-      );
+      if (!outboundSession?.id) {
+        throw Object.assign(new Error('This coding session is no longer available. Refresh the session list and reopen the workspace before sending another message.'), {
+          code: 'CODE_SESSION_UNAVAILABLE',
+        });
+      }
+      const outboundSessionId = outboundSession.id;
+      const response = await api.codeSessionSendMessage(outboundSessionId, {
+        content: message,
+        channel: DEFAULT_USER_CHANNEL,
+      });
       const liveSession = resolveLiveSession(outboundSessionId, outboundSession || session);
       liveSession.activeSkills = Array.isArray(response?.metadata?.activeSkills)
         ? response.metadata.activeSkills.map((value) => String(value))
@@ -2734,14 +2778,6 @@ function bindEvents(container) {
       }
       appendChatMessage(liveSession, 'user', message);
       liveSession.pendingResponse = null;
-      // Detect session binding drift: backend couldn't resolve the code session
-      if (response?.metadata?.codeSessionResolved === false && outboundSessionId) {
-        appendChatMessage(liveSession, 'error',
-          'Session drift detected — the backend could not resolve this coding session. '
-          + 'Re-attaching now. If the problem persists, try resetting the chat or re-creating the session.');
-        // Attempt recovery: re-attach and mark for next message
-        await api.codeSessionAttach(outboundSessionId, { channel: DEFAULT_USER_CHANNEL }).catch(() => {});
-      }
       appendChatMessage(liveSession, 'agent', response.content || 'No response content.');
       const refreshedSession = await refreshSessionSnapshot(outboundSessionId).catch(() => resolveLiveSession(outboundSessionId, liveSession));
       await refreshAssistantState(refreshedSession || liveSession, {
@@ -2750,9 +2786,15 @@ function bindEvents(container) {
       });
     } catch (err) {
       const liveSession = resolveLiveSession(sessionId, session);
-      appendChatMessage(liveSession, 'user', message);
       liveSession.pendingResponse = null;
-      appendChatMessage(liveSession, 'error', err instanceof Error ? err.message : String(err));
+      if (isCodeSessionUnavailableError(err)) {
+        liveSession.chatDraft = message;
+        form.elements.message.value = message;
+        appendChatMessage(liveSession, 'error', err instanceof Error ? err.message : String(err));
+      } else {
+        appendChatMessage(liveSession, 'user', message);
+        appendChatMessage(liveSession, 'error', err instanceof Error ? err.message : String(err));
+      }
     }
     saveState(codeState);
     rerenderFromState();
@@ -2939,18 +2981,6 @@ function createTerminalTab(name, shell) {
     connecting: false,
     connected: false,
     openFailed: false,
-  };
-}
-
-// ─── Prompt and output helpers ─────────────────────────────
-
-function buildCodeMessageMetadata(session) {
-  const workspaceRoot = session?.resolvedRoot || session?.workspaceRoot || '.';
-  return {
-    codeContext: {
-      ...(session?.id ? { sessionId: session.id } : {}),
-      workspaceRoot,
-    },
   };
 }
 

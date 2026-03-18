@@ -216,6 +216,7 @@ GuardianAgent is accessible through three channels:
 - Chat with the built-in AI assistant
 - Use the Coding Assistant for repository-scoped work with a separate Code-session chat history, repo explorer, diff view, and PTY-backed terminals
 - Each Code session now keeps a backend workspace profile and current focus summary so the Coding Assistant stays project-aware across resume/attach flows
+- Code-page chat turns go through a dedicated backend Code-session transport and fail closed if that session cannot be resolved, instead of silently degrading into normal web chat
 - Run guarded filesystem, web, network, and automation tasks
 - Create and schedule automations with native Guardian objects — open-ended recurring work defaults to scheduled agent tasks, fixed pipelines use workflows
 - Review audit logs, security alerts, and threat intelligence
@@ -236,12 +237,18 @@ For scheduled automations, the intended workflow is:
 The web `Code` page is a dedicated coding workspace, not just the general chat panel pointed at a repo.
 
 - Each Code session keeps its own coding conversation history separate from the rest of the web chat
-- Each Code session also keeps backend-owned workspace identity and focus state, built from lightweight repo inspection of the root, `README`, and primary manifests/configs
+- Each Code session also keeps backend-owned workspace identity, an indexed repo map, a per-turn working set, and focus state derived from repo inspection and retrieval over the attached workspace
+- Repo/app answers are retrieval-backed: Code starts from the current working set and repo map instead of trying to answer from generic host-app context or prompt heuristics
+- The Coding Assistant's default reasoning context is the active code session and attached workspace, not GuardianAgent's own host-app repo or docs
+- Each Code session now also has its own durable long-term memory, separate from GuardianAgent's global memory
+- The Code page sends chat and approval actions through session-owned backend routes, so approvals, recent jobs, and repo grounding stay bound to the active coding session
 - The workspace combines a session rail, file explorer, source/diff viewer, and PTY-backed `xterm.js` terminals
 - The assistant sidebar is split into `Chat`, `Tasks`, `Approvals`, and `Checks` so operational detail does not flood the transcript
 - Approval-heavy coding flows stay in the same workspace; pending approvals appear in their own tab and as a small non-blocking chat notice instead of hijacking the page
 - Assistant-driven file and shell tools are pinned to the active workspace root, so Code can use repo-local `git` and verification commands without broadening the main chat shell policy
-- The Coding Assistant is workspace-centered rather than coding-only: it can still use broader Guardian capabilities like research or automation creation when they directly support the active workspace task
+- Global memory is not preloaded into Code sessions; cross-memory lookups are explicit and read-only through `memory_bridge_search`
+- Broader Guardian capabilities remain available from the Coding Assistant, including research, automation creation, and other assistant tasks, without replacing the session's repo anchor
+- Main chat, CLI, and Telegram can attach to the same backend code session and continue its transcript, but they remain normal chat surfaces rather than the full Code-page client
 
 Implementation detail and current limitations are documented in [docs/specs/CODING-ASSISTANT-SPEC.md](docs/specs/CODING-ASSISTANT-SPEC.md).
 
@@ -360,7 +367,7 @@ For detailed configuration documentation:
 **Proposals:**
 - [Windows App Options](docs/proposals/WINDOWS-APP-OPTIONS.md)
 - [Windows Portable Isolation](docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md)
-- [Pipelock Comparison Roadmap](docs/proposals/PIPELOCK-COMPARISON-ROADMAP.md)
+- [Sandbox Egress and Secret Brokering Roadmap](docs/proposals/SANDBOX-EGRESS-AND-SECRET-BROKERING-ROADMAP.md)
 
 ---
 

@@ -22,6 +22,8 @@ The worker process owns:
 - the LLM chat/tool loop
 - pending-approval continuation state
 
+For Code-session turns, that supervisor-provided state now includes the resolved backend coding-session context, including workspace root, workspace profile, repo map, working set, and Code-session memory scope. The brokered worker should reason from that session-owned context rather than from Guardian host-app identity or global memory.
+
 The boundary is JSON-RPC over stdio. The worker has no direct reference to `Runtime`, `ToolExecutor`, or channel adapters.
 
 ## Current Architecture
@@ -91,7 +93,9 @@ Not implemented today:
 Those are intentionally not claimed as part of the current implementation. Instead, the supervisor sends the worker the context it needs for each message:
 - system prompt
 - trimmed conversation history
-- per-agent knowledge base excerpt
+- scoped persistent-memory excerpt
+  - global agent memory for normal chat
+  - Code-session memory for Code turns
 - active skills
 - tool context
 - runtime notices

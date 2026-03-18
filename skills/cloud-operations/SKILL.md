@@ -1,6 +1,6 @@
 # Cloud Operations
 
-Use Guardian's built-in cloud and hosting tools for read-first inspection across Vercel, Cloudflare, AWS, GCP, Azure, cPanel, and WHM.
+Use the built-in cloud and hosting tools for read-first inspection across Vercel, Cloudflare, AWS, GCP, Azure, cPanel, and WHM.
 
 ## Core Rules
 

@@ -6,7 +6,7 @@ Use this only for explicit Notion workspace tasks. For generic local docs, repo 
 
 ## Setup
 
-If Guardian already exposes a managed Notion provider, use that instead of creating new local API keys.
+If a managed Notion provider is already configured, use that instead of creating new local API keys.
 
 1. Create an integration at https://notion.so/my-integrations
 2. Copy the API key (starts with `ntn_` or `secret_`)

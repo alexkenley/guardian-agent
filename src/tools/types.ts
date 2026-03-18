@@ -147,7 +147,7 @@ export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
     'whm_services',
   ],
   system: ['sys_info', 'sys_resources', 'sys_processes', 'sys_services', 'host_monitor_status', 'host_monitor_check', 'gateway_firewall_status', 'gateway_firewall_check'],
-  memory: ['memory_search', 'memory_recall', 'memory_save'],
+  memory: ['memory_search', 'memory_recall', 'memory_save', 'memory_bridge_search'],
   search: ['doc_search', 'doc_search_status', 'doc_search_reindex'],
 };
 
@@ -229,6 +229,7 @@ export interface ToolJobRecord {
   toolName: string;
   risk: ToolRisk;
   origin: 'assistant' | 'cli' | 'web';
+  codeSessionId?: string;
   agentId?: string;
   userId?: string;
   principalId?: string;
@@ -259,6 +260,7 @@ export interface ToolApprovalRequest {
   toolName: string;
   risk: ToolRisk;
   origin: 'assistant' | 'cli' | 'web';
+  codeSessionId?: string;
   requestedByPrincipal?: string;
   requestedByRole?: PrincipalRole;
   approvableByPrincipals?: string[];

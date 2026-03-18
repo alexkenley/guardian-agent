@@ -2,7 +2,7 @@
   "id": "knowledge-search",
   "name": "Knowledge Search",
   "version": "0.1.0",
-  "description": "Use when searching or summarizing indexed local documents, repo docs, notes, or wikis through Guardian's document search tools.",
+  "description": "Use when searching or summarizing indexed local documents, repo docs, notes, or wikis through the document search tools.",
   "role": "domain",
   "tags": ["docs", "search", "knowledge base", "wiki", "indexed documents"],
   "enabled": true,

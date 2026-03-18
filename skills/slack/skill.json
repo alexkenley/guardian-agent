@@ -2,7 +2,7 @@
   "id": "slack",
   "name": "Slack Actions",
   "version": "0.1.0",
-  "description": "Use the Guardian-managed Slack integration to read messages, react, pin items, and send or edit Slack content.",
+  "description": "Use the managed Slack integration to read messages, react, pin items, and send or edit Slack content.",
   "role": "domain",
   "tags": [
     "slack",

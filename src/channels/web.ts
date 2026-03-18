@@ -123,6 +123,11 @@ interface TerminalSessionRecord {
   codeSessionId?: string | null;
 }
 
+type RequestErrorLike = Error & {
+  statusCode?: number;
+  errorCode?: string;
+};
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -135,6 +140,20 @@ function trimOptionalString(value: unknown): string | undefined {
 
 function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function getRequestErrorDetails(err: unknown): { statusCode: number; error: string; errorCode?: string } | null {
+  if (!(err instanceof Error)) return null;
+  const requestError = err as RequestErrorLike;
+  const statusCode = Number(requestError.statusCode);
+  if (!Number.isFinite(statusCode) || statusCode < 400 || statusCode > 599) {
+    return null;
+  }
+  return {
+    statusCode,
+    error: requestError.message || 'Request failed',
+    ...(requestError.errorCode ? { errorCode: requestError.errorCode } : {}),
+  };
 }
 
 function hasOwn(value: object, key: string): boolean {
@@ -2515,6 +2534,14 @@ export class WebChannel implements ChannelAdapter {
           );
           sendJSON(res, 200, result);
         } catch (err) {
+          const requestError = getRequestErrorDetails(err);
+          if (requestError) {
+            sendJSON(res, requestError.statusCode, {
+              error: requestError.error,
+              ...(requestError.errorCode ? { errorCode: requestError.errorCode } : {}),
+            });
+            return;
+          }
           logInternalError('Stream dispatch failed', err);
           sendJSON(res, 500, { error: 'Stream dispatch error' });
         }
@@ -2562,6 +2589,14 @@ export class WebChannel implements ChannelAdapter {
             });
             sendJSON(res, 200, response);
           } catch (err) {
+            const requestError = getRequestErrorDetails(err);
+            if (requestError) {
+              sendJSON(res, requestError.statusCode, {
+                error: requestError.error,
+                ...(requestError.errorCode ? { errorCode: requestError.errorCode } : {}),
+              });
+              return;
+            }
             logInternalError('Message dispatch failed', err);
             const detail = err instanceof Error ? err.message : String(err);
             sendJSON(res, 500, { error: `Dispatch error: ${detail}` });
@@ -2589,6 +2624,14 @@ export class WebChannel implements ChannelAdapter {
           });
           sendJSON(res, 200, response);
         } catch (err) {
+          const requestError = getRequestErrorDetails(err);
+          if (requestError) {
+            sendJSON(res, requestError.statusCode, {
+              error: requestError.error,
+              ...(requestError.errorCode ? { errorCode: requestError.errorCode } : {}),
+            });
+            return;
+          }
           logInternalError('Message dispatch failed', err);
           const detail = err instanceof Error ? err.message : String(err);
           sendJSON(res, 500, { error: `Dispatch error: ${detail}` });
@@ -3383,7 +3426,7 @@ export class WebChannel implements ChannelAdapter {
           userId,
           principalId: principal.principalId,
           channel,
-          surfaceId: principal.principalId,
+          surfaceId: '',
         }));
         return;
       }
@@ -3411,7 +3454,7 @@ export class WebChannel implements ChannelAdapter {
           userId: parsed.userId || 'web-user',
           principalId: principal.principalId,
           channel: parsed.channel || 'web',
-          surfaceId: principal.principalId,
+          surfaceId: '',
           title: parsed.title!,
           workspaceRoot: parsed.workspaceRoot!,
           agentId: trimOptionalString(parsed.agentId) ?? null,
@@ -3433,7 +3476,7 @@ export class WebChannel implements ChannelAdapter {
           userId: parsed.userId || 'web-user',
           principalId: principal.principalId,
           channel: parsed.channel || 'web',
-          surfaceId: principal.principalId,
+          surfaceId: '',
         });
         sendJSON(res, 200, result);
         return;
@@ -3456,10 +3499,100 @@ export class WebChannel implements ChannelAdapter {
           userId: parsed.userId || 'web-user',
           principalId: principal.principalId,
           channel: parsed.channel || 'web',
-          surfaceId: principal.principalId,
+          surfaceId: '',
           mode: trimOptionalString(parsed.mode) as import('../runtime/code-sessions.js').CodeSessionAttachmentMode | undefined,
         });
         sendJSON(res, 200, result);
+        return;
+      }
+
+      const codeSessionMessageMatch = req.method === 'POST'
+        ? url.pathname.match(/^\/api\/code\/sessions\/([^/]+)\/message$/)
+        : null;
+      if (codeSessionMessageMatch) {
+        if (!this.dashboard.onCodeSessionMessage) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const sessionId = decodeURIComponent(codeSessionMessageMatch[1]);
+        const body = await readBody(req, this.maxBodyBytes);
+        const parsed = JSON.parse(body || '{}') as { userId?: string; channel?: string; content?: unknown };
+        const content = asNonEmptyString(parsed.content);
+        if (!content) {
+          sendJSON(res, 400, { error: 'content is required' });
+          return;
+        }
+        const principal = this.resolveRequestPrincipal(req);
+        try {
+          const response = await this.dashboard.onCodeSessionMessage({
+            sessionId,
+            userId: parsed.userId || 'web-user',
+            principalId: principal.principalId,
+            principalRole: principal.principalRole,
+            channel: parsed.channel || 'web',
+            surfaceId: '',
+            content,
+          });
+          sendJSON(res, 200, response);
+        } catch (err) {
+          const requestError = getRequestErrorDetails(err);
+          if (requestError) {
+            sendJSON(res, requestError.statusCode, {
+              error: requestError.error,
+              ...(requestError.errorCode ? { errorCode: requestError.errorCode } : {}),
+            });
+            return;
+          }
+          logInternalError('Code session message dispatch failed', err);
+          const detail = err instanceof Error ? err.message : String(err);
+          sendJSON(res, 500, { error: `Dispatch error: ${detail}` });
+        }
+        return;
+      }
+
+      const codeSessionApprovalMatch = req.method === 'POST'
+        ? url.pathname.match(/^\/api\/code\/sessions\/([^/]+)\/approvals\/([^/]+)$/)
+        : null;
+      if (codeSessionApprovalMatch) {
+        if (!this.dashboard.onCodeSessionApprovalDecision) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const sessionId = decodeURIComponent(codeSessionApprovalMatch[1]);
+        const approvalId = decodeURIComponent(codeSessionApprovalMatch[2]);
+        const body = await readBody(req, this.maxBodyBytes);
+        const parsed = JSON.parse(body || '{}') as { userId?: string; channel?: string; decision?: 'approved' | 'denied'; reason?: string };
+        if (!parsed.decision || (parsed.decision !== 'approved' && parsed.decision !== 'denied')) {
+          sendJSON(res, 400, { error: 'decision is required' });
+          return;
+        }
+        const principal = this.resolveRequestPrincipal(req);
+        try {
+          const result = await this.dashboard.onCodeSessionApprovalDecision({
+            sessionId,
+            approvalId,
+            decision: parsed.decision,
+            userId: parsed.userId || 'web-user',
+            principalId: principal.principalId,
+            principalRole: principal.principalRole,
+            channel: parsed.channel || 'web',
+            surfaceId: '',
+            reason: trimOptionalString(parsed.reason),
+          });
+          sendJSON(res, 200, result);
+        } catch (err) {
+          const requestError = getRequestErrorDetails(err);
+          if (requestError) {
+            sendJSON(res, requestError.statusCode, {
+              error: requestError.error,
+              ...(requestError.errorCode ? { errorCode: requestError.errorCode } : {}),
+            });
+            return;
+          }
+          logInternalError('Code session approval decision failed', err);
+          const detail = err instanceof Error ? err.message : String(err);
+          sendJSON(res, 500, { error: `Dispatch error: ${detail}` });
+        }
         return;
       }
 
@@ -3501,7 +3634,7 @@ export class WebChannel implements ChannelAdapter {
             userId,
             principalId: principal.principalId,
             channel,
-            surfaceId: principal.principalId,
+            surfaceId: '',
             historyLimit: Number.isFinite(historyLimit) ? historyLimit : 120,
           });
           if (!result) {
@@ -3533,7 +3666,7 @@ export class WebChannel implements ChannelAdapter {
             userId: parsed.userId || 'web-user',
             principalId: principal.principalId,
             channel: parsed.channel || 'web',
-            surfaceId: principal.principalId,
+            surfaceId: '',
             title: trimOptionalString(parsed.title),
             workspaceRoot: trimOptionalString(parsed.workspaceRoot),
             agentId: hasOwn(parsed as object, 'agentId') ? (trimOptionalString(parsed.agentId) ?? null) : undefined,
@@ -3561,7 +3694,7 @@ export class WebChannel implements ChannelAdapter {
             userId: parsed.userId || 'web-user',
             principalId: principal.principalId,
             channel: parsed.channel || 'web',
-            surfaceId: principal.principalId,
+            surfaceId: '',
           });
           sendJSON(res, result.success ? 200 : 404, result);
           return;
@@ -3580,7 +3713,7 @@ export class WebChannel implements ChannelAdapter {
             userId: parsed.userId || 'web-user',
             principalId: principal.principalId,
             channel: parsed.channel || 'web',
-            surfaceId: principal.principalId,
+            surfaceId: '',
             historyLimit: 1,
           });
           if (!snapshot) {
@@ -3624,7 +3757,7 @@ export class WebChannel implements ChannelAdapter {
             userId: parsed.userId || 'web-user',
             principalId: principal.principalId,
             channel: parsed.channel || 'web',
-            surfaceId: principal.principalId,
+            surfaceId: '',
             historyLimit: 1,
           });
           if (!snapshot) {
@@ -3665,7 +3798,7 @@ export class WebChannel implements ChannelAdapter {
             userId: parsed.userId || 'web-user',
             principalId: principal.principalId,
             channel: parsed.channel || 'web',
-            surfaceId: principal.principalId,
+            surfaceId: '',
             historyLimit: 1,
           });
           if (!snapshot) {
@@ -3727,7 +3860,7 @@ export class WebChannel implements ChannelAdapter {
             userId: parsed.userId || 'web-user',
             principalId: principal.principalId,
             channel: parsed.channel || 'web',
-            surfaceId: principal.principalId,
+            surfaceId: '',
             historyLimit: 1,
           });
           if (!snapshot) {

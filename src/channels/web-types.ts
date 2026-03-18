@@ -665,6 +665,38 @@ export interface DashboardCallbacks {
     channel: string;
     surfaceId: string;
   }) => { success: boolean };
+  onCodeSessionMessage?: (args: {
+    sessionId: string;
+    userId: string;
+    principalId?: string;
+    principalRole?: import('../tools/types.js').PrincipalRole;
+    channel: string;
+    surfaceId: string;
+    content: string;
+  }) => Promise<{
+    content: string;
+    metadata?: Record<string, unknown>;
+  }>;
+  onCodeSessionApprovalDecision?: (input: {
+    sessionId: string;
+    approvalId: string;
+    decision: 'approved' | 'denied';
+    userId: string;
+    principalId?: string;
+    principalRole?: import('../tools/types.js').PrincipalRole;
+    channel: string;
+    surfaceId: string;
+    reason?: string;
+  }) => Promise<{
+    success: boolean;
+    message: string;
+    continueConversation?: boolean;
+    displayMessage?: string;
+    continuedResponse?: {
+      content: string;
+      metadata?: Record<string, unknown>;
+    };
+  }>;
   onCodeSessionResetConversation?: (args: {
     sessionId: string;
     userId: string;
