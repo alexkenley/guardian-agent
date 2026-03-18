@@ -5978,6 +5978,17 @@ function buildDashboardCallbacks(
         workspaceRoot,
         agentId: agentId?.trim() || null,
       });
+      // Auto-add workspace root to allowed paths so the coding assistant can
+      // operate on workspace files without requiring update_tool_policy approval.
+      // Auto-add workspace root to allowed paths so the coding assistant can
+      // operate on workspace files without requiring update_tool_policy approval.
+      if (session.resolvedRoot && toolExecutor) {
+        const currentAllowed = toolExecutor.getPolicy().sandbox.allowedPaths;
+        if (!currentAllowed.some((p: string) => session.resolvedRoot.startsWith(p) || p.startsWith(session.resolvedRoot))) {
+          toolExecutor.updatePolicy({ sandbox: { allowedPaths: [...currentAllowed, session.resolvedRoot] } });
+          log.info({ sessionId: session.id, path: session.resolvedRoot }, 'Auto-added code session workspace root to allowed paths');
+        }
+      }
       if (attach !== false) {
         codeSessionStore.attachSession({
           sessionId: session.id,

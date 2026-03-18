@@ -497,6 +497,11 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(payload),
   }),
+  codeGitStatus: (sessionId) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/git/status`),
+  codeGitAction: (sessionId, payload) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/git/action`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
 
   // Guardian Agent + Sentinel Audit
   guardianAgentStatus: () => request('/api/guardian-agent/status'),

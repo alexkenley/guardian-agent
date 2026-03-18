@@ -1493,8 +1493,8 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
   const focusState = captureFocusState(container);
   const activeSession = getActiveSession();
   const fileView = cachedFileView;
-  const railCollapsed = !!codeState.railCollapsed;
-  const explorerCollapsed = !!codeState.explorerCollapsed;
+  const activePanel = codeState.activePanel !== undefined ? codeState.activePanel : 'sessions'; // 'sessions' | 'explorer' | 'git' | null
+  const panelCollapsed = !activePanel;
 
   const editorContent = activeSession?.selectedFilePath
     ? (activeSession.showDiff
@@ -1522,38 +1522,60 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
 
   container.innerHTML = `
     <div class="code-page">
-      <div class="code-page__shell ${railCollapsed ? 'rail-collapsed' : ''}">
-        <aside class="code-rail ${railCollapsed ? 'is-collapsed' : ''}">
-          <div class="code-rail__header">
-            <h3><span class="code-panel-title__icon">&#128451;</span><span class="code-panel-title__text">Sessions</span></h3>
-            ${!railCollapsed ? '<button class="btn btn-primary btn-sm" type="button" data-code-new-session>+</button>' : ''}
-          </div>
-          ${!railCollapsed ? renderSessionForm() : ''}
-          ${!railCollapsed ? `
-            <div class="code-rail__list">
-              ${codeState.sessions.map((session) => renderSessionCard(session)).join('')}
+      <div class="code-page__shell ${panelCollapsed ? 'panel-collapsed' : ''}">
+        <nav class="code-icon-rail">
+          <button class="code-icon-rail__btn ${activePanel === 'sessions' ? 'is-active' : ''}" type="button" data-code-panel-switch="sessions" title="Sessions">&#128451;</button>
+          <button class="code-icon-rail__btn ${activePanel === 'explorer' ? 'is-active' : ''}" type="button" data-code-panel-switch="explorer" title="Explorer">&#128193;</button>
+          <button class="code-icon-rail__btn ${activePanel === 'git' ? 'is-active' : ''}" type="button" data-code-panel-switch="git" title="Source Control">&#9095;</button>
+        </nav>
+        ${!panelCollapsed ? `
+        <aside class="code-side-panel">
+          ${activePanel === 'sessions' ? `
+            <div class="code-side-panel__section">
+              <div class="code-rail__header">
+                <h3><span class="code-panel-title__icon">&#128451;</span> Sessions</h3>
+                <button class="btn btn-primary btn-sm" type="button" data-code-new-session>+</button>
+              </div>
+              ${renderSessionForm()}
+              <div class="code-rail__list">
+                ${codeState.sessions.map((session) => renderSessionCard(session)).join('')}
+              </div>
             </div>
           ` : ''}
-          <button class="sidebar-toggle code-panel-toggle" type="button" data-code-toggle-rail title="${railCollapsed ? 'Expand sessions panel' : 'Collapse sessions panel'}">${railCollapsed ? '&#x276F;' : '&#x276E;'}</button>
-        </aside>
-        <section class="code-workspace">
-          <div class="code-workspace__main ${isCollapsed ? 'terminals-collapsed' : ''} ${explorerCollapsed ? 'explorer-collapsed' : ''}">
-            <section class="code-explorer panel ${explorerCollapsed ? 'is-collapsed' : ''}">
+          ${activePanel === 'explorer' ? `
+            <div class="code-side-panel__section">
               <div class="panel__header">
-                <h3><span class="code-panel-title__icon">&#128193;</span><span class="code-panel-title__text">Explorer</span> ${!explorerCollapsed ? '<span class="code-tooltip-icon" title="Browse workspace files. Expand folders in the tree, click files to view source.">&#9432;</span>' : ''}</h3>
-                ${activeSession && !explorerCollapsed ? `
+                <h3><span class="code-panel-title__icon">&#128193;</span> Explorer</h3>
+                ${activeSession ? `
                   <div class="panel__actions">
                     <button class="btn btn-secondary btn-sm" type="button" data-code-refresh-explorer title="Reload directory tree">&#x21BB;</button>
                   </div>
                 ` : ''}
               </div>
-              ${activeSession && !explorerCollapsed ? `
+              ${activeSession ? `
                 <div class="code-file-list">
                   ${renderTree(activeSession.resolvedRoot || activeSession.workspaceRoot || '.', activeSession)}
                 </div>
-              ` : (!activeSession ? '<div class="empty-state">Create a session to browse.</div>' : '')}
-              <button class="sidebar-toggle code-panel-toggle" type="button" data-code-toggle-explorer title="${explorerCollapsed ? 'Expand explorer panel' : 'Collapse explorer panel'}">${explorerCollapsed ? '&#x276F;' : '&#x276E;'}</button>
-            </section>
+              ` : '<div class="empty-state">Create a session to browse.</div>'}
+            </div>
+          ` : ''}
+          ${activePanel === 'git' ? `
+            <div class="code-side-panel__section">
+              <div class="panel__header">
+                <h3><span class="code-panel-title__icon">&#9095;</span> Source Control</h3>
+                ${activeSession ? `
+                  <div class="panel__actions">
+                    <button class="btn btn-secondary btn-sm" type="button" data-code-git-refresh title="Refresh git status">&#x21BB;</button>
+                  </div>
+                ` : ''}
+              </div>
+              ${activeSession ? renderGitPanel(activeSession) : '<div class="empty-state">Create a session to view source control.</div>'}
+            </div>
+          ` : ''}
+        </aside>
+        ` : ''}
+        <section class="code-workspace">
+          <div class="code-workspace__main ${isCollapsed ? 'terminals-collapsed' : ''}">
             <section class="code-editor panel">
               <div class="panel__header">
                 <h3>${activeSession?.selectedFilePath ? esc(basename(activeSession.selectedFilePath)) : 'Editor'} <span class="code-tooltip-icon" title="View file source and git diffs. Click a file in the Explorer to open it. Use Split Diff to compare source and changes side by side.">&#9432;</span></h3>
@@ -2024,6 +2046,108 @@ function renderAssistantPanel(session) {
   }
 }
 
+// ─── Git panel rendering ───────────────────────────────────
+
+function renderGitPanel(session) {
+  const git = session.gitState || {};
+  const branch = git.branch || '';
+  const staged = git.staged || [];
+  const unstaged = git.unstaged || [];
+  const untracked = git.untracked || [];
+  const loading = !!git.loading;
+  const commitMsg = session.gitCommitMessage || '';
+
+  if (loading) {
+    return '<div class="empty-inline" style="padding:1rem">Loading git status...</div>';
+  }
+  if (!branch && staged.length === 0 && unstaged.length === 0 && untracked.length === 0) {
+    return `
+      <div class="empty-state" style="padding:0.75rem">
+        <div style="margin-bottom:0.5rem">No git status available.</div>
+        <button class="btn btn-secondary btn-sm" type="button" data-code-git-refresh>Refresh</button>
+      </div>
+    `;
+  }
+
+  const renderFileRow = (file, group) => {
+    const statusIcon = file.status === 'M' ? 'M' : file.status === 'A' ? 'A' : file.status === 'D' ? 'D' : file.status === 'R' ? 'R' : file.status === '?' ? 'U' : file.status || '?';
+    const statusClass = file.status === 'M' ? 'modified' : file.status === 'D' ? 'deleted' : file.status === 'A' ? 'added' : file.status === '?' ? 'untracked' : 'default';
+    return `
+      <div class="code-git-file">
+        <button class="code-git-file__name" type="button" data-code-git-file-diff="${escAttr(file.path)}" title="${escAttr(file.path)}">
+          <span class="code-git-status code-git-status--${statusClass}">${esc(statusIcon)}</span>
+          <span class="code-git-file__label">${esc(file.path)}</span>
+        </button>
+        <span class="code-git-file__actions">
+          ${group === 'unstaged' || group === 'untracked' ? `<button class="code-git-action-btn" type="button" data-code-git-stage="${escAttr(file.path)}" title="Stage">+</button>` : ''}
+          ${group === 'staged' ? `<button class="code-git-action-btn" type="button" data-code-git-unstage="${escAttr(file.path)}" title="Unstage">&minus;</button>` : ''}
+          ${group !== 'staged' ? `<button class="code-git-action-btn code-git-action-btn--danger" type="button" data-code-git-discard="${escAttr(file.path)}" title="Discard changes">&#x2715;</button>` : ''}
+        </span>
+      </div>
+    `;
+  };
+
+  const sections = [];
+  if (branch) {
+    sections.push(`<div class="code-git-branch" title="Current branch"><span class="code-git-branch__icon">&#9095;</span> ${esc(branch)}</div>`);
+  }
+
+  // Commit input
+  sections.push(`
+    <div class="code-git-commit">
+      <input class="code-git-commit__input" type="text" placeholder="Commit message" value="${escAttr(commitMsg)}" data-code-git-commit-msg>
+      <button class="btn btn-primary btn-sm" type="button" data-code-git-commit title="Commit staged changes" ${staged.length === 0 ? 'disabled' : ''}>Commit</button>
+    </div>
+  `);
+
+  if (staged.length > 0) {
+    sections.push(`
+      <div class="code-git-group">
+        <div class="code-git-group__header">
+          <span>Staged Changes</span>
+          <span class="code-git-group__count">${staged.length}</span>
+        </div>
+        ${staged.map((f) => renderFileRow(f, 'staged')).join('')}
+      </div>
+    `);
+  }
+
+  if (unstaged.length > 0) {
+    sections.push(`
+      <div class="code-git-group">
+        <div class="code-git-group__header">
+          <span>Changes</span>
+          <span class="code-git-group__count">${unstaged.length}</span>
+        </div>
+        ${unstaged.map((f) => renderFileRow(f, 'unstaged')).join('')}
+      </div>
+    `);
+  }
+
+  if (untracked.length > 0) {
+    sections.push(`
+      <div class="code-git-group">
+        <div class="code-git-group__header">
+          <span>Untracked Files</span>
+          <span class="code-git-group__count">${untracked.length}</span>
+        </div>
+        ${untracked.map((f) => renderFileRow(f, 'untracked')).join('')}
+      </div>
+    `);
+  }
+
+  // Action bar
+  sections.push(`
+    <div class="code-git-actions-bar">
+      <button class="btn btn-secondary btn-sm" type="button" data-code-git-pull title="Pull">&#x2193; Pull</button>
+      <button class="btn btn-secondary btn-sm" type="button" data-code-git-push title="Push">&#x2191; Push</button>
+      <button class="btn btn-secondary btn-sm" type="button" data-code-git-fetch title="Fetch">&#x21BB; Fetch</button>
+    </div>
+  `);
+
+  return `<div class="code-git-panel">${sections.join('')}</div>`;
+}
+
 // ─── Session card rendering ────────────────────────────────
 
 function renderSessionForm() {
@@ -2090,6 +2214,41 @@ function renderSessionCard(session) {
       </div>
     </button>
   `;
+}
+
+// ─── Git helpers ───────────────────────────────────────────
+
+async function refreshGitStatus(session) {
+  session.gitState = { ...session.gitState, loading: true };
+  saveState(codeState);
+  rerenderFromState();
+  try {
+    const result = await api.codeGitStatus(session.id);
+    if (result?.success) {
+      session.gitState = {
+        branch: result.branch || '',
+        staged: Array.isArray(result.staged) ? result.staged : [],
+        unstaged: Array.isArray(result.unstaged) ? result.unstaged : [],
+        untracked: Array.isArray(result.untracked) ? result.untracked : [],
+        loading: false,
+      };
+    } else {
+      session.gitState = { loading: false };
+    }
+  } catch {
+    session.gitState = { loading: false };
+  }
+  saveState(codeState);
+  rerenderFromState();
+}
+
+async function runGitAction(session, action, args = {}) {
+  try {
+    await api.codeGitAction(session.id, { action, ...args });
+  } catch (err) {
+    appendChatMessage(session, 'error', `Git ${action} failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  await refreshGitStatus(session);
 }
 
 // ─── Async data refresh helpers ────────────────────────────
@@ -2338,16 +2497,23 @@ async function handleCodeApprovalDecision(session, approvalIds, decision) {
 function bindEvents(container) {
   // ── Session rail ──
 
-  container.querySelector('[data-code-toggle-rail]')?.addEventListener('click', () => {
-    codeState.railCollapsed = !codeState.railCollapsed;
-    saveState(codeState);
-    rerenderFromState();
-  });
-
-  container.querySelector('[data-code-toggle-explorer]')?.addEventListener('click', () => {
-    codeState.explorerCollapsed = !codeState.explorerCollapsed;
-    saveState(codeState);
-    rerenderFromState();
+  // ── Icon rail panel switching ──
+  container.querySelectorAll('[data-code-panel-switch]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const panel = btn.dataset.codePanelSwitch;
+      if (codeState.activePanel === panel) {
+        codeState.activePanel = null; // collapse
+      } else {
+        codeState.activePanel = panel;
+        // Auto-refresh git status when switching to git panel
+        if (panel === 'git') {
+          const session = getActiveSession();
+          if (session) void refreshGitStatus(session);
+        }
+      }
+      saveState(codeState);
+      rerenderFromState();
+    });
   });
 
   container.querySelector('[data-code-new-session]')?.addEventListener('click', () => {
@@ -2391,6 +2557,80 @@ function bindEvents(container) {
     codeState.editDraft = null;
     saveState(codeState);
     rerenderFromState();
+  });
+
+  // ── Git panel ──
+  container.querySelector('[data-code-git-refresh]')?.addEventListener('click', async () => {
+    const session = getActiveSession();
+    if (session) await refreshGitStatus(session);
+  });
+
+  container.querySelector('[data-code-git-commit-msg]')?.addEventListener('input', (e) => {
+    const session = getActiveSession();
+    if (session) session.gitCommitMessage = e.currentTarget.value;
+    saveState(codeState);
+  });
+
+  container.querySelector('[data-code-git-commit]')?.addEventListener('click', async () => {
+    const session = getActiveSession();
+    if (!session) return;
+    const msg = (session.gitCommitMessage || '').trim();
+    if (!msg) return;
+    await runGitAction(session, 'commit', { message: msg });
+    session.gitCommitMessage = '';
+    saveState(codeState);
+  });
+
+  container.querySelector('[data-code-git-pull]')?.addEventListener('click', async () => {
+    const session = getActiveSession();
+    if (session) await runGitAction(session, 'pull');
+  });
+
+  container.querySelector('[data-code-git-push]')?.addEventListener('click', async () => {
+    const session = getActiveSession();
+    if (session) await runGitAction(session, 'push');
+  });
+
+  container.querySelector('[data-code-git-fetch]')?.addEventListener('click', async () => {
+    const session = getActiveSession();
+    if (session) await runGitAction(session, 'fetch');
+  });
+
+  container.querySelectorAll('[data-code-git-stage]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const session = getActiveSession();
+      if (session) await runGitAction(session, 'stage', { path: btn.dataset.codeGitStage });
+    });
+  });
+
+  container.querySelectorAll('[data-code-git-unstage]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const session = getActiveSession();
+      if (session) await runGitAction(session, 'unstage', { path: btn.dataset.codeGitUnstage });
+    });
+  });
+
+  container.querySelectorAll('[data-code-git-discard]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const path = btn.dataset.codeGitDiscard;
+      if (!confirm(`Discard changes to ${path}? This cannot be undone.`)) return;
+      const session = getActiveSession();
+      if (session) await runGitAction(session, 'discard', { path });
+    });
+  });
+
+  container.querySelectorAll('[data-code-git-file-diff]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const session = getActiveSession();
+      if (!session) return;
+      const filePath = btn.dataset.codeGitFileDiff;
+      const fullPath = joinWorkspacePath(session.resolvedRoot || session.workspaceRoot || '.', filePath);
+      session.selectedFilePath = fullPath;
+      session.showDiff = true;
+      saveState(codeState);
+      await refreshFileView(session);
+      rerenderFromState();
+    });
   });
 
   // Create form
@@ -2834,8 +3074,7 @@ function loadState() {
       sessions: [],
       activeSessionId: null,
       showCreateForm: false,
-      railCollapsed: false,
-      explorerCollapsed: false,
+      activePanel: 'sessions',
       createDraft: { title: '', workspaceRoot: '.', agentId: '' },
     };
   } catch {
@@ -2843,8 +3082,7 @@ function loadState() {
       sessions: [],
       activeSessionId: null,
       showCreateForm: false,
-      railCollapsed: false,
-      explorerCollapsed: false,
+      activePanel: 'sessions',
       createDraft: { title: '', workspaceRoot: '.', agentId: '' },
     };
   }
@@ -2880,12 +3118,13 @@ function normalizeState(raw, agents) {
         compactedSummary: session.compactedSummary || '',
         workspaceProfile: normalizeWorkspaceProfile(session.workspaceProfile),
         activeAssistantTab: isAssistantTab(session.activeAssistantTab) ? session.activeAssistantTab : 'chat',
+        gitState: session.gitState || null,
+        gitCommitMessage: session.gitCommitMessage || '',
       };
     }) : [],
     activeSessionId: raw?.activeSessionId || null,
     showCreateForm: !!raw?.showCreateForm,
-    railCollapsed: !!raw?.railCollapsed,
-    explorerCollapsed: !!raw?.explorerCollapsed,
+    activePanel: raw?.activePanel || (raw?.railCollapsed ? null : 'sessions'),
     editingSessionId: raw?.editingSessionId || null,
     editDraft: raw?.editDraft || null,
     createDraft: {

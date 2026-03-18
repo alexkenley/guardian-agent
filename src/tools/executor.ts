@@ -1006,6 +1006,26 @@ export class ToolExecutor {
     return isPathInside(resolvedValue, codeWorkspaceRoot);
   }
 
+  /** Auto-approve tools that belong to the coding workflow when operating inside the code session workspace. */
+  private isCodeSessionWorkspaceTool(
+    definition: ToolDefinition,
+    request?: Partial<ToolExecutionRequest>,
+  ): boolean {
+    if (!this.getCodeWorkspaceRoot(request)) return false;
+    const autoApprovedTools = new Set([
+      // Code tools
+      'code_edit', 'code_patch', 'code_create', 'code_plan', 'code_git_diff',
+      'code_test', 'code_build', 'code_lint', 'code_symbol_search',
+      // Filesystem tools scoped to workspace
+      'fs_read', 'fs_write', 'fs_search', 'fs_list', 'fs_mkdir', 'fs_move', 'fs_copy', 'fs_delete',
+      // Memory tools
+      'memory_save', 'memory_search', 'memory_recall',
+      // Document tools
+      'doc_create',
+    ]);
+    return autoApprovedTools.has(definition.name);
+  }
+
   private getCodeSessionSurfaceId(request?: Partial<ToolExecutionRequest>): string {
     const principalId = request?.principalId?.trim();
     const userId = request?.userId?.trim();
@@ -2040,6 +2060,12 @@ export class ToolExecutor {
     }
 
     if (this.isCodeWorkspacePolicyNoOp(definition, args, request)) {
+      return 'allow';
+    }
+
+    // Auto-approve coding and filesystem tools operating within the code session workspace.
+    // The user granted trust to this workspace by creating the session.
+    if (this.isCodeSessionWorkspaceTool(definition, request)) {
       return 'allow';
     }
 

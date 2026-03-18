@@ -357,32 +357,17 @@ guardian:
     assert.equal(await chatTab.getAttribute('aria-selected'), 'true', 'Chat tab should be active by default');
     assert.match(await page.locator('.code-chat__title').textContent(), /Coding Assistant/);
 
-    await page.click('[data-code-toggle-rail]');
-    await page.waitForFunction(() => {
-      const shell = document.querySelector('.code-page__shell');
-      const rail = document.querySelector('.code-rail');
-      return !!shell?.classList.contains('rail-collapsed') && !!rail?.classList.contains('is-collapsed');
-    });
-    await page.click('[data-code-toggle-rail]');
-    await page.waitForFunction(() => {
-      const shell = document.querySelector('.code-page__shell');
-      const rail = document.querySelector('.code-rail');
-      return !shell?.classList.contains('rail-collapsed') && !rail?.classList.contains('is-collapsed');
-    });
+    // Icon rail panel switching — switch to explorer
+    await page.locator('[data-code-panel-switch="explorer"]').click();
+    await page.waitForSelector('.code-icon-rail__btn[data-code-panel-switch="explorer"].is-active');
+    // Collapse panel by clicking active icon
+    await page.locator('[data-code-panel-switch="explorer"]').click();
+    await page.waitForSelector('.code-page__shell.panel-collapsed');
+    // Re-open explorer
+    await page.locator('[data-code-panel-switch="explorer"]').click();
+    await page.waitForFunction(() => !document.querySelector('.code-page__shell.panel-collapsed'));
 
     await page.locator('[data-code-tree-toggle]').filter({ hasText: 'src' }).click();
-    await page.click('[data-code-toggle-explorer]');
-    await page.waitForFunction(() => {
-      const main = document.querySelector('.code-workspace__main');
-      const explorer = document.querySelector('.code-explorer');
-      return !!main?.classList.contains('explorer-collapsed') && !!explorer?.classList.contains('is-collapsed');
-    });
-    await page.click('[data-code-toggle-explorer]');
-    await page.waitForFunction(() => {
-      const main = document.querySelector('.code-workspace__main');
-      const explorer = document.querySelector('.code-explorer');
-      return !main?.classList.contains('explorer-collapsed') && !explorer?.classList.contains('is-collapsed');
-    });
     await page.locator('[data-code-tree-file]').filter({ hasText: 'example.ts' }).click();
     await page.waitForSelector('text=example.ts');
     assert.match(await page.locator('.code-editor__content').textContent(), /answerValue = 41/);

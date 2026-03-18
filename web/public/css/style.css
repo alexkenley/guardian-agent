@@ -3868,16 +3868,81 @@ tr:hover td {
 
 .code-page__shell {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
-  gap: 0.5rem;
+  grid-template-columns: 48px 240px minmax(0, 1fr);
+  gap: 0;
   padding: 0.5rem;
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  column-gap: 0.5rem;
 }
 
-.code-page__shell.rail-collapsed {
+.code-page__shell.panel-collapsed {
   grid-template-columns: 48px minmax(0, 1fr);
+}
+
+/* ─── Icon Rail ──────────────────────────────────── */
+
+.code-icon-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.5rem 0;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.code-icon-rail__btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 1.05rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border-left: 2px solid transparent;
+}
+
+.code-icon-rail__btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+}
+
+.code-icon-rail__btn.is-active {
+  color: var(--accent);
+  background: var(--accent-glow);
+  border-left-color: var(--accent);
+}
+
+/* ─── Side Panel ─────────────────────────────────── */
+
+.code-side-panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.code-side-panel__section {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .code-rail,
@@ -4089,7 +4154,7 @@ tr:hover td {
 
 .code-workspace__main {
   display: grid;
-  grid-template-columns: minmax(200px, 260px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 1fr 1fr;
   gap: 0.5rem;
   min-width: 0;
@@ -4097,24 +4162,8 @@ tr:hover td {
   overflow: hidden;
 }
 
-.code-workspace__main.explorer-collapsed {
-  grid-template-columns: 48px minmax(0, 1fr);
-}
-
-.code-explorer {
-  grid-column: 1;
-  grid-row: 1 / span 2;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.code-explorer.is-collapsed {
-  min-width: 48px;
-}
-
 .code-editor {
-  grid-column: 2;
+  grid-column: 1;
   grid-row: 1;
   display: flex;
   flex-direction: column;
@@ -4124,7 +4173,7 @@ tr:hover td {
 }
 
 .code-terminals {
-  grid-column: 2;
+  grid-column: 1;
   grid-row: 2;
   display: flex;
   flex-direction: column;
@@ -4258,20 +4307,184 @@ tr:hover td {
   border-bottom-right-radius: 6px;
 }
 
-.code-rail.is-collapsed .code-rail__header,
-.code-explorer.is-collapsed .panel__header {
+.code-rail.is-collapsed .code-rail__header {
   justify-content: center;
   padding-left: 0.35rem;
   padding-right: 0.35rem;
 }
 
-.code-rail.is-collapsed .code-panel-title__text,
-.code-explorer.is-collapsed .code-panel-title__text,
-.code-explorer.is-collapsed .code-tooltip-icon,
-.code-explorer.is-collapsed .panel__actions,
-.code-explorer.is-collapsed .code-file-list,
-.code-explorer.is-collapsed .empty-state {
+.code-rail.is-collapsed .code-panel-title__text {
   display: none;
+}
+
+/* ─── Git Panel ──────────────────────────────────── */
+
+.code-git-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.5rem;
+}
+
+.code-git-branch {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.5rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-family: var(--font-mono);
+  color: var(--accent);
+}
+
+.code-git-branch__icon {
+  font-size: 0.9rem;
+}
+
+.code-git-commit {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.code-git-commit__input {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  padding: 0.4rem 0.6rem;
+}
+
+.code-git-group {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.code-git-group__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.6rem;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.code-git-group__count {
+  background: var(--bg-elevated);
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+}
+
+.code-git-file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+  padding: 0.2rem 0.4rem;
+  border-bottom: 1px solid rgba(26, 37, 64, 0.4);
+}
+
+.code-git-file:last-child {
+  border-bottom: none;
+}
+
+.code-git-file__name {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  cursor: pointer;
+  text-align: left;
+  padding: 0.15rem 0;
+}
+
+.code-git-file__name:hover {
+  color: var(--accent);
+}
+
+.code-git-file__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-git-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+.code-git-status--modified { color: #e0a458; }
+.code-git-status--added { color: #9ae6b4; }
+.code-git-status--deleted { color: #fc8181; }
+.code-git-status--untracked { color: #9ae6b4; }
+.code-git-status--default { color: var(--text-secondary); }
+
+.code-git-file__actions {
+  display: flex;
+  gap: 0.2rem;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.code-git-file:hover .code-git-file__actions {
+  opacity: 1;
+}
+
+.code-git-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.code-git-action-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.code-git-action-btn--danger:hover {
+  color: #fc8181;
+}
+
+.code-git-actions-bar {
+  display: flex;
+  gap: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--border);
 }
 
 /* ─── Session edit icon ───────────────────────────── */
@@ -4910,7 +5123,16 @@ tr:hover td {
     height: auto;
   }
 
-  .code-explorer,
+  .code-page__shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .code-icon-rail {
+    flex-direction: row;
+    justify-content: center;
+    padding: 0.25rem 0.5rem;
+  }
+
   .code-editor,
   .code-terminals {
     grid-column: auto;
