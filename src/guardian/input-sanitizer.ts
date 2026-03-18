@@ -61,6 +61,37 @@ const INJECTION_SIGNALS: Array<{ pattern: RegExp; score: number; name: string }>
   { pattern: /\bwhat\s+(?:are|were)\s+your\s+(?:original\s+)?instructions?\b/i, score: 2, name: 'exfil_what_instructions' },
 ];
 
+const FRAGMENTED_SIGNAL_KEYWORDS = [
+  'ignore',
+  'previous',
+  'instructions',
+  'prompts',
+  'rules',
+  'you',
+  'are',
+  'now',
+  'forget',
+  'act',
+  'pretend',
+  'system',
+  'assistant',
+  'user',
+  'new',
+  'override',
+  'settings',
+  'follow',
+  'dan',
+  'mode',
+  'developer',
+  'jailbreak',
+  'repeat',
+  'above',
+  'show',
+  'prompt',
+  'what',
+  'original',
+] as const;
+
 /** Strip invisible Unicode characters from content. */
 export function stripInvisibleChars(content: string): string {
   return content.replace(INVISIBLE_CHAR_REGEX, '');
@@ -90,7 +121,7 @@ export function detectInjection(content: string): { score: number; signals: stri
 export const detectInjectionSignals = detectInjection;
 
 function normalizeInjectionText(content: string): string {
-  return content
+  const normalized = content
     .normalize('NFKC')
     .toLowerCase()
     // Collapse obfuscated separators inside words (e.g., "ig-nore" -> "ignore").
@@ -101,9 +132,30 @@ function normalizeInjectionText(content: string): string {
     .replace(/4/g, 'a')
     .replace(/5/g, 's')
     .replace(/7/g, 't')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return collapseFragmentedSignalKeywords(normalized)
     .replace(/[_\-.]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function collapseFragmentedSignalKeywords(content: string): string {
+  let normalized = content;
+  for (const keyword of FRAGMENTED_SIGNAL_KEYWORDS) {
+    normalized = normalized.replace(buildFragmentedKeywordRegex(keyword), keyword);
+  }
+  return normalized;
+}
+
+function buildFragmentedKeywordRegex(keyword: string): RegExp {
+  const chars = keyword.split('').map((char) => escapeRegex(char));
+  return new RegExp(chars.join('\\s*'), 'gi');
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**

@@ -668,30 +668,10 @@ guardian:
       channel: 'web',
       metadata: codeToolMetadata,
     });
-    assert.equal(codeEditPending.status, 'pending_approval');
-    assert.ok(codeEditPending.approvalId, `Expected approvalId from code_edit: ${JSON.stringify(codeEditPending)}`);
-
-    const pendingCodeSession = await getCodeSessionSnapshot(5);
-    const pendingApprovals = pendingCodeSession?.session?.workState?.pendingApprovals;
-    assert.ok(Array.isArray(pendingApprovals) && pendingApprovals.length > 0, 'Expected code-session snapshot to expose pending approvals');
-    assert.equal(pendingApprovals[0].toolName, 'code_edit');
-    assert.equal(pendingApprovals[0].id, codeEditPending.approvalId);
-
-    const codeEditDecision = await requestJson(
-      baseUrl,
-      harnessToken,
-      'POST',
-      `${codeSessionPath}/approvals/${encodeURIComponent(codeEditPending.approvalId)}`,
-      {
-        decision: 'approved',
-        userId: 'web-code-harness',
-        channel: 'web',
-      },
-    );
-    assert.equal(codeEditDecision.success, true);
+    // Code tools within the workspace are auto-approved — no pending_approval step needed.
+    assert.equal(codeEditPending.status, 'succeeded', `Expected code_edit to auto-approve in code session: ${JSON.stringify(codeEditPending)}`);
     assert.match(fs.readFileSync(path.join(workspaceRoot, 'src', 'example.ts'), 'utf-8'), /answerValue = 42/);
     const postEditSession = await getCodeSessionSnapshot(5);
-    assert.equal(postEditSession?.session?.workState?.pendingApprovals?.length ?? 0, 0);
     assert.ok(
       Array.isArray(postEditSession?.session?.workState?.recentJobs)
       && postEditSession.session.workState.recentJobs.some((job) => job.toolName === 'code_edit'),

@@ -6,7 +6,7 @@ const DEFAULT_USER_CHANNEL = 'web';
 const MAX_TERMINAL_PANES = 3;
 const APPROVAL_BACKLOG_SOFT_CAP = 3;
 const MAX_SESSION_JOBS = 20;
-const ASSISTANT_TABS = ['chat', 'tasks', 'approvals', 'checks'];
+const ASSISTANT_TABS = ['chat', 'activity'];
 const SESSION_REFRESH_INTERVAL_MS = 5000;
 const JS_TS_KEYWORDS = [
   'abstract', 'as', 'async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'default', 'delete',
@@ -1496,13 +1496,16 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
   const activePanel = codeState.activePanel !== undefined ? codeState.activePanel : 'sessions'; // 'sessions' | 'explorer' | 'git' | null
   const panelCollapsed = !activePanel;
 
-  const editorContent = activeSession?.selectedFilePath
+  const activeTab = activeSession ? getActiveTab(activeSession) : null;
+  const editorDirty = activeTab?.dirty || false;
+  const openTabs = activeSession?.openTabs || [];
+  const editorContent = activeTab
     ? (activeSession.showDiff
       ? `<div class="code-editor__split">
           <div class="code-editor__pane">
             <div class="code-editor__pane-label">Source</div>
             ${renderCodeBlock(fileView.source || 'Empty file.', {
-              filePath: activeSession.selectedFilePath,
+              filePath: activeTab.filePath,
               kind: 'source',
             })}
           </div>
@@ -1511,11 +1514,18 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
             ${renderCodeBlock(fileView.diff || 'No diff output for this file.', { kind: 'diff' })}
           </div>
         </div>`
-      : renderCodeBlock(fileView.source || 'Empty file.', {
-          filePath: activeSession.selectedFilePath,
-          kind: 'source',
-        }))
+      : `<textarea class="code-editor__textarea" data-code-editor-textarea spellcheck="false">${esc(activeTab.content ?? fileView.source ?? '')}</textarea>`)
     : '';
+  const tabBar = openTabs.length > 0 ? `
+    <div class="code-editor__tabs">
+      ${openTabs.map((tab, i) => `
+        <button class="code-editor__tab ${i === activeSession.activeTabIndex ? 'is-active' : ''}" type="button" data-code-tab-index="${i}" title="${escAttr(tab.filePath)}">
+          <span class="code-editor__tab-name">${tab.dirty ? '<span class="code-editor__dirty">&bull;</span> ' : ''}${esc(basename(tab.filePath))}</span>
+          <span class="code-editor__tab-close" data-code-tab-close="${i}" title="Close">&times;</span>
+        </button>
+      `).join('')}
+    </div>
+  ` : '';
 
   const isCollapsed = activeSession?.terminalCollapsed;
   const terminalPanes = activeSession ? getVisibleTerminalPanes(activeSession) : [];
@@ -1523,13 +1533,13 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
   container.innerHTML = `
     <div class="code-page">
       <div class="code-page__shell ${panelCollapsed ? 'panel-collapsed' : ''}">
-        <nav class="code-icon-rail">
-          <button class="code-icon-rail__btn ${activePanel === 'sessions' ? 'is-active' : ''}" type="button" data-code-panel-switch="sessions" title="Sessions">&#128451;</button>
-          <button class="code-icon-rail__btn ${activePanel === 'explorer' ? 'is-active' : ''}" type="button" data-code-panel-switch="explorer" title="Explorer">&#128193;</button>
-          <button class="code-icon-rail__btn ${activePanel === 'git' ? 'is-active' : ''}" type="button" data-code-panel-switch="git" title="Source Control">&#9095;</button>
-        </nav>
-        ${!panelCollapsed ? `
-        <aside class="code-side-panel">
+        <aside class="code-side-panel ${panelCollapsed ? 'is-collapsed' : ''}">
+          <nav class="code-side-panel__nav">
+            <button class="code-side-panel__nav-btn ${activePanel === 'sessions' ? 'is-active' : ''}" type="button" data-code-panel-switch="sessions" title="Sessions">&#128451;</button>
+            <button class="code-side-panel__nav-btn ${activePanel === 'explorer' ? 'is-active' : ''}" type="button" data-code-panel-switch="explorer" title="Explorer">&#128193;</button>
+            <button class="code-side-panel__nav-btn ${activePanel === 'git' ? 'is-active' : ''}" type="button" data-code-panel-switch="git" title="Source Control">&#9095;</button>
+          </nav>
+          ${!panelCollapsed ? `
           ${activePanel === 'sessions' ? `
             <div class="code-side-panel__section">
               <div class="code-rail__header">
@@ -1572,25 +1582,27 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
               ${activeSession ? renderGitPanel(activeSession) : '<div class="empty-state">Create a session to view source control.</div>'}
             </div>
           ` : ''}
+          ` : ''}
         </aside>
-        ` : ''}
         <section class="code-workspace">
           <div class="code-workspace__main ${isCollapsed ? 'terminals-collapsed' : ''}">
             <section class="code-editor panel">
+              ${tabBar}
               <div class="panel__header">
-                <h3>${activeSession?.selectedFilePath ? esc(basename(activeSession.selectedFilePath)) : 'Editor'} <span class="code-tooltip-icon" title="View file source and git diffs. Click a file in the Explorer to open it. Use Split Diff to compare source and changes side by side.">&#9432;</span></h3>
-                ${activeSession?.selectedFilePath ? `
+                <h3>${activeTab ? `${esc(basename(activeTab.filePath))}${editorDirty ? ' <span class="code-editor__dirty" title="Unsaved changes">&bull;</span>' : ''}` : 'Editor'} <span class="code-tooltip-icon" title="Edit files directly. Changes are saved with the Save button or Ctrl+S. Use Split Diff to compare source and changes side by side.">&#9432;</span></h3>
+                ${activeTab ? `
                   <div class="panel__actions">
+                    ${editorDirty ? '<button class="btn btn-primary btn-sm" type="button" data-code-save-file title="Save changes (Ctrl+S)">Save</button>' : ''}
                     <button class="btn btn-secondary btn-sm" type="button" data-code-refresh-file title="Reload file contents">&#x21BB;</button>
                     <button class="btn btn-secondary btn-sm" type="button" data-code-toggle-diff title="Toggle side-by-side source and diff view">${activeSession.showDiff ? 'Source Only' : 'Split Diff'}</button>
                   </div>
                 ` : ''}
               </div>
-              ${activeSession?.selectedFilePath ? `
-                <div class="code-path">${esc(activeSession.selectedFilePath)}</div>
+              ${activeTab ? `
+                <div class="code-path">${esc(activeTab.filePath)}</div>
                 ${fileView.error ? `<div class="code-error">${esc(fileView.error)}</div>` : ''}
                 ${editorContent}
-              ` : '<div class="empty-state">Select a file to inspect.</div>'}
+              ` : '<div class="empty-state">Select a file to open.</div>'}
             </section>
             <section class="code-terminals panel ${isCollapsed ? 'is-collapsed' : ''}">
               <div class="panel__header">
@@ -1824,19 +1836,20 @@ function renderAssistantTabs(session) {
   const approvalCount = Array.isArray(session?.pendingApprovals) ? session.pendingApprovals.length : 0;
   const taskCount = getTaskBadgeCount(session);
   const checkCount = getCheckBadgeCount(session);
-  const counts = {
+  const activeTab = session?.activeAssistantTab || 'chat';
+  const activityTotal = approvalCount + taskCount + checkCount;
+  const viewedActivityTotal = (session?.viewedApprovalCount || 0) + (session?.viewedTaskCount || 0) + (session?.viewedCheckCount || 0);
+  const unreadCounts = {
     chat: 0,
-    tasks: taskCount,
-    approvals: approvalCount,
-    checks: checkCount,
+    activity: activeTab === 'activity' ? 0 : Math.max(0, activityTotal - viewedActivityTotal),
   };
 
   return `
     <div class="code-assistant-tabs" role="tablist" aria-label="Coding assistant views">
       ${ASSISTANT_TABS.map((tabId) => {
         const label = tabId.charAt(0).toUpperCase() + tabId.slice(1);
-        const isActive = (session?.activeAssistantTab || 'chat') === tabId;
-        const count = counts[tabId] || 0;
+        const isActive = activeTab === tabId;
+        const count = unreadCounts[tabId] || 0;
         return `
           <button
             class="code-assistant-tab ${isActive ? 'is-active' : ''}"
@@ -1880,12 +1893,27 @@ function formatCodeMessageRole(role) {
   }
 }
 
-function renderCodeMessage(role, content, extraClass = '') {
+function renderCodeMessage(role, content, extraClass = '', approvals = null) {
   const className = `code-message ${role === 'user' ? 'is-user' : role === 'error' ? 'is-error' : 'is-agent'}${extraClass ? ` ${extraClass}` : ''}`;
+  const approvalButtons = Array.isArray(approvals) && approvals.length > 0
+    ? `<div class="code-message__approvals">
+        ${approvals.map((a) => `
+          <div class="code-message__approval">
+            <span class="code-message__approval-tool">${esc(a.toolName)}</span>
+            <span class="code-message__approval-args">${esc(a.argsPreview || '')}</span>
+            <span class="code-message__approval-actions">
+              <button class="btn btn-primary btn-sm" type="button" data-code-inline-approve="${escAttr(a.id)}">Approve</button>
+              <button class="btn btn-secondary btn-sm" type="button" data-code-inline-deny="${escAttr(a.id)}">Deny</button>
+            </span>
+          </div>
+        `).join('')}
+      </div>`
+    : '';
   return `
     <div class="${className}">
       <div class="code-message__role">${esc(formatCodeMessageRole(role))}</div>
       <div class="code-message__body">${esc(content)}</div>
+      ${approvalButtons}
     </div>
   `;
 }
@@ -1980,18 +2008,7 @@ function renderCheckList(session) {
 function renderAssistantPanel(session) {
   const activeTab = session?.activeAssistantTab || 'chat';
   switch (activeTab) {
-    case 'tasks':
-      return `
-        <div class="code-assistant-panel__body">
-          <div class="code-chat__meta">
-            <div class="code-chat__workspace">${esc(session.resolvedRoot || session.workspaceRoot)}</div>
-          </div>
-          <div class="code-assistant-panel__scroll">
-            ${renderTaskList(session)}
-          </div>
-        </div>
-      `;
-    case 'approvals':
+    case 'activity':
       return `
         <div class="code-assistant-panel__body">
           <div class="code-chat__meta">
@@ -1999,16 +2016,7 @@ function renderAssistantPanel(session) {
           </div>
           <div class="code-assistant-panel__scroll">
             ${renderApprovalList(session)}
-          </div>
-        </div>
-      `;
-    case 'checks':
-      return `
-        <div class="code-assistant-panel__body">
-          <div class="code-chat__meta">
-            <div class="code-chat__workspace">${esc(session.resolvedRoot || session.workspaceRoot)}</div>
-          </div>
-          <div class="code-assistant-panel__scroll">
+            ${renderTaskList(session)}
             ${renderCheckList(session)}
           </div>
         </div>
@@ -2036,7 +2044,14 @@ function renderAssistantPanel(session) {
                   <li>Coding tools are built in &mdash; just describe what you need</li>
                 </ul>
               </div>`
-            : `${committedMessages.map((message) => renderCodeMessage(message.role, message.content)).join('')}${pendingUserMessage ? renderCodeMessage('user', pendingUserMessage, 'is-pending') : ''}${pendingUserMessage ? renderCodeThinkingMessage() : ''}`}
+            : `${committedMessages.map((message, idx) => {
+                // Attach inline approval buttons to the last agent message if there are pending approvals
+                const isLastAgent = message.role === 'agent' && !committedMessages.slice(idx + 1).some((m) => m.role === 'agent');
+                const inlineApprovals = isLastAgent && !pendingUserMessage && Array.isArray(session.pendingApprovals) && session.pendingApprovals.length > 0
+                  ? session.pendingApprovals
+                  : null;
+                return renderCodeMessage(message.role, message.content, '', inlineApprovals);
+              }).join('')}${pendingUserMessage ? renderCodeMessage('user', pendingUserMessage, 'is-pending') : ''}${pendingUserMessage ? renderCodeThinkingMessage() : ''}`}
         </div>
         <form class="code-chat__form" data-code-chat-form>
           <textarea name="message" rows="3" placeholder="Describe the change, bug, or refactor you want.">${esc(session.chatDraft || '')}</textarea>
@@ -2061,10 +2076,16 @@ function renderGitPanel(session) {
     return '<div class="empty-inline" style="padding:1rem">Loading git status...</div>';
   }
   if (!branch && staged.length === 0 && unstaged.length === 0 && untracked.length === 0) {
+    const notInitialized = git.notARepo;
     return `
       <div class="empty-state" style="padding:0.75rem">
-        <div style="margin-bottom:0.5rem">No git status available.</div>
-        <button class="btn btn-secondary btn-sm" type="button" data-code-git-refresh>Refresh</button>
+        ${notInitialized ? `
+          <div style="margin-bottom:0.5rem">This workspace is not a git repository.</div>
+          <button class="btn btn-primary btn-sm" type="button" data-code-git-init>Initialize Repository</button>
+        ` : `
+          <div style="margin-bottom:0.5rem">No git status available.</div>
+          <button class="btn btn-secondary btn-sm" type="button" data-code-git-refresh>Refresh</button>
+        `}
       </div>
     `;
   }
@@ -2145,6 +2166,31 @@ function renderGitPanel(session) {
     </div>
   `);
 
+  // Git graph
+  const graphEntries = git.graph || [];
+  if (graphEntries.length > 0) {
+    sections.push(`
+      <div class="code-git-group">
+        <div class="code-git-group__header">
+          <span>Commit Graph</span>
+          <span class="code-git-group__count">${graphEntries.length}</span>
+        </div>
+        <div class="code-git-graph">
+          ${graphEntries.map((entry) => {
+            const isHead = entry.refs && entry.refs.includes('HEAD');
+            return `<div class="code-git-graph__row ${isHead ? 'is-head' : ''}">
+              <span class="code-git-graph__line">${esc(entry.graph || '')}</span>
+              <span class="code-git-graph__hash">${esc(entry.hash || '')}</span>
+              ${entry.refs ? `<span class="code-git-graph__refs">${esc(entry.refs)}</span>` : ''}
+              <span class="code-git-graph__msg">${esc(entry.message || '')}</span>
+              <span class="code-git-graph__date">${esc(entry.date || '')}</span>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+    `);
+  }
+
   return `<div class="code-git-panel">${sections.join('')}</div>`;
 }
 
@@ -2216,6 +2262,75 @@ function renderSessionCard(session) {
   `;
 }
 
+// ─── Tab helpers ───────────────────────────────────────────
+
+function getActiveTab(session) {
+  if (!session || !Array.isArray(session.openTabs) || session.openTabs.length === 0) return null;
+  const idx = session.activeTabIndex;
+  if (idx < 0 || idx >= session.openTabs.length) return null;
+  return session.openTabs[idx];
+}
+
+function openFileInTab(session, filePath) {
+  if (!session) return;
+  if (!Array.isArray(session.openTabs)) session.openTabs = [];
+  // Check if already open
+  const existingIdx = session.openTabs.findIndex((t) => t.filePath === filePath);
+  if (existingIdx >= 0) {
+    session.activeTabIndex = existingIdx;
+  } else {
+    session.openTabs.push({ filePath, dirty: false, content: null });
+    session.activeTabIndex = session.openTabs.length - 1;
+  }
+  // Sync legacy field
+  session.selectedFilePath = filePath;
+}
+
+function closeTab(session, index) {
+  if (!session || !Array.isArray(session.openTabs)) return;
+  const tab = session.openTabs[index];
+  if (!tab) return;
+  if (tab.dirty && !confirm(`Discard unsaved changes to ${basename(tab.filePath)}?`)) return;
+  session.openTabs.splice(index, 1);
+  if (session.openTabs.length === 0) {
+    session.activeTabIndex = -1;
+    session.selectedFilePath = null;
+  } else if (session.activeTabIndex >= session.openTabs.length) {
+    session.activeTabIndex = session.openTabs.length - 1;
+    session.selectedFilePath = session.openTabs[session.activeTabIndex].filePath;
+  } else {
+    session.selectedFilePath = session.openTabs[session.activeTabIndex]?.filePath || null;
+  }
+}
+
+// ─── Editor save ───────────────────────────────────────────
+
+async function saveEditorFile() {
+  const session = getActiveSession();
+  const tab = getActiveTab(session);
+  if (!session || !tab || !tab.dirty) return;
+  const content = tab.content;
+  if (content == null) return;
+  try {
+    const result = await api.codeFsWrite({
+      sessionId: session.id,
+      path: tab.filePath,
+      content,
+    });
+    if (result?.success) {
+      tab.dirty = false;
+      tab.content = null;
+      cachedFileView = { ...cachedFileView, source: content };
+      saveState(codeState);
+      rerenderFromState();
+    } else {
+      appendChatMessage(session, 'error', `Save failed: ${result?.error || 'Unknown error'}`);
+    }
+  } catch (err) {
+    appendChatMessage(session, 'error', `Save failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 // ─── Git helpers ───────────────────────────────────────────
 
 async function refreshGitStatus(session) {
@@ -2223,17 +2338,22 @@ async function refreshGitStatus(session) {
   saveState(codeState);
   rerenderFromState();
   try {
-    const result = await api.codeGitStatus(session.id);
-    if (result?.success) {
+    const [statusResult, graphResult] = await Promise.all([
+      api.codeGitStatus(session.id),
+      api.codeGitGraph(session.id).catch(() => ({ success: false, entries: [] })),
+    ]);
+    if (statusResult?.success) {
       session.gitState = {
-        branch: result.branch || '',
-        staged: Array.isArray(result.staged) ? result.staged : [],
-        unstaged: Array.isArray(result.unstaged) ? result.unstaged : [],
-        untracked: Array.isArray(result.untracked) ? result.untracked : [],
+        branch: statusResult.branch || '',
+        staged: Array.isArray(statusResult.staged) ? statusResult.staged : [],
+        unstaged: Array.isArray(statusResult.unstaged) ? statusResult.unstaged : [],
+        untracked: Array.isArray(statusResult.untracked) ? statusResult.untracked : [],
+        graph: Array.isArray(graphResult?.entries) ? graphResult.entries : [],
         loading: false,
       };
     } else {
-      session.gitState = { loading: false };
+      const notARepo = /not a git repository/i.test(statusResult?.error || '');
+      session.gitState = { loading: false, notARepo };
     }
   } catch {
     session.gitState = { loading: false };
@@ -2369,9 +2489,9 @@ async function refreshAssistantState(session, { rerender = true, fallbackPending
   if (rerender) rerenderFromState();
 }
 
-function appendChatMessage(session, role, content) {
+function appendChatMessage(session, role, content, meta = {}) {
   if (!session || !content) return;
-  session.chat.push({ role, content });
+  session.chat.push({ role, content, ...meta });
 }
 
 async function decideCodeApprovalWithRetry(session, approvalId, decision) {
@@ -2565,6 +2685,12 @@ function bindEvents(container) {
     if (session) await refreshGitStatus(session);
   });
 
+  container.querySelector('[data-code-git-init]')?.addEventListener('click', async () => {
+    const session = getActiveSession();
+    if (!session) return;
+    await runGitAction(session, 'init');
+  });
+
   container.querySelector('[data-code-git-commit-msg]')?.addEventListener('input', (e) => {
     const session = getActiveSession();
     if (session) session.gitCommitMessage = e.currentTarget.value;
@@ -2625,7 +2751,7 @@ function bindEvents(container) {
       if (!session) return;
       const filePath = btn.dataset.codeGitFileDiff;
       const fullPath = joinWorkspacePath(session.resolvedRoot || session.workspaceRoot || '.', filePath);
-      session.selectedFilePath = fullPath;
+      openFileInTab(session, fullPath);
       session.showDiff = true;
       saveState(codeState);
       await refreshFileView(session);
@@ -2863,7 +2989,18 @@ function bindEvents(container) {
     button.addEventListener('click', () => {
       const session = getActiveSession();
       if (!session) return;
-      session.selectedFilePath = button.dataset.codeTreeFile || null;
+      const filePath = button.dataset.codeTreeFile || null;
+      if (!filePath) return;
+      // Save current tab's textarea content before switching
+      const currentTab = getActiveTab(session);
+      if (currentTab) {
+        const ta = document.querySelector('[data-code-editor-textarea]');
+        if (ta && ta.value !== (cachedFileView.source || '')) {
+          currentTab.content = ta.value;
+          currentTab.dirty = true;
+        }
+      }
+      openFileInTab(session, filePath);
       session.showDiff = false;
       saveState(codeState);
       queueSessionPersist(session);
@@ -2873,7 +3010,10 @@ function bindEvents(container) {
 
   container.querySelector('[data-code-refresh-file]')?.addEventListener('click', () => {
     const session = getActiveSession();
-    if (session) void refreshFileView(session);
+    if (!session) return;
+    const tab = getActiveTab(session);
+    if (tab) { tab.dirty = false; tab.content = null; }
+    void refreshFileView(session);
   });
 
   container.querySelector('[data-code-toggle-diff]')?.addEventListener('click', () => {
@@ -2884,6 +3024,108 @@ function bindEvents(container) {
     queueSessionPersist(session);
     rerenderFromState();
   });
+
+  // ── Editor tabs ──
+
+  container.querySelectorAll('[data-code-tab-index]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      // Ignore if the close button was clicked
+      if (e.target.closest('[data-code-tab-close]')) return;
+      const session = getActiveSession();
+      if (!session) return;
+      const idx = parseInt(btn.dataset.codeTabIndex, 10);
+      if (idx === session.activeTabIndex) return;
+      // Save current tab's content before switching
+      const currentTab = getActiveTab(session);
+      if (currentTab) {
+        const ta = container.querySelector('[data-code-editor-textarea]');
+        if (ta && ta.value !== (cachedFileView.source || '')) {
+          currentTab.content = ta.value;
+          currentTab.dirty = true;
+        }
+      }
+      session.activeTabIndex = idx;
+      session.selectedFilePath = session.openTabs[idx]?.filePath || null;
+      session.showDiff = false;
+      saveState(codeState);
+      void refreshFileView(session);
+    });
+  });
+
+  container.querySelectorAll('[data-code-tab-close]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const session = getActiveSession();
+      if (!session) return;
+      const idx = parseInt(btn.dataset.codeTabClose, 10);
+      closeTab(session, idx);
+      saveState(codeState);
+      if (session.selectedFilePath) {
+        void refreshFileView(session);
+      } else {
+        cachedFileView = { source: '', diff: '', error: null };
+        rerenderFromState();
+      }
+    });
+  });
+
+  // ── Editor (editable textarea) ──
+
+  const editorTextarea = container.querySelector('[data-code-editor-textarea]');
+  if (editorTextarea) {
+    editorTextarea.addEventListener('input', () => {
+      const session = getActiveSession();
+      if (!session) return;
+      const tab = getActiveTab(session);
+      if (tab) {
+        tab.content = editorTextarea.value;
+        tab.dirty = true;
+      }
+      // Update the dirty indicator without a full rerender (avoids losing cursor/scroll)
+      const dirtyDot = container.querySelector('.code-editor__dirty');
+      if (!dirtyDot) {
+        const h3 = container.querySelector('.code-editor .panel__header h3');
+        if (h3 && !h3.querySelector('.code-editor__dirty')) {
+          const span = document.createElement('span');
+          span.className = 'code-editor__dirty';
+          span.title = 'Unsaved changes';
+          span.innerHTML = '&bull;';
+          h3.appendChild(span);
+        }
+      }
+      // Show save button if not already visible
+      const actions = container.querySelector('.code-editor .panel__actions');
+      if (actions && !actions.querySelector('[data-code-save-file]')) {
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-primary btn-sm';
+        btn.type = 'button';
+        btn.dataset.codeSaveFile = '';
+        btn.title = 'Save changes (Ctrl+S)';
+        btn.textContent = 'Save';
+        btn.addEventListener('click', () => saveEditorFile());
+        actions.prepend(btn);
+      }
+    });
+
+    editorTextarea.addEventListener('keydown', (e) => {
+      // Ctrl+S / Cmd+S to save
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        saveEditorFile();
+      }
+      // Tab inserts 2 spaces instead of moving focus
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const start = editorTextarea.selectionStart;
+        const end = editorTextarea.selectionEnd;
+        editorTextarea.value = editorTextarea.value.substring(0, start) + '  ' + editorTextarea.value.substring(end);
+        editorTextarea.selectionStart = editorTextarea.selectionEnd = start + 2;
+        editorTextarea.dispatchEvent(new Event('input'));
+      }
+    });
+  }
+
+  container.querySelector('[data-code-save-file]')?.addEventListener('click', () => saveEditorFile());
 
   // ── Terminals ──
 
@@ -2956,6 +3198,12 @@ function bindEvents(container) {
       const nextTab = button.dataset.codeAssistantTab || button.dataset.codeSwitchTab;
       if (!isAssistantTab(nextTab)) return;
       session.activeAssistantTab = nextTab;
+      // Clear badge counts when the user opens the activity tab
+      if (nextTab === 'activity') {
+        session.viewedApprovalCount = (session.pendingApprovals || []).length;
+        session.viewedTaskCount = getTaskBadgeCount(session);
+        session.viewedCheckCount = getCheckBadgeCount(session);
+      }
       saveState(codeState);
       queueSessionPersist(session);
       rerenderFromState();
@@ -2974,6 +3222,27 @@ function bindEvents(container) {
         await handleCodeApprovalDecision(session, [approvalId], decision);
       } finally {
         button.removeAttribute('disabled');
+      }
+    });
+  });
+
+  // ── Inline approvals in chat ──
+
+  container.querySelectorAll('[data-code-inline-approve], [data-code-inline-deny]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const session = getActiveSession();
+      if (!session) return;
+      const approvalId = btn.dataset.codeInlineApprove || btn.dataset.codeInlineDeny;
+      const decision = btn.dataset.codeInlineApprove ? 'approved' : 'denied';
+      if (!approvalId) return;
+      btn.setAttribute('disabled', 'true');
+      // Disable the sibling button too
+      const parent = btn.closest('.code-message__approval-actions');
+      if (parent) parent.querySelectorAll('button').forEach((b) => b.setAttribute('disabled', 'true'));
+      try {
+        await handleCodeApprovalDecision(session, [approvalId], decision);
+      } finally {
+        btn.removeAttribute('disabled');
       }
     });
   });
@@ -3019,11 +3288,17 @@ function bindEvents(container) {
       appendChatMessage(liveSession, 'user', message);
       liveSession.pendingResponse = null;
       appendChatMessage(liveSession, 'agent', response.content || 'No response content.');
+      // Refresh file view after assistant response — the assistant may have edited the open file.
+      const activeEditorTab = getActiveTab(liveSession);
+      if (activeEditorTab) { activeEditorTab.dirty = false; activeEditorTab.content = null; }
       const refreshedSession = await refreshSessionSnapshot(outboundSessionId).catch(() => resolveLiveSession(outboundSessionId, liveSession));
       await refreshAssistantState(refreshedSession || liveSession, {
         rerender: false,
         fallbackPendingApprovals: responsePendingApprovals,
       });
+      if (liveSession.selectedFilePath) {
+        cachedFileView = await loadFileView(liveSession);
+      }
     } catch (err) {
       const liveSession = resolveLiveSession(sessionId, session);
       liveSession.pendingResponse = null;
@@ -3100,6 +3375,12 @@ function normalizeState(raw, agents) {
         currentDirectory: session.currentDirectory || null,
         selectedFilePath: session.selectedFilePath || null,
         showDiff: !!session.showDiff,
+        openTabs: Array.isArray(session.openTabs) ? session.openTabs.map((t) => ({
+          filePath: t.filePath || '',
+          dirty: false,
+          content: null,
+        })).filter((t) => t.filePath) : [],
+        activeTabIndex: typeof session.activeTabIndex === 'number' ? session.activeTabIndex : -1,
         agentId: resolveAgentId(session.agentId, agents),
         status: session.status || 'idle',
         conversationUserId: session.conversationUserId || '',
@@ -3117,9 +3398,13 @@ function normalizeState(raw, agents) {
         planSummary: session.planSummary || '',
         compactedSummary: session.compactedSummary || '',
         workspaceProfile: normalizeWorkspaceProfile(session.workspaceProfile),
-        activeAssistantTab: isAssistantTab(session.activeAssistantTab) ? session.activeAssistantTab : 'chat',
+        activeAssistantTab: isAssistantTab(session.activeAssistantTab) ? session.activeAssistantTab
+          : (session.activeAssistantTab === 'tasks' || session.activeAssistantTab === 'approvals' || session.activeAssistantTab === 'checks') ? 'activity'
+          : 'chat',
         gitState: session.gitState || null,
         gitCommitMessage: session.gitCommitMessage || '',
+        editorDirty: false,
+        editorContent: null,
       };
     }) : [],
     activeSessionId: raw?.activeSessionId || null,

@@ -493,6 +493,10 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(payload),
   }),
+  codeFsWrite: (payload) => request('/api/code/fs/write', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
   codeGitDiff: (payload) => request('/api/code/git/diff', {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -502,6 +506,7 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(payload),
   }),
+  codeGitGraph: (sessionId) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/git/graph`),
 
   // Guardian Agent + Sentinel Audit
   guardianAgentStatus: () => request('/api/guardian-agent/status'),

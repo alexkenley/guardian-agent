@@ -89,6 +89,7 @@ export class BrokerClient {
       derivedFromTaintedContent: request.derivedFromTaintedContent,
       scheduleId: request.scheduleId,
       allowImplicitMemorySave: request.allowImplicitMemorySave,
+      codeContext: request.codeContext,
     });
     return result;
   }

@@ -3,6 +3,7 @@ import type { ToolCaller } from '../broker/types.js';
 import type { ToolDefinition, ToolRunResponse } from '../tools/types.js';
 import { compactMessagesIfOverBudget } from '../util/context-budget.js';
 import { isResponseDegraded } from '../util/response-quality.js';
+import { withTaintedContentSystemPrompt } from '../util/tainted-content.js';
 
 export interface LlmLoopOptions {
   /** When true, memory_save tool calls are allowed (user explicitly asked to remember). */
@@ -44,7 +45,13 @@ export async function runLlmLoop(
     // Context window awareness: compact oldest tool results if approaching budget
     compactMessagesIfOverBudget(messages, contextBudget);
 
-    let response = await chatFn(messages, { tools: llmToolDefs });
+    const plannerMessages = withTaintedContentSystemPrompt(
+      messages,
+      currentContextTrustLevel,
+      currentTaintReasons,
+    );
+
+    let response = await chatFn(plannerMessages, { tools: llmToolDefs });
     finalContent = response.content ?? '';
 
     if (
@@ -55,7 +62,7 @@ export async function runLlmLoop(
       forcedPolicyRetryUsed = true;
       response = await chatFn(
         [
-          ...messages,
+          ...plannerMessages,
           { role: 'assistant', content: response.content ?? '' },
           { role: 'user', content: buildPolicyUpdateCorrectionPrompt() },
         ],

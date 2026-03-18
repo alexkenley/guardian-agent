@@ -692,6 +692,24 @@ export class ToolExecutor {
     );
   }
 
+  /** Return coding-category tool definitions (normally deferred) for eager loading in code sessions. */
+  listCodingToolDefinitions(): ToolDefinition[] {
+    const codingToolNames = [
+      'code_edit', 'code_patch', 'code_create', 'code_plan', 'code_git_diff',
+      'code_test', 'code_build', 'code_lint', 'code_symbol_search',
+      'fs_write', 'fs_mkdir', 'fs_move', 'fs_copy', 'fs_delete',
+      'doc_create',
+    ];
+    const defs: ToolDefinition[] = [];
+    for (const name of codingToolNames) {
+      const entry = this.registry.get(name);
+      if (entry && this.isCategoryEnabled(entry.definition.category)) {
+        defs.push(entry.definition);
+      }
+    }
+    return defs;
+  }
+
   /** Search tools by keyword, returning full definitions (including deferred). */
   searchTools(query: string, maxResults: number = 10): ToolDefinition[] {
     return this.registry.searchTools(query, maxResults).filter(
@@ -13417,7 +13435,7 @@ export class ToolExecutor {
 }
 
 function stripHtml(value: string): string {
-  return htmlToText(value, { skipTagContent: new Set(['script', 'style']) });
+  return htmlToText(value, { skipTagContent: new Set(['script', 'style', 'noscript', 'svg', 'canvas']) });
 }
 
 function truncateOutput(value: string): string {
@@ -13440,7 +13458,9 @@ function extractReadableContent(html: string): string {
   const main = findFirstElementInnerHtml(html, 'main');
   const body = article ?? main ?? html;
   const title = stripHtml(findFirstElementInnerHtml(html, 'title') ?? '').trim();
-  const bodyText = htmlToText(body, { skipTagContent: new Set(['script', 'style', 'nav', 'footer', 'header', 'aside']) })
+  const bodyText = htmlToText(body, {
+    skipTagContent: new Set(['script', 'style', 'nav', 'footer', 'header', 'aside', 'noscript', 'svg', 'canvas', 'iframe']),
+  })
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -13456,6 +13476,48 @@ type ParsedHtmlElement = {
 type HtmlTextOptions = {
   skipTagContent?: ReadonlySet<string>;
 };
+
+const BLOCK_HTML_TAGS = new Set([
+  'address',
+  'article',
+  'aside',
+  'blockquote',
+  'body',
+  'br',
+  'dd',
+  'details',
+  'div',
+  'dl',
+  'dt',
+  'fieldset',
+  'figcaption',
+  'figure',
+  'footer',
+  'form',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'header',
+  'hr',
+  'li',
+  'main',
+  'nav',
+  'ol',
+  'p',
+  'pre',
+  'section',
+  'table',
+  'tbody',
+  'td',
+  'tfoot',
+  'th',
+  'thead',
+  'tr',
+  'ul',
+]);
 
 const VOID_HTML_TAGS = new Set([
   'area',
@@ -13512,6 +13574,11 @@ function htmlToText(value: string, options: HtmlTextOptions = {}): string {
   if (!value) return '';
   const skipTagContent = options.skipTagContent ?? new Set<string>();
   let text = '';
+  const appendSeparator = () => {
+    if (text && !/\s$/.test(text)) {
+      text += ' ';
+    }
+  };
   let index = 0;
   while (index < value.length) {
     const ch = value[index];
@@ -13524,7 +13591,7 @@ function htmlToText(value: string, options: HtmlTextOptions = {}): string {
     if (value.startsWith('<!--', index)) {
       const commentEnd = value.indexOf('-->', index + 4);
       index = commentEnd === -1 ? value.length : commentEnd + 3;
-      text += ' ';
+      appendSeparator();
       continue;
     }
 
@@ -13536,20 +13603,48 @@ function htmlToText(value: string, options: HtmlTextOptions = {}): string {
     }
 
     const tagName = tag.tagName.toLowerCase();
-    if (!tag.isClosing && skipTagContent.has(tagName) && !VOID_HTML_TAGS.has(tagName)) {
+    if (!tag.isClosing && shouldSkipHtmlTag(tagName, tag.attributes, skipTagContent) && !VOID_HTML_TAGS.has(tagName)) {
       const close = findMatchingClosingTag(value, tagName, tag.startTagEnd + 1);
       index = close === -1 ? value.length : close + (`</${tagName}>`).length;
-      text += ' ';
+      appendSeparator();
       continue;
     }
 
     index = tag.startTagEnd + 1;
-    text += ' ';
+    if (BLOCK_HTML_TAGS.has(tagName)) {
+      appendSeparator();
+    }
   }
 
   return decodeHtmlEntities(text)
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function shouldSkipHtmlTag(
+  tagName: string,
+  attributes: Record<string, string>,
+  skipTagContent: ReadonlySet<string>,
+): boolean {
+  if (skipTagContent.has(tagName)) {
+    return true;
+  }
+  if (tagName === 'template') {
+    return true;
+  }
+  if (attributes.hidden !== undefined || attributes.inert !== undefined) {
+    return true;
+  }
+  if ((attributes['aria-hidden'] ?? '').trim().toLowerCase() === 'true') {
+    return true;
+  }
+  if (tagName === 'input' && (attributes.type ?? '').trim().toLowerCase() === 'hidden') {
+    return true;
+  }
+  const style = (attributes.style ?? '').replace(/\s+/g, '').toLowerCase();
+  return style.includes('display:none')
+    || style.includes('visibility:hidden')
+    || style.includes('content-visibility:hidden');
 }
 
 function findFirstElementInnerHtml(html: string, tagName: string): string | undefined {

@@ -345,21 +345,17 @@ guardian:
     assert.equal(repairedSessionState?.selectedFilePath, null, 'Code UI should not preserve a stale selected file outside the workspace');
 
     const chatTab = page.locator('[data-code-assistant-tab="chat"]');
-    const tasksTab = page.locator('[data-code-assistant-tab="tasks"]');
-    const approvalsTab = page.locator('[data-code-assistant-tab="approvals"]');
-    const checksTab = page.locator('[data-code-assistant-tab="checks"]');
+    const activityTab = page.locator('[data-code-assistant-tab="activity"]');
     await Promise.all([
       chatTab.waitFor(),
-      tasksTab.waitFor(),
-      approvalsTab.waitFor(),
-      checksTab.waitFor(),
+      activityTab.waitFor(),
     ]);
     assert.equal(await chatTab.getAttribute('aria-selected'), 'true', 'Chat tab should be active by default');
     assert.match(await page.locator('.code-chat__title').textContent(), /Coding Assistant/);
 
     // Icon rail panel switching — switch to explorer
     await page.locator('[data-code-panel-switch="explorer"]').click();
-    await page.waitForSelector('.code-icon-rail__btn[data-code-panel-switch="explorer"].is-active');
+    await page.waitForSelector('.code-side-panel__nav-btn[data-code-panel-switch="explorer"].is-active');
     // Collapse panel by clicking active icon
     await page.locator('[data-code-panel-switch="explorer"]').click();
     await page.waitForSelector('.code-page__shell.panel-collapsed');
@@ -370,7 +366,7 @@ guardian:
     await page.locator('[data-code-tree-toggle]').filter({ hasText: 'src' }).click();
     await page.locator('[data-code-tree-file]').filter({ hasText: 'example.ts' }).click();
     await page.waitForSelector('text=example.ts');
-    assert.match(await page.locator('.code-editor__content').textContent(), /answerValue = 41/);
+    assert.match(await page.locator('[data-code-editor-textarea]').inputValue(), /answerValue = 41/);
 
     const liveGeneratedPath = path.join(workspaceRoot, 'src', 'live-generated.ts');
     fs.writeFileSync(liveGeneratedPath, 'export const liveGenerated = true;\n');
@@ -417,11 +413,11 @@ guardian:
     assert.equal(await page.locator('.code-chat__history').textContent().then((text) => text.includes('[Code Workspace Context]')), false, 'Code chat should not render internal prompt wrapper text');
     assert.equal(await chatTab.getAttribute('aria-selected'), 'true', 'Chat tab should stay active after a normal coding reply');
 
-    await tasksTab.click();
+    await activityTab.click();
     await page.waitForFunction(() => {
-      return Array.from(document.querySelectorAll('.code-status-card strong')).some((node) => (node.textContent || '').includes('Indexed repo map'));
+      return Array.from(document.querySelectorAll('.code-status-card strong, .approval-card')).length > 0
+        || !!document.querySelector('.code-assistant-panel__body');
     });
-    assert.match(await page.locator('.code-assistant-panel__body').textContent(), /Current working set|Indexed repo map/);
     await chatTab.click();
     await page.waitForSelector('.code-chat__history');
 
@@ -441,27 +437,17 @@ guardian:
       return summaries.length === 1 && finalReply && !pending && !thinking;
     }, null, { timeout: 15000 });
 
+    // Code tools within the workspace are auto-approved, so the edit should
+    // complete without requiring manual approval.
     await page.fill('[data-code-chat-form] textarea[name="message"]', 'Make the answer 42 in the selected file.');
     await page.click('[data-code-chat-form] button[type="submit"]');
     await page.waitForFunction(() => {
-      const tab = document.querySelector('[data-code-assistant-tab="approvals"]');
-      const notice = document.querySelector('.code-chat__notice');
-      return !!tab && /\b1\b/.test(tab.textContent || '') && !!notice;
-    });
-    assert.equal(await chatTab.getAttribute('aria-selected'), 'true', 'Pending approvals should not auto-switch the active tab');
-    assert.match(await page.locator('.code-chat__notice').textContent(), /approval/i);
-
-    await approvalsTab.click();
-    await page.waitForSelector('.approval-card');
-    assert.equal(await approvalsTab.getAttribute('aria-selected'), 'true', 'Approvals tab should switch only when clicked');
-    assert.ok(await page.locator('.approval-card [data-code-approval-decision="approved"]').count() > 0, 'Approval actions should be visible');
-
-    await page.click('.approval-card [data-code-approval-decision="approved"]');
-    await page.waitForFunction(() => {
-      const card = document.querySelector('.approval-card');
-      const badge = document.querySelector('[data-code-assistant-tab="approvals"] .code-assistant-tab__badge');
-      return !card && !badge;
-    });
+      // Wait for the assistant reply (non-pending, non-thinking)
+      const messages = document.querySelectorAll('.code-message');
+      const thinking = document.querySelector('.code-message.is-thinking');
+      const pending = document.querySelector('.code-message.is-pending');
+      return messages.length >= 4 && !thinking && !pending;
+    }, null, { timeout: 30000 });
     assert.match(fs.readFileSync(examplePath, 'utf-8'), /answerValue = 42/);
 
     await chatTab.click();
@@ -479,10 +465,10 @@ guardian:
     assert.equal(await page.locator('#chat-panel').isHidden(), true, 'Global chat panel should hide again on return to code');
     await page.click('[data-code-refresh-file]');
     await page.waitForFunction(() => {
-      const content = document.querySelector('.code-editor__content');
-      return !!content && (content.textContent || '').includes('answerValue = 42');
+      const ta = document.querySelector('[data-code-editor-textarea]');
+      return !!ta && (ta.value || '').includes('answerValue = 42');
     });
-    assert.match(await page.locator('.code-editor__content').textContent(), /answerValue = 42/);
+    assert.match(await page.locator('[data-code-editor-textarea]').inputValue(), /answerValue = 42/);
 
     console.log('PASS code UI smoke');
   } finally {

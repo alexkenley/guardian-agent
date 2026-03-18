@@ -39,6 +39,7 @@ import { GuardianAgentService, SentinelAuditService } from './runtime/sentinel.j
 import { createPolicyEngine, loadPolicyFiles, ShadowEvaluator } from './policy/index.js';
 import type { PolicyModeConfig } from './policy/index.js';
 import { createLogger, setLogLevel } from './util/logging.js';
+import { withTaintedContentSystemPrompt } from './util/tainted-content.js';
 import { ConversationService, type ConversationKey } from './runtime/conversation.js';
 import { CodeSessionStore, type CodeSessionRecord, type ResolvedCodeSessionContext } from './runtime/code-sessions.js';
 import { inspectCodeWorkspaceSync, type CodeWorkspaceProfile } from './runtime/code-workspace-profile.js';
@@ -1183,8 +1184,12 @@ class ChatAgent extends BaseAgent {
       }
     } else {
       let rounds = 0;
-      // Deferred loading: start with always-loaded tools, expand via find_tools
-      const allToolDefs = this.tools.listAlwaysLoadedDefinitions();
+      // Deferred loading: start with always-loaded tools, expand via find_tools.
+      // In code sessions, eagerly include coding tools so the LLM can edit files immediately.
+      const baseToolDefs = this.tools.listAlwaysLoadedDefinitions();
+      const allToolDefs = resolvedCodeSession
+        ? [...baseToolDefs, ...this.tools.listCodingToolDefinitions().filter((d) => !baseToolDefs.some((b) => b.name === d.name))]
+        : baseToolDefs;
       // Local models get full descriptions for better tool selection; external models get short
       let llmToolDefs = allToolDefs.map((d) => toLLMToolDef(d, providerLocality));
       const pendingIds: string[] = [];
@@ -1196,7 +1201,13 @@ class ChatAgent extends BaseAgent {
         // Context window awareness: if approaching budget, summarize oldest tool results
         compactMessagesIfOverBudget(llmMessages, contextBudget);
 
-        let response = await chatFn(llmMessages, { tools: llmToolDefs });
+        const plannerMessages = withTaintedContentSystemPrompt(
+          llmMessages,
+          currentContextTrustLevel,
+          currentTaintReasons,
+        );
+
+        let response = await chatFn(plannerMessages, { tools: llmToolDefs });
         finalContent = response.content;
         if (
           !forcedPolicyRetryUsed
@@ -1205,7 +1216,7 @@ class ChatAgent extends BaseAgent {
           forcedPolicyRetryUsed = true;
           response = await chatFn(
             [
-              ...llmMessages,
+              ...plannerMessages,
               { role: 'assistant', content: response.content ?? '' },
               { role: 'user', content: this.buildPolicyUpdateCorrectionPrompt() },
             ],
@@ -1237,6 +1248,14 @@ class ChatAgent extends BaseAgent {
               );
               if (toBoolean(prefetched.success) && prefetched.output) {
                 const prefetchedScan = this.sanitizeToolResultForLlm('web_search', prefetched, toolResultProviderKind);
+                if (prefetchedScan.trustLevel === 'quarantined') {
+                  currentContextTrustLevel = 'quarantined';
+                } else if (prefetchedScan.trustLevel === 'low_trust' && currentContextTrustLevel === 'trusted') {
+                  currentContextTrustLevel = 'low_trust';
+                }
+                for (const reason of prefetchedScan.taintReasons) {
+                  currentTaintReasons.add(reason);
+                }
                 const safePrefetched = prefetchedScan.sanitized && typeof prefetchedScan.sanitized === 'object'
                   ? prefetchedScan.sanitized as Record<string, unknown>
                   : prefetched;
@@ -1263,7 +1282,9 @@ class ChatAgent extends BaseAgent {
                 }
                 // Re-prompt the LLM with the search results
                 if (answer || results.length > 0) {
-                  const retryResponse = await chatFn(llmMessages);
+                  const retryResponse = await chatFn(
+                    withTaintedContentSystemPrompt(llmMessages, currentContextTrustLevel, currentTaintReasons),
+                  );
                   finalContent = retryResponse.content;
                 }
               }
@@ -5978,10 +5999,8 @@ function buildDashboardCallbacks(
         workspaceRoot,
         agentId: agentId?.trim() || null,
       });
-      // Auto-add workspace root to allowed paths so the coding assistant can
-      // operate on workspace files without requiring update_tool_policy approval.
-      // Auto-add workspace root to allowed paths so the coding assistant can
-      // operate on workspace files without requiring update_tool_policy approval.
+      // Auto-add workspace root to allowed paths on create so the LLM sees it
+      // in <tool-context> and never calls update_tool_policy for the workspace.
       if (session.resolvedRoot && toolExecutor) {
         const currentAllowed = toolExecutor.getPolicy().sandbox.allowedPaths;
         if (!currentAllowed.some((p: string) => session.resolvedRoot.startsWith(p) || p.startsWith(session.resolvedRoot))) {
@@ -6061,6 +6080,14 @@ function buildDashboardCallbacks(
         mode,
       });
       const session = codeSessionStore.getSession(sessionId, canonicalUserId);
+      // Auto-add workspace root to allowed paths on attach (covers resumed sessions).
+      if (session?.resolvedRoot && toolExecutor) {
+        const currentAllowed = toolExecutor.getPolicy().sandbox.allowedPaths;
+        if (!currentAllowed.some((p: string) => session.resolvedRoot.startsWith(p) || p.startsWith(session.resolvedRoot))) {
+          toolExecutor.updatePolicy({ sandbox: { allowedPaths: [...currentAllowed, session.resolvedRoot] } });
+          log.info({ sessionId: session.id, path: session.resolvedRoot }, 'Auto-added code session workspace root to allowed paths on attach');
+        }
+      }
       return {
         success: !!attachment && !!session,
         ...(session ? {

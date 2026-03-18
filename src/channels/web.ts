@@ -3785,6 +3785,46 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // POST /api/code/fs/write — direct user file write for Code UI editor
+      if (req.method === 'POST' && url.pathname === '/api/code/fs/write') {
+        const body = await readBody(req, this.maxBodyBytes);
+        const parsed = JSON.parse(body || '{}') as { path?: string; content?: string; sessionId?: string; userId?: string; channel?: string };
+        if (typeof parsed.content !== 'string') {
+          sendJSON(res, 400, { success: false, error: 'Missing content' });
+          return;
+        }
+        let targetPath = resolve(parsed.path || '.');
+        if (trimOptionalString(parsed.sessionId) && this.dashboard.onCodeSessionGet) {
+          const principal = this.resolveRequestPrincipal(req);
+          const snapshot = this.dashboard.onCodeSessionGet({
+            sessionId: parsed.sessionId!,
+            userId: parsed.userId || 'web-user',
+            principalId: principal.principalId,
+            channel: parsed.channel || 'web',
+            surfaceId: '',
+            historyLimit: 1,
+          });
+          if (!snapshot) {
+            sendJSON(res, 404, { success: false, error: 'Code session not found' });
+            return;
+          }
+          try {
+            targetPath = resolveCodeSessionPath(snapshot.session.resolvedRoot, parsed.path);
+          } catch (err) {
+            sendJSON(res, 403, { success: false, error: err instanceof Error ? err.message : 'Denied path' });
+            return;
+          }
+        }
+        try {
+          const { writeFile } = await import('node:fs/promises');
+          await writeFile(targetPath, parsed.content, 'utf-8');
+          sendJSON(res, 200, { success: true, path: targetPath });
+        } catch (err) {
+          sendJSON(res, 200, { success: false, error: err instanceof Error ? err.message : 'Failed to write file' });
+        }
+        return;
+      }
+
       // POST /api/code/git/diff — direct user git diff for Code UI
       if (req.method === 'POST' && url.pathname === '/api/code/git/diff') {
         const body = await readBody(req, this.maxBodyBytes);
@@ -3916,7 +3956,7 @@ export class WebChannel implements ChannelAdapter {
         }
         const cwd = snapshot.session.resolvedRoot;
         const action = parsed.action;
-        const validActions = ['stage', 'unstage', 'commit', 'push', 'pull', 'fetch', 'discard'];
+        const validActions = ['stage', 'unstage', 'commit', 'push', 'pull', 'fetch', 'discard', 'init'];
         if (!validActions.includes(action)) {
           sendJSON(res, 400, { success: false, error: `Invalid git action: ${action}` });
           return;
@@ -3956,6 +3996,9 @@ export class WebChannel implements ChannelAdapter {
             case 'discard':
               result = await run(['checkout', '--', parsed.path || '.']);
               break;
+            case 'init':
+              result = await run(['init']);
+              break;
             default:
               sendJSON(res, 400, { success: false, error: 'Unknown action' });
               return;
@@ -3963,6 +4006,62 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 200, { success: result.exitCode === 0, stdout: result.stdout, stderr: result.stderr });
         } catch (err) {
           sendJSON(res, 200, { success: false, error: err instanceof Error ? err.message : `Git ${action} failed` });
+        }
+        return;
+      }
+
+      // GET /api/code/sessions/:id/git/graph — commit graph for git panel
+      const gitGraphMatch = url.pathname.match(/^\/api\/code\/sessions\/([^/]+)\/git\/graph$/);
+      if (req.method === 'GET' && gitGraphMatch) {
+        const sessionId = decodeURIComponent(gitGraphMatch[1]);
+        const principal = this.resolveRequestPrincipal(req);
+        const snapshot = this.dashboard.onCodeSessionGet?.({
+          sessionId,
+          userId: 'web-user',
+          principalId: principal.principalId,
+          channel: 'web',
+          surfaceId: '',
+          historyLimit: 1,
+        });
+        if (!snapshot) {
+          sendJSON(res, 404, { success: false, error: 'Code session not found' });
+          return;
+        }
+        const cwd = snapshot.session.resolvedRoot;
+        try {
+          const { execFile } = await import('node:child_process');
+          const result = await new Promise<{ stdout: string; exitCode: number }>((resolve) => {
+            execFile('git', [
+              'log', '--all', '--oneline', '--graph', '--decorate=short',
+              '--date=short', '--pretty=format:%h\t%d\t%s\t%ad',
+              '-40',
+            ], { cwd, windowsHide: true, maxBuffer: 256 * 1024 }, (error: any, stdout: string) => {
+              resolve({ stdout: stdout || '', exitCode: error ? (error.code ?? 1) : 0 });
+            });
+          });
+          if (result.exitCode !== 0) {
+            sendJSON(res, 200, { success: false, entries: [] });
+            return;
+          }
+          const entries = result.stdout.split('\n').filter(Boolean).map((line) => {
+            // Each line is: graph_chars hash \t refs \t message \t date
+            // But --graph prepends graph characters before the formatted output
+            const graphMatch = line.match(/^([*|/\\ ]+)\s*([a-f0-9]+)\t\s*(\([^)]*\))?\s*\t?\s*(.*?)\t\s*(.*)$/);
+            if (graphMatch) {
+              return {
+                graph: graphMatch[1].trimEnd(),
+                hash: graphMatch[2],
+                refs: (graphMatch[3] || '').replace(/^\(|\)$/g, '').trim(),
+                message: graphMatch[4],
+                date: graphMatch[5],
+              };
+            }
+            // Graph-only lines (merge lines, etc.)
+            return { graph: line, hash: '', refs: '', message: '', date: '' };
+          });
+          sendJSON(res, 200, { success: true, entries });
+        } catch (err) {
+          sendJSON(res, 200, { success: false, entries: [], error: err instanceof Error ? err.message : 'Git graph failed' });
         }
         return;
       }

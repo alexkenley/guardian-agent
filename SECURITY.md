@@ -376,6 +376,7 @@ Current enforced inputs include:
 Current enforced behaviors include:
 - deny non-read-only actions from quarantined context
 - require approval for tainted-content-driven mutation
+- inject a tainted-content reminder before additional planning turns so remote/tool text is treated as evidence, not instructions
 - quarantine low-trust memory writes by default
 - bind approvals to the requesting principal/role
 - enforce bounded schedule authority via approval expiry, scope hash drift, and token/run budgets
@@ -529,7 +530,9 @@ Email addresses are PII and flagged by default. However, email/calendar/MCP tool
 - Tool results are classified into `trusted`, `low_trust`, or `quarantined`
 - Tool results are wrapped as structured `<tool_result ...>` envelopes before they return to the model
 - Tool-result strings are stripped of invisible Unicode, checked for prompt-injection signals, and PII-redacted before reinjection
+- `web_fetch` normalizes HTML before scanning by skipping obvious hidden DOM (`hidden`, `aria-hidden`, inline hidden styles) and preserving inline text continuity so tag-fragmented phrases are harder to hide from the scanner
 - Quarantined tool output does not re-enter the planner as raw text; the runtime injects a constrained summary instead
+- When planning continues from tainted remote content, the planner receives an extra system reminder to treat tool output as data only and to ignore approval-like or role-changing text embedded in fetched content
 - Low-trust or quarantined content cannot become active memory by default
 - All detections logged to the audit trail
 

@@ -150,6 +150,9 @@ export class BrokerServer {
               : undefined,
             derivedFromTaintedContent: request.params.derivedFromTaintedContent === true,
             scheduleId: typeof request.params.scheduleId === 'string' ? request.params.scheduleId : undefined,
+            ...(request.params.codeContext && typeof request.params.codeContext === 'object'
+              ? { codeContext: request.params.codeContext as { workspaceRoot: string; sessionId?: string } }
+              : {}),
           };
 
           const toolDefinition = this.tools.getToolDefinition(toolName);
