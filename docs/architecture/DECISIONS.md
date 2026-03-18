@@ -493,7 +493,7 @@ Additionally, `POST /api/setup/apply` was hardened: when `providerType` is missi
 ## ADR-026: Native Skills Complement MCP Rather Than Replacing It
 
 **Status:** Accepted
-**Implementation Status:** Foundation implemented (`SkillRegistry`, `SkillResolver`, prompt injection, bundled local skills)
+**Implementation Status:** Foundation implemented and uplifted (`SkillRegistry`, trigger-aware `SkillResolver`, prompt injection, skill telemetry, bundled local skills with templates/scripts)
 
 **Context:** GuardianAgent needs a reusable workflow and procedural-knowledge layer. External skill ecosystems show strong utility, but they also expand supply-chain risk and do not provide the typed, policy-enforced execution model that GuardianAgent already has through built-in tools and MCP. Replacing MCP with skills would collapse execution and guidance into the same trust domain.
 
@@ -596,3 +596,38 @@ Resolution order: tool-name match > category match > smart category default > de
 - (-) Smart defaults are opinionated — users who disagree can disable via toggle or override per-category.
 
 **Refs:** `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`, `src/index.ts` (`resolveToolProviderRouting`, `resolveRoutedProviderForTools`)
+
+---
+
+## ADR-030: Code Session Auto-Approve with Guardian Agent Safety Net
+
+**Status:** Accepted
+
+**Context:** In `approve_by_policy` mode, every mutating tool call requires manual user approval. This creates excessive friction in coding sessions — the user must approve every file edit, file create, and automation setup individually, even though they have already granted trust to the workspace by creating the session. The approval flow also broke frequently because `codeContext` was not propagated through the broker pipeline, causing tools to fall back to the generic approval path.
+
+Additionally, auto-approving automation tools (`task_create`, `workflow_upsert`) raised a security concern: unlike filesystem tools which are scoped to the workspace root by `resolveAllowedPath()`, automation tools create system-level scheduled tasks that are not inherently workspace-scoped.
+
+**Decision:** Auto-approve coding, filesystem, memory, document, and automation tools when operating inside a code session with a valid workspace root. The auto-approve bypasses only the `decide()` approval step in `ToolExecutor`. All other security layers remain active:
+
+- Guardian admission pipeline (Layer 1)
+- **Guardian Agent inline LLM evaluation (Layer 2)** — `onPreExecute` evaluates every non-read-only tool action before execution, including auto-approved ones. This is the safety net for automation tools: the Guardian Agent LLM can detect and block contextually dangerous actions (e.g., prompt-injected malicious automations) that static approval gates cannot.
+- Output Guardian scanning (Layer 3)
+- Sentinel Audit (Layer 4)
+- Path validation via `resolveAllowedPath()` for filesystem tools
+- Bearer token authentication on the web channel
+
+The workspace root is also auto-added to the persistent `allowedPaths` on session create and session attach, so the LLM sees the path in `<tool-context>` and does not preemptively call `update_tool_policy`.
+
+**Implementation note — codeContext propagation:** Auto-approve depends on `codeContext` reaching `ToolExecutor.decide()`. Three execution paths carry it: (1) the inline ChatAgent LLM loop, (2) the brokered worker pipeline (ChatAgent → message metadata → worker session → BrokerClient → BrokerServer → ToolExecutor), and (3) the supervisor-side `tryDirectAutomationAuthoring` pre-route in WorkerManager. All three must forward `codeContext` or auto-approve silently fails. See `docs/specs/CODING-ASSISTANT-SPEC.md` § codeContext Propagation.
+
+**Consequences:**
+- (+) Eliminates approval friction for coding workflow — edits, creates, tests, and automations execute immediately
+- (+) Guardian Agent LLM evaluation catches contextually dangerous actions that static rules miss
+- (+) Path validation still enforces workspace boundary for filesystem tools
+- (+) All four security layers remain active — only the approval gate is bypassed
+- (+) Bearer token + session ownership provide authentication context
+- (-) Automation tools are not workspace-scoped — relies on Guardian Agent evaluation to catch misuse
+- (-) If Guardian Agent is disabled or configured as fail-open, automation tools execute without any approval checkpoint
+- (-) codeContext propagation is fragile — if any layer in the broker/worker chain drops it, auto-approve silently degrades to require_approval
+
+**Refs:** `docs/specs/CODING-ASSISTANT-SPEC.md`, `src/tools/executor.ts` (`isCodeSessionWorkspaceTool`), `src/index.ts` (workspace root auto-add), `src/supervisor/worker-manager.ts` (automation pre-route codeContext), `src/broker/broker-client.ts` + `src/broker/broker-server.ts` (broker codeContext forwarding)

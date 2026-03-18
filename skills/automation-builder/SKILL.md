@@ -44,3 +44,13 @@ Use this when the user wants a recurring check, scheduled task, monitoring workf
 - Cloud posture check: provider `*_status` then the narrowest provider-specific inventory or log tool
 - Security watch: `net_anomaly_check`, `net_threat_summary`, `intel_findings`, or firewall status plus an instruction step to summarize findings
 - Personal assistant briefing: schedule an `agent` task with a prompt such as "Review Gmail, calendar, tasks, and monitoring alerts, then send me a concise briefing."
+
+## Gotchas
+
+- Do not create both a playbook schedule and an agent schedule for the same job unless the user explicitly wants both.
+- Do not hide tool choice inside free-form instruction steps when the task really needs a typed tool or `agent` task.
+- Do not default monitoring automations to mutating actions; keep them read-only unless the user explicitly asks otherwise.
+
+## Template
+
+- Use `templates/automation-spec.md` when you need a durable, reviewable automation design before saving it.

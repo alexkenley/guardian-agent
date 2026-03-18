@@ -13,6 +13,11 @@ export interface SkillTriggers {
   toolCategories?: string[];
 }
 
+export interface SkillUpstreamMetadata {
+  source?: string;
+  [key: string]: unknown;
+}
+
 export interface SkillManifest {
   id: string;
   name: string;
@@ -27,6 +32,7 @@ export interface SkillManifest {
   requiredCapabilities?: string[];
   requiredManagedProvider?: string;
   risk?: SkillRisk;
+  _upstream?: SkillUpstreamMetadata;
 }
 
 export interface LoadedSkill {

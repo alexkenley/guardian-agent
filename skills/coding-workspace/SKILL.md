@@ -1,6 +1,6 @@
 ---
 name: coding-workspace
-description: Workflow guidance for backend-owned coding sessions, including attach/resume across web, CLI, and Telegram.
+description: Use when the request is about a repo, codebase, implementation, bugfix, or backend-owned coding session that should stay anchored to the active workspace.
 ---
 
 # Coding Workspace
@@ -33,3 +33,9 @@ Guardrails:
 - It is valid to create automations or use non-coding tools from within the coding session, but do not lose the session’s repo context while doing so.
 - If you need to inspect global memory from a coding session, do it explicitly through the read-only memory bridge instead of treating it as default context.
 - If the session is getting noisy, summarize progress so it can be compacted without losing the plan.
+
+## Gotchas
+
+- Do not treat a plain web or CLI turn as a coding-session turn unless the backend session is actually attached or explicitly targeted.
+- Do not rely on workspace summaries alone when making code claims; re-read the concrete files before editing or asserting behavior.
+- Do not let broader research, memory, or automation work sever the active repo/session anchor.

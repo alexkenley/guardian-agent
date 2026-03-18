@@ -2,7 +2,7 @@
   "id": "coding-workspace",
   "name": "Coding Workspace",
   "version": "0.2.0",
-  "description": "Workflow guidance for backend-owned coding sessions, including workspace-aware repo understanding, attach/resume across surfaces, and broader actions performed from the active workspace context.",
+  "description": "Use when the request is about a repo, codebase, implementation, bugfix, or backend-owned coding session that should stay anchored to the active workspace context.",
   "tags": [
     "coding",
     "code",

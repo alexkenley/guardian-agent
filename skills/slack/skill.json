@@ -2,7 +2,7 @@
   "id": "slack",
   "name": "Slack Actions",
   "version": "0.1.0",
-  "description": "Use the managed Slack integration to read messages, react, pin items, and send or edit Slack content.",
+  "description": "Use only for explicit Slack message, channel, reaction, pin, or send/edit workflows through the managed Slack integration.",
   "role": "domain",
   "tags": [
     "slack",
@@ -13,7 +13,7 @@
     "workspace",
     "dm"
   ],
-  "enabled": false,
+  "enabled": true,
   "appliesTo": {
     "channels": [
       "cli",

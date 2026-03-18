@@ -13,6 +13,10 @@ Capture assistant interaction telemetry to identify friction and prioritize UX i
 - `message_success`
 - `message_error`
 - `message_denied`
+- `skill_resolved`
+- `skill_prompt_injected`
+- `skill_read`
+- `skill_tool_executed`
 - `command_used`
 - `quick_action_triggered`
 - `conversation_reset`
@@ -38,6 +42,12 @@ Capture assistant interaction telemetry to identify friction and prioritize UX i
 - `canonicalUserId`
 - `agentId`
 - `metadata` (JSON payload)
+
+## Skill Event Metadata
+- `skill_resolved`: `skillId`, `skillName`, `skillRole`, `score`, `requestType`
+- `skill_prompt_injected`: `skillId`, `skillName`, `skillRole`, `score`, `requestType`
+- `skill_read`: `skillId`, `pathType`, `path`
+- `skill_tool_executed`: `skillId`, `toolName`, `toolStatus`
 
 ## API Surface
 - `GET /api/analytics/summary?windowMs=<ms>`

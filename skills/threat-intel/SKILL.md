@@ -27,3 +27,13 @@ When the user is working with threat indicators, watchlists, or intelligence fin
 - Use structured output: indicator, type, source, severity, recommended action.
 - Clearly label assessed vs. raw intelligence.
 - When evidence is incomplete, say so. Do not fill gaps with speculation.
+
+## Gotchas
+
+- Do not treat one reputation match or feed hit as proof of compromise.
+- Do not add malformed or low-context indicators to a watchlist without validating the type first.
+- Do not bury high-confidence findings under a flat list of low-confidence noise.
+
+## Template
+
+- Use `templates/intel-finding-report.md` when you need a durable, structured summary of one indicator or finding set.

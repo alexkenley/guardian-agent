@@ -2,7 +2,7 @@
   "id": "notion",
   "name": "Notion",
   "version": "0.1.0",
-  "description": "Use the managed Notion integration to work with pages, data sources, and blocks.",
+  "description": "Use only for explicit Notion page, database, data-source, or block workflows through the managed Notion integration.",
   "role": "domain",
   "tags": [
     "notion",
@@ -13,7 +13,7 @@
     "database",
     "notion-workspace"
   ],
-  "enabled": false,
+  "enabled": true,
   "appliesTo": {
     "channels": [
       "cli",
@@ -29,7 +29,7 @@
       "notion",
       "notion page",
       "notion database",
-      "data source",
+      "notion data source",
       "notion blocks",
       "notion workspace"
     ]

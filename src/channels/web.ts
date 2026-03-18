@@ -4213,85 +4213,12 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
-      // POST /api/shell/exec — Unrestricted user shell (auth-gated, not agent allowlist)
+      // POST /api/shell/exec — removed; use PTY-backed code terminals instead
       if (req.method === 'POST' && url.pathname === '/api/shell/exec') {
-        const body = await readBody(req, this.maxBodyBytes);
-        const parsed = JSON.parse(body || '{}') as {
-          command?: string;
-          cwd?: string;
-          shell?: string;
-          timeoutMs?: number;
-        };
-        if (!parsed.command || typeof parsed.command !== 'string') {
-          sendJSON(res, 400, { error: 'command is required' });
-          return;
-        }
-        const timeoutMs = Math.max(1000, Math.min(120_000, Number(parsed.timeoutMs) || 30_000));
-        const maxBuffer = 2 * 1024 * 1024; // 2 MB
-        const platform = process.platform;
-        const shellType = parsed.shell || (platform === 'win32' ? 'powershell' : 'bash');
-
-        let shellCmd: string;
-        let shellArgs: string[];
-        switch (shellType) {
-          case 'powershell':
-            shellCmd = platform === 'win32' ? 'powershell.exe' : 'pwsh';
-            shellArgs = ['-NoProfile', '-NonInteractive', '-Command', parsed.command];
-            break;
-          case 'cmd':
-            shellCmd = 'cmd.exe';
-            shellArgs = ['/c', parsed.command];
-            break;
-          case 'wsl':
-            shellCmd = 'wsl';
-            shellArgs = ['--', 'bash', '-c', parsed.command];
-            break;
-          case 'git-bash': {
-            const gitBashPath = 'C:\\Program Files\\Git\\bin\\bash.exe';
-            shellCmd = gitBashPath;
-            shellArgs = ['-c', parsed.command];
-            break;
-          }
-          case 'zsh':
-            shellCmd = 'zsh';
-            shellArgs = ['-c', parsed.command];
-            break;
-          case 'sh':
-            shellCmd = 'sh';
-            shellArgs = ['-c', parsed.command];
-            break;
-          case 'bash':
-          default:
-            shellCmd = 'bash';
-            shellArgs = ['-c', parsed.command];
-            break;
-        }
-
-        try {
-          const { execFile } = await import('node:child_process');
-          const result = await new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
-            execFile(shellCmd, shellArgs, {
-              cwd: parsed.cwd || undefined,
-              timeout: timeoutMs,
-              maxBuffer,
-              windowsHide: true,
-            } as any, (error: any, stdout: string, stderr: string) => {
-              resolve({
-                stdout: stdout || '',
-                stderr: stderr || '',
-                exitCode: error ? (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 2 : (error.killed ? 124 : (error.code ?? 1))) : 0,
-              });
-            });
-          });
-          sendJSON(res, 200, {
-            success: result.exitCode === 0,
-            stdout: result.stdout,
-            stderr: result.stderr,
-            exitCode: result.exitCode,
-          });
-        } catch (err) {
-          sendJSON(res, 500, { success: false, error: err instanceof Error ? err.message : 'Shell execution failed' });
-        }
+        sendJSON(res, 410, {
+          success: false,
+          error: 'Direct shell execution has been removed from the web API. Use /api/code/terminals for interactive shell access.',
+        });
         return;
       }
 

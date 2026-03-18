@@ -473,7 +473,7 @@ function shouldBridgeTerminalTextInput(event, text = '') {
     : (typeof event?.data === 'string' ? event.data : '');
   if (!candidate) return false;
   if (isClipboardPasteSentinel(candidate)) return true;
-  if (/[\r\n\t ]/.test(candidate)) return true;
+  if (/[\r\n\t]/.test(candidate)) return true;
   return candidate.length >= 4;
 }
 
@@ -1514,7 +1514,15 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
             ${renderCodeBlock(fileView.diff || 'No diff output for this file.', { kind: 'diff' })}
           </div>
         </div>`
-      : `<textarea class="code-editor__textarea" data-code-editor-textarea spellcheck="false">${esc(activeTab.content ?? fileView.source ?? '')}</textarea>`)
+      : (() => {
+          const src = activeTab.content ?? fileView.source ?? '';
+          const lang = detectCodeLanguage(activeTab.filePath);
+          const highlighted = highlightCode(src, lang);
+          return `<div class="code-editor__overlay" data-code-editor-overlay data-code-language="${escAttr(lang)}">
+            <pre class="code-editor__highlight" aria-hidden="true">${highlighted}\n</pre>
+            <textarea class="code-editor__textarea" data-code-editor-textarea spellcheck="false">${esc(src)}</textarea>
+          </div>`;
+        })())
     : '';
   const tabBar = openTabs.length > 0 ? `
     <div class="code-editor__tabs">
@@ -3072,7 +3080,18 @@ function bindEvents(container) {
   // ── Editor (editable textarea) ──
 
   const editorTextarea = container.querySelector('[data-code-editor-textarea]');
+  const editorHighlight = container.querySelector('.code-editor__highlight');
+  const editorOverlay = container.querySelector('[data-code-editor-overlay]');
+  let highlightTimer = null;
   if (editorTextarea) {
+    // Sync scroll between textarea and highlight pre
+    if (editorHighlight) {
+      editorTextarea.addEventListener('scroll', () => {
+        editorHighlight.scrollTop = editorTextarea.scrollTop;
+        editorHighlight.scrollLeft = editorTextarea.scrollLeft;
+      });
+    }
+
     editorTextarea.addEventListener('input', () => {
       const session = getActiveSession();
       if (!session) return;
@@ -3080,6 +3099,14 @@ function bindEvents(container) {
       if (tab) {
         tab.content = editorTextarea.value;
         tab.dirty = true;
+      }
+      // Debounced re-highlight
+      if (editorHighlight && editorOverlay) {
+        clearTimeout(highlightTimer);
+        highlightTimer = setTimeout(() => {
+          const lang = editorOverlay.dataset.codeLanguage || 'plaintext';
+          editorHighlight.innerHTML = highlightCode(editorTextarea.value, lang) + '\n';
+        }, 150);
       }
       // Update the dirty indicator without a full rerender (avoids losing cursor/scroll)
       const dirtyDot = container.querySelector('.code-editor__dirty');
@@ -3332,7 +3359,22 @@ function bindEvents(container) {
     rerenderFromState();
   });
 
-  container.querySelector('[data-code-chat-form] textarea[name="message"]')?.addEventListener('input', (event) => {
+  const codeChatInput = container.querySelector('[data-code-chat-form] textarea[name="message"]');
+  codeChatInput?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return;
+    event.preventDefault();
+    if (event.repeat) return;
+    const input = event.currentTarget;
+    const form = input instanceof HTMLTextAreaElement ? input.form : null;
+    if (!form) return;
+    if (typeof form.requestSubmit === 'function') {
+      form.requestSubmit();
+      return;
+    }
+    form.querySelector('button[type="submit"]')?.click();
+  });
+
+  codeChatInput?.addEventListener('input', (event) => {
     const session = getActiveSession();
     if (!session) return;
     session.chatDraft = event.currentTarget.value;

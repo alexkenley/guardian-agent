@@ -41,3 +41,9 @@ General `m365` rules:
 - The `service` field determines scope validation: `mail`, `calendar`, `onedrive`, `contacts`, `user`.
 
 Read only the domain reference you need for the current request. Do not load all references up front.
+
+## Gotchas
+
+- Do not ask the user for raw OAuth tokens or API credentials.
+- Do not silently pick Outlook when the mailbox provider is ambiguous.
+- Do not under-select fields on list calls and then answer follow-up questions from incomplete data.

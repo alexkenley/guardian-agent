@@ -30,3 +30,9 @@ Use this when the user is troubleshooting the local machine, checking service he
 - Use `network-recon` for host, subnet, DNS, or port diagnostics.
 - Use `security-triage` when the findings look security-relevant rather than purely operational.
 - Use `automation-builder` for recurring health checks.
+
+## Gotchas
+
+- Do not jump to root cause before establishing the current symptoms with host data.
+- Do not switch to network or security tooling when host-level tools already answer the question.
+- Do not treat a stale monitoring snapshot as current state if a fresh check is cheap and relevant.

@@ -16,3 +16,9 @@ Use indexed search when the user wants answers from local docs, notes, wikis, or
 - Prefer indexed search for broad discovery.
 - Prefer `fs_read` or `fs_search` only after you know the file or exact target.
 - Tell the user when the answer is coming from indexed content versus a direct file read.
+
+## Gotchas
+
+- Do not reindex first; confirm that stale or missing index state is actually the blocker.
+- Do not present indexed-search results as if they cover files that were never ingested.
+- Do not read large numbers of files after search if a few targeted passages answer the question.

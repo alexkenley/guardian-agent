@@ -192,8 +192,11 @@ src/google/         — Native Google Workspace integration (GoogleAuth, GoogleS
 src/microsoft/      — Native Microsoft 365 integration (MicrosoftAuth, MicrosoftService)
 src/tools/          — ToolExecutor, MCP client (MCPClient, MCPClientManager), approvals
 src/broker/         — BrokerServer/Client, capability tokens, provenance — JSON-RPC 2.0 bridge
-                      between supervisor and worker (tool calls, approvals, LLM chat proxy)
-src/supervisor/     — WorkerManager — spawns/manages sandboxed worker processes
+                      between supervisor and worker (tool calls, approvals, LLM chat proxy).
+                      IMPORTANT: BrokerClient.callTool and BrokerServer must forward codeContext
+                      for code-session auto-approve to work through the brokered path.
+src/supervisor/     — WorkerManager — spawns/manages sandboxed worker processes.
+                      tryDirectAutomationAuthoring must also forward codeContext from message metadata.
 src/worker/         — Worker entry point, BrokeredWorkerSession, runLlmLoop
 src/sandbox/        — OS sandbox profiles, bwrap/ulimit/env hardening, capability detection
 src/eval/           — Evaluation framework (types, metrics, runner)

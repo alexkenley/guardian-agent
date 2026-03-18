@@ -2,7 +2,7 @@
   "id": "code-review",
   "name": "Code Review",
   "version": "0.1.0",
-  "description": "Review workflow focused on bugs, regressions, missing tests, and operational risk.",
+  "description": "Use when reviewing a diff, PR, or patch for bugs, regressions, missing tests, or operational risk.",
   "tags": [
     "review",
     "regression",

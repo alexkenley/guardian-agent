@@ -41,3 +41,9 @@ Build MCP servers so they are easy for agents to discover, reason about, and use
 - Can common user tasks be solved without custom scripting around the server?
 
 Read [references/mcp-server-checklist.md](./references/mcp-server-checklist.md) when you need a compact implementation checklist.
+
+## Gotchas
+
+- Do not mirror raw endpoint naming when it makes tool discovery worse for agents.
+- Do not expose large unfiltered list endpoints without pagination, filters, or scoping.
+- Do not mix read-only and mutating behavior behind one ambiguous tool.

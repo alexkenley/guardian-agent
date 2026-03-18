@@ -2,7 +2,7 @@
   "id": "multi-search-engine",
   "name": "Multi Search Engine",
   "version": "0.1.0",
-  "description": "Use when standard web lookup is not enough and you need privacy-oriented, international, or engine-specific search strategy.",
+  "description": "Use only when the user explicitly needs privacy-oriented, international, or engine-specific web search strategy beyond the default web lookup.",
   "role": "process",
   "tags": [
     "international-search",
@@ -13,7 +13,7 @@
     "engine-selection",
     "wolframalpha"
   ],
-  "enabled": false,
+  "enabled": true,
   "appliesTo": {
     "channels": [
       "cli",
@@ -31,7 +31,6 @@
       "search operators",
       "duckduckgo bangs",
       "regional search engine",
-      "engine selection",
       "wolframalpha"
     ]
   },

@@ -31,6 +31,7 @@ When the workflow is still vague, capture 2-3 realistic user prompts before writ
 ## Trigger Authoring
 
 - Write the description as activation guidance, not marketing copy.
+- Treat the description field as model-facing trigger text; keep it high-signal because the runtime scores it alongside explicit keywords.
 - Include the user signals that should cause the skill to trigger.
 - Include nearby non-trigger cases when they are easy to confuse.
 - Prefer concrete request language over broad nouns like "help", "workflow", or "tool".
@@ -55,6 +56,12 @@ When the workflow is still vague, capture 2-3 realistic user prompts before writ
 - Name evals by the behavior they test.
 - Keep assertions specific enough that a weak answer cannot pass by accident.
 - When the change affects runtime skill behavior, update `docs/specs/SKILLS-SPEC.md` in the same pass.
+
+## Gotchas
+
+- Do not stuff reference material into `SKILL.md` when a `references/` file would keep the workflow clearer.
+- Do not create huge keyword lists to compensate for a vague description.
+- Do not add scripts unless they replace repeated boilerplate or materially improve determinism.
 
 Read [references/eval-rubric.md](./references/eval-rubric.md) when you need a compact checklist for writing or reviewing skill evals.
 Read [references/trigger-authoring.md](./references/trigger-authoring.md) when you need examples for writing descriptions and no-trigger prompts.

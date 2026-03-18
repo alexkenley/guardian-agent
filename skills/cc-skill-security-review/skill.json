@@ -2,7 +2,7 @@
   "id": "cc-skill-security-review",
   "name": "Security Review Skill",
   "version": "0.1.0",
-  "description": "Use this review checklist when adding authentication, handling secrets, validating input, or shipping other sensitive application changes.",
+  "description": "Use only for explicit application security review requests covering authentication, secrets, input validation, payment flows, or sensitive data handling.",
   "role": "process",
   "tags": [
     "security",
@@ -14,7 +14,7 @@
     "api-security",
     "sensitive-data"
   ],
-  "enabled": false,
+  "enabled": true,
   "appliesTo": {
     "channels": [
       "cli",
@@ -28,11 +28,11 @@
   "triggers": {
     "keywords": [
       "security review",
-      "authentication",
-      "input validation",
-      "secrets",
-      "payment flow",
-      "sensitive data"
+      "auth security review",
+      "input validation review",
+      "secrets review",
+      "payment security review",
+      "sensitive data review"
     ]
   },
   "tools": [],

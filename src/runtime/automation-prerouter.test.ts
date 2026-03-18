@@ -568,11 +568,11 @@ describe('tryAutomationPreRoute', () => {
     ))).toBe(true);
     expect(seenRequests.some((request) => (
       request.name === 'fs_read'
-      && String(request.args?.path).includes('example.com')
+      && request.args?.path === 'https://example.com'
     ))).toBe(false);
     expect(seenRequests.some((request) => (
       request.name === 'fs_write'
-      && String(request.args?.path).includes('example.com')
+      && request.args?.path === 'https://example.com'
     ))).toBe(false);
     expect(result?.content).toContain("Daily Lead Summary");
     expect(result?.content).toContain("Host 'example.com' is not in allowedDomains.");

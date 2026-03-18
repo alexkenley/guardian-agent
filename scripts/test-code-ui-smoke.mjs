@@ -401,7 +401,7 @@ guardian:
     await draftInput.fill('');
 
     await page.fill('[data-code-chat-form] textarea[name="message"]', 'Search the workspace for answerValue and tell me where it is defined.');
-    await page.click('[data-code-chat-form] button[type="submit"]');
+    await page.press('[data-code-chat-form] textarea[name="message"]', 'Enter');
     await page.waitForFunction(() => {
       const pendingUser = document.querySelector('.code-message.is-pending');
       const thinking = document.querySelector('.code-message.is-thinking');

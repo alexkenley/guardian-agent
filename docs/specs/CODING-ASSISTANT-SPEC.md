@@ -368,6 +368,43 @@ As built:
 
 This wider coding shell surface applies only when a request is running with coding-session context.
 
+### Code Session Auto-Approve
+
+Coding and filesystem tools operating within the code session workspace root are auto-approved without requiring manual user approval. The user implicitly grants trust to the workspace by creating the session. Auto-approved tools:
+
+- **Coding tools:** code_edit, code_patch, code_create, code_plan, code_git_diff, code_test, code_build, code_lint, code_symbol_search
+- **Filesystem tools:** fs_read, fs_write, fs_search, fs_list, fs_mkdir, fs_move, fs_copy, fs_delete
+- **Memory tools:** memory_save, memory_search, memory_recall
+- **Document tools:** doc_create
+- **Automation tools:** task_create, task_update, task_delete, workflow_upsert, workflow_run, workflow_delete
+
+Auto-approve bypasses only the `decide()` approval step. All other security layers remain active:
+
+- Guardian admission pipeline (secret scanning, PII, SSRF, input sanitization)
+- Path validation (`resolveAllowedPath()` still enforces workspace root boundary)
+- **Guardian Agent inline LLM evaluation** (Layer 2) — `onPreExecute` evaluates every non-read-only tool action before execution, including auto-approved ones. This catches contextually dangerous actions (e.g., prompt-injected automations) that static rules cannot detect.
+- Output Guardian scanning on all tool results
+- Bearer token authentication on the web channel
+
+The workspace root is also auto-added to the persistent `allowedPaths` on session create and attach, so the LLM sees it in `<tool-context>` and does not attempt to call `update_tool_policy` preemptively.
+
+### codeContext Propagation
+
+Auto-approve depends on `codeContext` reaching the `decide()` method inside `ToolExecutor`. The `codeContext` object (`{ workspaceRoot, sessionId }`) must flow through every execution path:
+
+1. **ChatAgent** attaches `codeContext` to the message metadata before passing to `WorkerManager.handleMessage()`.
+2. **WorkerManager.tryDirectAutomationAuthoring** — extracts `codeContext` from `input.message.metadata` and forwards it to `executeModelTool()` on each tool call. Without this, automation tools (`task_create`, `workflow_upsert`) called from the supervisor-side automation pre-route would not auto-approve.
+3. **WorkerManager.dispatchToWorker** — sends the full message (including metadata) to the worker process via `brokerServer.sendNotification()`.
+4. **Worker session** — extracts `codeContext` from `params.message.metadata` and injects it into every `executeModelTool()` call.
+5. **BrokerClient.callTool** — includes `codeContext` in the JSON-RPC params sent to the supervisor.
+6. **BrokerServer** — reads `codeContext` from `request.params` and includes it in the `ToolExecutionRequest` passed to `ToolExecutor.runTool()`.
+
+If any link in this chain drops `codeContext`, auto-approve silently fails and tools fall back to `require_approval`.
+
+### Code Session Prompt Isolation
+
+The code session uses a standalone system prompt (`code-session-core.ts`) that does not inherit the Guardian host-app identity. The model-facing context identifies as a neutral "AI Coding Assistant" attached to a workspace, not as GuardianAgent. This prevents deictic references like "this app" from resolving to the host product instead of the attached workspace.
+
 ## Terminal Model
 
 The Code page terminal area is still a manual PTY surface.

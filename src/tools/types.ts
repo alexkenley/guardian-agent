@@ -187,6 +187,8 @@ export interface ToolExecutionRequest {
   agentContext?: Pick<AgentContext, 'checkAction'>;
   /** When true, validate but do not execute mutating operations. */
   dryRun?: boolean;
+  /** Resolved skill ids active for the current planner turn. */
+  activeSkills?: string[];
   /**
    * Trusted runtime bypass for approval prompts.
    * Only internal control-plane paths such as approved scheduled tasks should set this.

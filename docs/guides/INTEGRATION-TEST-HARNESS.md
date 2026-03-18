@@ -139,6 +139,14 @@ node scripts/test-code-ui-smoke.mjs
 HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=<your-model> node scripts/test-coding-assistant.mjs --use-ollama
 ```
 
+For skill-routing or skill-trigger regressions, also run:
+
+```bash
+node --import tsx scripts/test-skills-routing-harness.mjs
+```
+
+This harness imports local TypeScript skill modules directly, so use the `tsx` loader rather than plain `node`.
+
 When validating the current Coding Assistant architecture, also assert:
 
 - Code turns do not preload Guardian global memory

@@ -2,7 +2,7 @@
   "id": "monitoring-expert",
   "name": "Monitoring Expert",
   "version": "0.1.0",
-  "description": "Reference workflow for observability work spanning metrics, logging, tracing, alerting, load testing, and capacity planning.",
+  "description": "Use only for explicit observability or monitoring work such as Prometheus, Grafana, tracing, alert tuning, load testing, or capacity planning.",
   "role": "domain",
   "tags": [
     "monitoring",
@@ -14,7 +14,7 @@
     "alerting",
     "capacity-planning"
   ],
-  "enabled": false,
+  "enabled": true,
   "appliesTo": {
     "channels": [
       "cli",
@@ -27,12 +27,12 @@
   },
   "triggers": {
     "keywords": [
-      "monitoring",
       "observability",
       "prometheus",
       "grafana",
-      "alerting",
-      "tracing"
+      "distributed tracing",
+      "alert tuning",
+      "capacity planning"
     ]
   },
   "tools": [],

@@ -25,3 +25,9 @@ Use the filesystem and document tools for local file work inside allowed paths.
 - For destructive operations, confirm scope if the request is ambiguous.
 - If the path is outside current policy roots, let the approval flow handle it rather than telling the user to do it manually.
 - When the user wants a durable plan or report, write it to the repo or target folder instead of only describing it in chat.
+
+## Gotchas
+
+- Do not overwrite an existing file before reading enough context to confirm the target and intent.
+- Do not create duplicate "final", "new", or timestamped copies when the user asked to update the original.
+- Do not treat blocked paths as manual-user work; let policy and approval decide.

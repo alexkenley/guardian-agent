@@ -29,3 +29,9 @@ This skill is for campaign and mailing-list workflows, not ordinary mailbox read
 - Refuse to send to lists the user has not reviewed.
 - If the contact list is large (>50), warn about volume and confirm intent.
 - Flag any contacts missing required fields (email address, name) before sending.
+
+## Gotchas
+
+- Do not infer the audience from vague language when the actual recipient set matters.
+- Do not skip `campaign_dry_run`, even if the content looks obvious.
+- Do not mix campaign workflows with ordinary one-off mailbox tasks.

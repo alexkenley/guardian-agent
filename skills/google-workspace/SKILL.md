@@ -30,3 +30,9 @@ General `gws` rules:
 - Calendar defaults to `calendarId: "primary"` when needed, but include it explicitly when clarity matters.
 
 Read only the domain reference you need for the current request. Do not load all references up front.
+
+## Gotchas
+
+- Do not ask the user for raw OAuth tokens or API credentials.
+- Do not silently pick Gmail when the mailbox provider is ambiguous.
+- Do not use broad `gws` calls when `gmail_draft` or `gmail_send` covers the plain-text task cleanly.

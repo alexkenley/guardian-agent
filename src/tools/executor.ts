@@ -37,7 +37,7 @@ import type { ConversationService } from '../runtime/conversation.js';
 import type { AgentMemoryStore } from '../runtime/agent-memory-store.js';
 import type { CodeSessionStore } from '../runtime/code-sessions.js';
 import { isPrivateAddress } from '../guardian/ssrf-protection.js';
-import { sandboxedExec, type SandboxConfig, DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
+import { sandboxedExec, sandboxedSpawn, type SandboxConfig, DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
 import type { SandboxHealth, SandboxProfile } from '../sandbox/types.js';
 import { realpath } from 'node:fs/promises';
 import type { DeviceInventoryService } from '../runtime/device-inventory.js';
@@ -184,13 +184,6 @@ function emptyCloudConfig(): AssistantCloudConfig {
 
 function normalizeCodeText(value: string): string {
   return value.replace(/\r\n/g, '\n');
-}
-
-function shellEscapeArg(value: string): string {
-  if (process.platform === 'win32') {
-    return `"${value.replace(/"/g, '\\"')}"`;
-  }
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 function normalizeHttpUrlLikeInput(raw: string): string {
@@ -699,6 +692,9 @@ export class ToolExecutor {
       'code_test', 'code_build', 'code_lint', 'code_symbol_search',
       'fs_write', 'fs_mkdir', 'fs_move', 'fs_copy', 'fs_delete',
       'doc_create',
+      'task_create', 'task_update', 'task_delete',
+      'workflow_upsert', 'workflow_run', 'workflow_delete',
+      'workflow_list', 'task_list',
     ];
     const defs: ToolDefinition[] = [];
     for (const name of codingToolNames) {
@@ -1040,6 +1036,9 @@ export class ToolExecutor {
       'memory_save', 'memory_search', 'memory_recall',
       // Document tools
       'doc_create',
+      // Automation tools
+      'task_create', 'task_update', 'task_delete',
+      'workflow_upsert', 'workflow_run', 'workflow_delete',
     ]);
     return autoApprovedTools.has(definition.name);
   }
@@ -4559,7 +4558,7 @@ export class ToolExecutor {
           const env = this.getCodeWorkspaceRoot(request)
             ? this.buildCodeShellEnv(this.getEffectiveWorkspaceRoot(request))
             : undefined;
-          await this.sandboxExec(`git apply --whitespace=nowarn ${shellEscapeArg(patchFile)}`, 'workspace-write', {
+          await this.sandboxExecFile('git', ['apply', '--whitespace=nowarn', patchFile], 'workspace-write', {
             cwd,
             timeout: 30_000,
             maxBuffer: 500_000,
@@ -4695,16 +4694,43 @@ export class ToolExecutor {
         },
       },
       async (args, request) => {
-        const delegate = this.registry.get('shell_safe');
-        if (!delegate) return { success: false, error: 'shell_safe is not available' };
+        const cwd = await this.resolveAllowedPath(requireString(args.cwd, 'cwd'), request);
         const staged = !!args.staged;
+        const timeoutMs = Math.max(500, Math.min(60_000, asNumber(args.timeoutMs, 15_000)));
+        const gitArgs = ['diff'];
+        if (staged) gitArgs.push('--staged');
         const maybePath = asString(args.path, '').trim();
-        const command = `git diff${staged ? ' --staged' : ''}${maybePath ? ` -- ${shellEscapeArg(maybePath)}` : ''}`;
-        return delegate.handler({
-          command,
-          cwd: requireString(args.cwd, 'cwd'),
-          timeoutMs: asNumber(args.timeoutMs, 15_000),
-        }, request);
+        if (maybePath) {
+          const resolvedPath = await this.resolveAllowedPath(resolve(cwd, maybePath), request);
+          const relativePath = relative(cwd, resolvedPath).replace(/\\/g, '/');
+          gitArgs.push('--', relativePath || '.');
+        }
+        try {
+          const env = this.getCodeWorkspaceRoot(request)
+            ? this.buildCodeShellEnv(this.getEffectiveWorkspaceRoot(request))
+            : undefined;
+          const { stdout, stderr } = await this.sandboxExecFile('git', gitArgs, 'read-only', {
+            cwd,
+            timeout: timeoutMs,
+            maxBuffer: 1_000_000,
+            env,
+          });
+          return {
+            success: true,
+            output: {
+              command: ['git', ...gitArgs].join(' '),
+              cwd,
+              stdout: truncateOutput(stdout),
+              stderr: truncateOutput(stderr),
+            },
+          };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return {
+            success: false,
+            error: `git diff failed: ${message}`,
+          };
+        }
       },
     );
 
@@ -4743,20 +4769,23 @@ export class ToolExecutor {
           await this.resolveAllowedPath(resolve(cwd, target), request);
         }
         this.guardAction(request, 'execute_command', { command: 'git commit', cwd, message, paths });
-        const addCommand = paths.length > 0
-          ? `git add -- ${paths.map((target) => shellEscapeArg(target)).join(' ')}`
-          : 'git add -A';
+        const relativePaths = paths.length > 0
+          ? await Promise.all(paths.map(async (target) => {
+              const resolvedPath = await this.resolveAllowedPath(resolve(cwd, target), request);
+              return relative(cwd, resolvedPath).replace(/\\/g, '/') || '.';
+            }))
+          : [];
         try {
           const env = this.getCodeWorkspaceRoot(request)
             ? this.buildCodeShellEnv(this.getEffectiveWorkspaceRoot(request))
             : undefined;
-          await this.sandboxExec(addCommand, 'workspace-write', {
+          await this.sandboxExecFile('git', relativePaths.length > 0 ? ['add', '--', ...relativePaths] : ['add', '-A'], 'workspace-write', {
             cwd,
             timeout: 30_000,
             maxBuffer: 500_000,
             env,
           });
-          const { stdout, stderr } = await this.sandboxExec(`git commit -m ${shellEscapeArg(message)}`, 'workspace-write', {
+          const { stdout, stderr } = await this.sandboxExecFile('git', ['commit', '-m', message], 'workspace-write', {
             cwd,
             timeout: 30_000,
             maxBuffer: 500_000,
@@ -13315,6 +13344,84 @@ export class ToolExecutor {
       timeout: opts.timeout,
       maxBuffer: opts.maxBuffer,
       env: opts.env,
+    });
+  }
+
+  private async sandboxExecFile(
+    command: string,
+    args: string[],
+    profile: SandboxProfile,
+    opts: { networkAccess?: boolean; cwd?: string; timeout?: number; maxBuffer?: number; env?: Record<string, string> } = {},
+  ): Promise<{ stdout: string; stderr: string }> {
+    const child = await sandboxedSpawn(command, args, this.sandboxConfig, {
+      profile,
+      networkAccess: opts.networkAccess,
+      cwd: opts.cwd ?? this.options.workspaceRoot,
+      env: opts.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsShell: false,
+    });
+
+    const maxBuffer = Math.max(1_024, opts.maxBuffer ?? 1_000_000);
+    let stdout = '';
+    let stderr = '';
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let timedOut = false;
+    let overflow = false;
+    const timeoutHandle = opts.timeout
+      ? setTimeout(() => {
+          timedOut = true;
+          child.kill();
+        }, opts.timeout)
+      : null;
+
+    const appendChunk = (chunk: string | Buffer, target: 'stdout' | 'stderr') => {
+      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
+      const bytes = Buffer.byteLength(text);
+      if (target === 'stdout') {
+        stdoutBytes += bytes;
+        if (stdoutBytes > maxBuffer) {
+          overflow = true;
+          child.kill();
+          return;
+        }
+        stdout += text;
+        return;
+      }
+      stderrBytes += bytes;
+      if (stderrBytes > maxBuffer) {
+        overflow = true;
+        child.kill();
+        return;
+      }
+      stderr += text;
+    };
+
+    return await new Promise<{ stdout: string; stderr: string }>((resolvePromise, rejectPromise) => {
+      child.stdout?.on('data', (chunk) => appendChunk(chunk, 'stdout'));
+      child.stderr?.on('data', (chunk) => appendChunk(chunk, 'stderr'));
+      child.on('error', (error) => {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        rejectPromise(error);
+      });
+      child.on('close', (code, signal) => {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        if (timedOut) {
+          rejectPromise(new Error(`Command timed out after ${opts.timeout}ms.`));
+          return;
+        }
+        if (overflow) {
+          rejectPromise(new Error(`Command output exceeded max buffer (${maxBuffer} bytes).`));
+          return;
+        }
+        if ((code ?? 0) !== 0) {
+          const detail = stderr.trim() || stdout.trim() || `exit code ${code ?? 'unknown'}${signal ? ` (${signal})` : ''}`;
+          rejectPromise(new Error(detail));
+          return;
+        }
+        resolvePromise({ stdout, stderr });
+      });
     });
   }
 

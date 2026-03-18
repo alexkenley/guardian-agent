@@ -2393,6 +2393,70 @@ describe('ToolExecutor', () => {
     expect(patched.replace(/\r\n/g, '\n')).toBe('export const answer = 42;\n');
   });
 
+  it('runs code_git_diff against a path with spaces without shell-string escaping', async () => {
+    const root = createExecutorRoot();
+    execFileSync('git', ['init'], { cwd: root, stdio: 'ignore' });
+    const filePath = join(root, 'space name.ts');
+    await writeFile(filePath, 'export const answer = 41;\n', 'utf-8');
+    execFileSync('git', ['add', '--', 'space name.ts'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'guardian@example.com'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'Guardian Agent'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: root, stdio: 'ignore' });
+    await writeFile(filePath, 'export const answer = 42;\n', 'utf-8');
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['git'],
+      allowedDomains: ['localhost'],
+    });
+
+    const result = await executor.runTool({
+      toolName: 'code_git_diff',
+      args: { cwd: root, path: 'space name.ts' },
+      origin: 'cli',
+    });
+
+    expect(result.success).toBe(true);
+    expect((result.output as any).stdout).toContain('space name.ts');
+    expect((result.output as any).stdout).toContain('-export const answer = 41;');
+    expect((result.output as any).stdout).toContain('+export const answer = 42;');
+  });
+
+  it('runs code_git_commit with a quoted message without shell-string escaping', async () => {
+    const root = createExecutorRoot();
+    execFileSync('git', ['init'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'guardian@example.com'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'Guardian Agent'], { cwd: root, stdio: 'ignore' });
+    const filePath = join(root, 'space name.ts');
+    await writeFile(filePath, 'export const answer = 41;\n', 'utf-8');
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['git'],
+      allowedDomains: ['localhost'],
+    });
+
+    const result = await executor.runTool({
+      toolName: 'code_git_commit',
+      args: {
+        cwd: root,
+        message: 'fix "quoted" path handling',
+        paths: ['space name.ts'],
+      },
+      origin: 'cli',
+    });
+
+    expect(result.success).toBe(true);
+    const logOutput = execFileSync('git', ['log', '--format=%s', '-1'], { cwd: root, encoding: 'utf-8' }).trim();
+    expect(logOutput).toBe('fix "quoted" path handling');
+  });
+
   it('enforces Google Workspace service-specific capabilities for managed MCP tools', async () => {
     const root = createExecutorRoot();
     const checked: Array<{ type: string; params: Record<string, unknown> }> = [];

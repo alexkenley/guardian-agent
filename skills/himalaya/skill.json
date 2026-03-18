@@ -2,7 +2,7 @@
   "id": "himalaya",
   "name": "Himalaya Email CLI",
   "version": "0.1.0",
-  "description": "Use the Himalaya CLI for explicit local IMAP/SMTP mailbox workflows configured on this machine.",
+  "description": "Use only for explicit Himalaya or local IMAP/SMTP mailbox workflows configured on this machine.",
   "role": "domain",
   "tags": [
     "imap",
@@ -13,7 +13,7 @@
     "mml",
     "local-mail"
   ],
-  "enabled": false,
+  "enabled": true,
   "appliesTo": {
     "channels": [
       "cli",

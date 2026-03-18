@@ -31,3 +31,13 @@ Use this when the user is reviewing a security alert, posture change, suspicious
 ## Runbooks
 
 Read [references/incident-runbook-template.md](./references/incident-runbook-template.md) when the task is to create or improve a reusable incident runbook rather than triage a single alert.
+
+## Gotchas
+
+- Do not gather every possible signal before answering the immediate triage question.
+- Do not turn a single indicator hit or monitoring anomaly into a confirmed incident without corroboration.
+- Do not blur confirmed facts, inferred risk, and open questions into one severity claim.
+
+## Template
+
+- Use `templates/incident-triage-report.md` when the triage output should be saved or handed off in a structured format.

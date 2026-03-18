@@ -1,6 +1,6 @@
 # Native Skills Specification
 
-**Status:** Implemented foundation
+**Status:** Implemented foundation with trigger-aware routing and skill telemetry
 **Current Files:** `src/skills/registry.ts`, `src/skills/resolver.ts`, `src/skills/prompt.ts`, `src/skills/types.ts`
 **Depends on:** ToolExecutor, MCP Client, Guardian prompt composition, channel config surfaces
 
@@ -8,7 +8,7 @@
 
 ## Overview
 
-GuardianAgent includes a native **skills layer** for reusable procedural knowledge, curated references, templates, and tool-usage guidance.
+GuardianAgent includes a native **skills layer** for reusable procedural knowledge, curated references, templates, small helper scripts, and tool-usage guidance.
 
 Skills are **not** a new execution plane. They are a structured knowledge and workflow layer that helps the model decide what to do. Any side effect still flows through the existing ToolExecutor, Guardian admission checks, approvals, audit trail, and OS sandbox.
 
@@ -53,6 +53,10 @@ skills/
       escalation-matrix.md
     templates/
       triage-summary.md
+    scripts/
+      verify-incident.sh
+    assets/
+      incident-diagram.png
     examples/
       example-input.md
 ```
@@ -72,7 +76,11 @@ Guardian-native manifests remain the richer format. Frontmatter-only skills are 
 
 - `references/` - reference material for selective loading
 - `templates/` - reusable output/input templates
+- `scripts/` - helper entrypoints the model can run instead of reconstructing boilerplate
+- `assets/` - non-markdown artifacts such as diagrams, fixtures, or sample outputs
 - `examples/` - example inputs and outputs
+
+Bundle contents are treated as reviewed static artifacts. Persistent runtime data should live in app-managed storage, not inside the skill bundle directory.
 
 ---
 
@@ -125,7 +133,7 @@ Guardian-native manifests remain the richer format. Frontmatter-only skills are 
 ### Dispatch Flow
 
 1. Runtime receives a user message or a scheduled task (tool, playbook, or assistant turn).
-2. `SkillResolver` ranks candidate skills using explicit enablement, trigger matches, agent, channel, and request type.
+2. `SkillResolver` ranks candidate skills using explicit enablement, trigger matches, trigger-oriented descriptions, explicit skill mentions, agent, channel, and request type.
 3. Selected skills are exposed to the model as a compact catalog: skill name, description, role, and `SKILL.md` path.
 4. The prompt builder instructs the model to read relevant `SKILL.md` files with `fs_read` before acting.
 5. If the model decides to act, it still must call built-in tools or MCP tools through `ToolExecutor`.
@@ -133,11 +141,20 @@ Guardian-native manifests remain the richer format. Frontmatter-only skills are 
 ### Prompt Discipline
 
 - Default to metadata catalog injection, not full `SKILL.md` body injection.
+- Descriptions should be written for triggerability, not marketing copy; the resolver and prompt both rely on them.
 - The model should read relevant skills before replying, asking clarifying questions, or calling tools.
 - The model should read at most two `SKILL.md` files up front: one `process` skill and one `domain` skill.
 - If both a process skill and a domain skill are relevant, the process skill should be read first.
+- Prefer first-party skills over reviewed imports when both cover the same area, unless the user explicitly names the imported product or skill.
 - Referenced files should be loaded only when needed.
 - Record active skill IDs in response metadata for debuggability.
+
+### Authoring Guidance
+
+- Write the manifest description as a trigger sentence that says when to use the skill.
+- Keep a `Gotchas` section in `SKILL.md` for repeated failure modes and update it over time.
+- Use progressive disclosure: put dense references, templates, scripts, and assets in subfolders instead of overloading the top-level instructions.
+- Add templates when the output shape matters, and scripts when deterministic verification or setup is better expressed as code.
 
 ---
 
@@ -151,6 +168,7 @@ Skills are treated as **untrusted advisory content** until reviewed.
 - A skill cannot directly expand an agent's capabilities.
 - A skill cannot create new tools at runtime.
 - A skill cannot silently install software or mutate configuration.
+- A skill should not rely on mutable state inside its own bundle directory.
 
 ### Review Model
 
@@ -161,9 +179,12 @@ Skills are treated as **untrusted advisory content** until reviewed.
 
 ### Audit
 
-Current implementation records active skill IDs in chat response metadata when skills were selected.
+Current implementation records active skill IDs in chat response metadata when skills were selected and emits analytics events for:
 
-Follow-up work can extend this to richer audit context.
+- skill resolution
+- prompt injection of resolved skills
+- direct reads of skill bundle files via `fs_read`
+- tool execution while one or more skills are active
 
 ---
 
@@ -189,9 +210,13 @@ assistant:
 - Local skill bundles are loaded from configured roots.
 - Both Guardian-native manifests and reviewed frontmatter-only imports are supported.
 - Manifest-disabled reviewed imports still load into the registry for inspection and explicit enablement later.
-- Chat requests can auto-activate matching skills.
+- Chat requests can auto-activate matching skills using keywords, explicit skill mentions, and trigger-oriented description terms.
+- Resolver ranking prefers more specific matches and uses normalized phrase boundaries to avoid obvious substring false positives.
+- Reviewed imports are available but intentionally harder to trigger than first-party skills unless the user explicitly names them or the request has multiple strong matching signals.
 - Active skills are injected as a catalog with descriptions, optional roles, and `SKILL.md` locations.
 - Chat responses include `metadata.activeSkills` when one or more skills were applied.
+- First-party skill bundles can include reusable `references/`, `templates/`, `scripts/`, and `assets/`.
+- Analytics events are emitted for skill resolution, prompt injection, direct bundle reads, and tool execution while skills are active.
 - Skills can be inspected and toggled through CLI and web API surfaces.
 
 ### Bundled Skills
@@ -267,14 +292,14 @@ This is especially important for managed providers such as Google Workspace, whe
 - Guardian-native manifest loading plus reviewed frontmatter-compatible import support
 - Read-only bundle loading
 - Prompt catalog injection with process/domain role hints and read-before-action guidance
-- Basic trigger resolution and ranking
+- Trigger-aware resolution and ranking with explicit mention handling, description fallback, and specificity tie-breaking
+- Bundle-aware telemetry for resolved skills, prompt injection, direct skill reads, and tool use while skills are active
 - CLI and web API management surfaces for skill inspection and runtime toggling
 
 ### Next
 
-- richer template/reference loading
+- richer dashboards and reporting on skill usage/under-triggering
 - reviewed import workflow
-- skill provenance audit events
 - optional install metadata with approval gating
 
 ---

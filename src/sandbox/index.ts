@@ -284,13 +284,14 @@ export async function sandboxedSpawn(
   config: SandboxConfig = DEFAULT_SANDBOX_CONFIG,
   options: SandboxSpawnOptions = {},
 ): Promise<ChildProcess> {
+  const useWindowsShell = process.platform === 'win32' && options.windowsShell !== false;
   // Bypass sandbox entirely if disabled
   if (!config.enabled) {
     return spawn(command, args, {
       cwd: options.cwd,
       stdio: options.stdio,
       env: options.env ? { ...process.env, ...options.env } : undefined,
-      ...(process.platform === 'win32' ? { shell: true } : {}),
+      ...(useWindowsShell ? { shell: true } : {}),
     });
   }
 
@@ -305,7 +306,7 @@ export async function sandboxedSpawn(
       cwd: options.cwd,
       stdio: options.stdio,
       env: hardenedEnv,
-      ...(process.platform === 'win32' ? { shell: true } : {}),
+      ...(useWindowsShell ? { shell: true } : {}),
     });
   }
 
@@ -359,8 +360,8 @@ export async function sandboxedSpawn(
     cwd: options.cwd,
     stdio: options.stdio,
     env: hardenedEnv,
-    // On Windows, .cmd/.bat shims (e.g. npm global bins) require shell: true
-    ...(process.platform === 'win32' ? { shell: true } : {}),
+    // On Windows, .cmd/.bat shims (e.g. npm global bins) usually require shell: true.
+    ...(useWindowsShell ? { shell: true } : {}),
   });
 }
 

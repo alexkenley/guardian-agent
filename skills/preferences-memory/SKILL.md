@@ -39,3 +39,9 @@ Use memory tools only when the user explicitly wants a stable fact or preference
 - temporary status output
 - approval bookkeeping
 - transient paths, errors, or command results unless the user specifically asks to remember them
+
+## Gotchas
+
+- Do not save memories implicitly from ordinary conversation; the user needs to want persistence.
+- Do not store volatile logs, diagnostics, or ephemeral paths as durable memory.
+- Do not turn memory into self-modifying prompts, local hook setup, or hidden configuration drift.

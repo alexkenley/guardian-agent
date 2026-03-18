@@ -26,3 +26,9 @@ When the user asks to scan, discover, or diagnose network hosts and services:
 - Summarize results in a structured format: host, open ports, services, OS guess, notes.
 - Separate confirmed facts from inferences.
 - Recommend next steps when findings warrant deeper investigation.
+
+## Gotchas
+
+- Do not expand the scan scope beyond the user’s explicit target.
+- Do not jump from anomaly output to incident conclusions without corroborating evidence.
+- Do not start with the noisiest or highest-impact probe when a narrow check can answer the question.

@@ -31,3 +31,9 @@ Use the built-in cloud and hosting tools for read-first inspection across Vercel
 - For recurring cloud checks, pair this skill with `automation-builder`.
 - Prefer low-noise inventory or status checks before logs-heavy workflows.
 - For possible security issues, hand off to `security-triage` after gathering the minimal cloud evidence.
+
+## Gotchas
+
+- Do not jump straight to logs when a status or inventory tool can answer the question faster.
+- Do not treat a missing configured profile as proof that the provider is unsupported; check `<tool-context>` and `find_tools` first.
+- Do not promise write or deploy operations that the current built-in surface does not expose.

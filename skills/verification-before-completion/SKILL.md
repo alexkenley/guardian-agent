@@ -36,6 +36,19 @@ Stop if you are about to say:
 
 without fresh verification evidence in the current turn.
 
+## Repo-Specific Verification
+
+When working in this GuardianAgent repository, prefer the existing harnesses before inventing ad hoc smoke checks:
+
+- `scripts/run-code-ui-smoke.sh` -> runs `node scripts/test-code-ui-smoke.mjs`
+- `scripts/run-skills-routing-harness.sh` -> runs `node scripts/test-skills-routing-harness.mjs`
+
+Use these when the claim depends on the Code UI flow or skill routing behavior.
+
+## Template
+
+- Use `templates/verification-report.md` when you want a durable claim -> evidence -> outcome record.
+
 ## Related Skills
 
 - Use `systematic-debugging` when you do not yet understand the issue.

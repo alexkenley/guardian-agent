@@ -34,7 +34,7 @@
 <details>
   <summary>Open the full application gallery</summary>
 
-  <p><em>Ordered the same way the app is navigated: Security, Network, Cloud, Automations, Configuration, and Reference Guide.</em></p>
+  <p><em>Ordered the same way the app is navigated: Security, Network, Cloud, Automations, Configuration, Coding Assistant, and Reference Guide.</em></p>
 
   <table>
     <tr>
@@ -78,6 +78,15 @@
         <strong>Configuration</strong>
       </td>
       <td align="center" width="50%">
+        <a href="docs/images/Coding-assistant-gruvbox.png">
+          <img src="docs/images/Coding-assistant-gruvbox.png" alt="GuardianAgent coding assistant view" width="100%"/>
+        </a>
+        <br/>
+        <strong>Coding Assistant</strong>
+      </td>
+    </tr>
+    <tr>
+      <td align="center" colspan="2">
         <a href="docs/images/reference-guide.png">
           <img src="docs/images/reference-guide.png" alt="GuardianAgent reference guide view" width="100%"/>
         </a>
@@ -117,7 +126,7 @@
 **Tools & Integrations**
 - 70+ built-in tools with deferred loading and parallel execution
 - MCP tool server integration with namespaced tools and Guardian admission on every call
-- Native skills layer with Guardian manifests plus frontmatter-compatible reviewed imports for reusable workflow guidance
+- Native skills layer with trigger-aware routing, Guardian manifests, and reviewed imports for reusable workflow guidance, templates, and helper scripts
 - Connector and playbook framework with allowlists, bounded execution, and dry-run mode
 - Google Workspace integration (Gmail, Calendar, Drive, Docs, Sheets) — native googleapis SDK (default) or gws CLI
 - Microsoft 365 integration (Outlook Mail, Calendar, OneDrive, Contacts) — native Graph REST API with OAuth 2.0 PKCE
@@ -142,7 +151,7 @@
 - Scheduled execution durability — per-task active-run locks prevent overlapping self-runs from duplicating side effects
 - Readiness-aware automation creation — save-time validation blocks broken automations, bounded workspace output writes are treated as covered by the approved automation definition, and fixable policy blockers can now be turned into chained approval prompts and retried automatically
 - Threat intelligence — watchlist scanning, findings triage, and approval-gated response actions
-- SQLite-backed analytics and usage tracking
+- SQLite-backed analytics and usage tracking, including skill routing/read/use telemetry
 
 ---
 

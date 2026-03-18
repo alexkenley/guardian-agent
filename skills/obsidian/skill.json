@@ -2,7 +2,7 @@
   "id": "obsidian",
   "name": "Obsidian",
   "version": "0.1.0",
-  "description": "Work with Obsidian vaults, Markdown notes, and safe note refactors through `obsidian-cli`.",
+  "description": "Use only for explicit Obsidian vault or `obsidian-cli` note workflows.",
   "role": "domain",
   "tags": [
     "obsidian",
@@ -13,7 +13,7 @@
     "vault-refactor",
     "vault-note"
   ],
-  "enabled": false,
+  "enabled": true,
   "appliesTo": {
     "channels": [
       "cli",

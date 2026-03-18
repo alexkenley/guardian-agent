@@ -2,7 +2,7 @@
   "id": "gha-security-review",
   "name": "GitHub Actions Security Review",
   "version": "0.1.0",
-  "description": "Review GitHub Actions workflows for externally exploitable CI vulnerabilities such as pwn requests, expression injection, secret exposure, and unsafe runner use.",
+  "description": "Use only for explicit GitHub Actions workflow security reviews covering pwn requests, expression injection, secret exposure, or unsafe runner use.",
   "role": "process",
   "tags": [
     "github-actions",
@@ -14,7 +14,7 @@
     "supply-chain",
     "runner-security"
   ],
-  "enabled": false,
+  "enabled": true,
   "appliesTo": {
     "channels": [
       "cli",

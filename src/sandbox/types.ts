@@ -82,6 +82,8 @@ export interface SandboxSpawnOptions {
   env?: Record<string, string>;
   /** stdio configuration for the spawned process. */
   stdio?: import('node:child_process').StdioOptions;
+  /** On Windows, force shell wrapping for .cmd/.bat shims unless explicitly disabled. */
+  windowsShell?: boolean;
 }
 
 /** Result of sandbox capability detection. */

@@ -2,7 +2,7 @@
   "id": "github",
   "name": "GitHub",
   "version": "0.1.0",
-  "description": "Use the GitHub CLI to inspect repositories, pull requests, issues, and workflow runs through reviewed `gh` commands.",
+  "description": "Use only for explicit GitHub, pull request, issue, workflow-run, or `gh` CLI workflows.",
   "role": "domain",
   "tags": [
     "github",
@@ -13,7 +13,7 @@
     "repository",
     "ci"
   ],
-  "enabled": false,
+  "enabled": true,
   "appliesTo": {
     "channels": [
       "cli",
@@ -31,7 +31,7 @@
       "workflow run",
       "gh cli",
       "github issue",
-      "repository"
+      "github repo"
     ]
   },
   "tools": [],

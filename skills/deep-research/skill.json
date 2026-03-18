@@ -2,7 +2,7 @@
   "id": "deep-research",
   "name": "Deep Research",
   "version": "0.1.0",
-  "description": "Research workflow for comparing code paths, tracing behavior, and synthesizing findings before implementation.",
+  "description": "Use when the task needs investigation first, especially to compare code paths, trace behavior, or synthesize findings before implementation.",
   "tags": [
     "research",
     "investigate",

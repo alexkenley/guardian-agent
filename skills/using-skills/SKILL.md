@@ -11,9 +11,9 @@ Use this as a bootstrap workflow when the user explicitly wants help choosing or
 
 ## Selection Rules
 
-- Prefer the narrowest skill that matches the user’s actual request.
+- Prefer the narrowest skill that matches the user's actual request.
 - Prefer native skills and managed-provider integrations over reviewed third-party skills when both cover the same area.
-- Keep reviewed third-party operational skills disabled unless the runtime, provider, and reviewer have approved them.
+- Reviewed third-party skills may be enabled, but treat them as narrower and lower-priority than first-party skills unless the user explicitly names the product or the match is unusually specific.
 - Do not treat marketplace popularity as a reason to use a skill.
 
 ## Pairing Pattern
@@ -21,3 +21,9 @@ Use this as a bootstrap workflow when the user explicitly wants help choosing or
 - process + domain is usually enough
 - more than two skills should be rare
 - if two skills conflict, pick the one with the tighter trigger and more relevant tool surface
+
+## Gotchas
+
+- Do not load multiple overlapping domain skills when one narrower skill fits.
+- Do not assume marketplace popularity means the skill is appropriate or safe.
+- Do not rely on memory of a skill body when the skill is clearly relevant; read it first.

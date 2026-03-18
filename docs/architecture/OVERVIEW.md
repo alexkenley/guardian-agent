@@ -294,9 +294,10 @@ Current implementation:
 - `SkillRegistry` loads local skill bundles from configured roots
 - supports both Guardian-native `skill.json` manifests and reviewed frontmatter-only `SKILL.md` imports
 - `SkillResolver` auto-selects relevant skills for chat requests
-- resolver uses native triggers first, then compatibility fallback matching for reviewed third-party skills
+- resolver combines keywords, explicit skill mentions, and trigger-oriented description terms, then prefers more specific matches
 - active skills are injected as a catalog, and the model reads the most relevant `SKILL.md` before acting
-- active skill IDs are included in chat response metadata
+- first-party bundles can carry `references/`, `templates/`, `scripts/`, and `assets/` for progressive disclosure
+- active skill IDs are included in chat response metadata, and analytics tracks resolution, prompt injection, bundle reads, and tool execution while skills are active
 - runtime skill inspection and toggling are available via `/skills` in CLI and `GET/POST /api/skills`
 - skill enable/disable updates persist to `assistant.skills.disabledSkills`
 - bundled skills now span personal assistant work, IT operations, and security workflows, including Google Workspace, cloud operations, automations, file workflows, web research, host and network operations, triage, and threat intel

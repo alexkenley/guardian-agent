@@ -2,7 +2,7 @@
   "id": "oracle",
   "name": "Oracle CLI",
   "version": "0.1.0",
-  "description": "Bundle a prompt plus selected files for a second-model review with the Oracle CLI or browser runner.",
+  "description": "Use only when the user explicitly asks for an Oracle CLI or second-model review workflow.",
   "role": "process",
   "tags": [
     "oracle",
@@ -13,7 +13,7 @@
     "browser-automation",
     "external-review"
   ],
-  "enabled": false,
+  "enabled": true,
   "appliesTo": {
     "channels": [
       "cli",
@@ -27,8 +27,7 @@
   "triggers": {
     "keywords": [
       "oracle",
-      "second opinion",
-      "cross-check",
+      "oracle second opinion",
       "external model review",
       "review with another model",
       "oracle cli"

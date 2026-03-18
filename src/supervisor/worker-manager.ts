@@ -231,7 +231,15 @@ export class WorkerManager {
       preflightTools,
       workspaceRoot,
       allowedPaths,
-      executeTool: (toolName, args, request) => this.tools.executeModelTool(toolName, args, request),
+      executeTool: (toolName, args, request) => {
+        // Forward codeContext from the inbound message metadata so tool decisions
+        // (e.g. isCodeSessionWorkspaceTool auto-approve) see the code session context.
+        const msgCodeContext = input.message.metadata?.codeContext as { workspaceRoot: string; sessionId?: string } | undefined;
+        return this.tools.executeModelTool(toolName, args, {
+          ...request,
+          ...(msgCodeContext ? { codeContext: msgCodeContext } : {}),
+        });
+      },
       trackPendingApproval: (approvalId) => {
         trackedPendingApprovalIds.push(approvalId);
         const existingIds = this.getDirectPendingApprovalIds(input.sessionId);

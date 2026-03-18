@@ -2,7 +2,7 @@
   "id": "weather",
   "name": "Weather",
   "version": "0.1.0",
-  "description": "Fetch current weather conditions and forecasts with `wttr.in` or Open-Meteo.",
+  "description": "Use only for explicit weather or forecast requests.",
   "role": "domain",
   "tags": [
     "weather",
@@ -13,7 +13,7 @@
     "weather-cli",
     "temperature"
   ],
-  "enabled": false,
+  "enabled": true,
   "appliesTo": {
     "channels": [
       "cli",
@@ -30,7 +30,6 @@
       "forecast",
       "current weather",
       "wttr",
-      "temperature",
       "rain forecast"
     ]
   },

@@ -327,6 +327,116 @@ Capture intent first, then draft the skill, write eval prompts, and iterate.
     })[0]?.id).toBe('skill-creator');
   });
 
+  it('uses explicit skill mentions even when keyword triggers are present', async () => {
+    const root = createSkillRoot();
+
+    const broadDir = join(root, 'automation-builder');
+    mkdirSync(broadDir, { recursive: true });
+    writeFileSync(join(broadDir, 'skill.json'), JSON.stringify({
+      id: 'automation-builder',
+      name: 'Automation Builder',
+      version: '0.1.0',
+      description: 'Use when creating or updating recurring workflows.',
+      triggers: { keywords: ['workflow'] },
+    }), 'utf-8');
+    writeFileSync(join(broadDir, 'SKILL.md'), '# Automation Builder\n\nCreate automations.', 'utf-8');
+
+    const namedDir = join(root, 'skill-creator');
+    mkdirSync(namedDir, { recursive: true });
+    writeFileSync(join(namedDir, 'skill.json'), JSON.stringify({
+      id: 'skill-creator',
+      name: 'Skill Creator',
+      version: '0.1.0',
+      description: 'Use when turning a workflow into a skill.',
+      triggers: { keywords: ['workflow'] },
+    }), 'utf-8');
+    writeFileSync(join(namedDir, 'SKILL.md'), '# Skill Creator\n\nWrite skills.', 'utf-8');
+
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([root]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 2 });
+    const resolved = resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content: 'Use skill-creator to turn this workflow into a reusable skill.',
+    });
+
+    expect(resolved).toHaveLength(2);
+    expect(resolved[0]?.id).toBe('skill-creator');
+  });
+
+  it('uses descriptions as a trigger signal even when keywords overlap', async () => {
+    const root = createSkillRoot();
+
+    const dashboardDir = join(root, 'dashboard-helper');
+    mkdirSync(dashboardDir, { recursive: true });
+    writeFileSync(join(dashboardDir, 'skill.json'), JSON.stringify({
+      id: 'dashboard-helper',
+      name: 'Dashboard Helper',
+      version: '0.1.0',
+      description: 'Use when reviewing dashboards, charts, and visual analytics.',
+      triggers: { keywords: ['review'] },
+    }), 'utf-8');
+    writeFileSync(join(dashboardDir, 'SKILL.md'), '# Dashboard Helper\n\nInspect dashboards.', 'utf-8');
+
+    const reviewDir = join(root, 'code-review');
+    mkdirSync(reviewDir, { recursive: true });
+    writeFileSync(join(reviewDir, 'skill.json'), JSON.stringify({
+      id: 'code-review',
+      name: 'Code Review',
+      version: '0.1.0',
+      description: 'Use when reviewing a diff, PR, or patch for regressions, missing tests, and operational risk.',
+      triggers: { keywords: ['review'] },
+    }), 'utf-8');
+    writeFileSync(join(reviewDir, 'SKILL.md'), '# Code Review\n\nReview code changes.', 'utf-8');
+
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([root]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 2 });
+    const resolved = resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content: 'Review this patch for regressions and missing tests before merge.',
+    });
+
+    expect(resolved).toHaveLength(2);
+    expect(resolved[0]?.id).toBe('code-review');
+  });
+
+  it('matches trigger keywords on normalized phrase boundaries instead of raw substrings', async () => {
+    const root = createSkillRoot();
+    const skillDir = join(root, 'systematic-debugging');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, 'skill.json'), JSON.stringify({
+      id: 'systematic-debugging',
+      name: 'Systematic Debugging',
+      version: '0.1.0',
+      description: 'Use when debugging a bug.',
+      triggers: { keywords: ['bug'] },
+    }), 'utf-8');
+    writeFileSync(join(skillDir, 'SKILL.md'), '# Systematic Debugging\n\nInvestigate first.', 'utf-8');
+
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([root]);
+    const resolver = new SkillResolver(registry);
+
+    expect(resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content: 'Please debug this integration.',
+    })).toHaveLength(0);
+
+    expect(resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content: 'Please fix this bug.',
+    })[0]?.id).toBe('systematic-debugging');
+  });
+
   it('rejects frontmatter skills that omit required metadata', async () => {
     const root = createSkillRoot();
     const skillDir = join(root, 'broken-skill');
@@ -398,5 +508,112 @@ This should not load.
     expect(resolved[0]?.role).toBe('process');
     expect(resolved[1]?.id).toBe('webapp-testing');
     expect(resolved[1]?.role).toBe('domain');
+  });
+
+  it('prefers first-party skills over reviewed imports when scores are otherwise equal', async () => {
+    const root = createSkillRoot();
+
+    const firstPartyDir = join(root, 'first-party-observability');
+    mkdirSync(firstPartyDir, { recursive: true });
+    writeFileSync(join(firstPartyDir, 'skill.json'), JSON.stringify({
+      id: 'first-party-observability',
+      name: 'First Party Observability',
+      version: '0.1.0',
+      description: 'Use when investigating observability dashboards and Prometheus metrics.',
+      triggers: { keywords: ['prometheus', 'grafana'] },
+    }), 'utf-8');
+    writeFileSync(join(firstPartyDir, 'SKILL.md'), '# First Party Observability\n\nUse the native monitoring workflow.', 'utf-8');
+
+    const reviewedDir = join(root, 'monitoring-expert');
+    mkdirSync(reviewedDir, { recursive: true });
+    writeFileSync(join(reviewedDir, 'skill.json'), JSON.stringify({
+      id: 'monitoring-expert',
+      name: 'Monitoring Expert',
+      version: '0.1.0',
+      description: 'Use only for explicit observability work such as Prometheus and Grafana analysis.',
+      triggers: { keywords: ['prometheus', 'grafana'] },
+      _upstream: { source: 'clawhub' },
+    }), 'utf-8');
+    writeFileSync(join(reviewedDir, 'SKILL.md'), '# Monitoring Expert\n\nUse the reviewed import.', 'utf-8');
+
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([root]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 2 });
+    const resolved = resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content: 'Compare the Prometheus metrics and Grafana dashboard for this incident.',
+    });
+
+    expect(resolved).toHaveLength(2);
+    expect(resolved[0]?.id).toBe('first-party-observability');
+    expect(resolved[1]?.id).toBe('monitoring-expert');
+  });
+
+  it('suppresses low-confidence reviewed-import matches without an explicit mention', async () => {
+    const root = createSkillRoot();
+    const reviewedDir = join(root, 'monitoring-expert');
+    mkdirSync(reviewedDir, { recursive: true });
+    writeFileSync(join(reviewedDir, 'skill.json'), JSON.stringify({
+      id: 'monitoring-expert',
+      name: 'Monitoring Expert',
+      version: '0.1.0',
+      description: 'Use only for explicit observability work such as Prometheus and Grafana analysis.',
+      triggers: { keywords: ['grafana'] },
+      _upstream: { source: 'clawhub' },
+    }), 'utf-8');
+    writeFileSync(join(reviewedDir, 'SKILL.md'), '# Monitoring Expert\n\nInvestigate dashboards.', 'utf-8');
+
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([root]);
+    const resolver = new SkillResolver(registry);
+
+    expect(resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content: 'This setup has a Grafana panel I do not trust.',
+    })).toHaveLength(0);
+  });
+
+  it('still resolves reviewed imports from explicit mentions', async () => {
+    const root = createSkillRoot();
+
+    const firstPartyDir = join(root, 'web-research');
+    mkdirSync(firstPartyDir, { recursive: true });
+    writeFileSync(join(firstPartyDir, 'skill.json'), JSON.stringify({
+      id: 'web-research',
+      name: 'Web Research',
+      version: '0.1.0',
+      description: 'Use for general web research.',
+      triggers: { keywords: ['weather'] },
+    }), 'utf-8');
+    writeFileSync(join(firstPartyDir, 'SKILL.md'), '# Web Research\n\nResearch on the web.', 'utf-8');
+
+    const reviewedDir = join(root, 'weather');
+    mkdirSync(reviewedDir, { recursive: true });
+    writeFileSync(join(reviewedDir, 'skill.json'), JSON.stringify({
+      id: 'weather',
+      name: 'Weather',
+      version: '0.1.0',
+      description: 'Use only for explicit weather or forecast requests.',
+      triggers: { keywords: ['weather', 'forecast'] },
+      _upstream: { source: 'clawhub' },
+    }), 'utf-8');
+    writeFileSync(join(reviewedDir, 'SKILL.md'), '# Weather\n\nFetch weather.', 'utf-8');
+
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([root]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 2 });
+    const resolved = resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content: 'Use the Weather skill to fetch today\'s forecast for Brisbane.',
+    });
+
+    expect(resolved).toHaveLength(2);
+    expect(resolved[0]?.id).toBe('weather');
   });
 });

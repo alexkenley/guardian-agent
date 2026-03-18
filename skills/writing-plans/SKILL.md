@@ -54,9 +54,17 @@ Use a concise structure like:
 
 Save the plan under `docs/plans/` with a dated filename when the user wants a durable artifact.
 
+Use `templates/implementation-plan.md` when you want a durable starting structure instead of drafting the outline from scratch.
+
 ## Rules
 
 - Prefer exact file paths when you know them.
 - Prefer explicit verification commands over vague "test it" language.
 - Keep tasks ordered so each one leaves the repo in a coherent state.
 - Call out assumptions and open questions instead of hiding them in the task list.
+
+## Gotchas
+
+- Do not collapse multiple risky changes into one oversized task.
+- Do not omit verification, rollout, or migration steps when they materially affect delivery.
+- Do not write a generic plan when the files, subsystems, or constraints are already known.

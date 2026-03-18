@@ -2,7 +2,7 @@
   "id": "k8s-security-policies",
   "name": "Kubernetes Security Policies",
   "version": "0.1.0",
-  "description": "Reference Kubernetes hardening patterns for NetworkPolicy, Pod Security Standards, RBAC, and admission-control design.",
+  "description": "Use only for explicit Kubernetes security policy work such as NetworkPolicy, Pod Security Standards, Kubernetes RBAC, or admission-control design.",
   "role": "process",
   "tags": [
     "kubernetes",
@@ -14,7 +14,7 @@
     "cluster-hardening",
     "compliance"
   ],
-  "enabled": false,
+  "enabled": true,
   "appliesTo": {
     "channels": [
       "cli",
@@ -30,8 +30,8 @@
       "kubernetes",
       "kubernetes security",
       "networkpolicy",
-      "pod security",
-      "rbac",
+      "pod security standards",
+      "kubernetes rbac",
       "admission control",
       "cluster hardening"
     ]

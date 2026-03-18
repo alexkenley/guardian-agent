@@ -468,6 +468,8 @@ class ChatAgent extends BaseAgent {
   private contextBudget: number;
   /** Whether to retry degraded local LLM responses with an external fallback. */
   private qualityFallbackEnabled: boolean;
+  /** Optional analytics sink for skill-trigger telemetry. */
+  private analytics?: AnalyticsService;
   /** Resolve a routed LLM provider based on tools just executed. Returns undefined if no routing override. */
   private resolveRoutedProviderForTools?: (tools: Array<{ name: string; category?: string }>) => { provider: LLMProvider; locality: 'local' | 'external' } | undefined;
 
@@ -546,6 +548,7 @@ class ChatAgent extends BaseAgent {
     resolveGwsProvider?: () => LLMProvider | undefined,
     contextBudget?: number,
     qualityFallback?: boolean,
+    analytics?: AnalyticsService,
     resolveRoutedProviderForTools?: (tools: Array<{ name: string; category?: string }>) => { provider: LLMProvider; locality: 'local' | 'external' } | undefined,
   ) {
     super(id, name, { handleMessages: true });
@@ -575,6 +578,7 @@ class ChatAgent extends BaseAgent {
     this.resolveGwsProvider = resolveGwsProvider;
     this.contextBudget = contextBudget ?? 80_000;
     this.qualityFallbackEnabled = qualityFallback ?? true;
+    this.analytics = analytics;
     this.resolveRoutedProviderForTools = resolveRoutedProviderForTools;
   }
 
@@ -582,6 +586,31 @@ class ChatAgent extends BaseAgent {
     if (!this.skillRegistry) return null;
     if (!isSkillInventoryQuery(content)) return null;
     return formatSkillInventoryResponse(this.skillRegistry.listStatus());
+  }
+
+  private trackResolvedSkills(
+    message: UserMessage,
+    requestType: string,
+    skills: readonly ResolvedSkill[],
+    stage: 'resolved' | 'prompt_injected',
+  ): void {
+    if (!this.analytics || skills.length === 0) return;
+    for (const skill of skills) {
+      this.analytics.track({
+        type: stage === 'resolved' ? 'skill_resolved' : 'skill_prompt_injected',
+        channel: message.channel,
+        canonicalUserId: message.userId,
+        channelUserId: message.userId,
+        agentId: this.id,
+        metadata: {
+          skillId: skill.id,
+          skillName: skill.name,
+          skillRole: skill.role ?? null,
+          score: skill.score,
+          requestType,
+        },
+      });
+    }
   }
 
   /**
@@ -747,6 +776,7 @@ class ChatAgent extends BaseAgent {
       enabledManagedProviders: this.enabledManagedProviders,
       availableCapabilities: new Set(ctx.capabilities),
     }) ?? [];
+    this.trackResolvedSkills(message, 'chat', preResolvedSkills, 'resolved');
     const directSkillInventory = this.tryDirectSkillInventoryResponse(groundedScopedMessage.content);
     if (directSkillInventory) {
       if (this.conversationService) {
@@ -789,12 +819,17 @@ class ChatAgent extends BaseAgent {
       try {
         const knowledgeBase = this.loadScopedKnowledgeBase(resolvedCodeSession);
         const workerSystemPrompt = this.buildScopedSystemPrompt(resolvedCodeSession);
+        // Attach codeContext to the message metadata so the worker can forward it
+        // through the broker to the tool executor for auto-approve decisions.
+        const workerMessage = effectiveCodeContext
+          ? { ...groundedScopedMessage, metadata: { ...groundedScopedMessage.metadata, codeContext: effectiveCodeContext } }
+          : groundedScopedMessage;
         const result = await workerManager.handleMessage({
           sessionId: `${conversationUserId}:${conversationChannel}`,
           agentId: this.id,
           userId: conversationUserId,
           grantedCapabilities: [...ctx.capabilities],
-          message: groundedScopedMessage,
+          message: workerMessage,
           systemPrompt: workerSystemPrompt,
           history: priorHistory,
           knowledgeBase,
@@ -821,6 +856,22 @@ class ChatAgent extends BaseAgent {
         if (requestedCodeContext?.sessionId) {
           workerMeta.codeSessionResolved = !!resolvedCodeSession;
           if (resolvedCodeSession) workerMeta.codeSessionId = resolvedCodeSession.session.id;
+        }
+        // Sync pending approvals from the executor into response metadata so the
+        // frontend can render inline approval buttons (worker path does not do this
+        // automatically like the inline ChatAgent LLM loop does).
+        const workerUserKey = `${conversationUserId}:${conversationChannel}`;
+        this.syncPendingApprovalsFromExecutor(workerUserKey, conversationUserId, conversationChannel);
+        const workerPending = this.getPendingApprovals(workerUserKey);
+        if (workerPending && workerPending.ids.length > 0) {
+          const summaries = this.tools?.getApprovalSummaries(workerPending.ids);
+          workerMeta.pendingApprovals = workerPending.ids.map((id: string) => {
+            const s = summaries?.get(id);
+            return { id, toolName: s?.toolName ?? 'unknown', argsPreview: s?.argsPreview ?? '' };
+          });
+        }
+        if (preResolvedSkills.length > 0) {
+          workerMeta.activeSkills = preResolvedSkills.map((skill) => skill.id);
         }
         return {
           content: result.content,
@@ -914,6 +965,7 @@ class ChatAgent extends BaseAgent {
         enrichedSystemPrompt += this.formatScopedKnowledgeBaseSection(scopedKnowledgeBase, resolvedCodeSession);
       }
       if (activeSkills.length > 0) {
+        this.trackResolvedSkills(message, 'chat', activeSkills, 'prompt_injected');
         enrichedSystemPrompt += `\n\n${formatAvailableSkillsPrompt(activeSkills, 'fs_read')}`;
       }
       if (this.tools) {
@@ -1313,6 +1365,7 @@ class ChatAgent extends BaseAgent {
           derivedFromTaintedContent: currentContextTrustLevel !== 'trusted',
           agentContext: { checkAction: ctx.checkAction },
           codeContext: effectiveCodeContext,
+          activeSkills: activeSkills.map((skill) => skill.id),
         };
 
         const toolResults = await Promise.allSettled(
@@ -1511,6 +1564,7 @@ class ChatAgent extends BaseAgent {
               requestId: message.id,
               agentContext: { checkAction: ctx.checkAction },
               codeContext: effectiveCodeContext,
+              activeSkills: activeSkills.map((skill) => skill.id),
             };
             const fbToolResults = await Promise.allSettled(
               this.executeToolsConflictAware(fallbackResult.response.toolCalls, fbToolOrigin, { allowImplicitMemorySave })
@@ -8603,6 +8657,80 @@ async function main(): Promise<void> {
     anomalyThresholds: sentinelAuditConfig?.anomalyThresholds,
   });
 
+  const isPathInsideRoot = (candidate: string, root: string): boolean => {
+    const rel = relative(root, candidate);
+    return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
+  };
+
+  const classifySkillBundlePath = (
+    skill: NonNullable<ReturnType<SkillRegistry['get']>>,
+    rawPath: unknown,
+  ): 'instruction' | 'reference' | 'template' | 'script' | 'asset' | 'bundle' | null => {
+    if (typeof rawPath !== 'string' || !rawPath.trim()) return null;
+    const resolvedPath = resolve(rawPath);
+    if (!isPathInsideRoot(resolvedPath, skill.rootDir)) return null;
+    if (resolvedPath === skill.instructionPath) return 'instruction';
+
+    const classifiedDirs: Array<{ dir: string; type: 'reference' | 'template' | 'script' | 'asset' }> = [
+      { dir: join(skill.rootDir, 'references'), type: 'reference' },
+      { dir: join(skill.rootDir, 'templates'), type: 'template' },
+      { dir: join(skill.rootDir, 'scripts'), type: 'script' },
+      { dir: join(skill.rootDir, 'assets'), type: 'asset' },
+    ];
+    for (const entry of classifiedDirs) {
+      if (isPathInsideRoot(resolvedPath, entry.dir)) return entry.type;
+    }
+    return 'bundle';
+  };
+
+  const trackSkillToolTelemetry = (
+    toolName: string,
+    args: Record<string, unknown>,
+    result: { success: boolean; status: string; message?: string; durationMs: number; error?: string; approvalId?: string },
+    request: ToolExecutionRequest,
+  ) => {
+    if (!analytics || !skillRegistry || !Array.isArray(request.activeSkills) || request.activeSkills.length === 0) return;
+    const skillIds = [...new Set(request.activeSkills.filter((value) => typeof value === 'string' && value.trim()))];
+    if (skillIds.length === 0) return;
+
+    if (toolName === 'fs_read') {
+      for (const skillId of skillIds) {
+        const skill = skillRegistry.get(skillId);
+        if (!skill) continue;
+        const pathType = classifySkillBundlePath(skill, args.path);
+        if (!pathType) continue;
+        analytics.track({
+          type: 'skill_read',
+          channel: request.channel,
+          canonicalUserId: request.userId,
+          channelUserId: request.userId,
+          agentId: request.agentId,
+          metadata: {
+            skillId,
+            pathType,
+            path: typeof args.path === 'string' ? resolve(args.path) : null,
+          },
+        });
+      }
+      return;
+    }
+
+    for (const skillId of skillIds) {
+      analytics.track({
+        type: 'skill_tool_executed',
+        channel: request.channel,
+        canonicalUserId: request.userId,
+        channelUserId: request.userId,
+        agentId: request.agentId,
+        metadata: {
+          skillId,
+          toolName,
+          toolStatus: result.status,
+        },
+      });
+    }
+  };
+
   // ─── Message router ────────────────────────────────────────
   const router = new MessageRouter(config.routing);
   const resolveSharedStateAgentId = (agentId?: string): string | undefined => resolveAgentStateId(agentId, {
@@ -8628,6 +8756,7 @@ async function main(): Promise<void> {
         timestamp: Date.now(),
         payload: { toolName, args, result, requestId: request.requestId },
       });
+      trackSkillToolTelemetry(toolName, args, result, request);
 
       if (request.requestId) {
         orchestrator.addTraceNode(request.requestId, {
@@ -9180,6 +9309,7 @@ async function main(): Promise<void> {
         resolveGwsProvider,
         config.assistant.tools.contextBudget,
         config.qualityFallback,
+        analytics ?? undefined,
         resolveRoutedProviderForTools,
       );
       chatAgents.set(agentConfig.id, agent);
@@ -9221,6 +9351,7 @@ async function main(): Promise<void> {
       resolveGwsProvider,
       config.assistant.tools.contextBudget,
       config.qualityFallback,
+      analytics ?? undefined,
       resolveRoutedProviderForTools,
     );
     chatAgents.set('local', localAgent);
@@ -9249,6 +9380,7 @@ async function main(): Promise<void> {
       resolveGwsProvider,
       config.assistant.tools.contextBudget,
       config.qualityFallback,
+      analytics ?? undefined,
       resolveRoutedProviderForTools,
     );
     chatAgents.set('external', externalAgent);
@@ -9302,6 +9434,7 @@ async function main(): Promise<void> {
       resolveGwsProvider,
       config.assistant.tools.contextBudget,
       config.qualityFallback,
+      analytics ?? undefined,
       resolveRoutedProviderForTools,
     );
     chatAgents.set('default', defaultAgent);

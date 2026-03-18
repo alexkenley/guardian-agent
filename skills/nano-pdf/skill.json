@@ -2,7 +2,7 @@
   "id": "nano-pdf",
   "name": "Nano PDF",
   "version": "0.1.0",
-  "description": "Edit PDFs with natural-language instructions using the `nano-pdf` CLI.",
+  "description": "Use only for explicit PDF editing or transformation requests using the `nano-pdf` CLI.",
   "role": "domain",
   "tags": [
     "pdf",
@@ -13,7 +13,7 @@
     "pdf-cli",
     "natural-language"
   ],
-  "enabled": false,
+  "enabled": true,
   "appliesTo": {
     "channels": [
       "cli",
