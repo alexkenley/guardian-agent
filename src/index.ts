@@ -65,6 +65,37 @@ import { NetworkBaselineService, type NetworkAnomalyReport } from './runtime/net
 import { NetworkTrafficService } from './runtime/network-traffic.js';
 import { HostMonitoringService, type HostMonitorReport } from './runtime/host-monitor.js';
 import { GatewayFirewallMonitoringService, type GatewayMonitorReport } from './runtime/gateway-monitor.js';
+import {
+  acknowledgeUnifiedSecurityAlert,
+  availableSecurityAlertSources,
+  collectUnifiedSecurityAlerts,
+  matchesSecurityAlertQuery,
+  normalizeSecurityAlertSeverity,
+  normalizeSecurityAlertSources,
+  resolveUnifiedSecurityAlert,
+  suppressUnifiedSecurityAlert,
+  type SecurityAlertSeverity,
+  type SecurityAlertSource,
+} from './runtime/security-alerts.js';
+import { isSecurityAlertStatus } from './runtime/security-alert-lifecycle.js';
+import {
+  DEFAULT_DEPLOYMENT_PROFILE,
+  DEFAULT_SECURITY_OPERATING_MODE,
+  DEFAULT_SECURITY_TRIAGE_LLM_PROVIDER,
+  isDeploymentProfile,
+  isSecurityOperatingMode,
+  isSecurityTriageLlmProvider,
+} from './runtime/security-controls.js';
+import { ContainmentService } from './runtime/containment-service.js';
+import { assessSecurityPosture } from './runtime/security-posture.js';
+import { SecurityActivityLogService } from './runtime/security-activity-log.js';
+import {
+  DEFAULT_SECURITY_TRIAGE_SYSTEM_PROMPT,
+  SECURITY_TRIAGE_AGENT_ID,
+  SECURITY_TRIAGE_DISPATCHER_AGENT_ID,
+  SecurityEventTriageAgent,
+} from './runtime/security-triage-agent.js';
+import { WindowsDefenderProvider } from './runtime/windows-defender-provider.js';
 import { ScheduledTaskService } from './runtime/scheduled-tasks.js';
 import { MoltbookConnector } from './runtime/moltbook-connector.js';
 import { AssistantOrchestrator } from './runtime/orchestrator.js';
@@ -202,6 +233,48 @@ function getProviderLocality(
 ): 'local' | 'external' | undefined {
   if (!llmCfg?.provider) return undefined;
   return isLocalProviderEndpoint(llmCfg.baseUrl, llmCfg.provider) ? 'local' : 'external';
+}
+
+function findProviderByLocality(
+  cfg: GuardianAgentConfig,
+  locality: 'local' | 'external',
+): string | null {
+  const preferred = cfg.assistant.tools.preferredProviders?.[locality]?.trim();
+  if (preferred && getProviderLocality(cfg.llm[preferred]) === locality) {
+    return preferred;
+  }
+
+  if (getProviderLocality(cfg.llm[cfg.defaultProvider]) === locality) {
+    return cfg.defaultProvider;
+  }
+
+  for (const [name, llmCfg] of Object.entries(cfg.llm)) {
+    if (getProviderLocality(llmCfg) === locality) {
+      return name;
+    }
+  }
+  return null;
+}
+
+function resolveSecurityTriageProviderName(cfg: GuardianAgentConfig): string {
+  const mode = cfg.assistant.security?.triageLlmProvider ?? DEFAULT_SECURITY_TRIAGE_LLM_PROVIDER;
+  if (mode === 'local') {
+    return findProviderByLocality(cfg, 'local') ?? cfg.defaultProvider;
+  }
+  if (mode === 'external') {
+    return findProviderByLocality(cfg, 'external') ?? cfg.defaultProvider;
+  }
+  return findProviderByLocality(cfg, 'local')
+    ?? findProviderByLocality(cfg, 'external')
+    ?? cfg.defaultProvider;
+}
+
+function bindSecurityTriageProvider(runtime: Runtime, cfg: GuardianAgentConfig): void {
+  const triageInstance = runtime.registry.get(SECURITY_TRIAGE_AGENT_ID);
+  if (!triageInstance) return;
+  const providerName = resolveSecurityTriageProviderName(cfg);
+  triageInstance.definition.providerName = providerName;
+  triageInstance.provider = runtime.getProvider(providerName);
 }
 
 type SoulInjectionMode = 'full' | 'summary' | 'disabled';
@@ -4196,6 +4269,11 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
       quickActions: {
         enabled: config.assistant.quickActions.enabled,
       },
+      security: {
+        deploymentProfile: config.assistant.security?.deploymentProfile ?? DEFAULT_DEPLOYMENT_PROFILE,
+        operatingMode: config.assistant.security?.operatingMode ?? DEFAULT_SECURITY_OPERATING_MODE,
+        triageLlmProvider: config.assistant.security?.triageLlmProvider ?? DEFAULT_SECURITY_TRIAGE_LLM_PROVIDER,
+      },
       credentials: {
         refs: Object.fromEntries(
           Object.entries(config.assistant.credentials.refs ?? {}).map(([name, ref]) => [name, {
@@ -4379,6 +4457,16 @@ function buildDashboardCallbacks(
   runHostMonitoring: (source: string) => Promise<HostMonitorReport>,
   gatewayMonitor: GatewayFirewallMonitoringService,
   runGatewayMonitoring: (source: string) => Promise<GatewayMonitorReport>,
+  windowsDefender: WindowsDefenderProvider,
+  runWindowsDefenderRefresh: (source: string) => Promise<import('./runtime/windows-defender-provider.js').WindowsDefenderProviderStatus>,
+  containmentService: ContainmentService,
+  securityActivityLog: SecurityActivityLogService,
+  getSecurityContainmentInputs: () => {
+    profile: 'personal' | 'home' | 'organization';
+    currentMode: 'monitor' | 'guarded' | 'lockdown' | 'ir_assist';
+    alerts: ReturnType<typeof collectUnifiedSecurityAlerts>;
+    posture: ReturnType<typeof assessSecurityPosture>;
+  },
   runNetworkAnalysis: (source: string) => NetworkAnomalyReport,
   guardianAgentService: GuardianAgentService,
   sentinelAuditService: SentinelAuditService,
@@ -4563,6 +4651,7 @@ function buildDashboardCallbacks(
         llm: resolvedNextCredentials.resolvedLLM,
         defaultProvider: nextConfig.defaultProvider,
       });
+      bindSecurityTriageProvider(runtime, nextConfig);
       identity.update(nextConfig.assistant.identity);
       connectors.updateConfig(nextConfig.assistant.connectors);
       toolExecutor.updatePolicy({
@@ -4908,12 +4997,18 @@ function buildDashboardCallbacks(
     return runtimeCredentials.credentialProvider.resolve(ref);
   };
 
+  const isInternalDashboardAgent = (agentId: string): boolean => (
+    router.findAgentByRole('local')?.id === agentId
+    || router.findAgentByRole('external')?.id === agentId
+    || agentId === SECURITY_TRIAGE_AGENT_ID
+    || agentId === SECURITY_TRIAGE_DISPATCHER_AGENT_ID
+  );
+
   const toDashboardAgentInfo = (inst: ReturnType<typeof runtime.registry.getAll>[number]): DashboardAgentInfo => {
     const providerName = inst.definition.providerName ?? configRef.current.defaultProvider;
     const providerConfig = configRef.current.llm[providerName];
     const providerLocality = getProviderLocality(providerConfig);
-    const isInternal = router.findAgentByRole('local')?.id === inst.agent.id
-      || router.findAgentByRole('external')?.id === inst.agent.id;
+    const isInternal = isInternalDashboardAgent(inst.agent.id);
     return {
       id: inst.agent.id,
       name: inst.agent.name,
@@ -5190,9 +5285,7 @@ function buildDashboardCallbacks(
     onAgentDetail: (id: string): DashboardAgentDetail | null => {
       const inst = runtime.registry.get(id);
       if (!inst) return null;
-      const isInternal =
-        router.findAgentByRole('local')?.id === id
-        || router.findAgentByRole('external')?.id === id;
+      const isInternal = isInternalDashboardAgent(id);
       const providerName = inst.definition.providerName ?? configRef.current.defaultProvider;
       const providerConfig = configRef.current.llm[providerName];
       return {
@@ -5909,6 +6002,217 @@ function buildDashboardCallbacks(
       return networkBaseline.acknowledgeAlert(alertId.trim());
     },
 
+    onSecurityAlerts: (args) => {
+      const includeAcknowledged = !!args?.includeAcknowledged;
+      const includeInactive = !!args?.includeInactive;
+      const parsedLimit = Number(args?.limit ?? 100);
+      const limit = Number.isFinite(parsedLimit) ? Math.max(1, Math.min(500, parsedLimit)) : 100;
+      const query = typeof args?.query === 'string' ? args.query.trim() : '';
+      const severity = normalizeSecurityAlertSeverity(args?.severity);
+      const status = typeof args?.status === 'string' && isSecurityAlertStatus(args.status)
+        ? args.status
+        : undefined;
+      const typeFilter = typeof args?.type === 'string' ? args.type.trim().toLowerCase() : '';
+      const selectedSources = normalizeSecurityAlertSources(args?.source, args?.sources);
+
+      let alerts = collectUnifiedSecurityAlerts({
+        hostMonitor,
+        networkBaseline,
+        gatewayMonitor,
+        windowsDefender,
+        includeAcknowledged,
+        includeInactive,
+      });
+      if (selectedSources.length > 0) {
+        const allowed = new Set(selectedSources);
+        alerts = alerts.filter((alert) => allowed.has(alert.source));
+      }
+      if (severity) {
+        alerts = alerts.filter((alert) => alert.severity === severity);
+      }
+      if (status) {
+        alerts = alerts.filter((alert) => alert.status === status);
+      }
+      if (typeFilter) {
+        alerts = alerts.filter((alert) => alert.type.toLowerCase() === typeFilter);
+      }
+      if (query) {
+        alerts = alerts.filter((alert) => matchesSecurityAlertQuery(alert, query));
+      }
+
+      alerts.sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+      const bySource: Record<SecurityAlertSource, number> = { host: 0, network: 0, gateway: 0, native: 0 };
+      const bySeverity: Record<SecurityAlertSeverity, number> = { low: 0, medium: 0, high: 0, critical: 0 };
+      for (const alert of alerts) {
+        bySource[alert.source] += 1;
+        bySeverity[alert.severity] += 1;
+      }
+
+      return {
+        alerts: alerts.slice(0, limit),
+        totalMatches: alerts.length,
+        returned: Math.min(alerts.length, limit),
+        searchedSources: selectedSources.length > 0 ? selectedSources : availableSecurityAlertSources({
+          hostMonitor,
+          networkBaseline,
+          gatewayMonitor,
+          windowsDefender,
+        }),
+        includeAcknowledged,
+        includeInactive,
+        query: query || undefined,
+        severity: severity ?? undefined,
+        status,
+        type: typeFilter || undefined,
+        bySource,
+        bySeverity,
+      };
+    },
+
+    onSecurityAlertAcknowledge: ({ alertId, source }) => {
+      if (!alertId.trim()) {
+        return { success: false, message: 'alertId is required' };
+      }
+      const result = acknowledgeUnifiedSecurityAlert({
+        alertId: alertId.trim(),
+        source,
+        hostMonitor,
+        networkBaseline,
+        gatewayMonitor,
+        windowsDefender,
+      });
+      return {
+        success: result.success,
+        message: result.message,
+        source: result.source,
+      };
+    },
+
+    onSecurityAlertResolve: ({ alertId, source, reason }) => {
+      if (!alertId.trim()) {
+        return { success: false, message: 'alertId is required' };
+      }
+      const result = resolveUnifiedSecurityAlert({
+        alertId: alertId.trim(),
+        source,
+        reason,
+        hostMonitor,
+        networkBaseline,
+        gatewayMonitor,
+        windowsDefender,
+      });
+      return {
+        success: result.success,
+        message: result.message,
+        source: result.source,
+      };
+    },
+
+    onSecurityAlertSuppress: ({ alertId, source, suppressedUntil, reason }) => {
+      if (!alertId.trim()) {
+        return { success: false, message: 'alertId is required' };
+      }
+      const result = suppressUnifiedSecurityAlert({
+        alertId: alertId.trim(),
+        source,
+        suppressedUntil,
+        reason,
+        hostMonitor,
+        networkBaseline,
+        gatewayMonitor,
+        windowsDefender,
+      });
+      return {
+        success: result.success,
+        message: result.message,
+        source: result.source,
+      };
+    },
+
+    onSecurityPosture: (args) => {
+      const configuredSecurity = configRef.current.assistant.security;
+      const profile = args?.profile
+        ?? configuredSecurity?.deploymentProfile
+        ?? DEFAULT_DEPLOYMENT_PROFILE;
+      const currentMode = args?.currentMode
+        ?? configuredSecurity?.operatingMode
+        ?? DEFAULT_SECURITY_OPERATING_MODE;
+      const includeAcknowledged = !!args?.includeAcknowledged;
+      const alerts = collectUnifiedSecurityAlerts({
+        hostMonitor,
+        networkBaseline,
+        gatewayMonitor,
+        windowsDefender,
+        includeAcknowledged,
+        includeInactive: false,
+      });
+      return assessSecurityPosture({
+        profile,
+        currentMode,
+        alerts,
+        availableSources: availableSecurityAlertSources({
+          hostMonitor,
+          networkBaseline,
+          gatewayMonitor,
+          windowsDefender,
+        }),
+      });
+    },
+
+    onSecurityContainmentStatus: (args) => {
+      const base = getSecurityContainmentInputs();
+      const profile = args?.profile ?? base.profile;
+      const currentMode = args?.currentMode ?? base.currentMode;
+      const posture = assessSecurityPosture({
+        profile,
+        currentMode,
+        alerts: base.alerts,
+        availableSources: availableSecurityAlertSources({
+          hostMonitor,
+          networkBaseline,
+          gatewayMonitor,
+          windowsDefender,
+        }),
+      });
+      return containmentService.getState({
+        profile,
+        currentMode,
+        alerts: base.alerts,
+        posture,
+      });
+    },
+
+    onSecurityActivityLog: (args) => {
+      const status = typeof args?.status === 'string' ? args.status : undefined;
+      return securityActivityLog.list({
+        limit: args?.limit,
+        status,
+        agentId: args?.agentId,
+      });
+    },
+
+    onWindowsDefenderStatus: () => ({
+      status: windowsDefender.getStatus(),
+      alerts: windowsDefender.listAlerts({
+        includeAcknowledged: true,
+        includeInactive: true,
+        limit: 100,
+      }),
+    }),
+
+    onWindowsDefenderRefresh: async () => ({
+      status: await runWindowsDefenderRefresh('web:manual'),
+      alerts: windowsDefender.listAlerts({
+        includeAcknowledged: true,
+        includeInactive: true,
+        limit: 100,
+      }),
+    }),
+
+    onWindowsDefenderScan: async ({ type, path }) => windowsDefender.runScan({ type, path }),
+
+    onWindowsDefenderUpdateSignatures: async () => windowsDefender.updateSignatures(),
+
     onHostMonitorStatus: () => hostMonitor.getStatus(),
 
     onHostMonitorAlerts: (args) => {
@@ -5975,6 +6279,11 @@ function buildDashboardCallbacks(
       };
       runtime.eventBus.subscribeByType('security:alert', onSecurityAlert);
       cleanups.push(() => runtime.eventBus.unsubscribeByType('security:alert', onSecurityAlert));
+
+      const unsubSecurityTriage = securityActivityLog.addListener((entry) => {
+        listener({ type: 'security.triage', data: entry });
+      });
+      cleanups.push(unsubSecurityTriage);
 
       // Metrics every 5s
       const metricsInterval = setInterval(() => {
@@ -6906,6 +7215,39 @@ function buildDashboardCallbacks(
             rawCredentials.refs = { ...existingDiskRefs, ...nextCredentialRefs };
           }
 
+          const securityUpdates = updates.assistant?.security;
+          if (securityUpdates && typeof securityUpdates === 'object') {
+            rawConfig.assistant = rawConfig.assistant ?? {};
+            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+            rawAssistant.security = (rawAssistant.security as Record<string, unknown> | undefined) ?? {};
+            const rawSecurity = rawAssistant.security as Record<string, unknown>;
+
+            if (securityUpdates.deploymentProfile !== undefined) {
+              const trimmed = securityUpdates.deploymentProfile.trim();
+              if (!trimmed) {
+                delete rawSecurity.deploymentProfile;
+              } else if (isDeploymentProfile(trimmed)) {
+                rawSecurity.deploymentProfile = trimmed;
+              }
+            }
+            if (securityUpdates.operatingMode !== undefined) {
+              const trimmed = securityUpdates.operatingMode.trim();
+              if (!trimmed) {
+                delete rawSecurity.operatingMode;
+              } else if (isSecurityOperatingMode(trimmed)) {
+                rawSecurity.operatingMode = trimmed;
+              }
+            }
+            if (securityUpdates.triageLlmProvider !== undefined) {
+              const trimmed = securityUpdates.triageLlmProvider.trim().toLowerCase();
+              if (!trimmed) {
+                delete rawSecurity.triageLlmProvider;
+              } else if (isSecurityTriageLlmProvider(trimmed)) {
+                rawSecurity.triageLlmProvider = trimmed;
+              }
+            }
+          }
+
           const notificationUpdates = updates.assistant?.notifications;
           if (notificationUpdates && typeof notificationUpdates === 'object') {
             rawConfig.assistant = rawConfig.assistant ?? {};
@@ -7764,7 +8106,7 @@ async function main(): Promise<void> {
       '    path: SOUL.md',
       '    primaryMode: full',
       '    delegatedMode: summary',
-      '    maxChars: 8000',
+      '    maxChars: 10000',
       '    summaryMaxChars: 1000',
       '  connectors:',
       '    enabled: false',
@@ -8463,12 +8805,44 @@ async function main(): Promise<void> {
     config: config.assistant.gatewayMonitoring,
   });
   await gatewayMonitor.load().catch(() => {});
+  const windowsDefender = new WindowsDefenderProvider();
+  await windowsDefender.load().catch(() => {});
+  const containmentService = new ContainmentService();
+  const securityActivityLog = new SecurityActivityLogService();
+  await securityActivityLog.load().catch(() => {});
 
   let lastNetworkAlertEmitAt = 0;
+  let lastWindowsDefenderAlertEmitAt = 0;
   let hostMonitorInterval: ReturnType<typeof setInterval> | null = null;
   let gatewayMonitorInterval: ReturnType<typeof setInterval> | null = null;
   let lastHostMonitorTriggeredAt = 0;
   let lastGatewayMonitorTriggeredAt = 0;
+
+  const getSecurityContainmentInputs = () => {
+    const configuredSecurity = configRef.current.assistant.security;
+    const profile = configuredSecurity?.deploymentProfile ?? DEFAULT_DEPLOYMENT_PROFILE;
+    const currentMode = configuredSecurity?.operatingMode ?? DEFAULT_SECURITY_OPERATING_MODE;
+    const alerts = collectUnifiedSecurityAlerts({
+      hostMonitor,
+      networkBaseline,
+      gatewayMonitor,
+      windowsDefender,
+      includeAcknowledged: false,
+      includeInactive: false,
+    });
+    const posture = assessSecurityPosture({
+      profile,
+      currentMode,
+      alerts,
+      availableSources: availableSecurityAlertSources({
+        hostMonitor,
+        networkBaseline,
+        gatewayMonitor,
+        windowsDefender,
+      }),
+    });
+    return { profile, currentMode, alerts, posture };
+  };
 
   const runNetworkAnalysis = (source: string): NetworkAnomalyReport => {
     const devices = deviceInventory.listDevices();
@@ -8601,7 +8975,25 @@ async function main(): Promise<void> {
           evidence: alert.evidence,
         },
       });
+
+      runtime.eventBus.emit({
+        type: 'security:host:alert',
+        sourceAgentId: 'host-monitor',
+        targetAgentId: '*',
+        payload: {
+          source,
+          alert,
+          report: {
+            baselineReady: report.baselineReady,
+            snapshot: report.snapshot,
+          },
+        },
+        timestamp: now,
+      }).catch(() => {});
     }
+    await runWindowsDefenderRefresh(`host-monitor:${source}`).catch((err) => {
+      log.warn({ err: err instanceof Error ? err.message : String(err), source }, 'Windows Defender refresh failed during host monitoring');
+    });
     return report;
   };
 
@@ -8646,9 +9038,77 @@ async function main(): Promise<void> {
           evidence: alert.evidence,
         },
       });
+
+      runtime.eventBus.emit({
+        type: 'security:gateway:alert',
+        sourceAgentId: 'gateway-monitor',
+        targetAgentId: '*',
+        payload: {
+          source,
+          alert,
+          report: {
+            baselineReady: report.baselineReady,
+            gatewayCount: report.gateways.length,
+          },
+        },
+        timestamp: now,
+      }).catch(() => {});
     }
     return report;
   };
+
+  const runWindowsDefenderRefresh = async (source: string) => {
+    const status = await windowsDefender.refreshStatus();
+    const now = Date.now();
+    const freshAlerts = windowsDefender
+      .listAlerts({ includeAcknowledged: false, includeInactive: false, limit: 200 })
+      .filter((alert) => alert.lastSeenAt > lastWindowsDefenderAlertEmitAt);
+
+    for (const alert of freshAlerts) {
+      const severity = alert.severity === 'critical'
+        ? 'critical'
+        : alert.severity === 'high' || alert.severity === 'medium'
+          ? 'warn'
+          : 'info';
+      runtime.auditLog.record({
+        type: 'host_alert',
+        severity,
+        agentId: 'windows-defender',
+        details: {
+          source: 'windows_defender',
+          alertType: alert.type,
+          description: alert.description,
+          hostSeverity: alert.severity,
+          dedupeKey: alert.dedupeKey,
+          evidence: alert.evidence,
+        },
+      });
+
+      runtime.eventBus.emit({
+        type: 'security:native:provider',
+        sourceAgentId: 'windows-defender',
+        targetAgentId: '*',
+        payload: {
+          source,
+          provider: status.provider,
+          alert,
+          status,
+        },
+        timestamp: now,
+      }).catch(() => {});
+    }
+
+    if (freshAlerts.length > 0) {
+      lastWindowsDefenderAlertEmitAt = Math.max(lastWindowsDefenderAlertEmitAt, ...freshAlerts.map((alert) => alert.lastSeenAt));
+    } else {
+      lastWindowsDefenderAlertEmitAt = Math.max(lastWindowsDefenderAlertEmitAt, status.lastUpdatedAt || now);
+    }
+    return status;
+  };
+
+  await runWindowsDefenderRefresh('startup').catch((err) => {
+    log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Initial Windows Defender refresh failed');
+  });
 
   // ─── Guardian Agent (inline LLM blocking) + Sentinel (audit) ──────
   const guardianAgentConfig = config.guardian?.guardianAgent;
@@ -8848,6 +9308,8 @@ async function main(): Promise<void> {
     runHostMonitorCheck: runHostMonitoring,
     gatewayMonitor,
     runGatewayMonitorCheck: runGatewayMonitoring,
+    windowsDefender,
+    containmentService,
     networkConfig: config.assistant.network,
     mcpManager,
     sandboxConfig,
@@ -8907,6 +9369,37 @@ async function main(): Promise<void> {
       });
     },
     onPreExecute: async (action) => {
+      const containmentDecision = containmentService.shouldAllowAction({
+        ...getSecurityContainmentInputs(),
+        action: {
+          type: action.type,
+          toolName: action.toolName,
+          category: action.category,
+          scheduled: !!action.scheduleId,
+          origin: action.origin,
+        },
+      });
+      if (!containmentDecision.allowed) {
+        runtime.auditLog.record({
+          type: 'action_denied',
+          severity: containmentDecision.state.effectiveMode === 'lockdown' ? 'critical' : 'warn',
+          agentId: action.agentId,
+          controller: 'ContainmentService',
+          details: {
+            actionType: action.type,
+            toolName: action.toolName,
+            reason: containmentDecision.reason,
+            matchedAction: containmentDecision.matchedAction,
+            currentMode: containmentDecision.state.currentMode,
+            effectiveMode: containmentDecision.state.effectiveMode,
+            recommendedMode: containmentDecision.state.recommendedMode,
+            autoElevated: containmentDecision.state.autoElevated,
+            source: 'containment_service',
+          },
+        });
+        return { allowed: false, reason: containmentDecision.reason };
+      }
+
       const hostDecision = hostMonitor.shouldBlockAction(action);
       if (!hostDecision.allowed) {
         runtime.auditLog.record({
@@ -9154,27 +9647,6 @@ async function main(): Promise<void> {
   let threatIntelInterval: NodeJS.Timeout | null = null;
   const orchestrator = new AssistantOrchestrator();
   const jobTracker = new AssistantJobTracker();
-
-  const findProviderByLocality = (
-    cfg: GuardianAgentConfig,
-    locality: 'local' | 'external',
-  ): string | null => {
-    const preferred = cfg.assistant.tools.preferredProviders?.[locality]?.trim();
-    if (preferred && getProviderLocality(cfg.llm[preferred]) === locality) {
-      return preferred;
-    }
-
-    if (getProviderLocality(cfg.llm[cfg.defaultProvider]) === locality) {
-      return cfg.defaultProvider;
-    }
-
-    for (const [name, llmCfg] of Object.entries(cfg.llm)) {
-      if (getProviderLocality(llmCfg) === locality) {
-        return name;
-      }
-    }
-    return null;
-  };
 
   // ─── Model fallback chain ─────────────────────────────────
   // Build a fallback chain from config.fallbacks: [defaultProvider, ...fallbacks]
@@ -9453,6 +9925,58 @@ async function main(): Promise<void> {
     }));
     router.registerAgent('default', agentCapabilities);
   }
+
+  if (!chatAgents.has(SECURITY_TRIAGE_AGENT_ID)) {
+    const securityTriageCapabilities: Capability[] = ['execute_commands', 'network_access'];
+    const securityTriageAgent = new ChatAgent(
+      SECURITY_TRIAGE_AGENT_ID,
+      'Security Triage Agent',
+      DEFAULT_SECURITY_TRIAGE_SYSTEM_PROMPT,
+      conversations,
+      toolExecutor,
+      runtime.outputGuardian,
+      skillRegistry,
+      skillResolver,
+      enabledManagedProviders,
+      fallbackChain,
+      selectSoulPrompt(soulProfile, config.assistant.soul.delegatedMode),
+      agentMemoryStore,
+      codeSessionMemoryStore,
+      codeSessionStore,
+      SECURITY_TRIAGE_AGENT_ID,
+      resolveGwsProvider,
+      config.assistant.tools.contextBudget,
+      config.qualityFallback,
+      analytics ?? undefined,
+      resolveRoutedProviderForTools,
+    );
+    chatAgents.set(SECURITY_TRIAGE_AGENT_ID, securityTriageAgent);
+    runtime.registerAgent(createAgentDefinition({
+      agent: securityTriageAgent,
+      providerName: resolveSecurityTriageProviderName(config),
+      grantedCapabilities: securityTriageCapabilities,
+      resourceLimits: {
+        maxInvocationBudgetMs: 120_000,
+        maxConcurrentTools: 4,
+      },
+    }));
+  }
+
+  runtime.registerAgent(createAgentDefinition({
+    agent: new SecurityEventTriageAgent({
+      targetAgentId: SECURITY_TRIAGE_AGENT_ID,
+      primaryUserId: config.assistant.identity.primaryUserId,
+      auditLog: runtime.auditLog,
+      activityLog: securityActivityLog,
+      channel: 'scheduled',
+      allowedCapabilities: ['execute_commands', 'network_access'],
+    }),
+    grantedCapabilities: ['agent.dispatch'],
+    resourceLimits: {
+      maxInvocationBudgetMs: 120_000,
+      maxQueueDepth: 256,
+    },
+  }));
 
   // ─── Guardian Agent + Sentinel provider setup ─────────────────────
   // Resolve local (Ollama) and external (OpenAI/Anthropic) providers for
@@ -9736,6 +10260,11 @@ async function main(): Promise<void> {
     runHostMonitoring,
     gatewayMonitor,
     runGatewayMonitoring,
+    windowsDefender,
+    runWindowsDefenderRefresh,
+    containmentService,
+    securityActivityLog,
+    getSecurityContainmentInputs,
     runNetworkAnalysis,
     guardianAgentService,
     sentinelAuditService,
@@ -9807,6 +10336,7 @@ async function main(): Promise<void> {
       tryDelete('scheduled-tasks.json', join(baseDir, 'scheduled-tasks.json'));
       tryDelete('network-baseline.json', join(baseDir, 'network-baseline.json'));
       tryDelete('network-traffic.json', join(baseDir, 'network-traffic.json'));
+      tryDelete('security-activity-log.json', join(baseDir, 'security-activity-log.json'));
     }
 
     if (scope === 'config' || scope === 'all') {
@@ -10093,7 +10623,9 @@ async function main(): Promise<void> {
         state: inst.state,
         capabilities: inst.definition.grantedCapabilities,
         internal: router.findAgentByRole('local')?.id === inst.agent.id
-          || router.findAgentByRole('external')?.id === inst.agent.id,
+          || router.findAgentByRole('external')?.id === inst.agent.id
+          || inst.agent.id === SECURITY_TRIAGE_AGENT_ID
+          || inst.agent.id === SECURITY_TRIAGE_DISPATCHER_AGENT_ID,
       })),
       onStatus: () => ({
         running: runtime.isRunning(),

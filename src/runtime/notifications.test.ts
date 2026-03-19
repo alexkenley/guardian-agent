@@ -62,6 +62,40 @@ describe('NotificationService', () => {
     expect(sendTelegram).toHaveBeenCalledTimes(1);
   });
 
+  it('still emits internal security events when web delivery is disabled', async () => {
+    const auditLog = new AuditLog();
+    const eventBus = { emit: vi.fn().mockResolvedValue(true) } as unknown as EventBus;
+    const sendCli = vi.fn().mockResolvedValue(undefined);
+    const service = new NotificationService({
+      config: makeConfig({
+        destinations: {
+          web: false,
+          cli: true,
+          telegram: false,
+        },
+      }),
+      auditLog,
+      eventBus,
+      senders: { sendCli },
+    });
+
+    service.start();
+    auditLog.record({
+      type: 'secret_detected',
+      severity: 'warn',
+      agentId: 'guardian',
+      details: { reason: 'Credential-like token found' },
+    });
+    await flushAsyncWork();
+
+    expect(vi.mocked(eventBus.emit)).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'security:alert',
+      sourceAgentId: 'notification-service',
+      targetAgentId: '*',
+    }));
+    expect(sendCli).toHaveBeenCalledTimes(1);
+  });
+
   it('suppresses duplicate notifications during cooldown', async () => {
     const auditLog = new AuditLog();
     const eventBus = { emit: vi.fn().mockResolvedValue(true) } as unknown as EventBus;

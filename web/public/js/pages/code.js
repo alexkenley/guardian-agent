@@ -1,5 +1,6 @@
 import { api } from '../api.js';
 import { onSSE } from '../app.js';
+import { registerAllThemes, THEME_REGISTRY } from '../monaco-themes.js';
 
 const STORAGE_KEY = 'guardianagent_code_sessions_v2';
 const DEFAULT_USER_CHANNEL = 'web';
@@ -8,33 +9,9 @@ const APPROVAL_BACKLOG_SOFT_CAP = 3;
 const MAX_SESSION_JOBS = 20;
 const ASSISTANT_TABS = ['chat', 'activity'];
 const SESSION_REFRESH_INTERVAL_MS = 5000;
-const JS_TS_KEYWORDS = [
-  'abstract', 'as', 'async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'default', 'delete',
-  'do', 'else', 'enum', 'export', 'extends', 'finally', 'for', 'from', 'function', 'get', 'if', 'implements',
-  'import', 'in', 'instanceof', 'interface', 'let', 'new', 'of', 'private', 'protected', 'public', 'readonly',
-  'return', 'set', 'static', 'super', 'switch', 'throw', 'try', 'type', 'typeof', 'var', 'void', 'while', 'yield',
-];
-const JS_TS_TYPES = [
-  'Array', 'Map', 'Promise', 'ReadonlyArray', 'Record', 'Set', 'any', 'boolean', 'never', 'null', 'number', 'object',
-  'string', 'true', 'false', 'undefined', 'unknown', 'void',
-];
-const PYTHON_KEYWORDS = [
-  'and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except',
-  'False', 'finally', 'for', 'from', 'if', 'import', 'in', 'is', 'lambda', 'None', 'nonlocal', 'not', 'or', 'pass',
-  'raise', 'return', 'True', 'try', 'while', 'with', 'yield',
-];
-const SHELL_KEYWORDS = [
-  'case', 'do', 'done', 'elif', 'else', 'esac', 'export', 'fi', 'for', 'function', 'if', 'in', 'local', 'readonly',
-  'return', 'select', 'then', 'until', 'while',
-];
-const MARKDOWN_INLINE_RULES = [
-  { type: 'string', pattern: /`[^`\n]+`/g },
-  { type: 'function', pattern: /\[[^\]]+\]\([^)]+\)/g },
-  { type: 'keyword', pattern: /\*\*[^*\n]+\*\*|__[^_\n]+__/g },
-  { type: 'type', pattern: /\*[^*\n]+\*|_[^_\n]+_/g },
-];
+const MONACO_THEME_STORAGE_KEY = 'guardianagent_monaco_theme';
 
-const SCROLL_SELECTORS = ['.code-file-list', '.code-editor__content', '.code-chat__history', '.code-rail__list'];
+const SCROLL_SELECTORS = ['.code-file-list', '.code-chat__history', '.code-rail__list'];
 
 let currentContainer = null;
 let codeState = loadState();
@@ -56,6 +33,309 @@ let sessionRefreshInterval = null;
 let sessionPersistTimers = new Map();
 let pendingTerminalFocusTabId = null;
 let deferredSelectionRerenderTimer = null;
+
+// ─── Monaco Editor state ───────────────────────────────────
+let monacoLoadPromise = null;
+let monacoEditorInstance = null;
+let monacoDiffInstance = null;
+/** @type {Map<string, {model: any, viewState: any}>} — keyed by filePath */
+let monacoModels = new Map();
+let monacoThemesRegistered = false;
+let currentMonacoTheme = localStorage.getItem(MONACO_THEME_STORAGE_KEY) || 'guardian-agent';
+
+/**
+ * Dynamically load Monaco's AMD loader, then load editor.main.
+ * Returns a Promise that resolves when window.monaco is ready.
+ */
+function loadMonaco() {
+  if (monacoLoadPromise) return monacoLoadPromise;
+  monacoLoadPromise = new Promise((resolve, reject) => {
+    if (window.monaco) { resolve(); return; }
+    const script = document.createElement('script');
+    script.src = '/vendor/monaco/vs/loader.js';
+    script.onload = () => {
+      // Configure AMD require for Monaco
+      window.require.config({ paths: { vs: '/vendor/monaco/vs' } });
+      window.require(['vs/editor/editor.main'], () => {
+        if (!monacoThemesRegistered) {
+          registerAllThemes(window.monaco);
+          monacoThemesRegistered = true;
+        }
+        resolve();
+      }, reject);
+    };
+    script.onerror = () => reject(new Error('Failed to load Monaco loader'));
+    document.head.appendChild(script);
+  });
+  return monacoLoadPromise;
+}
+
+/**
+ * Map file path to Monaco language ID.
+ * Monaco has built-in tokenizers for 100+ languages.
+ */
+function mapMonacoLanguageId(filePath) {
+  const name = basename(filePath || '').toLowerCase();
+  if (!name) return 'plaintext';
+  // Special filenames
+  if (name === 'dockerfile') return 'dockerfile';
+  if (name === 'makefile' || name === 'gnumakefile') return 'makefile';
+  if (name === '.gitignore' || name === '.dockerignore') return 'ignore';
+  if (name.endsWith('.env') || name === '.env') return 'dotenv';
+  const ext = name.includes('.') ? name.split('.').pop() : '';
+  const map = {
+    ts: 'typescript', tsx: 'typescript',
+    js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
+    json: 'json', jsonc: 'json',
+    css: 'css', scss: 'scss', less: 'less',
+    html: 'html', htm: 'html',
+    xml: 'xml', svg: 'xml', xsl: 'xml',
+    md: 'markdown', markdown: 'markdown',
+    yml: 'yaml', yaml: 'yaml',
+    py: 'python', pyw: 'python',
+    sh: 'shell', bash: 'shell', zsh: 'shell', fish: 'shell',
+    go: 'go',
+    rs: 'rust',
+    c: 'c', h: 'c',
+    cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp', hxx: 'cpp',
+    cs: 'csharp',
+    java: 'java',
+    rb: 'ruby', rake: 'ruby',
+    php: 'php',
+    sql: 'sql',
+    graphql: 'graphql', gql: 'graphql',
+    swift: 'swift',
+    kt: 'kotlin', kts: 'kotlin',
+    lua: 'lua',
+    r: 'r', rmd: 'r',
+    toml: 'ini', ini: 'ini', cfg: 'ini',
+    ps1: 'powershell', psm1: 'powershell', psd1: 'powershell',
+    bat: 'bat', cmd: 'bat',
+    pl: 'perl', pm: 'perl',
+    dart: 'dart',
+    scala: 'scala',
+    clj: 'clojure', cljs: 'clojure', cljc: 'clojure',
+    ex: 'elixir', exs: 'elixir',
+    erl: 'erlang',
+    hs: 'haskell',
+    tf: 'hcl', tfvars: 'hcl',
+    proto: 'protobuf',
+    dockerfile: 'dockerfile',
+  };
+  return map[ext] || 'plaintext';
+}
+
+/**
+ * Get or create a Monaco text model for a file path.
+ */
+function getOrCreateModel(filePath, content) {
+  const monaco = window.monaco;
+  if (!monaco) return null;
+  const existing = monacoModels.get(filePath);
+  if (existing?.model && !existing.model.isDisposed()) {
+    return existing.model;
+  }
+  const uri = monaco.Uri.file(filePath);
+  // Check if model already exists in Monaco (e.g. from another path)
+  let model = monaco.editor.getModel(uri);
+  if (!model) {
+    const lang = mapMonacoLanguageId(filePath);
+    model = monaco.editor.createModel(content || '', lang, uri);
+  }
+  monacoModels.set(filePath, { model, viewState: null });
+  return model;
+}
+
+/**
+ * Dispose all Monaco models and editor instances.
+ */
+function disposeMonacoEditors() {
+  if (monacoEditorInstance) {
+    monacoEditorInstance.dispose();
+    monacoEditorInstance = null;
+  }
+  if (monacoDiffInstance) {
+    // Dispose the original model (modified model is managed by monacoModels)
+    const diffModel = monacoDiffInstance.getModel();
+    if (diffModel?.original && !diffModel.original.isDisposed()) {
+      diffModel.original.dispose();
+    }
+    monacoDiffInstance.dispose();
+    monacoDiffInstance = null;
+  }
+}
+
+/**
+ * Dispose a specific model by file path.
+ */
+function disposeModel(filePath) {
+  const entry = monacoModels.get(filePath);
+  if (entry?.model && !entry.model.isDisposed()) {
+    entry.model.dispose();
+  }
+  monacoModels.delete(filePath);
+}
+
+/**
+ * Dispose all models (used on session switch).
+ */
+function disposeAllModels() {
+  for (const [, entry] of monacoModels) {
+    if (entry?.model && !entry.model.isDisposed()) {
+      entry.model.dispose();
+    }
+  }
+  monacoModels.clear();
+}
+
+/**
+ * Save current editor view state (cursor, scroll, selection) for the active tab.
+ */
+function saveMonacoViewState(filePath) {
+  if (!filePath || !monacoEditorInstance) return;
+  const entry = monacoModels.get(filePath);
+  if (entry) {
+    entry.viewState = monacoEditorInstance.saveViewState();
+  }
+}
+
+/**
+ * Mount or update the Monaco editor in the given container for the active tab.
+ */
+function mountMonacoEditor(container, filePath, content, isDiff, diffContent) {
+  const monaco = window.monaco;
+  if (!monaco || !container) return;
+
+  if (isDiff) {
+    // Diff editor mode
+    if (monacoEditorInstance) {
+      monacoEditorInstance.dispose();
+      monacoEditorInstance = null;
+    }
+    if (!monacoDiffInstance) {
+      monacoDiffInstance = monaco.editor.createDiffEditor(container, {
+        originalEditable: false,
+        renderSideBySide: true,
+        enableSplitViewResizing: true,
+        automaticLayout: true,
+        readOnly: false,
+        theme: currentMonacoTheme,
+        fontSize: 13,
+        fontFamily: "'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace",
+        minimap: { enabled: false },
+        scrollBeyondLastLine: false,
+      });
+    }
+    const lang = mapMonacoLanguageId(filePath);
+    // Dispose previous original model to prevent leak on repeated diff toggles
+    const prevDiffModel = monacoDiffInstance.getModel();
+    if (prevDiffModel?.original && !prevDiffModel.original.isDisposed()) {
+      prevDiffModel.original.dispose();
+    }
+    const originalModel = monaco.editor.createModel(diffContent || '', lang);
+    const modifiedModel = getOrCreateModel(filePath, content);
+    if (modifiedModel) {
+      modifiedModel.setValue(content || '');
+    }
+    monacoDiffInstance.setModel({ original: originalModel, modified: modifiedModel });
+    return;
+  }
+
+  // Regular editor mode
+  if (monacoDiffInstance) {
+    monacoDiffInstance.dispose();
+    monacoDiffInstance = null;
+  }
+
+  const model = getOrCreateModel(filePath, content);
+  if (!model) return;
+
+  // Update model content if it doesn't match (e.g. file reloaded from disk)
+  const session = getActiveSession();
+  const tab = getActiveTab(session);
+  const isTabDirty = tab?.dirty;
+  if (!isTabDirty && model.getValue() !== (content || '')) {
+    model.setValue(content || '');
+  }
+
+  if (!monacoEditorInstance) {
+    monacoEditorInstance = monaco.editor.create(container, {
+      model,
+      theme: currentMonacoTheme,
+      fontSize: 13,
+      fontFamily: "'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace",
+      minimap: { enabled: true },
+      lineNumbers: 'on',
+      folding: true,
+      wordWrap: 'off',
+      automaticLayout: true,
+      scrollBeyondLastLine: false,
+      renderWhitespace: 'selection',
+      bracketPairColorization: { enabled: true },
+      guides: { bracketPairs: true },
+      readOnly: false,
+      tabSize: 2,
+      insertSpaces: true,
+      smoothScrolling: true,
+      cursorBlinking: 'smooth',
+      cursorSmoothCaretAnimation: 'on',
+      overviewRulerLanes: 0,
+      overviewRulerBorder: false,
+      hideCursorInOverviewRuler: true,
+      scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
+      padding: { top: 8 },
+    });
+
+    // Ctrl+S / Cmd+S to save
+    monacoEditorInstance.addCommand(
+      monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
+      () => saveEditorFile()
+    );
+
+    // Track dirty state
+    monacoEditorInstance.onDidChangeModelContent(() => {
+      const session = getActiveSession();
+      if (!session) return;
+      const tab = getActiveTab(session);
+      if (!tab) return;
+      tab.content = monacoEditorInstance.getValue();
+      tab.dirty = true;
+      // Update dirty indicator in header without full rerender
+      const dirtyDot = currentContainer?.querySelector('.code-editor__dirty');
+      if (!dirtyDot) {
+        const h3 = currentContainer?.querySelector('.code-editor .panel__header h3');
+        if (h3 && !h3.querySelector('.code-editor__dirty')) {
+          const span = document.createElement('span');
+          span.className = 'code-editor__dirty';
+          span.title = 'Unsaved changes';
+          span.innerHTML = '&bull;';
+          h3.appendChild(span);
+        }
+      }
+      // Show save button if not visible
+      const actions = currentContainer?.querySelector('.code-editor .panel__actions');
+      if (actions && !actions.querySelector('[data-code-save-file]')) {
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-primary btn-sm';
+        btn.type = 'button';
+        btn.dataset.codeSaveFile = '';
+        btn.title = 'Save changes (Ctrl+S)';
+        btn.textContent = 'Save';
+        btn.addEventListener('click', () => saveEditorFile());
+        actions.prepend(btn);
+      }
+    });
+  } else {
+    monacoEditorInstance.setModel(model);
+  }
+
+  // Restore view state if available
+  const entry = monacoModels.get(filePath);
+  if (entry?.viewState) {
+    monacoEditorInstance.restoreViewState(entry.viewState);
+  }
+  monacoEditorInstance.focus();
+}
 
 function isAssistantTab(value) {
   return ASSISTANT_TABS.includes(value);
@@ -215,221 +495,6 @@ function scheduleTerminalRender() {
 function trimTerminalOutput(text) {
   const MAX_CHARS = 120000;
   return text.length > MAX_CHARS ? text.slice(text.length - MAX_CHARS) : text;
-}
-
-function renderCodeBlock(content, { filePath = '', kind = 'source' } = {}) {
-  const text = String(content ?? '');
-  const language = kind === 'diff' ? 'diff' : detectCodeLanguage(filePath);
-  const highlighted = kind === 'diff'
-    ? highlightDiff(text)
-    : highlightCode(text, language);
-  const highlightedClass = highlighted !== esc(text) ? ' is-highlighted' : '';
-  return `<pre class="code-editor__content code-editor__content--${escAttr(kind)}${highlightedClass}" data-code-language="${escAttr(language)}">${highlighted}</pre>`;
-}
-
-function detectCodeLanguage(filePath) {
-  const name = basename(filePath || '').toLowerCase();
-  if (!name) return 'plaintext';
-  if (name === 'dockerfile' || name === 'makefile' || name === '.gitignore' || name.endsWith('.env')) {
-    return 'shell';
-  }
-  const ext = name.includes('.') ? name.split('.').pop() : '';
-  switch (ext) {
-    case 'ts':
-    case 'tsx':
-    case 'js':
-    case 'jsx':
-    case 'mjs':
-    case 'cjs':
-      return 'javascript';
-    case 'json':
-    case 'jsonc':
-      return 'json';
-    case 'css':
-    case 'scss':
-    case 'less':
-      return 'css';
-    case 'html':
-    case 'htm':
-    case 'xml':
-    case 'svg':
-      return 'markup';
-    case 'md':
-    case 'markdown':
-      return 'markdown';
-    case 'yml':
-    case 'yaml':
-      return 'yaml';
-    case 'py':
-      return 'python';
-    case 'sh':
-    case 'bash':
-    case 'zsh':
-    case 'fish':
-    case 'ps1':
-    case 'psm1':
-    case 'bat':
-    case 'cmd':
-      return 'shell';
-    default:
-      return 'plaintext';
-  }
-}
-
-function highlightCode(text, language) {
-  switch (language) {
-    case 'javascript':
-      return highlightByRules(text, [
-        { type: 'comment', pattern: /\/\*[\s\S]*?\*\//g },
-        { type: 'comment', pattern: /\/\/.*$/gm },
-        { type: 'keyword', pattern: /@[A-Za-z_$][\w$]*/g },
-        { type: 'string', pattern: /`(?:\\.|[^`\\])*`|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g },
-        { type: 'keyword', pattern: makeWordPattern(JS_TS_KEYWORDS) },
-        { type: 'type', pattern: makeWordPattern(JS_TS_TYPES) },
-        { type: 'number', pattern: /\b(?:0x[\da-fA-F]+|\d+(?:\.\d+)?(?:e[+-]?\d+)?)\b/g },
-        { type: 'function', pattern: /\b[A-Za-z_$][\w$]*(?=\s*\()/g },
-      ]);
-    case 'json':
-      return highlightByRules(text, [
-        { type: 'property', pattern: /"(?:\\.|[^"\\])*"(?=\s*:)/g },
-        { type: 'string', pattern: /"(?:\\.|[^"\\])*"/g },
-        { type: 'number', pattern: /\b-?\d+(?:\.\d+)?(?:e[+-]?\d+)?\b/gi },
-        { type: 'keyword', pattern: /\b(?:true|false|null)\b/g },
-      ]);
-    case 'css':
-      return highlightByRules(text, [
-        { type: 'comment', pattern: /\/\*[\s\S]*?\*\//g },
-        { type: 'keyword', pattern: /@[\w-]+/g },
-        { type: 'property', pattern: /--[\w-]+(?=\s*:)|\b[A-Za-z-]+(?=\s*:)/g },
-        { type: 'function', pattern: /\b[A-Za-z-]+(?=\()/g },
-        { type: 'string', pattern: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g },
-        { type: 'number', pattern: /#[\da-fA-F]{3,8}\b|\b\d+(?:\.\d+)?(?:px|rem|em|%|vh|vw|ms|s|deg)?\b/g },
-      ]);
-    case 'markup':
-      return highlightByRules(text, [
-        { type: 'comment', pattern: /<!--[\s\S]*?-->/g },
-        { type: 'keyword', pattern: /<\/?[A-Za-z][A-Za-z0-9:-]*/g },
-        { type: 'property', pattern: /\b[A-Za-z_:][-A-Za-z0-9_:.]*(?=\=)/g },
-        { type: 'string', pattern: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g },
-      ]);
-    case 'yaml':
-      return highlightByRules(text, [
-        { type: 'comment', pattern: /#.*$/gm },
-        { type: 'property', pattern: /^[ \t-]*[A-Za-z0-9_"'.-]+(?=\s*:)/gm },
-        { type: 'string', pattern: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g },
-        { type: 'keyword', pattern: /\b(?:true|false|null|yes|no|on|off)\b/gi },
-        { type: 'number', pattern: /\b-?\d+(?:\.\d+)?\b/g },
-      ]);
-    case 'python':
-      return highlightByRules(text, [
-        { type: 'comment', pattern: /#.*$/gm },
-        { type: 'string', pattern: /"""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g },
-        { type: 'keyword', pattern: makeWordPattern(PYTHON_KEYWORDS) },
-        { type: 'number', pattern: /\b\d+(?:\.\d+)?\b/g },
-        { type: 'function', pattern: /\b[A-Za-z_][\w]*(?=\s*\()/g },
-      ]);
-    case 'shell':
-      return highlightByRules(text, [
-        { type: 'comment', pattern: /#.*$/gm },
-        { type: 'string', pattern: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g },
-        { type: 'variable', pattern: /\$\{[^}]+\}|\$[A-Za-z_][\w]*|%[A-Za-z_][\w]*%/g },
-        { type: 'keyword', pattern: makeWordPattern(SHELL_KEYWORDS) },
-        { type: 'number', pattern: /\b\d+(?:\.\d+)?\b/g },
-        { type: 'function', pattern: /\b[A-Za-z_][\w-]*(?=\s*\()/g },
-      ]);
-    case 'markdown':
-      return highlightMarkdown(text);
-    default:
-      return esc(text);
-  }
-}
-
-function highlightMarkdown(text) {
-  return String(text ?? '')
-    .split('\n')
-    .map((line) => {
-      if (/^\s*```/.test(line)) {
-        return `<span class="code-line code-line--meta">${renderToken('keyword', line)}</span>`;
-      }
-      if (/^\s{0,3}#{1,6}\s/.test(line)) {
-        return `<span class="code-line code-line--meta">${highlightByRules(line, MARKDOWN_INLINE_RULES)}</span>`;
-      }
-      if (/^\s*>\s/.test(line)) {
-        return `<span class="code-line code-line--context">${renderToken('comment', line)}</span>`;
-      }
-      if (/^\s*(?:[-*+]|\d+\.)\s/.test(line)) {
-        return `<span class="code-line code-line--context">${highlightByRules(line, MARKDOWN_INLINE_RULES)}</span>`;
-      }
-      const inline = highlightByRules(line, MARKDOWN_INLINE_RULES);
-      return `<span class="code-line code-line--context">${inline || '&#8203;'}</span>`;
-    })
-    .join('');
-}
-
-function highlightDiff(text) {
-  return String(text ?? '')
-    .split('\n')
-    .map((line) => {
-      let lineClass = 'context';
-      if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('--- ') || line.startsWith('+++ ')) {
-        lineClass = 'meta';
-      } else if (line.startsWith('@@')) {
-        lineClass = 'hunk';
-      } else if (line.startsWith('+') && !line.startsWith('+++')) {
-        lineClass = 'add';
-      } else if (line.startsWith('-') && !line.startsWith('---')) {
-        lineClass = 'remove';
-      }
-      const body = line.length > 0 ? esc(line) : '&#8203;';
-      return `<span class="code-line code-line--${lineClass}">${body}</span>`;
-    })
-    .join('');
-}
-
-function highlightByRules(text, rules) {
-  const input = String(text ?? '');
-  let cursor = 0;
-  let output = '';
-
-  while (cursor < input.length) {
-    const next = findNextHighlightMatch(input, cursor, rules);
-    if (!next) {
-      output += esc(input.slice(cursor));
-      break;
-    }
-    if (next.index > cursor) {
-      output += esc(input.slice(cursor, next.index));
-    }
-    output += renderToken(next.type, next.value);
-    cursor = next.index + next.value.length;
-  }
-
-  return output;
-}
-
-function findNextHighlightMatch(text, cursor, rules) {
-  let best = null;
-  for (const rule of rules) {
-    rule.pattern.lastIndex = cursor;
-    const match = rule.pattern.exec(text);
-    if (!match || typeof match.index !== 'number' || match[0].length === 0) continue;
-    if (!best || match.index < best.index || (match.index === best.index && match[0].length > best.value.length)) {
-      best = {
-        index: match.index,
-        value: match[0],
-        type: typeof rule.type === 'function' ? rule.type(match[0], match) : rule.type,
-      };
-    }
-  }
-  return best;
-}
-
-function makeWordPattern(words) {
-  return new RegExp(`\\b(?:${words.join('|')})\\b`, 'g');
-}
-
-function renderToken(type, value) {
-  return `<span class="code-token code-token--${type}">${esc(value)}</span>`;
 }
 
 async function readClipboardTextFromEvent(event) {
@@ -1163,6 +1228,9 @@ export async function renderCode(container) {
   currentContainer = container;
   bindTerminalListeners();
 
+  // Start loading Monaco in parallel with data fetches
+  loadMonaco().catch(() => {});
+
   if (!hasRenderedOnce) {
     container.innerHTML = '<div class="loading" style="padding:2rem">Loading coding workspace...</div>';
   }
@@ -1172,7 +1240,7 @@ export async function renderCode(container) {
       api.agents().catch(() => []),
       api.status().catch(() => null),
     ]);
-    cachedAgents = agents.filter((agent) => agent.canChat !== false);
+    cachedAgents = agents.filter((agent) => agent.canChat !== false && agent.internal !== true);
     if (statusResult?.platform) detectedPlatform = statusResult.platform;
     if (Array.isArray(statusResult?.shellOptions)) shellOptionsCache = statusResult.shellOptions;
 
@@ -1253,6 +1321,8 @@ export function teardownCode() {
     sessionRefreshInterval = null;
   }
   disposeInactiveTerminalInstances([]);
+  disposeMonacoEditors();
+  disposeAllModels();
 }
 
 function rerenderFromState() {
@@ -1489,6 +1559,13 @@ async function closeTerminal(tab) {
 }
 
 function renderDOM(container, { focusTerminalTabId = null } = {}) {
+  // Save Monaco view state before DOM wipe
+  const prevSession = getActiveSession();
+  const prevTab = prevSession ? getActiveTab(prevSession) : null;
+  if (prevTab) saveMonacoViewState(prevTab.filePath);
+  // Dispose Monaco instances (DOM will be destroyed by innerHTML)
+  disposeMonacoEditors();
+
   const saved = saveScrollPositions(container);
   const focusState = captureFocusState(container);
   const activeSession = getActiveSession();
@@ -1500,29 +1577,7 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
   const editorDirty = activeTab?.dirty || false;
   const openTabs = activeSession?.openTabs || [];
   const editorContent = activeTab
-    ? (activeSession.showDiff
-      ? `<div class="code-editor__split">
-          <div class="code-editor__pane">
-            <div class="code-editor__pane-label">Source</div>
-            ${renderCodeBlock(fileView.source || 'Empty file.', {
-              filePath: activeTab.filePath,
-              kind: 'source',
-            })}
-          </div>
-          <div class="code-editor__pane">
-            <div class="code-editor__pane-label">Diff</div>
-            ${renderCodeBlock(fileView.diff || 'No diff output for this file.', { kind: 'diff' })}
-          </div>
-        </div>`
-      : (() => {
-          const src = activeTab.content ?? fileView.source ?? '';
-          const lang = detectCodeLanguage(activeTab.filePath);
-          const highlighted = highlightCode(src, lang);
-          return `<div class="code-editor__overlay" data-code-editor-overlay data-code-language="${escAttr(lang)}">
-            <pre class="code-editor__highlight" aria-hidden="true">${highlighted}\n</pre>
-            <textarea class="code-editor__textarea" data-code-editor-textarea spellcheck="false">${esc(src)}</textarea>
-          </div>`;
-        })())
+    ? `<div class="code-editor__monaco" data-monaco-editor></div>`
     : '';
   const tabBar = openTabs.length > 0 ? `
     <div class="code-editor__tabs">
@@ -1603,6 +1658,9 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
                     ${editorDirty ? '<button class="btn btn-primary btn-sm" type="button" data-code-save-file title="Save changes (Ctrl+S)">Save</button>' : ''}
                     <button class="btn btn-secondary btn-sm" type="button" data-code-refresh-file title="Reload file contents">&#x21BB;</button>
                     <button class="btn btn-secondary btn-sm" type="button" data-code-toggle-diff title="Toggle side-by-side source and diff view">${activeSession.showDiff ? 'Source Only' : 'Split Diff'}</button>
+                    <select class="code-editor__theme-select" data-code-theme-select title="Editor theme">
+                      ${THEME_REGISTRY.map((t) => `<option value="${escAttr(t.id)}" ${t.id === currentMonacoTheme ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}
+                    </select>
                   </div>
                 ` : ''}
               </div>
@@ -1658,6 +1716,23 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
     void mountActiveTerminals(container, activeSession, { focusTabId: terminalFocusTabId });
   } else {
     disposeInactiveTerminalInstances([]);
+    disposeMonacoEditors();
+    disposeAllModels();
+  }
+
+  // Mount Monaco editor after DOM is ready
+  if (activeTab) {
+    const monacoContainer = container.querySelector('[data-monaco-editor]');
+    if (monacoContainer) {
+      loadMonaco().then(() => {
+        if (!isActiveCodeView(container, codeViewLifecycleId)) return;
+        const src = activeTab.content ?? fileView.source ?? '';
+        const isDiff = activeSession.showDiff;
+        mountMonacoEditor(monacoContainer, activeTab.filePath, src, isDiff, fileView.source || '');
+      }).catch((err) => {
+        monacoContainer.innerHTML = `<div class="code-error" style="padding:1rem">Failed to load editor: ${esc(err.message)}</div>`;
+      });
+    }
   }
 }
 
@@ -2324,7 +2399,8 @@ async function saveEditorFile() {
   const session = getActiveSession();
   const tab = getActiveTab(session);
   if (!session || !tab || !tab.dirty) return;
-  const content = tab.content;
+  // Get content from Monaco editor if available, otherwise from tab.content
+  const content = monacoEditorInstance ? monacoEditorInstance.getValue() : tab.content;
   if (content == null) return;
   try {
     const result = await api.codeFsWrite({
@@ -2927,6 +3003,7 @@ function bindEvents(container) {
       if (prevId === codeState.activeSessionId) return;
       treeCache.clear();
       cachedFileView = { source: '', diff: '', error: null };
+      disposeAllModels();
       saveState(codeState);
       rerenderFromState();
       const session = getActiveSession();
@@ -2956,6 +3033,7 @@ function bindEvents(container) {
       if (wasActive) {
         treeCache.clear();
         cachedFileView = { source: '', diff: '', error: null };
+        disposeAllModels();
         rerenderFromState();
         const session = getActiveSession();
         if (session) void refreshSessionData(session);
@@ -3006,13 +3084,16 @@ function bindEvents(container) {
       if (!session) return;
       const filePath = button.dataset.codeTreeFile || null;
       if (!filePath) return;
-      // Save current tab's textarea content before switching
+      // Save current Monaco view state before switching
       const currentTab = getActiveTab(session);
       if (currentTab) {
-        const ta = document.querySelector('[data-code-editor-textarea]');
-        if (ta && ta.value !== (cachedFileView.source || '')) {
-          currentTab.content = ta.value;
-          currentTab.dirty = true;
+        saveMonacoViewState(currentTab.filePath);
+        if (monacoEditorInstance) {
+          const val = monacoEditorInstance.getValue();
+          if (val !== (cachedFileView.source || '')) {
+            currentTab.content = val;
+            currentTab.dirty = true;
+          }
         }
       }
       openFileInTab(session, filePath);
@@ -3050,13 +3131,16 @@ function bindEvents(container) {
       if (!session) return;
       const idx = parseInt(btn.dataset.codeTabIndex, 10);
       if (idx === session.activeTabIndex) return;
-      // Save current tab's content before switching
+      // Save current Monaco view state before switching
       const currentTab = getActiveTab(session);
       if (currentTab) {
-        const ta = container.querySelector('[data-code-editor-textarea]');
-        if (ta && ta.value !== (cachedFileView.source || '')) {
-          currentTab.content = ta.value;
-          currentTab.dirty = true;
+        saveMonacoViewState(currentTab.filePath);
+        if (monacoEditorInstance) {
+          const val = monacoEditorInstance.getValue();
+          if (val !== (cachedFileView.source || '')) {
+            currentTab.content = val;
+            currentTab.dirty = true;
+          }
         }
       }
       session.activeTabIndex = idx;
@@ -3073,91 +3157,32 @@ function bindEvents(container) {
       const session = getActiveSession();
       if (!session) return;
       const idx = parseInt(btn.dataset.codeTabClose, 10);
+      const closingTab = session.openTabs[idx];
       closeTab(session, idx);
+      // Dispose the Monaco model for the closed tab
+      if (closingTab) disposeModel(closingTab.filePath);
       saveState(codeState);
       if (session.selectedFilePath) {
         void refreshFileView(session);
       } else {
         cachedFileView = { source: '', diff: '', error: null };
+        disposeMonacoEditors();
         rerenderFromState();
       }
     });
   });
 
-  // ── Editor (editable textarea) ──
+  // ── Editor (Monaco handles its own events — Ctrl+S, dirty tracking are in mountMonacoEditor) ──
 
-  const editorTextarea = container.querySelector('[data-code-editor-textarea]');
-  const editorHighlight = container.querySelector('.code-editor__highlight');
-  const editorOverlay = container.querySelector('[data-code-editor-overlay]');
-  let highlightTimer = null;
-  if (editorTextarea) {
-    // Sync scroll between textarea and highlight pre
-    if (editorHighlight) {
-      editorTextarea.addEventListener('scroll', () => {
-        editorHighlight.scrollTop = editorTextarea.scrollTop;
-        editorHighlight.scrollLeft = editorTextarea.scrollLeft;
-      });
+  // Theme selector
+  container.querySelector('[data-code-theme-select]')?.addEventListener('change', (e) => {
+    const themeId = e.target.value;
+    currentMonacoTheme = themeId;
+    localStorage.setItem(MONACO_THEME_STORAGE_KEY, themeId);
+    if (window.monaco) {
+      window.monaco.editor.setTheme(themeId);
     }
-
-    editorTextarea.addEventListener('input', () => {
-      const session = getActiveSession();
-      if (!session) return;
-      const tab = getActiveTab(session);
-      if (tab) {
-        tab.content = editorTextarea.value;
-        tab.dirty = true;
-      }
-      // Debounced re-highlight
-      if (editorHighlight && editorOverlay) {
-        clearTimeout(highlightTimer);
-        highlightTimer = setTimeout(() => {
-          const lang = editorOverlay.dataset.codeLanguage || 'plaintext';
-          editorHighlight.innerHTML = highlightCode(editorTextarea.value, lang) + '\n';
-        }, 150);
-      }
-      // Update the dirty indicator without a full rerender (avoids losing cursor/scroll)
-      const dirtyDot = container.querySelector('.code-editor__dirty');
-      if (!dirtyDot) {
-        const h3 = container.querySelector('.code-editor .panel__header h3');
-        if (h3 && !h3.querySelector('.code-editor__dirty')) {
-          const span = document.createElement('span');
-          span.className = 'code-editor__dirty';
-          span.title = 'Unsaved changes';
-          span.innerHTML = '&bull;';
-          h3.appendChild(span);
-        }
-      }
-      // Show save button if not already visible
-      const actions = container.querySelector('.code-editor .panel__actions');
-      if (actions && !actions.querySelector('[data-code-save-file]')) {
-        const btn = document.createElement('button');
-        btn.className = 'btn btn-primary btn-sm';
-        btn.type = 'button';
-        btn.dataset.codeSaveFile = '';
-        btn.title = 'Save changes (Ctrl+S)';
-        btn.textContent = 'Save';
-        btn.addEventListener('click', () => saveEditorFile());
-        actions.prepend(btn);
-      }
-    });
-
-    editorTextarea.addEventListener('keydown', (e) => {
-      // Ctrl+S / Cmd+S to save
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-        e.preventDefault();
-        saveEditorFile();
-      }
-      // Tab inserts 2 spaces instead of moving focus
-      if (e.key === 'Tab') {
-        e.preventDefault();
-        const start = editorTextarea.selectionStart;
-        const end = editorTextarea.selectionEnd;
-        editorTextarea.value = editorTextarea.value.substring(0, start) + '  ' + editorTextarea.value.substring(end);
-        editorTextarea.selectionStart = editorTextarea.selectionEnd = start + 2;
-        editorTextarea.dispatchEvent(new Event('input'));
-      }
-    });
-  }
+  });
 
   container.querySelector('[data-code-save-file]')?.addEventListener('click', () => saveEditorFile());
 

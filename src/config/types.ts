@@ -7,6 +7,7 @@
 
 import { DEFAULT_PII_ENTITIES, type PiiEntityType, type PiiRedactionMode } from '../guardian/pii-scanner.js';
 import type { ToolCategory, ToolRisk } from '../tools/types.js';
+import type { DeploymentProfile, SecurityOperatingMode, SecurityTriageLlmProvider } from '../runtime/security-controls.js';
 
 /** Top-level configuration. */
 export interface GuardianAgentConfig {
@@ -1213,6 +1214,16 @@ export interface AssistantToolsConfig {
 }
 
 /** Personal assistant feature configuration. */
+export interface AssistantSecurityConfig {
+  /** Deployment profile used to choose environment defaults. */
+  deploymentProfile: DeploymentProfile;
+  /** Current operator-selected security operating mode. */
+  operatingMode: SecurityOperatingMode;
+  /** LLM provider mode for the dedicated agentic security triage loop. */
+  triageLlmProvider: SecurityTriageLlmProvider;
+}
+
+/** Personal assistant feature configuration. */
 export interface AssistantConfig {
   setup: AssistantSetupConfig;
   identity: AssistantIdentityConfig;
@@ -1223,6 +1234,7 @@ export interface AssistantConfig {
   analytics: AssistantAnalyticsConfig;
   notifications: AssistantNotificationsConfig;
   quickActions: AssistantQuickActionsConfig;
+  security?: AssistantSecurityConfig;
   threatIntel: AssistantThreatIntelConfig;
   network: AssistantNetworkConfig;
   hostMonitoring: AssistantHostMonitoringConfig;
@@ -1230,6 +1242,23 @@ export interface AssistantConfig {
   connectors: AssistantConnectorsConfig;
   tools: AssistantToolsConfig;
 }
+
+export const DEFAULT_TOOL_ALLOWED_COMMANDS = [
+  'git status',
+  'git diff',
+  'git log',
+  'ls',
+  'dir',
+  'pwd',
+  'echo',
+  'cat',
+  'head',
+  'tail',
+  'whoami',
+  'hostname',
+  'uname',
+  'date',
+] as const;
 
 /** Default configuration values. */
 export const DEFAULT_CONFIG: GuardianAgentConfig = {
@@ -1356,7 +1385,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
     soul: {
       enabled: true,
       path: 'SOUL.md',
-      maxChars: 8000,
+      maxChars: 10000,
       primaryMode: 'full',
       delegatedMode: 'summary',
       summaryMaxChars: 1000,
@@ -1418,6 +1447,11 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         task: 'Turn this into a clear prioritized task list with owner/time suggestions:\n{details}',
         calendar: 'Create a calendar-ready event plan from these details:\n{details}\n\nInclude: title, agenda, time estimate, and follow-ups.',
       },
+    },
+    security: {
+      deploymentProfile: 'personal',
+      operatingMode: 'monitor',
+      triageLlmProvider: 'auto',
     },
     threatIntel: {
       enabled: true,
@@ -1547,32 +1581,13 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
     },
     tools: {
       enabled: true,
-      policyMode: 'approve_by_policy',
+      policyMode: 'approve_each',
       toolPolicies: {
         forum_post: 'manual',
       },
       allowExternalPosting: false,
       allowedPaths: ['.'],
-      allowedCommands: [
-        'node',
-        'npm',
-        'npx',
-        'git status',
-        'git diff',
-        'git log',
-        'ollama',
-        'ls',
-        'dir',
-        'pwd',
-        'echo',
-        'cat',
-        'head',
-        'tail',
-        'whoami',
-        'hostname',
-        'uname',
-        'date',
-      ],
+      allowedCommands: [...DEFAULT_TOOL_ALLOWED_COMMANDS],
       allowedDomains: [
         'localhost',
         '127.0.0.1',

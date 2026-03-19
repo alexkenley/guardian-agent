@@ -4657,61 +4657,14 @@ tr:hover td {
   color: var(--text-primary);
 }
 
-/* ─── Overlay editor (editable textarea + syntax highlight) ── */
+/* ─── Monaco editor container ────────────────────────────── */
 
-.code-editor__overlay {
-  position: relative;
+.code-editor__monaco {
   flex: 1;
   min-height: 0;
-  overflow: hidden;
-  border-top: 1px solid var(--border);
-}
-
-.code-editor__highlight,
-.code-editor__overlay .code-editor__textarea {
-  margin: 0;
-  padding: 0.85rem 1rem;
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  line-height: 1.6;
-  white-space: pre;
-  word-break: normal;
-  tab-size: 2;
-  border: none;
-  overflow: auto;
-}
-
-.code-editor__highlight {
-  position: absolute;
-  inset: 0;
-  background:
-    linear-gradient(180deg, rgba(79, 172, 254, 0.06), transparent 120px),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.015), rgba(255, 255, 255, 0)),
-    var(--code-surface);
-  color: var(--text-primary);
-  pointer-events: none;
-  z-index: 0;
-}
-
-.code-editor__overlay .code-editor__textarea {
-  position: absolute;
-  inset: 0;
   width: 100%;
-  height: 100%;
-  background: transparent;
-  color: transparent;
-  caret-color: var(--text-primary);
-  outline: none;
-  resize: none;
-  z-index: 1;
-}
-
-.code-editor__overlay .code-editor__textarea::selection {
-  background: var(--code-selection);
-}
-
-.code-editor__overlay .code-editor__textarea:focus {
-  box-shadow: inset 0 0 0 1px rgba(79, 172, 254, 0.2);
+  border-top: 1px solid var(--border);
+  position: relative;
 }
 
 .code-editor__dirty {
@@ -4733,72 +4686,19 @@ tr:hover td {
   flex-shrink: 0;
 }
 
-.code-token {
-  font-weight: 500;
-}
+/* ─── Theme selector dropdown ────────────────────────────── */
 
-.code-token--comment {
-  color: var(--code-comment);
-  font-style: italic;
-}
-
-.code-token--keyword {
-  color: var(--code-keyword);
-}
-
-.code-token--property {
-  color: var(--code-property);
-}
-
-.code-token--type {
-  color: var(--code-type);
-}
-
-.code-token--function {
-  color: var(--code-function);
-}
-
-.code-token--variable {
-  color: var(--code-variable);
-}
-
-.code-token--string {
-  color: var(--code-string);
-}
-
-.code-token--number {
-  color: var(--code-number);
-}
-
-.code-line {
-  display: block;
-  width: 100%;
-  margin: 0 -1rem;
-  padding: 0 1rem;
-}
-
-.code-line--context {
-  color: var(--text-primary);
-}
-
-.code-line--meta {
-  background: var(--code-diff-meta-bg);
-  color: var(--code-diff-meta-fg);
-}
-
-.code-line--hunk {
-  background: var(--code-diff-hunk-bg);
-  color: var(--code-diff-hunk-fg);
-}
-
-.code-line--add {
-  background: var(--code-diff-add-bg);
-  color: var(--code-diff-add-fg);
-}
-
-.code-line--remove {
-  background: var(--code-diff-remove-bg);
-  color: var(--code-diff-remove-fg);
+.code-editor__theme-select {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  padding: 0.15rem 0.35rem;
+  cursor: pointer;
+  flex-shrink: 0;
+  max-width: 140px;
 }
 
 /* ─── Split Terminal Panes ─────────────────────────── */

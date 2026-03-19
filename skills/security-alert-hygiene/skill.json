@@ -1,0 +1,23 @@
+{
+  "id": "security-alert-hygiene",
+  "name": "Security Alert Hygiene",
+  "version": "0.1.0",
+  "description": "Use when acknowledging, resolving, suppressing, or deduplicating noisy security alerts without discarding meaningful signal.",
+  "role": "process",
+  "tags": ["alert hygiene", "false positive", "acknowledge alert", "resolve alert", "suppress alert", "noisy alert", "deduplicate alerts"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["acknowledge alert", "resolve alert", "suppress alert", "false positive alert", "noisy alert", "alert noise", "deduplicate alerts", "alert hygiene"]
+  },
+  "tools": [
+    "security_alert_search",
+    "security_alert_ack",
+    "security_alert_resolve",
+    "security_alert_suppress"
+  ],
+  "risk": "operational"
+}

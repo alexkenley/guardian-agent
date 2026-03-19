@@ -34,6 +34,13 @@ import { applyHandoffContract } from './handoffs.js';
 import { validateHandoffContract } from './handoff-policy.js';
 
 const log = createLogger('runtime');
+const TRUSTED_SERVICE_EVENT_SOURCES = new Set([
+  'network-sentinel',
+  'host-monitor',
+  'gateway-monitor',
+  'windows-defender',
+  'notification-service',
+]);
 
 export class Runtime {
   readonly registry: AgentRegistry;
@@ -977,7 +984,7 @@ export class Runtime {
   private isTrustedEventSource(sourceAgentId: string): boolean {
     const source = sourceAgentId.trim();
     if (!source) return false;
-    if (source === 'system' || source === 'network-sentinel') return true;
+    if (source === 'system' || TRUSTED_SERVICE_EVENT_SOURCES.has(source)) return true;
     if (source.startsWith('sched-task:')) return true;
     return this.registry.get(source) !== undefined;
   }

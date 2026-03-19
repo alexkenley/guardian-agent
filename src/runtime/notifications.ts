@@ -80,15 +80,13 @@ export class NotificationService {
 
     const destinations = resolveDestinations(config);
 
-    if (destinations.web) {
-      await this.eventBus.emit({
-        type: 'security:alert',
-        sourceAgentId: 'notification-service',
-        targetAgentId: '*',
-        payload: notification,
-        timestamp: notification.timestamp,
-      }).catch(() => {});
-    }
+    await this.eventBus.emit({
+      type: 'security:alert',
+      sourceAgentId: 'notification-service',
+      targetAgentId: '*',
+      payload: notification,
+      timestamp: notification.timestamp,
+    }).catch(() => {});
 
     const text = formatNotificationText(notification);
     const deliveries: Array<Promise<void>> = [];

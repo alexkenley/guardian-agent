@@ -26,6 +26,13 @@ const log = createLogger('scheduled-tasks');
 export type ScheduledTaskStatus = 'succeeded' | 'failed' | 'pending_approval';
 export type ScheduledTaskType = 'tool' | 'playbook' | 'agent';
 
+export interface ScheduledTaskEventTrigger {
+  eventType: string;
+  sourceAgentId?: string;
+  targetAgentId?: string;
+  match?: Record<string, string | number | boolean>;
+}
+
 export interface ScheduledTaskDefinition {
   id: string;
   name: string;
@@ -41,7 +48,8 @@ export interface ScheduledTaskDefinition {
   principalRole?: import('../tools/types.js').PrincipalRole;
   deliver?: boolean;
   runOnce?: boolean;
-  cron: string;
+  cron?: string;
+  eventTrigger?: ScheduledTaskEventTrigger;
   enabled: boolean;
   createdAt: number;
   approvalExpiresAt?: number;
@@ -76,7 +84,8 @@ export interface ScheduledTaskCreateInput {
   principalRole?: import('../tools/types.js').PrincipalRole;
   deliver?: boolean;
   runOnce?: boolean;
-  cron: string;
+  cron?: string;
+  eventTrigger?: ScheduledTaskEventTrigger;
   enabled?: boolean;
   approvalExpiresAt?: number;
   maxRunsPerWindow?: number;
@@ -100,6 +109,7 @@ export interface ScheduledTaskUpdateInput {
   deliver?: boolean;
   runOnce?: boolean;
   cron?: string;
+  eventTrigger?: ScheduledTaskEventTrigger;
   enabled?: boolean;
   approvalExpiresAt?: number;
   maxRunsPerWindow?: number;
@@ -141,7 +151,8 @@ export interface ScheduledTaskPreset {
   userId?: string;
   deliver?: boolean;
   runOnce?: boolean;
-  cron: string;
+  cron?: string;
+  eventTrigger?: ScheduledTaskEventTrigger;
   emitEvent?: string;
   outputHandling?: AutomationOutputHandlingConfig;
 }
@@ -462,6 +473,72 @@ const BUILT_IN_PRESETS: ScheduledTaskPreset[] = [
     cron: '0 0 * * *',
     emitEvent: 'daily_report_completed',
   },
+  {
+    id: 'beaconing-response-triage',
+    name: 'Beaconing Response Triage',
+    description: 'When beaconing is detected, run an immediate host re-check to capture fresh workstation evidence.',
+    type: 'tool',
+    target: 'host_monitor_check',
+    args: {},
+    eventTrigger: {
+      eventType: 'security:network:threat',
+      match: {
+        'payload.type': 'beaconing',
+      },
+    },
+    emitEvent: 'beaconing_response_triage_completed',
+  },
+  {
+    id: 'port-scan-perimeter-triage',
+    name: 'Port Scan Perimeter Triage',
+    description: 'When active port-scanning pressure is detected, run a gateway firewall drift check for perimeter context.',
+    type: 'tool',
+    target: 'gateway_firewall_check',
+    args: {},
+    eventTrigger: {
+      eventType: 'security:network:threat',
+      match: {
+        'payload.type': 'port_scanning',
+      },
+    },
+    emitEvent: 'port_scan_perimeter_triage_completed',
+  },
+  {
+    id: 'secret-exposure-containment-review',
+    name: 'Secret Exposure Containment Review',
+    description: 'When secret exposure is notified, snapshot the effective containment posture for operator review.',
+    type: 'tool',
+    target: 'security_containment_status',
+    args: {
+      profile: 'personal',
+      currentMode: 'monitor',
+    },
+    eventTrigger: {
+      eventType: 'security:alert',
+      match: {
+        'payload.sourceEventType': 'secret_detected',
+      },
+    },
+    emitEvent: 'secret_exposure_containment_review_completed',
+  },
+  {
+    id: 'browser-denial-containment-review',
+    name: 'Browser Denial Containment Review',
+    description: 'When a risky browser or tool action is denied, snapshot containment posture so operators can review escalation advice quickly.',
+    type: 'tool',
+    target: 'security_containment_status',
+    args: {
+      profile: 'personal',
+      currentMode: 'monitor',
+    },
+    eventTrigger: {
+      eventType: 'security:alert',
+      match: {
+        'payload.sourceEventType': 'action_denied',
+      },
+    },
+    emitEvent: 'browser_denial_containment_review_completed',
+  },
 ];
 
 // ─── Service ──────────────────────────────────────────────
@@ -520,6 +597,11 @@ export interface ScheduledTaskHistoryEntry {
   events?: OrchestrationRunEvent[];
 }
 
+interface ScheduledTaskTriggerContext {
+  kind: 'manual' | 'cron' | 'event';
+  event?: AgentEvent;
+}
+
 export class ScheduledTaskService {
   private readonly tasks = new Map<string, ScheduledTaskDefinition>();
   private readonly scheduler: CronScheduler;
@@ -537,6 +619,7 @@ export class ScheduledTaskService {
   private readonly history: ScheduledTaskHistoryEntry[] = [];
   private readonly budgetHistory: ScheduledTaskBudgetRecord[] = [];
   private readonly activeRuns = new Map<string, string>();
+  private readonly eventSubscriptions = new Map<string, () => void>();
   private readonly maxHistory = 100;
 
   constructor(deps: ScheduledTaskServiceDeps) {
@@ -559,7 +642,7 @@ export class ScheduledTaskService {
 
   private computeScopeHash(task: Pick<
     ScheduledTaskDefinition,
-    'type' | 'target' | 'args' | 'prompt' | 'channel' | 'deliver' | 'runOnce' | 'cron' | 'emitEvent'
+    'type' | 'target' | 'args' | 'prompt' | 'channel' | 'deliver' | 'runOnce' | 'cron' | 'eventTrigger' | 'emitEvent'
   >): string {
     const normalized = JSON.stringify({
       type: task.type,
@@ -569,7 +652,8 @@ export class ScheduledTaskService {
       channel: task.channel ?? null,
       deliver: task.deliver ?? false,
       runOnce: task.runOnce === true,
-      cron: task.cron,
+      cron: task.cron ?? null,
+      eventTrigger: normalizeEventTrigger(task.eventTrigger) ?? null,
       emitEvent: task.emitEvent ?? null,
     });
     return createHash('sha256').update(normalized).digest('hex');
@@ -580,6 +664,8 @@ export class ScheduledTaskService {
       ...task,
       description: task.description?.trim() || undefined,
       principalRole: task.principalRole ?? 'owner',
+      cron: task.cron?.trim() || undefined,
+      eventTrigger: normalizeEventTrigger(task.eventTrigger),
       scopeHash: task.scopeHash || this.computeScopeHash(task),
       maxRunsPerWindow: task.maxRunsPerWindow ?? DEFAULT_MAX_RUNS_PER_WINDOW,
       dailySpendCap: task.dailySpendCap ?? DEFAULT_DAILY_SPEND_CAP,
@@ -612,7 +698,7 @@ export class ScheduledTaskService {
   private pauseTask(task: ScheduledTaskDefinition, reason: string): void {
     task.enabled = false;
     task.autoPausedReason = reason;
-    this.unregisterCron(task);
+    this.unregisterTaskTrigger(task);
   }
 
   private isScopeDrifted(task: ScheduledTaskDefinition): boolean {
@@ -761,7 +847,7 @@ export class ScheduledTaskService {
             const normalized = this.normalizePersistedTask(task);
             this.tasks.set(normalized.id, normalized);
             if (normalized.enabled) {
-              this.registerCron(normalized);
+              this.registerTaskTrigger(normalized);
             }
           }
         }
@@ -797,8 +883,13 @@ export class ScheduledTaskService {
     if (input.type === 'agent' && !input.prompt?.trim()) {
       return { success: false, message: 'prompt is required for agent tasks' };
     }
-    if (!input.cron?.trim()) {
-      return { success: false, message: 'cron is required' };
+    const cron = input.cron?.trim() || undefined;
+    const eventTrigger = normalizeEventTrigger(input.eventTrigger);
+    if (!cron && !eventTrigger) {
+      return { success: false, message: 'Either cron or eventTrigger is required' };
+    }
+    if (cron && eventTrigger) {
+      return { success: false, message: 'Provide either cron or eventTrigger, not both' };
     }
 
     const task: ScheduledTaskDefinition = {
@@ -816,7 +907,8 @@ export class ScheduledTaskService {
       principalRole: input.principalRole ?? 'owner',
       deliver: input.deliver,
       runOnce: input.runOnce === true,
-      cron: input.cron.trim(),
+      cron,
+      eventTrigger,
       enabled: input.enabled !== false,
       createdAt: this.now(),
       approvalExpiresAt: input.approvalExpiresAt,
@@ -844,10 +936,10 @@ export class ScheduledTaskService {
 
     if (task.enabled) {
       try {
-        this.registerCron(task);
+        this.registerTaskTrigger(task);
       } catch (err) {
         this.tasks.delete(task.id);
-        return { success: false, message: `Invalid cron expression: ${err instanceof Error ? err.message : String(err)}` };
+        return { success: false, message: `Invalid task trigger: ${err instanceof Error ? err.message : String(err)}` };
       }
     }
 
@@ -863,7 +955,10 @@ export class ScheduledTaskService {
     }
 
     const previousScopeHash = task.scopeHash;
-    const cronChanged = input.cron !== undefined && input.cron !== task.cron;
+    const nextCron = input.cron !== undefined ? input.cron.trim() : task.cron;
+    const nextEventTrigger = input.eventTrigger !== undefined ? normalizeEventTrigger(input.eventTrigger) : task.eventTrigger;
+    const cronChanged = input.cron !== undefined && nextCron !== task.cron;
+    const eventTriggerChanged = input.eventTrigger !== undefined && JSON.stringify(nextEventTrigger ?? null) !== JSON.stringify(task.eventTrigger ?? null);
     const enableChanged = input.enabled !== undefined && input.enabled !== task.enabled;
 
     if (input.name !== undefined) {
@@ -889,7 +984,8 @@ export class ScheduledTaskService {
     if (input.principalRole !== undefined) task.principalRole = input.principalRole;
     if (input.deliver !== undefined) task.deliver = input.deliver;
     if (input.runOnce !== undefined) task.runOnce = input.runOnce === true;
-    if (input.cron !== undefined) task.cron = input.cron.trim();
+    if (input.cron !== undefined) task.cron = nextCron || undefined;
+    if (input.eventTrigger !== undefined) task.eventTrigger = nextEventTrigger;
     if (input.enabled !== undefined) task.enabled = input.enabled;
     if (input.maxRunsPerWindow !== undefined) task.maxRunsPerWindow = Math.max(1, input.maxRunsPerWindow);
     if (input.dailySpendCap !== undefined) task.dailySpendCap = Math.max(0, input.dailySpendCap);
@@ -899,6 +995,12 @@ export class ScheduledTaskService {
 
     if (task.type === 'agent' && !task.prompt?.trim()) {
       return { success: false, message: 'prompt is required for agent tasks' };
+    }
+    if (!task.cron && !task.eventTrigger) {
+      return { success: false, message: 'Either cron or eventTrigger is required' };
+    }
+    if (task.cron && task.eventTrigger) {
+      return { success: false, message: 'Provide either cron or eventTrigger, not both' };
     }
     if (task.type !== 'agent') {
       task.prompt = undefined;
@@ -921,13 +1023,13 @@ export class ScheduledTaskService {
     }
 
     // Re-register cron if expression changed or enabled state changed
-    if (cronChanged || enableChanged) {
-      this.unregisterCron(task);
+    if (cronChanged || eventTriggerChanged || enableChanged) {
+      this.unregisterTaskTrigger(task);
       if (task.enabled) {
         try {
-          this.registerCron(task);
+          this.registerTaskTrigger(task);
         } catch (err) {
-          return { success: false, message: `Invalid cron expression: ${err instanceof Error ? err.message : String(err)}` };
+          return { success: false, message: `Invalid task trigger: ${err instanceof Error ? err.message : String(err)}` };
         }
       }
     }
@@ -947,7 +1049,7 @@ export class ScheduledTaskService {
       return { success: false, message: 'Task not found' };
     }
 
-    this.unregisterCron(task);
+    this.unregisterTaskTrigger(task);
     this.tasks.delete(id);
     this.persist().catch(() => {});
     log.info({ taskId: id, name: task.name }, 'Scheduled task deleted');
@@ -975,17 +1077,24 @@ export class ScheduledTaskService {
     }
 
     log.info({ taskId: id, name: task.name }, 'Manual run triggered');
-    const result = await this.executeTask(task);
+    const result = await this.executeTask(task, { kind: 'manual' });
     return { success: result.success, message: result.message };
   }
 
-  private async executeTask(task: ScheduledTaskDefinition): Promise<ScheduledTaskRunResult> {
+  private async executeTask(task: ScheduledTaskDefinition, triggerContext: ScheduledTaskTriggerContext = { kind: 'cron' }): Promise<ScheduledTaskRunResult> {
     const start = this.now();
     const runId = randomUUID();
     const events: OrchestrationRunEvent[] = [
       createRunEvent(runId, 'run_created', start, {
-        message: `Scheduled task '${task.name}' started.`,
-        metadata: { taskId: task.id, taskType: task.type, target: task.target },
+        message: `Scheduled task '${task.name}' started via ${triggerContext.kind}.`,
+        metadata: {
+          taskId: task.id,
+          taskType: task.type,
+          target: task.target,
+          triggerKind: triggerContext.kind,
+          triggerEventType: triggerContext.event?.type,
+          triggerSourceAgentId: triggerContext.event?.sourceAgentId,
+        },
       }),
     ];
     let result: ScheduledTaskRunResult;
@@ -1077,7 +1186,7 @@ export class ScheduledTaskService {
 
     if (task.runOnce) {
       task.enabled = false;
-      this.unregisterCron(task);
+      this.unregisterTaskTrigger(task);
       task.lastRunMessage = `${result.message}${result.message.endsWith('.') ? '' : '.'} One-shot task disabled after execution.`;
       result.message = task.lastRunMessage;
     }
@@ -1105,7 +1214,7 @@ export class ScheduledTaskService {
     }
 
     // Emit events
-    this.emitCompletionEvent(task, result);
+    this.emitCompletionEvent(task, result, triggerContext);
 
     this.persist().catch(() => {});
     this.activeRuns.delete(task.id);
@@ -1303,7 +1412,7 @@ export class ScheduledTaskService {
     return false;
   }
 
-  private emitCompletionEvent(task: ScheduledTaskDefinition, result: ScheduledTaskRunResult): void {
+  private emitCompletionEvent(task: ScheduledTaskDefinition, result: ScheduledTaskRunResult, triggerContext: ScheduledTaskTriggerContext): void {
     const chainId = `sched:${task.id}:${task.lastRunAt ?? this.now()}`;
     const baseEvent: AgentEvent = {
       type: 'scheduled_task_completed',
@@ -1320,6 +1429,9 @@ export class ScheduledTaskService {
         durationMs: result.durationMs,
         promotedFindings: result.promotedFindings,
         causalChainId: chainId,
+        triggerKind: triggerContext.kind,
+        triggerEventType: triggerContext.event?.type,
+        triggerSourceAgentId: triggerContext.event?.sourceAgentId,
         hopCount: MAX_CHAIN_HOPS,
         approvedByPrincipal: task.approvedByPrincipal,
         approvalExpiresAt: task.approvalExpiresAt,
@@ -1378,17 +1490,64 @@ export class ScheduledTaskService {
     return `sched-task:${task.id}`;
   }
 
+  private registerTaskTrigger(task: ScheduledTaskDefinition): void {
+    if (task.cron) {
+      this.registerCron(task);
+      return;
+    }
+    if (task.eventTrigger) {
+      this.registerEventTrigger(task);
+      return;
+    }
+    throw new Error('Task has no cron or event trigger.');
+  }
+
+  private unregisterTaskTrigger(task: ScheduledTaskDefinition): void {
+    this.unregisterCron(task);
+    this.unregisterEventTrigger(task);
+  }
+
   private registerCron(task: ScheduledTaskDefinition): void {
+    if (!task.cron) {
+      throw new Error('Task cron expression is missing.');
+    }
     const agentId = this.cronKey(task);
     this.scheduler.schedule(agentId, task.cron, async () => {
       log.info({ taskId: task.id, name: task.name }, 'Scheduled task triggered');
-      await this.executeTask(task);
+      await this.executeTask(task, { kind: 'cron' });
     });
   }
 
   private unregisterCron(task: ScheduledTaskDefinition): void {
     const agentId = this.cronKey(task);
     this.scheduler.unschedule(agentId);
+  }
+
+  private registerEventTrigger(task: ScheduledTaskDefinition): void {
+    const trigger = task.eventTrigger;
+    if (!trigger?.eventType) {
+      throw new Error('Task event trigger is missing eventType.');
+    }
+    this.unregisterEventTrigger(task);
+    const handler = (event: AgentEvent): void => {
+      if (!task.enabled || !task.eventTrigger) return;
+      if (!matchesScheduledTaskEventTrigger(event, task.eventTrigger)) return;
+      log.info({ taskId: task.id, name: task.name, eventType: event.type }, 'Event-triggered scheduled task fired');
+      void this.executeTask(task, { kind: 'event', event }).catch((err) => {
+        log.warn({ err: err instanceof Error ? err.message : String(err), taskId: task.id, eventType: event.type }, 'Event-triggered scheduled task failed');
+      });
+    };
+    this.eventBus.subscribeByType(trigger.eventType, handler);
+    this.eventSubscriptions.set(task.id, () => {
+      this.eventBus.unsubscribeByType(trigger.eventType, handler);
+    });
+  }
+
+  private unregisterEventTrigger(task: ScheduledTaskDefinition): void {
+    const unsubscribe = this.eventSubscriptions.get(task.id);
+    if (!unsubscribe) return;
+    unsubscribe();
+    this.eventSubscriptions.delete(task.id);
   }
 
   // ─── Presets ──────────────────────────────────────────
@@ -1421,6 +1580,7 @@ export class ScheduledTaskService {
       args: preset.args,
       runOnce: preset.runOnce,
       cron: preset.cron,
+      eventTrigger: preset.eventTrigger,
       enabled: false,
       emitEvent: preset.emitEvent,
     });
@@ -1476,6 +1636,58 @@ export class ScheduledTaskService {
     }
     return migrated;
   }
+}
+
+function normalizeEventTrigger(trigger: ScheduledTaskEventTrigger | undefined): ScheduledTaskEventTrigger | undefined {
+  if (!trigger) return undefined;
+  const eventType = trigger.eventType?.trim();
+  if (!eventType) return undefined;
+  const normalizedMatchEntries = Object.entries(trigger.match ?? {})
+    .filter(([key, value]) => key.trim() && ['string', 'number', 'boolean'].includes(typeof value))
+    .map(([key, value]) => [key.trim(), value] as const);
+  return {
+    eventType,
+    sourceAgentId: trigger.sourceAgentId?.trim() || undefined,
+    targetAgentId: trigger.targetAgentId?.trim() || undefined,
+    match: normalizedMatchEntries.length > 0 ? Object.fromEntries(normalizedMatchEntries) : undefined,
+  };
+}
+
+function matchesScheduledTaskEventTrigger(event: AgentEvent, trigger: ScheduledTaskEventTrigger): boolean {
+  if (event.type !== trigger.eventType) return false;
+  if (trigger.sourceAgentId && event.sourceAgentId !== trigger.sourceAgentId) return false;
+  if (trigger.targetAgentId && event.targetAgentId !== trigger.targetAgentId) return false;
+  if (!trigger.match || Object.keys(trigger.match).length === 0) return true;
+  return Object.entries(trigger.match).every(([path, expected]) => valuesEqual(resolveScheduledTaskEventField(event, path), expected));
+}
+
+function resolveScheduledTaskEventField(event: AgentEvent, path: string): unknown {
+  const parts = path.split('.').filter(Boolean);
+  if (parts.length === 0) return undefined;
+  let current: unknown;
+  if (parts[0] === 'payload') {
+    current = event.payload;
+    parts.shift();
+  } else {
+    current = event as unknown;
+  }
+  for (const part of parts) {
+    if (!current || typeof current !== 'object' || !(part in (current as Record<string, unknown>))) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
+
+function valuesEqual(actual: unknown, expected: string | number | boolean): boolean {
+  if (typeof expected === 'number') {
+    return typeof actual === 'number' && actual === expected;
+  }
+  if (typeof expected === 'boolean') {
+    return typeof actual === 'boolean' && actual === expected;
+  }
+  return String(actual ?? '').trim() === expected;
 }
 
 function isInventoryScanTool(toolName: string): boolean {

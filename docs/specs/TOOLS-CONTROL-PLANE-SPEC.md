@@ -167,6 +167,23 @@ Contextual additions now enforced at runtime:
 
 These inputs are consumed by `ToolExecutor` to block quarantined-context mutation, approval-gate tainted mutation, and bind approvals to the originating principal.
 
+Current main-assistant defaults:
+- shipped config defaults to `approve_each` (`approval_policy: on-request`)
+- the main shell allowlist is intentionally read-oriented: `git status`, `git diff`, `git log`, `ls`, `dir`, `pwd`, `echo`, `cat`, `head`, `tail`, `whoami`, `hostname`, `uname`, `date`
+- broad package-manager / interpreter prefixes such as bare `node`, `npm`, and `npx` are excluded from the main default allowlist
+- Coding Assistant code sessions are a separate surface and use their own repo-scoped command allowlist
+
+## Workspace Dependency Awareness
+
+For workspace-local JS package mutations executed through `shell_safe`, the runtime keeps a repo-scoped dependency ledger instead of writing ad hoc package state into global memory.
+
+- supported commands are detected from parsed shell commands (`npm`, `pnpm`, `yarn`, `bun`) for local add/install/remove flows
+- global installs (`-g`, `--global`, `--location=global`) are ignored by this ledger path
+- before/after snapshots diff the nearest workspace `package.json` and common lockfiles
+- diffs are persisted to `.guardianagent/dependency-awareness.json` under the workspace root
+- active entries are injected into tool context for later turns in that same workspace so the model can treat recently added packages as available only while they remain in the manifests
+- this awareness is workspace-scoped and durable on disk; it is not stored in the agent's global memory store
+
 ## Approval Workflow
 - Tool run can return:
   - `succeeded`
@@ -272,6 +289,8 @@ When a tool returns `pending_approval`, the response includes structured metadat
 
 ### Read-Only Shell Bypass
 Under `approve_by_policy`, `shell_safe` commands that are purely read-only skip approval automatically. Recognized read-only commands: `ls`, `dir`, `pwd`, `whoami`, `hostname`, `uname`, `date`, `echo`, `cat`, `head`, `tail`, `wc`, `file`, `which`, `type`, plus prefixed commands like `git status`, `git diff`, `git log`, `git branch`, `node --version`, `npm --version`, `npm ls`.
+
+This bypass is narrower than the Coding Assistant command surface. For the main assistant, the shipped default `allowedCommands` list stays read-oriented and does not include bare `node`, `npm`, or `npx`.
 
 ## Sandbox Boundaries
 - Policy-managed allowlists:

@@ -5,6 +5,18 @@ import { dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { promisify } from 'node:util';
 import type { AssistantGatewayMonitoringConfig, HostMonitorSeverity } from '../config/types.js';
+import {
+  acknowledgeSecurityAlert,
+  ensureSecurityAlertLifecycle,
+  isSecurityAlertSuppressed,
+  listSecurityAlerts,
+  reactivateSecurityAlert,
+  resolveSecurityAlert,
+  suppressSecurityAlert,
+  type SecurityAlertLifecycle,
+  type SecurityAlertListOptions,
+  type SecurityAlertStateResult,
+} from './security-alert-lifecycle.js';
 
 const execFile = promisify(execFileCb);
 
@@ -56,10 +68,16 @@ export interface GatewayMonitorAlert {
   description: string;
   dedupeKey: string;
   evidence: Record<string, unknown>;
-  acknowledged: boolean;
   firstSeenAt: number;
   lastSeenAt: number;
   occurrenceCount: number;
+  acknowledged: boolean;
+  status: SecurityAlertLifecycle['status'];
+  lastStateChangedAt: number;
+  suppressedUntil?: number;
+  suppressionReason?: string;
+  resolvedAt?: number;
+  resolutionReason?: string;
 }
 
 export interface GatewayMonitorStatus {
@@ -186,26 +204,53 @@ export class GatewayFirewallMonitoringService {
     };
   }
 
-  listAlerts(opts?: { includeAcknowledged?: boolean; limit?: number }): GatewayMonitorAlert[] {
-    const includeAcknowledged = !!opts?.includeAcknowledged;
-    const limit = Math.max(1, opts?.limit ?? 100);
-    return [...this.alerts.values()]
-      .filter((alert) => includeAcknowledged || !alert.acknowledged)
-      .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
-      .slice(0, limit);
+  listAlerts(opts?: SecurityAlertListOptions): GatewayMonitorAlert[] {
+    return listSecurityAlerts(this.alerts.values(), this.now(), opts);
   }
 
-  acknowledgeAlert(alertId: string): { success: boolean; message: string } {
+  acknowledgeAlert(alertId: string): SecurityAlertStateResult {
     const alert = this.alerts.get(alertId);
     if (!alert) return { success: false, message: `Alert '${alertId}' not found.` };
-    alert.acknowledged = true;
+    acknowledgeSecurityAlert(alert, this.now());
     this.persist().catch(() => {});
     return { success: true, message: `Alert '${alertId}' acknowledged.` };
   }
 
+  resolveAlert(alertId: string, reason?: string): SecurityAlertStateResult {
+    const alert = this.alerts.get(alertId);
+    if (!alert) return { success: false, message: `Alert '${alertId}' not found.` };
+    resolveSecurityAlert(alert, this.now(), reason);
+    this.persist().catch(() => {});
+    return { success: true, message: `Alert '${alertId}' resolved.` };
+  }
+
+  suppressAlert(alertId: string, until: number, reason?: string): SecurityAlertStateResult {
+    const alert = this.alerts.get(alertId);
+    if (!alert) return { success: false, message: `Alert '${alertId}' not found.` };
+    if (!Number.isFinite(until) || until <= this.now()) {
+      return { success: false, message: 'suppressedUntil must be a future timestamp.' };
+    }
+    suppressSecurityAlert(alert, this.now(), until, reason);
+    this.persist().catch(() => {});
+    return { success: true, message: `Alert '${alertId}' suppressed until ${new Date(until).toISOString()}.` };
+  }
+
   async runCheck(): Promise<GatewayMonitorReport> {
     const timestamp = this.now();
-    const alertsInput: Array<Omit<GatewayMonitorAlert, 'id' | 'acknowledged' | 'firstSeenAt' | 'lastSeenAt' | 'occurrenceCount'>> = [];
+    const alertsInput: Array<Omit<
+      GatewayMonitorAlert,
+      'id'
+      | 'acknowledged'
+      | 'status'
+      | 'lastStateChangedAt'
+      | 'suppressedUntil'
+      | 'suppressionReason'
+      | 'resolvedAt'
+      | 'resolutionReason'
+      | 'firstSeenAt'
+      | 'lastSeenAt'
+      | 'occurrenceCount'
+    >> = [];
     const gatewayStatuses: GatewayMonitorTargetStatus[] = [];
 
     for (const monitor of this.config.monitors.filter((item) => item.enabled)) {
@@ -386,35 +431,59 @@ export class GatewayFirewallMonitoringService {
   }
 
   private recordAlerts(
-    input: Array<Omit<GatewayMonitorAlert, 'id' | 'acknowledged' | 'firstSeenAt' | 'lastSeenAt' | 'occurrenceCount'>>,
+    input: Array<Omit<
+      GatewayMonitorAlert,
+      'id'
+      | 'acknowledged'
+      | 'status'
+      | 'lastStateChangedAt'
+      | 'suppressedUntil'
+      | 'suppressionReason'
+      | 'resolvedAt'
+      | 'resolutionReason'
+      | 'firstSeenAt'
+      | 'lastSeenAt'
+      | 'occurrenceCount'
+    >>,
     now: number,
   ): GatewayMonitorAlert[] {
     const emitted: GatewayMonitorAlert[] = [];
     for (const item of input) {
       const existing = [...this.alerts.values()].find((alert) => alert.dedupeKey === item.dedupeKey);
       if (existing) {
-        if ((now - existing.lastSeenAt) < this.config.dedupeWindowMs) {
-          existing.lastSeenAt = now;
-          existing.occurrenceCount += 1;
-          continue;
-        }
+        ensureSecurityAlertLifecycle(existing);
+        const previousLastSeenAt = existing.lastSeenAt;
+        const withinWindow = (now - previousLastSeenAt) < this.config.dedupeWindowMs;
         existing.lastSeenAt = now;
+        existing.occurrenceCount += 1;
         existing.timestamp = now;
         existing.severity = item.severity;
         existing.description = item.description;
         existing.evidence = item.evidence;
-        existing.occurrenceCount += 1;
-        existing.acknowledged = false;
+        if (existing.status === 'resolved') {
+          reactivateSecurityAlert(existing, now);
+          emitted.push(existing);
+          continue;
+        }
+        if (isSecurityAlertSuppressed(existing, now)) {
+          continue;
+        }
+        if (withinWindow) {
+          continue;
+        }
+        reactivateSecurityAlert(existing, now);
         emitted.push(existing);
         continue;
       }
       const created: GatewayMonitorAlert = {
         id: randomUUID(),
         ...item,
-        acknowledged: false,
         firstSeenAt: now,
         lastSeenAt: now,
         occurrenceCount: 1,
+        acknowledged: false,
+        status: 'active',
+        lastStateChangedAt: now,
       };
       this.alerts.set(created.id, created);
       emitted.push(created);

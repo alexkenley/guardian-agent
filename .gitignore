@@ -1,4 +1,5 @@
 node_modules/
+web/public/vendor/monaco/
 dist/
 .env
 .env.*

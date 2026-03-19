@@ -132,6 +132,7 @@ const sseListeners = {
   metrics: [],
   watchdog: [],
   'security.alert': [],
+  'security.triage': [],
   'assistant.notice': [],
   'chat.thinking': [],
   'chat.tool_call': [],

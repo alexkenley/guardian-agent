@@ -294,6 +294,39 @@ Start with the API surface, design clear tool names, and prefer structured outpu
     expect(registry.get('mcp-builder')?.summary).not.toContain('description:');
   });
 
+  it('routes bundled defensive-security requests to the most specific first-party skills', async () => {
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([join(process.cwd(), 'skills')]);
+    const resolver = new SkillResolver(registry);
+
+    const resolveTop = (content: string): string | undefined => resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content,
+    })[0]?.id;
+
+    expect(registry.get('host-firewall-defense')).toBeTruthy();
+    expect(registry.get('native-av-management')).toBeTruthy();
+    expect(registry.get('security-mode-escalation')).toBeTruthy();
+    expect(registry.get('security-alert-hygiene')).toBeTruthy();
+    expect(registry.get('security-response-automation')).toBeTruthy();
+    expect(registry.get('browser-session-defense')).toBeTruthy();
+
+    expect(resolveTop('Check Windows Defender status, Controlled Folder Access, and Malwarebytes coexistence.'))
+      .toBe('native-av-management');
+    expect(resolveTop('Explain these sensitive path change and new external destination host alerts.'))
+      .toBe('host-firewall-defense');
+    expect(resolveTop('Should we stay in monitor mode or escalate to guarded or lockdown based on containment state?'))
+      .toBe('security-mode-escalation');
+    expect(resolveTop('Suppress this noisy alert as a false positive and add a reason.'))
+      .toBe('security-alert-hygiene');
+    expect(resolveTop('Create an event-triggered security response automation that runs on alert and performs containment review.'))
+      .toBe('security-response-automation');
+    expect(resolveTop('Explain the browser storage state, upload approval, and brokered session boundary for Guardian-managed browsing.'))
+      .toBe('browser-session-defense');
+  });
+
   it('resolves frontmatter-only skills from explicit name mentions and description fallback', async () => {
     const root = createSkillRoot();
     const skillDir = join(root, 'skill-creator');

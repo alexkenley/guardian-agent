@@ -1,0 +1,22 @@
+{
+  "id": "security-mode-escalation",
+  "name": "Security Mode Escalation",
+  "version": "0.1.0",
+  "description": "Use when deciding whether to stay in monitor mode or escalate to guarded, lockdown, or ir_assist based on current alerts, posture, and containment state.",
+  "role": "process",
+  "tags": ["monitor mode", "guarded mode", "lockdown mode", "ir assist", "security posture", "containment state"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["monitor mode", "guarded mode", "lockdown mode", "ir assist", "containment state", "security posture recommendation", "escalate controls"]
+  },
+  "tools": [
+    "security_posture_status",
+    "security_containment_status",
+    "security_alert_search"
+  ],
+  "risk": "informational"
+}

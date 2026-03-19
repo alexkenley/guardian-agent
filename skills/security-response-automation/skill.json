@@ -1,0 +1,26 @@
+{
+  "id": "security-response-automation",
+  "name": "Security Response Automation",
+  "version": "0.1.0",
+  "description": "Use when creating or updating alert-driven security playbooks, scheduled response tasks, containment-review workflows, or defensive monitoring automations.",
+  "role": "process",
+  "tags": ["security automation", "security playbook", "scheduled response", "event trigger", "containment review", "response automation"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["security automation", "security playbook", "scheduled response", "event trigger", "event triggered response", "containment review", "run on alert", "response automation"]
+  },
+  "tools": [
+    "workflow_list",
+    "workflow_upsert",
+    "workflow_run",
+    "task_list",
+    "task_create",
+    "task_update",
+    "task_delete"
+  ],
+  "risk": "operational"
+}

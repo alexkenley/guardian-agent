@@ -238,7 +238,7 @@ Three simplified config aliases map to internal machinery:
 ```yaml
 # Simplified controls (top-level)
 sandbox_mode: strict           # off | workspace-write | strict
-approval_policy: auto-approve  # on-request | auto-approve | autonomous
+approval_policy: on-request    # on-request | auto-approve | autonomous
 writable_roots:                # merged into allowedPaths + sandbox additionalWritePaths
   - /home/user/projects
 ```

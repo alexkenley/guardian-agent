@@ -2,7 +2,7 @@
  * Reusable tab component.
  *
  * createTabs(container, tabs, defaultTab?)
- *   tabs: [{ id, label, render(panel) }]
+ *   tabs: [{ id, label, render(panel), tooltip? }]
  *   Returns { switchTo(tabId) }
  *
  * Renders lazily — tab content is only rendered on first switch.
@@ -21,6 +21,10 @@ export function createTabs(container, tabs, defaultTab) {
     btn.className = 'tab-btn';
     btn.textContent = tab.label;
     btn.dataset.tabId = tab.id;
+    if (tab.tooltip) {
+      btn.title = tab.tooltip;
+      btn.setAttribute('aria-label', `${tab.label}: ${tab.tooltip}`);
+    }
     buttons[tab.id] = btn;
     bar.appendChild(btn);
 

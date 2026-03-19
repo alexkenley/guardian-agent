@@ -1,0 +1,24 @@
+{
+  "id": "native-av-management",
+  "name": "Native AV Management",
+  "version": "0.1.0",
+  "description": "Use when checking Windows Defender or other native host-protection state, running Defender scans, reviewing signature age or Controlled Folder Access, or reasoning about coexistence with Malwarebytes or another antivirus.",
+  "role": "domain",
+  "tags": ["windows defender", "native host protection", "malwarebytes", "antivirus", "controlled folder access", "signature age", "defender scan"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["windows defender", "defender status", "native host protection", "controlled folder access", "signature age", "malwarebytes", "third party antivirus", "defender scan", "update signatures"]
+  },
+  "tools": [
+    "windows_defender_status",
+    "windows_defender_refresh",
+    "windows_defender_scan",
+    "windows_defender_update_signatures",
+    "security_alert_search"
+  ],
+  "risk": "operational"
+}

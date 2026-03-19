@@ -7,6 +7,8 @@ description: Toolkit for testing local web applications and browser workflows wi
 
 Use the MCP browser tools for browser work. Prefer Lightpanda for fast read-only inspection and Playwright for interaction, screenshots, uploads, and complex app behavior.
 
+Use `browser-session-defense` as the companion skill when the question is about browser security boundaries, risky browser actions, or the distinction between Guardian-managed browsing and the user's own browser activity.
+
 ## Backend Selection
 
 - Use `mcp-lightpanda-goto` plus read-only Lightpanda tools when the task is mostly reading, extracting, mapping links, or understanding page structure.

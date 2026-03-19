@@ -68,8 +68,22 @@ function createMockDeviceInventory() {
 }
 
 function createMockEventBus() {
+  const typeHandlers = new Map<string, Array<(event: { type: string; [key: string]: unknown }) => void | Promise<void>>>();
   return {
-    emit: vi.fn().mockResolvedValue(true),
+    emit: vi.fn().mockImplementation(async (event: { type: string; [key: string]: unknown }) => {
+      const handlers = typeHandlers.get(event.type) ?? [];
+      await Promise.all(handlers.map((handler) => handler(event)));
+      return true;
+    }),
+    subscribeByType: vi.fn().mockImplementation((eventType: string, handler: (event: { type: string; [key: string]: unknown }) => void | Promise<void>) => {
+      const handlers = typeHandlers.get(eventType) ?? [];
+      handlers.push(handler);
+      typeHandlers.set(eventType, handlers);
+    }),
+    unsubscribeByType: vi.fn().mockImplementation((eventType: string, handler: (event: { type: string; [key: string]: unknown }) => void | Promise<void>) => {
+      const handlers = typeHandlers.get(eventType) ?? [];
+      typeHandlers.set(eventType, handlers.filter((candidate) => candidate !== handler));
+    }),
   };
 }
 
@@ -183,10 +197,32 @@ describe('ScheduledTaskService', () => {
       expect(result.message).toContain('target');
     });
 
-    it('should reject missing cron', () => {
+    it('should reject missing cron when no event trigger is provided', () => {
       const result = service.create({ ...validInput, cron: '' });
       expect(result.success).toBe(false);
-      expect(result.message).toContain('cron');
+      expect(result.message).toContain('Either cron or eventTrigger');
+    });
+
+    it('should create an event-triggered task without cron', () => {
+      const result = service.create({
+        name: 'Beaconing Response',
+        type: 'tool',
+        target: 'host_monitor_check',
+        eventTrigger: {
+          eventType: 'security:network:threat',
+          match: {
+            'payload.type': 'beaconing',
+          },
+        },
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.task?.cron).toBeUndefined();
+      expect(result.task?.eventTrigger).toMatchObject({
+        eventType: 'security:network:threat',
+      });
+      expect(deps.scheduler.schedule).not.toHaveBeenCalled();
+      expect((deps.eventBus as any).subscribeByType).toHaveBeenCalledWith('security:network:threat', expect.any(Function));
     });
 
     it('should clear preset linkage when create input no longer matches the preset target', () => {
@@ -269,6 +305,27 @@ describe('ScheduledTaskService', () => {
       vi.mocked(deps.scheduler.schedule).mockClear();
       service.update(task!.id, { enabled: true });
       expect(deps.scheduler.schedule).toHaveBeenCalledTimes(1);
+    });
+
+    it('should switch a task from cron to event trigger', () => {
+      const { task } = service.create(validInput);
+      vi.mocked(deps.scheduler.schedule).mockClear();
+
+      const result = service.update(task!.id, {
+        cron: '',
+        eventTrigger: {
+          eventType: 'security:alert',
+          match: {
+            'payload.sourceEventType': 'secret_detected',
+          },
+        },
+      });
+
+      expect(result.success).toBe(true);
+      expect(service.get(task!.id)?.cron).toBeUndefined();
+      expect(service.get(task!.id)?.eventTrigger?.eventType).toBe('security:alert');
+      expect(deps.scheduler.unschedule).toHaveBeenCalled();
+      expect((deps.eventBus as any).subscribeByType).toHaveBeenCalledWith('security:alert', expect.any(Function));
     });
 
     it('should clear preset linkage when a preset task changes target', () => {
@@ -455,6 +512,55 @@ describe('ScheduledTaskService', () => {
       await service.runNow(task!.id);
       const calls = vi.mocked(deps.eventBus.emit).mock.calls;
       expect(calls.some(c => (c[0] as { type: string }).type === 'custom_event')).toBe(true);
+    });
+
+    it('runs event-triggered tasks when a matching event is emitted', async () => {
+      const localDeps = createDeps();
+      const localService = new ScheduledTaskService(localDeps);
+      const { task } = localService.create({
+        name: 'Secret Exposure Review',
+        type: 'tool',
+        target: 'security_containment_status',
+        args: { profile: 'personal', currentMode: 'monitor' },
+        eventTrigger: {
+          eventType: 'security:alert',
+          match: {
+            'payload.sourceEventType': 'secret_detected',
+          },
+        },
+      });
+
+      await (localDeps.eventBus as any).emit({
+        type: 'security:alert',
+        sourceAgentId: 'notification-service',
+        targetAgentId: '*',
+        payload: {
+          sourceEventType: 'secret_detected',
+        },
+        timestamp: 1_500,
+      });
+      await Promise.resolve();
+
+      expect(localDeps.toolExecutor.runTool).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'security_containment_status',
+        bypassApprovals: true,
+      }));
+      const history = localService.getHistory();
+      expect(history[0]?.taskId).toBe(task!.id);
+      expect(history[0]?.events?.[0]).toMatchObject({
+        type: 'run_created',
+        metadata: expect.objectContaining({
+          triggerKind: 'event',
+          triggerEventType: 'security:alert',
+        }),
+      });
+      const completionCall = vi.mocked(localDeps.eventBus.emit).mock.calls.find((call) => (call[0] as { type: string }).type === 'scheduled_task_completed');
+      expect(completionCall?.[0]).toMatchObject({
+        payload: expect.objectContaining({
+          triggerKind: 'event',
+          triggerEventType: 'security:alert',
+        }),
+      });
     });
 
     it('should handle execution error gracefully', async () => {

@@ -1,0 +1,69 @@
+import { rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { describe, expect, it } from 'vitest';
+import {
+  SecurityActivityLogService,
+  isSecurityActivityStatus,
+} from './security-activity-log.js';
+
+function makePersistPath(): string {
+  return join(tmpdir(), `guardianagent-security-activity-${randomUUID()}.json`);
+}
+
+describe('SecurityActivityLogService', () => {
+  it('records entries, exposes filtered lists, and persists them', async () => {
+    const persistPath = makePersistPath();
+    const log = new SecurityActivityLogService({ persistPath, now: () => 1_000 });
+
+    log.record({
+      agentId: 'security-triage-dispatcher',
+      targetAgentId: 'security-triage',
+      status: 'started',
+      severity: 'warn',
+      title: 'Investigating beaconing',
+      summary: 'Beaconing detected to external host.',
+      triggerEventType: 'security:network:threat',
+      triggerDetailType: 'beaconing',
+      dedupeKey: 'security:network:threat:beaconing',
+    });
+    log.record({
+      agentId: 'security-triage-dispatcher',
+      targetAgentId: 'security-triage',
+      status: 'completed',
+      severity: 'warn',
+      title: 'Completed triage for beaconing',
+      summary: 'Likely benign telemetry sync. Stay in monitor.',
+      triggerEventType: 'security:network:threat',
+      triggerDetailType: 'beaconing',
+      dedupeKey: 'security:network:threat:beaconing',
+    });
+
+    await log.persist();
+
+    const all = log.list();
+    expect(all.totalMatches).toBe(2);
+    expect(all.byStatus.started).toBe(1);
+    expect(all.byStatus.completed).toBe(1);
+    expect(all.entries[0]?.status).toBe('completed');
+
+    const filtered = log.list({ status: 'completed', agentId: 'security-triage' });
+    expect(filtered.totalMatches).toBe(1);
+    expect(filtered.entries[0]?.summary).toContain('Stay in monitor');
+
+    const reloaded = new SecurityActivityLogService({ persistPath });
+    await reloaded.load();
+    const persisted = reloaded.list();
+    expect(persisted.totalMatches).toBe(2);
+    expect(persisted.entries[0]?.title).toBe('Completed triage for beaconing');
+
+    rmSync(persistPath, { force: true });
+  });
+
+  it('validates activity status strings', () => {
+    expect(isSecurityActivityStatus('started')).toBe(true);
+    expect(isSecurityActivityStatus('completed')).toBe(true);
+    expect(isSecurityActivityStatus('bogus')).toBe(false);
+  });
+});

@@ -150,6 +150,72 @@ describe('HostMonitoringService', () => {
     ]));
   });
 
+  it('ignores built-in Windows Defender scheduled tasks when persistence drifts', async () => {
+    const dir = await makeTempDir();
+    const persistPath = join(dir, 'host-monitor.json');
+    const baselineRunner = makeRunner({
+      'tasklist /FO CSV /NH': '',
+      'reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run': '',
+      'reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce': '',
+      'reg query HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run': '',
+      'reg query HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce': '',
+      'schtasks /Query /FO CSV': '"TaskName","Next Run Time"\n',
+      'netstat -an': '',
+      'netsh advfirewall show allprofiles state': [
+        'Domain Profile Settings:',
+        'State                                 ON',
+        'Private Profile Settings:',
+        'State                                 ON',
+        'Public Profile Settings:',
+        'State                                 ON',
+      ].join('\n'),
+      'netsh advfirewall firewall show rule name=all': 'Rule Name: Allow DNS\nRule Name: Allow HTTPS\n',
+    });
+    const driftRunner = makeRunner({
+      'tasklist /FO CSV /NH': '',
+      'reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run': '',
+      'reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce': '',
+      'reg query HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run': '',
+      'reg query HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce': '',
+      'schtasks /Query /FO CSV': [
+        '"TaskName","Next Run Time"',
+        '"\\Microsoft\\Windows\\Windows Defender\\Windows Defender Scheduled Scan","N/A"',
+      ].join('\n'),
+      'netstat -an': '',
+      'netsh advfirewall show allprofiles state': [
+        'Domain Profile Settings:',
+        'State                                 ON',
+        'Private Profile Settings:',
+        'State                                 ON',
+        'Public Profile Settings:',
+        'State                                 ON',
+      ].join('\n'),
+      'netsh advfirewall firewall show rule name=all': 'Rule Name: Allow DNS\nRule Name: Allow HTTPS\n',
+    });
+
+    const baselineService = new HostMonitoringService({
+      config: makeConfig(),
+      platform: 'win32',
+      homeDir: dir,
+      persistPath,
+      runner: baselineRunner,
+    });
+    await baselineService.runCheck();
+    await baselineService.persist();
+
+    const service = new HostMonitoringService({
+      config: makeConfig(),
+      platform: 'win32',
+      homeDir: dir,
+      persistPath,
+      runner: driftRunner,
+    });
+    await service.load();
+    const report = await service.runCheck();
+
+    expect(report.alerts.find((alert) => alert.type === 'persistence_change')).toBeUndefined();
+  });
+
   it('blocks risky actions when multiple high-severity host alerts are active', async () => {
     const dir = await makeTempDir();
     const sshDir = join(dir, '.ssh');
@@ -240,7 +306,71 @@ describe('HostMonitoringService', () => {
 
     expect(report.alerts).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'new_listening_port', severity: 'high' }),
-      expect.objectContaining({ type: 'new_external_destination', severity: 'medium' }),
+      expect.objectContaining({ type: 'new_external_destination', severity: 'low' }),
+    ]));
+  });
+
+  it('auto-resolves transient host alerts when the condition disappears', async () => {
+    const dir = await makeTempDir();
+    const persistPath = join(dir, 'host-monitor.json');
+
+    const baselineService = new HostMonitoringService({
+      config: makeConfig(),
+      platform: 'linux',
+      homeDir: dir,
+      persistPath,
+      runner: makeRunner({
+        'ps -axo pid=,comm=': '',
+        'crontab -l': '',
+        'ss -tun': '',
+        'ufw status verbose': 'Status: active\nTo                         Action      From\n22/tcp                     ALLOW       Anywhere\n',
+      }),
+    });
+    await baselineService.runCheck();
+    await baselineService.persist();
+
+    const driftService = new HostMonitoringService({
+      config: makeConfig(),
+      platform: 'linux',
+      homeDir: dir,
+      persistPath,
+      runner: makeRunner({
+        'ps -axo pid=,comm=': '',
+        'crontab -l': '',
+        'ss -tun': new Error('ss unavailable'),
+        'netstat -an': 'tcp        0      0 192.168.1.20:51514      203.0.113.10:443        ESTABLISHED',
+        'ufw status verbose': 'Status: active\nTo                         Action      From\n22/tcp                     ALLOW       Anywhere\n',
+      }),
+    });
+    await driftService.load();
+    const driftReport = await driftService.runCheck();
+    expect(driftReport.alerts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'new_external_destination', severity: 'low' }),
+    ]));
+    await driftService.persist();
+
+    const clearedService = new HostMonitoringService({
+      config: makeConfig(),
+      platform: 'linux',
+      homeDir: dir,
+      persistPath,
+      runner: makeRunner({
+        'ps -axo pid=,comm=': '',
+        'crontab -l': '',
+        'ss -tun': '',
+        'ufw status verbose': 'Status: active\nTo                         Action      From\n22/tcp                     ALLOW       Anywhere\n',
+      }),
+    });
+    await clearedService.load();
+    await clearedService.runCheck();
+
+    expect(clearedService.listAlerts()).toEqual([]);
+    expect(clearedService.listAlerts({ includeInactive: true })).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'new_external_destination',
+        status: 'resolved',
+        resolutionReason: 'Condition no longer present in the latest host monitor check.',
+      }),
     ]));
   });
 
@@ -308,5 +438,52 @@ describe('HostMonitoringService', () => {
     ]));
     expect(report.snapshot.firewallBackend).toBe('windows-advfirewall');
     expect(report.snapshot.firewallEnabled).toBe(false);
+  });
+
+  it('downgrades Guardian state directory churn to low severity', async () => {
+    const dir = await makeTempDir();
+    const guardianDir = join(dir, '.guardianagent');
+    await mkdir(guardianDir, { recursive: true });
+    await writeFile(join(guardianDir, 'state.json'), '{"status":"baseline"}\n', 'utf8');
+
+    const baselineService = new HostMonitoringService({
+      config: makeConfig({
+        sensitivePaths: [guardianDir],
+      }),
+      platform: 'linux',
+      homeDir: dir,
+      persistPath: join(dir, 'host-monitor.json'),
+      runner: makeRunner({
+        'ps -axo pid=,comm=': '',
+        'crontab -l': '',
+        'ss -tun': '',
+        'ufw status verbose': 'Status: active\nTo                         Action      From\n22/tcp                     ALLOW       Anywhere\n',
+      }),
+    });
+    await baselineService.runCheck();
+    await baselineService.persist();
+
+    await writeFile(join(guardianDir, 'state.json'), '{"status":"updated"}\n', 'utf8');
+
+    const service = new HostMonitoringService({
+      config: makeConfig({
+        sensitivePaths: [guardianDir],
+      }),
+      platform: 'linux',
+      homeDir: dir,
+      persistPath: join(dir, 'host-monitor.json'),
+      runner: makeRunner({
+        'ps -axo pid=,comm=': '',
+        'crontab -l': '',
+        'ss -tun': '',
+        'ufw status verbose': 'Status: active\nTo                         Action      From\n22/tcp                     ALLOW       Anywhere\n',
+      }),
+    });
+    await service.load();
+    const report = await service.runCheck();
+
+    expect(report.alerts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'sensitive_path_change', severity: 'low' }),
+    ]));
   });
 });

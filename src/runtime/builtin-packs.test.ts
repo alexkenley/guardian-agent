@@ -26,6 +26,13 @@ describe('builtin pack templates', () => {
     expect(result.success).toBe(true);
     expect(service.upsertPack).toHaveBeenCalledTimes(1);
     expect(service.upsertPlaybook).toHaveBeenCalledTimes(2);
+    expect(service.upsertPlaybook).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'host-security-baseline',
+      steps: expect.arrayContaining([
+        expect.objectContaining({ toolName: 'security_alert_search' }),
+        expect.objectContaining({ toolName: 'security_posture_status' }),
+      ]),
+    }));
   });
 
   it('includes and installs the firewall sentry template', () => {
@@ -39,5 +46,12 @@ describe('builtin pack templates', () => {
     expect(result.success).toBe(true);
     expect(service.upsertPack).toHaveBeenCalledTimes(1);
     expect(service.upsertPlaybook).toHaveBeenCalledTimes(2);
+    expect(service.upsertPlaybook).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'firewall-posture-watch',
+      steps: expect.arrayContaining([
+        expect.objectContaining({ toolName: 'security_alert_search' }),
+        expect.objectContaining({ toolName: 'security_posture_status' }),
+      ]),
+    }));
   });
 });

@@ -31,6 +31,8 @@
     "installer:windows": "powershell -ExecutionPolicy Bypass -File scripts/build-windows-installer.ps1",
     "release:windows": "powershell -ExecutionPolicy Bypass -File scripts/build-windows-release.ps1",
     "start": "node dist/index.js",
+    "vendor:monaco": "node -e \"const{cpSync}=require('fs');cpSync('node_modules/monaco-editor/min/vs','web/public/vendor/monaco/vs',{recursive:true})\"",
+    "postinstall": "npm run vendor:monaco 2>/dev/null || true",
     "prepublishOnly": "npm test && npm run build"
   },
   "keywords": [
@@ -60,6 +62,7 @@
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^25.3.0",
+    "monaco-editor": "^0.55.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"

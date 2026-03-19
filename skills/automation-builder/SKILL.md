@@ -35,7 +35,7 @@ Use this when the user wants a recurring check, scheduled task, monitoring workf
 - Use sequential mode by default unless parallelism clearly helps.
 - Instruction steps are text-only. If the automation needs the assistant to choose tools or read skills at runtime, use an `agent` task instead of an instruction step.
 - Cron schedules are minute-granularity. If the user asks for sub-minute intervals, explain that limitation.
-- When the automation is domain-specific, read the matching domain skill too, such as `cloud-operations`, `google-workspace`, or `security-triage`.
+- When the automation is domain-specific, read the matching domain skill too, such as `cloud-operations`, `google-workspace`, `security-triage`, or `security-response-automation` for alert-driven defensive workflows.
 
 ## Monitoring Patterns
 

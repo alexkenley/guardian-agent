@@ -366,7 +366,19 @@ guardian:
     await page.locator('[data-code-tree-toggle]').filter({ hasText: 'src' }).click();
     await page.locator('[data-code-tree-file]').filter({ hasText: 'example.ts' }).click();
     await page.waitForSelector('text=example.ts');
-    assert.match(await page.locator('[data-code-editor-textarea]').inputValue(), /answerValue = 41/);
+    // Wait for Monaco editor to mount and contain expected content
+    await page.waitForFunction(() => {
+      const monaco = window.monaco;
+      if (!monaco) return false;
+      const models = monaco.editor.getModels();
+      return models.some((m) => m.getValue().includes('answerValue = 41'));
+    }, null, { timeout: 15000 });
+    const editorContent = await page.evaluate(() => {
+      const models = window.monaco?.editor?.getModels() || [];
+      const model = models.find((m) => m.getValue().includes('answerValue'));
+      return model ? model.getValue() : '';
+    });
+    assert.match(editorContent, /answerValue = 41/);
 
     const liveGeneratedPath = path.join(workspaceRoot, 'src', 'live-generated.ts');
     fs.writeFileSync(liveGeneratedPath, 'export const liveGenerated = true;\n');
@@ -464,11 +476,19 @@ guardian:
     await page.waitForSelector('.code-page');
     assert.equal(await page.locator('#chat-panel').isHidden(), true, 'Global chat panel should hide again on return to code');
     await page.click('[data-code-refresh-file]');
+    // Wait for Monaco to reload with updated content after refresh
     await page.waitForFunction(() => {
-      const ta = document.querySelector('[data-code-editor-textarea]');
-      return !!ta && (ta.value || '').includes('answerValue = 42');
+      const monaco = window.monaco;
+      if (!monaco) return false;
+      const models = monaco.editor.getModels();
+      return models.some((m) => m.getValue().includes('answerValue = 42'));
+    }, null, { timeout: 15000 });
+    const refreshedContent = await page.evaluate(() => {
+      const models = window.monaco?.editor?.getModels() || [];
+      const model = models.find((m) => m.getValue().includes('answerValue'));
+      return model ? model.getValue() : '';
     });
-    assert.match(await page.locator('[data-code-editor-textarea]').inputValue(), /answerValue = 42/);
+    assert.match(refreshedContent, /answerValue = 42/);
 
     console.log('PASS code UI smoke');
   } finally {

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
@@ -6,13 +6,18 @@ import { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ToolExecutor } from './executor.js';
 import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
 import { AgentMemoryStore } from '../runtime/agent-memory-store.js';
 import { ConversationService } from '../runtime/conversation.js';
 import { SHARED_TIER_AGENT_STATE_ID } from '../runtime/agent-state-context.js';
 import { CodeSessionStore } from '../runtime/code-sessions.js';
+import {
+  WorkspaceDependencyLedger,
+  captureJsDependencySnapshot,
+  diffJsDependencySnapshots,
+} from '../runtime/workspace-dependency-ledger.js';
 
 const testDirs: string[] = [];
 const testServers: Server[] = [];
@@ -137,6 +142,22 @@ describe('ToolExecutor', () => {
     expect(alwaysLoaded).toContain('update_tool_policy');
   });
 
+  it('uses a read-only shell allowlist by default when allowedCommands are omitted', () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_each',
+      allowedPaths: [root],
+      allowedDomains: ['localhost'],
+    });
+
+    const policy = executor.getPolicy();
+    expect(policy.mode).toBe('approve_each');
+    expect(policy.sandbox.allowedCommands).toEqual(expect.arrayContaining(['git status', 'git diff', 'ls', 'cat']));
+    expect(policy.sandbox.allowedCommands).not.toEqual(expect.arrayContaining(['node', 'npm', 'npx']));
+  });
+
   it('surfaces Google Workspace tools in the initial model tool list when Google is configured', () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
@@ -237,6 +258,55 @@ describe('ToolExecutor', () => {
     expect(context).toContain('Google Workspace: connected');
     expect(context).toContain('Google Workspace services: gmail, calendar');
     expect(context).toContain('Do not ask the user for OAuth access tokens.');
+  });
+
+  it('includes workspace dependency awareness in tool context when recent package changes are recorded', () => {
+    const root = createExecutorRoot();
+    writeFileSync(join(root, 'package.json'), JSON.stringify({
+      name: 'dependency-awareness-fixture',
+      version: '1.0.0',
+    }, null, 2));
+
+    const before = captureJsDependencySnapshot(root, root);
+    writeFileSync(join(root, 'package.json'), JSON.stringify({
+      name: 'dependency-awareness-fixture',
+      version: '1.0.0',
+      dependencies: {
+        'pdf-parse': '^1.1.1',
+      },
+    }, null, 2));
+
+    const after = captureJsDependencySnapshot(root, root);
+    const diff = diffJsDependencySnapshots(before, after);
+    expect(after).not.toBeNull();
+    expect(diff).not.toBeNull();
+    if (!after || !diff) {
+      throw new Error('Expected a dependency diff to be recorded.');
+    }
+
+    new WorkspaceDependencyLedger(root).recordMutation({
+      intent: { manager: 'npm', subcommand: 'install', requestedPackages: ['pdf-parse'] },
+      command: 'npm install pdf-parse',
+      cwd: root,
+      before,
+      after,
+      diff,
+      now: () => Date.parse('2026-03-19T00:00:00.000Z'),
+    });
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_each',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const context = executor.getToolContext();
+    expect(context).toContain('Workspace dependency awareness: recent JS package changes were recorded for this workspace.');
+    expect(context).toContain('pdf-parse@^1.1.1');
+    expect(context).toContain('2026-03-19 npm install');
   });
 
   it('ranks gmail_draft above gmail_send for gmail draft discovery', () => {
@@ -4753,6 +4823,490 @@ describe('ToolExecutor', () => {
       for (const r of results) {
         expect(r.decision).toBe('allow');
       }
+    });
+
+    it('aggregates unified security alerts across host, network, and gateway sources', async () => {
+      const root = createExecutorRoot();
+      const makeList = <T extends { acknowledged: boolean; lastSeenAt: number }>(items: T[]) =>
+        ({ includeAcknowledged = false, limit = 100 } = {}) => items
+          .filter((item) => includeAcknowledged || !item.acknowledged)
+          .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
+          .slice(0, limit);
+
+      const hostAlerts = [{
+        id: 'host-1',
+        type: 'suspicious_process',
+        severity: 'high',
+        timestamp: 1_000,
+        description: 'Suspicious process: wscript.exe',
+        dedupeKey: 'host:suspicious_process:wscript',
+        evidence: { process: 'wscript.exe' },
+        acknowledged: false,
+        firstSeenAt: 1_000,
+        lastSeenAt: 4_000,
+        occurrenceCount: 2,
+      }];
+      const networkAlerts = [{
+        id: 'net-1',
+        type: 'beaconing',
+        severity: 'critical',
+        timestamp: 2_000,
+        description: 'Beaconing detected to external host',
+        dedupeKey: 'network:beaconing:203.0.113.10',
+        evidence: { ip: '203.0.113.10' },
+        acknowledged: false,
+        firstSeenAt: 2_000,
+        lastSeenAt: 9_000,
+        occurrenceCount: 3,
+      }];
+      const gatewayAlerts = [{
+        id: 'gw-1',
+        targetId: 'edge',
+        targetName: 'Home Gateway',
+        provider: 'opnsense',
+        type: 'gateway_firewall_change',
+        severity: 'medium',
+        timestamp: 1_500,
+        description: 'Gateway firewall configuration changed',
+        dedupeKey: 'gateway:firewall_change:edge',
+        evidence: { gatewayId: 'edge' },
+        acknowledged: false,
+        firstSeenAt: 1_500,
+        lastSeenAt: 6_000,
+        occurrenceCount: 1,
+      }];
+
+      const executor = new ToolExecutor({
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: [],
+        agentCapabilities: {},
+        enabled: true,
+        hostMonitor: { listAlerts: makeList(hostAlerts) } as any,
+        networkBaseline: { listAlerts: makeList(networkAlerts) } as any,
+        gatewayMonitor: { listAlerts: makeList(gatewayAlerts) } as any,
+      });
+
+      const result = await executor.runTool({
+        toolName: 'security_alert_search',
+        args: { includeAcknowledged: true },
+        origin: 'cli',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toMatchObject({
+        totalMatches: 3,
+        returned: 3,
+        bySource: { host: 1, network: 1, gateway: 1 },
+        bySeverity: { low: 0, medium: 1, high: 1, critical: 1 },
+      });
+      expect((result.output as any).alerts.map((alert: any) => alert.source)).toEqual(['network', 'gateway', 'host']);
+    });
+
+    it('filters unified security alerts by source, severity, and query', async () => {
+      const root = createExecutorRoot();
+      const makeList = <T extends { acknowledged: boolean; lastSeenAt: number }>(items: T[]) =>
+        ({ includeAcknowledged = false, limit = 100 } = {}) => items
+          .filter((item) => includeAcknowledged || !item.acknowledged)
+          .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
+          .slice(0, limit);
+
+      const executor = new ToolExecutor({
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: [],
+        agentCapabilities: {},
+        enabled: true,
+        hostMonitor: {
+          listAlerts: makeList([{
+            id: 'host-1',
+            type: 'suspicious_process',
+            severity: 'high',
+            timestamp: 1_000,
+            description: 'Suspicious process: wscript.exe',
+            dedupeKey: 'host:suspicious_process:wscript',
+            evidence: { process: 'wscript.exe' },
+            acknowledged: false,
+            firstSeenAt: 1_000,
+            lastSeenAt: 4_000,
+            occurrenceCount: 1,
+          }]),
+        } as any,
+        networkBaseline: {
+          listAlerts: makeList([
+            {
+              id: 'net-1',
+              type: 'beaconing',
+              severity: 'critical',
+              timestamp: 2_000,
+              description: 'Beaconing detected to external host',
+              dedupeKey: 'network:beaconing:203.0.113.10',
+              evidence: { ip: '203.0.113.10' },
+              acknowledged: false,
+              firstSeenAt: 2_000,
+              lastSeenAt: 9_000,
+              occurrenceCount: 3,
+            },
+            {
+              id: 'net-2',
+              type: 'unusual_external',
+              severity: 'medium',
+              timestamp: 2_500,
+              description: 'Unusual external destination',
+              dedupeKey: 'network:unusual_external:198.51.100.4',
+              evidence: { ip: '198.51.100.4' },
+              acknowledged: true,
+              firstSeenAt: 2_500,
+              lastSeenAt: 5_000,
+              occurrenceCount: 1,
+            },
+          ]),
+        } as any,
+      });
+
+      const result = await executor.runTool({
+        toolName: 'security_alert_search',
+        args: {
+          source: 'network',
+          severity: 'critical',
+          query: '203.0.113.10 beaconing',
+        },
+        origin: 'cli',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toMatchObject({
+        totalMatches: 1,
+        returned: 1,
+        searchedSources: ['network'],
+        bySource: { host: 0, network: 1, gateway: 0 },
+        bySeverity: { low: 0, medium: 0, high: 0, critical: 1 },
+      });
+      expect((result.output as any).alerts[0]).toMatchObject({
+        id: 'net-1',
+        source: 'network',
+        type: 'beaconing',
+      });
+    });
+
+    it('includes native security-provider alerts in unified security alert search', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: [],
+        agentCapabilities: {},
+        enabled: true,
+        windowsDefender: {
+          listAlerts: () => [{
+            id: 'wd-1',
+            type: 'defender_threat_detected',
+            severity: 'high',
+            timestamp: 2_000,
+            description: 'Windows Defender detected TestThreat.',
+            dedupeKey: 'wd:defender_threat_detected:test-threat',
+            evidence: { threatName: 'TestThreat', resources: ['C:\\temp\\bad.exe'] },
+            acknowledged: false,
+            status: 'active',
+            lastStateChangedAt: 2_000,
+            firstSeenAt: 2_000,
+            lastSeenAt: 6_000,
+            occurrenceCount: 1,
+          }],
+        } as any,
+      });
+
+      const result = await executor.runTool({
+        toolName: 'security_alert_search',
+        args: { source: 'native', query: 'TestThreat' },
+        origin: 'cli',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toMatchObject({
+        totalMatches: 1,
+        returned: 1,
+        searchedSources: ['native'],
+        bySource: { host: 0, network: 0, gateway: 0, native: 1 },
+      });
+      expect((result.output as any).alerts[0]).toMatchObject({
+        id: 'wd-1',
+        source: 'native',
+        subject: 'TestThreat',
+      });
+    });
+
+    it('returns an error when unified security alert search has no sources', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: [],
+        agentCapabilities: {},
+        enabled: true,
+      });
+
+      const result = await executor.runTool({
+        toolName: 'security_alert_search',
+        args: {},
+        origin: 'cli',
+      });
+
+      expect(result.success).toBe(false);
+      expect(String((result as any).error ?? (result as any).message)).toContain('No security alert sources are available.');
+    });
+
+    it('summarizes posture and recommends a stricter operating mode', async () => {
+      const root = createExecutorRoot();
+      const makeList = <T extends { acknowledged: boolean; lastSeenAt: number }>(items: T[]) =>
+        ({ includeAcknowledged = false, limit = 100 } = {}) => items
+          .filter((item) => includeAcknowledged || !item.acknowledged)
+          .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
+          .slice(0, limit);
+
+      const executor = new ToolExecutor({
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: [],
+        agentCapabilities: {},
+        enabled: true,
+        hostMonitor: {
+          listAlerts: makeList([{
+            id: 'host-1',
+            type: 'suspicious_process',
+            severity: 'high',
+            timestamp: 1_000,
+            description: 'Suspicious process: wscript.exe',
+            dedupeKey: 'host:suspicious_process:wscript',
+            evidence: { process: 'wscript.exe' },
+            acknowledged: false,
+            firstSeenAt: 1_000,
+            lastSeenAt: 4_000,
+            occurrenceCount: 1,
+          }]),
+        } as any,
+        networkBaseline: {
+          listAlerts: makeList([{
+            id: 'net-1',
+            type: 'beaconing',
+            severity: 'critical',
+            timestamp: 2_000,
+            description: 'Beaconing detected to external host',
+            dedupeKey: 'network:beaconing:203.0.113.10',
+            evidence: { ip: '203.0.113.10' },
+            acknowledged: false,
+            firstSeenAt: 2_000,
+            lastSeenAt: 9_000,
+            occurrenceCount: 3,
+          }]),
+        } as any,
+      });
+
+      const result = await executor.runTool({
+        toolName: 'security_posture_status',
+        args: { profile: 'personal', currentMode: 'monitor' },
+        origin: 'cli',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toMatchObject({
+        profile: 'personal',
+        currentMode: 'monitor',
+        recommendedMode: 'ir_assist',
+        shouldEscalate: true,
+        counts: { total: 2, high: 1, critical: 1 },
+        bySource: { host: 1, network: 1, gateway: 0 },
+      });
+    });
+
+    it('validates security posture tool inputs', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: [],
+        agentCapabilities: {},
+        enabled: true,
+      });
+
+      const badProfile = await executor.runTool({
+        toolName: 'security_posture_status',
+        args: { profile: 'desktop' },
+        origin: 'cli',
+      });
+      expect(badProfile.success).toBe(false);
+      expect(String((badProfile as any).error ?? (badProfile as any).message)).toContain("Profile must be one of 'personal', 'home', or 'organization'.");
+
+      const badMode = await executor.runTool({
+        toolName: 'security_posture_status',
+        args: { currentMode: 'investigate' },
+        origin: 'cli',
+      });
+      expect(badMode.success).toBe(false);
+      expect(String((badMode as any).error ?? (badMode as any).message)).toContain("currentMode must be one of 'monitor', 'guarded', 'lockdown', or 'ir_assist'.");
+    });
+
+    it('approval-gates unified security alert acknowledgement and routes to the matching source', async () => {
+      const root = createExecutorRoot();
+      const hostAcknowledge = vi.fn().mockReturnValue({ success: false, message: "Alert 'net-1' not found." });
+      const networkAcknowledge = vi.fn().mockReturnValue({ success: true, message: "Alert 'net-1' acknowledged." });
+      const gatewayAcknowledge = vi.fn().mockReturnValue({ success: false, message: "Alert 'net-1' not found." });
+
+      const executor = new ToolExecutor({
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: [],
+        agentCapabilities: {},
+        enabled: true,
+        hostMonitor: { acknowledgeAlert: hostAcknowledge } as any,
+        networkBaseline: { acknowledgeAlert: networkAcknowledge } as any,
+        gatewayMonitor: { acknowledgeAlert: gatewayAcknowledge } as any,
+      });
+
+      const pending = await executor.runTool({
+        toolName: 'security_alert_ack',
+        args: { alertId: 'net-1' },
+        origin: 'cli',
+      });
+
+      expect(pending.status).toBe('pending_approval');
+      const approved = await executor.decideApproval(pending.approvalId!, 'approved', 'tester');
+      expect(approved.success).toBe(true);
+      expect(approved.result?.output).toMatchObject({
+        alertId: 'net-1',
+        source: 'network',
+      });
+      expect(hostAcknowledge).toHaveBeenCalledWith('net-1');
+      expect(networkAcknowledge).toHaveBeenCalledWith('net-1');
+      expect(gatewayAcknowledge).not.toHaveBeenCalled();
+    });
+
+    it('returns Windows Defender status when the native provider is available', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: [],
+        agentCapabilities: {},
+        enabled: true,
+        windowsDefender: {
+          getStatus: () => ({
+            platform: 'win32',
+            supported: true,
+            available: true,
+            provider: 'windows_defender',
+            lastUpdatedAt: 1_234,
+            antivirusEnabled: true,
+            realtimeProtectionEnabled: true,
+            behaviorMonitorEnabled: true,
+            controlledFolderAccessEnabled: true,
+            firewallEnabled: true,
+            activeAlertCount: 1,
+            bySeverity: { low: 0, medium: 1, high: 0, critical: 0 },
+            summary: 'AV enabled',
+          }),
+          listAlerts: () => [{
+            id: 'wd-1',
+            type: 'defender_threat_detected',
+            severity: 'medium',
+            timestamp: 1_234,
+            description: 'Windows Defender detected TestThreat.',
+            dedupeKey: 'wd-1',
+            evidence: { threatName: 'TestThreat' },
+            acknowledged: false,
+            status: 'active',
+            lastStateChangedAt: 1_234,
+            firstSeenAt: 1_234,
+            lastSeenAt: 1_234,
+            occurrenceCount: 1,
+          }],
+        } as any,
+      });
+
+      const result = await executor.runTool({
+        toolName: 'windows_defender_status',
+        args: {},
+        origin: 'cli',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toMatchObject({
+        status: {
+          provider: 'windows_defender',
+          activeAlertCount: 1,
+        },
+      });
+      expect((result.output as any).alerts[0].id).toBe('wd-1');
+    });
+
+    it('approval-gates Windows Defender scan requests', async () => {
+      const root = createExecutorRoot();
+      const runScan = vi.fn().mockResolvedValue({ success: true, message: 'Windows Defender quick scan requested.' });
+      const executor = new ToolExecutor({
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: [],
+        agentCapabilities: {},
+        enabled: true,
+        windowsDefender: { runScan } as any,
+      });
+
+      const pending = await executor.runTool({
+        toolName: 'windows_defender_scan',
+        args: { type: 'quick' },
+        origin: 'cli',
+      });
+
+      expect(pending.status).toBe('pending_approval');
+      const approved = await executor.decideApproval(pending.approvalId!, 'approved', 'tester');
+      expect(approved.success).toBe(true);
+      expect(runScan).toHaveBeenCalledWith({ type: 'quick', path: undefined });
+      expect(approved.result?.output).toMatchObject({
+        success: true,
+        type: 'quick',
+      });
+    });
+
+    it('returns an error when unified security alert acknowledgement cannot find the alert', async () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: [],
+        agentCapabilities: {},
+        enabled: true,
+        hostMonitor: { acknowledgeAlert: vi.fn().mockReturnValue({ success: false, message: "Alert 'missing' not found." }) } as any,
+        networkBaseline: { acknowledgeAlert: vi.fn().mockReturnValue({ success: false, message: "Alert 'missing' not found." }) } as any,
+      });
+
+      const result = await executor.runTool({
+        toolName: 'security_alert_ack',
+        args: { alertId: 'missing' },
+        origin: 'cli',
+      });
+
+      expect(result.success).toBe(false);
+      expect(String((result as any).error ?? (result as any).message)).toContain("Alert 'missing' not found in available security sources.");
     });
   });
 });

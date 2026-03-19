@@ -98,12 +98,13 @@ assistant:
     allowedCommands:
       - ls
       - cat
-      - grep
-      - git
-      - npm
+      - git status
+      - git diff
 ```
 
 Only commands in the allowlist are permitted. Commands not in the list are denied.
+
+For the main assistant, the shipped default allowlist is intentionally read-oriented. Broad package-manager or interpreter prefixes such as bare `node`, `npm`, and `npx` are not included by default, and blocked launcher classes like `npx`, `npm exec`, and interpreter-inline eval remain denied even if an operator later allowlists a base command prefix.
 
 ## Test Cases
 

@@ -11,6 +11,18 @@ import { dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import type { DiscoveredDevice } from './device-inventory.js';
 import type { DeviceType } from './network-intelligence.js';
+import {
+  acknowledgeSecurityAlert,
+  ensureSecurityAlertLifecycle,
+  isSecurityAlertSuppressed,
+  listSecurityAlerts,
+  reactivateSecurityAlert,
+  resolveSecurityAlert,
+  suppressSecurityAlert,
+  type SecurityAlertLifecycle,
+  type SecurityAlertListOptions,
+  type SecurityAlertStateResult,
+} from './security-alert-lifecycle.js';
 
 export type NetworkAnomalySeverity = 'low' | 'medium' | 'high' | 'critical';
 export type NetworkAnomalyType =
@@ -56,10 +68,16 @@ export interface NetworkAnomaly {
 }
 
 export interface NetworkAlert extends NetworkAnomaly {
-  acknowledged: boolean;
   firstSeenAt: number;
   lastSeenAt: number;
   occurrenceCount: number;
+  acknowledged: boolean;
+  status: SecurityAlertLifecycle['status'];
+  lastStateChangedAt: number;
+  suppressedUntil?: number;
+  suppressionReason?: string;
+  resolvedAt?: number;
+  resolutionReason?: string;
 }
 
 export interface NetworkBaselineSnapshot {
@@ -210,23 +228,41 @@ export class NetworkBaselineService {
     };
   }
 
-  listAlerts(opts?: { includeAcknowledged?: boolean; limit?: number }): NetworkAlert[] {
-    const includeAcknowledged = !!opts?.includeAcknowledged;
-    const limit = Math.max(1, opts?.limit ?? 100);
-    return [...this.alerts.values()]
-      .filter((a) => includeAcknowledged || !a.acknowledged)
-      .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
-      .slice(0, limit);
+  listAlerts(opts?: SecurityAlertListOptions): NetworkAlert[] {
+    return listSecurityAlerts(this.alerts.values(), this.now(), opts);
   }
 
-  acknowledgeAlert(alertId: string): { success: boolean; message: string } {
+  acknowledgeAlert(alertId: string): SecurityAlertStateResult {
     const alert = this.alerts.get(alertId);
     if (!alert) {
       return { success: false, message: `Alert '${alertId}' not found.` };
     }
-    alert.acknowledged = true;
+    acknowledgeSecurityAlert(alert, this.now());
     this.persist().catch(() => {});
     return { success: true, message: `Alert '${alertId}' acknowledged.` };
+  }
+
+  resolveAlert(alertId: string, reason?: string): SecurityAlertStateResult {
+    const alert = this.alerts.get(alertId);
+    if (!alert) {
+      return { success: false, message: `Alert '${alertId}' not found.` };
+    }
+    resolveSecurityAlert(alert, this.now(), reason);
+    this.persist().catch(() => {});
+    return { success: true, message: `Alert '${alertId}' resolved.` };
+  }
+
+  suppressAlert(alertId: string, until: number, reason?: string): SecurityAlertStateResult {
+    const alert = this.alerts.get(alertId);
+    if (!alert) {
+      return { success: false, message: `Alert '${alertId}' not found.` };
+    }
+    if (!Number.isFinite(until) || until <= this.now()) {
+      return { success: false, message: 'suppressedUntil must be a future timestamp.' };
+    }
+    suppressSecurityAlert(alert, this.now(), until, reason);
+    this.persist().catch(() => {});
+    return { success: true, message: `Alert '${alertId}' suppressed until ${new Date(until).toISOString()}.` };
   }
 
   /**
@@ -456,23 +492,55 @@ export class NetworkBaselineService {
     for (const anomaly of anomalies) {
       const existing = [...this.alerts.values()].find((a) => a.dedupeKey === anomaly.dedupeKey);
       if (existing) {
-        const withinWindow = now - existing.lastSeenAt < this.dedupeWindowMs;
+        ensureSecurityAlertLifecycle(existing);
+        const previousLastSeenAt = existing.lastSeenAt;
+        const withinWindow = now - previousLastSeenAt < this.dedupeWindowMs;
         existing.lastSeenAt = now;
         existing.occurrenceCount += 1;
+        existing.timestamp = anomaly.timestamp;
+        existing.severity = anomaly.severity;
+        existing.description = anomaly.description;
+        existing.evidence = anomaly.evidence;
+        existing.ip = anomaly.ip;
+        existing.mac = anomaly.mac;
+        if (existing.status === 'resolved') {
+          reactivateSecurityAlert(existing, now);
+          emitted.push({
+            ...existing,
+            id: existing.id,
+            type: existing.type,
+            severity: existing.severity,
+            timestamp: existing.timestamp,
+            mac: existing.mac,
+            ip: existing.ip,
+            description: existing.description,
+            dedupeKey: existing.dedupeKey,
+            evidence: existing.evidence,
+          });
+          continue;
+        }
         if (!withinWindow) {
           // Re-emit after dedupe window expiry.
-          existing.acknowledged = false;
-          emitted.push(anomaly);
+          if (isSecurityAlertSuppressed(existing, now)) {
+            continue;
+          }
+          reactivateSecurityAlert(existing, now);
+          emitted.push({
+            ...existing,
+            id: existing.id,
+          });
         }
         continue;
       }
 
       this.alerts.set(anomaly.id, {
         ...anomaly,
-        acknowledged: false,
         firstSeenAt: now,
         lastSeenAt: now,
         occurrenceCount: 1,
+        acknowledged: false,
+        status: 'active',
+        lastStateChangedAt: now,
       });
       emitted.push(anomaly);
     }

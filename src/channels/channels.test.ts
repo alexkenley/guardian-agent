@@ -2338,6 +2338,106 @@ describe('WebChannel', () => {
         snapshotCount: 4,
       }),
       onNetworkThreatAcknowledge: (alertId) => ({ success: true, message: `acked:${alertId}` }),
+      onSecurityAlerts: () => ({
+        alerts: [{
+          id: 'net-alert-1',
+          source: 'network',
+          type: 'new_device',
+          severity: 'medium',
+          timestamp: Date.now(),
+          firstSeenAt: Date.now(),
+          lastSeenAt: Date.now(),
+          occurrenceCount: 1,
+          acknowledged: false,
+          description: 'New device detected',
+          dedupeKey: 'new_device:aa:bb:cc:dd:ee:ff',
+          evidence: { ip: '192.168.1.25', macs: ['aa:bb:cc:dd:ee:ff'] },
+          subject: '192.168.1.25',
+        }],
+        totalMatches: 1,
+        returned: 1,
+        searchedSources: ['network'],
+        includeAcknowledged: false,
+        bySource: { host: 0, network: 1, gateway: 0, native: 0 },
+        bySeverity: { low: 0, medium: 1, high: 0, critical: 0 },
+      }),
+      onSecurityAlertAcknowledge: ({ alertId, source }) => ({ success: true, message: `security-acked:${source || 'auto'}:${alertId}`, source: source || 'network' }),
+      onSecurityPosture: () => ({
+        profile: 'personal',
+        currentMode: 'monitor',
+        recommendedMode: 'guarded',
+        shouldEscalate: true,
+        summary: "Profile 'personal' has 1 active alerts. Escalate from 'monitor' to 'guarded'.",
+        reasons: ['A high-severity alert is active and should tighten approvals and outbound actions.'],
+        counts: { total: 1, low: 0, medium: 1, high: 0, critical: 0 },
+        bySource: { host: 0, network: 1, gateway: 0, native: 0 },
+        availableSources: ['network'],
+        topAlerts: [{
+          id: 'net-alert-1',
+          source: 'network',
+          type: 'new_device',
+          severity: 'medium',
+          description: 'New device detected',
+        }],
+      }),
+      onSecurityActivityLog: () => ({
+        entries: [{
+          id: 'security-activity-1',
+          timestamp: Date.now(),
+          agentId: 'security-triage-dispatcher',
+          targetAgentId: 'security-triage',
+          status: 'completed',
+          severity: 'warn',
+          title: 'Completed triage for beaconing',
+          summary: 'Likely benign telemetry sync. Stay in monitor.',
+          triggerEventType: 'security:network:threat',
+          triggerDetailType: 'beaconing',
+          dedupeKey: 'security:network:threat:beaconing',
+        }],
+        totalMatches: 1,
+        returned: 1,
+        byStatus: { started: 0, skipped: 0, completed: 1, failed: 0 },
+      }),
+      onWindowsDefenderStatus: () => ({
+        status: {
+          platform: 'win32',
+          supported: true,
+          available: true,
+          provider: 'windows_defender',
+          lastUpdatedAt: Date.now(),
+          antivirusEnabled: true,
+          realtimeProtectionEnabled: true,
+          behaviorMonitorEnabled: true,
+          controlledFolderAccessEnabled: true,
+          firewallEnabled: true,
+          signatureVersion: '1.2.3.4',
+          engineVersion: '5.6.7.8',
+          signatureAgeHours: 6,
+          quickScanAgeHours: 12,
+          fullScanAgeHours: 72,
+          activeAlertCount: 1,
+          bySeverity: { low: 0, medium: 1, high: 0, critical: 0 },
+          summary: 'AV enabled • real-time enabled • firewall enabled • CFA enabled • 1 detection',
+        },
+        alerts: [{
+          id: 'wd-1',
+          type: 'defender_threat_detected',
+          severity: 'medium',
+          timestamp: Date.now(),
+          description: 'Windows Defender detected a threat.',
+          dedupeKey: 'wd:threat:1',
+          evidence: { threatName: 'TestThreat' },
+          acknowledged: false,
+          status: 'active',
+          lastStateChangedAt: Date.now(),
+          firstSeenAt: Date.now(),
+          lastSeenAt: Date.now(),
+          occurrenceCount: 1,
+        }],
+      }),
+      onWindowsDefenderRefresh: async () => mockDashboard.onWindowsDefenderStatus!(),
+      onWindowsDefenderScan: async ({ type }) => ({ success: true, message: `scan:${type}` }),
+      onWindowsDefenderUpdateSignatures: async () => ({ success: true, message: 'signatures:updated' }),
     };
 
     it('GET /api/agents should return agent list', async () => {
@@ -2511,6 +2611,109 @@ describe('WebChannel', () => {
       const body = await res.json() as { success: boolean; message: string };
       expect(body.success).toBe(true);
       expect(body.message).toBe('acked:net-alert-1');
+    });
+
+    it('GET /api/security/alerts should return unified local security alerts', async () => {
+      web = new WebChannel({ port: 18969, authToken: TEST_TOKEN, dashboard: mockDashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18969/api/security/alerts?source=network&severity=medium&limit=10', { headers: authHeaders });
+      expect(res.status).toBe(200);
+      const body = await res.json() as {
+        totalMatches: number;
+        searchedSources: string[];
+        alerts: Array<{ id: string; source: string; subject: string }>;
+      };
+      expect(body.totalMatches).toBe(1);
+      expect(body.searchedSources).toEqual(['network']);
+      expect(body.alerts[0].id).toBe('net-alert-1');
+      expect(body.alerts[0].subject).toBe('192.168.1.25');
+    });
+
+    it('POST /api/security/alerts/ack should acknowledge unified security alerts', async () => {
+      web = new WebChannel({ port: 18970, authToken: TEST_TOKEN, dashboard: mockDashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18970/api/security/alerts/ack', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ alertId: 'net-alert-1', source: 'network' }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json() as { success: boolean; message: string; source: string };
+      expect(body.success).toBe(true);
+      expect(body.message).toBe('security-acked:network:net-alert-1');
+      expect(body.source).toBe('network');
+    });
+
+    it('GET /api/security/posture should return advisory posture', async () => {
+      web = new WebChannel({ port: 18971, authToken: TEST_TOKEN, dashboard: mockDashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18971/api/security/posture?profile=personal&currentMode=monitor', { headers: authHeaders });
+      expect(res.status).toBe(200);
+      const body = await res.json() as {
+        recommendedMode: string;
+        shouldEscalate: boolean;
+        summary: string;
+      };
+      expect(body.recommendedMode).toBe('guarded');
+      expect(body.shouldEscalate).toBe(true);
+      expect(body.summary).toContain("Escalate from 'monitor' to 'guarded'");
+    });
+
+    it('GET /api/security/posture should validate query parameters', async () => {
+      web = new WebChannel({ port: 18972, authToken: TEST_TOKEN, dashboard: mockDashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18972/api/security/posture?profile=invalid', { headers: authHeaders });
+      expect(res.status).toBe(400);
+      const body = await res.json() as { error: string };
+      expect(body.error).toContain('profile must be one of');
+    });
+
+    it('GET /api/security/activity should return persisted agentic security activity', async () => {
+      web = new WebChannel({ port: 18974, authToken: TEST_TOKEN, dashboard: mockDashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18974/api/security/activity?status=completed&agentId=security-triage&limit=10', { headers: authHeaders });
+      expect(res.status).toBe(200);
+      const body = await res.json() as {
+        totalMatches: number;
+        entries: Array<{ status: string; targetAgentId?: string; summary: string }>;
+        byStatus: Record<string, number>;
+      };
+      expect(body.totalMatches).toBe(1);
+      expect(body.entries[0]?.status).toBe('completed');
+      expect(body.entries[0]?.targetAgentId).toBe('security-triage');
+      expect(body.byStatus.completed).toBe(1);
+    });
+
+    it('GET /api/windows-defender/status should return native provider status', async () => {
+      web = new WebChannel({ port: 18973, authToken: TEST_TOKEN, dashboard: mockDashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18973/api/windows-defender/status', { headers: authHeaders });
+      expect(res.status).toBe(200);
+      const body = await res.json() as { status: { provider: string; supported: boolean }; alerts: Array<{ id: string }> };
+      expect(body.status.provider).toBe('windows_defender');
+      expect(body.status.supported).toBe(true);
+      expect(body.alerts[0].id).toBe('wd-1');
+    });
+
+    it('POST /api/windows-defender/scan should validate scan payload and call the dashboard action', async () => {
+      web = new WebChannel({ port: 18974, authToken: TEST_TOKEN, dashboard: mockDashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18974/api/windows-defender/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ type: 'quick' }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json() as { success: boolean; message: string };
+      expect(body.success).toBe(true);
+      expect(body.message).toBe('scan:quick');
     });
 
     it('should return 404 when dashboard callback is not set', async () => {

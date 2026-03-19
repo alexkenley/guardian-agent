@@ -1,0 +1,17 @@
+{
+  "id": "browser-session-defense",
+  "name": "Browser Session Defense",
+  "version": "0.1.0",
+  "description": "Use when the task is about Guardian-managed browser sessions, risky browser uploads or storage state, browser policy boundaries, or the distinction between agent-driven browsing and the user's own browser activity.",
+  "role": "domain",
+  "tags": ["browser session", "brokered session", "browser uploads", "browser storage state", "browser policy", "playwright", "lightpanda"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["browser session", "brokered session", "browser upload", "browser storage state", "browser policy", "browser evaluate", "browser run code", "playwright browser", "lightpanda"]
+  },
+  "risk": "informational"
+}

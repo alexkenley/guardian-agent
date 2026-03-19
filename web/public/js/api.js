@@ -96,6 +96,20 @@ export function hasCookieSession() {
   return cookieSessionActive;
 }
 
+function buildQueryString(params = {}) {
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === '') continue;
+    if (Array.isArray(value)) {
+      if (value.length > 0) qs.set(key, value.join(','));
+      continue;
+    }
+    qs.set(key, String(value));
+  }
+  const query = qs.toString();
+  return query ? `?${query}` : '';
+}
+
 export const api = {
   createSession,
   destroySession,
@@ -236,25 +250,44 @@ export const api = {
   networkDevices: () => request('/api/network/devices'),
   networkBaseline: () => request('/api/network/baseline'),
   networkThreats: (params = {}) => {
-    const qs = new URLSearchParams();
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== '') qs.set(k, String(v));
-    }
-    const q = qs.toString();
-    return request(`/api/network/threats${q ? '?' + q : ''}`);
+    return request(`/api/network/threats${buildQueryString(params)}`);
   },
   acknowledgeNetworkThreat: (alertId) => request('/api/network/threats/ack', {
     method: 'POST',
     body: JSON.stringify({ alertId }),
   }),
+  securityAlerts: (params = {}) => request(`/api/security/alerts${buildQueryString(params)}`),
+  acknowledgeSecurityAlert: (alertId, source) => request('/api/security/alerts/ack', {
+    method: 'POST',
+    body: JSON.stringify({ alertId, source }),
+  }),
+  resolveSecurityAlert: (alertId, source, reason) => request('/api/security/alerts/resolve', {
+    method: 'POST',
+    body: JSON.stringify({ alertId, source, reason }),
+  }),
+  suppressSecurityAlert: (alertId, source, suppressedUntil, reason) => request('/api/security/alerts/suppress', {
+    method: 'POST',
+    body: JSON.stringify({ alertId, source, suppressedUntil, reason }),
+  }),
+  securityActivity: (params = {}) => request(`/api/security/activity${buildQueryString(params)}`),
+  securityPosture: (params = {}) => request(`/api/security/posture${buildQueryString(params)}`),
+  securityContainment: (params = {}) => request(`/api/security/containment${buildQueryString(params)}`),
+  windowsDefenderStatus: () => request('/api/windows-defender/status'),
+  windowsDefenderRefresh: () => request('/api/windows-defender/refresh', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  }),
+  windowsDefenderScan: (type, path) => request('/api/windows-defender/scan', {
+    method: 'POST',
+    body: JSON.stringify({ type, path }),
+  }),
+  windowsDefenderUpdateSignatures: () => request('/api/windows-defender/signatures/update', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  }),
   hostMonitorStatus: () => request('/api/host-monitor/status'),
   hostMonitorAlerts: (params = {}) => {
-    const qs = new URLSearchParams();
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== '') qs.set(k, String(v));
-    }
-    const q = qs.toString();
-    return request(`/api/host-monitor/alerts${q ? '?' + q : ''}`);
+    return request(`/api/host-monitor/alerts${buildQueryString(params)}`);
   },
   acknowledgeHostMonitorAlert: (alertId) => request('/api/host-monitor/alerts/ack', {
     method: 'POST',
@@ -266,12 +299,7 @@ export const api = {
   }),
   gatewayMonitorStatus: () => request('/api/gateway-monitor/status'),
   gatewayMonitorAlerts: (params = {}) => {
-    const qs = new URLSearchParams();
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== '') qs.set(k, String(v));
-    }
-    const q = qs.toString();
-    return request(`/api/gateway-monitor/alerts${q ? '?' + q : ''}`);
+    return request(`/api/gateway-monitor/alerts${buildQueryString(params)}`);
   },
   acknowledgeGatewayMonitorAlert: (alertId) => request('/api/gateway-monitor/alerts/ack', {
     method: 'POST',

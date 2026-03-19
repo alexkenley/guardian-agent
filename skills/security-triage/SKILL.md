@@ -21,6 +21,11 @@ Use this when the user is reviewing a security alert, posture change, suspicious
 - For suspicious network behavior, use `net_anomaly_check`, `net_threat_summary`, or `network-recon` for deeper inspection.
 - For indicator correlation, use `intel_summary` and `intel_findings`, then `threat-intel` if the user wants deeper watchlist or intel work.
 - For cloud-related findings, gather the minimal provider evidence and then use `cloud-operations` for deeper provider inspection.
+- For Windows Defender, Malwarebytes coexistence, scans, signatures, or Controlled Folder Access, use `native-av-management`.
+- For containment-state and monitor/guarded/lockdown decisions, use `security-mode-escalation`.
+- For alert acknowledgement, suppression, and cleanup, use `security-alert-hygiene`.
+- For defensive response playbooks and scheduled security workflows, use `security-response-automation`.
+- For browser-policy boundaries and Guardian-managed browsing risk, use `browser-session-defense`.
 
 ## Reporting
 
@@ -37,6 +42,7 @@ Read [references/incident-runbook-template.md](./references/incident-runbook-tem
 - Do not gather every possible signal before answering the immediate triage question.
 - Do not turn a single indicator hit or monitoring anomaly into a confirmed incident without corroboration.
 - Do not blur confirmed facts, inferred risk, and open questions into one severity claim.
+- Do not stay in generic triage mode when a narrower defensive-security skill cleanly fits the question.
 
 ## Template
 

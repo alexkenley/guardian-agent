@@ -22,7 +22,56 @@ function Write-WaitLine {
     param(
         [string]$Message
     )
-    Write-Host "  Please wait — $Message" -ForegroundColor DarkGray
+    Write-Host "  " -NoNewline
+    Write-Host "Please wait — " -NoNewline -ForegroundColor DarkGray
+    Write-Host $Message -ForegroundColor Cyan
+}
+
+function Format-ElapsedLabel {
+    param(
+        [Parameter(Mandatory = $true)]
+        [TimeSpan]$Elapsed
+    )
+
+    return "{0:mm\:ss}" -f $Elapsed
+}
+
+function Show-AnimatedWaitFrame {
+    param(
+        [string]$Message,
+        [string]$Frame,
+        [TimeSpan]$Elapsed,
+        [int]$FrameIndex = 0
+    )
+
+    $label = Format-ElapsedLabel -Elapsed $Elapsed
+    $line = "  $Frame Please wait — $Message ($label)"
+    $frameColors = @("DarkCyan", "Cyan", "Blue", "DarkBlue")
+    $frameColor = $frameColors[$FrameIndex % $frameColors.Count]
+    $padding = " " * [Math]::Max(0, 120 - $line.Length)
+
+    Write-Host "`r  " -NoNewline
+    Write-Host $Frame -NoNewline -ForegroundColor $frameColor
+    Write-Host " Please wait — " -NoNewline -ForegroundColor DarkGray
+    Write-Host $Message -NoNewline -ForegroundColor Cyan
+    Write-Host " ($label)" -NoNewline -ForegroundColor DarkCyan
+    Write-Host $padding -NoNewline
+}
+
+function Clear-AnimatedWaitFrame {
+    Write-Host ("`r{0}`r" -f (" " * 120)) -NoNewline
+}
+
+function Get-ShuffledMessages {
+    param(
+        [string[]]$Messages
+    )
+
+    if (-not $Messages -or $Messages.Count -le 1) {
+        return @($Messages)
+    }
+
+    return @($Messages | Sort-Object { Get-Random })
 }
 
 function Wait-ForProcessWithMessages {
@@ -30,24 +79,119 @@ function Wait-ForProcessWithMessages {
         [Parameter(Mandatory = $true)]
         [System.Diagnostics.Process]$Process,
         [string[]]$Messages = @("Working..."),
-        [int]$IntervalSeconds = 4
+        [int]$IntervalSeconds = 4,
+        [switch]$Animated
     )
 
     $intervalMs = [Math]::Max(250, $IntervalSeconds * 1000)
+    $pollMs = if ($Animated) { 200 } else { $intervalMs }
+    $frames = @("[=   ]", "[==  ]", "[=== ]", "[ ===]", "[  ===]", "[   ==]", "[   =]", "[  ==]")
     $index = 0
+    $frameIndex = 0
+    $start = Get-Date
+    $lastMessageAt = Get-Date
+    $messagePool = Get-ShuffledMessages -Messages $Messages
+    $message = if ($messagePool.Count -gt 0) { $messagePool[0] } else { "Working..." }
+
     while (-not $Process.HasExited) {
-        if (-not $Process.HasExited -and $Messages.Count -gt 0) {
-            $message = $Messages[$index % $Messages.Count]
-            Write-WaitLine $message
+        $now = Get-Date
+        if ($messagePool.Count -gt 0 -and (($now - $lastMessageAt).TotalMilliseconds -ge $intervalMs -or $index -eq 0)) {
+            $message = $messagePool[$index % $messagePool.Count]
             $index++
+            $lastMessageAt = $now
         }
-        $null = $Process.WaitForExit($intervalMs)
+
+        if ($Animated) {
+            $frame = $frames[$frameIndex % $frames.Count]
+            Show-AnimatedWaitFrame -Message $message -Frame $frame -Elapsed ($now - $start) -FrameIndex $frameIndex
+            $frameIndex++
+        } elseif (-not $Process.HasExited -and $Messages.Count -gt 0) {
+            Write-WaitLine $message
+        }
+
+        $null = $Process.WaitForExit($pollMs)
         $Process.Refresh()
     }
 
     $Process.WaitForExit()
     $Process.Refresh()
+    if ($Animated) {
+        Clear-AnimatedWaitFrame
+        Write-Host ""
+    }
     return [int]$Process.ExitCode
+}
+
+function Show-ProcessLogTail {
+    param(
+        [string]$Path,
+        [string]$Label,
+        [int]$TailLines = 80
+    )
+
+    if (-not (Test-Path $Path)) {
+        return
+    }
+
+    $lines = Get-Content $Path -Tail $TailLines -ErrorAction SilentlyContinue
+    if (-not $lines -or $lines.Count -eq 0) {
+        return
+    }
+
+    Write-Host ("  {0} (last {1} lines):" -f $Label, [Math]::Min($TailLines, $lines.Count)) -ForegroundColor DarkCyan
+    foreach ($line in $lines) {
+        Write-Host "    $line" -ForegroundColor DarkGray
+    }
+}
+
+function Invoke-ProcessQuietlyWithAnimation {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [Parameter(Mandatory = $true)]
+        [string]$WorkingDirectory,
+        [string[]]$Messages = @("Working..."),
+        [int]$IntervalSeconds = 4,
+        [string]$FailureLabel = "Process failed"
+    )
+
+    $stdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) ("guardianagent-startup-{0}-stdout.log" -f ([System.Guid]::NewGuid().ToString("N")))
+    $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ("guardianagent-startup-{0}-stderr.log" -f ([System.Guid]::NewGuid().ToString("N")))
+
+    try {
+        $process = Start-Process `
+            -FilePath $FilePath `
+            -ArgumentList $ArgumentList `
+            -WorkingDirectory $WorkingDirectory `
+            -NoNewWindow `
+            -PassThru `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath
+
+        $exitCode = Wait-ForProcessWithMessages `
+            -Process $process `
+            -Messages $Messages `
+            -IntervalSeconds $IntervalSeconds `
+            -Animated
+
+        if ($exitCode -ne 0) {
+            Show-ProcessLogTail -Path $stdoutPath -Label "$FailureLabel output"
+            Show-ProcessLogTail -Path $stderrPath -Label "$FailureLabel errors"
+        }
+
+        return [PSCustomObject]@{
+            ExitCode = $exitCode
+            StdoutPath = $stdoutPath
+            StderrPath = $stderrPath
+        }
+    } finally {
+        foreach ($path in @($stdoutPath, $stderrPath)) {
+            if (Test-Path $path) {
+                Remove-Item -Force $path -ErrorAction SilentlyContinue
+            }
+        }
+    }
 }
 
 function Get-TestWaitMessages {
@@ -115,6 +259,30 @@ function Get-TestWaitMessages {
         "Verifying cross-platform paths...",
         "Checking Node runtime compatibility...",
         "Confirming process shutdown hygiene...",
+        "Charging the shield generators...",
+        "Rerouting power from life support to CI...",
+        "Checking whether the cake is still a lie...",
+        "Rolling for initiative against flaky tests...",
+        "Spinning up the TARDIS stabilizers...",
+        "Calibrating the flux capacitor...",
+        "Escorting the payload through staging...",
+        "Deploying extra pylons for test coverage...",
+        "Untangling redstone timing loops...",
+        "Checking for creepers near the build cache...",
+        "Sharpening the Master Sword of refactors...",
+        "Feeding quarters into the arcade cabinet...",
+        "Cleaning the cartridge contacts...",
+        "Defragging the holodeck...",
+        "Triangulating the stargate glyphs...",
+        "Counting to 42, just to be safe...",
+        "Booting the cyberdeck diagnostics...",
+        "Cooling the warp core...",
+        "Listening for the dial-up handshake of destiny...",
+        "Syncing save files with the cloud kingdom...",
+        "Grinding XP for integration tests...",
+        "Speedrunning the dependency dungeon...",
+        "Loading the next biome...",
+        "Checking if the boss music is justified...",
         "Almost there, stitching final reports..."
     )
 }
@@ -325,25 +493,6 @@ Get-ChildItem -Path $env:TEMP -Filter "guardian-*-harness*.yaml" -ErrorAction Si
         Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
     }
 
-# --- ASCII Art Banner ---
-Write-Host ""
-Write-Host "   ██████╗ ██╗   ██╗ █████╗ ██████╗ ██████╗ ██╗ █████╗ ███╗   ██╗" -ForegroundColor Cyan
-Write-Host "  ██╔════╝ ██║   ██║██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗████╗  ██║" -ForegroundColor Cyan
-Write-Host "  ██║  ███╗██║   ██║███████║██████╔╝██║  ██║██║███████║██╔██╗ ██║" -ForegroundColor Blue
-Write-Host "  ██║   ██║██║   ██║██╔══██║██╔══██╗██║  ██║██║██╔══██║██║╚██╗██║" -ForegroundColor Blue
-Write-Host "  ╚██████╔╝╚██████╔╝██║  ██║██║  ██║██████╔╝██║██║  ██║██║ ╚████║" -ForegroundColor DarkBlue
-Write-Host "   ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝" -ForegroundColor DarkBlue
-Write-Host ""
-Write-Host "       █████╗  ██████╗ ███████╗███╗   ██╗████████╗" -ForegroundColor Cyan
-Write-Host "      ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝" -ForegroundColor Cyan
-Write-Host "      ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   " -ForegroundColor Blue
-Write-Host "      ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   " -ForegroundColor Blue
-Write-Host "      ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   " -ForegroundColor DarkBlue
-Write-Host "      ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   " -ForegroundColor DarkBlue
-Write-Host ""
-Write-Host "        Four-Layer Defense  |  Real-Time Dashboard" -ForegroundColor Cyan
-Write-Host ""
-
 # --- Step 1: Check Node.js ---
 Write-Host "[1/6] Checking Node.js..." -ForegroundColor DarkCyan
 Write-WaitLine "Waking the runtime engines..."
@@ -440,21 +589,17 @@ if (-not $SkipTests) {
     Write-Host "[4/6] Running tests..." -ForegroundColor DarkCyan
     Write-WaitLine "Interrogating the test matrix..."
     $testStart = Get-Date
-    $testProc = Start-Process `
+    $testResult = Invoke-ProcessQuietlyWithAnimation `
         -FilePath "npm.cmd" `
         -ArgumentList @("test", "--", "--reporter=dot") `
         -WorkingDirectory $Root `
-        -NoNewWindow `
-        -PassThru
-
-    $testExitCode = Wait-ForProcessWithMessages `
-        -Process $testProc `
         -Messages (Get-TestWaitMessages) `
-        -IntervalSeconds 4
+        -IntervalSeconds 4 `
+        -FailureLabel "Test runner"
     $testDuration = (Get-Date) - $testStart
 
-    if ($testExitCode -ne 0) {
-        Write-Host "  Test runner exit code: $testExitCode" -ForegroundColor DarkCyan
+    if ($testResult.ExitCode -ne 0) {
+        Write-Host "  Test runner exit code: $($testResult.ExitCode)" -ForegroundColor DarkCyan
         Write-Host "  ERROR: Tests failed" -ForegroundColor Red
         exit 1
     }

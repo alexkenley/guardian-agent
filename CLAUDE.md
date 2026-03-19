@@ -123,11 +123,11 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 ### Channel Adapters
 - **CLI** (`src/channels/cli.ts`) — readline prompt with `/help`, `/agents`, `/status`, `/config`, `/tools`, `/connectors`, etc. Structured approval prompts via interactive `Approve (y) / Deny (n):` readline question with auto-continuation.
 - **Telegram** (`src/channels/telegram.ts`) — grammy bot, polling mode, `allowed_chat_ids` filtering. Inline keyboard buttons for tool approvals with callback query handling and auto-continuation.
-- **Web** (`src/channels/web.ts`) — Node.js HTTP server, REST API (`/health`, `/api/status`, `/api/message`), serves static files from `web/public/`, bearer token auth. Structured Approve/Deny buttons via `response.metadata.pendingApprovals` with auto-continuation.
+- **Web** (`src/channels/web.ts`) — Node.js HTTP server, REST API (`/health`, `/api/status`, `/api/message`), serves static files from `web/public/`, vendor routes for xterm (`/vendor/xterm/`) and Monaco (`/vendor/monaco/`), bearer token auth. Structured Approve/Deny buttons via `response.metadata.pendingApprovals` with auto-continuation.
 - **Approval UX**: All channels use structured `response.metadata.pendingApprovals` (array of `{ id, toolName, argsPreview }`) for native approval UI rendering. On approval, each channel auto-dispatches a continuation message so the LLM completes multi-step tasks (e.g., add path → write file).
 
 ### Web Frontend (`web/public/`)
-Vanilla JavaScript — no framework, no build step. Static HTML/CSS/JS served directly by the WebChannel HTTP server. Consolidated into 6 sidebar pages with tabbed navigation:
+Vanilla JavaScript — no framework, no build step. Static HTML/CSS/JS served directly by the WebChannel HTTP server. Monaco Editor vendored in `web/public/vendor/monaco/` (gitignored, copied from npm by `postinstall`). Consolidated into 6 sidebar pages with tabbed navigation:
 - **Dashboard** (`#/`) — status cards, agent table, LLM status, recent alerts, assistant state (sessions, jobs, cron, policy)
 - **Security** (`#/security`) — Audit tab, Monitoring tab, Threat Intel tab
 - **Network** (`#/network`) — Connectors tab, Devices tab
@@ -203,7 +203,7 @@ src/eval/           — Evaluation framework (types, metrics, runner)
 src/prompts/        — System prompt composition (composeGuardianSystemPrompt)
 src/util/           — Backoff, logging (pino), crypto guardrails, memory-intent, response-quality,
                       context-budget, tool-report (shared utilities for both execution paths)
-web/public/         — Static frontend (vanilla JS, no build step)
+web/public/         — Static frontend (vanilla JS, no build step), Monaco Editor vendored in vendor/monaco/
 examples/           — Demo scripts (single-agent, multi-agent, llm-chat)
 policies/           — Declarative JSON policy rule files (base tool rules shipped)
 docs/               — Architecture docs, specs, guides, research
@@ -234,6 +234,33 @@ See README.md for the full config reference.
 - Mock HTTP/SDK for LLM provider tests
 - Orchestration tests mock `ctx.dispatch()` to verify step ordering and state passing
 - Eval integration tests run through real Runtime with Guardian active
+
+### Integration Test Harness (Post-Implementation Verification)
+
+**After any implementation that touches the web UI, coding assistant, tool execution, approval flow, or security pipeline**, run the relevant integration harness tests. These exercise the full stack (config, Guardian, LLM, tools, response formatting) and catch regressions that unit tests miss. See `docs/guides/INTEGRATION-TEST-HARNESS.md` for the complete guide.
+
+**Minimum post-implementation checklist:**
+
+```bash
+npm test                                    # Unit tests (vitest, 1500+ tests)
+node scripts/test-coding-assistant.mjs      # Code-session transport, approval scoping, memory isolation
+node scripts/test-code-ui-smoke.mjs         # Browser smoke: explorer, chat, approvals, editor, persistence (Playwright)
+```
+
+**Extended verification (run when touching the relevant subsystem):**
+
+```bash
+node scripts/test-contextual-security-uplifts.mjs   # Quarantine, trust-aware memory, bounded schedules
+node scripts/test-automation-authoring-compiler.mjs  # Conversational automation compiler, dedup, no-script drift
+node --import tsx scripts/test-cli-approvals.mjs     # CLI readline approval flow
+```
+
+**PowerShell harnesses (Windows / cross-platform):**
+- `scripts/test-harness.ps1` — Functional + security (~39 assertions)
+- `scripts/test-tools.ps1` — Tool exercise + approval flow (~50+ assertions)
+- `scripts/test-approvals.ps1` — Approval UX, contextual prompts, multi-approval (~45+ assertions)
+
+The harness scripts are self-contained: they start a temporary backend, run tests via HTTP, and shut down. No running instance needed.
 
 ## Debugging and Decision-Making Protocol
 

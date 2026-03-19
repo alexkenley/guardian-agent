@@ -1,0 +1,27 @@
+{
+  "id": "host-firewall-defense",
+  "name": "Host And Firewall Defense",
+  "version": "0.1.0",
+  "description": "Use when reviewing host-monitor alerts, sensitive path drift, new external destinations, host firewall drift, or gateway firewall findings in GuardianAgent's defensive security surfaces.",
+  "role": "domain",
+  "tags": ["host monitor", "sensitive path change", "new external destination", "host firewall", "gateway firewall", "firewall drift", "host alert"],
+  "enabled": true,
+  "appliesTo": {
+    "channels": ["cli", "web", "telegram"],
+    "requestTypes": ["chat"]
+  },
+  "triggers": {
+    "keywords": ["host monitor alert", "sensitive path change", "new external destination", "host firewall drift", "gateway firewall alert", "gateway firewall drift", "host alert"]
+  },
+  "tools": [
+    "host_monitor_status",
+    "host_monitor_check",
+    "gateway_firewall_status",
+    "gateway_firewall_check",
+    "security_alert_search",
+    "security_alert_ack",
+    "security_alert_resolve",
+    "security_alert_suppress"
+  ],
+  "risk": "informational"
+}

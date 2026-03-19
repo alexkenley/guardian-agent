@@ -15,6 +15,11 @@ import { isValidTrustPreset, applyTrustPreset } from '../guardian/trust-presets.
 import { ProviderRegistry } from '../llm/provider-registry.js';
 import { normalizeCpanelConnectionConfig } from '../tools/cloud/cpanel-profile.js';
 import { normalizeConfigInputs, normalizeHttpUrlInput } from './input-normalization.js';
+import {
+  isDeploymentProfile,
+  isSecurityOperatingMode,
+  isSecurityTriageLlmProvider,
+} from '../runtime/security-controls.js';
 
 const SUPPORTED_LLM_PROVIDERS = new Set(new ProviderRegistry().listProviderNames());
 const SUPPORTED_LLM_PROVIDER_LIST = [...SUPPORTED_LLM_PROVIDERS].join(', ');
@@ -248,6 +253,19 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
 
   if (!['single_user', 'channel_user'].includes(assistant.identity.mode)) {
     errors.push("assistant.identity.mode must be 'single_user' or 'channel_user'");
+  }
+
+  if (assistant.security?.deploymentProfile && !isDeploymentProfile(assistant.security.deploymentProfile)) {
+    errors.push("assistant.security.deploymentProfile must be one of: personal, home, organization");
+  }
+  if (assistant.security?.operatingMode && !isSecurityOperatingMode(assistant.security.operatingMode)) {
+    errors.push("assistant.security.operatingMode must be one of: monitor, guarded, lockdown, ir_assist");
+  }
+  if (
+    assistant.security?.triageLlmProvider
+    && !isSecurityTriageLlmProvider(assistant.security.triageLlmProvider)
+  ) {
+    errors.push("assistant.security.triageLlmProvider must be one of: auto, local, external");
   }
 
   const soul = assistant.soul;

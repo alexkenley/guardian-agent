@@ -243,6 +243,12 @@ The repository currently includes bundled local skills under `skills/`, includin
 - `webapp-testing`
 - `web-research`
 - `writing-plans`
+- `host-firewall-defense`
+- `native-av-management`
+- `security-mode-escalation`
+- `security-alert-hygiene`
+- `security-response-automation`
+- `browser-session-defense`
 
 This bundled suite is intentionally mixed:
 

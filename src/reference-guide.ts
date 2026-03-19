@@ -396,6 +396,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Use `agent-host-guard` when you want workstation baseline and anomaly-response playbooks.',
                   'Use `firewall-sentry` when you want host and gateway firewall posture checks plus firewall-drift triage.',
+                  'Those packs now include unified alert search and operating-mode recommendation steps so the operator gets both raw findings and a posture recommendation in one run.',
                   'Preset scheduled jobs such as `host-monitor-watch`, `firewall-posture-watch`, `gateway-firewall-watch`, and `gateway-firewall-posture` are available from Examples.',
                 ],
               },

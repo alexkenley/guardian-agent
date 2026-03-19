@@ -29,6 +29,8 @@ Use this when the user is troubleshooting the local machine, checking service he
 
 - Use `network-recon` for host, subnet, DNS, or port diagnostics.
 - Use `security-triage` when the findings look security-relevant rather than purely operational.
+- Use `host-firewall-defense` when host-monitor, firewall drift, or gateway-alert interpretation is the main task.
+- Use `native-av-management` for Windows Defender or third-party antivirus coexistence questions.
 - Use `automation-builder` for recurring health checks.
 
 ## Gotchas

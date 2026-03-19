@@ -105,11 +105,17 @@ async function requestJson(baseUrl, token, method, pathname, body) {
         data += chunk;
       });
       res.on('end', () => {
+        let parsed;
         try {
-          resolve(data ? JSON.parse(data) : {});
+          parsed = data ? JSON.parse(data) : {};
         } catch {
-          resolve(data);
+          parsed = data;
         }
+        if ((res.statusCode ?? 500) >= 400) {
+          reject(new Error(`HTTP ${res.statusCode} for ${method} ${pathname}: ${typeof parsed === 'string' ? parsed : JSON.stringify(parsed)}`));
+          return;
+        }
+        resolve(parsed);
       });
     });
     req.on('error', reject);
@@ -289,6 +295,94 @@ guardian:
     });
     assert.equal(postHostileRecall.success, true);
     assert.ok(!JSON.stringify(postHostileRecall.output).includes('HOSTILE REMOTE OVERRIDE'));
+
+    const unifiedAlerts = await requestJson(baseUrl, token, 'POST', '/api/tools/run', {
+      toolName: 'security_alert_search',
+      agentId: 'default',
+      args: {
+        includeAcknowledged: true,
+        limit: 10,
+      },
+    });
+    assert.equal(unifiedAlerts.success, true);
+    assert.ok(Array.isArray(unifiedAlerts.output?.alerts));
+    assert.ok(Array.isArray(unifiedAlerts.output?.searchedSources));
+
+    const postureStatus = await requestJson(baseUrl, token, 'POST', '/api/tools/run', {
+      toolName: 'security_posture_status',
+      agentId: 'default',
+      args: {
+        profile: 'personal',
+        currentMode: 'monitor',
+      },
+    });
+    assert.equal(postureStatus.success, true);
+    assert.equal(postureStatus.output?.profile, 'personal');
+    assert.equal(postureStatus.output?.currentMode, 'monitor');
+    assert.ok(typeof postureStatus.output?.recommendedMode === 'string');
+    assert.ok(typeof postureStatus.output?.summary === 'string');
+
+    const dashboardAlerts = await requestJson(baseUrl, token, 'GET', '/api/security/alerts?includeAcknowledged=true&limit=10');
+    assert.ok(Array.isArray(dashboardAlerts.alerts));
+    assert.ok(typeof dashboardAlerts.totalMatches === 'number');
+    assert.ok(Array.isArray(dashboardAlerts.searchedSources));
+
+    const dashboardPosture = await requestJson(baseUrl, token, 'GET', '/api/security/posture?profile=personal&currentMode=monitor');
+    assert.equal(dashboardPosture.profile, 'personal');
+    assert.equal(dashboardPosture.currentMode, 'monitor');
+    assert.ok(typeof dashboardPosture.recommendedMode === 'string');
+    assert.ok(typeof dashboardPosture.summary === 'string');
+
+    const securityActivity = await requestJson(baseUrl, token, 'GET', '/api/security/activity?limit=20');
+    assert.ok(Array.isArray(securityActivity.entries));
+    assert.ok(typeof securityActivity.totalMatches === 'number');
+    assert.ok(typeof securityActivity.byStatus?.completed === 'number');
+
+    const nativeStatus = await requestJson(baseUrl, token, 'GET', '/api/windows-defender/status');
+    assert.equal(nativeStatus.status?.provider, 'windows_defender');
+    assert.equal(typeof nativeStatus.status?.supported, 'boolean');
+    assert.ok(Array.isArray(nativeStatus.alerts));
+
+    const securityDefaultsUpdate = await requestJson(baseUrl, token, 'POST', '/api/config', {
+      assistant: {
+        security: {
+          deploymentProfile: 'home',
+          operatingMode: 'guarded',
+        },
+      },
+    });
+    assert.equal(securityDefaultsUpdate.success, true);
+
+    const updatedConfig = await requestJson(baseUrl, token, 'GET', '/api/config');
+    assert.equal(updatedConfig.assistant?.security?.deploymentProfile, 'home');
+    assert.equal(updatedConfig.assistant?.security?.operatingMode, 'guarded');
+
+    const defaultDashboardPosture = await requestJson(baseUrl, token, 'GET', '/api/security/posture');
+    assert.equal(defaultDashboardPosture.profile, 'home');
+    assert.equal(defaultDashboardPosture.currentMode, 'guarded');
+
+    const eventTriggeredTaskCreate = await requestJson(baseUrl, token, 'POST', '/api/scheduled-tasks', {
+      name: 'Secret Exposure Containment Snapshot',
+      type: 'tool',
+      target: 'security_containment_status',
+      args: {
+        profile: 'home',
+        currentMode: 'guarded',
+      },
+      eventTrigger: {
+        eventType: 'security:alert',
+        match: {
+          'payload.sourceEventType': 'secret_detected',
+        },
+      },
+      approvalExpiresAt: Date.now() + 60_000,
+    });
+    assert.equal(eventTriggeredTaskCreate.success, true);
+    assert.equal(eventTriggeredTaskCreate.task?.cron, undefined);
+    assert.equal(eventTriggeredTaskCreate.task?.eventTrigger?.eventType, 'security:alert');
+
+    const scheduledTasks = await requestJson(baseUrl, token, 'GET', '/api/scheduled-tasks');
+    assert.ok(scheduledTasks.some((task) => task.id === eventTriggeredTaskCreate.task.id && task.eventTrigger?.eventType === 'security:alert'));
 
     const expiredTaskCreate = await requestJson(baseUrl, token, 'POST', '/api/scheduled-tasks', {
       name: 'Expired Task',

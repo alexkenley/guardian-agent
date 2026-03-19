@@ -1,8 +1,11 @@
 # Agentic Defensive Security Suite — Implementation Plan
 
-**Status:** Planned  
+**Status:** In progress  
 **Date:** 2026-03-19  
 **Source proposals:** [Agentic Defensive Security Suite](/mnt/s/Development/GuardianAgent/docs/proposals/AGENTIC-DEFENSIVE-SECURITY-SUITE-PROPOSAL.md), [Security Detection And Threat Sharing Uplift](/mnt/s/Development/GuardianAgent/docs/proposals/SECURITY-DETECTION-AND-THREAT-SHARING-UPLIFT-PROPOSAL.md), [Threat Sharing Hub Spec](/mnt/s/Development/GuardianAgent/docs/specs/THREAT-SHARING-HUB-SPEC.md)
+**Companion as-built spec:** [Agentic Defensive Security Suite - As-Built Spec](/mnt/s/Development/GuardianAgent/docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md)
+
+**Current implementation scope:** phases 1 through 5 only. Enterprise governance and Guardian Hub work are deferred to future planning after the local defensive stack is proven.
 
 ## Objective
 
@@ -10,10 +13,9 @@ Deliver GuardianAgent as a layered defensive system that:
 
 1. protects the local agent runtime from agentic offensive attacks
 2. actively defends personal workstations and home networks
-3. scales into governed enterprise defensive workflows
-4. only integrates with the Guardian Hub after high-quality local evidence, containment, and trust boundaries exist
+3. provides bounded, approval-aware containment and response automation for local threats
 
-For this plan, **Guardian Hub** is the product/control-plane name for the local-first threat-sharing and coordination network described in the hub spec.
+Enterprise governance and **Guardian Hub** integration remain valid future directions, but they are not part of the current implementation target.
 
 ## Sequencing Principles
 
@@ -24,7 +26,7 @@ For this plan, **Guardian Hub** is the product/control-plane name for the local-
 - **Use native platform controls where they are strong.** On Windows, keep Microsoft Defender as the primary AV and firewall foundation, then layer Guardian correlation, policy, and response above it.
 - **Profiles and modes are different axes.** Deployment profile selects environment defaults; operating mode selects control aggressiveness.
 - **Default to monitor.** All deployment profiles start in `monitor` unless policy explicitly overrides that.
-- **Hub integration is final-phase work.** The last two phases are Guardian Hub participation and Guardian Hub trust/federation.
+- **Stop at local containment for now.** Enterprise governance and Guardian Hub work stay deferred until the local defensive stack is credible end to end.
 
 ## Scope
 
@@ -33,11 +35,12 @@ For this plan, **Guardian Hub** is the product/control-plane name for the local-
 - runtime hardening for agent/browser/tool workflows
 - explicit alert-store and memory boundary
 - workstation and home-network detection/correlation/containment
-- enterprise governance extensions
-- final integration with Guardian Hub
+- event-triggered containment and response automation
 
 ### Out of scope for this plan
 
+- enterprise governance and defensive control-plane work
+- Guardian Hub participation, trust, and federation
 - a full replacement for commercial EDR, SIEM, or MDM suites
 - replacing strong native OS protection engines with a weaker custom AV clone
 - mandatory deep packet inspection on day one
@@ -61,7 +64,7 @@ By the end of this plan, GuardianAgent should support:
   - on Windows, Microsoft Defender remains the primary antivirus and ransomware-protection engine
   - GuardianAgent acts as the policy, telemetry-correlation, threat-intelligence, and response layer above native host controls
   - GuardianAgent can advise, query, and trigger approved native protections without pretending to replace them
-- a **Guardian Hub** node mode that can safely publish and consume threat intelligence with strong trust controls
+- local alerting, posture recommendation, and bounded containment workflows that do not depend on a shared hub
 
 ## Host Protection Model
 
@@ -307,7 +310,11 @@ Move from observation to safe reaction without bypassing Guardian enforcement.
 
 ---
 
-## Phase 6: Enterprise Governance And Defensive Control Plane
+## Deferred Future Phases
+
+The following phases remain part of the broader long-term roadmap, but they are explicitly out of scope for the current implementation effort. Current delivery stops after phase 5.
+
+### Phase 6: Enterprise Governance And Defensive Control Plane
 
 ### Goal
 
@@ -343,7 +350,7 @@ Extend the local defensive model into a governed organizational product.
 
 ---
 
-## Phase 7: Guardian Hub Local Node Integration
+### Phase 7: Guardian Hub Local Node Integration
 
 ### Goal
 
@@ -373,7 +380,7 @@ Allow a fully local GuardianAgent deployment to participate in the Guardian Hub 
 
 ---
 
-## Phase 8: Guardian Hub Trust, Feedback, And Federation
+### Phase 8: Guardian Hub Trust, Feedback, And Federation
 
 ### Goal
 
@@ -414,8 +421,8 @@ Run throughout all phases:
 - prompt injection evals
 - browser and credential misuse evals
 - memory poisoning evals
-- enterprise approval-abuse evals
-- hub poisoning and stale-intel evals
+- enterprise approval-abuse evals for future enterprise phases
+- hub poisoning and stale-intel evals for future hub phases
 
 ### Documentation
 
@@ -424,7 +431,6 @@ Keep current through all phases:
 - deployment-profile semantics, operating-mode semantics, and safe defaults
 - operator runbooks
 - case and alert taxonomy
-- trust/sharing policy docs
 - developer guidance for new tools, MCPs, and connectors
 
 ### UX
@@ -445,18 +451,13 @@ Keep current through all phases:
 3. Phase 3: Unified Detection Pipeline And Alert Store
 4. Phase 4: Personal Workstation Defender And Home Network Guard
 5. Phase 5: Event-Triggered Containment And Response Automation
-6. Phase 6: Enterprise Governance And Defensive Control Plane
-7. Phase 7: Guardian Hub Local Node Integration
-8. Phase 8: Guardian Hub Trust, Feedback, And Federation
 
-This order keeps the Guardian Hub work last, where it belongs. The system should earn the right to share and act on external intelligence only after local safety, evidence quality, and containment are already solid.
+Current implementation stops here. Enterprise governance and Guardian Hub phases remain deferred until the local safety, evidence quality, and containment layers are complete and proven.
 
 ## Definition Of Done
 
 - GuardianAgent can run safely across `personal`, `home`, and `organization` deployment profiles with `monitor` as the default operating mode
-- enterprise users can govern agents, tools, and connectors with clear policy and approval boundaries
 - alerts and evidence are stored in a dedicated security system rather than planner memory
 - detections can trigger safe containment and response flows
 - native host protections can be integrated and orchestrated without GuardianAgent pretending to replace them outright
-- Guardian Hub participation is signed, evidence-gated, and trust-aware
-- the last phases add shared intelligence without weakening the local defensive posture
+- the implementation is operational and coherent without depending on enterprise governance or Guardian Hub participation

@@ -5,6 +5,19 @@ import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { AssistantHostMonitoringConfig, HostMonitorSeverity } from '../config/types.js';
+import {
+  acknowledgeSecurityAlert,
+  ensureSecurityAlertLifecycle,
+  isSecurityAlertSuppressed,
+  listSecurityAlerts,
+  maybeExpireSecurityAlertSuppression,
+  reactivateSecurityAlert,
+  resolveSecurityAlert,
+  suppressSecurityAlert,
+  type SecurityAlertLifecycle,
+  type SecurityAlertListOptions,
+  type SecurityAlertStateResult,
+} from './security-alert-lifecycle.js';
 
 const execFile = promisify(execFileCb);
 
@@ -36,10 +49,16 @@ export interface HostMonitorAlert {
   description: string;
   dedupeKey: string;
   evidence: Record<string, unknown>;
-  acknowledged: boolean;
   firstSeenAt: number;
   lastSeenAt: number;
   occurrenceCount: number;
+  acknowledged: boolean;
+  status: SecurityAlertLifecycle['status'];
+  lastStateChangedAt: number;
+  suppressedUntil?: number;
+  suppressionReason?: string;
+  resolvedAt?: number;
+  resolutionReason?: string;
 }
 
 export interface HostMonitorSnapshot {
@@ -103,6 +122,9 @@ const HIGH_RISK_WINDOWS_PROCESSES = new Set([
   'psexec.exe',
 ]);
 const HIGH_RISK_PORTS = new Set([22, 23, 445, 1433, 3306, 3389, 5432, 5900, 6379]);
+const KNOWN_WINDOWS_PERSISTENCE_PREFIXES = [
+  'schtasks:\\microsoft\\windows\\windows defender\\',
+];
 
 export interface HostMonitoringServiceOptions {
   config: AssistantHostMonitoringConfig;
@@ -205,21 +227,39 @@ export class HostMonitoringService {
     };
   }
 
-  listAlerts(opts?: { includeAcknowledged?: boolean; limit?: number }): HostMonitorAlert[] {
-    const includeAcknowledged = !!opts?.includeAcknowledged;
-    const limit = Math.max(1, opts?.limit ?? 100);
-    return [...this.alerts.values()]
-      .filter((alert) => includeAcknowledged || !alert.acknowledged)
-      .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
-      .slice(0, limit);
+  listAlerts(opts?: SecurityAlertListOptions): HostMonitorAlert[] {
+    const alerts = listSecurityAlerts(this.alerts.values(), this.now(), opts);
+    if (alerts.some((alert) => maybeExpireSecurityAlertSuppression(alert, this.now()))) {
+      this.persist().catch(() => {});
+    }
+    return alerts;
   }
 
-  acknowledgeAlert(alertId: string): { success: boolean; message: string } {
+  acknowledgeAlert(alertId: string): SecurityAlertStateResult {
     const alert = this.alerts.get(alertId);
     if (!alert) return { success: false, message: `Alert '${alertId}' not found.` };
-    alert.acknowledged = true;
+    acknowledgeSecurityAlert(alert, this.now());
     this.persist().catch(() => {});
     return { success: true, message: `Alert '${alertId}' acknowledged.` };
+  }
+
+  resolveAlert(alertId: string, reason?: string): SecurityAlertStateResult {
+    const alert = this.alerts.get(alertId);
+    if (!alert) return { success: false, message: `Alert '${alertId}' not found.` };
+    resolveSecurityAlert(alert, this.now(), reason);
+    this.persist().catch(() => {});
+    return { success: true, message: `Alert '${alertId}' resolved.` };
+  }
+
+  suppressAlert(alertId: string, until: number, reason?: string): SecurityAlertStateResult {
+    const alert = this.alerts.get(alertId);
+    if (!alert) return { success: false, message: `Alert '${alertId}' not found.` };
+    if (!Number.isFinite(until) || until <= this.now()) {
+      return { success: false, message: 'suppressedUntil must be a future timestamp.' };
+    }
+    suppressSecurityAlert(alert, this.now(), until, reason);
+    this.persist().catch(() => {});
+    return { success: true, message: `Alert '${alertId}' suppressed until ${new Date(until).toISOString()}.` };
   }
 
   async runCheck(): Promise<HostMonitorReport> {
@@ -253,7 +293,20 @@ export class HostMonitoringService {
       firewallRuleCount: firewallState.ruleCount,
     };
 
-    const anomalies: Array<Omit<HostMonitorAlert, 'id' | 'acknowledged' | 'firstSeenAt' | 'lastSeenAt' | 'occurrenceCount'>> = [];
+    const anomalies: Array<Omit<
+      HostMonitorAlert,
+      'id'
+      | 'acknowledged'
+      | 'status'
+      | 'lastStateChangedAt'
+      | 'suppressedUntil'
+      | 'suppressionReason'
+      | 'resolvedAt'
+      | 'resolutionReason'
+      | 'firstSeenAt'
+      | 'lastSeenAt'
+      | 'occurrenceCount'
+    >> = [];
 
     for (const proc of suspiciousProcesses) {
       anomalies.push({
@@ -286,7 +339,7 @@ export class HostMonitoringService {
 
     if (this.baselineReady) {
       for (const entry of persistenceEntries) {
-        if (!this.persistenceEntries.has(entry)) {
+        if (!this.persistenceEntries.has(entry) && !isIgnoredPersistenceEntry(entry, this.platform)) {
           anomalies.push({
             type: 'persistence_change',
             severity: persistenceSeverity(entry, this.platform),
@@ -316,7 +369,7 @@ export class HostMonitoringService {
         if (!this.knownExternalDestinations.has(remote)) {
           anomalies.push({
             type: 'new_external_destination',
-            severity: 'medium',
+            severity: 'low',
             timestamp,
             description: `New external destination observed: ${remote}`,
             dedupeKey: `new_external_destination:${remote}`,
@@ -329,7 +382,7 @@ export class HostMonitoringService {
         if (!this.knownListeningPorts.has(port)) {
           anomalies.push({
             type: 'new_listening_port',
-            severity: HIGH_RISK_PORTS.has(port) ? 'high' : 'medium',
+            severity: HIGH_RISK_PORTS.has(port) ? 'high' : 'low',
             timestamp,
             description: `New listening port observed: ${port}`,
             dedupeKey: `new_listening_port:${port}`,
@@ -357,7 +410,9 @@ export class HostMonitoringService {
       }
     }
 
+    const activeDedupeKeys = new Set(anomalies.map((alert) => alert.dedupeKey));
     const alerts = this.recordAlerts(anomalies, timestamp);
+    this.resolveClearedAlerts(activeDedupeKeys, timestamp);
     this.persistenceEntries = new Set(persistenceEntries);
     this.sensitiveFingerprints = sensitiveFingerprints;
     this.knownExternalDestinations = new Set(networkState.externalDestinations);
@@ -407,25 +462,48 @@ export class HostMonitoringService {
   }
 
   private recordAlerts(
-    input: Array<Omit<HostMonitorAlert, 'id' | 'acknowledged' | 'firstSeenAt' | 'lastSeenAt' | 'occurrenceCount'>>,
+    input: Array<Omit<
+      HostMonitorAlert,
+      'id'
+      | 'acknowledged'
+      | 'status'
+      | 'lastStateChangedAt'
+      | 'suppressedUntil'
+      | 'suppressionReason'
+      | 'resolvedAt'
+      | 'resolutionReason'
+      | 'firstSeenAt'
+      | 'lastSeenAt'
+      | 'occurrenceCount'
+    >>,
     now: number,
   ): HostMonitorAlert[] {
     const emitted: HostMonitorAlert[] = [];
     for (const item of input) {
       const existing = [...this.alerts.values()].find((alert) => alert.dedupeKey === item.dedupeKey);
       if (existing) {
-        if ((now - existing.lastSeenAt) < this.config.dedupeWindowMs) {
-          existing.lastSeenAt = now;
-          existing.occurrenceCount += 1;
-          continue;
-        }
+        ensureSecurityAlertLifecycle(existing);
+        const previousLastSeenAt = existing.lastSeenAt;
+        const withinWindow = (now - previousLastSeenAt) < this.config.dedupeWindowMs;
         existing.lastSeenAt = now;
-        existing.timestamp = now;
+        existing.occurrenceCount += 1;
         existing.severity = item.severity;
         existing.description = item.description;
         existing.evidence = item.evidence;
-        existing.occurrenceCount += 1;
-        existing.acknowledged = false;
+        existing.timestamp = item.timestamp;
+        if (existing.status === 'resolved') {
+          reactivateSecurityAlert(existing, now);
+          emitted.push(existing);
+          continue;
+        }
+        if (isSecurityAlertSuppressed(existing, now)) {
+          continue;
+        }
+        if (withinWindow) {
+          existing.lastSeenAt = now;
+          continue;
+        }
+        reactivateSecurityAlert(existing, now);
         emitted.push(existing);
         continue;
       }
@@ -438,15 +516,26 @@ export class HostMonitoringService {
         description: item.description,
         dedupeKey: item.dedupeKey,
         evidence: item.evidence,
-        acknowledged: false,
         firstSeenAt: now,
         lastSeenAt: now,
         occurrenceCount: 1,
+        acknowledged: false,
+        status: 'active',
+        lastStateChangedAt: now,
       };
       this.alerts.set(created.id, created);
       emitted.push(created);
     }
     return emitted;
+  }
+
+  private resolveClearedAlerts(activeDedupeKeys: Set<string>, now: number): void {
+    for (const alert of this.alerts.values()) {
+      ensureSecurityAlertLifecycle(alert);
+      if (alert.status === 'resolved') continue;
+      if (activeDedupeKeys.has(alert.dedupeKey)) continue;
+      resolveSecurityAlert(alert, now, 'Condition no longer present in the latest host monitor check.');
+    }
   }
 
   private async collectProcesses(): Promise<Array<{ pid: number; name: string }>> {
@@ -902,6 +991,12 @@ function persistenceSeverity(entry: string, platform: NodeJS.Platform): HostMoni
   return 'high';
 }
 
+function isIgnoredPersistenceEntry(entry: string, platform: NodeJS.Platform): boolean {
+  if (platform !== 'win32') return false;
+  const normalized = entry.trim().toLowerCase();
+  return KNOWN_WINDOWS_PERSISTENCE_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
 function firewallDisabledSeverity(platform: NodeJS.Platform, state: HostFirewallState): HostMonitorSeverity {
   if (platform === 'win32') {
     return state.enabledProfileCount === 0 ? 'critical' : 'high';
@@ -915,13 +1010,16 @@ function firewallChangeSeverity(
   previousBackend: string,
 ): HostMonitorSeverity {
   if (platform === 'win32' && previousBackend === state.backend) {
-    return 'high';
+    return state.enabled === false ? 'high' : 'medium';
   }
   return 'medium';
 }
 
 function sensitivePathSeverity(pathKey: string): HostMonitorSeverity {
   const normalized = pathKey.toLowerCase();
+  if (/[\\/]\.guardianagent(?:$|[\\/])/.test(normalized)) {
+    return 'low';
+  }
   if (normalized.includes('.ssh') || normalized.includes('.aws') || normalized.includes('gcloud') || normalized.includes('.azure') || normalized.includes('.kube')) {
     return 'high';
   }

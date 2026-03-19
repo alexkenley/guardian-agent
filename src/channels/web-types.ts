@@ -31,6 +31,24 @@ import type { ScheduledTaskDefinition, ScheduledTaskCreateInput, ScheduledTaskUp
 import type { NetworkAlert, NetworkBaselineSnapshot } from '../runtime/network-baseline.js';
 import type { HostMonitorAlert, HostMonitorStatus, HostMonitorReport } from '../runtime/host-monitor.js';
 import type { GatewayMonitorAlert, GatewayMonitorStatus, GatewayMonitorReport } from '../runtime/gateway-monitor.js';
+import type {
+  SecurityAlertSeverity,
+  SecurityAlertSource,
+  UnifiedSecurityAlert,
+} from '../runtime/security-alerts.js';
+import type { SecurityAlertStatus } from '../runtime/security-alert-lifecycle.js';
+import type {
+  DeploymentProfile,
+  SecurityOperatingMode,
+  SecurityPostureAssessment,
+} from '../runtime/security-posture.js';
+import type { SecurityTriageLlmProvider } from '../runtime/security-controls.js';
+import type { SecurityContainmentState } from '../runtime/containment-service.js';
+import type {
+  SecurityActivityListResult,
+  SecurityActivityStatus,
+} from '../runtime/security-activity-log.js';
+import type { WindowsDefenderAlert, WindowsDefenderProviderStatus } from '../runtime/windows-defender-provider.js';
 import type { SandboxHealth } from '../sandbox/index.js';
 import type { SkillRisk } from '../skills/types.js';
 import type {
@@ -270,6 +288,11 @@ export interface RedactedConfig {
     };
     quickActions: {
       enabled: boolean;
+    };
+    security?: {
+      deploymentProfile: DeploymentProfile;
+      operatingMode: SecurityOperatingMode;
+      triageLlmProvider: SecurityTriageLlmProvider;
     };
     credentials: {
       refs: Record<string, {
@@ -563,9 +586,84 @@ export interface ScheduledTaskHistoryStep {
   output?: unknown;
 }
 
+export interface DashboardSecurityAlertsArgs {
+  query?: string;
+  source?: SecurityAlertSource;
+  sources?: SecurityAlertSource[];
+  severity?: SecurityAlertSeverity;
+  status?: SecurityAlertStatus;
+  type?: string;
+  limit?: number;
+  includeAcknowledged?: boolean;
+  includeInactive?: boolean;
+}
+
+export interface DashboardSecurityAlertsResult {
+  alerts: UnifiedSecurityAlert[];
+  totalMatches: number;
+  returned: number;
+  searchedSources: SecurityAlertSource[];
+  includeAcknowledged: boolean;
+  includeInactive?: boolean;
+  query?: string;
+  severity?: SecurityAlertSeverity;
+  status?: SecurityAlertStatus;
+  type?: string;
+  bySource: Record<SecurityAlertSource, number>;
+  bySeverity: Record<SecurityAlertSeverity, number>;
+}
+
+export interface DashboardSecurityAlertAckInput {
+  alertId: string;
+  source?: SecurityAlertSource;
+}
+
+export interface DashboardSecurityAlertAckResult {
+  success: boolean;
+  message: string;
+  source?: SecurityAlertSource;
+}
+
+export interface DashboardSecurityAlertSuppressInput extends DashboardSecurityAlertAckInput {
+  suppressedUntil: number;
+  reason?: string;
+}
+
+export interface DashboardSecurityPostureInput {
+  profile?: DeploymentProfile;
+  currentMode?: SecurityOperatingMode;
+  includeAcknowledged?: boolean;
+}
+
+export interface DashboardSecurityContainmentInput {
+  profile?: DeploymentProfile;
+  currentMode?: SecurityOperatingMode;
+}
+
+export interface DashboardSecurityActivityLogArgs {
+  limit?: number;
+  status?: SecurityActivityStatus;
+  agentId?: string;
+}
+
+export interface DashboardWindowsDefenderStatusResult {
+  status: WindowsDefenderProviderStatus;
+  alerts: WindowsDefenderAlert[];
+}
+
+export interface DashboardWindowsDefenderScanInput {
+  type: 'quick' | 'full' | 'custom';
+  path?: string;
+}
+
+export interface DashboardWindowsDefenderActionResult {
+  success: boolean;
+  message: string;
+}
+
 /** SSE event pushed to dashboard clients. */
 export interface SSEEvent {
-  type: 'audit' | 'metrics' | 'watchdog' | 'security.alert' | 'assistant.notice' | 'chat.thinking' | 'chat.tool_call' | 'chat.token' | 'chat.done' | 'chat.error' | 'ui.invalidate' | 'terminal.output' | 'terminal.exit';
+  type: 'audit' | 'metrics' | 'watchdog' | 'security.alert' | 'security.triage' | 'assistant.notice' | 'chat.thinking' | 'chat.tool_call' | 'chat.token' | 'chat.done' | 'chat.error' | 'ui.invalidate' | 'terminal.output' | 'terminal.exit';
   data: unknown;
 }
 
@@ -871,6 +969,17 @@ export interface DashboardCallbacks {
     snapshotCount: number;
   };
   onNetworkThreatAcknowledge?: (alertId: string) => { success: boolean; message: string };
+  onSecurityAlerts?: (args?: DashboardSecurityAlertsArgs) => DashboardSecurityAlertsResult;
+  onSecurityAlertAcknowledge?: (input: DashboardSecurityAlertAckInput) => DashboardSecurityAlertAckResult;
+  onSecurityAlertResolve?: (input: DashboardSecurityAlertAckInput & { reason?: string }) => DashboardSecurityAlertAckResult;
+  onSecurityAlertSuppress?: (input: DashboardSecurityAlertSuppressInput) => DashboardSecurityAlertAckResult;
+  onSecurityPosture?: (args?: DashboardSecurityPostureInput) => SecurityPostureAssessment;
+  onSecurityContainmentStatus?: (args?: DashboardSecurityContainmentInput) => SecurityContainmentState;
+  onSecurityActivityLog?: (args?: DashboardSecurityActivityLogArgs) => SecurityActivityListResult;
+  onWindowsDefenderStatus?: () => DashboardWindowsDefenderStatusResult;
+  onWindowsDefenderRefresh?: () => Promise<DashboardWindowsDefenderStatusResult> | DashboardWindowsDefenderStatusResult;
+  onWindowsDefenderScan?: (input: DashboardWindowsDefenderScanInput) => Promise<DashboardWindowsDefenderActionResult> | DashboardWindowsDefenderActionResult;
+  onWindowsDefenderUpdateSignatures?: () => Promise<DashboardWindowsDefenderActionResult> | DashboardWindowsDefenderActionResult;
   onHostMonitorStatus?: () => HostMonitorStatus;
   onHostMonitorAlerts?: (args?: { includeAcknowledged?: boolean; limit?: number }) => {
     alerts: HostMonitorAlert[];
@@ -1094,6 +1203,11 @@ export interface ConfigUpdate {
     };
   };
   assistant?: {
+    security?: {
+      deploymentProfile?: DeploymentProfile;
+      operatingMode?: SecurityOperatingMode;
+      triageLlmProvider?: SecurityTriageLlmProvider;
+    };
     credentials?: {
       refs?: Record<string, {
         source?: 'env' | 'local';

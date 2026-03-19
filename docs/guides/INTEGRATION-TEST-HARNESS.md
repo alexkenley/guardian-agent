@@ -583,6 +583,23 @@ Tests whether the LLM can **discover, create, compose, schedule, run, and delete
 | "create daily-resource-check at 9 AM" | `workflow_upsert` + `task_create` | End-to-end: automation + schedule |
 | "create weekday-net-check at 8 AM Mon-Fri" | `workflow_upsert` + `task_create` | Complex cron schedule |
 
+#### Security Monitoring Readouts
+| Prompt | Expected Tool | What It Validates |
+|--------|--------------|-------------------|
+| "show all active security alerts across host, network, and gateway" | `security_alert_search` | Unified alert aggregation across local sources |
+| "show only critical network security alerts" | `security_alert_search` | Source + severity filtering |
+| "what operating mode do you recommend right now for personal use" | `security_posture_status` | Advisory posture evaluation and mode recommendation |
+| "show the agentic security activity log" | Dashboard `GET /api/security/activity` | Persisted real-time log of security-agent investigations and decisions |
+| "show the native Windows Defender status" | `windows_defender_status` | Native provider visibility and host-security integration |
+| "request a Windows Defender quick scan" | `windows_defender_scan` | Approval-gated native host scan action |
+| "acknowledge security alert `<id>`" | `security_alert_ack` | Approval-gated unified alert acknowledgement across local sources |
+
+#### Event-Triggered Scheduling
+| Prompt | Expected Tool | What It Validates |
+|--------|--------------|-------------------|
+| "create an event-triggered task when `security:alert` reports `secret_detected`" | `task_create` | Event-trigger schedule model without cron |
+| "list tasks with trigger details" | `task_list` | Event-trigger persistence alongside cron tasks |
+
 #### Deletion
 | Prompt | Expected Tool | What It Validates |
 |--------|--------------|-------------------|

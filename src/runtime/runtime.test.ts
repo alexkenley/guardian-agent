@@ -1089,5 +1089,23 @@ describe('Runtime', () => {
 
       expect(result).toBe(true);
     });
+
+    it('should allow trusted internal service event sources used by security monitoring', async () => {
+      const agent = new EchoAgent();
+      runtime.registerAgent(createAgentDefinition({ agent }));
+
+      const result = await runtime.emit({
+        type: 'security:host:alert',
+        sourceAgentId: 'host-monitor',
+        targetAgentId: 'echo',
+        payload: { alert: { type: 'new_external_destination', severity: 'low' } },
+        timestamp: Date.now(),
+      });
+
+      expect(result).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(agent.receivedEvents).toHaveLength(1);
+      expect(agent.receivedEvents[0]?.type).toBe('security:host:alert');
+    });
   });
 });

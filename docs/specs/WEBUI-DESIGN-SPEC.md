@@ -273,20 +273,22 @@ It must provide:
 
 ### Purpose
 
-Central place for security investigation, audit review, and alert triage.
+Central place for security investigation, alert triage, agentic-security workflow review, and audit history.
 
 ### Guidance standard
 
 Security must include:
 
-- a page-level intro explaining the difference between `Overview`, `Alerts`, `Audit`, and `Threat Intel`
+- a page-level intro explaining the difference between `Overview`, `Alerts`, `Agentic Security Log`, `Audit`, and `Threat Intel`
 - a tab-level intro for each major tab
+- a tooltip or equivalent hover description on each tab button
 - section-level info affordances on major cards, tables, and queues
 
 ### Required tabs
 
 - `Overview`
 - `Alerts`
+- `Agentic Security Log`
 - `Audit`
 - `Threat Intel`
 
@@ -295,10 +297,13 @@ Security must include:
 Must contain:
 
 - overall security posture summary
+- effective containment state
+- native host-protection summary
 - host monitor posture summary
 - gateway firewall posture summary
 - network anomaly summary
 - cloud security summary
+- recent security activity
 
 Must not contain:
 
@@ -315,12 +320,29 @@ Must support:
   - network
   - host
   - gateway
+  - native
   - cloud
   - tool/policy
   - automation
 - severity filters
 - acknowledgement
+- resolve and suppression actions for supported local alerts
 - deep links to originating objects
+
+### `Agentic Security Log`
+
+Owns:
+
+- the persisted running log of security-agent workflow
+- live triage activity fed from `security.triage`
+- investigation start/skip/complete/failure history
+- light filtering by status and agent identity
+
+Must not become:
+
+- a duplicate alert queue
+- a replacement for the audit ledger
+- a generic runtime metrics page
 
 ### `Audit`
 

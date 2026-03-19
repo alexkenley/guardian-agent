@@ -81,9 +81,43 @@ describe('validateConfig', () => {
     expect(DEFAULT_CONFIG.assistant.tools.sandbox?.enforcementMode).toBe('permissive');
   });
 
+  it('should default assistant tools to approve_each with a read-only shell allowlist', () => {
+    expect(DEFAULT_CONFIG.assistant.tools.policyMode).toBe('approve_each');
+    expect(DEFAULT_CONFIG.assistant.tools.allowedCommands).toEqual(
+      expect.arrayContaining(['git status', 'git diff', 'ls', 'cat']),
+    );
+    expect(DEFAULT_CONFIG.assistant.tools.allowedCommands).not.toEqual(
+      expect.arrayContaining(['node', 'npm', 'npx']),
+    );
+  });
+
+  it('should default security profile, operating mode, and triage provider to personal/monitor/auto', () => {
+    expect(DEFAULT_CONFIG.assistant.security?.deploymentProfile).toBe('personal');
+    expect(DEFAULT_CONFIG.assistant.security?.operatingMode).toBe('monitor');
+    expect(DEFAULT_CONFIG.assistant.security?.triageLlmProvider).toBe('auto');
+  });
+
   it('should pass with valid default config', () => {
     const errors = validateConfig(DEFAULT_CONFIG);
     expect(errors).toEqual([]);
+  });
+
+  it('should reject invalid assistant security defaults', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        security: {
+          deploymentProfile: 'lab' as any,
+          operatingMode: 'observe' as any,
+          triageLlmProvider: 'remote' as any,
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toContain('assistant.security.deploymentProfile must be one of: personal, home, organization');
+    expect(validateConfig(config)).toContain('assistant.security.operatingMode must be one of: monitor, guarded, lockdown, ir_assist');
+    expect(validateConfig(config)).toContain('assistant.security.triageLlmProvider must be one of: auto, local, external');
   });
 
   it('should fail when defaultProvider is missing', () => {

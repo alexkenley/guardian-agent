@@ -41,27 +41,224 @@ else
   CYAN='' BLUE='' LBLUE='' DBLUE='' GREEN='' RED='' DIM='' RESET=''
 fi
 
-# ── Banner ─────────────────────────────────────────────────────
-echo ""
-echo -e "${LBLUE}   ██████╗ ██╗   ██╗ █████╗ ██████╗ ██████╗ ██╗ █████╗ ███╗   ██╗${RESET}"
-echo -e "${LBLUE}  ██╔════╝ ██║   ██║██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗████╗  ██║${RESET}"
-echo -e "${BLUE}  ██║  ███╗██║   ██║███████║██████╔╝██║  ██║██║███████║██╔██╗ ██║${RESET}"
-echo -e "${BLUE}  ██║   ██║██║   ██║██╔══██║██╔══██╗██║  ██║██║██╔══██║██║╚██╗██║${RESET}"
-echo -e "${DBLUE}  ╚██████╔╝╚██████╔╝██║  ██║██║  ██║██████╔╝██║██║  ██║██║ ╚████║${RESET}"
-echo -e "${DBLUE}   ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝${RESET}"
-echo ""
-echo -e "${LBLUE}        █████╗  ██████╗ ███████╗███╗   ██╗████████╗${RESET}"
-echo -e "${LBLUE}       ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝${RESET}"
-echo -e "${BLUE}       ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   ${RESET}"
-echo -e "${BLUE}       ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   ${RESET}"
-echo -e "${DBLUE}       ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ${RESET}"
-echo -e "${DBLUE}       ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   ${RESET}"
-echo ""
-echo -e "${LBLUE}      Four-Layer Defense${RESET}  ${DIM}|${RESET}  ${LBLUE}Real-Time Dashboard${RESET}"
-echo ""
+write_wait_line() {
+  echo -e "  ${DIM}Please wait — ${LBLUE}$1${RESET}"
+}
+
+format_elapsed_label() {
+  local total_seconds=$1
+  printf '%02d:%02d' $((total_seconds / 60)) $((total_seconds % 60))
+}
+
+show_animated_wait_frame() {
+  local frame=$1
+  local message=$2
+  local elapsed_seconds=$3
+  local frame_index=$4
+  local label
+  local -a frame_colors=("$CYAN" "$LBLUE" "$BLUE" "$DBLUE")
+  local frame_color="${frame_colors[$((frame_index % ${#frame_colors[@]}))]}"
+  label=$(format_elapsed_label "$elapsed_seconds")
+  printf "\r  %b%s%b %bPlease wait — %b%b%s%b %b(%s)%b%-24s" \
+    "$frame_color" "$frame" "$RESET" \
+    "$DIM" "$LBLUE" "$message" "$RESET" \
+    "$CYAN" "$label" "$RESET" ""
+}
+
+clear_animated_wait_frame() {
+  printf '\r%-120s\r' ' '
+}
+
+wait_for_process_with_messages() {
+  local pid=$1
+  local interval_seconds=$2
+  shift 2
+  local -a messages=("$@")
+  local -a frames=("[=   ]" "[==  ]" "[=== ]" "[ ===]" "[  ===]" "[   ==]" "[   =]" "[  ==]")
+  local start_epoch
+  start_epoch=$(date +%s)
+  local last_message_epoch=$start_epoch
+  local message_index=0
+  local frame_index=0
+
+  if [ "${#messages[@]}" -gt 1 ]; then
+    local i j tmp
+    for ((i=${#messages[@]} - 1; i>0; i--)); do
+      j=$((RANDOM % (i + 1)))
+      tmp=${messages[i]}
+      messages[i]=${messages[j]}
+      messages[j]=$tmp
+    done
+  fi
+
+  local message="${messages[0]:-Working...}"
+
+  while kill -0 "$pid" 2>/dev/null; do
+    local now_epoch
+    now_epoch=$(date +%s)
+
+    if [ "${#messages[@]}" -gt 0 ] && { [ "$message_index" -eq 0 ] || [ $((now_epoch - last_message_epoch)) -ge "$interval_seconds" ]; }; then
+      message="${messages[$((message_index % ${#messages[@]}))]}"
+      message_index=$((message_index + 1))
+      last_message_epoch=$now_epoch
+    fi
+
+    show_animated_wait_frame "${frames[$((frame_index % ${#frames[@]}))]}" "$message" $((now_epoch - start_epoch)) "$frame_index"
+    frame_index=$((frame_index + 1))
+    sleep 0.2
+  done
+
+  wait "$pid"
+  local exit_code=$?
+  clear_animated_wait_frame
+  echo ""
+  return "$exit_code"
+}
+
+show_process_log_tail() {
+  local path=$1
+  local label=$2
+  local tail_lines=${3:-80}
+
+  if [ ! -f "$path" ]; then
+    return
+  fi
+
+  if [ ! -s "$path" ]; then
+    return
+  fi
+
+  echo -e "  ${CYAN}${label} (last ${tail_lines} lines):${RESET}"
+  tail -n "$tail_lines" "$path" | while IFS= read -r line; do
+    echo -e "    ${DIM}${line}${RESET}"
+  done
+}
+
+invoke_process_quietly_with_animation() {
+  local failure_label=$1
+  local interval_seconds=$2
+  shift 2
+
+  if [ "$1" != "--" ]; then
+    echo "invoke_process_quietly_with_animation requires -- before the command" >&2
+    return 2
+  fi
+  shift
+
+  local stdout_path
+  local stderr_path
+  stdout_path=$(mktemp "${TMPDIR:-/tmp}/guardianagent-startup-stdout.XXXXXX")
+  stderr_path=$(mktemp "${TMPDIR:-/tmp}/guardianagent-startup-stderr.XXXXXX")
+
+  "$@" >"$stdout_path" 2>"$stderr_path" &
+  local pid=$!
+
+  if ! wait_for_process_with_messages "$pid" "$interval_seconds" "${TEST_WAIT_MESSAGES[@]}"; then
+    local exit_code=$?
+    show_process_log_tail "$stdout_path" "$failure_label output"
+    show_process_log_tail "$stderr_path" "$failure_label errors"
+    rm -f "$stdout_path" "$stderr_path"
+    return "$exit_code"
+  fi
+
+  rm -f "$stdout_path" "$stderr_path"
+  return 0
+}
+
+TEST_WAIT_MESSAGES=(
+  "Reticulating Splines..."
+  "Correlating failing dimensions..."
+  "Reindexing assertion nebulae..."
+  "Consulting the flake detector..."
+  "Probing CLI command routing..."
+  "Verifying web channel auth paths..."
+  "Exercising CORS guardrails..."
+  "Stressing request body limits..."
+  "Validating SSE stream handling..."
+  "Auditing static path traversal blocks..."
+  "Checking runtime watchdog behavior..."
+  "Scanning for secret redaction leaks..."
+  "Simulating prompt-injection defenses..."
+  "Evaluating rate limiter thresholds..."
+  "Replaying anomaly detection events..."
+  "Exercising budget timeout controls..."
+  "Verifying provider failover logic..."
+  "Inspecting threat-intel workflows..."
+  "Cross-checking moltbook connector safety..."
+  "Synchronizing audit event timelines..."
+  "Rebuilding provider capability map..."
+  "Sampling conversation memory paths..."
+  "Validating analytics persistence..."
+  "Confirming sqlite fallback behavior..."
+  "Exercising config loader validation..."
+  "Traversing integration edge cases..."
+  "Polishing response schema checks..."
+  "Rehearsing incident response hooks..."
+  "Watching for race-condition ghosts..."
+  "Rehydrating test doubles..."
+  "Inspecting guardian policy gates..."
+  "Verifying denied-path enforcement..."
+  "Red-teaming output scanners..."
+  "Comparing state machine transitions..."
+  "Sweeping telemetry breadcrumbs..."
+  "Containing socket chaos..."
+  "Tightening endpoint contracts..."
+  "Testing dashboard callback paths..."
+  "Verifying quick-actions metadata..."
+  "Exercising reference-guide APIs..."
+  "Aligning threat-label taxonomy..."
+  "Diffing audit summaries..."
+  "Rechecking provider connectivity probes..."
+  "Validating agent lifecycle transitions..."
+  "Measuring event-bus backpressure..."
+  "Ensuring queue ordering invariants..."
+  "Stress-testing concurrent dispatch..."
+  "Reheating cold-start assumptions..."
+  "Checking stale-session cleanup..."
+  "Revisiting malformed payload handling..."
+  "Reconciling SSE auth tokens..."
+  "Confirming static MIME mapping..."
+  "Sandboxing hostile forum connectors..."
+  "Verifying defensive defaults..."
+  "Running adversarial content heuristics..."
+  "Replaying watchdog recovery paths..."
+  "Shaping deterministic test outputs..."
+  "Aligning structured log contracts..."
+  "Resolving synthetic network hops..."
+  "Finalizing assertion matrix..."
+  "Verifying cross-platform paths..."
+  "Checking Node runtime compatibility..."
+  "Confirming process shutdown hygiene..."
+  "Charging the shield generators..."
+  "Rerouting power from life support to CI..."
+  "Checking whether the cake is still a lie..."
+  "Rolling for initiative against flaky tests..."
+  "Spinning up the TARDIS stabilizers..."
+  "Calibrating the flux capacitor..."
+  "Escorting the payload through staging..."
+  "Deploying extra pylons for test coverage..."
+  "Untangling redstone timing loops..."
+  "Checking for creepers near the build cache..."
+  "Sharpening the Master Sword of refactors..."
+  "Feeding quarters into the arcade cabinet..."
+  "Cleaning the cartridge contacts..."
+  "Defragging the holodeck..."
+  "Triangulating the stargate glyphs..."
+  "Counting to 42, just to be safe..."
+  "Booting the cyberdeck diagnostics..."
+  "Cooling the warp core..."
+  "Listening for the dial-up handshake of destiny..."
+  "Syncing save files with the cloud kingdom..."
+  "Grinding XP for integration tests..."
+  "Speedrunning the dependency dungeon..."
+  "Loading the next biome..."
+  "Checking if the boss music is justified..."
+  "Almost there, stitching final reports..."
+)
 
 # ── Step 1: Check Node.js ─────────────────────────────────────
 echo -e "${CYAN}[1/6] Checking Node.js...${RESET}"
+write_wait_line "Waking the runtime engines..."
 if ! command -v node &>/dev/null; then
   echo -e "  ${RED}ERROR: Node.js not found. Install from https://nodejs.org${RESET}"
   exit 1
@@ -79,6 +276,7 @@ fi
 
 # ── Step 2: Install dependencies ──────────────────────────────
 echo -e "${CYAN}[2/6] Checking dependencies...${RESET}"
+write_wait_line "Reticulating Splines..."
 NEEDS_INSTALL=false
 if [ ! -d "node_modules" ]; then
   NEEDS_INSTALL=true
@@ -101,6 +299,7 @@ echo -e "${CYAN}    Checking bundled tools...${RESET}"
 
 # Install Playwright browser if @playwright/mcp is a dependency and Chromium is missing
 if [ -d "node_modules/@playwright/mcp" ]; then
+  write_wait_line "Checking Playwright Chromium browser..."
   if ! npx playwright install --dry-run chromium 2>/dev/null | grep -q "already installed" 2>/dev/null; then
     echo "  Installing Playwright Chromium browser..."
     npx playwright install chromium 2>/dev/null || {
@@ -123,6 +322,7 @@ if [ "$START_ONLY" = true ]; then
 else
   # ── Step 3: Build ─────────────────────────────────────────────
   echo -e "${CYAN}[3/6] Building TypeScript...${RESET}"
+  write_wait_line "Cleaning old build artifacts and forging TypeScript into JavaScript..."
   rm -rf dist
   npm run build
   if [ -f "dist/index.js" ]; then
@@ -137,8 +337,9 @@ else
     echo -e "${CYAN}[4/6] Tests: SKIPPED${RESET}"
   else
     echo -e "${CYAN}[4/6] Running tests...${RESET}"
+    write_wait_line "Interrogating the test matrix..."
     TEST_START=$(date +%s)
-    npx vitest run --reporter=dot
+    invoke_process_quietly_with_animation "Test runner" 4 -- npx vitest run --reporter=dot
     TEST_END=$(date +%s)
     TEST_DURATION=$((TEST_END - TEST_START))
     echo -e "  ${GREEN}Tests: PASSED (${TEST_DURATION}s)${RESET}"

@@ -23,6 +23,14 @@ import type { DashboardCallbacks, SSEEvent, SSEListener, UIInvalidationEvent } f
 import type { AuditEventType, AuditSeverity } from '../guardian/audit-log.js';
 import { createLogger } from '../util/logging.js';
 import { timingSafeEqualString } from '../util/crypto-guardrails.js';
+import {
+  isSecurityAlertSeverity,
+  isSecurityAlertSource,
+  normalizeSecurityAlertSources,
+} from '../runtime/security-alerts.js';
+import { isSecurityAlertStatus } from '../runtime/security-alert-lifecycle.js';
+import { isSecurityActivityStatus } from '../runtime/security-activity-log.js';
+import { isDeploymentProfile, isSecurityOperatingMode } from '../runtime/security-posture.js';
 
 const log = createLogger('channel:web');
 
@@ -1622,6 +1630,330 @@ export class WebChannel implements ChannelAdapter {
         const result = this.dashboard.onNetworkThreatAcknowledge(parsed.alertId.trim());
         sendJSON(res, 200, result);
         this.maybeEmitUIInvalidation(result, ['network', 'security'], 'network.threat.acknowledged', url.pathname);
+        return;
+      }
+
+      // GET /api/security/alerts — unified host/network/gateway/native alerts
+      if (req.method === 'GET' && url.pathname === '/api/security/alerts') {
+        if (!this.dashboard.onSecurityAlerts) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const includeAcknowledged = (url.searchParams.get('includeAcknowledged') ?? 'false').toLowerCase() === 'true';
+        const includeInactive = (url.searchParams.get('includeInactive') ?? 'false').toLowerCase() === 'true';
+        const parsedLimit = Number.parseInt(url.searchParams.get('limit') ?? '100', 10);
+        const limit = Number.isFinite(parsedLimit) ? parsedLimit : 100;
+        const query = trimOptionalString(url.searchParams.get('query'));
+        const type = trimOptionalString(url.searchParams.get('type'));
+        const rawStatus = trimOptionalString(url.searchParams.get('status'))?.toLowerCase();
+        const rawSource = trimOptionalString(url.searchParams.get('source'));
+        const rawSources = (trimOptionalString(url.searchParams.get('sources')) ?? '')
+          .split(',')
+          .map((value) => value.trim().toLowerCase())
+          .filter(Boolean);
+        const rawSeverity = trimOptionalString(url.searchParams.get('severity'))?.toLowerCase();
+
+        if (rawSource && !isSecurityAlertSource(rawSource.toLowerCase())) {
+          sendJSON(res, 400, { error: "source must be one of 'host', 'network', 'gateway', or 'native'" });
+          return;
+        }
+        if (rawSources.some((value) => !isSecurityAlertSource(value))) {
+          sendJSON(res, 400, { error: "sources must contain only 'host', 'network', 'gateway', or 'native'" });
+          return;
+        }
+        if (rawSeverity && !isSecurityAlertSeverity(rawSeverity)) {
+          sendJSON(res, 400, { error: "severity must be one of 'low', 'medium', 'high', or 'critical'" });
+          return;
+        }
+        if (rawStatus && !isSecurityAlertStatus(rawStatus)) {
+          sendJSON(res, 400, { error: "status must be one of 'active', 'acknowledged', 'resolved', or 'suppressed'" });
+          return;
+        }
+
+        const sources = normalizeSecurityAlertSources(rawSource, rawSources);
+        sendJSON(res, 200, this.dashboard.onSecurityAlerts({
+          query,
+          source: rawSource?.toLowerCase() as 'host' | 'network' | 'gateway' | 'native' | undefined,
+          sources,
+          severity: rawSeverity as 'low' | 'medium' | 'high' | 'critical' | undefined,
+          status: rawStatus as 'active' | 'acknowledged' | 'resolved' | 'suppressed' | undefined,
+          type,
+          includeAcknowledged,
+          includeInactive,
+          limit,
+        }));
+        return;
+      }
+
+      // POST /api/security/alerts/ack — acknowledge host/network/gateway/native alert
+      if (req.method === 'POST' && url.pathname === '/api/security/alerts/ack') {
+        if (!this.dashboard.onSecurityAlertAcknowledge) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body = '';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { alertId?: string; source?: string };
+        try {
+          parsed = JSON.parse(body) as { alertId?: string; source?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed.alertId?.trim()) {
+          sendJSON(res, 400, { error: 'alertId is required' });
+          return;
+        }
+        const source = trimOptionalString(parsed.source)?.toLowerCase();
+        if (source && !isSecurityAlertSource(source)) {
+          sendJSON(res, 400, { error: "source must be one of 'host', 'network', 'gateway', or 'native'" });
+          return;
+        }
+        const result = this.dashboard.onSecurityAlertAcknowledge({
+          alertId: parsed.alertId.trim(),
+          source: source as 'host' | 'network' | 'gateway' | 'native' | undefined,
+        });
+        sendJSON(res, 200, result);
+        const topics = result.source === 'network' ? ['network', 'security'] : ['security'];
+        this.maybeEmitUIInvalidation(result, topics, 'security.alert.acknowledged', url.pathname);
+        return;
+      }
+
+      // POST /api/security/alerts/resolve — resolve host/network/gateway/native alert
+      if (req.method === 'POST' && url.pathname === '/api/security/alerts/resolve') {
+        if (!this.dashboard.onSecurityAlertResolve) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body = '';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { alertId?: string; source?: string; reason?: string };
+        try {
+          parsed = JSON.parse(body) as { alertId?: string; source?: string; reason?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed.alertId?.trim()) {
+          sendJSON(res, 400, { error: 'alertId is required' });
+          return;
+        }
+        const source = trimOptionalString(parsed.source)?.toLowerCase();
+        if (source && !isSecurityAlertSource(source)) {
+          sendJSON(res, 400, { error: "source must be one of 'host', 'network', 'gateway', or 'native'" });
+          return;
+        }
+        const result = this.dashboard.onSecurityAlertResolve({
+          alertId: parsed.alertId.trim(),
+          source: source as 'host' | 'network' | 'gateway' | 'native' | undefined,
+          reason: trimOptionalString(parsed.reason),
+        });
+        sendJSON(res, 200, result);
+        const topics = result.source === 'network' ? ['network', 'security'] : ['security'];
+        this.maybeEmitUIInvalidation(result, topics, 'security.alert.resolved', url.pathname);
+        return;
+      }
+
+      // POST /api/security/alerts/suppress — suppress host/network/gateway/native alert
+      if (req.method === 'POST' && url.pathname === '/api/security/alerts/suppress') {
+        if (!this.dashboard.onSecurityAlertSuppress) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body = '';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { alertId?: string; source?: string; reason?: string; suppressedUntil?: number };
+        try {
+          parsed = JSON.parse(body) as { alertId?: string; source?: string; reason?: string; suppressedUntil?: number };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed.alertId?.trim()) {
+          sendJSON(res, 400, { error: 'alertId is required' });
+          return;
+        }
+        if (!Number.isFinite(parsed.suppressedUntil)) {
+          sendJSON(res, 400, { error: 'suppressedUntil is required and must be a number' });
+          return;
+        }
+        const source = trimOptionalString(parsed.source)?.toLowerCase();
+        if (source && !isSecurityAlertSource(source)) {
+          sendJSON(res, 400, { error: "source must be one of 'host', 'network', 'gateway', or 'native'" });
+          return;
+        }
+        const result = this.dashboard.onSecurityAlertSuppress({
+          alertId: parsed.alertId.trim(),
+          source: source as 'host' | 'network' | 'gateway' | 'native' | undefined,
+          reason: trimOptionalString(parsed.reason),
+          suppressedUntil: Number(parsed.suppressedUntil),
+        });
+        sendJSON(res, 200, result);
+        const topics = result.source === 'network' ? ['network', 'security'] : ['security'];
+        this.maybeEmitUIInvalidation(result, topics, 'security.alert.suppressed', url.pathname);
+        return;
+      }
+
+      // GET /api/security/activity — persisted real-time activity log for agentic security workflows
+      if (req.method === 'GET' && url.pathname === '/api/security/activity') {
+        if (!this.dashboard.onSecurityActivityLog) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const rawLimit = Number(url.searchParams.get('limit') ?? 200);
+        const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(500, rawLimit)) : 200;
+        const rawStatus = trimOptionalString(url.searchParams.get('status'))?.toLowerCase();
+        const agentId = trimOptionalString(url.searchParams.get('agentId'));
+        if (rawStatus && !isSecurityActivityStatus(rawStatus)) {
+          sendJSON(res, 400, { error: "status must be one of 'started', 'skipped', 'completed', or 'failed'" });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onSecurityActivityLog({
+          limit,
+          status: rawStatus && isSecurityActivityStatus(rawStatus) ? rawStatus : undefined,
+          agentId,
+        }));
+        return;
+      }
+
+      // GET /api/security/posture — advisory operating mode recommendation
+      if (req.method === 'GET' && url.pathname === '/api/security/posture') {
+        if (!this.dashboard.onSecurityPosture) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const rawProfile = trimOptionalString(url.searchParams.get('profile'))?.toLowerCase();
+        const rawCurrentMode = trimOptionalString(url.searchParams.get('currentMode'))?.toLowerCase();
+        const includeAcknowledged = (url.searchParams.get('includeAcknowledged') ?? 'false').toLowerCase() === 'true';
+        if (rawProfile && !isDeploymentProfile(rawProfile)) {
+          sendJSON(res, 400, { error: "profile must be one of 'personal', 'home', or 'organization'" });
+          return;
+        }
+        if (rawCurrentMode && !isSecurityOperatingMode(rawCurrentMode)) {
+          sendJSON(res, 400, { error: "currentMode must be one of 'monitor', 'guarded', 'lockdown', or 'ir_assist'" });
+          return;
+        }
+        const profile = rawProfile && isDeploymentProfile(rawProfile) ? rawProfile : undefined;
+        const currentMode = rawCurrentMode && isSecurityOperatingMode(rawCurrentMode) ? rawCurrentMode : undefined;
+        sendJSON(res, 200, this.dashboard.onSecurityPosture({
+          profile,
+          currentMode,
+          includeAcknowledged,
+        }));
+        return;
+      }
+
+      // GET /api/security/containment — effective containment state for the current profile/mode
+      if (req.method === 'GET' && url.pathname === '/api/security/containment') {
+        if (!this.dashboard.onSecurityContainmentStatus) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const rawProfile = trimOptionalString(url.searchParams.get('profile'))?.toLowerCase();
+        const rawCurrentMode = trimOptionalString(url.searchParams.get('currentMode'))?.toLowerCase();
+        if (rawProfile && !isDeploymentProfile(rawProfile)) {
+          sendJSON(res, 400, { error: "profile must be one of 'personal', 'home', or 'organization'" });
+          return;
+        }
+        if (rawCurrentMode && !isSecurityOperatingMode(rawCurrentMode)) {
+          sendJSON(res, 400, { error: "currentMode must be one of 'monitor', 'guarded', 'lockdown', or 'ir_assist'" });
+          return;
+        }
+        const profile = rawProfile && isDeploymentProfile(rawProfile) ? rawProfile : undefined;
+        const currentMode = rawCurrentMode && isSecurityOperatingMode(rawCurrentMode) ? rawCurrentMode : undefined;
+        sendJSON(res, 200, this.dashboard.onSecurityContainmentStatus({
+          profile,
+          currentMode,
+        }));
+        return;
+      }
+
+      // GET /api/windows-defender/status
+      if (req.method === 'GET' && url.pathname === '/api/windows-defender/status') {
+        if (!this.dashboard.onWindowsDefenderStatus) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onWindowsDefenderStatus());
+        return;
+      }
+
+      // POST /api/windows-defender/refresh
+      if (req.method === 'POST' && url.pathname === '/api/windows-defender/refresh') {
+        if (!this.dashboard.onWindowsDefenderRefresh) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const result = await this.dashboard.onWindowsDefenderRefresh();
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['security'], 'windows-defender.refreshed', url.pathname);
+        return;
+      }
+
+      // POST /api/windows-defender/scan
+      if (req.method === 'POST' && url.pathname === '/api/windows-defender/scan') {
+        if (!this.dashboard.onWindowsDefenderScan) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body = '';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { type?: string; path?: string };
+        try {
+          parsed = JSON.parse(body) as { type?: string; path?: string };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        const type = trimOptionalString(parsed.type)?.toLowerCase();
+        if (type !== 'quick' && type !== 'full' && type !== 'custom') {
+          sendJSON(res, 400, { error: "type must be one of 'quick', 'full', or 'custom'" });
+          return;
+        }
+        const path = trimOptionalString(parsed.path);
+        if (type === 'custom' && !path) {
+          sendJSON(res, 400, { error: 'path is required when type is custom' });
+          return;
+        }
+        const result = await this.dashboard.onWindowsDefenderScan({ type, path });
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['security'], 'windows-defender.scan.requested', url.pathname);
+        return;
+      }
+
+      // POST /api/windows-defender/signatures/update
+      if (req.method === 'POST' && url.pathname === '/api/windows-defender/signatures/update') {
+        if (!this.dashboard.onWindowsDefenderUpdateSignatures) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const result = await this.dashboard.onWindowsDefenderUpdateSignatures();
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['security'], 'windows-defender.signatures.updated', url.pathname);
         return;
       }
 
@@ -4302,6 +4634,23 @@ export class WebChannel implements ChannelAdapter {
         const contentType = MIME_TYPES[ext] ?? 'application/octet-stream';
         const content = await readFile(vendorPath);
         res.writeHead(200, { 'Content-Type': contentType });
+        res.end(content);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    // Serve vendored Monaco editor files from web/public/vendor/monaco/
+    if (pathname.startsWith('/vendor/monaco/')) {
+      const monacoDir = normalize(join(this.staticDir, 'vendor', 'monaco'));
+      const monacoPath = normalize(join(monacoDir, pathname.slice('/vendor/monaco/'.length)));
+      if (!monacoPath.startsWith(monacoDir)) return false;
+      try {
+        const ext = extname(monacoPath);
+        const contentType = MIME_TYPES[ext] ?? (ext === '.ttf' ? 'font/ttf' : 'application/octet-stream');
+        const content = await readFile(monacoPath);
+        res.writeHead(200, { 'Content-Type': contentType, 'Cache-Control': 'public, max-age=86400' });
         res.end(content);
         return true;
       } catch {

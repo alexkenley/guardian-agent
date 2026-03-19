@@ -41,7 +41,7 @@ import type {
 } from './types.js';
 import { TOOL_CATEGORIES, BUILTIN_TOOL_CATEGORIES } from './types.js';
 import { MCPClientManager } from './mcp-client.js';
-import type { AssistantCloudConfig, AssistantNetworkConfig, BrowserConfig, WebSearchConfig } from '../config/types.js';
+import { DEFAULT_TOOL_ALLOWED_COMMANDS, type AssistantCloudConfig, type AssistantNetworkConfig, type BrowserConfig, type WebSearchConfig } from '../config/types.js';
 import type { ConversationService } from '../runtime/conversation.js';
 import type { AgentMemoryStore } from '../runtime/agent-memory-store.js';
 import type { CodeSessionStore } from '../runtime/code-sessions.js';
@@ -55,8 +55,25 @@ import { classifyDevice, lookupOuiVendor } from '../runtime/network-intelligence
 import type { NetworkTrafficService, TrafficConnectionSample } from '../runtime/network-traffic.js';
 import type { HostMonitoringService, HostMonitorReport } from '../runtime/host-monitor.js';
 import type { GatewayFirewallMonitoringService, GatewayMonitorReport } from '../runtime/gateway-monitor.js';
+import type { ContainmentService } from '../runtime/containment-service.js';
+import type { WindowsDefenderProvider } from '../runtime/windows-defender-provider.js';
+import type { ScheduledTaskEventTrigger } from '../runtime/scheduled-tasks.js';
 import { parseBanner, inferServiceFromPort } from '../runtime/network-fingerprinting.js';
 import { parseAirportWifi, parseNetshWifi, parseNmcliWifi, correlateWifiClients } from '../runtime/network-wifi.js';
+import { assessSecurityPosture, isDeploymentProfile, isSecurityOperatingMode } from '../runtime/security-posture.js';
+import {
+  acknowledgeUnifiedSecurityAlert,
+  availableSecurityAlertSources,
+  collectUnifiedSecurityAlerts,
+  matchesSecurityAlertQuery,
+  normalizeSecurityAlertSeverity,
+  normalizeSecurityAlertSources,
+  resolveUnifiedSecurityAlert,
+  suppressUnifiedSecurityAlert,
+  type SecurityAlertSeverity,
+  type SecurityAlertSource,
+} from '../runtime/security-alerts.js';
+import { isSecurityAlertStatus } from '../runtime/security-alert-lifecycle.js';
 import { AwsClient, type AwsInstanceConfig } from './cloud/aws-client.js';
 import { AzureClient, type AzureInstanceConfig, type AzureServiceName } from './cloud/azure-client.js';
 import { CpanelClient, type CpanelInstanceConfig } from './cloud/cpanel-client.js';
@@ -66,6 +83,14 @@ import { GcpClient, type GcpInstanceConfig, type GcpServiceName } from './cloud/
 import { VercelClient, type VercelInstanceConfig } from './cloud/vercel-client.js';
 import { buildGmailRawMessage } from '../runtime/gmail-compose.js';
 import { inferMimeType, parseDocument } from '../search/document-parser.js';
+import {
+  WorkspaceDependencyLedger,
+  captureJsDependencySnapshot,
+  detectJsDependencyMutationIntent,
+  diffJsDependencySnapshots,
+  type JsDependencyMutationIntent,
+  type JsDependencySnapshot,
+} from '../runtime/workspace-dependency-ledger.js';
 
 const MAX_JOBS = 200;
 const MAX_APPROVALS = 200;
@@ -180,6 +205,13 @@ interface ShellCommandCheck {
   safe: boolean;
   reason?: string;
   plan?: ShellCommandPlan;
+}
+
+interface PendingJsDependencyTracking {
+  intent: JsDependencyMutationIntent;
+  before: JsDependencySnapshot | null;
+  workspaceRoot: string;
+  cwd: string;
 }
 
 function normalizeShellCommandName(command: string): string {
@@ -474,6 +506,10 @@ export interface ToolExecutorOptions {
   gatewayMonitor?: GatewayFirewallMonitoringService;
   /** Centralized gateway-monitor check wrapper so alerts are audited/notified consistently. */
   runGatewayMonitorCheck?: (source: string) => Promise<GatewayMonitorReport>;
+  /** Native Windows Defender status and action provider. */
+  windowsDefender?: WindowsDefenderProvider;
+  /** Security containment evaluation for effective mode and bounded response state. */
+  containmentService?: ContainmentService;
   /** Network feature configuration. */
   networkConfig?: AssistantNetworkConfig;
   /** OS-level process sandbox configuration. */
@@ -496,8 +532,13 @@ export interface ToolExecutorOptions {
   onPreExecute?: (action: {
     type: string;
     toolName: string;
+    category?: ToolCategory;
     params: Record<string, unknown>;
     agentId: string;
+    origin: ToolExecutionRequest['origin'];
+    scheduleId?: string;
+    channel?: string;
+    principalId?: string;
   }) => Promise<{ allowed: boolean; reason?: string }>;
   /** Executed tool trajectories for eval/tracing. */
   onToolExecuted?: (
@@ -554,7 +595,8 @@ interface AutomationTaskSummary {
   description?: string;
   type: 'tool' | 'playbook' | 'agent';
   target: string;
-  cron: string;
+  cron?: string;
+  eventTrigger?: ScheduledTaskEventTrigger;
   enabled: boolean;
   args?: Record<string, unknown>;
   prompt?: string;
@@ -596,6 +638,7 @@ interface AutomationControlPlane {
 export class ToolExecutor {
   private readonly registry = new ToolRegistry();
   private readonly approvals = new ToolApprovalStore();
+  private readonly dependencyLedgers = new Map<string, WorkspaceDependencyLedger>();
   private readonly jobs: ToolJobRecord[] = [];
   private readonly jobsById = new Map<string, ToolJobRecord>();
   private readonly pendingApprovalContexts = new Map<string, PendingApprovalContext>();
@@ -663,7 +706,7 @@ export class ToolExecutor {
           : [options.workspaceRoot],
         allowedCommands: options.allowedCommands?.length
           ? [...options.allowedCommands]
-          : ['node', 'npm', 'npx', 'git', 'ollama', 'ls', 'dir', 'pwd', 'echo', 'cat', 'head', 'tail', 'whoami', 'hostname', 'uname', 'date'],
+          : [...DEFAULT_TOOL_ALLOWED_COMMANDS],
         allowedDomains: options.allowedDomains?.length
           ? [...options.allowedDomains]
           : ['localhost', '127.0.0.1', 'moltbook.com'],
@@ -822,6 +865,7 @@ export class ToolExecutor {
         'For this coding-session request, the workspace root above is already trusted. Do not call update_tool_policy to add that same path unless the user explicitly wants to widen the persistent global allowlist.',
       );
     }
+    lines.push(...this.getDependencyAwarenessContextLines(effectiveWorkspaceRoot));
     if (this.policy.sandbox.allowedDomains.length > 0) {
       lines.push(`Allowed domains: ${this.policy.sandbox.allowedDomains.join(', ')}`);
     }
@@ -1064,6 +1108,69 @@ export class ToolExecutor {
       return [...CODE_ASSISTANT_ALLOWED_COMMANDS];
     }
     return this.policy.sandbox.allowedCommands;
+  }
+
+  private getDependencyLedger(workspaceRoot: string): WorkspaceDependencyLedger {
+    const normalizedWorkspaceRoot = resolve(workspaceRoot);
+    let ledger = this.dependencyLedgers.get(normalizedWorkspaceRoot);
+    if (!ledger) {
+      ledger = new WorkspaceDependencyLedger(normalizedWorkspaceRoot);
+      this.dependencyLedgers.set(normalizedWorkspaceRoot, ledger);
+    }
+    return ledger;
+  }
+
+  private getDependencyAwarenessContextLines(workspaceRoot: string): string[] {
+    try {
+      return this.getDependencyLedger(workspaceRoot).buildPromptLines();
+    } catch {
+      return [];
+    }
+  }
+
+  private prepareJsDependencyTracking(
+    commands: ParsedCommand[],
+    cwd: string,
+    request?: Partial<ToolExecutionRequest>,
+  ): PendingJsDependencyTracking | null {
+    const intent = commands
+      .map((parsedCommand) => detectJsDependencyMutationIntent(parsedCommand))
+      .find((value): value is JsDependencyMutationIntent => value !== null);
+    if (!intent) return null;
+
+    const workspaceRoot = this.getEffectiveWorkspaceRoot(request);
+    try {
+      return {
+        intent,
+        before: captureJsDependencySnapshot(workspaceRoot, cwd),
+        workspaceRoot,
+        cwd,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private finalizeJsDependencyTracking(tracking: PendingJsDependencyTracking | null, command: string): void {
+    if (!tracking) return;
+    try {
+      const after = captureJsDependencySnapshot(tracking.workspaceRoot, tracking.cwd);
+      if (!after) return;
+      const diff = diffJsDependencySnapshots(tracking.before, after);
+      if (!diff) return;
+
+      this.getDependencyLedger(tracking.workspaceRoot).recordMutation({
+        intent: tracking.intent,
+        command,
+        cwd: tracking.cwd,
+        before: tracking.before,
+        after,
+        diff,
+        now: this.now,
+      });
+    } catch {
+      // Dependency-awareness bookkeeping should not make the shell command fail.
+    }
   }
 
   private isCodeWorkspacePolicyNoOp(
@@ -3277,8 +3384,13 @@ export class ToolExecutor {
         const evaluation = await this.options.onPreExecute({
           type: job.risk ?? 'mutating',
           toolName: job.toolName,
+          category: this.registry.get(job.toolName)?.definition.category,
           params: args,
           agentId: request.agentId ?? 'assistant-tools',
+          origin: request.origin,
+          scheduleId: request.scheduleId,
+          channel: request.channel,
+          principalId: request.principalId,
         });
       if (!evaluation.allowed) {
         job.status = 'denied';
@@ -4452,6 +4564,7 @@ export class ToolExecutor {
           execMode: executionPlan.execMode,
           resolvedExecutable: executionPlan.resolvedExecutable,
         };
+        const dependencyTracking = this.prepareJsDependencyTracking(shellCheck.plan.commands, cwd, request);
         this.guardAction(request, 'execute_command', {
           command,
           cwd,
@@ -4476,6 +4589,7 @@ export class ToolExecutor {
               maxBuffer: 1_000_000,
               env,
             });
+          this.finalizeJsDependencyTracking(dependencyTracking, command);
           return {
             success: true,
             output: {
@@ -11514,6 +11628,545 @@ export class ToolExecutor {
           ? await this.options.runGatewayMonitorCheck(`tool:gateway_firewall_check:${request.agentId || 'assistant'}`)
           : await this.options.gatewayMonitor.runCheck();
         return { success: true, output: report };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'windows_defender_status',
+        description: 'Return the current Windows Defender provider status, including AV/real-time protection health, firewall posture, signature age, and active native alerts. Read-only.',
+        shortDescription: 'Return current Windows Defender status and native alerts.',
+        risk: 'read_only',
+        category: 'system',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {},
+        },
+      },
+      async (_args, request) => {
+        if (!this.options.windowsDefender) {
+          return { success: false, error: 'Windows Defender integration is not available.' };
+        }
+        this.guardAction(request, 'system_info', {
+          action: 'windows_defender_status',
+        });
+        return {
+          success: true,
+          output: {
+            status: this.options.windowsDefender.getStatus(),
+            alerts: this.options.windowsDefender.listAlerts({
+              includeAcknowledged: true,
+              includeInactive: true,
+              limit: 100,
+            }),
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'windows_defender_refresh',
+        description: 'Refresh Windows Defender status from the host, updating AV/real-time protection health, signature age, firewall posture, and native alerts. Read-only with host-native command execution.',
+        shortDescription: 'Refresh Windows Defender status from the host.',
+        risk: 'read_only',
+        category: 'system',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {},
+        },
+      },
+      async (_args, request) => {
+        if (!this.options.windowsDefender) {
+          return { success: false, error: 'Windows Defender integration is not available.' };
+        }
+        this.guardAction(request, 'system_info', {
+          action: 'windows_defender_refresh',
+        });
+        return {
+          success: true,
+          output: {
+            status: await this.options.windowsDefender.refreshStatus(),
+            alerts: this.options.windowsDefender.listAlerts({
+              includeAcknowledged: true,
+              includeInactive: true,
+              limit: 100,
+            }),
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'windows_defender_scan',
+        description: 'Request a Windows Defender scan on the host. Supports quick, full, or custom path scans. Mutating and approval-gated.',
+        shortDescription: 'Request a Windows Defender quick, full, or custom scan.',
+        risk: 'mutating',
+        category: 'system',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            type: { type: 'string', description: 'Scan type: quick, full, or custom.' },
+            path: { type: 'string', description: 'Required custom scan path when type is custom.' },
+          },
+          required: ['type'],
+        },
+      },
+      async (args, request) => {
+        if (!this.options.windowsDefender) {
+          return { success: false, error: 'Windows Defender integration is not available.' };
+        }
+        const type = asString(args.type).trim().toLowerCase();
+        if (type !== 'quick' && type !== 'full' && type !== 'custom') {
+          return { success: false, error: "type must be one of 'quick', 'full', or 'custom'." };
+        }
+        const path = asString(args.path).trim() || undefined;
+        if (type === 'custom' && !path) {
+          return { success: false, error: 'path is required when type is custom.' };
+        }
+        this.guardAction(request, 'execute_command', {
+          action: 'windows_defender_scan',
+          scanType: type,
+          path,
+        });
+        const result = await this.options.windowsDefender.runScan({ type, path });
+        if (!result.success) {
+          return { success: false, error: result.message };
+        }
+        return { success: true, output: { ...result, type, path } };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'windows_defender_update_signatures',
+        description: 'Request an immediate Windows Defender signature update on the host. Mutating and approval-gated.',
+        shortDescription: 'Request an immediate Windows Defender signature update.',
+        risk: 'mutating',
+        category: 'system',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {},
+        },
+      },
+      async (_args, request) => {
+        if (!this.options.windowsDefender) {
+          return { success: false, error: 'Windows Defender integration is not available.' };
+        }
+        this.guardAction(request, 'execute_command', {
+          action: 'windows_defender_update_signatures',
+        });
+        const result = await this.options.windowsDefender.updateSignatures();
+        if (!result.success) {
+          return { success: false, error: result.message };
+        }
+        return { success: true, output: result };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'security_alert_search',
+        description: 'Search and filter unified security alerts across workstation host monitoring, network anomaly alerts, gateway firewall monitoring, and native security-provider alerts such as Windows Defender. Read-only.',
+        shortDescription: 'Search unified security alerts across host, network, gateway, and native sources.',
+        risk: 'read_only',
+        category: 'system',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Optional free-text query matched against source, type, description, and evidence.' },
+            source: { type: 'string', description: 'Optional single source filter: host, network, gateway, or native.' },
+            sources: {
+              type: 'array',
+              description: 'Optional list of source filters: any of host, network, gateway, native.',
+              items: { type: 'string' },
+            },
+            severity: { type: 'string', description: 'Optional severity filter: low, medium, high, or critical.' },
+            status: { type: 'string', description: 'Optional lifecycle-state filter: active, acknowledged, resolved, or suppressed.' },
+            type: { type: 'string', description: 'Optional exact alert-type filter.' },
+            limit: { type: 'number', description: 'Maximum alerts to return (1-200, default 50).' },
+            includeAcknowledged: { type: 'boolean', description: 'Include acknowledged alerts (default false).' },
+            includeInactive: { type: 'boolean', description: 'Include resolved and suppressed alerts (default false).' },
+          },
+        },
+      },
+      async (args, request) => {
+        if (!this.options.hostMonitor && !this.options.networkBaseline && !this.options.gatewayMonitor && !this.options.windowsDefender) {
+          return { success: false, error: 'No security alert sources are available.' };
+        }
+
+        const limit = Math.max(1, Math.min(200, asNumber(args.limit, 50)));
+        const includeAcknowledged = !!args.includeAcknowledged;
+        const query = asString(args.query).trim();
+        const severity = normalizeSecurityAlertSeverity(args.severity);
+        if (asString(args.severity).trim() && !severity) {
+          return { success: false, error: "Severity must be one of 'low', 'medium', 'high', or 'critical'." };
+        }
+        const statusFilter = asString(args.status).trim().toLowerCase();
+        if (statusFilter && !isSecurityAlertStatus(statusFilter)) {
+          return { success: false, error: "status must be one of 'active', 'acknowledged', 'resolved', or 'suppressed'." };
+        }
+        const typeFilter = asString(args.type).trim().toLowerCase();
+        const selectedSources = normalizeSecurityAlertSources(args.source, args.sources);
+        const includeInactive = !!args.includeInactive;
+
+        this.guardAction(request, 'system_info', {
+          action: 'security_alert_search',
+          query,
+          sources: selectedSources,
+          severity: severity ?? undefined,
+          status: statusFilter || undefined,
+          type: typeFilter || undefined,
+          includeAcknowledged,
+          includeInactive,
+          limit,
+        });
+
+        let alerts = collectUnifiedSecurityAlerts({
+          hostMonitor: this.options.hostMonitor,
+          networkBaseline: this.options.networkBaseline,
+          gatewayMonitor: this.options.gatewayMonitor,
+          windowsDefender: this.options.windowsDefender,
+          includeAcknowledged,
+          includeInactive,
+        });
+        if (selectedSources.length > 0) {
+          const allowed = new Set(selectedSources);
+          alerts = alerts.filter((alert) => allowed.has(alert.source));
+        }
+        if (severity) {
+          alerts = alerts.filter((alert) => alert.severity === severity);
+        }
+        if (statusFilter) {
+          alerts = alerts.filter((alert) => alert.status === statusFilter);
+        }
+        if (typeFilter) {
+          alerts = alerts.filter((alert) => alert.type.toLowerCase() === typeFilter);
+        }
+        if (query) {
+          alerts = alerts.filter((alert) => matchesSecurityAlertQuery(alert, query));
+        }
+
+        alerts.sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+        const filteredTotal = alerts.length;
+        const bySource: Record<SecurityAlertSource, number> = { host: 0, network: 0, gateway: 0, native: 0 };
+        const bySeverity: Record<SecurityAlertSeverity, number> = { low: 0, medium: 0, high: 0, critical: 0 };
+        for (const alert of alerts) {
+          bySource[alert.source] += 1;
+          bySeverity[alert.severity] += 1;
+        }
+
+        return {
+          success: true,
+          output: {
+            totalMatches: filteredTotal,
+            returned: Math.min(filteredTotal, limit),
+            searchedSources: selectedSources.length > 0 ? selectedSources : availableSecurityAlertSources(this.options),
+            includeAcknowledged,
+            includeInactive,
+            query: query || undefined,
+            severity: severity ?? undefined,
+            status: statusFilter || undefined,
+            type: typeFilter || undefined,
+            bySource,
+            bySeverity,
+            alerts: alerts.slice(0, limit),
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'security_posture_status',
+        description: 'Summarize current security posture across available host, network, and gateway alert sources and recommend whether to stay in monitor mode or move to guarded, lockdown, or ir_assist. Read-only.',
+        shortDescription: 'Summarize security posture and recommend an operating mode.',
+        risk: 'read_only',
+        category: 'system',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Deployment profile: personal, home, or organization. Defaults to personal.' },
+            currentMode: { type: 'string', description: 'Current operating mode: monitor, guarded, lockdown, or ir_assist. Defaults to monitor.' },
+            includeAcknowledged: { type: 'boolean', description: 'Include acknowledged alerts when assessing posture (default false).' },
+          },
+        },
+      },
+      async (args, request) => {
+        const profileRaw = asString(args.profile, 'personal').trim().toLowerCase() || 'personal';
+        if (!isDeploymentProfile(profileRaw)) {
+          return { success: false, error: "Profile must be one of 'personal', 'home', or 'organization'." };
+        }
+        const modeRaw = asString(args.currentMode, 'monitor').trim().toLowerCase() || 'monitor';
+        if (!isSecurityOperatingMode(modeRaw)) {
+          return { success: false, error: "currentMode must be one of 'monitor', 'guarded', 'lockdown', or 'ir_assist'." };
+        }
+        const includeAcknowledged = !!args.includeAcknowledged;
+
+        this.guardAction(request, 'system_info', {
+          action: 'security_posture_status',
+          profile: profileRaw,
+          currentMode: modeRaw,
+          includeAcknowledged,
+        });
+
+        const alerts = collectUnifiedSecurityAlerts({
+          hostMonitor: this.options.hostMonitor,
+          networkBaseline: this.options.networkBaseline,
+          gatewayMonitor: this.options.gatewayMonitor,
+          windowsDefender: this.options.windowsDefender,
+          includeAcknowledged,
+          includeInactive: false,
+        });
+        const assessment = assessSecurityPosture({
+          profile: profileRaw,
+          currentMode: modeRaw,
+          alerts,
+          availableSources: availableSecurityAlertSources(this.options),
+        });
+
+        return {
+          success: true,
+          output: assessment,
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'security_containment_status',
+        description: 'Return the effective local containment state, including temporary guarded auto-escalation, active bounded response actions, and the effective operating mode derived from current alerts. Read-only.',
+        shortDescription: 'Return effective security containment state and active bounded actions.',
+        risk: 'read_only',
+        category: 'system',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            profile: { type: 'string', description: 'Deployment profile: personal, home, or organization. Defaults to personal.' },
+            currentMode: { type: 'string', description: 'Current operating mode: monitor, guarded, lockdown, or ir_assist. Defaults to monitor.' },
+          },
+        },
+      },
+      async (args, request) => {
+        if (!this.options.containmentService) {
+          return { success: false, error: 'Security containment is not available.' };
+        }
+        const profileRaw = asString(args.profile, 'personal').trim().toLowerCase() || 'personal';
+        if (!isDeploymentProfile(profileRaw)) {
+          return { success: false, error: "Profile must be one of 'personal', 'home', or 'organization'." };
+        }
+        const modeRaw = asString(args.currentMode, 'monitor').trim().toLowerCase() || 'monitor';
+        if (!isSecurityOperatingMode(modeRaw)) {
+          return { success: false, error: "currentMode must be one of 'monitor', 'guarded', 'lockdown', or 'ir_assist'." };
+        }
+
+        this.guardAction(request, 'system_info', {
+          action: 'security_containment_status',
+          profile: profileRaw,
+          currentMode: modeRaw,
+        });
+
+        const alerts = collectUnifiedSecurityAlerts({
+          hostMonitor: this.options.hostMonitor,
+          networkBaseline: this.options.networkBaseline,
+          gatewayMonitor: this.options.gatewayMonitor,
+          windowsDefender: this.options.windowsDefender,
+          includeAcknowledged: false,
+          includeInactive: false,
+        });
+        const posture = assessSecurityPosture({
+          profile: profileRaw,
+          currentMode: modeRaw,
+          alerts,
+          availableSources: availableSecurityAlertSources(this.options),
+        });
+
+        return {
+          success: true,
+          output: this.options.containmentService.getState({
+            profile: profileRaw,
+            currentMode: modeRaw,
+            alerts,
+            posture,
+          }),
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'security_alert_ack',
+        description: 'Acknowledge a security alert by id across host monitoring, network anomaly alerts, gateway firewall monitoring, or native security-provider alerts. Mutating and approval-gated.',
+        shortDescription: 'Acknowledge a security alert by id.',
+        risk: 'mutating',
+        category: 'system',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            alertId: { type: 'string', description: 'Security alert id to acknowledge.' },
+            source: { type: 'string', description: 'Optional source hint: host, network, gateway, or native.' },
+          },
+          required: ['alertId'],
+        },
+      },
+      async (args, request) => {
+        const alertId = requireString(args.alertId, 'alertId').trim();
+        const source = normalizeSecurityAlertSources(args.source, undefined)[0];
+        if (asString(args.source).trim() && !source) {
+          return { success: false, error: "Source must be one of 'host', 'network', 'gateway', or 'native'." };
+        }
+        this.guardAction(request, 'write_file', {
+          path: 'security:alerts',
+          action: 'security_alert_ack',
+          alertId,
+          source: source ?? undefined,
+        });
+        const result = acknowledgeUnifiedSecurityAlert({
+          alertId,
+          source,
+          hostMonitor: this.options.hostMonitor,
+          networkBaseline: this.options.networkBaseline,
+          gatewayMonitor: this.options.gatewayMonitor,
+          windowsDefender: this.options.windowsDefender,
+        });
+        if (!result.success) {
+          return { success: false, error: result.message };
+        }
+        return {
+          success: true,
+          output: {
+            alertId,
+            source: result.source,
+            message: result.message,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'security_alert_resolve',
+        description: 'Resolve a security alert by id across host monitoring, network anomaly alerts, gateway firewall monitoring, or native security-provider alerts. Mutating and approval-gated.',
+        shortDescription: 'Resolve a security alert by id.',
+        risk: 'mutating',
+        category: 'system',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            alertId: { type: 'string', description: 'Security alert id to resolve.' },
+            source: { type: 'string', description: 'Optional source hint: host, network, gateway, or native.' },
+            reason: { type: 'string', description: 'Optional operator reason for resolving the alert.' },
+          },
+          required: ['alertId'],
+        },
+      },
+      async (args, request) => {
+        const alertId = requireString(args.alertId, 'alertId').trim();
+        const source = normalizeSecurityAlertSources(args.source, undefined)[0];
+        if (asString(args.source).trim() && !source) {
+          return { success: false, error: "Source must be one of 'host', 'network', 'gateway', or 'native'." };
+        }
+        const reason = asString(args.reason).trim() || undefined;
+        this.guardAction(request, 'write_file', {
+          path: 'security:alerts',
+          action: 'security_alert_resolve',
+          alertId,
+          source: source ?? undefined,
+          reason,
+        });
+        const result = resolveUnifiedSecurityAlert({
+          alertId,
+          source,
+          reason,
+          hostMonitor: this.options.hostMonitor,
+          networkBaseline: this.options.networkBaseline,
+          gatewayMonitor: this.options.gatewayMonitor,
+          windowsDefender: this.options.windowsDefender,
+        });
+        if (!result.success) {
+          return { success: false, error: result.message };
+        }
+        return {
+          success: true,
+          output: {
+            alertId,
+            source: result.source,
+            message: result.message,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'security_alert_suppress',
+        description: 'Suppress a security alert by id across host monitoring, network anomaly alerts, gateway firewall monitoring, or native security-provider alerts until a future timestamp. Mutating and approval-gated.',
+        shortDescription: 'Suppress a security alert until a future timestamp.',
+        risk: 'mutating',
+        category: 'system',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            alertId: { type: 'string', description: 'Security alert id to suppress.' },
+            source: { type: 'string', description: 'Optional source hint: host, network, gateway, or native.' },
+            suppressedUntil: { type: 'number', description: 'UTC timestamp in milliseconds when suppression expires.' },
+            reason: { type: 'string', description: 'Optional operator reason for suppressing the alert.' },
+          },
+          required: ['alertId', 'suppressedUntil'],
+        },
+      },
+      async (args, request) => {
+        const alertId = requireString(args.alertId, 'alertId').trim();
+        const source = normalizeSecurityAlertSources(args.source, undefined)[0];
+        if (asString(args.source).trim() && !source) {
+          return { success: false, error: "Source must be one of 'host', 'network', 'gateway', or 'native'." };
+        }
+        const suppressedUntil = asNumber(args.suppressedUntil, NaN);
+        if (!Number.isFinite(suppressedUntil)) {
+          return { success: false, error: 'suppressedUntil must be a valid UTC timestamp in milliseconds.' };
+        }
+        const reason = asString(args.reason).trim() || undefined;
+        this.guardAction(request, 'write_file', {
+          path: 'security:alerts',
+          action: 'security_alert_suppress',
+          alertId,
+          source: source ?? undefined,
+          suppressedUntil,
+          reason,
+        });
+        const result = suppressUnifiedSecurityAlert({
+          alertId,
+          source,
+          suppressedUntil,
+          reason,
+          hostMonitor: this.options.hostMonitor,
+          networkBaseline: this.options.networkBaseline,
+          gatewayMonitor: this.options.gatewayMonitor,
+          windowsDefender: this.options.windowsDefender,
+        });
+        if (!result.success) {
+          return { success: false, error: result.message };
+        }
+        return {
+          success: true,
+          output: {
+            alertId,
+            source: result.source,
+            suppressedUntil,
+            message: result.message,
+          },
+        };
       },
     );
 

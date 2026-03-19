@@ -30,6 +30,11 @@ GuardianAgent is an AI agent orchestration system where:
 - **Remote/tool output is NOT trusted by default** — tool results are classified as `trusted`, `low_trust`, or `quarantined` before they re-enter planning, memory, or delegation
 - **Durable memory is not equivalent to reviewed truth** — memory entries carry trust, provenance, and quarantine state
 
+For the shipped local defensive overlay on top of the runtime security model, see:
+
+- [Agentic Defensive Security Suite - As-Built Spec](/mnt/s/Development/GuardianAgent/docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md)
+- [Contextual Security Uplift Spec](/mnt/s/Development/GuardianAgent/docs/specs/CONTEXTUAL-SECURITY-UPLIFT-SPEC.md)
+
 ### Threats Addressed
 
 | Threat | Mitigation |
@@ -312,6 +317,12 @@ Current contextual additions:
 - repeated identical failures in one execution chain are blocked before they can overspend further
 - non-read-only tools are capped per execution chain to reduce broken-tool runaway spend
 
+Current default operator posture for the main assistant:
+- shipped config defaults to `approval_policy: on-request` / `assistant.tools.policyMode: approve_each`
+- the default main-assistant shell allowlist is read-oriented: `git status`, `git diff`, `git log`, `ls`, `dir`, `pwd`, `echo`, `cat`, `head`, `tail`, `whoami`, `hostname`, `uname`, `date`
+- broad package-manager and interpreter entry points such as bare `node`, `npm`, and `npx` are not in the main default allowlist; Coding Assistant code sessions continue to use their separate repo-scoped command policy
+- approved workspace-local JS dependency mutations are recorded in `.guardianagent/dependency-awareness.json` and surfaced back into workspace tool context; dependency state is not persisted through the global memory store
+
 ### Risk Classification
 
 | Risk Level | Examples |
@@ -473,7 +484,7 @@ Three simplified top-level config aliases provide a clean mental model that maps
 
 ```yaml
 sandbox_mode: strict           # off | workspace-write | strict
-approval_policy: auto-approve  # on-request | auto-approve | autonomous
+approval_policy: on-request    # on-request | auto-approve | autonomous
 writable_roots:                # merged into allowedPaths + sandbox additionalWritePaths
   - /home/user/projects
 ```
@@ -610,7 +621,7 @@ A practical host-monitoring layer intended for direct host installs where there 
 - Multiple active high-severity alerts can force operator review before sensitive execution continues
 - Denials are logged as `action_denied` with `controller: HostMonitor`
 
-**Operator surfaces:** audit events (`host_alert`), configurable notification fanout, Security page (posture cards, active alerts, manual check, acknowledgement), built-in automation starters.
+**Operator surfaces:** audit events (`host_alert`), configurable notification fanout, Security page (`Overview`, `Alerts`, `Agentic Security Log`), manual checks, acknowledgement/resolve/suppress controls, built-in automation starters.
 
 **Limits:** This is a practical first-pass monitor, not EDR-grade telemetry. File drift is metadata-based. Deep process correlation and auditd/eBPF/EndpointSecurity telemetry are future work.
 
@@ -626,6 +637,54 @@ Monitors edge devices (OPNsense, pfSense, UniFi-class gateways) as a separate su
 - Alert family: `gateway_alert`
 
 Gateway monitoring is intentionally separate from local host monitoring — host monitoring observes the machine GuardianAgent runs on, while gateway monitoring observes remote perimeter devices through operator-supplied collectors.
+
+### Native Host Protection Integration
+
+GuardianAgent now integrates with Microsoft Defender as a native host-security provider on Windows.
+
+Current behavior:
+
+- Defender status, signatures, scan ages, firewall state, and Controlled Folder Access state are queryable from tools and the Security page
+- Defender detections are normalized into the unified local security alert model
+- approved quick/full/custom scans and signature refreshes can be requested through GuardianAgent
+- third-party antivirus coexistence is handled explicitly so Defender can be marked inactive/passive rather than always treated as a hard failure
+
+GuardianAgent is the policy, correlation, and response layer above native host protection. It is not currently a replacement antivirus engine.
+
+### Unified Local Alerting, Posture, and Containment
+
+Local defensive signals are normalized across:
+
+- host monitoring
+- network monitoring
+- gateway monitoring
+- native Windows Defender integration
+
+Current operator surfaces include:
+
+- unified local alert queue
+- advisory posture recommendations across `monitor`, `guarded`, `lockdown`, and `ir_assist`
+- bounded containment decisions that can restrict risky browser mutation, scheduled mutation, network egress, and command execution depending on effective mode
+
+The memory boundary is explicit:
+
+- raw security alerts stay in security-specific state
+- reviewed summaries may be promoted to memory separately
+
+### Agentic Security Triage And Activity Logging
+
+GuardianAgent now includes a dedicated LLM-backed security triage loop on top of the deterministic alerting stack.
+
+Current behavior:
+
+- a dedicated `security-triage` agent investigates selected security events with read-first tooling
+- a `security-triage-dispatcher` wakes the triage agent only for higher-value events
+- low-confidence noise families are skipped
+- repeated events are deduped by cooldown
+- completed triage is written to audit as `automation_finding`
+- the Security page now includes a persisted live activity tab labeled `Agentic Security Log`
+
+This makes the defensive stack partly agentic without handing full autonomous remediation to the model layer.
 
 ---
 

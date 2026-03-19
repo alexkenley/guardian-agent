@@ -1,7 +1,7 @@
 # Coding Assistant Spec
 
-**Status:** As Built  
-**Date:** 2026-03-17  
+**Status:** As Built
+**Date:** 2026-03-19  
 **Primary UI:** [code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)  
 **Primary Runtime:** [index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)  
 **Code Session Store:** [code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)  
@@ -195,9 +195,53 @@ The Code page keeps the existing layout:
 
 - session rail
 - explorer
-- editor/diff viewer
+- Monaco Editor / diff editor
 - terminal panes
 - assistant sidebar
+
+### Monaco Editor
+
+The code editor is powered by Monaco Editor (the engine behind VS Code), vendored from npm and served from `web/public/vendor/monaco/`. Monaco is loaded on demand via AMD loader injection (`loadMonaco()`) the first time the code page renders.
+
+Editor capabilities provided by Monaco out of the box:
+
+- syntax highlighting for 100+ languages via built-in Monarch tokenizers
+- line numbers, code folding, minimap, find/replace, command palette
+- bracket pair colorization, indent guides, multi-cursor editing
+- autocomplete and IntelliSense for TypeScript/JavaScript/JSON/CSS/HTML (runs in Web Workers, no backend)
+- Ctrl+S / Cmd+S save via Monaco keybinding system
+- `automaticLayout: true` for responsive resizing
+
+Language detection uses `mapMonacoLanguageId(filePath)` which maps 40+ file extensions to Monaco's built-in language IDs: TypeScript, JavaScript, JSON, CSS/SCSS/LESS, HTML/XML, Markdown, YAML, Python, Shell, Go, Rust, C/C++, C#, Java, Ruby, PHP, SQL, GraphQL, Swift, Kotlin, Lua, Dart, Scala, and more.
+
+### Diff Editor
+
+When `showDiff` is toggled, Monaco's `createDiffEditor()` replaces the regular editor with a side-by-side diff view. The original (read-only) model shows the last saved file content, and the modified (editable) model shows the current file content with changes. The diff editor supports both side-by-side and inline rendering modes.
+
+### Editor Model Lifecycle
+
+Each open tab gets its own `monaco.editor.ITextModel` keyed by file URI (`monaco.Uri.file(filePath)`):
+
+- models persist in memory while the tab is open, preserving undo history
+- cursor position, scroll position, and selection are saved per tab via `editor.saveViewState()` and restored on tab switch via `editor.restoreViewState()`
+- on tab close, the model is disposed
+- on session switch, all models are disposed
+- on full DOM rerender (e.g. terminal output, chat messages), the editor is disposed and recreated with saved view state
+
+### Theme System
+
+14 bundled editor themes defined in `web/public/js/monaco-themes.js`:
+
+- **Guardian Agent** (default) — maps existing CSS color variables to Monaco theme format
+- Threat Vector Security, Dracula, Monokai, Nord, Gruvbox Dark/Light, Solarized Dark/Light, GitHub Dark/Light, Night Owl, One Dark, Catppuccin Mocha
+
+Theme selection persists in localStorage (`guardianagent_monaco_theme`). A dropdown in the editor panel header switches themes instantly via `monaco.editor.setTheme()`. Themes are global to all editor instances.
+
+### Vendoring
+
+Monaco is installed as a devDependency (`monaco-editor`). The `postinstall` script copies `node_modules/monaco-editor/min/vs/` to `web/public/vendor/monaco/vs/`. The vendor directory is gitignored. The WebChannel serves it from `/vendor/monaco/` with caching headers.
+
+### Assistant Sidebar
 
 The assistant sidebar remains tabbed:
 
@@ -461,6 +505,7 @@ As built, the Coding Assistant still does not provide:
 - dedicated subagent `task` orchestration in the coding runtime yet
 - automatic smart-routing escalation when the model gets stuck yet
 - fully event-driven cross-client live sync; the Code page currently relies on refresh/polling and normal session reload paths
+- LSP backend integration for cross-file intelligence beyond Monaco's built-in TS/JS/JSON/CSS/HTML workers
 
 ## Verification
 
