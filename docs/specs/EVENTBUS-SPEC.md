@@ -58,12 +58,8 @@ Capture the architecture improvements currently implemented from the OpenClaw pa
   - adds `createSession()`, `destroySession()`, `hasCookieSession()`
   - sends `credentials: 'same-origin'` with requests
 - `web/public/js/app.js`:
+  - login flow exchanges the bearer token for a session cookie through `api.createSession()` after successful authentication
   - SSE prefers `/sse` when cookie session is active, otherwise falls back to `/sse?token=...`
-
-### Not Yet Wired
-
-- Login flow in `web/public/js/app.js` does not currently call `api.createSession()` after bearer auth success.
-- Browser token storage is still used as the primary auth path unless session exchange is triggered elsewhere.
 
 ## 3) Event Classification Pipeline
 

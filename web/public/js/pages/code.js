@@ -434,7 +434,15 @@ function bindTerminalListeners() {
   terminalListenersBound = true;
   if (!terminalUnloadBound) {
     terminalUnloadBound = true;
-    window.addEventListener('beforeunload', () => {
+    window.addEventListener('beforeunload', (event) => {
+      const activeSession = getActiveSession();
+      if (activeSession) {
+        syncActiveEditorStateFromMonaco(activeSession);
+      }
+      if (getDirtyCodeTabs().length > 0) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
       for (const session of codeState.sessions || []) {
         for (const tab of session.terminalTabs || []) {
           if (tab.runtimeTerminalId) {
@@ -711,6 +719,7 @@ function deriveTaskItems(session) {
   const backlog = getApprovalBacklogState(session);
   const recentJobs = Array.isArray(session?.recentJobs) ? session.recentJobs.filter(isCodeAssistantJob) : [];
   const workspaceProfile = session?.workspaceProfile || null;
+  const workspaceTrust = session?.workspaceTrust || null;
   const workspaceMap = session?.workspaceMap || null;
   const workingSet = session?.workingSet || null;
 
@@ -736,6 +745,22 @@ function deriveTaskItems(session) {
       status: 'info',
       detail: workspaceProfile.summary,
       meta: workspaceProfile.stack?.length ? workspaceProfile.stack.join(', ') : (workspaceProfile.repoKind || ''),
+    });
+  }
+
+  if (workspaceTrust?.summary) {
+    const findingPreview = Array.isArray(workspaceTrust.findings) && workspaceTrust.findings.length > 0
+      ? workspaceTrust.findings.slice(0, 2).map((finding) => `${finding.path}: ${finding.summary}`).join(' ')
+      : '';
+    const nativeProtectionMeta = workspaceTrust.nativeProtection?.summary
+      ? ` • ${workspaceTrust.nativeProtection.summary}`
+      : '';
+    items.push({
+      id: 'workspace-trust',
+      title: `Workspace trust: ${workspaceTrust.state}`,
+      status: workspaceTrust.state === 'trusted' ? 'completed' : workspaceTrust.state === 'blocked' ? 'blocked' : 'warn',
+      detail: findingPreview ? `${workspaceTrust.summary} ${findingPreview}` : workspaceTrust.summary,
+      meta: `${workspaceTrust.scannedFiles || 0} scanned file${workspaceTrust.scannedFiles === 1 ? '' : 's'}${workspaceTrust.truncated ? ' • truncated' : ''}${nativeProtectionMeta}`,
     });
   }
 
@@ -1020,6 +1045,39 @@ function normalizeWorkspaceProfile(profile) {
   };
 }
 
+function normalizeWorkspaceTrust(trust) {
+  if (!trust || typeof trust !== 'object') return null;
+  const nativeProtection = trust.nativeProtection && typeof trust.nativeProtection === 'object'
+    ? {
+      provider: String(trust.nativeProtection.provider || ''),
+      status: String(trust.nativeProtection.status || 'pending'),
+      summary: String(trust.nativeProtection.summary || ''),
+      observedAt: Number(trust.nativeProtection.observedAt) || 0,
+      requestedAt: Number(trust.nativeProtection.requestedAt) || 0,
+      details: Array.isArray(trust.nativeProtection.details)
+        ? trust.nativeProtection.details.map((value) => String(value))
+        : [],
+    }
+    : null;
+  return {
+    state: String(trust.state || 'trusted'),
+    summary: String(trust.summary || ''),
+    assessedAt: Number(trust.assessedAt) || 0,
+    scannedFiles: Number(trust.scannedFiles) || 0,
+    truncated: !!trust.truncated,
+    findings: Array.isArray(trust.findings)
+      ? trust.findings.map((finding) => ({
+        severity: String(finding?.severity || 'warn'),
+        kind: String(finding?.kind || 'unknown'),
+        path: String(finding?.path || ''),
+        summary: String(finding?.summary || ''),
+        evidence: String(finding?.evidence || ''),
+      }))
+      : [],
+    nativeProtection,
+  };
+}
+
 function normalizeWorkspaceMap(map) {
   if (!map || typeof map !== 'object') return null;
   return {
@@ -1059,6 +1117,7 @@ function normalizeServerSession(record, existing = {}) {
   const uiState = record?.uiState || {};
   const workState = record?.workState || {};
   const hasWorkspaceProfile = Object.prototype.hasOwnProperty.call(workState, 'workspaceProfile');
+  const hasWorkspaceTrust = Object.prototype.hasOwnProperty.call(workState, 'workspaceTrust');
   const hasWorkspaceMap = Object.prototype.hasOwnProperty.call(workState, 'workspaceMap');
   const hasWorkingSet = Object.prototype.hasOwnProperty.call(workState, 'workingSet');
   return {
@@ -1086,6 +1145,7 @@ function normalizeServerSession(record, existing = {}) {
     planSummary: workState.planSummary || '',
     compactedSummary: workState.compactedSummary || '',
     workspaceProfile: hasWorkspaceProfile ? normalizeWorkspaceProfile(workState.workspaceProfile) : (existing.workspaceProfile || null),
+    workspaceTrust: hasWorkspaceTrust ? normalizeWorkspaceTrust(workState.workspaceTrust) : (existing.workspaceTrust || null),
     workspaceMap: hasWorkspaceMap ? normalizeWorkspaceMap(workState.workspaceMap) : (existing.workspaceMap || null),
     workingSet: hasWorkingSet ? normalizeWorkspaceWorkingSet(workState.workingSet) : (existing.workingSet || null),
     activeAssistantTab: isAssistantTab(uiState.activeAssistantTab) ? uiState.activeAssistantTab : (existing.activeAssistantTab || 'chat'),
@@ -1490,6 +1550,7 @@ function getSessionRenderSignature(session) {
     planSummary: session.planSummary || '',
     compactedSummary: session.compactedSummary || '',
     workspaceProfile: normalizeWorkspaceProfile(session.workspaceProfile),
+    workspaceTrust: normalizeWorkspaceTrust(session.workspaceTrust),
     workspaceMap: normalizeWorkspaceMap(session.workspaceMap),
     workingSet: normalizeWorkspaceWorkingSet(session.workingSet),
     activeAssistantTab: session.activeAssistantTab || 'chat',
@@ -1968,6 +2029,23 @@ function renderChatNotice(session) {
   `;
 }
 
+function renderWorkspaceTrustNotice(session) {
+  const workspaceTrust = session?.workspaceTrust || null;
+  if (!workspaceTrust || workspaceTrust.state === 'trusted') return '';
+  const nativeDetection = workspaceTrust.nativeProtection?.status === 'detected'
+    || workspaceTrust.findings.some((finding) => finding.kind === 'native_av_detection');
+  const copy = nativeDetection
+    ? 'Native host malware scanning reported a workspace detection. Guardian will require approval before repo execution or persistence actions continue.'
+    : workspaceTrust.state === 'blocked'
+      ? 'Static repo review found high-risk indicators. Guardian will require approval before repo execution or persistence actions continue.'
+      : 'Static repo review found suspicious indicators. Guardian will require approval before repo execution or persistence actions continue.';
+  return `
+    <div class="code-chat__notice is-warning">
+      <span>${esc(copy)}</span>
+    </div>
+  `;
+}
+
 function formatCodeMessageRole(role) {
   switch (role) {
     case 'user':
@@ -2104,6 +2182,7 @@ function renderAssistantPanel(session) {
           <div class="code-chat__meta">
             <div class="code-chat__workspace">${esc(session.resolvedRoot || session.workspaceRoot)}</div>
           </div>
+          ${renderWorkspaceTrustNotice(session)}
           <div class="code-assistant-panel__scroll">
             ${renderApprovalList(session)}
             ${renderTaskList(session)}
@@ -2122,6 +2201,7 @@ function renderAssistantPanel(session) {
         <div class="code-chat__meta">
           <div class="code-chat__workspace">${esc(session.resolvedRoot || session.workspaceRoot)}</div>
         </div>
+        ${renderWorkspaceTrustNotice(session)}
         ${renderChatNotice(session)}
         <div class="code-chat__history">
           ${!hasVisibleMessages
@@ -2333,6 +2413,14 @@ function renderSessionCard(session) {
   const approvalCount = Array.isArray(session.pendingApprovals) ? session.pendingApprovals.length : 0;
   const checkCount = getCheckBadgeCount(session);
   const taskCount = getTaskBadgeCount(session);
+  const workspaceTrust = session.workspaceTrust || null;
+  const trustBadgeClass = workspaceTrust?.state === 'blocked'
+    ? 'badge-critical'
+    : workspaceTrust?.state === 'caution'
+      ? 'badge-warn'
+      : workspaceTrust?.state === 'trusted'
+        ? 'badge-idle'
+        : '';
   return `
     <button class="code-session ${isActive ? 'is-active' : ''}" type="button" data-code-session-id="${escAttr(session.id)}">
       <div class="code-session__top">
@@ -2344,6 +2432,7 @@ function renderSessionCard(session) {
       </div>
       <div class="code-session__meta">${esc(session.workspaceRoot)}</div>
       <div class="code-session__badges">
+        ${workspaceTrust ? `<span class="badge ${trustBadgeClass}">trust ${esc(workspaceTrust.state)}</span>` : ''}
         ${approvalCount > 0 ? `<span class="badge badge-warn">${approvalCount} ${approvalCount === 1 ? 'approval' : 'approvals'}</span>` : ''}
         ${taskCount > 0 ? `<span class="badge badge-idle">${taskCount} ${taskCount === 1 ? 'task' : 'tasks'}</span>` : ''}
         ${checkCount > 0 ? `<span class="badge badge-info">${checkCount} ${checkCount === 1 ? 'check' : 'checks'}</span>` : ''}
@@ -2393,30 +2482,109 @@ function closeTab(session, index) {
   }
 }
 
+function syncActiveEditorStateFromMonaco(session = getActiveSession()) {
+  const currentTab = getActiveTab(session);
+  if (!currentTab || !monacoEditorInstance) return;
+  const value = monacoEditorInstance.getValue();
+  if (value !== (cachedFileView.source || '')) {
+    currentTab.content = value;
+    currentTab.dirty = true;
+  }
+}
+
+function getDirtyCodeTabs() {
+  const dirtyTabs = [];
+  for (const session of codeState.sessions || []) {
+    if (!Array.isArray(session?.openTabs)) continue;
+    for (const tab of session.openTabs) {
+      if (tab?.dirty && tab.filePath) {
+        dirtyTabs.push({ session, tab });
+      }
+    }
+  }
+  return dirtyTabs;
+}
+
+function formatDirtyTabsPrompt(dirtyTabs) {
+  if (dirtyTabs.length === 1) {
+    return `Save changes to ${basename(dirtyTabs[0].tab.filePath)} before leaving the Code page?\n\nPress OK to save and continue. Press Cancel to stay on this page.`;
+  }
+  const preview = dirtyTabs
+    .slice(0, 3)
+    .map(({ tab }) => basename(tab.filePath))
+    .join(', ');
+  const remainder = dirtyTabs.length > 3 ? `, and ${dirtyTabs.length - 3} more` : '';
+  return `Save ${dirtyTabs.length} unsaved files before leaving the Code page?\n\n${preview}${remainder}\n\nPress OK to save and continue. Press Cancel to stay on this page.`;
+}
+
+async function saveCodeTab(session, tab) {
+  if (!session || !tab?.filePath) return;
+  const activeSession = getActiveSession();
+  const isActiveSession = !!activeSession && activeSession.id === session.id;
+  const isActiveTab = isActiveSession && getActiveTab(session) === tab;
+  const content = isActiveTab && monacoEditorInstance ? monacoEditorInstance.getValue() : tab.content;
+  if (content == null) {
+    throw new Error(`No staged editor content is available for ${basename(tab.filePath)}.`);
+  }
+  const result = await api.codeFsWrite({
+    sessionId: session.id,
+    path: tab.filePath,
+    content,
+  });
+  if (!result?.success) {
+    throw new Error(result?.error || `Failed to save ${basename(tab.filePath)}.`);
+  }
+  tab.dirty = false;
+  tab.content = null;
+  if (isActiveTab) {
+    cachedFileView = { ...cachedFileView, source: content };
+  }
+}
+
+export async function confirmCodeRouteLeave() {
+  const activeSession = getActiveSession();
+  if (activeSession) {
+    syncActiveEditorStateFromMonaco(activeSession);
+  }
+  const dirtyTabs = getDirtyCodeTabs();
+  if (dirtyTabs.length === 0) return true;
+  if (!window.confirm(formatDirtyTabsPrompt(dirtyTabs))) {
+    return false;
+  }
+  try {
+    for (const { session, tab } of dirtyTabs) {
+      await saveCodeTab(session, tab);
+    }
+    saveState(codeState);
+    if (currentContainer) {
+      rerenderFromState();
+    }
+    return true;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const session = dirtyTabs[0]?.session || activeSession;
+    if (session) {
+      appendChatMessage(session, 'error', `Save failed: ${message}`);
+    }
+    saveState(codeState);
+    if (currentContainer) {
+      rerenderFromState();
+    }
+    window.alert(`Couldn't save your changes before leaving the Code page.\n\n${message}`);
+    return false;
+  }
+}
+
 // ─── Editor save ───────────────────────────────────────────
 
 async function saveEditorFile() {
   const session = getActiveSession();
   const tab = getActiveTab(session);
   if (!session || !tab || !tab.dirty) return;
-  // Get content from Monaco editor if available, otherwise from tab.content
-  const content = monacoEditorInstance ? monacoEditorInstance.getValue() : tab.content;
-  if (content == null) return;
   try {
-    const result = await api.codeFsWrite({
-      sessionId: session.id,
-      path: tab.filePath,
-      content,
-    });
-    if (result?.success) {
-      tab.dirty = false;
-      tab.content = null;
-      cachedFileView = { ...cachedFileView, source: content };
-      saveState(codeState);
-      rerenderFromState();
-    } else {
-      appendChatMessage(session, 'error', `Save failed: ${result?.error || 'Unknown error'}`);
-    }
+    await saveCodeTab(session, tab);
+    saveState(codeState);
+    rerenderFromState();
   } catch (err) {
     appendChatMessage(session, 'error', `Save failed: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -3088,13 +3256,7 @@ function bindEvents(container) {
       const currentTab = getActiveTab(session);
       if (currentTab) {
         saveMonacoViewState(currentTab.filePath);
-        if (monacoEditorInstance) {
-          const val = monacoEditorInstance.getValue();
-          if (val !== (cachedFileView.source || '')) {
-            currentTab.content = val;
-            currentTab.dirty = true;
-          }
-        }
+        syncActiveEditorStateFromMonaco(session);
       }
       openFileInTab(session, filePath);
       session.showDiff = false;
@@ -3135,13 +3297,7 @@ function bindEvents(container) {
       const currentTab = getActiveTab(session);
       if (currentTab) {
         saveMonacoViewState(currentTab.filePath);
-        if (monacoEditorInstance) {
-          const val = monacoEditorInstance.getValue();
-          if (val !== (cachedFileView.source || '')) {
-            currentTab.content = val;
-            currentTab.dirty = true;
-          }
-        }
+        syncActiveEditorStateFromMonaco(session);
       }
       session.activeTabIndex = idx;
       session.selectedFilePath = session.openTabs[idx]?.filePath || null;
@@ -3489,6 +3645,7 @@ function normalizeState(raw, agents) {
         planSummary: session.planSummary || '',
         compactedSummary: session.compactedSummary || '',
         workspaceProfile: normalizeWorkspaceProfile(session.workspaceProfile),
+        workspaceTrust: normalizeWorkspaceTrust(session.workspaceTrust),
         activeAssistantTab: isAssistantTab(session.activeAssistantTab) ? session.activeAssistantTab
           : (session.activeAssistantTab === 'tasks' || session.activeAssistantTab === 'approvals' || session.activeAssistantTab === 'checks') ? 'activity'
           : 'chat',

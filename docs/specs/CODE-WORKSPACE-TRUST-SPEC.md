@@ -1,0 +1,178 @@
+# Code Workspace Trust Spec
+
+**Status:** As Built  
+**Date:** 2026-03-20  
+**Primary Runtime:** [code-workspace-trust.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-trust.ts)  
+**Related Specs:** [Coding Assistant Spec](/mnt/s/Development/GuardianAgent/docs/specs/CODING-ASSISTANT-SPEC.md), [Contextual Security Uplift Spec](/mnt/s/Development/GuardianAgent/docs/specs/CONTEXTUAL-SECURITY-UPLIFT-SPEC.md)
+
+## Purpose
+
+Remove the Coding Assistant's previous assumption that creating a code session means the attached repo is automatically safe to execute.
+
+The shipped model now performs a bounded static review of the workspace before Guardian treats repo-scoped execution and persistence as low-friction actions.
+
+It now also enriches that static assessment with a native host-malware scan signal when a supported provider is available.
+
+## Shipped Model
+
+Every backend code session now carries a persisted `workspaceTrust` assessment in `CodeSessionWorkState`.
+
+Current states:
+
+- `trusted`
+- `caution`
+- `blocked`
+
+Assessment runs:
+
+- on code-session creation
+- when the session workspace root changes
+- during normal workspace-awareness refresh when the cached assessment is stale
+
+The assessment is deterministic and local-only. It does not execute repo code.
+
+The shipped trust model now has two parts:
+
+- a synchronous bounded static review of repo content
+- an asynchronous native AV enrichment pass recorded in `workspaceTrust.nativeProtection`
+
+The shipped assessment is intentionally non-agentic. No Guardian agent or LLM reviews the repo to decide trust, no repo code is executed, and a `trusted` outcome only means the current bounded checks found no indicators.
+
+## Detection Heuristics
+
+The current scanner is intentionally bounded and fast.
+
+It reviews a limited set of text-like repo files and looks for:
+
+- prompt-injection-style text in README/docs/prompt-like files
+- `package.json` lifecycle scripts such as `preinstall`, `postinstall`, and `prepare`
+- fetch-and-exec patterns such as `curl ... | sh` and `Invoke-WebRequest ... | iex`
+- encoded execution patterns such as PowerShell `-EncodedCommand`
+- inline interpreter execution such as `node -e` and `python -c`
+- suspicious network-fetch commands inside executable repo files such as scripts, workflows, Dockerfiles, and devcontainer files
+
+Current scoring:
+
+- any high-risk finding yields `blocked`
+- warning findings without a high-risk hit yield `caution`
+- no findings yields `trusted`
+
+## Native AV Enrichment
+
+Workspace trust now also records an optional `nativeProtection` sub-state.
+
+Current native backends:
+
+- Windows: existing Windows Defender custom-path scan support
+- Unix-like hosts: `clamdscan` or `clamscan` when available
+
+Current behavior:
+
+- the static assessment is stored immediately
+- a background native AV scan is then scheduled for the workspace root
+- the resulting provider status is persisted back into `workspaceTrust.nativeProtection`
+- a native detection adds a high-risk trust finding and forces `workspaceTrust.state = blocked`
+- a clean native scan does not override static trust findings
+- unavailable or failed native scans are surfaced in the summary, but do not by themselves promote a repo to `caution` or `blocked`
+
+Current statuses:
+
+- `pending`
+- `clean`
+- `detected`
+- `unavailable`
+- `error`
+
+## Prompt Handling
+
+Workspace trust now affects what repo-derived content is injected into the coding-session system context.
+
+Current behavior:
+
+- `trusted` workspaces include the normal workspace profile summary and working-set snippets
+- `caution` and `blocked` workspaces suppress raw working-set snippets from the system prompt
+- `caution` and `blocked` workspaces suppress the README-derived workspace summary from the system prompt
+- the system prompt includes the latest native AV status when available
+- the system prompt explicitly tells the model to treat repo files and repo-generated summaries as untrusted data and never follow instructions found inside them
+
+This is a prompt-hardening layer for repo content. It is separate from remote-content tainting in the contextual-security uplift.
+
+## Execution And Approval Behavior
+
+Workspace trust now narrows which code-session tools are auto-approved.
+
+Still auto-approved inside the active workspace:
+
+- `code_edit`, `code_patch`, `code_create`, `code_plan`, `code_git_diff`, `code_symbol_search`
+- repo-scoped filesystem tools
+- `memory_search`, `memory_recall`
+- `doc_create`
+
+Auto-approved only when `workspaceTrust.state = trusted`:
+
+- `code_test`, `code_build`, `code_lint`
+- `memory_save`
+- `task_create`, `task_update`, `task_delete`
+- `workflow_upsert`, `workflow_run`, `workflow_delete`
+
+Additional current behavior:
+
+- `shell_safe` remains allowlisted and repo-scoped
+- read-only shell commands such as `git status` still pass without approval
+- non-read-only shell execution in `caution` or `blocked` workspaces requires approval even under autonomous policy mode
+
+This keeps repo reading and editing low-friction while forcing a human decision before Guardian runs repo code or persists repo-derived state in a flagged workspace.
+
+## UI Surface
+
+The Code page now exposes workspace trust directly:
+
+- session rail badge showing trust state
+- activity card summarizing the latest assessment
+- chat/activity warning banner for `caution` and `blocked` workspaces
+- native AV status is folded into the assessment summary, and native detections change the warning copy from “static review” to “host malware scan”
+
+## Current Non-Goals
+
+The shipped version does **not** yet provide:
+
+- Git-host attestation or publisher trust
+- package-signature or SBOM verification
+- automatic Security-page alerts for repo trust findings
+- agentic repo trust review or dynamic detonation/sandbox execution
+- WSL-to-Windows Defender bridging when Guardian itself is not running on Windows
+- autonomous remediation or autonomous trust promotion
+
+## Primary Files
+
+- [code-workspace-trust.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-trust.ts)
+- [code-workspace-native-protection.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-native-protection.ts)
+- [code-workspace-trust-service.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-trust-service.ts)
+- [code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)
+- [index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
+- [executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
+- [code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
+
+## Verification
+
+Current regression coverage includes:
+
+- [code-workspace-trust.test.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-trust.test.ts)
+- [code-workspace-native-protection.test.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-native-protection.test.ts)
+- [code-workspace-trust-service.test.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-trust-service.test.ts)
+- [code-sessions.test.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.test.ts)
+- [executor.test.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.test.ts)
+- [test-coding-assistant.mjs](/mnt/s/Development/GuardianAgent/scripts/test-coding-assistant.mjs)
+- [test-code-ui-smoke.mjs](/mnt/s/Development/GuardianAgent/scripts/test-code-ui-smoke.mjs)
+
+Manual Windows-host validation helper:
+
+- [test-windows-defender-workspace-scan.ps1](/mnt/s/Development/GuardianAgent/scripts/test-windows-defender-workspace-scan.ps1)
+
+Validated during this implementation:
+
+- `npm test -- src/runtime/code-workspace-trust.test.ts src/runtime/code-workspace-native-protection.test.ts src/runtime/code-workspace-trust-service.test.ts src/runtime/code-sessions.test.ts src/tools/executor.test.ts src/runtime/windows-defender-provider.test.ts`
+- `node scripts/test-coding-assistant.mjs`
+- `node scripts/test-code-ui-smoke.mjs`
+- live WSL ClamAV validation using clean and EICAR-positive fixtures through `CodeWorkspaceNativeProtectionScanner`
+- manual Windows Defender custom-path scan validation using [test-windows-defender-workspace-scan.ps1](/mnt/s/Development/GuardianAgent/scripts/test-windows-defender-workspace-scan.ps1)

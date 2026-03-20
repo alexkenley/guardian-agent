@@ -118,6 +118,14 @@ const SECURITY_HELP = {
   },
 };
 
+function renderSecurityGuidancePanel(config = {}) {
+  return renderGuidancePanel({
+    collapsible: true,
+    collapsed: true,
+    ...config,
+  });
+}
+
 function cleanupSSE() {
   if (auditHandler) { offSSE('audit', auditHandler); auditHandler = null; }
   if (monAuditHandler) { offSSE('audit', monAuditHandler); monAuditHandler = null; }
@@ -131,7 +139,7 @@ export async function renderSecurity(container, options = {}) {
   cleanupSSE();
   container.innerHTML = `
     <h2 class="page-title">Security</h2>
-    ${renderGuidancePanel({
+    ${renderSecurityGuidancePanel({
       kicker: 'Security Guide',
       title: 'Investigation, triage, and evidence',
       whatItIs: 'Security is the canonical home for live alert triage, historical audit review, and threat-intel investigation and response planning.',
@@ -183,7 +191,7 @@ async function renderOverviewTab(panel) {
       .slice(0, 12);
 
     panel.innerHTML = `
-      ${renderGuidancePanel({
+      ${renderSecurityGuidancePanel({
         kicker: 'Overview',
         compact: true,
         whatItIs: 'Overview is the posture summary for the major security domains.',
@@ -533,7 +541,7 @@ async function renderAlertsTab(panel) {
       .slice(0, 200);
 
     panel.innerHTML = `
-      ${renderGuidancePanel({
+      ${renderSecurityGuidancePanel({
         kicker: 'Alerts',
         compact: true,
         whatItIs: 'Alerts is the active queue for security items that may need operator action.',
@@ -677,7 +685,7 @@ async function renderActivityTab(panel) {
     const entries = Array.isArray(activity.entries) ? [...activity.entries] : [];
 
     panel.innerHTML = `
-      ${renderGuidancePanel({
+      ${renderSecurityGuidancePanel({
         kicker: 'Agentic Security Log',
         compact: true,
         whatItIs: 'This tab is the persisted running log for the dedicated security agents and their triage workflow.',
@@ -801,7 +809,7 @@ async function renderAuditTab(panel) {
 
   try {
     const summary = await api.auditSummary(300000);
-    panel.innerHTML = renderGuidancePanel({
+    panel.innerHTML = renderSecurityGuidancePanel({
       kicker: 'Audit',
       compact: true,
       whatItIs: 'Audit is the full historical ledger for security, policy, and promoted automation events.',
@@ -1697,7 +1705,7 @@ async function renderCloudTab(panel) {
     const deniedCount = cloudEvents.filter((event) => event.type === 'action_denied').length;
 
     panel.innerHTML = `
-      ${renderGuidancePanel({
+      ${renderSecurityGuidancePanel({
         kicker: 'Threat Intel',
         compact: true,
         whatItIs: 'Threat Intel is the monitored-target and response-planning workspace.',
@@ -1811,7 +1819,7 @@ async function renderIntelTab(panel) {
     const lastScan = intelUiState.lastScan;
 
     panel.innerHTML = `
-      ${renderGuidancePanel({
+      ${renderSecurityGuidancePanel({
         kicker: 'Threat Intel',
         compact: true,
         whatItIs: 'Threat Intel is the monitored-target and response-planning workspace for longer-running identity-abuse and impersonation work.',

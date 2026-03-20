@@ -384,20 +384,16 @@ function Resolve-WebTokenValue {
     return $raw
 }
 
-function Ensure-WebAuthTokenInContent {
+function Get-WebRotateOnStartupFromContent {
     param(
-        [string]$Content,
-        [string]$Token
+        [string]$Content
     )
 
     $lines = $Content -split "`r?`n"
-    $result = New-Object System.Collections.Generic.List[string]
-
     $inWeb = $false
     $webIndent = 0
-    $hasToken = $false
-    $updated = $false
-    $effectiveToken = $null
+    $inAuth = $false
+    $authIndent = 0
 
     for ($i = 0; $i -lt $lines.Length; $i++) {
         $line = $lines[$i]
@@ -407,71 +403,40 @@ function Ensure-WebAuthTokenInContent {
         if (-not $inWeb -and $line -match '^\s*web:\s*$') {
             $inWeb = $true
             $webIndent = $indent
-            $hasToken = $false
-            $result.Add($line)
+            $inAuth = $false
             continue
         }
 
         if ($inWeb) {
             $isNextBlock = ($trimmed -ne '') -and ($trimmed -notmatch '^#') -and ($indent -le $webIndent)
             if ($isNextBlock) {
-                if (-not $hasToken) {
-                    $result.Add((' ' * ($webIndent + 2)) + "authToken: $Token")
-                    $effectiveToken = $Token
-                    $hasToken = $true
-                    $updated = $true
-                }
                 $inWeb = $false
+                $inAuth = $false
+                continue
             }
         }
 
-        if ($inWeb) {
-            if ($line -match '^\s*authToken:\s*(.*)$') {
-                $raw = $Matches[1].Trim().Trim("'`"")
-                if ($raw -match '^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$') {
-                    $envName = $Matches[1]
-                    $envValue = [Environment]::GetEnvironmentVariable($envName)
-                    if ($envValue) {
-                        $effectiveToken = $envValue
-                    } else {
-                        $line = (' ' * ($webIndent + 2)) + "authToken: $Token"
-                        $effectiveToken = $Token
-                        $updated = $true
-                    }
-                    $hasToken = $true
-                } elseif ($raw) {
-                    $effectiveToken = $raw
-                    $hasToken = $true
-                } else {
-                    $line = (' ' * ($webIndent + 2)) + "authToken: $Token"
-                    $effectiveToken = $Token
-                    $hasToken = $true
-                    $updated = $true
-                }
-            } elseif ($line -match '^\s*#\s*authToken:\s*') {
-                if (-not $hasToken) {
-                    $line = (' ' * ($webIndent + 2)) + "authToken: $Token"
-                    $effectiveToken = $Token
-                    $hasToken = $true
-                    $updated = $true
-                }
+        if (-not $inWeb) { continue }
+
+        if (-not $inAuth -and $line -match '^\s*auth:\s*$') {
+            $inAuth = $true
+            $authIndent = $indent
+            continue
+        }
+
+        if ($inAuth) {
+            $isAuthNextBlock = ($trimmed -ne '') -and ($trimmed -notmatch '^#') -and ($indent -le $authIndent)
+            if ($isAuthNextBlock) {
+                $inAuth = $false
             }
         }
 
-        $result.Add($line)
+        if ($inAuth -and $line -match '^\s*rotateOnStartup:\s*(.+?)\s*$') {
+            return ($Matches[1].Trim().Trim("'`"") -eq 'true')
+        }
     }
 
-    if ($inWeb -and -not $hasToken) {
-        $result.Add((' ' * ($webIndent + 2)) + "authToken: $Token")
-        $effectiveToken = $Token
-        $updated = $true
-    }
-
-    return @{
-        Content = ($result -join "`r`n")
-        Updated = $updated
-        Token = $effectiveToken
-    }
+    return $false
 }
 
 try {
@@ -727,7 +692,6 @@ runtime:
 # --- Check if web channel is enabled in existing config ---
 $webEnabled = $false
 $webPort = 3000
-$webAuthToken = $null
 if (Test-Path $configFile) {
     $configContent = Get-Content $configFile -Raw
     if ($configContent -match '(?m)^(\s*logLevel:\s*)info(\s*)$') {
@@ -750,16 +714,17 @@ if (Test-Path $configFile) {
     }
 
     if ($webEnabled) {
-        $webAuthToken = Get-WebAuthTokenFromContent -Content $configContent
-        if (-not $webAuthToken) {
-            $generatedToken = [Guid]::NewGuid().ToString('N')
-            $ensureResult = Ensure-WebAuthTokenInContent -Content $configContent -Token $generatedToken
-            $configContent = [string]$ensureResult.Content
-            if ([bool]$ensureResult.Updated) {
-                Set-Content -Path $configFile -Value $configContent -Encoding UTF8
-                Write-Host "  Web auth token set in config for dashboard access." -ForegroundColor Green
-            }
-            $webAuthToken = [string]$ensureResult.Token
+        $configuredWebAuthToken = Get-WebAuthTokenFromContent -Content $configContent
+        $rotateWebAuthOnStartup = Get-WebRotateOnStartupFromContent -Content $configContent
+        if ($rotateWebAuthOnStartup) {
+            Write-Host "  Web dashboard auth is set to rotate on startup." -ForegroundColor DarkCyan
+            Write-Host "  GuardianAgent will print a runtime-ephemeral dashboard token in this terminal at startup." -ForegroundColor DarkCyan
+        } elseif ($configuredWebAuthToken) {
+            Write-Host "  Web dashboard auth token is pinned in config or env and will be reused." -ForegroundColor DarkCyan
+            Write-Host "  Remove it or enable channels.web.auth.rotateOnStartup to switch back to per-run terminal tokens." -ForegroundColor DarkCyan
+        } else {
+            Write-Host "  Web dashboard auth token is not pinned in config." -ForegroundColor DarkCyan
+            Write-Host "  GuardianAgent will print a runtime-ephemeral dashboard token in this terminal at startup." -ForegroundColor DarkCyan
         }
     }
 }

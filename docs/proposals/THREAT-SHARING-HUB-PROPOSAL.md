@@ -1,8 +1,11 @@
-# Threat Intelligence Sharing Hub
+# Proposal: Threat Intelligence Sharing Hub
 
-> **Status:** Proposed
-> **Date:** 2026-03-04
-> **Author:** Design discussion
+**Date:** 2026-03-04
+**Status:** Draft
+**Depends on:** [Multi-User Server + Client Agent Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/MULTI-USER-CLIENT-AGENT-PROPOSAL.md)
+**Related:** [Security Detection And Threat Sharing Uplift Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/SECURITY-DETECTION-AND-THREAT-SHARING-UPLIFT-PROPOSAL.md), [Agentic Defensive Security Suite Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/AGENTIC-DEFENSIVE-SECURITY-SUITE-PROPOSAL.md)
+
+This document is a downstream feature proposal for Guardian Hub and shared threat intelligence. It is not the primary platform architecture document for multi-user control plane, client-agent trust boundaries, or federation transport.
 
 ## Problem Statement
 
@@ -439,7 +442,7 @@ These map directly to the Hub's indicator schema:
 - Must come from correlator (not raw single signals)
 - Approval-gated by default (operator confirms before submission)
 
-This ensures the Hub receives evidence-backed indicators, not noise — aligning with the Local-First Prerequisite (Phases 1-2 of this spec).
+This ensures the Hub receives evidence-backed indicators, not noise — aligning with the Local-First Prerequisite (Phases 1-2 of this proposal).
 
 ### Hub → NDR: Feed Indicators as Detection Signals
 
@@ -505,7 +508,7 @@ assistant:
 
 | Hub Phase | NDR Dependency | Integration |
 |---|---|---|
-| Phase 1 (Local Intel Foundation) | NDR Phase 1 (Correlator) + Phase 2 (Enrichment) | NDR provides the "real local collection" the Hub spec requires before sharing |
+| Phase 1 (Local Intel Foundation) | NDR Phase 1 (Correlator) + Phase 2 (Enrichment) | NDR provides the "real local collection" the Hub proposal requires before sharing |
 | Phase 2 (Investigation Maturity) | NDR Phase 5 (Alert Persistence) | FTS5 alert store enables retroactive hunting and forensic search |
 | Phase 3 (Minimal Viable Hub) | NDR Phase 6 (Automations) | Event-triggered playbooks handle submission and feed ingestion |
 | Phase 4 (Trust Engine) | NDR Phase 2 (Enrichment) | Multi-factor risk scoring reduces false positive submissions, protecting node reputation |

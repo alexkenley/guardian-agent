@@ -64,6 +64,10 @@ Input fields:
 - Telegram channel structural updates still require restart
 - Web auth mode is fixed to `bearer_required` (no unauthenticated mode)
 - If no token is configured, runtime may generate an ephemeral token for the current process
+- If `channels.web.auth.rotateOnStartup` is `true`, runtime generates a fresh ephemeral token at startup even when a config/env token exists
+- Runtime-generated startup tokens and manually rotated tokens remain runtime-ephemeral and are not written back into config
+- When Guardian starts in an interactive terminal with an ephemeral startup token, it prints the full token once so the operator can exchange it for the dashboard session cookie
+- The Windows and Unix development launchers should mirror that runtime behavior by explaining up front whether startup will reuse a pinned token or surface a per-run ephemeral token in the terminal
 
 ## Telegram Configuration Flow
 

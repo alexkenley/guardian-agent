@@ -14,6 +14,11 @@ import {
   type CodeWorkspaceMap,
   type CodeWorkspaceWorkingSet,
 } from './code-workspace-map.js';
+import {
+  assessCodeWorkspaceTrustSync,
+  cloneCodeWorkspaceTrustAssessment,
+  type CodeWorkspaceTrustAssessment,
+} from './code-workspace-trust.js';
 import { SQLiteSecurityMonitor, type SQLiteSecurityEvent } from './sqlite-security.js';
 
 export type CodeSessionStatus =
@@ -53,6 +58,7 @@ export interface CodeSessionWorkState {
   planSummary: string;
   compactedSummary: string;
   workspaceProfile: CodeWorkspaceProfile | null;
+  workspaceTrust: CodeWorkspaceTrustAssessment | null;
   workspaceMap: CodeWorkspaceMap | null;
   workingSet: CodeWorkspaceWorkingSet | null;
   activeSkills: string[];
@@ -201,6 +207,7 @@ function defaultWorkState(): CodeSessionWorkState {
     planSummary: '',
     compactedSummary: '',
     workspaceProfile: null,
+    workspaceTrust: null,
     workspaceMap: null,
     workingSet: null,
     activeSkills: [],
@@ -225,6 +232,10 @@ function cloneWorkspaceProfile(profile: CodeWorkspaceProfile | null | undefined)
     topLevelEntries: Array.isArray(profile.topLevelEntries) ? [...profile.topLevelEntries] : [],
     entryHints: Array.isArray(profile.entryHints) ? [...profile.entryHints] : [],
   };
+}
+
+function cloneWorkspaceTrust(assessment: CodeWorkspaceTrustAssessment | null | undefined): CodeWorkspaceTrustAssessment | null {
+  return cloneCodeWorkspaceTrustAssessment(assessment);
 }
 
 function normalizePathForHost(value: string): string {
@@ -384,6 +395,9 @@ export class CodeSessionStore {
     const workspaceProfile = resolvedRootChanged || !record.workState.workspaceProfile
       ? inspectCodeWorkspaceSync(canonicalResolvedRoot, this.now())
       : cloneWorkspaceProfile(record.workState.workspaceProfile);
+    const workspaceTrust = resolvedRootChanged || !record.workState.workspaceTrust
+      ? assessCodeWorkspaceTrustSync(canonicalResolvedRoot, this.now())
+      : cloneWorkspaceTrust(record.workState.workspaceTrust);
     const canonicalRecord: CodeSessionRecord = {
       ...record,
       resolvedRoot: canonicalResolvedRoot,
@@ -391,6 +405,7 @@ export class CodeSessionStore {
       workState: {
         ...record.workState,
         workspaceProfile,
+        workspaceTrust,
         workspaceMap: resolvedRootChanged || workspaceMapChanged
           ? null
           : workspaceMap,
@@ -446,6 +461,7 @@ export class CodeSessionStore {
     const workspaceRoot = input.workspaceRoot.trim() || '.';
     const resolvedRoot = normalizePath(workspaceRoot);
     const workspaceProfile = inspectCodeWorkspaceSync(resolvedRoot, now);
+    const workspaceTrust = assessCodeWorkspaceTrustSync(resolvedRoot, now);
     const record: CodeSessionRecord = {
       id,
       ownerUserId: input.ownerUserId,
@@ -465,6 +481,7 @@ export class CodeSessionStore {
       workState: {
         ...defaultWorkState(),
         workspaceProfile,
+        workspaceTrust,
       },
     };
 
@@ -490,6 +507,11 @@ export class CodeSessionStore {
       : (input.workspaceRoot !== undefined
         ? inspectCodeWorkspaceSync(nextResolvedRoot, now)
         : cloneWorkspaceProfile(existing.workState.workspaceProfile));
+    const nextWorkspaceTrust = input.workState?.workspaceTrust !== undefined
+      ? cloneWorkspaceTrust(input.workState.workspaceTrust)
+      : (input.workspaceRoot !== undefined
+        ? assessCodeWorkspaceTrustSync(nextResolvedRoot, now)
+        : cloneWorkspaceTrust(existing.workState.workspaceTrust));
     const nextWorkspaceMap = input.workState?.workspaceMap !== undefined
       ? cloneWorkspaceMap(input.workState.workspaceMap)
       : (workspaceRootChanged ? null : cloneWorkspaceMap(existing.workState.workspaceMap));
@@ -523,6 +545,7 @@ export class CodeSessionStore {
           ? input.workState.focusSummary
           : (workspaceRootChanged ? '' : existing.workState.focusSummary),
         workspaceProfile: nextWorkspaceProfile,
+        workspaceTrust: nextWorkspaceTrust,
         workspaceMap: nextWorkspaceMap,
         workingSet: nextWorkingSet,
         activeSkills: Array.isArray(input.workState?.activeSkills)
@@ -738,6 +761,7 @@ export class CodeSessionStore {
         ...defaultWorkState(),
         ...(payload.workState ?? {}),
         workspaceProfile: cloneWorkspaceProfile(payload.workState?.workspaceProfile as CodeWorkspaceProfile | null | undefined),
+        workspaceTrust: cloneWorkspaceTrust(payload.workState?.workspaceTrust as CodeWorkspaceTrustAssessment | null | undefined),
         workspaceMap: cloneWorkspaceMap(payload.workState?.workspaceMap as CodeWorkspaceMap | null | undefined),
         workingSet: cloneWorkspaceWorkingSet(payload.workState?.workingSet as CodeWorkspaceWorkingSet | null | undefined),
       },

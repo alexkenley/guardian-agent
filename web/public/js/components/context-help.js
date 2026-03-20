@@ -28,6 +28,8 @@ export function renderGuidancePanel({
   kicker = 'Guide',
   title = '',
   compact = false,
+  collapsible = true,
+  collapsed = true,
   whatItIs = '',
   whatSeeing = '',
   whatCanDo = '',
@@ -42,19 +44,43 @@ export function renderGuidancePanel({
     ...extras.filter((item) => item?.label && item?.text),
   ].filter((item) => item.text);
 
+  const body = `
+    <div class="context-grid">
+      ${items.map((item) => `
+        <div class="context-item">
+          <div class="context-label">${esc(item.label)}</div>
+          <div class="context-copy">${esc(item.text)}</div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+
+  if (!collapsible) {
+    return `
+      <section class="context-panel${compact ? ' compact' : ''}">
+        <div class="context-kicker">${esc(kicker)}</div>
+        ${title ? `<h3 class="context-title">${esc(title)}</h3>` : ''}
+        ${body}
+      </section>
+    `;
+  }
+
   return `
-    <section class="context-panel${compact ? ' compact' : ''}">
-      <div class="context-kicker">${esc(kicker)}</div>
-      ${title ? `<h3 class="context-title">${esc(title)}</h3>` : ''}
-      <div class="context-grid">
-        ${items.map((item) => `
-          <div class="context-item">
-            <div class="context-label">${esc(item.label)}</div>
-            <div class="context-copy">${esc(item.text)}</div>
-          </div>
-        `).join('')}
+    <details class="context-panel context-panel--collapsible${compact ? ' compact' : ''}"${collapsed ? '' : ' open'}>
+      <summary class="context-panel__summary">
+        <div class="context-panel__summary-copy">
+          <div class="context-kicker">${esc(kicker)}</div>
+          ${title ? `<h3 class="context-title">${esc(title)}</h3>` : ''}
+        </div>
+        <div class="context-panel__summary-toggle" aria-hidden="true">
+          <span class="context-panel__summary-open-label">Open guide</span>
+          <span class="context-panel__summary-close-label">Hide guide</span>
+        </div>
+      </summary>
+      <div class="context-panel__content">
+        ${body}
       </div>
-    </section>
+    </details>
   `;
 }
 

@@ -10,7 +10,7 @@ import { renderReference } from './pages/reference.js';
 import { renderNetwork, updateNetwork } from './pages/network.js';
 import { renderAutomations, updateAutomations } from './pages/automations.js';
 import { renderCloud, updateCloud } from './pages/cloud.js';
-import { renderCode, updateCode, teardownCode } from './pages/code.js';
+import { confirmCodeRouteLeave, renderCode, updateCode, teardownCode } from './pages/code.js';
 import { initChatPanel, setChatContext } from './chat-panel.js';
 import { applyInputTooltips } from './tooltip.js';
 import { initTheme } from './theme.js';
@@ -23,6 +23,7 @@ const app = document.getElementById('app');
 const indicator = document.getElementById('connection-indicator');
 let eventSource = null;
 let currentPage = '';
+let lastCommittedHash = window.location.hash || '#/';
 let invalidationTimer = null;
 let invalidationInFlight = false;
 let invalidationQueued = false;
@@ -346,8 +347,9 @@ function scheduleCurrentRouteRefresh() {
   }, 250);
 }
 
-function navigate() {
-  const raw = window.location.hash.slice(1) || '/';
+async function navigate() {
+  const nextHash = window.location.hash || '#/';
+  const raw = nextHash.slice(1) || '/';
   const [path, query] = raw.split('?');
 
   // Redirect old pages to unified Automations
@@ -361,6 +363,13 @@ function navigate() {
   const previousPage = currentPage;
 
   if (previousPage === 'code' && route.name !== 'code') {
+    const canLeaveCode = await confirmCodeRouteLeave();
+    if (!canLeaveCode) {
+      if (window.location.hash !== lastCommittedHash) {
+        window.location.hash = lastCommittedHash;
+      }
+      return;
+    }
     teardownCode();
   }
 
@@ -380,6 +389,8 @@ function navigate() {
   document.querySelectorAll('.nav-item').forEach(item => {
     item.classList.toggle('active', item.dataset.page === route.name);
   });
+
+  lastCommittedHash = nextHash;
 
   // Render page, passing options like tab deep-link
   route.render(content, { tab: params.get('tab') });
@@ -432,8 +443,10 @@ function startApp() {
     });
   }
 
-  window.addEventListener('hashchange', navigate);
-  navigate();
+  window.addEventListener('hashchange', () => {
+    void navigate();
+  });
+  void navigate();
 
   // Killswitch button
   const killBtn = document.getElementById('killswitch-btn');

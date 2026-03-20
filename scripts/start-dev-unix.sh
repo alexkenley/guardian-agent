@@ -69,6 +69,131 @@ clear_animated_wait_frame() {
   printf '\r%-120s\r' ' '
 }
 
+resolve_web_token_value() {
+  local raw="$1"
+  raw="${raw#"${raw%%[![:space:]]*}"}"
+  raw="${raw%"${raw##*[![:space:]]}"}"
+  raw="${raw#\"}"
+  raw="${raw%\"}"
+  raw="${raw#\'}"
+  raw="${raw%\'}"
+  if [ -z "$raw" ]; then
+    return 1
+  fi
+  if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$ ]]; then
+    local env_name="${BASH_REMATCH[1]}"
+    local env_value="${!env_name:-}"
+    if [ -n "$env_value" ]; then
+      printf '%s\n' "$env_value"
+      return 0
+    fi
+    return 1
+  fi
+  printf '%s\n' "$raw"
+}
+
+get_web_auth_token_from_file() {
+  local file="$1"
+  local in_web=false
+  local web_indent=0
+  local in_auth=false
+  local auth_indent=0
+  local line trimmed indent
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    trimmed="${line#"${line%%[![:space:]]*}"}"
+    indent=$(( ${#line} - ${#trimmed} ))
+
+    if [ "$in_web" = false ] && [[ "$trimmed" == "web:" ]]; then
+      in_web=true
+      web_indent=$indent
+      in_auth=false
+      continue
+    fi
+
+    if [ "$in_web" = true ] && [[ -n "$trimmed" && ! "$trimmed" =~ ^# && $indent -le $web_indent ]]; then
+      in_web=false
+      in_auth=false
+    fi
+
+    [ "$in_web" = true ] || continue
+
+    if [ "$in_auth" = false ] && [[ "$trimmed" == "auth:" ]]; then
+      in_auth=true
+      auth_indent=$indent
+      continue
+    fi
+
+    if [ "$in_auth" = true ] && [[ -n "$trimmed" && ! "$trimmed" =~ ^# && $indent -le $auth_indent ]]; then
+      in_auth=false
+    fi
+
+    if [[ "$trimmed" =~ ^authToken:[[:space:]]*(.+)$ ]]; then
+      resolve_web_token_value "${BASH_REMATCH[1]}"
+      return $?
+    fi
+
+    if [ "$in_auth" = true ] && [[ "$trimmed" =~ ^token:[[:space:]]*(.+)$ ]]; then
+      resolve_web_token_value "${BASH_REMATCH[1]}"
+      return $?
+    fi
+  done < "$file"
+
+  return 1
+}
+
+get_web_rotate_on_startup_from_file() {
+  local file="$1"
+  local in_web=false
+  local web_indent=0
+  local in_auth=false
+  local auth_indent=0
+  local line trimmed indent
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    trimmed="${line#"${line%%[![:space:]]*}"}"
+    indent=$(( ${#line} - ${#trimmed} ))
+
+    if [ "$in_web" = false ] && [[ "$trimmed" == "web:" ]]; then
+      in_web=true
+      web_indent=$indent
+      in_auth=false
+      continue
+    fi
+
+    if [ "$in_web" = true ] && [[ -n "$trimmed" && ! "$trimmed" =~ ^# && $indent -le $web_indent ]]; then
+      in_web=false
+      in_auth=false
+    fi
+
+    [ "$in_web" = true ] || continue
+
+    if [ "$in_auth" = false ] && [[ "$trimmed" == "auth:" ]]; then
+      in_auth=true
+      auth_indent=$indent
+      continue
+    fi
+
+    if [ "$in_auth" = true ] && [[ -n "$trimmed" && ! "$trimmed" =~ ^# && $indent -le $auth_indent ]]; then
+      in_auth=false
+    fi
+
+    if [ "$in_auth" = true ] && [[ "$trimmed" =~ ^rotateOnStartup:[[:space:]]*(.+)$ ]]; then
+      local raw="${BASH_REMATCH[1]}"
+      raw="${raw#"${raw%%[![:space:]]*}"}"
+      raw="${raw%"${raw##*[![:space:]]}"}"
+      raw="${raw#\"}"
+      raw="${raw%\"}"
+      raw="${raw#\'}"
+      raw="${raw%\'}"
+      [ "$raw" = "true" ]
+      return $?
+    fi
+  done < "$file"
+
+  return 1
+}
+
 wait_for_process_with_messages() {
   local pid=$1
   local interval_seconds=$2
@@ -447,6 +572,17 @@ YAMLEOF
   echo -e "  ${GREEN}Config created: $CONFIG_FILE${RESET}"
 else
   echo -e "  ${GREEN}Config: $CONFIG_FILE${RESET}"
+fi
+
+if get_web_rotate_on_startup_from_file "$CONFIG_FILE"; then
+  echo -e "  ${DIM}Web dashboard auth is set to rotate on startup.${RESET}"
+  echo -e "  ${DIM}GuardianAgent will print a runtime-ephemeral dashboard token in this terminal at startup.${RESET}"
+elif configured_web_auth_token=$(get_web_auth_token_from_file "$CONFIG_FILE"); then
+  echo -e "  ${DIM}Web dashboard auth token is pinned in config or env and will be reused.${RESET}"
+  echo -e "  ${DIM}Remove it or enable channels.web.auth.rotateOnStartup to switch back to per-run terminal tokens.${RESET}"
+else
+  echo -e "  ${DIM}Web dashboard auth token is not pinned in config.${RESET}"
+  echo -e "  ${DIM}GuardianAgent will print a runtime-ephemeral dashboard token in this terminal at startup.${RESET}"
 fi
 
 # ── Step 6: Start ─────────────────────────────────────────────

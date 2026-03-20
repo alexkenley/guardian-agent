@@ -25,8 +25,14 @@ Provide explicit, operator-friendly control of dashboard/API authentication, inc
   - Explicit config token
   - Environment token
   - Ephemeral runtime-generated token
+- Startup behavior:
+  - If no token is configured, Guardian generates an ephemeral runtime token for that process.
+  - If `channels.web.auth.rotateOnStartup` is `true`, Guardian generates a fresh ephemeral runtime token at startup even when a configured token exists.
+  - When an ephemeral startup token is generated and Guardian is running in an interactive terminal, the full token is printed once to the terminal for browser sign-in.
+- Persistence behavior:
+  - Runtime-generated startup tokens and manually rotated tokens are not written back into config.
+  - Configured or env-backed tokens remain stable until the operator changes them.
 - Operators can:
-  - Set/update token
   - Rotate token
   - Reveal token for copy/paste
 
@@ -57,6 +63,8 @@ Provide explicit, operator-friendly control of dashboard/API authentication, inc
 ## UX Requirements
 - Config Center shows auth mode, token source, TTL, and token controls.
 - Browser login flow should exchange bearer token to cookie session and remove browser token storage after successful exchange.
+- Startup scripts should not silently pin a newly generated bearer token into config just to make first login work; the interactive-terminal path should surface the ephemeral token directly instead.
+- Windows and Unix development startup scripts should inspect the saved web-auth settings and tell the operator whether the dashboard will reuse a pinned token or print a per-run ephemeral token.
 - CLI supports:
   - `/auth status`
   - `/auth rotate`

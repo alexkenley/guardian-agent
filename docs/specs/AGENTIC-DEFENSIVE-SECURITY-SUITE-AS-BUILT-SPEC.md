@@ -1,7 +1,7 @@
 # Agentic Defensive Security Suite - As-Built Spec
 
 **Status:** Implemented for the current local-defense scope  
-**Date:** 2026-03-19  
+**Date:** 2026-03-20  
 **Proposal origin:** [Agentic Defensive Security Suite](/mnt/s/Development/GuardianAgent/docs/proposals/AGENTIC-DEFENSIVE-SECURITY-SUITE-PROPOSAL.md)  
 **Implementation plan:** [Agentic Defensive Security Suite - Implementation Plan](/mnt/s/Development/GuardianAgent/plans/AGENTIC-DEFENSIVE-SECURITY-SUITE-IMPLEMENTATION-PLAN.md)
 
@@ -19,6 +19,7 @@ The shipped system covers:
 - unified local security alerts across host, network, gateway, and native provider sources
 - advisory posture and bounded containment logic
 - Windows Defender status, alert, and scan integration
+- coding-session repo-trust enrichment via Windows Defender custom-path scans and optional Unix ClamAV path scans
 - event-triggered security response automations
 - an agentic security triage loop with persisted live activity history
 - Security page surfaces for posture, alerts, activity, audit, and threat-intel review
@@ -30,6 +31,7 @@ The current scope does **not** include:
 - deep EDR-grade kernel telemetry
 - full browser isolation for user-driven browsing outside Guardian-managed browser tools
 - a standalone secrets broker
+- agentic repo trust classification for coding workspaces
 
 ## Separation Model
 
@@ -195,6 +197,30 @@ Primary files:
 Persisted state:
 
 - `~/.guardianagent/windows-defender-provider.json`
+
+## Coding-session native AV consumption
+
+The Coding Assistant workspace-trust pipeline now consumes native AV signals as a secondary repo-assessment input.
+
+Current behavior:
+
+- on Windows, coding sessions can schedule Defender custom-path scans for the attached workspace
+- on Unix-like hosts, coding sessions can use `clamdscan` or `clamscan` when installed
+- native detections are merged back into `workspaceTrust` and can force the repo trust state to `blocked`
+- clean native scans do not override static repo findings
+- the `security-triage` agent does not currently review repos or assign workspace-trust verdicts
+
+Current boundary:
+
+- Windows Defender is a first-class native provider in the Security page and unified-alert pipeline
+- Unix ClamAV is currently consumed only as a coding-session workspace scan signal, not as a first-class Security-page provider surface
+
+Primary files:
+
+- `src/runtime/code-workspace-native-protection.ts`
+- `src/runtime/code-workspace-trust-service.ts`
+- `src/runtime/code-workspace-trust.ts`
+- `src/runtime/windows-defender-provider.ts`
 
 ## Bounded containment
 
@@ -382,6 +408,14 @@ Current focused verification includes:
 Harness coverage:
 
 - `scripts/test-contextual-security-uplifts.mjs`
+
+Manual and live validation completed for this uplift:
+
+- `npm test -- src/runtime/code-workspace-trust.test.ts src/runtime/code-workspace-native-protection.test.ts src/runtime/code-workspace-trust-service.test.ts src/runtime/code-sessions.test.ts src/tools/executor.test.ts src/runtime/windows-defender-provider.test.ts`
+- `node scripts/test-coding-assistant.mjs`
+- `node scripts/test-code-ui-smoke.mjs`
+- live WSL ClamAV validation using clean and EICAR-positive fixtures through `CodeWorkspaceNativeProtectionScanner`
+- manual Windows Defender custom-path validation using [test-windows-defender-workspace-scan.ps1](/mnt/s/Development/GuardianAgent/scripts/test-windows-defender-workspace-scan.ps1)
 
 ## Deferred Work
 

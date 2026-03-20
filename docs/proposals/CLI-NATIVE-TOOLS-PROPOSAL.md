@@ -3,6 +3,9 @@
 **Date:** 2026-03-09
 **Status:** Proposal
 **Scope:** Tool architecture direction, GitHub CLI integration, MCP positioning
+**Current as-built references:** [Tools Control Plane Spec](/mnt/s/Development/GuardianAgent/docs/specs/TOOLS-CONTROL-PLANE-SPEC.md), [Google Workspace Integration Specification (CLI Mode)](/mnt/s/Development/GuardianAgent/docs/specs/GOOGLE-WORKSPACE-INTEGRATION-SPEC.md)
+
+This proposal is still forward-looking. Guardian already ships some direct CLI/native tool patterns, but the proposal's main GitHub CLI adapter direction is not implemented as a dedicated built-in tool surface yet.
 
 ---
 

@@ -2,7 +2,7 @@
 
 **Status:** In progress  
 **Date:** 2026-03-19  
-**Source proposals:** [Agentic Defensive Security Suite](/mnt/s/Development/GuardianAgent/docs/proposals/AGENTIC-DEFENSIVE-SECURITY-SUITE-PROPOSAL.md), [Security Detection And Threat Sharing Uplift](/mnt/s/Development/GuardianAgent/docs/proposals/SECURITY-DETECTION-AND-THREAT-SHARING-UPLIFT-PROPOSAL.md), [Threat Sharing Hub Spec](/mnt/s/Development/GuardianAgent/docs/specs/THREAT-SHARING-HUB-SPEC.md)
+**Source proposals:** [Agentic Defensive Security Suite](/mnt/s/Development/GuardianAgent/docs/proposals/AGENTIC-DEFENSIVE-SECURITY-SUITE-PROPOSAL.md), [Security Detection And Threat Sharing Uplift](/mnt/s/Development/GuardianAgent/docs/proposals/SECURITY-DETECTION-AND-THREAT-SHARING-UPLIFT-PROPOSAL.md), [Threat Sharing Hub Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/THREAT-SHARING-HUB-PROPOSAL.md)
 **Companion as-built spec:** [Agentic Defensive Security Suite - As-Built Spec](/mnt/s/Development/GuardianAgent/docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md)
 
 **Current implementation scope:** phases 1 through 5 only. Enterprise governance and Guardian Hub work are deferred to future planning after the local defensive stack is proven.

@@ -1,10 +1,12 @@
 # Coding Assistant Spec
 
 **Status:** As Built
-**Date:** 2026-03-19  
+**Date:** 2026-03-20  
 **Primary UI:** [code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)  
 **Primary Runtime:** [index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)  
 **Code Session Store:** [code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)  
+**Workspace Trust Runtime:** [code-workspace-trust.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-trust.ts)  
+**Native AV Runtime:** [code-workspace-native-protection.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-native-protection.ts)  
 **Primary Web API:** [web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts)  
 **Primary Tools:** [executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
 
@@ -33,7 +35,7 @@ The browser no longer owns the authoritative coding session. The browser is now 
 Core layers:
 
 - backend `CodeSessionStore` persists coding sessions and surface attachments
-- backend workspace profiling and repo indexing build durable repo identity plus retrievable workspace context for each session
+- backend workspace profiling, repo trust review, async native-AV enrichment, and repo indexing build durable repo identity plus retrievable workspace context for each session
 - `ConversationService` stores the coding transcript for each session conversation identity
 - `ChatAgent` resolves attached or explicit coding sessions before prompt assembly and tool execution
 - `ToolExecutor` exposes coding-session tools and enforces repo-scoped coding sandbox rules
@@ -75,6 +77,7 @@ Primary persisted shape:
   - `planSummary`
   - `compactedSummary`
   - `workspaceProfile`
+  - `workspaceTrust`
   - `workspaceMap`
   - `workingSet`
   - `activeSkills`
@@ -117,10 +120,19 @@ Each backend `CodeSession` carries durable workspace awareness state:
   - per-turn retrieved repo files for the current request
   - bounded excerpts from the most relevant files
   - survives vague follow-up questions so the assistant keeps answering from the same repo evidence
+- `workspaceTrust`
+  - bounded static review of the attached repo before Guardian treats repo execution as low-friction
+  - persisted trust state: `trusted`, `caution`, `blocked`
+  - summary plus finding list for suspicious prompt-injection or execution indicators
+  - optional `nativeProtection` sub-state for host malware scan results such as Windows Defender or ClamAV
 - `focusSummary`
   - short durable summary of the current coding objective for that session
 
-Workspace profiling is still built from lightweight backend inspection of the session root, `README`, and primary manifest/config files, but Code sessions now also maintain a bounded repo map and a per-turn working set. The coding-session prompt gets the repo profile plus the current working-set evidence, so the model starts from actual repo files rather than generic host-app context or ad hoc prompt wording.
+Workspace profiling is still built from lightweight backend inspection of the session root, `README`, and primary manifest/config files, but Code sessions now also maintain workspace trust assessment, async native-AV scan status, a bounded repo map, and a per-turn working set. The coding-session prompt gets the repo profile plus the current working-set evidence, so the model starts from actual repo files rather than generic host-app context or ad hoc prompt wording.
+
+The shipped repo-assessment boundary is intentionally narrow: `workspaceTrust` is a bounded static heuristic review plus optional native AV enrichment. It is not an agentic repo assessment, it does not execute repo code, and a `trusted` result only means the shipped checks did not find current indicators.
+
+When `workspaceTrust` is not `trusted`, prompt assembly suppresses README-derived summary text and raw working-set snippets and instead instructs the model to treat repo content as untrusted data, not instructions. The implementation details are in [CODE-WORKSPACE-TRUST-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODE-WORKSPACE-TRUST-SPEC.md).
 
 This is the mechanism that moves the Coding Assistant closer to a dedicated coding agent: not “all file contents in one prompt,” but backend repo awareness plus retrieval-backed working context.
 
@@ -415,13 +427,26 @@ This wider coding shell surface applies only when a request is running with codi
 
 ### Code Session Auto-Approve
 
-Coding and filesystem tools operating within the code session workspace root are auto-approved without requiring manual user approval. The user implicitly grants trust to the workspace by creating the session. Auto-approved tools:
+Coding-session auto-approve is now split between safe repo-local edits/reads and trust-cleared execution.
 
-- **Coding tools:** code_edit, code_patch, code_create, code_plan, code_git_diff, code_test, code_build, code_lint, code_symbol_search
+Always auto-approved inside the code session workspace root:
+
+- **Coding tools:** code_edit, code_patch, code_create, code_plan, code_git_diff, code_symbol_search
 - **Filesystem tools:** fs_read, fs_write, fs_search, fs_list, fs_mkdir, fs_move, fs_copy, fs_delete
-- **Memory tools:** memory_save, memory_search, memory_recall
+- **Memory tools:** memory_search, memory_recall
 - **Document tools:** doc_create
+
+Auto-approved only when `workspaceTrust.state = trusted`:
+
+- **Execution tools:** code_test, code_build, code_lint
+- **Persistence tools:** memory_save
 - **Automation tools:** task_create, task_update, task_delete, workflow_upsert, workflow_run, workflow_delete
+
+Additional current behavior:
+
+- read-only shell commands such as `git status` remain low-friction
+- non-read-only shell execution in `caution` or `blocked` workspaces requires approval even under autonomous policy mode
+- creating the code session authorizes the workspace path, but it no longer means the repo itself is accepted as safe for automatic execution
 
 Auto-approve bypasses only the `decide()` approval step. All other security layers remain active:
 
@@ -506,18 +531,22 @@ As built, the Coding Assistant still does not provide:
 - automatic smart-routing escalation when the model gets stuck yet
 - fully event-driven cross-client live sync; the Code page currently relies on refresh/polling and normal session reload paths
 - LSP backend integration for cross-file intelligence beyond Monaco's built-in TS/JS/JSON/CSS/HTML workers
+- agentic repo trust review or sandbox detonation before classifying a workspace as `trusted`
 
 ## Verification
 
 Relevant checks:
 
 - typecheck: `npm run check`
-- executor unit tests: `npm test -- src/tools/executor.test.ts`
+- focused tests: `npm test -- src/runtime/code-workspace-trust.test.ts src/runtime/code-workspace-native-protection.test.ts src/runtime/code-workspace-trust-service.test.ts src/runtime/code-sessions.test.ts src/tools/executor.test.ts src/runtime/windows-defender-provider.test.ts`
 - code UI smoke: [test-code-ui-smoke.mjs](/mnt/s/Development/GuardianAgent/scripts/test-code-ui-smoke.mjs)
 - coding assistant harness: [test-coding-assistant.mjs](/mnt/s/Development/GuardianAgent/scripts/test-coding-assistant.mjs)
+- Windows Defender host helper: [test-windows-defender-workspace-scan.ps1](/mnt/s/Development/GuardianAgent/scripts/test-windows-defender-workspace-scan.ps1)
 
 Validated during this implementation:
 
+- `npm test -- src/runtime/code-workspace-trust.test.ts src/runtime/code-workspace-native-protection.test.ts src/runtime/code-workspace-trust-service.test.ts src/runtime/code-sessions.test.ts src/tools/executor.test.ts src/runtime/windows-defender-provider.test.ts`
 - `node scripts/test-code-ui-smoke.mjs`
 - `node scripts/test-coding-assistant.mjs`
-- `HARNESS_USE_REAL_OLLAMA=1 node scripts/test-coding-assistant.mjs --use-ollama`
+- live WSL `CodeWorkspaceNativeProtectionScanner` validation with ClamAV clean and EICAR-positive fixtures
+- manual Windows Defender workspace scan validation with [test-windows-defender-workspace-scan.ps1](/mnt/s/Development/GuardianAgent/scripts/test-windows-defender-workspace-scan.ps1)

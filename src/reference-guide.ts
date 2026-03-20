@@ -31,12 +31,12 @@ export interface ReferenceGuide {
 export function getReferenceGuide(): ReferenceGuide {
   return {
     title: 'Guardian Agent Reference Guide',
-    intro: 'Operator wiki for setup, day-to-day use, automations, and security controls across web, CLI, and Telegram.',
+    intro: 'Operator wiki for setup, day-to-day use, coding workflows, cloud connections, automations, and security controls across web, CLI, and Telegram.',
     categories: [
       {
         id: 'getting-started',
         title: 'Getting Started',
-        description: 'Bootstrap the assistant, learn the control surfaces, and manage conversations.',
+        description: 'Bootstrap the assistant, learn the control surfaces, use the coding IDE, and manage conversations safely.',
         pages: [
           {
             id: 'quick-start',
@@ -48,7 +48,8 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Run Guardian Agent from the repo root with the platform startup script or `npx guardianagent`.',
                   'Open the web dashboard at `http://localhost:3000` when the web channel is enabled.',
-                  'If no web auth token is configured, Guardian Agent generates an ephemeral token at startup and prints it to the console.',
+                  'If no web auth token is configured, or if `channels.web.auth.rotateOnStartup` is enabled, Guardian Agent generates a runtime-ephemeral token at startup and prints it to the interactive terminal.',
+                  'The Windows and Unix startup scripts now tell you whether the dashboard will reuse a pinned token or print a per-run runtime token at startup.',
                   'Use the Configuration Center in the web UI or CLI `/config` to create or update provider settings instead of editing YAML by hand.',
                 ],
               },
@@ -57,7 +58,8 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Use the Dashboard page to confirm runtime status, agent health, provider connectivity, and assistant state.',
                   'Open `#/config` to verify the default provider, web auth settings, and channel configuration.',
-                  'Use CLI `/providers` or the Providers tab to confirm the selected provider is reachable.',
+                  'Open `#/code` when you want the repo-scoped coding surface, and `#/security` when you want posture, alerts, activity, audit, or threat-intel visibility.',
+                  'Use CLI `/providers` or Configuration > AI Providers to confirm the selected provider is reachable.',
                   'Use CLI `/guide` or Telegram `/guide` to pull the same reference content outside the web UI.',
                 ],
                 note: 'Most configuration changes now appear in the web UI without a manual browser refresh because the dashboard listens for server-sent invalidation events.',
@@ -97,8 +99,8 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Web Control Surfaces',
                 items: [
                   'Dashboard shows session queue depth, assistant throughput, latency, background jobs, and scheduled cron jobs.',
-                  'Configuration > Tools exposes tool policy mode, sandbox boundaries, provider routing, categories, approvals, and recent jobs.',
-                  'Security shows audit history, network posture, and threat-intel workflows.',
+                  'Configuration > Tools exposes tool enablement, routing, approvals, sandbox boundaries, and recent jobs. Configuration > Policy owns policy-as-code posture and enforcement mode.',
+                  'Security is the main operator surface for posture, unified alerts, agentic activity history, audit evidence, threat-intel workflows, and native Windows Defender state.',
                 ],
               },
               {
@@ -120,7 +122,8 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Tool Governance',
                 items: [
-                  'Configuration > Tools is the main operator surface for policy mode, category enablement, provider routing, approvals, and recent jobs.',
+                  'Configuration > Tools is the main operator surface for tool enablement, category routing, approvals, and recent jobs.',
+                  'Configuration > Policy is where you review or change policy-as-code enforcement posture.',
                   'Use CLI `/tools` for the same operational visibility when you are working outside the web UI.',
                   'Allowed paths, commands, and domains should be adjusted deliberately; treat them as policy boundaries, not convenience toggles.',
                 ],
@@ -129,6 +132,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Approvals',
                 items: [
                   'Pending tool actions are surfaced in web approvals, CLI native prompts, and Telegram approval flows.',
+                  'Inside code sessions, safe repo-local reads and edits stay low-friction, while repo execution and persistence actions only auto-approve after the workspace trust state reaches `trusted`.',
                   'Use `/approve [approvalId]` and `/deny [approvalId]` as fallback commands when native approval controls are unavailable.',
                   'Recent approval outcomes show up in audit history and assistant policy views, so you can verify what was allowed and why.',
                 ],
@@ -140,6 +144,47 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Browser navigation only supports HTTP and HTTPS targets, and private hosts are blocked for SSRF protection.',
                   'Browser MCP startup does not require the general MCP toggle to be enabled; if browser tooling is on and the binaries are available, GuardianAgent registers the browser servers automatically.',
                   'Use Lightpanda first for page reading and structure extraction; use Playwright when you need clicks, typing, screenshots, uploads, or richer interaction.',
+                ],
+              },
+            ],
+          },
+          {
+            id: 'coding-assistant-ide',
+            title: 'Coding Assistant IDE',
+            summary: 'Use backend-owned code sessions, Monaco editing, bounded repo review, and session-scoped approvals for repo work.',
+            sections: [
+              {
+                title: 'Start A Code Session',
+                items: [
+                  'Open `#/code` and create a session with a title plus the workspace root you want Guardian to anchor to.',
+                  'Each code session is backend-owned and persists the coding transcript, workspace profile, repo map, trust state, approvals, recent jobs, and verification state.',
+                  'The web Code page is the richest coding client, but main chat, CLI, and Telegram can attach to the same backend code session when you want to continue the work from another surface.',
+                ],
+              },
+              {
+                title: 'IDE And Session Context',
+                items: [
+                  'The Code page combines a session rail, explorer, Monaco editor and diff view, manual terminal panes, and an assistant sidebar for chat, tasks, approvals, and checks.',
+                  'The assistant sidebar uses backend session state rather than browser-only state, so workspace profile, indexed repo map, working set, pending approvals, recent jobs, and checks survive refreshes and cross-surface reuse.',
+                  'Terminal panes remain operator-controlled PTY sessions. Assistant-driven file edits, shell execution, tests, builds, and linting still go through the guarded tool path instead of taking over a PTY.',
+                ],
+              },
+              {
+                title: 'Repo Trust And Native AV',
+                items: [
+                  'New code sessions no longer assume a cloned repo is automatically safe. Guardian first stores a bounded static repo review and then, when available, schedules a background native malware scan of the workspace root.',
+                  'Windows code sessions consume Windows Defender custom-path scans. Unix-like hosts consume `clamscan` or `clamdscan` when installed.',
+                  'The Code page exposes trust state directly through session badges, activity cards, and warning banners. Trust states are `trusted`, `caution`, and `blocked`, and native AV status is folded into the trust summary.',
+                  'When workspace trust is not cleared, README-derived summaries and raw working-set snippets are suppressed from the model prompt so repo content is treated as untrusted data rather than instructions.',
+                  'A `trusted` result means the shipped static review and optional native AV scan did not find current indicators. It is not an agentic repo review or a proof that the repo is safe.',
+                ],
+              },
+              {
+                title: 'Coding Approvals',
+                items: [
+                  'Safe repo-local coding tools such as `code_edit`, `code_patch`, `code_create`, `code_plan`, `code_git_diff`, and repo-scoped file operations remain auto-approved inside the active workspace.',
+                  'Execution and persistence actions such as `code_test`, `code_build`, `code_lint`, `memory_save`, and workflow or task mutations only auto-approve when `workspaceTrust.state` is `trusted`.',
+                  'Read-only shell commands such as `git status` stay low-friction. Non-read-only shell execution in a `caution` or `blocked` workspace requires approval even under autonomous policy mode.',
                 ],
               },
             ],
@@ -161,14 +206,14 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Install and run Ollama locally before configuring Guardian Agent.',
                   'Pull at least one model first, for example `ollama pull llama3.2`.',
-                  'In the Providers tab choose the local provider path, then set a profile name, model, and base URL if needed.',
+                  'In Configuration > AI Providers choose the local provider path, then set a profile name, model, and base URL if needed.',
                   'CLI equivalent: `/config add ollama ollama llama3.2` followed by `/config set default ollama`.',
                 ],
               },
               {
                 title: 'Validation',
                 items: [
-                  'Use the Providers tab test button or CLI `/providers` to verify connectivity and model discovery.',
+                  'Use Configuration > AI Providers or CLI `/providers` to verify connectivity and model discovery.',
                   'If the provider is unavailable, check the Ollama process and base URL before changing Guardian configuration.',
                 ],
               },
@@ -176,15 +221,15 @@ export function getReferenceGuide(): ReferenceGuide {
           },
           {
             id: 'cloud-providers',
-            title: 'Connect Cloud Providers',
-            summary: 'Add external models from OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, or Google Gemini for quality fallback, smart routing, or explicit cloud use.',
+            title: 'Connect Hosted AI Providers',
+            summary: 'Add external models from OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, or Google Gemini for quality fallback, smart routing, or explicit hosted-model use.',
             sections: [
               {
                 title: 'External Provider Setup',
                 items: [
-                  'In Configuration > AI & Search choose External Providers, then select the provider family (OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, or Google Gemini), model, and either paste the API key once or point the profile at a credential ref.',
+                  'In Configuration > AI Providers choose External Providers, then select the provider family (OpenAI, Anthropic, Groq, Mistral, DeepSeek, Together, xAI, or Google Gemini), model, and either paste the API key once or point the profile at a credential ref.',
                   'CLI equivalent: `/config add <name> <provider> <model> <apiKey>` where provider is openai, anthropic, groq, mistral, deepseek, together, xai, or google.',
-                  'Set the default provider from the Providers tab or with `/config set default <name>`.',
+                  'Set the default provider from Configuration > AI Providers or with `/config set default <name>`.',
                 ],
               },
               {
@@ -224,7 +269,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Advanced Env-Backed Refs',
                 items: [
                   'Set the real secret in the host environment, for example `OPENAI_API_KEY` or `BRAVE_API_KEY`.',
-                  'Open Configuration > AI & Search > Credential Refs and create a stable ref name such as `llm.openai.primary` that maps to that environment variable.',
+                  'Open Configuration > AI Providers > Credential Refs and create a stable ref name such as `llm.openai.primary` that maps to that environment variable.',
                   'In provider, search, or Telegram settings, leave the secret field blank and enter that credential ref instead.',
                 ],
               },
@@ -256,7 +301,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Step 1 — Create OAuth credentials: Go to the Google Cloud Console (console.cloud.google.com). Create a new project if needed (top-left project selector > New Project). Navigate to APIs & Services > Credentials. Click "+ Create Credentials" > "OAuth client ID". IMPORTANT: Set Application type to "Desktop app" (not "Web application"). Give it any name (e.g. "Guardian Agent Desktop") and click Create. On the confirmation dialog, click "Download JSON" to get your client_secret.json file.',
                   'Before creating credentials you may need to configure the OAuth consent screen: Go to Google Auth Platform > Audience (or OAuth consent screen). Set user type to External, fill in the app name and your email, save. Then under Publishing status click "Publish App" — without this, only manually-added test users can authenticate.',
                   'Enable the Google APIs you plan to use: Go to APIs & Services > Library. Search for and enable: Gmail API, Google Calendar API, Google Drive API, Google Docs API, Google Sheets API. Only enable what you need.',
-                  'Step 2 — Upload credentials: In Guardian Agent, go to Configuration > Integrations > Google Workspace. Select Native mode. Upload the client_secret.json file you downloaded, or manually place it at ~/.guardianagent/google-credentials.json.',
+                  'Step 2 — Upload credentials: In Guardian Agent, open Cloud > Connections > Google Workspace. Select Native mode, then upload the `client_secret.json` file you downloaded, or manually place it at `~/.guardianagent/google-credentials.json`.',
                   'Step 3 — Connect: Select the Google services you want (Gmail, Calendar, Drive, Docs, Sheets, Contacts). Click "Connect Google". A browser window opens for Google consent. Approve access, and the connection is live immediately.',
                 ],
               },
@@ -279,7 +324,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Setup (3 Steps)',
                 items: [
                   'Step 1 — Register app: Go to the Microsoft Entra admin center (entra.microsoft.com). Click "New registration". Name it anything (e.g. "Guardian Agent"). Set supported account types to "Any Entra ID directory + personal Microsoft accounts". Under Redirect URI, select "Mobile and desktop applications" and enter http://localhost:18433/callback. Click Register. Then go to Authentication > Settings, enable "Allow public client flows", and click Save. Copy the Application (client) ID from the Overview page.',
-                  'Step 2 — Enter Client ID: In Guardian Agent, go to Cloud > Connections > Microsoft 365. Paste the Application (client) ID. Optionally set a Tenant ID (defaults to "common" for broadest compatibility).',
+                  'Step 2 — Enter Client ID: In Guardian Agent, open Cloud > Connections > Microsoft 365. Paste the Application (client) ID. Optionally set a Tenant ID (defaults to `common` for broadest compatibility).',
                   'Step 3 — Connect: Select the services you want (Mail, Calendar, OneDrive, Contacts). Click "Connect Microsoft". A browser window opens for consent. Approve access, and the connection is live immediately.',
                 ],
               },
@@ -304,7 +349,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Bot Setup',
                 items: [
                   'Create the bot through `@BotFather` using `/newbot`, then copy the returned token.',
-                  'Enable Telegram in Configuration > Integrations, then either paste the token once for secure local storage or leave the token field blank and provide an env-backed credential ref.',
+                  'Enable Telegram in Configuration > Integration System, then either paste the token once for secure local storage or leave the token field blank and provide an env-backed credential ref.',
                   'Send at least one message to the bot, then fetch your `message.chat.id` from `https://api.telegram.org/bot<token>/getUpdates`.',
                   'Paste allowed chat IDs into the configuration. Group IDs are commonly negative and often start with `-100`.',
                 ],
@@ -327,7 +372,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Web Search',
                 items: [
                   'Built-in web search and fetch tools can run through the configured search provider path without leaving Guardian controls.',
-                  'Use Configuration > Search Sources to set provider options and either paste premium search keys once or assign env-backed credential refs.',
+                  'Use Configuration > Search Providers to set provider options and either paste premium search keys once or assign env-backed credential refs.',
                   'Search config changes apply immediately and invalidate the web UI so the current state stays visible.',
                 ],
               },
@@ -336,7 +381,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Native hybrid search combines BM25 keyword matching and vector similarity across local directories, repositories, URLs, and files.',
                   'When you already know the exact local PDF path, use `fs_read` to extract the document text directly instead of indexing first.',
-                  'Use the Search Sources configuration area to add, remove, enable, disable, or reindex document sources.',
+                  'Use Configuration > Search Providers to add, remove, enable, disable, or reindex document sources.',
                   'Keep collections tight and purposeful so retrieval quality remains high and reindex times stay reasonable.',
                 ],
                 note: 'Treat web search and document search as complementary: web search is for external freshness, document search is for trusted local context.',
@@ -543,7 +588,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Analytics summary is available in the dashboard and with CLI `/analytics [minutes]`.',
                   'Assistant state exposes running jobs, failed jobs, queue pressure, traces, and policy decisions.',
-                  'Security monitoring surfaces audit volume, denied actions, network posture, host-monitor alerts, gateway-firewall alerts, and recent notifications.',
+                  'Security monitoring now surfaces posture state, unified alerts, recent security-agent activity, audit volume, denied actions, host-monitor alerts, gateway-firewall alerts, native-provider alerts, and recent notifications.',
                 ],
               },
               {
@@ -558,6 +603,45 @@ export function getReferenceGuide(): ReferenceGuide {
             ],
           },
           {
+            id: 'defensive-security-suite',
+            title: 'Defensive Security Suite',
+            summary: 'Use the Security page, native provider integrations, and agentic triage loop to operate the local defensive stack.',
+            sections: [
+              {
+                title: 'Main Operator Surface',
+                items: [
+                  'The Security page is the main operator surface for the local defensive suite. It combines posture, unified alerts, activity history, audit review, threat intel, and native Windows Defender visibility in one place.',
+                  'Unified local security alerts currently aggregate host monitoring, network baseline and anomaly analysis, gateway firewall monitoring, and native Windows Defender alerts.',
+                  'Use the Security page when you need posture and evidence. Use the Network page for device inventory and diagnostics, and the Code page when the issue is repo trust inside a coding session.',
+                ],
+              },
+              {
+                title: 'Profiles, Modes, And Containment',
+                items: [
+                  'The runtime stores deployment profiles (`personal`, `home`, `organization`) separately from operating modes (`monitor`, `guarded`, `lockdown`, `ir_assist`).',
+                  'Monitor is the normal default. Posture can recommend escalation, and containment can temporarily auto-elevate to `guarded` when elevated alerts stack together.',
+                  'Containment remains bounded and policy-driven. The shipped system does not fully auto-remediate or silently take over the host.',
+                ],
+              },
+              {
+                title: 'Native Host Protection',
+                items: [
+                  'Windows Defender is integrated as a native provider, not replaced. Guardian can refresh status, expose provider health and alerts, request quick, full, and custom path scans, and request signature updates from the Security page.',
+                  'The Coding Assistant now consumes native AV signals as a secondary repo-assessment input. A native detection can be merged into `workspaceTrust` and force the repo trust state to `blocked`.',
+                  'On Unix-like hosts, code-session repo scanning can use `clamscan` or `clamdscan` when installed. That Unix AV signal is currently consumed in code-session workspace trust rather than shown as a first-class Security-page provider. A clean native AV result does not override suspicious static repo findings.',
+                ],
+              },
+              {
+                title: 'Agentic Triage',
+                items: [
+                  'The defensive suite includes an LLM-backed `security-triage` agent plus an event dispatcher that investigates selected security events.',
+                  'The triage path is intentionally conservative: read-only evidence gathering first, repeated events deduped with a cooldown window, and completed investigations recorded in the security activity log.',
+                  'The shipped triage loop does not automatically acknowledge, resolve, suppress, or launch mutating host actions purely because an alert fired.',
+                ],
+              },
+            ],
+          },
+          {
             id: 'policy-and-audit',
             title: 'Policy-As-Code And Audit',
             summary: 'Use deterministic policy rules and audit evidence together when you need to explain or change behavior safely.',
@@ -566,7 +650,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Policy Engine',
                 items: [
                   'Policy-as-code supports off, shadow, and enforce modes depending on how aggressively you want rules to apply.',
-                  'Configuration > Tools & Policy and CLI `/policy ...` expose the current mode, family settings, and reload controls.',
+                  'Configuration > Policy and CLI `/policy ...` expose the current mode, family settings, and reload controls.',
                   'Shadow mode is the safest way to compare rule output with current behavior before switching to enforce.',
                 ],
               },
@@ -589,8 +673,9 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'First Checks',
                 items: [
                   'If the web dashboard rejects you, confirm the bearer token or session cookie state in Web Authentication settings.',
-                  'If a model appears offline, verify connectivity in the Providers tab or with CLI `/providers`.',
-                  'If file or command execution is blocked, review Tools policy and allowed path or command settings before retrying.',
+                  'If a model appears offline, verify connectivity in Configuration > AI Providers or with CLI `/providers`.',
+                  'If file or command execution is blocked, review Configuration > Tools, Configuration > Policy, and the relevant allowed path or command settings before retrying.',
+                  'If repo execution is blocked in the Code page, inspect the code session workspace trust badge, native AV summary, approvals tab, and recent jobs before assuming the coding tools are broken.',
                   'If network data looks stale, use the Network History tab and recent outputs to confirm whether the scan actually ran.',
                 ],
               },
@@ -598,9 +683,10 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Security Defaults',
                 items: [
                   'Guardian blocks prompt injection patterns, secret leakage, and risky tool actions by default.',
+                  'New code sessions authorize the workspace path for repo-local access, but they do not treat the attached repo as automatically safe for execution.',
                   'Bearer auth is mandatory for the web dashboard; there is no unauthenticated dashboard mode.',
                   'Rotate web auth credentials from the web Config Center or with CLI `/auth rotate`.',
-                  'Security alerts default to CLI-only delivery; use Configuration > System to enable web or Telegram fanout.',
+                  'Security alerts default to CLI-only delivery; use Configuration > Integration System > Security Alerts to enable web or Telegram fanout.',
                   'Use audit and policy views to understand why an action was denied instead of loosening controls blindly.',
                   'Outbound HTTP tool calls are checked against SSRF protection rules that block private IPs, cloud metadata endpoints, and obfuscated addresses.',
                 ],

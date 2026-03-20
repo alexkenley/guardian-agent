@@ -188,6 +188,41 @@ const CODE_DISALLOWED_SHELL_TOKEN_PREFIXES = new Map<string, string>([
   ['--userconfig=', 'User config overrides are blocked in the Coding Assistant.'],
   ['--globalconfig=', 'Global config overrides are blocked in the Coding Assistant.'],
 ]);
+const CODE_SESSION_SAFE_AUTO_APPROVED_TOOLS = new Set([
+  'code_edit',
+  'code_patch',
+  'code_create',
+  'code_plan',
+  'code_git_diff',
+  'code_symbol_search',
+  'fs_read',
+  'fs_write',
+  'fs_search',
+  'fs_list',
+  'fs_mkdir',
+  'fs_move',
+  'fs_copy',
+  'fs_delete',
+  'memory_search',
+  'memory_recall',
+  'doc_create',
+]);
+const CODE_SESSION_TRUSTED_EXECUTION_TOOLS = new Set([
+  'code_test',
+  'code_build',
+  'code_lint',
+  'memory_save',
+  'task_create',
+  'task_update',
+  'task_delete',
+  'workflow_upsert',
+  'workflow_run',
+  'workflow_delete',
+]);
+const CODE_SESSION_UNTRUSTED_APPROVAL_TOOLS = new Set([
+  'shell_safe',
+  ...CODE_SESSION_TRUSTED_EXECUTION_TOOLS,
+]);
 
 type ShellExecMode = 'direct_exec' | 'shell_fallback';
 
@@ -1197,21 +1232,8 @@ export class ToolExecutor {
     request?: Partial<ToolExecutionRequest>,
   ): boolean {
     if (!this.getCodeWorkspaceRoot(request)) return false;
-    const autoApprovedTools = new Set([
-      // Code tools
-      'code_edit', 'code_patch', 'code_create', 'code_plan', 'code_git_diff',
-      'code_test', 'code_build', 'code_lint', 'code_symbol_search',
-      // Filesystem tools scoped to workspace
-      'fs_read', 'fs_write', 'fs_search', 'fs_list', 'fs_mkdir', 'fs_move', 'fs_copy', 'fs_delete',
-      // Memory tools
-      'memory_save', 'memory_search', 'memory_recall',
-      // Document tools
-      'doc_create',
-      // Automation tools
-      'task_create', 'task_update', 'task_delete',
-      'workflow_upsert', 'workflow_run', 'workflow_delete',
-    ]);
-    return autoApprovedTools.has(definition.name);
+    return CODE_SESSION_SAFE_AUTO_APPROVED_TOOLS.has(definition.name)
+      || (this.isCodeSessionTrustCleared(request) && CODE_SESSION_TRUSTED_EXECUTION_TOOLS.has(definition.name));
   }
 
   private getCodeSessionSurfaceId(request?: Partial<ToolExecutionRequest>): string {
@@ -1230,6 +1252,54 @@ export class ToolExecutor {
     const ownerUserId = request?.userId?.trim();
     if (!ownerUserId || !this.options.codeSessionStore) return null;
     return this.options.codeSessionStore.getSession(sessionId, ownerUserId);
+  }
+
+  private getCurrentCodeSessionRecord(request?: Partial<ToolExecutionRequest>) {
+    const sessionId = request?.codeContext?.sessionId?.trim();
+    if (!sessionId) return null;
+    return this.getOwnedCodeSession(sessionId, request)
+      ?? this.options.codeSessionStore?.getSession(sessionId)
+      ?? null;
+  }
+
+  private getCurrentCodeSessionTrustState(request?: Partial<ToolExecutionRequest>): string | null {
+    const session = this.getCurrentCodeSessionRecord(request);
+    return session?.workState.workspaceTrust?.state ?? null;
+  }
+
+  private isCodeSessionTrustCleared(request?: Partial<ToolExecutionRequest>): boolean {
+    return this.getCurrentCodeSessionTrustState(request) === 'trusted';
+  }
+
+  private isReadOnlyShellCommand(command: string): boolean {
+    const fullCmd = command.trim();
+    if (!fullCmd) return false;
+    const firstWord = fullCmd.split(/\s+/)[0];
+    const readOnlyCommands = ['ls', 'dir', 'pwd', 'whoami', 'hostname', 'uname', 'date', 'echo',
+      'cat', 'head', 'tail', 'wc', 'file', 'which', 'type'];
+    const readOnlyPrefixed = ['git status', 'git diff', 'git log', 'git branch', 'git remote',
+      'git tag', 'node --version', 'npm --version', 'npm ls'];
+    return readOnlyCommands.includes(firstWord)
+      || readOnlyPrefixed.some((candidate) => fullCmd === candidate || fullCmd.startsWith(`${candidate} `));
+  }
+
+  private decideCodeSessionTrust(
+    definition: ToolDefinition,
+    args: Record<string, unknown>,
+    request?: Partial<ToolExecutionRequest>,
+  ): ToolDecision | null {
+    if (!this.getCodeWorkspaceRoot(request)) return null;
+    const trustState = this.getCurrentCodeSessionTrustState(request);
+    if (!trustState || trustState === 'trusted') return null;
+
+    if (definition.name === 'shell_safe') {
+      const command = asString(args.command).trim();
+      return this.isReadOnlyShellCommand(command) ? 'allow' : 'require_approval';
+    }
+
+    return CODE_SESSION_UNTRUSTED_APPROVAL_TOOLS.has(definition.name)
+      ? 'require_approval'
+      : null;
   }
 
   private getCurrentCodeSessionMemoryContext(
@@ -2383,6 +2453,14 @@ export class ToolExecutor {
     const explicit = this.policy.toolPolicies[definition.name];
     if (explicit) {
       if (explicit === 'deny') return 'deny';
+    }
+
+    const codeSessionTrustDecision = this.decideCodeSessionTrust(definition, args, request);
+    if (codeSessionTrustDecision) {
+      return codeSessionTrustDecision;
+    }
+
+    if (explicit) {
       if (explicit === 'auto') return 'allow';
       if (explicit === 'manual') return 'require_approval';
     }
@@ -2415,13 +2493,7 @@ export class ToolExecutor {
     // Read-only shell commands skip approval even under approve_by_policy
     if (definition.name === 'shell_safe' && this.policy.mode !== 'approve_each') {
       const fullCmd = ((args as Record<string, unknown>).command as string ?? '').trim();
-      const firstWord = fullCmd.split(/\s+/)[0];
-      const readOnlyCommands = ['ls', 'dir', 'pwd', 'whoami', 'hostname', 'uname', 'date', 'echo',
-        'cat', 'head', 'tail', 'wc', 'file', 'which', 'type'];
-      const readOnlyPrefixed = ['git status', 'git diff', 'git log', 'git branch', 'git remote',
-        'git tag', 'node --version', 'npm --version', 'npm ls'];
-      if (readOnlyCommands.includes(firstWord) ||
-          readOnlyPrefixed.some(rc => fullCmd === rc || fullCmd.startsWith(rc + ' '))) {
+      if (this.isReadOnlyShellCommand(fullCmd)) {
         return 'allow';
       }
     }
@@ -5197,7 +5269,7 @@ export class ToolExecutor {
         name: 'code_test',
         description: 'Run an allowlisted test command inside a validated project directory.',
         shortDescription: 'Run tests from a project directory.',
-        risk: 'read_only',
+        risk: 'mutating',
         category: 'coding',
         deferLoading: true,
         parameters: {
@@ -5226,7 +5298,7 @@ export class ToolExecutor {
         name: 'code_build',
         description: 'Run an allowlisted build command inside a validated project directory.',
         shortDescription: 'Run a build command from a project directory.',
-        risk: 'read_only',
+        risk: 'mutating',
         category: 'coding',
         deferLoading: true,
         parameters: {
@@ -5255,7 +5327,7 @@ export class ToolExecutor {
         name: 'code_lint',
         description: 'Run an allowlisted lint or static analysis command inside a validated project directory.',
         shortDescription: 'Run lint or static analysis from a project directory.',
-        risk: 'read_only',
+        risk: 'mutating',
         category: 'coding',
         deferLoading: true,
         parameters: {
