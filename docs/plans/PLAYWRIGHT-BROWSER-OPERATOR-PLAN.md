@@ -7,7 +7,6 @@ Guardian's current browser mutation path is unreliable for click and type action
 Current pain points:
 
 - `browser_interact` mixes two different jobs: state discovery and mutation.
-- Read discovery may come from Lightpanda while mutation runs through Playwright.
 - Mutating actions still accept free-form `element` strings instead of stable page-local ids.
 - A lot of recent work has gone into approval-copy recovery rather than making the browser action path deterministic.
 
@@ -23,7 +22,6 @@ The core lesson from the UI-TARS comparison is not "switch to Puppeteer". The us
 - Make click, type, and select deterministic on the Playwright lane.
 - Stop relying on free-form element labels for mutating browser actions.
 - Keep approvals tied to real tool execution, not fallback prose.
-- Preserve Lightpanda for read-only extraction where it is useful.
 - Add end-to-end coverage for the exact failure cases that keep regressing.
 
 ## Non-Goals
@@ -43,7 +41,7 @@ Do not continue with these troubleshooting patterns:
 
 - more free-form selector fallback experiments in repo-root scratch files
 - more approval-copy workarounds for browser-click failures
-- more Lightpanda-to-Playwright mutation bridging via loose text labels
+- more cross-backend browser mutation bridging via loose text labels
 
 ## Implementation Direction
 
@@ -70,7 +68,6 @@ New wrapper tools:
 Rules:
 
 - All mutating browser actions must use Playwright-derived state.
-- Lightpanda remains read-only only.
 - A `browser_act` call against stale state must fail with an explicit stale-state error and require a fresh `browser_state` call.
 
 ### Phase 2: Compatibility Layer
@@ -153,7 +150,7 @@ Unit tests:
 - `src/tools/executor.test.ts`
   - `browser_state` is read-only and not approval-gated
   - `browser_act` is approval-gated outside autonomous mode
-  - Lightpanda outputs are never used as mutation targets
+  - read-only browser extraction does not feed free-form mutation targets
 
 - worker/runtime tests
   - browser approval metadata comes only from real tool execution
@@ -190,5 +187,5 @@ Run after implementation:
   - a real pending approval for `browser_act`, or
   - a real successful click result
 - no generic approval prose without real approval metadata
-- no label-based Lightpanda-to-Playwright mutation bridging
+- no label-based mutation bridging
 - reproducible harness coverage for the two known regression prompts

@@ -942,14 +942,12 @@ export interface MicrosoftConfig {
   timeoutMs?: number;
 }
 
-/** Browser automation configuration (Playwright MCP + Lightpanda MCP). */
+/** Browser automation configuration (Playwright MCP). */
 export interface BrowserConfig {
   /** Master switch for all browser tooling. Default: true */
   enabled: boolean;
   /** Enable Playwright MCP backend. Default: true */
   playwrightEnabled?: boolean;
-  /** Enable Lightpanda MCP backend. Default: false */
-  lightpandaEnabled?: boolean;
   /** Playwright browser engine. Default: 'chromium' */
   playwrightBrowser?: 'chromium' | 'firefox' | 'webkit' | 'chrome' | 'msedge';
   /** Playwright MCP capability groups (comma-separated). Default: 'network,storage' */
@@ -958,8 +956,6 @@ export interface BrowserConfig {
   allowedDomains?: string[];
   /** Extra Playwright CLI args (proxy, user-agent, viewport, etc.) */
   playwrightArgs?: string[];
-  /** Lightpanda binary path override. Default: 'lightpanda' */
-  lightpandaBinaryPath?: string;
 }
 
 /** Web search provider configuration. */
@@ -1201,7 +1197,7 @@ export interface AssistantToolsConfig {
   mcp?: AssistantMCPConfig;
   /** Web search tool configuration. Auto-selects best available provider (Brave > Perplexity > DuckDuckGo). */
   webSearch?: WebSearchConfig;
-  /** Browser automation configuration for the Playwright MCP and Lightpanda MCP backends. */
+  /** Browser automation configuration for the Playwright MCP backend. */
   browser?: BrowserConfig;
   /** Native Google Workspace integration (googleapis SDK). Alternative to gws CLI via MCP managed providers. */
   google?: GoogleConfig;

@@ -224,7 +224,7 @@ function parseDirectBrowserIntent(content: string): DirectBrowserIntent | null {
   const hasPageContext = /\b(browser|page|current page|this page|website|web page|form)\b/i.test(normalized);
   const hasInteractiveContext = hasPageContext || /\b(link|links|button|input|field|interactive elements)\b/i.test(normalized);
 
-  if (/\bcapabilities\b/i.test(normalized) && /\b(playwright|lightpanda|browser)\b/i.test(normalized)) {
+  if (/\bcapabilities\b/i.test(normalized) && /\b(playwright|browser)\b/i.test(normalized)) {
     return { kind: 'capabilities' };
   }
 
@@ -475,8 +475,9 @@ function formatDirectBrowserToolResult(
     const content = formatted || toString(result.message) || 'Browser action completed.';
     return { content };
   }
+  const missingWrapper = formatMissingBrowserWrapperMessage(toString(result.message));
   return {
-    content: toString(result.message) || 'Browser action failed.',
+    content: missingWrapper || toString(result.message) || 'Browser action failed.',
   };
 }
 
@@ -541,6 +542,15 @@ function clipText(value: string, maxChars: number): string {
   return value.length <= maxChars
     ? value
     : `${value.slice(0, maxChars).trimEnd()}\n...[truncated]`;
+}
+
+function formatMissingBrowserWrapperMessage(message: string): string | null {
+  const missingTool = message.match(/^Unknown tool '([^']+)'/);
+  const toolName = missingTool?.[1]?.trim();
+  if (toolName === 'browser_links' || toolName === 'browser_extract') {
+    return `The ${toolName} wrapper is unavailable right now. That usually means the Playwright browser backend is not connected or the required snapshot/evaluate capability is missing. Run browser_capabilities to confirm backend availability.`;
+  }
+  return null;
 }
 
 function formatUnknown(value: unknown): string {

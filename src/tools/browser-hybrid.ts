@@ -7,16 +7,75 @@ const PLAYWRIGHT_SNAPSHOT_TOOL = 'mcp-playwright-browser_snapshot';
 const PLAYWRIGHT_CLICK_TOOL = 'mcp-playwright-browser_click';
 const PLAYWRIGHT_TYPE_TOOL = 'mcp-playwright-browser_type';
 const PLAYWRIGHT_SELECT_TOOL = 'mcp-playwright-browser_select_option';
+const PLAYWRIGHT_EVALUATE_TOOL = 'mcp-playwright-browser_evaluate';
 
-const LIGHTPANDA_GOTO_TOOL = 'mcp-lightpanda-goto';
-const LIGHTPANDA_MARKDOWN_TOOL = 'mcp-lightpanda-markdown';
-const LIGHTPANDA_LINKS_TOOL = 'mcp-lightpanda-links';
-const LIGHTPANDA_STRUCTURED_DATA_TOOL = 'mcp-lightpanda-structuredData';
-const LIGHTPANDA_SEMANTIC_TREE_TOOL = 'mcp-lightpanda-semantic_tree';
-const LIGHTPANDA_INTERACTIVE_ELEMENTS_TOOL = 'mcp-lightpanda-interactiveElements';
+const PLAYWRIGHT_LINKS_EVALUATION = `() => {
+  const normalize = (value) => (value || '').replace(/\\s+/g, ' ').trim();
+  return Array.from(document.querySelectorAll('a[href]')).map((anchor) => ({
+    text: normalize(anchor.textContent || anchor.getAttribute('aria-label') || anchor.getAttribute('title') || ''),
+    href: anchor.href,
+  })).filter((entry) => !!entry.href);
+}`;
+
+const PLAYWRIGHT_STRUCTURED_EVALUATION = `() => {
+  const normalize = (value) => (value || '').replace(/\\s+/g, ' ').trim();
+  const readAttr = (selector, attribute = 'content') => {
+    const element = document.querySelector(selector);
+    const value = element?.getAttribute(attribute);
+    return value ? normalize(value) || null : null;
+  };
+  const parseJsonLd = (text) => {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  };
+  const headings = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6'))
+    .map((element) => ({
+      level: Number(element.tagName.slice(1)),
+      text: normalize(element.textContent || ''),
+    }))
+    .filter((entry) => entry.text);
+  const landmarks = Array.from(document.querySelectorAll('main,nav,header,footer,aside,section,article,[role="main"],[role="navigation"],[role="banner"],[role="contentinfo"],[role="complementary"],[role="region"]'))
+    .map((element) => {
+      const role = normalize(element.getAttribute('role') || element.tagName.toLowerCase());
+      const label = normalize(element.getAttribute('aria-label') || element.getAttribute('aria-labelledby') || '') || null;
+      return { role, label };
+    })
+    .filter((entry) => entry.role)
+    .slice(0, 80);
+  const jsonLd = Array.from(document.querySelectorAll('script[type="application/ld+json"]'))
+    .map((script) => parseJsonLd(script.textContent || ''))
+    .filter((entry) => entry !== null);
+  return {
+    metadata: {
+      url: location.href,
+      title: normalize(document.title || '') || null,
+      lang: normalize(document.documentElement.lang || '') || null,
+      description: readAttr('meta[name="description"]'),
+      canonicalUrl: readAttr('link[rel="canonical"]', 'href'),
+      openGraph: {
+        title: readAttr('meta[property="og:title"]'),
+        description: readAttr('meta[property="og:description"]'),
+        type: readAttr('meta[property="og:type"]'),
+        image: readAttr('meta[property="og:image"]'),
+      },
+      twitter: {
+        card: readAttr('meta[name="twitter:card"]'),
+        title: readAttr('meta[name="twitter:title"]'),
+        description: readAttr('meta[name="twitter:description"]'),
+        image: readAttr('meta[name="twitter:image"]'),
+      },
+    },
+    headings,
+    landmarks,
+    jsonLd,
+  };
+}`;
 
 export type HybridBrowserMode = 'auto' | 'read' | 'interactive';
-export type HybridBrowserBackend = 'lightpanda' | 'playwright';
+export type HybridBrowserBackend = 'playwright';
 
 interface HybridBrowserSessionState {
   currentUrl?: string;
@@ -24,7 +83,6 @@ interface HybridBrowserSessionState {
   lastAction?: string;
   lastBackend?: HybridBrowserBackend;
   lastReadBackend?: HybridBrowserBackend;
-  lastLightpandaUrl?: string;
   lastPlaywrightUrl?: string;
   latestPlaywrightStateId?: string;
   playwrightStateVersion: number;
@@ -59,15 +117,7 @@ export interface HybridBrowserCapabilities {
       navigate: boolean;
       snapshot: boolean;
       interact: boolean;
-    };
-    lightpanda: {
-      available: boolean;
-      navigate: boolean;
-      markdown: boolean;
-      links: boolean;
-      structuredData: boolean;
-      semanticTree: boolean;
-      interactiveElements: boolean;
+      evaluate: boolean;
     };
   };
   wrappers: {
@@ -113,16 +163,11 @@ export class HybridBrowserService {
     const playwrightInteract = toolNames.has(PLAYWRIGHT_CLICK_TOOL)
       || toolNames.has(PLAYWRIGHT_TYPE_TOOL)
       || toolNames.has(PLAYWRIGHT_SELECT_TOOL);
-    const lightpandaNavigate = toolNames.has(LIGHTPANDA_GOTO_TOOL);
-    const lightpandaMarkdown = toolNames.has(LIGHTPANDA_MARKDOWN_TOOL);
-    const lightpandaLinks = toolNames.has(LIGHTPANDA_LINKS_TOOL);
-    const lightpandaStructuredData = toolNames.has(LIGHTPANDA_STRUCTURED_DATA_TOOL);
-    const lightpandaSemanticTree = toolNames.has(LIGHTPANDA_SEMANTIC_TREE_TOOL);
-    const lightpandaInteractiveElements = toolNames.has(LIGHTPANDA_INTERACTIVE_ELEMENTS_TOOL);
+    const playwrightEvaluate = toolNames.has(PLAYWRIGHT_EVALUATE_TOOL);
 
-    const preferredReadBackend = lightpandaNavigate && lightpandaMarkdown
-      ? 'lightpanda'
-      : (playwrightNavigate && playwrightSnapshot ? 'playwright' : null);
+    const preferredReadBackend = playwrightNavigate && playwrightSnapshot
+      ? 'playwright'
+      : null;
     const preferredInteractionBackend = playwrightNavigate && playwrightInteract
       ? 'playwright'
       : null;
@@ -133,27 +178,19 @@ export class HybridBrowserService {
       preferredInteractionBackend,
       backends: {
         playwright: {
-          available: playwrightNavigate || playwrightSnapshot || playwrightInteract,
+          available: playwrightNavigate || playwrightSnapshot || playwrightInteract || playwrightEvaluate,
           navigate: playwrightNavigate,
           snapshot: playwrightSnapshot,
           interact: playwrightInteract,
-        },
-        lightpanda: {
-          available: lightpandaNavigate || lightpandaMarkdown || lightpandaLinks || lightpandaStructuredData || lightpandaSemanticTree || lightpandaInteractiveElements,
-          navigate: lightpandaNavigate,
-          markdown: lightpandaMarkdown,
-          links: lightpandaLinks,
-          structuredData: lightpandaStructuredData,
-          semanticTree: lightpandaSemanticTree,
-          interactiveElements: lightpandaInteractiveElements,
+          evaluate: playwrightEvaluate,
         },
       },
       wrappers: {
         browserCapabilities: true,
-        browserNavigate: lightpandaNavigate || playwrightNavigate,
-        browserRead: (lightpandaNavigate && lightpandaMarkdown) || (playwrightNavigate && playwrightSnapshot),
-        browserLinks: lightpandaNavigate && lightpandaLinks,
-        browserExtract: lightpandaNavigate && (lightpandaStructuredData || lightpandaSemanticTree),
+        browserNavigate: playwrightNavigate,
+        browserRead: playwrightNavigate && playwrightSnapshot,
+        browserLinks: playwrightNavigate && playwrightEvaluate,
+        browserExtract: playwrightNavigate && playwrightSnapshot,
         browserState: playwrightNavigate && playwrightSnapshot,
         browserAct: playwrightNavigate && playwrightInteract,
         browserInteract: (playwrightNavigate && playwrightSnapshot) || (playwrightNavigate && playwrightInteract),
@@ -196,7 +233,7 @@ export class HybridBrowserService {
       return { success: false, error: 'No active browser page. Call browser_navigate first or pass a url.' };
     }
 
-    const sync = await this.ensureBackendAtUrl(scopeKey, 'playwright', currentUrl);
+    const sync = await this.ensurePlaywrightAtUrl(scopeKey, currentUrl);
     if (!sync.success) {
       return sync.result;
     }
@@ -259,9 +296,8 @@ export class HybridBrowserService {
     if (!state || state.scopeKey !== scopeKey) {
       return { success: false, error: 'Unknown browser state. Capture a fresh browser_state before mutating the page.' };
     }
-
     const session = this.sessions.get(scopeKey);
-    if (!session || session.playwrightStateVersion !== state.version || session.currentUrl !== state.url) {
+    if ((session?.playwrightStateVersion ?? 0) !== state.version) {
       return { success: false, error: 'The captured browser state is stale. Capture a fresh browser_state before mutating the page.' };
     }
 
@@ -269,55 +305,55 @@ export class HybridBrowserService {
     if (!ref) {
       return { success: false, error: 'ref is required for browser_act.' };
     }
-    const mutationValue = typeof input.value === 'string' ? input.value : '';
-    if (action !== 'click' && mutationValue.length === 0) {
+    const target = state.elements.find((element) => element.ref === ref);
+    if (!target) {
+      return { success: false, error: `ref '${ref}' was not present in browser_state '${stateId}'. Capture a fresh browser_state before mutating the page.` };
+    }
+
+    if ((action === 'type' || action === 'fill' || action === 'select') && !String(input.value ?? '').length) {
       return { success: false, error: `value is required for browser_act action '${action}'.` };
     }
 
-    const matchedTarget = state.elements.find((element) => element.ref === ref);
-    if (!matchedTarget) {
-      return { success: false, error: `Unknown ref '${ref}' for the captured browser state.` };
-    }
-
-    const sync = await this.ensureBackendAtUrl(scopeKey, 'playwright', state.url);
+    const sync = await this.ensurePlaywrightAtUrl(scopeKey, state.url);
     if (!sync.success) {
       return sync.result;
     }
 
     const toolName = action === 'click'
       ? PLAYWRIGHT_CLICK_TOOL
-      : (action === 'select' ? PLAYWRIGHT_SELECT_TOOL : PLAYWRIGHT_TYPE_TOOL);
-    const payload = buildPlaywrightMutationPayload(
-      this.getToolDefinition(toolName),
-      action as 'click' | 'type' | 'fill' | 'select',
-      ref,
-      mutationValue,
-    );
-    const interactionResult = await this.callTool(toolName, payload);
-    if (!interactionResult.success) {
-      return interactionResult;
+      : action === 'select'
+        ? PLAYWRIGHT_SELECT_TOOL
+        : PLAYWRIGHT_TYPE_TOOL;
+    const definition = this.getToolDefinition(toolName);
+    const payload = buildPlaywrightMutationPayload(definition, action as 'click' | 'type' | 'fill' | 'select', ref, asString(input.value, ''));
+    const result = await this.callTool(toolName, payload);
+    if (!result.success) {
+      return result;
     }
 
     const nextVersion = this.bumpPlaywrightStateVersion(scopeKey);
     this.updateSession(scopeKey, {
-      lastAction: `act:${action}`,
+      currentUrl: state.url,
+      pageTitle: state.title,
+      lastAction: action,
       lastBackend: 'playwright',
-      lastStrategy: 'playwright-action',
+      lastReadBackend: 'playwright',
+      lastPlaywrightUrl: state.url,
       latestPlaywrightStateId: undefined,
+      lastStrategy: 'playwright-act',
     });
     this.pruneActionStates(scopeKey, nextVersion);
+
     return {
       success: true,
-      message: `${formatInteractionPastTense(action)} '${matchedTarget.text || matchedTarget.ref}' on ${state.url} via Playwright.`,
+      message: `${formatInteractionPastTense(action)} '${target.text || target.ref}' on ${state.url} via Playwright.`,
       output: {
-        stateId,
         url: state.url,
         backend: 'playwright',
         action,
         ref,
-        target: matchedTarget,
-        ...(action === 'click' ? {} : { value: mutationValue }),
-        resyncedPage: sync.navigated,
+        target,
+        result: outputToStructured(result.output),
         session: this.getSession(scopeKey),
       },
     };
@@ -329,89 +365,13 @@ export class HybridBrowserService {
     mode: HybridBrowserMode = 'auto',
   ): Promise<ToolResult> {
     const capabilities = this.getCapabilities();
-    if (!capabilities.available) {
-      return { success: false, error: 'Browser tooling is unavailable because no managed browser backend is connected.' };
+    if (!capabilities.backends.playwright.navigate) {
+      return { success: false, error: 'No navigation-capable browser backend is available.' };
     }
 
     const normalizedUrl = normalizeBrowserUrl(url);
     if (!normalizedUrl) {
       return { success: false, error: 'url is required' };
-    }
-
-    if (mode !== 'interactive' && capabilities.backends.lightpanda.navigate) {
-      const lightpandaResult = await this.callTool(LIGHTPANDA_GOTO_TOOL, { url: normalizedUrl });
-      if (lightpandaResult.success) {
-        const summary = summarizeNavigationResult(lightpandaResult.output, normalizedUrl);
-        const nextVersion = this.bumpPlaywrightStateVersion(scopeKey);
-        this.updateSession(scopeKey, {
-          currentUrl: summary.url,
-          pageTitle: summary.title,
-          lastAction: 'navigate',
-          lastBackend: 'lightpanda',
-          lastReadBackend: 'lightpanda',
-          lastLightpandaUrl: summary.url,
-          latestPlaywrightStateId: undefined,
-          lastStrategy: mode === 'read' ? 'lightpanda' : 'lightpanda-first',
-        });
-        this.pruneActionStates(scopeKey, nextVersion);
-        return {
-          success: true,
-          message: `Navigated to ${summary.url} via Lightpanda.`,
-          output: {
-            url: summary.url,
-            title: summary.title,
-            backend: 'lightpanda',
-            requestedMode: mode,
-            fallbackUsed: false,
-            session: this.getSession(scopeKey),
-          },
-        };
-      }
-
-      if (!capabilities.backends.playwright.navigate) {
-        return lightpandaResult;
-      }
-
-      const playwrightResult = await this.callTool(PLAYWRIGHT_NAVIGATE_TOOL, { url: normalizedUrl });
-      if (!playwrightResult.success) {
-        return {
-          success: false,
-          error: playwrightResult.error ?? lightpandaResult.error ?? 'Browser navigation failed.',
-        };
-      }
-      const summary = summarizeNavigationResult(playwrightResult.output, normalizedUrl);
-      const nextVersion = this.bumpPlaywrightStateVersion(scopeKey);
-      this.updateSession(scopeKey, {
-        currentUrl: summary.url,
-        pageTitle: summary.title,
-        lastAction: 'navigate',
-        lastBackend: 'playwright',
-        lastReadBackend: 'playwright',
-        lastPlaywrightUrl: summary.url,
-        latestPlaywrightStateId: undefined,
-        lastStrategy: 'lightpanda-fallback-playwright',
-      });
-      this.pruneActionStates(scopeKey, nextVersion);
-      return {
-        success: true,
-        message: `Navigated to ${summary.url} via Playwright after Lightpanda fallback.`,
-        output: {
-          url: summary.url,
-          title: summary.title,
-          backend: 'playwright',
-          requestedMode: mode,
-          fallbackUsed: true,
-          session: this.getSession(scopeKey),
-        },
-      };
-    }
-
-    if (!capabilities.backends.playwright.navigate && capabilities.backends.lightpanda.navigate) {
-      return this.navigate(scopeKey, normalizedUrl, 'read');
-    }
-
-    if (!capabilities.backends.playwright.navigate) {
-      return { success: false, error: 'No navigation-capable browser backend is available.' };
     }
 
     const playwrightResult = await this.callTool(PLAYWRIGHT_NAVIGATE_TOOL, { url: normalizedUrl });
@@ -428,7 +388,7 @@ export class HybridBrowserService {
       lastReadBackend: 'playwright',
       lastPlaywrightUrl: summary.url,
       latestPlaywrightStateId: undefined,
-      lastStrategy: 'playwright',
+      lastStrategy: mode === 'interactive' ? 'playwright-interactive' : 'playwright-read',
     });
     this.pruneActionStates(scopeKey, nextVersion);
     return {
@@ -464,44 +424,11 @@ export class HybridBrowserService {
     const maxChars = Math.max(500, Math.min(40_000, asNumber(input.maxChars, 12_000)));
     const capabilities = this.getCapabilities();
 
-    if (capabilities.backends.lightpanda.navigate && capabilities.backends.lightpanda.markdown) {
-      const sync = await this.ensureBackendAtUrl(scopeKey, 'lightpanda', currentUrl);
-      if (!sync.success) {
-        return sync.result;
-      }
-      const markdownResult = await this.callTool(LIGHTPANDA_MARKDOWN_TOOL, {});
-      if (markdownResult.success) {
-        const content = clipText(outputToText(markdownResult.output), maxChars);
-        this.updateSession(scopeKey, {
-          lastAction: 'read',
-          lastBackend: 'lightpanda',
-          lastReadBackend: 'lightpanda',
-          lastStrategy: 'lightpanda',
-        });
-        return {
-          success: true,
-          message: `Read ${currentUrl} via Lightpanda.`,
-          output: {
-            url: currentUrl,
-            title: this.sessions.get(scopeKey)?.pageTitle,
-            backend: 'lightpanda',
-            contentType: 'markdown',
-            content,
-            truncated: content.length >= maxChars,
-            session: this.getSession(scopeKey),
-          },
-        };
-      }
-      if (!capabilities.backends.playwright.navigate || !capabilities.backends.playwright.snapshot) {
-        return markdownResult;
-      }
-    }
-
     if (!capabilities.backends.playwright.navigate || !capabilities.backends.playwright.snapshot) {
       return { success: false, error: 'No readable browser backend is available.' };
     }
 
-    const sync = await this.ensureBackendAtUrl(scopeKey, 'playwright', currentUrl);
+    const sync = await this.ensurePlaywrightAtUrl(scopeKey, currentUrl);
     if (!sync.success) {
       return sync.result;
     }
@@ -514,7 +441,7 @@ export class HybridBrowserService {
       lastAction: 'read',
       lastBackend: 'playwright',
       lastReadBackend: 'playwright',
-      lastStrategy: 'playwright-fallback',
+      lastStrategy: 'playwright-snapshot',
     });
     return {
       success: true,
@@ -536,8 +463,8 @@ export class HybridBrowserService {
     input: { url?: string; filter?: string; maxItems?: number },
   ): Promise<ToolResult> {
     const capabilities = this.getCapabilities();
-    if (!(capabilities.backends.lightpanda.navigate && capabilities.backends.lightpanda.links)) {
-      return { success: false, error: 'Structured link extraction requires the Lightpanda read backend.' };
+    if (!(capabilities.backends.playwright.navigate && capabilities.backends.playwright.evaluate)) {
+      return { success: false, error: 'Structured link extraction requires the Playwright browser_evaluate capability.' };
     }
 
     const targetUrl = normalizeBrowserUrl(input.url);
@@ -552,34 +479,37 @@ export class HybridBrowserService {
       return { success: false, error: 'No active browser page. Call browser_navigate first or pass a url.' };
     }
 
-    const sync = await this.ensureBackendAtUrl(scopeKey, 'lightpanda', currentUrl);
+    const sync = await this.ensurePlaywrightAtUrl(scopeKey, currentUrl);
     if (!sync.success) {
       return sync.result;
     }
 
-    const linkResult = await this.callTool(LIGHTPANDA_LINKS_TOOL, {});
-    if (!linkResult.success) {
-      return linkResult;
+    const evaluateResult = await this.callTool(
+      PLAYWRIGHT_EVALUATE_TOOL,
+      buildPlaywrightEvaluatePayload(this.getToolDefinition(PLAYWRIGHT_EVALUATE_TOOL), PLAYWRIGHT_LINKS_EVALUATION),
+    );
+    if (!evaluateResult.success) {
+      return evaluateResult;
     }
 
     const filter = (input.filter ?? '').trim().toLowerCase();
     const maxItems = Math.max(1, Math.min(100, asNumber(input.maxItems, 50)));
-    const links = normalizeLinkEntries(linkResult.output, currentUrl)
+    const links = normalizeLinkEntries(evaluateResult.output, currentUrl)
       .filter((entry) => !filter || entry.text.toLowerCase().includes(filter) || entry.href.toLowerCase().includes(filter))
       .slice(0, maxItems);
 
     this.updateSession(scopeKey, {
       lastAction: 'links',
-      lastBackend: 'lightpanda',
-      lastReadBackend: 'lightpanda',
-      lastStrategy: 'lightpanda',
+      lastBackend: 'playwright',
+      lastReadBackend: 'playwright',
+      lastStrategy: 'playwright-dom-evaluate',
     });
     return {
       success: true,
       message: `Extracted ${links.length} link${links.length === 1 ? '' : 's'} from ${currentUrl}.`,
       output: {
         url: currentUrl,
-        backend: 'lightpanda',
+        backend: 'playwright',
         filter: filter || undefined,
         links,
         session: this.getSession(scopeKey),
@@ -592,8 +522,8 @@ export class HybridBrowserService {
     input: { url?: string; type?: 'structured' | 'semantic' | 'both'; maxChars?: number },
   ): Promise<ToolResult> {
     const capabilities = this.getCapabilities();
-    if (!capabilities.backends.lightpanda.navigate) {
-      return { success: false, error: 'Structured browser extraction requires the Lightpanda read backend.' };
+    if (!(capabilities.backends.playwright.navigate && capabilities.backends.playwright.snapshot)) {
+      return { success: false, error: 'Structured browser extraction requires the Playwright backend.' };
     }
 
     const targetUrl = normalizeBrowserUrl(input.url);
@@ -608,44 +538,54 @@ export class HybridBrowserService {
       return { success: false, error: 'No active browser page. Call browser_navigate first or pass a url.' };
     }
 
-    const sync = await this.ensureBackendAtUrl(scopeKey, 'lightpanda', currentUrl);
+    const sync = await this.ensurePlaywrightAtUrl(scopeKey, currentUrl);
     if (!sync.success) {
       return sync.result;
     }
 
     const type = input.type ?? 'both';
     const maxChars = Math.max(500, Math.min(40_000, asNumber(input.maxChars, 12_000)));
+
+    let snapshotText = '';
+    if (type === 'semantic' || type === 'both') {
+      const snapshotResult = await this.callTool(PLAYWRIGHT_SNAPSHOT_TOOL, {});
+      if (!snapshotResult.success) {
+        return snapshotResult;
+      }
+      snapshotText = extractSnapshotText(snapshotResult.output);
+    }
+
     let structuredData: unknown;
-    let semanticTree: string | undefined;
-
-    if ((type === 'structured' || type === 'both') && capabilities.backends.lightpanda.structuredData) {
-      const structuredResult = await this.callTool(LIGHTPANDA_STRUCTURED_DATA_TOOL, {});
-      if (!structuredResult.success) {
-        return structuredResult;
+    if (type === 'structured' || type === 'both') {
+      if (!capabilities.backends.playwright.evaluate) {
+        return { success: false, error: 'Structured metadata extraction requires the Playwright browser_evaluate capability.' };
       }
-      structuredData = normalizeStructuredOutput(structuredResult.output);
+      const evaluateResult = await this.callTool(
+        PLAYWRIGHT_EVALUATE_TOOL,
+        buildPlaywrightEvaluatePayload(this.getToolDefinition(PLAYWRIGHT_EVALUATE_TOOL), PLAYWRIGHT_STRUCTURED_EVALUATION),
+      );
+      if (!evaluateResult.success) {
+        return evaluateResult;
+      }
+      structuredData = normalizeStructuredOutput(evaluateResult.output);
     }
 
-    if ((type === 'semantic' || type === 'both') && capabilities.backends.lightpanda.semanticTree) {
-      const semanticResult = await this.callTool(LIGHTPANDA_SEMANTIC_TREE_TOOL, {});
-      if (!semanticResult.success) {
-        return semanticResult;
-      }
-      semanticTree = clipText(outputToText(semanticResult.output), maxChars);
-    }
+    const semanticTree = (type === 'semantic' || type === 'both')
+      ? clipText(formatSemanticOutline(structuredData, snapshotText), maxChars)
+      : undefined;
 
     this.updateSession(scopeKey, {
       lastAction: 'extract',
-      lastBackend: 'lightpanda',
-      lastReadBackend: 'lightpanda',
-      lastStrategy: 'lightpanda',
+      lastBackend: 'playwright',
+      lastReadBackend: 'playwright',
+      lastStrategy: 'playwright-structured-extract',
     });
     return {
       success: true,
       message: `Extracted ${type} page data from ${currentUrl}.`,
       output: {
         url: currentUrl,
-        backend: 'lightpanda',
+        backend: 'playwright',
         type,
         structuredData,
         semanticTree,
@@ -743,36 +683,27 @@ export class HybridBrowserService {
     return this.manager.getAllToolDefinitions().find((definition) => definition.name === toolName);
   }
 
-  private async ensureBackendAtUrl(
+  private async ensurePlaywrightAtUrl(
     scopeKey: string,
-    backend: HybridBrowserBackend,
     url: string,
   ): Promise<{ success: true; navigated: boolean } | { success: false; result: ToolResult }> {
     const session = this.sessions.get(scopeKey);
-    const currentUrl = backend === 'lightpanda' ? session?.lastLightpandaUrl : session?.lastPlaywrightUrl;
+    const currentUrl = session?.lastPlaywrightUrl;
     if (currentUrl === url) {
       return { success: true, navigated: false };
     }
-    const toolName = backend === 'lightpanda' ? LIGHTPANDA_GOTO_TOOL : PLAYWRIGHT_NAVIGATE_TOOL;
-    const result = await this.callTool(toolName, { url });
+    const result = await this.callTool(PLAYWRIGHT_NAVIGATE_TOOL, { url });
     if (!result.success) {
       return { success: false, result };
     }
     const summary = summarizeNavigationResult(result.output, url);
     const nextVersion = this.bumpPlaywrightStateVersion(scopeKey);
-    this.updateSession(scopeKey, backend === 'lightpanda'
-      ? {
-          currentUrl: summary.url,
-          pageTitle: summary.title,
-          lastLightpandaUrl: summary.url,
-          latestPlaywrightStateId: undefined,
-        }
-      : {
-          currentUrl: summary.url,
-          pageTitle: summary.title,
-          lastPlaywrightUrl: summary.url,
-          latestPlaywrightStateId: undefined,
-        });
+    this.updateSession(scopeKey, {
+      currentUrl: summary.url,
+      pageTitle: summary.title,
+      lastPlaywrightUrl: summary.url,
+      latestPlaywrightStateId: undefined,
+    });
     this.pruneActionStates(scopeKey, nextVersion);
     return { success: true, navigated: true };
   }
@@ -854,7 +785,7 @@ function summarizeNavigationResult(
 }
 
 function normalizeLinkEntries(output: unknown, currentUrl: string): Array<{ text: string; href: string }> {
-  const structured = outputToStructured(output);
+  const structured = unwrapToolOutput(outputToStructured(output));
   const candidates = Array.isArray(structured)
     ? structured
     : isRecord(structured) && Array.isArray(structured.links)
@@ -883,8 +814,7 @@ function normalizeLinkEntries(output: unknown, currentUrl: string): Array<{ text
 }
 
 function normalizeStructuredOutput(output: unknown): unknown {
-  const structured = outputToStructured(output);
-  return structured;
+  return unwrapToolOutput(outputToStructured(output));
 }
 
 function parseSnapshotRefs(snapshot: string): Array<{ ref: string; type: string; text: string }> {
@@ -895,11 +825,13 @@ function parseSnapshotRefs(snapshot: string): Array<{ ref: string; type: string;
     const refMatch = trimmed.match(/\bref=([^\s\]]+)/i);
     if (!refMatch) continue;
     const ref = refMatch[1];
-    const typeMatch = trimmed.match(/^(button|link|textbox|input|checkbox|radio|combobox|option|tab)\b/i);
-    const type = typeMatch?.[1]?.toLowerCase() ?? 'interactive';
+    const typeMatch = trimmed.match(/\b(button|link|textbox|input|checkbox|radio|combobox|option|tab|searchbox|textarea|menuitem|switch|slider|spinbutton)\b/i);
+    if (!typeMatch?.[1]) continue;
+    const type = typeMatch[1].toLowerCase();
     const text = trimmed
       .replace(/\bref=[^\s\]]+/i, '')
-      .replace(/^(button|link|textbox|input|checkbox|radio|combobox|option|tab)\b/i, '')
+      .replace(/\b(button|link|textbox|input|checkbox|radio|combobox|option|tab|searchbox|textarea|menuitem|switch|slider|spinbutton)\b/i, '')
+      .replace(/^[-:>\s]+/, '')
       .replace(/\s+/g, ' ')
       .trim();
     elements.push({ ref, type, text });
@@ -1054,6 +986,16 @@ function buildPlaywrightMutationPayload(
   return payload;
 }
 
+function buildPlaywrightEvaluatePayload(
+  definition: ToolDefinition | undefined,
+  fnSource: string,
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+  const functionKey = pickDefinitionParameterKey(definition, ['function', 'expression', 'script', 'code'], 'function');
+  payload[functionKey] = fnSource;
+  return payload;
+}
+
 function pickDefinitionParameterKey(
   definition: ToolDefinition | undefined,
   preferredKeys: string[],
@@ -1094,6 +1036,13 @@ function outputToStructured(output: unknown): unknown {
   }
 }
 
+function unwrapToolOutput(output: unknown): unknown {
+  if (isRecord(output) && Object.prototype.hasOwnProperty.call(output, 'result')) {
+    return outputToStructured(output.result);
+  }
+  return output;
+}
+
 function outputToText(output: unknown): string {
   if (typeof output === 'string') return output;
   if (output === undefined || output === null) return '';
@@ -1132,6 +1081,37 @@ function formatInteractionPastTense(action: string): string {
     default:
       return `${capitalize(action)}ed`;
   }
+}
+
+function formatSemanticOutline(structuredData: unknown, snapshotText: string): string {
+  const lines: string[] = [];
+  const structured = isRecord(structuredData) ? structuredData : {};
+  const metadata = isRecord(structured.metadata) ? structured.metadata : {};
+  const title = asOptionalString(metadata.title);
+  if (title) {
+    lines.push(`Document: ${title}`);
+  }
+
+  const landmarks = Array.isArray(structured.landmarks) ? structured.landmarks : [];
+  for (const landmark of landmarks) {
+    if (!isRecord(landmark)) continue;
+    const role = asOptionalString(landmark.role);
+    const label = asOptionalString(landmark.label);
+    if (!role) continue;
+    lines.push(`- ${capitalize(role)}${label ? ` - ${label}` : ''}`);
+  }
+
+  const headings = Array.isArray(structured.headings) ? structured.headings : [];
+  for (const heading of headings) {
+    if (!isRecord(heading)) continue;
+    const level = Math.max(1, Math.min(6, asNumber(heading.level, 1)));
+    const text = asOptionalString(heading.text);
+    if (!text) continue;
+    lines.push(`${'  '.repeat(level - 1)}- h${level}: ${text}`);
+  }
+
+  const outline = lines.join('\n').trim();
+  return outline || snapshotText.trim();
 }
 
 function asNumber(value: unknown, fallback: number): number {

@@ -460,18 +460,9 @@ assistant:
             - "playwright"
           timeoutMs: 30000
           startupApproved: true
-        - id: lightpanda
-          name: Fake Lightpanda Browser
-          command: ${JSON.stringify(process.execPath)}
-          args:
-            - ${JSON.stringify(fakeBrowserMcpPath)}
-            - "lightpanda"
-          timeoutMs: 30000
-          startupApproved: true
     browser:
       enabled: true
-      playwrightEnabled: false
-      lightpandaEnabled: false
+      playwrightEnabled: true
 runtime:
   agentIsolation:
     enabled: ${options.agentIsolation ? 'true' : 'false'}
@@ -508,7 +499,7 @@ guardian:
     const browserCapabilities = await runTool(baseUrl, token, 'browser_capabilities');
     assert.equal(browserCapabilities.success, true, `Expected browser_capabilities to succeed: ${JSON.stringify(browserCapabilities)}`);
     assert.equal(browserCapabilities.output?.available, true);
-    assert.equal(browserCapabilities.output?.preferredReadBackend, 'lightpanda');
+    assert.equal(browserCapabilities.output?.preferredReadBackend, 'playwright');
     assert.equal(browserCapabilities.output?.preferredInteractionBackend, 'playwright');
 
     const leadPrompt = `Build a weekday lead research workflow that reads ${JSON.stringify(companiesPath)}, researches each company’s website and public presence, scores fit from 1-5 using a simple B2B SaaS ICP, writes results to ${JSON.stringify(outputCsvPath)}, and creates ${JSON.stringify(summaryPath)}. Use built-in tools only. Do not create any shell script, Python script, or code file.`;

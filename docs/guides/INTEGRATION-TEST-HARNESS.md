@@ -197,7 +197,7 @@ The automation-authoring compiler harness follows the same pattern in `scripts/t
 - deterministic explicit tool graphs still compile into workflows
 - deterministic browser automation prompts compile into Guardian wrapper steps such as `browser_navigate`, `browser_read`, `browser_links`, `browser_extract`, `browser_state`, and `browser_act`
 - deterministic workflows then execute through the graph-backed playbook runtime with run ids and orchestration events
-- browser authoring/runtime validation stays on the Guardian wrapper surface rather than surfacing raw `mcp-playwright-*` or `mcp-lightpanda-*` browser tool names as the normal saved-workflow path
+- browser authoring/runtime validation stays on the Guardian wrapper surface rather than surfacing raw `mcp-playwright-*` browser tool names as the normal saved-workflow path
 - scheduled assistant tasks persist a concise `description` separate from the internal `prompt`, so UI surfaces do not leak the full runtime prompt
 - conversational automation requests are blocked before save when obvious readiness checks fail (missing input files, blocked allowlists, or predicted runtime approvals for assistant tasks)
 - fixable policy blockers on conversational automation requests can be staged as remediation approvals and then retried automatically after approval
@@ -233,7 +233,6 @@ Use the real-Ollama lane for smoke validation of local-model behavior. Keep the 
 When validating the browser configuration surface manually or through focused harness extensions, also assert:
 
 - browser config toggles reconcile live without a required process restart under normal conditions
-- enabling Lightpanda updates the connected browser capability surface if the binary is available
 - private/internal browser targets fail closed before any browser allowlist remediation is suggested
 
 ### LLMMap External Prompt-Injection Harness
@@ -678,7 +677,7 @@ The preferred product surface is the Guardian wrapper family:
 - `browser_act`
 - `browser_interact`
 
-For conversational browser automation regressions, prefer `scripts/test-automation-authoring-compiler.mjs` over manual-only UI checks. The Node harness now boots fake Playwright and Lightpanda MCP servers so WSL can validate wrapper registration, browser workflow compilation, and graph execution deterministically without depending on locally installed browser binaries.
+For conversational browser automation regressions, prefer `scripts/test-automation-authoring-compiler.mjs` over manual-only UI checks. The Node harness now boots a fake Playwright MCP server so WSL can validate wrapper registration, browser workflow compilation, and graph execution deterministically without depending on locally installed browser binaries.
 
 Current browser authoring coverage in that harness includes:
 - Browser Read Smoke → `browser_navigate`, `browser_read`, `browser_links`

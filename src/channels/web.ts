@@ -1384,9 +1384,9 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: message });
           return;
         }
-        let parsed: { enabled?: boolean; allowedDomains?: string[]; playwrightEnabled?: boolean; lightpandaEnabled?: boolean; playwrightBrowser?: string; playwrightCaps?: string };
+        let parsed: { enabled?: boolean; allowedDomains?: string[]; playwrightEnabled?: boolean; playwrightBrowser?: string; playwrightCaps?: string };
         try {
-          parsed = JSON.parse(body) as { enabled?: boolean; allowedDomains?: string[]; playwrightEnabled?: boolean; lightpandaEnabled?: boolean; playwrightBrowser?: string; playwrightCaps?: string };
+          parsed = JSON.parse(body) as { enabled?: boolean; allowedDomains?: string[]; playwrightEnabled?: boolean; playwrightBrowser?: string; playwrightCaps?: string };
         } catch {
           sendJSON(res, 400, { error: 'Invalid JSON' });
           return;

@@ -29,7 +29,6 @@ function createRuntimeSnapshot(overrides?: Partial<AiSecurityRuntimeSnapshot>): 
       enabled: true,
       allowedDomains: [],
       playwrightEnabled: true,
-      lightpandaEnabled: false,
       ...(overrides?.browser ?? {}),
     },
     mcp: {

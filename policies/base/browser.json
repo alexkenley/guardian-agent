@@ -44,20 +44,6 @@
       }
     },
     {
-      "id": "browser-approve-evaluate-lightpanda",
-      "family": "tool",
-      "enabled": true,
-      "priority": 80,
-      "description": "Require approval for Lightpanda JS evaluation",
-      "match": {
-        "action": "tool:mcp-lightpanda-evaluate"
-      },
-      "decision": {
-        "kind": "require_approval",
-        "reason": "JavaScript evaluation on a web page requires approval"
-      }
-    },
-    {
       "id": "browser-approve-file-upload",
       "family": "tool",
       "enabled": true,

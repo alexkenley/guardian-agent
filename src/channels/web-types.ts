@@ -455,7 +455,6 @@ export interface RedactedConfig {
         enabled: boolean;
         allowedDomains: string[];
         playwrightEnabled: boolean;
-        lightpandaEnabled: boolean;
         playwrightBrowser: string;
         playwrightCaps: string;
       };
@@ -1025,11 +1024,10 @@ export interface DashboardCallbacks {
     enabled?: boolean;
     allowedDomains?: string[];
     playwrightEnabled?: boolean;
-    lightpandaEnabled?: boolean;
     playwrightBrowser?: string;
     playwrightCaps?: string;
   }) => Promise<{ success: boolean; message: string }> | { success: boolean; message: string };
-  onBrowserConfigState?: () => { enabled: boolean; allowedDomains: string[]; playwrightEnabled: boolean; lightpandaEnabled: boolean; playwrightBrowser: string; playwrightCaps: string };
+  onBrowserConfigState?: () => { enabled: boolean; allowedDomains: string[]; playwrightEnabled: boolean; playwrightBrowser: string; playwrightCaps: string };
   onToolsApprovalDecision?: (input: {
     approvalId: string;
     decision: 'approved' | 'denied';

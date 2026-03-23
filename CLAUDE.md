@@ -113,9 +113,9 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 - Spec: `docs/specs/MICROSOFT-365-INTEGRATION-SPEC.md`
 
 ### Browser Automation (MCP-based)
-- **Playwright MCP** (`@playwright/mcp`) — managed MCP server providing 55+ browser automation tools via real Chromium/Firefox/WebKit. Registered as `mcp-playwright-*` tools. Config: `assistant.tools.browser.playwrightEnabled` (default: true), `playwrightBrowser`, `playwrightCaps`
-- **Lightpanda** (`@lightpanda/browser`) — optional lightweight MCP server for fast page reads (7 tools: goto, markdown, links, evaluate, semantic_tree, interactiveElements, structuredData). Registered as `mcp-lightpanda-*` tools. Config: `assistant.tools.browser.lightpandaEnabled` (default: false)
-- Both run as stdio subprocesses via MCPClientManager — no custom session management
+- **Playwright MCP** (`@playwright/mcp`) — managed MCP server providing the browser transport for Guardian's wrapper tools. Registered internally as `mcp-playwright-*` tools. Config: `assistant.tools.browser.playwrightEnabled` (default: true), `playwrightBrowser`, `playwrightCaps`
+- Guardian exposes `browser_capabilities`, `browser_navigate`, `browser_read`, `browser_links`, `browser_extract`, `browser_state`, `browser_act`, and compatibility `browser_interact` as the normal browser surface
+- Browser tooling runs as a stdio subprocess via MCPClientManager — no custom browser engine in-process
 - Policy rules in `policies/base/browser.json`: `browser_run_code` denied, `browser_evaluate` requires approval, `browser_file_upload` and `browser_storage_state` require approval
 - Start scripts auto-install Playwright Chromium binary on first run
 - Spec: `docs/specs/BROWSER-AUTOMATION-SPEC.md`

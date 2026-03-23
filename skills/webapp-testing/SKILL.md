@@ -5,21 +5,21 @@ description: Toolkit for testing local web applications and browser workflows wi
 
 # Webapp Testing
 
-Use the MCP browser tools for browser work. Prefer Lightpanda for fast read-only inspection and Playwright for interaction, screenshots, uploads, and complex app behavior.
+Use the MCP browser tools for browser work. Use Playwright for both read-only inspection and interaction. Prefer the Guardian wrapper tools when available.
 
 Use `browser-session-defense` as the companion skill when the question is about browser security boundaries, risky browser actions, or the distinction between Guardian-managed browsing and the user's own browser activity.
 
-## Backend Selection
+## Tool Selection
 
-- Use `mcp-lightpanda-goto` plus read-only Lightpanda tools when the task is mostly reading, extracting, mapping links, or understanding page structure.
-- Use `mcp-playwright-browser_navigate` and Playwright interaction tools when the task requires clicks, typing, form submission, auth flows, screenshots, or SPA behavior.
+- Use Guardian wrapper tools first: `browser_navigate`, `browser_read`, `browser_links`, `browser_extract`, `browser_state`, `browser_act`.
+- Use raw `mcp-playwright-*` tools only when the wrapper surface cannot answer the question.
 - Do not use `mcp-playwright-browser_run_code`; it is blocked by policy.
 - Avoid `evaluate` unless the existing browser tools cannot answer the question and the action is worth approval.
 
 ## Workflow
 
 1. Confirm how the app is started if it is not already running.
-2. Open the page with the lowest-power tool that can answer the question.
+2. Open the page with the lowest-power Guardian wrapper tool that can answer the question.
 3. Inspect before acting:
    - page text or markdown
    - semantic structure
@@ -33,13 +33,10 @@ Use `browser-session-defense` as the companion skill when the question is about 
 
 When the user asks "what is on this page?" or "why is this screen wrong?", prefer:
 
-- `mcp-lightpanda-goto`
-- `mcp-lightpanda-markdown`
-- `mcp-lightpanda-semantic_tree`
-- `mcp-lightpanda-interactiveElements`
-- `mcp-lightpanda-structuredData`
-
-Escalate to Playwright only when rendered behavior, interactivity, or visual proof matters.
+- `browser_read`
+- `browser_links`
+- `browser_extract`
+- `browser_state` when interactive refs matter
 
 ## Interactive Testing
 
@@ -54,7 +51,7 @@ For user journeys and bug reproduction:
 ## Common Pitfalls
 
 - Do not guess selectors before inspecting the current page state.
-- Do not default to the heavier browser backend for simple extraction tasks.
+- Do not jump straight to raw MCP tools when the wrapper surface already covers the task.
 - Do not stop at "it failed"; collect the screenshot, console messages, and any obvious network errors.
 
-Read [references/browser-tool-selection.md](./references/browser-tool-selection.md) when you need a quick backend-selection checklist.
+Read [references/browser-tool-selection.md](./references/browser-tool-selection.md) when you need a quick tool-selection checklist.

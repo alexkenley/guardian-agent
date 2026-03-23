@@ -3356,7 +3356,6 @@ function createBrowserPanel(config, panel) {
   const browser = config.assistant?.tools?.browser || {};
   const enabled = browser.enabled !== false;
   const playwrightEnabled = browser.playwrightEnabled !== false;
-  const lightpandaEnabled = browser.lightpandaEnabled === true;
   const playwrightBrowser = browser.playwrightBrowser || 'chromium';
   const playwrightCaps = browser.playwrightCaps || 'network,storage';
   const domains = (browser.allowedDomains || config.assistant?.tools?.allowedDomains || []).join(', ');
@@ -3368,19 +3367,18 @@ function createBrowserPanel(config, panel) {
   section.innerHTML = `
     <div class="table-header">
       <h3>Browser Automation</h3>
-      <span class="cfg-header-note">MCP-based browser tools (Playwright + Lightpanda)</span>
+      <span class="cfg-header-note">MCP-based browser tools (Playwright)</span>
     </div>
     <div class="cfg-center-body">
       <div class="cfg-form-grid">
         <div class="cfg-field"><label>Browser Tools</label><select id="browser-enabled"><option value="true" ${enabled ? 'selected' : ''}>Enabled</option><option value="false" ${!enabled ? 'selected' : ''}>Disabled</option></select></div>
         <div class="cfg-field"><label>Playwright</label><select id="browser-playwright-enabled"><option value="true" ${playwrightEnabled ? 'selected' : ''}>Enabled</option><option value="false" ${!playwrightEnabled ? 'selected' : ''}>Disabled</option></select></div>
-        <div class="cfg-field"><label>Lightpanda</label><select id="browser-lightpanda-enabled"><option value="true" ${lightpandaEnabled ? 'selected' : ''}>Enabled</option><option value="false" ${!lightpandaEnabled ? 'selected' : ''}>Disabled</option></select></div>
         <div class="cfg-field"><label>Browser Engine</label><select id="browser-playwright-browser">${browserOptions}</select></div>
         <div class="cfg-field"><label>Capabilities</label><input id="browser-playwright-caps" type="text" value="${esc(playwrightCaps)}" placeholder="network,storage"></div>
         <div class="cfg-field"><label>Allowed Domains</label><input id="browser-domains" type="text" value="${esc(domains)}" placeholder="example.com, github.com"></div>
       </div>
       <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
-        Playwright provides full browser automation; Lightpanda is a lightweight reader. Browser tools stay inside the allowed-domain boundary but can still access authenticated web sessions, upload files, and drive outbound requests.
+        Playwright provides both read and interactive browser automation. Browser tools stay inside the allowed-domain boundary but can still access authenticated web sessions, upload files, and drive outbound requests.
       </div>
       <div style="margin-top:0.4rem;padding:0.55rem 0.7rem;border:1px solid rgba(255,196,0,0.28);border-radius:10px;background:rgba(255,196,0,0.08);font-size:0.72rem;color:var(--text-secondary);">
         <strong>Degraded backend warning:</strong> when native sandboxing falls back to a degraded backend, browser automation remains blocked by default until <code>Allow browser automation</code> is enabled in <strong>Configuration &gt; Security &gt; Sandbox &amp; Policy Access</strong>.
@@ -3397,7 +3395,6 @@ function createBrowserPanel(config, panel) {
   section.querySelector('#browser-save')?.addEventListener('click', async () => {
     const enabledVal = section.querySelector('#browser-enabled').value === 'true';
     const pwEnabled = section.querySelector('#browser-playwright-enabled').value === 'true';
-    const lpEnabled = section.querySelector('#browser-lightpanda-enabled').value === 'true';
     const pwBrowser = section.querySelector('#browser-playwright-browser').value;
     const pwCaps = section.querySelector('#browser-playwright-caps').value.trim() || 'network,storage';
     const domainsRaw = section.querySelector('#browser-domains').value.trim();
@@ -3408,7 +3405,6 @@ function createBrowserPanel(config, panel) {
       const result = await api.saveBrowserConfig({
         enabled: enabledVal,
         playwrightEnabled: pwEnabled,
-        lightpandaEnabled: lpEnabled,
         playwrightBrowser: pwBrowser,
         playwrightCaps: pwCaps,
         allowedDomains: domainList.length > 0 ? domainList : undefined,

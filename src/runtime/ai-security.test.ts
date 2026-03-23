@@ -32,7 +32,6 @@ function createRuntimeSnapshot(overrides?: Partial<AiSecurityRuntimeSnapshot>): 
       enabled: false,
       allowedDomains: ['github.com'],
       playwrightEnabled: true,
-      lightpandaEnabled: false,
       ...(overrides?.browser ?? {}),
     },
     mcp: {
@@ -134,7 +133,6 @@ describe('AiSecurityService', () => {
           enabled: true,
           allowedDomains: [],
           playwrightEnabled: true,
-          lightpandaEnabled: false,
         },
         mcp: {
           enabled: true,

@@ -39,7 +39,7 @@ export const TOOL_CATEGORIES: Record<ToolCategory, { label: string; description:
   coding: { label: 'Coding', description: 'Code-aware editing, diffing, search, and verification tools inspired by terminal coding agents.' },
   shell: { label: 'Shell', description: 'Execute allowlisted shell commands from the workspace root.' },
   web: { label: 'Web', description: 'Fetch web pages and search the internet via HTTP.' },
-  browser: { label: 'Browser', description: 'Browser automation and page inspection via MCP-backed Playwright and Lightpanda tools.' },
+  browser: { label: 'Browser', description: 'Browser automation and page inspection via Playwright-backed wrapper tools.' },
   mcp: { label: 'MCP', description: 'Third-party MCP tool servers exposed through the Guardian MCP client.' },
   automation: { label: 'Automation', description: 'Create, update, run, and schedule workflows and recurring tasks.' },
   contacts: { label: 'Contacts', description: 'Discover, import, list contacts and manage marketing campaigns.' },

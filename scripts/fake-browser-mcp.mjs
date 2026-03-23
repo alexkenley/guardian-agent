@@ -1,6 +1,5 @@
 import readline from 'node:readline';
 
-const serverKind = process.argv[2] === 'lightpanda' ? 'lightpanda' : 'playwright';
 let currentUrl = 'about:blank';
 
 const PLAYWRIGHT_TOOLS = [
@@ -61,58 +60,15 @@ const PLAYWRIGHT_TOOLS = [
       },
     },
   },
-];
-
-const LIGHTPANDA_TOOLS = [
   {
-    name: 'goto',
-    description: 'Navigate to a URL.',
+    name: 'browser_evaluate',
+    description: 'Evaluate a browser-side extraction function.',
     inputSchema: {
       type: 'object',
       properties: {
-        url: { type: 'string' },
+        function: { type: 'string' },
       },
-      required: ['url'],
-    },
-  },
-  {
-    name: 'markdown',
-    description: 'Extract page markdown.',
-    inputSchema: {
-      type: 'object',
-      properties: {},
-    },
-  },
-  {
-    name: 'links',
-    description: 'List links on the current page.',
-    inputSchema: {
-      type: 'object',
-      properties: {},
-    },
-  },
-  {
-    name: 'structuredData',
-    description: 'Extract structured page metadata.',
-    inputSchema: {
-      type: 'object',
-      properties: {},
-    },
-  },
-  {
-    name: 'semantic_tree',
-    description: 'Extract a semantic outline for the current page.',
-    inputSchema: {
-      type: 'object',
-      properties: {},
-    },
-  },
-  {
-    name: 'interactiveElements',
-    description: 'List interactive elements on the current page.',
-    inputSchema: {
-      type: 'object',
-      properties: {},
+      required: ['function'],
     },
   },
 ];
@@ -133,19 +89,29 @@ function pageProfile(url) {
   if (url.includes('example.com')) {
     return {
       title: 'Example Domain',
-      markdown: '# Example Domain\n\nThis domain is for use in documentation examples.\n\n[More information...](https://www.iana.org/help/example-domains)',
       links: [{ text: 'More information...', href: 'https://www.iana.org/help/example-domains' }],
       structuredData: {
-        title: 'Example Domain',
-        description: 'This domain is for use in illustrative examples in documents.',
-        canonical: 'https://example.com/',
-      },
-      semanticTree: {
-        outline: [
-          'Header: Example Domain',
-          'Body: explanatory copy',
-          'Footer: More information link',
-        ],
+        metadata: {
+          url: 'https://example.com/',
+          title: 'Example Domain',
+          description: 'This domain is for use in illustrative examples in documents.',
+          canonicalUrl: 'https://example.com/',
+          openGraph: {
+            title: 'Example Domain',
+            description: 'This domain is for use in illustrative examples in documents.',
+            type: 'website',
+            image: null,
+          },
+          twitter: {
+            card: null,
+            title: null,
+            description: null,
+            image: null,
+          },
+        },
+        headings: [{ level: 1, text: 'Example Domain' }],
+        landmarks: [{ role: 'main', label: null }],
+        jsonLd: [],
       },
       interactiveElements: [{ ref: 'link-more-info', role: 'link', name: 'More information...' }],
     };
@@ -154,24 +120,39 @@ function pageProfile(url) {
   if (url.includes('github.com')) {
     return {
       title: 'GitHub · Change is constant. GitHub keeps you ahead.',
-      markdown: '# GitHub keeps you ahead.\n\nThe world’s most popular development platform.',
       links: [
         { text: 'Sign in', href: 'https://github.com/login' },
         { text: 'Sign up', href: 'https://github.com/signup' },
       ],
       structuredData: {
-        title: 'GitHub',
-        description: 'GitHub keeps you ahead.',
-        canonical: 'https://github.com/',
-        openGraphTitle: 'GitHub',
-      },
-      semanticTree: {
-        outline: [
-          'Header / Navigation',
-          'Hero: GitHub keeps you ahead.',
-          'Feature highlights',
-          'Footer',
+        metadata: {
+          url: 'https://github.com/',
+          title: 'GitHub',
+          description: 'GitHub keeps you ahead.',
+          canonicalUrl: 'https://github.com/',
+          openGraph: {
+            title: 'GitHub',
+            description: 'GitHub keeps you ahead.',
+            type: 'website',
+            image: null,
+          },
+          twitter: {
+            card: null,
+            title: null,
+            description: null,
+            image: null,
+          },
+        },
+        headings: [
+          { level: 1, text: 'GitHub keeps you ahead.' },
+          { level: 2, text: 'The world’s most popular development platform.' },
         ],
+        landmarks: [
+          { role: 'banner', label: null },
+          { role: 'main', label: null },
+          { role: 'contentinfo', label: null },
+        ],
+        jsonLd: [],
       },
       interactiveElements: [
         { ref: 'e1', role: 'link', name: 'Sign in' },
@@ -183,18 +164,29 @@ function pageProfile(url) {
   if (url.includes('httpbin.org/forms/post')) {
     return {
       title: 'HTTPBin Forms',
-      markdown: '# Pizza order form\n\nCustomer name, telephone, email, toppings, and submit button.',
       links: [],
       structuredData: {
-        title: 'HTTPBin Forms',
-      },
-      semanticTree: {
-        outline: [
-          'Form: customer details',
-          'Form: pizza size',
-          'Form: toppings',
-          'Submit order button',
-        ],
+        metadata: {
+          url: 'https://httpbin.org/forms/post',
+          title: 'HTTPBin Forms',
+          description: 'Pizza order form.',
+          canonicalUrl: 'https://httpbin.org/forms/post',
+          openGraph: {
+            title: 'HTTPBin Forms',
+            description: 'Pizza order form.',
+            type: 'website',
+            image: null,
+          },
+          twitter: {
+            card: null,
+            title: null,
+            description: null,
+            image: null,
+          },
+        },
+        headings: [{ level: 1, text: 'Pizza order form' }],
+        landmarks: [{ role: 'main', label: null }],
+        jsonLd: [],
       },
       interactiveElements: [
         { ref: 'e5', role: 'textbox', name: 'Customer name' },
@@ -207,16 +199,50 @@ function pageProfile(url) {
 
   return {
     title: currentUrl,
-    markdown: `# ${currentUrl}`,
     links: [],
-    structuredData: { title: currentUrl },
-    semanticTree: { outline: [currentUrl] },
+    structuredData: {
+      metadata: {
+        url: currentUrl,
+        title: currentUrl,
+        description: null,
+        canonicalUrl: currentUrl,
+        openGraph: {
+          title: currentUrl,
+          description: null,
+          type: null,
+          image: null,
+        },
+        twitter: {
+          card: null,
+          title: null,
+          description: null,
+          image: null,
+        },
+      },
+      headings: [],
+      landmarks: [],
+      jsonLd: [],
+    },
     interactiveElements: [],
   };
 }
 
+function buildSnapshot(page) {
+  return page.interactiveElements
+    .map((element) => `${element.role} ref=${element.ref} ${element.name}`)
+    .join('\n');
+}
+
+function buildEvaluateResult(page, fnSource) {
+  const source = String(fnSource || '');
+  if (source.includes('querySelectorAll(\'a[href]\')') || source.includes('querySelectorAll("a[href]")')) {
+    return JSON.stringify(page.links);
+  }
+  return JSON.stringify(page.structuredData);
+}
+
 function buildToolText(name, args = {}) {
-  if (name === 'browser_navigate' || name === 'goto') {
+  if (name === 'browser_navigate') {
     currentUrl = typeof args.url === 'string' ? args.url : currentUrl;
     const page = pageProfile(currentUrl);
     return JSON.stringify({ url: currentUrl, title: page.title });
@@ -225,14 +251,11 @@ function buildToolText(name, args = {}) {
   const page = pageProfile(currentUrl);
 
   if (name === 'browser_snapshot') {
-    const snapshot = page.interactiveElements
-      .map((element) => `${element.role} ref=${element.ref} ${element.name}`)
-      .join('\n');
     return JSON.stringify({
       url: currentUrl,
       title: page.title,
       contentType: 'snapshot',
-      snapshot,
+      snapshot: buildSnapshot(page),
     });
   }
 
@@ -259,24 +282,8 @@ function buildToolText(name, args = {}) {
     });
   }
 
-  if (name === 'markdown') {
-    return page.markdown;
-  }
-
-  if (name === 'links') {
-    return JSON.stringify(page.links);
-  }
-
-  if (name === 'structuredData') {
-    return JSON.stringify(page.structuredData);
-  }
-
-  if (name === 'semantic_tree') {
-    return JSON.stringify(page.semanticTree);
-  }
-
-  if (name === 'interactiveElements') {
-    return JSON.stringify(page.interactiveElements);
+  if (name === 'browser_evaluate') {
+    return buildEvaluateResult(page, args.function);
   }
 
   return JSON.stringify({ ok: true, name, url: currentUrl });
@@ -299,7 +306,7 @@ function handleRequest(message) {
         tools: { listChanged: false },
       },
       serverInfo: {
-        name: `fake-${serverKind}-browser`,
+        name: 'fake-playwright-browser',
         version: '0.1.0',
       },
     });
@@ -308,7 +315,7 @@ function handleRequest(message) {
 
   if (method === 'tools/list') {
     sendResult(id, {
-      tools: serverKind === 'lightpanda' ? LIGHTPANDA_TOOLS : PLAYWRIGHT_TOOLS,
+      tools: PLAYWRIGHT_TOOLS,
     });
     return;
   }

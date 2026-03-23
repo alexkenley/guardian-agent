@@ -4618,7 +4618,6 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
           enabled: config.assistant.tools.browser?.enabled ?? true,
           allowedDomains: config.assistant.tools.browser?.allowedDomains ?? config.assistant.tools.allowedDomains,
           playwrightEnabled: config.assistant.tools.browser?.playwrightEnabled ?? true,
-          lightpandaEnabled: config.assistant.tools.browser?.lightpandaEnabled ?? false,
           playwrightBrowser: config.assistant.tools.browser?.playwrightBrowser ?? 'chromium',
           playwrightCaps: config.assistant.tools.browser?.playwrightCaps ?? 'network,storage',
         },
@@ -6075,7 +6074,6 @@ function buildDashboardCallbacks(
         enabled: browser?.enabled ?? true,
         allowedDomains: browser?.allowedDomains ?? configRef.current.assistant.tools.allowedDomains ?? [],
         playwrightEnabled: browser?.playwrightEnabled ?? true,
-        lightpandaEnabled: browser?.lightpandaEnabled ?? false,
         playwrightBrowser: browser?.playwrightBrowser ?? 'chromium',
         playwrightCaps: browser?.playwrightCaps ?? 'network,storage',
       };
@@ -6084,13 +6082,12 @@ function buildDashboardCallbacks(
     onBrowserConfigUpdate: async (input) => {
       const current = configRef.current.assistant.tools.browser ?? { enabled: true };
       const updated = {
-        ...current,
-        ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
-        ...(input.allowedDomains ? { allowedDomains: input.allowedDomains } : {}),
-        ...(input.playwrightEnabled !== undefined ? { playwrightEnabled: input.playwrightEnabled } : {}),
-        ...(input.lightpandaEnabled !== undefined ? { lightpandaEnabled: input.lightpandaEnabled } : {}),
-        ...(input.playwrightBrowser ? { playwrightBrowser: input.playwrightBrowser as BrowserConfig['playwrightBrowser'] } : {}),
-        ...(input.playwrightCaps ? { playwrightCaps: input.playwrightCaps } : {}),
+        enabled: input.enabled ?? current.enabled ?? true,
+        allowedDomains: input.allowedDomains ?? current.allowedDomains,
+        playwrightEnabled: input.playwrightEnabled ?? current.playwrightEnabled ?? true,
+        playwrightBrowser: (input.playwrightBrowser ?? current.playwrightBrowser ?? 'chromium') as BrowserConfig['playwrightBrowser'],
+        playwrightCaps: input.playwrightCaps ?? current.playwrightCaps ?? 'network,storage',
+        playwrightArgs: current.playwrightArgs,
       };
       configRef.current.assistant.tools.browser = updated;
       const persisted = persistToolsState(toolExecutor.getPolicy());
@@ -9444,28 +9441,6 @@ async function main(): Promise<void> {
       }
     }
 
-    // Lightpanda MCP (Phase 2 — opt-in)
-    if (browserConfig?.lightpandaEnabled) {
-      try {
-        await mcpManager.addServer({
-          id: 'lightpanda',
-          name: 'Lightpanda Browser',
-          transport: 'stdio' as const,
-          command: browserConfig?.lightpandaBinaryPath ?? 'lightpanda',
-          args: ['mcp'],
-          source: 'managed_browser',
-          category: 'browser',
-          networkAccess: true,
-          inheritEnv: false,
-          timeoutMs: 30_000,
-          maxCallsPerMinute: 120,
-        });
-        const lpTools = mcpManager.getClient('lightpanda')?.getTools().length ?? 0;
-        log.info({ tools: lpTools }, 'Lightpanda MCP browser connected');
-      } catch (err) {
-        log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Lightpanda MCP failed to start — lightweight browser reads unavailable');
-      }
-    }
   } else if (browserConfig?.enabled !== false && browserBlockedBySandbox) {
     log.warn(
       {
@@ -9777,7 +9752,6 @@ async function main(): Promise<void> {
           enabled: configRef.current.assistant.tools.browser?.enabled ?? true,
           allowedDomains: configRef.current.assistant.tools.browser?.allowedDomains ?? configRef.current.assistant.tools.allowedDomains,
           playwrightEnabled: configRef.current.assistant.tools.browser?.playwrightEnabled ?? true,
-          lightpandaEnabled: configRef.current.assistant.tools.browser?.lightpandaEnabled ?? false,
         },
         mcp: {
           enabled: configRef.current.assistant.tools.mcp?.enabled ?? false,
@@ -10438,7 +10412,6 @@ async function main(): Promise<void> {
         'mcp-playwright-browser_navigate', 'mcp-playwright-browser_click',
         'mcp-playwright-browser_type', 'mcp-playwright-browser_evaluate',
         'mcp-playwright-browser_run_code', 'mcp-playwright-browser_file_upload',
-        'mcp-lightpanda-goto', 'mcp-lightpanda-evaluate',
       ]);
       const now = Date.now();
       if (
@@ -10692,7 +10665,7 @@ async function main(): Promise<void> {
     const blockedBySandbox = strictSandboxLockdown || (degradedFallbackActive && !degradedFallback.allowBrowserTools);
 
     mcpManager ??= new MCPClientManager(sandboxConfig);
-    for (const serverId of ['playwright', 'lightpanda']) {
+    for (const serverId of ['playwright']) {
       mcpManager.removeServer(serverId);
     }
 
@@ -10746,31 +10719,10 @@ async function main(): Promise<void> {
       }
     }
 
-    if (normalized.lightpandaEnabled) {
-      try {
-        await mcpManager.addServer({
-          id: 'lightpanda',
-          name: 'Lightpanda Browser',
-          transport: 'stdio',
-          command: normalized.lightpandaBinaryPath ?? 'lightpanda',
-          args: ['mcp'],
-          source: 'managed_browser',
-          category: 'browser',
-          networkAccess: true,
-          inheritEnv: false,
-          timeoutMs: 30_000,
-          maxCallsPerMinute: 120,
-        });
-      } catch (err) {
-        issues.push(`Lightpanda failed to start: ${err instanceof Error ? err.message : String(err)}.`);
-      }
-    }
-
     toolExecutor.refreshDynamicMcpTooling();
 
     const activeBackends = [
       mcpManager.getClient('playwright')?.getState() === 'connected' ? 'Playwright' : null,
-      mcpManager.getClient('lightpanda')?.getState() === 'connected' ? 'Lightpanda' : null,
     ].filter((value): value is string => !!value);
 
     log.info({ browser: normalized, activeBackends, issues }, 'Browser config updated and applied live');

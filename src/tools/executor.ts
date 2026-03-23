@@ -574,7 +574,7 @@ export interface ToolExecutorOptions {
   mcpManager?: MCPClientManager;
   /** Web search configuration. Auto-selects best available provider (Brave > Perplexity > DuckDuckGo). */
   webSearch?: WebSearchConfig;
-  /** Browser automation configuration (Playwright MCP + Lightpanda MCP). */
+  /** Browser automation configuration (Playwright MCP wrappers). */
   browserConfig?: BrowserConfig;
   /** Cloud and hosting provider integrations. */
   cloudConfig?: AssistantCloudConfig;
@@ -923,7 +923,7 @@ export class ToolExecutor {
       this.registry.register(
         {
           name: 'browser_capabilities',
-          description: 'Report the currently connected browser backends, the preferred read and interaction lanes, and the current wrapper session state. Use this before browser work when you need to know whether Lightpanda, Playwright, or both are available.',
+          description: 'Report the currently connected Playwright browser backend capabilities and the current wrapper session state. Use this before browser work when you need to know whether navigation, snapshot reads, DOM extraction, and interactive actions are available.',
           shortDescription: 'Show browser backend availability and the current wrapper session state.',
           risk: 'read_only',
           category: 'browser',
@@ -950,7 +950,7 @@ export class ToolExecutor {
       this.registry.register(
         {
           name: 'browser_navigate',
-          description: 'Navigate the Guardian browser wrapper to a URL. Read-oriented navigation prefers Lightpanda when available; interactive navigation prefers Playwright. Security: only http/https targets are allowed, private/internal hosts are blocked, and hostname checks use browser allowedDomains when configured.',
+          description: 'Navigate the Guardian browser wrapper to a URL through Playwright. Security: only http/https targets are allowed, private/internal hosts are blocked, and hostname checks use browser allowedDomains when configured.',
           shortDescription: 'Navigate the browser wrapper to a URL with read-first or interactive mode.',
           risk: 'network',
           category: 'browser',
@@ -983,8 +983,8 @@ export class ToolExecutor {
       this.registry.register(
         {
           name: 'browser_read',
-          description: 'Read the current browser page through the Guardian wrapper. Prefers Lightpanda markdown for DOM-first page reads and falls back to Playwright accessibility snapshots when needed. Optional url performs a navigate-first read.',
-          shortDescription: 'Read the current browser page with DOM-first fallback behavior.',
+          description: 'Read the current browser page through the Guardian wrapper using a Playwright accessibility snapshot. Optional url performs a navigate-first read.',
+          shortDescription: 'Read the current browser page through a Playwright accessibility snapshot.',
           risk: 'read_only',
           category: 'browser',
           deferLoading: true,
@@ -1016,7 +1016,7 @@ export class ToolExecutor {
       this.registry.register(
         {
           name: 'browser_links',
-          description: 'List structured page links through the Lightpanda-backed browser wrapper. Optional url performs a navigate-first extraction. Supports simple text or href filtering.',
+          description: 'List structured page links through the Playwright-backed browser wrapper using a fixed DOM extraction. Optional url performs a navigate-first extraction. Supports simple text or href filtering.',
           shortDescription: 'List structured links from the current browser page.',
           risk: 'read_only',
           category: 'browser',
@@ -1051,7 +1051,7 @@ export class ToolExecutor {
       this.registry.register(
         {
           name: 'browser_extract',
-          description: 'Extract structured page data through the Lightpanda-backed browser wrapper. Supports structured metadata, semantic tree output, or both. Optional url performs a navigate-first extraction.',
+          description: 'Extract structured page data through the Playwright-backed browser wrapper. Structured metadata uses a fixed DOM extraction and semantic output uses the page snapshot outline. Optional url performs a navigate-first extraction.',
           shortDescription: 'Extract structured metadata or semantic tree output from the current page.',
           risk: 'read_only',
           category: 'browser',
@@ -1414,11 +1414,7 @@ export class ToolExecutor {
       'Use Guardian-native browser tools first: browser_capabilities, browser_navigate, browser_read, browser_links, browser_extract, browser_state, and browser_act.',
       `Browser allowed domains: ${browserAllowedDomains.join(', ') || '(none)'}${browserUsesDedicatedAllowlist ? '' : ' (inherits general allowedDomains)'}`,
     ];
-    if (capabilities.backends.lightpanda.available) {
-      lines.push('Read-oriented browser tasks should prefer Lightpanda-backed wrappers when available and fall back to Playwright only when needed.');
-    } else {
-      lines.push('Lightpanda is not available, so browser reads fall back to Playwright accessibility snapshots.');
-    }
+    lines.push('Browser reads, link extraction, structured extraction, and interactive actions all run through the Playwright wrapper lane.');
     if (capabilities.wrappers.browserState && capabilities.wrappers.browserAct) {
       lines.push('For deterministic page mutation, capture browser_state first and then call browser_act with the returned stateId plus a stable ref.');
     }
@@ -17293,7 +17289,7 @@ function validateWorkflowDefinition(
       return `Tool step '${stepId}' is missing toolName.`;
     }
     if (!hasTool(toolName)) {
-      const browserHint = /^mcp[_-](playwright|lightpanda)/i.test(toolName)
+      const browserHint = /^mcp[_-]playwright/i.test(toolName)
         ? ' Use Guardian-native browser wrapper tools (`browser_navigate`, `browser_read`, `browser_links`, `browser_extract`, `browser_state`, `browser_act`, and compatibility `browser_interact`) in saved automations instead of raw MCP browser names.'
         : '';
       return `Unknown tool '${toolName}'.${browserHint}`;

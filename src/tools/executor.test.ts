@@ -5404,49 +5404,28 @@ describe('ToolExecutor', () => {
         description: 'Click browser element',
         risk: 'mutating' as const,
         category: 'browser' as const,
-        parameters: { type: 'object', properties: { element: { type: 'string' } } },
+        parameters: { type: 'object', properties: { ref: { type: 'string' } } },
       },
       {
-        name: 'mcp-lightpanda-goto',
-        description: 'Goto URL',
-        risk: 'network' as const,
+        name: 'mcp-playwright-browser_type',
+        description: 'Type into browser element',
+        risk: 'mutating' as const,
         category: 'browser' as const,
-        parameters: { type: 'object', properties: { url: { type: 'string' } } },
+        parameters: { type: 'object', properties: { ref: { type: 'string' }, text: { type: 'string' } } },
       },
       {
-        name: 'mcp-lightpanda-markdown',
-        description: 'Read page as markdown',
+        name: 'mcp-playwright-browser_select_option',
+        description: 'Select browser option',
+        risk: 'mutating' as const,
+        category: 'browser' as const,
+        parameters: { type: 'object', properties: { ref: { type: 'string' }, values: { type: 'array' } } },
+      },
+      {
+        name: 'mcp-playwright-browser_evaluate',
+        description: 'Evaluate DOM extraction code',
         risk: 'read_only' as const,
         category: 'browser' as const,
-        parameters: { type: 'object', properties: {} },
-      },
-      {
-        name: 'mcp-lightpanda-links',
-        description: 'List links',
-        risk: 'read_only' as const,
-        category: 'browser' as const,
-        parameters: { type: 'object', properties: {} },
-      },
-      {
-        name: 'mcp-lightpanda-structuredData',
-        description: 'Structured page data',
-        risk: 'read_only' as const,
-        category: 'browser' as const,
-        parameters: { type: 'object', properties: {} },
-      },
-      {
-        name: 'mcp-lightpanda-semantic_tree',
-        description: 'Semantic tree',
-        risk: 'read_only' as const,
-        category: 'browser' as const,
-        parameters: { type: 'object', properties: {} },
-      },
-      {
-        name: 'mcp-lightpanda-interactiveElements',
-        description: 'Interactive elements',
-        risk: 'read_only' as const,
-        category: 'browser' as const,
-        parameters: { type: 'object', properties: {} },
+        parameters: { type: 'object', properties: { function: { type: 'string' } } },
       },
     ];
 
@@ -5530,12 +5509,12 @@ describe('ToolExecutor', () => {
       expect(names).toContain('browser_capabilities');
       expect(names).toContain('browser_navigate');
       expect(names).not.toContain('mcp-playwright-browser_navigate');
-      expect(names).not.toContain('mcp-lightpanda-goto');
+      expect(names).not.toContain('mcp-playwright-browser_evaluate');
 
       const discovered = executor.searchTools('browser').map((t) => t.name);
       expect(discovered).toContain('browser_navigate');
       expect(discovered).not.toContain('mcp-playwright-browser_click');
-      expect(discovered).not.toContain('mcp-lightpanda-links');
+      expect(discovered).not.toContain('mcp-playwright-browser_evaluate');
     });
 
     it('refreshes wrapper availability when managed browser backends change at runtime', () => {
@@ -5552,7 +5531,7 @@ describe('ToolExecutor', () => {
         allowedPaths: [root],
         allowedCommands: [],
         allowedDomains: ['example.com'],
-        browserConfig: { enabled: true, lightpandaEnabled: false },
+        browserConfig: { enabled: true, playwrightEnabled: true },
         mcpManager: {
           getAllToolDefinitions: () => currentDefinitions,
           callTool: async () => ({ success: true, output: { ok: true } }),
@@ -5564,23 +5543,23 @@ describe('ToolExecutor', () => {
       expect(names).toContain('browser_state');
       expect(names).toContain('browser_act');
       expect(names).not.toContain('browser_links');
-      expect(names).not.toContain('browser_extract');
+      expect(names).toContain('browser_extract');
 
       currentDefinitions = browserToolDefinitions;
-      executor.setBrowserConfig({ enabled: true, lightpandaEnabled: true });
+      executor.setBrowserConfig({ enabled: true, playwrightEnabled: true });
       executor.refreshDynamicMcpTooling();
 
       names = executor.listToolDefinitions().map((t) => t.name);
       expect(names).toContain('browser_links');
       expect(names).toContain('browser_extract');
 
-      currentDefinitions = currentDefinitions.filter((definition) => !definition.name.startsWith('mcp-lightpanda-'));
-      executor.setBrowserConfig({ enabled: true, lightpandaEnabled: false });
+      currentDefinitions = currentDefinitions.filter((definition) => definition.name !== 'mcp-playwright-browser_evaluate');
+      executor.setBrowserConfig({ enabled: true, playwrightEnabled: true });
       executor.refreshDynamicMcpTooling();
 
       names = executor.listToolDefinitions().map((t) => t.name);
       expect(names).not.toContain('browser_links');
-      expect(names).not.toContain('browser_extract');
+      expect(names).toContain('browser_extract');
     });
 
     it('allows browser_state without approval, approval-gates browser_act, and rejects invalid legacy browser_interact mutations without approval', async () => {

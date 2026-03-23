@@ -1,14 +1,13 @@
 # Browser Tool Selection
 
-Use Lightpanda when you need:
+Prefer the Guardian wrapper tools first:
 
-- fast page reads
-- markdown extraction
-- link maps
-- semantic structure
-- structured data such as JSON-LD or OpenGraph
+- `browser_read` for page text and snapshot-driven reads
+- `browser_links` for link maps
+- `browser_extract` for structured metadata and semantic outline
+- `browser_state` plus `browser_act` for deterministic interaction
 
-Use Playwright when you need:
+Drop to raw Playwright tools when you need:
 
 - clicks, typing, or form submission
 - file uploads

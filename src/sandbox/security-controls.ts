@@ -56,5 +56,5 @@ export function listEnabledDegradedFallbackAllowances(
 }
 
 export function isBrowserMcpToolName(toolName: string): boolean {
-  return toolName.startsWith('mcp-playwright-') || toolName.startsWith('mcp-lightpanda-');
+  return toolName.startsWith('mcp-playwright-');
 }

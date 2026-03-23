@@ -135,7 +135,6 @@ export interface AiSecurityRuntimeSnapshot {
     enabled: boolean;
     allowedDomains: string[];
     playwrightEnabled: boolean;
-    lightpandaEnabled: boolean;
   };
   mcp: {
     enabled: boolean;

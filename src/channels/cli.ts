@@ -2480,7 +2480,6 @@ export class CLIChannel implements ChannelAdapter {
         this.write(this.bold('Browser Automation\n'));
         this.write(`  Enabled:          ${state.enabled ? this.green('yes') : this.yellow('no')}\n`);
         this.write(`  Playwright:       ${state.playwrightEnabled ? this.green('yes') : this.yellow('no')} (${state.playwrightBrowser})\n`);
-        this.write(`  Lightpanda:       ${state.lightpandaEnabled ? this.green('yes') : this.yellow('no')}\n`);
         this.write(`  Capabilities:     ${state.playwrightCaps}\n`);
         this.write(`  Allowed domains:  ${state.allowedDomains.join(', ') || '(uses global tools allowedDomains)'}\n`);
         this.write('\n');

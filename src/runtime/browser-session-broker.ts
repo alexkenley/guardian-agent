@@ -49,8 +49,7 @@ const MUTATING_BROWSER_TOOLS = new Set([
 export class BrowserSessionBroker {
   isBrowserTool(toolName: string): boolean {
     return toolName.startsWith('browser_')
-      || toolName.startsWith('mcp-playwright-browser_')
-      || toolName.startsWith('mcp-lightpanda-');
+      || toolName.startsWith('mcp-playwright-browser_');
   }
 
   isHighRiskBrowserTool(toolName: string): boolean {
