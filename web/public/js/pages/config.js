@@ -1733,7 +1733,7 @@ async function renderPolicyTab(panel) {
                   <p class="policy-hint">${esc(cat.hint)}</p>
                   <div class="policy-add-row">
                     <input type="text" class="policy-add-input" data-category="${cat.key}" placeholder="${esc(cat.placeholder)}">
-                    <button class="btn btn-primary btn-sm policy-add-btn" data-category="${cat.key}">Add</button>
+                    <button class="btn btn-primary btn-sm policy-add-btn" type="button" data-category="${cat.key}">Add</button>
                   </div>
                   <div class="policy-item-list" data-category="${cat.key}">
                     ${items.length === 0
@@ -1741,7 +1741,7 @@ async function renderPolicyTab(panel) {
                       : items.map(item => `
                         <div class="policy-item" data-category="${cat.key}" data-item="${escAttr(item)}">
                           <code>${esc(item)}</code>
-                          <button class="policy-item-remove" data-category="${cat.key}" data-item="${escAttr(item)}" title="Remove ${esc(item)}">
+                          <button class="policy-item-remove" type="button" data-category="${cat.key}" data-item="${escAttr(item)}" title="Remove ${esc(item)}">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                           </button>
                         </div>

@@ -1028,7 +1028,7 @@ export interface DashboardCallbacks {
     lightpandaEnabled?: boolean;
     playwrightBrowser?: string;
     playwrightCaps?: string;
-  }) => { success: boolean; message: string };
+  }) => Promise<{ success: boolean; message: string }> | { success: boolean; message: string };
   onBrowserConfigState?: () => { enabled: boolean; allowedDomains: string[]; playwrightEnabled: boolean; lightpandaEnabled: boolean; playwrightBrowser: string; playwrightCaps: string };
   onToolsApprovalDecision?: (input: {
     approvalId: string;

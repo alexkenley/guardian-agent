@@ -5,6 +5,8 @@
  */
 
 const TOKEN_KEY = 'guardianagent_token';
+export const AUTH_FAILED_EVENT = 'guardianagent:auth-failed';
+export const AUTH_RECOVERED_EVENT = 'guardianagent:auth-recovered';
 
 function getToken() {
   return sessionStorage.getItem(TOKEN_KEY) || '';
@@ -47,21 +49,58 @@ function isAuthFailureResponse(status, body) {
     || errorText.startsWith('Authentication required.');
 }
 
+function dispatchAuthFailed(detail = { code: 'AUTH_FAILED' }) {
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    if (typeof CustomEvent === 'function') {
+      window.dispatchEvent(new CustomEvent(AUTH_FAILED_EVENT, { detail }));
+    } else {
+      window.dispatchEvent(new Event(AUTH_FAILED_EVENT));
+    }
+  }
+}
+
+function waitForAuthRecovery() {
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
+    return Promise.reject(new Error('AUTH_FAILED'));
+  }
+  return new Promise((resolve) => {
+    const onRecovered = () => resolve();
+    window.addEventListener(AUTH_RECOVERED_EVENT, onRecovered, { once: true });
+  });
+}
+
 async function request(path, options = {}) {
+  const { retryOnAuth = true, _authRetryCount = 0, ...fetchOptions } = options || {};
   const token = getToken();
-  const headers = { ...options.headers };
+  const headers = { ...fetchOptions.headers };
   if (token && !cookieSessionActive) {
     headers['Authorization'] = `Bearer ${token}`;
   }
-  if (options.body && typeof options.body === 'string') {
+  if (fetchOptions.body && typeof fetchOptions.body === 'string') {
     headers['Content-Type'] = 'application/json';
   }
 
-  const res = await fetch(path, { ...options, headers, credentials: 'same-origin' });
+  const res = await fetch(path, { ...fetchOptions, headers, credentials: 'same-origin' });
 
   if (!res.ok) {
     const body = await readErrorBody(res);
     if (isAuthFailureResponse(res.status, body)) {
+      cookieSessionActive = false;
+      const detail = {
+        status: res.status,
+        code: typeof body.errorCode === 'string' && body.errorCode.trim()
+          ? body.errorCode.trim()
+          : 'AUTH_FAILED',
+      };
+      dispatchAuthFailed(detail);
+      if (retryOnAuth && _authRetryCount < 1) {
+        await waitForAuthRecovery();
+        return request(path, {
+          ...fetchOptions,
+          retryOnAuth: false,
+          _authRetryCount: _authRetryCount + 1,
+        });
+      }
       const error = new Error('AUTH_FAILED');
       error.status = res.status;
       if (typeof body.errorCode === 'string' && body.errorCode.trim()) {
@@ -139,8 +178,8 @@ function buildQueryString(params = {}) {
 export const api = {
   createSession,
   destroySession,
-  status:       () => request('/api/status'),
-  authStatus:   () => request('/api/auth/status'),
+  status:       (options = {}) => request('/api/status', options),
+  authStatus:   (options = {}) => request('/api/auth/status', options),
   updateAuth:   (input) => requestPrivileged('/api/auth/config', 'auth.config', input || {}),
   rotateAuthToken: () => requestPrivileged('/api/auth/token/rotate', 'auth.rotate', {}),
   revealAuthToken: () => requestPrivileged('/api/auth/token/reveal', 'auth.reveal', {}),
@@ -248,10 +287,7 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(payload),
   }),
-  updateToolPolicy: (payload) => request('/api/tools/policy', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  }),
+  updateToolPolicy: (payload) => requestPrivileged('/api/tools/policy', 'tools.policy', payload || {}),
   preflightTools: (payload) => request('/api/tools/preflight', {
     method: 'POST',
     body: JSON.stringify(Array.isArray(payload) ? { tools: payload } : payload),
@@ -479,14 +515,8 @@ export const api = {
 
   // Policy-as-Code Engine
   policyStatus: () => request('/api/policy/status'),
-  updatePolicy: (payload) => request('/api/policy/config', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  }),
-  reloadPolicy: () => request('/api/policy/reload', {
-    method: 'POST',
-    body: '{}',
-  }),
+  updatePolicy: (payload) => requestPrivileged('/api/policy/config', 'policy.config', payload || {}),
+  reloadPolicy: () => requestPrivileged('/api/policy/reload', 'policy.config', {}),
 
   // User shell (unrestricted, auth-gated)
   shellExec: (payload) => request('/api/shell/exec', {
@@ -594,10 +624,7 @@ export const api = {
 
   // Guardian Agent + Sentinel Audit
   guardianAgentStatus: () => request('/api/guardian-agent/status'),
-  updateGuardianAgent: (payload) => request('/api/guardian-agent/config', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  }),
+  updateGuardianAgent: (payload) => requestPrivileged('/api/guardian-agent/config', 'guardian.config', payload || {}),
   runSentinelAudit: (windowMs) => request('/api/sentinel/audit', {
     method: 'POST',
     body: JSON.stringify(windowMs ? { windowMs } : {}),

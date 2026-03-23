@@ -195,7 +195,9 @@ The automation-authoring compiler harness follows the same pattern in `scripts/t
 - open-ended automations become scheduled `agent` tasks instead of scripts
 - repeat authoring requests update existing native tasks instead of duplicating them
 - deterministic explicit tool graphs still compile into workflows
+- deterministic browser automation prompts compile into Guardian wrapper steps such as `browser_navigate`, `browser_read`, `browser_links`, `browser_extract`, and `browser_interact`
 - deterministic workflows then execute through the graph-backed playbook runtime with run ids and orchestration events
+- browser authoring/runtime validation stays on the Guardian wrapper surface rather than surfacing raw `mcp-playwright-*` or `mcp-lightpanda-*` browser tool names as the normal saved-workflow path
 - scheduled assistant tasks persist a concise `description` separate from the internal `prompt`, so UI surfaces do not leak the full runtime prompt
 - conversational automation requests are blocked before save when obvious readiness checks fail (missing input files, blocked allowlists, or predicted runtime approvals for assistant tasks)
 - fixable policy blockers on conversational automation requests can be staged as remediation approvals and then retried automatically after approval
@@ -227,6 +229,12 @@ Recommended usage:
 The WSL-local smoke lane is intentionally on-demand. The harness will spin up `ollama serve` only when needed and stop it when the test exits, so it does not consume resources between runs.
 
 Use the real-Ollama lane for smoke validation of local-model behavior. Keep the embedded fake-provider lane as the default regression baseline because it is deterministic and less brittle.
+
+When validating the browser configuration surface manually or through focused harness extensions, also assert:
+
+- browser config toggles reconcile live without a required process restart under normal conditions
+- enabling Lightpanda updates the connected browser capability surface if the binary is available
+- private/internal browser targets fail closed before any browser allowlist remediation is suggested
 
 ### LLMMap External Prompt-Injection Harness
 
@@ -658,37 +666,30 @@ Tests contacts management, campaign lifecycle, and `gmail_send` approval gating.
 | `gmail_send` | approve_by_policy | pending_approval → deny | External_post always gated |
 | `gmail_send` | autonomous | pending_approval → deny | External_post still gated in autonomous |
 
-### Browser Automation Suite (MCP-based)
+### Browser Automation Coverage
 
-Browser automation is now provided via managed MCP servers (Playwright MCP and Lightpanda MCP) rather than built-in tools. Browser tools are registered as `mcp-playwright-*` and `mcp-lightpanda-*` by MCPClientManager. This browser path does not require `assistant.tools.mcp.enabled: true`; it can initialize its own MCP manager when browser tooling is enabled. Tests still require the respective MCP server binaries to be installed.
+The preferred product surface is the Guardian wrapper family:
+- `browser_capabilities`
+- `browser_navigate`
+- `browser_read`
+- `browser_links`
+- `browser_extract`
+- `browser_interact`
 
-#### Playwright MCP Lifecycle
-| Step | Tool | What It Validates |
-|------|------|-------------------|
-| 1 | `mcp-playwright-browser_navigate` | Navigates to URL, returns snapshot |
-| 2 | `mcp-playwright-browser_snapshot` | Captures accessibility tree |
-| 3 | `mcp-playwright-browser_click` | Clicks element by ref (mutating — requires approval) |
-| 4 | `mcp-playwright-browser_close` | Closes page |
+For conversational browser automation regressions, prefer `scripts/test-automation-authoring-compiler.mjs` over manual-only UI checks. The Node harness now boots fake Playwright and Lightpanda MCP servers so WSL can validate wrapper registration, browser workflow compilation, and graph execution deterministically without depending on locally installed browser binaries.
 
-#### Lightpanda MCP Lifecycle
-| Step | Tool | What It Validates |
-|------|------|-------------------|
-| 1 | `mcp-lightpanda-goto` | Navigates to URL |
-| 2 | `mcp-lightpanda-markdown` | Extracts page as markdown |
-| 3 | `mcp-lightpanda-links` | Lists page links |
-| 4 | `mcp-lightpanda-structuredData` | Extracts JSON-LD/OpenGraph |
+Current browser authoring coverage in that harness includes:
+- Browser Read Smoke → `browser_navigate`, `browser_read`, `browser_links`
+- Browser Extract Smoke → `browser_navigate`, `browser_extract`
+- HTTPBin Form Smoke Test → `browser_navigate`, `browser_interact`, deterministic target-selection instruction, `browser_interact`
 
-#### Policy Enforcement
-| Tool | Risk | Expected (approve_by_policy) |
-|------|------|------------------------------|
-| `mcp-playwright-browser_navigate` | network | Auto-allowed |
-| `mcp-playwright-browser_snapshot` | read_only | Auto-allowed |
-| `mcp-playwright-browser_click` | mutating | Requires approval |
-| `mcp-playwright-browser_evaluate` | mutating | Requires approval (policy rule) |
-| `mcp-playwright-browser_run_code` | mutating | Denied (policy rule) |
-| `mcp-lightpanda-goto` | network | Auto-allowed |
-| `mcp-lightpanda-markdown` | read_only | Auto-allowed |
-| `mcp-lightpanda-evaluate` | mutating | Requires approval (policy rule) |
+Use the real-Ollama lane from WSL when you want local-model smoke coverage for the authoring path:
+
+```bash
+HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=<your-model> node scripts/test-automation-authoring-compiler.mjs --use-ollama
+```
+
+Manual UI testing is still useful for live approval UX, real browser engine behavior, and dashboard rendering issues. `scripts/test-browser.ps1` remains legacy coverage for older raw browser surfaces and should not be the primary regression signal for wrapper-first browser automation.
 
 ### Approval UX Suite (`test-approvals.ps1`, ~45+ assertions)
 

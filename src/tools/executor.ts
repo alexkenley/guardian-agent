@@ -47,6 +47,7 @@ import type {
 } from './types.js';
 import { TOOL_CATEGORIES, BUILTIN_TOOL_CATEGORIES } from './types.js';
 import { MCPClientManager } from './mcp-client.js';
+import { HybridBrowserService, type HybridBrowserMode } from './browser-hybrid.js';
 import { DEFAULT_TOOL_ALLOWED_COMMANDS, type AssistantCloudConfig, type AssistantNetworkConfig, type BrowserConfig, type WebSearchConfig } from '../config/types.js';
 import type { ConversationService } from '../runtime/conversation.js';
 import type { AgentMemoryStore } from '../runtime/agent-memory-store.js';
@@ -629,7 +630,10 @@ export interface ToolExecutorOptions {
   /** Controls which policy areas the assistant can modify via chat (always requires approval). */
   agentPolicyUpdates?: import('../config/types.js').AgentPolicyUpdatesConfig;
   /** Callback to persist policy changes to config file after update_tool_policy modifies them. */
-  onPolicyUpdate?: (policy: ToolPolicySnapshot) => void;
+  onPolicyUpdate?: (
+    policy: ToolPolicySnapshot,
+    meta?: { browserAllowedDomains?: string[] },
+  ) => void;
   /** Async pre-execution hook (Guardian Agent inline evaluation). Called after
    *  sync Guardian checks pass but before the tool handler runs. Can deny. */
   onPreExecute?: (action: {
@@ -755,6 +759,7 @@ export class ToolExecutor {
   private automationControlPlane?: AutomationControlPlane;
   private readonly marketingStore: MarketingStore;
   private readonly mcpManager?: MCPClientManager;
+  private readonly hybridBrowser?: HybridBrowserService;
   private webSearchConfig: WebSearchConfig;
   private readonly searchCache = new Map<string, { results: unknown; timestamp: number }>();
   private readonly now: () => number;
@@ -771,6 +776,7 @@ export class ToolExecutor {
     this.now = options.now ?? Date.now;
     this.disabledCategories = new Set(options.disabledCategories ?? []);
     this.mcpManager = options.mcpManager;
+    this.hybridBrowser = this.mcpManager ? new HybridBrowserService(this.mcpManager, this.now) : undefined;
     this.webSearchConfig = options.webSearch ?? {};
     this.sandboxConfig = options.sandboxConfig ?? DEFAULT_SANDBOX_CONFIG;
     this.sandboxHealth = options.sandboxHealth;
@@ -823,7 +829,7 @@ export class ToolExecutor {
     this.initializeSandboxNotices();
     this.registerBuiltinTools();
     if (this.mcpManager) {
-      this.registerMCPTools();
+      this.refreshDynamicMcpTooling();
     }
   }
 
@@ -837,9 +843,20 @@ export class ToolExecutor {
    * Call this again after connecting new MCP servers to refresh.
    */
   registerMCPTools(): void {
+    this.refreshDynamicMcpTooling();
+  }
+
+  refreshDynamicMcpTooling(): void {
     if (!this.mcpManager) return;
 
     const definitions = this.mcpManager.getAllToolDefinitions();
+    const currentNames = new Set(definitions.map((definition) => definition.name));
+    for (const registered of this.registry.listDefinitions()) {
+      if (registered.name.startsWith('mcp-') && !currentNames.has(registered.name)) {
+        this.registry.unregister(registered.name);
+      }
+    }
+
     for (const def of definitions) {
       const normalizedDef = !def.category
         ? {
@@ -847,9 +864,6 @@ export class ToolExecutor {
           category: isBrowserMcpToolName(def.name) ? 'browser' as const : 'mcp' as const,
         }
         : def;
-      // Skip if already registered (idempotent)
-      if (this.registry.get(normalizedDef.name)) continue;
-
       const manager = this.mcpManager;
       this.registry.register(normalizedDef, async (args, request) => {
         const guard = inferMCPGuardAction(normalizedDef);
@@ -862,6 +876,302 @@ export class ToolExecutor {
         return manager.callTool(normalizedDef.name, args);
       });
     }
+
+    this.syncHybridBrowserTools();
+  }
+
+  setBrowserConfig(browserConfig: BrowserConfig | undefined): void {
+    this.options.browserConfig = browserConfig;
+  }
+
+  private syncHybridBrowserTools(): void {
+    if (!this.hybridBrowser) return;
+
+    const wrapperNames = [
+      'browser_capabilities',
+      'browser_navigate',
+      'browser_read',
+      'browser_links',
+      'browser_extract',
+      'browser_interact',
+    ];
+    if (this.options.browserConfig?.enabled === false) {
+      for (const name of wrapperNames) {
+        this.registry.unregister(name);
+      }
+      return;
+    }
+    const capabilities = this.hybridBrowser.getCapabilities();
+    const shouldExpose = new Set<string>(['browser_capabilities']);
+    if (capabilities.wrappers.browserNavigate) shouldExpose.add('browser_navigate');
+    if (capabilities.wrappers.browserRead) shouldExpose.add('browser_read');
+    if (capabilities.wrappers.browserLinks) shouldExpose.add('browser_links');
+    if (capabilities.wrappers.browserExtract) shouldExpose.add('browser_extract');
+    if (capabilities.wrappers.browserInteract) shouldExpose.add('browser_interact');
+
+    for (const name of wrapperNames) {
+      if (!shouldExpose.has(name)) {
+        this.registry.unregister(name);
+      }
+    }
+
+    if (!this.registry.get('browser_capabilities')) {
+      this.registry.register(
+        {
+          name: 'browser_capabilities',
+          description: 'Report the currently connected browser backends, the preferred read and interaction lanes, and the current wrapper session state. Use this before browser work when you need to know whether Lightpanda, Playwright, or both are available.',
+          shortDescription: 'Show browser backend availability and the current wrapper session state.',
+          risk: 'read_only',
+          category: 'browser',
+          deferLoading: true,
+          parameters: {
+            type: 'object',
+            properties: {},
+          },
+        },
+        async (_args, request) => {
+          const scopeKey = this.getHybridBrowserScopeKey(request);
+          return {
+            success: true,
+            output: {
+              ...this.hybridBrowser!.getCapabilities(),
+              session: this.hybridBrowser!.getSession(scopeKey),
+            },
+          };
+        },
+      );
+    }
+
+    if (capabilities.wrappers.browserNavigate && !this.registry.get('browser_navigate')) {
+      this.registry.register(
+        {
+          name: 'browser_navigate',
+          description: 'Navigate the Guardian browser wrapper to a URL. Read-oriented navigation prefers Lightpanda when available; interactive navigation prefers Playwright. Security: only http/https targets are allowed, private/internal hosts are blocked, and hostname checks use browser allowedDomains when configured.',
+          shortDescription: 'Navigate the browser wrapper to a URL with read-first or interactive mode.',
+          risk: 'network',
+          category: 'browser',
+          deferLoading: true,
+          parameters: {
+            type: 'object',
+            properties: {
+              url: { type: 'string', description: 'Target http or https URL.' },
+              mode: { type: 'string', description: "Navigation lane: 'auto', 'read', or 'interactive'." },
+            },
+            required: ['url'],
+          },
+        },
+        async (args, request) => {
+          const validated = this.normalizeBrowserUrlArg('browser_navigate', args.url);
+          if (validated.error) {
+            return { success: false, error: validated.error };
+          }
+          this.guardAction(request, 'http_request', { url: validated.url });
+          return this.hybridBrowser!.navigate(
+            this.getHybridBrowserScopeKey(request),
+            validated.url!,
+            this.normalizeHybridBrowserMode(args.mode),
+          );
+        },
+      );
+    }
+
+    if (capabilities.wrappers.browserRead && !this.registry.get('browser_read')) {
+      this.registry.register(
+        {
+          name: 'browser_read',
+          description: 'Read the current browser page through the Guardian wrapper. Prefers Lightpanda markdown for DOM-first page reads and falls back to Playwright accessibility snapshots when needed. Optional url performs a navigate-first read.',
+          shortDescription: 'Read the current browser page with DOM-first fallback behavior.',
+          risk: 'read_only',
+          category: 'browser',
+          deferLoading: true,
+          parameters: {
+            type: 'object',
+            properties: {
+              url: { type: 'string', description: 'Optional target URL to navigate before reading.' },
+              maxChars: { type: 'number', description: 'Maximum characters to return (default 12000).' },
+            },
+          },
+        },
+        async (args, request) => {
+          const validated = this.normalizeBrowserUrlArg('browser_read', args.url);
+          if (validated.error) {
+            return { success: false, error: validated.error };
+          }
+          if (validated.url) {
+            this.guardAction(request, 'http_request', { url: validated.url });
+          }
+          return this.hybridBrowser!.read(this.getHybridBrowserScopeKey(request), {
+            ...(validated.url ? { url: validated.url } : {}),
+            ...(typeof args.maxChars === 'number' ? { maxChars: args.maxChars } : {}),
+          });
+        },
+      );
+    }
+
+    if (capabilities.wrappers.browserLinks && !this.registry.get('browser_links')) {
+      this.registry.register(
+        {
+          name: 'browser_links',
+          description: 'List structured page links through the Lightpanda-backed browser wrapper. Optional url performs a navigate-first extraction. Supports simple text or href filtering.',
+          shortDescription: 'List structured links from the current browser page.',
+          risk: 'read_only',
+          category: 'browser',
+          deferLoading: true,
+          parameters: {
+            type: 'object',
+            properties: {
+              url: { type: 'string', description: 'Optional target URL to navigate before extracting links.' },
+              filter: { type: 'string', description: 'Optional text or href filter.' },
+              maxItems: { type: 'number', description: 'Maximum links to return (default 50).' },
+            },
+          },
+        },
+        async (args, request) => {
+          const validated = this.normalizeBrowserUrlArg('browser_links', args.url);
+          if (validated.error) {
+            return { success: false, error: validated.error };
+          }
+          if (validated.url) {
+            this.guardAction(request, 'http_request', { url: validated.url });
+          }
+          return this.hybridBrowser!.links(this.getHybridBrowserScopeKey(request), {
+            ...(validated.url ? { url: validated.url } : {}),
+            filter: asString(args.filter, '').trim() || undefined,
+            ...(typeof args.maxItems === 'number' ? { maxItems: args.maxItems } : {}),
+          });
+        },
+      );
+    }
+
+    if (capabilities.wrappers.browserExtract && !this.registry.get('browser_extract')) {
+      this.registry.register(
+        {
+          name: 'browser_extract',
+          description: 'Extract structured page data through the Lightpanda-backed browser wrapper. Supports structured metadata, semantic tree output, or both. Optional url performs a navigate-first extraction.',
+          shortDescription: 'Extract structured metadata or semantic tree output from the current page.',
+          risk: 'read_only',
+          category: 'browser',
+          deferLoading: true,
+          parameters: {
+            type: 'object',
+            properties: {
+              url: { type: 'string', description: 'Optional target URL to navigate before extraction.' },
+              type: { type: 'string', description: "Extraction type: 'structured', 'semantic', or 'both'." },
+              maxChars: { type: 'number', description: 'Maximum semantic-tree characters to return (default 12000).' },
+            },
+          },
+        },
+        async (args, request) => {
+          const validated = this.normalizeBrowserUrlArg('browser_extract', args.url);
+          if (validated.error) {
+            return { success: false, error: validated.error };
+          }
+          if (validated.url) {
+            this.guardAction(request, 'http_request', { url: validated.url });
+          }
+          const type = asString(args.type, 'both').trim().toLowerCase();
+          if (!['structured', 'semantic', 'both'].includes(type)) {
+            return { success: false, error: `Unsupported browser_extract type '${type}'.` };
+          }
+          return this.hybridBrowser!.extract(this.getHybridBrowserScopeKey(request), {
+            ...(validated.url ? { url: validated.url } : {}),
+            type: type as 'structured' | 'semantic' | 'both',
+            ...(typeof args.maxChars === 'number' ? { maxChars: args.maxChars } : {}),
+          });
+        },
+      );
+    }
+
+    if (capabilities.wrappers.browserInteract && !this.registry.get('browser_interact')) {
+      this.registry.register(
+        {
+          name: 'browser_interact',
+          description: 'Inspect or interact with the current browser page through the Guardian wrapper. action=list is read-oriented and lists interactive targets. click, type, fill, and select use the Playwright interaction lane and may require approval depending on policy mode.',
+          shortDescription: 'List interactive browser targets or perform a click, type, fill, or select action.',
+          risk: 'mutating',
+          category: 'browser',
+          deferLoading: true,
+          parameters: {
+            type: 'object',
+            properties: {
+              url: { type: 'string', description: 'Optional target URL to navigate before listing or interacting.' },
+              action: { type: 'string', description: "Interaction action: 'list', 'click', 'type', 'fill', or 'select'." },
+              element: { type: 'string', description: 'Element ref or selector from the current page representation.' },
+              value: { type: 'string', description: 'Input text or selected option value for type, fill, or select.' },
+            },
+          },
+        },
+        async (args, request) => {
+          const validated = this.normalizeBrowserUrlArg('browser_interact', args.url);
+          if (validated.error) {
+            return { success: false, error: validated.error };
+          }
+          if (validated.url) {
+            this.guardAction(request, 'http_request', { url: validated.url });
+          }
+          const action = asString(args.action, 'list').trim().toLowerCase();
+          this.guardAction(request, 'mcp_tool', {
+            toolName: 'browser_interact',
+            action,
+            element: asString(args.element, '').trim(),
+            ...(validated.url ? { url: validated.url } : {}),
+          });
+          return this.hybridBrowser!.interact(this.getHybridBrowserScopeKey(request), {
+            ...(validated.url ? { url: validated.url } : {}),
+            action,
+            element: asString(args.element, '').trim() || undefined,
+            value: asString(args.value, ''),
+          });
+        },
+      );
+    }
+  }
+
+  private getHybridBrowserScopeKey(request: Partial<ToolExecutionRequest>): string {
+    const codeSessionId = request.codeContext?.sessionId?.trim();
+    if (codeSessionId) return `code:${codeSessionId}`;
+    const principalId = request.principalId?.trim();
+    if (principalId) return `principal:${request.channel ?? 'unknown'}:${principalId}`;
+    const userId = request.userId?.trim();
+    if (userId) return `user:${request.channel ?? 'unknown'}:${userId}`;
+    const requestId = request.requestId?.trim();
+    if (requestId) return `request:${requestId}`;
+    return `agent:${request.agentId ?? 'assistant-tools'}`;
+  }
+
+  private normalizeBrowserUrlArg(
+    toolName: string,
+    value: unknown,
+  ): { url?: string; error?: string } {
+    const raw = asString(value, '').trim();
+    if (!raw) return {};
+    const urlText = normalizeHttpUrlLikeInput(raw);
+    let parsed: URL;
+    try {
+      parsed = new URL(urlText);
+    } catch {
+      return { error: `Invalid URL '${raw}'.` };
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { error: 'Browser tools only support http and https URLs.' };
+    }
+    if (isPrivateAddress(parsed.hostname)) {
+      return { error: `Blocked: ${parsed.hostname} is a private/internal address (SSRF protection).` };
+    }
+    const host = parsed.hostname.toLowerCase();
+    if (!this.isHostAllowedForTool(toolName, host)) {
+      return {
+        error: this.isBrowserFacingTool(toolName)
+          ? `Host '${host}' is not in the browser allowedDomains.`
+          : `Host '${host}' is not in allowedDomains.`,
+      };
+    }
+    return { url: urlText };
+  }
+
+  private normalizeHybridBrowserMode(value: unknown): HybridBrowserMode {
+    const mode = asString(value, 'auto').trim().toLowerCase();
+    return mode === 'read' || mode === 'interactive' ? mode : 'auto';
   }
 
   isEnabled(): boolean {
@@ -879,7 +1189,9 @@ export class ToolExecutor {
 
   listToolDefinitions(): ToolDefinition[] {
     return this.registry.listDefinitions().filter(
-      (def) => this.isCategoryEnabled(def.category) && !this.getSandboxBlockReason(def.name, def.category),
+      (def) => this.isAssistantVisibleTool(def)
+        && this.isCategoryEnabled(def.category)
+        && !this.getSandboxBlockReason(def.name, def.category),
     );
   }
 
@@ -900,7 +1212,9 @@ export class ToolExecutor {
     }
 
     return uniqueBy(definitions, (def) => def.name).filter(
-      (def) => this.isCategoryEnabled(def.category) && !this.getSandboxBlockReason(def.name, def.category),
+      (def) => this.isAssistantVisibleTool(def)
+        && this.isCategoryEnabled(def.category)
+        && !this.getSandboxBlockReason(def.name, def.category),
     );
   }
 
@@ -928,7 +1242,9 @@ export class ToolExecutor {
   /** Search tools by keyword, returning full definitions (including deferred). */
   searchTools(query: string, maxResults: number = 10): ToolDefinition[] {
     return this.registry.searchTools(query, maxResults).filter(
-      (def) => this.isCategoryEnabled(def.category) && !this.getSandboxBlockReason(def.name, def.category),
+      (def) => this.isAssistantVisibleTool(def)
+        && this.isCategoryEnabled(def.category)
+        && !this.getSandboxBlockReason(def.name, def.category),
     );
   }
 
@@ -983,6 +1299,7 @@ export class ToolExecutor {
     if (this.policy.sandbox.allowedDomains.length > 0) {
       lines.push(`Allowed domains: ${this.policy.sandbox.allowedDomains.join(', ')}`);
     }
+    lines.push(...this.describeBrowserContextLines());
     lines.push(...this.describeGoogleContextLines());
     lines.push(...this.describeCloudContextLines());
     return lines.join('\n');
@@ -998,6 +1315,33 @@ export class ToolExecutor {
       return 'Policy updates via chat: disabled';
     }
     return `Policy updates via chat: enabled via update_tool_policy (${enabledActions.join(', ')})`;
+  }
+
+  private describeBrowserContextLines(): string[] {
+    const capabilities = this.hybridBrowser?.getCapabilities();
+    if (!capabilities?.available) {
+      return ['Browser automation: unavailable'];
+    }
+
+    const readBackend = capabilities.preferredReadBackend ?? 'none';
+    const interactionBackend = capabilities.preferredInteractionBackend ?? 'none';
+    const browserAllowedDomains = this.getBrowserAllowedDomains();
+    const browserUsesDedicatedAllowlist = Array.isArray(this.options.browserConfig?.allowedDomains)
+      && this.options.browserConfig.allowedDomains.length > 0;
+    const lines = [
+      `Browser automation: available (read=${readBackend}, interact=${interactionBackend})`,
+      'Use Guardian-native browser tools first: browser_capabilities, browser_navigate, browser_read, browser_links, browser_extract, and browser_interact.',
+      `Browser allowed domains: ${browserAllowedDomains.join(', ') || '(none)'}${browserUsesDedicatedAllowlist ? '' : ' (inherits general allowedDomains)'}`,
+    ];
+    if (capabilities.backends.lightpanda.available) {
+      lines.push('Read-oriented browser tasks should prefer Lightpanda-backed wrappers when available and fall back to Playwright only when needed.');
+    } else {
+      lines.push('Lightpanda is not available, so browser reads fall back to Playwright accessibility snapshots.');
+    }
+    if (!capabilities.backends.playwright.available) {
+      lines.push('Interactive browser actions are unavailable because the Playwright backend is not connected.');
+    }
+    return lines;
   }
 
   private describeCloudContextLines(): string[] {
@@ -2018,13 +2362,22 @@ export class ToolExecutor {
       }
       const host = explicitHost.host;
       if (!host) return null;
-      if (!this.isHostAllowed(host)) {
+      if (isPrivateAddress(host)) {
         return {
-          reason: `Host '${host}' is not in allowedDomains.`,
+          reason: `Blocked: ${host} is a private/internal address (SSRF protection).`,
+        };
+      }
+      if (!this.isHostAllowedForTool(toolName, host)) {
+        return {
+          reason: this.isBrowserFacingTool(toolName)
+            ? `Host '${host}' is not in the browser allowedDomains.`
+            : `Host '${host}' is not in allowedDomains.`,
           fix: {
             type: 'domain',
             value: host,
-            description: `Add '${host}' to allowed domains`,
+            description: this.isBrowserFacingTool(toolName)
+              ? `Add '${host}' to browser allowed domains`
+              : `Add '${host}' to allowed domains`,
           },
         };
       }
@@ -2061,6 +2414,32 @@ export class ToolExecutor {
       }
     }
     return null;
+  }
+
+  private isBrowserFacingTool(toolName: string): boolean {
+    return toolName.startsWith('browser_') || isBrowserMcpToolName(toolName);
+  }
+
+  private isAssistantVisibleTool(definition: ToolDefinition): boolean {
+    return !isBrowserMcpToolName(definition.name);
+  }
+
+  private getBrowserAllowedDomains(): string[] {
+    return this.options.browserConfig?.allowedDomains?.length
+      ? this.options.browserConfig.allowedDomains
+      : this.policy.sandbox.allowedDomains;
+  }
+
+  private getExplicitBrowserAllowedDomains(): string[] | null {
+    return Array.isArray(this.options.browserConfig?.allowedDomains) && this.options.browserConfig.allowedDomains.length > 0
+      ? [...this.options.browserConfig.allowedDomains]
+      : null;
+  }
+
+  private isHostAllowedForTool(toolName: string, host: string): boolean {
+    return this.isBrowserFacingTool(toolName)
+      ? this.isHostAllowed(host, this.getBrowserAllowedDomains())
+      : this.isHostAllowed(host);
   }
 
   private isPathAllowedForPreflight(candidate: string): boolean {
@@ -2708,6 +3087,11 @@ export class ToolExecutor {
       if (explicit === 'manual') return 'require_approval';
     }
 
+    const browserDecision = this.decideBrowserTool(definition.name, args);
+    if (browserDecision) {
+      return browserDecision;
+    }
+
     const gwsDecision = this.decideGwsTool(definition.name, args);
     if (gwsDecision) {
       return gwsDecision;
@@ -2780,6 +3164,19 @@ export class ToolExecutor {
       return 'require_approval';
     }
     return null;
+  }
+
+  private decideBrowserTool(toolName: string, args: Record<string, unknown>): ToolDecision | null {
+    if (toolName !== 'browser_interact') {
+      return null;
+    }
+
+    const action = asString(args.action, 'list').trim().toLowerCase();
+    if (action === 'list') {
+      return 'allow';
+    }
+
+    return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
   }
 
   private decideGwsTool(toolName: string, args: Record<string, unknown>): ToolDecision | null {
@@ -3090,6 +3487,13 @@ export class ToolExecutor {
         } catch (err) {
           return err instanceof Error ? err.message : String(err);
         }
+      }
+    }
+
+    if (this.isBrowserFacingTool(toolName)) {
+      const validated = this.normalizeBrowserUrlArg(toolName, args.url);
+      if (validated.error) {
+        return validated.error;
       }
     }
 
@@ -13861,20 +14265,28 @@ export class ToolExecutor {
         if (!this.automationControlPlane) {
           return { success: false, error: 'Workflow control plane is not available.' };
         }
-        const result = this.automationControlPlane.upsertWorkflow(args);
+        const stepError = validateWorkflowDefinition(args, (toolName) => this.registry.get(toolName) !== undefined);
+        if (stepError) {
+          return { success: false, error: stepError };
+        }
+        const normalizedArgs: Record<string, unknown> = {
+          ...args,
+          enabled: args.enabled !== false,
+        };
+        const result = this.automationControlPlane.upsertWorkflow(normalizedArgs);
         if (!result.success) {
           return { success: false, error: result.message };
         }
-        const workflowId = requireString(args.id, 'id');
+        const workflowId = requireString(normalizedArgs.id, 'id');
         const workflow = this.automationControlPlane.listWorkflows().find((entry) => entry.id === workflowId);
         const linkedTasks = workflow
           ? this.automationControlPlane.listTasks()
             .filter((task) => task.type === 'playbook' && task.target === workflow.id)
             .map(normalizeTaskSummary)
           : [];
-        const stepCount = workflow?.steps?.length ?? (Array.isArray(args.steps) ? args.steps.length : 0);
+        const stepCount = workflow?.steps?.length ?? (Array.isArray(normalizedArgs.steps) ? normalizedArgs.steps.length : 0);
         const action = /^updated\b/i.test(result.message) ? 'Updated' : 'Created';
-        const summary = `Workflow '${workflow?.name ?? requireString(args.name, 'name')}' (id: ${workflowId}) ${action.toLowerCase()} with ${stepCount} step${stepCount === 1 ? '' : 's'}${linkedTasks.length > 0 ? ` and ${linkedTasks.length} linked scheduled task${linkedTasks.length === 1 ? '' : 's'}` : ''}.`;
+        const summary = `Workflow '${workflow?.name ?? requireString(normalizedArgs.name, 'name')}' (id: ${workflowId}) ${action.toLowerCase()} with ${stepCount} step${stepCount === 1 ? '' : 's'}${linkedTasks.length > 0 ? ` and ${linkedTasks.length} linked scheduled task${linkedTasks.length === 1 ? '' : 's'}` : ''}.`;
         return {
           success: true,
           message: summary,
@@ -14214,8 +14626,9 @@ export class ToolExecutor {
 
           const current = this.getPolicy();
           let updated: ToolPolicyUpdate;
+          let browserAllowedDomainsUpdate: string[] | undefined;
 
-              switch (action) {
+          switch (action) {
             case 'add_path': {
               if (current.sandbox.allowedPaths.includes(value)) {
                 return { success: true, output: { message: `Path '${value}' is already in the allowlist.`, allowedPaths: current.sandbox.allowedPaths } };
@@ -14251,19 +14664,41 @@ export class ToolExecutor {
             }
             case 'add_domain': {
               const normalizedValue = value.toLowerCase();
-              if (current.sandbox.allowedDomains.includes(normalizedValue)) {
+              const currentBrowserDomains = this.getExplicitBrowserAllowedDomains();
+              const browserNeedsUpdate = !!currentBrowserDomains && !currentBrowserDomains.includes(normalizedValue);
+              if (current.sandbox.allowedDomains.includes(normalizedValue) && !browserNeedsUpdate) {
                 return { success: true, output: { message: `Domain '${normalizedValue}' is already in the allowlist.`, allowedDomains: current.sandbox.allowedDomains } };
               }
-              updated = { sandbox: { allowedDomains: [...current.sandbox.allowedDomains, normalizedValue] } };
+              updated = current.sandbox.allowedDomains.includes(normalizedValue)
+                ? {}
+                : { sandbox: { allowedDomains: [...current.sandbox.allowedDomains, normalizedValue] } };
+              if (browserNeedsUpdate) {
+                browserAllowedDomainsUpdate = [...currentBrowserDomains!, normalizedValue];
+                this.options.browserConfig = {
+                  ...(this.options.browserConfig ?? { enabled: true }),
+                  allowedDomains: browserAllowedDomainsUpdate,
+                };
+              }
               break;
             }
             case 'remove_domain': {
               const normalizedValue = value.toLowerCase();
-              const filtered = current.sandbox.allowedDomains.filter(d => d !== normalizedValue);
-              if (filtered.length === current.sandbox.allowedDomains.length) {
+              const filtered = current.sandbox.allowedDomains.filter((d) => d !== normalizedValue);
+              const currentBrowserDomains = this.getExplicitBrowserAllowedDomains();
+              const browserHasDomain = !!currentBrowserDomains && currentBrowserDomains.includes(normalizedValue);
+              if (filtered.length === current.sandbox.allowedDomains.length && !browserHasDomain) {
                 return { success: false, error: `Domain '${normalizedValue}' is not in the allowlist.` };
               }
-              updated = { sandbox: { allowedDomains: filtered } };
+              updated = filtered.length === current.sandbox.allowedDomains.length
+                ? {}
+                : { sandbox: { allowedDomains: filtered } };
+              if (browserHasDomain) {
+                browserAllowedDomainsUpdate = currentBrowserDomains!.filter((d) => d !== normalizedValue);
+                this.options.browserConfig = {
+                  ...(this.options.browserConfig ?? { enabled: true }),
+                  allowedDomains: browserAllowedDomainsUpdate,
+                };
+              }
               break;
             }
             case 'set_tool_policy_auto': {
@@ -14282,9 +14717,11 @@ export class ToolExecutor {
               return { success: false, error: `Unknown action: ${action}` };
           }
 
-          const result = this.updatePolicy(updated);
+          const result = updated.mode || updated.toolPolicies || updated.sandbox
+            ? this.updatePolicy(updated)
+            : current;
           // Persist to config file so changes survive reloads and restarts
-          try { this.options.onPolicyUpdate?.(result); } catch { /* best-effort persist */ }
+          try { this.options.onPolicyUpdate?.(result, browserAllowedDomainsUpdate ? { browserAllowedDomains: browserAllowedDomainsUpdate } : undefined); } catch { /* best-effort persist */ }
           return {
             success: true,
             output: {
@@ -14292,6 +14729,7 @@ export class ToolExecutor {
               allowedPaths: result.sandbox.allowedPaths,
               allowedCommands: result.sandbox.allowedCommands,
               allowedDomains: result.sandbox.allowedDomains,
+              ...(browserAllowedDomainsUpdate ? { browserAllowedDomains: browserAllowedDomainsUpdate } : {}),
             },
           };
         },
@@ -14944,10 +15382,10 @@ export class ToolExecutor {
     return '';
   }
 
-  private isHostAllowed(host: string): boolean {
+  private isHostAllowed(host: string, allowedDomains: string[] = this.policy.sandbox.allowedDomains): boolean {
     const normalized = host.trim().toLowerCase();
     if (!normalized) return false;
-    return this.policy.sandbox.allowedDomains.some((allowedHost) => {
+    return allowedDomains.some((allowedHost) => {
       const allowed = allowedHost.trim().toLowerCase();
       return normalized === allowed || normalized.endsWith(`.${allowed}`);
     });
@@ -16709,6 +17147,58 @@ function summarizeWorkflowPreview(args: Record<string, unknown>): string | null 
   const steps = Array.isArray(args.steps) ? args.steps : [];
   if (!id && !name) return null;
   return `workflow ${name || id} (${mode || 'sequential'}, ${steps.length} step${steps.length === 1 ? '' : 's'}${schedule ? `, schedule ${schedule}` : ''})`;
+}
+
+function validateWorkflowDefinition(
+  args: Record<string, unknown>,
+  hasTool: (toolName: string) => boolean,
+): string | null {
+  const steps = Array.isArray(args.steps) ? args.steps : [];
+  for (const [index, rawStep] of steps.entries()) {
+    if (!isRecord(rawStep)) {
+      return `Step ${index + 1} is invalid.`;
+    }
+    const stepId = asString(rawStep.id, `step_${index + 1}`).trim() || `step_${index + 1}`;
+    const stepType = inferWorkflowStepType(rawStep);
+    if (stepType === 'instruction') {
+      if (!asString(rawStep.instruction).trim()) {
+        return `Instruction step '${stepId}' is missing instruction text.`;
+      }
+      continue;
+    }
+    if (stepType === 'delay') {
+      if (typeof rawStep.delayMs !== 'number' || !Number.isFinite(rawStep.delayMs) || rawStep.delayMs < 0) {
+        return `Delay step '${stepId}' is missing a valid delayMs value.`;
+      }
+      continue;
+    }
+
+    const toolName = asString(rawStep.toolName).trim();
+    if (!toolName) {
+      return `Tool step '${stepId}' is missing toolName.`;
+    }
+    if (!hasTool(toolName)) {
+      const browserHint = /^mcp[_-](playwright|lightpanda)/i.test(toolName)
+        ? ' Use Guardian-native browser wrapper tools (`browser_navigate`, `browser_read`, `browser_links`, `browser_extract`, `browser_interact`) in saved automations instead of raw MCP browser names.'
+        : '';
+      return `Unknown tool '${toolName}'.${browserHint}`;
+    }
+  }
+  return null;
+}
+
+function inferWorkflowStepType(step: Record<string, unknown>): 'tool' | 'instruction' | 'delay' {
+  const explicit = asString(step.type).trim().toLowerCase();
+  if (explicit === 'instruction' || explicit === 'delay' || explicit === 'tool') {
+    return explicit;
+  }
+  if (typeof step.delayMs === 'number') {
+    return 'delay';
+  }
+  if (asString(step.instruction).trim()) {
+    return 'instruction';
+  }
+  return 'tool';
 }
 
 function summarizeScheduledTaskPreview(args: Record<string, unknown>): string | null {

@@ -2,7 +2,7 @@
  * Main application — hash-based router + SSE connection manager.
  */
 
-import { api, setToken, clearToken } from './api.js';
+import { api, setToken, clearToken, AUTH_FAILED_EVENT, AUTH_RECOVERED_EVENT } from './api.js';
 import { renderDashboard, updateDashboard } from './pages/dashboard.js';
 import { renderSecurity, updateSecurity } from './pages/security.js';
 import { renderConfig, updateConfig } from './pages/config.js';
@@ -28,13 +28,15 @@ let invalidationTimer = null;
 let invalidationInFlight = false;
 let invalidationQueued = false;
 let securityAlertTray = null;
+let appStarted = false;
+let authRecoveryInProgress = false;
 
 // ─── Auth ────────────────────────────────────────────────
 
 async function checkAuth() {
   // Try to reach status endpoint
   try {
-    await api.status();
+    await api.status({ retryOnAuth: false });
     return 'ok';
   } catch (e) {
     if (e.message === 'AUTH_FAILED') return 'auth_failed';
@@ -79,7 +81,10 @@ async function initAuth() {
   // AUTH_FAILED — clear any stale token so it doesn't keep causing 401s
   clearToken();
 
-  // Show auth modal
+  showAuthPrompt();
+}
+
+function showAuthPrompt(initialError = '') {
   authModal.style.display = '';
   app.style.display = 'none';
 
@@ -88,7 +93,12 @@ async function initAuth() {
   const form = document.getElementById('auth-form');
   const errorEl = document.getElementById('auth-error');
 
-  const handleSubmit = async (event) => {
+  if (!input || !submit || !form || !errorEl) return;
+
+  errorEl.textContent = initialError;
+  errorEl.style.display = initialError ? '' : 'none';
+
+  form.onsubmit = async (event) => {
     event?.preventDefault?.();
     const token = input.value.trim();
     if (!token) {
@@ -107,21 +117,32 @@ async function initAuth() {
         errorEl.style.display = '';
         return;
       }
+      authRecoveryInProgress = false;
       authModal.style.display = 'none';
       app.style.display = '';
       applyInputTooltips(document);
-      startApp();
+      if (!appStarted) {
+        startApp();
+      } else {
+        connectSSE();
+        if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+          if (typeof CustomEvent === 'function') {
+            window.dispatchEvent(new CustomEvent(AUTH_RECOVERED_EVENT));
+          } else {
+            window.dispatchEvent(new Event(AUTH_RECOVERED_EVENT));
+          }
+        }
+      }
     } else {
       clearToken();
       errorEl.textContent = check === 'unreachable' ? 'Server unreachable' : 'Invalid token';
       errorEl.style.display = '';
     }
   };
-  form?.addEventListener('submit', handleSubmit);
 
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') form?.requestSubmit ? form.requestSubmit() : submit.click();
-  });
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') form.requestSubmit ? form.requestSubmit() : submit.click();
+  };
 
   applyInputTooltips(authModal);
 }
@@ -409,6 +430,7 @@ function startClock() {
 }
 
 function startApp() {
+  appStarted = true;
   connectSSE();
   onSSE('ui.invalidate', (payload) => {
     const { route } = getRouteState();
@@ -463,6 +485,19 @@ function startApp() {
     };
   }
 }
+
+window.addEventListener(AUTH_FAILED_EVENT, () => {
+  if (!appStarted || authRecoveryInProgress) return;
+  authRecoveryInProgress = true;
+  clearToken();
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
+  }
+  indicator.className = 'indicator disconnected';
+  indicator.textContent = 'Disconnected';
+  showAuthPrompt('Session expired. Enter the dashboard token again.');
+});
 
 // ─── Init ────────────────────────────────────────────────
 

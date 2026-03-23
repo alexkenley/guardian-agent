@@ -112,6 +112,83 @@ describe('compileAutomationAuthoringRequest', () => {
     expect(compilation?.workflowUpsert?.steps[1]?.toolName).toBe('web_fetch');
   });
 
+  it('uses the explicit automation name and browser wrapper tools for browser smoke workflows', () => {
+    const compilation = compileAutomationAuthoringRequest(
+      'Create an automation called Browser Read Smoke. When I run it, it should open https://example.com, read the page, list the links, and keep the results in the automation run output only. Do not schedule it yet.',
+      { channel: 'web', userId: 'owner' },
+    );
+
+    expect(compilation).not.toBeNull();
+    expect(compilation?.shape).toBe('workflow');
+    expect(compilation?.name).toBe('Browser Read Smoke');
+    expect(compilation?.workflowUpsert?.id).toBe('browser-read-smoke');
+    expect(compilation?.workflowUpsert?.enabled).toBe(true);
+    expect(compilation?.workflowUpsert?.steps).toMatchObject([
+      {
+        toolName: 'browser_navigate',
+        args: { url: 'https://example.com', mode: 'read' },
+      },
+      {
+        toolName: 'browser_read',
+      },
+      {
+        toolName: 'browser_links',
+      },
+    ]);
+  });
+
+  it('compiles structured browser extraction workflows to browser_extract', () => {
+    const compilation = compileAutomationAuthoringRequest(
+      'Create an automation called Browser Extract Smoke. When I run it, it should open https://github.com, extract structured metadata and a semantic outline, and show me the result. Do not schedule it.',
+      { channel: 'web', userId: 'owner' },
+    );
+
+    expect(compilation).not.toBeNull();
+    expect(compilation?.shape).toBe('workflow');
+    expect(compilation?.name).toBe('Browser Extract Smoke');
+    expect(compilation?.workflowUpsert?.steps).toMatchObject([
+      {
+        toolName: 'browser_navigate',
+        args: { url: 'https://github.com', mode: 'read' },
+      },
+      {
+        toolName: 'browser_extract',
+        args: { type: 'both' },
+      },
+    ]);
+  });
+
+  it('compiles simple browser form typing workflows with wrapper tools and deterministic target selection', () => {
+    const compilation = compileAutomationAuthoringRequest(
+      'Create an automation that opens https://httpbin.org/forms/post, lists the inputs, and types "automation smoke test" into the first text field. Run it once.',
+      { channel: 'web', userId: 'owner' },
+    );
+
+    expect(compilation).not.toBeNull();
+    expect(compilation?.shape).toBe('workflow');
+    expect(compilation?.workflowUpsert?.steps).toMatchObject([
+      {
+        toolName: 'browser_navigate',
+        args: { url: 'https://httpbin.org/forms/post', mode: 'interactive' },
+      },
+      {
+        toolName: 'browser_interact',
+        args: { action: 'list' },
+      },
+      {
+        type: 'instruction',
+      },
+      {
+        toolName: 'browser_interact',
+        args: {
+          action: 'type',
+          element: '${select_target.output}',
+          value: 'automation smoke test',
+        },
+      },
+    ]);
+  });
+
   it('compiles deterministic read-summarize-write requests into native workflows with instruction steps', () => {
     const compilation = compileAutomationAuthoringRequest(
       'Create a sequential Guardian workflow that first reads ./companies.csv, then runs a fixed summarization step, then writes ./lead-research-summary.md.',

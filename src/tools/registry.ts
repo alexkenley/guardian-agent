@@ -16,6 +16,10 @@ export class ToolRegistry {
     this.tools.set(definition.name, { definition, handler });
   }
 
+  unregister(name: string): void {
+    this.tools.delete(name);
+  }
+
   listDefinitions(): ToolDefinition[] {
     return [...this.tools.values()]
       .map((entry) => entry.definition)

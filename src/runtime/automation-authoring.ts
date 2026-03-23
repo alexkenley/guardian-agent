@@ -77,13 +77,25 @@ const OPEN_ENDED_PATTERNS = [
 const EXPLICIT_WORKFLOW_PATTERNS = [
   /\bstep\s*\d+\b/i,
   /\b(workflow_upsert|task_create|instruction step|delay step)\b/i,
-  /\b(gws|gmail_draft|web_fetch|web_search|fs_read|fs_write|sys_resources|net_ping|net_port_check|memory_save)\b/i,
+  /\b(gws|gmail_draft|web_fetch|web_search|fs_read|fs_write|sys_resources|net_ping|net_port_check|memory_save|browser_navigate|browser_read|browser_links|browser_extract|browser_interact)\b/i,
   /\b(sequential|parallel)\b/i,
   /\bworkflow that first\b/i,
   /\bfirst\b[\s\S]{0,160}\bthen\b/i,
   /\bfixed (?:summari[sz]ation|analysis|classification|comparison|draft|transform|extraction) step\b/i,
 ];
-const EXPLICIT_WORKFLOW_TOOL_NAMES = ['net_ping', 'web_fetch', 'net_port_check', 'sys_resources', 'gws', 'gmail_draft'];
+const EXPLICIT_WORKFLOW_TOOL_NAMES = [
+  'net_ping',
+  'web_fetch',
+  'net_port_check',
+  'sys_resources',
+  'gws',
+  'gmail_draft',
+  'browser_navigate',
+  'browser_read',
+  'browser_links',
+  'browser_extract',
+  'browser_interact',
+];
 const INSTRUCTION_VERB_PATTERNS: Array<{ pattern: RegExp; label: string; verb: string; present: string }> = [
   { pattern: /\bsummari[sz](?:e|es|ed|ing|ation)\b/i, label: 'Summarize', verb: 'summarize', present: 'summarizes' },
   { pattern: /\b(?:analy[sz](?:e|es|ed|ing)|analysis)\b/i, label: 'Analyze', verb: 'analyze', present: 'analyzes' },
@@ -284,6 +296,7 @@ function classifyAutomationShape(
   const openEndedSignals = OPEN_ENDED_PATTERNS.filter((pattern) => pattern.test(text)).length;
   const explicitWorkflowSignals = EXPLICIT_WORKFLOW_PATTERNS.filter((pattern) => pattern.test(text)).length;
   const deterministicInstructionWorkflow = looksLikeDeterministicInstructionWorkflow(text);
+  if (looksLikeBrowserWorkflow(text)) return 'workflow';
   if (deterministicInstructionWorkflow) return 'workflow';
   if (explicitWorkflowSignals >= 2) return 'workflow';
   if (openEndedSignals > 0) return 'scheduled_agent';
@@ -294,6 +307,8 @@ function classifyAutomationShape(
 function buildWorkflowBody(text: string): AutomationIRWorkflowBody | null {
   const steps: AssistantConnectorPlaybookStepDefinition[] = [];
   const lower = text.toLowerCase();
+  const browserWorkflow = buildBrowserWorkflow(text);
+  if (browserWorkflow) return browserWorkflow;
 
   if (/\b(gws|gmail)\b/.test(lower) && /\binbox\b/.test(lower)) {
     steps.push({
@@ -370,6 +385,183 @@ function compileWorkflowFromIR(
     schedule: ir.schedule?.cron,
     steps: workflow.steps,
   };
+}
+
+function looksLikeBrowserWorkflow(text: string): boolean {
+  const urls = extractExplicitUrls(text);
+  if (urls.length === 0) return false;
+  return [
+    /\b(open|navigate|visit|load|go to)\b/i,
+    /\b(read|page title|page content|current page|summari[sz]e)\b/i,
+    /\blinks?\b/i,
+    /\bextract\b/i,
+    /\bstructured metadata\b/i,
+    /\bsemantic (?:outline|tree)\b/i,
+    /\binteractive elements?\b/i,
+    /\binputs?\b/i,
+    /\b(type|fill|click|select)\b/i,
+  ].some((pattern) => pattern.test(text));
+}
+
+function buildBrowserWorkflow(text: string): AutomationIRWorkflowBody | null {
+  if (!looksLikeBrowserWorkflow(text)) return null;
+
+  const url = extractExplicitUrls(text)[0];
+  if (!url) return null;
+
+  const steps: AssistantConnectorPlaybookStepDefinition[] = [];
+  const needsMutation = /\b(type|types|typed|typing|fill|fills|filled|filling|click|clicks|clicked|clicking|select|selects|selected|selecting)\b/i.test(text);
+  const wantsRead = /\b(read|page title|page content|current page|summari[sz]e)\b/i.test(text);
+  const wantsLinks = /\b(list|show|extract|get)\b[\s\S]{0,48}\blinks?\b/i.test(text);
+  const wantsInteractiveList = /\b(list(?:s|ed|ing)?|show(?:s|ed|ing)?|inspect(?:s|ed|ing)?)\b[\s\S]{0,48}\b(interactive elements?|inputs?|form fields?|controls?)\b/i.test(text)
+    || /\blist the inputs\b/i.test(text);
+  const extractType = inferBrowserExtractType(text);
+
+  steps.push({
+    id: 'navigate',
+    name: 'Open page',
+    type: 'tool',
+    packId: '',
+    toolName: 'browser_navigate',
+    args: {
+      url,
+      mode: needsMutation ? 'interactive' : 'read',
+    },
+  });
+
+  if (wantsRead) {
+    steps.push({
+      id: 'read_page',
+      name: 'Read page',
+      type: 'tool',
+      packId: '',
+      toolName: 'browser_read',
+      args: {},
+    });
+  }
+
+  if (wantsLinks) {
+    steps.push({
+      id: 'list_links',
+      name: 'List page links',
+      type: 'tool',
+      packId: '',
+      toolName: 'browser_links',
+      args: {},
+    });
+  }
+
+  if (extractType) {
+    steps.push({
+      id: 'extract_page',
+      name: 'Extract page structure',
+      type: 'tool',
+      packId: '',
+      toolName: 'browser_extract',
+      args: {
+        type: extractType,
+      },
+    });
+  }
+
+  const needsTargetSelection = needsMutation || wantsInteractiveList;
+  if (needsTargetSelection) {
+    steps.push({
+      id: 'list_targets',
+      name: 'List interactive targets',
+      type: 'tool',
+      packId: '',
+      toolName: 'browser_interact',
+      args: {
+        action: 'list',
+      },
+    });
+  }
+
+  const typeValue = extractBrowserQuotedValue(text, ['type', 'fill']);
+  const clickLabel = extractBrowserClickLabel(text);
+  const targetInstruction = buildBrowserTargetSelectionInstruction(text);
+
+  if (targetInstruction && (typeValue || clickLabel)) {
+    const action = typeValue ? 'type' : 'click';
+    steps.push({
+      id: 'select_target',
+      name: 'Select target element',
+      type: 'instruction',
+      packId: '',
+      toolName: '',
+      instruction: targetInstruction,
+    });
+    steps.push({
+      id: action === 'type' ? 'type_value' : 'click_target',
+      name: action === 'type' ? 'Type value' : 'Click target',
+      type: 'tool',
+      packId: '',
+      toolName: 'browser_interact',
+      args: {
+        action,
+        element: '${select_target.output}',
+        ...(typeValue ? { value: typeValue } : {}),
+      },
+    });
+  }
+
+  if (steps.length <= 1) return null;
+  return {
+    mode: 'sequential',
+    steps,
+  };
+}
+
+function inferBrowserExtractType(text: string): 'structured' | 'semantic' | 'both' | null {
+  const wantsStructured = /\b(structured metadata|structured data|metadata|open graph|json-ld)\b/i.test(text);
+  const wantsSemantic = /\b(semantic outline|semantic tree|outline|heading hierarchy|headings)\b/i.test(text);
+  if (/\bextract\b/i.test(text) && wantsStructured && wantsSemantic) return 'both';
+  if (/\bextract\b/i.test(text) && wantsStructured) return 'structured';
+  if (/\bextract\b/i.test(text) && wantsSemantic) return 'semantic';
+  return null;
+}
+
+function extractBrowserQuotedValue(text: string, verbs: string[]): string | null {
+  const pattern = new RegExp(`\\b(?:${verbs.join('|')})(?:s|d|ing)?\\s+["'\`]([^"'\\\`]+)["'\`]`, 'i');
+  const match = text.match(pattern);
+  return match?.[1]?.trim() || null;
+}
+
+function extractBrowserClickLabel(text: string): string | null {
+  const match = text.match(/\bclick\s+(?:the\s+)?["'`]([^"'`]+)["'`]/i);
+  return match?.[1]?.trim() || null;
+}
+
+function buildBrowserTargetSelectionInstruction(text: string): string | null {
+  if (/\bfirst\s+text\s+(?:field|input|textbox)\b/i.test(text)) {
+    return [
+      'Use the prior browser_interact list output.',
+      'Return only the ref for the first text input or textbox element.',
+      'Do not include any explanation, markdown, or extra text.',
+    ].join(' ');
+  }
+
+  const fieldMatch = text.match(/\binto\s+the\s+([^.,\n\r]+?)\s+field\b/i);
+  if (fieldMatch?.[1]?.trim()) {
+    const label = fieldMatch[1].trim();
+    return [
+      'Use the prior browser_interact list output.',
+      `Return only the ref for the element whose label, text, or description best matches "${label}".`,
+      'Do not include any explanation, markdown, or extra text.',
+    ].join(' ');
+  }
+
+  const clickLabel = extractBrowserClickLabel(text);
+  if (clickLabel) {
+    return [
+      'Use the prior browser_interact list output.',
+      `Return only the ref for the clickable element whose visible text best matches "${clickLabel}".`,
+      'Do not include any explanation, markdown, or extra text.',
+    ].join(' ');
+  }
+
+  return null;
 }
 
 function looksLikeDeterministicInstructionWorkflow(text: string): boolean {
@@ -534,6 +726,10 @@ function inferAutomationName(text: string, schedule: AutomationScheduleSpec | nu
       : schedule?.label === 'Weekly'
         ? 'Weekly '
         : '';
+  const explicitName = extractExplicitAutomationName(text);
+  if (explicitName) {
+    return explicitName;
+  }
   const deterministicWorkflow = inferDeterministicInstructionWorkflowMetadata(text);
   if (deterministicWorkflow?.name) {
     return `${schedulePrefix}${deterministicWorkflow.name}`.trim();
@@ -594,6 +790,20 @@ function summarizeDescription(text: string): string {
   return trimmed.length <= 240 ? trimmed : `${trimmed.slice(0, 237)}...`;
 }
 
+function extractExplicitAutomationName(text: string): string | null {
+  const quotedMatch = text.match(/\b(?:called|named)\s+["'`]([^"'`]+)["'`]/i);
+  if (quotedMatch?.[1]?.trim()) {
+    return quotedMatch[1].trim();
+  }
+
+  const titleCaseMatch = text.match(/\b(?:called|named)\s+([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+){0,7})\b/);
+  if (titleCaseMatch?.[1]?.trim()) {
+    return titleCaseMatch[1].trim();
+  }
+
+  return null;
+}
+
 function normalizeAutomationAuthoringText(text: string): string {
   return normalizePathLikeSegments(
     text
@@ -630,6 +840,17 @@ function extractWritePaths(text: string): string[] {
     }
   }
   return paths;
+}
+
+function extractExplicitUrls(text: string): string[] {
+  const urls = new Set<string>();
+  for (const match of text.matchAll(/\bhttps?:\/\/[^\s"',;]+/gi)) {
+    const value = match[0]?.trim();
+    if (value) {
+      urls.add(value.replace(/[.,;!?]+$/g, ''));
+    }
+  }
+  return [...urls];
 }
 
 function normalizeExtractedPath(path: string | null): string | null {

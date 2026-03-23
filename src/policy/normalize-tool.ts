@@ -97,6 +97,15 @@ function extractResourceAttrs(
     case 'web_search':
       if (typeof args.query === 'string') attrs.query = args.query;
       break;
+    case 'browser_navigate':
+    case 'browser_read':
+    case 'browser_links':
+    case 'browser_extract':
+    case 'browser_interact':
+      if (typeof args.url === 'string') attrs.url = args.url;
+      if (typeof args.action === 'string') attrs.action = args.action;
+      if (typeof args.element === 'string') attrs.element = args.element;
+      break;
 
     // Email: extract recipient
     case 'gmail_draft':

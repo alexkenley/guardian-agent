@@ -14,6 +14,16 @@ function makeTool(overrides: Partial<ToolDefinition> & { name: string }): ToolDe
 }
 
 describe('ToolRegistry', () => {
+  it('unregisters tools cleanly', () => {
+    const registry = new ToolRegistry();
+    registry.register(makeTool({ name: 'temp_tool' }), handler);
+
+    registry.unregister('temp_tool');
+
+    expect(registry.get('temp_tool')).toBeUndefined();
+    expect(registry.listDefinitions()).toHaveLength(0);
+  });
+
   describe('listAlwaysLoaded', () => {
     it('excludes deferred tools', () => {
       const registry = new ToolRegistry();

@@ -175,6 +175,7 @@ Tool execution and tool approvals remain data-plane operations, but tool policy 
 
 - `POST /api/tools/policy` requires a short-lived privileged ticket with action `tools.policy`
 - callers mint that ticket first via `POST /api/auth/ticket`
+- the web dashboard mints that ticket automatically before policy/allowlist saves; if the browser session expired mid-save, the dashboard now prompts for the bearer token, exchanges it for a fresh session cookie, and retries the interrupted privileged mutation once instead of dropping the edit
 - ordinary `POST /api/tools/run` calls do not require privileged tickets
 - security- or memory-sensitive `POST /api/config` mutations are ticket-gated separately under `config.security` or `memory.config`
 - Guardian-managed control-plane state written under `~/.guardianagent` is now created with restrictive permissions and tightened on startup (`0700` directories, `0600` files on normal supported hosts)

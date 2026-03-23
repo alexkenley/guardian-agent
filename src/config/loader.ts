@@ -56,6 +56,11 @@ export function interpolateEnvVars(value: string): string {
       return `\${${varName}}`;
     }
     const envValue = process.env[varName];
+    // Preserve incidental template placeholders from saved automation content
+    // unless they match the normal ${ENV_VAR} config pattern or the env exists.
+    if (envValue === undefined && !/^[A-Z_][A-Z0-9_]*$/.test(varName)) {
+      return `\${${varName}}`;
+    }
     if (envValue === undefined) {
       throw new Error(`Environment variable '${varName}' is not set`);
     }

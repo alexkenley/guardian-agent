@@ -51,6 +51,11 @@ describe('interpolateEnvVars', () => {
     expect(interpolateEnvVars('${step2.output}')).toBe('${step2.output}');
     expect(interpolateEnvVars('Body: ${step2.output}')).toBe('Body: ${step2.output}');
   });
+
+  it('preserves incidental template placeholders from automation content', () => {
+    expect(interpolateEnvVars('${i}')).toBe('${i}');
+    expect(interpolateEnvVars('Target ref: ${select_target.output} / loop ${i}')).toBe('Target ref: ${select_target.output} / loop ${i}');
+  });
 });
 
 describe('deepMerge', () => {

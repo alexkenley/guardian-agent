@@ -2409,6 +2409,127 @@ describe('ToolExecutor', () => {
     expect(context).toContain('already trusted');
   });
 
+  it('surfaces browser-specific allowed domains in tool context', () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      browserConfig: {
+        enabled: true,
+        allowedDomains: ['example.com', 'httpbin.org'],
+      },
+      mcpManager: {
+        getAllToolDefinitions: () => [
+          {
+            name: 'mcp-playwright-browser_navigate',
+            description: 'Navigate browser',
+            risk: 'network' as const,
+            category: 'browser' as const,
+            parameters: { type: 'object', properties: { url: { type: 'string' } } },
+          },
+          {
+            name: 'mcp-playwright-browser_snapshot',
+            description: 'Snapshot browser',
+            risk: 'read_only' as const,
+            category: 'browser' as const,
+            parameters: { type: 'object', properties: {} },
+          },
+          {
+            name: 'mcp-playwright-browser_click',
+            description: 'Click browser element',
+            risk: 'mutating' as const,
+            category: 'browser' as const,
+            parameters: { type: 'object', properties: { element: { type: 'string' } } },
+          },
+        ],
+        callTool: async () => ({ success: true, output: { ok: true } }),
+      } as unknown as import('./mcp-client.js').MCPClientManager,
+    });
+
+    const context = executor.getToolContext();
+
+    expect(context).toContain('Browser allowed domains: example.com, httpbin.org');
+  });
+
+  it('syncs add_domain into the explicit browser allowlist when browser uses its own domain list', async () => {
+    const root = createExecutorRoot();
+    const onPolicyUpdate = vi.fn();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost', 'httpbin.org'],
+      browserConfig: {
+        enabled: true,
+        allowedDomains: ['example.com'],
+      },
+      mcpManager: {
+        getAllToolDefinitions: () => [
+          {
+            name: 'mcp-playwright-browser_navigate',
+            description: 'Navigate browser',
+            risk: 'network' as const,
+            category: 'browser' as const,
+            parameters: { type: 'object', properties: { url: { type: 'string' } } },
+          },
+          {
+            name: 'mcp-playwright-browser_snapshot',
+            description: 'Snapshot browser',
+            risk: 'read_only' as const,
+            category: 'browser' as const,
+            parameters: { type: 'object', properties: {} },
+          },
+          {
+            name: 'mcp-playwright-browser_click',
+            description: 'Click browser element',
+            risk: 'mutating' as const,
+            category: 'browser' as const,
+            parameters: { type: 'object', properties: { element: { type: 'string' } } },
+          },
+        ],
+        callTool: async () => ({ success: true, output: { ok: true } }),
+      } as unknown as import('./mcp-client.js').MCPClientManager,
+      agentPolicyUpdates: {
+        allowedPaths: false,
+        allowedCommands: false,
+        allowedDomains: true,
+      },
+      onPolicyUpdate,
+    });
+
+    const result = await executor.runTool({
+      toolName: 'update_tool_policy',
+      args: {
+        action: 'add_domain',
+        value: 'httpbin.org',
+      },
+      origin: 'web',
+      bypassApprovals: true,
+      userId: 'browser-user',
+      principalId: 'browser-user',
+      channel: 'web',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('succeeded');
+    expect(result.output?.browserAllowedDomains).toEqual(['example.com', 'httpbin.org']);
+    expect(onPolicyUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sandbox: expect.objectContaining({
+          allowedDomains: ['localhost', 'httpbin.org'],
+        }),
+      }),
+      { browserAllowedDomains: ['example.com', 'httpbin.org'] },
+    );
+    expect(executor.getToolContext()).toContain('Browser allowed domains: example.com, httpbin.org');
+  });
+
   it('treats add_path for the active code workspace as a no-op instead of requiring approval', async () => {
     const globalRoot = createExecutorRoot();
     const codeRoot = createExecutorRoot();
@@ -3734,6 +3855,65 @@ describe('ToolExecutor', () => {
     expect(run.output).toMatchObject({
       workflow: { id: 'daily-inbox-review', name: 'Daily Gmail Inbox Review' },
     });
+  });
+
+  it('defaults workflow_upsert enabled to true and rejects unknown step tools up front', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    let storedWorkflow: Record<string, unknown> | null = null;
+    const upsertWorkflow = vi.fn((workflow: Record<string, unknown>) => {
+      storedWorkflow = workflow;
+      return { success: true, message: "Added playbook 'browser-read-smoke'." };
+    });
+
+    executor.setAutomationControlPlane({
+      listWorkflows: () => storedWorkflow ? [storedWorkflow as any] : [],
+      upsertWorkflow,
+      deleteWorkflow: () => ({ success: true, message: 'ok' }),
+      runWorkflow: async () => ({ success: true, message: 'ok', status: 'succeeded' }),
+      listTasks: () => [],
+      createTask: () => ({ success: true, message: 'ok' }),
+      updateTask: () => ({ success: true, message: 'ok' }),
+      deleteTask: () => ({ success: true, message: 'ok' }),
+    });
+
+    const goodRun = await executor.runTool({
+      toolName: 'workflow_upsert',
+      args: {
+        id: 'browser-read-smoke',
+        name: 'Browser Read Smoke',
+        mode: 'sequential',
+        steps: [{ id: 'step-1', toolName: 'web_fetch', args: { url: 'https://localhost/status' } }],
+      },
+      origin: 'web',
+    });
+
+    expect(goodRun.success).toBe(true);
+    expect(upsertWorkflow).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }));
+
+    const badRun = await executor.runTool({
+      toolName: 'workflow_upsert',
+      args: {
+        id: 'browser-extract-smoke',
+        name: 'Browser Extract Smoke',
+        mode: 'sequential',
+        steps: [{ id: 'step-1', toolName: 'mcp_playwright_browser_navigate', args: { url: 'https://github.com' } }],
+      },
+      origin: 'web',
+    });
+
+    expect(badRun.success).toBe(false);
+    expect(badRun.status).toBe('failed');
+    expect(badRun.message).toContain("Unknown tool 'mcp_playwright_browser_navigate'.");
+    expect(badRun.message).toContain('browser_navigate');
   });
 
   it('grounds scheduled workflow task creation on the created task target', async () => {
@@ -5204,6 +5384,72 @@ describe('ToolExecutor', () => {
   });
 
   describe('Browser tools (MCP-based)', () => {
+    const browserToolDefinitions = [
+      {
+        name: 'mcp-playwright-browser_navigate',
+        description: 'Navigate browser',
+        risk: 'network' as const,
+        category: 'browser' as const,
+        parameters: { type: 'object', properties: { url: { type: 'string' } } },
+      },
+      {
+        name: 'mcp-playwright-browser_snapshot',
+        description: 'Snapshot browser',
+        risk: 'read_only' as const,
+        category: 'browser' as const,
+        parameters: { type: 'object', properties: {} },
+      },
+      {
+        name: 'mcp-playwright-browser_click',
+        description: 'Click browser element',
+        risk: 'mutating' as const,
+        category: 'browser' as const,
+        parameters: { type: 'object', properties: { element: { type: 'string' } } },
+      },
+      {
+        name: 'mcp-lightpanda-goto',
+        description: 'Goto URL',
+        risk: 'network' as const,
+        category: 'browser' as const,
+        parameters: { type: 'object', properties: { url: { type: 'string' } } },
+      },
+      {
+        name: 'mcp-lightpanda-markdown',
+        description: 'Read page as markdown',
+        risk: 'read_only' as const,
+        category: 'browser' as const,
+        parameters: { type: 'object', properties: {} },
+      },
+      {
+        name: 'mcp-lightpanda-links',
+        description: 'List links',
+        risk: 'read_only' as const,
+        category: 'browser' as const,
+        parameters: { type: 'object', properties: {} },
+      },
+      {
+        name: 'mcp-lightpanda-structuredData',
+        description: 'Structured page data',
+        risk: 'read_only' as const,
+        category: 'browser' as const,
+        parameters: { type: 'object', properties: {} },
+      },
+      {
+        name: 'mcp-lightpanda-semantic_tree',
+        description: 'Semantic tree',
+        risk: 'read_only' as const,
+        category: 'browser' as const,
+        parameters: { type: 'object', properties: {} },
+      },
+      {
+        name: 'mcp-lightpanda-interactiveElements',
+        description: 'Interactive elements',
+        risk: 'read_only' as const,
+        category: 'browser' as const,
+        parameters: { type: 'object', properties: {} },
+      },
+    ];
+
     it('does not register legacy browser tools (browser tools are now MCP-provided)', () => {
       const root = createExecutorRoot();
       const executor = new ToolExecutor({
@@ -5237,6 +5483,199 @@ describe('ToolExecutor', () => {
       });
       // Should not throw — no browser session manager to clean up
       await executor.dispose();
+    });
+
+    it('registers Guardian-native hybrid browser wrapper tools when browser MCP backends are present', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: ['example.com'],
+        mcpManager: {
+          getAllToolDefinitions: () => browserToolDefinitions,
+          callTool: async () => ({ success: true, output: { ok: true } }),
+        } as unknown as import('./mcp-client.js').MCPClientManager,
+      });
+
+      const names = executor.listToolDefinitions().map((t) => t.name);
+      expect(names).toContain('browser_capabilities');
+      expect(names).toContain('browser_navigate');
+      expect(names).toContain('browser_read');
+      expect(names).toContain('browser_links');
+      expect(names).toContain('browser_extract');
+      expect(names).toContain('browser_interact');
+    });
+
+    it('hides raw managed browser MCP tools from assistant-visible tool discovery', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: ['example.com'],
+        mcpManager: {
+          getAllToolDefinitions: () => browserToolDefinitions,
+          callTool: async () => ({ success: true, output: { ok: true } }),
+        } as unknown as import('./mcp-client.js').MCPClientManager,
+      });
+
+      const names = executor.listToolDefinitions().map((t) => t.name);
+      expect(names).toContain('browser_capabilities');
+      expect(names).toContain('browser_navigate');
+      expect(names).not.toContain('mcp-playwright-browser_navigate');
+      expect(names).not.toContain('mcp-lightpanda-goto');
+
+      const discovered = executor.searchTools('browser').map((t) => t.name);
+      expect(discovered).toContain('browser_navigate');
+      expect(discovered).not.toContain('mcp-playwright-browser_click');
+      expect(discovered).not.toContain('mcp-lightpanda-links');
+    });
+
+    it('refreshes wrapper availability when managed browser backends change at runtime', () => {
+      const root = createExecutorRoot();
+      let currentDefinitions = browserToolDefinitions.filter((definition) => (
+        definition.name === 'mcp-playwright-browser_navigate'
+        || definition.name === 'mcp-playwright-browser_snapshot'
+        || definition.name === 'mcp-playwright-browser_click'
+      ));
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: ['example.com'],
+        browserConfig: { enabled: true, lightpandaEnabled: false },
+        mcpManager: {
+          getAllToolDefinitions: () => currentDefinitions,
+          callTool: async () => ({ success: true, output: { ok: true } }),
+        } as unknown as import('./mcp-client.js').MCPClientManager,
+      });
+
+      let names = executor.listToolDefinitions().map((t) => t.name);
+      expect(names).toContain('browser_read');
+      expect(names).not.toContain('browser_links');
+      expect(names).not.toContain('browser_extract');
+
+      currentDefinitions = browserToolDefinitions;
+      executor.setBrowserConfig({ enabled: true, lightpandaEnabled: true });
+      executor.refreshDynamicMcpTooling();
+
+      names = executor.listToolDefinitions().map((t) => t.name);
+      expect(names).toContain('browser_links');
+      expect(names).toContain('browser_extract');
+
+      currentDefinitions = currentDefinitions.filter((definition) => !definition.name.startsWith('mcp-lightpanda-'));
+      executor.setBrowserConfig({ enabled: true, lightpandaEnabled: false });
+      executor.refreshDynamicMcpTooling();
+
+      names = executor.listToolDefinitions().map((t) => t.name);
+      expect(names).not.toContain('browser_links');
+      expect(names).not.toContain('browser_extract');
+    });
+
+    it('allows browser_interact list without approval but approval-gates click actions', async () => {
+      const root = createExecutorRoot();
+      const callTool = vi.fn(async (toolName: string) => {
+        if (toolName === 'mcp-lightpanda-goto') {
+          return { success: true, output: JSON.stringify({ url: 'https://example.com', title: 'Example' }) };
+        }
+        if (toolName === 'mcp-lightpanda-interactiveElements') {
+          return { success: true, output: JSON.stringify([{ ref: 'btn-login', type: 'button', text: 'Log in' }]) };
+        }
+        return { success: true, output: { ok: true } };
+      });
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: ['example.com'],
+        mcpManager: {
+          getAllToolDefinitions: () => browserToolDefinitions,
+          callTool,
+        } as unknown as import('./mcp-client.js').MCPClientManager,
+      });
+
+      const listResult = await executor.runTool({
+        toolName: 'browser_interact',
+        args: { url: 'https://example.com', action: 'list' },
+        origin: 'assistant',
+      });
+      expect(listResult.success).toBe(true);
+      expect(listResult.status).toBe('succeeded');
+      expect(listResult.output).toMatchObject({
+        backend: 'lightpanda',
+        action: 'list',
+        elements: [{ ref: 'btn-login', type: 'button', text: 'Log in' }],
+      });
+
+      const clickResult = await executor.runTool({
+        toolName: 'browser_interact',
+        args: { url: 'https://example.com', action: 'click', element: 'btn-login' },
+        origin: 'assistant',
+      });
+      expect(clickResult.success).toBe(false);
+      expect(clickResult.status).toBe('pending_approval');
+      expect(callTool).not.toHaveBeenCalledWith('mcp-playwright-browser_click', expect.anything());
+    });
+
+    it('blocks raw browser MCP navigation to private metadata endpoints before execution', async () => {
+      const root = createExecutorRoot();
+      const callTool = vi.fn(async () => ({ success: true, output: { ok: true } }));
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'autonomous',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: ['example.com'],
+        mcpManager: {
+          getAllToolDefinitions: () => browserToolDefinitions,
+          callTool,
+        } as unknown as import('./mcp-client.js').MCPClientManager,
+      });
+
+      const result = await executor.runTool({
+        toolName: 'mcp-playwright-browser_navigate',
+        args: { url: 'http://169.254.169.254/latest/' },
+        origin: 'assistant',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.status).toBe('failed');
+      expect(result.message).toContain('private/internal address');
+      expect(callTool).not.toHaveBeenCalled();
+    });
+
+    it('denies private metadata endpoints during preflight without suggesting add_domain remediation', () => {
+      const root = createExecutorRoot();
+      const executor = new ToolExecutor({
+        enabled: true,
+        workspaceRoot: root,
+        policyMode: 'approve_by_policy',
+        allowedPaths: [root],
+        allowedCommands: [],
+        allowedDomains: ['example.com'],
+        mcpManager: {
+          getAllToolDefinitions: () => browserToolDefinitions,
+          callTool: async () => ({ success: true, output: { ok: true } }),
+        } as unknown as import('./mcp-client.js').MCPClientManager,
+      });
+
+      const [result] = executor.preflightTools([
+        { name: 'browser_navigate', args: { url: 'http://169.254.169.254/latest/' } },
+      ]);
+
+      expect(result.decision).toBe('deny');
+      expect(result.reason).toContain('private/internal address');
+      expect(result.fixes).toHaveLength(0);
     });
   });
 

@@ -9,6 +9,66 @@ export interface DirectFileSearchIntent {
   query: string;
 }
 
+export function isDirectBrowserAutomationIntent(content: string): boolean {
+  const text = content.trim();
+  if (!text || text.length < 5) return false;
+
+  const hasUrl = /\bhttps?:\/\/\S+/i.test(text);
+  const hasBrowserToolName = /\bbrowser_(?:capabilities|navigate|read|links|extract|interact)\b/i.test(text);
+  const hasBrowserAction = /\b(open|go\s+to|goto|navigate|visit|load|read|click|type|fill|select|submit|list|extract|summari[sz]e|show)\b/i.test(text);
+  const hasBrowserContext = /\b(browser|page|current page|this page|website|web page|form|link|links|button|input|field|interactive elements|metadata|semantic outline)\b/i.test(text);
+
+  if (hasBrowserToolName) return true;
+  if (!hasUrl) {
+    return /\b(?:current page|this page)\b/i.test(text) && hasBrowserAction;
+  }
+
+  return hasBrowserAction || hasBrowserContext;
+}
+
+/**
+ * Detect web search intent from free-form user messages.
+ * Returns a search query string, or null if the message isn't a web search request.
+ * Conservative by design: only trigger for explicit web-search language
+ * or strong internet-oriented keywords to avoid hijacking normal chat.
+ */
+export function parseWebSearchIntent(content: string): string | null {
+  const text = content.trim();
+  if (!text || text.length < 5) return null;
+
+  if (isDirectBrowserAutomationIntent(text)) {
+    return null;
+  }
+
+  // Must NOT be a filesystem search (those are handled by parseDirectFileSearchIntent)
+  if (/\b(file|folder|directory|path|onedrive|drive|\.txt|\.json|\.ts|\.js|\.py)\b/i.test(text)) {
+    return null;
+  }
+
+  if (/^(?:hi|hello|hey)\b/i.test(text)) return null;
+  if (/^(?:who|what)\s+are\s+you\b/i.test(text)) return null;
+
+  const explicitSearchPatterns = [
+    /^(?:please\s+)?(?:search|find|look\s*up|google|browse)\b/i,
+    /\b(?:search|look\s*up|google|browse)\b.*\b(?:web|internet|online)\b/i,
+    /\bon\s+the\s+(?:web|internet|online)\b/i,
+    /\bweb\s+search\b/i,
+  ];
+  const hasExplicitSignal = explicitSearchPatterns.some((pattern) => pattern.test(text));
+
+  const hasInternetTopicSignal = /\b(?:latest|news|weather|price|stock|market|review|release\s+date|breaking)\b/i.test(text);
+  const hasQuestionSignal = /[?]|\b(?:what|who|where|when|how)\b/i.test(text);
+  if (!hasExplicitSignal && !(hasInternetTopicSignal && hasQuestionSignal)) return null;
+
+  const query = text
+    .replace(/^(?:please|can you|could you|help me|i need to|i want to)\s+/i, '')
+    .replace(/^(?:search|find|look\s*up|google|browse)\s+(?:for\s+|the\s+web\s+for\s+)?/i, '')
+    .replace(/\s+on\s+the\s+(?:web|internet|online)\s*$/i, '')
+    .trim();
+
+  return query.length >= 3 ? query : null;
+}
+
 export function parseDirectFileSearchIntent(
   content: string,
   policy: ToolPolicySnapshot,

@@ -63,6 +63,7 @@ Provide explicit, operator-friendly control of dashboard/API authentication, inc
 ## UX Requirements
 - Config Center shows auth mode, token source, TTL, and token controls.
 - Browser login flow should exchange bearer token to cookie session and remove browser token storage after successful exchange.
+- If a privileged dashboard mutation fails because the browser session expired, the login prompt should recover by exchanging the bearer token for a fresh session cookie and retrying the interrupted request once.
 - Startup scripts should not silently pin a newly generated bearer token into config just to make first login work; the interactive-terminal path should surface the ephemeral token directly instead.
 - Windows and Unix development startup scripts should inspect the saved web-auth settings and tell the operator whether the dashboard will reuse a pinned token or print a per-run ephemeral token.
 - CLI supports:

@@ -1391,7 +1391,7 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'Invalid JSON' });
           return;
         }
-        const result = this.dashboard.onBrowserConfigUpdate(parsed);
+        const result = await this.dashboard.onBrowserConfigUpdate(parsed);
         sendJSON(res, 200, result);
         this.maybeEmitUIInvalidation(result, ['config', 'tools'], 'tools.browser.updated', url.pathname);
         return;

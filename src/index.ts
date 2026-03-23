@@ -149,7 +149,12 @@ import {
   isSkillInventoryQuery,
 } from './runtime/skills-query.js';
 import { tryAutomationPreRoute } from './runtime/automation-prerouter.js';
-import { parseDirectFileSearchIntent } from './runtime/search-intent.js';
+import {
+  isDirectBrowserAutomationIntent,
+  parseDirectFileSearchIntent,
+  parseWebSearchIntent,
+} from './runtime/search-intent.js';
+import { applyCredentialRefInput } from './runtime/credential-ref-input.js';
 
 let syncAssistantSecurityMonitoringTask: () => void = () => {};
 import { ToolExecutor } from './tools/executor.js';
@@ -1247,8 +1252,10 @@ class ChatAgent extends BaseAgent {
       // web_search directly so the tool executes even when the LLM doesn't invoke it.
       // If a more specialized search skill is active, let the LLM read that skill
       // first instead of forcing the generic shortcut.
+      const directBrowserIntent = isDirectBrowserAutomationIntent(contextAwareScopedMessage.content);
       const skipDirectWebSearch = !!resolvedCodeSession
         || !!effectiveCodeContext
+        || directBrowserIntent
         || activeSkills.some((skill) => (
           skill.id === 'multi-search-engine'
           || skill.id === 'weather'
@@ -1347,6 +1354,7 @@ class ChatAgent extends BaseAgent {
       : defaultToolResultProviderKind;
 
     const providerLocality = this.resolveToolResultProviderKind(ctx);
+    const directBrowserIntent = isDirectBrowserAutomationIntent(contextAwareScopedMessage.content);
 
     if (!this.tools?.isEnabled()) {
       const response = await chatFn(llmMessages);
@@ -1372,9 +1380,16 @@ class ChatAgent extends BaseAgent {
       // Deferred loading: start with always-loaded tools, expand via find_tools.
       // In code sessions, eagerly include coding tools so the LLM can edit files immediately.
       const baseToolDefs = this.tools.listAlwaysLoadedDefinitions();
-      const allToolDefs = resolvedCodeSession
-        ? [...baseToolDefs, ...this.tools.listCodingToolDefinitions().filter((d) => !baseToolDefs.some((b) => b.name === d.name))]
-        : baseToolDefs;
+      const eagerBrowserToolDefs = directBrowserIntent
+        ? this.tools.listToolDefinitions().filter((definition) => definition.name.startsWith('browser_'))
+        : [];
+      const allToolDefs = [
+        ...baseToolDefs,
+        ...(resolvedCodeSession
+          ? this.tools.listCodingToolDefinitions().filter((d) => !baseToolDefs.some((b) => b.name === d.name))
+          : []),
+        ...eagerBrowserToolDefs.filter((d) => !baseToolDefs.some((b) => b.name === d.name)),
+      ];
       // Local models get full descriptions for better tool selection; external models get short
       let llmToolDefs = allToolDefs.map((d) => toLLMToolDef(d, providerLocality));
       const pendingIds: string[] = [];
@@ -3985,46 +4000,6 @@ function truncateText(value: string, maxChars: number): string {
   return `${value.slice(0, Math.max(0, maxChars - 16))}[...truncated]`;
 }
 
-/**
- * Detect web search intent from free-form user messages.
- * Returns a search query string, or null if the message isn't a web search request.
- * Conservative by design: only trigger for explicit web-search language
- * or strong internet-oriented keywords to avoid hijacking normal chat.
- */
-function parseWebSearchIntent(content: string): string | null {
-  const text = content.trim();
-  if (!text || text.length < 5) return null;
-
-  // Must NOT be a filesystem search (those are handled by tryDirectFilesystemSearch)
-  if (/\b(file|folder|directory|path|onedrive|drive|\.txt|\.json|\.ts|\.js|\.py)\b/i.test(text)) {
-    return null;
-  }
-
-  if (/^(?:hi|hello|hey)\b/i.test(text)) return null;
-  if (/^(?:who|what)\s+are\s+you\b/i.test(text)) return null;
-
-  const explicitSearchPatterns = [
-    /^(?:please\s+)?(?:search|find|look\s*up|google|browse)\b/i,
-    /\b(?:search|look\s*up|google|browse)\b.*\b(?:web|internet|online)\b/i,
-    /\bon\s+the\s+(?:web|internet|online)\b/i,
-    /\bweb\s+search\b/i,
-  ];
-  const hasExplicitSignal = explicitSearchPatterns.some((pattern) => pattern.test(text));
-
-  const hasInternetTopicSignal = /\b(?:latest|news|weather|price|stock|market|review|release\s+date|breaking)\b/i.test(text);
-  const hasQuestionSignal = /[?]|\b(?:what|who|where|when|how)\b/i.test(text);
-  if (!hasExplicitSignal && !(hasInternetTopicSignal && hasQuestionSignal)) return null;
-
-  // Extract the query — use the full message, cleaned up
-  const query = text
-    .replace(/^(?:please|can you|could you|help me|i need to|i want to)\s+/i, '')
-    .replace(/^(?:search|find|look\s*up|google|browse)\s+(?:for\s+|the\s+web\s+for\s+)?/i, '')
-    .replace(/\s+on\s+the\s+(?:web|internet|online)\s*$/i, '')
-    .trim();
-
-  return query.length >= 3 ? query : null;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -4645,6 +4620,7 @@ function buildDashboardCallbacks(
   threatIntel: ThreatIntelService,
   connectors: ConnectorPlaybookService,
   toolExecutor: ToolExecutor,
+  applyBrowserRuntimeConfig: (browserConfig: BrowserConfig | undefined) => Promise<{ success: boolean; message: string }>,
   agentMemoryStore: AgentMemoryStore,
   codeSessionMemoryStore: AgentMemoryStore,
   codeSessionStore: CodeSessionStore,
@@ -6037,7 +6013,7 @@ function buildDashboardCallbacks(
       };
     },
 
-    onBrowserConfigUpdate: (input) => {
+    onBrowserConfigUpdate: async (input) => {
       const current = configRef.current.assistant.tools.browser ?? { enabled: true };
       const updated = {
         ...current,
@@ -6053,19 +6029,14 @@ function buildDashboardCallbacks(
       if (!persisted.success) {
         return { success: false, message: persisted.message };
       }
+      const liveResult = await applyBrowserRuntimeConfig(configRef.current.assistant.tools.browser);
       analytics.track({
         type: 'browser_config_updated',
         channel: 'system',
         canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        metadata: { enabled: updated.enabled },
+        metadata: { enabled: updated.enabled, liveApplied: liveResult.success },
       });
-      log.info({ browser: updated }, 'Browser config updated (restart required for changes to take effect)');
-      return {
-        success: true,
-        message: updated.enabled
-          ? 'Browser tools enabled. Restart to apply changes.'
-          : 'Browser tools disabled. Restart to apply changes.',
-      };
+      return liveResult;
     },
 
     onToolsApprovalDecision: async (input) => {
@@ -7279,33 +7250,30 @@ function buildDashboardCallbacks(
             rawTools.webSearch = rawTools.webSearch ?? {};
             const rawWS = rawTools.webSearch as Record<string, unknown>;
             if (input.webSearchProvider) rawWS.provider = input.webSearchProvider;
-            if (input.perplexityApiKey?.trim()) {
+            const perplexityApiKey = input.perplexityApiKey?.trim();
+            const hasPerplexityApiKey = !!perplexityApiKey;
+            if (perplexityApiKey) {
               const refName = input.perplexityCredentialRef?.trim() || rawWS.perplexityCredentialRef as string || 'search.perplexity.local';
-              rawWS.perplexityCredentialRef = upsertLocalCredentialRef(rawConfig, refName, input.perplexityApiKey.trim(), 'Perplexity search API key');
+              rawWS.perplexityCredentialRef = upsertLocalCredentialRef(rawConfig, refName, perplexityApiKey, 'Perplexity search API key');
             }
             delete rawWS.perplexityApiKey;
-            if (input.perplexityCredentialRef !== undefined) {
-              if (input.perplexityCredentialRef.trim()) rawWS.perplexityCredentialRef = input.perplexityCredentialRef.trim();
-              else delete rawWS.perplexityCredentialRef;
-            }
-            if (input.openRouterApiKey?.trim()) {
+            applyCredentialRefInput(rawWS, 'perplexityCredentialRef', input.perplexityCredentialRef, hasPerplexityApiKey);
+            const openRouterApiKey = input.openRouterApiKey?.trim();
+            const hasOpenRouterApiKey = !!openRouterApiKey;
+            if (openRouterApiKey) {
               const refName = input.openRouterCredentialRef?.trim() || rawWS.openRouterCredentialRef as string || 'search.openrouter.local';
-              rawWS.openRouterCredentialRef = upsertLocalCredentialRef(rawConfig, refName, input.openRouterApiKey.trim(), 'OpenRouter search API key');
+              rawWS.openRouterCredentialRef = upsertLocalCredentialRef(rawConfig, refName, openRouterApiKey, 'OpenRouter search API key');
             }
             delete rawWS.openRouterApiKey;
-            if (input.openRouterCredentialRef !== undefined) {
-              if (input.openRouterCredentialRef.trim()) rawWS.openRouterCredentialRef = input.openRouterCredentialRef.trim();
-              else delete rawWS.openRouterCredentialRef;
-            }
-            if (input.braveApiKey?.trim()) {
+            applyCredentialRefInput(rawWS, 'openRouterCredentialRef', input.openRouterCredentialRef, hasOpenRouterApiKey);
+            const braveApiKey = input.braveApiKey?.trim();
+            const hasBraveApiKey = !!braveApiKey;
+            if (braveApiKey) {
               const refName = input.braveCredentialRef?.trim() || rawWS.braveCredentialRef as string || 'search.brave.local';
-              rawWS.braveCredentialRef = upsertLocalCredentialRef(rawConfig, refName, input.braveApiKey.trim(), 'Brave search API key');
+              rawWS.braveCredentialRef = upsertLocalCredentialRef(rawConfig, refName, braveApiKey, 'Brave search API key');
             }
             delete rawWS.braveApiKey;
-            if (input.braveCredentialRef !== undefined) {
-              if (input.braveCredentialRef.trim()) rawWS.braveCredentialRef = input.braveCredentialRef.trim();
-              else delete rawWS.braveCredentialRef;
-            }
+            applyCredentialRefInput(rawWS, 'braveCredentialRef', input.braveCredentialRef, hasBraveApiKey);
           }
 
           const result = persistAndApplyConfig(rawConfig, {
@@ -7340,33 +7308,30 @@ function buildDashboardCallbacks(
       const rawWS = rawTools.webSearch as Record<string, unknown>;
 
       if (input.webSearchProvider) rawWS.provider = input.webSearchProvider;
-      if (input.perplexityApiKey?.trim()) {
+      const perplexityApiKey = input.perplexityApiKey?.trim();
+      const hasPerplexityApiKey = !!perplexityApiKey;
+      if (perplexityApiKey) {
         const refName = input.perplexityCredentialRef?.trim() || (typeof rawWS.perplexityCredentialRef === 'string' ? rawWS.perplexityCredentialRef : '') || 'search.perplexity.local';
-        rawWS.perplexityCredentialRef = upsertLocalCredentialRef(rawConfig, refName, input.perplexityApiKey.trim(), 'Perplexity search API key');
+        rawWS.perplexityCredentialRef = upsertLocalCredentialRef(rawConfig, refName, perplexityApiKey, 'Perplexity search API key');
       }
       delete rawWS.perplexityApiKey;
-      if (input.perplexityCredentialRef !== undefined) {
-        if (input.perplexityCredentialRef.trim()) rawWS.perplexityCredentialRef = input.perplexityCredentialRef.trim();
-        else delete rawWS.perplexityCredentialRef;
-      }
-      if (input.openRouterApiKey?.trim()) {
+      applyCredentialRefInput(rawWS, 'perplexityCredentialRef', input.perplexityCredentialRef, hasPerplexityApiKey);
+      const openRouterApiKey = input.openRouterApiKey?.trim();
+      const hasOpenRouterApiKey = !!openRouterApiKey;
+      if (openRouterApiKey) {
         const refName = input.openRouterCredentialRef?.trim() || (typeof rawWS.openRouterCredentialRef === 'string' ? rawWS.openRouterCredentialRef : '') || 'search.openrouter.local';
-        rawWS.openRouterCredentialRef = upsertLocalCredentialRef(rawConfig, refName, input.openRouterApiKey.trim(), 'OpenRouter search API key');
+        rawWS.openRouterCredentialRef = upsertLocalCredentialRef(rawConfig, refName, openRouterApiKey, 'OpenRouter search API key');
       }
       delete rawWS.openRouterApiKey;
-      if (input.openRouterCredentialRef !== undefined) {
-        if (input.openRouterCredentialRef.trim()) rawWS.openRouterCredentialRef = input.openRouterCredentialRef.trim();
-        else delete rawWS.openRouterCredentialRef;
-      }
-      if (input.braveApiKey?.trim()) {
+      applyCredentialRefInput(rawWS, 'openRouterCredentialRef', input.openRouterCredentialRef, hasOpenRouterApiKey);
+      const braveApiKey = input.braveApiKey?.trim();
+      const hasBraveApiKey = !!braveApiKey;
+      if (braveApiKey) {
         const refName = input.braveCredentialRef?.trim() || (typeof rawWS.braveCredentialRef === 'string' ? rawWS.braveCredentialRef : '') || 'search.brave.local';
-        rawWS.braveCredentialRef = upsertLocalCredentialRef(rawConfig, refName, input.braveApiKey.trim(), 'Brave search API key');
+        rawWS.braveCredentialRef = upsertLocalCredentialRef(rawConfig, refName, braveApiKey, 'Brave search API key');
       }
       delete rawWS.braveApiKey;
-      if (input.braveCredentialRef !== undefined) {
-        if (input.braveCredentialRef.trim()) rawWS.braveCredentialRef = input.braveCredentialRef.trim();
-        else delete rawWS.braveCredentialRef;
-      }
+      applyCredentialRefInput(rawWS, 'braveCredentialRef', input.braveCredentialRef, hasBraveApiKey);
 
       if (input.fallbacks !== undefined) {
         rawConfig.fallbacks = input.fallbacks.length > 0 ? input.fallbacks : undefined;
@@ -9447,6 +9412,10 @@ async function main(): Promise<void> {
     );
   }
 
+  if (!mcpManager) {
+    mcpManager = new MCPClientManager(sandboxConfig);
+  }
+
   // ─── Native Skills ───────────────────────────────────────────
   let skillRegistry: SkillRegistry | undefined;
   let skillResolver: SkillResolver | undefined;
@@ -10397,6 +10366,7 @@ async function main(): Promise<void> {
 
       const hostRelevant = new Set([
         'shell_safe', 'net_connections', 'sys_processes',
+        'browser_navigate', 'browser_read', 'browser_links', 'browser_extract', 'browser_interact',
         'mcp-playwright-browser_navigate', 'mcp-playwright-browser_click',
         'mcp-playwright-browser_type', 'mcp-playwright-browser_evaluate',
         'mcp-playwright-browser_run_code', 'mcp-playwright-browser_file_upload',
@@ -10427,7 +10397,7 @@ async function main(): Promise<void> {
         });
       }
     },
-    onPolicyUpdate: (policy) => {
+    onPolicyUpdate: (policy, meta) => {
       // Persist policy changes to config.yaml so they survive reloads and restarts
       try {
         const verification = controlPlaneIntegrity.verifyFileSync(configPath, {
@@ -10447,6 +10417,10 @@ async function main(): Promise<void> {
         t.allowedPaths = policy.sandbox.allowedPaths;
         t.allowedCommands = policy.sandbox.allowedCommands;
         t.allowedDomains = policy.sandbox.allowedDomains;
+        if (meta?.browserAllowedDomains) {
+          t.browser = (t.browser as Record<string, unknown> | undefined) ?? {};
+          (t.browser as Record<string, unknown>).allowedDomains = meta.browserAllowedDomains;
+        }
         writeSecureFileSync(configPath, yaml.dump(raw, { lineWidth: -1, noRefs: true }));
         controlPlaneIntegrity.signFileSync(configPath, 'tool_policy_update');
         configRef.current = loadConfig(configPath, {
@@ -10642,6 +10616,114 @@ async function main(): Promise<void> {
   };
 
   const toolExecutor = new ToolExecutor(toolExecutorOptions);
+
+  const applyBrowserRuntimeConfig = async (
+    nextBrowserConfig: BrowserConfig | undefined,
+  ): Promise<{ success: boolean; message: string }> => {
+    const normalized = nextBrowserConfig ?? { enabled: true };
+    const blockedBySandbox = strictSandboxLockdown || (degradedFallbackActive && !degradedFallback.allowBrowserTools);
+
+    mcpManager ??= new MCPClientManager(sandboxConfig);
+    for (const serverId of ['playwright', 'lightpanda']) {
+      mcpManager.removeServer(serverId);
+    }
+
+    toolExecutor.setBrowserConfig(normalized);
+
+    if (normalized.enabled === false) {
+      toolExecutor.refreshDynamicMcpTooling();
+      log.info({ browser: normalized }, 'Browser config updated and applied live');
+      return { success: true, message: 'Browser tools disabled and applied live.' };
+    }
+
+    if (blockedBySandbox) {
+      toolExecutor.refreshDynamicMcpTooling();
+      const reason = strictSandboxLockdown
+        ? 'strict sandbox mode is blocking browser automation startup'
+        : 'degraded backend safeguards are blocking browser automation until allowBrowserTools is enabled';
+      log.warn(
+        { browser: normalized, strictSandboxLockdown, degradedFallbackActive },
+        'Browser config saved, but live browser startup is blocked by sandbox policy',
+      );
+      return { success: false, message: `Browser config saved, but live reload is blocked because ${reason}.` };
+    }
+
+    const issues: string[] = [];
+    if (normalized.playwrightEnabled !== false) {
+      const playwrightArgs: string[] = [
+        '--no-install',
+        '@playwright/mcp',
+        '--headless',
+        '--browser', normalized.playwrightBrowser ?? 'chromium',
+        '--caps', normalized.playwrightCaps ?? 'network,storage',
+        '--snapshot-mode', 'incremental',
+        ...(normalized.playwrightArgs ?? []),
+      ];
+      try {
+        await mcpManager.addServer({
+          id: 'playwright',
+          name: 'Playwright Browser',
+          transport: 'stdio',
+          command: 'npx',
+          args: playwrightArgs,
+          source: 'managed_browser',
+          category: 'browser',
+          networkAccess: true,
+          inheritEnv: false,
+          timeoutMs: 60_000,
+          maxCallsPerMinute: 60,
+        });
+      } catch (err) {
+        issues.push(`Playwright failed to start: ${err instanceof Error ? err.message : String(err)}.`);
+      }
+    }
+
+    if (normalized.lightpandaEnabled) {
+      try {
+        await mcpManager.addServer({
+          id: 'lightpanda',
+          name: 'Lightpanda Browser',
+          transport: 'stdio',
+          command: normalized.lightpandaBinaryPath ?? 'lightpanda',
+          args: ['mcp'],
+          source: 'managed_browser',
+          category: 'browser',
+          networkAccess: true,
+          inheritEnv: false,
+          timeoutMs: 30_000,
+          maxCallsPerMinute: 120,
+        });
+      } catch (err) {
+        issues.push(`Lightpanda failed to start: ${err instanceof Error ? err.message : String(err)}.`);
+      }
+    }
+
+    toolExecutor.refreshDynamicMcpTooling();
+
+    const activeBackends = [
+      mcpManager.getClient('playwright')?.getState() === 'connected' ? 'Playwright' : null,
+      mcpManager.getClient('lightpanda')?.getState() === 'connected' ? 'Lightpanda' : null,
+    ].filter((value): value is string => !!value);
+
+    log.info({ browser: normalized, activeBackends, issues }, 'Browser config updated and applied live');
+
+    if (issues.length > 0) {
+      return {
+        success: false,
+        message: `Browser config saved, but live reload is degraded. ${issues.join(' ')}${activeBackends.length > 0 ? ` Active now: ${activeBackends.join(', ')}.` : ''}`,
+      };
+    }
+    if (activeBackends.length === 0) {
+      return {
+        success: false,
+        message: 'Browser config saved, but no browser backend could be started live.',
+      };
+    }
+    return {
+      success: true,
+      message: `Browser config applied live. Active now: ${activeBackends.join(', ')}.`,
+    };
+  };
 
   if (config.runtime.agentIsolation.enabled && config.runtime.agentIsolation.mode === 'brokered') {
     runtime.workerManager = new WorkerManager(
@@ -11502,6 +11584,7 @@ async function main(): Promise<void> {
     threatIntel,
     connectors,
     toolExecutor,
+    applyBrowserRuntimeConfig,
     agentMemoryStore,
     codeSessionMemoryStore,
     codeSessionStore,

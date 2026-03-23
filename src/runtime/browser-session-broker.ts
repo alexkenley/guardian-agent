@@ -13,6 +13,7 @@ export interface BrowserSessionDecision {
 }
 
 const HIGH_RISK_BROWSER_TOOLS = new Set([
+  'browser_evaluate',
   'mcp-playwright-browser_run_code',
   'mcp-playwright-browser_evaluate',
   'mcp-playwright-browser_file_upload',
@@ -24,6 +25,7 @@ const HIGH_RISK_BROWSER_TOOLS = new Set([
 ]);
 
 const MUTATING_BROWSER_TOOLS = new Set([
+  'browser_interact',
   'mcp-playwright-browser_click',
   'mcp-playwright-browser_type',
   'mcp-playwright-browser_select_option',
@@ -45,7 +47,9 @@ const MUTATING_BROWSER_TOOLS = new Set([
 
 export class BrowserSessionBroker {
   isBrowserTool(toolName: string): boolean {
-    return toolName.startsWith('mcp-playwright-browser_') || toolName.startsWith('mcp-lightpanda-');
+    return toolName.startsWith('browser_')
+      || toolName.startsWith('mcp-playwright-browser_')
+      || toolName.startsWith('mcp-lightpanda-');
   }
 
   isHighRiskBrowserTool(toolName: string): boolean {

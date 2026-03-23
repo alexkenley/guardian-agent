@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { extractPathHint, extractSearchQuery, parseDirectFileSearchIntent } from './search-intent.js';
+import {
+  extractPathHint,
+  extractSearchQuery,
+  isDirectBrowserAutomationIntent,
+  parseDirectFileSearchIntent,
+  parseWebSearchIntent,
+} from './search-intent.js';
 import type { ToolPolicySnapshot } from '../tools/types.js';
 
 const policy: ToolPolicySnapshot = {
@@ -34,5 +40,19 @@ describe('search-intent parser', () => {
       path: 'C:\\Users\\kenle\\OneDrive\\Technical and GRC',
       query: 'five',
     });
+  });
+
+  it('detects explicit browser URL automation requests', () => {
+    expect(isDirectBrowserAutomationIntent('Open https://httpbin.org/forms/post and list the interactive elements on the page.')).toBe(true);
+    expect(isDirectBrowserAutomationIntent('Go to https://example.com and click the More information link.')).toBe(true);
+  });
+
+  it('does not classify generic web search requests as browser automation', () => {
+    expect(isDirectBrowserAutomationIntent('Search the web for the latest Playwright MCP news.')).toBe(false);
+  });
+
+  it('does not hijack explicit browser prompts into web search intent', () => {
+    expect(parseWebSearchIntent('Open https://httpbin.org/forms/post and list the interactive elements on the page.')).toBeNull();
+    expect(parseWebSearchIntent('Go to https://example.com and click the More information link.')).toBeNull();
   });
 });

@@ -2445,7 +2445,7 @@ export class CLIChannel implements ChannelAdapter {
           this.write('\nBrowser config updates are not available.\n\n');
           return;
         }
-        const result = this.dashboard.onBrowserConfigUpdate({ enabled: true });
+        const result = await this.dashboard.onBrowserConfigUpdate({ enabled: true });
         this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
         return;
       }
@@ -2454,7 +2454,7 @@ export class CLIChannel implements ChannelAdapter {
           this.write('\nBrowser config updates are not available.\n\n');
           return;
         }
-        const result = this.dashboard.onBrowserConfigUpdate({ enabled: false });
+        const result = await this.dashboard.onBrowserConfigUpdate({ enabled: false });
         this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
         return;
       }
@@ -2469,7 +2469,7 @@ export class CLIChannel implements ChannelAdapter {
           return;
         }
         const domains = csv.split(',').map((d) => d.trim()).filter(Boolean);
-        const result = this.dashboard.onBrowserConfigUpdate({ allowedDomains: domains });
+        const result = await this.dashboard.onBrowserConfigUpdate({ allowedDomains: domains });
         this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
         return;
       }

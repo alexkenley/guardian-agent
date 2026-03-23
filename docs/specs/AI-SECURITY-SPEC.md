@@ -1,284 +1,438 @@
-# Assistant Security - As-Built Spec
+# Assistant Security Spec
 
-**Status:** Implemented for the current posture-driven scope  
+**Status:** Proposed intended implementation  
 **Date:** 2026-03-21  
-**Related:** [WEBUI-DESIGN-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/WEBUI-DESIGN-SPEC.md), [SECURITY-PANEL-CONSOLIDATION-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/SECURITY-PANEL-CONSOLIDATION-SPEC.md), [THREAT-INTEL-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/THREAT-INTEL-SPEC.md), [CODE-WORKSPACE-TRUST-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODE-WORKSPACE-TRUST-SPEC.md), [AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md)
+**Owner:** Security + Runtime + Web UI  
+**Amends:** [WEBUI-DESIGN-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/WEBUI-DESIGN-SPEC.md) for the future `Security > Assistant Security` tab  
+**Related:** [SECURITY-PANEL-CONSOLIDATION-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/SECURITY-PANEL-CONSOLIDATION-SPEC.md), [THREAT-INTEL-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/THREAT-INTEL-SPEC.md), [CODE-WORKSPACE-TRUST-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODE-WORKSPACE-TRUST-SPEC.md), [AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md)
 
-## Purpose
+Configuration remains the owner of security settings. `Security > Assistant Security` is the operator command center.
 
-Define the shipped `Assistant Security` capability in GuardianAgent.
+## Goal
 
-This is an as-built runtime and operator spec, not an implementation plan. It documents what exists now, how it integrates with the broader security stack, and which parts of the broader vision remain deferred.
+Add a built-in `Assistant Security` capability that continuously tests Guardian's assistant surfaces for adversarial failure modes:
 
-User-facing surfaces use the name `Assistant Security`. Some internal compatibility paths still use legacy `ai-security` naming, including `src/runtime/ai-security.ts` and `/api/security/ai/*`.
+- jailbreak susceptibility
+- prompt injection and untrusted-context influence
+- system-prompt leakage
+- unsafe tool or approval-boundary behavior
+- secret and sensitive-data disclosure
+- trust-boundary failures inside coding sessions and web chat flows
 
-## Current Scope
+The feature should test **Guardian itself**, not only the attached repo.
 
-The shipped capability covers:
+## Why
 
-- posture-driven scans against the live Guardian runtime and tracked coding workspaces
-- manual scans from `Security > Assistant Security`
-- assistant-callable scan and summary tools
-- a built-in quick action for security review
-- managed continuous monitoring through Configuration-owned scheduling
-- persisted findings and run history across restart
-- promotion of high-signal findings into `Security Log`
-- persisted Assistant Security activity history
-- projection of latest results into `Code > Checks`
-- conservative automatic containment for selected high-confidence findings
-- MCP exposure monitoring as part of runtime posture review
+Guardian already has:
 
-The current scope does **not** include:
+- workspace trust review for coding sessions
+- host, gateway, network, and native AV alerting
+- Security Log for current issues and evidence
+- Threat Intel for external monitoring
 
-- live adversarial prompt or jailbreak probe execution against the configured LLM
-- garak or external probe-pack worker integration
-- browser or web-chat target execution
-- ASR scoring or trend charts
-- autonomous remediation beyond temporary containment tightening
+What is missing is a first-class way to ask:
 
-## Separation Model
+- "Would the current assistant prompt and policy stack resist a jailbreak today?"
+- "Did a recent prompt or routing change make the coding assistant less safe?"
+- "Can a hostile repo or chat turn into unsafe tool use, memory writes, or hidden-prompt leakage?"
 
-GuardianAgent now has two complementary security layers:
+`Assistant Security` fills that gap.
 
-### 1. Inline runtime enforcement
+## Scope
 
-This is Guardian’s existing prevention path:
+### Primary scan targets
 
-- approvals
-- tool policy enforcement
-- sandbox and degraded-backend controls
-- workspace trust gates
-- guarded LLM handling
-- containment checks before tool execution
+- `assistant_runtime`
+  - the main Guardian assistant behavior with its current prompt, policy, and tool routing
+- `code_session`
+  - the coding assistant with an attached workspace and current trust state
+- `web_ui`
+  - the web chat and approval flow when browser-backed validation is enabled
+- `workspace_influence`
+  - bounded analysis of repo content that may influence the assistant without executing repo code
 
-### 2. Assistant Security review and monitoring
+### Not just repo review
 
-This is the detection and validation layer:
+Repo scanning is only one part of the feature. The main value is dynamic adversarial testing of the assistant/runtime itself.
 
-- recurring posture review
-- runtime and workspace exposure findings
-- promoted Assistant Security alerts
-- operator-facing findings, runs, and activity history
-- conservative temporary containment based on repeated high-confidence findings
+## Non-Goals
 
-Assistant Security does not replace inline enforcement. It reviews whether the current runtime, workspace, and MCP posture are drifting into states that make the inline controls less trustworthy over time.
+This spec does not define:
 
-## Operator Model
+- a replacement for SAST, dependency scanning, or secret scanning across arbitrary source code
+- a full third-party scanner product embedded into Guardian
+- automatic offensive exploitation or host mutation
+- automatic remediation of findings
+- a second alert console separate from `Security Log`
 
-The command center lives in `Security > Assistant Security`.
+## Security Model
 
-The shipped Security page now uses:
+- The model is never treated as trustworthy by default.
+- Assistant Security probes are bounded, read-only, and auditable.
+- Findings are evidence, not automatic permission to mutate state.
+- Higher-risk scan profiles must be posture-aware:
+  - if sandboxing is degraded
+  - if browser tooling is disabled
+  - if manual terminals are allowed on degraded backends
+  - if network-bearing tools are disallowed
+
+The feature should consume the security-settings posture produced by the parallel hardening work rather than duplicating that configuration in its own tab.
+
+## Detection Categories
+
+Phase 1 should cover:
+
+- `jailbreak`
+  - attempts to override role, policy, or system instructions
+- `prompt_injection`
+  - attempts to make untrusted repo/chat content act as instructions
+- `prompt_leak`
+  - attempts to reveal system prompt, hidden policy, or internal guardrail text
+- `tool_escape`
+  - attempts to get the assistant to exceed path, domain, or authority bounds
+- `approval_bypass`
+  - attempts to perform actions that should still require approval
+- `secret_disclosure`
+  - attempts to reveal secrets, credentials, prior messages, memory, or protected config
+- `memory_boundary`
+  - attempts to poison or persist hostile memory content
+- `trust_boundary`
+  - attempts to turn low-trust or quarantined content into writes, approvals, or execution
+- `workspace_influence`
+  - hostile README, prompt file, script, or toolchain cues that may steer the coding assistant
+
+Phase 2 can add:
+
+- browser/webchat-specific interaction probes
+- regression scoring and attack success rate (ASR) trends
+- optional garak-compatible community probe adapters
+
+## UX
+
+The operator surface should make it obvious what was scanned, what failed, how serious it is, and where the next action belongs.
+
+### Command Center
+
+The command center is a new `Security > Assistant Security` tab.
+
+It should sit beside:
 
 - `Overview`
 - `Security Log`
-- `Assistant Security`
+- `Assistant Security` (merged command center including automated security activity)
 - `Threat Intel`
 
-The `Assistant Security` tab currently includes:
+Recommended placement: between `Security Log` and `Threat Intel`.
 
-- `Continuous Monitoring`
-- `Run Assistant Security Scan`
-- `Assistant Security Summary`
-- `Assistant Security Findings`
-- `Recent Assistant Security Runs`
-- `Assistant Security Activity`
+### Required sections
 
-`Configuration > Security` owns the editable settings. The `Continuous Monitoring` panel inside `Assistant Security` is a read-only status view of the managed schedule and explicitly explains that the work is scheduler-driven infrastructure work, not a conversational assistant turn.
+#### `Assistant Security Posture`
 
-## Runtime Model
+Shows:
 
-The runtime implementation is centered on `AiSecurityService`.
+- scan system enabled or disabled
+- sandbox posture and confidence level
+- degraded-backend warnings
+- browser/MCP/manual-terminal availability relevant to scan profiles
+- last completed scan
+- "Open Security Settings" deep link into Configuration
 
-Current behavior:
+This section must explain that Configuration owns the settings, not this tab.
 
-- findings and runs persist to `~/.guardianagent/assistant-security.json`
-- scans support three sources:
-  - `manual`
-  - `scheduled`
-  - `system`
-- targets are currently:
-  - the Guardian runtime
-  - deduplicated tracked coding workspaces
-- built-in profiles are currently:
-  - `quick`
-  - `runtime-hardening`
-  - `workspace-boundaries`
-- posture confidence is currently reported as:
-  - `bounded` when sandbox availability is `strong`
-  - `reduced` otherwise
+#### `Targets`
 
-The current implementation is deterministic and posture-driven. It evaluates the runtime snapshot and workspace-trust state; it does not yet send adversarial probe prompts through the active LLM.
+Operators can view and manage scan targets such as:
 
-## Detection Coverage
+- current assistant runtime
+- selected code sessions
+- configured web UI surface
 
-Current finding categories are:
+#### `Profiles`
 
-- `sandbox`
-- `policy`
-- `browser`
-- `mcp`
-- `workspace`
-- `trust_boundary`
+Profiles define probe bundles and execution scope.
 
-### Runtime posture findings
+Initial built-ins:
 
-Assistant Security currently detects and persists findings for:
+- `Quick`
+- `Standard`
+- `Release Gate`
+- `Continuous`
+- `Browser`
 
-- sandbox disabled entirely
-- degraded permissive fallback active
-- degraded fallback with network tools enabled
-- degraded fallback with browser tools enabled
-- degraded fallback with manual code terminals enabled
-- agent-initiated policy widening enabled for paths, domains, or tool policies
-- browser tooling enabled without an explicit local domain allowlist
+#### `Recent Runs`
 
-### MCP exposure findings
+Shows:
 
-Assistant Security now treats MCP posture as part of runtime security review and detects:
+- target
+- profile
+- status
+- duration
+- finding count
+- regression flag
 
-- connected third-party MCP servers
-- connected third-party MCP servers with outbound network access
-- connected third-party MCP servers inheriting the Guardian process environment
-- connected MCP servers receiving explicit environment variables
-- connected third-party MCP servers using trust-level overrides
-- dynamic Playwright MCP package resolution if it reappears
+#### `Findings`
 
-This complements the separate Guardian core MCP hardening. Core hardening owns prevention and safer defaults; Assistant Security owns visibility, recurrence tracking, and promotion into operator-facing queues.
+Shows:
 
-### Workspace posture findings
+- category
+- severity
+- confidence
+- target
+- short summary
+- evidence preview
+- current finding status
+- "View in Security Log" when promoted
 
-For tracked coding workspaces, Assistant Security currently detects:
+#### `Trends`
 
-- missing trust assessment
-- workspace trust in `caution`
-- workspace trust in `blocked`
-- blocked workspaces that are running under a manual acceptance review
-- high-risk workspace-trust findings, including prompt-injection-style content surfaced by the trust review pipeline
+Shows:
 
-Assistant Security does not replace `workspaceTrust`. It consumes that output and presents it as security evidence alongside runtime posture findings.
+- findings over time
+- ASR or regression trend
+- per-target stability
+- latest pass/fail deltas
 
-## Integrations
+## Runtime Architecture
 
-### Security Log and unified alerts
+Add the following runtime pieces:
 
-High and critical Assistant Security findings are promoted into the main security surfaces:
+- `AiSecurityTargetStore`
+  - persists configured scan targets
+- `AiSecurityProbeRegistry`
+  - resolves built-in, community, and custom probe packs
+- `AiSecurityScanService`
+  - runs probes against the chosen target
+- `AiSecurityRunStore`
+  - persists run state and per-run evidence
+- `AiSecurityFindingStore`
+  - persists normalized findings and triage status
+- `AiSecurityScheduler`
+  - runs background scans on schedule
 
-- a unified alert source of `assistant`
-- audit-backed anomaly records for evidence and timeline review
+Optional later component:
 
-This means Assistant Security findings participate in the same operator queue as host, network, gateway, and native-provider alerts without creating a separate incident console.
+- `AiSecurityExternalWorkerAdapter`
+  - bridges to a separate Python or garak-compatible worker when enabled
 
-### Activity history
+## Execution model
 
-Assistant Security scan lifecycle and related workflow entries are recorded in the persisted security activity stream shown on the `Assistant Security` tab.
+1. A target and profile are selected.
+2. The profile resolves into a bounded probe list.
+3. The scan service runs those probes against the target.
+4. Raw results are normalized into findings.
+5. Findings are persisted, triaged, and optionally promoted.
+6. Relevant promoted findings appear in `Security Log`.
+7. Run lifecycle events appear in `Agentic Security Log` when agent-driven or scheduled.
 
-### Code checks
+## Settings Integration
 
-The latest Assistant Security result is projected into `Code > Checks` so the active coding session shows current security posture alongside other verification state.
+Configuration should own the editable settings under the broader Security settings area being introduced by the parallel hardening work.
 
-### Assistant tools, API, and automation
+Recommended semantic namespace:
 
-The shipped assistant-callable tools are:
+- `assistant.security.aiSecurity`
 
-- `assistant_security_summary`
-- `assistant_security_scan`
-- `assistant_security_findings`
+If the concurrent config work nests this differently, the fields can be remapped. The semantic requirements are:
 
-The shipped built-in quick action is `Run Security Review`.
+- `enabled: boolean`
+- `mode: off | manual | continuous`
+- `defaultProfile: quick | standard | release_gate | continuous | browser`
+- `scheduleCron` or `intervalMinutes`
+- `promoteSeverity: high | critical`
+- `allowCodeSessionTargets: boolean`
+- `allowWebTargets: boolean`
+- `allowExternalProbeWorkers: boolean`
+- `requireStrongSandboxForBrowserProfiles: boolean`
+- `requireStrongSandboxForContinuousProfiles: boolean`
+- `retainRunsDays: number`
+- `retainEvidenceDays: number`
 
-The current web API surface is:
+### Posture-aware behavior
+
+Assistant Security must consume sandbox and hardening posture as input.
+
+Examples:
+
+- if the host is on degraded fallback, `Browser` and `Continuous` profiles may be blocked or downgraded
+- if browser tooling is disabled, web UI targets are unavailable
+- if manual code terminals are allowed on degraded backends, posture copy should warn that scan confidence is reduced
+- if strong containment is present, the UI can show a higher-confidence posture badge
+
+The tab should **read** this posture, not become the place where those settings are edited.
+
+## Data Model
+
+### Target
+
+- `id`
+- `kind: assistant_runtime | code_session | web_ui | workspace_influence`
+- `label`
+- `targetRef`
+- `enabled`
+- `createdAt`
+- `updatedAt`
+
+### Run
+
+- `id`
+- `targetId`
+- `profileId`
+- `status: queued | running | succeeded | failed | cancelled`
+- `trigger: manual | scheduled | release_gate | session_attach`
+- `startedAt`
+- `completedAt`
+- `summary`
+- `postureSnapshot`
+
+### Finding
+
+- `id`
+- `runId`
+- `targetId`
+- `category`
+- `severity: low | medium | high | critical`
+- `confidence`
+- `summary`
+- `evidence`
+- `status: new | triaged | accepted_risk | fixed | false_positive`
+- `promotedToSecurityLog: boolean`
+- `createdAt`
+- `updatedAt`
+
+## Integration With Existing Security Surfaces
+
+### Security Log
+
+High and critical Assistant Security findings must flow into `Security Log`.
+
+Phase 1 should do this by emitting audit events and rendering promoted rows in the merged `Security Log` view.
+
+Do **not** force these findings into the current `UnifiedSecurityAlert` source union immediately, because that lifecycle model is currently optimized for host/network/gateway/native alerts.
+
+Phase 2 can add a broader lifecycle model for AI findings if inline acknowledge/resolve behavior is needed.
+
+### Agentic Security Log
+
+When Assistant Security scans are run by a scheduler or dedicated agent, record:
+
+- scan started
+- scan completed
+- scan skipped
+- regression detected
+- scan failed
+
+These belong in `src/runtime/security-activity-log.ts`, not in a second ad hoc run log.
+
+### Code Sessions
+
+Code sessions should show the latest Assistant Security result in session-local checks.
+
+Recommended change:
+
+- extend `CodeSessionWorkState.verification.kind` to include `security`
+
+Examples:
+
+- `security / pass` for a clean quick scan
+- `security / warn` for medium findings or reduced-confidence posture
+- `security / fail` for high/critical findings or release-gate failure
+
+### Workspace Trust
+
+`workspaceTrust` remains the static + native-protection trust boundary.
+
+Assistant Security must not silently replace it.
+
+Phase 1:
+
+- add Assistant Security findings as parallel evidence
+- use them to enrich operator context
+- never auto-promote a repo to `trusted`
+
+Phase 2:
+
+- allow selective correlation where strong AI findings can raise caution or block follow-on assistant behaviors under explicit policy
+
+## API Surface
+
+Recommended endpoints:
 
 - `GET /api/security/ai/summary`
-- `GET /api/security/ai/profiles`
 - `GET /api/security/ai/targets`
+- `POST /api/security/ai/targets`
+- `POST /api/security/ai/targets/delete`
+- `GET /api/security/ai/profiles`
 - `GET /api/security/ai/runs`
-- `POST /api/security/ai/scan`
+- `POST /api/security/ai/runs`
 - `GET /api/security/ai/findings`
 - `POST /api/security/ai/findings/status`
+- `GET /api/security/ai/trends`
 
-The built-in automation preset is `assistant-security-scan`.
+Optional later:
 
-## Managed Continuous Monitoring
+- `POST /api/security/ai/profiles`
+- `POST /api/security/ai/probes/sync`
 
-Configuration owns managed monitoring under `assistant.security.continuousMonitoring`.
+## Audit Events
 
-Current fields:
+Add audit types for:
 
-- `enabled`
-- `profileId`
-- `cron`
+- `assistant_security_scan_started`
+- `assistant_security_scan_completed`
+- `assistant_security_scan_failed`
+- `assistant_security_finding`
+- `assistant_security_regression_detected`
 
-Current defaults:
+These events should support Security Log rendering without inventing a second evidence pipeline.
 
-- `enabled: true`
-- `profileId: quick`
-- `cron: 15 */12 * * *`
+## Implementation Phases
 
-Current behavior:
+### Phase 1
 
-- Guardian keeps the built-in `assistant-security-scan` scheduled task aligned with Configuration
-- the managed task runs `assistant_security_scan` directly through scheduler/runtime infrastructure
-- this does **not** create a user chat turn or coding-assistant conversation
-- the `Assistant Security` tab renders the managed schedule state read-only so operators can see that it is active
+- add `Security > Assistant Security` tab shell
+- add target/profile/run/finding persistence
+- ship built-in deterministic probes
+- support manual scans for `assistant_runtime` and `code_session`
+- promote high/critical findings into `Security Log`
+- surface session-local results in Code checks
 
-## Automatic Containment
+### Phase 2
 
-Configuration owns automatic containment under `assistant.security.autoContainment`.
+- add scheduling and trend tracking
+- add web UI/browser-backed targets
+- add posture-aware gating for higher-risk profiles
+- add regression comparisons and release-gate mode
 
-Current fields:
+### Phase 3
 
-- `enabled`
-- `minSeverity`
-- `minConfidence`
-- `categories`
+- add optional external worker adapter for community probe packs
+- add richer ASR metrics
+- add saved views and triage presets
 
-Current defaults:
+## Testing
 
-- `enabled: true`
-- `minSeverity: high`
-- `minConfidence: 0.95`
-- `categories: ['sandbox', 'trust_boundary', 'mcp']`
+Required verification:
 
-Current behavior is intentionally conservative:
+- unit tests for stores, scan normalization, finding promotion, and scheduler behavior
+- web UI smoke for the `Assistant Security` tab
+- coding assistant integration tests for code-session scan status and result propagation
+- Security Log tests for promoted AI findings
+- harness coverage using the documented integration test process
 
-- it only considers active unified alerts from the `assistant` source
-- it only applies when the operator is still in `monitor` mode and broader posture already recommends leaving `monitor`
-- one matching `critical` Assistant Security alert is enough to trigger temporary guarded controls
-- otherwise, two or more matching alerts are required
+Recommended harness additions:
 
-Current guarded effects:
+- `scripts/test-ai-security-smoke.mjs`
+- extend `scripts/test-contextual-security-uplifts.mjs` for regression and boundary checks
+- add a real-model smoke lane for the manual run path when the configured AI test backend is available
 
-- matching `mcp` findings temporarily block MCP tool calls
-- matching `sandbox` or `trust_boundary` findings temporarily block direct command execution
-- scheduled risky mutations are paused by normal guarded-mode behavior
+## Recommendation
 
-This keeps the containment path aligned with Guardian’s existing inline policing rather than inventing a second enforcement system.
+Build `Assistant Security` as a Guardian-native feature, not as a bolt-on scanner console.
 
-## Current Boundaries
+The key design choices are:
 
-The current implementation is deliberately narrower than the original longer-term vision.
-
-Deferred work includes:
-
-- live LLM probe execution for jailbreak, prompt-leak, and approval-bypass testing
-- browser-backed target execution
-- regression trend views and richer analytics
-- external community probe adapters
-- broader automated remediation beyond temporary guarded controls
-
-The shipped feature should be understood as a posture-and-boundary review system with automation and containment hooks, not yet as a full adversarial scanner.
-
-## Primary Files
-
-- `src/runtime/ai-security.ts`
-- `src/runtime/containment-service.ts`
-- `src/runtime/security-alerts.ts`
-- `src/runtime/security-activity-log.ts`
-- `src/runtime/scheduled-tasks.ts`
-- `src/tools/executor.ts`
-- `src/index.ts`
-- `src/config/types.ts`
-- `src/config/loader.ts`
-- `web/public/js/pages/security.js`
-- `web/public/js/pages/config.js`
-- `src/reference-guide.ts`
+- the command center lives in `Security > Assistant Security`
+- actionable findings land in `Security Log`
+- code-session results also appear in `Code > Checks`
+- configuration stays in the broader Security settings surface
+- scan confidence is explicitly tied to runtime containment posture

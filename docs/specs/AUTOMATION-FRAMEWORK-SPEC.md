@@ -156,6 +156,7 @@ Validation guarantees:
 - Compiler-first routing is authoritative across both the direct runtime path and the brokered worker path. If a request is classified as native automation authoring, it does not fall through to generic exploratory tools first.
 - Open-ended recurring automations default to scheduled `agent` tasks instead of ad hoc scripts or overfit playbooks.
 - Deterministic built-in tool graphs remain playbooks and are upserted via `workflow_upsert`.
+- Deterministic browser workflows are also compiler-driven now: conversational browser smoke tests and simple wrapper-based form checks compile to saved `browser_*` playbooks instead of raw MCP browser step names.
 - Scheduled assistant tasks are first-class in the runtime and UI for recurring briefings, monitoring reports, and other open-ended agent activities.
 - The UI renders scheduled assistant task `description` fields instead of exposing the full internal execution prompt in list views.
 - Scheduled tasks can be marked `runOnce: true` for one-shot execution; the runtime disables them after the first run.

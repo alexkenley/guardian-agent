@@ -134,6 +134,55 @@ describe('tryAutomationPreRoute', () => {
     );
   });
 
+  it('routes deterministic browser smoke workflows through wrapper tool steps', async () => {
+    const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName === 'workflow_upsert') {
+        expect(args).toMatchObject({
+          id: 'browser-read-smoke',
+          name: 'Browser Read Smoke',
+          enabled: true,
+          mode: 'sequential',
+          steps: [
+            {
+              toolName: 'browser_navigate',
+              args: { url: 'https://example.com', mode: 'read' },
+            },
+            {
+              toolName: 'browser_read',
+            },
+            {
+              toolName: 'browser_links',
+            },
+          ],
+        });
+        return {
+          success: true,
+          message: "Workflow 'Browser Read Smoke' created.",
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryAutomationPreRoute({
+      agentId: 'default',
+      message: {
+        ...baseMessage,
+        content: 'Create an automation called Browser Read Smoke. When I run it, it should open https://example.com, read the page, list the links, and keep the results in the automation run output only. Do not schedule it yet.',
+      },
+      executeTool,
+    });
+
+    expect(result?.content).toContain('Browser Read Smoke');
+    expect(executeTool).toHaveBeenCalledWith(
+      'workflow_upsert',
+      expect.objectContaining({
+        id: 'browser-read-smoke',
+        name: 'Browser Read Smoke',
+      }),
+      expect.objectContaining({ channel: 'web', userId: 'owner' }),
+    );
+  });
+
   it('blocks automation creation when required input files are missing', async () => {
     const executeTool = vi.fn();
 

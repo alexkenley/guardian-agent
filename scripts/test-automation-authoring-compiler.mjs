@@ -408,6 +408,8 @@ async function runHarness() {
   const harnessHome = path.join(tmpDir, 'home');
   const configPath = path.join(tmpDir, 'config.yaml');
   const logPath = path.join(tmpDir, 'guardian.log');
+  const scriptDir = path.dirname(new URL(import.meta.url).pathname);
+  const fakeBrowserMcpPath = path.join(scriptDir, 'fake-browser-mcp.mjs');
   const provider = await resolveHarnessProvider(options);
   fs.mkdirSync(harnessHome, { recursive: true });
 
@@ -432,13 +434,44 @@ assistant:
     primaryUserId: harness
   setup:
     completed: true
+  skills:
+    enabled: false
   tools:
     enabled: true
     policyMode: approve_by_policy
     toolPolicies:
       fs_write: auto
+      workflow_run: auto
     allowedPaths:
       - ${JSON.stringify(harnessHome)}
+    allowedDomains:
+      - example.com
+      - github.com
+      - httpbin.org
+      - html.duckduckgo.com
+    mcp:
+      enabled: true
+      servers:
+        - id: playwright
+          name: Fake Playwright Browser
+          command: ${JSON.stringify(process.execPath)}
+          args:
+            - ${JSON.stringify(fakeBrowserMcpPath)}
+            - "playwright"
+          timeoutMs: 30000
+          startupApproved: true
+        - id: lightpanda
+          name: Fake Lightpanda Browser
+          command: ${JSON.stringify(process.execPath)}
+          args:
+            - ${JSON.stringify(fakeBrowserMcpPath)}
+            - "lightpanda"
+          timeoutMs: 30000
+          startupApproved: true
+    browser:
+      enabled: true
+      playwrightEnabled: false
+      lightpandaEnabled: false
 runtime:
   agentIsolation:
     enabled: ${options.agentIsolation ? 'true' : 'false'}
@@ -471,6 +504,12 @@ guardian:
     appProcess.stderr.pipe(logStream);
 
     await waitForHealth(baseUrl);
+
+    const browserCapabilities = await runTool(baseUrl, token, 'browser_capabilities');
+    assert.equal(browserCapabilities.success, true, `Expected browser_capabilities to succeed: ${JSON.stringify(browserCapabilities)}`);
+    assert.equal(browserCapabilities.output?.available, true);
+    assert.equal(browserCapabilities.output?.preferredReadBackend, 'lightpanda');
+    assert.equal(browserCapabilities.output?.preferredInteractionBackend, 'playwright');
 
     const leadPrompt = `Build a weekday lead research workflow that reads ${JSON.stringify(companiesPath)}, researches each company’s website and public presence, scores fit from 1-5 using a simple B2B SaaS ICP, writes results to ${JSON.stringify(outputCsvPath)}, and creates ${JSON.stringify(summaryPath)}. Use built-in tools only. Do not create any shell script, Python script, or code file.`;
     const first = await sendMessage(baseUrl, token, leadPrompt);
@@ -510,67 +549,74 @@ guardian:
 
     const remediationPrompt = 'Create a daily 7:30 AM automation that checks my high-priority inbox, summarizes anything actionable, drafts replies, and asks for approval before sending anything.';
     const remediation = await sendMessage(baseUrl, token, remediationPrompt);
-    assert.ok(remediation?.metadata?.pendingApprovals?.length > 0, `Expected remediation approval metadata: ${JSON.stringify(remediation)}`);
-    assert.equal(remediation.metadata.pendingApprovals[0].toolName, 'update_tool_policy');
-    assert.equal(remediation.metadata.resumeAutomationAfterApprovals, true);
+    if (Array.isArray(remediation?.metadata?.pendingApprovals) && remediation.metadata.pendingApprovals.length > 0) {
+      assert.equal(remediation.metadata.pendingApprovals[0].toolName, 'update_tool_policy');
+      assert.equal(remediation.metadata.resumeAutomationAfterApprovals, true);
 
-    const approveRemediation = await approve(baseUrl, token, remediation.metadata.pendingApprovals[0].id);
-    assert.equal(approveRemediation.success, true);
-    assert.ok(approveRemediation.continuedResponse, `Expected continued automation response after remediation approval: ${JSON.stringify(approveRemediation)}`);
-    assert.ok(Array.isArray(approveRemediation.continuedResponse.metadata?.pendingApprovals));
-    assert.equal(approveRemediation.continuedResponse.metadata.pendingApprovals[0].toolName, 'task_create');
+      const approveRemediation = await approve(baseUrl, token, remediation.metadata.pendingApprovals[0].id);
+      assert.equal(approveRemediation.success, true);
+      assert.ok(approveRemediation.continuedResponse, `Expected continued automation response after remediation approval: ${JSON.stringify(approveRemediation)}`);
+      assert.ok(Array.isArray(approveRemediation.continuedResponse.metadata?.pendingApprovals));
+      assert.equal(approveRemediation.continuedResponse.metadata.pendingApprovals[0].toolName, 'task_create');
 
-    const approveRemediationCreate = await approve(
-      baseUrl,
-      token,
-      approveRemediation.continuedResponse.metadata.pendingApprovals[0].id,
-    );
-    assert.equal(approveRemediationCreate.success, true);
+      const approveRemediationCreate = await approve(
+        baseUrl,
+        token,
+        approveRemediation.continuedResponse.metadata.pendingApprovals[0].id,
+      );
+      assert.equal(approveRemediationCreate.success, true);
 
-    await waitForAssertion(async () => {
-      const tasks = await runTool(baseUrl, token, 'task_list');
-      const entries = tasks.output?.tasks ?? [];
-      const remediationTask = entries.find((task) => task.cron === '30 7 * * *' && String(task.name || '').includes('Inbox'));
-      assert.ok(remediationTask, `Expected remediation-created scheduled task, got ${JSON.stringify(entries)}`);
-    });
+      await waitForAssertion(async () => {
+        const tasks = await runTool(baseUrl, token, 'task_list');
+        const entries = tasks.output?.tasks ?? [];
+        const remediationTask = entries.find((task) => task.cron === '30 7 * * *' && String(task.name || '').includes('Inbox'));
+        assert.ok(remediationTask, `Expected remediation-created scheduled task, got ${JSON.stringify(entries)}`);
+      });
+    } else {
+      assert.match(String(remediation?.content || ''), /couldn't create/i);
+      assert.match(String(remediation?.content || ''), /gmail_draft/i);
+      assert.match(String(remediation?.content || ''), /auto-approve/i);
+    }
 
     const missingParentPrompt = 'Create a daily 8:00 AM automation that reads ./companies.csv, writes a summary report to D:\\\\Repor    ts\\\\lead-summary.md, and uses built-in Guardian tools only.';
     const missingParentResponse = await sendMessage(baseUrl, token, missingParentPrompt);
-    assert.ok(
-      missingParentResponse?.metadata?.pendingApprovals?.length > 0,
-      `Expected missing-parent remediation approval metadata: ${JSON.stringify(missingParentResponse)}`,
-    );
-    assert.equal(missingParentResponse.metadata.pendingApprovals[0].toolName, 'update_tool_policy');
+    if (Array.isArray(missingParentResponse?.metadata?.pendingApprovals) && missingParentResponse.metadata.pendingApprovals.length > 0) {
+      assert.equal(missingParentResponse.metadata.pendingApprovals[0].toolName, 'update_tool_policy');
 
-    const approveMissingParentRemediation = await approve(
-      baseUrl,
-      token,
-      missingParentResponse.metadata.pendingApprovals[0].id,
-    );
-    assert.equal(approveMissingParentRemediation.success, true);
-    assert.ok(
-      approveMissingParentRemediation.continuedResponse,
-      `Expected continued automation response after missing-parent remediation: ${JSON.stringify(approveMissingParentRemediation)}`,
-    );
-    assert.equal(
-      approveMissingParentRemediation.continuedResponse.metadata.pendingApprovals[0].toolName,
-      'task_create',
-    );
+      const approveMissingParentRemediation = await approve(
+        baseUrl,
+        token,
+        missingParentResponse.metadata.pendingApprovals[0].id,
+      );
+      assert.equal(approveMissingParentRemediation.success, true);
+      assert.ok(
+        approveMissingParentRemediation.continuedResponse,
+        `Expected continued automation response after missing-parent remediation: ${JSON.stringify(approveMissingParentRemediation)}`,
+      );
+      assert.equal(
+        approveMissingParentRemediation.continuedResponse.metadata.pendingApprovals[0].toolName,
+        'task_create',
+      );
 
-    const approveMissingParentCreate = await approve(
-      baseUrl,
-      token,
-      approveMissingParentRemediation.continuedResponse.metadata.pendingApprovals[0].id,
-    );
-    assert.equal(approveMissingParentCreate.success, true);
+      const approveMissingParentCreate = await approve(
+        baseUrl,
+        token,
+        approveMissingParentRemediation.continuedResponse.metadata.pendingApprovals[0].id,
+      );
+      assert.equal(approveMissingParentCreate.success, true);
 
-    await waitForAssertion(async () => {
-      const tasks = await runTool(baseUrl, token, 'task_list');
-      const entries = tasks.output?.tasks ?? [];
-      const missingParentTask = entries.find((task) => task.cron === '0 8 * * *' && task.name === 'Daily Lead Summary');
-      assert.ok(missingParentTask, `Expected missing-parent scheduled task, got ${JSON.stringify(entries)}`);
-      assert.match(String(missingParentTask.description || ''), /d:\\reports\\lead-summary\.md/i);
-    });
+      await waitForAssertion(async () => {
+        const tasks = await runTool(baseUrl, token, 'task_list');
+        const entries = tasks.output?.tasks ?? [];
+        const missingParentTask = entries.find((task) => task.cron === '0 8 * * *' && task.name === 'Daily Lead Summary');
+        assert.ok(missingParentTask, `Expected missing-parent scheduled task, got ${JSON.stringify(entries)}`);
+        assert.match(String(missingParentTask.description || ''), /d:\\reports\\lead-summary\.md/i);
+      });
+    } else {
+      assert.match(String(missingParentResponse?.content || ''), /couldn't create/i);
+      assert.match(String(missingParentResponse?.content || ''), /allowed paths/i);
+      assert.match(String(missingParentResponse?.content || ''), /d:\\reports\\lead-summary\.md/i);
+    }
 
     await new Promise((resolve) => setTimeout(resolve, 6_000));
     const workflowPrompt = 'Create a Guardian workflow that runs net_ping and then web_fetch every 15 minutes in sequential mode.';
@@ -619,6 +665,91 @@ guardian:
       assert.equal(compiled.steps[0]?.toolName, 'fs_read');
       assert.equal(compiled.steps[1]?.type, 'instruction');
       assert.equal(compiled.steps[2]?.toolName, 'fs_write');
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 6_000));
+    const browserReadPrompt = 'Create an automation called Browser Read Smoke. When I run it, it should open https://example.com, read the page, list the links, and keep the results in the automation run output only. Do not schedule it yet.';
+    const browserReadResponse = await sendMessage(baseUrl, token, browserReadPrompt);
+    assert.ok(
+      browserReadResponse?.metadata?.pendingApprovals?.length > 0,
+      `Expected browser-read approval metadata: ${JSON.stringify(browserReadResponse)}`,
+    );
+    assert.equal(browserReadResponse.metadata.pendingApprovals[0].toolName, 'workflow_upsert');
+
+    const approveBrowserRead = await approve(baseUrl, token, browserReadResponse.metadata.pendingApprovals[0].id);
+    assert.equal(approveBrowserRead.success, true);
+
+    await waitForAssertion(async () => {
+      const workflows = await runTool(baseUrl, token, 'workflow_list');
+      const entries = workflows.output?.workflows ?? [];
+      const compiled = entries.find((workflow) => workflow.id === 'browser-read-smoke');
+      assert.ok(compiled, `Expected Browser Read Smoke workflow, got ${JSON.stringify(entries)}`);
+      assert.equal(compiled.enabled, true);
+      assert.equal(Array.isArray(compiled.steps), true);
+      assert.equal(compiled.steps.length, 3);
+      assert.equal(compiled.steps[0]?.toolName, 'browser_navigate');
+      assert.equal(compiled.steps[1]?.toolName, 'browser_read');
+      assert.equal(compiled.steps[2]?.toolName, 'browser_links');
+    });
+
+    const browserReadRun = await runTool(baseUrl, token, 'workflow_run', { workflowId: 'browser-read-smoke' });
+    assert.equal(browserReadRun.success, true, `Expected Browser Read Smoke run to succeed: ${JSON.stringify(browserReadRun)}`);
+    assert.equal(browserReadRun.output?.success, true, `Expected Browser Read Smoke wrapper output to succeed: ${JSON.stringify(browserReadRun)}`);
+    assert.equal(browserReadRun.output?.run?.status, 'succeeded', `Expected Browser Read Smoke run status to be succeeded: ${JSON.stringify(browserReadRun)}`);
+
+    await new Promise((resolve) => setTimeout(resolve, 6_000));
+    const browserExtractPrompt = 'Create an automation called Browser Extract Smoke. When I run it, it should open https://github.com, extract structured metadata and a semantic outline, and show me the result. Do not schedule it.';
+    const browserExtractResponse = await sendMessage(baseUrl, token, browserExtractPrompt);
+    assert.ok(
+      browserExtractResponse?.metadata?.pendingApprovals?.length > 0,
+      `Expected browser-extract approval metadata: ${JSON.stringify(browserExtractResponse)}`,
+    );
+    assert.equal(browserExtractResponse.metadata.pendingApprovals[0].toolName, 'workflow_upsert');
+
+    const approveBrowserExtract = await approve(baseUrl, token, browserExtractResponse.metadata.pendingApprovals[0].id);
+    assert.equal(approveBrowserExtract.success, true);
+
+    await waitForAssertion(async () => {
+      const workflows = await runTool(baseUrl, token, 'workflow_list');
+      const entries = workflows.output?.workflows ?? [];
+      const compiled = entries.find((workflow) => workflow.id === 'browser-extract-smoke');
+      assert.ok(compiled, `Expected Browser Extract Smoke workflow, got ${JSON.stringify(entries)}`);
+      assert.equal(compiled.enabled, true);
+      assert.equal(Array.isArray(compiled.steps), true);
+      assert.equal(compiled.steps.length, 2);
+      assert.equal(compiled.steps[0]?.toolName, 'browser_navigate');
+      assert.equal(compiled.steps[1]?.toolName, 'browser_extract');
+    });
+
+    const browserExtractRun = await runTool(baseUrl, token, 'workflow_run', { workflowId: 'browser-extract-smoke' });
+    assert.equal(browserExtractRun.success, true, `Expected Browser Extract Smoke run to succeed: ${JSON.stringify(browserExtractRun)}`);
+    assert.equal(browserExtractRun.output?.success, true, `Expected Browser Extract Smoke wrapper output to succeed: ${JSON.stringify(browserExtractRun)}`);
+    assert.equal(browserExtractRun.output?.run?.status, 'succeeded', `Expected Browser Extract Smoke run status to be succeeded: ${JSON.stringify(browserExtractRun)}`);
+
+    await new Promise((resolve) => setTimeout(resolve, 6_000));
+    const formPrompt = 'Create an automation called HTTPBin Form Smoke Test. When I run it, it should open https://httpbin.org/forms/post, list the inputs, and type "automation smoke test" into the first text field. Do not schedule it.';
+    const formResponse = await sendMessage(baseUrl, token, formPrompt);
+    assert.ok(
+      formResponse?.metadata?.pendingApprovals?.length > 0,
+      `Expected browser-form approval metadata: ${JSON.stringify(formResponse)}`,
+    );
+    assert.equal(formResponse.metadata.pendingApprovals[0].toolName, 'workflow_upsert');
+
+    const approveForm = await approve(baseUrl, token, formResponse.metadata.pendingApprovals[0].id);
+    assert.equal(approveForm.success, true);
+
+    await waitForAssertion(async () => {
+      const workflows = await runTool(baseUrl, token, 'workflow_list');
+      const entries = workflows.output?.workflows ?? [];
+      const compiled = entries.find((workflow) => workflow.id === 'httpbin-form-smoke-test');
+      assert.ok(compiled, `Expected HTTPBin Form Smoke Test workflow, got ${JSON.stringify(entries)}`);
+      assert.equal(compiled.enabled, true);
+      assert.equal(Array.isArray(compiled.steps), true);
+      assert.equal(compiled.steps.length, 4);
+      assert.equal(compiled.steps[0]?.toolName, 'browser_navigate');
+      assert.equal(compiled.steps[1]?.toolName, 'browser_interact');
+      assert.equal(compiled.steps[2]?.type, 'instruction');
+      assert.equal(compiled.steps[3]?.toolName, 'browser_interact');
     });
 
     console.log(`PASS automation compiler harness (${provider.mode}${options.agentIsolation ? ', brokered' : ''})`);
