@@ -45,6 +45,7 @@ describe('search-intent parser', () => {
   it('detects explicit browser URL automation requests', () => {
     expect(isDirectBrowserAutomationIntent('Open https://httpbin.org/forms/post and list the interactive elements on the page.')).toBe(true);
     expect(isDirectBrowserAutomationIntent('Go to https://example.com and click the More information link.')).toBe(true);
+    expect(isDirectBrowserAutomationIntent('Use browser_state and browser_act to click the login button.')).toBe(true);
   });
 
   it('does not classify generic web search requests as browser automation', () => {

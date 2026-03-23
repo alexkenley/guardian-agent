@@ -14,7 +14,7 @@ export function isDirectBrowserAutomationIntent(content: string): boolean {
   if (!text || text.length < 5) return false;
 
   const hasUrl = /\bhttps?:\/\/\S+/i.test(text);
-  const hasBrowserToolName = /\bbrowser_(?:capabilities|navigate|read|links|extract|interact)\b/i.test(text);
+  const hasBrowserToolName = /\bbrowser_(?:capabilities|navigate|read|links|extract|state|act|interact)\b/i.test(text);
   const hasBrowserAction = /\b(open|go\s+to|goto|navigate|visit|load|read|click|type|fill|select|submit|list|extract|summari[sz]e|show)\b/i.test(text);
   const hasBrowserContext = /\b(browser|page|current page|this page|website|web page|form|link|links|button|input|field|interactive elements|metadata|semantic outline)\b/i.test(text);
 

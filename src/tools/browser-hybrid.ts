@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { MCPClientManager } from './mcp-client.js';
 import type { ToolDefinition, ToolResult } from './types.js';
 
@@ -25,8 +26,27 @@ interface HybridBrowserSessionState {
   lastReadBackend?: HybridBrowserBackend;
   lastLightpandaUrl?: string;
   lastPlaywrightUrl?: string;
+  latestPlaywrightStateId?: string;
+  playwrightStateVersion: number;
   lastStrategy?: string;
   updatedAt: number;
+}
+
+export interface HybridBrowserTarget {
+  ref: string;
+  type: string;
+  text: string;
+}
+
+interface HybridBrowserActionState {
+  id: string;
+  scopeKey: string;
+  url: string;
+  title?: string;
+  snapshot: string;
+  elements: HybridBrowserTarget[];
+  version: number;
+  createdAt: number;
 }
 
 export interface HybridBrowserCapabilities {
@@ -56,6 +76,8 @@ export interface HybridBrowserCapabilities {
     browserRead: boolean;
     browserLinks: boolean;
     browserExtract: boolean;
+    browserState: boolean;
+    browserAct: boolean;
     browserInteract: boolean;
   };
 }
@@ -72,6 +94,7 @@ export interface HybridBrowserSessionSnapshot {
 
 export class HybridBrowserService {
   private readonly sessions = new Map<string, HybridBrowserSessionState>();
+  private readonly actionStates = new Map<string, HybridBrowserActionState>();
 
   constructor(
     private readonly manager: MCPClientManager,
@@ -131,7 +154,9 @@ export class HybridBrowserService {
         browserRead: (lightpandaNavigate && lightpandaMarkdown) || (playwrightNavigate && playwrightSnapshot),
         browserLinks: lightpandaNavigate && lightpandaLinks,
         browserExtract: lightpandaNavigate && (lightpandaStructuredData || lightpandaSemanticTree),
-        browserInteract: playwrightNavigate && playwrightInteract,
+        browserState: playwrightNavigate && playwrightSnapshot,
+        browserAct: playwrightNavigate && playwrightInteract,
+        browserInteract: (playwrightNavigate && playwrightSnapshot) || (playwrightNavigate && playwrightInteract),
       },
     };
   }
@@ -147,6 +172,154 @@ export class HybridBrowserService {
       lastReadBackend: session.lastReadBackend,
       lastStrategy: session.lastStrategy,
       updatedAt: session.updatedAt,
+    };
+  }
+
+  async state(
+    scopeKey: string,
+    input: { url?: string; maxChars?: number },
+  ): Promise<ToolResult> {
+    const capabilities = this.getCapabilities();
+    if (!(capabilities.backends.playwright.navigate && capabilities.backends.playwright.snapshot)) {
+      return { success: false, error: 'Interactive browser state requires the Playwright backend.' };
+    }
+
+    const targetUrl = normalizeBrowserUrl(input.url);
+    if (targetUrl) {
+      const navigation = await this.navigate(scopeKey, targetUrl, 'interactive');
+      if (!navigation.success) return navigation;
+    }
+
+    const session = this.sessions.get(scopeKey);
+    const currentUrl = session?.currentUrl;
+    if (!currentUrl) {
+      return { success: false, error: 'No active browser page. Call browser_navigate first or pass a url.' };
+    }
+
+    const sync = await this.ensureBackendAtUrl(scopeKey, 'playwright', currentUrl);
+    if (!sync.success) {
+      return sync.result;
+    }
+    const snapshotResult = await this.callTool(PLAYWRIGHT_SNAPSHOT_TOOL, {});
+    if (!snapshotResult.success) {
+      return snapshotResult;
+    }
+
+    const parsedSnapshot = parsePlaywrightSnapshot(snapshotResult.output);
+    const snapshotText = clipText(parsedSnapshot.snapshotText, Math.max(500, Math.min(40_000, asNumber(input.maxChars, 12_000))));
+    const state = this.storePlaywrightActionState(scopeKey, {
+      url: currentUrl,
+      title: this.sessions.get(scopeKey)?.pageTitle,
+      snapshot: snapshotText,
+      elements: parsedSnapshot.elements,
+    });
+    this.updateSession(scopeKey, {
+      lastAction: 'state',
+      lastBackend: 'playwright',
+      lastReadBackend: 'playwright',
+      latestPlaywrightStateId: state.id,
+      lastStrategy: 'playwright-state',
+    });
+    return {
+      success: true,
+      message: `Captured interactive browser state for ${currentUrl} via Playwright.`,
+      output: {
+        stateId: state.id,
+        url: state.url,
+        title: state.title,
+        backend: 'playwright',
+        elements: state.elements,
+        snapshot: state.snapshot,
+        createdAt: state.createdAt,
+        session: this.getSession(scopeKey),
+      },
+    };
+  }
+
+  async act(
+    scopeKey: string,
+    input: { stateId?: string; action?: string; ref?: string; value?: string },
+  ): Promise<ToolResult> {
+    const capabilities = this.getCapabilities();
+    if (!(capabilities.backends.playwright.navigate && capabilities.backends.playwright.interact)) {
+      return { success: false, error: 'Interactive browser actions require the Playwright backend.' };
+    }
+
+    const action = (input.action ?? 'click').trim().toLowerCase();
+    if (!['click', 'type', 'fill', 'select'].includes(action)) {
+      return { success: false, error: `Unsupported browser_act action '${action}'.` };
+    }
+
+    const stateId = (input.stateId ?? '').trim();
+    if (!stateId) {
+      return { success: false, error: 'stateId is required. Capture a fresh browser_state before mutating the page.' };
+    }
+
+    const state = this.actionStates.get(stateId);
+    if (!state || state.scopeKey !== scopeKey) {
+      return { success: false, error: 'Unknown browser state. Capture a fresh browser_state before mutating the page.' };
+    }
+
+    const session = this.sessions.get(scopeKey);
+    if (!session || session.playwrightStateVersion !== state.version || session.currentUrl !== state.url) {
+      return { success: false, error: 'The captured browser state is stale. Capture a fresh browser_state before mutating the page.' };
+    }
+
+    const ref = (input.ref ?? '').trim();
+    if (!ref) {
+      return { success: false, error: 'ref is required for browser_act.' };
+    }
+    const mutationValue = typeof input.value === 'string' ? input.value : '';
+    if (action !== 'click' && mutationValue.length === 0) {
+      return { success: false, error: `value is required for browser_act action '${action}'.` };
+    }
+
+    const matchedTarget = state.elements.find((element) => element.ref === ref);
+    if (!matchedTarget) {
+      return { success: false, error: `Unknown ref '${ref}' for the captured browser state.` };
+    }
+
+    const sync = await this.ensureBackendAtUrl(scopeKey, 'playwright', state.url);
+    if (!sync.success) {
+      return sync.result;
+    }
+
+    const toolName = action === 'click'
+      ? PLAYWRIGHT_CLICK_TOOL
+      : (action === 'select' ? PLAYWRIGHT_SELECT_TOOL : PLAYWRIGHT_TYPE_TOOL);
+    const payload = buildPlaywrightMutationPayload(
+      this.getToolDefinition(toolName),
+      action as 'click' | 'type' | 'fill' | 'select',
+      ref,
+      mutationValue,
+    );
+    const interactionResult = await this.callTool(toolName, payload);
+    if (!interactionResult.success) {
+      return interactionResult;
+    }
+
+    const nextVersion = this.bumpPlaywrightStateVersion(scopeKey);
+    this.updateSession(scopeKey, {
+      lastAction: `act:${action}`,
+      lastBackend: 'playwright',
+      lastStrategy: 'playwright-action',
+      latestPlaywrightStateId: undefined,
+    });
+    this.pruneActionStates(scopeKey, nextVersion);
+    return {
+      success: true,
+      message: `${formatInteractionPastTense(action)} '${matchedTarget.text || matchedTarget.ref}' on ${state.url} via Playwright.`,
+      output: {
+        stateId,
+        url: state.url,
+        backend: 'playwright',
+        action,
+        ref,
+        target: matchedTarget,
+        ...(action === 'click' ? {} : { value: mutationValue }),
+        resyncedPage: sync.navigated,
+        session: this.getSession(scopeKey),
+      },
     };
   }
 
@@ -169,6 +342,7 @@ export class HybridBrowserService {
       const lightpandaResult = await this.callTool(LIGHTPANDA_GOTO_TOOL, { url: normalizedUrl });
       if (lightpandaResult.success) {
         const summary = summarizeNavigationResult(lightpandaResult.output, normalizedUrl);
+        const nextVersion = this.bumpPlaywrightStateVersion(scopeKey);
         this.updateSession(scopeKey, {
           currentUrl: summary.url,
           pageTitle: summary.title,
@@ -176,8 +350,10 @@ export class HybridBrowserService {
           lastBackend: 'lightpanda',
           lastReadBackend: 'lightpanda',
           lastLightpandaUrl: summary.url,
+          latestPlaywrightStateId: undefined,
           lastStrategy: mode === 'read' ? 'lightpanda' : 'lightpanda-first',
         });
+        this.pruneActionStates(scopeKey, nextVersion);
         return {
           success: true,
           message: `Navigated to ${summary.url} via Lightpanda.`,
@@ -204,6 +380,7 @@ export class HybridBrowserService {
         };
       }
       const summary = summarizeNavigationResult(playwrightResult.output, normalizedUrl);
+      const nextVersion = this.bumpPlaywrightStateVersion(scopeKey);
       this.updateSession(scopeKey, {
         currentUrl: summary.url,
         pageTitle: summary.title,
@@ -211,8 +388,10 @@ export class HybridBrowserService {
         lastBackend: 'playwright',
         lastReadBackend: 'playwright',
         lastPlaywrightUrl: summary.url,
+        latestPlaywrightStateId: undefined,
         lastStrategy: 'lightpanda-fallback-playwright',
       });
+      this.pruneActionStates(scopeKey, nextVersion);
       return {
         success: true,
         message: `Navigated to ${summary.url} via Playwright after Lightpanda fallback.`,
@@ -240,6 +419,7 @@ export class HybridBrowserService {
       return playwrightResult;
     }
     const summary = summarizeNavigationResult(playwrightResult.output, normalizedUrl);
+    const nextVersion = this.bumpPlaywrightStateVersion(scopeKey);
     this.updateSession(scopeKey, {
       currentUrl: summary.url,
       pageTitle: summary.title,
@@ -247,8 +427,10 @@ export class HybridBrowserService {
       lastBackend: 'playwright',
       lastReadBackend: 'playwright',
       lastPlaywrightUrl: summary.url,
+      latestPlaywrightStateId: undefined,
       lastStrategy: 'playwright',
     });
+    this.pruneActionStates(scopeKey, nextVersion);
     return {
       success: true,
       message: `Navigated to ${summary.url} via Playwright.`,
@@ -327,7 +509,7 @@ export class HybridBrowserService {
     if (!snapshotResult.success) {
       return snapshotResult;
     }
-    const content = clipText(outputToText(snapshotResult.output), maxChars);
+    const content = clipText(extractSnapshotText(snapshotResult.output), maxChars);
     this.updateSession(scopeKey, {
       lastAction: 'read',
       lastBackend: 'playwright',
@@ -474,144 +656,83 @@ export class HybridBrowserService {
 
   async interact(
     scopeKey: string,
-    input: { url?: string; action?: string; element?: string; value?: string },
+    input: { url?: string; action?: string; stateId?: string; ref?: string; element?: string; value?: string },
   ): Promise<ToolResult> {
-    const capabilities = this.getCapabilities();
     const action = (input.action ?? 'list').trim().toLowerCase();
     if (!['list', 'click', 'type', 'fill', 'select'].includes(action)) {
       return { success: false, error: `Unsupported browser_interact action '${action}'.` };
     }
 
     const targetUrl = normalizeBrowserUrl(input.url);
-    if (targetUrl) {
-      const navigation = await this.navigate(
-        scopeKey,
-        targetUrl,
-        action === 'list' ? 'read' : 'interactive',
-      );
-      if (!navigation.success) return navigation;
-    }
-
-    const session = this.sessions.get(scopeKey);
-    const currentUrl = session?.currentUrl;
-    if (!currentUrl) {
-      return { success: false, error: 'No active browser page. Call browser_navigate first or pass a url.' };
-    }
 
     if (action === 'list') {
-      if (capabilities.backends.lightpanda.navigate && capabilities.backends.lightpanda.interactiveElements) {
-        const sync = await this.ensureBackendAtUrl(scopeKey, 'lightpanda', currentUrl);
-        if (!sync.success) {
-          return sync.result;
-        }
-        const elementsResult = await this.callTool(LIGHTPANDA_INTERACTIVE_ELEMENTS_TOOL, {});
-        if (!elementsResult.success) {
-          return elementsResult;
-        }
-        const elements = normalizeInteractiveElements(elementsResult.output);
-        this.updateSession(scopeKey, {
-          lastAction: 'interact:list',
-          lastBackend: 'lightpanda',
-          lastReadBackend: 'lightpanda',
-          lastStrategy: 'lightpanda',
-        });
-        return {
-          success: true,
-          message: `Listed ${elements.length} interactive element${elements.length === 1 ? '' : 's'} on ${currentUrl}.`,
-          output: {
-            url: currentUrl,
-            backend: 'lightpanda',
-            action,
-            elements,
-            session: this.getSession(scopeKey),
-          },
-        };
+      const stateResult = await this.state(scopeKey, {
+        ...(targetUrl ? { url: targetUrl } : {}),
+      });
+      if (!stateResult.success) {
+        return stateResult;
       }
-
-      if (!capabilities.backends.playwright.navigate || !capabilities.backends.playwright.snapshot) {
-        return { success: false, error: 'Interactive element discovery is unavailable on the current browser backends.' };
-      }
-
-      const sync = await this.ensureBackendAtUrl(scopeKey, 'playwright', currentUrl);
-      if (!sync.success) {
-        return sync.result;
-      }
-      const snapshotResult = await this.callTool(PLAYWRIGHT_SNAPSHOT_TOOL, {});
-      if (!snapshotResult.success) {
-        return snapshotResult;
-      }
-      const snapshotText = outputToText(snapshotResult.output);
-      const parsedElements = parseSnapshotRefs(snapshotText);
+      const output = isRecord(stateResult.output) ? stateResult.output : {};
+      const elements = Array.isArray(output.elements)
+        ? output.elements.filter((entry): entry is HybridBrowserTarget => (
+          isRecord(entry)
+          && typeof entry.ref === 'string'
+          && typeof entry.type === 'string'
+          && typeof entry.text === 'string'
+        ))
+        : [];
       this.updateSession(scopeKey, {
         lastAction: 'interact:list',
         lastBackend: 'playwright',
         lastReadBackend: 'playwright',
-        lastStrategy: 'playwright',
+        lastStrategy: 'playwright-state',
       });
+      const url = asOptionalString(output.url) ?? this.sessions.get(scopeKey)?.currentUrl;
+      const snapshot = asOptionalString(output.snapshot);
+      const stateId = asOptionalString(output.stateId);
+      if (!url) {
+        return stateResult;
+      }
       return {
         success: true,
-        message: `Listed interactive targets for ${currentUrl} via Playwright snapshot.`,
+        message: `Listed interactive targets for ${url} via Playwright browser state.`,
         output: {
-          url: currentUrl,
+          url,
           backend: 'playwright',
           action,
-          elements: parsedElements,
-          snapshot: clipText(snapshotText, 12_000),
+          ...(stateId ? { stateId } : {}),
+          elements,
+          ...(snapshot ? { snapshot } : {}),
           session: this.getSession(scopeKey),
         },
       };
     }
 
-    if (!(capabilities.backends.playwright.navigate && capabilities.backends.playwright.interact)) {
-      return { success: false, error: 'Interactive browser actions require the Playwright backend.' };
+    if (targetUrl) {
+      const stateResult = await this.state(scopeKey, { url: targetUrl });
+      if (!stateResult.success) {
+        return stateResult;
+      }
     }
 
-    const element = (input.element ?? '').trim();
-    if (!element) {
-      return { success: false, error: 'element is required for click, type, fill, and select actions.' };
+    const session = this.sessions.get(scopeKey);
+    const stateId = (input.stateId ?? '').trim() || session?.latestPlaywrightStateId || '';
+    if (!stateId) {
+      return { success: false, error: 'browser_interact mutating actions now require a fresh browser_state (or action=list) so you can supply stateId and ref.' };
     }
 
-    const sync = await this.ensureBackendAtUrl(scopeKey, 'playwright', currentUrl);
-    if (!sync.success) {
-      return sync.result;
+    const ref = (input.ref ?? '').trim()
+      || resolveCompatibilityRef(input.element, this.actionStates.get(stateId));
+    if (!ref) {
+      return { success: false, error: 'browser_interact mutating actions now require a stable ref from browser_state output. Free-form labels are no longer accepted.' };
     }
 
-    const toolName = action === 'click'
-      ? PLAYWRIGHT_CLICK_TOOL
-      : (action === 'select' ? PLAYWRIGHT_SELECT_TOOL : PLAYWRIGHT_TYPE_TOOL);
-    const elementKey = this.pickParameterKey(toolName, ['element', 'ref', 'selector', 'target'], 'element');
-    const payload: Record<string, unknown> = {
-      [elementKey]: element,
-    };
-    if (action !== 'click') {
-      const value = input.value ?? '';
-      const valueKey = this.pickParameterKey(toolName, ['text', 'value', 'option', 'input'], action === 'select' ? 'value' : 'text');
-      payload[valueKey] = value;
-    }
-
-    const interactionResult = await this.callTool(toolName, payload);
-    if (!interactionResult.success) {
-      return interactionResult;
-    }
-
-    this.updateSession(scopeKey, {
-      lastAction: `interact:${action}`,
-      lastBackend: 'playwright',
-      lastStrategy: 'playwright',
+    return this.act(scopeKey, {
+      stateId,
+      action,
+      ref,
+      value: input.value,
     });
-    return {
-      success: true,
-      message: `${formatInteractionPastTense(action)} '${element}' on ${currentUrl} via Playwright.`,
-      output: {
-        url: currentUrl,
-        backend: 'playwright',
-        action,
-        element,
-        ...(action === 'click' ? {} : { value: input.value ?? '' }),
-        resyncedPage: sync.navigated,
-        session: this.getSession(scopeKey),
-      },
-    };
   }
 
   private getToolNames(): Set<string> {
@@ -620,22 +741,6 @@ export class HybridBrowserService {
 
   private getToolDefinition(toolName: string): ToolDefinition | undefined {
     return this.manager.getAllToolDefinitions().find((definition) => definition.name === toolName);
-  }
-
-  private pickParameterKey(
-    toolName: string,
-    preferredKeys: string[],
-    fallback: string,
-  ): string {
-    const definition = this.getToolDefinition(toolName);
-    const properties = isRecord(definition?.parameters)
-      && isRecord((definition.parameters as Record<string, unknown>).properties)
-      ? Object.keys((definition.parameters as { properties: Record<string, unknown> }).properties)
-      : [];
-    for (const preferred of preferredKeys) {
-      if (properties.includes(preferred)) return preferred;
-    }
-    return properties[0] ?? fallback;
   }
 
   private async ensureBackendAtUrl(
@@ -654,17 +759,21 @@ export class HybridBrowserService {
       return { success: false, result };
     }
     const summary = summarizeNavigationResult(result.output, url);
+    const nextVersion = this.bumpPlaywrightStateVersion(scopeKey);
     this.updateSession(scopeKey, backend === 'lightpanda'
       ? {
           currentUrl: summary.url,
           pageTitle: summary.title,
           lastLightpandaUrl: summary.url,
+          latestPlaywrightStateId: undefined,
         }
       : {
           currentUrl: summary.url,
           pageTitle: summary.title,
           lastPlaywrightUrl: summary.url,
+          latestPlaywrightStateId: undefined,
         });
+    this.pruneActionStates(scopeKey, nextVersion);
     return { success: true, navigated: true };
   }
 
@@ -676,12 +785,52 @@ export class HybridBrowserService {
   }
 
   private updateSession(scopeKey: string, patch: Partial<HybridBrowserSessionState>): void {
-    const current = this.sessions.get(scopeKey) ?? { updatedAt: this.now() };
+    const current = this.sessions.get(scopeKey) ?? { updatedAt: this.now(), playwrightStateVersion: 0 };
     this.sessions.set(scopeKey, {
       ...current,
       ...patch,
       updatedAt: this.now(),
     });
+  }
+
+  private storePlaywrightActionState(
+    scopeKey: string,
+    input: { url: string; title?: string; snapshot: string; elements: HybridBrowserTarget[] },
+  ): HybridBrowserActionState {
+    const session = this.sessions.get(scopeKey) ?? { updatedAt: this.now(), playwrightStateVersion: 0 };
+    const state: HybridBrowserActionState = {
+      id: `browser-state:${randomUUID()}`,
+      scopeKey,
+      url: input.url,
+      title: input.title,
+      snapshot: input.snapshot,
+      elements: input.elements,
+      version: session.playwrightStateVersion,
+      createdAt: this.now(),
+    };
+    this.actionStates.set(state.id, state);
+    this.pruneActionStates(scopeKey, session.playwrightStateVersion);
+    return state;
+  }
+
+  private bumpPlaywrightStateVersion(scopeKey: string): number {
+    const current = this.sessions.get(scopeKey) ?? { updatedAt: this.now(), playwrightStateVersion: 0 };
+    const nextVersion = (current.playwrightStateVersion ?? 0) + 1;
+    this.sessions.set(scopeKey, {
+      ...current,
+      playwrightStateVersion: nextVersion,
+      updatedAt: this.now(),
+    });
+    return nextVersion;
+  }
+
+  private pruneActionStates(scopeKey: string, currentVersion: number): void {
+    for (const [id, state] of this.actionStates.entries()) {
+      if (state.scopeKey !== scopeKey) continue;
+      if (state.version !== currentVersion) {
+        this.actionStates.delete(id);
+      }
+    }
   }
 }
 
@@ -738,34 +887,6 @@ function normalizeStructuredOutput(output: unknown): unknown {
   return structured;
 }
 
-function normalizeInteractiveElements(output: unknown): Array<{ ref: string; type: string; text: string }> {
-  const structured = outputToStructured(output);
-  const candidates = Array.isArray(structured)
-    ? structured
-    : isRecord(structured) && Array.isArray(structured.elements)
-      ? structured.elements
-      : [];
-  const elements: Array<{ ref: string; type: string; text: string }> = [];
-  for (const candidate of candidates) {
-    if (!isRecord(candidate)) continue;
-    const ref = asOptionalString(candidate.ref)
-      ?? asOptionalString(candidate.id)
-      ?? asOptionalString(candidate.selector)
-      ?? asOptionalString(candidate.element);
-    if (!ref) continue;
-    const type = asOptionalString(candidate.type)
-      ?? asOptionalString(candidate.role)
-      ?? asOptionalString(candidate.tag)
-      ?? 'interactive';
-    const text = asOptionalString(candidate.text)
-      ?? asOptionalString(candidate.label)
-      ?? asOptionalString(candidate.name)
-      ?? '';
-    elements.push({ ref, type, text });
-  }
-  return elements;
-}
-
 function parseSnapshotRefs(snapshot: string): Array<{ ref: string; type: string; text: string }> {
   const elements: Array<{ ref: string; type: string; text: string }> = [];
   for (const line of snapshot.split(/\r?\n/g)) {
@@ -776,10 +897,192 @@ function parseSnapshotRefs(snapshot: string): Array<{ ref: string; type: string;
     const ref = refMatch[1];
     const typeMatch = trimmed.match(/^(button|link|textbox|input|checkbox|radio|combobox|option|tab)\b/i);
     const type = typeMatch?.[1]?.toLowerCase() ?? 'interactive';
-    const text = trimmed.replace(/\bref=[^\s\]]+/i, '').trim();
+    const text = trimmed
+      .replace(/\bref=[^\s\]]+/i, '')
+      .replace(/^(button|link|textbox|input|checkbox|radio|combobox|option|tab)\b/i, '')
+      .replace(/\s+/g, ' ')
+      .trim();
     elements.push({ ref, type, text });
   }
   return elements;
+}
+
+function parsePlaywrightSnapshot(output: unknown): { snapshotText: string; elements: HybridBrowserTarget[] } {
+  const structured = outputToStructured(output);
+  const snapshotValue = isRecord(structured) && Object.prototype.hasOwnProperty.call(structured, 'snapshot')
+    ? structured.snapshot
+    : structured;
+  const text = extractSnapshotText(snapshotValue).trim() || extractSnapshotText(structured).trim();
+  const elements = collectSnapshotRefs(snapshotValue);
+  if (elements.length > 0) {
+    return {
+      snapshotText: text || elements.map((element) => `${element.type} ref=${element.ref} ${element.text}`.trim()).join('\n'),
+      elements,
+    };
+  }
+  return {
+    snapshotText: text,
+    elements: parseSnapshotRefs(text),
+  };
+}
+
+function extractSnapshotText(output: unknown): string {
+  if (typeof output === 'string') {
+    const structured = outputToStructured(output);
+    if (structured !== output) {
+      return extractSnapshotText(structured);
+    }
+    return output;
+  }
+  if (Array.isArray(output)) {
+    return output.map((entry) => extractSnapshotText(entry)).filter(Boolean).join('\n');
+  }
+  if (isRecord(output)) {
+    if (typeof output.snapshot === 'string') return output.snapshot;
+    if (Array.isArray(output.outline)) {
+      return output.outline
+        .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+        .filter(Boolean)
+        .join('\n');
+    }
+    const formatted = formatSnapshotNode(output);
+    if (formatted.trim()) return formatted;
+  }
+  return outputToText(output);
+}
+
+function collectSnapshotRefs(value: unknown): HybridBrowserTarget[] {
+  const elements: HybridBrowserTarget[] = [];
+  const seen = new Set<string>();
+
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach(visit);
+      return;
+    }
+    if (!isRecord(node)) return;
+
+    const ref = asOptionalString(node.ref)
+      ?? asOptionalString(node.id)
+      ?? asOptionalString(node.element);
+    const type = asOptionalString(node.role)
+      ?? asOptionalString(node.type)
+      ?? asOptionalString(node.tag)
+      ?? asOptionalString(node.kind);
+    const text = asOptionalString(node.name)
+      ?? asOptionalString(node.text)
+      ?? asOptionalString(node.label)
+      ?? asOptionalString(node.value)
+      ?? asOptionalString(node.title)
+      ?? '';
+
+    if (ref && type && !seen.has(ref)) {
+      seen.add(ref);
+      elements.push({ ref, type, text });
+    }
+
+    for (const [key, child] of Object.entries(node)) {
+      if (key === 'ref' || key === 'id' || key === 'element' || key === 'role' || key === 'type' || key === 'tag' || key === 'kind' || key === 'name' || key === 'text' || key === 'label' || key === 'value' || key === 'title') {
+        continue;
+      }
+      visit(child);
+    }
+  };
+
+  visit(value);
+  return elements;
+}
+
+function formatSnapshotNode(value: unknown, depth = 0): string {
+  if (typeof value === 'string') return `${'  '.repeat(depth)}${value}`;
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => formatSnapshotNode(entry, depth))
+      .filter(Boolean)
+      .join('\n');
+  }
+  if (!isRecord(value)) return '';
+
+  const ref = asOptionalString(value.ref)
+    ?? asOptionalString(value.id)
+    ?? asOptionalString(value.element);
+  const type = asOptionalString(value.role)
+    ?? asOptionalString(value.type)
+    ?? asOptionalString(value.tag)
+    ?? asOptionalString(value.kind);
+  const text = asOptionalString(value.name)
+    ?? asOptionalString(value.text)
+    ?? asOptionalString(value.label)
+    ?? asOptionalString(value.value)
+    ?? asOptionalString(value.title);
+  const line = [type, ref ? `ref=${ref}` : '', text].filter(Boolean).join(' ').trim();
+
+  const childLines: string[] = [];
+  for (const [key, child] of Object.entries(value)) {
+    if (key === 'ref' || key === 'id' || key === 'element' || key === 'role' || key === 'type' || key === 'tag' || key === 'kind' || key === 'name' || key === 'text' || key === 'label' || key === 'value' || key === 'title') {
+      continue;
+    }
+    const rendered = formatSnapshotNode(child, line ? depth + 1 : depth);
+    if (rendered) childLines.push(rendered);
+  }
+
+  return [line ? `${'  '.repeat(depth)}${line}` : '', ...childLines].filter(Boolean).join('\n');
+}
+
+function buildPlaywrightMutationPayload(
+  definition: ToolDefinition | undefined,
+  action: 'click' | 'type' | 'fill' | 'select',
+  ref: string,
+  value: string,
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+  const refKey = pickDefinitionParameterKey(definition, ['ref', 'element', 'selector'], 'ref');
+  payload[refKey] = ref;
+
+  if (action === 'click') {
+    return payload;
+  }
+
+  if (action === 'select') {
+    const valueKey = pickDefinitionParameterKey(definition, ['values', 'value', 'options'], 'values');
+    payload[valueKey] = valueKey === 'values' || valueKey === 'options' ? [value] : value;
+    return payload;
+  }
+
+  const valueKey = pickDefinitionParameterKey(definition, ['text', 'value', 'input'], 'text');
+  payload[valueKey] = value;
+  return payload;
+}
+
+function pickDefinitionParameterKey(
+  definition: ToolDefinition | undefined,
+  preferredKeys: string[],
+  fallback: string,
+): string {
+  const properties = isRecord(definition?.parameters)
+    && isRecord((definition.parameters as Record<string, unknown>).properties)
+    ? Object.keys((definition.parameters as { properties: Record<string, unknown> }).properties)
+    : [];
+  for (const preferred of preferredKeys) {
+    if (properties.includes(preferred)) return preferred;
+  }
+  return properties[0] ?? fallback;
+}
+
+function resolveCompatibilityRef(
+  value: string | undefined,
+  state: HybridBrowserActionState | undefined,
+): string {
+  const normalized = (value ?? '').trim();
+  if (!normalized) return '';
+  if (state?.elements.some((element) => element.ref === normalized)) {
+    return normalized;
+  }
+  return looksLikeBrowserRef(normalized) ? normalized : '';
+}
+
+function looksLikeBrowserRef(value: string): boolean {
+  return /^[A-Za-z0-9:_-]{1,120}$/.test(value.trim());
 }
 
 function outputToStructured(output: unknown): unknown {

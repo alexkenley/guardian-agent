@@ -473,6 +473,78 @@ describe('ConnectorPlaybookService', () => {
     expect(scanOutput).toHaveBeenCalledWith('The password is SECRET');
   });
 
+  it('resolves nested output placeholders for later tool args', async () => {
+    const config = makeConfig();
+    config.playbooks.requireDryRunOnFirstExecution = false;
+    config.playbooks.requireSignedDefinitions = false;
+    config.playbooks.definitions = [
+      {
+        id: 'browser-playbook',
+        name: 'Browser Playbook',
+        enabled: true,
+        mode: 'sequential',
+        steps: [
+          {
+            id: 'capture_state',
+            packId: '',
+            toolName: 'browser_state',
+            args: { url: 'https://example.com' },
+          },
+          {
+            id: 'click_target',
+            packId: '',
+            toolName: 'browser_act',
+            args: {
+              stateId: '${capture_state.output.stateId}',
+              ref: '${capture_state.output.elements.0.ref}',
+              action: 'click',
+            },
+          },
+        ],
+      },
+    ];
+
+    const runTool = vi.fn(async (request: ToolExecutionRequest): Promise<ToolRunResponse> => {
+      if (request.toolName === 'browser_state') {
+        return {
+          success: true,
+          status: 'succeeded',
+          jobId: 'job-state',
+          message: 'state ok',
+          output: {
+            stateId: 'state-123',
+            elements: [{ ref: 'link-more-info', type: 'link', text: 'More information...' }],
+          },
+        };
+      }
+      expect(request.toolName).toBe('browser_act');
+      expect(request.args).toEqual({
+        stateId: 'state-123',
+        ref: 'link-more-info',
+        action: 'click',
+      });
+      return {
+        success: true,
+        status: 'succeeded',
+        jobId: 'job-click',
+        message: 'clicked',
+      };
+    });
+
+    const service = new ConnectorPlaybookService({
+      config,
+      runTool,
+    });
+
+    const result = await service.runPlaybook({
+      playbookId: 'browser-playbook',
+      origin: 'web',
+    });
+
+    expect(result.success).toBe(true);
+    expect(runTool).toHaveBeenCalledTimes(2);
+  });
+
   it('mixes tool and instruction steps in sequential pipeline', async () => {
     const config = makeConfig();
     config.playbooks.requireDryRunOnFirstExecution = false;

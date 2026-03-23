@@ -149,6 +149,7 @@ import {
   isSkillInventoryQuery,
 } from './runtime/skills-query.js';
 import { tryAutomationPreRoute } from './runtime/automation-prerouter.js';
+import { tryBrowserPreRoute } from './runtime/browser-prerouter.js';
 import {
   isDirectBrowserAutomationIntent,
   parseDirectFileSearchIntent,
@@ -1245,6 +1246,30 @@ class ChatAgent extends BaseAgent {
         return {
           content: finalContent,
           metadata: this.buildImmediateResponseMetadata(activeSkills, userKey),
+        };
+      }
+
+      const directBrowserAutomation = await this.tryDirectBrowserAutomation(
+        contextAwareScopedMessage,
+        ctx,
+        userKey,
+        effectiveCodeContext,
+      );
+      if (directBrowserAutomation) {
+        finalContent = directBrowserAutomation.content;
+        if (this.conversationService) {
+          this.conversationService.recordTurn(
+            conversationKey,
+            message.content,
+            finalContent,
+          );
+        }
+        return {
+          content: finalContent,
+          metadata: {
+            ...this.buildImmediateResponseMetadata(activeSkills, userKey),
+            ...directBrowserAutomation.metadata,
+          },
         };
       }
 
@@ -2973,6 +2998,49 @@ class ChatAgent extends BaseAgent {
       this.clearAutomationApprovalContinuation(userKey);
     }
     return result;
+  }
+
+  private async tryDirectBrowserAutomation(
+    message: UserMessage,
+    ctx: AgentContext,
+    userKey: string,
+    codeContext?: { workspaceRoot?: string; sessionId?: string },
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    if (!this.tools?.isEnabled()) return null;
+    const scopedCodeContext = codeContext?.workspaceRoot
+      ? { workspaceRoot: codeContext.workspaceRoot, ...(codeContext.sessionId ? { sessionId: codeContext.sessionId } : {}) }
+      : undefined;
+
+    return tryBrowserPreRoute({
+      agentId: this.id,
+      message,
+      checkAction: ctx.checkAction,
+      executeTool: (toolName, args, request) => this.tools!.executeModelTool(toolName, args, {
+        ...request,
+        ...(scopedCodeContext ? { codeContext: scopedCodeContext } : {}),
+      }),
+      trackPendingApproval: (approvalId) => {
+        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
+        this.setPendingApprovals(userKey, [...existingIds, approvalId]);
+      },
+      onPendingApproval: ({ approvalId, approved, denied }) => {
+        this.setApprovalFollowUp(approvalId, { approved, denied });
+      },
+      formatPendingApprovalPrompt: (ids) => this.formatPendingApprovalPrompt(ids),
+      resolvePendingApprovalMetadata: (ids, fallback) => {
+        const summaries = this.tools?.getApprovalSummaries(ids);
+        if (!summaries) return fallback;
+        return ids.map((id) => {
+          const summary = summaries.get(id);
+          const fallbackItem = fallback.find((item) => item.id === id);
+          return {
+            id,
+            toolName: summary?.toolName ?? fallbackItem?.toolName ?? 'unknown',
+            argsPreview: summary?.argsPreview ?? fallbackItem?.argsPreview ?? '',
+          };
+        });
+      },
+    });
   }
 
   private async tryDirectScheduledEmailAutomation(
@@ -10366,7 +10434,7 @@ async function main(): Promise<void> {
 
       const hostRelevant = new Set([
         'shell_safe', 'net_connections', 'sys_processes',
-        'browser_navigate', 'browser_read', 'browser_links', 'browser_extract', 'browser_interact',
+        'browser_navigate', 'browser_read', 'browser_links', 'browser_extract', 'browser_state', 'browser_act', 'browser_interact',
         'mcp-playwright-browser_navigate', 'mcp-playwright-browser_click',
         'mcp-playwright-browser_type', 'mcp-playwright-browser_evaluate',
         'mcp-playwright-browser_run_code', 'mcp-playwright-browser_file_upload',

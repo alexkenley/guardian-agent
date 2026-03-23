@@ -7,19 +7,33 @@ describe('BrowserSessionBroker', () => {
 
     expect(broker.isBrowserTool('browser_capabilities')).toBe(true);
     expect(broker.isBrowserTool('browser_navigate')).toBe(true);
+    expect(broker.isBrowserTool('browser_state')).toBe(true);
+    expect(broker.isBrowserTool('browser_act')).toBe(true);
     expect(broker.isBrowserTool('browser_interact')).toBe(true);
   });
 
-  it('blocks scheduled browser_interact mutations outside monitor mode', () => {
+  it('blocks scheduled browser_act mutations outside monitor mode', () => {
     const broker = new BrowserSessionBroker();
 
     const decision = broker.decide({
-      toolName: 'browser_interact',
+      toolName: 'browser_act',
       currentMode: 'guarded',
       scheduled: true,
     });
 
     expect(decision.allowed).toBe(false);
     expect(decision.policy).toBe('browser_scheduled_mutation');
+  });
+
+  it('allows scheduled browser_state reads outside monitor mode', () => {
+    const broker = new BrowserSessionBroker();
+
+    const decision = broker.decide({
+      toolName: 'browser_state',
+      currentMode: 'guarded',
+      scheduled: true,
+    });
+
+    expect(decision.allowed).toBe(true);
   });
 });

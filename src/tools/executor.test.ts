@@ -5506,6 +5506,8 @@ describe('ToolExecutor', () => {
       expect(names).toContain('browser_read');
       expect(names).toContain('browser_links');
       expect(names).toContain('browser_extract');
+      expect(names).toContain('browser_state');
+      expect(names).toContain('browser_act');
       expect(names).toContain('browser_interact');
     });
 
@@ -5559,6 +5561,8 @@ describe('ToolExecutor', () => {
 
       let names = executor.listToolDefinitions().map((t) => t.name);
       expect(names).toContain('browser_read');
+      expect(names).toContain('browser_state');
+      expect(names).toContain('browser_act');
       expect(names).not.toContain('browser_links');
       expect(names).not.toContain('browser_extract');
 
@@ -5579,14 +5583,14 @@ describe('ToolExecutor', () => {
       expect(names).not.toContain('browser_extract');
     });
 
-    it('allows browser_interact list without approval but approval-gates click actions', async () => {
+    it('allows browser_state without approval, approval-gates browser_act, and rejects invalid legacy browser_interact mutations without approval', async () => {
       const root = createExecutorRoot();
       const callTool = vi.fn(async (toolName: string) => {
-        if (toolName === 'mcp-lightpanda-goto') {
+        if (toolName === 'mcp-playwright-browser_navigate') {
           return { success: true, output: JSON.stringify({ url: 'https://example.com', title: 'Example' }) };
         }
-        if (toolName === 'mcp-lightpanda-interactiveElements') {
-          return { success: true, output: JSON.stringify([{ ref: 'btn-login', type: 'button', text: 'Log in' }]) };
+        if (toolName === 'mcp-playwright-browser_snapshot') {
+          return { success: true, output: 'link ref=link-more-info More information...' };
         }
         return { success: true, output: { ok: true } };
       });
@@ -5603,27 +5607,36 @@ describe('ToolExecutor', () => {
         } as unknown as import('./mcp-client.js').MCPClientManager,
       });
 
-      const listResult = await executor.runTool({
-        toolName: 'browser_interact',
-        args: { url: 'https://example.com', action: 'list' },
+      const stateResult = await executor.runTool({
+        toolName: 'browser_state',
+        args: { url: 'https://example.com' },
         origin: 'assistant',
       });
-      expect(listResult.success).toBe(true);
-      expect(listResult.status).toBe('succeeded');
-      expect(listResult.output).toMatchObject({
-        backend: 'lightpanda',
-        action: 'list',
-        elements: [{ ref: 'btn-login', type: 'button', text: 'Log in' }],
+      expect(stateResult.success).toBe(true);
+      expect(stateResult.status).toBe('succeeded');
+      expect(stateResult.output).toMatchObject({
+        backend: 'playwright',
+        elements: [{ ref: 'link-more-info', type: 'link', text: 'More information...' }],
       });
+      const stateId = (stateResult.output as { stateId: string }).stateId;
 
       const clickResult = await executor.runTool({
-        toolName: 'browser_interact',
-        args: { url: 'https://example.com', action: 'click', element: 'btn-login' },
+        toolName: 'browser_act',
+        args: { stateId, action: 'click', ref: 'link-more-info' },
         origin: 'assistant',
       });
       expect(clickResult.success).toBe(false);
       expect(clickResult.status).toBe('pending_approval');
       expect(callTool).not.toHaveBeenCalledWith('mcp-playwright-browser_click', expect.anything());
+
+      const invalidLegacyResult = await executor.runTool({
+        toolName: 'browser_interact',
+        args: { action: 'click', element: 'More information...' },
+        origin: 'assistant',
+      });
+      expect(invalidLegacyResult.success).toBe(false);
+      expect(invalidLegacyResult.status).toBe('failed');
+      expect(invalidLegacyResult.message).toContain('stable ref from browser_state output');
     });
 
     it('blocks raw browser MCP navigation to private metadata endpoints before execution', async () => {

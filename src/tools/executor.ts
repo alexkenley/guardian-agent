@@ -893,6 +893,8 @@ export class ToolExecutor {
       'browser_read',
       'browser_links',
       'browser_extract',
+      'browser_state',
+      'browser_act',
       'browser_interact',
     ];
     if (this.options.browserConfig?.enabled === false) {
@@ -907,6 +909,8 @@ export class ToolExecutor {
     if (capabilities.wrappers.browserRead) shouldExpose.add('browser_read');
     if (capabilities.wrappers.browserLinks) shouldExpose.add('browser_links');
     if (capabilities.wrappers.browserExtract) shouldExpose.add('browser_extract');
+    if (capabilities.wrappers.browserState) shouldExpose.add('browser_state');
+    if (capabilities.wrappers.browserAct) shouldExpose.add('browser_act');
     if (capabilities.wrappers.browserInteract) shouldExpose.add('browser_interact');
 
     for (const name of wrapperNames) {
@@ -1082,12 +1086,83 @@ export class ToolExecutor {
       );
     }
 
+    if (capabilities.wrappers.browserState && !this.registry.get('browser_state')) {
+      this.registry.register(
+        {
+          name: 'browser_state',
+          description: 'Capture the current interactive browser state through the Playwright lane. Returns a fresh stateId, indexed/stable element refs, and the current snapshot so later browser_act calls can mutate the page deterministically. Optional url performs a navigate-first state capture.',
+          shortDescription: 'Capture Playwright-backed browser state with stable refs for later actions.',
+          risk: 'read_only',
+          category: 'browser',
+          deferLoading: true,
+          parameters: {
+            type: 'object',
+            properties: {
+              url: { type: 'string', description: 'Optional target URL to navigate before capturing browser state.' },
+              maxChars: { type: 'number', description: 'Maximum snapshot characters to return (default 12000).' },
+            },
+          },
+        },
+        async (args, request) => {
+          const validated = this.normalizeBrowserUrlArg('browser_state', args.url);
+          if (validated.error) {
+            return { success: false, error: validated.error };
+          }
+          if (validated.url) {
+            this.guardAction(request, 'http_request', { url: validated.url });
+          }
+          return this.hybridBrowser!.state(this.getHybridBrowserScopeKey(request), {
+            ...(validated.url ? { url: validated.url } : {}),
+            ...(typeof args.maxChars === 'number' ? { maxChars: args.maxChars } : {}),
+          });
+        },
+      );
+    }
+
+    if (capabilities.wrappers.browserAct && !this.registry.get('browser_act')) {
+      this.registry.register(
+        {
+          name: 'browser_act',
+          description: 'Perform a Playwright-backed browser mutation using a fresh browser_state snapshot. Requires stateId plus a stable ref from the matching browser_state output. Supports click, type, fill, and select. This is the approval-aware mutation lane for browser automation.',
+          shortDescription: 'Perform a Playwright browser action using stateId plus a stable ref.',
+          risk: 'mutating',
+          category: 'browser',
+          deferLoading: true,
+          parameters: {
+            type: 'object',
+            properties: {
+              stateId: { type: 'string', description: 'Required state id returned by browser_state.' },
+              action: { type: 'string', description: "Mutation action: 'click', 'type', 'fill', or 'select'." },
+              ref: { type: 'string', description: 'Stable element ref from the matching browser_state output.' },
+              value: { type: 'string', description: 'Input text or selected option value for type, fill, or select.' },
+            },
+            required: ['stateId', 'action', 'ref'],
+          },
+        },
+        async (args, request) => {
+          const action = asString(args.action, 'click').trim().toLowerCase();
+          this.guardAction(request, 'mcp_tool', {
+            toolName: 'browser_act',
+            action,
+            ref: asString(args.ref, '').trim(),
+            stateId: asString(args.stateId, '').trim(),
+          });
+          return this.hybridBrowser!.act(this.getHybridBrowserScopeKey(request), {
+            stateId: asString(args.stateId, '').trim() || undefined,
+            action,
+            ref: asString(args.ref, '').trim() || undefined,
+            value: asString(args.value, ''),
+          });
+        },
+      );
+    }
+
     if (capabilities.wrappers.browserInteract && !this.registry.get('browser_interact')) {
       this.registry.register(
         {
           name: 'browser_interact',
-          description: 'Inspect or interact with the current browser page through the Guardian wrapper. action=list is read-oriented and lists interactive targets. click, type, fill, and select use the Playwright interaction lane and may require approval depending on policy mode.',
-          shortDescription: 'List interactive browser targets or perform a click, type, fill, or select action.',
+          description: 'Compatibility wrapper for browser interaction. action=list captures Playwright-backed interactive targets and returns a stateId plus stable refs. Mutating actions are maintained for compatibility only and now require stateId plus ref (or element set to the exact ref) from browser_state output; free-form labels are no longer accepted.',
+          shortDescription: 'Compatibility wrapper for browser_state listing and ref-based browser actions.',
           risk: 'mutating',
           category: 'browser',
           deferLoading: true,
@@ -1096,7 +1171,9 @@ export class ToolExecutor {
             properties: {
               url: { type: 'string', description: 'Optional target URL to navigate before listing or interacting.' },
               action: { type: 'string', description: "Interaction action: 'list', 'click', 'type', 'fill', or 'select'." },
-              element: { type: 'string', description: 'Element ref or selector from the current page representation.' },
+              stateId: { type: 'string', description: 'Fresh browser state id returned by browser_state or browser_interact action=list.' },
+              ref: { type: 'string', description: 'Stable element ref from browser_state output.' },
+              element: { type: 'string', description: 'Compatibility alias for ref. Free-form labels are not accepted for mutating actions.' },
               value: { type: 'string', description: 'Input text or selected option value for type, fill, or select.' },
             },
           },
@@ -1113,12 +1190,16 @@ export class ToolExecutor {
           this.guardAction(request, 'mcp_tool', {
             toolName: 'browser_interact',
             action,
+            stateId: asString(args.stateId, '').trim(),
+            ref: asString(args.ref, '').trim(),
             element: asString(args.element, '').trim(),
             ...(validated.url ? { url: validated.url } : {}),
           });
           return this.hybridBrowser!.interact(this.getHybridBrowserScopeKey(request), {
             ...(validated.url ? { url: validated.url } : {}),
             action,
+            stateId: asString(args.stateId, '').trim() || undefined,
+            ref: asString(args.ref, '').trim() || undefined,
             element: asString(args.element, '').trim() || undefined,
             value: asString(args.value, ''),
           });
@@ -1330,13 +1411,19 @@ export class ToolExecutor {
       && this.options.browserConfig.allowedDomains.length > 0;
     const lines = [
       `Browser automation: available (read=${readBackend}, interact=${interactionBackend})`,
-      'Use Guardian-native browser tools first: browser_capabilities, browser_navigate, browser_read, browser_links, browser_extract, and browser_interact.',
+      'Use Guardian-native browser tools first: browser_capabilities, browser_navigate, browser_read, browser_links, browser_extract, browser_state, and browser_act.',
       `Browser allowed domains: ${browserAllowedDomains.join(', ') || '(none)'}${browserUsesDedicatedAllowlist ? '' : ' (inherits general allowedDomains)'}`,
     ];
     if (capabilities.backends.lightpanda.available) {
       lines.push('Read-oriented browser tasks should prefer Lightpanda-backed wrappers when available and fall back to Playwright only when needed.');
     } else {
       lines.push('Lightpanda is not available, so browser reads fall back to Playwright accessibility snapshots.');
+    }
+    if (capabilities.wrappers.browserState && capabilities.wrappers.browserAct) {
+      lines.push('For deterministic page mutation, capture browser_state first and then call browser_act with the returned stateId plus a stable ref.');
+    }
+    if (capabilities.wrappers.browserInteract) {
+      lines.push('browser_interact remains available as a compatibility shim; use action=list for discovery, but prefer browser_state/browser_act for new flows and saved automations.');
     }
     if (!capabilities.backends.playwright.available) {
       lines.push('Interactive browser actions are unavailable because the Playwright backend is not connected.');
@@ -3167,6 +3254,16 @@ export class ToolExecutor {
   }
 
   private decideBrowserTool(toolName: string, args: Record<string, unknown>): ToolDecision | null {
+    if (toolName === 'browser_state') {
+      return 'allow';
+    }
+
+    if (toolName === 'browser_act') {
+      return hasValidBrowserMutationArgs(args)
+        ? (this.policy.mode === 'autonomous' ? 'allow' : 'require_approval')
+        : 'allow';
+    }
+
     if (toolName !== 'browser_interact') {
       return null;
     }
@@ -3176,7 +3273,9 @@ export class ToolExecutor {
       return 'allow';
     }
 
-    return this.policy.mode === 'autonomous' ? 'allow' : 'require_approval';
+    return hasValidBrowserMutationArgs(args)
+      ? (this.policy.mode === 'autonomous' ? 'allow' : 'require_approval')
+      : 'allow';
   }
 
   private decideGwsTool(toolName: string, args: Record<string, unknown>): ToolDecision | null {
@@ -16110,6 +16209,22 @@ function asString(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
 }
 
+function looksLikeStableBrowserRef(value: unknown): boolean {
+  return typeof value === 'string' && /^[A-Za-z0-9:_-]{1,120}$/.test(value.trim());
+}
+
+function hasValidBrowserMutationArgs(args: Record<string, unknown>): boolean {
+  const action = asString(args.action, 'click').trim().toLowerCase();
+  const stateId = asString(args.stateId).trim();
+  if (!stateId) return false;
+  const hasRef = looksLikeStableBrowserRef(args.ref) || looksLikeStableBrowserRef(args.element);
+  if (!hasRef) return false;
+  if (action === 'type' || action === 'fill' || action === 'select') {
+    return typeof args.value === 'string' && args.value.length > 0;
+  }
+  return true;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -17179,7 +17294,7 @@ function validateWorkflowDefinition(
     }
     if (!hasTool(toolName)) {
       const browserHint = /^mcp[_-](playwright|lightpanda)/i.test(toolName)
-        ? ' Use Guardian-native browser wrapper tools (`browser_navigate`, `browser_read`, `browser_links`, `browser_extract`, `browser_interact`) in saved automations instead of raw MCP browser names.'
+        ? ' Use Guardian-native browser wrapper tools (`browser_navigate`, `browser_read`, `browser_links`, `browser_extract`, `browser_state`, `browser_act`, and compatibility `browser_interact`) in saved automations instead of raw MCP browser names.'
         : '';
       return `Unknown tool '${toolName}'.${browserHint}`;
     }

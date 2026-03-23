@@ -77,7 +77,7 @@ const OPEN_ENDED_PATTERNS = [
 const EXPLICIT_WORKFLOW_PATTERNS = [
   /\bstep\s*\d+\b/i,
   /\b(workflow_upsert|task_create|instruction step|delay step)\b/i,
-  /\b(gws|gmail_draft|web_fetch|web_search|fs_read|fs_write|sys_resources|net_ping|net_port_check|memory_save|browser_navigate|browser_read|browser_links|browser_extract|browser_interact)\b/i,
+  /\b(gws|gmail_draft|web_fetch|web_search|fs_read|fs_write|sys_resources|net_ping|net_port_check|memory_save|browser_navigate|browser_read|browser_links|browser_extract|browser_state|browser_act|browser_interact)\b/i,
   /\b(sequential|parallel)\b/i,
   /\bworkflow that first\b/i,
   /\bfirst\b[\s\S]{0,160}\bthen\b/i,
@@ -94,6 +94,8 @@ const EXPLICIT_WORKFLOW_TOOL_NAMES = [
   'browser_read',
   'browser_links',
   'browser_extract',
+  'browser_state',
+  'browser_act',
   'browser_interact',
 ];
 const INSTRUCTION_VERB_PATTERNS: Array<{ pattern: RegExp; label: string; verb: string; present: string }> = [
@@ -467,14 +469,12 @@ function buildBrowserWorkflow(text: string): AutomationIRWorkflowBody | null {
   const needsTargetSelection = needsMutation || wantsInteractiveList;
   if (needsTargetSelection) {
     steps.push({
-      id: 'list_targets',
-      name: 'List interactive targets',
+      id: 'capture_state',
+      name: 'Capture interactive state',
       type: 'tool',
       packId: '',
-      toolName: 'browser_interact',
-      args: {
-        action: 'list',
-      },
+      toolName: 'browser_state',
+      args: {},
     });
   }
 
@@ -497,10 +497,11 @@ function buildBrowserWorkflow(text: string): AutomationIRWorkflowBody | null {
       name: action === 'type' ? 'Type value' : 'Click target',
       type: 'tool',
       packId: '',
-      toolName: 'browser_interact',
+      toolName: 'browser_act',
       args: {
+        stateId: '${capture_state.output.stateId}',
         action,
-        element: '${select_target.output}',
+        ref: '${select_target.output}',
         ...(typeValue ? { value: typeValue } : {}),
       },
     });
@@ -536,7 +537,7 @@ function extractBrowserClickLabel(text: string): string | null {
 function buildBrowserTargetSelectionInstruction(text: string): string | null {
   if (/\bfirst\s+text\s+(?:field|input|textbox)\b/i.test(text)) {
     return [
-      'Use the prior browser_interact list output.',
+      'Use the prior browser_state output.',
       'Return only the ref for the first text input or textbox element.',
       'Do not include any explanation, markdown, or extra text.',
     ].join(' ');
@@ -546,7 +547,7 @@ function buildBrowserTargetSelectionInstruction(text: string): string | null {
   if (fieldMatch?.[1]?.trim()) {
     const label = fieldMatch[1].trim();
     return [
-      'Use the prior browser_interact list output.',
+      'Use the prior browser_state output.',
       `Return only the ref for the element whose label, text, or description best matches "${label}".`,
       'Do not include any explanation, markdown, or extra text.',
     ].join(' ');
@@ -555,7 +556,7 @@ function buildBrowserTargetSelectionInstruction(text: string): string | null {
   const clickLabel = extractBrowserClickLabel(text);
   if (clickLabel) {
     return [
-      'Use the prior browser_interact list output.',
+      'Use the prior browser_state output.',
       `Return only the ref for the clickable element whose visible text best matches "${clickLabel}".`,
       'Do not include any explanation, markdown, or extra text.',
     ].join(' ');

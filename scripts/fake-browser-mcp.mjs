@@ -133,8 +133,8 @@ function pageProfile(url) {
   if (url.includes('example.com')) {
     return {
       title: 'Example Domain',
-      markdown: '# Example Domain\n\nThis domain is for use in documentation examples.\n\n[Learn more](https://iana.org/domains/example)',
-      links: [{ text: 'Learn more', href: 'https://iana.org/domains/example' }],
+      markdown: '# Example Domain\n\nThis domain is for use in documentation examples.\n\n[More information...](https://www.iana.org/help/example-domains)',
+      links: [{ text: 'More information...', href: 'https://www.iana.org/help/example-domains' }],
       structuredData: {
         title: 'Example Domain',
         description: 'This domain is for use in illustrative examples in documents.',
@@ -144,10 +144,10 @@ function pageProfile(url) {
         outline: [
           'Header: Example Domain',
           'Body: explanatory copy',
-          'Footer: Learn more link',
+          'Footer: More information link',
         ],
       },
-      interactiveElements: [{ ref: 'e6', role: 'link', name: 'Learn more' }],
+      interactiveElements: [{ ref: 'link-more-info', role: 'link', name: 'More information...' }],
     };
   }
 
@@ -225,11 +225,14 @@ function buildToolText(name, args = {}) {
   const page = pageProfile(currentUrl);
 
   if (name === 'browser_snapshot') {
+    const snapshot = page.interactiveElements
+      .map((element) => `${element.role} ref=${element.ref} ${element.name}`)
+      .join('\n');
     return JSON.stringify({
       url: currentUrl,
       title: page.title,
       contentType: 'snapshot',
-      snapshot: page.semanticTree,
+      snapshot,
     });
   }
 

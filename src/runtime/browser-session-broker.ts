@@ -25,6 +25,7 @@ const HIGH_RISK_BROWSER_TOOLS = new Set([
 ]);
 
 const MUTATING_BROWSER_TOOLS = new Set([
+  'browser_act',
   'browser_interact',
   'mcp-playwright-browser_click',
   'mcp-playwright-browser_type',

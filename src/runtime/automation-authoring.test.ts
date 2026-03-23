@@ -172,17 +172,17 @@ describe('compileAutomationAuthoringRequest', () => {
         args: { url: 'https://httpbin.org/forms/post', mode: 'interactive' },
       },
       {
-        toolName: 'browser_interact',
-        args: { action: 'list' },
+        toolName: 'browser_state',
       },
       {
         type: 'instruction',
       },
       {
-        toolName: 'browser_interact',
+        toolName: 'browser_act',
         args: {
+          stateId: '${capture_state.output.stateId}',
           action: 'type',
-          element: '${select_target.output}',
+          ref: '${select_target.output}',
           value: 'automation smoke test',
         },
       },

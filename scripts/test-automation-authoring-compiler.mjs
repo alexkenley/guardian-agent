@@ -747,9 +747,9 @@ guardian:
       assert.equal(Array.isArray(compiled.steps), true);
       assert.equal(compiled.steps.length, 4);
       assert.equal(compiled.steps[0]?.toolName, 'browser_navigate');
-      assert.equal(compiled.steps[1]?.toolName, 'browser_interact');
+      assert.equal(compiled.steps[1]?.toolName, 'browser_state');
       assert.equal(compiled.steps[2]?.type, 'instruction');
-      assert.equal(compiled.steps[3]?.toolName, 'browser_interact');
+      assert.equal(compiled.steps[3]?.toolName, 'browser_act');
     });
 
     console.log(`PASS automation compiler harness (${provider.mode}${options.agentIsolation ? ', brokered' : ''})`);

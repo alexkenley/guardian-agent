@@ -1267,13 +1267,13 @@ function resolveTemplateValue(value: unknown, priorResults: PlaybookStepRunResul
 }
 
 function replaceStepPlaceholders(template: string, priorResults: PlaybookStepRunResult[]): unknown {
-  const exactMatch = template.match(/^\$\{([^.}]+)\.(output|message|status)\}$/);
+  const exactMatch = template.match(/^\$\{([^.}]+)\.(output|message|status)(?:\.([^}]+))?\}$/);
   if (exactMatch) {
-    return resolveStepPlaceholderValue(exactMatch[1], exactMatch[2], priorResults);
+    return resolveStepPlaceholderValue(exactMatch[1], exactMatch[2], exactMatch[3], priorResults);
   }
 
-  return template.replace(/\$\{([^.}]+)\.(output|message|status)\}/g, (_match, stepId: string, field: string) => {
-    const resolved = resolveStepPlaceholderValue(stepId, field, priorResults);
+  return template.replace(/\$\{([^.}]+)\.(output|message|status)(?:\.([^}]+))?\}/g, (_match, stepId: string, field: string, path: string | undefined) => {
+    const resolved = resolveStepPlaceholderValue(stepId, field, path, priorResults);
     return typeof resolved === 'string' ? resolved : formatStepOutput(resolved);
   });
 }
@@ -1281,14 +1281,35 @@ function replaceStepPlaceholders(template: string, priorResults: PlaybookStepRun
 function resolveStepPlaceholderValue(
   stepId: string,
   field: string,
+  path: string | undefined,
   priorResults: PlaybookStepRunResult[],
 ): unknown {
   const step = priorResults.find((result) => result.stepId === stepId);
   if (!step) return '';
-  if (field === 'output') return step.output ?? '';
+  if (field === 'output') {
+    const output = step.output ?? '';
+    return path ? resolveNestedTemplatePath(output, path) : output;
+  }
   if (field === 'message') return step.message;
   if (field === 'status') return step.status;
   return '';
+}
+
+function resolveNestedTemplatePath(value: unknown, path: string): unknown {
+  const segments = path
+    .split('.')
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  let current: unknown = value;
+  for (const segment of segments) {
+    if (Array.isArray(current) && /^\d+$/.test(segment)) {
+      current = current[Number.parseInt(segment, 10)];
+      continue;
+    }
+    if (!isRecord(current)) return '';
+    current = current[segment];
+  }
+  return current ?? '';
 }
 
 function formatStepOutput(output: unknown): string {

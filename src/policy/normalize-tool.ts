@@ -101,9 +101,19 @@ function extractResourceAttrs(
     case 'browser_read':
     case 'browser_links':
     case 'browser_extract':
+    case 'browser_state':
+      if (typeof args.url === 'string') attrs.url = args.url;
+      if (typeof args.action === 'string') attrs.action = args.action;
+      if (typeof args.ref === 'string') attrs.ref = args.ref;
+      if (typeof args.stateId === 'string') attrs.stateId = args.stateId;
+      if (typeof args.element === 'string') attrs.element = args.element;
+      break;
+    case 'browser_act':
     case 'browser_interact':
       if (typeof args.url === 'string') attrs.url = args.url;
       if (typeof args.action === 'string') attrs.action = args.action;
+      if (typeof args.ref === 'string') attrs.ref = args.ref;
+      if (typeof args.stateId === 'string') attrs.stateId = args.stateId;
       if (typeof args.element === 'string') attrs.element = args.element;
       break;
 

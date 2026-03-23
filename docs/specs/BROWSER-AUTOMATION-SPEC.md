@@ -27,6 +27,8 @@ The wrapper tools are:
 - `browser_read`
 - `browser_links`
 - `browser_extract`
+- `browser_state`
+- `browser_act`
 - `browser_interact`
 
 Under the wrapper, the browser transport remains MCP-native:
@@ -174,7 +176,9 @@ Accurate current limits:
 
 - Browser automation is still MCP-backed under the hood rather than a custom browser engine.
 - The main browser UX is now a Guardian-native wrapper layer. Raw MCP browser tools still remain available as fallback escape hatches, but they are intentionally hidden from normal assistant-visible tool discovery so the model prefers the wrapper surface first.
-- Conversational automation authoring should save browser workflows with Guardian wrapper step names (`browser_navigate`, `browser_read`, `browser_links`, `browser_extract`, `browser_interact`) instead of raw MCP identifiers.
+- Conversational automation authoring should save browser workflows with Guardian wrapper step names (`browser_navigate`, `browser_read`, `browser_links`, `browser_extract`, `browser_state`, `browser_act`) instead of raw MCP identifiers.
+- `browser_state` is the deterministic Playwright discovery lane for interactive pages. `browser_act` is the approval-aware mutation lane and expects a fresh `stateId` plus a stable ref from `browser_state`.
+- `browser_interact` remains for compatibility, but mutating `browser_interact` calls now require `stateId` plus a stable ref. Free-form label mutation is no longer supported.
 - Playwright is the primary implementation. Lightpanda remains opt-in.
 - Browser-specific `allowedDomains` now applies to the Guardian-native wrapper tools when configured, falling back to the general tool `allowedDomains` list otherwise.
 - High-risk browser behavior is constrained mainly through approval rules, containment mode, and MCP tool policy, not through the more advanced privacy features proposed elsewhere.
@@ -208,7 +212,7 @@ Behavior confirmed by current tests/spec-adjacent checks:
 - Guardian-native wrapper tools are registered when managed browser backends are present
 - raw managed browser MCP tools are hidden from assistant-visible tool discovery while remaining available internally for the wrapper/escape-hatch path
 - wrapper reads prefer Lightpanda and fall back to Playwright snapshots when needed
-- wrapper browser interactions keep `action=list` low-friction while mutating actions remain approval-aware
+- wrapper browser interactions keep ref discovery low-friction through `browser_state` / `browser_interact action=list` while mutating actions stay on the approval-aware `browser_act` lane
 - browser config API/UI wiring exists and live-applies backend changes when possible
 - private/internal browser targets are denied before any add-domain remediation path
 - browser containment and policy rules are present in the runtime

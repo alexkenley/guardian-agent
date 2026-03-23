@@ -83,6 +83,8 @@ export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
     'browser_read',
     'browser_links',
     'browser_extract',
+    'browser_state',
+    'browser_act',
     'browser_interact',
   ],
   mcp: [],

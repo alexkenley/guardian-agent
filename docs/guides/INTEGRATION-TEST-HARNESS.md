@@ -195,7 +195,7 @@ The automation-authoring compiler harness follows the same pattern in `scripts/t
 - open-ended automations become scheduled `agent` tasks instead of scripts
 - repeat authoring requests update existing native tasks instead of duplicating them
 - deterministic explicit tool graphs still compile into workflows
-- deterministic browser automation prompts compile into Guardian wrapper steps such as `browser_navigate`, `browser_read`, `browser_links`, `browser_extract`, and `browser_interact`
+- deterministic browser automation prompts compile into Guardian wrapper steps such as `browser_navigate`, `browser_read`, `browser_links`, `browser_extract`, `browser_state`, and `browser_act`
 - deterministic workflows then execute through the graph-backed playbook runtime with run ids and orchestration events
 - browser authoring/runtime validation stays on the Guardian wrapper surface rather than surfacing raw `mcp-playwright-*` or `mcp-lightpanda-*` browser tool names as the normal saved-workflow path
 - scheduled assistant tasks persist a concise `description` separate from the internal `prompt`, so UI surfaces do not leak the full runtime prompt
@@ -674,6 +674,8 @@ The preferred product surface is the Guardian wrapper family:
 - `browser_read`
 - `browser_links`
 - `browser_extract`
+- `browser_state`
+- `browser_act`
 - `browser_interact`
 
 For conversational browser automation regressions, prefer `scripts/test-automation-authoring-compiler.mjs` over manual-only UI checks. The Node harness now boots fake Playwright and Lightpanda MCP servers so WSL can validate wrapper registration, browser workflow compilation, and graph execution deterministically without depending on locally installed browser binaries.
@@ -681,7 +683,7 @@ For conversational browser automation regressions, prefer `scripts/test-automati
 Current browser authoring coverage in that harness includes:
 - Browser Read Smoke → `browser_navigate`, `browser_read`, `browser_links`
 - Browser Extract Smoke → `browser_navigate`, `browser_extract`
-- HTTPBin Form Smoke Test → `browser_navigate`, `browser_interact`, deterministic target-selection instruction, `browser_interact`
+- HTTPBin Form Smoke Test → `browser_navigate`, `browser_state`, deterministic target-selection instruction, `browser_act`
 
 Use the real-Ollama lane from WSL when you want local-model smoke coverage for the authoring path:
 

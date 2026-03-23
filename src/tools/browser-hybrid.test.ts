@@ -44,6 +44,8 @@ describe('HybridBrowserService', () => {
     expect(capabilities.preferredReadBackend).toBe('lightpanda');
     expect(capabilities.preferredInteractionBackend).toBe('playwright');
     expect(capabilities.wrappers.browserExtract).toBe(true);
+    expect(capabilities.wrappers.browserState).toBe(true);
+    expect(capabilities.wrappers.browserAct).toBe(true);
     expect(capabilities.wrappers.browserInteract).toBe(true);
   });
 
@@ -85,40 +87,57 @@ describe('HybridBrowserService', () => {
     expect(callTool).toHaveBeenCalledWith('mcp-playwright-browser_snapshot', {});
   });
 
-  it('lists interactive elements from the Lightpanda read lane', async () => {
+  it('captures Playwright-backed interactive state and acts on stable refs', async () => {
+    let tick = 1_000;
+    const now = vi.fn(() => {
+      tick += 100;
+      return tick;
+    });
     const manager = makeManager([
       'mcp-playwright-browser_navigate',
+      'mcp-playwright-browser_snapshot',
       'mcp-playwright-browser_click',
-      'mcp-lightpanda-goto',
-      'mcp-lightpanda-interactiveElements',
+      'mcp-playwright-browser_type',
     ], async (toolName: string) => {
-      if (toolName === 'mcp-lightpanda-goto') {
+      if (toolName === 'mcp-playwright-browser_navigate') {
         return { success: true, output: JSON.stringify({ url: 'https://example.com/login', title: 'Login' }) };
       }
-      if (toolName === 'mcp-lightpanda-interactiveElements') {
+      if (toolName === 'mcp-playwright-browser_snapshot') {
         return {
           success: true,
-          output: JSON.stringify([
-            { ref: 'btn-login', type: 'button', text: 'Log in' },
-            { ref: 'email', type: 'textbox', text: 'Email' },
-          ]),
+          output: 'textbox ref=email Email\nbutton ref=btn-login Log in',
         };
       }
-      return { success: true, output: JSON.stringify({ url: 'https://example.com/login', title: 'Login' }) };
+      if (toolName === 'mcp-playwright-browser_click') {
+        return { success: true, output: JSON.stringify({ clicked: 'btn-login', url: 'https://example.com/login' }) };
+      }
+      return { success: false, error: `Unexpected tool ${toolName}` };
     });
-    const service = new HybridBrowserService(manager);
+    const service = new HybridBrowserService(manager, now);
 
-    await service.navigate('scope-2', 'https://example.com/login');
-    const result = await service.interact('scope-2', { action: 'list' });
-
-    expect(result.success).toBe(true);
-    expect(result.output).toMatchObject({
-      backend: 'lightpanda',
-      action: 'list',
+    const state = await service.state('scope-2', { url: 'https://example.com/login' });
+    expect(state.success).toBe(true);
+    expect(state.output).toMatchObject({
+      backend: 'playwright',
       elements: [
-        { ref: 'btn-login', type: 'button', text: 'Log in' },
         { ref: 'email', type: 'textbox', text: 'Email' },
+        { ref: 'btn-login', type: 'button', text: 'Log in' },
       ],
+    });
+
+    const stateId = (state.output as { stateId: string }).stateId;
+    const act = await service.act('scope-2', {
+      stateId,
+      action: 'click',
+      ref: 'btn-login',
+    });
+
+    expect(act.success).toBe(true);
+    expect(act.output).toMatchObject({
+      backend: 'playwright',
+      action: 'click',
+      ref: 'btn-login',
+      target: { ref: 'btn-login', type: 'button' },
     });
   });
 });

@@ -11,6 +11,7 @@ import {
   type ResponseSourceMetadata,
 } from '../runtime/model-routing-ux.js';
 import { tryAutomationPreRoute } from '../runtime/automation-prerouter.js';
+import { tryBrowserPreRoute } from '../runtime/browser-prerouter.js';
 import { runLlmLoop } from './worker-llm-loop.js';
 import { BrokerClient } from '../broker/broker-client.js';
 import { shouldAllowModelMemoryMutation } from '../util/memory-intent.js';
@@ -185,6 +186,11 @@ export class BrokeredWorkerSession {
       return directAutomationAuthoring;
     }
 
+    const directBrowserAutomation = await this.tryDirectBrowserAutomation(params.message, toolExecutor);
+    if (directBrowserAutomation) {
+      return directBrowserAutomation;
+    }
+
     const enrichedSystemPrompt = buildWorkerSystemPrompt(params);
     const llmMessages: ChatMessage[] = [
       { role: 'system', content: enrichedSystemPrompt },
@@ -350,6 +356,41 @@ export class BrokeredWorkerSession {
       this.automationContinuation = null;
     }
     return result;
+  }
+
+  private async tryDirectBrowserAutomation(
+    message: UserMessage,
+    toolExecutor: BrokeredToolExecutor,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    return tryBrowserPreRoute({
+      agentId: 'brokered-worker',
+      message,
+      executeTool: (toolName, args, request) => {
+        const codeContext = message.metadata?.codeContext as { workspaceRoot: string; sessionId?: string } | undefined;
+        return toolExecutor.executeModelTool(toolName, args, {
+          ...request,
+          ...(codeContext ? { codeContext } : {}),
+        });
+      },
+      trackPendingApproval: (approvalId) => {
+        const existingIds = this.getPendingApprovalIds();
+        this.pendingApprovals = {
+          ids: [...new Set([...existingIds, approvalId])],
+          expiresAt: Date.now() + PENDING_APPROVAL_TTL_MS,
+        };
+        this.suspendedSession = null;
+      },
+      formatPendingApprovalPrompt: (ids) => {
+        const meta = toolExecutor.getApprovalMetadata(ids);
+        return meta.length > 0
+          ? formatPendingApprovalMessage(meta)
+          : 'This action needs approval before I can continue.';
+      },
+      resolvePendingApprovalMetadata: (ids, fallback) => {
+        const resolved = toolExecutor.getApprovalMetadata(ids);
+        return resolved.length > 0 ? resolved : fallback;
+      },
+    });
   }
 
   private async executeLoop(
