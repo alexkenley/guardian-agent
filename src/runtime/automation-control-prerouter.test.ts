@@ -14,33 +14,40 @@ const baseMessage = {
 describe('tryAutomationControlPreRoute', () => {
   it('lists the unified automation catalog when asked to inspect automations', async () => {
     const executeTool = vi.fn(async (toolName: string) => {
-      if (toolName === 'workflow_list') {
+      if (toolName === 'automation_list') {
         return {
           success: true,
           output: {
-            workflows: [{
-              id: 'browser-read-smoke',
-              name: 'Browser Read Smoke',
-              enabled: true,
-              mode: 'sequential',
-              description: 'Reads example.com.',
-              steps: [{ id: 'step-1', toolName: 'browser_navigate' }],
-            }],
-          },
-        };
-      }
-      if (toolName === 'task_list') {
-        return {
-          success: true,
-          output: {
-            tasks: [{
-              id: 'task-1',
-              name: 'Inbox Triage',
-              type: 'agent',
-              target: 'default',
-              eventTrigger: { eventType: 'automation:manual:inbox-triage' },
-              enabled: false,
-            }],
+            automations: [
+              {
+                id: 'browser-read-smoke',
+                name: 'Browser Read Smoke',
+                kind: 'workflow',
+                enabled: true,
+                workflow: {
+                  id: 'browser-read-smoke',
+                  name: 'Browser Read Smoke',
+                  enabled: true,
+                  mode: 'sequential',
+                  description: 'Reads example.com.',
+                  steps: [{ id: 'step-1', toolName: 'browser_navigate' }],
+                },
+              },
+              {
+                id: 'task-1',
+                name: 'Inbox Triage',
+                kind: 'assistant_task',
+                enabled: false,
+                task: {
+                  id: 'task-1',
+                  name: 'Inbox Triage',
+                  type: 'agent',
+                  target: 'default',
+                  eventTrigger: { eventType: 'automation:manual:inbox-triage' },
+                  enabled: false,
+                },
+              },
+            ],
           },
         };
       }
@@ -56,33 +63,36 @@ describe('tryAutomationControlPreRoute', () => {
       executeTool,
     });
 
-    expect(result?.content).toContain('Saved automations (2)');
+    expect(result?.content).toContain('Automation catalog (2)');
     expect(result?.content).toContain('Browser Read Smoke');
     expect(result?.content).toContain('Inbox Triage');
   });
 
-  it('runs task-only automations through task_run', async () => {
+  it('runs task-only automations through automation_run', async () => {
     const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
-      if (toolName === 'workflow_list') {
-        return { success: true, output: { workflows: [] } };
-      }
-      if (toolName === 'task_list') {
+      if (toolName === 'automation_list') {
         return {
           success: true,
           output: {
-            tasks: [{
+            automations: [{
               id: 'task-inbox',
               name: 'Inbox Triage',
-              type: 'agent',
-              target: 'default',
-              cron: '0 8 * * *',
+              kind: 'assistant_task',
               enabled: true,
+              task: {
+                id: 'task-inbox',
+                name: 'Inbox Triage',
+                type: 'agent',
+                target: 'default',
+                cron: '0 8 * * *',
+                enabled: true,
+              },
             }],
           },
         };
       }
-      if (toolName === 'task_run') {
-        expect(args).toEqual({ taskId: 'task-inbox' });
+      if (toolName === 'automation_run') {
+        expect(args).toEqual({ automationId: 'task-inbox' });
         return {
           success: true,
           message: "Ran 'Inbox Triage'.",
@@ -112,39 +122,37 @@ describe('tryAutomationControlPreRoute', () => {
 
     expect(result?.content).toContain("Ran 'Inbox Triage'.");
     expect(executeTool).toHaveBeenCalledWith(
-      'task_run',
-      { taskId: 'task-inbox' },
+      'automation_run',
+      { automationId: 'task-inbox' },
       expect.objectContaining({ channel: 'web', userId: 'owner' }),
     );
   });
 
-  it('toggles workflows from automations-page intents via workflow_upsert', async () => {
+  it('toggles workflows from automations-page intents via automation_set_enabled', async () => {
     const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
-      if (toolName === 'workflow_list') {
+      if (toolName === 'automation_list') {
         return {
           success: true,
           output: {
-            workflows: [{
+            automations: [{
               id: 'browser-read-smoke',
               name: 'Browser Read Smoke',
+              kind: 'workflow',
               enabled: true,
-              mode: 'sequential',
-              description: 'Reads example.com.',
-              steps: [{ id: 'step-1', toolName: 'browser_navigate', args: { url: 'https://example.com' } }],
+              workflow: {
+                id: 'browser-read-smoke',
+                name: 'Browser Read Smoke',
+                enabled: true,
+                mode: 'sequential',
+                description: 'Reads example.com.',
+                steps: [{ id: 'step-1', toolName: 'browser_navigate', args: { url: 'https://example.com' } }],
+              },
             }],
           },
         };
       }
-      if (toolName === 'task_list') {
-        return { success: true, output: { tasks: [] } };
-      }
-      if (toolName === 'workflow_upsert') {
-        expect(args).toMatchObject({
-          id: 'browser-read-smoke',
-          name: 'Browser Read Smoke',
-          enabled: false,
-          mode: 'sequential',
-        });
+      if (toolName === 'automation_set_enabled') {
+        expect(args).toEqual({ automationId: 'browser-read-smoke', enabled: false });
         return {
           success: true,
           message: "Disabled 'Browser Read Smoke'.",
@@ -177,51 +185,42 @@ describe('tryAutomationControlPreRoute', () => {
     expect(result?.content).toContain("Disabled 'Browser Read Smoke'.");
   });
 
-  it('prepares both task and workflow deletions when a linked automation needs approval', async () => {
+  it('prepares deletion through automation_delete when approval is required', async () => {
     const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
-      if (toolName === 'workflow_list') {
+      if (toolName === 'automation_list') {
         return {
           success: true,
           output: {
-            workflows: [{
+            automations: [{
               id: 'browser-read-smoke',
               name: 'Browser Read Smoke',
+              kind: 'workflow',
               enabled: true,
-              mode: 'sequential',
-              steps: [{ id: 'step-1', toolName: 'browser_navigate' }],
+              workflow: {
+                id: 'browser-read-smoke',
+                name: 'Browser Read Smoke',
+                enabled: true,
+                mode: 'sequential',
+                steps: [{ id: 'step-1', toolName: 'browser_navigate' }],
+              },
+              task: {
+                id: 'task-browser-read',
+                name: 'Browser Read Smoke',
+                type: 'workflow',
+                target: 'browser-read-smoke',
+                cron: '0 8 * * 1',
+                enabled: true,
+              },
             }],
           },
         };
       }
-      if (toolName === 'task_list') {
-        return {
-          success: true,
-          output: {
-            tasks: [{
-              id: 'task-browser-read',
-              name: 'Browser Read Smoke',
-              type: 'workflow',
-              target: 'browser-read-smoke',
-              cron: '0 8 * * 1',
-              enabled: true,
-            }],
-          },
-        };
-      }
-      if (toolName === 'task_delete') {
-        expect(args).toEqual({ taskId: 'task-browser-read' });
+      if (toolName === 'automation_delete') {
+        expect(args).toEqual({ automationId: 'browser-read-smoke' });
         return {
           success: false,
           status: 'pending_approval',
-          approvalId: 'approval-task',
-        };
-      }
-      if (toolName === 'workflow_delete') {
-        expect(args).toEqual({ workflowId: 'browser-read-smoke' });
-        return {
-          success: false,
-          status: 'pending_approval',
-          approvalId: 'approval-workflow',
+          approvalId: 'approval-automation',
         };
       }
       throw new Error(`Unexpected tool ${toolName}`);
@@ -257,18 +256,62 @@ describe('tryAutomationControlPreRoute', () => {
     expect(result?.content).toContain('Approval UI rendered.');
     expect(result?.metadata?.pendingApprovals).toEqual([
       {
-        id: 'approval-task',
-        toolName: 'task_delete',
-        argsPreview: '{"taskId":"task-browser-read"}',
-      },
-      {
-        id: 'approval-workflow',
-        toolName: 'workflow_delete',
-        argsPreview: '{"workflowId":"browser-read-smoke"}',
+        id: 'approval-automation',
+        toolName: 'automation_delete',
+        argsPreview: '{"automationId":"browser-read-smoke"}',
       },
     ]);
-    expect(trackPendingApproval).toHaveBeenCalledWith('approval-task');
-    expect(trackPendingApproval).toHaveBeenCalledWith('approval-workflow');
-    expect(onPendingApproval).toHaveBeenCalledTimes(2);
+    expect(trackPendingApproval).toHaveBeenCalledWith('approval-automation');
+    expect(onPendingApproval).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses to run built-in starter catalog entries', async () => {
+    const executeTool = vi.fn(async (toolName: string) => {
+      if (toolName === 'automation_list') {
+        return {
+          success: true,
+          output: {
+            automations: [{
+              id: 'builtin-browser-read',
+              name: 'Builtin Browser Read',
+              kind: 'workflow',
+              enabled: false,
+              builtin: true,
+              source: 'builtin_template',
+              workflow: {
+                id: 'builtin-browser-read',
+                name: 'Builtin Browser Read',
+                enabled: false,
+                mode: 'sequential',
+                steps: [{ id: 'step-1', toolName: 'browser_navigate' }],
+              },
+            }],
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryAutomationControlPreRoute({
+      agentId: 'default',
+      message: {
+        ...baseMessage,
+        content: 'Run Builtin Browser Read.',
+      },
+      executeTool,
+    }, {
+      intentDecision: {
+        route: 'automation_control',
+        confidence: 'high',
+        operation: 'run',
+        summary: 'Run an existing automation.',
+        entities: {
+          automationName: 'Builtin Browser Read',
+        },
+      },
+    });
+
+    expect(result?.content).toContain('built-in starter entry');
+    expect(executeTool).toHaveBeenCalledTimes(1);
   });
 });

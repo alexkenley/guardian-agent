@@ -72,6 +72,7 @@ import type { HostMonitoringService, HostMonitorReport } from '../runtime/host-m
 import type { GatewayFirewallMonitoringService, GatewayMonitorReport } from '../runtime/gateway-monitor.js';
 import type { ContainmentService } from '../runtime/containment-service.js';
 import type { WindowsDefenderProvider } from '../runtime/windows-defender-provider.js';
+import type { SavedAutomationCatalogEntry } from '../runtime/automation-catalog.js';
 import type { ScheduledTaskEventTrigger } from '../runtime/scheduled-tasks.js';
 import { parseBanner, inferServiceFromPort } from '../runtime/network-fingerprinting.js';
 import { parseAirportWifi, parseNetshWifi, parseNmcliWifi, correlateWifiClients } from '../runtime/network-wifi.js';
@@ -274,6 +275,9 @@ const CODE_SESSION_TRUSTED_EXECUTION_TOOLS = new Set([
   'code_test',
   'code_build',
   'code_lint',
+  'automation_set_enabled',
+  'automation_run',
+  'automation_delete',
   'task_create',
   'task_update',
   'task_run',
@@ -732,6 +736,18 @@ interface AutomationTaskSummary {
 }
 
 interface AutomationControlPlane {
+  listAutomations: () => SavedAutomationCatalogEntry[];
+  setAutomationEnabled: (automationId: string, enabled: boolean) => { success: boolean; message: string };
+  deleteAutomation: (automationId: string) => { success: boolean; message: string };
+  runAutomation: (input: {
+    automationId: string;
+    dryRun?: boolean;
+    origin?: ToolExecutionRequest['origin'];
+    agentId?: string;
+    userId?: string;
+    channel?: string;
+    requestedBy?: string;
+  }) => Promise<Record<string, unknown>> | Record<string, unknown>;
   listWorkflows: () => AutomationWorkflowSummary[];
   upsertWorkflow: (workflow: Record<string, unknown>) => { success: boolean; message: string };
   deleteWorkflow: (workflowId: string) => { success: boolean; message: string };
@@ -1326,6 +1342,7 @@ export class ToolExecutor {
       'code_test', 'code_build', 'code_lint', 'code_symbol_search',
       'fs_write', 'fs_mkdir', 'fs_move', 'fs_copy', 'fs_delete',
       'doc_create',
+      'automation_list', 'automation_set_enabled', 'automation_run', 'automation_delete',
       'task_create', 'task_update', 'task_run', 'task_delete',
       'workflow_upsert', 'workflow_run', 'workflow_delete',
       'workflow_list', 'task_list',
@@ -14283,6 +14300,125 @@ export class ToolExecutor {
 
     this.registry.register(
       {
+        name: 'automation_list',
+        description: 'List automations from the canonical automation catalog. Includes saved workflows/tasks plus built-in starter examples, with source, enabled status, and scheduling hints.',
+        shortDescription: 'List automations from the canonical catalog.',
+        risk: 'read_only',
+        category: 'automation',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {},
+        },
+      },
+      async () => {
+        if (!this.automationControlPlane) {
+          return { success: false, error: 'Automation control plane is not available.' };
+        }
+        const automations = this.automationControlPlane.listAutomations().map(normalizeAutomationCatalogEntry);
+        return {
+          success: true,
+          output: {
+            count: automations.length,
+            automations,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'automation_set_enabled',
+        description: 'Enable or disable a saved automation by id. Built-in starter entries cannot be toggled until they are cloned or installed. Mutating - requires approval.',
+        shortDescription: 'Enable or disable a saved automation.',
+        risk: 'mutating',
+        category: 'automation',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            automationId: { type: 'string', description: 'Saved automation id.' },
+            enabled: { type: 'boolean', description: 'Desired enabled state.' },
+          },
+          required: ['automationId', 'enabled'],
+        },
+      },
+      async (args) => {
+        if (!this.automationControlPlane) {
+          return { success: false, error: 'Automation control plane is not available.' };
+        }
+        const automationId = requireString(args.automationId, 'automationId');
+        const enabled = requireBoolean(args.enabled, 'enabled');
+        const result = this.automationControlPlane.setAutomationEnabled(automationId, enabled);
+        return { success: result.success, output: result, error: result.success ? undefined : result.message };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'automation_run',
+        description: 'Run a saved automation immediately by id. Built-in starter entries must be cloned or installed first. Supports dryRun for workflow-backed automations. Mutating - requires approval.',
+        shortDescription: 'Run a saved automation immediately.',
+        risk: 'mutating',
+        category: 'automation',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            automationId: { type: 'string', description: 'Saved automation id.' },
+            dryRun: { type: 'boolean', description: 'Preview without side effects when the automation supports it.' },
+          },
+          required: ['automationId'],
+        },
+      },
+      async (args, request) => {
+        if (!this.automationControlPlane) {
+          return { success: false, error: 'Automation control plane is not available.' };
+        }
+        const automationId = requireString(args.automationId, 'automationId');
+        const result = await this.automationControlPlane.runAutomation({
+          automationId,
+          dryRun: args.dryRun === true,
+          origin: request.origin,
+          agentId: request.agentId,
+          userId: request.userId,
+          channel: request.channel,
+          requestedBy: request.userId || request.agentId || request.origin,
+        });
+        const succeeded = isRecord(result) ? result.success === true : false;
+        const message = isRecord(result) ? asString(result.message, '').trim() : '';
+        return { success: succeeded, output: result, error: succeeded ? undefined : message || 'Automation run failed.' };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'automation_delete',
+        description: 'Delete a saved automation by id. For workflow-backed automations this also removes any linked schedule. Built-in starter entries cannot be deleted. Mutating - requires approval.',
+        shortDescription: 'Delete a saved automation.',
+        risk: 'mutating',
+        category: 'automation',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            automationId: { type: 'string', description: 'Saved automation id.' },
+          },
+          required: ['automationId'],
+        },
+      },
+      async (args) => {
+        if (!this.automationControlPlane) {
+          return { success: false, error: 'Automation control plane is not available.' };
+        }
+        const automationId = requireString(args.automationId, 'automationId');
+        const result = this.automationControlPlane.deleteAutomation(automationId);
+        return { success: result.success, output: result, error: result.success ? undefined : result.message };
+      },
+    );
+
+    this.registry.register(
+      {
         name: 'workflow_list',
         description: 'List saved automations (playbooks) available for manual runs or scheduling. Returns id, name, mode, step count, and enabled status for each.',
         shortDescription: 'List saved automations.',
@@ -16288,6 +16424,13 @@ function requireStringAllowEmpty(value: unknown, field: string): string {
   return value;
 }
 
+function requireBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== 'boolean') {
+    throw new Error(`'${field}' must be a boolean.`);
+  }
+  return value;
+}
+
 function asNumber(value: unknown, fallback: number): number {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string') {
@@ -17215,6 +17358,23 @@ function normalizeWorkflowSummary(workflow: AutomationWorkflowSummary): Automati
   };
 }
 
+function normalizeAutomationCatalogEntry(entry: SavedAutomationCatalogEntry): Record<string, unknown> {
+  return {
+    id: entry.id,
+    name: entry.name,
+    description: entry.description,
+    kind: entry.kind,
+    enabled: entry.enabled,
+    source: entry.source,
+    builtin: entry.builtin === true,
+    category: entry.category,
+    templateId: entry.templateId,
+    presetId: entry.presetId,
+    workflow: entry.workflow ? normalizeWorkflowSummary(entry.workflow as unknown as AutomationWorkflowSummary) : undefined,
+    task: entry.task ? normalizeTaskSummary(entry.task as AutomationTaskSummary) : undefined,
+  };
+}
+
 function normalizeTaskSummary(task: AutomationTaskSummary): Record<string, unknown> {
   return {
     ...task,
@@ -17284,6 +17444,18 @@ function inferGoogleWorkspaceCapabilityAction(toolName: string, description: str
 }
 
 function formatToolArgsPreview(toolName: string, redactedArgs: unknown): string {
+  if (toolName === 'automation_set_enabled') {
+    const summary = summarizeAutomationTogglePreview(isRecord(redactedArgs) ? redactedArgs : {});
+    if (summary) return sanitizePreview(summary);
+  }
+  if (toolName === 'automation_run') {
+    const summary = summarizeAutomationRunPreview(isRecord(redactedArgs) ? redactedArgs : {});
+    if (summary) return sanitizePreview(summary);
+  }
+  if (toolName === 'automation_delete') {
+    const summary = summarizeAutomationDeletePreview(isRecord(redactedArgs) ? redactedArgs : {});
+    if (summary) return sanitizePreview(summary);
+  }
   if (toolName === 'task_create' || toolName === 'task_update') {
     const summary = summarizeScheduledTaskPreview(isRecord(redactedArgs) ? redactedArgs : {});
     if (summary) return sanitizePreview(summary);
@@ -17297,6 +17469,24 @@ function formatToolArgsPreview(toolName: string, redactedArgs: unknown): string 
     if (summary) return sanitizePreview(summary);
   }
   return sanitizePreview(JSON.stringify(redactedArgs));
+}
+
+function summarizeAutomationTogglePreview(args: Record<string, unknown>): string | null {
+  const automationId = asString(args.automationId).trim();
+  if (!automationId || typeof args.enabled !== 'boolean') return null;
+  return `${args.enabled ? 'enable' : 'disable'} automation ${automationId}`;
+}
+
+function summarizeAutomationRunPreview(args: Record<string, unknown>): string | null {
+  const automationId = asString(args.automationId).trim();
+  if (!automationId) return null;
+  return `${args.dryRun === true ? 'dry-run' : 'run'} automation ${automationId}`;
+}
+
+function summarizeAutomationDeletePreview(args: Record<string, unknown>): string | null {
+  const automationId = asString(args.automationId).trim();
+  if (!automationId) return null;
+  return `delete automation ${automationId}`;
 }
 
 function summarizeWorkflowPreview(args: Record<string, unknown>): string | null {

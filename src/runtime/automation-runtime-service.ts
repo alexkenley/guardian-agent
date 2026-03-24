@@ -82,6 +82,18 @@ export interface AutomationRuntimeService {
     requestedBy?: string;
   }): Promise<Record<string, unknown>>;
   createExecutorControlPlane(): {
+    listAutomations: () => SavedAutomationCatalogEntry[];
+    setAutomationEnabled: (automationId: string, enabled: boolean) => { success: boolean; message: string };
+    deleteAutomation: (automationId: string) => { success: boolean; message: string };
+    runAutomation: (input: {
+      automationId: string;
+      dryRun?: ConnectorPlaybookRunInput['dryRun'];
+      origin?: ConnectorPlaybookRunInput['origin'];
+      agentId?: string;
+      userId?: string;
+      channel?: string;
+      requestedBy?: string;
+    }) => Promise<Record<string, unknown>>;
     listWorkflows: () => Array<{
       id: string;
       name: string;
@@ -169,6 +181,10 @@ export function createAutomationRuntimeService(
       runSavedAutomation(asManagerControlPlane(service), input.automationId, input)
     ),
     createExecutorControlPlane: () => ({
+      listAutomations: () => service.listAutomationCatalog().map(cloneCatalogEntry),
+      setAutomationEnabled: (automationId, enabled) => service.setSavedAutomationEnabled(automationId, enabled),
+      deleteAutomation: (automationId) => service.deleteSavedAutomation(automationId),
+      runAutomation: async (input) => service.runSavedAutomation(input),
       listWorkflows: () => service.listWorkflows().map((workflow) => ({
         id: workflow.id,
         name: workflow.name,
@@ -222,6 +238,14 @@ function asManagerControlPlane(service: AutomationRuntimeService): AutomationMan
 
 function importCatalogEntries(service: AutomationRuntimeService) {
   return buildSavedAutomationCatalogEntries(service.listWorkflows(), service.listTasks());
+}
+
+function cloneCatalogEntry(entry: SavedAutomationCatalogEntry): SavedAutomationCatalogEntry {
+  return {
+    ...entry,
+    ...(entry.workflow ? { workflow: cloneWorkflow(entry.workflow) } : {}),
+    ...(entry.task ? { task: cloneTask(entry.task) } : {}),
+  };
 }
 
 function cloneCatalogTemplate(

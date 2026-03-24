@@ -3827,6 +3827,18 @@ describe('ToolExecutor', () => {
     }];
 
     executor.setAutomationControlPlane({
+      listAutomations: () => [{
+        id: 'daily-inbox-review',
+        name: 'Daily Gmail Inbox Review',
+        description: '',
+        kind: 'workflow',
+        enabled: true,
+        workflow: workflows[0] as any,
+        task: tasks[0] as any,
+      }],
+      setAutomationEnabled: () => ({ success: true, message: 'ok' }),
+      deleteAutomation: () => ({ success: true, message: 'ok' }),
+      runAutomation: async () => ({ success: true, message: 'ok' }),
       listWorkflows: () => workflows,
       upsertWorkflow: () => ({ success: true, message: "Added playbook 'daily-inbox-review'." }),
       deleteWorkflow: () => ({ success: true, message: 'ok' }),
@@ -3875,6 +3887,17 @@ describe('ToolExecutor', () => {
     });
 
     executor.setAutomationControlPlane({
+      listAutomations: () => storedWorkflow ? [{
+        id: 'browser-read-smoke',
+        name: 'Browser Read Smoke',
+        description: '',
+        kind: 'workflow',
+        enabled: true,
+        workflow: storedWorkflow as any,
+      }] : [],
+      setAutomationEnabled: () => ({ success: true, message: 'ok' }),
+      deleteAutomation: () => ({ success: true, message: 'ok' }),
+      runAutomation: async () => ({ success: true, message: 'ok' }),
       listWorkflows: () => storedWorkflow ? [storedWorkflow as any] : [],
       upsertWorkflow,
       deleteWorkflow: () => ({ success: true, message: 'ok' }),
@@ -3944,6 +3967,18 @@ describe('ToolExecutor', () => {
     };
 
     executor.setAutomationControlPlane({
+      listAutomations: () => [{
+        id: 'daily-inbox-review',
+        name: 'Daily Gmail Inbox Review',
+        description: '',
+        kind: 'workflow',
+        enabled: true,
+        workflow: workflow as any,
+        task: task as any,
+      }],
+      setAutomationEnabled: () => ({ success: true, message: 'ok' }),
+      deleteAutomation: () => ({ success: true, message: 'ok' }),
+      runAutomation: async () => ({ success: true, message: 'ok' }),
       listWorkflows: () => [workflow],
       upsertWorkflow: () => ({ success: true, message: 'ok' }),
       deleteWorkflow: () => ({ success: true, message: 'ok' }),
@@ -3999,6 +4034,17 @@ describe('ToolExecutor', () => {
     };
 
     executor.setAutomationControlPlane({
+      listAutomations: () => [{
+        id: 'task-manual-123',
+        name: 'Company Homepage Collector',
+        description: '',
+        kind: 'assistant_task',
+        enabled: true,
+        task: task as any,
+      }],
+      setAutomationEnabled: () => ({ success: true, message: 'ok' }),
+      deleteAutomation: () => ({ success: true, message: 'ok' }),
+      runAutomation: async () => ({ success: true, message: 'ok' }),
       listWorkflows: () => [],
       upsertWorkflow: () => ({ success: true, message: 'ok' }),
       deleteWorkflow: () => ({ success: true, message: 'ok' }),
@@ -4046,6 +4092,10 @@ describe('ToolExecutor', () => {
 
     const runTask = vi.fn(async () => ({ success: true, message: 'Manual run triggered.' }));
     executor.setAutomationControlPlane({
+      listAutomations: () => [],
+      setAutomationEnabled: () => ({ success: true, message: 'ok' }),
+      deleteAutomation: () => ({ success: true, message: 'ok' }),
+      runAutomation: async () => ({ success: true, message: 'ok' }),
       listWorkflows: () => [],
       upsertWorkflow: () => ({ success: true, message: 'ok' }),
       deleteWorkflow: () => ({ success: true, message: 'ok' }),
@@ -4072,6 +4122,109 @@ describe('ToolExecutor', () => {
       message: 'Manual run triggered.',
     });
     expect(runTask).toHaveBeenCalledWith('task-manual-123');
+  });
+
+  it('lists automations through automation_list using the canonical catalog', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    executor.setAutomationControlPlane({
+      listAutomations: () => [{
+        id: 'builtin-browser-read',
+        name: 'Builtin Browser Read',
+        description: 'Starter workflow.',
+        kind: 'workflow',
+        enabled: false,
+        builtin: true,
+        source: 'builtin_template',
+        workflow: {
+          id: 'builtin-browser-read',
+          name: 'Builtin Browser Read',
+          enabled: false,
+          mode: 'sequential',
+          steps: [{ id: 'step-1', type: 'tool', packId: '', toolName: 'browser_navigate', args: { url: 'https://example.com' } }],
+        },
+      }],
+      setAutomationEnabled: () => ({ success: true, message: 'ok' }),
+      deleteAutomation: () => ({ success: true, message: 'ok' }),
+      runAutomation: async () => ({ success: true, message: 'ok' }),
+      listWorkflows: () => [],
+      upsertWorkflow: () => ({ success: true, message: 'ok' }),
+      deleteWorkflow: () => ({ success: true, message: 'ok' }),
+      runWorkflow: async () => ({ success: true, message: 'ok', status: 'succeeded' }),
+      listTasks: () => [],
+      createTask: () => ({ success: true, message: 'ok' }),
+      updateTask: () => ({ success: true, message: 'ok' }),
+      runTask: async () => ({ success: true, message: 'ok' }),
+      deleteTask: () => ({ success: true, message: 'ok' }),
+    });
+
+    const run = await executor.runTool({
+      toolName: 'automation_list',
+      args: {},
+      origin: 'web',
+    });
+
+    expect(run.success).toBe(true);
+    expect(run.output).toMatchObject({
+      count: 1,
+      automations: [
+        expect.objectContaining({
+          id: 'builtin-browser-read',
+          builtin: true,
+          source: 'builtin_template',
+        }),
+      ],
+    });
+  });
+
+  it('toggles saved automations through automation_set_enabled', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const setAutomationEnabled = vi.fn(() => ({ success: true, message: 'Disabled automation.' }));
+    executor.setAutomationControlPlane({
+      listAutomations: () => [],
+      setAutomationEnabled,
+      deleteAutomation: () => ({ success: true, message: 'ok' }),
+      runAutomation: async () => ({ success: true, message: 'ok' }),
+      listWorkflows: () => [],
+      upsertWorkflow: () => ({ success: true, message: 'ok' }),
+      deleteWorkflow: () => ({ success: true, message: 'ok' }),
+      runWorkflow: async () => ({ success: true, message: 'ok', status: 'succeeded' }),
+      listTasks: () => [],
+      createTask: () => ({ success: true, message: 'ok' }),
+      updateTask: () => ({ success: true, message: 'ok' }),
+      runTask: async () => ({ success: true, message: 'ok' }),
+      deleteTask: () => ({ success: true, message: 'ok' }),
+    });
+
+    const run = await executor.runTool({
+      toolName: 'automation_set_enabled',
+      args: {
+        automationId: 'browser-read-smoke',
+        enabled: false,
+      },
+      origin: 'web',
+    });
+
+    expect(run.success).toBe(true);
+    expect(run.message).toContain('Disabled automation.');
+    expect(setAutomationEnabled).toHaveBeenCalledWith('browser-read-smoke', false);
   });
 
   it('lists pending approval IDs scoped to user/channel with optional unscoped fallback', async () => {

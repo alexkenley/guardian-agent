@@ -8,17 +8,9 @@ import type {
 } from '../config/types.js';
 import type { ScheduledTaskDefinition } from './scheduled-tasks.js';
 import {
-  buildSavedAutomationCatalogEntries,
   selectSavedAutomationCatalogEntry,
   type SavedAutomationCatalogEntry,
 } from './automation-catalog.js';
-import {
-  planSavedAutomationDelete,
-  planSavedAutomationRun,
-  planSavedAutomationToggle,
-  type SavedAutomationMutationToolName,
-  type SavedAutomationMutationOperation,
-} from './automation-manager.js';
 
 export interface AutomationControlPendingApprovalMetadata {
   id: string;
@@ -34,14 +26,10 @@ export interface AutomationControlPreRouteResult {
 }
 
 type AutomationControlToolName =
-  | 'workflow_list'
-  | 'workflow_upsert'
-  | 'workflow_delete'
-  | 'workflow_run'
-  | 'task_list'
-  | 'task_update'
-  | 'task_run'
-  | 'task_delete';
+  | 'automation_list'
+  | 'automation_set_enabled'
+  | 'automation_run'
+  | 'automation_delete';
 
 interface AutomationControlPreRouteParams {
   agentId: string;
@@ -126,34 +114,14 @@ async function listAutomationCatalog(
   executeTool: AutomationControlPreRouteParams['executeTool'],
   request: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
 ): Promise<SavedAutomationCatalogEntry[]> {
-  const [workflowResult, taskResult] = await Promise.all([
-    executeTool('workflow_list', {}, request),
-    executeTool('task_list', {}, request),
-  ]);
-  return buildSavedAutomationCatalogEntries(
-    extractWorkflowSummaries(workflowResult),
-    extractTaskSummaries(taskResult),
-  );
-}
-
-function extractWorkflowSummaries(result: Record<string, unknown>): AssistantConnectorPlaybookDefinition[] {
+  const result = await executeTool('automation_list', {}, request);
   if (!toBoolean(result.success)) return [];
   const output = isRecord(result.output) ? result.output : null;
-  if (!output || !Array.isArray(output.workflows)) return [];
-  return output.workflows
+  if (!output || !Array.isArray(output.automations)) return [];
+  return output.automations
     .filter(isRecord)
-    .map(toWorkflowSummary)
-    .filter((workflow): workflow is AssistantConnectorPlaybookDefinition => Boolean(workflow));
-}
-
-function extractTaskSummaries(result: Record<string, unknown>): ScheduledTaskDefinition[] {
-  if (!toBoolean(result.success)) return [];
-  const output = isRecord(result.output) ? result.output : null;
-  if (!output || !Array.isArray(output.tasks)) return [];
-  return output.tasks
-    .filter(isRecord)
-    .map(toTaskSummary)
-    .filter((task): task is ScheduledTaskDefinition => Boolean(task));
+    .map(toAutomationCatalogEntry)
+    .filter((entry): entry is SavedAutomationCatalogEntry => Boolean(entry));
 }
 
 function resolveAutomationControlIntent(
@@ -240,6 +208,9 @@ function renderAutomationInspectCopy(
       `${selected.name} (${selected.kind === 'workflow' ? 'workflow' : selected.kind === 'assistant_task' ? 'assistant automation' : 'task'})`,
       `Enabled: ${selected.enabled ? 'yes' : 'no'}`,
     ];
+    if (selected.builtin) {
+      lines.push('Catalog: built-in starter entry');
+    }
     const cron = toString(selected.task?.cron);
     const eventType = readEventType(selected.task);
     if (cron) lines.push(`Schedule: ${cron}`);
@@ -261,13 +232,13 @@ function renderAutomationInspectCopy(
   }
 
   if (catalog.length === 0) {
-    return 'There are no saved automations.';
+    return 'There are no automations in the catalog.';
   }
 
-  const lines = [`Saved automations (${catalog.length}):`];
+  const lines = [`Automation catalog (${catalog.length}):`];
   for (const entry of catalog.slice(0, 20)) {
     const schedule = toString(entry.task?.cron) || readEventType(entry.task) || 'manual';
-    lines.push(`- ${entry.name} [${entry.kind === 'workflow' ? 'workflow' : entry.kind === 'assistant_task' ? 'assistant' : 'task'} · ${entry.enabled ? 'enabled' : 'disabled'} · ${schedule}]`);
+    lines.push(`- ${entry.name} [${entry.kind === 'workflow' ? 'workflow' : entry.kind === 'assistant_task' ? 'assistant' : 'task'} · ${entry.builtin ? 'catalog' : (entry.enabled ? 'enabled' : 'disabled')} · ${schedule}]`);
   }
   if (catalog.length > 20) {
     lines.push(`- ...and ${catalog.length - 20} more`);
@@ -280,19 +251,17 @@ async function runAutomationEntry(
   toolRequest: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
   entry: SavedAutomationCatalogEntry,
 ): Promise<AutomationControlPreRouteResult> {
-  const [operation] = planSavedAutomationRun(entry).operations;
-  if (!operation) {
+  if (entry.builtin) {
     return {
-      content: `I could not run '${entry.name}'.`,
+      content: `'${entry.name}' is a built-in starter entry. Clone or install it first, then run the saved automation.`,
     };
   }
-  const { toolName, args } = operation;
-  const result = await params.executeTool(toolName, args, toolRequest);
+  const result = await params.executeTool('automation_run', { automationId: entry.id }, toolRequest);
   return formatSingleAutomationMutationResult(
     params,
     result,
-    toolName as Extract<SavedAutomationMutationToolName, 'workflow_run' | 'task_run'>,
-    args,
+    'automation_run',
+    { automationId: entry.id },
     entry.name,
     `I ran '${entry.name}'.`,
     `I did not run '${entry.name}'.`,
@@ -306,23 +275,26 @@ async function toggleAutomationEntry(
   entry: SavedAutomationCatalogEntry,
   desiredEnabled?: boolean,
 ): Promise<AutomationControlPreRouteResult> {
-  const plan = planSavedAutomationToggle(entry, desiredEnabled);
-  const [operation] = plan.operations;
-  if (!operation) {
+  if (entry.builtin) {
     return {
-      content: `I could not update '${entry.name}'.`,
+      content: `'${entry.name}' is a built-in starter entry. Clone or install it first, then enable or disable the saved automation.`,
     };
   }
-  const result = await params.executeTool(operation.toolName, operation.args, toolRequest);
+  const enabled = typeof desiredEnabled === 'boolean' ? desiredEnabled : !entry.enabled;
+  const result = await params.executeTool(
+    'automation_set_enabled',
+    { automationId: entry.id, enabled },
+    toolRequest,
+  );
   return formatSingleAutomationMutationResult(
     params,
     result,
-    operation.toolName as Extract<SavedAutomationMutationToolName, 'workflow_upsert' | 'task_update'>,
-    operation.args,
+    'automation_set_enabled',
+    { automationId: entry.id, enabled },
     entry.name,
-    plan.enabled ? `I enabled '${entry.name}'.` : `I disabled '${entry.name}'.`,
-    plan.enabled ? `I did not enable '${entry.name}'.` : `I did not disable '${entry.name}'.`,
-    plan.enabled ? `Enabled '${entry.name}'.` : `Disabled '${entry.name}'.`,
+    enabled ? `I enabled '${entry.name}'.` : `I disabled '${entry.name}'.`,
+    enabled ? `I did not enable '${entry.name}'.` : `I did not disable '${entry.name}'.`,
+    enabled ? `Enabled '${entry.name}'.` : `Disabled '${entry.name}'.`,
   );
 }
 
@@ -331,63 +303,35 @@ async function deleteAutomationEntry(
   toolRequest: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
   entry: SavedAutomationCatalogEntry,
 ): Promise<AutomationControlPreRouteResult> {
-  const messages: string[] = [];
-  const pendingIds: string[] = [];
-  const pendingFallback: AutomationControlPendingApprovalMetadata[] = [];
-
-  for (const operation of planSavedAutomationDelete(entry).operations) {
-    const taskResult = await params.executeTool(operation.toolName, operation.args, toolRequest);
-    const taskPending = collectPendingMutation(
-      params,
-      taskResult,
-      operation.toolName,
-      operation.args,
-      `I deleted '${entry.name}'.`,
-      `I did not delete '${entry.name}'.`,
-      pendingFallback,
-    );
-    pendingIds.push(...taskPending.pendingIds);
-    if (taskPending.message) messages.push(taskPending.message);
-  }
-
-  if (pendingIds.length > 0) {
-    const prompt = params.formatPendingApprovalPrompt
-      ? params.formatPendingApprovalPrompt(pendingIds)
-      : 'This action needs approval before I can continue.';
-    const resolvedPending = params.resolvePendingApprovalMetadata
-      ? params.resolvePendingApprovalMetadata(pendingIds, pendingFallback)
-      : pendingFallback;
+  if (entry.builtin) {
     return {
-      content: [
-        `I prepared deletion of '${entry.name}'.`,
-        ...messages.filter(Boolean),
-        prompt,
-      ].filter(Boolean).join('\n\n'),
-      metadata: resolvedPending.length > 0 ? { pendingApprovals: resolvedPending } : undefined,
+      content: `'${entry.name}' is a built-in starter entry and cannot be deleted from the catalog.`,
     };
   }
-
-  const failures = messages.filter((line) => /^Failed:/i.test(line));
-  if (failures.length > 0) {
-    return {
-      content: failures.join('\n'),
-    };
-  }
-
-  return {
-    content: `Deleted '${entry.name}'.`,
-  };
+  const result = await params.executeTool('automation_delete', { automationId: entry.id }, toolRequest);
+  return formatSingleAutomationMutationResult(
+    params,
+    result,
+    'automation_delete',
+    { automationId: entry.id },
+    entry.name,
+    `I deleted '${entry.name}'.`,
+    `I did not delete '${entry.name}'.`,
+    `Deleted '${entry.name}'.`,
+    `I prepared deletion of '${entry.name}'.`,
+  );
 }
 
 function formatSingleAutomationMutationResult(
   params: AutomationControlPreRouteParams,
   result: Record<string, unknown>,
-  toolName: Extract<SavedAutomationMutationOperation['toolName'], 'workflow_upsert' | 'workflow_run' | 'task_update' | 'task_run'>,
+  toolName: 'automation_set_enabled' | 'automation_run' | 'automation_delete',
   args: Record<string, unknown>,
   automationName: string,
   approvedCopy: string,
   deniedCopy: string,
   successCopy: string,
+  pendingLeadCopy: string = `I prepared the requested change for '${automationName}'.`,
 ): AutomationControlPreRouteResult {
   const pendingFallback: AutomationControlPendingApprovalMetadata[] = [];
   const pending = collectPendingMutation(
@@ -408,7 +352,7 @@ function formatSingleAutomationMutationResult(
       : pendingFallback;
     return {
       content: [
-        `I prepared the requested change for '${automationName}'.`,
+        pendingLeadCopy,
         prompt,
       ].filter(Boolean).join('\n\n'),
       metadata: resolvedPending.length > 0 ? { pendingApprovals: resolvedPending } : undefined,
@@ -429,7 +373,7 @@ function formatSingleAutomationMutationResult(
 function collectPendingMutation(
   params: AutomationControlPreRouteParams,
   result: Record<string, unknown>,
-  toolName: SavedAutomationMutationOperation['toolName'],
+  toolName: 'automation_set_enabled' | 'automation_run' | 'automation_delete',
   args: Record<string, unknown>,
   approvedCopy: string,
   deniedCopy: string,
@@ -559,6 +503,39 @@ function toTaskSummary(value: Record<string, unknown>): ScheduledTaskDefinition 
     runCount: Number.isFinite(Number(value.runCount)) ? Number(value.runCount) : 0,
     ...(toString(value.emitEvent) ? { emitEvent: toString(value.emitEvent) } : {}),
     ...(toOutputHandling(value.outputHandling) ? { outputHandling: toOutputHandling(value.outputHandling) } : {}),
+  };
+}
+
+function toAutomationCatalogEntry(value: Record<string, unknown>): SavedAutomationCatalogEntry | null {
+  const id = toString(value.id).trim();
+  const name = toString(value.name).trim();
+  const kindValue = toString(value.kind).trim();
+  const kind: SavedAutomationCatalogEntry['kind'] | null = kindValue === 'workflow'
+    ? 'workflow'
+    : kindValue === 'assistant_task'
+      ? 'assistant_task'
+      : kindValue === 'task'
+        ? 'task'
+        : null;
+  if (!id || !name || !kind) return null;
+
+  const workflow = isRecord(value.workflow) ? toWorkflowSummary(value.workflow) : null;
+  const task = isRecord(value.task) ? toTaskSummary(value.task) : null;
+  return {
+    id,
+    name,
+    description: toString(value.description),
+    kind,
+    enabled: toBoolean(value.enabled),
+    ...(typeof value.source === 'string'
+      ? { source: value.source as SavedAutomationCatalogEntry['source'] }
+      : {}),
+    ...(typeof value.builtin === 'boolean' ? { builtin: value.builtin } : {}),
+    ...(toString(value.category).trim() ? { category: toString(value.category).trim() } : {}),
+    ...(toString(value.templateId).trim() ? { templateId: toString(value.templateId).trim() } : {}),
+    ...(toString(value.presetId).trim() ? { presetId: toString(value.presetId).trim() } : {}),
+    ...(workflow ? { workflow } : {}),
+    ...(task ? { task } : {}),
   };
 }
 

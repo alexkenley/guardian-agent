@@ -181,8 +181,16 @@ describe('automation-runtime-service', () => {
     }));
 
     const executorControlPlane = service.createExecutorControlPlane();
+    expect(executorControlPlane.listAutomations()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'browser-read-smoke', source: 'saved_workflow' }),
+      expect.objectContaining({ id: 'builtin-browser-read', source: 'builtin_template', builtin: true }),
+    ]));
     expect(executorControlPlane.listWorkflows()).toHaveLength(1);
+    expect(executorControlPlane.setAutomationEnabled('task-agent-1', false).success).toBe(true);
+    expect(executorControlPlane.deleteAutomation('task-agent-1').success).toBe(true);
+    await executorControlPlane.runAutomation({ automationId: 'browser-read-smoke', origin: 'web' });
     await executorControlPlane.runTask('task-agent-1');
+    expect(workflowControl.run).toHaveBeenCalledWith(expect.objectContaining({ playbookId: 'browser-read-smoke' }));
     expect(taskControl.runNow).toHaveBeenCalledWith('task-agent-1');
   });
 });
