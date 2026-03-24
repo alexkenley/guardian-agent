@@ -130,6 +130,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Configuration > Security now combines sandbox enforcement and assistant policy-widening gates in one control surface. `Strict` means fail closed when the strong sandbox is unavailable. `Permissive` means Guardian can keep running on a degraded backend, but the risky degraded-backend surfaces still stay off until you explicitly opt in.',
                   'Use CLI `/tools` for the same operational visibility when you are working outside the web UI.',
                   'Allowed paths, commands, and domains should be adjusted deliberately; treat them as policy boundaries, not convenience toggles.',
+                  'The `.guardianagent/` data directory is a hard-denied path at the Guardian admission layer. The agent cannot read, write, copy, or delete any files under `~/.guardianagent/` through filesystem tools, even if the operator adds the home directory to `allowedPaths`. This prevents agent self-modification of config, auth tokens, memory stores, and integrity signatures. Internal services (memory, search, OAuth, audit) write to this directory through their own APIs, bypassing the filesystem tool gate.',
                   'When the web dashboard needs to change a protected allowlist or policy setting, it now mints the required privileged ticket automatically. If your dashboard session expired, enter the bearer token once and the interrupted save is retried automatically.',
                 ],
               },

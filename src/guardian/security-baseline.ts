@@ -29,6 +29,7 @@ export const SECURITY_BASELINE: SecurityBaseline = {
     '\\.key$',
     '(^|/)credentials\\.[^/]+$',
     '(^|/)id_rsa(?:$|\\.)',
+    '(^|/)\\.guardianagent(?:/|$)',
   ],
   maxApprovalPolicy: 'approve_by_policy',
   minimumPolicyMode: 'shadow',

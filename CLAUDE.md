@@ -71,7 +71,7 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 - **CapabilityController**: Per-agent capability grants (`read_files`, `write_files`, `execute_commands`, etc.)
 - **SecretScanController**: Regex detection for 30+ credential and PII patterns (AWS, GCP, GitHub, OpenAI, Stripe, etc.)
 - **PiiScanController**: High-signal PII detection for tool arguments (address, DOB, MRN, passport, driver's license)
-- **DeniedPathController**: Blocks `.env`, `*.pem`, `*.key`, `credentials.*`, `id_rsa*`
+- **DeniedPathController**: Blocks `.env`, `*.pem`, `*.key`, `credentials.*`, `id_rsa*`, `.guardianagent/` (control plane protection — prevents agent self-modification of config, tokens, and memory files via filesystem tools)
 - **SsrfController**: Centralized SSRF protection blocking private IPs (RFC1918), loopback, link-local, cloud metadata endpoints, IPv4-mapped IPv6, and decimal/hex/octal IP obfuscation. Config: `guardian.ssrf`
 - **InputSanitizer**: Prompt injection detection with invisible Unicode stripping
 - **RateLimiter**: Per-agent burst/per-minute/per-hour sliding windows

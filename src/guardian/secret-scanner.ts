@@ -96,6 +96,7 @@ const DENIED_PATH_PATTERNS: ReadonlyArray<{ name: string; regex: RegExp }> = [
   { name: 'AWS shared credentials', regex: /(?:^|\/)\.aws\/credentials$/i },
   { name: 'Docker config', regex: /(?:^|\/)\.docker\/config\.json$/i },
   { name: 'Kubeconfig', regex: /(?:^|\/)(?:\.kube\/config|kubeconfig)$/i },
+  { name: 'GuardianAgent data directory', regex: /(?:^|\/)\.guardianagent(?:\/|$)/i },
 ];
 
 export class SecretScanner {

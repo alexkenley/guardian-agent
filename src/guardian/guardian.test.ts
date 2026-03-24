@@ -415,6 +415,27 @@ describe('Guardian', () => {
       expect(result).not.toBeNull();
       expect(result!.allowed).toBe(false);
     });
+
+    it('should block access to .guardianagent data directory', () => {
+      const controller = new DeniedPathController();
+      const paths = [
+        '/home/user/.guardianagent/config.yaml',
+        '/home/user/.guardianagent/secrets.enc.json',
+        '/home/user/.guardianagent/memory/assistant.md',
+        '.guardianagent/config.yaml',
+        'foo/../.guardianagent/config.yaml',
+      ];
+      for (const path of paths) {
+        const result = controller.check({
+          type: 'write_file',
+          agentId: 'test',
+          capabilities: ['write_files'],
+          params: { path },
+        });
+        expect(result, `expected ${path} to be blocked`).not.toBeNull();
+        expect(result!.allowed).toBe(false);
+      }
+    });
   });
 
   describe('PiiScanController', () => {

@@ -1344,6 +1344,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       '\\.key$',
       '(^|/)credentials\\.[^/]+$',
       '(^|/)id_rsa(?:$|\\.)',
+      '(^|/)\\.guardianagent(?:/|$)',
     ],
     additionalSecretPatterns: [],
     logDenials: true,

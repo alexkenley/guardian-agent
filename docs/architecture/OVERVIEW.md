@@ -431,7 +431,7 @@ User Message
 │                              │
 │ 3. CapabilityController      │──▶ Agent has permission?
 │ 4. SecretScanController      │──▶ Content contains secrets?
-│ 5. DeniedPathController      │──▶ Path is sensitive?
+│ 5. DeniedPathController      │──▶ Path is sensitive? (.guardianagent/, .env, *.pem, etc.)
 └──────────┬───────────────────┘
            │ ✓ allowed
            ▼
