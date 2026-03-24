@@ -1162,6 +1162,17 @@ export interface DashboardCallbacks {
   onRoutingMode?: () => { tierMode: string; complexityThreshold: number; fallbackOnFailure: boolean };
   onRoutingModeUpdate?: (mode: 'auto' | 'local-only' | 'external-only') => { success: boolean; message: string; tierMode: string };
   onAutomationCatalog?: () => SavedAutomationCatalogEntry[];
+  onAutomationSetEnabled?: (automationId: string, enabled: boolean) => { success: boolean; message: string };
+  onAutomationDelete?: (automationId: string) => { success: boolean; message: string };
+  onAutomationRun?: (input: {
+    automationId: string;
+    dryRun?: boolean;
+    origin?: 'assistant' | 'cli' | 'web';
+    agentId?: string;
+    userId?: string;
+    channel?: string;
+    requestedBy?: string;
+  }) => Promise<Record<string, unknown>> | Record<string, unknown>;
   onScheduledTasks?: () => ScheduledTaskDefinition[];
   onScheduledTaskGet?: (id: string) => ScheduledTaskDefinition | null;
   onScheduledTaskCreate?: (input: ScheduledTaskCreateInput) => { success: boolean; message: string; task?: ScheduledTaskDefinition };

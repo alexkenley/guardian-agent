@@ -130,6 +130,12 @@ import {
 import { WindowsDefenderProvider } from './runtime/windows-defender-provider.js';
 import { ScheduledTaskService } from './runtime/scheduled-tasks.js';
 import { buildSavedAutomationCatalogEntries } from './runtime/automation-catalog.js';
+import {
+  deleteSavedAutomation,
+  runSavedAutomation,
+  setSavedAutomationEnabled,
+  type AutomationManagerControlPlane,
+} from './runtime/automation-manager.js';
 import { MoltbookConnector } from './runtime/moltbook-connector.js';
 import { AssistantOrchestrator } from './runtime/orchestrator.js';
 import { AgentMemoryStore } from './runtime/agent-memory-store.js';
@@ -12050,18 +12056,6 @@ async function main(): Promise<void> {
   };
 
   // ─── Scheduled Tasks callbacks ─────────────────────────
-  dashboardCallbacks.onAutomationCatalog = () => buildSavedAutomationCatalogEntries(
-    connectors.getState().playbooks.map((workflow) => ({
-      ...workflow,
-      steps: workflow.steps.map((step) => ({ ...step })),
-    })),
-    scheduledTasks.list().map((task) => ({
-      ...task,
-      ...(task.args ? { args: { ...task.args } } : {}),
-      ...(task.eventTrigger ? { eventTrigger: { ...task.eventTrigger } } : {}),
-      ...(task.outputHandling ? { outputHandling: { ...task.outputHandling } } : {}),
-    })),
-  );
   dashboardCallbacks.onScheduledTasks = () => scheduledTasks.list();
   dashboardCallbacks.onScheduledTaskGet = (id) => scheduledTasks.get(id);
   dashboardCallbacks.onScheduledTaskCreate = (input) => scheduledTasks.create(input);
@@ -12071,6 +12065,78 @@ async function main(): Promise<void> {
   dashboardCallbacks.onScheduledTaskPresets = () => scheduledTasks.getPresets();
   dashboardCallbacks.onScheduledTaskInstallPreset = (presetId) => scheduledTasks.installPreset(presetId);
   dashboardCallbacks.onScheduledTaskHistory = () => scheduledTasks.getHistory();
+
+  const automationManagerControlPlane: AutomationManagerControlPlane = {
+    listWorkflows: () => connectors.getState().playbooks.map((workflow) => ({
+      ...workflow,
+      steps: workflow.steps.map((step) => ({ ...step })),
+      ...(workflow.outputHandling ? { outputHandling: { ...workflow.outputHandling } } : {}),
+    })),
+    listTasks: () => scheduledTasks.list().map((task) => ({
+      ...task,
+      ...(task.args ? { args: { ...task.args } } : {}),
+      ...(task.eventTrigger ? { eventTrigger: { ...task.eventTrigger } } : {}),
+      ...(task.outputHandling ? { outputHandling: { ...task.outputHandling } } : {}),
+    })),
+    upsertWorkflow: (workflow) => {
+      if (!dashboardCallbacks.onPlaybookUpsert) {
+        return { success: false, message: 'Workflow control plane is not available.' };
+      }
+      return dashboardCallbacks.onPlaybookUpsert(workflow);
+    },
+    updateTask: (id, input) => {
+      if (!dashboardCallbacks.onScheduledTaskUpdate) {
+        return { success: false, message: 'Task control plane is not available.' };
+      }
+      return dashboardCallbacks.onScheduledTaskUpdate(id, input as Parameters<NonNullable<DashboardCallbacks['onScheduledTaskUpdate']>>[1]);
+    },
+    deleteWorkflow: (workflowId) => {
+      if (!dashboardCallbacks.onPlaybookDelete) {
+        return { success: false, message: 'Workflow control plane is not available.' };
+      }
+      return dashboardCallbacks.onPlaybookDelete(workflowId);
+    },
+    deleteTask: (id) => {
+      if (!dashboardCallbacks.onScheduledTaskDelete) {
+        return { success: false, message: 'Task control plane is not available.' };
+      }
+      return dashboardCallbacks.onScheduledTaskDelete(id);
+    },
+    runWorkflow: async (input) => {
+      if (!dashboardCallbacks.onPlaybookRun) {
+        return { success: false, message: 'Workflow control plane is not available.', status: 'error' };
+      }
+      return dashboardCallbacks.onPlaybookRun({
+        playbookId: input.workflowId,
+        dryRun: input.dryRun,
+        origin: input.origin,
+        agentId: input.agentId,
+        userId: input.userId,
+        channel: input.channel,
+        requestedBy: input.requestedBy,
+      });
+    },
+    runTask: async (id) => {
+      if (!dashboardCallbacks.onScheduledTaskRunNow) {
+        return { success: false, message: 'Task control plane is not available.' };
+      }
+      return dashboardCallbacks.onScheduledTaskRunNow(id);
+    },
+  };
+
+  dashboardCallbacks.onAutomationCatalog = () => buildSavedAutomationCatalogEntries(
+    automationManagerControlPlane.listWorkflows(),
+    automationManagerControlPlane.listTasks(),
+  );
+  dashboardCallbacks.onAutomationSetEnabled = (automationId, enabled) => (
+    setSavedAutomationEnabled(automationManagerControlPlane, automationId, enabled)
+  );
+  dashboardCallbacks.onAutomationDelete = (automationId) => (
+    deleteSavedAutomation(automationManagerControlPlane, automationId)
+  );
+  dashboardCallbacks.onAutomationRun = (input) => (
+    runSavedAutomation(automationManagerControlPlane, input.automationId, input)
+  );
 
   toolExecutor.setAutomationControlPlane({
     listWorkflows: () => connectors.getState().playbooks.map((workflow) => ({

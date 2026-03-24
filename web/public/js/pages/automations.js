@@ -1475,17 +1475,10 @@ function bindEvents(container, ctx) {
       if (!auto) return;
       toggle.disabled = true;
       try {
-        if (auto._source === 'playbook' && auto._playbook) {
-          requireAutomationMutationSuccess(
-            await api.upsertPlaybook({ ...auto._playbook, enabled: toggle.checked }),
-            `Could not ${toggle.checked ? 'enable' : 'disable'} '${auto.name}'.`,
-          );
-        } else if (auto._task) {
-          requireAutomationMutationSuccess(
-            await api.updateScheduledTask(auto._task.id, { enabled: toggle.checked }),
-            `Could not ${toggle.checked ? 'enable' : 'disable'} '${auto.name}'.`,
-          );
-        }
+        requireAutomationMutationSuccess(
+          await api.setAutomationEnabled(auto.id, toggle.checked),
+          `Could not ${toggle.checked ? 'enable' : 'disable'} '${auto.name}'.`,
+        );
         await renderAutomationsPreserveScroll(container);
         setAutomationActionStatus(container, `${toggle.checked ? 'Enabled' : 'Disabled'} '${auto.name}'.`, 'success');
       } catch (err) {
@@ -1507,20 +1500,16 @@ function bindEvents(container, ctx) {
       button.disabled = true;
       button.textContent = dryRun ? 'Running dry...' : 'Running...';
       try {
-        let result;
+        const result = await api.runAutomation(auto.id, {
+          dryRun,
+          origin: 'web',
+          channel: 'web',
+          userId: 'web-user',
+          requestedBy: 'web-user',
+        });
         if (auto._source === 'task' && !auto._playbook) {
-          // Orphaned task — run via scheduled task API
-          result = await api.runScheduledTaskNow(auto._task.id);
           button.textContent = result.success ? 'Done' : 'Failed';
         } else {
-          result = await api.runPlaybook({
-            playbookId: auto.id,
-            dryRun,
-            origin: 'web',
-            channel: 'web',
-            userId: 'web-user',
-            requestedBy: 'web-user',
-          });
           const resultsDiv = container.querySelector('#auto-run-results');
           if (resultsDiv && result.run) {
             const runOutputHandling = normalizeOutputHandling(result.run.outputHandling);
@@ -1642,43 +1631,12 @@ function bindEvents(container, ctx) {
       if (!auto || !confirm(`Delete automation '${label}'?`)) return;
 
       try {
-        const failures = [];
-        let deletedAny = false;
-
-        if (auto._task) {
-          try {
-            requireAutomationMutationSuccess(
-              await api.deleteScheduledTask(auto._task.id),
-              `Could not delete the linked task for '${label}'.`,
-            );
-            deletedAny = true;
-          } catch (err) {
-            failures.push(err instanceof Error ? err.message : String(err));
-          }
-        }
-
-        if (auto._playbook) {
-          try {
-            requireAutomationMutationSuccess(
-              await api.deletePlaybook(auto.id),
-              `Could not delete workflow '${label}'.`,
-            );
-            deletedAny = true;
-          } catch (err) {
-            failures.push(err instanceof Error ? err.message : String(err));
-          }
-        }
-
-        if (!deletedAny && failures.length > 0) {
-          throw new Error(failures[0]);
-        }
-
+        requireAutomationMutationSuccess(
+          await api.deleteAutomation(auto.id),
+          `Could not delete '${label}'.`,
+        );
         await renderAutomationsPreserveScroll(container);
-        if (failures.length > 0) {
-          setAutomationActionStatus(container, `Deleted '${label}' with warnings: ${failures.join(' ')}`, 'warning');
-        } else {
-          setAutomationActionStatus(container, `Deleted '${label}'.`, 'success');
-        }
+        setAutomationActionStatus(container, `Deleted '${label}'.`, 'success');
       } catch (err) {
         setAutomationActionStatus(container, err instanceof Error ? err.message : String(err), 'error');
       }

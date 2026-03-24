@@ -440,6 +440,17 @@ export const api = {
   }),
   factoryReset: (scope) => requestPrivileged('/api/factory-reset', 'factory-reset', { scope }),
   automationsCatalog: () => request('/api/automations/catalog'),
+  setAutomationEnabled: (id, enabled) => request(`/api/automations/${encodeURIComponent(id)}/enabled`, {
+    method: 'POST',
+    body: JSON.stringify({ enabled }),
+  }),
+  runAutomation: (id, payload = {}) => request(`/api/automations/${encodeURIComponent(id)}/run`, {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+  }),
+  deleteAutomation: (id) => request(`/api/automations/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  }),
   scheduledTasks: () => request('/api/scheduled-tasks'),
   scheduledTask: (id) => request(`/api/scheduled-tasks/${encodeURIComponent(id)}`),
   createScheduledTask: (data) => request('/api/scheduled-tasks', {

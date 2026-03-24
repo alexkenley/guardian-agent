@@ -3410,6 +3410,103 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      if (req.method === 'POST' && url.pathname.match(/^\/api\/automations\/[^/]+\/run$/)) {
+        if (!this.dashboard.onAutomationRun) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const automationId = decodeURIComponent(url.pathname.split('/')[3] || '').trim();
+        if (!automationId) {
+          sendJSON(res, 400, { error: 'automationId is required' });
+          return;
+        }
+        let body = '{}';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: {
+          dryRun?: boolean;
+          origin?: 'assistant' | 'cli' | 'web';
+          agentId?: string;
+          userId?: string;
+          channel?: string;
+          requestedBy?: string;
+        };
+        try {
+          parsed = body ? JSON.parse(body) as typeof parsed : {};
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        const result = await this.dashboard.onAutomationRun({
+          automationId,
+          dryRun: parsed?.dryRun === true,
+          origin: parsed?.origin,
+          agentId: trimOptionalString(parsed?.agentId),
+          userId: trimOptionalString(parsed?.userId),
+          channel: trimOptionalString(parsed?.channel),
+          requestedBy: trimOptionalString(parsed?.requestedBy),
+        });
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['automations'], 'automation.run', url.pathname);
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname.match(/^\/api\/automations\/[^/]+\/enabled$/)) {
+        if (!this.dashboard.onAutomationSetEnabled) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const automationId = decodeURIComponent(url.pathname.split('/')[3] || '').trim();
+        if (!automationId) {
+          sendJSON(res, 400, { error: 'automationId is required' });
+          return;
+        }
+        let body: string;
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: { enabled?: boolean };
+        try {
+          parsed = JSON.parse(body) as { enabled?: boolean };
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        if (typeof parsed.enabled !== 'boolean') {
+          sendJSON(res, 400, { error: 'enabled must be a boolean' });
+          return;
+        }
+        const result = this.dashboard.onAutomationSetEnabled(automationId, parsed.enabled);
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['automations'], 'automation.enabled', url.pathname);
+        return;
+      }
+
+      if (req.method === 'DELETE' && url.pathname.match(/^\/api\/automations\/[^/]+$/)) {
+        if (!this.dashboard.onAutomationDelete) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const automationId = decodeURIComponent(url.pathname.split('/')[3] || '').trim();
+        if (!automationId) {
+          sendJSON(res, 400, { error: 'automationId is required' });
+          return;
+        }
+        const result = this.dashboard.onAutomationDelete(automationId);
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['automations'], 'automation.deleted', url.pathname);
+        return;
+      }
+
       // GET /api/scheduled-tasks — List all scheduled tasks
       if (req.method === 'GET' && url.pathname === '/api/scheduled-tasks') {
         if (!this.dashboard.onScheduledTasks) {
