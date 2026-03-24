@@ -129,6 +129,7 @@ import {
 } from './runtime/security-triage-agent.js';
 import { WindowsDefenderProvider } from './runtime/windows-defender-provider.js';
 import { ScheduledTaskService } from './runtime/scheduled-tasks.js';
+import { buildSavedAutomationCatalogEntries } from './runtime/automation-catalog.js';
 import { MoltbookConnector } from './runtime/moltbook-connector.js';
 import { AssistantOrchestrator } from './runtime/orchestrator.js';
 import { AgentMemoryStore } from './runtime/agent-memory-store.js';
@@ -12049,6 +12050,18 @@ async function main(): Promise<void> {
   };
 
   // ─── Scheduled Tasks callbacks ─────────────────────────
+  dashboardCallbacks.onAutomationCatalog = () => buildSavedAutomationCatalogEntries(
+    connectors.getState().playbooks.map((workflow) => ({
+      ...workflow,
+      steps: workflow.steps.map((step) => ({ ...step })),
+    })),
+    scheduledTasks.list().map((task) => ({
+      ...task,
+      ...(task.args ? { args: { ...task.args } } : {}),
+      ...(task.eventTrigger ? { eventTrigger: { ...task.eventTrigger } } : {}),
+      ...(task.outputHandling ? { outputHandling: { ...task.outputHandling } } : {}),
+    })),
+  );
   dashboardCallbacks.onScheduledTasks = () => scheduledTasks.list();
   dashboardCallbacks.onScheduledTaskGet = (id) => scheduledTasks.get(id);
   dashboardCallbacks.onScheduledTaskCreate = (input) => scheduledTasks.create(input);

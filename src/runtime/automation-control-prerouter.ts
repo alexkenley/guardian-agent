@@ -1,6 +1,17 @@
 import type { AgentContext, UserMessage } from '../agent/types.js';
 import type { ToolExecutionRequest } from '../tools/types.js';
 import type { IntentGatewayDecision } from './intent-gateway.js';
+import type {
+  AssistantConnectorPlaybookDefinition,
+  AssistantConnectorPlaybookStepDefinition,
+  AutomationOutputHandlingConfig,
+} from '../config/types.js';
+import type { ScheduledTaskDefinition } from './scheduled-tasks.js';
+import {
+  buildSavedAutomationCatalogEntries,
+  selectSavedAutomationCatalogEntry,
+  type SavedAutomationCatalogEntry,
+} from './automation-catalog.js';
 
 export interface AutomationControlPendingApprovalMetadata {
   id: string;
@@ -46,16 +57,6 @@ interface AutomationControlIntent {
   enabled?: boolean;
 }
 
-interface AutomationCatalogEntry {
-  id: string;
-  name: string;
-  description: string;
-  kind: 'workflow' | 'assistant_task' | 'task';
-  enabled: boolean;
-  workflow?: Record<string, unknown>;
-  task?: Record<string, unknown>;
-}
-
 export async function tryAutomationControlPreRoute(
   params: AutomationControlPreRouteParams,
   options?: { intentDecision?: IntentGatewayDecision | null },
@@ -66,7 +67,7 @@ export async function tryAutomationControlPreRoute(
   const toolRequest = toolRequestFor(params);
   const catalog = await listAutomationCatalog(params.executeTool, toolRequest);
   const selected = intent.automationName
-    ? selectAutomationCatalogEntry(catalog, intent.automationName)
+    ? selectSavedAutomationCatalogEntry(catalog, intent.automationName)
     : null;
 
   if (intent.operation === 'inspect') {
@@ -117,64 +118,35 @@ function toolRequestFor(
 async function listAutomationCatalog(
   executeTool: AutomationControlPreRouteParams['executeTool'],
   request: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
-): Promise<AutomationCatalogEntry[]> {
+): Promise<SavedAutomationCatalogEntry[]> {
   const [workflowResult, taskResult] = await Promise.all([
     executeTool('workflow_list', {}, request),
     executeTool('task_list', {}, request),
   ]);
-
-  const workflows = extractWorkflowSummaries(workflowResult);
-  const tasks = extractTaskSummaries(taskResult);
-  const matchedTaskIds = new Set<string>();
-  const entries: AutomationCatalogEntry[] = [];
-
-  for (const workflow of workflows) {
-    const linkedTask = tasks.find((task) => (
-      toString(task.type).toLowerCase() === 'workflow'
-      && toString(task.target) === toString(workflow.id)
-    ));
-    if (linkedTask) {
-      matchedTaskIds.add(toString(linkedTask.id));
-    }
-    entries.push({
-      id: toString(workflow.id) || toString(linkedTask?.id),
-      name: toString(workflow.name) || toString(linkedTask?.name) || 'Unnamed automation',
-      description: toString(workflow.description),
-      kind: 'workflow',
-      enabled: workflow.enabled !== false,
-      workflow,
-      ...(linkedTask ? { task: linkedTask } : {}),
-    });
-  }
-
-  for (const task of tasks) {
-    const taskId = toString(task.id);
-    if (!taskId || matchedTaskIds.has(taskId)) continue;
-    entries.push({
-      id: taskId,
-      name: toString(task.name) || taskId,
-      description: toString(task.description),
-      kind: toString(task.type).toLowerCase() === 'agent' ? 'assistant_task' : 'task',
-      enabled: task.enabled !== false,
-      task,
-    });
-  }
-
-  return entries.filter((entry) => entry.id && entry.name);
+  return buildSavedAutomationCatalogEntries(
+    extractWorkflowSummaries(workflowResult),
+    extractTaskSummaries(taskResult),
+  );
 }
 
-function extractWorkflowSummaries(result: Record<string, unknown>): Array<Record<string, unknown>> {
+function extractWorkflowSummaries(result: Record<string, unknown>): AssistantConnectorPlaybookDefinition[] {
   if (!toBoolean(result.success)) return [];
   const output = isRecord(result.output) ? result.output : null;
   if (!output || !Array.isArray(output.workflows)) return [];
-  return output.workflows.filter(isRecord);
+  return output.workflows
+    .filter(isRecord)
+    .map(toWorkflowSummary)
+    .filter((workflow): workflow is AssistantConnectorPlaybookDefinition => Boolean(workflow));
 }
 
-function extractTaskSummaries(result: Record<string, unknown>): Array<Record<string, unknown>> {
+function extractTaskSummaries(result: Record<string, unknown>): ScheduledTaskDefinition[] {
   if (!toBoolean(result.success)) return [];
   const output = isRecord(result.output) ? result.output : null;
   if (!output || !Array.isArray(output.tasks)) return [];
-  return output.tasks.filter(isRecord);
+  return output.tasks
+    .filter(isRecord)
+    .map(toTaskSummary)
+    .filter((task): task is ScheduledTaskDefinition => Boolean(task));
 }
 
 function resolveAutomationControlIntent(
@@ -252,21 +224,9 @@ function extractAutomationReference(text: string): string | undefined {
   return undefined;
 }
 
-function selectAutomationCatalogEntry(
-  catalog: AutomationCatalogEntry[],
-  requestedName: string,
-): AutomationCatalogEntry | null {
-  const normalized = normalizeLookupKey(requestedName);
-  const exact = catalog.find((entry) => normalizeLookupKey(entry.name) === normalized || normalizeLookupKey(entry.id) === normalized);
-  if (exact) return exact;
-
-  const partial = catalog.filter((entry) => normalizeLookupKey(entry.name).includes(normalized) || normalizeLookupKey(entry.id).includes(normalized));
-  return partial.length === 1 ? partial[0] : null;
-}
-
 function renderAutomationInspectCopy(
-  catalog: AutomationCatalogEntry[],
-  selected: AutomationCatalogEntry | null,
+  catalog: SavedAutomationCatalogEntry[],
+  selected: SavedAutomationCatalogEntry | null,
 ): string {
   if (selected) {
     const lines = [
@@ -311,7 +271,7 @@ function renderAutomationInspectCopy(
 async function runAutomationEntry(
   params: AutomationControlPreRouteParams,
   toolRequest: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
-  entry: AutomationCatalogEntry,
+  entry: SavedAutomationCatalogEntry,
 ): Promise<AutomationControlPreRouteResult> {
   const toolName = entry.workflow ? 'workflow_run' : 'task_run';
   const args = entry.workflow
@@ -333,7 +293,7 @@ async function runAutomationEntry(
 async function toggleAutomationEntry(
   params: AutomationControlPreRouteParams,
   toolRequest: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
-  entry: AutomationCatalogEntry,
+  entry: SavedAutomationCatalogEntry,
   desiredEnabled?: boolean,
 ): Promise<AutomationControlPreRouteResult> {
   const enabled = typeof desiredEnabled === 'boolean' ? desiredEnabled : !entry.enabled;
@@ -368,28 +328,25 @@ async function toggleAutomationEntry(
 }
 
 function buildWorkflowToggleArgs(
-  workflow: Record<string, unknown>,
+  workflow: AssistantConnectorPlaybookDefinition,
   enabled: boolean,
 ): Record<string, unknown> {
-  const outputHandling = isRecord(workflow.outputHandling) ? workflow.outputHandling : undefined;
   return {
-    id: toString(workflow.id),
-    name: toString(workflow.name),
-    mode: toString(workflow.mode) || 'sequential',
-    description: toString(workflow.description),
+    id: workflow.id,
+    name: workflow.name,
+    mode: workflow.mode || 'sequential',
+    description: workflow.description,
     enabled,
-    ...(toString(workflow.schedule) ? { schedule: toString(workflow.schedule) } : {}),
-    ...(outputHandling ? { outputHandling } : {}),
-    steps: Array.isArray(workflow.steps)
-      ? workflow.steps.filter(isRecord).map((step) => ({ ...step }))
-      : [],
+    ...(workflow.schedule ? { schedule: workflow.schedule } : {}),
+    ...(workflow.outputHandling ? { outputHandling: workflow.outputHandling } : {}),
+    steps: Array.isArray(workflow.steps) ? workflow.steps.map((step) => ({ ...step })) : [],
   };
 }
 
 async function deleteAutomationEntry(
   params: AutomationControlPreRouteParams,
   toolRequest: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
-  entry: AutomationCatalogEntry,
+  entry: SavedAutomationCatalogEntry,
 ): Promise<AutomationControlPreRouteResult> {
   const messages: string[] = [];
   const pendingIds: string[] = [];
@@ -555,14 +512,8 @@ function extractFailureMessage(result: Record<string, unknown>): string {
   return output ? toString(output.message).trim() : '';
 }
 
-function readEventType(task: Record<string, unknown> | undefined): string {
-  if (!task) return '';
-  const eventTrigger = isRecord(task.eventTrigger) ? task.eventTrigger : null;
-  return eventTrigger ? toString(eventTrigger.eventType) : '';
-}
-
-function normalizeLookupKey(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+function readEventType(task: { eventTrigger?: { eventType: string } } | undefined): string {
+  return task?.eventTrigger?.eventType ?? '';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -575,4 +526,108 @@ function toString(value: unknown): string {
 
 function toBoolean(value: unknown): boolean {
   return value === true;
+}
+
+function toWorkflowSummary(value: Record<string, unknown>): AssistantConnectorPlaybookDefinition | null {
+  const id = toString(value.id);
+  const name = toString(value.name);
+  const mode = toString(value.mode) === 'parallel' ? 'parallel' : 'sequential';
+  const steps = Array.isArray(value.steps)
+    ? value.steps.filter(isRecord).map(toWorkflowStepSummary).filter((step): step is AssistantConnectorPlaybookStepDefinition => Boolean(step))
+    : [];
+  if (!id || !name || steps.length === 0) return null;
+  return {
+    id,
+    name,
+    enabled: value.enabled !== false,
+    mode,
+    description: toString(value.description),
+    ...(toString(value.schedule) ? { schedule: toString(value.schedule) } : {}),
+    ...(toOutputHandling(value.outputHandling) ? { outputHandling: toOutputHandling(value.outputHandling) } : {}),
+    steps,
+  };
+}
+
+function toTaskSummary(value: Record<string, unknown>): ScheduledTaskDefinition | null {
+  const id = toString(value.id);
+  const name = toString(value.name);
+  const typeValue = toString(value.type).toLowerCase();
+  const target = toString(value.target);
+  if (!id || !name || !target) return null;
+  const type: ScheduledTaskDefinition['type'] = typeValue === 'agent'
+    ? 'agent'
+    : typeValue === 'playbook' || typeValue === 'workflow'
+      ? 'playbook'
+      : 'tool';
+  const eventTrigger = isRecord(value.eventTrigger) && toString(value.eventTrigger.eventType)
+    ? {
+        eventType: toString(value.eventTrigger.eventType),
+      }
+    : undefined;
+  return {
+    id,
+    name,
+    description: toString(value.description) || undefined,
+    type,
+    target,
+    ...(isRecord(value.args) ? { args: { ...value.args } } : {}),
+    ...(toString(value.prompt) ? { prompt: toString(value.prompt) } : {}),
+    ...(toString(value.channel) ? { channel: toString(value.channel) } : {}),
+    ...(toString(value.userId) ? { userId: toString(value.userId) } : {}),
+    ...(typeof value.deliver === 'boolean' ? { deliver: value.deliver } : {}),
+    ...(typeof value.runOnce === 'boolean' ? { runOnce: value.runOnce } : {}),
+    ...(toString(value.cron) ? { cron: toString(value.cron) } : {}),
+    ...(eventTrigger ? { eventTrigger } : {}),
+    enabled: value.enabled !== false,
+    createdAt: Number.isFinite(Number(value.createdAt)) ? Number(value.createdAt) : 0,
+    scopeHash: toString(value.scopeHash) || 'unknown',
+    maxRunsPerWindow: Number.isFinite(Number(value.maxRunsPerWindow)) ? Number(value.maxRunsPerWindow) : 1,
+    dailySpendCap: Number.isFinite(Number(value.dailySpendCap)) ? Number(value.dailySpendCap) : 0,
+    providerSpendCap: Number.isFinite(Number(value.providerSpendCap)) ? Number(value.providerSpendCap) : 0,
+    consecutiveFailureCount: Number.isFinite(Number(value.consecutiveFailureCount)) ? Number(value.consecutiveFailureCount) : 0,
+    consecutiveDeniedCount: Number.isFinite(Number(value.consecutiveDeniedCount)) ? Number(value.consecutiveDeniedCount) : 0,
+    ...(Number.isFinite(Number(value.lastRunAt)) ? { lastRunAt: Number(value.lastRunAt) } : {}),
+    ...(toString(value.lastRunStatus)
+      ? { lastRunStatus: toString(value.lastRunStatus) as ScheduledTaskDefinition['lastRunStatus'] }
+      : {}),
+    runCount: Number.isFinite(Number(value.runCount)) ? Number(value.runCount) : 0,
+    ...(toString(value.emitEvent) ? { emitEvent: toString(value.emitEvent) } : {}),
+    ...(toOutputHandling(value.outputHandling) ? { outputHandling: toOutputHandling(value.outputHandling) } : {}),
+  };
+}
+
+function toWorkflowStepSummary(value: Record<string, unknown>): AssistantConnectorPlaybookStepDefinition | null {
+  const id = toString(value.id);
+  const typeValue = toString(value.type);
+  const type: AssistantConnectorPlaybookStepDefinition['type'] = typeValue === 'instruction' || typeValue === 'delay'
+    ? typeValue
+    : 'tool';
+  if (!id) return null;
+  return {
+    id,
+    name: toString(value.name),
+    type,
+    packId: toString(value.packId),
+    toolName: toString(value.toolName),
+    ...(isRecord(value.args) ? { args: { ...value.args } } : {}),
+    ...(toString(value.instruction) ? { instruction: toString(value.instruction) } : {}),
+    ...(Number.isFinite(Number(value.delayMs)) ? { delayMs: Number(value.delayMs) } : {}),
+    ...(Number.isFinite(Number(value.timeoutMs)) ? { timeoutMs: Number(value.timeoutMs) } : {}),
+    ...(value.continueOnError === true ? { continueOnError: true } : {}),
+    ...(toString(value.evidenceMode) ? { evidenceMode: toString(value.evidenceMode) as AssistantConnectorPlaybookStepDefinition['evidenceMode'] } : {}),
+    ...(toString(value.citationStyle) ? { citationStyle: toString(value.citationStyle) as AssistantConnectorPlaybookStepDefinition['citationStyle'] } : {}),
+  };
+}
+
+function toOutputHandling(value: unknown): AutomationOutputHandlingConfig | undefined {
+  if (!isRecord(value)) return undefined;
+  const notify = toString(value.notify);
+  const sendToSecurity = toString(value.sendToSecurity);
+  const persistArtifacts = toString(value.persistArtifacts);
+  if (!notify || !sendToSecurity || !persistArtifacts) return undefined;
+  return {
+    notify: notify as AutomationOutputHandlingConfig['notify'],
+    sendToSecurity: sendToSecurity as AutomationOutputHandlingConfig['sendToSecurity'],
+    persistArtifacts: persistArtifacts as AutomationOutputHandlingConfig['persistArtifacts'],
+  };
 }

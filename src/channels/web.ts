@@ -3400,6 +3400,16 @@ export class WebChannel implements ChannelAdapter {
 
       // ─── Scheduled Tasks API ─────────────────────────────────
 
+      // GET /api/automations/catalog — Unified saved automation catalog
+      if (req.method === 'GET' && url.pathname === '/api/automations/catalog') {
+        if (!this.dashboard.onAutomationCatalog) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        sendJSON(res, 200, this.dashboard.onAutomationCatalog());
+        return;
+      }
+
       // GET /api/scheduled-tasks — List all scheduled tasks
       if (req.method === 'GET' && url.pathname === '/api/scheduled-tasks') {
         if (!this.dashboard.onScheduledTasks) {

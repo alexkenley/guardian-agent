@@ -38,6 +38,7 @@ import type {
 import type { ConnectorFrameworkState, ConnectorPlaybookRunResult } from '../runtime/connectors.js';
 import type { ToolApprovalRequest, ToolCategory, ToolDefinition, ToolJobRecord, ToolPolicySnapshot, ToolRunResponse, ToolRuntimeNotice } from '../tools/types.js';
 import type { ScheduledTaskDefinition, ScheduledTaskCreateInput, ScheduledTaskUpdateInput, ScheduledTaskPreset, ScheduledTaskStatus } from '../runtime/scheduled-tasks.js';
+import type { SavedAutomationCatalogEntry } from '../runtime/automation-catalog.js';
 import type { NetworkAlert, NetworkBaselineSnapshot } from '../runtime/network-baseline.js';
 import type { HostMonitorAlert, HostMonitorStatus, HostMonitorReport } from '../runtime/host-monitor.js';
 import type { GatewayMonitorAlert, GatewayMonitorStatus, GatewayMonitorReport } from '../runtime/gateway-monitor.js';
@@ -1160,6 +1161,7 @@ export interface DashboardCallbacks {
   }>;
   onRoutingMode?: () => { tierMode: string; complexityThreshold: number; fallbackOnFailure: boolean };
   onRoutingModeUpdate?: (mode: 'auto' | 'local-only' | 'external-only') => { success: boolean; message: string; tierMode: string };
+  onAutomationCatalog?: () => SavedAutomationCatalogEntry[];
   onScheduledTasks?: () => ScheduledTaskDefinition[];
   onScheduledTaskGet?: (id: string) => ScheduledTaskDefinition | null;
   onScheduledTaskCreate?: (input: ScheduledTaskCreateInput) => { success: boolean; message: string; task?: ScheduledTaskDefinition };

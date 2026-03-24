@@ -86,9 +86,10 @@ export async function renderAutomations(container) {
   container.innerHTML = '<h2 class="page-title">Automations</h2><div class="loading">Loading...</div>';
 
   try {
-    const [connState, toolsState, tasks, presets, history, templates, agentsState, assistantRuns] = await Promise.all([
+    const [connState, toolsState, automationCatalog, tasks, presets, history, templates, agentsState, assistantRuns] = await Promise.all([
       api.connectorsState(40),
       api.toolsState(500).catch(() => ({ tools: [] })),
+      api.automationsCatalog().catch(() => []),
       api.scheduledTasks().catch(() => []),
       api.scheduledTaskPresets().catch(() => []),
       api.scheduledTaskHistory().catch(() => []),
@@ -108,7 +109,7 @@ export async function renderAutomations(container) {
     const recentAssistantRuns = Array.isArray(assistantRuns?.runs) ? assistantRuns.runs : [];
 
     const automations = reorderAutomationsForUi(
-      buildAutomationList(playbooks, tasks, tools, templates, presets),
+      buildAutomationList(Array.isArray(automationCatalog) ? automationCatalog : [], tasks, tools, templates, presets),
     );
     const allCategories = [...new Set(automations.map((a) => a.category))].sort();
     const totalScheduled = automations.filter((a) => a.cron).length;
@@ -289,10 +290,13 @@ function createGenericHelpFactory(area) {
 
 // ─── Data Model — merge workflows + scheduled tasks ──────
 
-function buildAutomationList(playbooks, tasks, tools, templates = [], presets = []) {
+function buildAutomationList(savedCatalog, tasks, tools, templates = [], presets = []) {
   const automations = [];
-  const matchedTaskIds = new Set();
-  const playbookIds = new Set((playbooks || []).map((pb) => pb.id));
+  const playbookIds = new Set(
+    (savedCatalog || [])
+      .map((entry) => entry?._playbook?.id || entry?.workflow?.id || null)
+      .filter(Boolean),
+  );
   const installedPresetIds = new Set(
     (tasks || [])
       .map((task) => task.presetId)
@@ -304,48 +308,42 @@ function buildAutomationList(playbooks, tasks, tools, templates = [], presets = 
     _templateId: tpl.id,
   })));
   const findCatalogPlaybook = (playbookId) => (
-    (playbooks || []).find((pb) => pb.id === playbookId)
+    (savedCatalog || []).find((entry) => (entry?._playbook?.id || entry?.workflow?.id) === playbookId)?._playbook
     || templatePlaybooks.find((pb) => pb.id === playbookId)
   );
 
-  // 1. For each workflow, create an automation and find linked scheduled task
-  for (const pb of playbooks) {
-    const linkedTask = tasks.find(
-      (t) => t.type === 'playbook' && t.target === pb.id,
-    );
-    if (linkedTask) matchedTaskIds.add(linkedTask.id);
+  // 1. Saved automation catalog entries already come from the backend in merged form.
+  for (const entry of (savedCatalog || [])) {
+    const pb = entry.workflow || entry._playbook || null;
+    const task = entry.task || entry._task || null;
+    if (pb) {
+      automations.push({
+        id: pb.id,
+        name: pb.name,
+        description: pb.description || '',
+        category: deriveCategory(pb.steps || [], tools),
+        kind: (pb.steps || []).length <= 1 ? 'single' : 'pipeline',
+        mode: pb.mode || 'sequential',
+        steps: pb.steps || [],
+        packId: (pb.steps || [])[0]?.packId || null,
+        enabled: pb.enabled !== false,
+        cron: task?.cron || null,
+        runOnce: task?.runOnce === true,
+        emitEvent: task?.emitEvent || '',
+        outputHandling: normalizeOutputHandling(pb.outputHandling || task?.outputHandling),
+        scheduleEnabled: task?.enabled || false,
+        taskId: task?.id || null,
+        lastRunAt: task?.lastRunAt || null,
+        lastRunStatus: task?.lastRunStatus || null,
+        runCount: task?.runCount || 0,
+        _source: 'playbook',
+        _playbook: pb,
+        _task: task || null,
+      });
+      continue;
+    }
 
-    automations.push({
-      id: pb.id,
-      name: pb.name,
-      description: pb.description || '',
-      category: deriveCategory(pb.steps || [], tools),
-      kind: (pb.steps || []).length <= 1 ? 'single' : 'pipeline',
-      mode: pb.mode || 'sequential',
-      steps: pb.steps || [],
-      packId: (pb.steps || [])[0]?.packId || null,
-      enabled: pb.enabled !== false,
-      cron: linkedTask?.cron || null,
-      runOnce: linkedTask?.runOnce === true,
-      emitEvent: linkedTask?.emitEvent || '',
-      outputHandling: normalizeOutputHandling(pb.outputHandling || linkedTask?.outputHandling),
-      scheduleEnabled: linkedTask?.enabled || false,
-      taskId: linkedTask?.id || null,
-      lastRunAt: linkedTask?.lastRunAt || null,
-      lastRunStatus: linkedTask?.lastRunStatus || null,
-      runCount: linkedTask?.runCount || 0,
-      _source: 'playbook',
-      _playbook: pb,
-      _task: linkedTask || null,
-    });
-  }
-
-  // 2. Orphaned scheduled tasks (type 'tool', no matching workflow)
-  for (const task of tasks) {
-    if (matchedTaskIds.has(task.id)) continue;
-    // Check if already linked by workflow target
-    if (automations.some((a) => a.taskId === task.id)) continue;
-
+    if (!task) continue;
     if (task.type === 'agent') {
       automations.push({
         id: task.id,
@@ -412,7 +410,7 @@ function buildAutomationList(playbooks, tasks, tools, templates = [], presets = 
     });
   }
 
-  // 3. Built-in connector templates move directly into the catalog as disabled starter entries.
+  // 2. Built-in connector templates move directly into the catalog as disabled starter entries.
   for (const tpl of (templates || [])) {
     for (const pb of (tpl.playbooks || [])) {
       if (playbookIds.has(pb.id)) continue;
@@ -443,7 +441,7 @@ function buildAutomationList(playbooks, tasks, tools, templates = [], presets = 
     }
   }
 
-  // 4. Built-in scheduled presets also appear in the catalog as disabled starter entries.
+  // 3. Built-in scheduled presets also appear in the catalog as disabled starter entries.
   for (const preset of (presets || [])) {
     const presetAlreadyInstalled = installedPresetIds.has(preset.id)
       || (tasks || []).some((task) =>
