@@ -188,6 +188,7 @@ function parseHarnessOptions() {
     wslHostIp: process.env.HARNESS_WSL_HOST_IP?.trim() || '',
     ollamaBin: process.env.HARNESS_OLLAMA_BIN?.trim() || '',
     autostartLocalOllama: process.env.HARNESS_AUTOSTART_LOCAL_OLLAMA !== '0',
+    bypassLocalModelComplexityGuard: process.env.HARNESS_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD !== '0',
   };
 }
 
@@ -662,6 +663,9 @@ guardian:
         ...process.env,
         HOME: tmpDir,
         PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+        ...(options.useRealOllama && options.bypassLocalModelComplexityGuard
+          ? { GUARDIAN_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD: '1' }
+          : {}),
       },
     });
     const stdout = fs.createWriteStream(logPath);

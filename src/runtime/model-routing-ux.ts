@@ -6,11 +6,20 @@ export interface ResponseSourceMetadata {
   notice?: string;
 }
 
+export type LocalModelComplexityGuardEnv = Record<string, string | undefined>;
+
 const LOCAL_MODEL_TOO_COMPLICATED_MESSAGE =
   'This request is too complicated for the current local model. Please change model or configure external.';
 
 export function buildLocalModelTooComplicatedMessage(): string {
   return LOCAL_MODEL_TOO_COMPLICATED_MESSAGE;
+}
+
+export function shouldBypassLocalModelComplexityGuard(
+  env: LocalModelComplexityGuardEnv = process.env,
+): boolean {
+  const value = env.GUARDIAN_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD?.trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes';
 }
 
 export function isLocalToolCallParseError(error: unknown): boolean {

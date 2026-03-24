@@ -216,6 +216,7 @@ import {
   buildLocalModelTooComplicatedMessage,
   getProviderLocalityFromName,
   isLocalToolCallParseError,
+  shouldBypassLocalModelComplexityGuard,
   type ResponseSourceMetadata,
 } from './runtime/model-routing-ux.js';
 import {
@@ -814,6 +815,9 @@ class ChatAgent extends BaseAgent {
         };
       } catch (primaryError) {
         if (primaryProviderLocality === 'local' && isLocalToolCallParseError(primaryError)) {
+          if (shouldBypassLocalModelComplexityGuard()) {
+            throw primaryError;
+          }
           throw new Error(buildLocalModelTooComplicatedMessage());
         }
         throw primaryError;
@@ -834,6 +838,9 @@ class ChatAgent extends BaseAgent {
       );
 
       if (primaryProviderLocality === 'local' && isLocalToolCallParseError(primaryError)) {
+        if (shouldBypassLocalModelComplexityGuard()) {
+          throw primaryError;
+        }
         try {
           const result = await this.fallbackChain.chatWithFallbackAfterPrimary(messages, options);
           return {

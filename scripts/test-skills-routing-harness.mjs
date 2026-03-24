@@ -113,6 +113,7 @@ function parseHarnessOptions() {
     wslHostIp: process.env.HARNESS_WSL_HOST_IP?.trim() || '',
     ollamaBin: process.env.HARNESS_OLLAMA_BIN?.trim() || '',
     autostartLocalOllama: process.env.HARNESS_AUTOSTART_LOCAL_OLLAMA !== '0',
+    bypassLocalModelComplexityGuard: process.env.HARNESS_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD !== '0',
   };
 }
 
@@ -556,7 +557,7 @@ async function runResolverMatrix() {
   }
 }
 
-async function runHttpMatrix(provider) {
+async function runHttpMatrix(provider, options) {
   log('');
   log(`=== HTTP Planner Matrix (${provider.mode}) ===`);
 
@@ -646,6 +647,9 @@ async function runHttpMatrix(provider) {
         USERPROFILE: tempDir,
         XDG_CONFIG_HOME: tempDir,
         XDG_DATA_HOME: tempDir,
+        ...(options.useRealOllama && options.bypassLocalModelComplexityGuard
+          ? { GUARDIAN_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD: '1' }
+          : {}),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -751,10 +755,11 @@ async function runHttpMatrix(provider) {
 
 async function main() {
   await runResolverMatrix();
-  const provider = await resolveHarnessProvider(parseHarnessOptions());
+  const options = parseHarnessOptions();
+  const provider = await resolveHarnessProvider(options);
   log(`Using provider mode: ${provider.mode} (${provider.baseUrl}, model=${provider.model})`);
   try {
-    await runHttpMatrix(provider);
+    await runHttpMatrix(provider, options);
   } finally {
     await provider.close();
   }

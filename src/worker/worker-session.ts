@@ -8,6 +8,7 @@ import {
 import {
   buildLocalModelTooComplicatedMessage,
   isLocalToolCallParseError,
+  shouldBypassLocalModelComplexityGuard,
   type ResponseSourceMetadata,
 } from '../runtime/model-routing-ux.js';
 import { tryAutomationPreRoute } from '../runtime/automation-prerouter.js';
@@ -527,6 +528,9 @@ export class BrokeredWorkerSession {
           return await chatFn(messages, options);
         } catch (error) {
           if (isLocalToolCallParseError(error)) {
+            if (shouldBypassLocalModelComplexityGuard()) {
+              throw error;
+            }
             if (fallbackChatFn) {
               return fallbackChatFn(messages, options);
             }

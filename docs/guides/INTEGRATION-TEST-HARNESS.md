@@ -142,6 +142,8 @@ HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=<your-model> node scripts/test-co
 
 If you are using the WSL-local real-Ollama lane and `ollama list` cannot reach a local server, start it first in WSL with `ollama serve` before running the smoke commands.
 
+For real-Ollama smoke runs, the harness sets `GUARDIAN_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD=1` by default so local-model tool-call formatting failures surface as the original Ollama error instead of the friendly “too complicated” shortcut. Set `HARNESS_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD=0` if you need to reproduce production-style guard behavior exactly.
+
 For skill-routing or skill-trigger regressions, also run:
 
 ```bash
@@ -233,6 +235,8 @@ The WSL-local smoke lane is intentionally on-demand. The harness will spin up `o
 
 Use the real-Ollama lane for smoke validation of local-model behavior. Keep the embedded fake-provider lane as the default regression baseline because it is deterministic and less brittle.
 
+The real-Ollama lane also defaults `GUARDIAN_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD=1` inside the spawned Guardian process so harness failures reflect the actual local-model/tool-call behavior. Override with `HARNESS_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD=0` when you explicitly want the friendly guard path instead.
+
 When validating the browser configuration surface manually or through focused harness extensions, also assert:
 
 - browser config toggles reconcile live without a required process restart under normal conditions
@@ -291,6 +295,7 @@ Useful environment variables:
 | `HARNESS_WSL_HOST_IP` | unset | Optional explicit Windows host IP override for WSL-to-Windows Ollama connectivity |
 | `HARNESS_OLLAMA_BIN` | auto-detect | Optional path to the Ollama binary when using WSL-local autostart |
 | `HARNESS_AUTOSTART_LOCAL_OLLAMA` | `1` | When `1`, the harness may start and stop a WSL-local `ollama serve` process for loopback real-model runs |
+| `HARNESS_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD` | `1` | When `1`, real-Ollama harnesses surface raw local-model tool-call parse failures instead of Guardian’s friendly “too complicated” message |
 
 ## What It Tests
 

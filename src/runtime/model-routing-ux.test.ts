@@ -4,6 +4,7 @@ import {
   formatResponseSourceLabel,
   isLocalToolCallParseError,
   readResponseSourceMetadata,
+  shouldBypassLocalModelComplexityGuard,
 } from './model-routing-ux.js';
 
 describe('model-routing-ux', () => {
@@ -40,5 +41,17 @@ describe('model-routing-ux', () => {
 
   it('returns the friendly local-model complexity message', () => {
     expect(buildLocalModelTooComplicatedMessage()).toContain('Please change model or configure external');
+  });
+
+  it('supports bypassing the friendly local-model complexity guard via env', () => {
+    expect(shouldBypassLocalModelComplexityGuard({
+      GUARDIAN_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD: '1',
+    })).toBe(true);
+    expect(shouldBypassLocalModelComplexityGuard({
+      GUARDIAN_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD: 'true',
+    })).toBe(true);
+    expect(shouldBypassLocalModelComplexityGuard({
+      GUARDIAN_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD: '0',
+    })).toBe(false);
   });
 });
