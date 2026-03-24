@@ -453,6 +453,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Use Examples to install starter automations such as Agent Host Guard and Firewall Sentry, then Clone to fork an existing workflow.',
                   'Use Dry Run before live execution when you want a safe preview path.',
                   'Named automations can also be controlled from chat: Guardian can inspect, run, enable, disable, or delete saved workflows and task-only automations through the same backend control plane used by the UI.',
+                  'If a chat automation request is incomplete, Guardian now keeps it inside automation authoring and returns a draft with the missing schedule, goal, or deterministic steps instead of falling back into browser or general chat handling.',
                 ],
               },
               {

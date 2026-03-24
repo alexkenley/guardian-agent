@@ -54,6 +54,35 @@ export interface AutomationAuthoringCompilation {
   workflowUpsert?: CompiledAutomationWorkflowUpsert;
 }
 
+export interface AutomationAuthoringDraftField {
+  key: 'goal' | 'schedule' | 'workflow_steps';
+  label: string;
+  prompt: string;
+}
+
+export interface AutomationAuthoringDraft {
+  intent: 'create';
+  shape: AutomationAuthoringShape;
+  name: string;
+  id: string;
+  description: string;
+  schedule?: AutomationScheduleSpec;
+  nativeOnly: boolean;
+  forbidCodeArtifacts: boolean;
+  builtInToolsOnly: boolean;
+  missingFields: AutomationAuthoringDraftField[];
+}
+
+export type AutomationAuthoringOutcome =
+  | {
+      status: 'ready';
+      compilation: AutomationAuthoringCompilation;
+    }
+  | {
+      status: 'draft';
+      draft: AutomationAuthoringDraft;
+    };
+
 export interface ExistingAutomationTask {
   id: string;
   name: string;
@@ -74,6 +103,18 @@ export interface AutomationAuthoringCompileOptions {
   userId?: string;
   now?: Date;
   assumeAuthoring?: boolean;
+}
+
+interface ParsedAutomationAuthoringContext {
+  text: string;
+  desiredShape: AutomationAuthoringShape;
+  name: string;
+  id: string;
+  description: string;
+  schedule: AutomationScheduleSpec | null;
+  nativeOnly: boolean;
+  forbidCodeArtifacts: boolean;
+  builtInToolsOnly: boolean;
 }
 
 const AUTOMATION_INTENT_PATTERN = /\b(create|build|set up|setup|make|configure|schedule|automate|turn into|create this as)\b[\s\S]{0,120}\b(automation|workflow|playbook|pipeline|scheduled task|task)\b/i;
@@ -146,74 +187,30 @@ export function compileAutomationAuthoringRequest(
   content: string,
   options?: AutomationAuthoringCompileOptions,
 ): AutomationAuthoringCompilation | null {
-  const ir = compileAutomationAuthoringIR(content, options);
-  if (!ir) return null;
+  const outcome = compileAutomationAuthoringOutcome(content, options);
+  return outcome?.status === 'ready'
+    ? outcome.compilation
+    : null;
+}
 
-  const shape: AutomationAuthoringShape = ir.primitive === 'workflow'
-    ? 'workflow'
-    : (ir.schedule ? 'scheduled_agent' : 'manual_agent');
-  if (shape === 'workflow' && !ir.workflow) return null;
-  if ((shape === 'scheduled_agent' || shape === 'manual_agent') && !ir.agent) return null;
+export function compileAutomationAuthoringOutcome(
+  content: string,
+  options?: AutomationAuthoringCompileOptions,
+): AutomationAuthoringOutcome | null {
+  const parsed = parseAutomationAuthoringContext(content, options);
+  if (!parsed) return null;
 
-  if (shape === 'workflow') {
-    const workflow = compileWorkflowFromIR(ir, ir.workflow!);
-    if (!workflow) return null;
+  const compilation = buildAutomationAuthoringCompilation(parsed, options);
+  if (compilation) {
     return {
-      intent: 'create',
-      shape,
-      name: ir.name,
-      id: ir.id,
-      description: ir.description,
-      ir,
-      schedule: ir.schedule,
-      nativeOnly: ir.constraints.nativeOnly,
-      forbidCodeArtifacts: ir.constraints.forbidCodeArtifacts,
-      workflowUpsert: workflow,
+      status: 'ready',
+      compilation,
     };
   }
 
-  const taskCreate: CompiledAutomationTaskCreate = {
-    name: ir.name,
-    description: ir.description,
-    type: 'agent',
-    target: ir.agent!.target,
-    prompt: buildAssistantAutomationPrompt(
-      ir.agent!.operatorRequest,
-      {
-        nativeOnly: ir.constraints.nativeOnly,
-        forbidCodeArtifacts: ir.constraints.forbidCodeArtifacts,
-      },
-      ir.schedule ? 'scheduled' : 'manual',
-    ),
-    channel: options?.channel?.trim() || ir.metadata.channel?.trim() || 'scheduled',
-    userId: options?.userId?.trim() || ir.metadata.userId?.trim() || undefined,
-    deliver: (options?.channel?.trim() || ir.metadata.channel?.trim() || 'scheduled') !== 'scheduled',
-    ...(ir.schedule
-      ? {
-          cron: ir.schedule.cron,
-          runOnce: ir.schedule.runOnce,
-        }
-      : {
-          eventTrigger: buildManualAutomationEventTrigger(ir.id),
-          runOnce: false,
-        }),
-    enabled: true,
-    maxRunsPerWindow: ir.schedule ? deriveMaxRunsPerWindow(ir.schedule) : 5,
-    dailySpendCap: ir.schedule ? deriveDailySpendCap(ir.schedule) : 60_000,
-    providerSpendCap: ir.schedule ? deriveProviderSpendCap(ir.schedule) : 36_000,
-  };
-
   return {
-    intent: 'create',
-    shape,
-    name: ir.name,
-    id: ir.id,
-    description: ir.description,
-    ir,
-    schedule: ir.schedule,
-    nativeOnly: ir.constraints.nativeOnly,
-    forbidCodeArtifacts: ir.constraints.forbidCodeArtifacts,
-    taskCreate,
+    status: 'draft',
+    draft: buildAutomationAuthoringDraft(parsed),
   };
 }
 
@@ -221,60 +218,9 @@ export function compileAutomationAuthoringIR(
   content: string,
   options?: AutomationAuthoringCompileOptions,
 ): AutomationIR | null {
-  const text = normalizeAutomationAuthoringText(content);
-  if (!text) return null;
-  if (!options?.assumeAuthoring && !isAutomationAuthoringIntent(text)) return null;
-
-  const schedule = parseAutomationSchedule(text, options?.now ?? new Date());
-  const nativeOnly = NATIVE_ONLY_PATTERN.test(text);
-  const forbidCodeArtifacts = FORBID_CODE_PATTERN.test(text);
-  const builtInToolsOnly = /built[- ]in (?:guardian )?tools only/i.test(text);
-  const shape = classifyAutomationShape(text, schedule);
-
-  const name = inferAutomationName(text, schedule);
-  const id = slugify(name);
-  const description = summarizeDescription(text);
-  const baseIr: AutomationIR = {
-    version: 1,
-    intent: 'create',
-    id,
-    name,
-    description,
-    primitive: shape === 'workflow' ? 'workflow' : 'agent',
-    schedule: schedule ?? undefined,
-    constraints: {
-      nativeOnly,
-      forbidCodeArtifacts,
-      builtInToolsOnly,
-    },
-    metadata: {
-      sourceText: text,
-      channel: options?.channel?.trim() || undefined,
-      userId: options?.userId?.trim() || undefined,
-    },
-  };
-
-  if (shape === 'workflow') {
-    const workflow = buildWorkflowBody(text);
-    if (!workflow) return null;
-    const repaired = repairAutomationIR({
-      ...baseIr,
-      primitive: 'workflow',
-      workflow,
-    });
-    return validateAutomationIR(repaired).ok ? repaired : null;
-  }
-
-  const repaired = repairAutomationIR({
-    ...baseIr,
-    primitive: 'agent',
-    schedule: schedule!,
-    agent: {
-      target: 'default',
-      operatorRequest: text,
-    } satisfies AutomationIRAgentBody,
-  });
-  return validateAutomationIR(repaired).ok ? repaired : null;
+  const parsed = parseAutomationAuthoringContext(content, options);
+  if (!parsed) return null;
+  return buildValidatedAutomationIR(parsed, options);
 }
 
 export function buildTaskUpdateForCompiledAutomation(
@@ -329,20 +275,229 @@ function classifyAutomationShape(
   text: string,
   schedule: AutomationScheduleSpec | null,
 ): AutomationAuthoringShape {
+  const explicitScheduledAssistantTask = /\bscheduled assistant task\b/i.test(text);
   const explicitAssistantTask = EXPLICIT_ASSISTANT_TASK_PATTERN.test(text);
   const openEndedSignals = OPEN_ENDED_PATTERNS.filter((pattern) => pattern.test(text)).length;
   const explicitWorkflow = EXPLICIT_WORKFLOW_PATTERN.test(text) && !explicitAssistantTask && openEndedSignals === 0;
   const explicitWorkflowSignals = EXPLICIT_WORKFLOW_PATTERNS.filter((pattern) => pattern.test(text)).length;
   const deterministicInstructionWorkflow = looksLikeDeterministicInstructionWorkflow(text);
+  if (explicitScheduledAssistantTask) return 'scheduled_agent';
   if (explicitAssistantTask) return schedule ? 'scheduled_agent' : 'manual_agent';
-  if (explicitWorkflow) return 'workflow';
   if (looksLikeBrowserWorkflow(text)) return 'workflow';
   if (deterministicInstructionWorkflow) return 'workflow';
   if (explicitWorkflowSignals >= 2) return 'workflow';
   if (openEndedSignals > 0) return schedule ? 'scheduled_agent' : 'manual_agent';
   if (MANUAL_ONLY_PATTERN.test(text)) return 'manual_agent';
+  if (explicitWorkflow) return 'workflow';
   if (schedule) return 'scheduled_agent';
   return 'workflow';
+}
+
+function parseAutomationAuthoringContext(
+  content: string,
+  options?: AutomationAuthoringCompileOptions,
+): ParsedAutomationAuthoringContext | null {
+  const text = normalizeAutomationAuthoringText(content);
+  if (!text) return null;
+  if (!options?.assumeAuthoring && !isAutomationAuthoringIntent(text)) return null;
+
+  const scheduleText = stripExplicitAutomationNameSegment(text);
+  const schedule = parseAutomationSchedule(scheduleText, options?.now ?? new Date());
+  const nativeOnly = NATIVE_ONLY_PATTERN.test(text);
+  const forbidCodeArtifacts = FORBID_CODE_PATTERN.test(text);
+  const builtInToolsOnly = /built[- ]in (?:guardian )?tools only/i.test(text);
+  const desiredShape = classifyAutomationShape(text, schedule);
+  const name = inferAutomationName(text, schedule);
+
+  return {
+    text,
+    desiredShape,
+    name,
+    id: slugify(name),
+    description: summarizeDescription(text),
+    schedule,
+    nativeOnly,
+    forbidCodeArtifacts,
+    builtInToolsOnly,
+  };
+}
+
+function buildAutomationAuthoringCompilation(
+  parsed: ParsedAutomationAuthoringContext,
+  options?: AutomationAuthoringCompileOptions,
+): AutomationAuthoringCompilation | null {
+  const ir = buildValidatedAutomationIR(parsed, options);
+  if (!ir) return null;
+
+  if (parsed.desiredShape === 'workflow') {
+    if (!ir.workflow) return null;
+    const workflow = compileWorkflowFromIR(ir, ir.workflow);
+    if (!workflow) return null;
+    return {
+      intent: 'create',
+      shape: 'workflow',
+      name: ir.name,
+      id: ir.id,
+      description: ir.description,
+      ir,
+      schedule: ir.schedule,
+      nativeOnly: ir.constraints.nativeOnly,
+      forbidCodeArtifacts: ir.constraints.forbidCodeArtifacts,
+      workflowUpsert: workflow,
+    };
+  }
+
+  if (!ir.agent) return null;
+  const taskCreate: CompiledAutomationTaskCreate = {
+    name: ir.name,
+    description: ir.description,
+    type: 'agent',
+    target: ir.agent.target,
+    prompt: buildAssistantAutomationPrompt(
+      ir.agent.operatorRequest,
+      {
+        nativeOnly: ir.constraints.nativeOnly,
+        forbidCodeArtifacts: ir.constraints.forbidCodeArtifacts,
+      },
+      parsed.desiredShape === 'scheduled_agent' ? 'scheduled' : 'manual',
+    ),
+    channel: options?.channel?.trim() || ir.metadata.channel?.trim() || 'scheduled',
+    userId: options?.userId?.trim() || ir.metadata.userId?.trim() || undefined,
+    deliver: (options?.channel?.trim() || ir.metadata.channel?.trim() || 'scheduled') !== 'scheduled',
+    ...(parsed.desiredShape === 'scheduled_agent' && ir.schedule
+      ? {
+          cron: ir.schedule.cron,
+          runOnce: ir.schedule.runOnce,
+        }
+      : {
+          eventTrigger: buildManualAutomationEventTrigger(ir.id),
+          runOnce: false,
+        }),
+    enabled: true,
+    maxRunsPerWindow: ir.schedule ? deriveMaxRunsPerWindow(ir.schedule) : 5,
+    dailySpendCap: ir.schedule ? deriveDailySpendCap(ir.schedule) : 60_000,
+    providerSpendCap: ir.schedule ? deriveProviderSpendCap(ir.schedule) : 36_000,
+  };
+
+  return {
+    intent: 'create',
+    shape: parsed.desiredShape,
+    name: ir.name,
+    id: ir.id,
+    description: ir.description,
+    ir,
+    schedule: ir.schedule,
+    nativeOnly: ir.constraints.nativeOnly,
+    forbidCodeArtifacts: ir.constraints.forbidCodeArtifacts,
+    taskCreate,
+  };
+}
+
+function buildValidatedAutomationIR(
+  parsed: ParsedAutomationAuthoringContext,
+  options?: AutomationAuthoringCompileOptions,
+): AutomationIR | null {
+  const baseIr: AutomationIR = {
+    version: 1,
+    intent: 'create',
+    id: parsed.id,
+    name: parsed.name,
+    description: parsed.description,
+    primitive: parsed.desiredShape === 'workflow' ? 'workflow' : 'agent',
+    schedule: parsed.schedule ?? undefined,
+    constraints: {
+      nativeOnly: parsed.nativeOnly,
+      forbidCodeArtifacts: parsed.forbidCodeArtifacts,
+      builtInToolsOnly: parsed.builtInToolsOnly,
+    },
+    metadata: {
+      sourceText: parsed.text,
+      channel: options?.channel?.trim() || undefined,
+      userId: options?.userId?.trim() || undefined,
+    },
+  };
+
+  if (parsed.desiredShape === 'workflow') {
+    const workflow = buildWorkflowBody(parsed.text);
+    if (!workflow) return null;
+    const repaired = repairAutomationIR({
+      ...baseIr,
+      primitive: 'workflow',
+      workflow,
+    });
+    return validateAutomationIR(repaired).ok ? repaired : null;
+  }
+
+  if (parsed.desiredShape === 'scheduled_agent' && !parsed.schedule) {
+    return null;
+  }
+  if (!hasMeaningfulAutomationGoal(parsed.text)) {
+    return null;
+  }
+
+  const repaired = repairAutomationIR({
+    ...baseIr,
+    primitive: 'agent',
+    schedule: parsed.desiredShape === 'scheduled_agent' ? parsed.schedule ?? undefined : undefined,
+    agent: {
+      target: 'default',
+      operatorRequest: parsed.text,
+    } satisfies AutomationIRAgentBody,
+  });
+  return validateAutomationIR(repaired).ok ? repaired : null;
+}
+
+function buildAutomationAuthoringDraft(
+  parsed: ParsedAutomationAuthoringContext,
+): AutomationAuthoringDraft {
+  const missingFields: AutomationAuthoringDraftField[] = [];
+
+  if (parsed.desiredShape === 'scheduled_agent' && !parsed.schedule) {
+    missingFields.push({
+      key: 'schedule',
+      label: 'Schedule',
+      prompt: 'Tell me when it should run, for example "every weekday at 7:30 AM" or "daily at 8:00 AM".',
+    });
+  }
+
+  if (parsed.desiredShape === 'workflow') {
+    if (!buildWorkflowBody(parsed.text)) {
+      missingFields.push({
+        key: 'workflow_steps',
+        label: 'Deterministic steps',
+        prompt: 'List the fixed tool steps or browser actions it should run in order. If the work is open-ended, say you want a manual assistant automation instead of a deterministic workflow.',
+      });
+    }
+  } else if (!hasMeaningfulAutomationGoal(parsed.text)) {
+    missingFields.push({
+      key: 'goal',
+      label: 'Automation goal',
+      prompt: 'Tell me what the automation should actually do when it runs, including the inputs it should inspect and the output or artifact it should produce.',
+    });
+  }
+
+  if (missingFields.length === 0) {
+    missingFields.push({
+      key: parsed.desiredShape === 'workflow' ? 'workflow_steps' : 'goal',
+      label: parsed.desiredShape === 'workflow' ? 'Deterministic steps' : 'Automation goal',
+      prompt: parsed.desiredShape === 'workflow'
+        ? 'Describe the exact fixed steps the workflow should run.'
+        : 'Describe what this automation should do when it runs.',
+    });
+  }
+
+  return {
+    intent: 'create',
+    shape: parsed.desiredShape,
+    name: parsed.name,
+    id: parsed.id,
+    description: parsed.description,
+    schedule: parsed.schedule ?? undefined,
+    nativeOnly: parsed.nativeOnly,
+    forbidCodeArtifacts: parsed.forbidCodeArtifacts,
+    builtInToolsOnly: parsed.builtInToolsOnly,
+    missingFields,
+  };
 }
 
 function buildWorkflowBody(text: string): AutomationIRWorkflowBody | null {
@@ -886,6 +1041,15 @@ function summarizeDescription(text: string): string {
   return trimmed.length <= 240 ? trimmed : `${trimmed.slice(0, 237)}...`;
 }
 
+function hasMeaningfulAutomationGoal(text: string): boolean {
+  const signalText = stripExplicitAutomationNameSegment(text);
+  if (extractExplicitUrls(signalText).length > 0) return true;
+  if (extractReadPath(signalText)) return true;
+  if (extractWritePaths(signalText).length > 0) return true;
+  if (OPEN_ENDED_PATTERNS.some((pattern) => pattern.test(signalText))) return true;
+  return /\b(check|collect|compare|draft|extract|inspect|list|monitor|open|prioriti[sz]e|read|reply|research|review|score|search|summari[sz]e|triage|visit|write)\b/i.test(signalText);
+}
+
 function extractExplicitAutomationName(text: string): string | null {
   const quotedMatch = text.match(/\b(?:called|named)\s+["'`]([^"'`]+)["'`]/i);
   if (quotedMatch?.[1]?.trim()) {
@@ -909,6 +1073,14 @@ function normalizeAutomationAuthoringText(text: string): string {
     .replace(/([A-Za-z]:[\\/])\s+/g, '$1')
     .trim(),
   );
+}
+
+function stripExplicitAutomationNameSegment(text: string): string {
+  return text
+    .replace(/\b(?:called|named|titled)\s+["'`][^"'`]+["'`]/i, '')
+    .replace(/\b(?:called|named|titled)\s+[A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+){0,7}\b/, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
 
 function extractReadPath(text: string): string | null {

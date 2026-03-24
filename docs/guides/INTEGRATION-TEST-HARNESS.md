@@ -140,6 +140,8 @@ node scripts/test-code-ui-smoke.mjs
 HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=<your-model> node scripts/test-coding-assistant.mjs --use-ollama
 ```
 
+If you are using the WSL-local real-Ollama lane and `ollama list` cannot reach a local server, start it first in WSL with `ollama serve` before running the smoke commands.
+
 For skill-routing or skill-trigger regressions, also run:
 
 ```bash
@@ -219,6 +221,7 @@ WSL note:
 - when `HARNESS_OLLAMA_BASE_URL` is not set, the harness will try a few candidates, including the WSL host IP from `/etc/resolv.conf`
 - if WSL-local Ollama is installed and the selected endpoint is loopback (`127.0.0.1` or `localhost`), the harness will autostart `ollama serve` for the test run and shut it down afterward
 - if none are reachable and no local WSL install can be autostarted, the harness fails fast with a clear connectivity message instead of silently falling back
+- for manual WSL smoke runs, prefer checking `ollama list` first and start `ollama serve` yourself if the local server is not already running
 
 Recommended usage:
 - default regression lane: run the harness with no extra flags; this uses the embedded fake provider and remains deterministic

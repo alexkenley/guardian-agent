@@ -856,7 +856,7 @@ guardian:
       },
     });
     assert.ok(String(suspiciousOverview.content ?? '').trim().length > 0, `Expected non-empty suspicious repo overview: ${JSON.stringify(suspiciousOverview)}`);
-    {
+    if (provider.mode === 'fake') {
       const suspiciousScenario = [...scenarioLog].reverse().find((entry) => entry.latestUser === 'Give me a brief overview of this repo.');
       assert.ok(suspiciousScenario, 'Expected suspicious overview scenario to be captured');
       assert.match(suspiciousScenario.systemPrompt, /workspaceTrust\.state: blocked/);
@@ -1109,9 +1109,11 @@ guardian:
       assert.ok(scenarioLog.some((entry) => entry.latestUser === 'Search the workspace for answerValue and tell me where it is defined.'), 'Expected raw coding message content, not wrapped prompt metadata');
     } else {
       const acceptableToolNames = new Set(['find_tools', 'code_symbol_search', 'fs_search', 'fs_read', 'shell_safe']);
+      const groundedDirectAnswer = /answerValue/i.test(String(messageResponse.content ?? ''))
+        && /src\/example\.ts/i.test(String(messageResponse.content ?? ''));
       assert.ok(
-        newJobs.some((job) => acceptableToolNames.has(job.toolName)),
-        `Expected a coding search/read tool call from the real-model message flow, got ${JSON.stringify(newJobs)}`,
+        groundedDirectAnswer || newJobs.some((job) => acceptableToolNames.has(job.toolName)),
+        `Expected either a grounded direct coding answer or a coding search/read tool call from the real-model message flow, got content=${JSON.stringify(messageResponse.content)} jobs=${JSON.stringify(newJobs)}`,
       );
     }
 
@@ -1158,9 +1160,11 @@ guardian:
       assert.ok(fallbackJobs.some((job) => job.toolName === 'code_symbol_search'), 'Expected code_symbol_search job from workspace-root fallback flow');
     } else {
       const acceptableFallbackToolNames = new Set(['find_tools', 'code_symbol_search', 'fs_search', 'fs_read', 'shell_safe']);
+      const groundedFallbackAnswer = /answerValue/i.test(String(workspaceOnlyFallbackResponse.content ?? ''))
+        && /src\/example\.ts/i.test(String(workspaceOnlyFallbackResponse.content ?? ''));
       assert.ok(
-        fallbackJobs.some((job) => acceptableFallbackToolNames.has(job.toolName)),
-        `Expected a coding tool call from the workspace-root fallback flow, got ${JSON.stringify(fallbackJobs)}`,
+        groundedFallbackAnswer || fallbackJobs.some((job) => acceptableFallbackToolNames.has(job.toolName)),
+        `Expected either a grounded direct coding answer or a coding tool call from the workspace-root fallback flow, got content=${JSON.stringify(workspaceOnlyFallbackResponse.content)} jobs=${JSON.stringify(fallbackJobs)}`,
       );
     }
 

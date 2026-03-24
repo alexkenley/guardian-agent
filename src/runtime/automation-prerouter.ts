@@ -1,10 +1,11 @@
 import type { AgentContext, UserMessage } from '../agent/types.js';
 import {
   buildTaskUpdateForCompiledAutomation,
-  compileAutomationAuthoringRequest,
+  compileAutomationAuthoringOutcome,
   findMatchingScheduledAutomationTask,
   isAutomationAuthoringRequest,
   type AutomationAuthoringCompilation,
+  type AutomationAuthoringDraft,
   type ExistingAutomationTask,
 } from './automation-authoring.js';
 import {
@@ -63,17 +64,23 @@ export async function tryAutomationPreRoute(
   options?: { allowRemediation?: boolean; assumeAuthoring?: boolean },
 ): Promise<AutomationPreRouteResult | null> {
   const authoringIntent = options?.assumeAuthoring || isAutomationAuthoringRequest(params.message.content);
-  const compilation = compileAutomationAuthoringRequest(params.message.content, {
+  const outcome = compileAutomationAuthoringOutcome(params.message.content, {
     channel: params.message.channel,
     userId: params.message.userId,
     assumeAuthoring: options?.assumeAuthoring,
   });
-  if (!compilation) {
+  if (!outcome) {
     if (!authoringIntent) return null;
     return {
-      content: 'I recognized this as an automation authoring request, but I could not compile it into a Guardian workflow or assistant automation. Rephrase it as either a deterministic workflow or a manual/scheduled assistant automation.',
+      content: 'I recognized this as an automation authoring request, but I could not parse enough structure to turn it into a Guardian automation draft yet. Add the automation goal, schedule, or fixed steps you want.',
     };
   }
+  if (outcome.status === 'draft') {
+    return {
+      content: renderAutomationDraftClarification(outcome.draft),
+    };
+  }
+  const compilation = outcome.compilation;
 
   if (params.preflightTools) {
     const validation = validateAutomationCompilation(
@@ -143,6 +150,20 @@ export async function tryAutomationPreRoute(
   }
 
   return null;
+}
+
+function renderAutomationDraftClarification(draft: AutomationAuthoringDraft): string {
+  const kind = describeAutomationDraft(draft);
+  const lines = [
+    `I drafted the ${kind.kindLabel} '${draft.name}', but I still need a few details before I can save it.`,
+    kind.detailLine,
+    '',
+    'Missing details:',
+  ];
+  for (const field of draft.missingFields) {
+    lines.push(`- ${field.prompt}`);
+  }
+  return lines.join('\n');
 }
 
 function toolRequestFor(params: AutomationPreRouteParams): Omit<ToolExecutionRequest, 'toolName' | 'args'> {
@@ -292,6 +313,35 @@ function describeAutomationCompilation(compilation: AutomationAuthoringCompilati
     detailLine: compilation.schedule?.cron
       ? `Schedule: ${compilation.schedule.cron} · Target: default assistant`
       : 'Target: default assistant',
+  };
+}
+
+function describeAutomationDraft(draft: AutomationAuthoringDraft): {
+  kindLabel: string;
+  detailLine: string;
+} {
+  if (draft.shape === 'workflow') {
+    return {
+      kindLabel: 'native Guardian workflow draft',
+      detailLine: [
+        'Mode: sequential',
+        draft.schedule?.cron ? `Schedule: ${draft.schedule.cron}` : 'Manual run',
+      ].join(' · '),
+    };
+  }
+
+  if (draft.shape === 'manual_agent') {
+    return {
+      kindLabel: 'native Guardian manual assistant automation draft',
+      detailLine: 'Runs on demand only · Target: default assistant',
+    };
+  }
+
+  return {
+    kindLabel: 'native Guardian scheduled assistant task draft',
+    detailLine: draft.schedule?.cron
+      ? `Schedule: ${draft.schedule.cron} · Target: default assistant`
+      : 'Schedule: missing · Target: default assistant',
   };
 }
 

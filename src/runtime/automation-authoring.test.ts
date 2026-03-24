@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildTaskUpdateForCompiledAutomation,
+  compileAutomationAuthoringOutcome,
   compileAutomationAuthoringRequest,
   findMatchingScheduledAutomationTask,
 } from './automation-authoring.js';
@@ -153,6 +154,39 @@ describe('compileAutomationAuthoringRequest', () => {
     });
     expect(compilation?.taskCreate?.cron).toBeUndefined();
     expect(compilation?.taskCreate?.prompt).toContain('manual on-demand Guardian automation');
+  });
+
+  it('returns a draft instead of guessing when a scheduled assistant task prompt only provides a name', () => {
+    const outcome = compileAutomationAuthoringOutcome(
+      'Create a scheduled assistant task called Weekly Browser Report...',
+      { channel: 'web', userId: 'owner' },
+    );
+
+    expect(outcome).not.toBeNull();
+    expect(outcome?.status).toBe('draft');
+    if (outcome?.status !== 'draft') return;
+    expect(outcome.draft.shape).toBe('scheduled_agent');
+    expect(outcome.draft.name).toBe('Weekly Browser Report');
+    expect(outcome.draft.missingFields).toEqual([
+      expect.objectContaining({ key: 'schedule' }),
+      expect.objectContaining({ key: 'goal' }),
+    ]);
+  });
+
+  it('returns a draft for incomplete named manual automations instead of compiling the wrong shape', () => {
+    const outcome = compileAutomationAuthoringOutcome(
+      'Build a workflow called Company Homepage Collector ... Do not schedule it yet.',
+      { channel: 'web', userId: 'owner' },
+    );
+
+    expect(outcome).not.toBeNull();
+    expect(outcome?.status).toBe('draft');
+    if (outcome?.status !== 'draft') return;
+    expect(outcome.draft.shape).toBe('manual_agent');
+    expect(outcome.draft.name).toBe('Company Homepage Collector');
+    expect(outcome.draft.missingFields).toEqual([
+      expect.objectContaining({ key: 'goal' }),
+    ]);
   });
 
   it('compiles structured browser extraction workflows to browser_extract', () => {

@@ -40,7 +40,26 @@ describe('tryAutomationPreRoute', () => {
       assumeAuthoring: true,
     });
 
-    expect(result?.content).toContain('I recognized this as an automation authoring request');
+    expect(result?.content).toContain('I drafted the native Guardian workflow draft');
+    expect(result?.content).toContain('Missing details:');
+  });
+
+  it('returns a draft clarification for incomplete named automations instead of falling through', async () => {
+    const executeTool = vi.fn();
+
+    const result = await tryAutomationPreRoute({
+      agentId: 'default',
+      message: {
+        ...baseMessage,
+        content: 'Build a workflow called Company Homepage Collector ... Do not schedule it yet.',
+      },
+      executeTool,
+    });
+
+    expect(result?.content).toContain("I drafted the native Guardian manual assistant automation draft 'Company Homepage Collector'");
+    expect(result?.content).toContain('Missing details:');
+    expect(result?.content).toContain('Tell me what the automation should actually do when it runs');
+    expect(executeTool).not.toHaveBeenCalled();
   });
 
   it('routes native scheduled automation requests to task_create before generic tools', async () => {
