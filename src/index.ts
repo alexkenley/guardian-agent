@@ -129,13 +129,7 @@ import {
 } from './runtime/security-triage-agent.js';
 import { WindowsDefenderProvider } from './runtime/windows-defender-provider.js';
 import { ScheduledTaskService } from './runtime/scheduled-tasks.js';
-import { buildSavedAutomationCatalogEntries } from './runtime/automation-catalog.js';
-import {
-  deleteSavedAutomation,
-  runSavedAutomation,
-  setSavedAutomationEnabled,
-  type AutomationManagerControlPlane,
-} from './runtime/automation-manager.js';
+import { createAutomationRuntimeService } from './runtime/automation-runtime-service.js';
 import { MoltbookConnector } from './runtime/moltbook-connector.js';
 import { AssistantOrchestrator } from './runtime/orchestrator.js';
 import { AgentMemoryStore } from './runtime/agent-memory-store.js';
@@ -8931,6 +8925,17 @@ async function main(): Promise<void> {
       adoptUntrackedIntegrity: true,
     }),
   };
+
+  // Inject the resolved data directory as an absolute denied path so it stays
+  // correct even if the directory name or home path changes in the future.
+  {
+    const existing = configRef.current.guardian.deniedPaths ?? [];
+    const absPattern = guardianDataDir.replace(/\\/g, '/').replace(/[.*+?^${}()|[\]]/g, '\\$&');
+    if (!existing.some(p => p.includes(absPattern))) {
+      configRef.current.guardian.deniedPaths = [...existing, `(^|/)${absPattern}(/|$)`];
+    }
+  }
+
   const threatIntelWebSearchConfigRef: { current: WebSearchConfig | undefined } = { current: undefined };
   const secretStore = new LocalSecretStore({ baseDir: dirname(configPath) });
 
@@ -11919,41 +11924,50 @@ async function main(): Promise<void> {
   };
 
   const basePlaybookUpsert = dashboardCallbacks.onPlaybookUpsert;
-  if (basePlaybookUpsert) {
-    dashboardCallbacks.onPlaybookUpsert = (playbook) => {
-      const result = basePlaybookUpsert(playbook);
-      if (result.success) {
-        syncPlaybookScheduleToTasks(playbook);
-        syncPlaybookOutputHandlingToSchedules(playbook.id);
-      }
-      return result;
-    };
-  }
-
   const basePlaybookDelete = dashboardCallbacks.onPlaybookDelete;
-  if (basePlaybookDelete) {
-    dashboardCallbacks.onPlaybookDelete = (playbookId) => {
-      const linkedTaskIds = scheduledTasks.list()
-        .filter((task) => task.type === 'playbook' && task.target === playbookId)
-        .map((task) => task.id);
-      const result = basePlaybookDelete(playbookId);
-      if (result.success) {
-        for (const taskId of linkedTaskIds) {
-          scheduledTasks.delete(taskId);
-        }
-      }
-      return result;
-    };
-  }
-
   const basePlaybookRun = dashboardCallbacks.onPlaybookRun;
-  if (basePlaybookRun) {
-    dashboardCallbacks.onPlaybookRun = async (input) => {
-      const result = await basePlaybookRun(input);
-      attachPlaybookPromotions(result, input);
-      return result;
-    };
-  }
+  const automationRuntime = (basePlaybookUpsert && basePlaybookDelete && basePlaybookRun)
+    ? createAutomationRuntimeService({
+        workflows: {
+          list: () => connectors.getState().playbooks.map((workflow) => ({
+            ...workflow,
+            steps: workflow.steps.map((step) => ({ ...step })),
+            ...(workflow.outputHandling ? { outputHandling: { ...workflow.outputHandling } } : {}),
+          })),
+          upsert: (playbook) => basePlaybookUpsert(playbook),
+          delete: (playbookId) => basePlaybookDelete(playbookId),
+          run: async (input) => basePlaybookRun(input),
+        },
+        tasks: {
+          list: () => scheduledTasks.list(),
+          get: (id) => scheduledTasks.get(id),
+          create: (input) => scheduledTasks.create(input),
+          update: (id, input) => scheduledTasks.update(id, input),
+          delete: (id) => scheduledTasks.delete(id),
+          runNow: async (id) => scheduledTasks.runNow(id),
+          presets: () => scheduledTasks.getPresets(),
+          installPreset: (presetId) => scheduledTasks.installPreset(presetId),
+          history: () => scheduledTasks.getHistory(),
+        },
+        templates: {
+          list: () => listTemplates(connectors).map((template) => ({
+            ...template,
+            playbooks: template.playbooks.map((playbook) => ({
+              ...playbook,
+              steps: playbook.steps.map((step) => ({ ...step })),
+              ...(playbook.outputHandling ? { outputHandling: { ...playbook.outputHandling } } : {}),
+            })),
+          })),
+        },
+        onWorkflowSaved: (playbook) => {
+          syncPlaybookScheduleToTasks(playbook);
+          syncPlaybookOutputHandlingToSchedules(playbook.id);
+        },
+        onWorkflowRunResult: async (result, input) => {
+          attachPlaybookPromotions(result, input);
+        },
+      })
+    : null;
 
   reloadSearchRef.current = initialSearchReloadRef.current;
 
@@ -12056,156 +12070,32 @@ async function main(): Promise<void> {
   };
 
   // ─── Scheduled Tasks callbacks ─────────────────────────
-  dashboardCallbacks.onScheduledTasks = () => scheduledTasks.list();
-  dashboardCallbacks.onScheduledTaskGet = (id) => scheduledTasks.get(id);
-  dashboardCallbacks.onScheduledTaskCreate = (input) => scheduledTasks.create(input);
-  dashboardCallbacks.onScheduledTaskUpdate = (id, input) => scheduledTasks.update(id, input);
-  dashboardCallbacks.onScheduledTaskDelete = (id) => scheduledTasks.delete(id);
-  dashboardCallbacks.onScheduledTaskRunNow = (id) => scheduledTasks.runNow(id);
-  dashboardCallbacks.onScheduledTaskPresets = () => scheduledTasks.getPresets();
-  dashboardCallbacks.onScheduledTaskInstallPreset = (presetId) => scheduledTasks.installPreset(presetId);
-  dashboardCallbacks.onScheduledTaskHistory = () => scheduledTasks.getHistory();
-
-  const automationManagerControlPlane: AutomationManagerControlPlane = {
-    listWorkflows: () => connectors.getState().playbooks.map((workflow) => ({
-      ...workflow,
-      steps: workflow.steps.map((step) => ({ ...step })),
-      ...(workflow.outputHandling ? { outputHandling: { ...workflow.outputHandling } } : {}),
-    })),
-    listTasks: () => scheduledTasks.list().map((task) => ({
-      ...task,
-      ...(task.args ? { args: { ...task.args } } : {}),
-      ...(task.eventTrigger ? { eventTrigger: { ...task.eventTrigger } } : {}),
-      ...(task.outputHandling ? { outputHandling: { ...task.outputHandling } } : {}),
-    })),
-    upsertWorkflow: (workflow) => {
-      if (!dashboardCallbacks.onPlaybookUpsert) {
-        return { success: false, message: 'Workflow control plane is not available.' };
-      }
-      return dashboardCallbacks.onPlaybookUpsert(workflow);
-    },
-    updateTask: (id, input) => {
-      if (!dashboardCallbacks.onScheduledTaskUpdate) {
-        return { success: false, message: 'Task control plane is not available.' };
-      }
-      return dashboardCallbacks.onScheduledTaskUpdate(id, input as Parameters<NonNullable<DashboardCallbacks['onScheduledTaskUpdate']>>[1]);
-    },
-    deleteWorkflow: (workflowId) => {
-      if (!dashboardCallbacks.onPlaybookDelete) {
-        return { success: false, message: 'Workflow control plane is not available.' };
-      }
-      return dashboardCallbacks.onPlaybookDelete(workflowId);
-    },
-    deleteTask: (id) => {
-      if (!dashboardCallbacks.onScheduledTaskDelete) {
-        return { success: false, message: 'Task control plane is not available.' };
-      }
-      return dashboardCallbacks.onScheduledTaskDelete(id);
-    },
-    runWorkflow: async (input) => {
-      if (!dashboardCallbacks.onPlaybookRun) {
-        return { success: false, message: 'Workflow control plane is not available.', status: 'error' };
-      }
-      return dashboardCallbacks.onPlaybookRun({
-        playbookId: input.workflowId,
-        dryRun: input.dryRun,
-        origin: input.origin,
-        agentId: input.agentId,
-        userId: input.userId,
-        channel: input.channel,
-        requestedBy: input.requestedBy,
-      });
-    },
-    runTask: async (id) => {
-      if (!dashboardCallbacks.onScheduledTaskRunNow) {
-        return { success: false, message: 'Task control plane is not available.' };
-      }
-      return dashboardCallbacks.onScheduledTaskRunNow(id);
-    },
-  };
-
-  dashboardCallbacks.onAutomationCatalog = () => buildSavedAutomationCatalogEntries(
-    automationManagerControlPlane.listWorkflows(),
-    automationManagerControlPlane.listTasks(),
-  );
-  dashboardCallbacks.onAutomationSetEnabled = (automationId, enabled) => (
-    setSavedAutomationEnabled(automationManagerControlPlane, automationId, enabled)
-  );
-  dashboardCallbacks.onAutomationDelete = (automationId) => (
-    deleteSavedAutomation(automationManagerControlPlane, automationId)
-  );
-  dashboardCallbacks.onAutomationRun = (input) => (
-    runSavedAutomation(automationManagerControlPlane, input.automationId, input)
-  );
-
-  toolExecutor.setAutomationControlPlane({
-    listWorkflows: () => connectors.getState().playbooks.map((workflow) => ({
-      id: workflow.id,
-      name: workflow.name,
-      enabled: workflow.enabled,
-      mode: workflow.mode,
-      description: workflow.description,
-      schedule: workflow.schedule,
-      outputHandling: workflow.outputHandling,
-      steps: workflow.steps.map((step) => ({ ...step })),
-    })),
-    upsertWorkflow: (workflow) => {
-      if (!dashboardCallbacks.onPlaybookUpsert) {
-        return { success: false, message: 'Workflow control plane is not available.' };
-      }
-      return dashboardCallbacks.onPlaybookUpsert(workflow as unknown as Parameters<NonNullable<DashboardCallbacks['onPlaybookUpsert']>>[0]);
-    },
-    deleteWorkflow: (workflowId) => {
-      if (!dashboardCallbacks.onPlaybookDelete) {
-        return { success: false, message: 'Workflow control plane is not available.' };
-      }
-      return dashboardCallbacks.onPlaybookDelete(workflowId);
-    },
-    runWorkflow: async (input) => {
-      if (!dashboardCallbacks.onPlaybookRun) {
-        return { success: false, message: 'Workflow control plane is not available.', status: 'error' };
-      }
-      return dashboardCallbacks.onPlaybookRun({
-        playbookId: input.workflowId,
-        dryRun: input.dryRun,
-        origin: input.origin,
-        agentId: input.agentId,
-        userId: input.userId,
-        channel: input.channel,
-        requestedBy: input.requestedBy,
-      });
-    },
-    listTasks: () => scheduledTasks.list(),
-    createTask: (input) => {
-      if (!dashboardCallbacks.onScheduledTaskCreate) {
-        return { success: false, message: 'Task control plane is not available.' };
-      }
-      return dashboardCallbacks.onScheduledTaskCreate(
-        input as unknown as Parameters<NonNullable<DashboardCallbacks['onScheduledTaskCreate']>>[0],
-      );
-    },
-    updateTask: (id, input) => {
-      if (!dashboardCallbacks.onScheduledTaskUpdate) {
-        return { success: false, message: 'Task control plane is not available.' };
-      }
-      return dashboardCallbacks.onScheduledTaskUpdate(
-        id,
-        input as unknown as Parameters<NonNullable<DashboardCallbacks['onScheduledTaskUpdate']>>[1],
-      );
-    },
-    runTask: async (id) => {
-      if (!dashboardCallbacks.onScheduledTaskRunNow) {
-        return { success: false, message: 'Task control plane is not available.' };
-      }
-      return dashboardCallbacks.onScheduledTaskRunNow(id);
-    },
-    deleteTask: (id) => {
-      if (!dashboardCallbacks.onScheduledTaskDelete) {
-        return { success: false, message: 'Task control plane is not available.' };
-      }
-      return dashboardCallbacks.onScheduledTaskDelete(id);
-    },
-  });
+  if (automationRuntime) {
+    dashboardCallbacks.onPlaybookUpsert = (playbook) => automationRuntime.upsertWorkflow(playbook);
+    dashboardCallbacks.onPlaybookDelete = (playbookId) => automationRuntime.deleteWorkflow(playbookId);
+    dashboardCallbacks.onPlaybookRun = async (input) => automationRuntime.runWorkflow({
+      ...input,
+      origin: input.origin ?? 'web',
+    });
+    dashboardCallbacks.onScheduledTasks = () => automationRuntime.listTasks();
+    dashboardCallbacks.onScheduledTaskGet = (id) => automationRuntime.getTask(id);
+    dashboardCallbacks.onScheduledTaskCreate = (input) => automationRuntime.createTask(input);
+    dashboardCallbacks.onScheduledTaskUpdate = (id, input) => automationRuntime.updateTask(id, input);
+    dashboardCallbacks.onScheduledTaskDelete = (id) => automationRuntime.deleteTask(id);
+    dashboardCallbacks.onScheduledTaskRunNow = async (id) => automationRuntime.runTaskNow(id);
+    dashboardCallbacks.onScheduledTaskPresets = () => automationRuntime.listTaskPresets();
+    dashboardCallbacks.onScheduledTaskInstallPreset = (presetId) => automationRuntime.installTaskPreset(presetId);
+    dashboardCallbacks.onScheduledTaskHistory = () => automationRuntime.listTaskHistory();
+    dashboardCallbacks.onAutomationCatalog = () => automationRuntime.listAutomationCatalog();
+    dashboardCallbacks.onAutomationSetEnabled = (automationId, enabled) => (
+      automationRuntime.setSavedAutomationEnabled(automationId, enabled)
+    );
+    dashboardCallbacks.onAutomationDelete = (automationId) => (
+      automationRuntime.deleteSavedAutomation(automationId)
+    );
+    dashboardCallbacks.onAutomationRun = async (input) => automationRuntime.runSavedAutomation(input);
+    toolExecutor.setAutomationControlPlane(automationRuntime.createExecutorControlPlane());
+  }
 
   // ─── Document Search callbacks ──────────────────────────
   dashboardCallbacks.onSearchStatus = () => {

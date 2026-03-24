@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { buildSavedAutomationCatalogEntries, selectSavedAutomationCatalogEntry } from './automation-catalog.js';
+import {
+  buildAutomationCatalogEntries,
+  buildSavedAutomationCatalogEntries,
+  selectSavedAutomationCatalogEntry,
+} from './automation-catalog.js';
 import type { AssistantConnectorPlaybookDefinition } from '../config/types.js';
-import type { ScheduledTaskDefinition } from './scheduled-tasks.js';
+import type { ScheduledTaskDefinition, ScheduledTaskPreset } from './scheduled-tasks.js';
 
 describe('buildSavedAutomationCatalogEntries', () => {
   it('merges workflows with linked playbook tasks and keeps standalone task automations', () => {
@@ -67,6 +71,77 @@ describe('buildSavedAutomationCatalogEntries', () => {
       name: 'Inbox Triage',
       kind: 'assistant_task',
       task: { id: 'task-agent-1' },
+    });
+  });
+});
+
+describe('buildAutomationCatalogEntries', () => {
+  it('adds built-in template and preset starter entries without duplicating installed automations', () => {
+    const workflows: AssistantConnectorPlaybookDefinition[] = [];
+    const tasks: ScheduledTaskDefinition[] = [];
+    const templates = [
+      {
+        id: 'browser-starters',
+        category: 'system',
+        installed: false,
+        playbooks: [
+          {
+            id: 'browser-read-smoke',
+            name: 'Browser Read Smoke',
+            enabled: true,
+            mode: 'sequential',
+            description: 'Read a page and list links.',
+            steps: [
+              { id: 'navigate', type: 'tool', packId: '', toolName: 'browser_navigate', args: { url: 'https://example.com' } },
+            ],
+          },
+        ],
+      },
+    ];
+    const presets: ScheduledTaskPreset[] = [
+      {
+        id: 'browser-read-weekly',
+        name: 'Weekly Browser Read',
+        description: 'Run the browser read starter every Monday.',
+        type: 'playbook',
+        target: 'browser-read-smoke',
+        cron: '0 8 * * 1',
+      },
+      {
+        id: 'assistant-inbox-triage',
+        name: 'Inbox Triage',
+        description: 'Review high-priority inbox items.',
+        type: 'agent',
+        target: 'default',
+        prompt: 'Check the inbox.',
+        channel: 'scheduled',
+      },
+    ];
+
+    const catalog = buildAutomationCatalogEntries(workflows, tasks, templates, presets);
+
+    expect(catalog).toHaveLength(3);
+    expect(catalog[0]).toMatchObject({
+      id: 'browser-read-smoke',
+      source: 'builtin_template',
+      builtin: true,
+      category: 'system',
+      workflow: { id: 'browser-read-smoke', enabled: false },
+    });
+    expect(catalog[1]).toMatchObject({
+      id: 'browser-read-weekly',
+      source: 'builtin_preset',
+      builtin: true,
+      kind: 'workflow',
+      workflow: { id: 'browser-read-smoke', enabled: false },
+      task: { id: 'browser-read-weekly', cron: '0 8 * * 1', enabled: false },
+    });
+    expect(catalog[2]).toMatchObject({
+      id: 'assistant-inbox-triage',
+      source: 'builtin_preset',
+      builtin: true,
+      kind: 'assistant_task',
+      task: { id: 'assistant-inbox-triage', target: 'default', enabled: false },
     });
   });
 });

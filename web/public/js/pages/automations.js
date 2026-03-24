@@ -86,14 +86,12 @@ export async function renderAutomations(container) {
   container.innerHTML = '<h2 class="page-title">Automations</h2><div class="loading">Loading...</div>';
 
   try {
-    const [connState, toolsState, automationCatalog, tasks, presets, history, templates, agentsState, assistantRuns] = await Promise.all([
+    const [connState, toolsState, automationCatalog, tasks, history, agentsState, assistantRuns] = await Promise.all([
       api.connectorsState(40),
       api.toolsState(500).catch(() => ({ tools: [] })),
       api.automationsCatalog().catch(() => []),
       api.scheduledTasks().catch(() => []),
-      api.scheduledTaskPresets().catch(() => []),
       api.scheduledTaskHistory().catch(() => []),
-      api.connectorsTemplates().catch(() => []),
       api.agents().catch(() => []),
       api.assistantRuns({ limit: 15 }).catch(() => ({ runs: [] })),
     ]);
@@ -109,7 +107,7 @@ export async function renderAutomations(container) {
     const recentAssistantRuns = Array.isArray(assistantRuns?.runs) ? assistantRuns.runs : [];
 
     const automations = reorderAutomationsForUi(
-      buildAutomationList(Array.isArray(automationCatalog) ? automationCatalog : [], tasks, tools, templates, presets),
+      buildAutomationList(Array.isArray(automationCatalog) ? automationCatalog : [], tools),
     );
     const allCategories = [...new Set(automations.map((a) => a.category))].sort();
     const totalScheduled = automations.filter((a) => a.cron).length;
@@ -226,7 +224,7 @@ export async function renderAutomations(container) {
       </div>
     `;
 
-    bindEvents(container, { automations, playbooks, tasks, presets, tools, packs, templates, workflowConfig, summary, studio, runs, history, agents });
+    bindEvents(container, { automations, playbooks, tasks, tools, packs, workflowConfig, summary, studio, runs, history, agents });
     bindRunTimelineUpdates();
     focusRequestedRun(container);
     applyInputTooltips(container);
@@ -290,43 +288,32 @@ function createGenericHelpFactory(area) {
 
 // ─── Data Model — merge workflows + scheduled tasks ──────
 
-function buildAutomationList(savedCatalog, tasks, tools, templates = [], presets = []) {
+function buildAutomationList(savedCatalog, tools) {
   const automations = [];
-  const playbookIds = new Set(
-    (savedCatalog || [])
-      .map((entry) => entry?._playbook?.id || entry?.workflow?.id || null)
-      .filter(Boolean),
-  );
-  const installedPresetIds = new Set(
-    (tasks || [])
-      .map((task) => task.presetId)
-      .filter(Boolean),
-  );
-  const templatePlaybooks = (templates || []).flatMap((tpl) => (tpl.playbooks || []).map((playbook) => ({
-    ...playbook,
-    _templateCategory: tpl.category,
-    _templateId: tpl.id,
-  })));
-  const findCatalogPlaybook = (playbookId) => (
-    (savedCatalog || []).find((entry) => (entry?._playbook?.id || entry?.workflow?.id) === playbookId)?._playbook
-    || templatePlaybooks.find((pb) => pb.id === playbookId)
-  );
-
-  // 1. Saved automation catalog entries already come from the backend in merged form.
   for (const entry of (savedCatalog || [])) {
     const pb = entry.workflow || entry._playbook || null;
     const task = entry.task || entry._task || null;
+    const source = entry.source === 'builtin_template'
+      ? 'template'
+      : entry.source === 'builtin_preset'
+        ? 'preset'
+        : pb
+          ? 'playbook'
+          : 'task';
+    const category = entry.category || deriveCategory(pb?.steps || [], tools);
+    const enabled = entry.enabled !== false;
+    const isBuiltin = entry.builtin === true;
     if (pb) {
       automations.push({
         id: pb.id,
         name: pb.name,
         description: pb.description || '',
-        category: deriveCategory(pb.steps || [], tools),
+        category,
         kind: (pb.steps || []).length <= 1 ? 'single' : 'pipeline',
         mode: pb.mode || 'sequential',
         steps: pb.steps || [],
         packId: (pb.steps || [])[0]?.packId || null,
-        enabled: pb.enabled !== false,
+        enabled,
         cron: task?.cron || null,
         runOnce: task?.runOnce === true,
         emitEvent: task?.emitEvent || '',
@@ -336,7 +323,8 @@ function buildAutomationList(savedCatalog, tasks, tools, templates = [], presets
         lastRunAt: task?.lastRunAt || null,
         lastRunStatus: task?.lastRunStatus || null,
         runCount: task?.runCount || 0,
-        _source: 'playbook',
+        _source: source,
+        _builtin: isBuiltin,
         _playbook: pb,
         _task: task || null,
       });
@@ -377,7 +365,8 @@ function buildAutomationList(savedCatalog, tasks, tools, templates = [], presets
         agentPrompt: task.prompt || '',
         agentChannel: task.channel || 'scheduled',
         agentDeliver: task.deliver !== false,
-        _source: 'task',
+        _source: source,
+        _builtin: isBuiltin,
         _playbook: null,
         _task: task,
       });
@@ -389,12 +378,12 @@ function buildAutomationList(savedCatalog, tasks, tools, templates = [], presets
       id: task.id,
       name: task.name || task.target,
       description: describeStandaloneAutomationTask(task, tool),
-      category: tool?.category || 'uncategorized',
+      category: entry.category || tool?.category || 'uncategorized',
       kind: 'single',
       mode: 'sequential',
       steps: [{ id: 'step-1', name: task.target, toolName: task.target, packId: null, args: task.args || {} }],
       packId: null,
-      enabled: task.enabled,
+      enabled,
       cron: task.cron || null,
       runOnce: task.runOnce === true,
       emitEvent: task.emitEvent || '',
@@ -404,88 +393,10 @@ function buildAutomationList(savedCatalog, tasks, tools, templates = [], presets
       lastRunAt: task.lastRunAt || null,
       lastRunStatus: task.lastRunStatus || null,
       runCount: task.runCount || 0,
-      _source: 'task',
+      _source: source,
+      _builtin: isBuiltin,
       _playbook: null,
       _task: task,
-    });
-  }
-
-  // 2. Built-in connector templates move directly into the catalog as disabled starter entries.
-  for (const tpl of (templates || [])) {
-    for (const pb of (tpl.playbooks || [])) {
-      if (playbookIds.has(pb.id)) continue;
-      automations.push({
-        id: pb.id,
-        name: pb.name,
-        description: pb.description || tpl.description || '',
-        category: tpl.category || deriveCategory(pb.steps || [], tools),
-        kind: (pb.steps || []).length <= 1 ? 'single' : 'pipeline',
-        mode: pb.mode || 'sequential',
-        steps: pb.steps || [],
-        packId: (pb.steps || [])[0]?.packId || null,
-        enabled: false,
-      cron: null,
-      runOnce: false,
-      emitEvent: '',
-      outputHandling: normalizeOutputHandling(pb.outputHandling),
-      scheduleEnabled: false,
-        taskId: null,
-        lastRunAt: null,
-        lastRunStatus: null,
-        runCount: 0,
-        _source: 'template',
-        _builtin: true,
-        _playbook: pb,
-        _task: null,
-      });
-    }
-  }
-
-  // 3. Built-in scheduled presets also appear in the catalog as disabled starter entries.
-  for (const preset of (presets || [])) {
-    const presetAlreadyInstalled = installedPresetIds.has(preset.id)
-      || (tasks || []).some((task) =>
-        task.name === preset.name && task.target === preset.target && task.type === preset.type,
-      );
-    if (presetAlreadyInstalled) continue;
-
-    const catalogPlaybook = preset.type === 'playbook'
-      ? findCatalogPlaybook(preset.target)
-      : null;
-    const steps = preset.type === 'playbook'
-      ? (catalogPlaybook?.steps || [])
-      : [{ id: `${preset.id}-step-1`, name: preset.target, toolName: preset.target, packId: null, args: preset.args || {} }];
-    const mode = preset.type === 'playbook' ? (catalogPlaybook?.mode || 'sequential') : 'sequential';
-    const kind = steps.length <= 1 ? 'single' : 'pipeline';
-
-    automations.push({
-      id: preset.id,
-      name: preset.name,
-      description: preset.description || '',
-      category: resolveCatalogCategory({
-        explicitCategory: catalogPlaybook?._templateCategory,
-        steps,
-        tools,
-        fallbackText: [preset.name, preset.description, preset.target].join(' '),
-      }),
-      kind,
-      mode,
-      steps,
-      packId: steps[0]?.packId || null,
-      enabled: false,
-      cron: preset.cron || null,
-      runOnce: preset.runOnce === true,
-      emitEvent: preset.emitEvent || '',
-      outputHandling: normalizeOutputHandling(preset.outputHandling),
-      scheduleEnabled: false,
-      taskId: null,
-      lastRunAt: null,
-      lastRunStatus: null,
-      runCount: 0,
-      _source: 'preset',
-      _builtin: true,
-      _playbook: preset.type === 'playbook' ? catalogPlaybook || null : null,
-      _task: null,
     });
   }
 
@@ -501,18 +412,6 @@ function deriveCategory(steps, tools) {
   }
   const sorted = Object.entries(cats).sort((a, b) => b[1] - a[1]);
   return sorted.length > 0 ? sorted[0][0] : 'uncategorized';
-}
-
-function resolveCatalogCategory({ explicitCategory, steps, tools, fallbackText }) {
-  if (explicitCategory) return explicitCategory;
-  const derived = deriveCategory(steps || [], tools || []);
-  if (derived !== 'uncategorized') return derived;
-
-  const text = String(fallbackText || '').toLowerCase();
-  if (/(gateway|firewall|threat|security|host monitor|anomaly|baseline)/.test(text)) return 'security';
-  if (/(network|arp|dns|port scan|gateway ping|connection)/.test(text)) return 'network';
-  if (/(system|resource|process|service|uptime|localhost)/.test(text)) return 'system';
-  return 'security';
 }
 
 function describeStandaloneAutomationTask(task, tool) {
