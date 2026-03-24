@@ -10,10 +10,10 @@
 
 ```
 [harness] Killing 3 existing GuardianAgent process(es)...
-[harness] Starting GuardianAgent with token: harness-ce007303b16f4165878ee44d8236dda5
+[harness] Starting GuardianAgent with token: <redacted-harness-token>
 [harness] App PID: 24712, waiting for /health...
 [harness] App is healthy after 1s
-[harness] Ready with auth token: harness-ce007303b16f4165878ee44d8236dda5
+[harness] Ready with auth token: <redacted-harness-token>
 
 [harness] === Health & Auth ===
   PASS GET /health returns valid JSON
@@ -104,7 +104,7 @@
   PASS: 39  FAIL: 0  SKIP: 0  Total: 39
 ============================================
 
-[harness] Full app log: C:\Users\kenle\AppData\Local\Temp\guardian-harness.log
+[harness] Full app log: %LOCALAPPDATA%\\Temp\\guardian-harness.log
 [harness] Stopping app (PID 24712)...
 ```
 

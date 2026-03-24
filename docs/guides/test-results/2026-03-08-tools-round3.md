@@ -35,10 +35,10 @@
 
 ```
 [tools] Killing 3 existing GuardianAgent process(es)...
-[tools] Starting GuardianAgent with token: harness-1f949fda274441a3ac95e810ed0a8537
+[tools] Starting GuardianAgent with token: <redacted-harness-token>
 [tools] App PID: 38108, waiting for /health...
 [tools] App is healthy after 1s
-[tools] Ready with auth token: harness-1f949fda274441a3ac95e810ed0a8537
+[tools] Ready with auth token: <redacted-harness-token>
 
 [tools] LLM Provider: ollama (ollama) — model: gpt-oss:latest, locality: local
 [tools] LLM Provider: openai (openai) — model: gpt-4o, locality: external

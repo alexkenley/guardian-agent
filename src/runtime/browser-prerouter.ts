@@ -509,13 +509,20 @@ function formatReadContent(result: Record<string, unknown>): string | null {
 function formatLinksContent(result: Record<string, unknown>): string | null {
   const output = isRecord(result.output) ? result.output : null;
   if (!output) return toString(result.message) || null;
-  const links = Array.isArray(output.links)
-    ? output.links
-      .filter((entry): entry is Record<string, unknown> => isRecord(entry))
-      .slice(0, 10)
-      .map((entry) => `- ${toString(entry.text) || toString(entry.href)}${toString(entry.href) ? ` -> ${toString(entry.href)}` : ''}`)
-    : [];
-  return [toString(result.message), links.join('\n')].filter(Boolean).join('\n\n');
+  const rawLinks = Array.isArray(output.links) ? output.links : [];
+  const links = rawLinks
+    .filter((entry): entry is Record<string, unknown> => isRecord(entry))
+    .slice(0, 20)
+    .map((entry) => {
+      const text = toString(entry.text).trim();
+      const href = toString(entry.href).trim();
+      if (!href) return '';
+      return text && text !== href ? `- ${text} → ${href}` : `- ${href}`;
+    })
+    .filter(Boolean);
+  const remaining = rawLinks.length - links.length;
+  const suffix = remaining > 0 ? `\n...and ${remaining} more` : '';
+  return [toString(result.message), links.join('\n') + suffix].filter(Boolean).join('\n\n');
 }
 
 function formatExtractContent(result: Record<string, unknown>): string | null {

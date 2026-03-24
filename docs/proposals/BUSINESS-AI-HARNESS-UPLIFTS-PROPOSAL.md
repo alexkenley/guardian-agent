@@ -98,16 +98,24 @@ Why this matters:
 
 This is the highest-priority uplift.
 
-GuardianAgent already tracks token rate and invocation budgets, but that is not yet the same thing as business-grade cost control. The system should be able to stop an expensive misconfiguration before it burns money for hours.
+GuardianAgent already tracks token rate and invocation budgets, and scheduled tasks now have token-budget auto-pause controls. That is still not the same thing as business-grade cost control. The system should be able to stop an expensive misconfiguration before it burns money for hours and explain the spend clearly.
+
+Already implemented baseline:
+
+- scheduled task daily token caps
+- scheduled task per-provider token caps
+- scheduled task auto-pause when those caps are exceeded
+- approval-expiry enforcement before scheduled execution
+- auto-pause after repeated failures or approval denials
 
 Recommended additions:
 
 - per-agent daily spend caps
 - per-user daily spend caps
-- per-provider daily spend caps
-- per-scheduled-task budget ceilings
+- provider-aware cost accounting in currency terms, not only tokens
 - per-run estimated cost preview before approval
 - cumulative monthly budget tracking
+- operator-visible spend reporting across interactive and scheduled paths
 - automatic suspension of schedules after repeated budget overruns
 - anomaly alerts for unusual token acceleration or repeated retries
 - "dry-run cost estimate" for automations and scheduled tasks
@@ -155,15 +163,20 @@ Suggested integration points:
 
 ### 3. Scheduled Automation Governance
 
-GuardianAgent's current model is operationally pragmatic: approval happens when a scheduled task is created or updated, and later executions are treated as approved. That is convenient, but it is exactly where business users can end up with silent drift, runaway repetition, or stale permissions.
+GuardianAgent's current model is stronger than the original baseline described here. Scheduled tasks now enforce approval expiry and auto-pause after repeated failures or approval denials. The remaining gap is richer scope-drift detection and more explicit operator-facing provenance.
+
+Already implemented baseline:
+
+- approval expiry windows for scheduled tasks
+- execution circuit breaker after repeated failures or denials
+- token-budget pause controls for repeated scheduled execution
+- operator-visible paused state and auto-pause reason
 
 Recommended additions:
 
-- approval expiry windows for scheduled tasks
 - automatic re-approval after meaningful task changes
 - approval expiry on elevated scope changes
 - recurrence-risk scoring for schedules
-- execution circuit breaker after repeated failures or denials
 - operator-visible "why is this still allowed?" provenance for each saved schedule
 - separate policy for autonomous schedules vs attended schedules
 - maintenance-window constraints for high-impact tasks

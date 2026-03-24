@@ -2,7 +2,7 @@
 
 **Status:** Implemented  
 **Date:** 2026-03-16  
-**Proposal Origin:** [docs/proposals/CONTEXTUAL-SECURITY-UPLIFT-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/CONTEXTUAL-SECURITY-UPLIFT-PROPOSAL.md)
+**Proposal Origin:** [docs/implemented-sops/CONTEXTUAL-SECURITY-UPLIFT-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/implemented-sops/CONTEXTUAL-SECURITY-UPLIFT-PROPOSAL.md)
 
 ## Purpose
 

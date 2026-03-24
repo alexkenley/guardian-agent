@@ -1,10 +1,14 @@
 # Multi-Agent Workflow Hardening Proposal
 
-**Status:** Proposed
+**Status:** Historical proposal; core items implemented
 **Date:** 2026-03-10
 **Informed by:**
 - GitHub Engineering: [Multi-agent workflows often fail. Here's how to engineer ones that don't](https://github.blog/ai-and-ml/generative-ai/multi-agent-workflows-often-fail-heres-how-to-engineer-ones-that-dont/)
 - GuardianAgent runtime, orchestration, tools, and eval code
+
+Update 2026-03-24:
+- The proposal is retained for rationale, but the core hardening items are now implemented.
+- See [MULTI-AGENT-WORKFLOW-HARDENING-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/MULTI-AGENT-WORKFLOW-HARDENING-SPEC.md) for current status.
 
 ---
 
@@ -20,7 +24,7 @@ GuardianAgent already implements several controls that the GitHub article argues
 
 The remaining weakness is not basic safety. It is **contract rigor**.
 
-Today, GuardianAgent's multi-agent layer still relies heavily on free-form text handoffs, shallow schema validation, and incomplete execution telemetry. That makes the system safer than many multi-agent apps, but less reliable and less debuggable than it should be.
+At proposal time, GuardianAgent's multi-agent layer still relied heavily on free-form text handoffs, shallow schema validation, and incomplete execution telemetry. Those specific gaps have since been materially reduced by the hardening work captured in the linked specification.
 
 This proposal recommends six focused changes:
 

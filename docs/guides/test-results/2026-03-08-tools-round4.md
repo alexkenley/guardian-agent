@@ -42,10 +42,10 @@ All 5 failures stem from the local LLM confusing similarly-named tools:
 
 ```
 [tools] Killing 3 existing GuardianAgent process(es)...
-[tools] Starting GuardianAgent with token: harness-28bdf3052aa1401e9e71fc4d849c83f4
+[tools] Starting GuardianAgent with token: <redacted-harness-token>
 [tools] App PID: 35792, waiting for /health...
 [tools] App is healthy after 1s
-[tools] Ready with auth token: harness-28bdf3052aa1401e9e71fc4d849c83f4
+[tools] Ready with auth token: <redacted-harness-token>
 
 [tools] LLM Provider: ollama (ollama) — model: gpt-oss:latest, locality: local
 [tools] LLM Provider: openai (openai) — model: gpt-4o, locality: external

@@ -9,7 +9,7 @@ A step-by-step guide for Claude Code assistants to independently test GuardianAg
 ### 1.1 Build the Project
 
 ```bash
-cd /mnt/c/Users/kenle/OneDrive/Development/GuradianAgent
+cd /mnt/c/Users/<user>/OneDrive/Development/GuardianAgent
 npm run build
 ```
 

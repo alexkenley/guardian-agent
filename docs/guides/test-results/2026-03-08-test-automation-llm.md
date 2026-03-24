@@ -7,10 +7,10 @@ Check the spelling of the name, or if a path was included, verify that the path 
 
 Suggestion [3,General]: The command "test-automations-llm.ps1" was not found, but does exist in the current location. PowerShell does not load commands from the current location by default. If you trust this command, instead type: ".\test-automations-llm.ps1". See "get-help about_Command_Precedence" for more details.
 PS S:\Development\GuardianAgent\scripts> .\test-automations-llm.ps1
-[auto-llm] Starting GuardianAgent with token: harness-60a7d3a285464f03ae3c30f08cbd7e27
+[auto-llm] Starting GuardianAgent with token: <redacted-harness-token>
 [auto-llm] App PID: 38428, waiting for /health...
 [auto-llm] App is healthy after 2s
-[auto-llm] Ready with auth token: harness-60a7d3a285464f03ae3c30f08cbd7e27
+[auto-llm] Ready with auth token: <redacted-harness-token>
 
 [auto-llm] LLM Provider: ollama (ollama) — model: gpt-oss:latest, locality: local
 [auto-llm] LLM Provider: openai (openai) — model: gpt-4o, locality: external
@@ -133,6 +133,6 @@ If you’d like to create a new one, let me know the details and I’ll set it u
   FAIL: natural: confirms daily scheduled automation - expected 'creat|automat|daily|9|schedul|resource' in: I could not generate a final response for that request.
   FAIL: natural: automation tools were called - expected tool matching 'workflow_upsert|task_create', got: find_tools, workflow_list, workflow_list, workflow_list, workflow_list, find_tools, workflow_list, find_tools, find_tools
 
-[auto-llm] Full app log: C:\Users\kenle\AppData\Local\Temp\guardian-autollm-harness.log
+[auto-llm] Full app log: %LOCALAPPDATA%\\Temp\\guardian-autollm-harness.log
 [auto-llm] Stopping app (PID 38428)...
 PS S:\Development\GuardianAgent\scripts>

@@ -20,10 +20,10 @@ The 21 failures trace to three systemic issues:
 
 ```
 [tools] Killing 3 existing GuardianAgent process(es)...
-[tools] Starting GuardianAgent with token: harness-71280d7519a54eec8d967edb20b47a03
+[tools] Starting GuardianAgent with token: <redacted-harness-token>
 [tools] App PID: 34260, waiting for /health...
 [tools] App is healthy after 1s
-[tools] Ready with auth token: harness-71280d7519a54eec8d967edb20b47a03
+[tools] Ready with auth token: <redacted-harness-token>
 
 [tools] LLM Provider: ollama (ollama) — model: gpt-oss:latest, locality: local
 [tools] LLM Provider: openai (openai) — model: gpt-4o, locality: external

@@ -465,11 +465,13 @@ Why:
 
 Current state:
 - token usage exists in `src/runtime/budget.ts`
+- scheduled tasks already enforce approval expiry, daily token caps, per-provider token caps, and auto-pause after repeated failures or denials in `src/runtime/scheduled-tasks.ts`
 
 Gap:
-- no provider-aware cost accounting
-- no hard spend ceilings
-- no serious autonomous/scheduled cost stop conditions
+- no provider-aware cost accounting in currency terms
+- no unified per-user/per-agent spend governance across interactive and scheduled paths
+- no per-run cost preview
+- no monthly spend rollups or anomaly reporting
 
 This gap is already identified internally in:
 - `docs/proposals/BUSINESS-AI-HARNESS-UPLIFTS-PROPOSAL.md`
@@ -484,6 +486,23 @@ Adopt:
 Why:
 - preserves eval integrity
 - answers the golden-test-set concern cleanly
+
+## Remaining Quick Wins Vs. Complex Work
+
+### Quick wins
+
+- retrieval-quality scoring before generation using existing search/reranker signals
+- private eval lane split: public smoke, private regression, blind holdout
+- operator-facing budget observability and clearer budget APIs on top of the existing token trackers
+- prompt version tagging and trace surfacing before building a full prompt control plane
+
+### More complex and risky
+
+- full semantic memory recall/ranking overhaul
+- provider-priced cost accounting with hard spend governance across every execution path
+- enterprise identity and role-based authorization
+- full prompt rollout/rollback control plane
+- retrieval rewrite/decompose and corrective fallback loops that materially change answer behavior
 
 ## Final Position
 

@@ -7,7 +7,7 @@ Date: 2026-03-17
 External `LLMMap` smoke test against GuardianAgent web chat surface:
 
 - target: `POST /api/message`
-- tool: cloned `LLMMap` repo at `/mnt/s/Development/LLMMap`
+- tool: local `LLMMap` checkout
 - model: local Ollama `gpt-oss:latest`
 
 ## Commands Run
@@ -42,11 +42,6 @@ The discovered injection point is the expected user-controlled chat prompt field
 
 ## Primary Artifacts
 
-- [summary.json](/mnt/s/Development/GuardianAgent/docs/security-testing-results/2026-03-17-llmmap/test-files/summary.json)
-- [scan-report.md](/mnt/s/Development/GuardianAgent/docs/security-testing-results/2026-03-17-llmmap/test-files/scan-report.md)
-- [scan-report.json](/mnt/s/Development/GuardianAgent/docs/security-testing-results/2026-03-17-llmmap/test-files/scan-report.json)
-- [guardian.config.yaml](/mnt/s/Development/GuardianAgent/docs/security-testing-results/2026-03-17-llmmap/test-files/guardian.config.yaml)
-- [guardian-message-request.txt](/mnt/s/Development/GuardianAgent/docs/security-testing-results/2026-03-17-llmmap/test-files/guardian-message-request.txt)
-- [llmmap-bridge-config.json](/mnt/s/Development/GuardianAgent/docs/security-testing-results/2026-03-17-llmmap/test-files/llmmap-bridge-config.json)
-- [llmmap-result.json](/mnt/s/Development/GuardianAgent/docs/security-testing-results/2026-03-17-llmmap/test-files/llmmap-result.json)
 - [test-llmmap-security.mjs](/mnt/s/Development/GuardianAgent/scripts/test-llmmap-security.mjs)
+
+Raw request captures, bridge configs, and host-local run artifacts were intentionally excluded from the checked-in docs tree. This repo keeps the sanitized result summary and rerun script, not the full local harness exhaust.

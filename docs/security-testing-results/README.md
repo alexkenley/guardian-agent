@@ -13,3 +13,9 @@ This directory contains the current security verification artifacts for Guardian
 ```bash
 node scripts/test-security-verification.mjs
 ```
+
+## Artifact Hygiene
+
+- Keep sanitized summaries, claim matrices, and rerun commands in the repo.
+- Keep raw request captures, local config snapshots, host-specific logs, and blind eval sets out of the checked-in proof surface.
+- If a security result needs deeper raw evidence, store it in a private artifact location and summarize the conclusion here.

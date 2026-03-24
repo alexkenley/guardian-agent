@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-14
 **Status:** Implementation
-**Proposal:** [`docs/proposals/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-PROPOSAL.md`](../proposals/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-PROPOSAL.md)
+**Proposal:** [`docs/implemented-sops/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-PROPOSAL.md`](../implemented-sops/NATIVE-GOOGLE-AND-INSTRUCTION-STEPS-PROPOSAL.md)
 
 ---
 

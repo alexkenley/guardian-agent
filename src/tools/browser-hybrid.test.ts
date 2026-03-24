@@ -171,6 +171,40 @@ describe('HybridBrowserService', () => {
     );
   });
 
+  it('extracts links from Playwright MCP Markdown-wrapped evaluate response', async () => {
+    const markdownWrapped = [
+      '### Result',
+      '[',
+      '  {',
+      '    "text": "Learn more",',
+      '    "href": "https://iana.org/domains/example"',
+      '  }',
+      ']',
+      '### Ran Playwright code',
+      '```js',
+      "await page.evaluate('() => { ... }');",
+      '```',
+    ].join('\n');
+    const callTool = vi.fn(async (toolName: string) => {
+      if (toolName === 'mcp-playwright-browser_navigate') {
+        return { success: true, output: JSON.stringify({ url: 'https://example.com', title: 'Example' }) };
+      }
+      if (toolName === 'mcp-playwright-browser_evaluate') {
+        return { success: true, output: markdownWrapped };
+      }
+      return { success: false, error: `Unexpected tool ${toolName}` };
+    });
+    const manager = makeManager(PLAYWRIGHT_DEFINITIONS, callTool);
+    const service = new HybridBrowserService(manager);
+
+    const result = await service.links('scope-md', { url: 'https://example.com' });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({
+      links: [{ text: 'Learn more', href: 'https://iana.org/domains/example' }],
+    });
+  });
+
   it('extracts structured metadata and semantic outline through Playwright', async () => {
     const callTool = vi.fn(async (toolName: string) => {
       if (toolName === 'mcp-playwright-browser_navigate') {

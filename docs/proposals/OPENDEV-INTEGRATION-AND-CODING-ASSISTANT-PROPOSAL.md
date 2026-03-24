@@ -1073,4 +1073,4 @@ The spec is ephemeral (per-session, not persisted to memory), but the user can s
 - `gru-ai` local review — `S:\Development\gru-ai`
 - `Broomy` local review — `S:\Development\Broomy`
 - [GuardianAgent Orchestration Spec](../specs/ORCHESTRATION-SPEC.md)
-- [GuardianAgent Brokered Isolation Proposal](./BROKERED-AGENT-ISOLATION-PROPOSAL.md)
+- [GuardianAgent Brokered Isolation Proposal](../implemented-sops/BROKERED-AGENT-ISOLATION-PROPOSAL.md)

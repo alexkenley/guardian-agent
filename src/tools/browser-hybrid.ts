@@ -1138,8 +1138,26 @@ function outputToStructured(output: unknown): unknown {
   try {
     return JSON.parse(output);
   } catch {
+    // Playwright MCP wraps evaluate results in Markdown: "### Result\n...\n### Ran Playwright code"
+    const resultBlock = extractPlaywrightResultBlock(output);
+    if (resultBlock) {
+      try {
+        return JSON.parse(resultBlock);
+      } catch {
+        // not JSON inside the result block either
+      }
+    }
     return output;
   }
+}
+
+function extractPlaywrightResultBlock(text: string): string | null {
+  const resultHeader = text.indexOf('### Result\n');
+  if (resultHeader < 0) return null;
+  const contentStart = resultHeader + '### Result\n'.length;
+  const nextSection = text.indexOf('\n### ', contentStart);
+  const block = (nextSection >= 0 ? text.slice(contentStart, nextSection) : text.slice(contentStart)).trim();
+  return block || null;
 }
 
 function unwrapToolOutput(output: unknown): unknown {

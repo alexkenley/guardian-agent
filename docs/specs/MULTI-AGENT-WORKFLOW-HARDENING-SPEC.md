@@ -3,7 +3,7 @@
 **Status:** Completed
 **Date:** 2026-03-10
 
-This specification formalizes the implementation of the `MULTI-AGENT-WORKFLOW-HARDENING-PROPOSAL.md`.
+This specification formalizes the implementation of [MULTI-AGENT-WORKFLOW-HARDENING-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/implemented-sops/MULTI-AGENT-WORKFLOW-HARDENING-PROPOSAL.md).
 
 ## Overview
 

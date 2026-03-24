@@ -2,7 +2,7 @@
 
 **Status:** Implemented
 **Date:** 2026-03-12
-**Proposal:** `docs/proposals/BROKERED-AGENT-ISOLATION-PROPOSAL.md`
+**Proposal:** `docs/implemented-sops/BROKERED-AGENT-ISOLATION-PROPOSAL.md`
 **Code:** `src/broker/`, `src/supervisor/`, `src/worker/`
 
 ## Overview

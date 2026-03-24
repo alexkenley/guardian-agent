@@ -316,7 +316,7 @@ This bypass is narrower than the Coding Assistant command surface. For the main 
 - High-risk external posting is disabled by default unless explicitly allowed.
 - Path compatibility:
   - `allowedPaths` and tool path args accept both native and Windows/WSL formats.
-  - Examples: `C:\Users\kenle\OneDrive\Technical and GRC` and `/mnt/c/Users/kenle/OneDrive/Technical and GRC`.
+  - Examples: `C:\Users\<user>\OneDrive\Technical and GRC` and `/mnt/c/Users/<user>/OneDrive/Technical and GRC`.
 
 ## Dry-Run Mode
 - Tools support a `dryRun` flag on execution requests.
