@@ -128,6 +128,58 @@ describe('tryAutomationControlPreRoute', () => {
     );
   });
 
+  it('fills missing automation names from the user prompt when the gateway omits them', async () => {
+    const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName === 'automation_list') {
+        return {
+          success: true,
+          output: {
+            automations: [{
+              id: 'browser-read-smoke',
+              name: 'Browser Read Smoke',
+              kind: 'workflow',
+              enabled: true,
+              workflow: {
+                id: 'browser-read-smoke',
+                name: 'Browser Read Smoke',
+                enabled: true,
+                mode: 'sequential',
+                steps: [{ id: 'step-1', toolName: 'browser_navigate' }],
+              },
+            }],
+          },
+        };
+      }
+      if (toolName === 'automation_run') {
+        expect(args).toEqual({ automationId: 'browser-read-smoke' });
+        return {
+          success: true,
+          message: "Ran 'Browser Read Smoke'.",
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryAutomationControlPreRoute({
+      agentId: 'default',
+      message: {
+        ...baseMessage,
+        content: 'Run Browser Read Smoke now.',
+      },
+      executeTool,
+    }, {
+      intentDecision: {
+        route: 'automation_control',
+        confidence: 'high',
+        operation: 'run',
+        summary: 'Run an existing automation.',
+        entities: {},
+      },
+    });
+
+    expect(result?.content).toContain("Ran 'Browser Read Smoke'.");
+  });
+
   it('toggles workflows from automations-page intents via automation_set_enabled', async () => {
     const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
       if (toolName === 'automation_list') {
@@ -263,6 +315,30 @@ describe('tryAutomationControlPreRoute', () => {
     ]);
     expect(trackPendingApproval).toHaveBeenCalledWith('approval-automation');
     expect(onPendingApproval).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces catalog lookup errors instead of pretending the catalog is empty', async () => {
+    const executeTool = vi.fn(async (toolName: string) => {
+      if (toolName === 'automation_list') {
+        return {
+          success: false,
+          message: 'Automation control plane is not available.',
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryAutomationControlPreRoute({
+      agentId: 'default',
+      message: {
+        ...baseMessage,
+        content: 'Show me the saved automations.',
+      },
+      executeTool,
+    });
+
+    expect(result?.content).toContain('I could not inspect the automation catalog right now');
+    expect(result?.content).toContain('Automation control plane is not available.');
   });
 
   it('refuses to run built-in starter catalog entries', async () => {

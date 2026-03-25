@@ -136,6 +136,21 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
   },
 };
 
+const AUTOMATION_NAME_REPAIR_TOOL: ToolDefinition = {
+  name: 'resolve_automation_name',
+  description: 'Extract the exact saved automation name referenced by a request that is already known to be about controlling an existing automation. Call exactly once.',
+  parameters: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      automationName: {
+        type: 'string',
+      },
+    },
+    required: ['automationName'],
+  },
+};
+
 const INTENT_GATEWAY_SYSTEM_PROMPT = [
   'You are Guardian\'s intent gateway.',
   'Your job is only to classify the top-level route for a user request.',
@@ -157,7 +172,16 @@ const INTENT_GATEWAY_SYSTEM_PROMPT = [
   'Prefer email_task over workspace_task for direct email compose/send requests.',
   'Prefer search_task over browser_task for generic web search.',
   'Prefer automation_authoring for create/build/setup requests and automation_control for delete/toggle/run/clone/inspect requests.',
+  'When the request refers to a specific existing automation, workflow, scheduled task, or assistant automation, always set automationName to the exact human-readable name from the request.',
+  'Examples: "Run Browser Read Smoke now" -> automationName = "Browser Read Smoke"; "Show me the automation Browser Read Smoke" -> automationName = "Browser Read Smoke".',
   'For enable/disable requests, set enabled=true or enabled=false when explicit.',
+].join(' ');
+
+const AUTOMATION_NAME_REPAIR_SYSTEM_PROMPT = [
+  'You repair missing automation names for Guardian intent routing.',
+  'The route and operation are already known to be about controlling an existing saved automation.',
+  'Return only the exact automationName the user referenced.',
+  'Call the resolve_automation_name tool exactly once.',
 ].join(' ');
 
 export class IntentGateway {
@@ -172,7 +196,19 @@ export class IntentGateway {
         temperature: 0,
         tools: [INTENT_GATEWAY_TOOL],
       });
-      const decision = parseIntentGatewayDecision(response);
+      let decision = parseIntentGatewayDecision(response);
+      if (needsAutomationNameRepair(decision)) {
+        const repairedName = await repairAutomationName(input, decision, chat);
+        if (repairedName) {
+          decision = {
+            ...decision,
+            entities: {
+              ...decision.entities,
+              automationName: repairedName,
+            },
+          };
+        }
+      }
       return {
         mode: 'shadow',
         model: response.model,
@@ -232,6 +268,30 @@ function buildIntentGatewayMessages(input: IntentGatewayInput): ChatMessage[] {
   ];
 }
 
+function buildAutomationNameRepairMessages(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+): ChatMessage[] {
+  const channelLabel = input.channel?.trim() || 'unknown';
+  return [
+    {
+      role: 'system',
+      content: AUTOMATION_NAME_REPAIR_SYSTEM_PROMPT,
+    },
+    {
+      role: 'user',
+      content: [
+        `Channel: ${channelLabel}`,
+        `Route: ${decision.route}`,
+        `Operation: ${decision.operation}`,
+        'Extract the saved automation name from this request.',
+        '',
+        input.content.trim(),
+      ].join('\n'),
+    },
+  ];
+}
+
 function parseIntentGatewayDecision(response: ChatResponse): IntentGatewayDecision {
   const parsed = parseStructuredToolArguments(response)
     ?? parseStructuredContent(response.content);
@@ -255,6 +315,14 @@ function parseStructuredToolArguments(response: ChatResponse): Record<string, un
   } catch {
     return null;
   }
+}
+
+function parseAutomationNameRepair(response: ChatResponse): string | undefined {
+  const parsed = parseStructuredToolArguments(response)
+    ?? parseStructuredContent(response.content);
+  if (!parsed) return undefined;
+  const automationName = typeof parsed.automationName === 'string' ? parsed.automationName.trim() : '';
+  return automationName || undefined;
 }
 
 function parseStructuredContent(content: string): Record<string, unknown> | null {
@@ -317,6 +385,33 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
       ...(path ? { path } : {}),
     },
   };
+}
+
+async function repairAutomationName(
+  input: IntentGatewayInput,
+  decision: IntentGatewayDecision,
+  chat: IntentGatewayChatFn,
+): Promise<string | undefined> {
+  try {
+    const response = await chat(buildAutomationNameRepairMessages(input, decision), {
+      maxTokens: 80,
+      temperature: 0,
+      tools: [AUTOMATION_NAME_REPAIR_TOOL],
+    });
+    return parseAutomationNameRepair(response);
+  } catch {
+    return undefined;
+  }
+}
+
+function needsAutomationNameRepair(decision: IntentGatewayDecision): boolean {
+  if (decision.entities.automationName?.trim()) return false;
+  if (decision.route === 'automation_control') {
+    return ['delete', 'toggle', 'run', 'inspect', 'clone'].includes(decision.operation);
+  }
+  return decision.route === 'ui_control'
+    && decision.entities.uiSurface === 'automations'
+    && ['delete', 'toggle', 'run', 'inspect', 'clone'].includes(decision.operation);
 }
 
 function normalizeRoute(value: unknown): IntentGatewayRoute {

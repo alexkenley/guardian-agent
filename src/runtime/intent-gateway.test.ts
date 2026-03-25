@@ -161,4 +161,46 @@ describe('IntentGateway', () => {
     expect(result.decision.operation).toBe('toggle');
     expect(result.decision.entities.enabled).toBe(false);
   });
+
+  it('repairs missing automation names for automation-control requests', async () => {
+    const gateway = new IntentGateway();
+    let callCount = 0;
+
+    const result = await gateway.classifyShadow(
+      {
+        content: 'Run Browser Read Smoke now.',
+        channel: 'web',
+      },
+      async (_messages, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          expect(options?.tools?.[0]?.name).toBe('route_intent');
+          return {
+            content: JSON.stringify({
+              route: 'automation_control',
+              confidence: 'high',
+              operation: 'run',
+              summary: 'Run an existing automation.',
+            }),
+            model: 'test-model',
+            finishReason: 'stop',
+          } satisfies ChatResponse;
+        }
+
+        expect(options?.tools?.[0]?.name).toBe('resolve_automation_name');
+        return {
+          content: JSON.stringify({
+            automationName: 'Browser Read Smoke',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(result.decision.route).toBe('automation_control');
+    expect(result.decision.operation).toBe('run');
+    expect(result.decision.entities.automationName).toBe('Browser Read Smoke');
+    expect(callCount).toBe(2);
+  });
 });

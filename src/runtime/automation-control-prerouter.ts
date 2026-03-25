@@ -52,6 +52,11 @@ interface AutomationControlIntent {
   enabled?: boolean;
 }
 
+interface AutomationCatalogLookupResult {
+  entries: SavedAutomationCatalogEntry[];
+  error?: string;
+}
+
 export async function tryAutomationControlPreRoute(
   params: AutomationControlPreRouteParams,
   options?: { intentDecision?: IntentGatewayDecision | null },
@@ -60,14 +65,15 @@ export async function tryAutomationControlPreRoute(
   if (!intent || intent.operation === 'clone' || intent.operation === 'unknown') return null;
 
   const toolRequest = toolRequestFor(params);
-  const catalog = await listAutomationCatalog(params.executeTool, toolRequest);
+  const catalogLookup = await listAutomationCatalog(params.executeTool, toolRequest);
+  const catalog = catalogLookup.entries;
   const selected = intent.automationName
     ? selectSavedAutomationCatalogEntry(catalog, intent.automationName)
     : null;
 
   if (intent.operation === 'inspect') {
     return {
-      content: renderAutomationInspectCopy(catalog, selected),
+      content: renderAutomationInspectCopy(catalog, selected, catalogLookup.error),
     };
   }
 
@@ -113,15 +119,9 @@ function toolRequestFor(
 async function listAutomationCatalog(
   executeTool: AutomationControlPreRouteParams['executeTool'],
   request: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
-): Promise<SavedAutomationCatalogEntry[]> {
+): Promise<AutomationCatalogLookupResult> {
   const result = await executeTool('automation_list', {}, request);
-  if (!toBoolean(result.success)) return [];
-  const output = isRecord(result.output) ? result.output : null;
-  if (!output || !Array.isArray(output.automations)) return [];
-  return output.automations
-    .filter(isRecord)
-    .map(toAutomationCatalogEntry)
-    .filter((entry): entry is SavedAutomationCatalogEntry => Boolean(entry));
+  return parseAutomationListResult(result);
 }
 
 function resolveAutomationControlIntent(
@@ -130,37 +130,15 @@ function resolveAutomationControlIntent(
 ): AutomationControlIntent | null {
   if (decision) {
     const routed = resolveDecisionBackedIntent(decision);
-    if (routed) return routed;
+    if (routed) {
+      const inferredName = routed.automationName ?? extractAutomationReference(content);
+      return {
+        ...routed,
+        ...(inferredName ? { automationName: inferredName } : {}),
+      };
+    }
   }
-
-  const trimmed = content.trim();
-  if (!trimmed) return null;
-  const lower = trimmed.toLowerCase();
-  const hasAutomationContext = /\b(automations?|automation catalog|workflow(?:s)?|scheduled task|manual assistant automation|assistant automation|assistant task|task)\b/i.test(trimmed);
-  if (/\b(list|show|what are)\b/.test(lower) && /\b(automations|automation catalog|workflows|scheduled tasks)\b/.test(lower)) {
-    return { operation: 'inspect' };
-  }
-
-  const automationName = extractAutomationReference(trimmed);
-  if (hasAutomationContext && /\b(delete|remove)\b/i.test(trimmed)) {
-    return { operation: 'delete', automationName };
-  }
-  if (hasAutomationContext && /\b(run|execute|start)\b/i.test(trimmed)) {
-    return { operation: 'run', automationName };
-  }
-  if (hasAutomationContext && /\b(enable|turn on)\b/i.test(trimmed)) {
-    return { operation: 'toggle', automationName, enabled: true };
-  }
-  if (hasAutomationContext && /\b(disable|turn off)\b/i.test(trimmed)) {
-    return { operation: 'toggle', automationName, enabled: false };
-  }
-  if (hasAutomationContext && /\btoggle\b/i.test(trimmed)) {
-    return { operation: 'toggle', automationName };
-  }
-  if (hasAutomationContext && /\b(show|inspect|details?|status)\b/i.test(trimmed)) {
-    return { operation: 'inspect', automationName };
-  }
-  return null;
+  return resolveHeuristicAutomationControlIntent(content);
 }
 
 function resolveDecisionBackedIntent(
@@ -186,13 +164,21 @@ function resolveDecisionBackedIntent(
 }
 
 function extractAutomationReference(text: string): string | undefined {
-  const quoted = text.match(/\b(?:automation|workflow|task)\b[\s\S]{0,40}\b(?:called|named)\s+["'`]([^"'`]+)["'`]/i)
-    ?? text.match(/\b(?:delete|remove|run|execute|start|enable|disable|toggle|inspect|show)\s+["'`]([^"'`]+)["'`]/i);
+  const cleaned = text
+    .replace(/\s+\b(?:now|please)\b[.!?]*$/i, '')
+    .trim();
+  const quoted = cleaned.match(/\b(?:automation|workflow|task)\b[\s\S]{0,40}\b(?:called|named)\s+["'`]([^"'`]+)["'`]/i)
+    ?? cleaned.match(/\b(?:delete|remove|run|execute|start|enable|disable|toggle|inspect|show)\s+["'`]([^"'`]+)["'`]/i);
   if (quoted?.[1]?.trim()) {
     return quoted[1].trim();
   }
 
-  const titled = text.match(/\b(?:delete|remove|run|execute|start|enable|disable|toggle|inspect|show)\s+([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+){0,7})\b/);
+  const namedAutomation = cleaned.match(/\b(?:show|inspect|details?|status)\b(?:\s+me)?(?:\s+the)?\s+(?:saved\s+)?(?:automation|workflow|task)\s+([A-Z0-9][A-Za-z0-9]+(?:\s+[A-Z0-9][A-Za-z0-9]+){0,7})\b/i);
+  if (namedAutomation?.[1]?.trim()) {
+    return namedAutomation[1].trim();
+  }
+
+  const titled = cleaned.match(/\b(?:delete|remove|run|execute|start|enable|disable|toggle|inspect|show)\s+([A-Z0-9][A-Za-z0-9]+(?:\s+[A-Z0-9][A-Za-z0-9]+){0,7})\b/i);
   if (titled?.[1]?.trim()) {
     return titled[1].trim();
   }
@@ -202,6 +188,7 @@ function extractAutomationReference(text: string): string | undefined {
 function renderAutomationInspectCopy(
   catalog: SavedAutomationCatalogEntry[],
   selected: SavedAutomationCatalogEntry | null,
+  error?: string,
 ): string {
   if (selected) {
     const lines = [
@@ -232,7 +219,9 @@ function renderAutomationInspectCopy(
   }
 
   if (catalog.length === 0) {
-    return 'There are no automations in the catalog.';
+    return error
+      ? `I could not inspect the automation catalog right now: ${error}`
+      : 'There are no automations in the catalog.';
   }
 
   const lines = [`Automation catalog (${catalog.length}):`];
@@ -244,6 +233,59 @@ function renderAutomationInspectCopy(
     lines.push(`- ...and ${catalog.length - 20} more`);
   }
   return lines.join('\n');
+}
+
+function resolveHeuristicAutomationControlIntent(content: string): AutomationControlIntent | null {
+  const trimmed = content.trim();
+  if (!trimmed) return null;
+  const lower = trimmed.toLowerCase();
+  const hasAutomationContext = /\b(automations?|automation catalog|workflow(?:s)?|scheduled task|manual assistant automation|assistant automation|assistant task|task)\b/i.test(trimmed);
+  if (/\b(list|show|what are)\b/.test(lower) && /\b(automations|automation catalog|workflows|scheduled tasks)\b/.test(lower)) {
+    return { operation: 'inspect' };
+  }
+
+  const automationName = extractAutomationReference(trimmed);
+  if (hasAutomationContext && /\b(delete|remove)\b/i.test(trimmed)) {
+    return { operation: 'delete', automationName };
+  }
+  if (hasAutomationContext && /\b(run|execute|start)\b/i.test(trimmed)) {
+    return { operation: 'run', automationName };
+  }
+  if (hasAutomationContext && /\b(enable|turn on)\b/i.test(trimmed)) {
+    return { operation: 'toggle', automationName, enabled: true };
+  }
+  if (hasAutomationContext && /\b(disable|turn off)\b/i.test(trimmed)) {
+    return { operation: 'toggle', automationName, enabled: false };
+  }
+  if (hasAutomationContext && /\btoggle\b/i.test(trimmed)) {
+    return { operation: 'toggle', automationName };
+  }
+  if (hasAutomationContext && /\b(show|inspect|details?|status)\b/i.test(trimmed)) {
+    return { operation: 'inspect', automationName };
+  }
+  return null;
+}
+
+function parseAutomationListResult(result: Record<string, unknown>): AutomationCatalogLookupResult {
+  if (!toBoolean(result.success)) {
+    return {
+      entries: [],
+      error: toString(result.message) || 'Automation catalog lookup failed.',
+    };
+  }
+  const output = isRecord(result.output) ? result.output : null;
+  if (!output || !Array.isArray(output.automations)) {
+    return {
+      entries: [],
+      error: 'Automation catalog returned an invalid response.',
+    };
+  }
+  return {
+    entries: output.automations
+      .filter(isRecord)
+      .map(toAutomationCatalogEntry)
+      .filter((entry): entry is SavedAutomationCatalogEntry => Boolean(entry)),
+  };
 }
 
 async function runAutomationEntry(
