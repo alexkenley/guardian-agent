@@ -646,24 +646,24 @@ if (Test-ValidResponse $resp "intel_findings: list findings") {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# TASK & WORKFLOW TOOLS
+# AUTOMATION TOOLS
 # ═══════════════════════════════════════════════════════════════
 Start-Sleep -Seconds 3
 Write-Host ""
-Write-Log "=== Task & Workflow Tools ==="
+Write-Log "=== Automation Tools ==="
 
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "use the task_list tool to list all scheduled tasks"
-if (Test-ValidResponse $resp "task_list: list tasks") {
-    [void](Test-ToolWasCalled "task_list" "task_list: tool was called" $jobs0)
+$resp = Send-Message "use the automation_list tool to list all saved automations and their schedules"
+if (Test-ValidResponse $resp "automation_list: list automations") {
+    [void](Test-ToolWasCalled "automation_list" "automation_list: tool was called" $jobs0)
 }
 
 Start-Sleep -Seconds 3
 
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "use the workflow_list tool to list all automation workflows"
-if (Test-ValidResponse $resp "workflow_list: list workflows") {
-    [void](Test-ToolWasCalled "workflow_list" "workflow_list: tool was called" $jobs0)
+$resp = Send-Message "use the automation_list tool to show starter examples separately from saved automations"
+if (Test-ValidResponse $resp "automation_list: starter examples") {
+    [void](Test-ToolWasCalled "automation_list" "automation_list: tool was called for starter examples" $jobs0)
 }
 
 # ═══════════════════════════════════════════════════════════════

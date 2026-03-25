@@ -219,6 +219,7 @@ import { resolveRuntimeCredentialView } from './runtime/credentials.js';
 import { LocalSecretStore } from './runtime/secret-store.js';
 import { WorkerManager } from './supervisor/worker-manager.js';
 import {
+  describePendingApproval,
   formatPendingApprovalMessage,
   isPhantomPendingApprovalMessage,
   shouldUseStructuredPendingApprovalMessage,
@@ -2886,11 +2887,12 @@ class ChatAgent extends BaseAgent {
     summaries?: Map<string, { toolName: string; argsPreview: string }>,
   ): string {
     if (ids.length === 0) return 'There are no pending approvals.';
+    const resolvedSummaries = summaries ?? this.tools?.getApprovalSummaries(ids);
     const ttlMinutes = Math.round(PENDING_APPROVAL_TTL_MS / 60_000);
     if (ids.length === 1) {
-      const summary = summaries?.get(ids[0]);
+      const summary = resolvedSummaries?.get(ids[0]);
       const what = summary
-        ? `Action: ${summary.toolName}${summary.argsPreview ? ` — ${summary.argsPreview}` : ''}`
+        ? `Waiting for approval to ${describePendingApproval(summary)}.`
         : undefined;
       return [
         what ?? 'I prepared an action that needs your approval.',
@@ -2899,14 +2901,16 @@ class ChatAgent extends BaseAgent {
         'Optional: /approve or /deny',
       ].join('\n');
     }
-    const lines = [`I prepared ${ids.length} actions that need your approval.`];
+    const described = ids
+      .map((id) => resolvedSummaries?.get(id))
+      .filter((summary): summary is { toolName: string; argsPreview: string } => Boolean(summary));
+    const lines = [
+      described.length > 0
+        ? formatPendingApprovalMessage(described)
+        : `I prepared ${ids.length} actions that need your approval.`,
+    ];
     for (const id of ids) {
-      const summary = summaries?.get(id);
-      if (summary) {
-        lines.push(`  • ${summary.toolName}${summary.argsPreview ? ` — ${summary.argsPreview}` : ''} (${id.slice(0, 8)}…)`);
-      } else {
-        lines.push(`  • ${id}`);
-      }
+      lines.push(`  • ${id.slice(0, 8)}…`);
     }
     lines.push(`Reply "yes" to approve all or "no" to deny all (expires in ${ttlMinutes} minutes).`);
     lines.push('Optional: /approve <id> or /deny <id> for specific actions');

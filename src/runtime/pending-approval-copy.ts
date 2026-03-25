@@ -93,6 +93,46 @@ function describeFilesystemMove(preview: string): string | null {
   return `move ${source} to ${destination}`;
 }
 
+function describeAutomationAction(toolName: string, preview: string): string | null {
+  const parsed = tryParsePreview(preview);
+  if (!parsed) {
+    const normalized = normalizePreview(preview);
+    if (!normalized) return null;
+    switch (toolName) {
+      case 'automation_save':
+        return /^save\b/i.test(normalized) ? normalized : `save automation ${normalized}`;
+      case 'automation_set_enabled':
+      case 'automation_run':
+      case 'automation_delete':
+        return normalized;
+      default:
+        return null;
+    }
+  }
+
+  const automationId = asString(parsed.automationId) || asString(parsed.id);
+  const name = asString(parsed.name) || automationId;
+
+  switch (toolName) {
+    case 'automation_save':
+      return name ? `save automation ${name}` : 'save automation';
+    case 'automation_set_enabled':
+      if (automationId) {
+        return `${parsed.enabled === false ? 'disable' : 'enable'} automation ${automationId}`;
+      }
+      return parsed.enabled === false ? 'disable automation' : 'enable automation';
+    case 'automation_run':
+      if (automationId) {
+        return `${parsed.dryRun === true ? 'dry-run' : 'run'} automation ${automationId}`;
+      }
+      return parsed.dryRun === true ? 'dry-run automation' : 'run automation';
+    case 'automation_delete':
+      return automationId ? `delete automation ${automationId}` : 'delete automation';
+    default:
+      return null;
+  }
+}
+
 export function describePendingApproval(summary: PendingApprovalSummary): string {
   const preview = normalizePreview(summary.argsPreview);
 
@@ -115,6 +155,16 @@ export function describePendingApproval(summary: PendingApprovalSummary): string
   if (summary.toolName === 'fs_move') {
     const moveDescription = describeFilesystemMove(preview);
     if (moveDescription) return moveDescription;
+  }
+
+  if (
+    summary.toolName === 'automation_save'
+    || summary.toolName === 'automation_set_enabled'
+    || summary.toolName === 'automation_run'
+    || summary.toolName === 'automation_delete'
+  ) {
+    const automationDescription = describeAutomationAction(summary.toolName, preview);
+    if (automationDescription) return automationDescription;
   }
 
   if (preview) {

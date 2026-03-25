@@ -346,22 +346,22 @@ Write-Log "=== Automation Prerequisite Check ==="
 
 $autoToolsAvailable = $false
 
-# Probe task_list (read_only) to check if automation tools are registered
+# Probe automation_list (read_only) to check if automation tools are registered
 $probeArgs = @{}
-$taskProbe = Invoke-ToolRun -ToolName "task_list" -ToolArgs $probeArgs
+$automationProbe = Invoke-ToolRun -ToolName "automation_list" -ToolArgs $probeArgs
 
-if ($taskProbe.success -eq $true -or $taskProbe.status -eq "succeeded" -or $taskProbe.status -eq "failed") {
+if ($automationProbe.success -eq $true -or $automationProbe.status -eq "succeeded" -or $automationProbe.status -eq "failed") {
     $autoToolsAvailable = $true
-    Write-Pass "automation: tools available (probe status: $($taskProbe.status))"
+    Write-Pass "automation: tools available (probe status: $($automationProbe.status))"
 }
-elseif ($taskProbe.message -match "Unknown tool") {
-    Write-Skip "automation: all tests" "task_list tool not registered (automation tools may be disabled)"
+elseif ($automationProbe.message -match "Unknown tool") {
+    Write-Skip "automation: all tests" "automation_list tool not registered (automation tools may be disabled)"
 }
-elseif ($taskProbe.error -match "Unknown tool") {
-    Write-Skip "automation: all tests" "task_list tool not registered (automation tools may be disabled)"
+elseif ($automationProbe.error -match "Unknown tool") {
+    Write-Skip "automation: all tests" "automation_list tool not registered (automation tools may be disabled)"
 }
 else {
-    Write-Skip "automation: all tests" "unexpected probe result: status=$($taskProbe.status), error=$($taskProbe.error), message=$($taskProbe.message)"
+    Write-Skip "automation: all tests" "unexpected probe result: status=$($automationProbe.status), error=$($automationProbe.error), message=$($automationProbe.message)"
 }
 
 if ($autoToolsAvailable) {
@@ -377,21 +377,21 @@ Write-Pass "setup: autonomous policy for read-only tests"
 
 Start-Sleep -Seconds 2
 
-# --- Test: task_list (read_only) ---
+# --- Test: automation_list (read_only) ---
 Write-Host ""
-Write-Log "--- Test: task_list (read_only) ---"
+Write-Log "--- Test: automation_list (read_only) ---"
 
-$taskListArgs = @{}
-$taskListResult = Invoke-ToolRun -ToolName "task_list" -ToolArgs $taskListArgs
+$automationListArgs = @{}
+$automationListResult = Invoke-ToolRun -ToolName "automation_list" -ToolArgs $automationListArgs
 
-if ($taskListResult.status -eq "pending_approval") {
-    Write-Fail "task_list: read_only tool should not require approval" "got pending_approval"
+if ($automationListResult.status -eq "pending_approval") {
+    Write-Fail "automation_list: read_only tool should not require approval" "got pending_approval"
 }
-elseif ($taskListResult.success -eq $true -or $taskListResult.status -eq "succeeded" -or $taskListResult.status -eq "failed") {
-    Write-Pass "task_list: executed without approval (status: $($taskListResult.status))"
+elseif ($automationListResult.success -eq $true -or $automationListResult.status -eq "succeeded" -or $automationListResult.status -eq "failed") {
+    Write-Pass "automation_list: executed without approval (status: $($automationListResult.status))"
 }
 else {
-    Write-Fail "task_list: unexpected" "status=$($taskListResult.status), error=$($taskListResult.error)"
+    Write-Fail "automation_list: unexpected" "status=$($automationListResult.status), error=$($automationListResult.error)"
 }
 
 Start-Sleep -Seconds 2
@@ -402,78 +402,85 @@ Start-Sleep -Seconds 2
 Write-Host ""
 Write-Log "=== Autonomous Mode Execution Tests ==="
 
-# --- Test: workflow_upsert (mutating) ---
+# --- Test: automation_save workflow (mutating) ---
 Write-Host ""
-Write-Log "--- Test: workflow_upsert (autonomous) ---"
+Write-Log "--- Test: automation_save workflow (autonomous) ---"
 
-$wfUpsertArgs = @{ id = "harness-test-wf"; name = "Harness Test WF"; mode = "sequential"; steps = @(@{id="step-1";toolName="sys_info";args=@{}}) }
-$wfUpsertResult = Invoke-ToolRun -ToolName "workflow_upsert" -ToolArgs $wfUpsertArgs
+$workflowSaveArgs = @{ id = "harness-test-wf"; name = "Harness Test WF"; enabled = $true; kind = "workflow"; mode = "sequential"; steps = @(@{id="step-1";toolName="sys_info";args=@{}}) }
+$workflowSaveResult = Invoke-ToolRun -ToolName "automation_save" -ToolArgs $workflowSaveArgs
 
-if ($wfUpsertResult.status -eq "pending_approval") {
-    Write-Fail "workflow_upsert (autonomous): should not require approval" "got pending_approval"
+if ($workflowSaveResult.status -eq "pending_approval") {
+    Write-Fail "automation_save workflow (autonomous): should not require approval" "got pending_approval"
 }
-elseif ($wfUpsertResult.success -eq $true -or $wfUpsertResult.status -eq "succeeded" -or $wfUpsertResult.status -eq "failed") {
-    Write-Pass "workflow_upsert (autonomous): executed (status: $($wfUpsertResult.status))"
+elseif ($workflowSaveResult.success -eq $true -or $workflowSaveResult.status -eq "succeeded" -or $workflowSaveResult.status -eq "failed") {
+    Write-Pass "automation_save workflow (autonomous): executed (status: $($workflowSaveResult.status))"
 }
 else {
-    Write-Fail "workflow_upsert (autonomous): unexpected" "status=$($wfUpsertResult.status), error=$($wfUpsertResult.error)"
+    Write-Fail "automation_save workflow (autonomous): unexpected" "status=$($workflowSaveResult.status), error=$($workflowSaveResult.error)"
 }
 
 Start-Sleep -Seconds 2
 
-# --- Test: task_create (mutating) ---
+# --- Test: automation_save standalone task (mutating) ---
 Write-Host ""
-Write-Log "--- Test: task_create (autonomous) ---"
+Write-Log "--- Test: automation_save standalone task (autonomous) ---"
 
-$taskCreateArgs = @{ name = "harness-test-task"; type = "tool"; target = "sys_info"; cron = "0 0 31 2 *" }
-$taskCreateResult = Invoke-ToolRun -ToolName "task_create" -ToolArgs $taskCreateArgs
-
-if ($taskCreateResult.status -eq "pending_approval") {
-    Write-Fail "task_create (autonomous): should not require approval" "got pending_approval"
+$taskSaveArgs = @{
+    id = "harness-test-task"
+    name = "harness-test-task"
+    enabled = $true
+    kind = "standalone_task"
+    task = @{ target = "sys_info"; args = @{} }
+    schedule = @{ enabled = $true; cron = "0 0 31 2 *" }
 }
-elseif ($taskCreateResult.success -eq $true -or $taskCreateResult.status -eq "succeeded" -or $taskCreateResult.status -eq "failed") {
-    Write-Pass "task_create (autonomous): executed (status: $($taskCreateResult.status))"
+$taskSaveResult = Invoke-ToolRun -ToolName "automation_save" -ToolArgs $taskSaveArgs
+
+if ($taskSaveResult.status -eq "pending_approval") {
+    Write-Fail "automation_save standalone task (autonomous): should not require approval" "got pending_approval"
+}
+elseif ($taskSaveResult.success -eq $true -or $taskSaveResult.status -eq "succeeded" -or $taskSaveResult.status -eq "failed") {
+    Write-Pass "automation_save standalone task (autonomous): executed (status: $($taskSaveResult.status))"
 }
 else {
-    Write-Fail "task_create (autonomous): unexpected" "status=$($taskCreateResult.status), error=$($taskCreateResult.error)"
+    Write-Fail "automation_save standalone task (autonomous): unexpected" "status=$($taskSaveResult.status), error=$($taskSaveResult.error)"
 }
 
 Start-Sleep -Seconds 2
 
-# --- Test: workflow_delete (mutating) ---
+# --- Test: automation_delete workflow (mutating) ---
 Write-Host ""
-Write-Log "--- Test: workflow_delete (autonomous) ---"
+Write-Log "--- Test: automation_delete workflow (autonomous) ---"
 
-$wfDeleteArgs = @{ workflowId = "harness-test-wf" }
-$wfDeleteResult = Invoke-ToolRun -ToolName "workflow_delete" -ToolArgs $wfDeleteArgs
+$wfDeleteArgs = @{ automationId = "harness-test-wf" }
+$wfDeleteResult = Invoke-ToolRun -ToolName "automation_delete" -ToolArgs $wfDeleteArgs
 
 if ($wfDeleteResult.status -eq "pending_approval") {
-    Write-Fail "workflow_delete (autonomous): should not require approval" "got pending_approval"
+    Write-Fail "automation_delete workflow (autonomous): should not require approval" "got pending_approval"
 }
 elseif ($wfDeleteResult.success -eq $true -or $wfDeleteResult.status -eq "succeeded" -or $wfDeleteResult.status -eq "failed") {
-    Write-Pass "workflow_delete (autonomous): executed (status: $($wfDeleteResult.status))"
+    Write-Pass "automation_delete workflow (autonomous): executed (status: $($wfDeleteResult.status))"
 }
 else {
-    Write-Fail "workflow_delete (autonomous): unexpected" "status=$($wfDeleteResult.status), error=$($wfDeleteResult.error)"
+    Write-Fail "automation_delete workflow (autonomous): unexpected" "status=$($wfDeleteResult.status), error=$($wfDeleteResult.error)"
 }
 
 Start-Sleep -Seconds 2
 
-# --- Test: task_delete (mutating, nonexistent ID is OK) ---
+# --- Test: automation_delete standalone task (mutating) ---
 Write-Host ""
-Write-Log "--- Test: task_delete (autonomous) ---"
+Write-Log "--- Test: automation_delete standalone task (autonomous) ---"
 
-$taskDeleteArgs = @{ taskId = "harness-nonexistent-id" }
-$taskDeleteResult = Invoke-ToolRun -ToolName "task_delete" -ToolArgs $taskDeleteArgs
+$taskDeleteArgs = @{ automationId = "harness-test-task" }
+$taskDeleteResult = Invoke-ToolRun -ToolName "automation_delete" -ToolArgs $taskDeleteArgs
 
 if ($taskDeleteResult.status -eq "pending_approval") {
-    Write-Fail "task_delete (autonomous): should not require approval" "got pending_approval"
+    Write-Fail "automation_delete standalone task (autonomous): should not require approval" "got pending_approval"
 }
 elseif ($taskDeleteResult.success -eq $true -or $taskDeleteResult.status -eq "succeeded" -or $taskDeleteResult.status -eq "failed") {
-    Write-Pass "task_delete (autonomous): executed (status: $($taskDeleteResult.status))"
+    Write-Pass "automation_delete standalone task (autonomous): executed (status: $($taskDeleteResult.status))"
 }
 else {
-    Write-Fail "task_delete (autonomous): unexpected" "status=$($taskDeleteResult.status), error=$($taskDeleteResult.error)"
+    Write-Fail "automation_delete standalone task (autonomous): unexpected" "status=$($taskDeleteResult.status), error=$($taskDeleteResult.error)"
 }
 
 Start-Sleep -Seconds 2
@@ -494,169 +501,176 @@ else {
 
 Start-Sleep -Seconds 2
 
-# --- Test: workflow_upsert (mutating) should require approval ---
+# --- Test: automation_save workflow (mutating) should require approval ---
 Write-Host ""
-Write-Log "--- Test: workflow_upsert under approve_by_policy ---"
+Write-Log "--- Test: automation_save workflow under approve_by_policy ---"
 
-$wfUpsertApprovalArgs = @{ id = "harness-test-wf-2"; name = "Harness Test WF 2"; mode = "sequential"; steps = @(@{id="step-1";toolName="sys_info";args=@{}}) }
-$wfUpsertApproval = Invoke-ToolRun -ToolName "workflow_upsert" -ToolArgs $wfUpsertApprovalArgs
+$wfUpsertApprovalArgs = @{ id = "harness-test-wf-2"; name = "Harness Test WF 2"; enabled = $true; kind = "workflow"; mode = "sequential"; steps = @(@{id="step-1";toolName="sys_info";args=@{}}) }
+$wfUpsertApproval = Invoke-ToolRun -ToolName "automation_save" -ToolArgs $wfUpsertApprovalArgs
 
 if ($wfUpsertApproval.status -eq "pending_approval") {
-    Write-Pass "workflow_upsert (approve_by_policy): requires approval"
+    Write-Pass "automation_save workflow (approve_by_policy): requires approval"
     if ($wfUpsertApproval.approvalId) {
         $deny = Invoke-ApprovalDecision $wfUpsertApproval.approvalId "denied" "harness test"
-        if ($deny.success) { Write-Pass "workflow_upsert (approve_by_policy): denial accepted" }
-        else { Write-Fail "workflow_upsert (approve_by_policy): deny" ($deny.error ?? "unknown") }
+        if ($deny.success) { Write-Pass "automation_save workflow (approve_by_policy): denial accepted" }
+        else { Write-Fail "automation_save workflow (approve_by_policy): deny" ($deny.error ?? "unknown") }
     }
 }
 elseif ($wfUpsertApproval.success -eq $true) {
-    Write-Fail "workflow_upsert (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
+    Write-Fail "automation_save workflow (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
 }
 else {
-    Write-Fail "workflow_upsert (approve_by_policy): unexpected" "status=$($wfUpsertApproval.status), error=$($wfUpsertApproval.error)"
+    Write-Fail "automation_save workflow (approve_by_policy): unexpected" "status=$($wfUpsertApproval.status), error=$($wfUpsertApproval.error)"
 }
 
 Start-Sleep -Seconds 2
 
-# --- Test: workflow_delete (mutating) should require approval ---
+# --- Test: automation_delete (mutating) should require approval ---
 Write-Host ""
-Write-Log "--- Test: workflow_delete under approve_by_policy ---"
+Write-Log "--- Test: automation_delete under approve_by_policy ---"
 
-$wfDeleteApprovalArgs = @{ workflowId = "harness-test-wf" }
-$wfDeleteApproval = Invoke-ToolRun -ToolName "workflow_delete" -ToolArgs $wfDeleteApprovalArgs
+$wfDeleteApprovalArgs = @{ automationId = "harness-test-wf" }
+$wfDeleteApproval = Invoke-ToolRun -ToolName "automation_delete" -ToolArgs $wfDeleteApprovalArgs
 
 if ($wfDeleteApproval.status -eq "pending_approval") {
-    Write-Pass "workflow_delete (approve_by_policy): requires approval"
+    Write-Pass "automation_delete (approve_by_policy): requires approval"
     if ($wfDeleteApproval.approvalId) {
         $deny = Invoke-ApprovalDecision $wfDeleteApproval.approvalId "denied" "harness test"
-        if ($deny.success) { Write-Pass "workflow_delete (approve_by_policy): denial accepted" }
-        else { Write-Fail "workflow_delete (approve_by_policy): deny" ($deny.error ?? "unknown") }
+        if ($deny.success) { Write-Pass "automation_delete (approve_by_policy): denial accepted" }
+        else { Write-Fail "automation_delete (approve_by_policy): deny" ($deny.error ?? "unknown") }
     }
 }
 elseif ($wfDeleteApproval.success -eq $true) {
-    Write-Fail "workflow_delete (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
+    Write-Fail "automation_delete (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
 }
 else {
-    Write-Fail "workflow_delete (approve_by_policy): unexpected" "status=$($wfDeleteApproval.status), error=$($wfDeleteApproval.error)"
+    Write-Fail "automation_delete (approve_by_policy): unexpected" "status=$($wfDeleteApproval.status), error=$($wfDeleteApproval.error)"
 }
 
 Start-Sleep -Seconds 2
 
-# --- Test: workflow_run (mutating) should require approval ---
+# --- Test: automation_run (mutating) should require approval ---
 Write-Host ""
-Write-Log "--- Test: workflow_run under approve_by_policy ---"
+Write-Log "--- Test: automation_run under approve_by_policy ---"
 
-$wfRunApprovalArgs = @{ workflowId = "harness-test-wf" }
-$wfRunApproval = Invoke-ToolRun -ToolName "workflow_run" -ToolArgs $wfRunApprovalArgs
+$wfRunApprovalArgs = @{ automationId = "harness-test-wf" }
+$wfRunApproval = Invoke-ToolRun -ToolName "automation_run" -ToolArgs $wfRunApprovalArgs
 
 if ($wfRunApproval.status -eq "pending_approval") {
-    Write-Pass "workflow_run (approve_by_policy): requires approval"
+    Write-Pass "automation_run (approve_by_policy): requires approval"
     if ($wfRunApproval.approvalId) {
         $deny = Invoke-ApprovalDecision $wfRunApproval.approvalId "denied" "harness test"
-        if ($deny.success) { Write-Pass "workflow_run (approve_by_policy): denial accepted" }
-        else { Write-Fail "workflow_run (approve_by_policy): deny" ($deny.error ?? "unknown") }
+        if ($deny.success) { Write-Pass "automation_run (approve_by_policy): denial accepted" }
+        else { Write-Fail "automation_run (approve_by_policy): deny" ($deny.error ?? "unknown") }
     }
 }
 elseif ($wfRunApproval.success -eq $true) {
-    Write-Fail "workflow_run (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
+    Write-Fail "automation_run (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
 }
 else {
-    Write-Fail "workflow_run (approve_by_policy): unexpected" "status=$($wfRunApproval.status), error=$($wfRunApproval.error)"
+    Write-Fail "automation_run (approve_by_policy): unexpected" "status=$($wfRunApproval.status), error=$($wfRunApproval.error)"
 }
 
 Start-Sleep -Seconds 2
 
-# --- Test: task_create (mutating) should require approval ---
+# --- Test: automation_save standalone task (mutating) should require approval ---
 Write-Host ""
-Write-Log "--- Test: task_create under approve_by_policy ---"
+Write-Log "--- Test: automation_save standalone task under approve_by_policy ---"
 
-$taskCreateApprovalArgs = @{ name = "harness-test-task-2"; type = "tool"; target = "sys_info"; cron = "0 0 31 2 *" }
-$taskCreateApproval = Invoke-ToolRun -ToolName "task_create" -ToolArgs $taskCreateApprovalArgs
+$taskCreateApprovalArgs = @{
+    id = "harness-test-task-2"
+    name = "harness-test-task-2"
+    enabled = $true
+    kind = "standalone_task"
+    task = @{ target = "sys_info"; args = @{} }
+    schedule = @{ enabled = $true; cron = "0 0 31 2 *" }
+}
+$taskCreateApproval = Invoke-ToolRun -ToolName "automation_save" -ToolArgs $taskCreateApprovalArgs
 
 if ($taskCreateApproval.status -eq "pending_approval") {
-    Write-Pass "task_create (approve_by_policy): requires approval"
+    Write-Pass "automation_save standalone task (approve_by_policy): requires approval"
     if ($taskCreateApproval.approvalId) {
         $deny = Invoke-ApprovalDecision $taskCreateApproval.approvalId "denied" "harness test"
-        if ($deny.success) { Write-Pass "task_create (approve_by_policy): denial accepted" }
-        else { Write-Fail "task_create (approve_by_policy): deny" ($deny.error ?? "unknown") }
+        if ($deny.success) { Write-Pass "automation_save standalone task (approve_by_policy): denial accepted" }
+        else { Write-Fail "automation_save standalone task (approve_by_policy): deny" ($deny.error ?? "unknown") }
     }
 }
 elseif ($taskCreateApproval.success -eq $true) {
-    Write-Fail "task_create (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
+    Write-Fail "automation_save standalone task (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
 }
 else {
-    Write-Fail "task_create (approve_by_policy): unexpected" "status=$($taskCreateApproval.status), error=$($taskCreateApproval.error)"
+    Write-Fail "automation_save standalone task (approve_by_policy): unexpected" "status=$($taskCreateApproval.status), error=$($taskCreateApproval.error)"
 }
 
 Start-Sleep -Seconds 2
 
-# --- Test: task_update (mutating) should require approval ---
+# --- Test: automation_set_enabled (mutating) should require approval ---
 Write-Host ""
-Write-Log "--- Test: task_update under approve_by_policy ---"
+Write-Log "--- Test: automation_set_enabled under approve_by_policy ---"
 
-$taskUpdateApprovalArgs = @{ taskId = "harness-nonexistent-id"; name = "updated-name" }
-$taskUpdateApproval = Invoke-ToolRun -ToolName "task_update" -ToolArgs $taskUpdateApprovalArgs
+$taskUpdateApprovalArgs = @{ automationId = "harness-test-wf"; enabled = $false }
+$taskUpdateApproval = Invoke-ToolRun -ToolName "automation_set_enabled" -ToolArgs $taskUpdateApprovalArgs
 
 if ($taskUpdateApproval.status -eq "pending_approval") {
-    Write-Pass "task_update (approve_by_policy): requires approval"
+    Write-Pass "automation_set_enabled (approve_by_policy): requires approval"
     if ($taskUpdateApproval.approvalId) {
         $deny = Invoke-ApprovalDecision $taskUpdateApproval.approvalId "denied" "harness test"
-        if ($deny.success) { Write-Pass "task_update (approve_by_policy): denial accepted" }
-        else { Write-Fail "task_update (approve_by_policy): deny" ($deny.error ?? "unknown") }
+        if ($deny.success) { Write-Pass "automation_set_enabled (approve_by_policy): denial accepted" }
+        else { Write-Fail "automation_set_enabled (approve_by_policy): deny" ($deny.error ?? "unknown") }
     }
 }
 elseif ($taskUpdateApproval.success -eq $true) {
-    Write-Fail "task_update (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
+    Write-Fail "automation_set_enabled (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
 }
 else {
-    Write-Fail "task_update (approve_by_policy): unexpected" "status=$($taskUpdateApproval.status), error=$($taskUpdateApproval.error)"
+    Write-Fail "automation_set_enabled (approve_by_policy): unexpected" "status=$($taskUpdateApproval.status), error=$($taskUpdateApproval.error)"
 }
 
 Start-Sleep -Seconds 2
 
-# --- Test: task_delete (mutating) should require approval ---
+# --- Test: automation_delete standalone task (mutating) should require approval ---
 Write-Host ""
-Write-Log "--- Test: task_delete under approve_by_policy ---"
+Write-Log "--- Test: automation_delete standalone task under approve_by_policy ---"
 
-$taskDeleteApprovalArgs = @{ taskId = "harness-nonexistent-id" }
-$taskDeleteApproval = Invoke-ToolRun -ToolName "task_delete" -ToolArgs $taskDeleteApprovalArgs
+$taskDeleteApprovalArgs = @{ automationId = "harness-test-task" }
+$taskDeleteApproval = Invoke-ToolRun -ToolName "automation_delete" -ToolArgs $taskDeleteApprovalArgs
 
 if ($taskDeleteApproval.status -eq "pending_approval") {
-    Write-Pass "task_delete (approve_by_policy): requires approval"
+    Write-Pass "automation_delete standalone task (approve_by_policy): requires approval"
     if ($taskDeleteApproval.approvalId) {
         $deny = Invoke-ApprovalDecision $taskDeleteApproval.approvalId "denied" "harness test"
-        if ($deny.success) { Write-Pass "task_delete (approve_by_policy): denial accepted" }
-        else { Write-Fail "task_delete (approve_by_policy): deny" ($deny.error ?? "unknown") }
+        if ($deny.success) { Write-Pass "automation_delete standalone task (approve_by_policy): denial accepted" }
+        else { Write-Fail "automation_delete standalone task (approve_by_policy): deny" ($deny.error ?? "unknown") }
     }
 }
 elseif ($taskDeleteApproval.success -eq $true) {
-    Write-Fail "task_delete (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
+    Write-Fail "automation_delete standalone task (approve_by_policy): BYPASSED APPROVAL" "mutating tool executed without approval gate"
 }
 else {
-    Write-Fail "task_delete (approve_by_policy): unexpected" "status=$($taskDeleteApproval.status), error=$($taskDeleteApproval.error)"
+    Write-Fail "automation_delete standalone task (approve_by_policy): unexpected" "status=$($taskDeleteApproval.status), error=$($taskDeleteApproval.error)"
 }
 
 Start-Sleep -Seconds 2
 
-# --- Test: task_list (read_only) should NOT require approval ---
+# --- Test: automation_list (read_only) should NOT require approval ---
 Write-Host ""
-Write-Log "--- Test: task_list under approve_by_policy ---"
+Write-Log "--- Test: automation_list under approve_by_policy ---"
 
 $taskListApprovalArgs = @{}
-$taskListApproval = Invoke-ToolRun -ToolName "task_list" -ToolArgs $taskListApprovalArgs
+$taskListApproval = Invoke-ToolRun -ToolName "automation_list" -ToolArgs $taskListApprovalArgs
 
 if ($taskListApproval.status -eq "pending_approval") {
-    Write-Fail "task_list (approve_by_policy): incorrectly requires approval" "read_only tools should be auto-allowed"
+    Write-Fail "automation_list (approve_by_policy): incorrectly requires approval" "read_only tools should be auto-allowed"
 }
 elseif ($taskListApproval.success -eq $true -or $taskListApproval.status -eq "succeeded") {
-    Write-Pass "task_list (approve_by_policy): allowed without approval"
+    Write-Pass "automation_list (approve_by_policy): allowed without approval"
 }
 elseif ($taskListApproval.status -eq "failed" -or $taskListApproval.status -eq "error") {
     # Tool executed past approval gate -- acceptable
-    Write-Pass "task_list (approve_by_policy): tool executed without approval (status: $($taskListApproval.status))"
+    Write-Pass "automation_list (approve_by_policy): tool executed without approval (status: $($taskListApproval.status))"
 }
 else {
-    Write-Fail "task_list (approve_by_policy): unexpected" "status=$($taskListApproval.status), error=$($taskListApproval.error)"
+    Write-Fail "automation_list (approve_by_policy): unexpected" "status=$($taskListApproval.status), error=$($taskListApproval.error)"
 }
 
 Start-Sleep -Seconds 2
@@ -687,7 +701,7 @@ try {
         -Headers @{ Authorization = "Bearer $Token" } -TimeoutSec 5
 
     $jobs = $state.jobs
-    $autoJobs = $jobs | Where-Object { $_.toolName -match "workflow_upsert|workflow_delete|workflow_run|task_create|task_update|task_delete|task_list" }
+    $autoJobs = $jobs | Where-Object { $_.toolName -match "automation_save|automation_set_enabled|automation_run|automation_delete|automation_list" }
     if ($autoJobs -and $autoJobs.Count -gt 0) {
         Write-Pass "job history: $($autoJobs.Count) automation tool executions recorded"
 

@@ -29,7 +29,7 @@ Expose a safe, auditable tool-execution plane so the assistant can perform works
 - System: `sys_info`, `sys_resources`, `sys_processes`, `sys_services`
 - Memory: `memory_search`, `memory_recall`, `memory_save`, `memory_bridge_search`
 - Search: `doc_search`, `doc_search_status`, `doc_search_reindex`
-- Automation: `workflow_list`, `workflow_upsert`, `workflow_delete`, `workflow_run`, `task_list`, `task_create`, `task_update`, `task_delete` — managed via web Automations page (`#/automations`) or chat through the automation authoring compiler
+- Automation: `automation_list`, `automation_save`, `automation_set_enabled`, `automation_run`, `automation_delete` — managed via the web Automations page (`#/automations`) or chat through the automation authoring compiler
 - Policy: `update_tool_policy`
 
 ## Deferred Tool Loading
@@ -120,15 +120,15 @@ Guardian now uses a native automation authoring compiler before the generic tool
 user request
   -> compiler detects automation intent
   -> extracts schedule + hard constraints
-  -> chooses workflow vs scheduled agent task
-  -> executes workflow_upsert / task_create / task_update through ToolExecutor
+  -> chooses the canonical automation shape
+  -> executes automation_save / automation_set_enabled through ToolExecutor when needed
 ```
 
 Compiler rules:
 1. **Native automation first**: requests for Guardian workflows, automations, or scheduled tasks resolve to automation tools, not to `fs_write`, `code_create`, or `shell_safe`, unless the user explicitly asked for code.
-2. **Open-ended work defaults to `task_create(type="agent")`**: inbox review, research, triage, recurring reports, and similar runtime-adaptive tasks compile into scheduled assistant turns.
-3. **Deterministic graphs use `workflow_upsert`**: only fixed built-in tool graphs compile into workflows.
-4. **Task duplication is avoided**: scheduled agent tasks check `task_list` first so clear re-creates become updates rather than duplicates.
+2. **Open-ended work defaults to `automation_save(kind="assistant_task")`**: inbox review, research, triage, recurring reports, and similar runtime-adaptive tasks compile into assistant automations.
+3. **Deterministic graphs use `automation_save(kind="workflow")`**: only fixed built-in tool graphs compile into step-based automations.
+4. **Automation updates stay idempotent**: existing saves reuse the same automation id so clear re-creates become updates rather than duplicates.
 5. **Creation stays inside the control plane**: approvals, verification, audit, principal binding, and bounded schedule authority still run through `ToolExecutor`.
 
 The automation tools remain available to the LLM, but they are no longer the only authoring path. The compiler is the authoritative path for clear conversational automation requests.
@@ -228,7 +228,7 @@ Tool results and job records can also carry:
 - `verificationStatus`: `verified` | `unverified` | `failed`
 - `verificationEvidence`
 
-This is used for operations such as `memory_save`, `task_create`, and `task_update` so the runtime can distinguish "reported success" from "state confirmed."
+This is used for operations such as `memory_save` and `automation_save` so the runtime can distinguish "reported success" from "state confirmed."
 
 ### Direct Tool API
 

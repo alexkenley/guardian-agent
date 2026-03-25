@@ -250,12 +250,13 @@ async function startFakeProvider(kind) {
           toolCalls: [
             {
               id: 'fallback-tool-1',
-              name: 'workflow_upsert',
+              name: 'automation_save',
               arguments: JSON.stringify({
                 id: 'minute-net-scans',
                 name: 'Minute Net Scans',
-                mode: 'sequential',
                 enabled: true,
+                kind: 'workflow',
+                mode: 'sequential',
                 steps: [
                   { id: 'step-1', toolName: 'net_connections' },
                   { id: 'step-2', toolName: 'net_classify' },
@@ -421,10 +422,11 @@ guardian:
     });
 
     assert.ok(response?.metadata?.pendingApprovals?.length > 0, `Expected pending approval metadata from fallback tool call: ${JSON.stringify(response)}`);
-    assert.equal(response.metadata.pendingApprovals[0].toolName, 'workflow_upsert');
-    assert.match(response.content, /Waiting for approval to run workflow_upsert/i);
+    assert.equal(response.metadata.pendingApprovals[0].toolName, 'automation_save');
+    assert.match(response.content, /Waiting for approval to save /i);
+    assert.ok(!/automation_save/i.test(response.content), 'Should not surface the raw automation tool name in approval copy');
     assert.ok(!/I could not generate a final response/i.test(response.content), 'Should not surface degraded fallback copy when approval metadata exists');
-    assert.equal(externalProvider.getChatCalls(), 1, 'Fallback provider should stop after the pending approval turn');
+    assert.ok(externalProvider.getChatCalls() <= 1, 'Fallback provider should not loop once approval metadata exists');
 
     console.log('PASS automation fallback approval harness');
   } finally {

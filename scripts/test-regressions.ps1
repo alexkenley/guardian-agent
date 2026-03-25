@@ -347,20 +347,20 @@ if (Test-ValidResponse $resp "1.3 intel_findings: list findings") {
     [void](Test-ToolWasCalled "intel_findings|find_tools" "1.3 intel_findings: tool was called" $jobs0)
 }
 
-# --- Test 1.4: task_list (automation category) ---
+# --- Test 1.4: automation_list (automation category) ---
 Start-Sleep -Seconds 3
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "use the task_list tool to list all scheduled tasks"
-if (Test-ValidResponse $resp "1.4 task_list: list tasks") {
-    [void](Test-ToolWasCalled "task_list" "1.4 task_list: tool was called" $jobs0)
+$resp = Send-Message "use the automation_list tool to list all saved automations and schedules"
+if (Test-ValidResponse $resp "1.4 automation_list: list automations") {
+    [void](Test-ToolWasCalled "automation_list" "1.4 automation_list: tool was called" $jobs0)
 }
 
-# --- Test 1.5: workflow_list (automation category) ---
+# --- Test 1.5: automation_list starter examples (automation category) ---
 Start-Sleep -Seconds 3
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "use the workflow_list tool to list all automation workflows"
-if (Test-ValidResponse $resp "1.5 workflow_list: list workflows") {
-    [void](Test-ToolWasCalled "workflow_list" "1.5 workflow_list: tool was called" $jobs0)
+$resp = Send-Message "use the automation_list tool to show starter examples separately from saved automations"
+if (Test-ValidResponse $resp "1.5 automation_list: starter examples") {
+    [void](Test-ToolWasCalled "automation_list" "1.5 automation_list: tool was called" $jobs0)
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -373,7 +373,7 @@ Write-Log "=== Part 2: Automation LLM-Path (from test-automations-llm) ==="
 
 # --- Prerequisite: verify automation tools are registered ---
 $autoToolsAvailable = $false
-$probeResult = Invoke-ToolRun -ToolName "task_list" -ToolArgs @{}
+$probeResult = Invoke-ToolRun -ToolName "automation_list" -ToolArgs @{}
 
 if ($probeResult.success -eq $true -or $probeResult.status -eq "succeeded" -or $probeResult.status -eq "failed") {
     $autoToolsAvailable = $true
@@ -391,9 +391,9 @@ if ($autoToolsAvailable) {
 # --- Test 2.1: Tool Discovery ---
 Start-Sleep -Seconds 3
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "what automation tools do you have? use find_tools to search for workflow and task tools"
+$resp = Send-Message "what automation tools do you have? use find_tools to search for automation tools"
 if (Test-ValidResponse $resp "2.1 discovery: automation tools query") {
-    [void](Test-Contains $resp "content" "workflow|task|automat|schedule|playbook" `
+    [void](Test-Contains $resp "content" "automat|schedule|save|run|delete|enable" `
         "2.1 discovery: mentions automation concepts")
     [void](Test-ToolWasCalled "find_tools" "2.1 discovery: find_tools was invoked" $jobs0)
 }
@@ -401,79 +401,79 @@ if (Test-ValidResponse $resp "2.1 discovery: automation tools query") {
 # --- Test 2.2: Single-Tool Automation Creation ---
 Start-Sleep -Seconds 5
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "call workflow_upsert now to create an automation with these exact args: id 'regr-sys-check', name 'Regression System Check', mode 'sequential', enabled true, steps array with one step: id 'step-1', toolName 'sys_info'. Do not schedule it."
+$resp = Send-Message "call automation_save now to create an automation with these exact args: id 'regr-sys-check', name 'Regression System Check', enabled true, kind 'workflow', mode 'sequential', steps array with one step: id 'step-1', toolName 'sys_info'. Do not schedule it."
 if (Test-ValidResponse $resp "2.2 create-single: basic creation") {
-    [void](Test-Contains $resp "content" "creat|automat|sys|check|Health|playbook|workflow|upsert" `
+    [void](Test-Contains $resp "content" "creat|automat|sys|check|health|save" `
         "2.2 create-single: confirms creation")
-    [void](Test-ToolWasCalled "workflow_upsert" "2.2 create-single: workflow_upsert was called" $jobs0)
+    [void](Test-ToolWasCalled "automation_save" "2.2 create-single: automation_save was called" $jobs0)
 }
 
 # --- Test 2.3: Verify via listing ---
 Start-Sleep -Seconds 5
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "call workflow_list now to show all automations"
+$resp = Send-Message "call automation_list now to show all automations"
 if (Test-ValidResponse $resp "2.3 create-single: verify via list") {
     [void](Test-Contains $resp "content" "regr.sys|Regression|automation|workflow" `
         "2.3 create-single: automation appears in list")
-    [void](Test-ToolWasCalled "workflow_list" "2.3 create-single: workflow_list was called" $jobs0)
+    [void](Test-ToolWasCalled "automation_list" "2.3 create-single: automation_list was called" $jobs0)
 }
 
 # --- Test 2.4: Pipeline Creation (sequential) ---
 Start-Sleep -Seconds 5
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "call workflow_upsert now with these exact args: id 'regr-full-check', name 'Regression Full Check', mode 'sequential', enabled true, steps array with two steps: [{id:'step-1', toolName:'sys_resources'}, {id:'step-2', toolName:'sys_processes'}]. Execute the tool, do not just describe it."
+$resp = Send-Message "call automation_save now with these exact args: id 'regr-full-check', name 'Regression Full Check', enabled true, kind 'workflow', mode 'sequential', steps array with two steps: [{id:'step-1', toolName:'sys_resources'}, {id:'step-2', toolName:'sys_processes'}]. Execute the tool, do not just describe it."
 if (Test-ValidResponse $resp "2.4 create-pipeline: sequential creation") {
     [void](Test-Contains $resp "content" "creat|automat|sequential|full|pipeline|step" `
         "2.4 create-pipeline: confirms multi-step creation")
-    [void](Test-ToolWasCalled "workflow_upsert" "2.4 create-pipeline: workflow_upsert was called" $jobs0)
+    [void](Test-ToolWasCalled "automation_save" "2.4 create-pipeline: automation_save was called" $jobs0)
 }
 
 # --- Test 2.5: Run automation (dry run) ---
 Start-Sleep -Seconds 5
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "call workflow_run now with workflowId 'regr-sys-check' and dryRun true. Execute the tool immediately."
+$resp = Send-Message "call automation_run now with automationId 'regr-sys-check' and dryRun true. Execute the tool immediately."
 if (Test-ValidResponse $resp "2.5 run: dry run") {
     [void](Test-Contains $resp "content" "dry|run|sys|result|info|system|step|check" `
         "2.5 run: confirms dry run execution")
-    [void](Test-ToolWasCalled "workflow_run" "2.5 run: workflow_run was called" $jobs0)
+    [void](Test-ToolWasCalled "automation_run" "2.5 run: automation_run was called" $jobs0)
 }
 
 # --- Test 2.6: Run automation (real) ---
 Start-Sleep -Seconds 5
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "call workflow_run now with workflowId 'regr-sys-check' and dryRun false. Execute it for real."
+$resp = Send-Message "call automation_run now with automationId 'regr-sys-check' and dryRun false. Execute it for real."
 if (Test-ValidResponse $resp "2.6 run: real execution") {
     [void](Test-Contains $resp "content" "ran|execut|complet|result|system|success|info|step" `
         "2.6 run: confirms real execution")
-    [void](Test-ToolWasCalled "workflow_run" "2.6 run: workflow_run was called" $jobs0)
+    [void](Test-ToolWasCalled "automation_run" "2.6 run: automation_run was called" $jobs0)
 }
 
 # --- Test 2.7: Schedule creation ---
 Start-Sleep -Seconds 5
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "call task_create now with these args: name 'regr-schedule', type 'workflow', target 'regr-sys-check', cron '*/30 * * * *', enabled true. Execute the tool, do not just describe it."
+$resp = Send-Message "call automation_save now with these args: id 'regr-sys-check', name 'Regression System Check', enabled true, kind 'workflow', mode 'sequential', steps array with one step: id 'step-1', toolName 'sys_info', schedule { enabled true, cron '*/30 * * * *' }. Execute the tool, do not just describe it."
 if (Test-ValidResponse $resp "2.7 schedule: create scheduled task") {
     [void](Test-Contains $resp "content" "schedul|cron|30|task|minute|creat" `
         "2.7 schedule: confirms schedule creation")
-    [void](Test-ToolWasCalled "task_create" "2.7 schedule: task_create was called" $jobs0)
+    [void](Test-ToolWasCalled "automation_save" "2.7 schedule: automation_save was called" $jobs0)
 }
 
 # --- Test 2.8: Delete automation ---
 Start-Sleep -Seconds 5
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "delete the regr-sys-check automation using workflow_delete"
+$resp = Send-Message "delete the regr-sys-check automation using automation_delete"
 if (Test-ValidResponse $resp "2.8 delete: single automation") {
     [void](Test-Contains $resp "content" "delet|remov|regr.sys" `
         "2.8 delete: confirms deletion")
-    [void](Test-ToolWasCalled "workflow_delete" "2.8 delete: workflow_delete was called" $jobs0)
+    [void](Test-ToolWasCalled "automation_delete" "2.8 delete: automation_delete was called" $jobs0)
 }
 
 # --- Test 2.9: Delete pipeline + cleanup ---
 Start-Sleep -Seconds 3
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "delete the regr-full-check automation using workflow_delete. Also list scheduled tasks with task_list and delete any containing 'regr' using task_delete."
+$resp = Send-Message "delete the regr-full-check automation using automation_delete, then call automation_list to confirm the regression automations are gone."
 if (Test-ValidResponse $resp "2.9 delete: pipeline + task cleanup") {
-    [void](Test-ToolWasCalled "workflow_delete|task_list|task_delete" "2.9 delete: cleanup tools were called" $jobs0)
+    [void](Test-ToolWasCalled "automation_delete|automation_list" "2.9 delete: cleanup tools were called" $jobs0)
 }
 
 } # end if ($autoToolsAvailable)

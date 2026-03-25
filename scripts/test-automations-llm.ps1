@@ -368,7 +368,7 @@ Write-Host ""
 Write-Log "=== Prerequisite Check ==="
 
 $autoToolsAvailable = $false
-$probeResult = Invoke-ToolRun -ToolName "task_list" -ToolArgs @{}
+$probeResult = Invoke-ToolRun -ToolName "automation_list" -ToolArgs @{}
 
 if ($probeResult.success -eq $true -or $probeResult.status -eq "succeeded" -or $probeResult.status -eq "failed") {
     $autoToolsAvailable = $true
@@ -397,9 +397,9 @@ Write-Host ""
 Write-Log "=== Section 1: Tool Discovery ==="
 
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "what automation tools do you have? use find_tools to search for workflow and task tools"
+$resp = Send-Message "what automation tools do you have? use find_tools to search for automation tools"
 if (Test-ValidResponse $resp "discovery: automation tools query") {
-    [void](Test-Contains $resp "content" "workflow|task|automat|schedule|playbook" `
+    [void](Test-Contains $resp "content" "automat|schedule|save|run|delete|enable" `
         "discovery: mentions automation concepts")
     [void](Test-ToolWasCalled "find_tools" "discovery: find_tools was invoked" $jobs0)
 }
@@ -407,9 +407,9 @@ if (Test-ValidResponse $resp "discovery: automation tools query") {
 Start-Sleep -Seconds 3
 
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "can you list the specific automation tools available? I need to know about workflow_upsert, workflow_list, workflow_run, workflow_delete, task_create, task_list, task_update, task_delete"
+$resp = Send-Message "can you list the specific automation tools available? I need to know about automation_save, automation_list, automation_run, automation_set_enabled, automation_delete"
 if (Test-ValidResponse $resp "discovery: specific tool names") {
-    [void](Test-Contains $resp "content" "workflow_upsert|workflow_list|task_create|task_list" `
+    [void](Test-Contains $resp "content" "automation_save|automation_list|automation_run|automation_delete" `
         "discovery: mentions specific tool names")
 }
 
@@ -422,22 +422,22 @@ Write-Host ""
 Write-Log "=== Section 2: Single-Tool Automation Creation ==="
 
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "call workflow_upsert now to create an automation with these exact args: id 'sys-health-check', name 'System Health Check', mode 'sequential', enabled true, steps array with one step: id 'step-1', toolName 'sys_info'. Do not schedule it."
+$resp = Send-Message "call automation_save now to create an automation with these exact args: id 'sys-health-check', name 'System Health Check', enabled true, kind 'workflow', mode 'sequential', steps array with one step: id 'step-1', toolName 'sys_info'. Do not schedule it."
 if (Test-ValidResponse $resp "create-single: basic creation") {
-    [void](Test-Contains $resp "content" "creat|automat|sys.health|Health|playbook|workflow|upsert" `
+    [void](Test-Contains $resp "content" "creat|automat|sys.health|health|save" `
         "create-single: confirms creation")
-    [void](Test-ToolWasCalled "workflow_upsert" "create-single: workflow_upsert was called" $jobs0)
+    [void](Test-ToolWasCalled "automation_save" "create-single: automation_save was called" $jobs0)
 }
 
 Start-Sleep -Seconds 5
 
 # Verify it exists by listing
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "call workflow_list now to show all automations"
+$resp = Send-Message "call automation_list now to show all automations"
 if (Test-ValidResponse $resp "create-single: verify via list") {
     [void](Test-Contains $resp "content" "sys.health|Health.Check|health.check|automation|workflow" `
         "create-single: automation appears in list")
-    [void](Test-ToolWasCalled "workflow_list" "create-single: workflow_list was called" $jobs0)
+    [void](Test-ToolWasCalled "automation_list" "create-single: automation_list was called" $jobs0)
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -449,29 +449,29 @@ Write-Host ""
 Write-Log "=== Section 3: Pipeline Automation Creation ==="
 
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "call workflow_upsert now with these exact args: id 'full-system-check', name 'Full System Check', mode 'sequential', enabled true, steps array with two steps: [{id:'step-1', toolName:'sys_resources'}, {id:'step-2', toolName:'sys_processes'}]. Execute the tool, do not just describe it."
+$resp = Send-Message "call automation_save now with these exact args: id 'full-system-check', name 'Full System Check', enabled true, kind 'workflow', mode 'sequential', steps array with two steps: [{id:'step-1', toolName:'sys_resources'}, {id:'step-2', toolName:'sys_processes'}]. Execute the tool, do not just describe it."
 if (Test-ValidResponse $resp "create-pipeline: sequential creation") {
     [void](Test-Contains $resp "content" "creat|automat|sequential|full.system|pipeline|step" `
         "create-pipeline: confirms multi-step creation")
-    [void](Test-ToolWasCalled "workflow_upsert" "create-pipeline: workflow_upsert was called" $jobs0)
+    [void](Test-ToolWasCalled "automation_save" "create-pipeline: automation_save was called" $jobs0)
 }
 
 Start-Sleep -Seconds 3
 
 # Parallel pipeline
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "call workflow_upsert now with these exact args: id 'quick-network-check', name 'Quick Network Check', mode 'parallel', enabled true, steps [{id:'step-1', toolName:'net_interfaces'}, {id:'step-2', toolName:'net_dns_lookup', args:{host:'localhost'}}, {id:'step-3', toolName:'net_port_check', args:{host:'127.0.0.1', port:$Port}}]. Execute the tool, do not just describe it."
+$resp = Send-Message "call automation_save now with these exact args: id 'quick-network-check', name 'Quick Network Check', enabled true, kind 'workflow', mode 'parallel', steps [{id:'step-1', toolName:'net_interfaces'}, {id:'step-2', toolName:'net_dns_lookup', args:{host:'localhost'}}, {id:'step-3', toolName:'net_port_check', args:{host:'127.0.0.1', port:$Port}}]. Execute the tool, do not just describe it."
 if (Test-ValidResponse $resp "create-pipeline: parallel creation") {
     [void](Test-Contains $resp "content" "creat|automat|parallel|network|quick" `
         "create-pipeline: confirms parallel creation")
-    $toolCalled = Test-ToolWasCalled "workflow_upsert" "create-pipeline: workflow_upsert was called" $jobs0
+    $toolCalled = Test-ToolWasCalled "automation_save" "create-pipeline: automation_save was called" $jobs0
     if (-not $toolCalled) {
         # Nudge: local model may have searched tools but not executed — follow up
         Start-Sleep -Seconds 3
         $jobs0 = Get-RecentJobs
-        $resp = Send-Message "you searched for the tool but didn't execute it. Call workflow_upsert now with id 'quick-network-check', name 'Quick Network Check', mode 'parallel', enabled true, steps [{id:'step-1', toolName:'net_interfaces'}, {id:'step-2', toolName:'net_dns_lookup', args:{host:'localhost'}}, {id:'step-3', toolName:'net_port_check', args:{host:'127.0.0.1', port:$Port}}]."
+        $resp = Send-Message "you searched for the tool but didn't execute it. Call automation_save now with id 'quick-network-check', name 'Quick Network Check', enabled true, kind 'workflow', mode 'parallel', steps [{id:'step-1', toolName:'net_interfaces'}, {id:'step-2', toolName:'net_dns_lookup', args:{host:'localhost'}}, {id:'step-3', toolName:'net_port_check', args:{host:'127.0.0.1', port:$Port}}]."
         if (Test-ValidResponse $resp "create-pipeline: parallel retry") {
-            [void](Test-ToolWasCalled "workflow_upsert" "create-pipeline: workflow_upsert was called (retry)" $jobs0)
+            [void](Test-ToolWasCalled "automation_save" "create-pipeline: automation_save was called (retry)" $jobs0)
         }
     }
 }
@@ -485,20 +485,20 @@ Write-Host ""
 Write-Log "=== Section 4: Scheduling ==="
 
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "call task_create now with these args: name 'sys-health-check schedule', type 'workflow', target 'sys-health-check', cron '*/30 * * * *', enabled true. Execute the tool, do not just describe it."
+$resp = Send-Message "call automation_save now with these exact args: id 'sys-health-check', name 'System Health Check', enabled true, kind 'workflow', mode 'sequential', steps array with one step: id 'step-1', toolName 'sys_info', schedule object with enabled true and cron '*/30 * * * *'. Execute the tool, do not just describe it."
 if (Test-ValidResponse $resp "schedule: create scheduled task") {
     [void](Test-Contains $resp "content" "schedul|cron|30|task|minute|creat" `
         "schedule: confirms schedule creation")
-    [void](Test-ToolWasCalled "task_create" "schedule: task_create was called" $jobs0)
+    [void](Test-ToolWasCalled "automation_save" "schedule: automation_save was called" $jobs0)
 }
 
 Start-Sleep -Seconds 3
 
 # Verify schedule by listing tasks
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "list all scheduled tasks using the task_list tool"
-if (Test-ValidResponse $resp "schedule: verify via task_list") {
-    [void](Test-ToolWasCalled "task_list" "schedule: task_list was called" $jobs0)
+$resp = Send-Message "list all automations using automation_list and show me the schedules"
+if (Test-ValidResponse $resp "schedule: verify via automation_list") {
+    [void](Test-ToolWasCalled "automation_list" "schedule: automation_list was called" $jobs0)
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -511,29 +511,29 @@ Write-Log "=== Section 5: Tool Composition for Monitoring ==="
 
 # HTTP monitoring — the LLM should compose net_port_check + web_fetch
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "call workflow_upsert now with these exact args: id 'http-monitor-local', name 'HTTP Monitor Local', mode 'sequential', enabled true, steps [{id:'step-1', toolName:'net_port_check', args:{host:'127.0.0.1', port:$Port}}, {id:'step-2', toolName:'web_fetch', args:{url:'http://127.0.0.1:$Port/health'}}]. Execute the tool, do not just describe it."
+$resp = Send-Message "call automation_save now with these exact args: id 'http-monitor-local', name 'HTTP Monitor Local', enabled true, kind 'workflow', mode 'sequential', steps [{id:'step-1', toolName:'net_port_check', args:{host:'127.0.0.1', port:$Port}}, {id:'step-2', toolName:'web_fetch', args:{url:'http://127.0.0.1:$Port/health'}}]. Execute the tool, do not just describe it."
 if (Test-ValidResponse $resp "compose-http: HTTP monitoring pipeline") {
     [void](Test-Contains $resp "content" "creat|automat|monitor|http|sequential|pipeline|port|fetch|health" `
         "compose-http: confirms HTTP monitoring concept")
-    [void](Test-ToolWasCalled "workflow_upsert" "compose-http: workflow_upsert was called" $jobs0)
+    [void](Test-ToolWasCalled "automation_save" "compose-http: automation_save was called" $jobs0)
 }
 
 Start-Sleep -Seconds 3
 
 # Network monitoring composition
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "call workflow_upsert now with these exact args: id 'network-sweep', name 'Network Sweep', mode 'parallel', enabled true, steps [{id:'step-1', toolName:'net_ping', args:{host:'127.0.0.1'}}, {id:'step-2', toolName:'net_interfaces'}, {id:'step-3', toolName:'net_connections'}]. Execute the tool, do not just describe it."
+$resp = Send-Message "call automation_save now with these exact args: id 'network-sweep', name 'Network Sweep', enabled true, kind 'workflow', mode 'parallel', steps [{id:'step-1', toolName:'net_ping', args:{host:'127.0.0.1'}}, {id:'step-2', toolName:'net_interfaces'}, {id:'step-3', toolName:'net_connections'}]. Execute the tool, do not just describe it."
 if (Test-ValidResponse $resp "compose-net: network sweep pipeline") {
     [void](Test-Contains $resp "content" "creat|automat|network|parallel|sweep|ping|interface|connection" `
         "compose-net: confirms network monitoring concept")
-    $toolCalled = Test-ToolWasCalled "workflow_upsert" "compose-net: workflow_upsert was called" $jobs0
+    $toolCalled = Test-ToolWasCalled "automation_save" "compose-net: automation_save was called" $jobs0
     if (-not $toolCalled) {
         # Nudge: local model may have searched tools but not executed — follow up
         Start-Sleep -Seconds 3
         $jobs0 = Get-RecentJobs
-        $resp = Send-Message "you searched for the tool but didn't execute it. Call workflow_upsert now with id 'network-sweep', name 'Network Sweep', mode 'parallel', enabled true, steps [{id:'step-1', toolName:'net_ping', args:{host:'127.0.0.1'}}, {id:'step-2', toolName:'net_interfaces'}, {id:'step-3', toolName:'net_connections'}]."
+        $resp = Send-Message "you searched for the tool but didn't execute it. Call automation_save now with id 'network-sweep', name 'Network Sweep', enabled true, kind 'workflow', mode 'parallel', steps [{id:'step-1', toolName:'net_ping', args:{host:'127.0.0.1'}}, {id:'step-2', toolName:'net_interfaces'}, {id:'step-3', toolName:'net_connections'}]."
         if (Test-ValidResponse $resp "compose-net: network sweep retry") {
-            [void](Test-ToolWasCalled "workflow_upsert" "compose-net: workflow_upsert was called (retry)" $jobs0)
+            [void](Test-ToolWasCalled "automation_save" "compose-net: automation_save was called (retry)" $jobs0)
         }
     }
 }
@@ -548,31 +548,31 @@ Write-Log "=== Section 6: Running Automations ==="
 
 # Dry run
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "call workflow_run now with workflowId 'sys-health-check' and dryRun true. Execute the tool immediately."
+$resp = Send-Message "call automation_run now with automationId 'sys-health-check' and dryRun true. Execute the tool immediately."
 if (Test-ValidResponse $resp "run: dry run") {
     [void](Test-Contains $resp "content" "dry|run|sys.health|result|info|system|step|check" `
         "run: confirms dry run execution")
-    [void](Test-ToolWasCalled "workflow_run" "run: workflow_run was called for dry run" $jobs0)
+    [void](Test-ToolWasCalled "automation_run" "run: automation_run was called for dry run" $jobs0)
 }
 
 Start-Sleep -Seconds 5
 
 # Real run
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "call workflow_run now with workflowId 'sys-health-check' and dryRun false. Execute it for real."
+$resp = Send-Message "call automation_run now with automationId 'sys-health-check' and dryRun false. Execute it for real."
 if (Test-ValidResponse $resp "run: real execution") {
     [void](Test-Contains $resp "content" "ran|execut|complet|result|system|success|info|step" `
         "run: confirms real execution")
-    [void](Test-ToolWasCalled "workflow_run" "run: workflow_run was called for real run" $jobs0)
+    [void](Test-ToolWasCalled "automation_run" "run: automation_run was called for real run" $jobs0)
 }
 
 Start-Sleep -Seconds 5
 
 # Run the pipeline
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "call workflow_run with workflowId 'full-system-check' and dryRun false. Execute it now."
+$resp = Send-Message "call automation_run with automationId 'full-system-check' and dryRun false. Execute it now."
 if (Test-ValidResponse $resp "run: pipeline execution") {
-    [void](Test-ToolWasCalled "workflow_run" "run: workflow_run was called for pipeline" $jobs0)
+    [void](Test-ToolWasCalled "automation_run" "run: automation_run was called for pipeline" $jobs0)
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -583,22 +583,22 @@ Start-Sleep -Seconds 5
 Write-Host ""
 Write-Log "=== Section 7: Schedule Management ==="
 
-# First list tasks to get the ID
+# First list automations to inspect the current schedule
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "list all scheduled tasks and show me their IDs and schedules"
-if (Test-ValidResponse $resp "sched-mgmt: list tasks") {
-    [void](Test-ToolWasCalled "task_list" "sched-mgmt: task_list was called" $jobs0)
+$resp = Send-Message "list all automations and show me their IDs and schedules"
+if (Test-ValidResponse $resp "sched-mgmt: list automations") {
+    [void](Test-ToolWasCalled "automation_list" "sched-mgmt: automation_list was called" $jobs0)
 }
 
 Start-Sleep -Seconds 3
 
-# Ask to update the schedule — first list to get the ID, then update
+# Ask to update the schedule through automation_save
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "I need to change the sys-health-check schedule to every 5 minutes. First call task_list to find the task ID, then call task_update with that ID and the new schedule '*/5 * * * *'. Execute both tools now."
+$resp = Send-Message "I need to change the sys-health-check schedule to every 5 minutes. First call automation_list to confirm the automation, then call automation_save with id 'sys-health-check', name 'System Health Check', enabled true, kind 'workflow', mode 'sequential', steps [{id:'step-1', toolName:'sys_info'}], and schedule {enabled true, cron '*/5 * * * *'}. Execute both tools now."
 if (Test-ValidResponse $resp "sched-mgmt: update schedule") {
     [void](Test-Contains $resp "content" "updat|chang|schedul|5|minute|cron|task" `
         "sched-mgmt: confirms schedule update")
-    [void](Test-ToolWasCalled "task_update|task_list" "sched-mgmt: task_update or task_list was called" $jobs0)
+    [void](Test-ToolWasCalled "automation_save|automation_list" "sched-mgmt: automation_save or automation_list was called" $jobs0)
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -621,22 +621,22 @@ Start-Sleep -Seconds 3
 
 # Cron schedule from natural language — split into two explicit steps
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "do two things: 1) call workflow_upsert with id 'daily-resource-check', name 'Daily Resource Check', mode 'sequential', enabled true, steps [{id:'step-1', toolName:'sys_resources'}]. 2) then call task_create with name 'daily resource schedule', type 'workflow', target 'daily-resource-check', cron '0 9 * * *', enabled true. Execute both tools now."
+$resp = Send-Message "call automation_save to create a daily scheduled automation with these exact args: id 'daily-resource-check', name 'Daily Resource Check', enabled true, kind 'workflow', mode 'sequential', steps [{id:'step-1', toolName:'sys_resources'}], schedule {enabled true, cron '0 9 * * *'}. Execute the tool now."
 if (Test-ValidResponse $resp "natural: daily schedule creation") {
     [void](Test-Contains $resp "content" "creat|automat|daily|9|schedul|resource|workflow|task" `
         "natural: confirms daily scheduled automation")
-    [void](Test-ToolWasCalled "workflow_upsert|task_create" "natural: automation tools were called" $jobs0)
+    [void](Test-ToolWasCalled "automation_save" "natural: automation_save was called" $jobs0)
 }
 
 Start-Sleep -Seconds 5
 
 # Weekday-only schedule
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "do two things: 1) call workflow_upsert with id 'weekday-net-check', name 'Weekday Net Check', mode 'sequential', enabled true, steps [{id:'step-1', toolName:'net_interfaces'}]. 2) then call task_create with name 'weekday net schedule', type 'workflow', target 'weekday-net-check', cron '0 8 * * 1-5', enabled true. Execute both now."
+$resp = Send-Message "call automation_save to create a weekday scheduled automation with these exact args: id 'weekday-net-check', name 'Weekday Net Check', enabled true, kind 'workflow', mode 'sequential', steps [{id:'step-1', toolName:'net_interfaces'}], schedule {enabled true, cron '0 8 * * 1-5'}. Execute the tool now."
 if (Test-ValidResponse $resp "natural: weekday schedule") {
     [void](Test-Contains $resp "content" "creat|automat|weekday|schedul|8" `
         "natural: confirms weekday scheduled automation")
-    [void](Test-ToolWasCalled "workflow_upsert|task_create" "natural: automation tools were called" $jobs0)
+    [void](Test-ToolWasCalled "automation_save" "natural: automation_save was called" $jobs0)
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -652,15 +652,15 @@ $resp = Send-Message "show me all my automations and their current status"
 if (Test-ValidResponse $resp "list: show all automations") {
     [void](Test-Contains $resp "content" "sys.health|full.system|http.monitor|network|automat" `
         "list: shows automation names")
-    [void](Test-ToolWasCalled "workflow_list|task_list" "list: listing tools were called" $jobs0)
+    [void](Test-ToolWasCalled "automation_list" "list: automation_list was called" $jobs0)
 }
 
 Start-Sleep -Seconds 3
 
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "how many automations do I have? list them with workflow_list."
+$resp = Send-Message "how many automations do I have? list them with automation_list."
 if (Test-ValidResponse $resp "list: count automations") {
-    [void](Test-ToolWasCalled "workflow_list" "list: workflow_list was called" $jobs0)
+    [void](Test-ToolWasCalled "automation_list" "list: automation_list was called" $jobs0)
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -673,11 +673,11 @@ Write-Log "=== Section 10: Deletion ==="
 
 # Delete a single-tool automation
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "delete the sys-health-check automation using workflow_delete"
+$resp = Send-Message "delete the sys-health-check automation using automation_delete"
 if (Test-ValidResponse $resp "delete: single automation") {
     [void](Test-Contains $resp "content" "delet|remov|sys.health" `
         "delete: confirms deletion")
-    [void](Test-ToolWasCalled "workflow_delete" "delete: workflow_delete was called" $jobs0)
+    [void](Test-ToolWasCalled "automation_delete" "delete: automation_delete was called" $jobs0)
 }
 
 Start-Sleep -Seconds 3
@@ -686,7 +686,7 @@ Start-Sleep -Seconds 3
 $jobs0 = Get-RecentJobs
 $resp = Send-Message "delete the full-system-check automation"
 if (Test-ValidResponse $resp "delete: pipeline automation") {
-    [void](Test-ToolWasCalled "workflow_delete" "delete: workflow_delete was called for pipeline" $jobs0)
+    [void](Test-ToolWasCalled "automation_delete" "delete: automation_delete was called for pipeline" $jobs0)
 }
 
 Start-Sleep -Seconds 3
@@ -695,25 +695,25 @@ Start-Sleep -Seconds 3
 $jobs0 = Get-RecentJobs
 $resp = Send-Message "delete the http-monitor-local automation"
 if (Test-ValidResponse $resp "delete: http monitor automation") {
-    [void](Test-ToolWasCalled "workflow_delete" "delete: workflow_delete was called for http monitor" $jobs0)
+    [void](Test-ToolWasCalled "automation_delete" "delete: automation_delete was called for http monitor" $jobs0)
 }
 
 Start-Sleep -Seconds 3
 
 # Delete remaining test automations
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "delete all remaining test automations: quick-network-check, network-sweep, daily-resource-check, weekday-net-check. Use workflow_delete for each one."
+$resp = Send-Message "delete all remaining test automations: quick-network-check, network-sweep, daily-resource-check, weekday-net-check. Use automation_delete for each one."
 if (Test-ValidResponse $resp "delete: cleanup remaining") {
-    [void](Test-ToolWasCalled "workflow_delete" "delete: workflow_delete was called for cleanup" $jobs0)
+    [void](Test-ToolWasCalled "automation_delete" "delete: automation_delete was called for cleanup" $jobs0)
 }
 
 Start-Sleep -Seconds 3
 
-# Clean up any remaining scheduled tasks
+# Clean up any remaining saved automations from the harness run
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "list all scheduled tasks with task_list. If there are any test tasks remaining (with names containing 'harness' or 'health' or 'resource' or 'net-check'), delete them with task_delete."
+$resp = Send-Message "list all automations with automation_list. If there are any harness test automations remaining, delete them with automation_delete."
 if (Test-ValidResponse $resp "delete: cleanup tasks") {
-    [void](Test-ToolWasCalled "task_list|task_delete" "delete: task cleanup tools were called" $jobs0)
+    [void](Test-ToolWasCalled "automation_list|automation_delete" "delete: automation cleanup tools were called" $jobs0)
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -725,7 +725,7 @@ Write-Log "=== Section 11: Edge Cases ==="
 
 # Non-existent automation
 $jobs0 = Get-RecentJobs
-$resp = Send-Message "run the automation called 'this-does-not-exist-xyz' using workflow_run"
+$resp = Send-Message "run the automation called 'this-does-not-exist-xyz' using automation_run"
 if (Test-ValidResponse $resp "edge: non-existent automation") {
     [void](Test-Contains $resp "content" "not found|doesn.t exist|error|fail|no.*automat|no.*workflow|unknown|could not|can.t be run" `
         "edge: reports automation not found")
@@ -753,7 +753,7 @@ try {
 
     $jobs = $state.jobs
     $autoJobs = $jobs | Where-Object {
-        $_.toolName -match "workflow_upsert|workflow_delete|workflow_run|workflow_list|task_create|task_list|task_update|task_delete|find_tools"
+        $_.toolName -match "automation_save|automation_delete|automation_run|automation_list|automation_set_enabled|find_tools"
     }
     if ($autoJobs -and $autoJobs.Count -gt 0) {
         Write-Pass "job history: $($autoJobs.Count) automation-related tool executions recorded"
@@ -762,7 +762,7 @@ try {
         Write-Pass "job history: tools used: $toolNames"
 
         # Check for key tools that should have been called
-        $expectedTools = @("workflow_upsert", "workflow_list", "workflow_run", "workflow_delete", "task_create", "task_list")
+        $expectedTools = @("automation_save", "automation_list", "automation_run", "automation_delete")
         $missingTools = @()
         foreach ($tool in $expectedTools) {
             $found = $autoJobs | Where-Object { $_.toolName -eq $tool }

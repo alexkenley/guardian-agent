@@ -36,6 +36,15 @@ describe('pending approval copy', () => {
     ])).toBe('Waiting for approval to write S:\\Development\\test23.txt.');
   });
 
+  it('formats automation approvals without leaking raw tool names', () => {
+    expect(formatPendingApprovalMessage([
+      {
+        toolName: 'automation_save',
+        argsPreview: '{"id":"minute-net-scans","name":"Minute Net Scans","kind":"workflow"}',
+      },
+    ])).toBe('Waiting for approval to save automation Minute Net Scans.');
+  });
+
   it('formats multiple approvals as a short action list', () => {
     expect(formatPendingApprovalMessage([
       {
