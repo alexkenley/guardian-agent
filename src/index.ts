@@ -3076,7 +3076,7 @@ class ChatAgent extends BaseAgent {
         const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
         this.setPendingApprovals(userKey, [...existingIds, approvalId]);
       },
-      onPendingApproval: ({ approvalId, toolName, automationName, artifactLabel, verb }) => {
+      onPendingApproval: ({ approvalId, automationName, artifactLabel, verb }) => {
         this.setApprovalFollowUp(approvalId, {
           approved: `I ${verb} the ${artifactLabel} '${automationName}'.`,
           denied: `I did not ${verb === 'updated' ? 'update' : 'create'} the ${artifactLabel} '${automationName}'.`,

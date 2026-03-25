@@ -107,9 +107,9 @@ function cloneSavedCatalogEntry(
   return {
     success: taskResult.success,
     message: taskResult.success
-      ? `Cloned '${entry.name}' as '${taskResult.task?.name || cloneName}'.`
+      ? `Created copy '${taskResult.task?.name || cloneName}' from '${entry.name}'.`
       : taskResult.message || `Could not clone '${entry.name}'.`,
-    action: taskResult.success ? 'cloned' : undefined,
+    action: taskResult.success ? 'copied' : undefined,
     automationId: taskResult.task?.id,
     automationName: taskResult.task?.name || cloneName,
   };

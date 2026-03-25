@@ -48,7 +48,16 @@ import type {
 import { TOOL_CATEGORIES, BUILTIN_TOOL_CATEGORIES } from './types.js';
 import { MCPClientManager } from './mcp-client.js';
 import { HybridBrowserService, type HybridBrowserMode } from './browser-hybrid.js';
-import { DEFAULT_TOOL_ALLOWED_COMMANDS, type AssistantCloudConfig, type AssistantNetworkConfig, type BrowserConfig, type WebSearchConfig } from '../config/types.js';
+import {
+  DEFAULT_TOOL_ALLOWED_COMMANDS,
+  type AssistantCloudConfig,
+  type AssistantNetworkConfig,
+  type AutomationArtifactPersistenceMode,
+  type AutomationOutputHandlingConfig,
+  type AutomationOutputRoutingMode,
+  type BrowserConfig,
+  type WebSearchConfig,
+} from '../config/types.js';
 import type { ConversationService } from '../runtime/conversation.js';
 import type { AgentMemoryStore } from '../runtime/agent-memory-store.js';
 import type { CodeSessionStore } from '../runtime/code-sessions.js';
@@ -17514,11 +17523,7 @@ function normalizeAutomationSaveInput(
 
   const outputHandling = isRecord(input.outputHandling) ? input.outputHandling : null;
   if (outputHandling) {
-    normalized.outputHandling = {
-      ...(asString(outputHandling.notify).trim() ? { notify: asString(outputHandling.notify).trim() as AutomationSaveInput['outputHandling']['notify'] } : {}),
-      ...(asString(outputHandling.sendToSecurity).trim() ? { sendToSecurity: asString(outputHandling.sendToSecurity).trim() as AutomationSaveInput['outputHandling']['sendToSecurity'] } : {}),
-      ...(asString(outputHandling.persistArtifacts).trim() ? { persistArtifacts: asString(outputHandling.persistArtifacts).trim() as AutomationSaveInput['outputHandling']['persistArtifacts'] } : {}),
-    };
+    normalized.outputHandling = normalizeAutomationOutputHandlingInput(outputHandling);
   }
 
   if (kind === 'workflow') {
@@ -17551,6 +17556,31 @@ function normalizeAutomationSaveInput(
     ...(asString(task.llmProvider).trim() ? { llmProvider: asString(task.llmProvider).trim() } : {}),
   };
   return normalized;
+}
+
+function normalizeAutomationOutputHandlingInput(
+  input: Record<string, unknown>,
+): AutomationOutputHandlingConfig {
+  const notify = asString(input.notify).trim();
+  const sendToSecurity = asString(input.sendToSecurity).trim();
+  const persistArtifacts = asString(input.persistArtifacts).trim();
+  return {
+    notify: normalizeAutomationOutputRoutingMode(notify),
+    sendToSecurity: normalizeAutomationOutputRoutingMode(sendToSecurity),
+    persistArtifacts: normalizeAutomationArtifactPersistenceMode(persistArtifacts),
+  };
+}
+
+function normalizeAutomationOutputRoutingMode(
+  value: string,
+): AutomationOutputRoutingMode {
+  return value === 'warn_critical' || value === 'all' ? value : 'off';
+}
+
+function normalizeAutomationArtifactPersistenceMode(
+  value: string,
+): AutomationArtifactPersistenceMode {
+  return value === 'run_history_plus_memory' ? value : 'run_history_only';
 }
 
 function inferMCPGuardAction(def: ToolDefinition): { type: string; params?: Record<string, unknown> } | null {

@@ -384,6 +384,29 @@ async function runTool(baseUrl, token, toolName, args = {}) {
   });
 }
 
+async function listAutomations(baseUrl, token) {
+  const result = await runTool(baseUrl, token, 'automation_list');
+  assert.equal(result.success, true, `Expected automation_list to succeed: ${JSON.stringify(result)}`);
+  return result.output?.automations ?? [];
+}
+
+async function listAutomationHistory(baseUrl, token) {
+  const result = await requestJson(baseUrl, token, 'GET', '/api/automations/history');
+  assert.ok(Array.isArray(result), `Expected automation history array: ${JSON.stringify(result)}`);
+  return result;
+}
+
+async function runAutomationWithApproval(baseUrl, token, automationId) {
+  const result = await runTool(baseUrl, token, 'automation_run', { automationId });
+  if (result?.status === 'pending_approval' && result.approvalId) {
+    const decision = await approve(baseUrl, token, result.approvalId);
+    assert.equal(decision.success, true, `Expected automation_run approval to succeed: ${JSON.stringify(decision)}`);
+    return { approved: true, decision };
+  }
+  assert.equal(result.success, true, `Expected automation_run to succeed: ${JSON.stringify(result)}`);
+  return { approved: false, result };
+}
+
 async function sendMessage(baseUrl, token, content) {
   return requestJson(baseUrl, token, 'POST', '/api/message', {
     agentId: 'default',
@@ -509,37 +532,35 @@ guardian:
     const leadPrompt = `Build a weekday lead research workflow that reads ${JSON.stringify(companiesPath)}, researches each company’s website and public presence, scores fit from 1-5 using a simple B2B SaaS ICP, writes results to ${JSON.stringify(outputCsvPath)}, and creates ${JSON.stringify(summaryPath)}. Use built-in tools only. Do not create any shell script, Python script, or code file.`;
     const first = await sendMessage(baseUrl, token, leadPrompt);
     assert.ok(first?.metadata?.pendingApprovals?.length > 0, `Expected pending approval metadata from automation compiler: ${JSON.stringify(first)}`);
-    assert.equal(first.metadata.pendingApprovals[0].toolName, 'task_create');
+    assert.equal(first.metadata.pendingApprovals[0].toolName, 'automation_save');
     assert.match(first.content, /native Guardian scheduled assistant task/i);
 
     const approveCreate = await approve(baseUrl, token, first.metadata.pendingApprovals[0].id);
     assert.equal(approveCreate.success, true);
 
     await waitForAssertion(async () => {
-      const tasks = await runTool(baseUrl, token, 'task_list');
-      assert.equal(tasks.success, true);
-      const entries = tasks.output?.tasks ?? [];
-      const leadTask = entries.find((task) => task.name === 'Weekday Lead Research');
-      assert.ok(leadTask, `Expected Weekday Lead Research task, got ${JSON.stringify(entries)}`);
-      assert.equal(leadTask.type, 'agent');
-      assert.equal(leadTask.cron, '0 9 * * 1-5');
-      assert.match(String(leadTask.description || ''), /weekday lead research workflow/i);
-      assert.doesNotMatch(String(leadTask.description || ''), /you are executing a scheduled guardian automation/i);
-      return leadTask;
+      const entries = await listAutomations(baseUrl, token);
+      const leadAutomation = entries.find((entry) => entry.name === 'Weekday Lead Research');
+      assert.ok(leadAutomation, `Expected Weekday Lead Research automation, got ${JSON.stringify(entries)}`);
+      assert.equal(leadAutomation.kind, 'assistant_task');
+      assert.equal(leadAutomation.task?.type, 'agent');
+      assert.equal(leadAutomation.task?.cron, '0 9 * * 1-5');
+      assert.match(String(leadAutomation.description || ''), /weekday lead research workflow/i);
+      assert.doesNotMatch(String(leadAutomation.description || ''), /you are executing a scheduled guardian automation/i);
+      return leadAutomation;
     });
 
     const second = await sendMessage(baseUrl, token, leadPrompt);
     assert.ok(second?.metadata?.pendingApprovals?.length > 0, `Expected update approval metadata on second automation request: ${JSON.stringify(second)}`);
-    assert.equal(second.metadata.pendingApprovals[0].toolName, 'task_update');
+    assert.equal(second.metadata.pendingApprovals[0].toolName, 'automation_save');
 
     const approveUpdate = await approve(baseUrl, token, second.metadata.pendingApprovals[0].id);
     assert.equal(approveUpdate.success, true);
 
     await waitForAssertion(async () => {
-      const tasks = await runTool(baseUrl, token, 'task_list');
-      const entries = tasks.output?.tasks ?? [];
-      const leadTasks = entries.filter((task) => task.name === 'Weekday Lead Research');
-      assert.equal(leadTasks.length, 1, `Expected deduped lead-research task, got ${JSON.stringify(entries)}`);
+      const entries = await listAutomations(baseUrl, token);
+      const leadAutomations = entries.filter((entry) => entry.name === 'Weekday Lead Research');
+      assert.equal(leadAutomations.length, 1, `Expected deduped lead-research automation, got ${JSON.stringify(entries)}`);
     });
 
     const remediationPrompt = 'Create a daily 7:30 AM automation that checks my high-priority inbox, summarizes anything actionable, drafts replies, and asks for approval before sending anything.';
@@ -552,7 +573,7 @@ guardian:
       assert.equal(approveRemediation.success, true);
       assert.ok(approveRemediation.continuedResponse, `Expected continued automation response after remediation approval: ${JSON.stringify(approveRemediation)}`);
       assert.ok(Array.isArray(approveRemediation.continuedResponse.metadata?.pendingApprovals));
-      assert.equal(approveRemediation.continuedResponse.metadata.pendingApprovals[0].toolName, 'task_create');
+      assert.equal(approveRemediation.continuedResponse.metadata.pendingApprovals[0].toolName, 'automation_save');
 
       const approveRemediationCreate = await approve(
         baseUrl,
@@ -562,10 +583,9 @@ guardian:
       assert.equal(approveRemediationCreate.success, true);
 
       await waitForAssertion(async () => {
-        const tasks = await runTool(baseUrl, token, 'task_list');
-        const entries = tasks.output?.tasks ?? [];
-        const remediationTask = entries.find((task) => task.cron === '30 7 * * *' && String(task.name || '').includes('Inbox'));
-        assert.ok(remediationTask, `Expected remediation-created scheduled task, got ${JSON.stringify(entries)}`);
+        const entries = await listAutomations(baseUrl, token);
+        const remediationAutomation = entries.find((entry) => entry.task?.cron === '30 7 * * *' && String(entry.name || '').includes('Inbox'));
+        assert.ok(remediationAutomation, `Expected remediation-created automation, got ${JSON.stringify(entries)}`);
       });
     } else {
       assert.match(String(remediation?.content || ''), /couldn't create/i);
@@ -590,7 +610,7 @@ guardian:
       );
       assert.equal(
         approveMissingParentRemediation.continuedResponse.metadata.pendingApprovals[0].toolName,
-        'task_create',
+        'automation_save',
       );
 
       const approveMissingParentCreate = await approve(
@@ -601,11 +621,10 @@ guardian:
       assert.equal(approveMissingParentCreate.success, true);
 
       await waitForAssertion(async () => {
-        const tasks = await runTool(baseUrl, token, 'task_list');
-        const entries = tasks.output?.tasks ?? [];
-        const missingParentTask = entries.find((task) => task.cron === '0 8 * * *' && task.name === 'Daily Lead Summary');
-        assert.ok(missingParentTask, `Expected missing-parent scheduled task, got ${JSON.stringify(entries)}`);
-        assert.match(String(missingParentTask.description || ''), /d:\\reports\\lead-summary\.md/i);
+        const entries = await listAutomations(baseUrl, token);
+        const missingParentAutomation = entries.find((entry) => entry.task?.cron === '0 8 * * *' && entry.name === 'Daily Lead Summary');
+        assert.ok(missingParentAutomation, `Expected missing-parent automation, got ${JSON.stringify(entries)}`);
+        assert.match(String(missingParentAutomation.description || ''), /d:\\reports\\lead-summary\.md/i);
       });
     } else {
       assert.match(String(missingParentResponse?.content || ''), /couldn't create/i);
@@ -617,20 +636,19 @@ guardian:
     const workflowPrompt = 'Create a Guardian workflow that runs net_ping and then web_fetch every 15 minutes in sequential mode.';
     const workflowResponse = await sendMessage(baseUrl, token, workflowPrompt);
     assert.ok(workflowResponse?.metadata?.pendingApprovals?.length > 0, `Expected workflow approval metadata: ${JSON.stringify(workflowResponse)}`);
-    assert.equal(workflowResponse.metadata.pendingApprovals[0].toolName, 'workflow_upsert');
+    assert.equal(workflowResponse.metadata.pendingApprovals[0].toolName, 'automation_save');
 
     const approveWorkflow = await approve(baseUrl, token, workflowResponse.metadata.pendingApprovals[0].id);
     assert.equal(approveWorkflow.success, true);
 
     await waitForAssertion(async () => {
-      const workflows = await runTool(baseUrl, token, 'workflow_list');
-      assert.equal(workflows.success, true);
-      const entries = workflows.output?.workflows ?? [];
-      const compiled = entries.find((workflow) => workflow.id === 'net-ping-web-fetch-workflow');
+      const entries = await listAutomations(baseUrl, token);
+      const compiled = entries.find((entry) => entry.id === 'net-ping-web-fetch-workflow');
       assert.ok(compiled, `Expected compiled workflow, got ${JSON.stringify(entries)}`);
-      assert.equal(compiled.schedule, '*/15 * * * *');
-      assert.equal(Array.isArray(compiled.steps), true);
-      assert.equal(compiled.steps.length, 2);
+      assert.equal(compiled.kind, 'workflow');
+      assert.equal(compiled.task?.cron, '*/15 * * * *');
+      assert.equal(Array.isArray(compiled.workflow?.steps), true);
+      assert.equal(compiled.workflow.steps.length, 2);
     });
 
     await new Promise((resolve) => setTimeout(resolve, 6_000));
@@ -640,7 +658,7 @@ guardian:
       instructionWorkflowResponse?.metadata?.pendingApprovals?.length > 0,
       `Expected instruction-workflow approval metadata: ${JSON.stringify(instructionWorkflowResponse)}`,
     );
-    assert.equal(instructionWorkflowResponse.metadata.pendingApprovals[0].toolName, 'workflow_upsert');
+    assert.equal(instructionWorkflowResponse.metadata.pendingApprovals[0].toolName, 'automation_save');
 
     const approveInstructionWorkflow = await approve(
       baseUrl,
@@ -650,16 +668,14 @@ guardian:
     assert.equal(approveInstructionWorkflow.success, true);
 
     await waitForAssertion(async () => {
-      const workflows = await runTool(baseUrl, token, 'workflow_list');
-      assert.equal(workflows.success, true);
-      const entries = workflows.output?.workflows ?? [];
-      const compiled = entries.find((workflow) => workflow.id === 'lead-research-summary-workflow');
+      const entries = await listAutomations(baseUrl, token);
+      const compiled = entries.find((entry) => entry.id === 'lead-research-summary-workflow');
       assert.ok(compiled, `Expected instruction-compiled workflow, got ${JSON.stringify(entries)}`);
-      assert.equal(Array.isArray(compiled.steps), true);
-      assert.equal(compiled.steps.length, 3);
-      assert.equal(compiled.steps[0]?.toolName, 'fs_read');
-      assert.equal(compiled.steps[1]?.type, 'instruction');
-      assert.equal(compiled.steps[2]?.toolName, 'fs_write');
+      assert.equal(Array.isArray(compiled.workflow?.steps), true);
+      assert.equal(compiled.workflow.steps.length, 3);
+      assert.equal(compiled.workflow.steps[0]?.toolName, 'fs_read');
+      assert.equal(compiled.workflow.steps[1]?.type, 'instruction');
+      assert.equal(compiled.workflow.steps[2]?.toolName, 'fs_write');
     });
 
     await new Promise((resolve) => setTimeout(resolve, 6_000));
@@ -669,28 +685,31 @@ guardian:
       browserReadResponse?.metadata?.pendingApprovals?.length > 0,
       `Expected browser-read approval metadata: ${JSON.stringify(browserReadResponse)}`,
     );
-    assert.equal(browserReadResponse.metadata.pendingApprovals[0].toolName, 'workflow_upsert');
+    assert.equal(browserReadResponse.metadata.pendingApprovals[0].toolName, 'automation_save');
 
     const approveBrowserRead = await approve(baseUrl, token, browserReadResponse.metadata.pendingApprovals[0].id);
     assert.equal(approveBrowserRead.success, true);
 
     await waitForAssertion(async () => {
-      const workflows = await runTool(baseUrl, token, 'workflow_list');
-      const entries = workflows.output?.workflows ?? [];
-      const compiled = entries.find((workflow) => workflow.id === 'browser-read-smoke');
+      const entries = await listAutomations(baseUrl, token);
+      const compiled = entries.find((entry) => entry.id === 'browser-read-smoke');
       assert.ok(compiled, `Expected Browser Read Smoke workflow, got ${JSON.stringify(entries)}`);
       assert.equal(compiled.enabled, true);
-      assert.equal(Array.isArray(compiled.steps), true);
-      assert.equal(compiled.steps.length, 3);
-      assert.equal(compiled.steps[0]?.toolName, 'browser_navigate');
-      assert.equal(compiled.steps[1]?.toolName, 'browser_read');
-      assert.equal(compiled.steps[2]?.toolName, 'browser_links');
+      assert.equal(Array.isArray(compiled.workflow?.steps), true);
+      assert.equal(compiled.workflow.steps.length, 3);
+      assert.equal(compiled.workflow.steps[0]?.toolName, 'browser_navigate');
+      assert.equal(compiled.workflow.steps[1]?.toolName, 'browser_read');
+      assert.equal(compiled.workflow.steps[2]?.toolName, 'browser_links');
     });
 
-    const browserReadRun = await runTool(baseUrl, token, 'workflow_run', { workflowId: 'browser-read-smoke' });
-    assert.equal(browserReadRun.success, true, `Expected Browser Read Smoke run to succeed: ${JSON.stringify(browserReadRun)}`);
-    assert.equal(browserReadRun.output?.success, true, `Expected Browser Read Smoke wrapper output to succeed: ${JSON.stringify(browserReadRun)}`);
-    assert.equal(browserReadRun.output?.run?.status, 'succeeded', `Expected Browser Read Smoke run status to be succeeded: ${JSON.stringify(browserReadRun)}`);
+    await runAutomationWithApproval(baseUrl, token, 'browser-read-smoke');
+    await waitForAssertion(async () => {
+      const history = await listAutomationHistory(baseUrl, token);
+      const entry = history.find((item) => item.name === 'Browser Read Smoke');
+      assert.ok(entry, `Expected Browser Read Smoke history entry, got ${JSON.stringify(history)}`);
+      assert.equal(entry.status, 'succeeded');
+      assert.equal(entry.source, 'workflow');
+    });
 
     await new Promise((resolve) => setTimeout(resolve, 6_000));
     const browserExtractPrompt = 'Create an automation called Browser Extract Smoke. When I run it, it should open https://github.com, extract structured metadata and a semantic outline, and show me the result. Do not schedule it.';
@@ -699,27 +718,30 @@ guardian:
       browserExtractResponse?.metadata?.pendingApprovals?.length > 0,
       `Expected browser-extract approval metadata: ${JSON.stringify(browserExtractResponse)}`,
     );
-    assert.equal(browserExtractResponse.metadata.pendingApprovals[0].toolName, 'workflow_upsert');
+    assert.equal(browserExtractResponse.metadata.pendingApprovals[0].toolName, 'automation_save');
 
     const approveBrowserExtract = await approve(baseUrl, token, browserExtractResponse.metadata.pendingApprovals[0].id);
     assert.equal(approveBrowserExtract.success, true);
 
     await waitForAssertion(async () => {
-      const workflows = await runTool(baseUrl, token, 'workflow_list');
-      const entries = workflows.output?.workflows ?? [];
-      const compiled = entries.find((workflow) => workflow.id === 'browser-extract-smoke');
+      const entries = await listAutomations(baseUrl, token);
+      const compiled = entries.find((entry) => entry.id === 'browser-extract-smoke');
       assert.ok(compiled, `Expected Browser Extract Smoke workflow, got ${JSON.stringify(entries)}`);
       assert.equal(compiled.enabled, true);
-      assert.equal(Array.isArray(compiled.steps), true);
-      assert.equal(compiled.steps.length, 2);
-      assert.equal(compiled.steps[0]?.toolName, 'browser_navigate');
-      assert.equal(compiled.steps[1]?.toolName, 'browser_extract');
+      assert.equal(Array.isArray(compiled.workflow?.steps), true);
+      assert.equal(compiled.workflow.steps.length, 2);
+      assert.equal(compiled.workflow.steps[0]?.toolName, 'browser_navigate');
+      assert.equal(compiled.workflow.steps[1]?.toolName, 'browser_extract');
     });
 
-    const browserExtractRun = await runTool(baseUrl, token, 'workflow_run', { workflowId: 'browser-extract-smoke' });
-    assert.equal(browserExtractRun.success, true, `Expected Browser Extract Smoke run to succeed: ${JSON.stringify(browserExtractRun)}`);
-    assert.equal(browserExtractRun.output?.success, true, `Expected Browser Extract Smoke wrapper output to succeed: ${JSON.stringify(browserExtractRun)}`);
-    assert.equal(browserExtractRun.output?.run?.status, 'succeeded', `Expected Browser Extract Smoke run status to be succeeded: ${JSON.stringify(browserExtractRun)}`);
+    await runAutomationWithApproval(baseUrl, token, 'browser-extract-smoke');
+    await waitForAssertion(async () => {
+      const history = await listAutomationHistory(baseUrl, token);
+      const entry = history.find((item) => item.name === 'Browser Extract Smoke');
+      assert.ok(entry, `Expected Browser Extract Smoke history entry, got ${JSON.stringify(history)}`);
+      assert.equal(entry.status, 'succeeded');
+      assert.equal(entry.source, 'workflow');
+    });
 
     await new Promise((resolve) => setTimeout(resolve, 6_000));
     const formPrompt = 'Create an automation called HTTPBin Form Smoke Test. When I run it, it should open https://httpbin.org/forms/post, list the inputs, and type "automation smoke test" into the first text field. Do not schedule it.';
@@ -728,23 +750,22 @@ guardian:
       formResponse?.metadata?.pendingApprovals?.length > 0,
       `Expected browser-form approval metadata: ${JSON.stringify(formResponse)}`,
     );
-    assert.equal(formResponse.metadata.pendingApprovals[0].toolName, 'workflow_upsert');
+    assert.equal(formResponse.metadata.pendingApprovals[0].toolName, 'automation_save');
 
     const approveForm = await approve(baseUrl, token, formResponse.metadata.pendingApprovals[0].id);
     assert.equal(approveForm.success, true);
 
     await waitForAssertion(async () => {
-      const workflows = await runTool(baseUrl, token, 'workflow_list');
-      const entries = workflows.output?.workflows ?? [];
-      const compiled = entries.find((workflow) => workflow.id === 'httpbin-form-smoke-test');
+      const entries = await listAutomations(baseUrl, token);
+      const compiled = entries.find((entry) => entry.id === 'httpbin-form-smoke-test');
       assert.ok(compiled, `Expected HTTPBin Form Smoke Test workflow, got ${JSON.stringify(entries)}`);
       assert.equal(compiled.enabled, true);
-      assert.equal(Array.isArray(compiled.steps), true);
-      assert.equal(compiled.steps.length, 4);
-      assert.equal(compiled.steps[0]?.toolName, 'browser_navigate');
-      assert.equal(compiled.steps[1]?.toolName, 'browser_state');
-      assert.equal(compiled.steps[2]?.type, 'instruction');
-      assert.equal(compiled.steps[3]?.toolName, 'browser_act');
+      assert.equal(Array.isArray(compiled.workflow?.steps), true);
+      assert.equal(compiled.workflow.steps.length, 4);
+      assert.equal(compiled.workflow.steps[0]?.toolName, 'browser_navigate');
+      assert.equal(compiled.workflow.steps[1]?.toolName, 'browser_state');
+      assert.equal(compiled.workflow.steps[2]?.type, 'instruction');
+      assert.equal(compiled.workflow.steps[3]?.toolName, 'browser_act');
     });
 
     console.log(`PASS automation compiler harness (${provider.mode}${options.agentIsolation ? ', brokered' : ''})`);
