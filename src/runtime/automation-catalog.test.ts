@@ -76,14 +76,14 @@ describe('buildSavedAutomationCatalogEntries', () => {
 });
 
 describe('buildAutomationCatalogEntries', () => {
-  it('adds built-in template and preset starter entries without duplicating installed automations', () => {
+  it('adds built-in starter examples without duplicating materialized automations', () => {
     const workflows: AssistantConnectorPlaybookDefinition[] = [];
     const tasks: ScheduledTaskDefinition[] = [];
     const templates = [
       {
         id: 'browser-starters',
         category: 'system',
-        installed: false,
+        materialized: false,
         playbooks: [
           {
             id: 'browser-read-smoke',
@@ -123,14 +123,14 @@ describe('buildAutomationCatalogEntries', () => {
     expect(catalog).toHaveLength(3);
     expect(catalog[0]).toMatchObject({
       id: 'browser-read-smoke',
-      source: 'builtin_template',
+      source: 'builtin_example',
       builtin: true,
       category: 'system',
       workflow: { id: 'browser-read-smoke', enabled: false },
     });
     expect(catalog[1]).toMatchObject({
       id: 'browser-read-weekly',
-      source: 'builtin_preset',
+      source: 'builtin_example',
       builtin: true,
       kind: 'workflow',
       workflow: { id: 'browser-read-smoke', enabled: false },
@@ -138,7 +138,7 @@ describe('buildAutomationCatalogEntries', () => {
     });
     expect(catalog[2]).toMatchObject({
       id: 'assistant-inbox-triage',
-      source: 'builtin_preset',
+      source: 'builtin_example',
       builtin: true,
       kind: 'assistant_task',
       task: { id: 'assistant-inbox-triage', target: 'default', enabled: false },

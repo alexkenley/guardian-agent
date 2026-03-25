@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { listTemplates, installTemplate } from './builtin-packs.js';
+import {
+  listBuiltinAutomationExamples,
+  materializeBuiltinAutomationExample,
+} from './builtin-packs.js';
 import type { ConnectorPlaybookService } from './connectors.js';
 
 function createMockConnectorService(): ConnectorPlaybookService {
@@ -11,18 +14,18 @@ function createMockConnectorService(): ConnectorPlaybookService {
   } as unknown as ConnectorPlaybookService;
 }
 
-describe('builtin pack templates', () => {
-  it('includes the host guard template', () => {
+describe('builtin automation examples', () => {
+  it('includes the host guard starter example', () => {
     const service = createMockConnectorService();
-    const templates = listTemplates(service);
+    const templates = listBuiltinAutomationExamples(service);
     const template = templates.find((item) => item.id === 'agent-host-guard');
     expect(template).toBeDefined();
-    expect(template?.playbookCount).toBe(2);
+    expect(template?.automationCount).toBe(2);
   });
 
-  it('installs the host guard template playbooks', () => {
+  it('materializes the host guard starter example workflows', () => {
     const service = createMockConnectorService();
-    const result = installTemplate('agent-host-guard', service);
+    const result = materializeBuiltinAutomationExample('agent-host-guard', service);
     expect(result.success).toBe(true);
     expect(service.upsertPack).toHaveBeenCalledTimes(1);
     expect(service.upsertPlaybook).toHaveBeenCalledTimes(2);
@@ -35,14 +38,14 @@ describe('builtin pack templates', () => {
     }));
   });
 
-  it('includes and installs the firewall sentry template', () => {
+  it('includes and materializes the firewall sentry starter example', () => {
     const service = createMockConnectorService();
-    const templates = listTemplates(service);
+    const templates = listBuiltinAutomationExamples(service);
     const template = templates.find((item) => item.id === 'firewall-sentry');
     expect(template).toBeDefined();
-    expect(template?.playbookCount).toBe(2);
+    expect(template?.automationCount).toBe(2);
 
-    const result = installTemplate('firewall-sentry', service);
+    const result = materializeBuiltinAutomationExample('firewall-sentry', service);
     expect(result.success).toBe(true);
     expect(service.upsertPack).toHaveBeenCalledTimes(1);
     expect(service.upsertPlaybook).toHaveBeenCalledTimes(2);

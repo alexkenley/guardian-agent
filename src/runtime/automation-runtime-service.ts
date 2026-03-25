@@ -20,7 +20,7 @@ import {
   type AutomationCatalogToolMetadata,
   type AutomationCatalogViewEntry,
 } from './automation-catalog-view.js';
-import type { BuiltinTemplate } from './builtin-packs.js';
+import type { BuiltinAutomationExample } from './builtin-packs.js';
 import type {
   ScheduledTaskCreateInput,
   ScheduledTaskDefinition,
@@ -51,13 +51,13 @@ interface AutomationTaskControl {
   delete(id: string): { success: boolean; message: string };
   runNow(id: string): Promise<{ success: boolean; message: string }> | { success: boolean; message: string };
   presets(): ScheduledTaskPreset[];
-  installPreset(presetId: string): { success: boolean; message: string; task?: ScheduledTaskDefinition };
+  createFromPresetExample(presetId: string): { success: boolean; message: string; task?: ScheduledTaskDefinition };
   history(): ScheduledTaskHistoryEntry[];
 }
 
 interface AutomationTemplateControl {
-  list(): Array<Pick<BuiltinTemplate, 'id' | 'category' | 'playbooks'> & { installed: boolean }>;
-  install?(templateId: string): { success: boolean; message: string };
+  list(): Array<Pick<BuiltinAutomationExample, 'id' | 'category' | 'playbooks'> & { materialized: boolean }>;
+  createFromExample?(templateId: string): { success: boolean; message: string };
 }
 
 export interface AutomationRuntimeServiceOptions {
@@ -93,7 +93,7 @@ export interface AutomationRuntimeService {
   deleteTask(id: string): { success: boolean; message: string };
   runTaskNow(id: string): Promise<{ success: boolean; message: string }>;
   listTaskPresets(): ScheduledTaskPreset[];
-  installTaskPreset(presetId: string): { success: boolean; message: string; task?: ScheduledTaskDefinition };
+  createAutomationFromPresetExample(presetId: string): { success: boolean; message: string; task?: ScheduledTaskDefinition };
   listTaskHistory(): ScheduledTaskHistoryEntry[];
   listSavedAutomations(): SavedAutomationCatalogEntry[];
   setSavedAutomationEnabled(automationId: string, enabled: boolean): { success: boolean; message: string };
@@ -166,15 +166,15 @@ export function createAutomationRuntimeService(
       service.listTaskHistory(),
     ),
     createAutomationFromCatalog: (automationId) => {
-      const installTemplate = options.templates?.install;
+      const createFromExample = options.templates?.createFromExample;
       const controlPlane = {
         listCatalog: () => service.listAutomationCatalog(),
         upsertWorkflow: (workflow: AssistantConnectorPlaybookDefinition) => service.upsertWorkflow(workflow),
         deleteWorkflow: (workflowId: string) => service.deleteWorkflow(workflowId),
         createTask: (input: ScheduledTaskCreateInput) => service.createTask(input),
-        installPreset: (presetId: string) => service.installTaskPreset(presetId),
-        ...(installTemplate
-          ? { installTemplate: (templateId: string) => installTemplate(templateId) }
+        createFromPresetExample: (presetId: string) => service.createAutomationFromPresetExample(presetId),
+        ...(createFromExample
+          ? { createFromTemplateExample: (templateId: string) => createFromExample(templateId) }
           : {}),
       };
       return createAutomationFromCatalogEntry(controlPlane, automationId);
@@ -280,7 +280,7 @@ export function createAutomationRuntimeService(
     deleteTask: (id) => options.tasks.delete(id),
     runTaskNow: async (id) => options.tasks.runNow(id),
     listTaskPresets: () => options.tasks.presets().map(cloneTaskPreset),
-    installTaskPreset: (presetId) => options.tasks.installPreset(presetId),
+    createAutomationFromPresetExample: (presetId) => options.tasks.createFromPresetExample(presetId),
     listTaskHistory: () => options.tasks.history().map(cloneTaskHistoryEntry),
     listSavedAutomations: () => importCatalogEntries(service),
     setSavedAutomationEnabled: (automationId, enabled) => (
@@ -362,8 +362,8 @@ function cloneCatalogEntry(entry: SavedAutomationCatalogEntry): SavedAutomationC
 }
 
 function cloneCatalogTemplate(
-  template: Pick<BuiltinTemplate, 'id' | 'category' | 'playbooks'> & { installed: boolean },
-): Pick<BuiltinTemplate, 'id' | 'category' | 'playbooks'> & { installed: boolean } {
+  template: Pick<BuiltinAutomationExample, 'id' | 'category' | 'playbooks'> & { materialized: boolean },
+): Pick<BuiltinAutomationExample, 'id' | 'category' | 'playbooks'> & { materialized: boolean } {
   return {
     ...template,
     playbooks: template.playbooks.map((playbook) => cloneWorkflow(playbook)),

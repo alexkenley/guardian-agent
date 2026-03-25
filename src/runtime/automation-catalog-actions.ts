@@ -10,8 +10,8 @@ export interface AutomationCatalogActionControlPlane {
   upsertWorkflow(workflow: AssistantConnectorPlaybookDefinition): { success: boolean; message: string };
   deleteWorkflow(workflowId: string): { success: boolean; message: string };
   createTask(input: ScheduledTaskCreateInput): { success: boolean; message: string; task?: ScheduledTaskDefinition };
-  installPreset(presetId: string): { success: boolean; message: string; task?: ScheduledTaskDefinition };
-  installTemplate?(templateId: string): { success: boolean; message: string };
+  createFromPresetExample(presetId: string): { success: boolean; message: string; task?: ScheduledTaskDefinition };
+  createFromTemplateExample?(templateId: string): { success: boolean; message: string };
 }
 
 export interface AutomationCatalogCreateResult {
@@ -31,7 +31,7 @@ export function createAutomationFromCatalogEntry(
     return { success: false, message: `Automation '${automationId}' not found.` };
   }
 
-  if (selected.source === 'builtin_template' || selected.source === 'builtin_preset' || selected.builtin === true) {
+  if (selected.source === 'builtin_example' || selected.builtin === true) {
     return createAutomationFromBuiltinExample(controlPlane, selected);
   }
 
@@ -51,14 +51,14 @@ function createAutomationFromBuiltinExample(
   controlPlane: AutomationCatalogActionControlPlane,
   entry: SavedAutomationCatalogEntry,
 ): AutomationCatalogCreateResult {
-  if (entry.source === 'builtin_template') {
+  if (entry.templateId?.trim()) {
     if (!entry.templateId?.trim()) {
       return { success: false, message: `Built-in automation '${entry.name}' is missing its template reference.` };
     }
-    if (!controlPlane.installTemplate) {
+    if (!controlPlane.createFromTemplateExample) {
       return { success: false, message: 'Creating an automation from this starter example is not available.' };
     }
-    const result = controlPlane.installTemplate(entry.templateId);
+    const result = controlPlane.createFromTemplateExample(entry.templateId);
     const automationName = entry.workflow?.name || entry.name;
     const automationId = entry.workflow?.id || entry.id;
     return {
@@ -75,7 +75,7 @@ function createAutomationFromBuiltinExample(
   if (!entry.presetId?.trim()) {
     return { success: false, message: `Built-in automation '${entry.name}' is missing its preset reference.` };
   }
-  const result = controlPlane.installPreset(entry.presetId);
+  const result = controlPlane.createFromPresetExample(entry.presetId);
   const automationName = result.task?.name || entry.name;
   return {
     success: result.success,

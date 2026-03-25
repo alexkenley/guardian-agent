@@ -708,7 +708,7 @@ guardian:
       const entry = history.find((item) => item.name === 'Browser Read Smoke');
       assert.ok(entry, `Expected Browser Read Smoke history entry, got ${JSON.stringify(history)}`);
       assert.equal(entry.status, 'succeeded');
-      assert.equal(entry.source, 'workflow');
+      assert.equal(entry.source, 'automation');
     });
 
     await new Promise((resolve) => setTimeout(resolve, 6_000));
@@ -740,7 +740,7 @@ guardian:
       const entry = history.find((item) => item.name === 'Browser Extract Smoke');
       assert.ok(entry, `Expected Browser Extract Smoke history entry, got ${JSON.stringify(history)}`);
       assert.equal(entry.status, 'succeeded');
-      assert.equal(entry.source, 'workflow');
+      assert.equal(entry.source, 'automation');
     });
 
     await new Promise((resolve) => setTimeout(resolve, 6_000));

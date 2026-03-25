@@ -74,7 +74,7 @@ describe('automation-catalog-view', () => {
       {
         id: 'browser-starters',
         category: 'browser',
-        installed: false,
+        materialized: false,
         playbooks: workflows,
       },
     ];
@@ -127,7 +127,7 @@ describe('automation-catalog-view', () => {
       expect.objectContaining({
         id: 'assistant-browser-report',
         builtin: true,
-        sourceKind: 'preset',
+        sourceKind: 'example',
         kind: 'assistant',
       }),
     ]));

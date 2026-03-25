@@ -1,9 +1,8 @@
 /**
- * Built-in connector pack templates for zero-config network & system workflows.
+ * Built-in automation examples for zero-config network and system workflows.
  *
- * Each template bundles a connector pack with pre-configured playbooks.
- * Users can install templates from the web UI or API with one click —
- * no configuration, signatures, or dry-run gates required.
+ * Each example bundles a connector pack with pre-configured workflows that can
+ * be materialized into the saved automation catalog with one action.
  */
 
 import type {
@@ -12,7 +11,7 @@ import type {
 } from '../config/types.js';
 import type { ConnectorPlaybookService } from './connectors.js';
 
-export interface BuiltinTemplate {
+export interface BuiltinAutomationExample {
   id: string;
   name: string;
   description: string;
@@ -21,8 +20,8 @@ export interface BuiltinTemplate {
   playbooks: AssistantConnectorPlaybookDefinition[];
 }
 
-/** All built-in templates. */
-export const BUILTIN_TEMPLATES: BuiltinTemplate[] = [
+/** All built-in automation examples. */
+export const BUILTIN_AUTOMATION_EXAMPLES: BuiltinAutomationExample[] = [
   // ── Home Network ───────────────────────────────────────────
   {
     id: 'home-network',
@@ -258,19 +257,19 @@ export const BUILTIN_TEMPLATES: BuiltinTemplate[] = [
 ];
 
 /**
- * Install a built-in template into a ConnectorPlaybookService instance.
- * Automatically enables the framework and playbook engine.
+ * Materialize a built-in automation example into ConnectorPlaybookService.
+ * Automatically enables the framework and workflow engine.
  */
-export function installTemplate(
-  templateId: string,
+export function materializeBuiltinAutomationExample(
+  exampleId: string,
   service: ConnectorPlaybookService,
 ): { success: boolean; message: string } {
-  const template = BUILTIN_TEMPLATES.find((t) => t.id === templateId);
-  if (!template) {
-    return { success: false, message: `Template '${templateId}' not found.` };
+  const example = BUILTIN_AUTOMATION_EXAMPLES.find((candidate) => candidate.id === exampleId);
+  if (!example) {
+    return { success: false, message: `Built-in automation example '${exampleId}' not found.` };
   }
 
-  // Auto-enable the framework and playbook engine
+  // Auto-enable the framework and workflow engine.
   service.updateSettings({
     enabled: true,
     playbooks: {
@@ -280,53 +279,53 @@ export function installTemplate(
     },
   });
 
-  // Upsert the pack
-  service.upsertPack(template.pack);
+  // Upsert the backing connector pack.
+  service.upsertPack(example.pack);
 
-  // Upsert all playbooks
-  for (const playbook of template.playbooks) {
+  // Upsert all example workflows.
+  for (const playbook of example.playbooks) {
     service.upsertPlaybook(playbook);
   }
 
-  const playbookNames = template.playbooks.map((p) => p.name).join(', ');
+  const playbookNames = example.playbooks.map((playbook) => playbook.name).join(', ');
   return {
     success: true,
-    message: `Installed template '${template.name}' with ${template.playbooks.length} playbook(s): ${playbookNames}.`,
+    message: `Created saved automations from the starter example '${example.name}' with ${example.playbooks.length} workflow(s): ${playbookNames}.`,
   };
 }
 
 /**
- * Auto-install all built-in templates that are not already installed.
+ * Ensure all built-in automation examples are materialized during bootstrap.
  */
-export function autoInstallAllTemplates(
+export function materializeAllBuiltinAutomationExamples(
   service: ConnectorPlaybookService,
 ): number {
   const state = service.getState();
-  const installedPackIds = new Set(state.packs.map((p) => p.id));
-  let installed = 0;
+  const materializedPackIds = new Set(state.packs.map((pack) => pack.id));
+  let materialized = 0;
 
-  for (const template of BUILTIN_TEMPLATES) {
-    if (!installedPackIds.has(template.pack.id)) {
-      const result = installTemplate(template.id, service);
-      if (result.success) installed++;
+  for (const example of BUILTIN_AUTOMATION_EXAMPLES) {
+    if (!materializedPackIds.has(example.pack.id)) {
+      const result = materializeBuiltinAutomationExample(example.id, service);
+      if (result.success) materialized++;
     }
   }
 
-  return installed;
+  return materialized;
 }
 
 /**
- * List all available templates with installation status.
+ * List all built-in automation examples with materialization status.
  */
-export function listTemplates(
+export function listBuiltinAutomationExamples(
   service: ConnectorPlaybookService,
-): Array<BuiltinTemplate & { installed: boolean; playbookCount: number }> {
+): Array<BuiltinAutomationExample & { materialized: boolean; automationCount: number }> {
   const state = service.getState();
-  const installedPackIds = new Set(state.packs.map((p) => p.id));
+  const materializedPackIds = new Set(state.packs.map((pack) => pack.id));
 
-  return BUILTIN_TEMPLATES.map((template) => ({
-    ...template,
-    installed: installedPackIds.has(template.pack.id),
-    playbookCount: template.playbooks.length,
+  return BUILTIN_AUTOMATION_EXAMPLES.map((example) => ({
+    ...example,
+    materialized: materializedPackIds.has(example.pack.id),
+    automationCount: example.playbooks.length,
   }));
 }

@@ -97,7 +97,11 @@ import {
   type PlaybookStepRunResult,
 } from './runtime/connectors.js';
 import { JsonFileRunStateStore } from './runtime/run-state-store.js';
-import { installTemplate, listTemplates, autoInstallAllTemplates } from './runtime/builtin-packs.js';
+import {
+  listBuiltinAutomationExamples,
+  materializeAllBuiltinAutomationExamples,
+  materializeBuiltinAutomationExample,
+} from './runtime/builtin-packs.js';
 import { DeviceInventoryService } from './runtime/device-inventory.js';
 import { NetworkBaselineService, type NetworkAnomalyReport } from './runtime/network-baseline.js';
 import { NetworkTrafficService } from './runtime/network-traffic.js';
@@ -6558,14 +6562,14 @@ function buildDashboardCallbacks(
     }),
 
     onNetworkScan: async () => {
-      // Try to run the network-discovery playbook if installed
+      // Try to run the network-discovery workflow if it already exists.
       const state = connectors.getState();
       const pb = state.playbooks.find((p) => p.id === 'network-discovery');
       if (!pb) {
-        // Auto-install home-network template and retry
-        const installed = installTemplate('home-network', connectors);
-        if (!installed.success) {
-          return { success: false, message: 'Could not install home-network template for scanning.', devicesFound: 0 };
+        // Materialize the built-in Home Network example and retry.
+        const materialized = materializeBuiltinAutomationExample('home-network', connectors);
+        if (!materialized.success) {
+          return { success: false, message: 'Could not create the Home Network starter example for scanning.', devicesFound: 0 };
         }
         persistConnectorsState();
       }
@@ -11129,9 +11133,9 @@ async function main(): Promise<void> {
 
   syncAssistantSecurityMonitoringTask();
 
-  // Auto-install all connector templates if no packs exist yet
+  // Bootstrap the built-in automation examples if no connector packs exist yet.
   if (connectors.getState().packs.length === 0) {
-    autoInstallAllTemplates(connectors);
+    materializeAllBuiltinAutomationExamples(connectors);
   }
 
   function syncPlaybookOutputHandlingToSchedules(playbookId: string): void {
@@ -11980,19 +11984,19 @@ async function main(): Promise<void> {
           delete: (id) => scheduledTasks.delete(id),
           runNow: async (id) => scheduledTasks.runNow(id),
           presets: () => scheduledTasks.getPresets(),
-          installPreset: (presetId) => scheduledTasks.installPreset(presetId),
+          createFromPresetExample: (presetId) => scheduledTasks.installPreset(presetId),
           history: () => scheduledTasks.getHistory(),
         },
         templates: {
-          list: () => listTemplates(connectors).map((template) => ({
-            ...template,
-            playbooks: template.playbooks.map((playbook) => ({
+          list: () => listBuiltinAutomationExamples(connectors).map((example) => ({
+            ...example,
+            playbooks: example.playbooks.map((playbook) => ({
               ...playbook,
               steps: playbook.steps.map((step) => ({ ...step })),
               ...(playbook.outputHandling ? { outputHandling: { ...playbook.outputHandling } } : {}),
             })),
           })),
-          install: (templateId) => installTemplate(templateId, connectors),
+          createFromExample: (templateId) => materializeBuiltinAutomationExample(templateId, connectors),
         },
         toolMetadata: toolExecutor.listToolDefinitions().map((definition) => ({
           name: definition.name,

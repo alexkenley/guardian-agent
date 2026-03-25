@@ -345,7 +345,7 @@ describe('tryAutomationControlPreRoute', () => {
               kind: 'workflow',
               enabled: false,
               builtin: true,
-              source: 'builtin_template',
+              source: 'builtin_example',
               workflow: {
                 id: 'builtin-browser-read',
                 name: 'Builtin Browser Read',

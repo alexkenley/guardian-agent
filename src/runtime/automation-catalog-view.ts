@@ -46,7 +46,7 @@ export interface AutomationCatalogViewEntry {
   lastRunStatus: string | null;
   runCount: number;
   source: AutomationCatalogSource | null;
-  sourceKind: 'playbook' | 'task' | 'template' | 'preset';
+  sourceKind: 'playbook' | 'task' | 'example';
   builtin: boolean;
   workflow: AssistantConnectorPlaybookDefinition | null;
   task: ScheduledTaskDefinition | null;
@@ -78,13 +78,11 @@ function toAutomationCatalogViewEntry(
   const task = entry.task ? cloneTask(entry.task) : null;
   const enabled = entry.enabled !== false;
   const source = entry.source ?? null;
-  const sourceKind = source === 'builtin_template'
-    ? 'template'
-    : source === 'builtin_preset'
-      ? 'preset'
-      : workflow
-        ? 'playbook'
-        : 'task';
+  const sourceKind = source === 'builtin_example'
+    ? 'example'
+    : workflow
+      ? 'playbook'
+      : 'task';
 
   if (workflow) {
     return {

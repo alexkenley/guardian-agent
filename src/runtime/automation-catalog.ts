@@ -1,9 +1,9 @@
 import type { AssistantConnectorPlaybookDefinition } from '../config/types.js';
-import type { BuiltinTemplate } from './builtin-packs.js';
+import type { BuiltinAutomationExample } from './builtin-packs.js';
 import type { ScheduledTaskDefinition, ScheduledTaskPreset } from './scheduled-tasks.js';
 
 export type AutomationCatalogKind = 'workflow' | 'assistant_task' | 'task';
-export type AutomationCatalogSource = 'saved_workflow' | 'saved_task' | 'builtin_template' | 'builtin_preset';
+export type AutomationCatalogSource = 'saved_workflow' | 'saved_task' | 'builtin_example';
 
 export interface SavedAutomationCatalogEntry {
   id: string;
@@ -20,8 +20,8 @@ export interface SavedAutomationCatalogEntry {
   task?: ScheduledTaskDefinition;
 }
 
-interface AutomationCatalogTemplateInput extends Pick<BuiltinTemplate, 'id' | 'category' | 'playbooks'> {
-  installed: boolean;
+interface AutomationCatalogTemplateInput extends Pick<BuiltinAutomationExample, 'id' | 'category' | 'playbooks'> {
+  materialized: boolean;
 }
 
 export function buildSavedAutomationCatalogEntries(
@@ -92,13 +92,13 @@ export function buildAutomationCatalogEntries(
   const workflowIds = new Set(entries
     .map((entry) => entry.workflow?.id)
     .filter((id): id is string => Boolean(id)));
-  const installedPresetIds = new Set(tasks
+  const materializedPresetIds = new Set(tasks
     .map((task) => task.presetId)
     .filter((presetId): presetId is string => Boolean(presetId)));
-  const installedPresetKeys = new Set(tasks.map(buildPresetInstallationKey));
+  const materializedPresetKeys = new Set(tasks.map(buildPresetInstallationKey));
 
   for (const template of templates) {
-    if (template.installed) continue;
+    if (template.materialized) continue;
     for (const playbook of template.playbooks) {
       if (workflowIds.has(playbook.id) || entryIds.has(playbook.id)) continue;
       entries.push({
@@ -107,7 +107,7 @@ export function buildAutomationCatalogEntries(
         description: playbook.description || '',
         kind: 'workflow',
         enabled: false,
-        source: 'builtin_template',
+        source: 'builtin_example',
         builtin: true,
         category: template.category,
         templateId: template.id,
@@ -122,7 +122,7 @@ export function buildAutomationCatalogEntries(
   }
 
   for (const preset of presets) {
-    if (installedPresetIds.has(preset.id) || installedPresetKeys.has(buildPresetInstallationKey(preset))) {
+    if (materializedPresetIds.has(preset.id) || materializedPresetKeys.has(buildPresetInstallationKey(preset))) {
       continue;
     }
     if (entryIds.has(preset.id)) continue;
@@ -139,7 +139,7 @@ export function buildAutomationCatalogEntries(
       description: preset.description || workflow?.description || '',
       kind: preset.type === 'agent' ? 'assistant_task' : (preset.type === 'playbook' ? 'workflow' : 'task'),
       enabled: false,
-      source: 'builtin_preset',
+      source: 'builtin_example',
       builtin: true,
       category: workflow ? workflowCategoryById.get(workflow.id) : undefined,
       presetId: preset.id,

@@ -104,7 +104,7 @@ function makeService() {
     delete: vi.fn(() => ({ success: true, message: 'Deleted task.' })),
     runNow: vi.fn(async () => ({ success: true, message: 'Task run started.' })),
     presets: vi.fn(() => []),
-    installPreset: vi.fn(() => ({ success: true, message: 'Installed preset.' })),
+    createFromPresetExample: vi.fn(() => ({ success: true, message: 'Created starter example.' })),
     history: vi.fn(() => []),
   };
   const onWorkflowSaved = vi.fn();
@@ -114,7 +114,7 @@ function makeService() {
       {
         id: 'builtin-browser',
         category: 'system' as const,
-        installed: false,
+        materialized: false,
         playbooks: [
           {
             id: 'builtin-browser-read',
@@ -129,7 +129,7 @@ function makeService() {
         ],
       },
     ]),
-    install: vi.fn(() => ({ success: true, message: 'Installed template.' })),
+    createFromExample: vi.fn(() => ({ success: true, message: 'Created starter example.' })),
   };
 
   const service = createAutomationRuntimeService({
@@ -190,12 +190,12 @@ describe('automation-runtime-service', () => {
     expect(service.listSavedAutomations()).toHaveLength(2);
     expect(service.listAutomationCatalog()).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'browser-read-smoke', source: 'saved_workflow' }),
-      expect.objectContaining({ id: 'builtin-browser-read', source: 'builtin_template', builtin: true }),
+      expect.objectContaining({ id: 'builtin-browser-read', source: 'builtin_example', builtin: true }),
     ]));
     expect(service.listAutomationCatalogView()).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'browser-read-smoke', category: 'browser', sourceKind: 'playbook' }),
       expect.objectContaining({ id: 'task-agent-1', kind: 'assistant', sourceKind: 'task' }),
-      expect.objectContaining({ id: 'builtin-browser-read', builtin: true, sourceKind: 'template' }),
+      expect.objectContaining({ id: 'builtin-browser-read', builtin: true, sourceKind: 'example' }),
     ]));
     expect(service.listAutomationRunHistory()).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'run-1', source: 'automation' }),
@@ -207,7 +207,7 @@ describe('automation-runtime-service', () => {
       action: 'created',
       automationId: 'builtin-browser-read',
     });
-    expect(templateControl.install).toHaveBeenCalledWith('builtin-browser');
+    expect(templateControl.createFromExample).toHaveBeenCalledWith('builtin-browser');
 
     expect(service.saveAutomation({
       id: 'browser-read-smoke',
@@ -254,7 +254,7 @@ describe('automation-runtime-service', () => {
     const executorControlPlane = service.createExecutorControlPlane();
     expect(executorControlPlane.listAutomations()).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'browser-read-smoke', source: 'saved_workflow' }),
-      expect.objectContaining({ id: 'builtin-browser-read', source: 'builtin_template', builtin: true }),
+      expect.objectContaining({ id: 'builtin-browser-read', source: 'builtin_example', builtin: true }),
     ]));
     expect(executorControlPlane.listWorkflows()).toHaveLength(1);
     expect(executorControlPlane.setAutomationEnabled('task-agent-1', false).success).toBe(true);

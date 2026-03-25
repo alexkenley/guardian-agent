@@ -73,7 +73,7 @@ function makeControlPlane(): AutomationCatalogActionControlPlane {
       kind: 'workflow' as const,
       enabled: false,
       builtin: true,
-      source: 'builtin_template' as const,
+      source: 'builtin_example' as const,
       templateId: 'builtin-browser',
       workflow: {
         id: 'builtin-browser-read',
@@ -93,7 +93,7 @@ function makeControlPlane(): AutomationCatalogActionControlPlane {
       kind: 'task' as const,
       enabled: false,
       builtin: true,
-      source: 'builtin_preset' as const,
+      source: 'builtin_example' as const,
       presetId: 'network-watch',
       task: {
         id: 'network-watch',
@@ -140,11 +140,11 @@ function makeControlPlane(): AutomationCatalogActionControlPlane {
         runCount: 0,
       },
     })),
-    installPreset: vi.fn(() => ({
+    createFromPresetExample: vi.fn(() => ({
       success: true,
       message: 'Installed preset.',
       task: {
-        id: 'task-installed-preset',
+        id: 'task-created-preset-example',
         name: 'Network Watch',
         type: 'tool' as const,
         target: 'net_arp_scan',
@@ -159,7 +159,7 @@ function makeControlPlane(): AutomationCatalogActionControlPlane {
         runCount: 0,
       },
     })),
-    installTemplate: vi.fn(() => ({ success: true, message: 'Installed template.' })),
+    createFromTemplateExample: vi.fn(() => ({ success: true, message: 'Created starter example.' })),
   };
 }
 
@@ -224,14 +224,14 @@ describe('automation-catalog-actions', () => {
       automationId: 'builtin-browser-read',
       message: "Created automation 'Builtin Browser Read' from the starter example.",
     });
-    expect(controlPlane.installTemplate).toHaveBeenCalledWith('builtin-browser');
+    expect(controlPlane.createFromTemplateExample).toHaveBeenCalledWith('builtin-browser');
 
     expect(presetResult).toMatchObject({
       success: true,
       action: 'created',
-      automationId: 'task-installed-preset',
+      automationId: 'task-created-preset-example',
       message: "Created automation 'Network Watch' from the starter example.",
     });
-    expect(controlPlane.installPreset).toHaveBeenCalledWith('network-watch');
+    expect(controlPlane.createFromPresetExample).toHaveBeenCalledWith('network-watch');
   });
 });
