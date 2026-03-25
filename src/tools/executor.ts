@@ -4465,39 +4465,6 @@ export class ToolExecutor {
         }
         return { status: 'unverified', evidence: 'Automation was not found after save.' };
       }
-      case 'task_create': {
-        const output = isRecord(result.output) ? result.output : {};
-        const task = isRecord(output.task) ? output.task : {};
-        const taskId = typeof task.id === 'string' ? task.id : '';
-        if (taskId && this.automationControlPlane?.listTasks().some((entry) => entry.id === taskId)) {
-          return { status: 'verified', evidence: `Scheduled task ${taskId} exists.` };
-        }
-        return { status: 'unverified', evidence: 'Scheduled task was not found after creation.' };
-      }
-      case 'task_update': {
-        const taskId = typeof args.taskId === 'string' ? args.taskId : '';
-        if (taskId && this.automationControlPlane?.listTasks().some((entry) => entry.id === taskId)) {
-          return { status: 'verified', evidence: `Scheduled task ${taskId} exists after update.` };
-        }
-        return { status: 'unverified', evidence: 'Updated scheduled task was not found.' };
-      }
-      case 'workflow_upsert': {
-        const workflowId = typeof args.id === 'string' ? args.id.trim() : '';
-        const workflow = workflowId
-          ? this.automationControlPlane?.listWorkflows().find((entry) => entry.id === workflowId)
-          : undefined;
-        if (!workflow) {
-          return { status: 'unverified', evidence: 'Workflow was not found after upsert.' };
-        }
-        const linkedTaskCount = this.automationControlPlane?.listTasks()
-          .filter((task) => task.type === 'playbook' && task.target === workflow.id).length ?? 0;
-        return {
-          status: 'verified',
-          evidence: linkedTaskCount > 0
-            ? `Workflow ${workflow.id} exists with ${linkedTaskCount} linked scheduled task${linkedTaskCount === 1 ? '' : 's'}.`
-            : `Workflow ${workflow.id} exists.`,
-        };
-      }
       default:
         return { status: 'unverified', evidence: 'No verifier is defined for this tool.' };
     }
@@ -14503,439 +14470,6 @@ export class ToolExecutor {
       },
     );
 
-    this.registry.register(
-      {
-        name: 'workflow_list',
-        description: 'List saved automations (playbooks) available for manual runs or scheduling. Returns id, name, mode, step count, and enabled status for each.',
-        shortDescription: 'List saved automations.',
-        risk: 'read_only',
-        category: 'automation',
-        deferLoading: true,
-        parameters: {
-          type: 'object',
-          properties: {},
-        },
-      },
-      async () => {
-        if (!this.automationControlPlane) {
-          return { success: false, error: 'Workflow control plane is not available.' };
-        }
-        const workflows = this.automationControlPlane.listWorkflows().map(normalizeWorkflowSummary);
-        return {
-          success: true,
-          output: {
-            count: workflows.length,
-            workflows,
-          },
-        };
-      },
-    );
-
-    this.registry.register(
-      {
-        name: 'workflow_upsert',
-        description: 'Create or update an automation (playbook). Requires id, name, mode ("sequential" or "parallel"), and a steps array. Each step needs id and either toolName (tool step), instruction (instruction step), or delayMs (delay step). Set type accordingly: "tool", "instruction", or "delay". For a single-tool automation, provide one step with mode "sequential". In sequential playbooks, later tool args may reference prior step fields with placeholders such as "${summarize.output}" or "${fetch.status}". Preferred scheduling flow: create/update a separate scheduled task with task_create/task_update. Legacy convenience: if schedule is included here, Guardian syncs one linked scheduled playbook task immediately. Mutating - requires approval.',
-        shortDescription: 'Create or update an automation (playbook).',
-        risk: 'mutating',
-        category: 'automation',
-        deferLoading: true,
-        examples: [
-          {
-            description: 'Single-tool automation: ARP network scan',
-            input: { id: 'net-scan', name: 'Network Scan', mode: 'sequential', enabled: true, description: 'Quick ARP scan of the local network', steps: [{ id: 'net-scan-step-1', toolName: 'net_arp_scan', args: {} }] },
-          },
-          {
-            description: 'Multi-step sequential pipeline: network discovery',
-            input: { id: 'net-discovery', name: 'Network Discovery', mode: 'sequential', enabled: true, description: 'Full network discovery', steps: [{ id: 'step-1', toolName: 'net_interfaces', args: {} }, { id: 'step-2', toolName: 'net_arp_scan', args: {} }, { id: 'step-3', toolName: 'net_dns_lookup', args: { hostname: 'gateway' } }] },
-          },
-          {
-            description: 'Parallel pipeline: system health checks',
-            input: { id: 'sys-health', name: 'System Health', mode: 'parallel', enabled: true, steps: [{ id: 'step-1', toolName: 'sys_resources', args: {} }, { id: 'step-2', toolName: 'sys_processes', args: {} }, { id: 'step-3', toolName: 'sys_services', args: {} }] },
-          },
-          {
-            description: 'HTTP monitoring: check port then fetch URL',
-            input: { id: 'http-monitor', name: 'HTTP Monitor', mode: 'sequential', enabled: true, description: 'Check HTTP service availability', steps: [{ id: 'step-1', toolName: 'net_port_check', args: { host: '192.168.1.1', port: 80 } }, { id: 'step-2', toolName: 'web_fetch', args: { url: 'http://192.168.1.1/' }, continueOnError: true }] },
-          },
-          {
-            description: 'Sequential pipeline with delay between steps',
-            input: { id: 'scan-wait-report', name: 'Scan then Report', mode: 'sequential', steps: [
-              { id: 'step-1', toolName: 'net_arp_scan', args: {} },
-              { id: 'step-2', type: 'delay', delayMs: 60000 },
-              { id: 'step-3', type: 'instruction', instruction: 'Summarize the scan results.' },
-            ]},
-          },
-        ],
-        parameters: {
-          type: 'object',
-          properties: {
-            id: { type: 'string', description: 'Unique automation ID (kebab-case, e.g. "daily-net-scan")' },
-            name: { type: 'string', description: 'Human-readable name' },
-            enabled: { type: 'boolean', description: 'Whether this automation can be run (default: true)' },
-            mode: { type: 'string', description: '"sequential" (steps run in order) or "parallel" (steps run concurrently)' },
-            description: { type: 'string', description: 'What this automation does' },
-            schedule: { type: 'string', description: 'Optional cron expression. Prefer task_create/task_update for explicit scheduling; if provided here, Guardian syncs a linked scheduled playbook task.' },
-            steps: {
-              type: 'array',
-              description: 'Ordered list of steps to execute',
-              items: {
-                type: 'object',
-                properties: {
-                  id: { type: 'string', description: 'Unique step ID within this automation' },
-                  name: { type: 'string', description: 'Optional human label' },
-                  type: { type: 'string', description: 'Step type: "tool" (default), "instruction" (LLM), or "delay" (pause pipeline)' },
-                  packId: { type: 'string', description: 'Permission policy ID (optional)' },
-                  toolName: { type: 'string', description: 'Name of the tool to execute (required for tool steps)' },
-                  args: { type: 'object', description: 'Tool arguments as key-value pairs. In sequential playbooks, string values may reference prior step fields with placeholders like "${step-id.output}", "${step-id.message}", or "${step-id.status}".' },
-                  instruction: { type: 'string', description: 'LLM prompt text (required for instruction steps). Prior step outputs injected as context.' },
-                  delayMs: { type: 'number', description: 'Delay duration in ms (required for delay steps). E.g. 60000 = 1 minute.' },
-                  llmProvider: { type: 'string', description: 'LLM provider override for instruction steps (e.g. "anthropic", "ollama")' },
-                  continueOnError: { type: 'boolean', description: 'Continue pipeline if this step fails' },
-                  timeoutMs: { type: 'number', description: 'Per-step timeout override in milliseconds' },
-                },
-              },
-            },
-          },
-          required: ['id', 'name', 'mode', 'steps'],
-        },
-      },
-      async (args) => {
-        if (!this.automationControlPlane) {
-          return { success: false, error: 'Workflow control plane is not available.' };
-        }
-        const stepError = validateWorkflowDefinition(args, (toolName) => this.registry.get(toolName) !== undefined);
-        if (stepError) {
-          return { success: false, error: stepError };
-        }
-        const normalizedArgs: Record<string, unknown> = {
-          ...args,
-          enabled: args.enabled !== false,
-        };
-        const result = this.automationControlPlane.upsertWorkflow(normalizedArgs);
-        if (!result.success) {
-          return { success: false, error: result.message };
-        }
-        const workflowId = requireString(normalizedArgs.id, 'id');
-        const workflow = this.automationControlPlane.listWorkflows().find((entry) => entry.id === workflowId);
-        const linkedTasks = workflow
-          ? this.automationControlPlane.listTasks()
-            .filter((task) => task.type === 'playbook' && task.target === workflow.id)
-            .map(normalizeTaskSummary)
-          : [];
-        const stepCount = workflow?.steps?.length ?? (Array.isArray(normalizedArgs.steps) ? normalizedArgs.steps.length : 0);
-        const action = /^updated\b/i.test(result.message) ? 'Updated' : 'Created';
-        const summary = `Workflow '${workflow?.name ?? requireString(normalizedArgs.name, 'name')}' (id: ${workflowId}) ${action.toLowerCase()} with ${stepCount} step${stepCount === 1 ? '' : 's'}${linkedTasks.length > 0 ? ` and ${linkedTasks.length} linked scheduled task${linkedTasks.length === 1 ? '' : 's'}` : ''}.`;
-        return {
-          success: true,
-          message: summary,
-          output: {
-            ...result,
-            message: summary,
-            workflow: workflow ? normalizeWorkflowSummary(workflow) : undefined,
-            linkedTasks,
-          },
-        };
-      },
-    );
-
-    this.registry.register(
-      {
-        name: 'workflow_delete',
-        description: 'Delete a saved automation (playbook) by id. Also delete any linked scheduled task separately with task_delete. Mutating - requires approval.',
-        shortDescription: 'Delete a saved automation by id.',
-        risk: 'mutating',
-        category: 'automation',
-        deferLoading: true,
-        parameters: {
-          type: 'object',
-          properties: {
-            workflowId: { type: 'string' },
-          },
-          required: ['workflowId'],
-        },
-      },
-      async (args) => {
-        if (!this.automationControlPlane) {
-          return { success: false, error: 'Workflow control plane is not available.' };
-        }
-        const workflowId = requireString(args.workflowId, 'workflowId');
-        const result = this.automationControlPlane.deleteWorkflow(workflowId);
-        return { success: result.success, output: result, error: result.success ? undefined : result.message };
-      },
-    );
-
-    this.registry.register(
-      {
-        name: 'workflow_run',
-        description: 'Run a saved automation (playbook) immediately. Set dryRun:true to preview without side effects. Returns step-by-step results with status, duration, and output.',
-        shortDescription: 'Run a saved automation immediately.',
-        risk: 'mutating',
-        category: 'automation',
-        deferLoading: true,
-        parameters: {
-          type: 'object',
-          properties: {
-            workflowId: { type: 'string' },
-            dryRun: { type: 'boolean' },
-          },
-          required: ['workflowId'],
-        },
-      },
-      async (args, request) => {
-        if (!this.automationControlPlane) {
-          return { success: false, error: 'Workflow control plane is not available.' };
-        }
-        const workflowId = requireString(args.workflowId, 'workflowId');
-        const result = await this.automationControlPlane.runWorkflow({
-          workflowId,
-          dryRun: !!args.dryRun,
-          origin: request.origin,
-          agentId: request.agentId,
-          userId: request.userId,
-          channel: request.channel,
-          requestedBy: request.userId || request.agentId || request.origin,
-        });
-        return { success: result.success, output: result, error: result.success ? undefined : result.message };
-      },
-    );
-
-    this.registry.register(
-      {
-        name: 'task_list',
-        description: 'List all scheduled recurring tasks. Returns name, type (tool, playbook, or agent), target, cron schedule, enabled status, last run info, and run count.',
-        shortDescription: 'List scheduled recurring tasks.',
-        risk: 'read_only',
-        category: 'automation',
-        deferLoading: true,
-        parameters: {
-          type: 'object',
-          properties: {},
-        },
-      },
-      async () => {
-        if (!this.automationControlPlane) {
-          return { success: false, error: 'Task control plane is not available.' };
-        }
-        const tasks = this.automationControlPlane.listTasks().map(normalizeTaskSummary);
-        return {
-          success: true,
-          output: {
-            count: tasks.length,
-            tasks,
-          },
-        };
-      },
-    );
-
-    this.registry.register(
-      {
-        name: 'task_create',
-        description: 'Create a bounded automation task. Use type "tool" to run a single tool, type "workflow" to run an automation playbook, or type "agent" to trigger an assistant turn. Provide either cron for scheduled execution or eventTrigger for a non-cron/manual/event-driven task. For type "agent", target is the agent id (or "default"), prompt is required, and channel controls the session/delivery path. Set runOnce:true for a one-shot schedule. Scheduled tasks now carry approval expiry, scope hash, and runaway budgets; later runs are allowed only while that authority remains valid. Mutating - requires approval.',
-        shortDescription: 'Create a scheduled or manual tool, workflow, or assistant task.',
-        risk: 'mutating',
-        category: 'automation',
-        deferLoading: true,
-        examples: [
-          {
-            description: 'Schedule a network scan every 30 minutes',
-            input: { name: 'Network Watch', type: 'tool', target: 'net_arp_scan', cron: '*/30 * * * *', enabled: true },
-          },
-          {
-            description: 'Schedule a playbook daily at 9 AM',
-            input: { name: 'Morning Discovery', type: 'workflow', target: 'net-discovery', cron: '0 9 * * *', enabled: true },
-          },
-          {
-            description: 'Schedule system health check on weekdays at 8 AM',
-            input: { name: 'Weekday Health', type: 'tool', target: 'sys_resources', cron: '0 8 * * 1-5', enabled: true },
-          },
-          {
-            description: 'Schedule a morning assistant briefing over Telegram',
-            input: {
-              name: 'Morning Briefing',
-              type: 'agent',
-              target: 'default',
-              prompt: 'Check recent email, calendar, and open tasks, then send me a concise morning briefing.',
-              channel: 'telegram',
-              deliver: true,
-              cron: '0 8 * * 1-5',
-              enabled: true,
-            },
-          },
-          {
-            description: 'Schedule a one-shot Gmail send for tonight and disable it after it runs',
-            input: {
-              name: 'Send Test Email Tonight',
-              type: 'tool',
-              target: 'gws',
-              cron: '3 22 * * *',
-              runOnce: true,
-              enabled: true,
-              args: {
-                service: 'gmail',
-                resource: 'users messages',
-                method: 'send',
-                params: { userId: 'me' },
-                json: { raw: 'BASE64URL_RFC822' },
-              },
-            },
-          },
-        ],
-        parameters: {
-          type: 'object',
-          properties: {
-            name: { type: 'string', description: 'Human-readable task name' },
-            description: { type: 'string', description: 'Optional concise human summary. Recommended for scheduled assistant tasks so the UI can show a short description without exposing the full prompt.' },
-            type: { type: 'string', description: '"tool" (run a single tool), "workflow" (run a playbook), or "agent" (run a scheduled assistant turn)' },
-            target: { type: 'string', description: 'Tool name, playbook ID, or agent ID. Use "default" to target the primary assistant.' },
-            prompt: { type: 'string', description: 'Required when type="agent". The scheduled instruction for the assistant.' },
-            channel: { type: 'string', description: 'Optional for type="agent". Session and delivery channel: "scheduled", "cli", "telegram", or "web". Default: "scheduled".' },
-            userId: { type: 'string', description: 'Optional for type="agent". Canonical user id for the assistant session. Defaults to the primary user.' },
-            deliver: { type: 'boolean', description: 'Optional for type="agent". Deliver the assistant response back to the selected channel after the run.' },
-            cron: { type: 'string', description: 'Cron expression: "minute hour day month weekday" (e.g. "*/30 * * * *"). Provide this for recurring schedules.' },
-            eventTrigger: {
-              type: 'object',
-              description: 'Optional event trigger for non-cron tasks. Use this when the task should be manual-only or event-driven instead of recurring on a schedule.',
-              properties: {
-                eventType: { type: 'string', description: 'Event name that fires this task.' },
-              },
-              required: ['eventType'],
-            },
-            runOnce: { type: 'boolean', description: 'Optional. If true, run on the next matching cron time once, then disable the task automatically.' },
-            enabled: { type: 'boolean', description: 'Start enabled (default: true)' },
-            args: { type: 'object', description: 'Optional tool arguments as key-value pairs' },
-            approvalExpiresAt: { type: 'number', description: 'Optional Unix ms approval expiry. Defaults to a bounded TTL.' },
-            maxRunsPerWindow: { type: 'number', description: 'Optional max executions per 24h window before auto-pause.' },
-            dailySpendCap: { type: 'number', description: 'Optional daily token budget before auto-pause.' },
-            providerSpendCap: { type: 'number', description: 'Optional per-provider daily token budget before auto-pause.' },
-            emitEvent: { type: 'string', description: 'Optional event name to emit on completion' },
-          },
-          required: ['name', 'type', 'target'],
-        },
-      },
-      async (args, request) => {
-        if (!this.automationControlPlane) {
-          return { success: false, error: 'Task control plane is not available.' };
-        }
-        const result = this.automationControlPlane.createTask(normalizeTaskInput(args, request));
-        if (!result.success) {
-          return { success: false, error: result.message };
-        }
-        const task = result.task ? normalizeTaskSummary(result.task) : undefined;
-        const linkedWorkflow = result.task?.type === 'playbook'
-          ? this.automationControlPlane.listWorkflows().find((entry) => entry.id === result.task?.target)
-          : undefined;
-        const summary = result.task
-          ? formatScheduledTaskSummary(result.task)
-          : result.message;
-        return {
-          success: true,
-          message: summary,
-          output: {
-            ...result,
-            message: summary,
-            task,
-            workflow: linkedWorkflow ? normalizeWorkflowSummary(linkedWorkflow) : undefined,
-          },
-        };
-      },
-    );
-
-    this.registry.register(
-      {
-        name: 'task_update',
-        description: 'Update an existing scheduled task by id. Can change name, schedule (cron), enabled status, target, args, runOnce behavior, approval expiry, or budget settings. Scope changes refresh the task authority snapshot and later cron runs fail closed when approval expires or budgets are exhausted. Mutating - requires approval.',
-        shortDescription: 'Update a scheduled task (cron, enabled, args).',
-        risk: 'mutating',
-        category: 'automation',
-        deferLoading: true,
-        parameters: {
-          type: 'object',
-          properties: {
-            taskId: { type: 'string' },
-            name: { type: 'string' },
-            description: { type: 'string' },
-            type: { type: 'string', description: "Use 'tool', 'workflow', or 'agent'." },
-            target: { type: 'string' },
-            prompt: { type: 'string' },
-            channel: { type: 'string' },
-            userId: { type: 'string' },
-            deliver: { type: 'boolean' },
-            cron: { type: 'string' },
-            runOnce: { type: 'boolean', description: 'If true, disable the task automatically after its next execution.' },
-            enabled: { type: 'boolean' },
-            args: { type: 'object' },
-            approvalExpiresAt: { type: 'number' },
-            maxRunsPerWindow: { type: 'number' },
-            dailySpendCap: { type: 'number' },
-            providerSpendCap: { type: 'number' },
-            emitEvent: { type: 'string' },
-          },
-          required: ['taskId'],
-        },
-      },
-      async (args, request) => {
-        if (!this.automationControlPlane) {
-          return { success: false, error: 'Task control plane is not available.' };
-        }
-        const taskId = requireString(args.taskId, 'taskId');
-        const next = { ...args };
-        delete next.taskId;
-        const result = this.automationControlPlane.updateTask(taskId, normalizeTaskInput(next, request));
-        return { success: result.success, output: result, error: result.success ? undefined : result.message };
-      },
-    );
-
-    this.registry.register(
-      {
-        name: 'task_run',
-        description: 'Run a scheduled or manual task immediately by id. Supports tool, workflow, and assistant tasks. Mutating - requires approval.',
-        shortDescription: 'Run a saved task immediately.',
-        risk: 'mutating',
-        category: 'automation',
-        deferLoading: true,
-        parameters: {
-          type: 'object',
-          properties: {
-            taskId: { type: 'string' },
-          },
-          required: ['taskId'],
-        },
-      },
-      async (args) => {
-        if (!this.automationControlPlane) {
-          return { success: false, error: 'Task control plane is not available.' };
-        }
-        const taskId = requireString(args.taskId, 'taskId');
-        const result = await this.automationControlPlane.runTask(taskId);
-        return { success: result.success, output: result, error: result.success ? undefined : result.message };
-      },
-    );
-
-    this.registry.register(
-      {
-        name: 'task_delete',
-        description: 'Delete a scheduled task by id, removing its cron schedule. Mutating - requires approval.',
-        shortDescription: 'Delete a scheduled task by id.',
-        risk: 'mutating',
-        category: 'automation',
-        deferLoading: true,
-        parameters: {
-          type: 'object',
-          properties: {
-            taskId: { type: 'string' },
-          },
-          required: ['taskId'],
-        },
-      },
-      async (args) => {
-        if (!this.automationControlPlane) {
-          return { success: false, error: 'Task control plane is not available.' };
-        }
-        const taskId = requireString(args.taskId, 'taskId');
-        const result = this.automationControlPlane.deleteTask(taskId);
-        return { success: result.success, output: result, error: result.success ? undefined : result.message };
-      },
-    );
-
     // ── Policy Update Tool ───────────────────────────────────────
     // Allows the assistant to modify allowed paths/commands/domains with mandatory user approval.
     // Configurable per-action via agentPolicyUpdates config.
@@ -17470,18 +17004,6 @@ function normalizeTaskSummary(task: AutomationTaskSummary): Record<string, unkno
   };
 }
 
-function normalizeTaskInput(input: Record<string, unknown>, request?: ToolExecutionRequest): Record<string, unknown> {
-  const normalized: Record<string, unknown> = {
-    ...input,
-    principalId: request?.principalId ?? request?.userId,
-    principalRole: request?.principalRole ?? 'owner',
-  };
-  if (normalized.type === 'workflow') {
-    normalized.type = 'playbook';
-  }
-  return normalized;
-}
-
 function normalizeAutomationSaveInput(
   input: Record<string, unknown>,
   hasTool: (toolName: string) => boolean,
@@ -17637,14 +17159,6 @@ function formatToolArgsPreview(toolName: string, redactedArgs: unknown): string 
     const summary = summarizeAutomationDeletePreview(isRecord(redactedArgs) ? redactedArgs : {});
     if (summary) return sanitizePreview(summary);
   }
-  if (toolName === 'task_create' || toolName === 'task_update') {
-    const summary = summarizeScheduledTaskPreview(isRecord(redactedArgs) ? redactedArgs : {});
-    if (summary) return sanitizePreview(summary);
-  }
-  if (toolName === 'workflow_upsert') {
-    const summary = summarizeWorkflowPreview(isRecord(redactedArgs) ? redactedArgs : {});
-    if (summary) return sanitizePreview(summary);
-  }
   if (toolName === 'gws') {
     const summary = summarizeGwsPreview(isRecord(redactedArgs) ? redactedArgs : {});
     if (summary) return sanitizePreview(summary);
@@ -17664,8 +17178,18 @@ function summarizeAutomationSavePreview(args: Record<string, unknown>): string |
       : `save manual assistant automation ${name}`;
   }
   if (kind === 'standalone_task') {
-    const target = asString(isRecord(args.task) ? args.task.target : undefined).trim();
-    return `save tool automation ${name}${target ? ` targeting ${target}` : ''}`;
+    const task = isRecord(args.task) ? args.task : null;
+    const target = asString(task?.target).trim();
+    const schedule = isRecord(args.schedule) ? args.schedule : null;
+    const cron = schedule ? asString(schedule.cron).trim() : '';
+    const runOnce = schedule?.runOnce === true;
+    if (target === 'gws') {
+      const gwsSummary = summarizeGwsPreview(isRecord(task?.args) ? task?.args : {});
+      if (gwsSummary) {
+        return `save ${runOnce ? 'one-shot' : cron ? 'scheduled' : 'manual'} tool automation ${name}: ${gwsSummary}${cron ? ` on ${cron}` : ''}`;
+      }
+    }
+    return `save ${runOnce ? 'one-shot' : cron ? 'scheduled' : 'manual'} tool automation ${name}${target ? ` targeting ${target}` : ''}${cron ? ` on ${cron}` : ''}`;
   }
   const mode = asString(args.mode, 'sequential').trim() || 'sequential';
   const steps = Array.isArray(args.steps) ? args.steps.length : 0;
@@ -17690,16 +17214,6 @@ function summarizeAutomationDeletePreview(args: Record<string, unknown>): string
   const automationId = asString(args.automationId).trim();
   if (!automationId) return null;
   return `delete automation ${automationId}`;
-}
-
-function summarizeWorkflowPreview(args: Record<string, unknown>): string | null {
-  const id = asString(args.id).trim();
-  const name = asString(args.name).trim();
-  const mode = asString(args.mode).trim();
-  const schedule = asString(args.schedule).trim();
-  const steps = Array.isArray(args.steps) ? args.steps : [];
-  if (!id && !name) return null;
-  return `workflow ${name || id} (${mode || 'sequential'}, ${steps.length} step${steps.length === 1 ? '' : 's'}${schedule ? `, schedule ${schedule}` : ''})`;
 }
 
 function validateWorkflowDefinition(
@@ -17752,62 +17266,6 @@ function inferWorkflowStepType(step: Record<string, unknown>): 'tool' | 'instruc
     return 'instruction';
   }
   return 'tool';
-}
-
-function summarizeScheduledTaskPreview(args: Record<string, unknown>): string | null {
-  const name = asString(args.name).trim() || 'scheduled task';
-  const type = asString(args.type).trim();
-  const cron = asString(args.cron).trim();
-  const eventTrigger = isRecord(args.eventTrigger) ? args.eventTrigger : null;
-  const eventType = eventTrigger ? asString(eventTrigger.eventType).trim() : '';
-  const runOnce = args.runOnce === true;
-  if (type === 'agent') {
-    const target = asString(args.target).trim() || 'default';
-    if (eventType) {
-      return `manual assistant automation "${name}" for agent ${target} via ${eventType}`;
-    }
-    return `${runOnce ? 'one-shot' : 'scheduled'} assistant task "${name}" for agent ${target} on ${cron || '(no cron)'}`;
-  }
-  if (type === 'workflow' || type === 'playbook') {
-    const target = asString(args.target).trim();
-    if (eventType) {
-      return `manual workflow "${name}" targeting ${target || '(no target)'} via ${eventType}`;
-    }
-    return `${runOnce ? 'one-shot' : 'scheduled'} workflow "${name}" targeting ${target || '(no target)'} on ${cron || '(no cron)'}`;
-  }
-  if (type === 'tool') {
-    const target = asString(args.target).trim();
-    if (target === 'gws') {
-      const gwsSummary = summarizeGwsPreview(isRecord(args.args) ? args.args : {});
-      if (gwsSummary) {
-        return `${runOnce ? 'one-shot' : 'scheduled'} "${name}": ${gwsSummary} on ${cron || '(no cron)'}`;
-      }
-    }
-    return `${runOnce ? 'one-shot' : 'scheduled'} tool task "${name}" targeting ${target || '(no target)'} on ${cron || '(no cron)'}`;
-  }
-  return null;
-}
-
-function formatScheduledTaskSummary(
-  task: Pick<AutomationTaskSummary, 'id' | 'name' | 'type' | 'target' | 'cron' | 'eventTrigger'>,
-): string {
-  const taskId = asString(task.id).trim();
-  const taskName = asString(task.name).trim();
-  const taskType = asString(task.type).trim();
-  const target = asString(task.target).trim();
-  const cron = asString(task.cron).trim();
-  const eventType = asString(task.eventTrigger && isRecord(task.eventTrigger) ? task.eventTrigger.eventType : undefined).trim();
-  const typeLabel = taskType === 'workflow' || taskType === 'playbook'
-    ? 'scheduled workflow task'
-    : taskType === 'agent'
-      ? (eventType ? 'manual assistant automation' : 'scheduled assistant task')
-      : 'scheduled task';
-
-  if (taskType === 'agent' && eventType) {
-    return `${capitalizeFirst(typeLabel)} '${taskName || taskId}' (id: ${taskId || taskName}) targets '${target || 'unknown'}' and runs on demand.`;
-  }
-
-  return `${capitalizeFirst(typeLabel)} '${taskName || taskId}' (id: ${taskId || taskName}) targets '${target || 'unknown'}' on ${cron || '(no cron)'}.`;
 }
 
 function summarizeGwsPreview(args: Record<string, unknown>): string | null {
@@ -17878,42 +17336,10 @@ function extractAutomationSuccessMessage(toolName: string, output: unknown): str
     }
   }
 
-  if (toolName === 'workflow_upsert') {
-    const workflow = isRecord(output.workflow) ? output.workflow : {};
-    const linkedTasks = Array.isArray(output.linkedTasks) ? output.linkedTasks : [];
-    const workflowId = asString(workflow.id).trim();
-    const workflowName = asString(workflow.name).trim();
-    const stepCount = Array.isArray(workflow.steps) ? workflow.steps.length : 0;
-    if (workflowId || workflowName) {
-      return `Workflow '${workflowName || workflowId}' (id: ${workflowId || workflowName}) is saved with ${stepCount} step${stepCount === 1 ? '' : 's'}${linkedTasks.length > 0 ? ` and ${linkedTasks.length} linked scheduled task${linkedTasks.length === 1 ? '' : 's'}` : ''}.`;
-    }
-  }
-
-  if (toolName === 'task_create') {
-    const task = isRecord(output.task) ? output.task : {};
-    if (asString(task.id).trim() || asString(task.name).trim()) {
-      return formatScheduledTaskSummary({
-        id: asString(task.id).trim(),
-        name: asString(task.name).trim(),
-        type: (asString(task.type).trim() || 'tool') as AutomationTaskSummary['type'],
-        target: asString(task.target).trim(),
-        cron: asString(task.cron).trim() || undefined,
-        eventTrigger: isRecord(task.eventTrigger)
-          ? { eventType: asString(task.eventTrigger.eventType).trim() }
-          : undefined,
-      });
-    }
-  }
-
   return '';
 }
 
 function extractOutputMessage(output: unknown): string {
   if (!isRecord(output)) return '';
   return asString(output.message).trim();
-}
-
-function capitalizeFirst(value: string): string {
-  if (!value) return value;
-  return value[0].toUpperCase() + value.slice(1);
 }

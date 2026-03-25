@@ -148,10 +148,10 @@ describe('WorkerManager', () => {
     const sandbox = await import('../sandbox/index.js');
 
     const executeModelTool = vi.fn(async (toolName: string) => {
-      if (toolName === 'task_list') {
-        return { success: true, output: { tasks: [] } };
+      if (toolName === 'automation_list') {
+        return { success: true, output: { automations: [] } };
       }
-      if (toolName === 'task_create') {
+      if (toolName === 'automation_save') {
         return {
           success: false,
           status: 'pending_approval',
@@ -166,7 +166,7 @@ describe('WorkerManager', () => {
         listAlwaysLoadedDefinitions: () => [],
         executeModelTool,
         getApprovalSummaries: () => new Map([
-          ['approval-automation-1', { toolName: 'task_create', argsPreview: '{"name":"Weekday Lead Research"}' }],
+          ['approval-automation-1', { toolName: 'automation_save', argsPreview: '{"name":"Weekday Lead Research"}' }],
         ]),
         decideApproval: vi.fn(),
       } as never,
@@ -211,20 +211,20 @@ describe('WorkerManager', () => {
       pendingApprovals: [
         {
           id: 'approval-automation-1',
-          toolName: 'task_create',
+          toolName: 'automation_save',
         },
       ],
     });
     expect(executeModelTool).toHaveBeenNthCalledWith(
       1,
-      'task_list',
+      'automation_list',
       {},
       expect.objectContaining({ channel: 'web', userId: 'tester' }),
     );
     expect(executeModelTool.mock.calls.some((call) => (
-      call[0] === 'task_create'
+      call[0] === 'automation_save'
       && call[1]?.name === 'Weekday Lead Research'
-      && call[1]?.type === 'agent'
+      && call[1]?.kind === 'assistant_task'
     ))).toBe(true);
     expect(vi.mocked(sandbox.sandboxedSpawn)).not.toHaveBeenCalled();
 
@@ -245,10 +245,10 @@ describe('WorkerManager', () => {
           approvalId: 'approval-policy-1',
         };
       }
-      if (toolName === 'task_list') {
-        return { success: true, output: { tasks: [] } };
+      if (toolName === 'automation_list') {
+        return { success: true, output: { automations: [] } };
       }
-      if (toolName === 'task_create') {
+      if (toolName === 'automation_save') {
         return {
           success: false,
           status: 'pending_approval',
@@ -276,7 +276,7 @@ describe('WorkerManager', () => {
         decideApproval,
         getApprovalSummaries: () => new Map([
           ['approval-policy-1', { toolName: 'update_tool_policy', argsPreview: `{"action":"add_path","value":"${externalPath}"}` }],
-          ['approval-task-1', { toolName: 'task_create', argsPreview: '{"name":"Daily Lead Summary"}' }],
+          ['approval-task-1', { toolName: 'automation_save', argsPreview: '{"name":"Daily Lead Summary"}' }],
         ]),
         getPolicy: () => ({
           sandbox: {
@@ -367,7 +367,7 @@ describe('WorkerManager', () => {
       pendingApprovals: [
         {
           id: 'approval-task-1',
-          toolName: 'task_create',
+          toolName: 'automation_save',
         },
       ],
     });
@@ -391,7 +391,10 @@ describe('WorkerManager', () => {
           approvalId: 'approval-workflow-policy-1',
         };
       }
-      if (toolName === 'workflow_upsert') {
+      if (toolName === 'automation_list') {
+        return { success: true, output: { automations: [] } };
+      }
+      if (toolName === 'automation_save') {
         return {
           success: false,
           status: 'pending_approval',
@@ -419,7 +422,7 @@ describe('WorkerManager', () => {
         decideApproval,
         getApprovalSummaries: () => new Map([
           ['approval-workflow-policy-1', { toolName: 'update_tool_policy', argsPreview: `{"action":"add_path","value":"${externalPath}"}` }],
-          ['approval-workflow-create-1', { toolName: 'workflow_upsert', argsPreview: '{"name":"Lead Research Summary Workflow"}' }],
+          ['approval-workflow-create-1', { toolName: 'automation_save', argsPreview: '{"name":"Lead Research Summary Workflow"}' }],
         ]),
         listPendingApprovalIdsForUser: () => pathAllowed ? [] : ['approval-workflow-policy-1'],
         getPolicy: () => ({
@@ -506,17 +509,17 @@ describe('WorkerManager', () => {
     });
 
     expect(approved.content).toContain(`Policy updated: add_path '${externalPath}'.`);
-    expect(approved.content).toContain("native Guardian workflow");
+    expect(approved.content).toContain("native Guardian step-based automation");
     expect(approved.metadata).toMatchObject({
       pendingApprovals: [
         {
           id: 'approval-workflow-create-1',
-          toolName: 'workflow_upsert',
+          toolName: 'automation_save',
         },
       ],
     });
     expect(pathAllowed).toBe(true);
-    expect(executeModelTool.mock.calls.some((call) => call[0] === 'workflow_upsert')).toBe(true);
+    expect(executeModelTool.mock.calls.some((call) => call[0] === 'automation_save')).toBe(true);
     expect(vi.mocked(sandbox.sandboxedSpawn)).not.toHaveBeenCalled();
 
     manager.shutdown();

@@ -3751,7 +3751,7 @@ describe('ToolExecutor', () => {
     await expect(readFile(join(root, 'note.txt'), 'utf-8')).resolves.toBe('hello from scheduler');
   });
 
-  it('summarizes one-shot Gmail scheduled tasks without exposing raw RFC822 payloads', async () => {
+  it('summarizes one-shot Gmail automation saves without exposing raw RFC822 payloads', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
       enabled: true,
@@ -3768,20 +3768,23 @@ describe('ToolExecutor', () => {
     ).toString('base64url');
 
     const run = await executor.runTool({
-      toolName: 'task_create',
+      toolName: 'automation_save',
       args: {
+        id: 'send-email-to-alexander-kenley',
         name: 'Send Email to Alexander Kenley',
-        type: 'tool',
-        target: 'gws',
-        cron: '3 22 * * *',
-        runOnce: true,
-        args: {
-          service: 'gmail',
-          resource: 'users messages',
-          method: 'send',
-          params: { userId: 'me' },
-          json: { raw },
+        enabled: true,
+        kind: 'standalone_task',
+        task: {
+          target: 'gws',
+          args: {
+            service: 'gmail',
+            resource: 'users messages',
+            method: 'send',
+            params: { userId: 'me' },
+            json: { raw },
+          },
         },
+        schedule: { enabled: true, cron: '3 22 * * *', runOnce: true },
       },
       origin: 'cli',
     });
@@ -3796,7 +3799,7 @@ describe('ToolExecutor', () => {
     expect(job.argsPreview).not.toContain(raw);
   });
 
-  it('grounds workflow creation success on the saved workflow and linked schedule', async () => {
+  it('grounds workflow automation saves on the saved automation and linked schedule', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
       enabled: true,
@@ -3836,6 +3839,7 @@ describe('ToolExecutor', () => {
         workflow: workflows[0] as any,
         task: tasks[0] as any,
       }],
+      saveAutomation: () => ({ success: true, message: 'Saved.', automationId: 'daily-inbox-review', taskId: 'task-123' }),
       setAutomationEnabled: () => ({ success: true, message: 'ok' }),
       deleteAutomation: () => ({ success: true, message: 'ok' }),
       runAutomation: async () => ({ success: true, message: 'ok' }),
@@ -3846,30 +3850,35 @@ describe('ToolExecutor', () => {
       listTasks: () => tasks,
       createTask: () => ({ success: true, message: 'ok', task: tasks[0] }),
       updateTask: () => ({ success: true, message: 'ok' }),
+      runTask: async () => ({ success: true, message: 'ok' }),
       deleteTask: () => ({ success: true, message: 'ok' }),
     });
 
     const run = await executor.runTool({
-      toolName: 'workflow_upsert',
+      toolName: 'automation_save',
       args: {
         id: 'daily-inbox-review',
         name: 'Daily Gmail Inbox Review',
+        enabled: true,
+        kind: 'workflow',
         mode: 'sequential',
         steps: [{ id: 'step-1', toolName: 'gws' }],
+        schedule: { enabled: true, cron: '30 7 * * *' },
       },
       origin: 'web',
     });
 
     expect(run.success).toBe(true);
-    expect(run.message).toContain("Workflow 'Daily Gmail Inbox Review'");
-    expect(run.message).toContain('linked scheduled task');
+    expect(run.message).toContain('Automation id: daily-inbox-review');
+    expect(run.message).toContain('Linked task: task-123');
     expect(run.verificationStatus).toBe('verified');
     expect(run.output).toMatchObject({
-      workflow: { id: 'daily-inbox-review', name: 'Daily Gmail Inbox Review' },
+      automationId: 'daily-inbox-review',
+      taskId: 'task-123',
     });
   });
 
-  it('defaults workflow_upsert enabled to true and rejects unknown step tools up front', async () => {
+  it('rejects unknown workflow step tools up front through automation_save', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
       enabled: true,
@@ -3880,53 +3889,30 @@ describe('ToolExecutor', () => {
       allowedDomains: ['localhost'],
     });
 
-    let storedWorkflow: Record<string, unknown> | null = null;
-    const upsertWorkflow = vi.fn((workflow: Record<string, unknown>) => {
-      storedWorkflow = workflow;
-      return { success: true, message: "Added playbook 'browser-read-smoke'." };
-    });
-
     executor.setAutomationControlPlane({
-      listAutomations: () => storedWorkflow ? [{
-        id: 'browser-read-smoke',
-        name: 'Browser Read Smoke',
-        description: '',
-        kind: 'workflow',
-        enabled: true,
-        workflow: storedWorkflow as any,
-      }] : [],
+      listAutomations: () => [],
+      saveAutomation: () => ({ success: true, message: 'Saved.', automationId: 'browser-read-smoke' }),
       setAutomationEnabled: () => ({ success: true, message: 'ok' }),
       deleteAutomation: () => ({ success: true, message: 'ok' }),
       runAutomation: async () => ({ success: true, message: 'ok' }),
-      listWorkflows: () => storedWorkflow ? [storedWorkflow as any] : [],
-      upsertWorkflow,
+      listWorkflows: () => [],
+      upsertWorkflow: () => ({ success: true, message: 'ok' }),
       deleteWorkflow: () => ({ success: true, message: 'ok' }),
       runWorkflow: async () => ({ success: true, message: 'ok', status: 'succeeded' }),
       listTasks: () => [],
       createTask: () => ({ success: true, message: 'ok' }),
       updateTask: () => ({ success: true, message: 'ok' }),
+      runTask: async () => ({ success: true, message: 'ok' }),
       deleteTask: () => ({ success: true, message: 'ok' }),
     });
 
-    const goodRun = await executor.runTool({
-      toolName: 'workflow_upsert',
-      args: {
-        id: 'browser-read-smoke',
-        name: 'Browser Read Smoke',
-        mode: 'sequential',
-        steps: [{ id: 'step-1', toolName: 'web_fetch', args: { url: 'https://localhost/status' } }],
-      },
-      origin: 'web',
-    });
-
-    expect(goodRun.success).toBe(true);
-    expect(upsertWorkflow).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }));
-
     const badRun = await executor.runTool({
-      toolName: 'workflow_upsert',
+      toolName: 'automation_save',
       args: {
         id: 'browser-extract-smoke',
         name: 'Browser Extract Smoke',
+        enabled: true,
+        kind: 'workflow',
         mode: 'sequential',
         steps: [{ id: 'step-1', toolName: 'mcp_playwright_browser_navigate', args: { url: 'https://github.com' } }],
       },
@@ -3939,7 +3925,7 @@ describe('ToolExecutor', () => {
     expect(badRun.message).toContain('browser_navigate');
   });
 
-  it('grounds scheduled workflow task creation on the created task target', async () => {
+  it('grounds standalone tool automation saves on the created saved task', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
       enabled: true,
@@ -3950,98 +3936,25 @@ describe('ToolExecutor', () => {
       allowedDomains: ['localhost'],
     });
 
-    const workflow = {
-      id: 'daily-inbox-review',
-      name: 'Daily Gmail Inbox Review',
-      enabled: true,
-      mode: 'sequential',
-      steps: [],
-    };
     const task = {
-      id: 'task-123',
-      name: 'Daily Gmail Inbox Review',
-      type: 'playbook' as const,
-      target: 'daily-inbox-review',
+      id: 'task-http-monitor',
+      name: 'HTTP Monitor Local',
+      type: 'tool' as const,
+      target: 'web_fetch',
       cron: '30 7 * * *',
       enabled: true,
     };
 
     executor.setAutomationControlPlane({
       listAutomations: () => [{
-        id: 'daily-inbox-review',
-        name: 'Daily Gmail Inbox Review',
+        id: 'task-http-monitor',
+        name: 'HTTP Monitor Local',
         description: '',
-        kind: 'workflow',
-        enabled: true,
-        workflow: workflow as any,
-        task: task as any,
-      }],
-      setAutomationEnabled: () => ({ success: true, message: 'ok' }),
-      deleteAutomation: () => ({ success: true, message: 'ok' }),
-      runAutomation: async () => ({ success: true, message: 'ok' }),
-      listWorkflows: () => [workflow],
-      upsertWorkflow: () => ({ success: true, message: 'ok' }),
-      deleteWorkflow: () => ({ success: true, message: 'ok' }),
-      runWorkflow: async () => ({ success: true, message: 'ok', status: 'succeeded' }),
-      listTasks: () => [task],
-      createTask: () => ({ success: true, message: 'ok', task }),
-      updateTask: () => ({ success: true, message: 'ok' }),
-      deleteTask: () => ({ success: true, message: 'ok' }),
-    });
-
-    const run = await executor.runTool({
-      toolName: 'task_create',
-      args: {
-        name: 'Daily Gmail Inbox Review',
-        type: 'workflow',
-        target: 'daily-inbox-review',
-        cron: '30 7 * * *',
-      },
-      origin: 'web',
-    });
-
-    expect(run.success).toBe(true);
-    expect(run.message).toContain("Scheduled workflow task 'Daily Gmail Inbox Review'");
-    expect(run.message).toContain("daily-inbox-review");
-    expect(run.verificationStatus).toBe('verified');
-    expect(run.output).toMatchObject({
-      task: { id: 'task-123', target: 'daily-inbox-review', type: 'workflow' },
-      workflow: { id: 'daily-inbox-review', name: 'Daily Gmail Inbox Review' },
-    });
-  });
-
-  it('summarizes manual assistant automations as on-demand runs', async () => {
-    const root = createExecutorRoot();
-    const executor = new ToolExecutor({
-      enabled: true,
-      workspaceRoot: root,
-      policyMode: 'autonomous',
-      allowedPaths: [root],
-      allowedCommands: ['echo'],
-      allowedDomains: ['localhost'],
-    });
-
-    const task = {
-      id: 'task-manual-123',
-      name: 'Company Homepage Collector',
-      type: 'agent' as const,
-      target: 'default',
-      enabled: true,
-      eventTrigger: { eventType: 'automation:manual:company-homepage-collector' },
-      prompt: 'Collect company homepages.',
-      channel: 'scheduled',
-      deliver: false,
-    };
-
-    executor.setAutomationControlPlane({
-      listAutomations: () => [{
-        id: 'task-manual-123',
-        name: 'Company Homepage Collector',
-        description: '',
-        kind: 'assistant_task',
+        kind: 'standalone_task',
         enabled: true,
         task: task as any,
       }],
+      saveAutomation: () => ({ success: true, message: 'Saved.', automationId: 'task-http-monitor', taskId: 'task-http-monitor' }),
       setAutomationEnabled: () => ({ success: true, message: 'ok' }),
       deleteAutomation: () => ({ success: true, message: 'ok' }),
       runAutomation: async () => ({ success: true, message: 'ok' }),
@@ -4052,47 +3965,50 @@ describe('ToolExecutor', () => {
       listTasks: () => [task],
       createTask: () => ({ success: true, message: 'ok', task }),
       updateTask: () => ({ success: true, message: 'ok' }),
+      runTask: async () => ({ success: true, message: 'ok' }),
       deleteTask: () => ({ success: true, message: 'ok' }),
     });
 
     const run = await executor.runTool({
-      toolName: 'task_create',
+      toolName: 'automation_save',
       args: {
-        name: 'Company Homepage Collector',
-        type: 'agent',
-        target: 'default',
-        prompt: 'Collect company homepages.',
-        eventTrigger: { eventType: 'automation:manual:company-homepage-collector' },
+        id: 'task-http-monitor',
+        name: 'HTTP Monitor Local',
+        enabled: true,
+        kind: 'standalone_task',
+        task: {
+          target: 'web_fetch',
+          args: { url: 'https://localhost/health' },
+        },
+        schedule: { enabled: true, cron: '30 7 * * *' },
       },
       origin: 'web',
     });
 
     expect(run.success).toBe(true);
-    expect(run.message).toContain("Manual assistant automation 'Company Homepage Collector'");
-    expect(run.message).toContain('runs on demand');
+    expect(run.message).toContain('Automation id: task-http-monitor');
+    expect(run.message).toContain('Linked task: task-http-monitor');
+    expect(run.verificationStatus).toBe('verified');
     expect(run.output).toMatchObject({
-      task: {
-        id: 'task-manual-123',
-        type: 'agent',
-        eventTrigger: { eventType: 'automation:manual:company-homepage-collector' },
-      },
+      automationId: 'task-http-monitor',
+      taskId: 'task-http-monitor',
     });
   });
 
-  it('runs saved tasks immediately through task_run', async () => {
+  it('summarizes manual assistant automation saves as on-demand runs', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({
       enabled: true,
       workspaceRoot: root,
-      policyMode: 'autonomous',
+      policyMode: 'approve_by_policy',
       allowedPaths: [root],
       allowedCommands: ['echo'],
       allowedDomains: ['localhost'],
     });
 
-    const runTask = vi.fn(async () => ({ success: true, message: 'Manual run triggered.' }));
     executor.setAutomationControlPlane({
       listAutomations: () => [],
+      saveAutomation: () => ({ success: true, message: 'Saved.', automationId: 'task-manual-123', taskId: 'task-manual-123' }),
       setAutomationEnabled: () => ({ success: true, message: 'ok' }),
       deleteAutomation: () => ({ success: true, message: 'ok' }),
       runAutomation: async () => ({ success: true, message: 'ok' }),
@@ -4103,14 +4019,65 @@ describe('ToolExecutor', () => {
       listTasks: () => [],
       createTask: () => ({ success: true, message: 'ok' }),
       updateTask: () => ({ success: true, message: 'ok' }),
-      runTask,
+      runTask: async () => ({ success: true, message: 'ok' }),
       deleteTask: () => ({ success: true, message: 'ok' }),
     });
 
     const run = await executor.runTool({
-      toolName: 'task_run',
+      toolName: 'automation_save',
       args: {
-        taskId: 'task-manual-123',
+        id: 'company-homepage-collector',
+        name: 'Company Homepage Collector',
+        enabled: true,
+        kind: 'assistant_task',
+        task: {
+          target: 'default',
+          prompt: 'Collect company homepages.',
+        },
+      },
+      origin: 'web',
+    });
+
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('pending_approval');
+    const job = executor.listJobs(1)[0];
+    expect(job.argsPreview).toContain('manual assistant automation');
+    expect(job.argsPreview).toContain('Company Homepage Collector');
+  });
+
+  it('runs saved automations immediately through automation_run', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const runAutomation = vi.fn(async () => ({ success: true, message: 'Manual run triggered.' }));
+    executor.setAutomationControlPlane({
+      listAutomations: () => [],
+      saveAutomation: () => ({ success: true, message: 'Saved.', automationId: 'task-manual-123' }),
+      setAutomationEnabled: () => ({ success: true, message: 'ok' }),
+      deleteAutomation: () => ({ success: true, message: 'ok' }),
+      runAutomation,
+      listWorkflows: () => [],
+      upsertWorkflow: () => ({ success: true, message: 'ok' }),
+      deleteWorkflow: () => ({ success: true, message: 'ok' }),
+      runWorkflow: async () => ({ success: true, message: 'ok', status: 'succeeded' }),
+      listTasks: () => [],
+      createTask: () => ({ success: true, message: 'ok' }),
+      updateTask: () => ({ success: true, message: 'ok' }),
+      runTask: async () => ({ success: true, message: 'ok' }),
+      deleteTask: () => ({ success: true, message: 'ok' }),
+    });
+
+    const run = await executor.runTool({
+      toolName: 'automation_run',
+      args: {
+        automationId: 'task-manual-123',
       },
       origin: 'web',
     });
@@ -4121,7 +4088,7 @@ describe('ToolExecutor', () => {
       success: true,
       message: 'Manual run triggered.',
     });
-    expect(runTask).toHaveBeenCalledWith('task-manual-123');
+    expect(runAutomation).toHaveBeenCalledWith(expect.objectContaining({ automationId: 'task-manual-123' }));
   });
 
   it('lists automations through automation_list using the canonical catalog', async () => {
@@ -4152,6 +4119,7 @@ describe('ToolExecutor', () => {
           steps: [{ id: 'step-1', type: 'tool', packId: '', toolName: 'browser_navigate', args: { url: 'https://example.com' } }],
         },
       }],
+      saveAutomation: () => ({ success: true, message: 'Saved.', automationId: 'builtin-browser-read' }),
       setAutomationEnabled: () => ({ success: true, message: 'ok' }),
       deleteAutomation: () => ({ success: true, message: 'ok' }),
       runAutomation: async () => ({ success: true, message: 'ok' }),
@@ -4199,6 +4167,7 @@ describe('ToolExecutor', () => {
     const setAutomationEnabled = vi.fn(() => ({ success: true, message: 'Disabled automation.' }));
     executor.setAutomationControlPlane({
       listAutomations: () => [],
+      saveAutomation: () => ({ success: true, message: 'Saved.', automationId: 'browser-read-smoke' }),
       setAutomationEnabled,
       deleteAutomation: () => ({ success: true, message: 'ok' }),
       runAutomation: async () => ({ success: true, message: 'ok' }),

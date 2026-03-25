@@ -649,15 +649,6 @@ function describeApprovalAction(approval) {
   if (toolName === 'automation_delete') {
     return preview ? `Delete ${preview}` : 'Delete automation';
   }
-  if (toolName === 'task_create') {
-    return preview ? `Create ${preview}` : 'Create scheduled automation';
-  }
-  if (toolName === 'task_update') {
-    return preview ? `Update ${preview}` : 'Update scheduled automation';
-  }
-  if (toolName === 'workflow_upsert') {
-    return preview ? `Save ${preview}` : 'Save workflow';
-  }
   if (preview) {
     return `${toolName}: ${preview}`;
   }
