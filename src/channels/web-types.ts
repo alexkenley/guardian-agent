@@ -1130,17 +1130,6 @@ export interface DashboardCallbacks {
   }) => { success: boolean; message: string };
   onConnectorsPackUpsert?: (pack: AssistantConnectorPackConfig) => { success: boolean; message: string };
   onConnectorsPackDelete?: (packId: string) => { success: boolean; message: string };
-  onPlaybookUpsert?: (playbook: AssistantConnectorPlaybookDefinition) => { success: boolean; message: string };
-  onPlaybookDelete?: (playbookId: string) => { success: boolean; message: string };
-  onPlaybookRun?: (input: {
-    playbookId: string;
-    dryRun?: boolean;
-    origin?: 'assistant' | 'cli' | 'web';
-    agentId?: string;
-    userId?: string;
-    channel?: string;
-    requestedBy?: string;
-  }) => Promise<ConnectorPlaybookRunResult> | ConnectorPlaybookRunResult;
   onStreamDispatch?: (
     agentId: string,
     message: {

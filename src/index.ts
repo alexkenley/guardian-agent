@@ -14,7 +14,14 @@ import { readFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { loadConfig, DEFAULT_CONFIG_PATH, deepMerge, validateConfig } from './config/loader.js';
-import type { BrowserConfig, CredentialRefConfig, GuardianAgentConfig, MCPServerEntry, WebSearchConfig } from './config/types.js';
+import type {
+  AssistantConnectorPlaybookDefinition,
+  BrowserConfig,
+  CredentialRefConfig,
+  GuardianAgentConfig,
+  MCPServerEntry,
+  WebSearchConfig,
+} from './config/types.js';
 import { normalizeHttpUrlRecord, normalizeOptionalHttpUrlInput } from './config/input-normalization.js';
 import yaml from 'js-yaml';
 import { Runtime } from './runtime/runtime.js';
@@ -84,7 +91,11 @@ import { evaluateSetupStatus } from './runtime/setup.js';
 import { AiSecurityService, createAiSecuritySessionSnapshot } from './runtime/ai-security.js';
 import { ThreatIntelService } from './runtime/threat-intel.js';
 import { createThreatIntelSourceScanners } from './runtime/threat-intel-osint.js';
-import { ConnectorPlaybookService, type PlaybookStepRunResult } from './runtime/connectors.js';
+import {
+  ConnectorPlaybookService,
+  type ConnectorPlaybookRunResult,
+  type PlaybookStepRunResult,
+} from './runtime/connectors.js';
 import { JsonFileRunStateStore } from './runtime/run-state-store.js';
 import { installTemplate, listTemplates, autoInstallAllTemplates } from './runtime/builtin-packs.js';
 import { DeviceInventoryService } from './runtime/device-inventory.js';
@@ -4947,6 +4958,19 @@ function buildDashboardCallbacks(
   microsoftServiceRef: { current: import('./microsoft/microsoft-service.js').MicrosoftService | null },
   toolExecutorRef: { current: import('./tools/executor.js').ToolExecutor | null },
 ): DashboardCallbacks & {
+  connectorWorkflowOps: {
+    upsert: (playbook: AssistantConnectorPlaybookDefinition) => { success: boolean; message: string };
+    delete: (playbookId: string) => { success: boolean; message: string };
+    run: (input: {
+      playbookId: string;
+      dryRun?: boolean;
+      origin?: 'assistant' | 'cli' | 'web';
+      agentId?: string;
+      userId?: string;
+      channel?: string;
+      requestedBy?: string;
+    }) => Promise<ConnectorPlaybookRunResult>;
+  };
   telegramReloadRef: { current: (() => Promise<{ success: boolean; message: string }>) | null };
   reloadSearchRef: { current: (() => Promise<{ success: boolean; message: string }>) | null };
 } {
@@ -5513,6 +5537,85 @@ function buildDashboardCallbacks(
       changedBy: 'connectors-control-plane',
       reason: 'connector/playbook update',
     });
+  };
+  const connectorWorkflowOps = {
+    upsert: (playbook: AssistantConnectorPlaybookDefinition) => {
+      const before = connectors.getConfig();
+      const result = connectors.upsertPlaybook(playbook);
+      if (!result.success) return result;
+      const persisted = persistConnectorsState();
+      if (!persisted.success) {
+        connectors.updateConfig(before);
+        return persisted;
+      }
+      analytics.track({
+        type: 'playbook_upserted',
+        channel: 'system',
+        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
+        metadata: { playbookId: playbook.id, enabled: String(playbook.enabled), mode: playbook.mode },
+      });
+      return result;
+    },
+    delete: (playbookId: string) => {
+      const before = connectors.getConfig();
+      const result = connectors.deletePlaybook(playbookId);
+      if (!result.success) return result;
+      const persisted = persistConnectorsState();
+      if (!persisted.success) {
+        connectors.updateConfig(before);
+        return persisted;
+      }
+      analytics.track({
+        type: 'playbook_deleted',
+        channel: 'system',
+        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
+        metadata: { playbookId },
+      });
+      return result;
+    },
+    run: async (input: {
+      playbookId: string;
+      dryRun?: boolean;
+      origin?: 'assistant' | 'cli' | 'web';
+      agentId?: string;
+      userId?: string;
+      channel?: string;
+      requestedBy?: string;
+    }) => {
+      const result = await connectors.runPlaybook({
+        playbookId: input.playbookId,
+        dryRun: input.dryRun,
+        origin: input.origin ?? 'web',
+        agentId: input.agentId,
+        userId: input.userId,
+        channel: input.channel,
+        requestedBy: input.requestedBy,
+      });
+      analytics.track({
+        type: result.success ? 'playbook_run_succeeded' : 'playbook_run_failed',
+        channel: input.channel ?? 'system',
+        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
+        channelUserId: input.userId ?? 'system',
+        agentId: input.agentId,
+        metadata: {
+          playbookId: input.playbookId,
+          status: result.status,
+          dryRun: String(!!input.dryRun),
+        },
+      });
+      if (result.run?.steps) {
+        deviceInventory.ingestPlaybookResults(result.run.steps);
+        const hasNetworkScanSteps = result.run.steps.some((step) =>
+          step.toolName === 'net_arp_scan'
+          || step.toolName === 'net_port_check'
+          || step.toolName === 'net_dns_lookup',
+        );
+        if (hasNetworkScanSteps) {
+          runNetworkAnalysis('playbook-run:web');
+        }
+      }
+      return result;
+    },
   };
 
   const buildProviderInfo = async (withConnectivity: boolean): Promise<DashboardProviderInfo[]> => {
@@ -6444,79 +6547,7 @@ function buildDashboardCallbacks(
       return result;
     },
 
-    onPlaybookUpsert: (playbook) => {
-      const before = connectors.getConfig();
-      const result = connectors.upsertPlaybook(playbook);
-      if (!result.success) return result;
-      const persisted = persistConnectorsState();
-      if (!persisted.success) {
-        connectors.updateConfig(before);
-        return persisted;
-      }
-      analytics.track({
-        type: 'playbook_upserted',
-        channel: 'system',
-        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        metadata: { playbookId: playbook.id, enabled: String(playbook.enabled), mode: playbook.mode },
-      });
-      return result;
-    },
-
-    onPlaybookDelete: (playbookId) => {
-      const before = connectors.getConfig();
-      const result = connectors.deletePlaybook(playbookId);
-      if (!result.success) return result;
-      const persisted = persistConnectorsState();
-      if (!persisted.success) {
-        connectors.updateConfig(before);
-        return persisted;
-      }
-
-      analytics.track({
-        type: 'playbook_deleted',
-        channel: 'system',
-        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        metadata: { playbookId },
-      });
-      return result;
-    },
-
-    onPlaybookRun: async (input) => {
-      const result = await connectors.runPlaybook({
-        playbookId: input.playbookId,
-        dryRun: input.dryRun,
-        origin: input.origin ?? 'web',
-        agentId: input.agentId,
-        userId: input.userId,
-        channel: input.channel,
-        requestedBy: input.requestedBy,
-      });
-      analytics.track({
-        type: result.success ? 'playbook_run_succeeded' : 'playbook_run_failed',
-        channel: input.channel ?? 'system',
-        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        channelUserId: input.userId ?? 'system',
-        agentId: input.agentId,
-        metadata: {
-          playbookId: input.playbookId,
-          status: result.status,
-          dryRun: String(!!input.dryRun),
-        },
-      });
-      // Feed step outputs to device inventory
-      if (result.run?.steps) {
-        deviceInventory.ingestPlaybookResults(result.run.steps);
-        const hasNetworkScanSteps = result.run.steps.some((step) =>
-          step.toolName === 'net_arp_scan'
-          || step.toolName === 'net_port_check'
-          || step.toolName === 'net_dns_lookup',
-        );
-        if (hasNetworkScanSteps) {
-          runNetworkAnalysis('playbook-run:web');
-        }
-      }
-      return result;
-    },
+    connectorWorkflowOps,
 
     onConnectorsTemplates: () => listTemplates(connectors),
 
@@ -11824,6 +11855,7 @@ async function main(): Promise<void> {
   }, 5 * 60 * 1000).unref();
 
   const {
+    connectorWorkflowOps,
     telegramReloadRef,
     reloadSearchRef,
     ...dashboardCallbacks
@@ -11936,11 +11968,7 @@ async function main(): Promise<void> {
     });
   };
 
-  const basePlaybookUpsert = dashboardCallbacks.onPlaybookUpsert;
-  const basePlaybookDelete = dashboardCallbacks.onPlaybookDelete;
-  const basePlaybookRun = dashboardCallbacks.onPlaybookRun;
-  const automationRuntime = (basePlaybookUpsert && basePlaybookDelete && basePlaybookRun)
-    ? createAutomationRuntimeService({
+  const automationRuntime = createAutomationRuntimeService({
         workflows: {
           list: () => connectors.getState().playbooks.map((workflow) => ({
             ...workflow,
@@ -11952,9 +11980,9 @@ async function main(): Promise<void> {
             steps: run.steps.map((step) => ({ ...step })),
             ...(run.outputHandling ? { outputHandling: { ...run.outputHandling } } : {}),
           })),
-          upsert: (playbook) => basePlaybookUpsert(playbook),
-          delete: (playbookId) => basePlaybookDelete(playbookId),
-          run: async (input) => basePlaybookRun(input),
+          upsert: (playbook) => connectorWorkflowOps.upsert(playbook),
+          delete: (playbookId) => connectorWorkflowOps.delete(playbookId),
+          run: async (input) => connectorWorkflowOps.run(input),
         },
         tasks: {
           list: () => scheduledTasks.list(),
@@ -11992,7 +12020,7 @@ async function main(): Promise<void> {
           attachPlaybookPromotions(result, input);
         },
       })
-    : null;
+  ;
 
   reloadSearchRef.current = initialSearchReloadRef.current;
 
@@ -12096,12 +12124,6 @@ async function main(): Promise<void> {
 
   // ─── Scheduled Tasks callbacks ─────────────────────────
   if (automationRuntime) {
-    dashboardCallbacks.onPlaybookUpsert = (playbook) => automationRuntime.upsertWorkflow(playbook);
-    dashboardCallbacks.onPlaybookDelete = (playbookId) => automationRuntime.deleteWorkflow(playbookId);
-    dashboardCallbacks.onPlaybookRun = async (input) => automationRuntime.runWorkflow({
-      ...input,
-      origin: input.origin ?? 'web',
-    });
     dashboardCallbacks.onScheduledTasks = () => automationRuntime.listTasks();
     dashboardCallbacks.onScheduledTaskGet = (id) => automationRuntime.getTask(id);
     dashboardCallbacks.onScheduledTaskCreate = (input) => automationRuntime.createTask(input);

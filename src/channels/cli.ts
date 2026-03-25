@@ -3,7 +3,7 @@
  *
  * Interactive readline prompt with full dashboard parity.
  * Commands: /chat, /agents, /agent, /status, /assistant, /providers, /budget, /watchdog,
- * /config, /campaign, /connectors, /playbooks, /audit, /security, /models, /intel, /clear, /help, /quit, /exit.
+ * /config, /campaign, /connectors, /automations, /audit, /security, /models, /intel, /clear, /help, /quit, /exit.
  *
  * Accepts the same DashboardCallbacks interface as the web channel for
  * instant feature parity with zero duplication.
@@ -327,18 +327,18 @@ const CLI_HELP_TOPICS: readonly CliHelpTopic[] = [
     ],
   },
   {
-    aliases: ['playbooks'],
-    title: '/playbooks',
-    summary: 'List playbooks, inspect recent runs, run one, or change the registered definitions.',
+    aliases: ['automations'],
+    title: '/automations',
+    summary: 'List automations, inspect recent runs, run one, or save/delete a definition.',
     usage: [
-      '/playbooks list',
-      '/playbooks runs',
-      '/playbooks run <playbookId> [--dry-run]',
-      '/playbooks upsert <json>',
-      '/playbooks delete <playbookId>',
+      '/automations list',
+      '/automations runs',
+      '/automations run <automationId> [--dry-run]',
+      '/automations save <json>',
+      '/automations delete <automationId>',
     ],
     examples: [
-      '/playbooks run infra-audit --dry-run',
+      '/automations run browser-read-smoke --dry-run',
     ],
     notes: [
       'run returns the created run id and any pending approval ids for steps that need approval.',
@@ -1105,8 +1105,8 @@ export class CLIChannel implements ChannelAdapter {
       case 'connectors':
         await this.handleConnectors(args);
         break;
-      case 'playbooks':
-        await this.handlePlaybooks(args);
+      case 'automations':
+        await this.handleAutomations(args);
         break;
       case 'config':
         await this.handleConfig(args);
@@ -1265,7 +1265,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /skills [list|show|enable|disable]      Inspect and toggle runtime skills\n');
     this.write('  /campaign ...                            Contact discovery + email campaign workflows\n');
     this.write('  /connectors [status|packs|settings|pack] Connector framework control plane\n');
-    this.write('  /playbooks [list|run|upsert|delete|runs] Playbook registry + execution\n');
+    this.write('  /automations [list|run|save|delete|runs] Automation catalog + execution\n');
     this.write('  /google [status|login]                   Google Workspace connection\n');
     this.write('\n');
     this.write(this.bold('Security & Audit\n'));
@@ -3137,28 +3137,29 @@ export class CLIChannel implements ChannelAdapter {
     this.write('  /connectors pack delete <packId>\n\n');
   }
 
-  // ─── /playbooks ──────────────────────────────────────────────
+  // ─── /automations ────────────────────────────────────────────
 
-  private async handlePlaybooks(args: string[]): Promise<void> {
-    if (!this.dashboard?.onConnectorsState) {
-      this.write('\nPlaybooks are not available.\n\n');
+  private async handleAutomations(args: string[]): Promise<void> {
+    if (!this.dashboard?.onAutomationCatalog) {
+      this.write('\nAutomations are not available.\n\n');
       return;
     }
     const sub = (args[0] ?? 'list').toLowerCase();
-    const state = this.dashboard.onConnectorsState({ limitRuns: 40 });
+    const automations = this.dashboard.onAutomationCatalog();
 
     if (sub === 'list') {
-      if (state.playbooks.length === 0) {
-        this.write('\nNo playbooks configured.\n\n');
+      if (automations.length === 0) {
+        this.write('\nNo automations configured.\n\n');
         return;
       }
-      const headers = ['ID', 'Name', 'Mode', 'Enabled', 'Steps'];
-      const rows = state.playbooks.map((playbook) => [
-        playbook.id,
-        playbook.name,
-        playbook.mode,
-        String(playbook.enabled),
-        String(playbook.steps.length),
+      const headers = ['ID', 'Name', 'Kind', 'Source', 'Enabled', 'Schedule'];
+      const rows = automations.map((automation) => [
+        automation.id,
+        automation.name,
+        automation.kind,
+        automation.builtin ? 'builtin' : (automation.sourceKind || 'saved'),
+        String(automation.enabled),
+        automation.cron || (automation.scheduleEnabled ? 'manual' : '-'),
       ]);
       this.write('\n');
       this.writeTable(headers, rows);
@@ -3167,18 +3168,23 @@ export class CLIChannel implements ChannelAdapter {
     }
 
     if (sub === 'runs') {
-      if (state.runs.length === 0) {
-        this.write('\nNo playbook runs yet.\n\n');
+      if (!this.dashboard.onAutomationRunHistory) {
+        this.write('\nAutomation run history is not available.\n\n');
         return;
       }
-      const headers = ['Run', 'Playbook', 'Status', 'DryRun', 'Duration', 'Message'];
-      const rows = state.runs.map((run) => [
+      const runs = this.dashboard.onAutomationRunHistory();
+      if (runs.length === 0) {
+        this.write('\nNo automation runs yet.\n\n');
+        return;
+      }
+      const headers = ['Run', 'Automation', 'Source', 'Status', 'Duration', 'Message'];
+      const rows = runs.map((run) => [
         run.id,
-        run.playbookId,
+        run.name,
+        run.source,
         run.status,
-        String(run.dryRun),
-        `${run.durationMs}ms`,
-        run.message,
+        `${run.duration}ms`,
+        run.message ?? '',
       ]);
       this.write('\n');
       this.writeTable(headers, rows);
@@ -3187,18 +3193,18 @@ export class CLIChannel implements ChannelAdapter {
     }
 
     if (sub === 'run') {
-      if (!this.dashboard.onPlaybookRun) {
-        this.write('\nPlaybook execution is not available.\n\n');
+      if (!this.dashboard.onAutomationRun) {
+        this.write('\nAutomation execution is not available.\n\n');
         return;
       }
-      const playbookId = args[1];
-      if (!playbookId) {
-        this.write('\nUsage: /playbooks run <playbookId> [--dry-run]\n\n');
+      const automationId = args[1];
+      if (!automationId) {
+        this.write('\nUsage: /automations run <automationId> [--dry-run]\n\n');
         return;
       }
       const dryRun = args.includes('--dry-run');
-      const result = await this.dashboard.onPlaybookRun({
-        playbookId,
+      const result = await this.dashboard.onAutomationRun({
+        automationId,
         dryRun,
         origin: 'cli',
         agentId: this.activeAgentId ?? this.defaultAgentId,
@@ -3206,61 +3212,73 @@ export class CLIChannel implements ChannelAdapter {
         channel: 'cli',
         requestedBy: 'cli-user',
       });
-      this.write(`\n${result.success ? this.green('OK') : this.yellow('INFO')}: ${result.message}\n`);
-      this.write(`  Run: ${result.run.id}\n`);
-      this.write(`  Status: ${result.run.status}\n`);
-      this.write(`  Steps: ${result.run.steps.length}\n`);
-      const approvals = result.run.steps.filter((step) => !!step.approvalId);
-      if (approvals.length > 0) {
-        this.write(`  Pending approvals: ${approvals.map((step) => step.approvalId).join(', ')}\n`);
+      const success = result && typeof result === 'object' && (result as { success?: unknown }).success === true;
+      const message = result && typeof result === 'object' && typeof (result as { message?: unknown }).message === 'string'
+        ? (result as { message: string }).message
+        : 'Automation run completed.';
+      this.write(`\n${success ? this.green('OK') : this.yellow('INFO')}: ${message}\n`);
+      const run = result && typeof result === 'object' && (result as { run?: unknown }).run && typeof (result as { run?: unknown }).run === 'object'
+        ? (result as { run: Record<string, unknown> }).run
+        : null;
+      if (run) {
+        const runId = typeof run.id === 'string' ? run.id : '';
+        const runStatus = typeof run.status === 'string' ? run.status : '';
+        const steps = Array.isArray(run.steps) ? run.steps : [];
+        if (runId) this.write(`  Run: ${runId}\n`);
+        if (runStatus) this.write(`  Status: ${runStatus}\n`);
+        this.write(`  Steps: ${steps.length}\n`);
+        const approvals = steps.filter((step) => step && typeof step === 'object' && 'approvalId' in step && (step as { approvalId?: unknown }).approvalId);
+        if (approvals.length > 0) {
+          this.write(`  Pending approvals: ${approvals.map((step) => String((step as { approvalId?: unknown }).approvalId)).join(', ')}\n`);
+        }
       }
       this.write('\n');
       return;
     }
 
-    if (sub === 'upsert') {
-      if (!this.dashboard.onPlaybookUpsert) {
-        this.write('\nPlaybook upsert is not available.\n\n');
+    if (sub === 'save') {
+      if (!this.dashboard.onAutomationSave) {
+        this.write('\nAutomation save is not available.\n\n');
         return;
       }
       const raw = args.slice(1).join(' ').trim();
       if (!raw) {
-        this.write('\nUsage: /playbooks upsert <json>\n\n');
+        this.write('\nUsage: /automations save <json>\n\n');
         return;
       }
       let parsed: unknown;
       try {
         parsed = JSON.parse(raw);
       } catch {
-        this.write('\nInvalid JSON for playbook definition.\n\n');
+        this.write('\nInvalid JSON for automation definition.\n\n');
         return;
       }
-      const result = this.dashboard.onPlaybookUpsert(parsed as Parameters<NonNullable<DashboardCallbacks['onPlaybookUpsert']>>[0]);
+      const result = this.dashboard.onAutomationSave(parsed as Parameters<NonNullable<DashboardCallbacks['onAutomationSave']>>[0]);
       this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
       return;
     }
 
     if (sub === 'delete') {
-      if (!this.dashboard.onPlaybookDelete) {
-        this.write('\nPlaybook deletion is not available.\n\n');
+      if (!this.dashboard.onAutomationDelete) {
+        this.write('\nAutomation deletion is not available.\n\n');
         return;
       }
-      const playbookId = args[1];
-      if (!playbookId) {
-        this.write('\nUsage: /playbooks delete <playbookId>\n\n');
+      const automationId = args[1];
+      if (!automationId) {
+        this.write('\nUsage: /automations delete <automationId>\n\n');
         return;
       }
-      const result = this.dashboard.onPlaybookDelete(playbookId);
+      const result = this.dashboard.onAutomationDelete(automationId);
       this.write(`\n${result.success ? this.green('OK') : this.red('FAIL')}: ${result.message}\n\n`);
       return;
     }
 
     this.write('\nUsage:\n');
-    this.write('  /playbooks list\n');
-    this.write('  /playbooks runs\n');
-    this.write('  /playbooks run <playbookId> [--dry-run]\n');
-    this.write('  /playbooks upsert <json>\n');
-    this.write('  /playbooks delete <playbookId>\n\n');
+    this.write('  /automations list\n');
+    this.write('  /automations runs\n');
+    this.write('  /automations run <automationId> [--dry-run]\n');
+    this.write('  /automations save <json>\n');
+    this.write('  /automations delete <automationId>\n\n');
   }
 
   // ─── /audit ──────────────────────────────────────────────────

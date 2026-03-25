@@ -724,55 +724,39 @@ describe('CLIChannel with DashboardCallbacks', () => {
     await cli.stop();
   });
 
-  it('/playbooks run should execute playbook via callback', async () => {
+  it('/automations run should execute a saved automation via callback', async () => {
     const { input, output, cli } = makeCli({
-      onConnectorsState: () => ({
-        summary: {
-          enabled: true,
-          executionMode: 'plan_then_execute',
-          maxConnectorCallsPerRun: 12,
-          packCount: 1,
-          enabledPackCount: 1,
-          playbookCount: 1,
-          enabledPlaybookCount: 1,
-          runCount: 0,
-          dryRunQualifiedCount: 0,
-        },
-        packs: [],
-        playbooks: [{
-          id: 'infra-audit',
-          name: 'Infra Audit',
-          enabled: true,
-          mode: 'sequential',
-          steps: [{
-            id: 'step-1',
-            packId: 'infra-core',
-            toolName: 'fs_list',
-          }],
-        }],
-        runs: [],
-        playbooksConfig: {
-          enabled: true,
-          maxSteps: 12,
-          maxParallelSteps: 3,
-          defaultStepTimeoutMs: 15000,
-          requireSignedDefinitions: true,
-          requireDryRunOnFirstExecution: true,
-        },
-        studio: {
-          enabled: true,
-          mode: 'builder',
-          requirePrivilegedTicket: true,
-        },
-      }),
-      onPlaybookRun: async ({ playbookId, dryRun }) => ({
+      onAutomationCatalog: () => [{
+        id: 'infra-audit',
+        name: 'Infra Audit',
+        description: '',
+        category: 'system',
+        kind: 'pipeline',
+        mode: 'sequential',
+        steps: [],
+        enabled: true,
+        cron: null,
+        runOnce: false,
+        emitEvent: '',
+        outputHandling: { notify: 'off', sendToSecurity: 'off', persistArtifacts: 'run_history_only' },
+        scheduleEnabled: false,
+        taskId: null,
+        lastRunAt: null,
+        lastRunStatus: null,
+        runCount: 0,
+        source: 'saved_workflow',
+        sourceKind: 'playbook',
+        builtin: false,
+        workflow: null,
+        task: null,
+      }],
+      onAutomationRun: async ({ automationId, dryRun }) => ({
         success: true,
         status: 'succeeded',
-        message: `${playbookId} ${dryRun ? 'dry' : 'live'} run complete`,
+        message: `${automationId} ${dryRun ? 'dry' : 'live'} run complete`,
         run: {
           id: 'run-1',
-          playbookId,
-          playbookName: 'Infra Audit',
+          automationId,
           createdAt: Date.now(),
           startedAt: Date.now(),
           completedAt: Date.now(),
@@ -787,7 +771,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
     });
     await cli.start(async () => ({ content: 'ok' }));
 
-    await sendCommand(input, '/playbooks run infra-audit --dry-run');
+    await sendCommand(input, '/automations run infra-audit --dry-run');
     const text = readOutput(output);
 
     expect(text).toContain('dry run complete');
