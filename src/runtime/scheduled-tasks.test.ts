@@ -394,6 +394,22 @@ describe('ScheduledTaskService', () => {
       expect(updated.approvalExpiresAt).toBeGreaterThanOrEqual(originalApprovalExpiresAt!);
       expect(updated.approvedByPrincipal).toBe('principal-a');
     });
+
+    it('allows output handling to be cleared explicitly', () => {
+      const { task } = service.create({
+        ...validInput,
+        outputHandling: {
+          notify: 'off',
+          sendToSecurity: 'findings_only',
+          persistArtifacts: 'long_term_memory',
+        },
+      });
+
+      const result = service.update(task!.id, { outputHandling: undefined });
+
+      expect(result.success).toBe(true);
+      expect(service.get(task!.id)?.outputHandling).toBeUndefined();
+    });
   });
 
   describe('delete', () => {

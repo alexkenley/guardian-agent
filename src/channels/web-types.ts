@@ -1168,6 +1168,10 @@ export interface DashboardCallbacks {
   onAutomationRunHistory?: () => AutomationRunHistoryEntry[];
   onAutomationMaterialize?: (automationId: string) => AutomationCatalogMaterializationResult;
   onAutomationSave?: (input: AutomationSaveInput) => AutomationSaveResult;
+  onAutomationWorkflowDefinitionSave?: (
+    automationId: string,
+    workflow: AssistantConnectorPlaybookDefinition,
+  ) => AutomationSaveResult;
   onAutomationSetEnabled?: (automationId: string, enabled: boolean) => { success: boolean; message: string };
   onAutomationDelete?: (automationId: string) => { success: boolean; message: string };
   onAutomationRun?: (input: {

@@ -19,6 +19,7 @@ export interface AutomationSaveInput {
   kind: AutomationSaveKind;
   sourceKind?: string;
   existingTaskId?: string;
+  signature?: string;
   mode?: 'sequential' | 'parallel';
   steps?: AssistantConnectorPlaybookStepDefinition[];
   task?: {
@@ -60,6 +61,7 @@ export function saveAutomationDefinition(
   const name = input.name.trim();
   const description = input.description?.trim() || '';
   const existingTaskId = input.existingTaskId?.trim() || '';
+  const signature = input.signature?.trim() || undefined;
   const emitEvent = input.emitEvent?.trim() || undefined;
   const outputHandling = input.outputHandling ? { ...input.outputHandling } : undefined;
   const scheduleEnabled = input.schedule?.enabled === true;
@@ -138,6 +140,7 @@ export function saveAutomationDefinition(
     enabled: input.enabled,
     mode: input.mode === 'parallel' ? 'parallel' : 'sequential',
     ...(description ? { description } : {}),
+    ...(signature ? { signature } : {}),
     ...(outputHandling ? { outputHandling } : {}),
     steps,
   });

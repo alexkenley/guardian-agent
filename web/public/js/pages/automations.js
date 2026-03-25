@@ -508,6 +508,7 @@ function renderPipelineView(auto, toolLookup, packs) {
   }).join('');
 
   const playbookData = auto.workflow || { id: auto.id, name: auto.name, mode: auto.mode, steps, enabled: auto.enabled, description: auto.description };
+  const rawEditorDisabled = auto.builtin === true;
   const configPanel = `
     <details class="wf-config-details">
       <summary class="wf-config-summary">
@@ -521,10 +522,14 @@ function renderPipelineView(auto, toolLookup, packs) {
         </div>
         <div class="wf-config-section">
           <div class="wf-config-section-title">Raw Definition JSON</div>
-          <div class="wf-config-section-note">Use the simple Edit flow for normal changes. This editor is for advanced troubleshooting and direct definition changes.</div>
-          <textarea class="wf-config-json-editor" data-auto-id="${escAttr(auto.id)}" rows="8">${esc(JSON.stringify(playbookData, null, 2))}</textarea>
+          <div class="wf-config-section-note">
+            ${rawEditorDisabled
+              ? 'Install or clone this catalog automation before editing its raw workflow definition.'
+              : 'Use the simple Edit flow for normal changes. This editor is for advanced troubleshooting and direct definition changes.'}
+          </div>
+          <textarea class="wf-config-json-editor" data-auto-id="${escAttr(auto.id)}" rows="8" ${rawEditorDisabled ? 'readonly' : ''}>${esc(JSON.stringify(playbookData, null, 2))}</textarea>
           <div class="cfg-actions" style="margin-top:0.5rem">
-            <button class="btn btn-primary btn-sm auto-config-save" data-auto-id="${escAttr(auto.id)}">Save Changes</button>
+            <button class="btn btn-primary btn-sm auto-config-save" data-auto-id="${escAttr(auto.id)}" ${rawEditorDisabled ? 'disabled' : ''}>Save Changes</button>
             <span class="auto-config-save-status cfg-save-status" data-auto-id="${escAttr(auto.id)}"></span>
           </div>
         </div>
@@ -1291,13 +1296,27 @@ function bindEvents(container, ctx) {
   container.querySelectorAll('.auto-config-save').forEach((button) => {
     button.addEventListener('click', async () => {
       const autoId = button.getAttribute('data-auto-id');
+      const auto = automations.find((entry) => entry.id === autoId);
       const textarea = container.querySelector(`.wf-config-json-editor[data-auto-id="${autoId}"]`);
       const statusEl = container.querySelector(`.auto-config-save-status[data-auto-id="${autoId}"]`);
       if (!textarea || !statusEl) return;
+      if (!auto?.workflow) {
+        statusEl.textContent = 'Only workflow automations support raw definition editing.';
+        statusEl.style.color = 'var(--error)';
+        return;
+      }
+      if (auto.builtin) {
+        statusEl.textContent = 'Install or clone this catalog automation before editing it.';
+        statusEl.style.color = 'var(--warning)';
+        return;
+      }
       statusEl.textContent = 'Saving...';
       statusEl.style.color = 'var(--text-muted)';
       try {
-        const result = await api.upsertPlaybook(JSON.parse(textarea.value.trim()));
+        const result = requireAutomationMutationSuccess(
+          await api.saveAutomationWorkflowDefinition(auto.id, JSON.parse(textarea.value.trim())),
+          `Could not save '${auto.name}'.`,
+        );
         statusEl.textContent = result.message || (result.success ? 'Saved.' : 'Failed.');
         statusEl.style.color = result.success ? 'var(--success)' : 'var(--error)';
         if (result.success) setTimeout(() => renderAutomationsPreserveScroll(container), 500);

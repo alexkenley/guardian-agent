@@ -1016,7 +1016,9 @@ export class ScheduledTaskService {
     if (input.dailySpendCap !== undefined) task.dailySpendCap = Math.max(0, input.dailySpendCap);
     if (input.providerSpendCap !== undefined) task.providerSpendCap = Math.max(0, input.providerSpendCap);
     if (input.emitEvent !== undefined) task.emitEvent = input.emitEvent?.trim() || undefined;
-    if (input.outputHandling !== undefined) task.outputHandling = input.outputHandling;
+    if (Object.prototype.hasOwnProperty.call(input, 'outputHandling')) {
+      task.outputHandling = input.outputHandling;
+    }
 
     if (task.type === 'agent' && !task.prompt?.trim()) {
       return { success: false, message: 'prompt is required for agent tasks' };

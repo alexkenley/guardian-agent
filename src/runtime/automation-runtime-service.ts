@@ -78,6 +78,10 @@ export interface AutomationRuntimeService {
   listAutomationRunHistory(): AutomationRunHistoryEntry[];
   materializeAutomation(automationId: string): AutomationCatalogMaterializationResult;
   saveAutomation(input: AutomationSaveInput): AutomationSaveResult;
+  saveAutomationWorkflowDefinition(
+    automationId: string,
+    workflow: AssistantConnectorPlaybookDefinition,
+  ): AutomationSaveResult;
   listWorkflows(): AssistantConnectorPlaybookDefinition[];
   upsertWorkflow(playbook: AssistantConnectorPlaybookDefinition): { success: boolean; message: string };
   deleteWorkflow(playbookId: string): { success: boolean; message: string };
@@ -179,7 +183,66 @@ export function createAutomationRuntimeService(
       createTask: (taskInput: ScheduledTaskCreateInput) => service.createTask(taskInput),
       updateTask: (taskId: string, taskInput: ScheduledTaskUpdateInput) => service.updateTask(taskId, taskInput),
       deleteTask: (taskId: string) => service.deleteTask(taskId),
-    }, input),
+    }, prepareAutomationSaveInput(service, input)),
+    saveAutomationWorkflowDefinition: (automationId, workflow) => {
+      const existing = findAutomationCatalogViewEntry(service, automationId);
+      if (!existing) {
+        return { success: false, message: `Automation '${automationId}' was not found.` };
+      }
+      if (existing.builtin) {
+        return {
+          success: false,
+          message: 'Install or clone this catalog automation before editing its raw workflow definition.',
+        };
+      }
+      if (!existing.workflow) {
+        return {
+          success: false,
+          message: 'Only workflow automations support raw workflow definition editing.',
+        };
+      }
+
+      const normalized = normalizeWorkflowDefinitionForAutomation(existing, workflow);
+      if (!normalized.success) {
+        return { success: false, message: normalized.message };
+      }
+
+      const workflowResult = service.upsertWorkflow(normalized.workflow);
+      if (!workflowResult.success) {
+        return {
+          success: false,
+          message: workflowResult.message || 'Failed to save the workflow definition.',
+        };
+      }
+
+      const linkedTaskId = existing.task?.type === 'playbook' ? existing.task.id : undefined;
+      if (!linkedTaskId) {
+        return {
+          success: true,
+          automationId: normalized.workflow.id,
+          message: workflowResult.message || 'Saved.',
+        };
+      }
+
+      const taskResult = service.updateTask(linkedTaskId, {
+        name: normalized.workflow.name,
+        outputHandling: normalized.workflow.outputHandling,
+      });
+      if (!taskResult.success) {
+        return {
+          success: false,
+          automationId: normalized.workflow.id,
+          taskId: linkedTaskId,
+          message: `Workflow definition saved, but the linked schedule could not be updated: ${taskResult.message || 'Unknown error.'}`,
+        };
+      }
+      return {
+        success: true,
+        automationId: normalized.workflow.id,
+        taskId: linkedTaskId,
+        message: workflowResult.message || 'Saved.',
+      };
+    },
     listWorkflows: () => options.workflows.list().map(cloneWorkflow),
     upsertWorkflow: (playbook) => {
       const normalized = cloneWorkflow(playbook);
@@ -332,12 +395,15 @@ function cloneTaskCreateInput(input: ScheduledTaskCreateInput): ScheduledTaskCre
 }
 
 function cloneTaskUpdateInput(input: ScheduledTaskUpdateInput): ScheduledTaskUpdateInput {
-  return {
+  const cloned: ScheduledTaskUpdateInput = {
     ...input,
     ...(input.args ? { args: { ...input.args } } : {}),
     ...(input.eventTrigger ? { eventTrigger: { ...input.eventTrigger } } : {}),
-    ...(input.outputHandling ? { outputHandling: { ...input.outputHandling } } : {}),
   };
+  if (Object.prototype.hasOwnProperty.call(input, 'outputHandling')) {
+    cloned.outputHandling = input.outputHandling ? { ...input.outputHandling } : undefined;
+  }
+  return cloned;
 }
 
 function cloneTaskPreset(preset: ScheduledTaskPreset): ScheduledTaskPreset {
@@ -384,4 +450,89 @@ function cloneWorkflowRun(run: PlaybookRunRecord): PlaybookRunRecord {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function findAutomationCatalogViewEntry(
+  service: AutomationRuntimeService,
+  automationId: string,
+): AutomationCatalogViewEntry | null {
+  const normalizedId = automationId.trim();
+  if (!normalizedId) return null;
+  return service.listAutomationCatalogView().find((entry) => entry.id === normalizedId) ?? null;
+}
+
+function prepareAutomationSaveInput(
+  service: AutomationRuntimeService,
+  input: AutomationSaveInput,
+): AutomationSaveInput {
+  const normalized: AutomationSaveInput = {
+    ...input,
+    ...(Array.isArray(input.steps) ? { steps: input.steps.map((step) => ({ ...step })) } : {}),
+    ...(input.task
+      ? {
+          task: {
+            ...input.task,
+            ...(input.task.args ? { args: { ...input.task.args } } : {}),
+          },
+        }
+      : {}),
+    ...(input.schedule ? { schedule: { ...input.schedule } } : {}),
+    ...(input.outputHandling ? { outputHandling: { ...input.outputHandling } } : {}),
+  };
+  if (normalized.kind !== 'workflow' || Object.prototype.hasOwnProperty.call(input, 'signature')) {
+    return normalized;
+  }
+
+  const existing = findAutomationCatalogViewEntry(service, normalized.id);
+  if (!existing?.workflow?.signature) {
+    return normalized;
+  }
+  normalized.signature = existing.workflow.signature;
+  return normalized;
+}
+
+function normalizeWorkflowDefinitionForAutomation(
+  existing: AutomationCatalogViewEntry,
+  workflow: AssistantConnectorPlaybookDefinition,
+): { success: true; workflow: AssistantConnectorPlaybookDefinition } | { success: false; message: string } {
+  const existingId = existing.workflow?.id || existing.id;
+  const requestedId = typeof workflow.id === 'string' ? workflow.id.trim() : '';
+  if (!requestedId) {
+    return { success: false, message: 'Workflow ID is required.' };
+  }
+  if (requestedId !== existingId) {
+    return {
+      success: false,
+      message: 'Raw workflow definition editing cannot rename an automation. Use Clone or the structured editor instead.',
+    };
+  }
+
+  const name = typeof workflow.name === 'string' ? workflow.name.trim() : '';
+  if (!name) {
+    return { success: false, message: 'Workflow name is required.' };
+  }
+  if (workflow.mode !== 'parallel' && workflow.mode !== 'sequential') {
+    return { success: false, message: 'Workflow mode must be sequential or parallel.' };
+  }
+
+  const steps = Array.isArray(workflow.steps)
+    ? workflow.steps.map((step) => ({ ...step }))
+    : [];
+  if (steps.length === 0) {
+    return { success: false, message: 'Add at least one workflow step.' };
+  }
+
+  return {
+    success: true,
+    workflow: {
+      id: existingId,
+      name,
+      enabled: workflow.enabled !== false,
+      mode: workflow.mode,
+      ...(workflow.description?.trim() ? { description: workflow.description.trim() } : {}),
+      ...(workflow.signature?.trim() ? { signature: workflow.signature.trim() } : {}),
+      ...(workflow.outputHandling ? { outputHandling: { ...workflow.outputHandling } } : {}),
+      steps,
+    },
+  };
 }

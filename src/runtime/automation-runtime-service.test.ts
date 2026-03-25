@@ -9,6 +9,7 @@ function makeService() {
       enabled: true,
       mode: 'sequential' as const,
       description: 'Reads example.com.',
+      signature: 'sig-existing',
       steps: [
         { id: 'step-1', type: 'tool' as const, packId: '', toolName: 'browser_navigate', args: { url: 'https://example.com' } },
       ],
@@ -224,6 +225,10 @@ describe('automation-runtime-service', () => {
       automationId: 'browser-read-smoke',
       taskId: 'task-linked-1',
     });
+    expect(workflowControl.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'browser-read-smoke',
+      signature: 'sig-existing',
+    }));
     expect(taskControl.update).toHaveBeenCalledWith('task-linked-1', expect.objectContaining({
       name: 'Browser Read Smoke',
       type: 'playbook',
@@ -258,5 +263,64 @@ describe('automation-runtime-service', () => {
     await executorControlPlane.runTask('task-agent-1');
     expect(workflowControl.run).toHaveBeenCalledWith(expect.objectContaining({ playbookId: 'browser-read-smoke' }));
     expect(taskControl.runNow).toHaveBeenCalledWith('task-agent-1');
+  });
+
+  it('saves raw workflow definitions through the automation runtime contract', () => {
+    const { service, workflowControl, taskControl } = makeService();
+
+    const result = service.saveAutomationWorkflowDefinition('browser-read-smoke', {
+      id: 'browser-read-smoke',
+      name: 'Browser Read Smoke v2',
+      enabled: false,
+      mode: 'parallel',
+      description: 'Updated browser smoke.',
+      steps: [
+        { id: 'step-1', type: 'tool', packId: '', toolName: 'browser_navigate', args: { url: 'https://example.com' } },
+        { id: 'step-2', type: 'tool', packId: '', toolName: 'browser_snapshot', args: {} },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      automationId: 'browser-read-smoke',
+      taskId: 'task-linked-1',
+    });
+    expect(workflowControl.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'browser-read-smoke',
+      name: 'Browser Read Smoke v2',
+      enabled: false,
+      mode: 'parallel',
+      description: 'Updated browser smoke.',
+    }));
+    expect(taskControl.update).toHaveBeenCalledWith('task-linked-1', {
+      name: 'Browser Read Smoke v2',
+      outputHandling: undefined,
+    });
+
+    expect(service.saveAutomationWorkflowDefinition('builtin-browser-read', {
+      id: 'builtin-browser-read',
+      name: 'Builtin Browser Read',
+      enabled: true,
+      mode: 'sequential',
+      steps: [
+        { id: 'step-1', type: 'tool', packId: '', toolName: 'browser_navigate', args: { url: 'https://example.com' } },
+      ],
+    })).toMatchObject({
+      success: false,
+      message: expect.stringContaining('Install or clone'),
+    });
+
+    expect(service.saveAutomationWorkflowDefinition('task-agent-1', {
+      id: 'task-agent-1',
+      name: 'Inbox Triage',
+      enabled: true,
+      mode: 'sequential',
+      steps: [
+        { id: 'step-1', type: 'tool', packId: '', toolName: 'browser_navigate', args: { url: 'https://example.com' } },
+      ],
+    })).toMatchObject({
+      success: false,
+      message: expect.stringContaining('Only workflow automations'),
+    });
   });
 });

@@ -12109,6 +12109,9 @@ async function main(): Promise<void> {
     dashboardCallbacks.onAutomationRunHistory = () => automationRuntime.listAutomationRunHistory();
     dashboardCallbacks.onAutomationMaterialize = (automationId) => automationRuntime.materializeAutomation(automationId);
     dashboardCallbacks.onAutomationSave = (input) => automationRuntime.saveAutomation(input);
+    dashboardCallbacks.onAutomationWorkflowDefinitionSave = (automationId, workflow) => (
+      automationRuntime.saveAutomationWorkflowDefinition(automationId, workflow)
+    );
     dashboardCallbacks.onAutomationSetEnabled = (automationId, enabled) => (
       automationRuntime.setSavedAutomationEnabled(automationId, enabled)
     );

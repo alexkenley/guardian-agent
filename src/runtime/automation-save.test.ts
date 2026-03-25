@@ -76,6 +76,29 @@ describe('automation-save', () => {
     expect(controlPlane.deleteTask).toHaveBeenCalledWith('task-linked-1');
   });
 
+  it('passes workflow signatures through the shared automation save path', () => {
+    const controlPlane = makeControlPlane();
+
+    const result = saveAutomationDefinition(controlPlane, {
+      id: 'signed-browser-read',
+      name: 'Signed Browser Read',
+      enabled: true,
+      kind: 'workflow',
+      mode: 'sequential',
+      signature: 'sig-123',
+      steps: [
+        { id: 'step-1', type: 'tool', packId: '', toolName: 'browser_navigate', args: { url: 'https://example.com' } },
+      ],
+      schedule: { enabled: false },
+    });
+
+    expect(result).toMatchObject({ success: true, automationId: 'signed-browser-read' });
+    expect(controlPlane.upsertWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'signed-browser-read',
+      signature: 'sig-123',
+    }));
+  });
+
   it('saves assistant automations through task create/update without UI-side branching', () => {
     const controlPlane = makeControlPlane();
 

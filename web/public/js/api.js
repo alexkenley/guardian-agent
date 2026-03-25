@@ -445,6 +445,10 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(payload || {}),
   }),
+  saveAutomationWorkflowDefinition: (id, payload) => request(`/api/automations/${encodeURIComponent(id)}/workflow-definition`, {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+  }),
   materializeAutomation: (id) => request(`/api/automations/${encodeURIComponent(id)}/materialize`, {
     method: 'POST',
     body: JSON.stringify({}),

@@ -23,6 +23,8 @@ import type { DashboardCallbacks, SSEEvent, SSEListener, UIInvalidationEvent } f
 import type { AuditEventType, AuditSeverity } from '../guardian/audit-log.js';
 import { createLogger } from '../util/logging.js';
 import { timingSafeEqualString } from '../util/crypto-guardrails.js';
+import type { AssistantConnectorPlaybookDefinition } from '../config/types.js';
+import type { AutomationSaveInput } from '../runtime/automation-save.js';
 import {
   isSecurityAlertSeverity,
   isSecurityAlertSource,
@@ -3432,16 +3434,47 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: message });
           return;
         }
-        let parsed: Record<string, unknown>;
+        let parsed: AutomationSaveInput;
         try {
-          parsed = body ? JSON.parse(body) as Record<string, unknown> : {};
+          parsed = body ? JSON.parse(body) as AutomationSaveInput : {} as AutomationSaveInput;
         } catch {
           sendJSON(res, 400, { error: 'Invalid JSON' });
           return;
         }
-        const result = this.dashboard.onAutomationSave(parsed as never);
+        const result = this.dashboard.onAutomationSave(parsed);
         sendJSON(res, 200, result);
         this.maybeEmitUIInvalidation(result, ['automations'], 'automation.saved', url.pathname);
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname.match(/^\/api\/automations\/[^/]+\/workflow-definition$/)) {
+        if (!this.dashboard.onAutomationWorkflowDefinitionSave) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const automationId = decodeURIComponent(url.pathname.split('/')[3] || '').trim();
+        if (!automationId) {
+          sendJSON(res, 400, { error: 'automationId is required' });
+          return;
+        }
+        let body = '{}';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { error: message });
+          return;
+        }
+        let parsed: AssistantConnectorPlaybookDefinition;
+        try {
+          parsed = body ? JSON.parse(body) as AssistantConnectorPlaybookDefinition : {} as AssistantConnectorPlaybookDefinition;
+        } catch {
+          sendJSON(res, 400, { error: 'Invalid JSON' });
+          return;
+        }
+        const result = this.dashboard.onAutomationWorkflowDefinitionSave(automationId, parsed);
+        sendJSON(res, 200, result);
+        this.maybeEmitUIInvalidation(result, ['automations'], 'automation.workflow_definition_saved', url.pathname);
         return;
       }
 
