@@ -637,6 +637,18 @@ function describeApprovalAction(approval) {
   if (toolName === 'update_tool_policy') {
     return describePolicyApproval(preview) || 'Apply policy update';
   }
+  if (toolName === 'automation_save') {
+    return preview ? `Save ${preview}` : 'Save automation';
+  }
+  if (toolName === 'automation_set_enabled') {
+    return preview ? `Update ${preview}` : 'Update automation';
+  }
+  if (toolName === 'automation_run') {
+    return preview ? `Run ${preview}` : 'Run automation';
+  }
+  if (toolName === 'automation_delete') {
+    return preview ? `Delete ${preview}` : 'Delete automation';
+  }
   if (toolName === 'task_create') {
     return preview ? `Create ${preview}` : 'Create scheduled automation';
   }

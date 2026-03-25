@@ -313,12 +313,6 @@ export const api = {
   updateConnectorsSettings: (payload) => requestPrivileged('/api/connectors/settings', 'connectors.config', payload || {}),
   upsertConnectorPack: (pack) => requestPrivileged('/api/connectors/packs/upsert', 'connectors.pack', pack || {}),
   deleteConnectorPack: (packId) => requestPrivileged('/api/connectors/packs/delete', 'connectors.pack', { packId }),
-  upsertPlaybook: (playbook) => requestPrivileged('/api/connectors/playbooks/upsert', 'connectors.playbook', playbook || {}),
-  deletePlaybook: (playbookId) => requestPrivileged('/api/connectors/playbooks/delete', 'connectors.playbook', { playbookId }),
-  runPlaybook: (payload) => request('/api/connectors/playbooks/run', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  }),
   connectorsTemplates: () => request('/api/connectors/templates'),
   installTemplate: (templateId) => request('/api/connectors/templates/install', {
     method: 'POST',
