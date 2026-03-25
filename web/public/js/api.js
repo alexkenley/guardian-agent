@@ -445,11 +445,11 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(payload || {}),
   }),
-  saveAutomationWorkflowDefinition: (id, payload) => request(`/api/automations/${encodeURIComponent(id)}/workflow-definition`, {
+  saveAutomationDefinition: (id, payload) => request(`/api/automations/${encodeURIComponent(id)}/definition`, {
     method: 'POST',
     body: JSON.stringify(payload || {}),
   }),
-  materializeAutomation: (id) => request(`/api/automations/${encodeURIComponent(id)}/materialize`, {
+  createAutomation: (id) => request(`/api/automations/${encodeURIComponent(id)}/create`, {
     method: 'POST',
     body: JSON.stringify({}),
   }),
@@ -480,11 +480,6 @@ export const api = {
   runScheduledTaskNow: (id) => request(`/api/scheduled-tasks/${encodeURIComponent(id)}/run`, {
     method: 'POST',
     body: JSON.stringify({}),
-  }),
-  scheduledTaskPresets: () => request('/api/scheduled-tasks/presets'),
-  installScheduledTaskPreset: (presetId) => request('/api/scheduled-tasks/presets/install', {
-    method: 'POST',
-    body: JSON.stringify({ presetId }),
   }),
   scheduledTaskHistory: () => request('/api/scheduled-tasks/history'),
 

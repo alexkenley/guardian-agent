@@ -30,12 +30,6 @@ export interface CompiledAutomationTaskCreate {
   providerSpendCap: number;
 }
 
-export interface CompiledAutomationTaskUpdate extends Omit<CompiledAutomationTaskCreate, 'type' | 'target'> {
-  taskId: string;
-  type: 'agent';
-  target: 'default';
-}
-
 export interface CompiledAutomationWorkflowUpsert extends AssistantConnectorPlaybookDefinition {
   enabled: true;
 }
@@ -83,19 +77,6 @@ export type AutomationAuthoringOutcome =
       draft: AutomationAuthoringDraft;
     };
 
-export interface ExistingAutomationTask {
-  id: string;
-  name: string;
-  type: string;
-  target: string;
-  cron: string;
-  eventTrigger?: { eventType: string };
-  prompt?: string;
-  channel?: string;
-  userId?: string;
-  deliver?: boolean;
-}
-
 export type AutomationAuthoringShape = 'scheduled_agent' | 'manual_agent' | 'workflow';
 
 export interface AutomationAuthoringCompileOptions {
@@ -134,7 +115,7 @@ const OPEN_ENDED_PATTERNS = [
 ];
 const EXPLICIT_WORKFLOW_PATTERNS = [
   /\bstep\s*\d+\b/i,
-  /\b(workflow_upsert|task_create|instruction step|delay step)\b/i,
+  /\b(automation_save|instruction step|delay step)\b/i,
   /\b(gws|gmail_draft|web_fetch|web_search|fs_read|fs_write|sys_resources|net_ping|net_port_check|memory_save|browser_navigate|browser_read|browser_links|browser_extract|browser_state|browser_act|browser_interact)\b/i,
   /\b(sequential|parallel)\b/i,
   /\bworkflow that first\b/i,
@@ -221,42 +202,6 @@ export function compileAutomationAuthoringIR(
   const parsed = parseAutomationAuthoringContext(content, options);
   if (!parsed) return null;
   return buildValidatedAutomationIR(parsed, options);
-}
-
-export function buildTaskUpdateForCompiledAutomation(
-  taskId: string,
-  compilation: AutomationAuthoringCompilation,
-  options?: { channel?: string; userId?: string },
-): CompiledAutomationTaskUpdate | null {
-  if ((compilation.shape !== 'scheduled_agent' && compilation.shape !== 'manual_agent') || !compilation.taskCreate) return null;
-  return {
-    taskId,
-    ...compilation.taskCreate,
-    channel: options?.channel?.trim() || compilation.taskCreate.channel,
-    userId: options?.userId?.trim() || compilation.taskCreate.userId,
-  };
-}
-
-export function findMatchingScheduledAutomationTask(
-  tasks: ExistingAutomationTask[],
-  compilation: AutomationAuthoringCompilation,
-): ExistingAutomationTask | null {
-  if ((compilation.shape !== 'scheduled_agent' && compilation.shape !== 'manual_agent') || !compilation.taskCreate) return null;
-  const desired = compilation.taskCreate;
-  const normalizedName = compilation.name.trim().toLowerCase();
-  const candidates = tasks.filter((task) => (
-    task.type === 'agent'
-    && task.target === desired.target
-    && task.name.trim().toLowerCase() === normalizedName
-  ));
-  if (candidates.length === 0) return null;
-  const exact = candidates.find((task) => (
-    (task.cron || '') === (desired.cron || '')
-    && (task.eventTrigger?.eventType || '') === (desired.eventTrigger?.eventType || '')
-    && (task.channel ?? 'scheduled') === desired.channel
-    && Boolean(task.deliver) === desired.deliver
-  ));
-  return exact ?? candidates[0] ?? null;
 }
 
 function isAutomationAuthoringIntent(text: string): boolean {

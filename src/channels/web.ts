@@ -3447,8 +3447,8 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
-      if (req.method === 'POST' && url.pathname.match(/^\/api\/automations\/[^/]+\/workflow-definition$/)) {
-        if (!this.dashboard.onAutomationWorkflowDefinitionSave) {
+      if (req.method === 'POST' && url.pathname.match(/^\/api\/automations\/[^/]+\/definition$/)) {
+        if (!this.dashboard.onAutomationDefinitionSave) {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
@@ -3472,14 +3472,14 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'Invalid JSON' });
           return;
         }
-        const result = this.dashboard.onAutomationWorkflowDefinitionSave(automationId, parsed);
+        const result = this.dashboard.onAutomationDefinitionSave(automationId, parsed);
         sendJSON(res, 200, result);
-        this.maybeEmitUIInvalidation(result, ['automations'], 'automation.workflow_definition_saved', url.pathname);
+        this.maybeEmitUIInvalidation(result, ['automations'], 'automation.definition_saved', url.pathname);
         return;
       }
 
-      if (req.method === 'POST' && url.pathname.match(/^\/api\/automations\/[^/]+\/materialize$/)) {
-        if (!this.dashboard.onAutomationMaterialize) {
+      if (req.method === 'POST' && url.pathname.match(/^\/api\/automations\/[^/]+\/create$/)) {
+        if (!this.dashboard.onAutomationCreate) {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
@@ -3488,9 +3488,9 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 400, { error: 'automationId is required' });
           return;
         }
-        const result = this.dashboard.onAutomationMaterialize(automationId);
+        const result = this.dashboard.onAutomationCreate(automationId);
         sendJSON(res, 200, result);
-        this.maybeEmitUIInvalidation(result, ['automations'], 'automation.materialized', url.pathname);
+        this.maybeEmitUIInvalidation(result, ['automations'], 'automation.created', url.pathname);
         return;
       }
 
@@ -3601,16 +3601,6 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
-      // GET /api/scheduled-tasks/presets — List available presets
-      if (req.method === 'GET' && url.pathname === '/api/scheduled-tasks/presets') {
-        if (!this.dashboard.onScheduledTaskPresets) {
-          sendJSON(res, 404, { error: 'Not available' });
-          return;
-        }
-        sendJSON(res, 200, this.dashboard.onScheduledTaskPresets());
-        return;
-      }
-
       // GET /api/scheduled-tasks/history — Get run history
       if (req.method === 'GET' && url.pathname === '/api/scheduled-tasks/history') {
         if (!this.dashboard.onScheduledTaskHistory) {
@@ -3618,37 +3608,6 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
         sendJSON(res, 200, this.dashboard.onScheduledTaskHistory());
-        return;
-      }
-
-      // POST /api/scheduled-tasks/presets/install — Install a preset
-      if (req.method === 'POST' && url.pathname === '/api/scheduled-tasks/presets/install') {
-        if (!this.dashboard.onScheduledTaskInstallPreset) {
-          sendJSON(res, 404, { error: 'Not available' });
-          return;
-        }
-        let body: string;
-        try {
-          body = await readBody(req, this.maxBodyBytes);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          sendJSON(res, 400, { error: message });
-          return;
-        }
-        let parsed: { presetId?: string };
-        try {
-          parsed = JSON.parse(body) as { presetId?: string };
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON' });
-          return;
-        }
-        if (!parsed.presetId?.trim()) {
-          sendJSON(res, 400, { error: 'presetId is required' });
-          return;
-        }
-        const result = this.dashboard.onScheduledTaskInstallPreset(parsed.presetId.trim());
-        sendJSON(res, 200, result);
-        this.maybeEmitUIInvalidation(result, ['automations', 'network'], 'scheduled-task.preset.installed', url.pathname);
         return;
       }
 

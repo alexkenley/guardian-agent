@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  materializeAutomationCatalogEntry,
+  createAutomationFromCatalogEntry,
   type AutomationCatalogActionControlPlane,
 } from './automation-catalog-actions.js';
 
@@ -164,14 +164,14 @@ function makeControlPlane(): AutomationCatalogActionControlPlane {
 }
 
 describe('automation-catalog-actions', () => {
-  it('clones saved workflows and linked schedules without copying the original schedule field', () => {
+  it('creates a copy of saved workflows and linked schedules without copying the original schedule field', () => {
     const controlPlane = makeControlPlane();
 
-    const result = materializeAutomationCatalogEntry(controlPlane, 'browser-read-smoke');
+    const result = createAutomationFromCatalogEntry(controlPlane, 'browser-read-smoke');
 
     expect(result).toMatchObject({
       success: true,
-      action: 'cloned',
+      action: 'copied',
       automationId: 'browser-read-smoke-copy',
       automationName: 'Browser Read Smoke (copy)',
     });
@@ -191,14 +191,14 @@ describe('automation-catalog-actions', () => {
     }));
   });
 
-  it('clones saved task automations through task creation and strips manual trigger event ids', () => {
+  it('creates a copy of saved task automations through task creation and strips manual trigger event ids', () => {
     const controlPlane = makeControlPlane();
 
-    const result = materializeAutomationCatalogEntry(controlPlane, 'task-agent-1');
+    const result = createAutomationFromCatalogEntry(controlPlane, 'task-agent-1');
 
     expect(result).toMatchObject({
       success: true,
-      action: 'cloned',
+      action: 'copied',
       automationName: 'Inbox Triage (copy)',
     });
     expect(controlPlane.createTask).toHaveBeenCalledWith(expect.objectContaining({
@@ -212,23 +212,25 @@ describe('automation-catalog-actions', () => {
     }));
   });
 
-  it('installs builtin template and preset entries instead of cloning them in the browser', () => {
+  it('creates saved automations from builtin template and preset examples', () => {
     const controlPlane = makeControlPlane();
 
-    const templateResult = materializeAutomationCatalogEntry(controlPlane, 'builtin-browser-read');
-    const presetResult = materializeAutomationCatalogEntry(controlPlane, 'network-watch');
+    const templateResult = createAutomationFromCatalogEntry(controlPlane, 'builtin-browser-read');
+    const presetResult = createAutomationFromCatalogEntry(controlPlane, 'network-watch');
 
     expect(templateResult).toMatchObject({
       success: true,
-      action: 'installed',
+      action: 'created',
       automationId: 'builtin-browser-read',
+      message: "Created automation 'Builtin Browser Read' from the starter example.",
     });
     expect(controlPlane.installTemplate).toHaveBeenCalledWith('builtin-browser');
 
     expect(presetResult).toMatchObject({
       success: true,
-      action: 'installed',
+      action: 'created',
       automationId: 'task-installed-preset',
+      message: "Created automation 'Network Watch' from the starter example.",
     });
     expect(controlPlane.installPreset).toHaveBeenCalledWith('network-watch');
   });

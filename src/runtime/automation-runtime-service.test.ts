@@ -202,9 +202,9 @@ describe('automation-runtime-service', () => {
     ]));
     expect(templateControl.list).toHaveBeenCalled();
 
-    expect(service.materializeAutomation('builtin-browser-read')).toMatchObject({
+    expect(service.createAutomationFromCatalog('builtin-browser-read')).toMatchObject({
       success: true,
-      action: 'installed',
+      action: 'created',
       automationId: 'builtin-browser-read',
     });
     expect(templateControl.install).toHaveBeenCalledWith('builtin-browser');
@@ -268,7 +268,7 @@ describe('automation-runtime-service', () => {
   it('saves raw workflow definitions through the automation runtime contract', () => {
     const { service, workflowControl, taskControl } = makeService();
 
-    const result = service.saveAutomationWorkflowDefinition('browser-read-smoke', {
+    const result = service.saveAutomationDefinition('browser-read-smoke', {
       id: 'browser-read-smoke',
       name: 'Browser Read Smoke v2',
       enabled: false,
@@ -297,7 +297,7 @@ describe('automation-runtime-service', () => {
       outputHandling: undefined,
     });
 
-    expect(service.saveAutomationWorkflowDefinition('builtin-browser-read', {
+    expect(service.saveAutomationDefinition('builtin-browser-read', {
       id: 'builtin-browser-read',
       name: 'Builtin Browser Read',
       enabled: true,
@@ -307,10 +307,10 @@ describe('automation-runtime-service', () => {
       ],
     })).toMatchObject({
       success: false,
-      message: expect.stringContaining('Install or clone'),
+      message: expect.stringContaining('Create a copy'),
     });
 
-    expect(service.saveAutomationWorkflowDefinition('task-agent-1', {
+    expect(service.saveAutomationDefinition('task-agent-1', {
       id: 'task-agent-1',
       name: 'Inbox Triage',
       enabled: true,
@@ -320,7 +320,7 @@ describe('automation-runtime-service', () => {
       ],
     })).toMatchObject({
       success: false,
-      message: expect.stringContaining('Only workflow automations'),
+      message: expect.stringContaining('Only step-based automations'),
     });
   });
 });

@@ -1,8 +1,9 @@
 /**
- * Automations page — unified view merging workflows + scheduled operations.
+ * Automations page — unified view for saved automations and starter examples.
  *
- * Every item is an "automation": a workflow (1-step for single tools, N-step
- * for pipelines) or a scheduled assistant task with cron execution.
+ * Every row represents one automation definition: a step-based automation,
+ * an assistant automation, or a built-in starter example that can be used as
+ * the basis for a saved automation.
  */
 
 import { api } from '../api.js';
@@ -19,10 +20,10 @@ const automationUiState = {
 
 const AUTOMATION_HELP = {
   'Automation Catalog': {
-    whatItIs: 'This section is the system of record for saved workflows and scheduled task definitions.',
-    whatSeeing: 'You are seeing one row per automation, including its type, linked tools or workflow steps, schedule state, enablement, and the actions available for editing, cloning, running, or deleting it.',
-    whatCanDo: 'Create a new automation, edit an existing one, run it immediately, or review whether it already has a schedule attached.',
-    howLinks: 'Other pages can deep-link here, but this catalog is still the canonical place where workflow definitions and schedule ownership live.',
+    whatItIs: 'This section is the system of record for saved automations, schedules, and built-in starter examples.',
+    whatSeeing: 'You are seeing one row per automation, including its type, linked tools or steps, schedule state, enablement, and the actions available for editing, copying, running, or deleting it.',
+    whatCanDo: 'Create a new automation, edit an existing one, use a starter example, run it immediately, or review whether it already has a schedule attached.',
+    howLinks: 'Other pages can deep-link here, but this catalog is still the canonical place where automation definitions and schedule ownership live.',
   },
   'Run History': {
     whatItIs: 'This section is the recent execution ledger for automations that were run manually, by schedule, or by another system trigger.',
@@ -31,10 +32,10 @@ const AUTOMATION_HELP = {
     howLinks: 'Even when a run also generated alerts, notifications, or security findings, the detailed execution record remains here.',
   },
   'Engine Settings': {
-    whatItIs: 'This section contains the runtime-level controls for the automation engine itself rather than one specific workflow.',
+    whatItIs: 'This section contains the runtime-level controls for the automation engine itself rather than one specific automation.',
     whatSeeing: 'You are seeing the collapsible engine configuration area for execution mode, studio behavior, and engine-wide operating settings.',
     whatCanDo: 'Change how the automation engine behaves globally without editing every automation individually.',
-    howLinks: 'These settings affect how workflows run in general, while the catalog above still owns the definition of each specific automation.',
+    howLinks: 'These settings affect how automations run in general, while the catalog above still owns the definition of each specific automation.',
   },
 };
 
@@ -114,11 +115,11 @@ export async function renderAutomations(container) {
       <h2 class="page-title">Automations</h2>
       ${renderGuidancePanel({
         kicker: 'Automation Guide',
-        title: 'Workflows, schedules, runs, and output routing',
-        whatItIs: 'Automations is the page where Guardian workflows are defined, scheduled, executed, and reviewed.',
-        whatSeeing: 'You are seeing the saved automation catalog, recent run history, engine-level settings, and the controls for creating or updating workflows.',
-        whatCanDo: 'Build new workflows, attach schedules, run them on demand, inspect prior runs, and control how outputs are routed into alerts or Security.',
-        howLinks: 'Other pages can point you here for cloud, network, or threat-intel workflows, but this page remains the owner of workflow definition, schedule state, and run history.',
+        title: 'Automations, schedules, runs, and output routing',
+        whatItIs: 'Automations is the page where Guardian automations are defined, scheduled, executed, and reviewed.',
+        whatSeeing: 'You are seeing the saved automation catalog, built-in starter examples, recent run history, engine-level settings, and the controls for creating or updating automations.',
+        whatCanDo: 'Build new automations, use starter examples, attach schedules, run them on demand, inspect prior runs, and control how outputs are routed into alerts or Security.',
+        howLinks: 'Other pages can point you here for cloud, network, or threat-intel automations, but this page remains the owner of automation definition, schedule state, and run history.',
       })}
 
       <div class="intel-summary-grid">
@@ -322,17 +323,17 @@ function renderAutomationRow(auto, tools, packs) {
   const kindLabel = isAssistant ? 'Assistant' : auto.kind === 'pipeline' ? 'Pipeline' : 'Single';
   const modeLabel = auto.kind === 'pipeline' ? auto.mode : '';
   const scheduleLabel = auto.cron ? cronToHuman(auto.cron, auto.runOnce === true) : 'Manual';
-  const statusLabel = isBuiltin ? 'Catalog' : (auto.enabled ? 'Enabled' : 'Disabled');
+  const statusLabel = isBuiltin ? 'Example' : (auto.enabled ? 'Enabled' : 'Disabled');
   const toggleDisabled = isBuiltin ? 'disabled' : '';
   const runDisabled = (!auto.enabled || isBuiltin) ? 'disabled' : '';
   const runTitle = isBuiltin
-    ? 'Install this catalog entry first to create a runnable automation.'
+    ? 'Use this starter example first to create a runnable automation.'
     : (!auto.enabled ? 'Enable first' : '');
   const dryRunDisabled = isBuiltin || isAssistant ? 'disabled' : '';
-  const dryRunTitle = isAssistant ? 'Assistant automations do not support dry-run mode.' : (isBuiltin ? 'Install this catalog entry first' : '');
-  const editDisabled = isBuiltin ? 'disabled title="Install this catalog item first"' : '';
+  const dryRunTitle = isAssistant ? 'Assistant automations do not support dry-run mode.' : (isBuiltin ? 'Use this starter example first' : '');
+  const editDisabled = isBuiltin ? 'disabled title="Create a copy of this starter example first"' : '';
   const deleteDisabled = isBuiltin ? 'disabled title="Built-in catalog item"' : '';
-  const secondaryActionLabel = isBuiltin ? 'Install' : 'Clone';
+  const secondaryActionLabel = isBuiltin ? 'Use Example' : 'Create Copy';
   const toolsCell = isAssistant
     ? `
         <div class="wf-catalog-tools">
@@ -368,7 +369,7 @@ function renderAutomationRow(auto, tools, packs) {
         <div class="ops-task-title">${esc(auto.name)}</div>
         <div class="ops-task-sub" title="${escAttr(auto.description || auto.id)}">${esc(auto.description || auto.id)}</div>
         <span class="wf-category-tag">${esc(auto.category)}</span>
-        ${isBuiltin ? '<span class="badge badge-info" style="margin-left:0.4rem">Catalog</span>' : ''}
+        ${isBuiltin ? '<span class="badge badge-info" style="margin-left:0.4rem">Starter Example</span>' : ''}
       </td>
       <td>
         <span class="auto-kind-badge ${auto.kind}">${esc(kindLabel)}</span>
@@ -396,7 +397,7 @@ function renderAutomationRow(auto, tools, packs) {
           <button class="btn btn-primary btn-sm auto-run" data-auto-id="${escAttr(auto.id)}" ${runDisabled} ${runTitle ? `title="${escAttr(runTitle)}"` : ''}>Run</button>
           <button class="btn btn-secondary btn-sm auto-dryrun" data-auto-id="${escAttr(auto.id)}" ${dryRunDisabled} ${dryRunTitle ? `title="${escAttr(dryRunTitle)}"` : ''}>Dry Run</button>
           <button class="btn btn-secondary btn-sm auto-edit" data-auto-id="${escAttr(auto.id)}" ${editDisabled}>Edit</button>
-          <button class="btn btn-secondary btn-sm auto-materialize" data-auto-id="${escAttr(auto.id)}">${esc(secondaryActionLabel)}</button>
+          <button class="btn btn-secondary btn-sm auto-create-copy" data-auto-id="${escAttr(auto.id)}">${esc(secondaryActionLabel)}</button>
           <button class="btn btn-secondary btn-sm auto-delete" data-auto-id="${escAttr(auto.id)}" data-label="${escAttr(auto.name)}" ${deleteDisabled}>Delete</button>
         </div>
       </td>
@@ -524,7 +525,7 @@ function renderPipelineView(auto, toolLookup, packs) {
           <div class="wf-config-section-title">Raw Definition JSON</div>
           <div class="wf-config-section-note">
             ${rawEditorDisabled
-              ? 'Install or clone this catalog automation before editing its raw workflow definition.'
+              ? 'Create a copy of this starter example before editing its raw definition.'
               : 'Use the simple Edit flow for normal changes. This editor is for advanced troubleshooting and direct definition changes.'}
           </div>
           <textarea class="wf-config-json-editor" data-auto-id="${escAttr(auto.id)}" rows="8" ${rawEditorDisabled ? 'readonly' : ''}>${esc(JSON.stringify(playbookData, null, 2))}</textarea>
@@ -1217,20 +1218,20 @@ function bindEvents(container, ctx) {
     });
   });
 
-  // Clone / install
-  container.querySelectorAll('.auto-materialize').forEach((button) => {
+  // Create copy / use example
+  container.querySelectorAll('.auto-create-copy').forEach((button) => {
     button.addEventListener('click', async () => {
       const autoId = button.getAttribute('data-auto-id');
       const auto = automations.find((a) => a.id === autoId);
       if (!auto) return;
 
-      const actionLabel = auto.builtin ? 'Install' : 'Clone';
+      const actionLabel = auto.builtin ? 'Use Example' : 'Create Copy';
       button.disabled = true;
       button.textContent = `${actionLabel}...`;
       try {
         const result = requireAutomationMutationSuccess(
-          await api.materializeAutomation(auto.id),
-          `Could not ${auto.builtin ? 'install' : 'clone'} '${auto.name}'.`,
+          await api.createAutomation(auto.id),
+          `Could not ${auto.builtin ? 'create' : 'copy'} '${auto.name}'.`,
         );
         automationUiState.placement = {
           anchorId: auto.builtin ? null : auto.id,
@@ -1301,12 +1302,12 @@ function bindEvents(container, ctx) {
       const statusEl = container.querySelector(`.auto-config-save-status[data-auto-id="${autoId}"]`);
       if (!textarea || !statusEl) return;
       if (!auto?.workflow) {
-        statusEl.textContent = 'Only workflow automations support raw definition editing.';
+        statusEl.textContent = 'Only step-based automations support raw definition editing.';
         statusEl.style.color = 'var(--error)';
         return;
       }
       if (auto.builtin) {
-        statusEl.textContent = 'Install or clone this catalog automation before editing it.';
+        statusEl.textContent = 'Create a copy of this starter example before editing it.';
         statusEl.style.color = 'var(--warning)';
         return;
       }
@@ -1314,7 +1315,7 @@ function bindEvents(container, ctx) {
       statusEl.style.color = 'var(--text-muted)';
       try {
         const result = requireAutomationMutationSuccess(
-          await api.saveAutomationWorkflowDefinition(auto.id, JSON.parse(textarea.value.trim())),
+          await api.saveAutomationDefinition(auto.id, JSON.parse(textarea.value.trim())),
           `Could not save '${auto.name}'.`,
         );
         statusEl.textContent = result.message || (result.success ? 'Saved.' : 'Failed.');
@@ -1453,7 +1454,7 @@ function bindCreateForm(container, { tools, packs, agents }) {
     editIdInput.value = '';
     editSourceInput.value = '';
     editTaskIdInput.value = '';
-    setFormMode('Create Automation', 'Build a native workflow, tool automation, or scheduled assistant task.');
+    setFormMode('Create Automation', 'Build a step-based automation, tool automation, or assistant automation.');
     setIdReadOnly(false);
     modeSelect.disabled = false;
     ensureAssistantModeOption(false);

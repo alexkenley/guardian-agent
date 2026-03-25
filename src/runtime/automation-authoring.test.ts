@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildTaskUpdateForCompiledAutomation,
   compileAutomationAuthoringOutcome,
   compileAutomationAuthoringRequest,
-  findMatchingScheduledAutomationTask,
 } from './automation-authoring.js';
 
 describe('compileAutomationAuthoringRequest', () => {
@@ -357,50 +355,5 @@ describe('compileAutomationAuthoringRequest', () => {
   it('returns null when the request is not an automation authoring request', () => {
     const compilation = compileAutomationAuthoringRequest('Read ./companies.csv and tell me what is inside.');
     expect(compilation).toBeNull();
-  });
-});
-
-describe('scheduled automation dedupe helpers', () => {
-  it('matches an existing scheduled agent task by native automation identity', () => {
-    const compilation = compileAutomationAuthoringRequest(
-      'Build a weekday lead research workflow that reads ./companies.csv, researches each company website and public presence, scores fit from 1-5 using a simple B2B SaaS ICP, writes results to ./lead-research-output.csv, and creates ./lead-research-summary.md.',
-      { channel: 'web', userId: 'owner' },
-    );
-    expect(compilation?.taskCreate).toBeTruthy();
-
-    const match = findMatchingScheduledAutomationTask(
-      [
-        {
-          id: 'task-1',
-          name: 'Weekday Lead Research',
-          type: 'agent',
-          target: 'default',
-          cron: '0 9 * * 1-5',
-          channel: 'web',
-          deliver: true,
-        },
-      ],
-      compilation!,
-    );
-
-    expect(match?.id).toBe('task-1');
-  });
-
-  it('builds a task update from compiled agent automation state', () => {
-    const compilation = compileAutomationAuthoringRequest(
-      'Create a daily 7:30 AM automation that checks my high-priority inbox, summarizes anything actionable, drafts replies, and asks for approval before sending anything.',
-      { channel: 'web', userId: 'owner' },
-    );
-    const update = buildTaskUpdateForCompiledAutomation('task-1', compilation!, { channel: 'web', userId: 'owner' });
-
-    expect(update).toMatchObject({
-      taskId: 'task-1',
-      type: 'agent',
-      target: 'default',
-      channel: 'web',
-      deliver: true,
-      cron: '30 7 * * *',
-    });
-    expect(update?.description).toBe(compilation?.description);
   });
 });

@@ -40,7 +40,7 @@ describe('tryAutomationPreRoute', () => {
       assumeAuthoring: true,
     });
 
-    expect(result?.content).toContain('I drafted the native Guardian workflow draft');
+    expect(result?.content).toContain('I drafted the native Guardian step-based automation draft');
     expect(result?.content).toContain('Missing details:');
   });
 
@@ -62,15 +62,15 @@ describe('tryAutomationPreRoute', () => {
     expect(executeTool).not.toHaveBeenCalled();
   });
 
-  it('routes native scheduled automation requests to task_create before generic tools', async () => {
+  it('routes native scheduled automation requests through automation_save before generic tools', async () => {
     const executeTool = vi.fn(async (toolName: string) => {
-      if (toolName === 'task_list') {
+      if (toolName === 'automation_list') {
         return {
           success: true,
-          output: { tasks: [] },
+          output: { automations: [] },
         };
       }
-      if (toolName === 'task_create') {
+      if (toolName === 'automation_save') {
         return {
           success: false,
           status: 'pending_approval',
@@ -97,25 +97,25 @@ describe('tryAutomationPreRoute', () => {
     expect(result?.metadata?.pendingApprovals).toEqual([
       {
         id: 'approval-1',
-        toolName: 'task_create',
+        toolName: 'automation_save',
         argsPreview: expect.any(String),
       },
     ]);
     expect(executeTool).toHaveBeenNthCalledWith(
       1,
-      'task_list',
+      'automation_list',
       {},
       expect.objectContaining({ channel: 'web', userId: 'owner' }),
     );
     expect(executeTool.mock.calls.some((call) => (
-      call[0] === 'task_create'
+      call[0] === 'automation_save'
       && call[1]?.name === 'Weekday Lead Research'
-      && call[1]?.type === 'agent'
-      && call[1]?.cron === '0 9 * * 1-5'
+      && call[1]?.kind === 'assistant_task'
+      && call[1]?.schedule?.cron === '0 9 * * 1-5'
     ))).toBe(true);
     expect(onPendingApproval).toHaveBeenCalledWith({
       approvalId: 'approval-1',
-      toolName: 'task_create',
+      toolName: 'automation_save',
       automationName: 'Weekday Lead Research',
       artifactLabel: 'native Guardian scheduled assistant task',
       verb: 'created',
@@ -124,28 +124,39 @@ describe('tryAutomationPreRoute', () => {
 
   it('updates matching scheduled automation tasks instead of creating duplicates', async () => {
     const executeTool = vi.fn(async (toolName: string) => {
-      if (toolName === 'task_list') {
+      if (toolName === 'automation_list') {
         return {
           success: true,
           output: {
-            tasks: [
+            automations: [
               {
-                id: 'task-1',
+                id: 'weekday-lead-research',
                 name: 'Weekday Lead Research',
-                type: 'agent',
-                target: 'default',
-                cron: '0 9 * * 1-5',
-                channel: 'web',
-                deliver: true,
+                kind: 'assistant_task',
+                builtin: false,
+                task: {
+                  id: 'task-1',
+                  kind: 'task',
+                  type: 'agent',
+                  target: 'default',
+                  cron: '0 9 * * 1-5',
+                  channel: 'web',
+                  deliver: true,
+                },
               },
             ],
           },
         };
       }
-      if (toolName === 'task_update') {
+      if (toolName === 'automation_save') {
         return {
           success: true,
-          message: 'Updated task.',
+          output: {
+            success: true,
+            message: 'Saved.',
+            automationId: 'weekday-lead-research',
+            taskId: 'task-1',
+          },
         };
       }
       throw new Error(`Unexpected tool ${toolName}`);
@@ -164,19 +175,23 @@ describe('tryAutomationPreRoute', () => {
     expect(result?.content).toContain('Schedule: 0 9 * * 1-5');
     expect(executeTool).toHaveBeenNthCalledWith(
       2,
-      'task_update',
-      expect.objectContaining({ taskId: 'task-1', name: 'Weekday Lead Research' }),
+      'automation_save',
+      expect.objectContaining({ existingTaskId: 'task-1', name: 'Weekday Lead Research' }),
       expect.objectContaining({ channel: 'web', userId: 'owner' }),
     );
   });
 
   it('routes deterministic browser smoke workflows through wrapper tool steps', async () => {
     const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
-      if (toolName === 'workflow_upsert') {
+      if (toolName === 'automation_list') {
+        return { success: true, output: { automations: [] } };
+      }
+      if (toolName === 'automation_save') {
         expect(args).toMatchObject({
           id: 'browser-read-smoke',
           name: 'Browser Read Smoke',
           enabled: true,
+          kind: 'workflow',
           mode: 'sequential',
           steps: [
             {
@@ -193,7 +208,11 @@ describe('tryAutomationPreRoute', () => {
         });
         return {
           success: true,
-          message: "Workflow 'Browser Read Smoke' created.",
+          output: {
+            success: true,
+            message: 'Saved.',
+            automationId: 'browser-read-smoke',
+          },
         };
       }
       throw new Error(`Unexpected tool ${toolName}`);
@@ -210,7 +229,7 @@ describe('tryAutomationPreRoute', () => {
 
     expect(result?.content).toContain('Browser Read Smoke');
     expect(executeTool).toHaveBeenCalledWith(
-      'workflow_upsert',
+      'automation_save',
       expect.objectContaining({
         id: 'browser-read-smoke',
         name: 'Browser Read Smoke',
@@ -221,29 +240,29 @@ describe('tryAutomationPreRoute', () => {
 
   it('routes unscheduled open-ended requests to manual assistant automations instead of falling through', async () => {
     const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
-      if (toolName === 'task_list') {
+      if (toolName === 'automation_list') {
         return {
           success: true,
-          output: { tasks: [] },
+          output: { automations: [] },
         };
       }
-      if (toolName === 'task_create') {
+      if (toolName === 'automation_save') {
         expect(args).toMatchObject({
+          id: 'company-homepage-collector',
           name: 'Company Homepage Collector',
-          type: 'agent',
-          target: 'default',
-          eventTrigger: { eventType: 'automation:manual:company-homepage-collector' },
+          kind: 'assistant_task',
+          task: {
+            target: 'default',
+          },
+          schedule: { enabled: false },
         });
         return {
           success: true,
           output: {
-            task: {
-              id: 'task-manual-1',
-              name: 'Company Homepage Collector',
-              type: 'agent',
-              target: 'default',
-              eventTrigger: { eventType: 'automation:manual:company-homepage-collector' },
-            },
+            success: true,
+            message: 'Saved.',
+            automationId: 'company-homepage-collector',
+            taskId: 'task-manual-1',
           },
         };
       }
@@ -261,7 +280,7 @@ describe('tryAutomationPreRoute', () => {
 
     expect(result?.content).toContain("Created manual assistant automation 'Company Homepage Collector'");
     expect(result?.content).toContain('Runs on demand only');
-    expect(executeTool.mock.calls.some((call) => call[0] === 'task_create')).toBe(true);
+    expect(executeTool.mock.calls.some((call) => call[0] === 'automation_save')).toBe(true);
   });
 
   it('blocks automation creation when required input files are missing', async () => {
@@ -387,13 +406,13 @@ describe('tryAutomationPreRoute', () => {
           message: 'Policy updated.',
         };
       }
-      if (toolName === 'task_list') {
+      if (toolName === 'automation_list') {
         return {
           success: true,
-          output: { tasks: [] },
+          output: { automations: [] },
         };
       }
-      if (toolName === 'task_create') {
+      if (toolName === 'automation_save') {
         return {
           success: false,
           status: 'pending_approval',
@@ -433,7 +452,7 @@ describe('tryAutomationPreRoute', () => {
 
     expect(pathAllowed).toBe(true);
     expect(result?.content).toContain('scheduled assistant task');
-    expect(executeTool.mock.calls.some((call) => call[0] === 'task_create')).toBe(true);
+    expect(executeTool.mock.calls.some((call) => call[0] === 'automation_save')).toBe(true);
   });
 
   it('continues scheduled assistant creation after path remediation even when the output parent directory is missing', async () => {
@@ -448,13 +467,13 @@ describe('tryAutomationPreRoute', () => {
           message: `Policy updated: add_path '${externalPath}'.`,
         };
       }
-      if (toolName === 'task_list') {
+      if (toolName === 'automation_list') {
         return {
           success: true,
-          output: { tasks: [] },
+          output: { automations: [] },
         };
       }
-      if (toolName === 'task_create') {
+      if (toolName === 'automation_save') {
         return {
           success: false,
           status: 'pending_approval',
@@ -498,25 +517,25 @@ describe('tryAutomationPreRoute', () => {
     expect(result?.metadata?.pendingApprovals).toEqual([
       {
         id: 'approval-task-missing-parent-1',
-        toolName: 'task_create',
+        toolName: 'automation_save',
         argsPreview: expect.any(String),
       },
     ]);
     expect(executeTool.mock.calls.some((call) => (
-      call[0] === 'task_create'
+      call[0] === 'automation_save'
       && call[1]?.name === 'Daily Lead Summary'
     ))).toBe(true);
   });
 
   it('allows scheduled assistant tasks when predicted approvals are only for bounded workspace writes', async () => {
     const executeTool = vi.fn(async (toolName: string) => {
-      if (toolName === 'task_list') {
+      if (toolName === 'automation_list') {
         return {
           success: true,
-          output: { tasks: [] },
+          output: { automations: [] },
         };
       }
-      if (toolName === 'task_create') {
+      if (toolName === 'automation_save') {
         return {
           success: false,
           status: 'pending_approval',
@@ -557,10 +576,10 @@ describe('tryAutomationPreRoute', () => {
     expect(result).not.toBeNull();
     expect(result?.content).toContain('scheduled assistant task');
     expect(executeTool).toHaveBeenCalledWith(
-      'task_create',
+      'automation_save',
       expect.objectContaining({
         name: 'Weekday Lead Research',
-        type: 'agent',
+        kind: 'assistant_task',
       }),
       expect.objectContaining({ channel: 'web', userId: 'owner' }),
     );
@@ -568,7 +587,10 @@ describe('tryAutomationPreRoute', () => {
 
   it('treats relative workflow output paths as workspace-rooted during preflight', async () => {
     const executeTool = vi.fn(async (toolName: string) => {
-      if (toolName === 'workflow_upsert') {
+      if (toolName === 'automation_list') {
+        return { success: true, output: { automations: [] } };
+      }
+      if (toolName === 'automation_save') {
         return {
           success: false,
           status: 'pending_approval',
@@ -607,16 +629,16 @@ describe('tryAutomationPreRoute', () => {
       formatPendingApprovalPrompt: () => 'Approval UI should be shown.',
     });
 
-    expect(result?.content).toContain('native Guardian workflow');
+    expect(result?.content).toContain('native Guardian step-based automation');
     expect(result?.metadata?.pendingApprovals).toEqual([
       {
         id: 'approval-workflow-relative-1',
-        toolName: 'workflow_upsert',
+        toolName: 'automation_save',
         argsPreview: expect.any(String),
       },
     ]);
     expect(executeTool).toHaveBeenCalledWith(
-      'workflow_upsert',
+      'automation_save',
       expect.objectContaining({
         name: 'Lead Research Summary Workflow',
       }),

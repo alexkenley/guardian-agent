@@ -1,8 +1,8 @@
 import type { AssistantConnectorPlaybookDefinition } from '../config/types.js';
 import type { ConnectorPlaybookRunInput, ConnectorPlaybookRunResult, PlaybookRunRecord } from './connectors.js';
 import {
-  materializeAutomationCatalogEntry,
-  type AutomationCatalogMaterializationResult,
+  createAutomationFromCatalogEntry,
+  type AutomationCatalogCreateResult,
 } from './automation-catalog-actions.js';
 import {
   saveAutomationDefinition,
@@ -76,9 +76,9 @@ export interface AutomationRuntimeService {
   listAutomationCatalog(): SavedAutomationCatalogEntry[];
   listAutomationCatalogView(): AutomationCatalogViewEntry[];
   listAutomationRunHistory(): AutomationRunHistoryEntry[];
-  materializeAutomation(automationId: string): AutomationCatalogMaterializationResult;
+  createAutomationFromCatalog(automationId: string): AutomationCatalogCreateResult;
   saveAutomation(input: AutomationSaveInput): AutomationSaveResult;
-  saveAutomationWorkflowDefinition(
+  saveAutomationDefinition(
     automationId: string,
     workflow: AssistantConnectorPlaybookDefinition,
   ): AutomationSaveResult;
@@ -109,6 +109,7 @@ export interface AutomationRuntimeService {
   }): Promise<Record<string, unknown>>;
   createExecutorControlPlane(): {
     listAutomations: () => SavedAutomationCatalogEntry[];
+    saveAutomation: (input: AutomationSaveInput) => AutomationSaveResult;
     setAutomationEnabled: (automationId: string, enabled: boolean) => { success: boolean; message: string };
     deleteAutomation: (automationId: string) => { success: boolean; message: string };
     runAutomation: (input: {
@@ -164,7 +165,7 @@ export function createAutomationRuntimeService(
       options.workflows.history().map(cloneWorkflowRun),
       service.listTaskHistory(),
     ),
-    materializeAutomation: (automationId) => {
+    createAutomationFromCatalog: (automationId) => {
       const installTemplate = options.templates?.install;
       const controlPlane = {
         listCatalog: () => service.listAutomationCatalog(),
@@ -176,7 +177,7 @@ export function createAutomationRuntimeService(
           ? { installTemplate: (templateId: string) => installTemplate(templateId) }
           : {}),
       };
-      return materializeAutomationCatalogEntry(controlPlane, automationId);
+      return createAutomationFromCatalogEntry(controlPlane, automationId);
     },
     saveAutomation: (input) => saveAutomationDefinition({
       upsertWorkflow: (workflow: AssistantConnectorPlaybookDefinition) => service.upsertWorkflow(workflow),
@@ -184,7 +185,7 @@ export function createAutomationRuntimeService(
       updateTask: (taskId: string, taskInput: ScheduledTaskUpdateInput) => service.updateTask(taskId, taskInput),
       deleteTask: (taskId: string) => service.deleteTask(taskId),
     }, prepareAutomationSaveInput(service, input)),
-    saveAutomationWorkflowDefinition: (automationId, workflow) => {
+    saveAutomationDefinition: (automationId, workflow) => {
       const existing = findAutomationCatalogViewEntry(service, automationId);
       if (!existing) {
         return { success: false, message: `Automation '${automationId}' was not found.` };
@@ -192,13 +193,13 @@ export function createAutomationRuntimeService(
       if (existing.builtin) {
         return {
           success: false,
-          message: 'Install or clone this catalog automation before editing its raw workflow definition.',
+          message: 'Create a copy of this starter example before editing its raw definition.',
         };
       }
       if (!existing.workflow) {
         return {
           success: false,
-          message: 'Only workflow automations support raw workflow definition editing.',
+          message: 'Only step-based automations support raw definition editing.',
         };
       }
 
@@ -211,7 +212,7 @@ export function createAutomationRuntimeService(
       if (!workflowResult.success) {
         return {
           success: false,
-          message: workflowResult.message || 'Failed to save the workflow definition.',
+          message: workflowResult.message || 'Failed to save the automation definition.',
         };
       }
 
@@ -293,6 +294,7 @@ export function createAutomationRuntimeService(
     ),
     createExecutorControlPlane: () => ({
       listAutomations: () => service.listAutomationCatalog().map(cloneCatalogEntry),
+      saveAutomation: (input) => service.saveAutomation(input),
       setAutomationEnabled: (automationId, enabled) => service.setSavedAutomationEnabled(automationId, enabled),
       deleteAutomation: (automationId) => service.deleteSavedAutomation(automationId),
       runAutomation: async (input) => service.runSavedAutomation(input),
@@ -498,21 +500,21 @@ function normalizeWorkflowDefinitionForAutomation(
   const existingId = existing.workflow?.id || existing.id;
   const requestedId = typeof workflow.id === 'string' ? workflow.id.trim() : '';
   if (!requestedId) {
-    return { success: false, message: 'Workflow ID is required.' };
+    return { success: false, message: 'Automation ID is required.' };
   }
   if (requestedId !== existingId) {
     return {
       success: false,
-      message: 'Raw workflow definition editing cannot rename an automation. Use Clone or the structured editor instead.',
+      message: 'Raw definition editing cannot rename an automation. Use Create Copy or the structured editor instead.',
     };
   }
 
   const name = typeof workflow.name === 'string' ? workflow.name.trim() : '';
   if (!name) {
-    return { success: false, message: 'Workflow name is required.' };
+    return { success: false, message: 'Automation name is required.' };
   }
   if (workflow.mode !== 'parallel' && workflow.mode !== 'sequential') {
-    return { success: false, message: 'Workflow mode must be sequential or parallel.' };
+    return { success: false, message: 'Automation mode must be sequential or parallel.' };
   }
 
   const steps = Array.isArray(workflow.steps)

@@ -1,12 +1,9 @@
 import type { AgentContext, UserMessage } from '../agent/types.js';
 import {
-  buildTaskUpdateForCompiledAutomation,
   compileAutomationAuthoringOutcome,
-  findMatchingScheduledAutomationTask,
   isAutomationAuthoringRequest,
   type AutomationAuthoringCompilation,
   type AutomationAuthoringDraft,
-  type ExistingAutomationTask,
 } from './automation-authoring.js';
 import {
   formatAutomationValidationFailure,
@@ -14,6 +11,7 @@ import {
   type AutomationValidationResult,
 } from './automation-validation.js';
 import type { ToolExecutionRequest } from '../tools/types.js';
+import type { AutomationSaveInput } from './automation-save.js';
 
 export interface AutomationPendingApprovalMetadata {
   id: string;
@@ -43,20 +41,29 @@ interface AutomationPreRouteParams {
   workspaceRoot?: string;
   allowedPaths?: string[];
   executeTool: (
-    toolName: 'task_list' | 'task_create' | 'task_update' | 'workflow_upsert' | 'update_tool_policy',
+    toolName: 'automation_list' | 'automation_save' | 'update_tool_policy',
     args: Record<string, unknown>,
     request: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
   ) => Promise<Record<string, unknown>>;
   trackPendingApproval?: (approvalId: string) => void;
   onPendingApproval?: (input: {
     approvalId: string;
-    toolName: 'task_create' | 'task_update' | 'workflow_upsert';
+    toolName: 'automation_save';
     automationName: string;
     artifactLabel: string;
     verb: 'created' | 'updated';
   }) => void;
   formatPendingApprovalPrompt?: (ids: string[]) => string;
   resolvePendingApprovalMetadata?: (ids: string[], fallback: AutomationPendingApprovalMetadata[]) => AutomationPendingApprovalMetadata[];
+}
+
+interface ExistingSavedAutomation {
+  id: string;
+  name: string;
+  builtin: boolean;
+  kind: string;
+  sourceKind?: string;
+  taskId?: string;
 }
 
 export async function tryAutomationPreRoute(
@@ -103,53 +110,27 @@ export async function tryAutomationPreRoute(
   const toolRequest: Omit<ToolExecutionRequest, 'toolName' | 'args'> = {
     ...toolRequestFor(params),
   };
+  const existingAutomations = await listExistingAutomations(params.executeTool, toolRequest);
+  const matchedAutomation = findMatchingSavedAutomation(existingAutomations, compilation);
+  const saveInput = buildAutomationSaveInput(compilation, matchedAutomation);
+  if (!saveInput) return null;
 
-  if ((compilation.shape === 'scheduled_agent' || compilation.shape === 'manual_agent') && compilation.taskCreate) {
-    const existingTasks = await listExistingAutomationTasks(params.executeTool, toolRequest);
-    const matchedTask = findMatchingScheduledAutomationTask(existingTasks, compilation);
-    const toolName = matchedTask ? 'task_update' : 'task_create';
-    const args = matchedTask
-      ? buildTaskUpdateForCompiledAutomation(matchedTask.id, compilation, {
-          channel: params.message.channel,
-          userId: params.message.userId,
-        })
-      : compilation.taskCreate;
-    if (!args) return null;
-
-    const toolResult = await params.executeTool(toolName, args as unknown as Record<string, unknown>, toolRequest);
-    return formatAutomationPreRouteResult({
-      toolName,
-      compilation,
-      toolResult,
-      verb: matchedTask ? 'updated' : 'created',
-      argsPreview: JSON.stringify(args).slice(0, 160),
-      onPendingApproval: params.onPendingApproval,
-      trackPendingApproval: params.trackPendingApproval,
-      formatPendingApprovalPrompt: params.formatPendingApprovalPrompt,
-      resolvePendingApprovalMetadata: params.resolvePendingApprovalMetadata,
-    });
-  }
-
-  if (compilation.workflowUpsert) {
-    const toolResult = await params.executeTool(
-      'workflow_upsert',
-      compilation.workflowUpsert as unknown as Record<string, unknown>,
-      toolRequest,
-    );
-    return formatAutomationPreRouteResult({
-      toolName: 'workflow_upsert',
-      compilation,
-      toolResult,
-      verb: 'created',
-      argsPreview: JSON.stringify(compilation.workflowUpsert).slice(0, 160),
-      onPendingApproval: params.onPendingApproval,
-      trackPendingApproval: params.trackPendingApproval,
-      formatPendingApprovalPrompt: params.formatPendingApprovalPrompt,
-      resolvePendingApprovalMetadata: params.resolvePendingApprovalMetadata,
-    });
-  }
-
-  return null;
+  const toolResult = await params.executeTool(
+    'automation_save',
+    saveInput as unknown as Record<string, unknown>,
+    toolRequest,
+  );
+  return formatAutomationPreRouteResult({
+    toolName: 'automation_save',
+    compilation,
+    toolResult,
+    verb: matchedAutomation ? 'updated' : 'created',
+    argsPreview: JSON.stringify(saveInput).slice(0, 160),
+    onPendingApproval: params.onPendingApproval,
+    trackPendingApproval: params.trackPendingApproval,
+    formatPendingApprovalPrompt: params.formatPendingApprovalPrompt,
+    resolvePendingApprovalMetadata: params.resolvePendingApprovalMetadata,
+  });
 }
 
 function renderAutomationDraftClarification(draft: AutomationAuthoringDraft): string {
@@ -179,43 +160,114 @@ function toolRequestFor(params: AutomationPreRouteParams): Omit<ToolExecutionReq
   };
 }
 
-async function listExistingAutomationTasks(
+async function listExistingAutomations(
   executeTool: AutomationPreRouteParams['executeTool'],
   request: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
-): Promise<ExistingAutomationTask[]> {
+): Promise<ExistingSavedAutomation[]> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const result = await executeTool('task_list', {}, request);
+    const result = await executeTool('automation_list', {}, request);
     if (!toBoolean(result.success)) return [];
     const output = isRecord(result.output) ? result.output : null;
-    if (!output || !Array.isArray(output.tasks)) return [];
-    const tasks = output.tasks
-      .map((task) => (isRecord(task) ? task : null))
-      .filter((task): task is Record<string, unknown> => Boolean(task))
-      .map((task) => ({
-        id: toString(task.id),
-        name: toString(task.name),
-        type: toString(task.type),
-        target: toString(task.target),
-        cron: toString(task.cron),
-        eventTrigger: isRecord(task.eventTrigger)
-          ? { eventType: toString(task.eventTrigger.eventType) }
-          : undefined,
-        prompt: toString(task.prompt) || undefined,
-        channel: toString(task.channel) || undefined,
-        userId: toString(task.userId) || undefined,
-        deliver: typeof task.deliver === 'boolean' ? task.deliver : undefined,
-      }))
-      .filter((task) => Boolean(task.id && task.name && task.type && task.target && (task.cron || task.eventTrigger?.eventType)));
-    if (tasks.length > 0 || attempt === 2) {
-      return tasks;
+    if (!output || !Array.isArray(output.automations)) return [];
+    const automations = output.automations
+      .map((automation) => (isRecord(automation) ? automation : null))
+      .filter((automation): automation is Record<string, unknown> => Boolean(automation))
+      .map((automation) => {
+        const task = isRecord(automation.task) ? automation.task : null;
+        return {
+          id: toString(automation.id),
+          name: toString(automation.name),
+          builtin: automation.builtin === true,
+          kind: toString(automation.kind),
+          sourceKind: task ? toString(task.kind) : (isRecord(automation.workflow) ? 'workflow' : undefined),
+          taskId: task ? toString(task.id) || undefined : undefined,
+        };
+      })
+      .filter((automation) => Boolean(automation.id && automation.name));
+    if (automations.length > 0 || attempt === 2) {
+      return automations;
     }
     await sleep(100);
   }
   return [];
 }
 
+function findMatchingSavedAutomation(
+  automations: ExistingSavedAutomation[],
+  compilation: AutomationAuthoringCompilation,
+): ExistingSavedAutomation | null {
+  const desiredId = normalizeAutomationLookupValue(compilation.id);
+  const desiredName = normalizeAutomationLookupValue(compilation.name);
+  return automations.find((automation) => {
+    if (automation.builtin) return false;
+    const kindMatches = compilation.shape === 'workflow'
+      ? automation.kind === 'workflow'
+      : automation.kind === 'assistant_task';
+    if (!kindMatches) return false;
+    return normalizeAutomationLookupValue(automation.id) === desiredId
+      || normalizeAutomationLookupValue(automation.name) === desiredName;
+  }) ?? null;
+}
+
+function buildAutomationSaveInput(
+  compilation: AutomationAuthoringCompilation,
+  existing: ExistingSavedAutomation | null,
+): AutomationSaveInput | null {
+  if (compilation.shape === 'workflow' && compilation.workflowUpsert) {
+    return {
+      id: compilation.id,
+      name: compilation.name,
+      description: compilation.description,
+      enabled: true,
+      kind: 'workflow',
+      ...(existing?.sourceKind ? { sourceKind: existing.sourceKind } : {}),
+      ...(existing?.taskId ? { existingTaskId: existing.taskId } : {}),
+      mode: compilation.workflowUpsert.mode,
+      steps: compilation.workflowUpsert.steps.map((step) => ({
+        ...step,
+        ...(isRecord(step.args) ? { args: { ...step.args } } : {}),
+      })),
+      schedule: compilation.schedule
+        ? {
+            enabled: true,
+            cron: compilation.schedule.cron,
+            runOnce: compilation.schedule.runOnce,
+          }
+        : { enabled: false },
+      ...(compilation.workflowUpsert.outputHandling ? { outputHandling: { ...compilation.workflowUpsert.outputHandling } } : {}),
+    };
+  }
+
+  if ((compilation.shape === 'scheduled_agent' || compilation.shape === 'manual_agent') && compilation.taskCreate) {
+    return {
+      id: compilation.id,
+      name: compilation.name,
+      description: compilation.description,
+      enabled: true,
+      kind: 'assistant_task',
+      ...(existing?.sourceKind ? { sourceKind: existing.sourceKind } : {}),
+      ...(existing?.taskId ? { existingTaskId: existing.taskId } : {}),
+      task: {
+        target: compilation.taskCreate.target,
+        prompt: compilation.taskCreate.prompt,
+        channel: compilation.taskCreate.channel,
+        deliver: compilation.taskCreate.deliver,
+      },
+      schedule: compilation.shape === 'scheduled_agent' && compilation.schedule
+        ? {
+            enabled: true,
+            cron: compilation.schedule.cron,
+            runOnce: compilation.schedule.runOnce,
+          }
+        : { enabled: false },
+    };
+  }
+
+  return null;
+}
+
 function formatAutomationPreRouteResult(input: {
-  toolName: 'task_create' | 'task_update' | 'workflow_upsert';
+  toolName: 'automation_save';
   compilation: AutomationAuthoringCompilation;
   toolResult: Record<string, unknown>;
   verb: 'created' | 'updated';
@@ -291,7 +343,7 @@ function describeAutomationCompilation(compilation: AutomationAuthoringCompilati
       })
       .filter(Boolean);
     return {
-      kindLabel: 'native Guardian workflow',
+      kindLabel: 'native Guardian step-based automation',
       detailLine: [
         `Mode: ${compilation.workflowUpsert.mode}`,
         `Steps: ${stepCount}`,
@@ -322,7 +374,7 @@ function describeAutomationDraft(draft: AutomationAuthoringDraft): {
 } {
   if (draft.shape === 'workflow') {
     return {
-      kindLabel: 'native Guardian workflow draft',
+      kindLabel: 'native Guardian step-based automation draft',
       detailLine: [
         'Mode: sequential',
         draft.schedule?.cron ? `Schedule: ${draft.schedule.cron}` : 'Manual run',
@@ -352,9 +404,8 @@ function renderAutomationSuccessHeadline(
 ): string {
   const output = isRecord(toolResult.output) ? toolResult.output : null;
   if (compilation.shape === 'workflow') {
-    const workflow = output && isRecord(output.workflow) ? output.workflow : null;
-    const workflowId = workflow ? toString(workflow.id) : compilation.id;
-    return `${capitalize(verb)} workflow '${compilation.name}' (id: ${workflowId}).`;
+    const automationId = output ? toString(output.automationId) || compilation.id : compilation.id;
+    return `${capitalize(verb)} step-based automation '${compilation.name}' (id: ${automationId}).`;
   }
   const task = output && isRecord(output.task) ? output.task : null;
   const taskId = task ? toString(task.id) : '';
@@ -455,6 +506,10 @@ function toPolicyRemediation(
     default:
       return null;
   }
+}
+
+function normalizeAutomationLookupValue(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 function toString(value: unknown): string {

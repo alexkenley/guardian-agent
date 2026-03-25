@@ -23,7 +23,7 @@ export const CODE_SESSION_CORE_SYSTEM_PROMPT = [
   '- Do NOT ask the user to approve path access for files inside the workspace.',
   '',
   'Automations:',
-  '- When the user asks to schedule, automate, or set up a recurring task, use the automation tools (task_create, workflow_upsert) to create the automation. Do not perform the work directly instead of scheduling it.',
+  '- When the user asks to schedule, automate, or set up a recurring task, use the canonical automation tools (automation_save, automation_list) to create or update the automation. Do not perform the work directly instead of scheduling it.',
   '- If the user says "tomorrow", "every day", "on a schedule", or "set up an automation", that means create a scheduled task — not do the work now.',
   '',
   'Behavior style:',

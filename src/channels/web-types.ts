@@ -37,8 +37,8 @@ import type {
 } from '../runtime/threat-intel.js';
 import type { ConnectorFrameworkState, ConnectorPlaybookRunResult } from '../runtime/connectors.js';
 import type { ToolApprovalRequest, ToolCategory, ToolDefinition, ToolJobRecord, ToolPolicySnapshot, ToolRunResponse, ToolRuntimeNotice } from '../tools/types.js';
-import type { ScheduledTaskDefinition, ScheduledTaskCreateInput, ScheduledTaskUpdateInput, ScheduledTaskPreset, ScheduledTaskStatus } from '../runtime/scheduled-tasks.js';
-import type { AutomationCatalogMaterializationResult } from '../runtime/automation-catalog-actions.js';
+import type { ScheduledTaskDefinition, ScheduledTaskCreateInput, ScheduledTaskUpdateInput, ScheduledTaskStatus } from '../runtime/scheduled-tasks.js';
+import type { AutomationCatalogCreateResult } from '../runtime/automation-catalog-actions.js';
 import type { AutomationCatalogViewEntry } from '../runtime/automation-catalog-view.js';
 import type { AutomationRunHistoryEntry } from '../runtime/automation-run-history.js';
 import type { AutomationSaveInput, AutomationSaveResult } from '../runtime/automation-save.js';
@@ -1166,9 +1166,9 @@ export interface DashboardCallbacks {
   onRoutingModeUpdate?: (mode: 'auto' | 'local-only' | 'external-only') => { success: boolean; message: string; tierMode: string };
   onAutomationCatalog?: () => AutomationCatalogViewEntry[];
   onAutomationRunHistory?: () => AutomationRunHistoryEntry[];
-  onAutomationMaterialize?: (automationId: string) => AutomationCatalogMaterializationResult;
+  onAutomationCreate?: (automationId: string) => AutomationCatalogCreateResult;
   onAutomationSave?: (input: AutomationSaveInput) => AutomationSaveResult;
-  onAutomationWorkflowDefinitionSave?: (
+  onAutomationDefinitionSave?: (
     automationId: string,
     workflow: AssistantConnectorPlaybookDefinition,
   ) => AutomationSaveResult;
@@ -1189,8 +1189,6 @@ export interface DashboardCallbacks {
   onScheduledTaskUpdate?: (id: string, input: ScheduledTaskUpdateInput) => { success: boolean; message: string };
   onScheduledTaskDelete?: (id: string) => { success: boolean; message: string };
   onScheduledTaskRunNow?: (id: string) => Promise<{ success: boolean; message: string }>;
-  onScheduledTaskPresets?: () => ScheduledTaskPreset[];
-  onScheduledTaskInstallPreset?: (presetId: string) => { success: boolean; message: string; task?: ScheduledTaskDefinition };
   onScheduledTaskHistory?: () => Array<{
     id: string;
     taskId: string;

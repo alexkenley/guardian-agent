@@ -14,25 +14,25 @@ export interface AutomationCatalogActionControlPlane {
   installTemplate?(templateId: string): { success: boolean; message: string };
 }
 
-export interface AutomationCatalogMaterializationResult {
+export interface AutomationCatalogCreateResult {
   success: boolean;
   message: string;
-  action?: 'installed' | 'cloned';
+  action?: 'created' | 'copied';
   automationId?: string;
   automationName?: string;
 }
 
-export function materializeAutomationCatalogEntry(
+export function createAutomationFromCatalogEntry(
   controlPlane: AutomationCatalogActionControlPlane,
   automationId: string,
-): AutomationCatalogMaterializationResult {
+): AutomationCatalogCreateResult {
   const selected = getCatalogEntry(controlPlane, automationId);
   if (!selected) {
     return { success: false, message: `Automation '${automationId}' not found.` };
   }
 
   if (selected.source === 'builtin_template' || selected.source === 'builtin_preset' || selected.builtin === true) {
-    return installBuiltinCatalogEntry(controlPlane, selected);
+    return createAutomationFromBuiltinExample(controlPlane, selected);
   }
 
   return cloneSavedCatalogEntry(controlPlane, selected);
@@ -47,24 +47,28 @@ function getCatalogEntry(
   return controlPlane.listCatalog().find((entry) => entry.id === normalized) ?? null;
 }
 
-function installBuiltinCatalogEntry(
+function createAutomationFromBuiltinExample(
   controlPlane: AutomationCatalogActionControlPlane,
   entry: SavedAutomationCatalogEntry,
-): AutomationCatalogMaterializationResult {
+): AutomationCatalogCreateResult {
   if (entry.source === 'builtin_template') {
     if (!entry.templateId?.trim()) {
       return { success: false, message: `Built-in automation '${entry.name}' is missing its template reference.` };
     }
     if (!controlPlane.installTemplate) {
-      return { success: false, message: 'Built-in template installation is not available.' };
+      return { success: false, message: 'Creating an automation from this starter example is not available.' };
     }
     const result = controlPlane.installTemplate(entry.templateId);
+    const automationName = entry.workflow?.name || entry.name;
+    const automationId = entry.workflow?.id || entry.id;
     return {
       success: result.success,
-      message: result.message,
-      action: result.success ? 'installed' : undefined,
-      automationId: result.success ? (entry.workflow?.id || entry.id) : undefined,
-      automationName: result.success ? (entry.workflow?.name || entry.name) : undefined,
+      message: result.success
+        ? `Created automation '${automationName}' from the starter example.`
+        : (result.message || `Could not create '${entry.name}' from the starter example.`),
+      action: result.success ? 'created' : undefined,
+      automationId: result.success ? automationId : undefined,
+      automationName: result.success ? automationName : undefined,
     };
   }
 
@@ -72,19 +76,22 @@ function installBuiltinCatalogEntry(
     return { success: false, message: `Built-in automation '${entry.name}' is missing its preset reference.` };
   }
   const result = controlPlane.installPreset(entry.presetId);
+  const automationName = result.task?.name || entry.name;
   return {
     success: result.success,
-    message: result.message,
-    action: result.success ? 'installed' : undefined,
+    message: result.success
+      ? `Created automation '${automationName}' from the starter example.`
+      : (result.message || `Could not create '${entry.name}' from the starter example.`),
+    action: result.success ? 'created' : undefined,
     automationId: result.task?.id,
-    automationName: result.task?.name,
+    automationName: result.success ? automationName : undefined,
   };
 }
 
 function cloneSavedCatalogEntry(
   controlPlane: AutomationCatalogActionControlPlane,
   entry: SavedAutomationCatalogEntry,
-): AutomationCatalogMaterializationResult {
+): AutomationCatalogCreateResult {
   const catalog = controlPlane.listCatalog();
   const cloneName = buildCloneName(entry.name, catalog);
 
@@ -113,7 +120,7 @@ function cloneWorkflowEntry(
   entry: SavedAutomationCatalogEntry,
   cloneName: string,
   catalog: SavedAutomationCatalogEntry[],
-): AutomationCatalogMaterializationResult {
+): AutomationCatalogCreateResult {
   const sourceWorkflow = entry.workflow;
   if (!sourceWorkflow) {
     return { success: false, message: `Automation '${entry.name}' cannot be cloned.` };
@@ -154,8 +161,8 @@ function cloneWorkflowEntry(
 
   return {
     success: true,
-    message: `Cloned '${entry.name}' as '${cloneName}'.`,
-    action: 'cloned',
+    message: `Created copy '${cloneName}' from '${entry.name}'.`,
+    action: 'copied',
     automationId: cloneId,
     automationName: cloneName,
   };

@@ -73,6 +73,7 @@ import type { GatewayFirewallMonitoringService, GatewayMonitorReport } from '../
 import type { ContainmentService } from '../runtime/containment-service.js';
 import type { WindowsDefenderProvider } from '../runtime/windows-defender-provider.js';
 import type { SavedAutomationCatalogEntry } from '../runtime/automation-catalog.js';
+import type { AutomationSaveInput } from '../runtime/automation-save.js';
 import type { ScheduledTaskEventTrigger } from '../runtime/scheduled-tasks.js';
 import { parseBanner, inferServiceFromPort } from '../runtime/network-fingerprinting.js';
 import { parseAirportWifi, parseNetshWifi, parseNmcliWifi, correlateWifiClients } from '../runtime/network-wifi.js';
@@ -275,6 +276,7 @@ const CODE_SESSION_TRUSTED_EXECUTION_TOOLS = new Set([
   'code_test',
   'code_build',
   'code_lint',
+  'automation_save',
   'automation_set_enabled',
   'automation_run',
   'automation_delete',
@@ -737,6 +739,7 @@ interface AutomationTaskSummary {
 
 interface AutomationControlPlane {
   listAutomations: () => SavedAutomationCatalogEntry[];
+  saveAutomation: (input: AutomationSaveInput) => { success: boolean; message: string; automationId?: string; taskId?: string };
   setAutomationEnabled: (automationId: string, enabled: boolean) => { success: boolean; message: string };
   deleteAutomation: (automationId: string) => { success: boolean; message: string };
   runAutomation: (input: {
@@ -1342,7 +1345,7 @@ export class ToolExecutor {
       'code_test', 'code_build', 'code_lint', 'code_symbol_search',
       'fs_write', 'fs_mkdir', 'fs_move', 'fs_copy', 'fs_delete',
       'doc_create',
-      'automation_list', 'automation_set_enabled', 'automation_run', 'automation_delete',
+      'automation_list', 'automation_save', 'automation_set_enabled', 'automation_run', 'automation_delete',
       'task_create', 'task_update', 'task_run', 'task_delete',
       'workflow_upsert', 'workflow_run', 'workflow_delete',
       'workflow_list', 'task_list',
@@ -4447,6 +4450,21 @@ export class ToolExecutor {
             : { status: 'unverified', evidence: `Memory entry ${entryId} is not active.` };
         }
         return { status: 'unverified', evidence: 'Memory entry identity missing from tool output.' };
+      }
+      case 'automation_save': {
+        const automationId = typeof args.id === 'string' ? args.id.trim() : '';
+        const automation = automationId
+          ? this.automationControlPlane?.listAutomations().find((entry) => entry.id === automationId)
+          : undefined;
+        if (automation) {
+          return { status: 'verified', evidence: `Automation ${automation.id} exists.` };
+        }
+        const output = isRecord(result.output) ? result.output : {};
+        const savedId = asString(output.automationId).trim();
+        if (savedId && this.automationControlPlane?.listAutomations().some((entry) => entry.id === savedId)) {
+          return { status: 'verified', evidence: `Automation ${savedId} exists.` };
+        }
+        return { status: 'unverified', evidence: 'Automation was not found after save.' };
       }
       case 'task_create': {
         const output = isRecord(result.output) ? result.output : {};
@@ -14328,8 +14346,77 @@ export class ToolExecutor {
 
     this.registry.register(
       {
+        name: 'automation_save',
+        description: 'Create or update an automation through Guardian\'s canonical automation contract. Supports step-based automations, assistant automations, and manual or scheduled execution. Mutating - requires approval.',
+        shortDescription: 'Create or update an automation.',
+        risk: 'mutating',
+        category: 'automation',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', description: 'Automation id.' },
+            name: { type: 'string', description: 'Automation name.' },
+            description: { type: 'string', description: 'Optional automation description.' },
+            enabled: { type: 'boolean', description: 'Whether the automation is enabled.' },
+            kind: { type: 'string', enum: ['workflow', 'assistant_task', 'standalone_task'], description: 'Automation kind.' },
+            sourceKind: { type: 'string', description: 'Optional existing source kind when updating an automation.' },
+            existingTaskId: { type: 'string', description: 'Optional linked task id when updating an automation with an existing schedule or saved task.' },
+            mode: { type: 'string', enum: ['sequential', 'parallel'], description: 'Execution mode for step-based automations.' },
+            steps: {
+              type: 'array',
+              description: 'Steps for a step-based automation. Each step should include id plus either toolName, instruction, or delayMs.',
+              items: { type: 'object' },
+            },
+            task: {
+              type: 'object',
+              description: 'Task definition for assistant or standalone tool automations.',
+              properties: {
+                target: { type: 'string', description: 'Target agent id or tool name.' },
+                args: { type: 'object', description: 'Optional tool args for standalone tool automations.' },
+                prompt: { type: 'string', description: 'Assistant prompt for assistant automations.' },
+                channel: { type: 'string', description: 'Delivery channel for assistant automations.' },
+                deliver: { type: 'boolean', description: 'Whether assistant output should be delivered to the channel.' },
+                llmProvider: { type: 'string', description: 'Optional explicit LLM provider selector.' },
+              },
+            },
+            schedule: {
+              type: 'object',
+              description: 'Optional schedule definition. Leave enabled=false or omit cron for manual-only automations.',
+              properties: {
+                enabled: { type: 'boolean', description: 'Whether a schedule is enabled.' },
+                cron: { type: 'string', description: 'Cron expression for scheduled automations.' },
+                runOnce: { type: 'boolean', description: 'Whether the schedule should disable itself after a single run.' },
+              },
+            },
+            emitEvent: { type: 'string', description: 'Optional event name to emit when the automation completes.' },
+            outputHandling: {
+              type: 'object',
+              description: 'Optional output routing configuration.',
+              properties: {
+                notify: { type: 'string', description: 'Notification routing mode.' },
+                sendToSecurity: { type: 'string', description: 'Security routing mode.' },
+                persistArtifacts: { type: 'string', description: 'Artifact persistence mode.' },
+              },
+            },
+          },
+          required: ['id', 'name', 'enabled', 'kind'],
+        },
+      },
+      async (args) => {
+        if (!this.automationControlPlane) {
+          return { success: false, error: 'Automation control plane is not available.' };
+        }
+        const input = normalizeAutomationSaveInput(args, (toolName) => Boolean(this.registry.get(toolName)));
+        const result = this.automationControlPlane.saveAutomation(input);
+        return { success: result.success, output: result, error: result.success ? undefined : result.message };
+      },
+    );
+
+    this.registry.register(
+      {
         name: 'automation_set_enabled',
-        description: 'Enable or disable a saved automation by id. Built-in starter entries cannot be toggled until they are cloned or installed. Mutating - requires approval.',
+        description: 'Enable or disable a saved automation by id. Built-in starter entries cannot be toggled until you create a saved copy. Mutating - requires approval.',
         shortDescription: 'Enable or disable a saved automation.',
         risk: 'mutating',
         category: 'automation',
@@ -14357,7 +14444,7 @@ export class ToolExecutor {
     this.registry.register(
       {
         name: 'automation_run',
-        description: 'Run a saved automation immediately by id. Built-in starter entries must be cloned or installed first. Supports dryRun for workflow-backed automations. Mutating - requires approval.',
+        description: 'Run a saved automation immediately by id. Built-in starter entries must be turned into a saved automation first. Supports dryRun for step-based automations. Mutating - requires approval.',
         shortDescription: 'Run a saved automation immediately.',
         risk: 'mutating',
         category: 'automation',
@@ -17396,6 +17483,76 @@ function normalizeTaskInput(input: Record<string, unknown>, request?: ToolExecut
   return normalized;
 }
 
+function normalizeAutomationSaveInput(
+  input: Record<string, unknown>,
+  hasTool: (toolName: string) => boolean,
+): AutomationSaveInput {
+  const kind = requireString(input.kind, 'kind').trim();
+  if (kind !== 'workflow' && kind !== 'assistant_task' && kind !== 'standalone_task') {
+    throw new Error(`Unsupported automation kind '${kind}'.`);
+  }
+
+  const normalized: AutomationSaveInput = {
+    id: requireString(input.id, 'id').trim(),
+    name: requireString(input.name, 'name').trim(),
+    enabled: requireBoolean(input.enabled, 'enabled'),
+    kind,
+    ...(asString(input.description).trim() ? { description: asString(input.description).trim() } : {}),
+    ...(asString(input.sourceKind).trim() ? { sourceKind: asString(input.sourceKind).trim() } : {}),
+    ...(asString(input.existingTaskId).trim() ? { existingTaskId: asString(input.existingTaskId).trim() } : {}),
+    ...(asString(input.emitEvent).trim() ? { emitEvent: asString(input.emitEvent).trim() } : {}),
+  };
+
+  const schedule = isRecord(input.schedule) ? input.schedule : null;
+  if (schedule) {
+    normalized.schedule = {
+      enabled: schedule.enabled === true,
+      ...(asString(schedule.cron).trim() ? { cron: asString(schedule.cron).trim() } : {}),
+      ...(schedule.runOnce === true ? { runOnce: true } : {}),
+    };
+  }
+
+  const outputHandling = isRecord(input.outputHandling) ? input.outputHandling : null;
+  if (outputHandling) {
+    normalized.outputHandling = {
+      ...(asString(outputHandling.notify).trim() ? { notify: asString(outputHandling.notify).trim() as AutomationSaveInput['outputHandling']['notify'] } : {}),
+      ...(asString(outputHandling.sendToSecurity).trim() ? { sendToSecurity: asString(outputHandling.sendToSecurity).trim() as AutomationSaveInput['outputHandling']['sendToSecurity'] } : {}),
+      ...(asString(outputHandling.persistArtifacts).trim() ? { persistArtifacts: asString(outputHandling.persistArtifacts).trim() as AutomationSaveInput['outputHandling']['persistArtifacts'] } : {}),
+    };
+  }
+
+  if (kind === 'workflow') {
+    const mode = asString(input.mode, 'sequential').trim();
+    if (mode !== 'sequential' && mode !== 'parallel') {
+      throw new Error('Automation mode must be sequential or parallel.');
+    }
+    const steps = Array.isArray(input.steps) ? input.steps : [];
+    const validationError = validateWorkflowDefinition({ steps }, hasTool);
+    if (validationError) {
+      throw new Error(validationError);
+    }
+    normalized.mode = mode;
+    normalized.steps = steps
+      .filter((step): step is Record<string, unknown> => isRecord(step))
+      .map((step) => ({
+        ...step,
+        ...(isRecord(step.args) ? { args: { ...step.args } } : {}),
+      })) as AutomationSaveInput['steps'];
+    return normalized;
+  }
+
+  const task = isRecord(input.task) ? input.task : {};
+  normalized.task = {
+    target: requireString(task.target, 'task.target').trim(),
+    ...(isRecord(task.args) ? { args: { ...task.args } } : {}),
+    ...(asString(task.prompt).trim() ? { prompt: asString(task.prompt).trim() } : {}),
+    ...(asString(task.channel).trim() ? { channel: asString(task.channel).trim() } : {}),
+    ...(typeof task.deliver === 'boolean' ? { deliver: task.deliver } : {}),
+    ...(asString(task.llmProvider).trim() ? { llmProvider: asString(task.llmProvider).trim() } : {}),
+  };
+  return normalized;
+}
+
 function inferMCPGuardAction(def: ToolDefinition): { type: string; params?: Record<string, unknown> } | null {
   const parsed = MCPClientManager.parseToolName(def.name);
   if (!parsed) return { type: 'mcp_tool', params: { toolName: def.name } };
@@ -17444,6 +17601,10 @@ function inferGoogleWorkspaceCapabilityAction(toolName: string, description: str
 }
 
 function formatToolArgsPreview(toolName: string, redactedArgs: unknown): string {
+  if (toolName === 'automation_save') {
+    const summary = summarizeAutomationSavePreview(isRecord(redactedArgs) ? redactedArgs : {});
+    if (summary) return sanitizePreview(summary);
+  }
   if (toolName === 'automation_set_enabled') {
     const summary = summarizeAutomationTogglePreview(isRecord(redactedArgs) ? redactedArgs : {});
     if (summary) return sanitizePreview(summary);
@@ -17469,6 +17630,28 @@ function formatToolArgsPreview(toolName: string, redactedArgs: unknown): string 
     if (summary) return sanitizePreview(summary);
   }
   return sanitizePreview(JSON.stringify(redactedArgs));
+}
+
+function summarizeAutomationSavePreview(args: Record<string, unknown>): string | null {
+  const name = asString(args.name).trim() || asString(args.id).trim();
+  const kind = asString(args.kind).trim();
+  if (!name || !kind) return null;
+  if (kind === 'assistant_task') {
+    const schedule = isRecord(args.schedule) ? args.schedule : null;
+    const cron = schedule ? asString(schedule.cron).trim() : '';
+    return cron
+      ? `save scheduled assistant automation ${name} on ${cron}`
+      : `save manual assistant automation ${name}`;
+  }
+  if (kind === 'standalone_task') {
+    const target = asString(isRecord(args.task) ? args.task.target : undefined).trim();
+    return `save tool automation ${name}${target ? ` targeting ${target}` : ''}`;
+  }
+  const mode = asString(args.mode, 'sequential').trim() || 'sequential';
+  const steps = Array.isArray(args.steps) ? args.steps.length : 0;
+  const schedule = isRecord(args.schedule) ? args.schedule : null;
+  const cron = schedule ? asString(schedule.cron).trim() : '';
+  return `save automation ${name} (${mode}, ${steps} step${steps === 1 ? '' : 's'}${cron ? `, schedule ${cron}` : ''})`;
 }
 
 function summarizeAutomationTogglePreview(args: Record<string, unknown>): string | null {
@@ -17665,6 +17848,15 @@ function extractToolSuccessMessage(
 
 function extractAutomationSuccessMessage(toolName: string, output: unknown): string {
   if (!isRecord(output)) return '';
+
+  if (toolName === 'automation_save') {
+    const automationId = asString(output.automationId).trim();
+    const taskId = asString(output.taskId).trim();
+    const message = asString(output.message).trim();
+    if (automationId) {
+      return `${message || 'Saved.'}${taskId ? ` Automation id: ${automationId}. Linked task: ${taskId}.` : ` Automation id: ${automationId}.`}`;
+    }
+  }
 
   if (toolName === 'workflow_upsert') {
     const workflow = isRecord(output.workflow) ? output.workflow : {};

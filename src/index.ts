@@ -3078,12 +3078,8 @@ class ChatAgent extends BaseAgent {
       },
       onPendingApproval: ({ approvalId, toolName, automationName, artifactLabel, verb }) => {
         this.setApprovalFollowUp(approvalId, {
-          approved: toolName === 'workflow_upsert'
-            ? `I ${verb} the workflow '${automationName}'.`
-            : `I ${verb} the ${artifactLabel} '${automationName}'.`,
-          denied: toolName === 'workflow_upsert'
-            ? `I did not ${verb === 'updated' ? 'update' : 'create'} the workflow '${automationName}'.`
-            : `I did not ${verb === 'updated' ? 'update' : 'create'} the ${artifactLabel} '${automationName}'.`,
+          approved: `I ${verb} the ${artifactLabel} '${automationName}'.`,
+          denied: `I did not ${verb === 'updated' ? 'update' : 'create'} the ${artifactLabel} '${automationName}'.`,
         });
       },
       formatPendingApprovalPrompt: (ids) => this.formatPendingApprovalPrompt(ids),
@@ -12102,15 +12098,13 @@ async function main(): Promise<void> {
     dashboardCallbacks.onScheduledTaskUpdate = (id, input) => automationRuntime.updateTask(id, input);
     dashboardCallbacks.onScheduledTaskDelete = (id) => automationRuntime.deleteTask(id);
     dashboardCallbacks.onScheduledTaskRunNow = async (id) => automationRuntime.runTaskNow(id);
-    dashboardCallbacks.onScheduledTaskPresets = () => automationRuntime.listTaskPresets();
-    dashboardCallbacks.onScheduledTaskInstallPreset = (presetId) => automationRuntime.installTaskPreset(presetId);
     dashboardCallbacks.onScheduledTaskHistory = () => automationRuntime.listTaskHistory();
     dashboardCallbacks.onAutomationCatalog = () => automationRuntime.listAutomationCatalogView();
     dashboardCallbacks.onAutomationRunHistory = () => automationRuntime.listAutomationRunHistory();
-    dashboardCallbacks.onAutomationMaterialize = (automationId) => automationRuntime.materializeAutomation(automationId);
+    dashboardCallbacks.onAutomationCreate = (automationId) => automationRuntime.createAutomationFromCatalog(automationId);
     dashboardCallbacks.onAutomationSave = (input) => automationRuntime.saveAutomation(input);
-    dashboardCallbacks.onAutomationWorkflowDefinitionSave = (automationId, workflow) => (
-      automationRuntime.saveAutomationWorkflowDefinition(automationId, workflow)
+    dashboardCallbacks.onAutomationDefinitionSave = (automationId, workflow) => (
+      automationRuntime.saveAutomationDefinition(automationId, workflow)
     );
     dashboardCallbacks.onAutomationSetEnabled = (automationId, enabled) => (
       automationRuntime.setSavedAutomationEnabled(automationId, enabled)
