@@ -51,7 +51,7 @@ function createCodeSession(
   };
 }
 
-function createTrace(): AssistantDispatchTrace {
+function createTrace(overrides: Partial<AssistantDispatchTrace> = {}): AssistantDispatchTrace {
   return {
     requestId: 'req-1',
     runId: 'req-1',
@@ -85,6 +85,7 @@ function createTrace(): AssistantDispatchTrace {
         },
       },
     }],
+    ...overrides,
   };
 }
 
@@ -149,5 +150,19 @@ describe('RunTimelineStore', () => {
     expect(run?.summary.pendingApprovalCount).toBe(0);
     expect(run?.items.some((item) => item.id === 'approval:approval-2:resolved')).toBe(true);
     expect(run?.items.some((item) => item.type === 'tool_call_completed' && item.status === 'blocked')).toBe(true);
+  });
+
+  it('strips the web-ui context prefix from assistant run titles and details', () => {
+    const store = new RunTimelineStore({ now: () => 500 });
+    store.ingestAssistantTrace(createTrace({
+      requestId: 'req-context',
+      runId: 'req-context',
+      messagePreview: '[Context: User is currently viewing the automations panel] Run Browser Read Smoke now.',
+      responsePreview: 'Ran the automation successfully.',
+    }));
+
+    const run = store.getRun('req-context');
+    expect(run?.summary.title).toBe('Run Browser Read Smoke now.');
+    expect(run?.items[0]?.detail).toBe('Run Browser Read Smoke now.');
   });
 });

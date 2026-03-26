@@ -184,7 +184,7 @@ export class RunTimelineStore {
         groupId: trace.groupId,
         kind: 'assistant_dispatch',
         title: summarizeRunTitle(trace.requestType, trace.messagePreview),
-        subtitle: nonEmptyText(trace.responsePreview),
+        subtitle: sanitizePreview(trace.responsePreview),
         agentId: trace.agentId,
         channel: trace.channel,
         sessionId: trace.sessionId,
@@ -467,7 +467,7 @@ function shouldUseCodeSessionBaseStatus(record: RunTimelineRecord | undefined): 
 }
 
 function summarizeRunTitle(requestType: string, preview?: string): string {
-  return nonEmptyText(preview) ?? `Assistant ${requestType || 'message'}`;
+  return sanitizePreview(preview) ?? `Assistant ${requestType || 'message'}`;
 }
 
 function resolveRunId(codeSessionId: string, requestId?: string): string {
@@ -614,7 +614,7 @@ function buildAssistantTraceItems(trace: AssistantDispatchTrace): DashboardRunTi
     status: 'info',
     source: 'orchestrator',
     title: `Queued ${trace.requestType}`,
-    detail: nonEmptyText(trace.messagePreview),
+    detail: sanitizePreview(trace.messagePreview),
   }];
 
   if (trace.startedAt) {
@@ -626,7 +626,7 @@ function buildAssistantTraceItems(trace: AssistantDispatchTrace): DashboardRunTi
       status: 'running',
       source: 'orchestrator',
       title: `Started ${trace.requestType}`,
-      detail: nonEmptyText(trace.messagePreview),
+      detail: sanitizePreview(trace.messagePreview),
     });
   }
 
@@ -643,7 +643,7 @@ function buildAssistantTraceItems(trace: AssistantDispatchTrace): DashboardRunTi
       status: 'succeeded',
       source: 'orchestrator',
       title: 'Run completed',
-      detail: nonEmptyText(trace.responsePreview),
+      detail: sanitizePreview(trace.responsePreview),
     });
   }
 
@@ -765,6 +765,12 @@ function mapWorkflowEventToItem(
     default:
       return null;
   }
+}
+
+function sanitizePreview(value: unknown): string | undefined {
+  const normalized = nonEmptyText(typeof value === 'string' ? value : undefined);
+  if (!normalized) return undefined;
+  return normalized.replace(/^\[Context:\s*User is currently viewing the [^\]]+\]\s*/i, '') || undefined;
 }
 
 function inferCompletedAt(baseStatus: DashboardRunStatus, lastUpdatedAt: number): number | undefined {

@@ -60,6 +60,7 @@ describe('automation-run-history', () => {
         name: 'Browser Read Smoke',
         status: 'succeeded',
         duration: 40,
+        message: 'Workflow run finished.',
       }),
     ]);
   });

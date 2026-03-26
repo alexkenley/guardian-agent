@@ -35,6 +35,7 @@ describe('GraphRunner', () => {
 
     expect(result.status).toBe('succeeded');
     expect(result.results).toHaveLength(1);
+    expect(result.message).toBe(`Automation 'Workflow' completed successfully.`);
     expect(result.events.some((event) => event.type === 'run_created')).toBe(true);
     expect(result.events.some((event) => event.type === 'run_completed')).toBe(true);
     expect(runner.getStore().get('run-1')?.completedNodeIds).toContain('step-1');

@@ -45,10 +45,11 @@ export class GraphRunner<TStepResult> {
     } = {},
   ): Promise<GraphRunResult<TStepResult>> {
     const runId = this.runIdFactory();
+    const automationName = describeAutomation(graph);
     let checkpoint = this.checkpoints.create(runId, graph.id, graph.name, options.resumeContext);
     checkpoint.events = [
       createRunEvent(runId, 'run_created', this.now(), {
-        message: `Run created for graph '${graph.name}'.`,
+        message: `Automation run created for '${automationName}'.`,
       }),
     ];
     checkpoint = this.checkpoints.update(checkpoint, {
@@ -95,6 +96,7 @@ export class GraphRunner<TStepResult> {
     },
   ): Promise<GraphRunResult<TStepResult>> {
     const runId = initialCheckpoint.runId;
+    const automationName = describeAutomation(graph);
     let checkpoint = initialCheckpoint;
     let nextNodeId: string | undefined = checkpoint.nextNodeId ?? graph.entryNodeId;
 
@@ -103,14 +105,14 @@ export class GraphRunner<TStepResult> {
       if (!node) {
         checkpoint.events.push(createRunEvent(runId, 'run_failed', this.now(), {
           nodeId: nextNodeId,
-          message: `Graph node '${nextNodeId}' was not found.`,
+          message: `Automation step '${nextNodeId}' was not found.`,
         }));
         checkpoint = this.checkpoints.update(checkpoint, {
           status: 'failed',
           events: checkpoint.events,
           nextNodeId: undefined,
         });
-        return this.finish(graph, checkpoint, `Graph node '${nextNodeId}' was not found.`);
+        return this.finish(graph, checkpoint, `Automation step '${nextNodeId}' was not found.`);
       }
 
       checkpoint.events.push(createRunEvent(runId, 'node_started', this.now(), {
@@ -143,7 +145,7 @@ export class GraphRunner<TStepResult> {
         checkpoint.completedNodeIds.push(node.id);
         checkpoint.events.push(createRunEvent(runId, 'run_completed', this.now(), {
           nodeId: node.id,
-          message: `Graph '${graph.name}' completed.`,
+          message: `Automation '${automationName}' completed.`,
         }));
         checkpoint = this.checkpoints.update(checkpoint, {
           status: 'succeeded',
@@ -152,7 +154,7 @@ export class GraphRunner<TStepResult> {
           nextNodeId: undefined,
           pendingApprovalIds: [],
         });
-        return this.finish(graph, checkpoint, `Playbook '${graph.playbookId}' completed successfully.`);
+        return this.finish(graph, checkpoint, `Automation '${automationName}' completed successfully.`);
       }
 
       const execution = node.type === 'parallel'
@@ -214,7 +216,7 @@ export class GraphRunner<TStepResult> {
     }
 
     checkpoint.events.push(createRunEvent(runId, 'run_completed', this.now(), {
-      message: `Graph '${graph.name}' completed.`,
+      message: `Automation '${automationName}' completed.`,
     }));
     checkpoint = this.checkpoints.update(checkpoint, {
       status: 'succeeded',
@@ -222,7 +224,7 @@ export class GraphRunner<TStepResult> {
       nextNodeId: undefined,
       pendingApprovalIds: [],
     });
-    return this.finish(graph, checkpoint, `Playbook '${graph.playbookId}' completed successfully.`);
+    return this.finish(graph, checkpoint, `Automation '${automationName}' completed successfully.`);
   }
 
   private finish(
@@ -248,6 +250,10 @@ export class GraphRunner<TStepResult> {
       },
     };
   }
+}
+
+function describeAutomation(graph: PlaybookGraphDefinition): string {
+  return graph.name?.trim() || graph.playbookId?.trim() || graph.id?.trim() || 'automation';
 }
 
 function extractApprovalId<TStepResult>(result: TStepResult): string | null {

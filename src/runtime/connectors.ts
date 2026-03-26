@@ -274,20 +274,20 @@ export class ConnectorPlaybookService {
     const index = this.config.playbooks.definitions.findIndex((existing) => existing.id === playbook.id);
     if (index >= 0) {
       this.config.playbooks.definitions[index] = clonePlaybook(playbook);
-      return { success: true, message: `Updated playbook '${playbook.id}'.` };
+      return { success: true, message: `Updated automation '${describeAutomation(playbook)}'.` };
     }
     this.config.playbooks.definitions.push(clonePlaybook(playbook));
-    return { success: true, message: `Added playbook '${playbook.id}'.` };
+    return { success: true, message: `Added automation '${describeAutomation(playbook)}'.` };
   }
 
   deletePlaybook(playbookId: string): { success: boolean; message: string } {
     const index = this.config.playbooks.definitions.findIndex((playbook) => playbook.id === playbookId);
     if (index < 0) {
-      return { success: false, message: `Playbook '${playbookId}' not found.` };
+      return { success: false, message: `Automation '${playbookId}' was not found.` };
     }
     this.config.playbooks.definitions.splice(index, 1);
     this.dryRunQualified.delete(playbookId);
-    return { success: true, message: `Deleted playbook '${playbookId}'.` };
+    return { success: true, message: `Deleted automation '${playbookId}'.` };
   }
 
   private buildGraphHandlers(
@@ -318,10 +318,10 @@ export class ConnectorPlaybookService {
           status: hasPending ? 'pending_approval' : hasHardFailure ? 'failed' : 'succeeded',
           results,
           message: hasPending
-            ? `Playbook '${playbook.id}' paused for approval.`
+            ? `Automation '${describeAutomation(playbook)}' paused for approval.`
             : hasHardFailure
-              ? `Playbook '${playbook.id}' completed with failures.`
-              : `Playbook '${playbook.id}' completed successfully.`,
+              ? `Automation '${describeAutomation(playbook)}' completed with failures.`
+              : `Automation '${describeAutomation(playbook)}' completed successfully.`,
         } satisfies GraphNodeExecutionResult<PlaybookStepRunResult>;
       },
     };
@@ -383,16 +383,16 @@ export class ConnectorPlaybookService {
       return this.buildDeniedRun(input, playbook, 'Connector framework is disabled.');
     }
     if (!this.config.playbooks.enabled) {
-      return this.buildDeniedRun(input, playbook, 'Playbook execution is disabled.');
+      return this.buildDeniedRun(input, playbook, 'Automation execution is disabled.');
     }
     if (!playbook) {
-      return this.buildDeniedRun(input, undefined, `Playbook '${input.playbookId}' not found.`);
+      return this.buildDeniedRun(input, undefined, `Automation '${input.playbookId}' was not found.`);
     }
     if (!playbook.enabled) {
-      return this.buildDeniedRun(input, playbook, `Playbook '${playbook.id}' is disabled.`);
+      return this.buildDeniedRun(input, playbook, `Automation '${describeAutomation(playbook)}' is disabled.`);
     }
     if (this.config.playbooks.requireSignedDefinitions && !playbook.signature?.trim()) {
-      return this.buildDeniedRun(input, playbook, `Playbook '${playbook.id}' requires a signature.`);
+      return this.buildDeniedRun(input, playbook, `Automation '${describeAutomation(playbook)}' requires a signature.`);
     }
     if (
       this.config.playbooks.requireDryRunOnFirstExecution &&
@@ -402,7 +402,7 @@ export class ConnectorPlaybookService {
       return this.buildDeniedRun(
         input,
         playbook,
-        `Playbook '${playbook.id}' requires a successful dry-run before live execution.`,
+        `Automation '${describeAutomation(playbook)}' requires a successful dry run before live execution.`,
       );
     }
 
@@ -410,14 +410,14 @@ export class ConnectorPlaybookService {
       return this.buildDeniedRun(
         input,
         playbook,
-        `Playbook '${playbook.id}' exceeds configured maxSteps (${this.config.playbooks.maxSteps}).`,
+        `Automation '${describeAutomation(playbook)}' exceeds configured max steps (${this.config.playbooks.maxSteps}).`,
       );
     }
     if (playbook.steps.length > this.config.maxConnectorCallsPerRun) {
       return this.buildDeniedRun(
         input,
         playbook,
-        `Playbook '${playbook.id}' exceeds maxConnectorCallsPerRun (${this.config.maxConnectorCallsPerRun}).`,
+        `Automation '${describeAutomation(playbook)}' exceeds max connector calls per run (${this.config.maxConnectorCallsPerRun}).`,
       );
     }
 
@@ -536,7 +536,7 @@ export class ConnectorPlaybookService {
           graphId: liveCheckpoint.graphId,
           graphName: liveCheckpoint.graphName,
           status: 'awaiting_approval',
-          message: 'Playbook is still awaiting additional approvals.',
+          message: `Automation '${describeAutomation(playbook)}' is still awaiting additional approvals.`,
           results: updatedResults,
           events: nextEvents,
           checkpoint: updatedCheckpoint,
@@ -602,7 +602,7 @@ export class ConnectorPlaybookService {
         return !!result && (result.status === 'failed' || result.status === 'denied') && !step.continueOnError;
       });
       if (hardFailure) {
-        const failureMessage = `Playbook '${playbook.id}' completed with failures.`;
+        const failureMessage = `Automation '${describeAutomation(playbook)}' completed with failures.`;
         const failureEvents = [...nextEvents];
         failureEvents.push(createRunEvent(liveCheckpoint.runId, 'run_failed', this.now(), {
           nodeId: currentNode.id,
@@ -1486,4 +1486,10 @@ function hasCitationReferences(
     return true;
   }
   return citations.some((citation) => trimmed.includes(citation.url));
+}
+
+function describeAutomation(
+  playbook: Pick<AssistantConnectorPlaybookDefinition, 'id' | 'name'> | undefined,
+): string {
+  return playbook?.name?.trim() || playbook?.id?.trim() || 'automation';
 }

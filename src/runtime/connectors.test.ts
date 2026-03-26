@@ -83,7 +83,7 @@ describe('ConnectorPlaybookService', () => {
     });
     expect(live.success).toBe(false);
     expect(live.status).toBe('failed');
-    expect(live.message).toContain('requires a successful dry-run');
+    expect(live.message).toContain('requires a successful dry run');
 
     const dryRun = await service.runPlaybook({
       playbookId: 'infra-audit',
@@ -119,6 +119,7 @@ describe('ConnectorPlaybookService', () => {
       channel: 'web',
     });
     expect(result.success).toBe(true);
+    expect(result.message).toBe(`Automation 'Infra Audit' completed successfully.`);
     expect(calls.length).toBe(1);
     expect(calls[0].toolName).toBe('fs_list');
     expect(calls[0].dryRun).toBe(true);

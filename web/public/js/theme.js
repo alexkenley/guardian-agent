@@ -4,6 +4,62 @@
  */
 
 const STORAGE_KEY = 'guardianagent_theme';
+const FONT_SCALE_STORAGE_KEY = 'guardianagent_font_scale';
+const FONT_PRESET_STORAGE_KEY = 'guardianagent_font_preset';
+const REDUCE_MOTION_STORAGE_KEY = 'guardianagent_reduce_motion';
+
+export const fontPresets = [
+  {
+    id: 'guardian-default',
+    name: 'Guardian Default',
+    description: 'Current Guardian typography stack with Cascadia Code and Inter.',
+    vars: {
+      '--font-mono': "'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace",
+      '--font-sans': "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+      '--font-display': "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    },
+  },
+  {
+    id: 'system-sans',
+    name: 'System Sans',
+    description: 'Neutral system UI stack with broad platform coverage.',
+    vars: {
+      '--font-mono': "'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif",
+      '--font-sans': "'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif",
+      '--font-display': "'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif",
+    },
+  },
+  {
+    id: 'readable-sans',
+    name: 'Readable Sans',
+    description: 'Accessibility-first sans serif stack with strong fallback coverage.',
+    vars: {
+      '--font-mono': "'Atkinson Hyperlegible', 'Lexend', 'Segoe UI', sans-serif",
+      '--font-sans': "'Atkinson Hyperlegible', 'Lexend', 'Segoe UI', sans-serif",
+      '--font-display': "'Atkinson Hyperlegible', 'Lexend', 'Segoe UI', sans-serif",
+    },
+  },
+  {
+    id: 'verdana-clear',
+    name: 'Verdana Clear',
+    description: 'Wider letterforms and familiar Windows readability.',
+    vars: {
+      '--font-mono': "Verdana, Geneva, sans-serif",
+      '--font-sans': "Verdana, Geneva, sans-serif",
+      '--font-display': "Verdana, Geneva, sans-serif",
+    },
+  },
+  {
+    id: 'georgia-serif',
+    name: 'Georgia Serif',
+    description: 'Serif reading mode for longer-form text and softer contrast.',
+    vars: {
+      '--font-mono': "Georgia, 'Times New Roman', serif",
+      '--font-sans': "Georgia, 'Times New Roman', serif",
+      '--font-display': "Georgia, 'Times New Roman', serif",
+    },
+  },
+];
 
 export const themes = [
   {
@@ -535,6 +591,21 @@ export function getSavedTheme() {
   return localStorage.getItem(STORAGE_KEY) || 'guardian-angel';
 }
 
+export function getSavedFontScale() {
+  const raw = Number(localStorage.getItem(FONT_SCALE_STORAGE_KEY) || '1.05');
+  if (!Number.isFinite(raw)) return 1.05;
+  return Math.min(1.4, Math.max(0.9, raw));
+}
+
+export function getSavedFontPreset() {
+  const saved = localStorage.getItem(FONT_PRESET_STORAGE_KEY) || 'guardian-default';
+  return fontPresets.some((preset) => preset.id === saved) ? saved : 'guardian-default';
+}
+
+export function getSavedReduceMotion() {
+  return localStorage.getItem(REDUCE_MOTION_STORAGE_KEY) === 'true';
+}
+
 /** Apply a theme by ID to the document */
 export function applyTheme(themeId) {
   const theme = themes.find(t => t.id === themeId);
@@ -549,7 +620,39 @@ export function applyTheme(themeId) {
   document.documentElement.dataset.theme = themeId;
 }
 
+export function applyFontScale(scale) {
+  const normalized = Math.min(1.4, Math.max(0.9, Number(scale) || 1));
+  document.documentElement.style.setProperty('--font-scale', String(normalized));
+  localStorage.setItem(FONT_SCALE_STORAGE_KEY, String(normalized));
+}
+
+export function applyFontPreset(presetId) {
+  const preset = fontPresets.find((entry) => entry.id === presetId) || fontPresets[0];
+  const root = document.documentElement;
+  for (const [prop, value] of Object.entries(preset.vars)) {
+    root.style.setProperty(prop, value);
+  }
+  root.dataset.fontPreset = preset.id;
+  localStorage.setItem(FONT_PRESET_STORAGE_KEY, preset.id);
+}
+
+export function applyReduceMotion(enabled) {
+  const next = enabled === true;
+  document.documentElement.dataset.reduceMotion = next ? 'true' : 'false';
+  localStorage.setItem(REDUCE_MOTION_STORAGE_KEY, next ? 'true' : 'false');
+}
+
+export function resetAppearancePreferences() {
+  applyTheme('guardian-angel');
+  applyFontPreset('guardian-default');
+  applyFontScale(1.05);
+  applyReduceMotion(false);
+}
+
 /** Initialize — apply saved theme on page load */
 export function initTheme() {
   applyTheme(getSavedTheme());
+  applyFontPreset(getSavedFontPreset());
+  applyFontScale(getSavedFontScale());
+  applyReduceMotion(getSavedReduceMotion());
 }

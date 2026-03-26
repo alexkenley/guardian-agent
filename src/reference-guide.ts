@@ -58,6 +58,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Use the Dashboard page to confirm runtime status, agent health, provider connectivity, and assistant state.',
                   'Open `#/config` to verify the default provider, web auth settings, and channel configuration.',
+                  'Open Configuration > Appearance when you want to raise the dashboard text size slightly, switch to a more readable font preset, or reduce interface motion.',
                   'Open `#/code` when you want the repo-scoped coding surface, and `#/security` when you want posture, alerts, activity, audit, or threat-intel visibility.',
                   'Use CLI `/providers` or Configuration > AI Providers to confirm the selected provider is reachable.',
                   'Use CLI `/guide` or Telegram `/guide` to pull the same reference content outside the web UI.',
@@ -475,11 +476,13 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Inspect Results',
                 items: [
+                  'Automations now separates `Output` from `History & Timeline`, so the page no longer mixes raw run output with the chronological execution view in one long panel.',
+                  'The `Output` tab leads with a readable run result summary for each recent run, then lets you expand into raw per-step output only when you need it.',
                   'Run history now keeps per-step output, not just status text.',
                   'Approval-gated automations keep one stable run record and resume after the approval decision instead of starting over from scratch.',
-                  'Manual and scheduled automation runs can be expanded in Automations to inspect captured output.',
-                  'Automations now also includes an `Execution Timeline` view for recent runs across assistant dispatch, coding sessions, automations, and scheduled jobs. It is the main global playback surface for run status, approvals, tool progression, and verification events.',
-                  'Use `Execution Timeline` when you need to answer "what happened in this run?" and use `Run History` when you need automation-specific step output and artifacts.',
+                  'Manual and scheduled automation runs can be expanded in the `Output` tab to inspect captured output.',
+                  'The `History & Timeline` tab keeps the compact run ledger together with the `Execution Timeline` view for recent runs across assistant dispatch, coding sessions, automations, and scheduled jobs.',
+                  'Use `History & Timeline` when you need to answer "what happened in this run?" and use `Output` when you need the automation-specific result payload, step output, and artifacts.',
                   'Where output is shown in the UI, operators can copy it directly or export it as plain text or HTML for sharing and review.',
                   'Live UI invalidation updates the Automations page when runs finish, schedules change, or automations are edited.',
                 ],

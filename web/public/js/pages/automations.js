@@ -9,6 +9,7 @@
 import { api } from '../api.js';
 import { onSSE, offSSE } from '../app.js';
 import { activateContextHelp, enhanceSectionHelp, renderGuidancePanel } from '../components/context-help.js';
+import { createTabs } from '../components/tabs.js';
 import { applyInputTooltips } from '../tooltip.js';
 
 let currentContainer = null;
@@ -16,6 +17,8 @@ let runTimelineHandler = null;
 let runTimelineRefreshTimer = null;
 const automationUiState = {
   placement: null,
+  activeTab: 'catalog',
+  tabs: null,
 };
 
 const AUTOMATION_HELP = {
@@ -25,11 +28,17 @@ const AUTOMATION_HELP = {
     whatCanDo: 'Create a new automation, edit an existing one, use a starter example, run it immediately, or review whether it already has a schedule attached.',
     howLinks: 'Other pages can deep-link here, but this catalog is still the canonical place where automation definitions and schedule ownership live.',
   },
-  'Run History': {
-    whatItIs: 'This section is the recent execution ledger for automations that were run manually, by schedule, or by another system trigger.',
-    whatSeeing: 'You are seeing run records with timestamp, source, status, duration, and expandable detail output for the run.',
-    whatCanDo: 'Open a run to inspect step output, confirm whether it succeeded, and understand what evidence or findings it produced.',
-    howLinks: 'Even when a run also generated alerts, notifications, or security findings, the detailed execution record remains here.',
+  Output: {
+    whatItIs: 'This section is the operator-facing output view for recent automation runs.',
+    whatSeeing: 'You are seeing each recent run with a readable run-result summary first, followed by expandable per-step output and any promoted findings.',
+    whatCanDo: 'Use it to answer what the automation actually found or produced without digging through raw step JSON unless you need deeper inspection.',
+    howLinks: 'This is the detailed evidence side of automation execution; the adjacent history and timeline tab keeps the chronological execution story.',
+  },
+  'History & Timeline': {
+    whatItIs: 'This tab combines the chronological run ledger with the higher-level execution timeline.',
+    whatSeeing: 'You are seeing recent automation runs as a compact history table plus the execution timeline that reconstructs what happened during each run.',
+    whatCanDo: 'Use it when you want the operational story of a run first, then drill into Output for the detailed result payload.',
+    howLinks: 'History shows when and how runs finished; Output shows what those runs actually produced.',
   },
   'Engine Settings': {
     whatItIs: 'This section contains the runtime-level controls for the automation engine itself rather than one specific automation.',
@@ -51,6 +60,12 @@ function getRequestedRunId() {
   const raw = window.location.hash || '';
   const [, query = ''] = raw.split('?');
   return new URLSearchParams(query).get('runId') || '';
+}
+
+function normalizeAutomationTab(tab) {
+  return tab === 'catalog' || tab === 'output' || tab === 'history'
+    ? tab
+    : 'catalog';
 }
 
 // ─── Public API ───────────────────────────────────────────
@@ -111,15 +126,20 @@ export async function renderAutomations(container) {
     const totalScheduled = automations.filter((a) => a.cron).length;
     const totalRuns = Number(summary.runCount || 0) + automations.reduce((sum, automation) => sum + (automation.runCount || 0), 0);
 
+    const requestedRunId = getRequestedRunId();
+    const defaultTab = requestedRunId
+      ? 'output'
+      : normalizeAutomationTab(automationUiState.activeTab);
+
     container.innerHTML = `
       <h2 class="page-title">Automations</h2>
       ${renderGuidancePanel({
         kicker: 'Automation Guide',
-        title: 'Automations, schedules, runs, and output routing',
+        title: 'Automations, output, history, and execution visibility',
         whatItIs: 'Automations is the page where Guardian automations are defined, scheduled, executed, and reviewed.',
-        whatSeeing: 'You are seeing the saved automation catalog, built-in starter examples, recent run history, engine-level settings, and the controls for creating or updating automations.',
-        whatCanDo: 'Build new automations, use starter examples, attach schedules, run them on demand, inspect prior runs, and control how outputs are routed into alerts or Security.',
-        howLinks: 'Other pages can point you here for cloud, network, or threat-intel automations, but this page remains the owner of automation definition, schedule state, and run history.',
+        whatSeeing: 'You are seeing the saved automation catalog, a dedicated output view for recent runs, a history and execution timeline tab, engine-level settings, and the controls for creating or updating automations.',
+        whatCanDo: 'Build new automations, use starter examples, attach schedules, run them on demand, inspect prior output, and reconstruct execution history without leaving this page.',
+        howLinks: 'Other pages can point you here for cloud, network, or threat-intel automations, but this page remains the owner of automation definition, run output, and execution history.',
       })}
 
       <div class="intel-summary-grid">
@@ -144,83 +164,59 @@ export async function renderAutomations(container) {
         </div>
       </div>
 
-      <div class="table-container">
-        <div class="table-header">
-          <h3>Automation Catalog</h3>
-          <div style="display:flex;gap:0.5rem;align-items:center;">
-            <button class="btn btn-primary" id="auto-create-toggle">Create Automation</button>
-            <button class="btn btn-secondary" id="auto-refresh">Refresh</button>
-          </div>
-        </div>
-
-        ${allCategories.length > 1 ? `
-        <div class="wf-category-bar" id="auto-category-filter">
-          <button class="wf-category-chip active" data-category="all">All</button>
-          ${allCategories.map((cat) => {
-            const count = automations.filter((a) => a.category === cat).length;
-            return `<button class="wf-category-chip" data-category="${escAttr(cat)}">${esc(cat)} <span class="wf-category-count">${count}</span></button>`;
-          }).join('')}
-        </div>
-        ` : ''}
-
-        <div style="padding:0.5rem 1rem;">
-          <input type="text" id="auto-catalog-search" placeholder="Search automations..." style="width:100%;padding:0.4rem 0.6rem;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-primary);font-size:0.8rem;">
-        </div>
-
-        <!-- Create form -->
-        <div class="cfg-center-body" id="auto-create-form" style="display:none">
-          ${renderCreateForm(tools, packs, agents)}
-        </div>
-
-        <table>
-          <thead><tr>
-            <th class="auto-sortable" data-sort="name" style="cursor:pointer;">Name <span class="auto-sort-arrow"></span></th>
-            <th class="auto-sortable" data-sort="type" style="cursor:pointer;">Type <span class="auto-sort-arrow"></span></th>
-            <th>Tools</th>
-            <th class="auto-sortable" data-sort="schedule" style="cursor:pointer;">Schedule <span class="auto-sort-arrow"></span></th>
-            <th class="auto-sortable" data-sort="status" style="cursor:pointer;">Status <span class="auto-sort-arrow"></span></th>
-            <th>Actions</th>
-          </tr></thead>
-          <tbody>
-            ${automations.length === 0
-              ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No automations configured.</td></tr>'
-              : automations.map((auto) => renderAutomationRow(auto, tools, packs)).join('')
-            }
-          </tbody>
-        </table>
-        <div id="auto-run-results" style="padding:0 1rem 1rem"></div>
-      </div>
-
-      <div class="table-container">
-        <div class="table-header"><h3>Run History</h3></div>
-        <table>
-          <thead><tr><th>Time</th><th>Automation</th><th>Source</th><th>Status</th><th>Duration</th><th>Details</th></tr></thead>
-          <tbody>
-            ${renderRunHistory(automationHistory)}
-          </tbody>
-        </table>
-      </div>
-
-      <div class="table-container">
-        <div class="table-header"><h3>Execution Timeline</h3></div>
-        <table>
-          <thead><tr><th>Time</th><th>Run</th><th>Kind</th><th>Status</th><th>Owner</th><th>Timeline</th></tr></thead>
-          <tbody>
-            ${renderExecutionTimeline(recentAssistantRuns)}
-          </tbody>
-        </table>
-      </div>
-
-      <div class="table-container">
-        <div class="table-header" style="cursor:pointer" id="auto-engine-toggle">
-          <h3>Engine Settings</h3>
-          <span id="auto-engine-arrow" style="font-size:0.85rem;color:var(--text-muted)">&#9654; Show</span>
-        </div>
-        <div id="auto-engine-panel" style="display:none">
-          ${renderEngineSettings(summary, workflowConfig, studio, packs)}
-        </div>
-      </div>
+      <div id="auto-tabs-host"></div>
     `;
+
+    const tabsHost = container.querySelector('#auto-tabs-host');
+    const tabDefs = [
+      {
+        id: 'catalog',
+        label: 'Automation Catalog',
+        tooltip: 'Create, edit, schedule, run, and manage saved automations and starter examples.',
+        render: (panel) => {
+          panel.innerHTML = renderCatalogTabContent({
+            automations,
+            allCategories,
+            tools,
+            packs,
+            agents,
+            summary,
+            workflowConfig,
+            studio,
+          });
+        },
+      },
+      {
+        id: 'output',
+        label: 'Output',
+        tooltip: 'See the actual results and step output from recent automation runs.',
+        render: (panel) => {
+          panel.innerHTML = renderOutputTabContent(automationHistory);
+        },
+      },
+      {
+        id: 'history',
+        label: 'History & Timeline',
+        tooltip: 'Review the chronological run ledger and the execution timeline.',
+        render: (panel) => {
+          panel.innerHTML = renderHistoryTabContent(automationHistory, recentAssistantRuns);
+        },
+      },
+    ];
+
+    if (tabsHost) {
+      automationUiState.tabs = createTabs(tabsHost, tabDefs, defaultTab);
+      for (const tab of tabDefs) {
+        automationUiState.tabs.switchTo(tab.id);
+      }
+      automationUiState.tabs.switchTo(defaultTab);
+      automationUiState.activeTab = defaultTab;
+      tabsHost.addEventListener('click', () => {
+        window.setTimeout(() => {
+          automationUiState.activeTab = normalizeAutomationTab(tabsHost.dataset.activeTab);
+        }, 0);
+      });
+    }
 
     bindEvents(container, { automations, tools, packs, workflowConfig, summary, studio, agents });
     bindRunTimelineUpdates();
@@ -235,6 +231,113 @@ export async function renderAutomations(container) {
 
 export async function updateAutomations() {
   if (currentContainer) await renderAutomations(currentContainer);
+}
+
+function renderCatalogTabContent({
+  automations,
+  allCategories,
+  tools,
+  packs,
+  agents,
+  summary,
+  workflowConfig,
+  studio,
+}) {
+  return `
+    <div class="table-container">
+      <div class="table-header">
+        <h3>Automation Catalog</h3>
+        <div style="display:flex;gap:0.5rem;align-items:center;">
+          <button class="btn btn-primary" id="auto-create-toggle">Create Automation</button>
+          <button class="btn btn-secondary" id="auto-refresh">Refresh</button>
+        </div>
+      </div>
+
+      ${allCategories.length > 1 ? `
+      <div class="wf-category-bar" id="auto-category-filter">
+        <button class="wf-category-chip active" data-category="all">All</button>
+        ${allCategories.map((cat) => {
+          const count = automations.filter((a) => a.category === cat).length;
+          return `<button class="wf-category-chip" data-category="${escAttr(cat)}">${esc(cat)} <span class="wf-category-count">${count}</span></button>`;
+        }).join('')}
+      </div>
+      ` : ''}
+
+      <div style="padding:0.5rem 1rem;">
+        <input type="text" id="auto-catalog-search" placeholder="Search automations..." style="width:100%;padding:0.4rem 0.6rem;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-primary);font-size:0.8rem;">
+      </div>
+
+      <div class="cfg-center-body" id="auto-create-form" style="display:none">
+        ${renderCreateForm(tools, packs, agents)}
+      </div>
+
+      <table id="auto-catalog-table">
+        <thead><tr>
+          <th class="auto-sortable" data-sort="name" style="cursor:pointer;">Name <span class="auto-sort-arrow"></span></th>
+          <th class="auto-sortable" data-sort="type" style="cursor:pointer;">Type <span class="auto-sort-arrow"></span></th>
+          <th>Tools</th>
+          <th class="auto-sortable" data-sort="schedule" style="cursor:pointer;">Schedule <span class="auto-sort-arrow"></span></th>
+          <th class="auto-sortable" data-sort="status" style="cursor:pointer;">Status <span class="auto-sort-arrow"></span></th>
+          <th>Actions</th>
+        </tr></thead>
+        <tbody>
+          ${automations.length === 0
+            ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No automations configured.</td></tr>'
+            : automations.map((auto) => renderAutomationRow(auto, tools, packs)).join('')
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <div class="table-container">
+      <div class="table-header" style="cursor:pointer" id="auto-engine-toggle">
+        <h3>Engine Settings</h3>
+        <span id="auto-engine-arrow" style="font-size:0.85rem;color:var(--text-muted)">&#9654; Show</span>
+      </div>
+      <div id="auto-engine-panel" style="display:none">
+        ${renderEngineSettings(summary, workflowConfig, studio, packs)}
+      </div>
+    </div>
+  `;
+}
+
+function renderOutputTabContent(history) {
+  return `
+    <div class="table-container">
+      <div class="table-header"><h3>Output</h3></div>
+      <div id="auto-run-results" style="padding:0 1rem 1rem"></div>
+      <table id="auto-output-table">
+        <thead><tr><th>Time</th><th>Automation</th><th>Source</th><th>Status</th><th>Duration</th><th>Output</th></tr></thead>
+        <tbody>
+          ${renderRunHistory(history)}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderHistoryTabContent(history, recentAssistantRuns) {
+  return `
+    <div class="table-container">
+      <div class="table-header"><h3>History & Timeline</h3></div>
+      <table id="auto-history-table">
+        <thead><tr><th>Time</th><th>Automation</th><th>Source</th><th>Status</th><th>Duration</th><th>Summary</th></tr></thead>
+        <tbody>
+          ${renderCompactRunHistory(history)}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="table-container">
+      <div class="table-header"><h3>Execution Timeline</h3></div>
+      <table id="auto-execution-timeline-table">
+        <thead><tr><th>Time</th><th>Run</th><th>Kind</th><th>Status</th><th>Owner</th><th>Timeline</th></tr></thead>
+        <tbody>
+          ${renderExecutionTimeline(recentAssistantRuns)}
+        </tbody>
+      </table>
+    </div>
+  `;
 }
 
 function bindRunTimelineUpdates() {
@@ -257,11 +360,13 @@ function bindRunTimelineUpdates() {
 function focusRequestedRun(container) {
   const runId = getRequestedRunId();
   if (!runId) return;
+  automationUiState.tabs?.switchTo('output');
+  automationUiState.activeTab = 'output';
   const row = container.querySelector(`#auto-run-detail-${CSS.escape(runId)}`);
   const trigger = container.querySelector(`.auto-run-details[data-run-id="${CSS.escape(runId)}"]`);
   if (!(row instanceof HTMLElement) || !(trigger instanceof HTMLElement)) return;
   row.style.display = '';
-  trigger.textContent = 'Hide';
+  trigger.textContent = 'Hide Output';
   trigger.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
@@ -831,7 +936,7 @@ function renderCreateForm(tools, packs, agents) {
 function renderRunHistory(entries) {
   const history = Array.isArray(entries) ? entries : [];
   if (history.length === 0) {
-    return '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No runs yet.</td></tr>';
+    return '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No run output yet.</td></tr>';
   }
 
   return history.slice(0, 60).map((entry) => `
@@ -846,7 +951,7 @@ function renderRunHistory(entries) {
       <td>${entry.duration}ms</td>
       <td>
         ${entry.steps && entry.steps.length > 0
-          ? `<button class="btn btn-secondary btn-sm auto-run-details" data-run-id="${escAttr(entry.id || '')}">Show</button>`
+          ? `<button class="btn btn-secondary btn-sm auto-run-details" data-run-id="${escAttr(entry.id || '')}">View Output</button>`
           : `<span class="ops-history-message" title="${escAttr(entry.message || '')}">${esc(entry.message || '-')}</span>`
         }
       </td>
@@ -854,11 +959,28 @@ function renderRunHistory(entries) {
     ${entry.steps && entry.steps.length > 0 ? `
     <tr class="auto-run-details-row" id="auto-run-detail-${escAttr(entry.id || '')}" style="display:none">
       <td colspan="6" style="padding:0.5rem 1rem;background:var(--bg-secondary)">
-        ${renderStepResults(entry.steps)}
-        ${renderPromotedFindings(entry.promotedFindings)}
+        ${renderRunOutputContent(entry)}
       </td>
     </tr>
     ` : ''}
+  `).join('');
+}
+
+function renderCompactRunHistory(entries) {
+  const history = Array.isArray(entries) ? entries : [];
+  if (history.length === 0) {
+    return '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No recent runs yet.</td></tr>';
+  }
+
+  return history.slice(0, 60).map((entry) => `
+    <tr>
+      <td>${formatTime(entry.time)}</td>
+      <td>${esc(entry.name)}</td>
+      <td><span class="badge ${entry.source === 'automation' ? 'badge-info' : 'badge-created'}">${esc(entry.source)}</span></td>
+      <td><span style="color:${statusColor(entry.status)}">${esc(entry.status)}</span></td>
+      <td>${entry.duration}ms</td>
+      <td class="ops-history-message">${esc(summarizeRunHistoryRow(entry))}</td>
+    </tr>
   `).join('');
 }
 
@@ -916,6 +1038,183 @@ function renderExecutionTimelineItems(items) {
   `;
 }
 
+function renderRunOutputContent(entry) {
+  return `
+    ${renderRunResultSummary(entry)}
+    <div style="margin-top:0.9rem">
+      <div style="font-weight:600;margin-bottom:0.45rem">Step Output</div>
+      ${renderStepResults(entry.steps)}
+    </div>
+    ${renderPromotedFindings(entry.promotedFindings)}
+  `;
+}
+
+function renderRunResultSummary(entry) {
+  const blocks = buildRunResultSummaryBlocks(entry);
+  const topMessage = String(entry?.message || '').trim();
+
+  return `
+    <div style="padding:0.8rem 0.9rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-primary)">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap">
+        <div style="font-weight:600">Run Result</div>
+        <div class="ops-task-sub">${esc(entry?.name || 'Automation run')} · ${esc(entry?.status || 'unknown')}</div>
+      </div>
+      ${topMessage ? `<div style="margin-top:0.35rem;color:var(--text-secondary)">${esc(topMessage)}</div>` : ''}
+      ${blocks.length > 0
+        ? `<div style="margin-top:0.7rem;display:flex;flex-direction:column;gap:0.6rem">${blocks.map(renderRunResultBlock).join('')}</div>`
+        : `<div class="ops-task-sub" style="margin-top:0.55rem">No structured output was captured for this run.</div>`
+      }
+    </div>
+  `;
+}
+
+function renderRunResultBlock(block) {
+  return `
+    <div style="padding:0.65rem 0.75rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-secondary)">
+      <div style="display:flex;justify-content:space-between;gap:0.75rem;align-items:center;flex-wrap:wrap">
+        <strong>${esc(block.title)}</strong>
+        ${block.meta ? `<span class="ops-task-sub">${esc(block.meta)}</span>` : ''}
+      </div>
+      ${block.detail ? `<div style="margin-top:0.25rem;color:var(--text-secondary)">${esc(block.detail)}</div>` : ''}
+      ${block.preview ? `<pre style="margin-top:0.45rem;font-size:0.8rem;background:var(--bg-primary);padding:0.5rem;border-radius:4px;white-space:pre-wrap;word-break:break-word">${esc(block.preview)}</pre>` : ''}
+      ${block.links && block.links.length > 0 ? `
+        <div style="margin-top:0.45rem;display:flex;flex-direction:column;gap:0.25rem">
+          ${block.links.map((link) => `<div style="font-size:0.83rem">${esc(link.text)}</div>`).join('')}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function buildRunResultSummaryBlocks(entry) {
+  const steps = Array.isArray(entry?.steps) ? entry.steps : [];
+  const blocks = [];
+  let hasBrowserRead = false;
+
+  for (const step of steps) {
+    const block = summarizeStepForRunResult(step);
+    if (!block) continue;
+    if (step?.toolName === 'browser_read') hasBrowserRead = true;
+    blocks.push(block);
+  }
+
+  if (!blocks.length && String(entry?.message || '').trim()) {
+    blocks.push({
+      title: 'Outcome',
+      detail: String(entry.message).trim(),
+    });
+  }
+
+  return hasBrowserRead
+    ? blocks.filter((block) => block.kind !== 'navigation')
+    : blocks;
+}
+
+function summarizeStepForRunResult(step) {
+  if (!isRecord(step)) return null;
+  const toolName = asString(step.toolName);
+  const output = step.output;
+  const stepMessage = asString(step.message).trim();
+
+  if (toolName === 'browser_navigate' && isRecord(output)) {
+    const url = asString(output.url);
+    return {
+      kind: 'navigation',
+      title: 'Opened Page',
+      detail: url ? `Opened ${url}` : stepMessage,
+      meta: asString(step.status) || '',
+    };
+  }
+
+  if (toolName === 'browser_read' && isRecord(output)) {
+    const url = asString(output.url);
+    const content = asString(output.content);
+    const pageTitle = extractBrowserPageTitle(content);
+    const snippet = extractBrowserReadSnippet(content);
+    return {
+      kind: 'browser_read',
+      title: 'Page Read',
+      detail: pageTitle
+        ? `${pageTitle}${url ? ` · ${url}` : ''}`
+        : (url ? `Read ${url}` : stepMessage),
+      meta: asString(output.contentType) || undefined,
+      ...(snippet ? { preview: snippet } : {}),
+    };
+  }
+
+  if (toolName === 'browser_links' && isRecord(output)) {
+    const links = Array.isArray(output.links)
+      ? output.links.filter(isRecord).slice(0, 8).map((link) => ({
+        text: formatBrowserLink(link),
+      }))
+      : [];
+    const count = Array.isArray(output.links) ? output.links.length : links.length;
+    return {
+      kind: 'browser_links',
+      title: 'Links Found',
+      detail: count > 0
+        ? `Extracted ${count} link${count === 1 ? '' : 's'}.`
+        : (stepMessage || 'No links were extracted.'),
+      ...(links.length ? { links } : {}),
+    };
+  }
+
+  if (toolName === 'browser_extract' && isRecord(output)) {
+    const structured = isRecord(output.structuredData) ? output.structuredData : null;
+    const keys = structured ? Object.keys(structured).slice(0, 8) : [];
+    const outline = Array.isArray(output.semanticOutline) ? output.semanticOutline : [];
+    return {
+      kind: 'browser_extract',
+      title: 'Structured Extraction',
+      detail: keys.length > 0
+        ? `Captured structured fields: ${keys.join(', ')}`
+        : (outline.length > 0 ? `Captured semantic outline with ${outline.length} sections.` : stepMessage),
+      ...(structured ? { preview: truncateText(JSON.stringify(structured, null, 2), 700) } : {}),
+    };
+  }
+
+  if (toolName === '_instruction' && typeof output === 'string' && output.trim()) {
+    return {
+      kind: 'instruction',
+      title: 'Instruction Result',
+      detail: stepMessage || 'Generated text output from prior steps.',
+      preview: truncateText(output.trim(), 700),
+    };
+  }
+
+  if (toolName === 'fs_write' && isRecord(output)) {
+    const path = asString(output.path) || asString(output.filePath);
+    return {
+      kind: 'fs_write',
+      title: 'File Written',
+      detail: path ? `Saved output to ${path}` : stepMessage,
+    };
+  }
+
+  if (typeof output === 'string' && output.trim()) {
+    return {
+      kind: 'generic',
+      title: humanizeToolName(toolName || 'step'),
+      detail: stepMessage,
+      preview: truncateText(output.trim(), 500),
+    };
+  }
+
+  return stepMessage
+    ? {
+        kind: 'generic',
+        title: humanizeToolName(toolName || 'step'),
+        detail: stepMessage,
+      }
+    : null;
+}
+
+function summarizeRunHistoryRow(entry) {
+  const blocks = buildRunResultSummaryBlocks(entry);
+  if (blocks[0]?.detail) return blocks[0].detail;
+  return String(entry?.message || '').trim() || 'No summary available.';
+}
+
 function renderStepResults(steps) {
   if (!steps || steps.length === 0) return '<div style="color:var(--text-muted)">No steps</div>';
   return `<div style="font-size:0.85rem">${steps.map((step, index) => {
@@ -928,7 +1227,7 @@ function renderStepResults(steps) {
         <span style="min-width:140px;font-weight:500">${esc(step.toolName)}</span>
         <span style="color:var(--text-muted)">${esc(step.message || '')}</span>
         <span style="margin-left:auto;color:var(--text-muted)">${step.durationMs}ms</span>
-        ${hasOutput ? `<button class="btn btn-secondary auto-step-output-toggle" data-output-id="${outputId}" style="font-size:0.75rem;padding:2px 6px">Output</button>` : ''}
+        ${hasOutput ? `<button class="btn btn-secondary auto-step-output-toggle" data-output-id="${outputId}" style="font-size:0.75rem;padding:2px 6px">Raw Output</button>` : ''}
       </div>
       ${hasOutput ? `<div id="${outputId}" style="display:none;padding:4px 0 4px 28px;max-height:300px;overflow:auto"><pre style="font-size:0.8rem;background:var(--bg-primary);padding:0.5rem;border-radius:4px;white-space:pre-wrap;word-break:break-word">${esc(typeof step.output === 'string' ? step.output : JSON.stringify(step.output, null, 2))}</pre></div>` : ''}
     `;
@@ -1070,9 +1369,9 @@ function bindEvents(container, ctx) {
       container.querySelectorAll('.auto-sortable .auto-sort-arrow').forEach((arrow) => { arrow.textContent = ''; });
       th.querySelector('.auto-sort-arrow').textContent = currentSort.dir === 'asc' ? ' \u25B2' : ' \u25BC';
 
-      const tbody = container.querySelector('.table-container table tbody');
-      if (!tbody) return;
-      const rows = Array.from(tbody.querySelectorAll('tr.auto-catalog-row:not(.wf-pipeline-row)'));
+      const catalogTable = container.querySelector('#auto-catalog-table tbody');
+      if (!catalogTable) return;
+      const rows = Array.from(catalogTable.querySelectorAll('tr.auto-catalog-row:not(.wf-pipeline-row)'));
       rows.sort((a, b) => {
         const valA = getSortValue(a, key);
         const valB = getSortValue(b, key);
@@ -1081,11 +1380,11 @@ function bindEvents(container, ctx) {
       });
       // Re-append rows in sorted order (each main row followed by its pipeline row if any)
       for (const row of rows) {
-        tbody.appendChild(row);
+        catalogTable.appendChild(row);
         const autoId = row.getAttribute('data-auto-id');
         if (autoId) {
           const pipelineRow = container.querySelector(`#auto-pipeline-${CSS.escape(autoId)}`);
-          if (pipelineRow) tbody.appendChild(pipelineRow);
+          if (pipelineRow) catalogTable.appendChild(pipelineRow);
         }
       }
     });
@@ -1199,11 +1498,18 @@ function bindEvents(container, ctx) {
                   <span style="color:${result.success ? 'var(--success)' : 'var(--error)'}">${esc(result.status)} (${result.run.durationMs}ms)</span>
                 </div>
                 <div style="margin-bottom:0.5rem">${renderOutputHandlingBadges(runOutputHandling, result.run.promotedFindings || [])}</div>
-                ${renderStepResults(result.run.steps || [])}
-                ${renderPromotedFindings(result.run.promotedFindings || [])}
+                ${renderRunOutputContent({
+                  name: result.run.automationName || result.run.playbookName || auto.name,
+                  status: result.status,
+                  message: result.run.message,
+                  steps: result.run.steps || [],
+                  promotedFindings: result.run.promotedFindings || [],
+                })}
               </div>
             `;
           }
+          automationUiState.tabs?.switchTo('output');
+          automationUiState.activeTab = 'output';
           button.textContent = dryRun ? 'Dry Run' : 'Run';
         }
         setTimeout(() => renderAutomationsPreserveScroll(container), 900);
@@ -1289,7 +1595,7 @@ function bindEvents(container, ctx) {
       if (!row) return;
       const visible = row.style.display !== 'none';
       row.style.display = visible ? 'none' : '';
-      button.textContent = visible ? 'Show' : 'Hide';
+      button.textContent = visible ? 'View Output' : 'Hide Output';
     });
   });
 
@@ -3008,6 +3314,53 @@ function escAttr(value) {
   return esc(value).replace(/"/g, '&quot;');
 }
 
+function isRecord(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function asString(value) {
+  return value == null ? '' : String(value);
+}
+
+function truncateText(value, maxChars) {
+  const text = asString(value).trim();
+  if (!text || text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
+}
+
+function humanizeToolName(name) {
+  return asString(name)
+    .replace(/^_+/, '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase()) || 'Step';
+}
+
+function extractBrowserPageTitle(content) {
+  const match = asString(content).match(/- Page Title:\s*(.+)/);
+  return match?.[1]?.trim() || '';
+}
+
+function extractBrowserReadSnippet(content) {
+  const text = asString(content);
+  if (!text) return '';
+  const lines = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('### ') && !line.startsWith('```') && !line.startsWith('- Page URL:') && !line.startsWith('- Page Title:') && !line.startsWith('- generic') && !line.startsWith('- /url:'));
+  const firstNarrativeLine = lines.find((line) => /[A-Za-z]/.test(line));
+  return truncateText(firstNarrativeLine || '', 220);
+}
+
+function formatBrowserLink(link) {
+  if (!isRecord(link)) return '';
+  const text = asString(link.text).trim();
+  const href = asString(link.href).trim();
+  if (text && href && text !== href) return `${text} -> ${href}`;
+  return href || text || '';
+}
+
 
 // Global click handler for step output toggles
 if (typeof document !== 'undefined') {
@@ -3022,7 +3375,7 @@ if (typeof document !== 'undefined') {
     if (!output) return;
     const visible = output.style.display !== 'none';
     output.style.display = visible ? 'none' : '';
-    button.textContent = visible ? 'Output' : 'Hide';
+    button.textContent = visible ? 'Raw Output' : 'Hide Raw Output';
   });
 }
 

@@ -29,6 +29,7 @@ export function buildAutomationRunHistoryEntries(
       source: 'automation',
       status: run.status || '',
       duration: run.durationMs || 0,
+      ...(run.message ? { message: run.message } : {}),
       steps: run.steps.map((step) => ({ ...step })),
       ...(run.outputHandling ? { outputHandling: { ...run.outputHandling } } : {}),
       promotedFindings: (run.promotedFindings ?? []).map((finding) => ({ ...finding })),
