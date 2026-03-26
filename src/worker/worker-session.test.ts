@@ -93,7 +93,7 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(result.content).toContain('Browser Read Smoke (workflow)');
     expect(result.content).toContain('Steps:');
     expect(result.metadata).toMatchObject({
-      intentGatewayShadow: {
+      intentGateway: {
         route: 'automation_control',
         operation: 'inspect',
         entities: {

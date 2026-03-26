@@ -638,21 +638,27 @@ function describeApprovalAction(approval) {
     return describePolicyApproval(preview) || 'Apply policy update';
   }
   if (toolName === 'automation_save') {
-    return preview ? `Save ${preview}` : 'Save automation';
+    return preview ? sentenceCaseApprovalPreview(preview) : 'Save automation';
   }
   if (toolName === 'automation_set_enabled') {
-    return preview ? `Update ${preview}` : 'Update automation';
+    return preview ? sentenceCaseApprovalPreview(preview) : 'Update automation';
   }
   if (toolName === 'automation_run') {
-    return preview ? `Run ${preview}` : 'Run automation';
+    return preview ? sentenceCaseApprovalPreview(preview) : 'Run automation';
   }
   if (toolName === 'automation_delete') {
-    return preview ? `Delete ${preview}` : 'Delete automation';
+    return preview ? sentenceCaseApprovalPreview(preview) : 'Delete automation';
   }
   if (preview) {
     return `${toolName}: ${preview}`;
   }
   return `Run ${toolName}`;
+}
+
+function sentenceCaseApprovalPreview(preview) {
+  const normalized = String(preview || '').trim();
+  if (!normalized) return '';
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
 function esc(str) {

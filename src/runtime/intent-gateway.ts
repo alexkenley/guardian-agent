@@ -51,8 +51,9 @@ export interface IntentGatewayDecision {
   entities: IntentGatewayEntities;
 }
 
-export interface IntentGatewayShadowRecord {
-  mode: 'shadow';
+export interface IntentGatewayRecord {
+  mode: 'primary';
+  available: boolean;
   model: string;
   latencyMs: number;
   decision: IntentGatewayDecision;
@@ -185,10 +186,10 @@ const AUTOMATION_NAME_REPAIR_SYSTEM_PROMPT = [
 ].join(' ');
 
 export class IntentGateway {
-  async classifyShadow(
+  async classify(
     input: IntentGatewayInput,
     chat: IntentGatewayChatFn,
-  ): Promise<IntentGatewayShadowRecord> {
+  ): Promise<IntentGatewayRecord> {
     const startedAt = Date.now();
     try {
       const response = await chat(buildIntentGatewayMessages(input), {
@@ -196,7 +197,8 @@ export class IntentGateway {
         temperature: 0,
         tools: [INTENT_GATEWAY_TOOL],
       });
-      let decision = parseIntentGatewayDecision(response);
+      const parsed = parseIntentGatewayDecision(response);
+      let decision = parsed.decision;
       if (needsAutomationNameRepair(decision)) {
         const repairedName = await repairAutomationName(input, decision, chat);
         if (repairedName) {
@@ -210,7 +212,8 @@ export class IntentGateway {
         }
       }
       return {
-        mode: 'shadow',
+        mode: 'primary',
+        available: parsed.available,
         model: response.model,
         latencyMs: Date.now() - startedAt,
         decision,
@@ -218,7 +221,8 @@ export class IntentGateway {
       };
     } catch (error) {
       return {
-        mode: 'shadow',
+        mode: 'primary',
+        available: false,
         model: 'unknown',
         latencyMs: Date.now() - startedAt,
         decision: {
@@ -234,18 +238,19 @@ export class IntentGateway {
 }
 
 export function toIntentGatewayClientMetadata(
-  shadow: IntentGatewayShadowRecord | null | undefined,
+  record: IntentGatewayRecord | null | undefined,
 ): Record<string, unknown> | undefined {
-  if (!shadow) return undefined;
+  if (!record) return undefined;
   return {
-    mode: shadow.mode,
-    model: shadow.model,
-    latencyMs: shadow.latencyMs,
-    route: shadow.decision.route,
-    confidence: shadow.decision.confidence,
-    operation: shadow.decision.operation,
-    summary: shadow.decision.summary,
-    entities: shadow.decision.entities,
+    mode: record.mode,
+    available: record.available,
+    model: record.model,
+    latencyMs: record.latencyMs,
+    route: record.decision.route,
+    confidence: record.decision.confidence,
+    operation: record.decision.operation,
+    summary: record.decision.summary,
+    entities: record.decision.entities,
   };
 }
 
@@ -292,19 +297,26 @@ function buildAutomationNameRepairMessages(
   ];
 }
 
-function parseIntentGatewayDecision(response: ChatResponse): IntentGatewayDecision {
+function parseIntentGatewayDecision(response: ChatResponse): { decision: IntentGatewayDecision; available: boolean } {
   const parsed = parseStructuredToolArguments(response)
     ?? parseStructuredContent(response.content);
   if (!parsed) {
     return {
-      route: 'unknown',
-      confidence: 'low',
-      operation: 'unknown',
-      summary: 'Intent gateway response was not structured.',
-      entities: {},
+      decision: {
+        route: 'unknown',
+        confidence: 'low',
+        operation: 'unknown',
+        summary: 'Intent gateway response was not structured.',
+        entities: {},
+      },
+      available: false,
     };
   }
-  return normalizeIntentGatewayDecision(parsed);
+  const decision = normalizeIntentGatewayDecision(parsed);
+  return {
+    decision,
+    available: decision.route !== 'unknown',
+  };
 }
 
 function parseStructuredToolArguments(response: ChatResponse): Record<string, unknown> | null {

@@ -132,6 +132,57 @@ describe('automation-save', () => {
     }));
   });
 
+  it('creates manual assistant automations with an event trigger instead of a cron schedule', () => {
+    const controlPlane = makeControlPlane();
+
+    const result = saveAutomationDefinition(controlPlane, {
+      id: 'company-homepage-collector',
+      name: 'Company Homepage Collector',
+      description: 'Reviews company homepages on demand.',
+      enabled: true,
+      kind: 'assistant_task',
+      task: {
+        target: 'default',
+        prompt: 'Read ./companies.csv, inspect each homepage, and write ./tmp/company-homepages.json.',
+        channel: 'scheduled',
+        deliver: false,
+      },
+      schedule: { enabled: false },
+    });
+
+    expect(result).toMatchObject({ success: true, automationId: 'task-created-1', taskId: 'task-created-1' });
+    expect(controlPlane.createTask).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'Company Homepage Collector',
+      type: 'agent',
+      target: 'default',
+      eventTrigger: { eventType: 'automation:manual:company-homepage-collector' },
+    }));
+  });
+
+  it('creates manual standalone tool automations with an event trigger instead of a cron schedule', () => {
+    const controlPlane = makeControlPlane();
+
+    const result = saveAutomationDefinition(controlPlane, {
+      id: 'example-links-snapshot',
+      name: 'Example Links Snapshot',
+      enabled: true,
+      kind: 'standalone_task',
+      task: {
+        target: 'browser_links',
+        args: { url: 'https://example.com' },
+      },
+      schedule: { enabled: false },
+    });
+
+    expect(result).toMatchObject({ success: true, automationId: 'task-created-1', taskId: 'task-created-1' });
+    expect(controlPlane.createTask).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'Example Links Snapshot',
+      type: 'tool',
+      target: 'browser_links',
+      eventTrigger: { eventType: 'automation:manual:example-links-snapshot' },
+    }));
+  });
+
   it('creates standalone tool tasks when editing a task-only automation is not applicable', () => {
     const controlPlane = makeControlPlane();
 

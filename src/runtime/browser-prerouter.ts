@@ -1,6 +1,6 @@
 import type { AgentContext, UserMessage } from '../agent/types.js';
 import type { ToolExecutionRequest } from '../tools/types.js';
-import { isAutomationAuthoringRequest } from './automation-authoring.js';
+import type { IntentGatewayDecision } from './intent-gateway.js';
 
 export interface BrowserPendingApprovalMetadata {
   id: string;
@@ -62,8 +62,10 @@ type DirectBrowserTargetSelector =
 
 export async function tryBrowserPreRoute(
   params: BrowserPreRouteParams,
+  options?: { intentDecision?: IntentGatewayDecision | null; allowHeuristicFallback?: boolean },
 ): Promise<BrowserPreRouteResult | null> {
-  if (isAutomationAuthoringRequest(params.message.content)) return null;
+  const gatewayBrowser = options?.intentDecision?.route === 'browser_task';
+  if (!gatewayBrowser && options?.allowHeuristicFallback !== true) return null;
   const intent = parseDirectBrowserIntent(params.message.content);
   if (!intent) return null;
   if (isGoogleWorkspaceBrowserIntent(intent)) return null;

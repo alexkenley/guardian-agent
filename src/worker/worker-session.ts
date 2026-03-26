@@ -21,7 +21,7 @@ import {
   IntentGateway,
   toIntentGatewayClientMetadata,
   type IntentGatewayDecision,
-  type IntentGatewayShadowRecord,
+  type IntentGatewayRecord,
 } from '../runtime/intent-gateway.js';
 import { runLlmLoop } from './worker-llm-loop.js';
 import { BrokerClient } from '../broker/broker-client.js';
@@ -193,9 +193,9 @@ export class BrokeredWorkerSession {
       return approvalResponse;
     }
 
-    const directIntentShadow = await this.classifyIntentGatewayShadow(params.message, chatFn);
+    const directIntent = await this.classifyIntentGateway(params.message, chatFn);
     const directRouting = resolveDirectIntentRoutingCandidates(
-      directIntentShadow?.decision ?? null,
+      directIntent,
       ['automation', 'automation_control', 'browser'],
       ['automation', 'automation_control', 'browser'],
     );
@@ -203,24 +203,32 @@ export class BrokeredWorkerSession {
       switch (candidate) {
         case 'automation': {
           const directAutomationAuthoring = await this.tryDirectAutomationAuthoring(params.message, toolExecutor, {
+            intentDecision: directIntent?.decision,
             assumeAuthoring: directRouting.gatewayDirected,
+            allowHeuristicFallback: directRouting.gatewayUnavailable,
           });
           if (!directAutomationAuthoring) break;
-          return this.attachIntentGatewayMetadata(directAutomationAuthoring, directIntentShadow);
+          return this.attachIntentGatewayMetadata(directAutomationAuthoring, directIntent);
         }
         case 'automation_control': {
           const directAutomationControl = await this.tryDirectAutomationControl(
             params.message,
             toolExecutor,
-            directIntentShadow?.decision,
+            directIntent?.decision,
+            directRouting.gatewayUnavailable,
           );
           if (!directAutomationControl) break;
-          return this.attachIntentGatewayMetadata(directAutomationControl, directIntentShadow);
+          return this.attachIntentGatewayMetadata(directAutomationControl, directIntent);
         }
         case 'browser': {
-          const directBrowserAutomation = await this.tryDirectBrowserAutomation(params.message, toolExecutor);
+          const directBrowserAutomation = await this.tryDirectBrowserAutomation(
+            params.message,
+            toolExecutor,
+            directIntent?.decision,
+            directRouting.gatewayUnavailable,
+          );
           if (!directBrowserAutomation) break;
-          return this.attachIntentGatewayMetadata(directBrowserAutomation, directIntentShadow);
+          return this.attachIntentGatewayMetadata(directBrowserAutomation, directIntent);
         }
         default:
           break;
@@ -289,7 +297,9 @@ export class BrokeredWorkerSession {
         if (stillPending.length === 0) {
           const originalMessage = this.automationContinuation.originalMessage;
           this.automationContinuation = null;
-          const retry = await this.tryDirectAutomationAuthoring(originalMessage, toolExecutor);
+          const retry = await this.tryDirectAutomationAuthoring(originalMessage, toolExecutor, {
+            assumeAuthoring: true,
+          });
           if (retry) {
             results.push('');
             results.push(retry.content);
@@ -345,7 +355,12 @@ export class BrokeredWorkerSession {
   private async tryDirectAutomationAuthoring(
     message: UserMessage,
     toolExecutor: BrokeredToolExecutor,
-    options?: { allowRemediation?: boolean; assumeAuthoring?: boolean },
+    options?: {
+      allowRemediation?: boolean;
+      assumeAuthoring?: boolean;
+      allowHeuristicFallback?: boolean;
+      intentDecision?: IntentGatewayDecision | null;
+    },
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     const trackedPendingApprovalIds: string[] = [];
     const result = await tryAutomationPreRoute({
@@ -398,6 +413,7 @@ export class BrokeredWorkerSession {
     message: UserMessage,
     toolExecutor: BrokeredToolExecutor,
     intentDecision?: IntentGatewayDecision | null,
+    allowHeuristicFallback = false,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     return tryAutomationControlPreRoute({
       agentId: 'brokered-worker',
@@ -429,12 +445,15 @@ export class BrokeredWorkerSession {
       },
     }, {
       intentDecision,
+      allowHeuristicFallback,
     });
   }
 
   private async tryDirectBrowserAutomation(
     message: UserMessage,
     toolExecutor: BrokeredToolExecutor,
+    intentDecision?: IntentGatewayDecision | null,
+    allowHeuristicFallback = false,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     return tryBrowserPreRoute({
       agentId: 'brokered-worker',
@@ -464,14 +483,17 @@ export class BrokeredWorkerSession {
         const resolved = toolExecutor.getApprovalMetadata(ids);
         return resolved.length > 0 ? resolved : fallback;
       },
+    }, {
+      intentDecision,
+      allowHeuristicFallback,
     });
   }
 
-  private async classifyIntentGatewayShadow(
+  private async classifyIntentGateway(
     message: UserMessage,
     chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>,
-  ): Promise<IntentGatewayShadowRecord | null> {
-    return this.intentGateway.classifyShadow(
+  ): Promise<IntentGatewayRecord | null> {
+    return this.intentGateway.classify(
       {
         content: message.content,
         channel: message.channel,
@@ -482,15 +504,15 @@ export class BrokeredWorkerSession {
 
   private attachIntentGatewayMetadata(
     response: { content: string; metadata?: Record<string, unknown> },
-    shadow: IntentGatewayShadowRecord | null,
+    intentGateway: IntentGatewayRecord | null,
   ): { content: string; metadata?: Record<string, unknown> } {
-    const shadowMeta = toIntentGatewayClientMetadata(shadow);
-    if (!shadowMeta) return response;
+    const gatewayMeta = toIntentGatewayClientMetadata(intentGateway);
+    if (!gatewayMeta) return response;
     return {
       content: response.content,
       metadata: {
         ...(response.metadata ?? {}),
-        intentGatewayShadow: shadowMeta,
+        intentGateway: gatewayMeta,
       },
     };
   }

@@ -54,6 +54,8 @@ describe('tryAutomationPreRoute', () => {
         content: 'Build a workflow called Company Homepage Collector ... Do not schedule it yet.',
       },
       executeTool,
+    }, {
+      assumeAuthoring: true,
     });
 
     expect(result?.content).toContain("I drafted the native Guardian manual assistant automation draft 'Company Homepage Collector'");
@@ -90,6 +92,8 @@ describe('tryAutomationPreRoute', () => {
       executeTool,
       onPendingApproval,
       formatPendingApprovalPrompt: () => 'Approval UI should be shown.',
+    }, {
+      assumeAuthoring: true,
     });
 
     expect(result).not.toBeNull();
@@ -169,6 +173,8 @@ describe('tryAutomationPreRoute', () => {
         content: 'Build a weekday lead research workflow that reads ./companies.csv, researches each company\'s website and public presence, scores fit from 1-5 using a simple B2B SaaS ICP, writes results to ./lead-research-output.csv, and creates ./lead-research-summary.md. Use built-in Guardian tools only. Do not create any shell script, Python script, or code file.',
       },
       executeTool,
+    }, {
+      assumeAuthoring: true,
     });
 
     expect(result?.content).toContain("Updated scheduled assistant task 'Weekday Lead Research'");
@@ -225,6 +231,8 @@ describe('tryAutomationPreRoute', () => {
         content: 'Create an automation called Browser Read Smoke. When I run it, it should open https://example.com, read the page, list the links, and keep the results in the automation run output only. Do not schedule it yet.',
       },
       executeTool,
+    }, {
+      assumeAuthoring: true,
     });
 
     expect(result?.content).toContain('Browser Read Smoke');
@@ -276,6 +284,8 @@ describe('tryAutomationPreRoute', () => {
         content: 'Build a workflow called Company Homepage Collector that reads ./companies.csv, opens each company homepage, extracts the page title and meta description, and writes ./tmp/company-homepages.json. Do not schedule it yet.',
       },
       executeTool,
+    }, {
+      assumeAuthoring: true,
     });
 
     expect(result?.content).toContain("Created manual assistant automation 'Company Homepage Collector'");
@@ -333,7 +343,7 @@ describe('tryAutomationPreRoute', () => {
         };
       }),
       executeTool,
-    }, { allowRemediation: false });
+    }, { allowRemediation: false, assumeAuthoring: true });
 
     expect(result?.content).toContain('not execution-ready');
     expect(result?.content).toContain('gmail_draft');
@@ -380,6 +390,8 @@ describe('tryAutomationPreRoute', () => {
       }),
       executeTool,
       formatPendingApprovalPrompt: () => 'Approval UI should be shown.',
+    }, {
+      assumeAuthoring: true,
     });
 
     expect(result?.content).toContain('fixable policy blockers');
@@ -448,6 +460,8 @@ describe('tryAutomationPreRoute', () => {
       }),
       executeTool,
       formatPendingApprovalPrompt: () => 'Approval UI should be shown.',
+    }, {
+      assumeAuthoring: true,
     });
 
     expect(pathAllowed).toBe(true);
@@ -509,6 +523,8 @@ describe('tryAutomationPreRoute', () => {
       }),
       executeTool,
       formatPendingApprovalPrompt: () => 'Approval UI should be shown.',
+    }, {
+      assumeAuthoring: true,
     });
 
     expect(pathAllowed).toBe(true);
@@ -571,6 +587,8 @@ describe('tryAutomationPreRoute', () => {
       }),
       executeTool,
       formatPendingApprovalPrompt: () => 'Approval UI should be shown.',
+    }, {
+      assumeAuthoring: true,
     });
 
     expect(result).not.toBeNull();
@@ -627,6 +645,8 @@ describe('tryAutomationPreRoute', () => {
       }),
       executeTool,
       formatPendingApprovalPrompt: () => 'Approval UI should be shown.',
+    }, {
+      assumeAuthoring: true,
     });
 
     expect(result?.content).toContain('native Guardian step-based automation');
@@ -708,7 +728,7 @@ describe('tryAutomationPreRoute', () => {
         });
       },
       executeTool,
-    }, { allowRemediation: false });
+    }, { allowRemediation: false, assumeAuthoring: true });
 
     expect(seenRequests.some((request) => (
       request.name === 'web_fetch'
@@ -794,7 +814,7 @@ describe('tryAutomationPreRoute', () => {
         });
       },
       executeTool,
-    }, { allowRemediation: false });
+    }, { allowRemediation: false, assumeAuthoring: true });
 
     expect(seenRequests.some((request) => (
       request.name === 'fs_write'

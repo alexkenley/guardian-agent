@@ -81,6 +81,7 @@ export function saveAutomationDefinition(
       return { success: false, message: 'Assistant prompt is required.' };
     }
     const taskInput = buildAgentTaskInput({
+      automationId,
       name,
       description,
       enabled: input.enabled,
@@ -108,6 +109,7 @@ export function saveAutomationDefinition(
       return { success: false, message: 'Select a tool.' };
     }
     const taskInput = buildStandaloneTaskInput({
+      automationId,
       name,
       description,
       enabled: input.enabled,
@@ -201,6 +203,7 @@ export function saveAutomationDefinition(
 }
 
 function buildAgentTaskInput(input: {
+  automationId: string;
   name: string;
   description: string;
   enabled: boolean;
@@ -222,7 +225,7 @@ function buildAgentTaskInput(input: {
     prompt: input.prompt,
     channel: input.channel,
     deliver: input.deliver,
-    ...(input.cron ? { cron: input.cron } : {}),
+    ...(input.cron ? { cron: input.cron } : { eventTrigger: buildManualAutomationEventTrigger(input.automationId) }),
     ...(input.runOnce ? { runOnce: true } : {}),
     enabled: input.enabled,
     ...(input.emitEvent ? { emitEvent: input.emitEvent } : {}),
@@ -232,6 +235,7 @@ function buildAgentTaskInput(input: {
 }
 
 function buildStandaloneTaskInput(input: {
+  automationId: string;
   name: string;
   description: string;
   enabled: boolean;
@@ -248,11 +252,17 @@ function buildStandaloneTaskInput(input: {
     type: 'tool',
     target: input.target,
     ...(input.args ? { args: { ...input.args } } : {}),
-    ...(input.cron ? { cron: input.cron } : {}),
+    ...(input.cron ? { cron: input.cron } : { eventTrigger: buildManualAutomationEventTrigger(input.automationId) }),
     ...(input.runOnce ? { runOnce: true } : {}),
     enabled: input.enabled,
     ...(input.emitEvent ? { emitEvent: input.emitEvent } : {}),
     ...(input.outputHandling ? { outputHandling: { ...input.outputHandling } } : {}),
+  };
+}
+
+function buildManualAutomationEventTrigger(automationId: string): { eventType: string } {
+  return {
+    eventType: `automation:manual:${automationId}`,
   };
 }
 

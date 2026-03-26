@@ -170,13 +170,14 @@ import { tryAutomationControlPreRoute } from './runtime/automation-control-prero
 import { tryBrowserPreRoute } from './runtime/browser-prerouter.js';
 import {
   resolveDirectIntentRoutingCandidates,
+  type DirectIntentRoutingCandidate,
 } from './runtime/direct-intent-routing.js';
 import {
   IntentGateway,
   toIntentGatewayClientMetadata,
   type IntentGatewayDecision,
   type IntentGatewayRoute,
-  type IntentGatewayShadowRecord,
+  type IntentGatewayRecord,
 } from './runtime/intent-gateway.js';
 import {
   isDirectBrowserAutomationIntent,
@@ -1189,6 +1190,48 @@ class ChatAgent extends BaseAgent {
     let lastToolRoundResults: Array<{ toolName: string; result: Record<string, unknown> }> = [];
     const defaultToolResultProviderKind = this.resolveToolResultProviderKind(ctx);
     let responseSource: ResponseSourceMetadata | undefined;
+    const directIntent = !skipDirectTools
+      ? await this.classifyIntentGateway(contextAwareScopedMessage, ctx)
+      : null;
+    const directIntentRouting = !skipDirectTools
+      ? resolveDirectIntentRoutingCandidates(
+        directIntent,
+        [
+          'filesystem',
+          'scheduled_email_automation',
+          'automation',
+          'automation_control',
+          'workspace_write',
+          'workspace_read',
+          'browser',
+          'web_search',
+        ],
+        [
+          'filesystem',
+          'scheduled_email_automation',
+          'automation',
+          'automation_control',
+          'workspace_write',
+          'workspace_read',
+          'browser',
+          'web_search',
+        ],
+      )
+      : {
+        candidates: [] as DirectIntentRoutingCandidate[],
+        gatewayDirected: false,
+        gatewayUnavailable: false,
+      };
+    const directBrowserIntent = directIntent?.decision.route === 'browser_task'
+      || (directIntentRouting.gatewayUnavailable && isDirectBrowserAutomationIntent(contextAwareScopedMessage.content));
+    const skipDirectWebSearch = !!resolvedCodeSession
+      || !!effectiveCodeContext
+      || directBrowserIntent
+      || activeSkills.some((skill) => (
+        skill.id === 'multi-search-engine'
+        || skill.id === 'weather'
+        || skill.id === 'blogwatcher'
+      ));
     
     if (!skipDirectTools) {
       if (ambiguousEmailProviderClarification) {
@@ -1205,41 +1248,6 @@ class ChatAgent extends BaseAgent {
           metadata: this.buildImmediateResponseMetadata(activeSkills, userKey),
         };
       }
-      const directBrowserIntent = isDirectBrowserAutomationIntent(contextAwareScopedMessage.content);
-      const skipDirectWebSearch = !!resolvedCodeSession
-        || !!effectiveCodeContext
-        || directBrowserIntent
-        || activeSkills.some((skill) => (
-          skill.id === 'multi-search-engine'
-          || skill.id === 'weather'
-          || skill.id === 'blogwatcher'
-        ));
-
-      const directIntentShadow = await this.classifyIntentGatewayShadow(contextAwareScopedMessage, ctx);
-      const directIntentRouting = resolveDirectIntentRoutingCandidates(
-        directIntentShadow?.decision ?? null,
-        [
-          'filesystem',
-          'scheduled_email_automation',
-          'automation',
-          'automation_control',
-          'workspace_write',
-          'workspace_read',
-          'browser',
-          'web_search',
-        ],
-        [
-          'filesystem',
-          'scheduled_email_automation',
-          'automation',
-          'automation_control',
-          'workspace_write',
-          'workspace_read',
-          'browser',
-          'web_search',
-        ],
-      );
-
       for (const candidate of directIntentRouting.candidates) {
         switch (candidate) {
           case 'filesystem': {
@@ -1254,7 +1262,7 @@ class ChatAgent extends BaseAgent {
               result: directSearch,
               message,
               routingMessage: contextAwareScopedMessage,
-              shadow: directIntentShadow,
+              intentGateway: directIntent,
               ctx,
               userKey,
               activeSkills,
@@ -1274,7 +1282,7 @@ class ChatAgent extends BaseAgent {
               result: directScheduledEmailAutomation,
               message,
               routingMessage: contextAwareScopedMessage,
-              shadow: directIntentShadow,
+              intentGateway: directIntent,
               ctx,
               userKey,
               activeSkills,
@@ -1288,7 +1296,9 @@ class ChatAgent extends BaseAgent {
               userKey,
               effectiveCodeContext,
               {
+                intentDecision: directIntent?.decision,
                 assumeAuthoring: directIntentRouting.gatewayDirected,
+                allowHeuristicFallback: directIntentRouting.gatewayUnavailable,
               },
             );
             if (!directAutomationAuthoring) break;
@@ -1297,7 +1307,7 @@ class ChatAgent extends BaseAgent {
               result: directAutomationAuthoring,
               message,
               routingMessage: contextAwareScopedMessage,
-              shadow: directIntentShadow,
+              intentGateway: directIntent,
               ctx,
               userKey,
               activeSkills,
@@ -1309,7 +1319,8 @@ class ChatAgent extends BaseAgent {
               contextAwareScopedMessage,
               ctx,
               userKey,
-              directIntentShadow?.decision,
+              directIntent?.decision,
+              directIntentRouting.gatewayUnavailable,
             );
             if (!directAutomationControl) break;
             return this.buildDirectIntentResponse({
@@ -1317,7 +1328,7 @@ class ChatAgent extends BaseAgent {
               result: directAutomationControl,
               message,
               routingMessage: contextAwareScopedMessage,
-              shadow: directIntentShadow,
+              intentGateway: directIntent,
               ctx,
               userKey,
               activeSkills,
@@ -1332,7 +1343,7 @@ class ChatAgent extends BaseAgent {
               result: directWorkspaceWrite,
               message,
               routingMessage: contextAwareScopedMessage,
-              shadow: directIntentShadow,
+              intentGateway: directIntent,
               ctx,
               userKey,
               activeSkills,
@@ -1347,7 +1358,7 @@ class ChatAgent extends BaseAgent {
               result: directWorkspaceRead,
               message,
               routingMessage: contextAwareScopedMessage,
-              shadow: directIntentShadow,
+              intentGateway: directIntent,
               ctx,
               userKey,
               activeSkills,
@@ -1360,6 +1371,8 @@ class ChatAgent extends BaseAgent {
               ctx,
               userKey,
               effectiveCodeContext,
+              directIntent?.decision,
+              directIntentRouting.gatewayUnavailable,
             );
             if (!directBrowserAutomation) break;
             return this.buildDirectIntentResponse({
@@ -1367,7 +1380,7 @@ class ChatAgent extends BaseAgent {
               result: directBrowserAutomation,
               message,
               routingMessage: contextAwareScopedMessage,
-              shadow: directIntentShadow,
+              intentGateway: directIntent,
               ctx,
               userKey,
               activeSkills,
@@ -1416,7 +1429,7 @@ class ChatAgent extends BaseAgent {
               result: finalContent,
               message,
               routingMessage: contextAwareScopedMessage,
-              shadow: directIntentShadow,
+              intentGateway: directIntent,
               ctx,
               userKey,
               activeSkills,
@@ -1472,7 +1485,6 @@ class ChatAgent extends BaseAgent {
       : defaultToolResultProviderKind;
 
     const providerLocality = this.resolveToolResultProviderKind(ctx);
-    const directBrowserIntent = isDirectBrowserAutomationIntent(contextAwareScopedMessage.content);
 
     if (!this.tools?.isEnabled()) {
       const response = await chatFn(llmMessages);
@@ -2446,7 +2458,7 @@ class ChatAgent extends BaseAgent {
     result: string | { content: string; metadata?: Record<string, unknown> };
     message: UserMessage;
     routingMessage?: UserMessage;
-    shadow?: IntentGatewayShadowRecord | null;
+    intentGateway?: IntentGatewayRecord | null;
     ctx: AgentContext;
     userKey: string;
     activeSkills: ResolvedSkill[];
@@ -2463,13 +2475,13 @@ class ChatAgent extends BaseAgent {
       );
     }
     const routingMessage = input.routingMessage ?? input.message;
-    const shadow = input.shadow ?? await this.classifyIntentGatewayShadow(routingMessage, input.ctx);
-    this.logIntentGatewayShadow(input.candidate, routingMessage, shadow, true);
-    const shadowMeta = toIntentGatewayClientMetadata(shadow);
+    const intentGateway = input.intentGateway ?? await this.classifyIntentGateway(routingMessage, input.ctx);
+    this.logIntentGateway(input.candidate, routingMessage, intentGateway, true);
+    const gatewayMeta = toIntentGatewayClientMetadata(intentGateway);
     const metadata = {
       ...(this.buildImmediateResponseMetadata(input.activeSkills, input.userKey) ?? {}),
       ...(normalized.metadata ?? {}),
-      ...(shadowMeta ? { intentGatewayShadow: shadowMeta } : {}),
+      ...(gatewayMeta ? { intentGateway: gatewayMeta } : {}),
     };
     return {
       content: normalized.content,
@@ -2660,7 +2672,9 @@ class ChatAgent extends BaseAgent {
         const stillPending = continuation.pendingApprovalIds.filter((id) => !approvedIds.has(id));
         if (stillPending.length === 0) {
           this.clearAutomationApprovalContinuation(userKey);
-          const retry = await this.tryDirectAutomationAuthoring(continuation.originalMessage, ctx, userKey);
+          const retry = await this.tryDirectAutomationAuthoring(continuation.originalMessage, ctx, userKey, undefined, {
+            assumeAuthoring: true,
+          });
           if (retry) {
             results.push('');
             results.push(retry.content);
@@ -2690,7 +2704,9 @@ class ChatAgent extends BaseAgent {
       const stillPending = fallbackContinuation.pendingApprovalIds.filter((id) => livePendingIds.has(id));
       if (stillPending.length === 0) {
         this.clearAutomationApprovalContinuation(userKey);
-        const retry = await this.tryDirectAutomationAuthoring(fallbackContinuation.originalMessage, ctx, userKey);
+        const retry = await this.tryDirectAutomationAuthoring(fallbackContinuation.originalMessage, ctx, userKey, undefined, {
+          assumeAuthoring: true,
+        });
         if (retry) {
           results.push('');
           results.push(retry.content);
@@ -2841,7 +2857,9 @@ class ChatAgent extends BaseAgent {
         return null;
       }
       this.clearAutomationApprovalContinuation(userKey);
-      return this.tryDirectAutomationAuthoring(continuation.originalMessage, continuation.ctx, userKey);
+      return this.tryDirectAutomationAuthoring(continuation.originalMessage, continuation.ctx, userKey, undefined, {
+        assumeAuthoring: true,
+      });
     }
     return null;
   }
@@ -3074,7 +3092,12 @@ class ChatAgent extends BaseAgent {
     ctx: AgentContext,
     userKey: string,
     codeContext?: { workspaceRoot?: string },
-    options?: { allowRemediation?: boolean; assumeAuthoring?: boolean },
+    options?: {
+      allowRemediation?: boolean;
+      assumeAuthoring?: boolean;
+      allowHeuristicFallback?: boolean;
+      intentDecision?: IntentGatewayDecision | null;
+    },
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
     const codeWorkspaceRoot = codeContext?.workspaceRoot?.trim();
@@ -3133,6 +3156,7 @@ class ChatAgent extends BaseAgent {
     ctx: AgentContext,
     userKey: string,
     intentDecision?: IntentGatewayDecision | null,
+    allowHeuristicFallback = false,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
     return tryAutomationControlPreRoute({
@@ -3163,6 +3187,7 @@ class ChatAgent extends BaseAgent {
       },
     }, {
       intentDecision,
+      allowHeuristicFallback,
     });
   }
 
@@ -3171,6 +3196,8 @@ class ChatAgent extends BaseAgent {
     ctx: AgentContext,
     userKey: string,
     codeContext?: { workspaceRoot?: string; sessionId?: string },
+    intentDecision?: IntentGatewayDecision | null,
+    allowHeuristicFallback = false,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
     const scopedCodeContext = codeContext?.workspaceRoot
@@ -3206,16 +3233,19 @@ class ChatAgent extends BaseAgent {
           };
         });
       },
+    }, {
+      intentDecision,
+      allowHeuristicFallback,
     });
     return result;
   }
 
-  private async classifyIntentGatewayShadow(
+  private async classifyIntentGateway(
     message: UserMessage,
     ctx: AgentContext,
-  ): Promise<IntentGatewayShadowRecord | null> {
+  ): Promise<IntentGatewayRecord | null> {
     if (!ctx.llm) return null;
-    return this.intentGateway.classifyShadow(
+    return this.intentGateway.classify(
       {
         content: message.content,
         channel: message.channel,
@@ -3224,15 +3254,15 @@ class ChatAgent extends BaseAgent {
     );
   }
 
-  private logIntentGatewayShadow(
+  private logIntentGateway(
     candidate: DirectIntentShadowCandidate,
     message: UserMessage,
-    shadow: IntentGatewayShadowRecord | null,
+    intentGateway: IntentGatewayRecord | null,
     handled: boolean,
   ): void {
-    if (!shadow) return;
+    if (!intentGateway) return;
     const expectedRoutes = this.expectedIntentGatewayRoutes(candidate);
-    const mismatch = handled && !expectedRoutes.has(shadow.decision.route);
+    const mismatch = handled && !expectedRoutes.has(intentGateway.decision.route);
     log.info({
       agentId: this.id,
       messageId: message.id,
@@ -3240,13 +3270,13 @@ class ChatAgent extends BaseAgent {
       candidate,
       handled,
       mismatch,
-      shadowRoute: shadow.decision.route,
-      shadowConfidence: shadow.decision.confidence,
-      shadowOperation: shadow.decision.operation,
-      shadowSummary: shadow.decision.summary,
-      shadowLatencyMs: shadow.latencyMs,
-      shadowModel: shadow.model,
-    }, 'Intent gateway shadow classification');
+      route: intentGateway.decision.route,
+      confidence: intentGateway.decision.confidence,
+      operation: intentGateway.decision.operation,
+      summary: intentGateway.decision.summary,
+      latencyMs: intentGateway.latencyMs,
+      model: intentGateway.model,
+    }, 'Intent gateway classification');
   }
 
   private expectedIntentGatewayRoutes(

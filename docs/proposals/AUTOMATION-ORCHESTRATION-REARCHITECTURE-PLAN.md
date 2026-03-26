@@ -6,226 +6,181 @@
 
 ## Goal
 
-Replace brittle message-pattern routing for automation, browser, and UI-control requests with a typed control-plane architecture built around:
+Complete Guardian’s move to an automation-first architecture built around:
 
-- explicit intent classification
-- typed automation specifications
-- durable execution state
-- one automation domain model across chat and web UI
-- operator-visible timeline, approvals, and takeover state
+- authoritative top-level intent routing
+- one canonical automation control plane
+- one Automations UI surface
+- backend-owned catalog and run history shaping
+- durable execution state for workflows and automations
 
-## Problem Statement
+## Current Architecture Baseline
 
-The current path mixes overlapping concerns across:
+The foundations are already in place:
 
-- direct browser pre-routing in `src/runtime/browser-prerouter.ts`
-- automation authoring heuristics in `src/runtime/automation-authoring.ts`
-- automation execution in `src/runtime/automation-prerouter.ts`
-- early-return route order in `src/index.ts`
-- web catalog reconstruction in `web/public/js/pages/automations.js`
+### Completed Foundations
 
-This creates four failure modes:
+- `IntentGateway` owns the normal top-level direct-action route decision.
+- Heuristic parsers are retained only as fail-safe behavior when the gateway is unavailable.
+- Conversational automation authoring routes into a typed automation compiler instead of generic tool drift.
+- Saved automation control routes through the canonical automation tools:
+  - `automation_list`
+  - `automation_save`
+  - `automation_set_enabled`
+  - `automation_run`
+  - `automation_delete`
+- The Automations page is the canonical operator surface.
+- Catalog rows, save flows, run/toggle/delete actions, and run-history shaping are backend-owned.
+- Built-in examples are treated as starter examples in the same catalog, not as a separate install system.
+- Direct runtime and brokered worker paths share the same automation-routing model.
 
-1. small wording changes change system behavior
-2. create/update/delete/run/toggle requests can drift between automation and browser paths
-3. chat and UI do not operate on one canonical automation object model
-4. approvals, takeovers, and run visibility are attached after the fact instead of being first-class runtime states
+### What The Current Runtime Still Adapts
 
-## Design Principles
+The current backend contract is unified at the product surface, but some lower-level execution adapters still bridge:
+- deterministic workflow storage/runtime
+- scheduled task storage/runtime
 
-- No regex or keyword matching as the primary routing authority
-- No split ownership between chat authoring and UI mutation semantics
-- No separate workflow/task mental models at the product surface
-- No non-durable pause/resume semantics
-- Keep Guardian's existing approval, audit, SSRF, sandbox, and policy boundaries
+That adapter layer is acceptable for now, but it is still the main remaining cleanup area.
 
-## Target Architecture
+## Architecture End State
 
 ### 1. Intent Gateway
 
-A single typed gateway classifies incoming requests into one of:
+One authoritative route selector for direct-action requests.
 
+Relevant routes:
 - `automation_authoring`
 - `automation_control`
 - `ui_control`
 - `browser_task`
+- `workspace_task`
+- `email_task`
+- `search_task`
+- `filesystem_task`
+- `coding_task`
+- `security_task`
 - `general_assistant`
 
 Requirements:
+- structured output
+- no tool execution during classification
+- explicit unavailable/fail-safe handling
 
-- schema-constrained structured output
-- confidence + rationale
-- canonical operation extraction such as `create`, `update`, `delete`, `run`, `toggle`, `clone`, `inspect`
-- no tool execution at classification time
+### 2. Canonical Automation Control Plane
 
-### 2. Automation Spec V2
+One automation contract for model-facing and UI-facing operations:
 
-Replace heuristic compilation with a typed draftable specification:
+- `automation_list`
+- `automation_save`
+- `automation_set_enabled`
+- `automation_run`
+- `automation_delete`
 
-- identity: `name`, `description`, `labels`
-- trigger: `manual`, `schedule`, `event`
-- execution style: `deterministic_workflow`, `assistant_runbook`, `hybrid`
-- inputs and artifacts
-- capabilities and policy requirements
-- approval points
-- takeover points
-- browser/session requirements
+This contract is the product-facing truth even while the runtime still uses internal execution adapters underneath.
 
-Compile failures must produce structured missing-field results, never `null`.
+### 3. Typed Automation Authoring
 
-### 3. Unified Automation Domain
+Conversational authoring must continue to produce:
+- typed drafts when details are missing
+- validated compilations when definitions are ready
+- saved `workflow`, `assistant_task`, or `standalone_task` automations through `automation_save`
 
-Replace split workflow/task handling with one domain model:
+Authoring must not fall through to competing browser or generic tool paths.
 
-- `AutomationDefinition`
-- `AutomationRun`
-- `AutomationArtifact`
-- `AutomationApprovalState`
-- `AutomationTakeoverState`
+### 4. Backend-Owned Operator Surface
 
-Schedules and manual execution are trigger modes, not different product objects.
+The web UI should remain a control-plane client rather than a reconstruction layer.
 
-### 4. Durable Runtime
+It should consume backend-owned:
+- catalog entries
+- starter-example entries
+- run history
+- timeline views
+- mutation responses
 
-All runs become state machines with persisted transitions:
+### 5. Durable Run Model
 
-- `draft`
+Longer-term cleanup still targets one automation run model with explicit runtime states such as:
 - `ready`
 - `running`
 - `awaiting_approval`
-- `takeover_required`
 - `paused`
 - `completed`
 - `failed`
 - `cancelled`
 
-### 5. Operator Surface
+## Remaining Work
 
-The web UI becomes a control-plane client, not a reconstruction layer.
+### Phase 1: Intent Gateway
 
-It must show:
+**Status:** Complete for the current direct-action path
 
-- definitions
-- runs
-- timeline
-- approvals
-- takeover/resume
-- artifacts
+- gateway classification is live
+- direct routes use gateway decisions first
+- fail-safe heuristics remain only when the gateway is unavailable
 
-## Implementation Phases
+### Phase 2: Canonical Automation Authoring And Control
 
-## Phase 1: Intent Gateway In Shadow Mode
+**Status:** Complete for current product behavior
 
-### Deliver
+- automation authoring compiles into the canonical automation save contract
+- saved automation control uses the canonical automation catalog and control tools
+- draft clarification stays inside automation authoring
 
-- new `IntentGateway` with schema-constrained classification
-- no production routing changes yet
-- shadow classification attached to current automation/browser entry points
-- logs and response metadata for comparison against current behavior
-- focused tests around classifier parsing and failure handling
+### Phase 3: Backend-Owned UI Contract
 
-### Exit Criteria
+**Status:** Complete for the Automations page core flows
 
-- Guardian can classify candidate requests into the target route set without affecting live routing
-- shadow records clearly show where current routing disagrees with the new gateway
-- no user-visible regression in automation or browser handling
+- catalog shaping is backend-owned
+- run/toggle/delete are backend-owned
+- save flows are backend-owned
+- built-in starter examples are backend-owned
+- run-history shaping is backend-owned
 
-## Phase 2: Automation Spec V2
+### Phase 4: Deeper Domain Unification
 
-### Deliver
+**Status:** In progress
 
-- new typed `AutomationSpecV2`
-- slot-filling / missing-field result model
-- authoring compiler that produces drafts and validated specs
-- explicit conversion into control-plane mutations
+Remaining work:
+- reduce the internal workflow/task adapter split
+- continue normalizing automation definition and run semantics behind the runtime service
+- keep low-level workflow/task behavior from leaking back into public naming or control contracts
 
-### Exit Criteria
+### Phase 5: Durable Approval / Takeover / Timeline State
 
-- authoring never falls through to browser routing
-- incomplete requests return structured clarification targets
-- manual, scheduled, and hybrid requests are represented without heuristic shape guessing
+**Status:** Partial foundation only
 
-## Phase 3: Unified Automation Domain Service
+Remaining work:
+- standardize approval and pause/resume state across all automation kinds
+- expose richer takeover/resume semantics where needed
+- keep replay safety for deterministic resume paths
 
-### Deliver
+### Phase 6: Browser Operator Integration
 
-- one backend service for create/update/delete/run/toggle/clone/pause/resume
-- one storage model for workflows and assistant automations
-- migration adapter from legacy workflow/task objects
-- one API contract used by both chat and web UI
+**Status:** Future work
 
-### Exit Criteria
-
-- UI and chat mutate the same backend objects
-- enable/disable/delete/run behavior is consistent across all automation types
-
-## Phase 4: Durable Run Engine
-
-### Deliver
-
-- durable run store with checkpointing
-- explicit approval and takeover runtime states
-- resumable execution context
-- canonical run timeline events
-
-### Exit Criteria
-
-- approval and takeover are runtime states, not string-level conventions
-- resumed runs continue safely without replaying unsafe side effects
-
-## Phase 5: Operator And Browser Integration
-
-### Deliver
-
-- browser operator nodes with DOM-first, vision-fallback execution
-- persistent browser session/run artifact model
-- timeline playback for browser and automation runs
-- user takeover/resume UI
-
-### Exit Criteria
-
-- browser automation is a first-class run surface
-- operator-visible evidence exists for every browser-affecting run
-
-## Phase 6: Cutover And Deletion
-
-### Deliver
-
-- route production traffic through `IntentGateway`
-- delete legacy pre-routing heuristics
-- remove duplicated workflow/task UI reconstruction
-- update docs and reference guide
-
-### Exit Criteria
-
-- `automation-authoring.ts` no longer owns top-level route selection
-- `browser-prerouter.ts` no longer acts as a competing message classifier
-- `automations.js` no longer merges separate workflow/task models client-side
-
-## Deletion Targets
-
-These are expected to shrink drastically or be removed by the end state:
-
-- `src/runtime/browser-prerouter.ts`
-- `src/runtime/automation-prerouter.ts`
-- top-level heuristic routing in `src/runtime/automation-authoring.ts`
-- workflow/task split reconstruction logic in `web/public/js/pages/automations.js`
+Remaining work:
+- promote browser automation evidence, sessions, and artifacts into the same durable run model
+- align browser-task execution more tightly with automation-run artifacts and timeline views
 
 ## Verification Strategy
 
-- golden prompt suite for authoring/control/browser/UI requests
-- shadow comparison between legacy route and `IntentGateway`
-- approval/takeover/resume integration tests
-- UI mutation contract tests for toggle/delete/run/clone
-- regression prompts from real operator failures
+- focused Vitest coverage for routing, authoring, save, control, and UI contracts
+- fake-provider harnesses for deterministic regression
+- real-Ollama smoke lanes in WSL for live model validation
+- targeted manual QA for:
+  - create
+  - inspect
+  - run
+  - enable/disable
+  - delete
+  - starter example copy flows
 
-## Current Work
+## Completion Criteria
 
-This change set starts Phase 1 only, and expands shadow classification across the current direct-action surfaces in chat:
-
-- filesystem search
-- scheduled email automation creation
-- automation authoring
-- workspace read/write shortcuts
-- browser task shortcuts
-- direct web search
+This proposal is complete when:
+- the intent gateway remains the normal authoritative route selector
+- the public automation surface is fully expressed through canonical automation tools
+- the Automations page is the only automation definition/control surface
+- backend naming and docs no longer leak obsolete workflow/task product concepts
+- remaining low-level workflow/task differences are internal implementation details rather than public architecture

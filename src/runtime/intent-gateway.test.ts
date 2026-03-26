@@ -5,7 +5,7 @@ import { IntentGateway, toIntentGatewayClientMetadata } from './intent-gateway.j
 describe('IntentGateway', () => {
   it('parses a tool-called structured intent decision', async () => {
     const gateway = new IntentGateway();
-    const result = await gateway.classifyShadow(
+    const result = await gateway.classify(
       {
         content: 'Create an automation called Browser Read Smoke. Do not schedule it yet.',
         channel: 'web',
@@ -39,7 +39,7 @@ describe('IntentGateway', () => {
 
   it('falls back to parsing JSON content when no tool call is present', async () => {
     const gateway = new IntentGateway();
-    const result = await gateway.classifyShadow(
+    const result = await gateway.classify(
       {
         content: 'Delete Browser Read Smoke from the automations page.',
         channel: 'web',
@@ -65,7 +65,7 @@ describe('IntentGateway', () => {
 
   it('returns an unknown decision when the model response is not structured', async () => {
     const gateway = new IntentGateway();
-    const result = await gateway.classifyShadow(
+    const result = await gateway.classify(
       {
         content: 'Open https://example.com and show me the links.',
         channel: 'cli',
@@ -83,7 +83,8 @@ describe('IntentGateway', () => {
 
   it('converts shadow decisions into client-safe metadata', () => {
     const metadata = toIntentGatewayClientMetadata({
-      mode: 'shadow',
+      mode: 'primary',
+      available: true,
       model: 'test-model',
       latencyMs: 17,
       decision: {
@@ -98,7 +99,7 @@ describe('IntentGateway', () => {
     });
 
     expect(metadata).toMatchObject({
-      mode: 'shadow',
+      mode: 'primary',
       model: 'test-model',
       route: 'ui_control',
       operation: 'navigate',
@@ -107,7 +108,7 @@ describe('IntentGateway', () => {
 
   it('supports broader direct-action routes beyond browser and automation', async () => {
     const gateway = new IntentGateway();
-    const result = await gateway.classifyShadow(
+    const result = await gateway.classify(
       {
         content: 'Search the web for the latest Playwright MCP news.',
         channel: 'cli',
@@ -137,7 +138,7 @@ describe('IntentGateway', () => {
 
   it('captures explicit enable and disable intent metadata', async () => {
     const gateway = new IntentGateway();
-    const result = await gateway.classifyShadow(
+    const result = await gateway.classify(
       {
         content: 'Disable Browser Read Smoke in the automations page.',
         channel: 'web',
@@ -166,7 +167,7 @@ describe('IntentGateway', () => {
     const gateway = new IntentGateway();
     let callCount = 0;
 
-    const result = await gateway.classifyShadow(
+    const result = await gateway.classify(
       {
         content: 'Run Browser Read Smoke now.',
         channel: 'web',

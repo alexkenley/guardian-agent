@@ -11,6 +11,7 @@ import {
   selectSavedAutomationCatalogEntry,
   type SavedAutomationCatalogEntry,
 } from './automation-catalog.js';
+import { extractAutomationListEntries } from './automation-tool-results.js';
 
 export interface AutomationControlPendingApprovalMetadata {
   id: string;
@@ -59,9 +60,13 @@ interface AutomationCatalogLookupResult {
 
 export async function tryAutomationControlPreRoute(
   params: AutomationControlPreRouteParams,
-  options?: { intentDecision?: IntentGatewayDecision | null },
+  options?: { intentDecision?: IntentGatewayDecision | null; allowHeuristicFallback?: boolean },
 ): Promise<AutomationControlPreRouteResult | null> {
-  const intent = resolveAutomationControlIntent(params.message.content, options?.intentDecision);
+  const intent = resolveAutomationControlIntent(
+    params.message.content,
+    options?.intentDecision,
+    options?.allowHeuristicFallback === true,
+  );
   if (!intent || intent.operation === 'clone' || intent.operation === 'unknown') return null;
 
   const toolRequest = toolRequestFor(params);
@@ -127,11 +132,13 @@ async function listAutomationCatalog(
 function resolveAutomationControlIntent(
   content: string,
   decision?: IntentGatewayDecision | null,
+  allowHeuristicFallback = false,
 ): AutomationControlIntent | null {
   if (decision) {
     const routed = resolveDecisionBackedIntent(decision);
     if (routed) return routed;
   }
+  if (!allowHeuristicFallback) return null;
   return resolveHeuristicAutomationControlIntent(content);
 }
 
@@ -267,16 +274,15 @@ function parseAutomationListResult(result: Record<string, unknown>): AutomationC
       error: toString(result.message) || 'Automation catalog lookup failed.',
     };
   }
-  const output = isRecord(result.output) ? result.output : null;
-  if (!output || !Array.isArray(output.automations)) {
+  const entries = extractAutomationListEntries(result);
+  if (!entries) {
     return {
       entries: [],
       error: 'Automation catalog returned an invalid response.',
     };
   }
   return {
-    entries: output.automations
-      .filter(isRecord)
+    entries: entries
       .map(toAutomationCatalogEntry)
       .filter((entry): entry is SavedAutomationCatalogEntry => Boolean(entry)),
   };

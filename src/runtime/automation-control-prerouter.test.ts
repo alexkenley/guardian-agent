@@ -61,6 +61,14 @@ describe('tryAutomationControlPreRoute', () => {
         content: 'Show me the saved automations.',
       },
       executeTool,
+    }, {
+      intentDecision: {
+        route: 'automation_control',
+        confidence: 'high',
+        operation: 'inspect',
+        summary: 'Inspect the automation catalog.',
+        entities: {},
+      },
     });
 
     expect(result?.content).toContain('Automation catalog (2)');
@@ -128,7 +136,7 @@ describe('tryAutomationControlPreRoute', () => {
     );
   });
 
-  it('falls back to heuristic name recovery only when no gateway decision is available', async () => {
+  it('uses heuristic name recovery only as an explicit gateway-unavailable fallback', async () => {
     const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
       if (toolName === 'automation_list') {
         return {
@@ -167,6 +175,8 @@ describe('tryAutomationControlPreRoute', () => {
         content: 'Show me the automation Browser Read Smoke.',
       },
       executeTool,
+    }, {
+      allowHeuristicFallback: true,
     });
 
     expect(result?.content).toContain('Browser Read Smoke (workflow)');
@@ -327,10 +337,67 @@ describe('tryAutomationControlPreRoute', () => {
         content: 'Show me the saved automations.',
       },
       executeTool,
+    }, {
+      intentDecision: {
+        route: 'automation_control',
+        confidence: 'high',
+        operation: 'inspect',
+        summary: 'Inspect the automation catalog.',
+        entities: {},
+      },
     });
 
     expect(result?.content).toContain('I could not inspect the automation catalog right now');
     expect(result?.content).toContain('Automation control plane is not available.');
+  });
+
+  it('accepts nested automation_list payloads from the live tool wrapper', async () => {
+    const executeTool = vi.fn(async (toolName: string) => {
+      if (toolName === 'automation_list') {
+        return {
+          success: true,
+          output: {
+            output: {
+              automations: [{
+                id: 'browser-read-smoke',
+                name: 'Browser Read Smoke',
+                kind: 'workflow',
+                enabled: true,
+                workflow: {
+                  id: 'browser-read-smoke',
+                  name: 'Browser Read Smoke',
+                  enabled: true,
+                  mode: 'sequential',
+                  steps: [{ id: 'step-1', toolName: 'browser_navigate' }],
+                },
+              }],
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryAutomationControlPreRoute({
+      agentId: 'default',
+      message: {
+        ...baseMessage,
+        content: 'Show me the automation Browser Read Smoke.',
+      },
+      executeTool,
+    }, {
+      intentDecision: {
+        route: 'automation_control',
+        confidence: 'high',
+        operation: 'inspect',
+        summary: 'Inspect an existing automation.',
+        entities: {
+          automationName: 'Browser Read Smoke',
+        },
+      },
+    });
+
+    expect(result?.content).toContain('Browser Read Smoke (workflow)');
   });
 
   it('refuses to run built-in starter catalog entries', async () => {

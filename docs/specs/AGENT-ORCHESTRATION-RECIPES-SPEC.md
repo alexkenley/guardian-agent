@@ -1,19 +1,13 @@
 # Agent Orchestration Recipes Spec
 
 **Status:** Implemented baseline  
-**Primary Files:** `src/agent/recipes.ts`, `src/agent/recipes.test.ts`, `src/agent/orchestration.ts`, `src/agent/conditional.ts`
+**Primary files:** `src/agent/recipes.ts`, `src/agent/recipes.test.ts`, `src/agent/orchestration.ts`, `src/agent/conditional.ts`
 
 ## Goal
 
-Ship first-class multi-agent workflow templates without introducing a second orchestration runtime.
+Provide first-class reusable multi-agent compositions without creating a second automation runtime or bypassing Guardian’s runtime controls.
 
-Guardian already had the core primitives:
-- `SequentialAgent`
-- `ParallelAgent`
-- `LoopAgent`
-- `ConditionalAgent`
-
-This uplift adds reusable role-separated compositions on top of those primitives so common enterprise patterns do not have to be rebuilt ad hoc.
+Recipes are a developer-facing orchestration layer. They sit beside the automation framework, not in place of it.
 
 ## Implemented Recipes
 
@@ -21,36 +15,50 @@ This uplift adds reusable role-separated compositions on top of those primitives
 - `researcher -> writer -> reviewer`
 - `research -> draft -> verify`
 
-Each recipe returns an `OrchestrationRecipe` with:
+Each recipe returns an `OrchestrationRecipe` that includes:
 - `entryAgent`
 - `supportingAgents`
-- descriptive metadata for docs and future tooling
+- descriptive metadata for runtime use and documentation
 
 ## Design Rules
 
-- Recipes are thin wrappers over existing orchestration agents.
-- Sub-agent execution still flows through `ctx.dispatch()` and the normal runtime path.
-- Handoff controls remain the same: capability filtering, contract validation, taint preservation rules, and approval checks are still supervisor-owned.
-- Recipes do not create new execution authority.
+- Recipes are thin wrappers over existing orchestration primitives.
+- Recipe execution still flows through `ctx.dispatch()` and normal runtime dispatch.
+- Capability checks, handoff validation, taint handling, approvals, and audit remain runtime-owned.
+- Recipes do not create new authority.
+- Recipes do not create persisted automation definitions on their own.
+
+## Relationship To The Automation System
+
+Recipes and saved automations solve different problems.
+
+- Saved automations are persisted control-plane objects managed through the Automations page and automation tools.
+- Recipes are in-process composition templates for agent developers.
+
+A saved assistant automation may internally rely on agent composition, but that does not change the automation contract:
+- top-level routing is still owned by `IntentGateway`
+- automation persistence still goes through `automation_save`
+- runtime admission and approvals still remain outside the recipe
 
 ## Benefits
 
-- Consistent separation of duties for planning, execution, review, and evidence collection
-- Lower developer overhead for common multi-agent patterns
-- Better testability because recipes expose stable, named compositions instead of one-off control flow
-- Easier future eval coverage because expected workflow shape is explicit
+- Stable role-separated flow templates
+- Lower developer overhead for common review/planning/verification chains
+- Better testability because workflow shape is explicit
+- Cleaner future eval coverage for multi-agent request handling
 
 ## Non-Goals
 
 - Peer-to-peer swarm coordination
-- Persistent cross-run shared memory
-- A second agent framework outside the existing Guardian runtime
+- Cross-run shared mutable memory
+- A separate end-user workflow builder for agent recipes
+- Bypassing Guardian runtime controls
 
 ## Current Boundaries
 
-- Recipes are developer/runtime building blocks, not a standalone end-user authoring surface yet
-- Validator/reviewer safety still depends on the selected target agents and handoff contracts
-- Recipes do not yet add automatic role capability narrowing beyond what the caller configures
+- Recipes are not a standalone end-user authoring surface.
+- Safety still depends on the agents selected and the handoff contracts declared.
+- Recipes do not automatically narrow capabilities beyond what the caller configures.
 
 ## Verification
 

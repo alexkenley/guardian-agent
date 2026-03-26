@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { tryBrowserPreRoute } from './browser-prerouter.js';
 
+const browserIntentDecision = {
+  route: 'browser_task' as const,
+  confidence: 'high' as const,
+  operation: 'read' as const,
+  summary: 'Browser task.',
+  entities: {},
+};
+
 describe('tryBrowserPreRoute', () => {
   it('does not hijack automation authoring prompts that mention browser actions', async () => {
     const result = await tryBrowserPreRoute({
@@ -68,6 +76,8 @@ describe('tryBrowserPreRoute', () => {
       onPendingApproval,
       formatPendingApprovalPrompt: () => 'Approval UI rendered.',
       resolvePendingApprovalMetadata: (_ids, fallback) => fallback,
+    }, {
+      intentDecision: browserIntentDecision,
     });
 
     expect(result).not.toBeNull();
@@ -132,6 +142,8 @@ describe('tryBrowserPreRoute', () => {
         timestamp: Date.now(),
       },
       executeTool,
+    }, {
+      intentDecision: browserIntentDecision,
     });
 
     expect(result).toEqual({
@@ -186,6 +198,8 @@ describe('tryBrowserPreRoute', () => {
       executeTool,
       formatPendingApprovalPrompt: () => 'Approval UI rendered.',
       resolvePendingApprovalMetadata: (_ids, fallback) => fallback,
+    }, {
+      intentDecision: browserIntentDecision,
     });
 
     expect(result?.content).toContain("prepared the click action");
@@ -221,6 +235,8 @@ describe('tryBrowserPreRoute', () => {
         timestamp: Date.now(),
       },
       executeTool,
+    }, {
+      intentDecision: browserIntentDecision,
     });
 
     expect(result).toEqual({
@@ -274,6 +290,8 @@ describe('tryBrowserPreRoute', () => {
         timestamp: Date.now(),
       },
       executeTool,
+    }, {
+      intentDecision: browserIntentDecision,
     });
 
     expect(readResult?.content).toContain('Example Domain');
@@ -289,6 +307,8 @@ describe('tryBrowserPreRoute', () => {
         timestamp: Date.now(),
       },
       executeTool,
+    }, {
+      intentDecision: browserIntentDecision,
     });
 
     expect(extractResult?.content).toContain('Structured data:');

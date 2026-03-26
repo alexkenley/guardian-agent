@@ -12,6 +12,8 @@ import {
 } from './automation-validation.js';
 import type { ToolExecutionRequest } from '../tools/types.js';
 import type { AutomationSaveInput } from './automation-save.js';
+import { extractAutomationListEntries } from './automation-tool-results.js';
+import type { IntentGatewayDecision } from './intent-gateway.js';
 
 export interface AutomationPendingApprovalMetadata {
   id: string;
@@ -68,13 +70,21 @@ interface ExistingSavedAutomation {
 
 export async function tryAutomationPreRoute(
   params: AutomationPreRouteParams,
-  options?: { allowRemediation?: boolean; assumeAuthoring?: boolean },
+  options?: {
+    allowRemediation?: boolean;
+    assumeAuthoring?: boolean;
+    allowHeuristicFallback?: boolean;
+    intentDecision?: IntentGatewayDecision | null;
+  },
 ): Promise<AutomationPreRouteResult | null> {
-  const authoringIntent = options?.assumeAuthoring || isAutomationAuthoringRequest(params.message.content);
+  const gatewayAuthoring = options?.intentDecision?.route === 'automation_authoring';
+  const authoringIntent = options?.assumeAuthoring
+    || gatewayAuthoring
+    || (options?.allowHeuristicFallback === true && isAutomationAuthoringRequest(params.message.content));
   const outcome = compileAutomationAuthoringOutcome(params.message.content, {
     channel: params.message.channel,
     userId: params.message.userId,
-    assumeAuthoring: options?.assumeAuthoring,
+    assumeAuthoring: authoringIntent,
   });
   if (!outcome) {
     if (!authoringIntent) return null;
@@ -167,11 +177,9 @@ async function listExistingAutomations(
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const result = await executeTool('automation_list', {}, request);
     if (!toBoolean(result.success)) return [];
-    const output = isRecord(result.output) ? result.output : null;
-    if (!output || !Array.isArray(output.automations)) return [];
-    const automations = output.automations
-      .map((automation) => (isRecord(automation) ? automation : null))
-      .filter((automation): automation is Record<string, unknown> => Boolean(automation))
+    const entries = extractAutomationListEntries(result);
+    if (!entries) return [];
+    const automations = entries
       .map((automation) => {
         const task = isRecord(automation.task) ? automation.task : null;
         return {

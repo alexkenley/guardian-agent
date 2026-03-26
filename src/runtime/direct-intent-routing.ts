@@ -1,4 +1,4 @@
-import type { IntentGatewayDecision } from './intent-gateway.js';
+import type { IntentGatewayDecision, IntentGatewayRecord } from './intent-gateway.js';
 
 export type DirectIntentRoutingCandidate =
   | 'filesystem'
@@ -11,23 +11,25 @@ export type DirectIntentRoutingCandidate =
   | 'web_search';
 
 export function resolveDirectIntentRoutingCandidates(
-  decision: IntentGatewayDecision | null | undefined,
+  gateway: IntentGatewayRecord | null | undefined,
   fallbackOrder: DirectIntentRoutingCandidate[],
   available: ReadonlyArray<DirectIntentRoutingCandidate>,
-): { candidates: DirectIntentRoutingCandidate[]; gatewayDirected: boolean } {
+): { candidates: DirectIntentRoutingCandidate[]; gatewayDirected: boolean; gatewayUnavailable: boolean } {
   const availableSet = new Set(available);
-  if (!decision || decision.confidence === 'low' || decision.route === 'unknown') {
+  if (!gateway || gateway.available === false) {
     return {
       candidates: fallbackOrder.filter((candidate) => availableSet.has(candidate)),
       gatewayDirected: false,
+      gatewayUnavailable: true,
     };
   }
 
-  const ordered = preferredCandidatesForDecision(decision)
+  const ordered = preferredCandidatesForDecision(gateway.decision)
     .filter((candidate) => availableSet.has(candidate));
   return {
     candidates: dedupeCandidates(ordered),
     gatewayDirected: true,
+    gatewayUnavailable: false,
   };
 }
 

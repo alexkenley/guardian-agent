@@ -1,220 +1,192 @@
 # Automation Framework Spec
 
+**Status:** Implemented current architecture
+
 ## Goal
-Build a native automation framework for infrastructure operations (home labs, enterprise labs, building systems) without adopting a full external workflow engine.
 
-Option 2 favors:
-- A curated connector-pack model
-- A deterministic playbook engine
-- A visual studio surface that stays behind existing Guardian + auth controls
+Guardian ships a native automation framework with one product surface, one control-plane contract, and one operator-facing catalog. Users create, edit, schedule, run, and inspect automations through the same system whether the automation is a deterministic step graph, an assistant automation, or a single-tool task.
 
-## Why Option 2
-- Lower integration complexity than embedding n8n-style orchestration runtimes.
-- Better security posture by default because all execution remains in GuardianAgent control planes.
-- Easier policy alignment with existing tool approvals, allowlists, and audit chain.
+## Product Model
 
-## Core Model
+### Automation Definition
 
-### Tool Access
-Automation steps use built-in tools by default. An optional access profile can add tighter boundaries for specific workflows.
+Every saved automation has:
+- `id`
+- `name`
+- `description`
+- `enabled`
+- `kind`
+- optional trigger metadata
+- optional output-routing metadata
 
-### Scheduled Assistant Task
-A scheduled assistant task is a recurring agent turn, not a playbook step. It stores:
-- `target` agent id (or `default`)
-- concise `description` for operator-facing UI summaries
-- `prompt`
-- cron schedule
-- optional `runOnce` flag for a single-shot run that disables itself after the first execution
-- optional `channel` / `deliver` routing for user-facing reports
-- approval metadata (`approvedByPrincipal`, `approvalExpiresAt`)
-- a `scopeHash` over the executable definition
-- runaway controls (`maxRunsPerWindow`, `dailySpendCap`, `providerSpendCap`)
+The product surface does not split definitions into separate workflow and task pages. The Automations page is the canonical surface.
 
-Use this when the automation should decide what to inspect at runtime with the normal assistant stack: skills, memory, tool calling, and Guardian policy.
+### Automation Kinds
 
-### Access Profile
-An access profile (internally still stored as a connector pack) is a bounded integration profile:
-- `id`, `name`, `enabled`
-- `allowedCapabilities` (domain-level permissions)
-- `allowedHosts`, `allowedPaths`, `allowedCommands` (sandbox boundaries)
-- `authMode` (`none`, `api_key`, `oauth2`, `certificate`)
-- `requireHumanApprovalForWrites`
+Guardian supports three saved automation kinds:
 
-Access profiles are declarative policy units, not arbitrary code bundles.
+1. `workflow`
+- Step-based automation with explicit execution order.
+- Supports `sequential` and `parallel` modes.
+- Step types:
+  - `tool`
+  - `instruction`
+  - `delay`
 
-If a step uses `packId: ""` or `packId: "default"`, it runs as a built-in tool step with the normal Guardian policy path and no extra access-profile boundary.
+2. `assistant_task`
+- An assistant automation that dispatches a real assistant turn.
+- Stores the target agent, runtime prompt, delivery channel, and optional provider override.
+- Can be manual-only or scheduled.
 
-### Playbook
-A playbook is an ordered workflow that calls one or more connector actions.
+3. `standalone_task`
+- A saved one-tool automation.
+- Stores the tool target plus fixed arguments.
+- Can be manual-only or scheduled.
 
-Execution controls:
-- `maxSteps`
-- `maxParallelSteps`
-- `defaultStepTimeoutMs`
-- `requireSignedDefinitions`
-- `requireDryRunOnFirstExecution`
+### Trigger Modes
 
-Playbook execution is now graph-backed internally:
-- sequential playbooks compile into linear node graphs
-- parallel playbooks compile into fan-out/fan-in graph nodes
-- each run receives a stable `runId`
-- node completion and approval interrupts emit orchestration run events
-- checkpointed run state is stored after node transitions, including pending approvals and bounded resume context
-- approval-backed runs can resume from the next deterministic node after the approval decision is recorded
+Triggering is part of the automation definition, not a separate product type.
 
-### Studio
-Operator-facing visual mode:
-- `read_only` for observability-only environments
-- `builder` for controlled authoring
-- Optional privileged ticket requirement for mutating studio operations
+- Manual-only automations are represented with an automation-scoped event trigger such as `automation:manual:<id>`.
+- Scheduled automations use cron.
+- Scheduled automations can also be marked `runOnce: true`.
 
-## Security Model
+### Built-In Starter Examples
 
-### Mandatory Controls
-1. Connector calls map to Guardian action checks (`read_file`, `write_file`, `http_request`, `execute_command`, etc.).
-2. Existing tool approval model remains authoritative for mutating/external actions.
-3. Creating or updating a scheduled task is the approval checkpoint for that automation definition, but later cron executions are allowed only while the saved authority is still valid.
-4. Access profile boundaries are explicit allowlists (hosts/paths/commands/capabilities) when a step opts into one.
-5. Playbook step budgets enforce bounded execution and reduce runaway workflows.
-6. Playbook metadata and results flow into existing audit + hash-chain persistence.
-7. Scheduled-task execution fails closed on approval expiry, scope drift, or budget exhaustion, auto-pauses after repeated failures or denials, and refuses overlapping self-runs.
+Built-in examples appear in the same Automations catalog as saved automations.
 
-### Approval workflow
+- They are first-class catalog entries.
+- They are not directly mutated or run as if they were already saved definitions.
+- Using one creates a saved copy that the operator can edit, schedule, enable, run, or delete.
 
-Guardian uses a two-stage approval model for automations:
+## Canonical Control Plane
 
-1. Creation/update approval
-   - the operator approves the automation definition
-   - Guardian records bounded authority for that saved definition
-   - expected workspace-local outputs can be treated as covered by this approval
+Guardian’s public automation contract is:
 
-2. Later scheduled execution
-   - the automation runs without re-asking for the same pre-approved bounded actions
-   - the saved authority remains valid only while scope, expiry, and budgets are still in bounds
-   - unexpected or higher-risk actions outside that saved scope still require intervention or are blocked
+- `automation_list`
+- `automation_save`
+- `automation_set_enabled`
+- `automation_run`
+- `automation_delete`
 
-Practical rule:
-- "write these reports into the workspace every weekday" should be covered by save-time approval
-- normal file-output tools such as `fs_write` can create missing parent directories during the run, so save-time validation should not reject those automations solely because the folder does not already exist
-- "send email", "post externally", "write outside allowed paths", or other expanded behavior should still be gated separately
+These are the model-facing and UI-facing primitives for automation definition and control.
 
-If save-time validation finds a fixable policy blocker, Guardian now stages the required bounded policy updates as approval-backed remediation steps, applies them after approval, and retries automation creation automatically in the same session.
+Low-level workflow and scheduled-task services still exist as internal runtime adapters, but they are not the intended product contract.
 
-### Cryptographic and Audit Alignment
-- Connector-triggered operations inherit tool/job argument hashing (`argsHash`).
-- Policy/config changes continue to emit SHA-256 policy hash deltas (`policy_changed`).
-- Audit persistence remains hash-chained JSONL.
+## Authoring Path
 
-## Configuration
+### Intent Gateway
 
-`assistant.connectors`:
+Top-level route selection is owned by `IntentGateway`.
 
-```yaml
-assistant:
-  connectors:
-    enabled: false
-    executionMode: plan_then_execute     # plan_then_execute | direct_execute
-    maxConnectorCallsPerRun: 12
-    packs: []
-    playbooks:
-      enabled: true
-      maxSteps: 12
-      maxParallelSteps: 3
-      defaultStepTimeoutMs: 15000
-      requireSignedDefinitions: true
-      requireDryRunOnFirstExecution: true
-    studio:
-      enabled: true
-      mode: builder                       # read_only | builder
-      requirePrivilegedTicket: true
-```
+Relevant automation routes:
+- `automation_authoring`
+- `automation_control`
+- `ui_control` for Automations-page actions
 
-Validation guarantees:
-- Pack IDs must be unique.
-- `maxParallelSteps <= maxSteps`.
-- Timeout floors and enum validation are enforced.
+The gateway is authoritative in the normal path. Heuristic parsing is only retained as a fail-safe when the gateway is unavailable.
 
-## Runtime Integration (Phased)
+### Authoring Compiler
 
-### Phase 1 (Implemented)
-- Config schema + validation + redacted config visibility.
-- Documentation and architecture decision record.
+Automation authoring uses a typed intermediate representation before persistence.
 
-### Phase 2 (Implemented)
-- `ConnectorPlaybookService` runtime module with bounded sequential/parallel execution.
-- Playbook step execution mapped through `ToolExecutor` (existing Guardian + approval path).
-- CLI commands: `/connectors ...`, `/playbooks ...`.
-
-### Phase 3 (Implemented baseline)
-- Web Connectors control plane (Network > Connectors tab, `#/network`) for settings, pack/playbook CRUD, and playbook runs.
-- Privileged-ticket gating for connector/playbook mutations when `assistant.connectors.studio.requirePrivilegedTicket` is enabled.
-- Signed-definition and dry-run-first enforcement in playbook runtime.
-
-### Phase 4 (Implemented — unified Automations)
-- Web `#/automations` page merges playbooks + scheduled tasks into a single "Automations" UI. Old `#/workflows` and `#/operations` routes redirect.
-- Conversational automation creation is now compiler-driven: clear authoring requests are first compiled into native `workflow_upsert`, `task_create`, or `task_update` payloads before the generic LLM tool-calling loop runs.
-- Compiler-first routing is authoritative across both the direct runtime path and the brokered worker path. If a request is classified as native automation authoring, it does not fall through to generic exploratory tools first.
-- Open-ended recurring automations default to scheduled `agent` tasks instead of ad hoc scripts or overfit playbooks.
-- Deterministic built-in tool graphs remain playbooks and are upserted via `workflow_upsert`.
-- Deterministic browser workflows are also compiler-driven now: conversational browser smoke tests and simple wrapper-based form checks compile to saved `browser_*` playbooks instead of raw MCP browser step names.
-- Scheduled assistant tasks are first-class in the runtime and UI for recurring briefings, monitoring reports, and other open-ended agent activities.
-- The UI renders scheduled assistant task `description` fields instead of exposing the full internal execution prompt in list views.
-- Scheduled tasks can be marked `runOnce: true` for one-shot execution; the runtime disables them after the first run.
-- When a playbook is upserted with a `schedule`, Guardian immediately syncs a linked scheduled task instead of waiting for a restart migration.
-- Clone, example catalog (templates + presets), and merged run history in the unified page.
-- The main web edit path is now intentionally simple for common changes; raw definition editing remains available in an advanced section for power users.
-- Pipeline rows use a centered disclosure control so multi-step workflows are easier to spot and expand from the catalog view.
-- Web labels use `Tool Access` / `Built-in tools` language for default steps. Access-profile names only appear when an operator deliberately assigns one.
-- Three step types supported in pipeline definitions:
-  - `tool` (default) — executes a built-in tool or connector action
-  - `instruction` — invokes the LLM with prior step outputs as context for text-only synthesis
-  - `delay` — pauses the sequential pipeline for a specified duration (`delayMs`). Useful for rate-limiting, cooldown periods, or waiting for external state to settle between steps. In dry-run mode, returns synthetic success without sleeping. Only meaningful in sequential mode.
-- Instruction steps can optionally enable evidence grounding with `evidenceMode` (`grounded` or `strict`) plus `citationStyle` (`sources_list` or `inline_markers`).
-- Grounded instruction steps collect citations/evidence from prior tool outputs, inject that evidence into the prompt, and store normalized citations/evidence in run history.
-
-## Out of Scope (Current Phase)
-- Distributed multi-node workflow scheduler.
-- Arbitrary user-supplied plugin code execution.
-- Bypass paths outside Guardian Runtime chokepoints.
-
-## Conversational Authoring Model
-
-Guardian no longer relies on prompt wording alone to author automations.
-
-Authoring flow:
+Flow:
 
 ```text
 user request
-  -> automation intent detection
+  -> IntentGateway
+  -> automation authoring compiler
   -> AutomationIR
-  -> IR repair + validation
-  -> schedule parse + constraint extraction
-  -> execution-readiness validation
-  -> compile to native mutation
-  -> ToolExecutor approval + verification
+  -> repair + validation
+  -> draft clarification or ready compilation
+  -> automation_save
+  -> approval + verification
 ```
 
-Current shape policy:
-- open-ended investigation, monitoring, reporting, research, drafting, or triage => scheduled `agent` task
-- explicit fixed built-in tool graph => playbook/workflow
+The compiler chooses the saved automation kind:
 
-Hard authoring constraints:
-- `Guardian workflow`
-- `scheduled task`
-- `using built-in tools only`
-- `not a shell script`
-- `not a code file`
+- fixed built-in step graph -> `workflow`
+- open-ended assistant work -> `assistant_task`
+- one fixed tool target -> `standalone_task`
 
-These are treated as compile-time constraints, not style hints for the model.
+Incomplete requests return a draft with missing fields instead of falling through to browser or generic tool routing.
 
-Runtime consequences:
-- lower malformed tool-call risk on local models
-- fewer duplicate scheduled tasks
-- less drift into generated scripts
-- no worker-path bypass of native automation compilation when agent isolation is enabled
-- no persistence for automations that fail obvious readiness checks (missing inputs, blocked allowlists, predicted runtime approvals for assistant tasks)
-- fixable readiness blockers can now turn into chained remediation approvals instead of forcing the operator to restate the original request
-- clearer approval/success grounding in the UI
-- typed `AutomationIR` becomes the stable authoring contract for future repair/eval work instead of growing heuristic-only compiler logic
-- multi-agent delegation now supports explicit runtime-enforced handoff contracts instead of advisory conventions
-- save-time readiness treats bounded workspace-local file writes as part of the approved automation scope instead of requiring a global `fs_write` auto-approve policy
+### Save-Time Validation
+
+Before persistence, Guardian validates:
+- schedule shape
+- workflow/body consistency
+- required inputs
+- supported tool usage
+- bounded workspace output handling
+- predicted policy blockers
+
+Fixable blockers can become approval-backed remediation actions and then retry the save in the same session.
+
+## Runtime Model
+
+### Deterministic Workflows
+
+Step-based automations are compiled into graph-backed runs with:
+- stable `runId`
+- node-level orchestration events
+- checkpointed state transitions
+- persisted bounded resume context
+- approval-safe deterministic resume
+
+### Assistant And Standalone Task Automations
+
+Task-backed automations run through the scheduled-task runtime.
+
+- Manual-only runs use the automation-scoped event trigger.
+- Scheduled runs use cron.
+- Execution enforces bounded authority, run budgeting, and overlap protection.
+
+### History And Timeline
+
+The runtime exposes:
+- unified automation catalog entries
+- unified automation run history
+- execution timeline data
+
+The Automations page consumes backend-owned views instead of reconstructing workflow/task state client-side.
+
+## Security And Approval Model
+
+Automation creation and mutation remain approval-gated.
+
+Save-time approval covers:
+- the saved automation definition
+- bounded expected in-scope actions
+- bounded workspace-local outputs when those outputs are part of the saved definition
+
+Later runs are allowed only while:
+- saved scope still matches
+- approval authority has not expired
+- budgets remain in bounds
+- the automation does not attempt higher-risk behavior outside the approved definition
+
+Guardian continues to enforce existing sandbox, SSRF, policy, audit, and output-routing controls at execution time.
+
+## Web UI Contract
+
+The web UI is a control-plane client.
+
+The Automations page is responsible for:
+- catalog browsing
+- create/edit
+- starter example copy flows
+- enable/disable
+- run now
+- delete
+- raw definition editing for saved step-based automations
+- run history and timeline visibility
+
+There is no separate workflow page in the intended product architecture.
+
+## Guidance
+
+- Use `workflow` when the automation should execute a fixed sequence of built-in steps.
+- Use `assistant_task` when the automation must decide what to inspect or produce at runtime.
+- Use `standalone_task` when one saved tool invocation is enough.
+- Use starter examples as templates for user-owned saved automations, not as immutable runtime objects.
