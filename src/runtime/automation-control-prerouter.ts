@@ -62,6 +62,9 @@ export async function tryAutomationControlPreRoute(
   params: AutomationControlPreRouteParams,
   options?: { intentDecision?: IntentGatewayDecision | null; allowHeuristicFallback?: boolean },
 ): Promise<AutomationControlPreRouteResult | null> {
+  if (looksLikeAutomationOutputAnalysisRequest(params.message.content)) {
+    return null;
+  }
   const intent = resolveAutomationControlIntent(
     params.message.content,
     options?.intentDecision,
@@ -239,6 +242,7 @@ function renderAutomationInspectCopy(
 function resolveHeuristicAutomationControlIntent(content: string): AutomationControlIntent | null {
   const trimmed = content.trim();
   if (!trimmed) return null;
+  if (looksLikeAutomationOutputAnalysisRequest(trimmed)) return null;
   const lower = trimmed.toLowerCase();
   const hasAutomationContext = /\b(automations?|automation catalog|workflow(?:s)?|scheduled task|manual assistant automation|assistant automation|assistant task|task)\b/i.test(trimmed);
   if (/\b(list|show|what are)\b/.test(lower) && /\b(automations|automation catalog|workflows|scheduled tasks)\b/.test(lower)) {
@@ -265,6 +269,19 @@ function resolveHeuristicAutomationControlIntent(content: string): AutomationCon
     return { operation: 'inspect', automationName };
   }
   return null;
+}
+
+function looksLikeAutomationOutputAnalysisRequest(content: string): boolean {
+  const trimmed = content.trim();
+  if (!trimmed) return false;
+  if (!/\b(automation|workflow|assistant automation|scheduled task|task|run)\b/i.test(trimmed)) {
+    return false;
+  }
+  const analysisIntent = /\b(analy[sz]e|summari[sz]e|explain|review|compare|investigate|interpret|what did(?:\s+it)?\s+find)\b/i.test(trimmed);
+  if (!analysisIntent) return false;
+  const outputContext = /\b(output|outputs|result|results|findings|history|timeline|step output|run output)\b/i.test(trimmed);
+  if (!outputContext) return false;
+  return true;
 }
 
 function parseAutomationListResult(result: Record<string, unknown>): AutomationCatalogLookupResult {

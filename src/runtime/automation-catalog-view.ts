@@ -303,7 +303,7 @@ function normalizeOutputHandling(
   return {
     notify: asString(outputHandling?.notify) || 'off',
     sendToSecurity: asString(outputHandling?.sendToSecurity) || 'off',
-    persistArtifacts: asString(outputHandling?.persistArtifacts) || 'run_history_only',
+    persistArtifacts: asString(outputHandling?.persistArtifacts) || 'run_history_plus_memory',
   };
 }
 

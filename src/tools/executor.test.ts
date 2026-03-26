@@ -13,6 +13,7 @@ import { AgentMemoryStore } from '../runtime/agent-memory-store.js';
 import { ConversationService } from '../runtime/conversation.js';
 import { SHARED_TIER_AGENT_STATE_ID } from '../runtime/agent-state-context.js';
 import { CodeSessionStore } from '../runtime/code-sessions.js';
+import { AutomationOutputStore } from '../runtime/automation-output-store.js';
 import {
   WorkspaceDependencyLedger,
   captureJsDependencySnapshot,
@@ -120,6 +121,53 @@ describe('ToolExecutor', () => {
     expect(names).toContain('campaign_run');
     expect(names).toContain('gmail_draft');
     expect(names).toContain('gmail_send');
+    expect(names).toContain('automation_output_search');
+    expect(names).toContain('automation_output_read');
+  });
+
+  it('searches and reads stored automation output through dedicated tools', async () => {
+    const root = createExecutorRoot();
+    const outputStore = new AutomationOutputStore({ basePath: join(root, 'automation-output') });
+    outputStore.saveRun({
+      automationId: 'browser-read-smoke',
+      automationName: 'Browser Read Smoke',
+      runId: 'run-1',
+      status: 'succeeded',
+      steps: [
+        {
+          stepId: 'read_page',
+          toolName: 'browser_read',
+          status: 'succeeded',
+          output: { content: 'Example Domain page snapshot' },
+        },
+      ],
+    });
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      automationOutputStore: outputStore,
+    });
+
+    const search = await executor.runTool({
+      toolName: 'automation_output_search',
+      args: { query: 'Example Domain' },
+      origin: 'cli',
+    });
+    expect(search.success).toBe(true);
+    expect((search.output as { resultCount: number }).resultCount).toBeGreaterThanOrEqual(1);
+
+    const read = await executor.runTool({
+      toolName: 'automation_output_read',
+      args: { runId: 'run-1' },
+      origin: 'cli',
+    });
+    expect(read.success).toBe(true);
+    expect((read.output as { text: string }).text).toContain('Example Domain page snapshot');
   });
 
   describe('assistant security tools', () => {

@@ -52,7 +52,7 @@ function normalizeOutputHandling(outputHandling) {
   return {
     notify: outputHandling?.notify || 'off',
     sendToSecurity: outputHandling?.sendToSecurity || 'off',
-    persistArtifacts: outputHandling?.persistArtifacts || 'run_history_only',
+    persistArtifacts: outputHandling?.persistArtifacts || 'run_history_plus_memory',
   };
 }
 
@@ -651,9 +651,70 @@ function renderOutputHandlingBadges(outputHandling, promotedFindings = []) {
   const badges = [];
   if (normalized.notify !== 'off') badges.push('<span class="badge badge-info">notifies</span>');
   if (normalized.sendToSecurity !== 'off') badges.push('<span class="badge badge-warn">security</span>');
-  if (normalized.persistArtifacts !== 'run_history_only') badges.push('<span class="badge badge-accent">artifacts</span>');
+  if (normalized.persistArtifacts !== 'run_history_only') badges.push('<span class="badge badge-accent">history + analysis</span>');
   if ((promotedFindings || []).length > 0) badges.push(`<span class="badge badge-critical">${promotedFindings.length} finding${promotedFindings.length === 1 ? '' : 's'}</span>`);
   return badges.join(' ') || '<span style="color:var(--text-muted)">Run history only</span>';
+}
+
+function renderHistoricalAnalysisStatus(entry) {
+  const stored = entry?.storedOutput || null;
+  const memory = entry?.memoryPromotion || null;
+  if (!stored && !memory) return '';
+
+  const rows = [];
+  if (stored) {
+    const storedTone = stored.status === 'saved'
+      ? 'var(--success)'
+      : stored.status === 'blocked' || stored.status === 'skipped'
+        ? 'var(--warning)'
+        : 'var(--error)';
+    rows.push(`
+      <div>
+        <div style="display:flex;justify-content:space-between;gap:0.75rem;align-items:flex-start;flex-wrap:wrap">
+          <strong>Stored Output</strong>
+          <span style="color:${storedTone}">${esc(stored.status || 'unknown')}</span>
+        </div>
+        <div style="margin-top:0.2rem;color:var(--text-secondary)">
+          ${esc(
+            stored.status === 'saved'
+              ? `Full output stored for historical analysis${stored.stepCount ? ` · ${stored.stepCount} step${stored.stepCount === 1 ? '' : 's'}` : ''}.`
+              : (stored.reason || 'Stored output was not persisted for this run.')
+          )}
+        </div>
+      </div>
+    `);
+  }
+  if (memory) {
+    const memoryTone = memory.status === 'saved'
+      ? 'var(--success)'
+      : memory.status === 'blocked' || memory.status === 'skipped'
+        ? 'var(--warning)'
+        : 'var(--error)';
+    rows.push(`
+      <div>
+        <div style="display:flex;justify-content:space-between;gap:0.75rem;align-items:flex-start;flex-wrap:wrap">
+          <strong>Memory Reference</strong>
+          <span style="color:${memoryTone}">${esc(memory.status || 'unknown')}</span>
+        </div>
+        <div style="margin-top:0.2rem;color:var(--text-secondary)">
+          ${esc(
+            memory.status === 'saved'
+              ? `Searchable memory reference saved${memory.agentId ? ` for ${memory.agentId}` : ''}.`
+              : (memory.reason || 'No searchable memory reference was saved for this run.')
+          )}
+        </div>
+      </div>
+    `);
+  }
+
+  return `
+    <div style="margin-top:0.9rem;padding:0.8rem 0.9rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-primary)">
+      <div style="font-weight:600">Historical Analysis</div>
+      <div style="margin-top:0.55rem;display:flex;flex-direction:column;gap:0.7rem">
+        ${rows.join('')}
+      </div>
+    </div>
+  `;
 }
 
 function renderPromotedFindings(promotedFindings) {
@@ -905,18 +966,22 @@ function renderCreateForm(tools, packs, agents) {
             <option value="all">On all findings</option>
           </select>
         </div>
-        <div class="cfg-field">
-          <label>Persist Artifacts</label>
-          <select id="auto-output-artifacts">
-            <option value="run_history_only" selected>Run history only</option>
-            <option value="run_history_plus_memory">Run history + search/memory</option>
-          </select>
+        <div class="cfg-field" style="grid-column:1 / -1;">
+          <label style="display:flex;align-items:flex-start;gap:0.55rem;cursor:pointer;">
+            <input id="auto-output-store-enabled" type="checkbox" checked style="margin-top:0.2rem;">
+            <span>
+              <span style="display:block;font-weight:500;color:var(--text-primary)">Store output for historical analysis</span>
+              <span style="display:block;font-size:0.75rem;color:var(--text-muted);line-height:1.45">
+                Keep the full automation run output in Guardian&apos;s private automation output store and save a searchable memory reference so the assistant can analyze that run later. This applies only to saved automation runs, not ad hoc tool uses.
+              </span>
+            </span>
+          </label>
         </div>
       </div>
     </details>
 
     <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);line-height:1.5;">
-      Automation output is always available in run history. Notifications and Security receive normalized findings only, not raw logs. <code>Output Event</code> is optional and lets scheduled runs emit a named downstream event.
+      Automation output is always available in run history. Historical analysis storage is enabled by default for saved automations and can be turned off here. Notifications and Security receive normalized findings only, not raw logs. <code>Output Event</code> is optional and lets scheduled runs emit a named downstream event.
     </div>
 
     <div id="auto-preflight-panel" style="display:none;margin-top:0.75rem;"></div>
@@ -1041,6 +1106,7 @@ function renderExecutionTimelineItems(items) {
 function renderRunOutputContent(entry) {
   return `
     ${renderRunResultSummary(entry)}
+    ${renderHistoricalAnalysisStatus(entry)}
     <div style="margin-top:0.9rem">
       <div style="font-weight:600;margin-bottom:0.45rem">Step Output</div>
       ${renderStepResults(entry.steps)}
@@ -1504,6 +1570,8 @@ function bindEvents(container, ctx) {
                   message: result.run.message,
                   steps: result.run.steps || [],
                   promotedFindings: result.run.promotedFindings || [],
+                  storedOutput: result.run.storedOutput,
+                  memoryPromotion: result.run.memoryPromotion,
                 })}
               </div>
             `;
@@ -1660,7 +1728,7 @@ function bindCreateForm(container, { tools, packs, agents }) {
   const eventInput = container.querySelector('#auto-create-event');
   const outputNotifySelect = container.querySelector('#auto-output-notify');
   const outputSecuritySelect = container.querySelector('#auto-output-security');
-  const outputArtifactsSelect = container.querySelector('#auto-output-artifacts');
+  const outputStoreEnabledCheck = container.querySelector('#auto-output-store-enabled');
   const agentModeCheck = container.querySelector('#auto-agent-mode');
   const assistantFields = container.querySelector('#auto-assistant-fields');
   const agentSelect = container.querySelector('#auto-agent-select');
@@ -1792,7 +1860,7 @@ function bindCreateForm(container, { tools, packs, agents }) {
     if (stpp) { stpp.innerHTML = ''; stpp.style.display = 'none'; }
     outputNotifySelect.value = 'off';
     outputSecuritySelect.value = 'off';
-    outputArtifactsSelect.value = 'run_history_only';
+    if (outputStoreEnabledCheck) outputStoreEnabledCheck.checked = true;
     modeSelect.value = 'single';
     scheduleCheck.checked = false;
     scheduleCheck.disabled = false;
@@ -2360,7 +2428,9 @@ function bindCreateForm(container, { tools, packs, agents }) {
       const outputHandling = {
         notify: outputNotifySelect.value || 'off',
         sendToSecurity: outputSecuritySelect.value || 'off',
-        persistArtifacts: outputArtifactsSelect.value || 'run_history_only',
+        persistArtifacts: outputStoreEnabledCheck?.checked === false
+          ? 'run_history_only'
+          : 'run_history_plus_memory',
       };
       const cron = scheduleEnabled ? buildCronFromForm(container) : '';
 
@@ -2479,7 +2549,9 @@ function bindCreateForm(container, { tools, packs, agents }) {
     eventInput.value = auto.task?.emitEvent || '';
     outputNotifySelect.value = auto.outputHandling?.notify || 'off';
     outputSecuritySelect.value = auto.outputHandling?.sendToSecurity || 'off';
-    outputArtifactsSelect.value = auto.outputHandling?.persistArtifacts || 'run_history_only';
+    if (outputStoreEnabledCheck) {
+      outputStoreEnabledCheck.checked = (auto.outputHandling?.persistArtifacts || 'run_history_plus_memory') !== 'run_history_only';
+    }
     if (runOnceCheck) runOnceCheck.checked = auto.runOnce === true;
 
     wfSteps.splice(0, wfSteps.length, ...(auto.steps || []).map((step) => ({

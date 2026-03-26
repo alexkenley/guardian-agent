@@ -182,6 +182,34 @@ describe('tryAutomationControlPreRoute', () => {
     expect(result?.content).toContain('Browser Read Smoke (workflow)');
   });
 
+  it('does not hijack automation-output analysis requests as automation control', async () => {
+    const executeTool = vi.fn(async () => {
+      throw new Error('automation control tools should not run for output-analysis requests');
+    });
+
+    const result = await tryAutomationControlPreRoute({
+      agentId: 'default',
+      message: {
+        ...baseMessage,
+        content: 'Analyze the output from the last HN Snapshot Smoke automation run. Summarize what it found.',
+      },
+      executeTool,
+    }, {
+      intentDecision: {
+        route: 'automation_control',
+        confidence: 'high',
+        operation: 'inspect',
+        summary: 'Inspect an automation run.',
+        entities: {
+          automationName: 'HN Snapshot Smoke',
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+    expect(executeTool).not.toHaveBeenCalled();
+  });
+
   it('toggles workflows from automations-page intents via automation_set_enabled', async () => {
     const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
       if (toolName === 'automation_list') {

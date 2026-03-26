@@ -400,8 +400,8 @@ describe('ScheduledTaskService', () => {
         ...validInput,
         outputHandling: {
           notify: 'off',
-          sendToSecurity: 'findings_only',
-          persistArtifacts: 'long_term_memory',
+          sendToSecurity: 'warn_critical',
+          persistArtifacts: 'run_history_plus_memory',
         },
       });
 

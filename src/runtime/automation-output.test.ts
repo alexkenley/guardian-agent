@@ -11,7 +11,7 @@ describe('automation output routing', () => {
     expect(normalizeAutomationOutputHandling(undefined)).toEqual({
       notify: 'off',
       sendToSecurity: 'off',
-      persistArtifacts: 'run_history_only',
+      persistArtifacts: 'run_history_plus_memory',
     });
   });
 

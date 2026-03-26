@@ -197,7 +197,7 @@ function normalizeRoutingMode(mode?: AutomationOutputRoutingMode | null): Automa
 function normalizeArtifactPersistence(
   mode?: AutomationArtifactPersistenceMode | null,
 ): AutomationArtifactPersistenceMode {
-  return mode === 'run_history_plus_memory' ? mode : 'run_history_only';
+  return mode === 'run_history_only' ? mode : 'run_history_plus_memory';
 }
 
 function inferSeverity(value: unknown): AuditSeverity {

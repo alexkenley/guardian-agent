@@ -83,6 +83,7 @@ import type { ContainmentService } from '../runtime/containment-service.js';
 import type { WindowsDefenderProvider } from '../runtime/windows-defender-provider.js';
 import type { SavedAutomationCatalogEntry } from '../runtime/automation-catalog.js';
 import type { AutomationSaveInput } from '../runtime/automation-save.js';
+import type { AutomationOutputStore } from '../runtime/automation-output-store.js';
 import type { ScheduledTaskEventTrigger } from '../runtime/scheduled-tasks.js';
 import { parseBanner, inferServiceFromPort } from '../runtime/network-fingerprinting.js';
 import { parseAirportWifi, parseNetshWifi, parseNmcliWifi, correlateWifiClients } from '../runtime/network-wifi.js';
@@ -595,6 +596,8 @@ export interface ToolExecutorOptions {
   conversationService?: ConversationService;
   /** Agent memory store for memory_get/memory_save tools. */
   agentMemoryStore?: AgentMemoryStore;
+  /** Private historical output store for saved automation runs. */
+  automationOutputStore?: AutomationOutputStore;
   /** Dedicated memory store for backend-owned coding sessions. */
   codeSessionMemoryStore?: AgentMemoryStore;
   /** Backend-owned coding session store for multi-surface coding workflows. */
@@ -1347,7 +1350,8 @@ export class ToolExecutor {
       'code_test', 'code_build', 'code_lint', 'code_symbol_search',
       'fs_write', 'fs_mkdir', 'fs_move', 'fs_copy', 'fs_delete',
       'doc_create',
-      'automation_list', 'automation_save', 'automation_set_enabled', 'automation_run', 'automation_delete',
+      'automation_list', 'automation_output_search', 'automation_output_read',
+      'automation_save', 'automation_set_enabled', 'automation_run', 'automation_delete',
     ];
     const defs: ToolDefinition[] = [];
     for (const name of codingToolNames) {
@@ -14312,6 +14316,107 @@ export class ToolExecutor {
 
     this.registry.register(
       {
+        name: 'automation_output_search',
+        description: 'Search historically stored output from saved automation runs. This only covers automation runs with historical analysis persistence enabled; ad hoc tool runs are excluded.',
+        shortDescription: 'Search stored output from saved automation runs.',
+        risk: 'read_only',
+        category: 'automation',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Optional text query for run previews and stored step output.' },
+            automationId: { type: 'string', description: 'Optional automation id filter.' },
+            runId: { type: 'string', description: 'Optional exact run id filter.' },
+            status: { type: 'string', description: 'Optional run status filter.' },
+            limit: { type: 'number', description: 'Maximum matches to return (default 10, max 50).' },
+          },
+        },
+      },
+      async (args, request) => {
+        const store = this.options.automationOutputStore;
+        if (!store) {
+          return { success: false, error: 'Historical automation output is not available.' };
+        }
+        const query = asString(args.query).trim();
+        const automationId = asString(args.automationId).trim();
+        const runId = asString(args.runId).trim();
+        const status = asString(args.status).trim();
+        const limit = Math.min(Math.max(asNumber(args.limit, 10), 1), 50);
+        this.guardAction(request, 'read_file', {
+          path: 'automation_output:search',
+          query,
+          automationId: automationId || undefined,
+          runId: runId || undefined,
+          status: status || undefined,
+        });
+        const results = store.search({
+          ...(query ? { query } : {}),
+          ...(automationId ? { automationId } : {}),
+          ...(runId ? { runId } : {}),
+          ...(status ? { status } : {}),
+          limit,
+        });
+        return {
+          success: true,
+          output: {
+            resultCount: results.length,
+            results,
+          },
+        };
+      },
+    );
+
+    this.registry.register(
+      {
+        name: 'automation_output_read',
+        description: 'Read historically stored output from a saved automation run. Supports whole-run reads or one specific step, with chunking for large outputs. This is only for saved automation runs, not ad hoc tool usage.',
+        shortDescription: 'Read stored output from a saved automation run.',
+        risk: 'read_only',
+        category: 'automation',
+        deferLoading: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            runId: { type: 'string', description: 'Automation run id to read.' },
+            stepId: { type: 'string', description: 'Optional specific step id within the run.' },
+            offset: { type: 'number', description: 'Optional character offset for chunked reads.' },
+            maxChars: { type: 'number', description: 'Optional character limit for this chunk.' },
+          },
+          required: ['runId'],
+        },
+      },
+      async (args, request) => {
+        const store = this.options.automationOutputStore;
+        if (!store) {
+          return { success: false, error: 'Historical automation output is not available.' };
+        }
+        const runId = requireString(args.runId, 'runId').trim();
+        const stepId = asString(args.stepId).trim();
+        const offset = Math.max(0, Math.floor(asNumber(args.offset, 0)));
+        const maxChars = Math.max(0, Math.floor(asNumber(args.maxChars, 0)));
+        this.guardAction(request, 'read_file', {
+          path: `automation_output:${runId}`,
+          ...(stepId ? { stepId } : {}),
+        });
+        const result = store.read({
+          runId,
+          ...(stepId ? { stepId } : {}),
+          ...(offset > 0 ? { offset } : {}),
+          ...(maxChars > 0 ? { maxChars } : {}),
+        });
+        if (!result) {
+          return { success: false, error: `Stored automation output for run '${runId}' was not found.` };
+        }
+        return {
+          success: true,
+          output: result,
+        };
+      },
+    );
+
+    this.registry.register(
+      {
         name: 'automation_save',
         description: 'Create or update an automation through Guardian\'s canonical automation contract. Supports step-based automations, assistant automations, and manual or scheduled execution. Mutating - requires approval.',
         shortDescription: 'Create or update an automation.',
@@ -17092,7 +17197,7 @@ function normalizeAutomationOutputRoutingMode(
 function normalizeAutomationArtifactPersistenceMode(
   value: string,
 ): AutomationArtifactPersistenceMode {
-  return value === 'run_history_plus_memory' ? value : 'run_history_only';
+  return value === 'run_history_only' ? value : 'run_history_plus_memory';
 }
 
 function inferMCPGuardAction(def: ToolDefinition): { type: string; params?: Record<string, unknown> } | null {

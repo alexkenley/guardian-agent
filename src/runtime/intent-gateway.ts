@@ -3,6 +3,7 @@ import type { ChatMessage, ChatOptions, ChatResponse, ToolDefinition } from '../
 export type IntentGatewayRoute =
   | 'automation_authoring'
   | 'automation_control'
+  | 'automation_output_task'
   | 'ui_control'
   | 'browser_task'
   | 'workspace_task'
@@ -82,6 +83,7 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
         enum: [
           'automation_authoring',
           'automation_control',
+          'automation_output_task',
           'ui_control',
           'browser_task',
           'workspace_task',
@@ -160,6 +162,7 @@ const INTENT_GATEWAY_SYSTEM_PROMPT = [
   'Route definitions:',
   '- automation_authoring: creating or changing an automation or workflow definition.',
   '- automation_control: operating on an existing automation definition or run, such as delete, toggle, clone, inspect, or run.',
+  '- automation_output_task: searching, reading, or analyzing previously stored output from a saved automation run.',
   '- ui_control: requests about Guardian UI pages or catalog surfaces such as the automations page, dashboard, config, or chat page.',
   '- browser_task: external website navigation, reading, extraction, or interaction.',
   '- workspace_task: reading or mutating managed workspace tools such as Gmail, Calendar, Drive, Docs, Sheets, or Microsoft 365.',
@@ -173,8 +176,10 @@ const INTENT_GATEWAY_SYSTEM_PROMPT = [
   'Prefer email_task over workspace_task for direct email compose/send requests.',
   'Prefer search_task over browser_task for generic web search.',
   'Prefer automation_authoring for create/build/setup requests and automation_control for delete/toggle/run/clone/inspect requests.',
+  'Requests to analyze, summarize, explain, compare, review, or investigate the output or findings of a previous automation run should route to automation_output_task, not automation_control.',
   'When the request refers to a specific existing automation, workflow, scheduled task, or assistant automation, always set automationName to the exact human-readable name from the request.',
   'Examples: "Run Browser Read Smoke now" -> automationName = "Browser Read Smoke"; "Show me the automation Browser Read Smoke" -> automationName = "Browser Read Smoke".',
+  'Example: "Analyze the output from the last HN Snapshot Smoke automation run" -> route = "automation_output_task", automationName = "HN Snapshot Smoke".',
   'For enable/disable requests, set enabled=true or enabled=false when explicit.',
 ].join(' ');
 
@@ -418,7 +423,7 @@ async function repairAutomationName(
 
 function needsAutomationNameRepair(decision: IntentGatewayDecision): boolean {
   if (decision.entities.automationName?.trim()) return false;
-  if (decision.route === 'automation_control') {
+  if (decision.route === 'automation_control' || decision.route === 'automation_output_task') {
     return ['delete', 'toggle', 'run', 'inspect', 'clone'].includes(decision.operation);
   }
   return decision.route === 'ui_control'
@@ -430,6 +435,7 @@ function normalizeRoute(value: unknown): IntentGatewayRoute {
   switch (value) {
     case 'automation_authoring':
     case 'automation_control':
+    case 'automation_output_task':
     case 'ui_control':
     case 'browser_task':
     case 'workspace_task':

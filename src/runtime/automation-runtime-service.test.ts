@@ -1,5 +1,23 @@
-import { describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAutomationRuntimeService } from './automation-runtime-service.js';
+import { AutomationOutputStore } from './automation-output-store.js';
+
+const tempDirs: string[] = [];
+
+function createTempDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'guardianagent-automation-runtime-'));
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 function makeService() {
   const workflows = [
@@ -108,7 +126,7 @@ function makeService() {
     history: vi.fn(() => []),
   };
   const onWorkflowSaved = vi.fn();
-  const onWorkflowRunResult = vi.fn();
+  const outputStore = new AutomationOutputStore({ basePath: join(createTempDir(), 'automation-output') });
   const templateControl = {
     list: vi.fn(() => [
       {
@@ -136,6 +154,7 @@ function makeService() {
     workflows: workflowControl,
     tasks: taskControl,
     templates: templateControl,
+    outputStore,
     toolMetadata: [
       {
         name: 'browser_navigate',
@@ -145,15 +164,14 @@ function makeService() {
       },
     ],
     onWorkflowSaved,
-    onWorkflowRunResult,
   });
 
-  return { service, workflowControl, taskControl, templateControl, onWorkflowSaved, onWorkflowRunResult };
+  return { service, workflowControl, taskControl, templateControl, onWorkflowSaved, outputStore };
 }
 
 describe('automation-runtime-service', () => {
   it('wraps workflow callbacks with saved-automation side effects', async () => {
-    const { service, workflowControl, taskControl, onWorkflowSaved, onWorkflowRunResult } = makeService();
+    const { service, workflowControl, taskControl, onWorkflowSaved } = makeService();
 
     const upsertResult = service.upsertWorkflow({
       id: 'browser-read-smoke',
@@ -178,7 +196,7 @@ describe('automation-runtime-service', () => {
       userId: 'web-user',
     });
     expect(runResult.success).toBe(true);
-    expect(onWorkflowRunResult).toHaveBeenCalledWith(expect.objectContaining({ success: true }), expect.objectContaining({
+    expect(workflowControl.run).toHaveBeenCalledWith(expect.objectContaining({
       playbookId: 'browser-read-smoke',
       origin: 'web',
     }));
@@ -263,6 +281,45 @@ describe('automation-runtime-service', () => {
     await executorControlPlane.runTask('task-agent-1');
     expect(workflowControl.run).toHaveBeenCalledWith(expect.objectContaining({ playbookId: 'browser-read-smoke' }));
     expect(taskControl.runNow).toHaveBeenCalledWith('task-agent-1');
+  });
+
+  it('includes persisted stored runs in automation history after live ledgers are empty', () => {
+    const { service, workflowControl, taskControl, outputStore } = makeService();
+    workflowControl.history.mockReturnValue([]);
+    taskControl.history.mockReturnValue([]);
+    outputStore.saveRun({
+      automationId: 'hn-snapshot-smoke',
+      automationName: 'HN Snapshot Smoke',
+      runId: 'run-persisted-1',
+      status: 'succeeded',
+      message: 'Persisted run.',
+      startedAt: 1_700_000_000_000,
+      completedAt: 1_700_000_001_000,
+      steps: [
+        {
+          stepId: 'list_links',
+          toolName: 'browser_links',
+          status: 'succeeded',
+          output: {
+            links: [{ text: 'Hacker News', href: 'https://news.ycombinator.com/news' }],
+          },
+        },
+      ],
+    });
+    outputStore.setMemoryPromotion('run-persisted-1', {
+      status: 'saved',
+      agentId: 'default',
+      entryId: 'entry-persisted-1',
+    });
+
+    expect(service.listAutomationRunHistory()).toEqual([
+      expect.objectContaining({
+        id: 'run-persisted-1',
+        name: 'HN Snapshot Smoke',
+        storedOutput: expect.objectContaining({ status: 'saved' }),
+        memoryPromotion: expect.objectContaining({ status: 'saved', entryId: 'entry-persisted-1' }),
+      }),
+    ]);
   });
 
   it('saves raw workflow definitions through the automation runtime contract', () => {

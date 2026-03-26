@@ -18,6 +18,10 @@ import type { CronScheduler } from './scheduler.js';
 import type { EventBus, AgentEvent } from '../queue/event-bus.js';
 import type { DeviceInventoryService } from './device-inventory.js';
 import { promoteAutomationFindings, type AutomationPromotedFindingRef } from './automation-output.js';
+import type {
+  AutomationMemoryPromotionStatus,
+  AutomationStoredOutputStatus,
+} from './automation-output-persistence.js';
 import { createRunEvent, type OrchestrationRunEvent } from './run-events.js';
 import { writeSecureFile } from '../util/secure-fs.js';
 const log = createLogger('scheduled-tasks');
@@ -129,6 +133,8 @@ export interface ScheduledTaskRunResult {
   output?: unknown;
   outputHandling?: AutomationOutputHandlingConfig;
   promotedFindings?: AutomationPromotedFindingRef[];
+  storedOutput?: AutomationStoredOutputStatus;
+  memoryPromotion?: AutomationMemoryPromotionStatus;
   steps?: Array<{
     stepId?: string;
     toolName: string;
@@ -193,6 +199,8 @@ export interface ScheduledTaskPlaybookExecutor {
       events?: OrchestrationRunEvent[];
       outputHandling?: AutomationOutputHandlingConfig;
       promotedFindings?: AutomationPromotedFindingRef[];
+      storedOutput?: AutomationStoredOutputStatus;
+      memoryPromotion?: AutomationMemoryPromotionStatus;
       steps: Array<{
         stepId?: string;
         toolName: string;
@@ -578,6 +586,11 @@ export interface ScheduledTaskServiceDeps {
     taskName: string;
     target: string;
   }) => void | Promise<void>;
+  onRunRecorded?: (
+    task: ScheduledTaskDefinition,
+    result: ScheduledTaskRunResult,
+    triggerContext: { kind: 'manual' | 'cron' | 'event'; event?: AgentEvent },
+  ) => void | Promise<void>;
   resolvePlaybookOutputHandling?: (playbookId: string) => AutomationOutputHandlingConfig | undefined;
   persistPath?: string;
   integrity?: ControlPlaneIntegrity;
@@ -605,6 +618,8 @@ export interface ScheduledTaskHistoryEntry {
   output?: unknown;
   outputHandling?: AutomationOutputHandlingConfig;
   promotedFindings?: AutomationPromotedFindingRef[];
+  storedOutput?: AutomationStoredOutputStatus;
+  memoryPromotion?: AutomationMemoryPromotionStatus;
   steps?: ScheduledTaskRunResult['steps'];
   events?: OrchestrationRunEvent[];
 }
@@ -624,6 +639,7 @@ export class ScheduledTaskService {
   private readonly eventBus: EventBus;
   private readonly auditLog?: AuditLog;
   private readonly onNetworkScanComplete?: ScheduledTaskServiceDeps['onNetworkScanComplete'];
+  private readonly onRunRecorded?: ScheduledTaskServiceDeps['onRunRecorded'];
   private readonly resolvePlaybookOutputHandling?: ScheduledTaskServiceDeps['resolvePlaybookOutputHandling'];
   private readonly persistPath: string;
   private readonly integrity?: ControlPlaneIntegrity;
@@ -644,6 +660,7 @@ export class ScheduledTaskService {
     this.eventBus = deps.eventBus;
     this.auditLog = deps.auditLog;
     this.onNetworkScanComplete = deps.onNetworkScanComplete;
+    this.onRunRecorded = deps.onRunRecorded;
     this.resolvePlaybookOutputHandling = deps.resolvePlaybookOutputHandling;
     this.persistPath = deps.persistPath ?? DEFAULT_PERSIST_PATH;
     this.integrity = deps.integrity;
@@ -1190,6 +1207,7 @@ export class ScheduledTaskService {
     }
     result.outputHandling = result.outputHandling ?? task.outputHandling;
     result.promotedFindings = this.promoteRunFindings(task, result);
+    await this.onRunRecorded?.(task, result, triggerContext);
 
     const usage = this.extractUsageTokens(result.output);
     if (usage.totalTokens > 0) {
@@ -1233,6 +1251,17 @@ export class ScheduledTaskService {
       output: result.output,
       outputHandling: result.outputHandling,
       promotedFindings: result.promotedFindings?.map((finding) => ({ ...finding })),
+      ...(result.storedOutput
+        ? {
+            storedOutput: {
+              ...result.storedOutput,
+              ...(result.storedOutput.taintReasons
+                ? { taintReasons: [...result.storedOutput.taintReasons] }
+                : {}),
+            },
+          }
+        : {}),
+      ...(result.memoryPromotion ? { memoryPromotion: { ...result.memoryPromotion } } : {}),
       steps: result.steps?.map((step) => ({ ...step })),
       events: result.events?.map((event) => ({ ...event })),
     });
@@ -1353,6 +1382,17 @@ export class ScheduledTaskService {
       durationMs: 0,
       outputHandling: task.outputHandling ?? pbResult.run?.outputHandling,
       promotedFindings: pbResult.run?.promotedFindings?.map((finding) => ({ ...finding })),
+      ...(pbResult.run?.storedOutput
+        ? {
+            storedOutput: {
+              ...pbResult.run.storedOutput,
+              ...(pbResult.run.storedOutput.taintReasons
+                ? { taintReasons: [...pbResult.run.storedOutput.taintReasons] }
+                : {}),
+            },
+          }
+        : {}),
+      ...(pbResult.run?.memoryPromotion ? { memoryPromotion: { ...pbResult.run.memoryPromotion } } : {}),
       steps: (pbResult.run?.steps ?? []).map((step) => ({
         stepId: step.stepId,
         toolName: step.toolName,

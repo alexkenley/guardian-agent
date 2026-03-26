@@ -163,6 +163,31 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.enabled).toBe(false);
   });
 
+  it('routes historical automation-output analysis to the dedicated automation output lane', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Analyze the output from the last HN Snapshot Smoke automation run. Summarize what it found.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'automation_output_task',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Analyze a previous automation run using stored automation output tools.',
+          automationName: 'HN Snapshot Smoke',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('automation_output_task');
+    expect(result.decision.operation).toBe('inspect');
+    expect(result.decision.entities.automationName).toBe('HN Snapshot Smoke');
+  });
+
   it('repairs missing automation names for automation-control requests', async () => {
     const gateway = new IntentGateway();
     let callCount = 0;

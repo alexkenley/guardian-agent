@@ -9,7 +9,11 @@ import {
   type AutomationSaveInput,
   type AutomationSaveResult,
 } from './automation-save.js';
-import { buildAutomationRunHistoryEntries, type AutomationRunHistoryEntry } from './automation-run-history.js';
+import {
+  buildAutomationRunHistoryEntries,
+  buildPersistedAutomationRunHistoryEntries,
+  type AutomationRunHistoryEntry,
+} from './automation-run-history.js';
 import {
   buildAutomationCatalogEntries,
   buildSavedAutomationCatalogEntries,
@@ -28,6 +32,7 @@ import type {
   ScheduledTaskPreset,
   ScheduledTaskUpdateInput,
 } from './scheduled-tasks.js';
+import type { AutomationOutputStore } from './automation-output-store.js';
 import {
   deleteSavedAutomation,
   runSavedAutomation,
@@ -65,11 +70,8 @@ export interface AutomationRuntimeServiceOptions {
   tasks: AutomationTaskControl;
   templates?: AutomationTemplateControl;
   toolMetadata?: AutomationCatalogToolMetadata[];
+  outputStore?: AutomationOutputStore;
   onWorkflowSaved?: (playbook: AssistantConnectorPlaybookDefinition) => void;
-  onWorkflowRunResult?: (
-    result: ConnectorPlaybookRunResult,
-    input: ConnectorPlaybookRunInput,
-  ) => Promise<void> | void;
 }
 
 export interface AutomationRuntimeService {
@@ -161,10 +163,16 @@ export function createAutomationRuntimeService(
       service.listTaskPresets(),
     ),
     listAutomationCatalogView: () => buildAutomationCatalogViewEntries(service.listAutomationCatalog(), toolMetadata),
-    listAutomationRunHistory: () => buildAutomationRunHistoryEntries(
-      options.workflows.history().map(cloneWorkflowRun),
-      service.listTaskHistory(),
-    ),
+    listAutomationRunHistory: () => {
+      const liveEntries = buildAutomationRunHistoryEntries(
+        options.workflows.history().map(cloneWorkflowRun),
+        service.listTaskHistory(),
+      );
+      const persistedEntries = options.outputStore
+        ? buildPersistedAutomationRunHistoryEntries(options.outputStore.listRecentRuns(60), options.outputStore)
+        : [];
+      return mergeAutomationRunHistoryEntries(liveEntries, persistedEntries);
+    },
     createAutomationFromCatalog: (automationId) => {
       const createFromExample = options.templates?.createFromExample;
       const controlPlane = {
@@ -266,9 +274,7 @@ export function createAutomationRuntimeService(
       return result;
     },
     runWorkflow: async (input) => {
-      const result = await options.workflows.run({ ...input });
-      await options.onWorkflowRunResult?.(result, input);
-      return result;
+      return options.workflows.run({ ...input });
     },
     listTasks: () => options.tasks.list().map(cloneTask),
     getTask: (id) => {
@@ -432,6 +438,15 @@ function cloneTaskHistoryEntry(entry: ScheduledTaskHistoryEntry): ScheduledTaskH
       ? { events: entry.events.map((event) => ({ ...event })) }
       : {}),
     ...(isRecord(entry.output) ? { output: { ...entry.output } } : {}),
+    ...(entry.storedOutput
+      ? {
+          storedOutput: {
+            ...entry.storedOutput,
+            ...(entry.storedOutput.taintReasons ? { taintReasons: [...entry.storedOutput.taintReasons] } : {}),
+          },
+        }
+      : {}),
+    ...(entry.memoryPromotion ? { memoryPromotion: { ...entry.memoryPromotion } } : {}),
   };
 }
 
@@ -446,6 +461,15 @@ function cloneWorkflowRun(run: PlaybookRunRecord): PlaybookRunRecord {
     ...(Array.isArray(run.promotedFindings)
       ? { promotedFindings: run.promotedFindings.map((finding) => ({ ...finding })) }
       : {}),
+    ...(run.storedOutput
+      ? {
+          storedOutput: {
+            ...run.storedOutput,
+            ...(run.storedOutput.taintReasons ? { taintReasons: [...run.storedOutput.taintReasons] } : {}),
+          },
+        }
+      : {}),
+    ...(run.memoryPromotion ? { memoryPromotion: { ...run.memoryPromotion } } : {}),
     ...(Array.isArray(run.events) ? { events: run.events.map((event) => ({ ...event })) } : { events: [] }),
   };
 }
@@ -536,5 +560,50 @@ function normalizeWorkflowDefinitionForAutomation(
       ...(workflow.outputHandling ? { outputHandling: { ...workflow.outputHandling } } : {}),
       steps,
     },
+  };
+}
+
+function mergeAutomationRunHistoryEntries(
+  liveEntries: AutomationRunHistoryEntry[],
+  persistedEntries: AutomationRunHistoryEntry[],
+): AutomationRunHistoryEntry[] {
+  const merged = new Map<string, AutomationRunHistoryEntry>();
+  for (const entry of persistedEntries) {
+    merged.set(entry.id, cloneAutomationRunHistoryEntry(entry));
+  }
+  for (const entry of liveEntries) {
+    const existing = merged.get(entry.id);
+    if (!existing) {
+      merged.set(entry.id, cloneAutomationRunHistoryEntry(entry));
+      continue;
+    }
+    merged.set(entry.id, {
+      ...cloneAutomationRunHistoryEntry(entry),
+      ...(entry.storedOutput ? {} : (existing.storedOutput ? { storedOutput: { ...existing.storedOutput } } : {})),
+      ...(entry.memoryPromotion ? {} : (existing.memoryPromotion ? { memoryPromotion: { ...existing.memoryPromotion } } : {})),
+      steps: entry.steps.length > 0 ? entry.steps.map((step) => ({ ...step })) : existing.steps.map((step) => ({ ...step })),
+      message: entry.message || existing.message,
+    });
+  }
+  return [...merged.values()]
+    .sort((left, right) => right.time - left.time)
+    .slice(0, 60);
+}
+
+function cloneAutomationRunHistoryEntry(entry: AutomationRunHistoryEntry): AutomationRunHistoryEntry {
+  return {
+    ...entry,
+    steps: entry.steps.map((step) => ({ ...step })),
+    ...(entry.outputHandling ? { outputHandling: { ...entry.outputHandling } } : {}),
+    promotedFindings: entry.promotedFindings.map((finding) => ({ ...finding })),
+    ...(entry.storedOutput
+      ? {
+          storedOutput: {
+            ...entry.storedOutput,
+            ...(entry.storedOutput.taintReasons ? { taintReasons: [...entry.storedOutput.taintReasons] } : {}),
+          },
+        }
+      : {}),
+    ...(entry.memoryPromotion ? { memoryPromotion: { ...entry.memoryPromotion } } : {}),
   };
 }

@@ -557,6 +557,10 @@ export class AgentMemoryStore {
     return this.load(agentId).length;
   }
 
+  isEnabled(): boolean {
+    return this.config.enabled;
+  }
+
   isReadOnly(): boolean {
     return this.config.readOnly;
   }

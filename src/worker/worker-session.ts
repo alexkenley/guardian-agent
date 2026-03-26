@@ -13,6 +13,7 @@ import {
 } from '../runtime/model-routing-ux.js';
 import { tryAutomationPreRoute } from '../runtime/automation-prerouter.js';
 import { tryAutomationControlPreRoute } from '../runtime/automation-control-prerouter.js';
+import { tryAutomationOutputPreRoute } from '../runtime/automation-output-prerouter.js';
 import { tryBrowserPreRoute } from '../runtime/browser-prerouter.js';
 import {
   resolveDirectIntentRoutingCandidates,
@@ -196,8 +197,8 @@ export class BrokeredWorkerSession {
     const directIntent = await this.classifyIntentGateway(params.message, chatFn);
     const directRouting = resolveDirectIntentRoutingCandidates(
       directIntent,
-      ['automation', 'automation_control', 'browser'],
-      ['automation', 'automation_control', 'browser'],
+      ['automation', 'automation_control', 'automation_output', 'browser'],
+      ['automation', 'automation_control', 'automation_output', 'browser'],
     );
     for (const candidate of directRouting.candidates) {
       switch (candidate) {
@@ -219,6 +220,15 @@ export class BrokeredWorkerSession {
           );
           if (!directAutomationControl) break;
           return this.attachIntentGatewayMetadata(directAutomationControl, directIntent);
+        }
+        case 'automation_output': {
+          const directAutomationOutput = await this.tryDirectAutomationOutput(
+            params.message,
+            toolExecutor,
+            directIntent?.decision,
+          );
+          if (!directAutomationOutput) break;
+          return this.attachIntentGatewayMetadata(directAutomationOutput, directIntent);
         }
         case 'browser': {
           const directBrowserAutomation = await this.tryDirectBrowserAutomation(
@@ -446,6 +456,26 @@ export class BrokeredWorkerSession {
     }, {
       intentDecision,
       allowHeuristicFallback,
+    });
+  }
+
+  private async tryDirectAutomationOutput(
+    message: UserMessage,
+    toolExecutor: BrokeredToolExecutor,
+    intentDecision?: IntentGatewayDecision | null,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    return tryAutomationOutputPreRoute({
+      agentId: 'brokered-worker',
+      message,
+      executeTool: (toolName, args, request) => {
+        const codeContext = message.metadata?.codeContext as { workspaceRoot: string; sessionId?: string } | undefined;
+        return toolExecutor.executeModelTool(toolName, args, {
+          ...request,
+          ...(codeContext ? { codeContext } : {}),
+        });
+      },
+    }, {
+      intentDecision,
     });
   }
 

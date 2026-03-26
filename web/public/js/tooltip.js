@@ -154,6 +154,7 @@ const DEFAULT_TOOLTIPS = {
   '#auto-agent-deliver': 'When checked, sends the response to the delivery channel. Uncheck for silent runs (results still in history).',
   '#auto-single-prompt': 'Optional instruction wrapped around the tool result. Adding this auto-converts to a 2-step pipeline (tool + LLM instruction).',
   '#auto-schedule-kind': 'Choose how this automation should be scheduled, from simple presets through to a custom cron expression.',
+  '#auto-output-store-enabled': 'When enabled, Guardian stores the full output of saved automation runs for historical analysis and saves a searchable memory reference to that run. This does not apply to ad hoc one-off tool usage.',
   '#auto-engine-enabled': 'Master switch for the automation engine. Disabling it prevents saved automations from executing.',
   '#auto-engine-mode': 'Choose how the automation engine approaches planning and execution.',
   '#auto-max-calls': 'Maximum number of tool calls one automation run may make before the engine stops it.',

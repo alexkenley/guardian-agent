@@ -64,12 +64,24 @@ Built-in examples appear in the same Automations catalog as saved automations.
 Guardian’s public automation contract is:
 
 - `automation_list`
+- `automation_output_search`
+- `automation_output_read`
 - `automation_save`
 - `automation_set_enabled`
 - `automation_run`
 - `automation_delete`
 
 These are the model-facing and UI-facing primitives for automation definition and control.
+
+Saved automation runs can also participate in historical analysis:
+
+- step-based, assistant, and standalone saved automations default to storing historical output references unless the operator turns that off
+- Guardian keeps a compact searchable memory reference plus a private full-output record for the run
+- later deep analysis uses `automation_output_search` and `automation_output_read`
+- ad hoc one-off tool calls are excluded from this historical automation-output path
+
+Current limitation:
+- the persistence and dereference path is implemented, but richer synthesis over large stored runs is still future work. Today the assistant can find and read prior saved automation output reliably; deeper multi-step summarization and higher-quality result analysis should continue to improve without changing the storage contract.
 
 Low-level workflow and scheduled-task services still exist as internal runtime adapters, but they are not the intended product contract.
 

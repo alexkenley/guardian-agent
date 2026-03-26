@@ -93,7 +93,9 @@ import { ThreatIntelService } from './runtime/threat-intel.js';
 import { createThreatIntelSourceScanners } from './runtime/threat-intel-osint.js';
 import {
   ConnectorPlaybookService,
+  type ConnectorPlaybookRunInput,
   type ConnectorPlaybookRunResult,
+  type PlaybookRunRecord,
   type PlaybookStepRunResult,
 } from './runtime/connectors.js';
 import { JsonFileRunStateStore } from './runtime/run-state-store.js';
@@ -143,7 +145,11 @@ import {
   SecurityEventTriageAgent,
 } from './runtime/security-triage-agent.js';
 import { WindowsDefenderProvider } from './runtime/windows-defender-provider.js';
-import { ScheduledTaskService } from './runtime/scheduled-tasks.js';
+import {
+  ScheduledTaskService,
+  type ScheduledTaskDefinition,
+  type ScheduledTaskRunResult,
+} from './runtime/scheduled-tasks.js';
 import { createAutomationRuntimeService } from './runtime/automation-runtime-service.js';
 import { MoltbookConnector } from './runtime/moltbook-connector.js';
 import { AssistantOrchestrator } from './runtime/orchestrator.js';
@@ -151,7 +157,9 @@ import { AgentMemoryStore } from './runtime/agent-memory-store.js';
 import { AssistantJobTracker } from './runtime/assistant-jobs.js';
 import { RunTimelineStore } from './runtime/run-timeline.js';
 import { NotificationService, notificationDestinationEnabled } from './runtime/notifications.js';
-import { promoteAutomationFindings } from './runtime/automation-output.js';
+import { normalizeAutomationOutputHandling, promoteAutomationFindings } from './runtime/automation-output.js';
+import { AutomationOutputStore } from './runtime/automation-output-store.js';
+import { AutomationOutputPersistenceService } from './runtime/automation-output-persistence.js';
 import { buildGmailRawMessage, parseDirectGmailWriteIntent } from './runtime/gmail-compose.js';
 import {
   parseScheduledEmailAutomationIntent,
@@ -167,6 +175,7 @@ import {
 } from './runtime/skills-query.js';
 import { tryAutomationPreRoute } from './runtime/automation-prerouter.js';
 import { tryAutomationControlPreRoute } from './runtime/automation-control-prerouter.js';
+import { tryAutomationOutputPreRoute } from './runtime/automation-output-prerouter.js';
 import { tryBrowserPreRoute } from './runtime/browser-prerouter.js';
 import {
   resolveDirectIntentRoutingCandidates,
@@ -594,6 +603,7 @@ type DirectIntentShadowCandidate =
   | 'scheduled_email_automation'
   | 'automation'
   | 'automation_control'
+  | 'automation_output'
   | 'workspace_write'
   | 'workspace_read'
   | 'browser'
@@ -1201,6 +1211,7 @@ class ChatAgent extends BaseAgent {
           'scheduled_email_automation',
           'automation',
           'automation_control',
+          'automation_output',
           'workspace_write',
           'workspace_read',
           'browser',
@@ -1211,6 +1222,7 @@ class ChatAgent extends BaseAgent {
           'scheduled_email_automation',
           'automation',
           'automation_control',
+          'automation_output',
           'workspace_write',
           'workspace_read',
           'browser',
@@ -1326,6 +1338,25 @@ class ChatAgent extends BaseAgent {
             return this.buildDirectIntentResponse({
               candidate,
               result: directAutomationControl,
+              message,
+              routingMessage: contextAwareScopedMessage,
+              intentGateway: directIntent,
+              ctx,
+              userKey,
+              activeSkills,
+              conversationKey,
+            });
+          }
+          case 'automation_output': {
+            const directAutomationOutput = await this.tryDirectAutomationOutput(
+              contextAwareScopedMessage,
+              ctx,
+              directIntent?.decision,
+            );
+            if (!directAutomationOutput) break;
+            return this.buildDirectIntentResponse({
+              candidate,
+              result: directAutomationOutput,
               message,
               routingMessage: contextAwareScopedMessage,
               intentGateway: directIntent,
@@ -3191,6 +3222,22 @@ class ChatAgent extends BaseAgent {
     });
   }
 
+  private async tryDirectAutomationOutput(
+    message: UserMessage,
+    ctx: AgentContext,
+    intentDecision?: IntentGatewayDecision | null,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    if (!this.tools?.isEnabled()) return null;
+    return tryAutomationOutputPreRoute({
+      agentId: this.id,
+      message,
+      checkAction: ctx.checkAction,
+      executeTool: (toolName, args, request) => this.tools!.executeModelTool(toolName, args, request),
+    }, {
+      intentDecision,
+    });
+  }
+
   private async tryDirectBrowserAutomation(
     message: UserMessage,
     ctx: AgentContext,
@@ -3291,6 +3338,8 @@ class ChatAgent extends BaseAgent {
         return new Set(['automation_authoring', 'automation_control']);
       case 'automation_control':
         return new Set(['automation_control', 'ui_control']);
+      case 'automation_output':
+        return new Set(['automation_output_task']);
       case 'workspace_write':
         return new Set(['workspace_task', 'email_task']);
       case 'workspace_read':
@@ -9270,6 +9319,12 @@ async function main(): Promise<void> {
     integrity: controlPlaneIntegrity,
     onSecurityEvent: onMemorySecurityEvent,
   });
+  const automationOutputStore = new AutomationOutputStore();
+  const automationOutputPersistence = new AutomationOutputPersistenceService({
+    outputStore: automationOutputStore,
+    agentMemoryStore,
+    defaultAgentId: 'default',
+  });
 
   const conversationDbPath = resolveAssistantDbPath(config.assistant.memory.sqlitePath, 'assistant-memory.sqlite');
   const analyticsDbPath = resolveAssistantDbPath(config.assistant.analytics.sqlitePath, 'assistant-analytics.sqlite');
@@ -10769,6 +10824,7 @@ async function main(): Promise<void> {
     disabledCategories: config.assistant.tools.disabledCategories,
     conversationService: conversations,
     agentMemoryStore,
+    automationOutputStore,
     codeSessionMemoryStore,
     codeSessionStore,
     resolveStateAgentId: resolveSharedStateAgentId,
@@ -11063,6 +11119,96 @@ async function main(): Promise<void> {
     maxEntries: 200,
   });
 
+  const cloneStoredOutputStatus = <T extends { taintReasons?: string[] }>(value: T | undefined): T | undefined => (
+    value
+      ? {
+          ...value,
+          ...(value.taintReasons ? { taintReasons: [...value.taintReasons] } : {}),
+        }
+      : undefined
+  );
+
+  const cloneMemoryPromotionStatus = (
+    value: import('./runtime/automation-output-persistence.js').AutomationMemoryPromotionStatus | undefined,
+  ): import('./runtime/automation-output-persistence.js').AutomationMemoryPromotionStatus | undefined => (
+    value ? { ...value } : undefined
+  );
+
+  const attachPlaybookRunPersistence = (
+    run: PlaybookRunRecord,
+    input: ConnectorPlaybookRunInput,
+  ): void => {
+    run.outputHandling = normalizeAutomationOutputHandling(run.outputHandling);
+    run.promotedFindings = promoteAutomationFindings(runtime.auditLog, {
+      automationId: run.playbookId,
+      automationName: run.playbookName,
+      runId: run.id,
+      status: run.status,
+      message: run.message,
+      steps: run.steps,
+      outputHandling: run.outputHandling,
+      origin: input.origin,
+      agentId: input.agentId,
+      userId: input.userId,
+      channel: input.channel,
+      target: run.playbookId,
+      runLink: `#/automations?runId=${encodeURIComponent(run.id)}`,
+    });
+    const persistence = automationOutputPersistence.persistRun({
+      automationId: run.playbookId,
+      automationName: run.playbookName,
+      runId: run.id,
+      status: run.status,
+      message: run.message,
+      steps: run.steps,
+      outputHandling: run.outputHandling,
+      origin: input.origin,
+      agentId: input.agentId,
+      userId: input.userId,
+      channel: input.channel,
+      target: run.playbookId,
+      runLink: `#/automations?runId=${encodeURIComponent(run.id)}`,
+      startedAt: run.startedAt,
+      completedAt: run.completedAt,
+    });
+    run.storedOutput = cloneStoredOutputStatus(persistence.storedOutput);
+    run.memoryPromotion = cloneMemoryPromotionStatus(persistence.memoryPromotion);
+  };
+
+  const attachScheduledTaskRunPersistence = (
+    task: ScheduledTaskDefinition,
+    result: ScheduledTaskRunResult,
+    triggerContext: { kind: 'manual' | 'cron' | 'event'; event?: import('./queue/event-bus.js').AgentEvent },
+  ): void => {
+    if (task.type === 'playbook' && (result.storedOutput || result.memoryPromotion)) {
+      return;
+    }
+    result.outputHandling = normalizeAutomationOutputHandling(result.outputHandling ?? task.outputHandling);
+    const completedAt = Date.now();
+    const startedAt = Number.isFinite(result.durationMs) ? Math.max(0, completedAt - result.durationMs) : undefined;
+    const runId = result.runId?.trim() || `${task.id}:${completedAt}`;
+    const persistence = automationOutputPersistence.persistRun({
+      automationId: task.id,
+      automationName: task.name,
+      runId,
+      status: result.status,
+      message: result.message,
+      steps: result.steps,
+      outputHandling: result.outputHandling,
+      origin: `scheduled-task:${triggerContext.kind}`,
+      agentId: `sched-task:${task.id}`,
+      ...(task.channel ? { channel: task.channel } : {}),
+      target: task.target,
+      taskId: task.id,
+      runLink: `#/automations?runId=${encodeURIComponent(runId)}`,
+      startedAt,
+      completedAt,
+      memoryAgentId: task.type === 'agent' ? task.target : undefined,
+    });
+    result.storedOutput = cloneStoredOutputStatus(persistence.storedOutput);
+    result.memoryPromotion = cloneMemoryPromotionStatus(persistence.memoryPromotion);
+  };
+
   connectors = new ConnectorPlaybookService({
     config: config.assistant.connectors,
     runTool: async (request) => toolExecutor.runTool(request),
@@ -11078,6 +11224,9 @@ async function main(): Promise<void> {
       return response.content;
     },
     runStateStore: playbookRunStateStore,
+    onRunRecorded: (run, input) => {
+      attachPlaybookRunPersistence(run, input);
+    },
   });
 
   const getPlaybookOutputHandling = (playbookId: string) => (
@@ -11097,6 +11246,9 @@ async function main(): Promise<void> {
     persistPath: scheduledTasksPersistPath,
     onNetworkScanComplete: () => {
       runNetworkAnalysis('scheduled-task');
+    },
+    onRunRecorded: (task, result, triggerContext) => {
+      attachScheduledTaskRunPersistence(task, result, triggerContext);
     },
   });
   await scheduledTasks.load().catch(() => {});
@@ -11221,42 +11373,6 @@ async function main(): Promise<void> {
       cron: normalizedSchedule,
       enabled: playbook.enabled !== false,
       outputHandling,
-    });
-  }
-
-  function attachPlaybookPromotions(result: {
-    run?: {
-      id: string;
-      playbookId: string;
-      playbookName: string;
-      status: string;
-      message: string;
-      steps: Array<{ stepId?: string; toolName: string; status?: string; message?: string; output?: unknown }>;
-      outputHandling?: unknown;
-      promotedFindings?: unknown;
-    };
-  }, input: {
-    playbookId: string;
-    origin?: 'assistant' | 'cli' | 'web';
-    agentId?: string;
-    userId?: string;
-    channel?: string;
-  }): void {
-    if (!result.run) return;
-    result.run.outputHandling = getPlaybookOutputHandling(input.playbookId);
-    result.run.promotedFindings = promoteAutomationFindings(runtime.auditLog, {
-      automationId: result.run.playbookId,
-      automationName: result.run.playbookName,
-      runId: result.run.id,
-      status: result.run.status,
-      message: result.run.message,
-      steps: result.run.steps,
-      outputHandling: getPlaybookOutputHandling(input.playbookId),
-      origin: input.origin,
-      agentId: input.agentId,
-      userId: input.userId,
-      channel: input.channel,
-      runLink: `#/automations?runId=${encodeURIComponent(result.run.id)}`,
     });
   }
 
@@ -12038,12 +12154,10 @@ async function main(): Promise<void> {
           description: definition.description,
           shortDescription: definition.shortDescription,
         })),
+        outputStore: automationOutputStore,
         onWorkflowSaved: (playbook) => {
           syncPlaybookScheduleToTasks(playbook);
           syncPlaybookOutputHandlingToSchedules(playbook.id);
-        },
-        onWorkflowRunResult: async (result, input) => {
-          attachPlaybookPromotions(result, input);
         },
       })
   ;
@@ -12082,6 +12196,7 @@ async function main(): Promise<void> {
         tryDelete(`assistant-analytics.sqlite${suffix}`, resolveAssistantDbPath(config.assistant.analytics.sqlitePath, 'assistant-analytics.sqlite') + suffix);
       }
       tryDelete('memory/ (agent knowledge base)', join(baseDir, 'memory'), { recursive: true });
+      tryDelete('automation-output/ (historical automation output)', join(baseDir, 'automation-output'), { recursive: true });
       tryDelete('audit/ (audit log)', join(baseDir, 'audit'), { recursive: true });
       tryDelete('device-inventory.json', join(baseDir, 'device-inventory.json'));
       tryDelete('scheduled-tasks.json', join(baseDir, 'scheduled-tasks.json'));

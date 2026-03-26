@@ -8,6 +8,7 @@ import type {
   ScheduledTaskDefinition,
   ScheduledTaskUpdateInput,
 } from './scheduled-tasks.js';
+import { normalizeAutomationOutputHandling } from './automation-output.js';
 
 export type AutomationSaveKind = 'workflow' | 'assistant_task' | 'standalone_task';
 
@@ -63,7 +64,7 @@ export function saveAutomationDefinition(
   const existingTaskId = input.existingTaskId?.trim() || '';
   const signature = input.signature?.trim() || undefined;
   const emitEvent = input.emitEvent?.trim() || undefined;
-  const outputHandling = input.outputHandling ? { ...input.outputHandling } : undefined;
+  const outputHandling = normalizeAutomationOutputHandling(input.outputHandling);
   const scheduleEnabled = input.schedule?.enabled === true;
   const cron = input.schedule?.cron?.trim() || '';
   const runOnce = input.schedule?.runOnce === true;

@@ -5,6 +5,7 @@ export type DirectIntentRoutingCandidate =
   | 'scheduled_email_automation'
   | 'automation'
   | 'automation_control'
+  | 'automation_output'
   | 'workspace_write'
   | 'workspace_read'
   | 'browser'
@@ -41,6 +42,8 @@ function preferredCandidatesForDecision(
       return ['scheduled_email_automation', 'automation'];
     case 'automation_control':
       return ['automation_control'];
+    case 'automation_output_task':
+      return ['automation_output'];
     case 'ui_control':
       if (decision.entities.uiSurface === 'automations'
         && ['delete', 'toggle', 'run', 'inspect', 'clone', 'update'].includes(decision.operation)) {

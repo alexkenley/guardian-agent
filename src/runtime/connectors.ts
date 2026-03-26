@@ -18,6 +18,10 @@ import type {
 import type { ToolExecutionRequest, ToolRunResponse } from '../tools/types.js';
 import type { ToolApprovalDecisionResult } from '../tools/executor.js';
 import type { AutomationPromotedFindingRef } from './automation-output.js';
+import type {
+  AutomationMemoryPromotionStatus,
+  AutomationStoredOutputStatus,
+} from './automation-output-persistence.js';
 import { GraphRunner } from './graph-runner.js';
 import type { GraphNodeExecutionResult, PlaybookGraphDefinition } from './graph-types.js';
 import { createRunEvent, type OrchestrationRunEvent } from './run-events.js';
@@ -72,6 +76,8 @@ export interface PlaybookRunRecord {
   steps: PlaybookStepRunResult[];
   outputHandling?: AutomationOutputHandlingConfig;
   promotedFindings?: AutomationPromotedFindingRef[];
+  storedOutput?: AutomationStoredOutputStatus;
+  memoryPromotion?: AutomationMemoryPromotionStatus;
   requestedBy?: string;
   origin: ToolExecutionRequest['origin'];
   events: OrchestrationRunEvent[];
@@ -156,6 +162,7 @@ interface ConnectorPlaybookServiceOptions {
   scanOutput?: (text: string) => Promise<string>;
   now?: () => number;
   runStateStore?: RunStateStore<PlaybookStepRunResult>;
+  onRunRecorded?: (run: PlaybookRunRecord, input: ConnectorPlaybookRunInput) => Promise<void> | void;
 }
 
 export class ConnectorPlaybookService {
@@ -164,6 +171,7 @@ export class ConnectorPlaybookService {
   private readonly runInstruction?: RunInstructionFn;
   private readonly scanOutput?: (text: string) => Promise<string>;
   private readonly now: () => number;
+  private readonly onRunRecorded?: ConnectorPlaybookServiceOptions['onRunRecorded'];
   private readonly graphRunner: GraphRunner<PlaybookStepRunResult>;
   private readonly runs: PlaybookRunRecord[] = [];
   private readonly dryRunQualified = new Set<string>();
@@ -174,6 +182,7 @@ export class ConnectorPlaybookService {
     this.runInstruction = options.runInstruction;
     this.scanOutput = options.scanOutput;
     this.now = options.now ?? Date.now;
+    this.onRunRecorded = options.onRunRecorded;
     this.graphRunner = new GraphRunner<PlaybookStepRunResult>({
       now: this.now,
       store: options.runStateStore ?? new InMemoryRunStateStore<PlaybookStepRunResult>(),
@@ -438,6 +447,7 @@ export class ConnectorPlaybookService {
 
     const run = this.buildRunRecord(playbook, input, graphResult, startedAt);
     this.upsertRun(run);
+    await this.onRunRecorded?.(run, input);
 
     if (input.dryRun && run.status === 'succeeded') {
       this.dryRunQualified.add(playbook.id);

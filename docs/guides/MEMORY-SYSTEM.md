@@ -5,6 +5,7 @@ The system has two durable long-term memory scopes plus searchable conversation 
 - global agent memory for the normal assistant
 - Code-session memory for the Coding Assistant
 - SQLite-backed conversation history with FTS5 search
+- runtime-authored automation result references for saved automation runs that opt into historical analysis
 
 This guide covers architecture, configuration, and usage.
 
@@ -40,6 +41,16 @@ Conversation history is separate from long-term memory.
 - trimmed to fit prompt context
 - flushed into the matching long-term memory scope when old messages are dropped
 
+### Automation output references
+
+Saved automations can also write a historical analysis record when their output persistence mode is `run_history_plus_memory`.
+
+- applies only to saved automation runs
+- does not include ad hoc one-off tool calls
+- writes a compact memory reference entry plus a private full-output record
+- lets the assistant find a prior automation run quickly through memory and then dereference the full stored output later
+- keeps raw large payloads out of normal prompt memory
+
 ### Explicit cross-memory bridge
 
 Cross-scope lookup is explicit and read-only.
@@ -50,7 +61,7 @@ Cross-scope lookup is explicit and read-only.
 
 ## Architecture
 
-The memory system has five layers:
+The memory system has six layers:
 
 ```text
 Layer 1: Persistent Memory Stores (AgentMemoryStore)
@@ -85,6 +96,12 @@ Layer 5: Cross-Memory Bridge
   Explicit read-only bridge search across global/code-session boundaries
   Returns reference-only results
   Never preloads the foreign scope into prompt context
+
+Layer 6: Automation Output Store + Reference Memory
+  Saved automation runs can persist full per-run output into ~/.guardianagent/automation-output
+  A compact runtime-authored memory reference points to that stored output
+  Full output is retrieved through automation_output_search / automation_output_read, not filesystem tools
+  Only saved automation runs participate; ad hoc tool executions do not
 ```
 
 ### Data Flow
@@ -106,6 +123,13 @@ Code-session turn
     -> LLM receives: code prompt + repo evidence + code-session memory + recent history + user message
     -> dropped history (if any) flushed into Code-session memory
     -> optional memory_bridge_search may return reference-only results from the other scope
+
+Automation run with historical analysis enabled
+  Automation finishes
+    -> full run output stored in the private automation output store
+    -> compact memory reference appended to the target agent's memory scope
+    -> later user request can find the run via memory_search / automation_output_search
+    -> assistant can dereference the stored output with automation_output_read for deeper analysis
 ```
 
 ## Configuration
@@ -245,6 +269,55 @@ Bridge rules:
 - never changes the current scope or objective
 - does not preload foreign memory into future prompts
 - if the model wants to carry a bridged fact into the current scope, it must do so explicitly with `memory_save`
+
+## Historical Automation Output Analysis
+
+Historical deep analysis of prior run output is available for saved automations only.
+
+- it is enabled by the automation output persistence mode `run_history_plus_memory`
+- it writes a safe memory reference, not the raw full output
+- the full output is kept in Guardian's private automation output store
+- ad hoc one-off tool calls are not written into this store
+
+Two read-only automation tools provide the dereference path:
+
+### automation_output_search
+
+Search stored output from saved automation runs.
+
+```text
+Tool: automation_output_search
+Risk: read_only
+Category: automation
+Parameters:
+  query (optional): text query across stored previews and step output
+  automationId (optional): filter to one automation
+  runId (optional): filter to one run
+  status (optional): filter by run status
+  limit (optional): max results (default 10, max 50)
+```
+
+### automation_output_read
+
+Read the stored full output for a saved automation run or one step inside that run.
+
+```text
+Tool: automation_output_read
+Risk: read_only
+Category: automation
+Parameters:
+  runId (required): saved automation run id
+  stepId (optional): read one step instead of the combined run view
+  offset (optional): chunk offset for large output
+  maxChars (optional): chunk size limit
+```
+
+Important rules:
+
+- these tools are only for saved automation runs
+- they do not expose raw `.guardianagent/` filesystem access
+- returned data is treated as retrieved/untrusted tool output before reinjection to the model
+- operators can disable this persistence per automation by switching output handling back to run-history-only
 
 ### Trust and quarantine semantics
 

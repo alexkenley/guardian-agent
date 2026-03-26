@@ -29,7 +29,7 @@ Expose a safe, auditable tool-execution plane so the assistant can perform works
 - System: `sys_info`, `sys_resources`, `sys_processes`, `sys_services`
 - Memory: `memory_search`, `memory_recall`, `memory_save`, `memory_bridge_search`
 - Search: `doc_search`, `doc_search_status`, `doc_search_reindex`
-- Automation: `automation_list`, `automation_save`, `automation_set_enabled`, `automation_run`, `automation_delete` — managed via the web Automations page (`#/automations`) or chat through the automation authoring compiler
+- Automation: `automation_list`, `automation_output_search`, `automation_output_read`, `automation_save`, `automation_set_enabled`, `automation_run`, `automation_delete` — managed via the web Automations page (`#/automations`) or chat through the automation authoring compiler
 - Policy: `update_tool_policy`
 
 ## Deferred Tool Loading
@@ -41,6 +41,7 @@ Memory scope note:
 - `memory_search` now supports `scope: conversation|persistent|both`; persistent search follows the same current-scope binding as `memory_recall`
 - `memory_bridge_search` is the explicit read-only cross-scope lookup path and does not switch the current context
 - if `assistant.memory.knowledgeBase.readOnly` is enabled, `memory_save` is rejected before approval/execution in both scopes
+- saved automation runs can also write memory references plus private full-output records when historical analysis persistence is enabled; that path is automation-only and does not include ad hoc tool calls
 
 By default, 11 tools are sent to the LLM on every request (**always-loaded**) when agent policy updates are enabled:
 `find_tools`, `update_tool_policy`, `web_search`, `fs_read`, `fs_list`, `fs_search`, `shell_safe`, `memory_search`, `memory_save`, `sys_info`, `sys_resources`
