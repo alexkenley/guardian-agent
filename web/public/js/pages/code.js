@@ -1509,7 +1509,13 @@ function bindRunTimelineListeners() {
     if (
       window.location.hash.startsWith('#/code')
       && activeSession?.id === codeSessionId
-      && normalizeAssistantTabValue(activeSession.activeAssistantTab) === 'activity'
+      && (
+        normalizeAssistantTabValue(activeSession.activeAssistantTab) === 'activity'
+        || (
+          normalizeAssistantTabValue(activeSession.activeAssistantTab) === 'chat'
+          && activeSession.pendingResponse
+        )
+      )
     ) {
       rerenderFromState();
     }
@@ -2640,10 +2646,27 @@ function normalizeVisibleHistoryEntry(entry) {
   const role = entry?.role === 'user' ? 'user' : 'agent';
   const content = sanitizeVisibleHistoryContent(role, String(entry?.content || ''));
   if (!content) return null;
+  const responseSource = normalizeCodeResponseSource(entry?.responseSource || entry?.metadata?.responseSource);
   return {
     role,
     content,
     timestamp: Number(entry?.timestamp) || Date.now(),
+    ...(responseSource ? { responseSource } : {}),
+  };
+}
+
+function normalizeCodeResponseSource(value) {
+  if (!value || typeof value !== 'object') return null;
+  const locality = value.locality === 'local' || value.locality === 'external'
+    ? value.locality
+    : null;
+  if (!locality) return null;
+  return {
+    locality,
+    ...(typeof value.providerName === 'string' && value.providerName ? { providerName: value.providerName } : {}),
+    ...(value.tier === 'local' || value.tier === 'external' ? { tier: value.tier } : {}),
+    ...(value.usedFallback === true ? { usedFallback: true } : {}),
+    ...(typeof value.notice === 'string' && value.notice ? { notice: value.notice } : {}),
   };
 }
 
@@ -3071,7 +3094,7 @@ export async function renderCode(container) {
       api.agents().catch(() => []),
       api.status().catch(() => null),
     ]);
-    cachedAgents = agents.filter((agent) => agent.canChat !== false && agent.internal !== true);
+    cachedAgents = agents.filter(isCodeSelectableAgent);
     if (statusResult?.platform) detectedPlatform = statusResult.platform;
     if (Array.isArray(statusResult?.shellOptions)) shellOptionsCache = statusResult.shellOptions;
 
@@ -3307,6 +3330,7 @@ function getSessionRenderSignature(session) {
         role: message.role,
         content: message.content,
         timestamp: message.timestamp || 0,
+        responseSource: message.responseSource || null,
       }))
       : [],
     pendingApprovals: Array.isArray(session.pendingApprovals)
@@ -3788,6 +3812,7 @@ function renderAssistantTabs(session) {
     chat: 0,
     activity: activeTab === 'activity' ? 0 : Math.max(0, activityTotal - viewedActivityTotal),
   };
+  const providerOptions = getCodeProviderOptions(cachedAgents);
 
   return `
     <div class="code-assistant-tabs" role="tablist" aria-label="Coding assistant views">
@@ -3809,8 +3834,7 @@ function renderAssistantTabs(session) {
         `;
       }).join('')}
       <select class="code-chat__provider-select" data-code-provider-select title="LLM provider for this session">
-        <option value=""${!session?.agentId ? ' selected' : ''}>Auto</option>
-        ${cachedAgents.map((agent) => `<option value="${escAttr(agent.id)}"${session?.agentId === agent.id ? ' selected' : ''}>${esc(agent.name)}</option>`).join('')}
+        ${providerOptions.map((option) => `<option value="${escAttr(option.value)}"${(session?.agentId || '') === option.value ? ' selected' : ''}>${esc(option.label)}</option>`).join('')}
       </select>
     </div>
   `;
@@ -3865,7 +3889,7 @@ function formatCodeMessageRole(role) {
 function renderCodeMessage(role, content, extraClass = '', approvals = null, responseSource = null) {
   const className = `code-message ${role === 'user' ? 'is-user' : role === 'error' ? 'is-error' : 'is-agent'}${extraClass ? ` ${extraClass}` : ''}`;
   const sourceBadge = responseSource?.locality
-    ? `<span class="code-message__source" title="${escAttr(responseSource.notice || '')}">${esc(responseSource.locality)}${responseSource.usedFallback ? ' fallback' : ''}</span>`
+    ? `<span class="code-message__source" title="${escAttr(buildCodeResponseSourceTitle(responseSource))}">${esc(buildCodeResponseSourceLabel(responseSource))}</span>`
     : '';
   const approvalButtons = Array.isArray(approvals) && approvals.length > 0
     ? `<div class="code-message__approvals">
@@ -3888,6 +3912,28 @@ function renderCodeMessage(role, content, extraClass = '', approvals = null, res
       ${approvalButtons}
     </div>
   `;
+}
+
+function buildCodeResponseSourceLabel(responseSource) {
+  if (!responseSource?.locality) return '';
+  let label = responseSource.locality;
+  if (responseSource.providerName) {
+    label += ` · ${responseSource.providerName}`;
+  }
+  if (responseSource.usedFallback) {
+    label += ' fallback';
+  }
+  return label;
+}
+
+function buildCodeResponseSourceTitle(responseSource) {
+  if (!responseSource) return '';
+  const parts = [];
+  if (responseSource.notice) parts.push(String(responseSource.notice));
+  if (responseSource.tier && responseSource.tier !== responseSource.locality) {
+    parts.push(`Requested ${responseSource.tier} route.`);
+  }
+  return parts.join(' ');
 }
 
 function renderCodeThinkingMessage() {
@@ -3955,20 +4001,120 @@ function renderSessionRunTimeline(session) {
   `;
 }
 
+function renderCodeLiveProgress(session) {
+  const pendingStartedAt = Number(session?.pendingResponse?.startedAt) || 0;
+  if (!pendingStartedAt) return '';
+
+  const run = findPendingTimelineRun(session, pendingStartedAt);
+  if (!run) {
+    return `
+      <div class="code-chat__progress">
+        <article class="code-status-card status-active">
+          <div class="code-status-card__top">
+            <strong>Starting request</strong>
+            <span class="code-status-card__meta">just now</span>
+          </div>
+          <div class="code-status-card__detail">Guardian is preparing this coding turn.</div>
+        </article>
+      </div>
+    `;
+  }
+
+  const summary = summarizeCodeLiveRun(run);
+  return `
+    <div class="code-chat__progress">
+      <article class="code-status-card status-${escAttr(mapTimelineRunTone(run.summary.status))}">
+        <div class="code-status-card__top">
+          <strong>${esc(summary.title)}</strong>
+          <span class="code-status-card__meta">${esc(formatTimelineRunMeta(run.summary))}</span>
+        </div>
+        ${summary.detail ? `<div class="code-status-card__detail">${esc(summary.detail)}</div>` : ''}
+        ${summary.items.length > 0
+          ? `<div class="code-chat__progress-items">
+              ${summary.items.map((item) => `
+                <div class="code-chat__progress-item">
+                  <div class="code-chat__progress-title">${esc(item.title)}</div>
+                  ${item.detail ? `<div class="code-chat__progress-detail">${esc(item.detail)}</div>` : ''}
+                </div>
+              `).join('')}
+            </div>`
+          : ''}
+      </article>
+    </div>
+  `;
+}
+
+function summarizeCodeLiveRun(run) {
+  const items = Array.isArray(run?.items)
+    ? run.items
+      .filter(isMeaningfulCodeLiveItem)
+      .slice(-2)
+      .map((item) => ({
+        title: String(item?.title || '').trim(),
+        detail: String(item?.detail || '').trim(),
+      }))
+      .filter((item) => item.title)
+    : [];
+  const latestItem = items[items.length - 1] || null;
+  return {
+    title: latestItem?.title || humanizeCodeLiveStatus(run?.summary?.status),
+    detail: latestItem?.detail || '',
+    items,
+  };
+}
+
+function isMeaningfulCodeLiveItem(item) {
+  const type = String(item?.type || '').trim();
+  return type !== 'run_queued'
+    && type !== 'run_started'
+    && type !== 'run_completed';
+}
+
+function humanizeCodeLiveStatus(status) {
+  switch (String(status || '')) {
+    case 'queued':
+      return 'Queued';
+    case 'running':
+      return 'Working…';
+    case 'awaiting_approval':
+      return 'Waiting for approval';
+    case 'verification_pending':
+      return 'Verification pending';
+    case 'blocked':
+      return 'Blocked';
+    case 'failed':
+      return 'Failed';
+    case 'completed':
+      return 'Done';
+    default:
+      return 'Working…';
+  }
+}
+
+function findPendingTimelineRun(session, pendingStartedAt) {
+  const activeStatuses = new Set(['queued', 'running', 'awaiting_approval', 'verification_pending', 'blocked']);
+  const runs = normalizeTimelineRuns(session?.timelineRuns);
+  const threshold = Math.max(0, pendingStartedAt - 5_000);
+  return runs.find((run) => {
+    const startedAt = Number(run?.summary?.startedAt) || Number(run?.summary?.lastUpdatedAt) || 0;
+    return activeStatuses.has(run.summary.status) && startedAt >= threshold;
+  }) || null;
+}
+
 function mapTimelineRunTone(status) {
   if (status === 'completed') return 'completed';
   if (status === 'failed') return 'blocked';
   if (status === 'blocked' || status === 'awaiting_approval' || status === 'verification_pending') return 'warn';
-  if (status === 'running') return 'info';
-  return 'info';
+  if (status === 'running') return 'active';
+  return 'active';
 }
 
 function mapTimelineItemTone(status) {
   if (status === 'succeeded') return 'completed';
   if (status === 'failed') return 'blocked';
   if (status === 'blocked' || status === 'warning') return 'warn';
-  if (status === 'running') return 'info';
-  return 'info';
+  if (status === 'running') return 'active';
+  return 'active';
 }
 
 function formatTimelineRunMeta(summary) {
@@ -5046,6 +5192,7 @@ function renderAssistantPanel(session) {
           </div>
           ${renderWorkspaceTrustNotice(session)}
           ${renderChatNotice(session)}
+          ${renderCodeLiveProgress(session)}
           <div class="code-chat__history">
             ${!hasVisibleMessages
               ? `<div class="code-chat__onboarding">
@@ -5486,8 +5633,9 @@ function renderSessionForm() {
         <label>
           Agent
           <select name="agentId">
-            <option value="">Guardian Auto</option>
-            ${cachedAgents.map((agent) => `<option value="${escAttr(agent.id)}"${draft.agentId === agent.id ? ' selected' : ''}>${esc(agent.name)} (${esc(agent.id)})</option>`).join('')}
+            ${getCodeProviderOptions(cachedAgents).map((option) => (
+              `<option value="${escAttr(option.value)}"${draft.agentId === option.value ? ' selected' : ''}>${esc(option.value ? option.label : 'Guardian Auto')}</option>`
+            )).join('')}
           </select>
         </label>
       ` : ''}
@@ -7168,6 +7316,33 @@ function createTerminalTab(name, shell) {
 function resolveAgentId(agentId, agents) {
   if (!agentId) return null;
   return agents.some((agent) => agent.id === agentId) ? agentId : null;
+}
+
+function isCodeSelectableAgent(agent) {
+  if (!agent || agent.canChat === false) return false;
+  if (agent.internal !== true) return true;
+  return agent.routingRole === 'local' || agent.routingRole === 'external';
+}
+
+function getCodeProviderOptions(agents) {
+  const selectableAgents = Array.isArray(agents) ? agents.filter(isCodeSelectableAgent) : [];
+  const localAgent = selectableAgents.find((agent) => agent.routingRole === 'local');
+  const externalAgent = selectableAgents.find((agent) => agent.routingRole === 'external');
+
+  if (localAgent || externalAgent) {
+    return [
+      { value: '', label: 'Auto' },
+      ...(localAgent ? [{ value: localAgent.id, label: 'Local' }] : []),
+      ...(externalAgent ? [{ value: externalAgent.id, label: 'External' }] : []),
+    ];
+  }
+
+  return [
+    { value: '', label: 'Auto' },
+    ...selectableAgents
+      .filter((agent) => agent.internal !== true)
+      .map((agent) => ({ value: agent.id, label: agent.name || agent.id })),
+  ];
 }
 
 function joinWorkspacePath(base, child) {

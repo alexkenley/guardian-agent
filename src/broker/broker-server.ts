@@ -7,6 +7,7 @@ import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from './typ
 import { assignProvenance } from './provenance.js';
 import type { ToolExecutionRequest } from '../tools/types.js';
 import type { ChatMessage, ChatOptions } from '../llm/types.js';
+import { getProviderLocalityFromName } from '../runtime/model-routing-ux.js';
 
 const log = createLogger('broker-server');
 
@@ -286,7 +287,11 @@ export class BrokerServer {
           }
 
           const chatResponse = await provider.chat(chatMessages, chatOptions);
-          result = chatResponse;
+          result = {
+            ...chatResponse,
+            providerName: provider.name,
+            providerLocality: getProviderLocalityFromName(provider.name),
+          };
           break;
         }
 

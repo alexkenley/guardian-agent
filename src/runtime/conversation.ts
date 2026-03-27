@@ -7,6 +7,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { ChatMessage } from '../llm/types.js';
 import { SQLiteSecurityMonitor, type SQLiteSecurityEvent } from './sqlite-security.js';
+import type { ResponseSourceMetadata } from './model-routing-ux.js';
 import {
   hasSQLiteDriver,
   openSQLiteDatabase,
@@ -25,6 +26,7 @@ interface ConversationEntry {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
+  responseSource?: ResponseSourceMetadata;
 }
 
 /** Result from full-text search across conversation history. */
@@ -63,6 +65,7 @@ interface MessageRow {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
+  response_source_json: string | null;
 }
 
 interface SessionSummaryRow {
@@ -218,7 +221,7 @@ export class ConversationService {
   getSessionHistory(
     key: ConversationKey,
     options?: { limit?: number },
-  ): Array<{ role: 'user' | 'assistant'; content: string; timestamp: number }> {
+  ): Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; responseSource?: ResponseSourceMetadata }> {
     const sessionId = this.getActiveSessionId(key);
     const history = this.mode === 'sqlite'
       ? this.getSessionHistorySQLite(key, sessionId)
@@ -228,9 +231,15 @@ export class ConversationService {
   }
 
   /** Record the completed user/assistant turn for future context. */
-  recordTurn(key: ConversationKey, userContent: string, assistantContent: string): void {
+  recordTurn(
+    key: ConversationKey,
+    userContent: string,
+    assistantContent: string,
+    options?: { assistantResponseSource?: ResponseSourceMetadata },
+  ): void {
     const sessionId = this.getActiveSessionId(key);
     const timestamp = this.now();
+    const assistantResponseSource = this.normalizeResponseSource(options?.assistantResponseSource);
 
     if (this.mode === 'sqlite' && this.db && this.insertStmt) {
       this.insertStmt.run(
@@ -241,6 +250,7 @@ export class ConversationService {
         'user',
         this.sanitizeContent(userContent),
         timestamp,
+        null,
       );
       this.insertStmt.run(
         key.agentId,
@@ -250,6 +260,7 @@ export class ConversationService {
         'assistant',
         this.sanitizeContent(assistantContent),
         timestamp,
+        this.serializeResponseSource(assistantResponseSource),
       );
       this.securityMonitor?.maybeCheck();
       this.trimSessionSQLite(key, sessionId);
@@ -268,6 +279,7 @@ export class ConversationService {
       role: 'assistant',
       content: this.sanitizeContent(assistantContent),
       timestamp,
+      ...(assistantResponseSource ? { responseSource: assistantResponseSource } : {}),
     });
     const maxEntries = this.options.maxTurns * 2;
     if (existing.length > maxEntries) {
@@ -558,7 +570,7 @@ export class ConversationService {
     if (!this.db) return [];
     const rows = this.db
       .prepare(`
-        SELECT role, content, timestamp
+        SELECT role, content, timestamp, response_source_json
         FROM conversation_messages
         WHERE agent_id = ? AND user_id = ? AND channel = ? AND session_id = ?
         ORDER BY id ASC
@@ -569,6 +581,9 @@ export class ConversationService {
       role: row.role,
       content: row.content,
       timestamp: row.timestamp,
+      ...(this.parseResponseSource(row.response_source_json)
+        ? { responseSource: this.parseResponseSource(row.response_source_json) }
+        : {}),
     }));
   }
 
@@ -613,7 +628,8 @@ export class ConversationService {
         session_id TEXT NOT NULL,
         role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
         content TEXT NOT NULL,
-        timestamp INTEGER NOT NULL
+        timestamp INTEGER NOT NULL,
+        response_source_json TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_conversation_lookup
@@ -632,6 +648,12 @@ export class ConversationService {
       );
     `);
 
+    try {
+      this.db.exec('ALTER TABLE conversation_messages ADD COLUMN response_source_json TEXT');
+    } catch {
+      // Column already exists or migration is not needed.
+    }
+
     // FTS5 virtual table for full-text search across conversation content.
     // Uses content-sync (content=) to avoid data duplication — the FTS index
     // references conversation_messages rows by rowid.
@@ -639,8 +661,8 @@ export class ConversationService {
 
     this.insertStmt = this.db.prepare(`
       INSERT INTO conversation_messages (
-        agent_id, user_id, channel, session_id, role, content, timestamp
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        agent_id, user_id, channel, session_id, role, content, timestamp, response_source_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     this.upsertActiveStmt = this.db.prepare(`
@@ -854,6 +876,40 @@ export class ConversationService {
   private sanitizeContent(content: string): string {
     if (content.length <= this.options.maxMessageChars) return content;
     return content.slice(0, this.options.maxMessageChars) + ' [truncated]';
+  }
+
+  private normalizeResponseSource(value: ResponseSourceMetadata | undefined): ResponseSourceMetadata | undefined {
+    if (!value) return undefined;
+    if (value.locality !== 'local' && value.locality !== 'external') return undefined;
+    return {
+      locality: value.locality,
+      ...(typeof value.providerName === 'string' && value.providerName.trim()
+        ? { providerName: value.providerName.trim() }
+        : {}),
+      ...(value.tier === 'local' || value.tier === 'external'
+        ? { tier: value.tier }
+        : {}),
+      ...(value.usedFallback === true ? { usedFallback: true } : {}),
+      ...(typeof value.notice === 'string' && value.notice.trim()
+        ? { notice: value.notice.trim() }
+        : {}),
+    };
+  }
+
+  private serializeResponseSource(value: ResponseSourceMetadata | undefined): string | null {
+    const normalized = this.normalizeResponseSource(value);
+    if (!normalized) return null;
+    return JSON.stringify(normalized);
+  }
+
+  private parseResponseSource(value: string | null | undefined): ResponseSourceMetadata | undefined {
+    if (!value) return undefined;
+    try {
+      const parsed = JSON.parse(value) as ResponseSourceMetadata;
+      return this.normalizeResponseSource(parsed);
+    } catch {
+      return undefined;
+    }
   }
 
   private toMapKey(key: ConversationKey, sessionId: string): string {

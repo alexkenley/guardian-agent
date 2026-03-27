@@ -165,4 +165,33 @@ describe('RunTimelineStore', () => {
     expect(run?.summary.title).toBe('Run Browser Read Smoke now.');
     expect(run?.items[0]?.detail).toBe('Run Browser Read Smoke now.');
   });
+
+  it('adds humanized orchestrator step items for ordinary assistant runs', () => {
+    const store = new RunTimelineStore({ now: () => 500 });
+    store.ingestAssistantTrace(createTrace({
+      requestId: 'req-steps',
+      runId: 'req-steps',
+      status: 'running',
+      completedAt: undefined,
+      steps: [
+        {
+          name: 'message_built',
+          status: 'succeeded',
+          startedAt: 112,
+          completedAt: 112,
+          durationMs: 0,
+        },
+        {
+          name: 'runtime_dispatch_message',
+          status: 'running',
+          startedAt: 115,
+        },
+      ],
+      nodes: [],
+    }));
+
+    const run = store.getRun('req-steps');
+    expect(run?.items.some((item) => item.title === 'Prepared request')).toBe(true);
+    expect(run?.items.some((item) => item.title === 'Agent is working')).toBe(true);
+  });
 });

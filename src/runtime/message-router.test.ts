@@ -388,6 +388,16 @@ describe('MessageRouter', () => {
       expect(result.fallbackAgentId).toBeUndefined();
     });
 
+    it('should not label local-only as local when only external exists', () => {
+      const singleRouter = new MessageRouter({ strategy: 'keyword' });
+      singleRouter.registerAgent('external', ['network_access'], {}, 'external');
+
+      const result = singleRouter.routeWithTier('hello', 'local-only', 0.5);
+      expect(result.agentId).toBe('external');
+      expect(result.tier).toBe('external');
+      expect(result.reason).toContain('local-only unavailable');
+    });
+
     it('should handle single-tier gracefully (only external)', () => {
       const singleRouter = new MessageRouter({ strategy: 'keyword' });
       singleRouter.registerAgent('external', ['network_access'], {}, 'external');
@@ -395,6 +405,16 @@ describe('MessageRouter', () => {
       const result = singleRouter.routeWithTier('hello', 'auto', 0.5);
       expect(result.agentId).toBe('external');
       expect(result.fallbackAgentId).toBeUndefined();
+    });
+
+    it('should not label external-only as external when only local exists', () => {
+      const singleRouter = new MessageRouter({ strategy: 'keyword' });
+      singleRouter.registerAgent('local', ['read_files'], {}, 'local');
+
+      const result = singleRouter.routeWithTier('hello', 'external-only', 0.5);
+      expect(result.agentId).toBe('local');
+      expect(result.tier).toBe('local');
+      expect(result.reason).toContain('external-only unavailable');
     });
 
     it('should fall through to plain route() when no role-tagged agents exist', () => {

@@ -3316,7 +3316,7 @@ describe('WebChannel', () => {
     it('POST /api/message/stream rejects non-string content', async () => {
       const dashboard: DashboardCallbacks = {
         ...mockDashboard,
-        onStreamDispatch: async () => ({ content: 'Reply from stream' }),
+        onStreamDispatch: async () => ({ requestId: 'req-1', runId: 'req-1', content: 'Reply from stream' }),
       };
 
       web = new WebChannel({ port: 18968, authToken: TEST_TOKEN, dashboard });
@@ -3330,7 +3330,34 @@ describe('WebChannel', () => {
 
       expect(res.status).toBe(400);
       const body = await res.json() as { error: string };
-      expect(body.error).toBe('content and agentId are required');
+      expect(body.error).toBe('content is required');
+    });
+
+    it('POST /api/message/stream forwards requestId and allows default routing', async () => {
+      const calls: Array<{ agentId?: string; requestId?: string; content: string }> = [];
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+        onStreamDispatch: async (agentId, message) => {
+          calls.push({ agentId, requestId: message.requestId, content: message.content });
+          return { requestId: message.requestId || 'req-fallback', runId: message.requestId || 'req-fallback', content: 'Reply from stream' };
+        },
+      };
+
+      web = new WebChannel({ port: 18969, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'fallback' }));
+
+      const res = await fetch('http://localhost:18969/api/message/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ content: 'Hello', requestId: 'req-stream-1' }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json() as { requestId: string; runId: string; content: string };
+      expect(body.requestId).toBe('req-stream-1');
+      expect(body.runId).toBe('req-stream-1');
+      expect(body.content).toBe('Reply from stream');
+      expect(calls).toEqual([{ agentId: undefined, requestId: 'req-stream-1', content: 'Hello' }]);
     });
 
     it('does not expose internal error details from dashboard callbacks', async () => {

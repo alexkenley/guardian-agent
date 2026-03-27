@@ -12,6 +12,7 @@
 export type AssistantDispatchPriority = 'high' | 'normal' | 'low';
 
 export interface AssistantDispatchInput {
+  requestId?: string;
   agentId: string;
   userId: string;
   channel: string;
@@ -219,7 +220,7 @@ export class AssistantOrchestrator {
     const now = Date.now();
     const priority = input.priority ?? 'normal';
     const requestType = input.requestType?.trim() || 'message';
-    const requestId = createRequestId(now);
+    const requestId = input.requestId?.trim() || createRequestId(now);
     const messagePreview = this.preview(input.content);
 
     session.queueDepth += 1;

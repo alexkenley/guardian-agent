@@ -244,6 +244,7 @@ import {
   buildLocalModelTooComplicatedMessage,
   getProviderLocalityFromName,
   isLocalToolCallParseError,
+  readResponseSourceMetadata,
   shouldBypassLocalModelComplexityGuard,
   type ResponseSourceMetadata,
 } from './runtime/model-routing-ux.js';
@@ -258,6 +259,15 @@ import { isToolReportQuery as _isToolReportQuery, formatToolReport as _formatToo
 
 const log = createLogger('main');
 let sharedCodeWorkspaceTrustService: CodeWorkspaceTrustService | undefined;
+
+function normalizeTierModeForRouter(
+  router: MessageRouter,
+  mode: 'auto' | 'local-only' | 'external-only' | undefined,
+): 'auto' | 'local-only' | 'external-only' {
+  if (mode === 'local-only' && !router.findAgentByRole('local')) return 'auto';
+  if (mode === 'external-only' && !router.findAgentByRole('external')) return 'auto';
+  return mode ?? 'auto';
+}
 let sharedPackageInstallTrustService: PackageInstallTrustService | undefined;
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1035,16 +1045,6 @@ class ChatAgent extends BaseAgent {
           }) ?? '',
           runtimeNotices: this.tools?.getRuntimeNotices() ?? [],
         });
-        if (this.conversationService) {
-          this.conversationService.recordTurn(
-            conversationKey,
-            message.content,
-            result.content,
-          );
-        }
-        if (resolvedCodeSession) {
-          this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
-        }
         const workerMeta: Record<string, unknown> = { ...(result.metadata ?? {}) };
         // Ensure responseSource is present — if the worker didn't provide one,
         // derive it from the primary provider context.
@@ -1074,6 +1074,17 @@ class ChatAgent extends BaseAgent {
         }
         if (preResolvedSkills.length > 0) {
           workerMeta.activeSkills = preResolvedSkills.map((skill) => skill.id);
+        }
+        if (this.conversationService) {
+          this.conversationService.recordTurn(
+            conversationKey,
+            message.content,
+            result.content,
+            { assistantResponseSource: readResponseSourceMetadata(workerMeta) },
+          );
+        }
+        if (resolvedCodeSession) {
+          this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
         }
         return {
           content: result.content,
@@ -2065,23 +2076,6 @@ class ChatAgent extends BaseAgent {
       }
     }
 
-    if (this.conversationService) {
-      this.conversationService.recordTurn(
-        conversationKey,
-        message.content,
-        finalContent,
-      );
-    }
-    if (resolvedCodeSession) {
-      this.syncCodeSessionRuntimeState(
-        resolvedCodeSession.session,
-        conversationUserId,
-        conversationChannel,
-        activeSkills,
-        lastToolRoundResults,
-      );
-    }
-
     const metadata: Record<string, unknown> = {};
     if (activeSkills.length > 0) metadata.activeSkills = activeSkills.map((skill) => skill.id);
     if (pendingApprovalMeta?.length) metadata.pendingApprovals = pendingApprovalMeta;
@@ -2092,6 +2086,24 @@ class ChatAgent extends BaseAgent {
       if (resolvedCodeSession) {
         metadata.codeSessionId = resolvedCodeSession.session.id;
       }
+    }
+
+    if (this.conversationService) {
+      this.conversationService.recordTurn(
+        conversationKey,
+        message.content,
+        finalContent,
+        { assistantResponseSource: responseSource },
+      );
+    }
+    if (resolvedCodeSession) {
+      this.syncCodeSessionRuntimeState(
+        resolvedCodeSession.session,
+        conversationUserId,
+        conversationChannel,
+        activeSkills,
+        lastToolRoundResults,
+      );
     }
 
     return {
@@ -2445,7 +2457,6 @@ class ChatAgent extends BaseAgent {
     this.codeSessionStore.updateSession({
       sessionId: session.id,
       ownerUserId: session.ownerUserId,
-      ...(session.agentId ? {} : { agentId: this.id }),
       status,
       workState: {
         ...session.workState,
@@ -2506,6 +2517,7 @@ class ChatAgent extends BaseAgent {
         input.conversationKey,
         input.message.content,
         normalized.content,
+        { assistantResponseSource: readResponseSourceMetadata(normalized.metadata) },
       );
     }
     const routingMessage = input.routingMessage ?? input.message;
@@ -5169,14 +5181,21 @@ function buildDashboardCallbacks(
       channel: session.conversationChannel,
     };
   };
-  const getDashboardPreferredAgentIdForCodeSession = (session: CodeSessionRecord, channelDefault?: string): string => (
-    session.agentId?.trim()
-    || router.findAgentByRole('local')?.id
-    || channelDefault
-    || configRef.current.channels.web?.defaultAgent
-    || configRef.current.channels.cli?.defaultAgent
-    || 'default'
-  );
+  const resolveConfiguredAutoRoute = (channelDefault: string | undefined, content: string): RouteDecision => {
+    if (channelDefault) {
+      return { agentId: channelDefault, confidence: 'high', reason: 'channel default override' };
+    }
+    const routingCfg = configRef.current.routing;
+    const tierMode = normalizeTierModeForRouter(router, routingCfg?.tierMode);
+    const threshold = routingCfg?.complexityThreshold ?? 0.5;
+
+    // Only use tier routing when role-tagged agents exist
+    const hasRoles = router.findAgentByRole('local') || router.findAgentByRole('external');
+    if (hasRoles) {
+      return router.routeWithTier(content, tierMode, threshold);
+    }
+    return router.route(content);
+  };
   const resolveDashboardCodeSessionRequest = (args: {
     sessionId: string;
     userId?: string;
@@ -5787,12 +5806,18 @@ function buildDashboardCallbacks(
     const providerConfig = configRef.current.llm[providerName];
     const providerLocality = getProviderLocality(providerConfig);
     const isInternal = isInternalDashboardAgent(inst.agent.id);
+    const routingRole = router.findAgentByRole('local')?.id === inst.agent.id
+      ? 'local'
+      : router.findAgentByRole('external')?.id === inst.agent.id
+        ? 'external'
+        : undefined;
     return {
       id: inst.agent.id,
       name: inst.agent.name,
       state: inst.state,
       canChat: inst.agent.capabilities.handleMessages,
       internal: isInternal,
+      ...(routingRole ? { routingRole } : {}),
       capabilities: inst.definition.grantedCapabilities,
       provider: providerName,
       providerType: providerConfig?.provider,
@@ -5815,7 +5840,7 @@ function buildDashboardCallbacks(
       metadata?: Record<string, unknown>;
     };
     routeDecision?: { fallbackAgentId?: string; complexityScore?: number; tier?: string };
-    options?: { priority?: 'high' | 'normal' | 'low'; requestType?: string };
+    options?: { priority?: 'high' | 'normal' | 'low'; requestType?: string; requestId?: string };
     resolvedCodeSession?: ResolvedCodeSessionContext | null;
   }) => {
     const channel = args.msg.channel?.trim() || 'web';
@@ -5877,8 +5902,43 @@ function buildDashboardCallbacks(
       metadata: args.routeDecision?.tier ? { tier: args.routeDecision.tier, complexity: String(args.routeDecision.complexityScore ?? '') } : undefined,
     });
 
+    const requestedTier = args.routeDecision?.tier
+      ?? (router.findAgentByRole('local')?.id === args.agentId
+        ? 'local'
+        : router.findAgentByRole('external')?.id === args.agentId
+          ? 'external'
+          : undefined);
+    const mergeResponseSourceMetadata = (metadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
+      const existingResponseSource = metadata?.responseSource && typeof metadata.responseSource === 'object'
+        ? metadata.responseSource as Record<string, unknown>
+        : undefined;
+      const locality = existingResponseSource?.locality === 'local' || existingResponseSource?.locality === 'external'
+        ? existingResponseSource.locality
+        : undefined;
+      const providerName = typeof existingResponseSource?.providerName === 'string'
+        ? existingResponseSource.providerName
+        : undefined;
+      const mismatchNotice = requestedTier && locality && requestedTier !== locality
+        ? `Requested ${requestedTier} route, final response came from ${locality}${providerName ? ` (${providerName})` : ''}.`
+        : undefined;
+      const mergedMetadata = {
+        ...(metadata ?? {}),
+        ...((requestedTier || mismatchNotice)
+          ? {
+              responseSource: {
+                ...(existingResponseSource ?? {}),
+                ...(requestedTier ? { tier: requestedTier } : {}),
+                ...(mismatchNotice && !existingResponseSource?.notice ? { notice: mismatchNotice } : {}),
+              },
+            }
+          : {}),
+      };
+      return Object.keys(mergedMetadata).length > 0 ? mergedMetadata : undefined;
+    };
+
     return orchestrator.dispatch(
       {
+        requestId: args.options?.requestId,
         agentId: args.agentId,
         userId: dispatchUserId,
         channel: dispatchChannel,
@@ -5912,22 +5972,9 @@ function buildDashboardCallbacks(
             channelUserId,
             agentId: args.agentId,
           });
-          const mergedMetadata = {
-            ...(response.metadata ?? {}),
-            ...(args.routeDecision?.tier
-              ? {
-                  responseSource: {
-                    ...((response.metadata?.responseSource && typeof response.metadata.responseSource === 'object')
-                      ? response.metadata.responseSource as Record<string, unknown>
-                      : {}),
-                    tier: args.routeDecision.tier,
-                  },
-                }
-              : {}),
-          };
           return {
             ...response,
-            metadata: Object.keys(mergedMetadata).length > 0 ? mergedMetadata : undefined,
+            metadata: mergeResponseSourceMetadata(response.metadata),
           };
         } catch (err) {
           const routingCfg = configRef.current.routing;
@@ -5961,17 +6008,16 @@ function buildDashboardCallbacks(
                 agentId: fallbackId,
                 metadata: { fallback: 'true' },
               });
-              const mergedMetadata = {
+              const mergedMetadata = mergeResponseSourceMetadata({
                 ...(fallbackResponse.metadata ?? {}),
                 fallback: true,
                 responseSource: {
                   ...((fallbackResponse.metadata?.responseSource && typeof fallbackResponse.metadata.responseSource === 'object')
                     ? fallbackResponse.metadata.responseSource as Record<string, unknown>
                     : {}),
-                  tier: 'external',
                   usedFallback: true,
                 },
-              };
+              });
               return {
                 ...fallbackResponse,
                 metadata: mergedMetadata,
@@ -7070,6 +7116,141 @@ function buildDashboardCallbacks(
       });
     },
 
+    onStreamDispatch: async (agentId, msg, emitSSE) => {
+      const requestId = msg.requestId?.trim() || randomUUID();
+      const routeDecision = (() => {
+        if (agentId?.trim()) return undefined;
+        const resolvedChannel = msg.channel?.trim() || 'web';
+        const channelUserId = msg.userId?.trim() || `${resolvedChannel}-user`;
+        const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
+        const requestedCodeContext = readCodeRequestMetadata(msg.metadata);
+        const resolvedCodeSession = codeSessionStore.resolveForRequest({
+          requestedSessionId: requestedCodeContext?.sessionId,
+          userId: canonicalUserId,
+          principalId: msg.principalId,
+          channel: resolvedChannel,
+          surfaceId: canonicalUserId,
+          touchAttachment: false,
+        });
+        const channelDefault = configRef.current.channels.web?.defaultAgent;
+        const defaultStreamAgentId = configRef.current.agents[0]?.id
+          ?? (router.findAgentByRole('local')?.id || router.findAgentByRole('external')?.id || 'default');
+        if (resolvedCodeSession) {
+          const pinnedAgentId = resolvedCodeSession.session.agentId?.trim();
+          if (pinnedAgentId) {
+            return {
+              agentId: pinnedAgentId,
+              confidence: 'high' as const,
+              reason: requestedCodeContext?.sessionId
+                ? 'explicit backend-owned coding session'
+                : 'attached backend-owned coding session',
+            };
+          }
+          return {
+            ...resolveConfiguredAutoRoute(channelDefault, msg.content),
+            reason: requestedCodeContext?.sessionId
+              ? 'explicit backend-owned coding session with auto routing'
+              : 'attached backend-owned coding session with auto routing',
+          };
+        }
+        if (requestedCodeContext?.workspaceRoot) {
+          return {
+            agentId: router.findAgentByRole('local')?.id || channelDefault || defaultStreamAgentId,
+            confidence: 'high' as const,
+            reason: 'code workspace context',
+          };
+        }
+        if (channelDefault) {
+          return {
+            agentId: channelDefault,
+            confidence: 'high' as const,
+            reason: 'channel default override',
+          };
+        }
+        const routingCfg = configRef.current.routing;
+        const tierMode = normalizeTierModeForRouter(router, routingCfg?.tierMode);
+        const threshold = routingCfg?.complexityThreshold ?? 0.5;
+        const hasRoles = router.findAgentByRole('local') || router.findAgentByRole('external');
+        return hasRoles
+          ? router.routeWithTier(msg.content, tierMode, threshold)
+          : router.route(msg.content);
+      })();
+      const resolvedAgentId = agentId?.trim()
+        || routeDecision?.agentId
+        || configRef.current.channels.web?.defaultAgent
+        || configRef.current.agents[0]?.id
+        || 'default';
+
+      emitSSE({
+        type: 'chat.thinking',
+        data: {
+          requestId,
+          runId: requestId,
+        },
+      });
+
+      try {
+        const response = await dispatchDashboardMessage({
+          agentId: resolvedAgentId,
+          msg: {
+            content: msg.content,
+            userId: msg.userId,
+            principalId: msg.principalId,
+            principalRole: msg.principalRole,
+            channel: msg.channel,
+            metadata: msg.metadata,
+          },
+          routeDecision,
+          options: {
+            priority: 'high',
+            requestType: 'chat',
+            requestId,
+          },
+        });
+        emitSSE({
+          type: 'chat.done',
+          data: {
+            requestId,
+            runId: requestId,
+            content: response.content,
+            metadata: response.metadata,
+          },
+        });
+        return {
+          requestId,
+          runId: requestId,
+          content: response.content,
+          metadata: response.metadata,
+        };
+      } catch (err) {
+        const requestError = err instanceof Error && typeof (err as { statusCode?: unknown }).statusCode === 'number'
+          ? {
+              error: err.message || 'Stream dispatch failed',
+              errorCode: typeof (err as unknown as { errorCode?: unknown }).errorCode === 'string'
+                ? (err as unknown as { errorCode: string }).errorCode
+                : undefined,
+            }
+          : null;
+        const error = requestError?.error ?? (err instanceof Error ? err.message : String(err));
+        emitSSE({
+          type: 'chat.error',
+          data: {
+            requestId,
+            runId: requestId,
+            error,
+            ...(requestError?.errorCode ? { errorCode: requestError.errorCode } : {}),
+          },
+        });
+        return {
+          requestId,
+          runId: requestId,
+          content: '',
+          error,
+          ...(requestError?.errorCode ? { errorCode: requestError.errorCode } : {}),
+        };
+      }
+    },
+
     onCodeSessionsList: ({ userId, principalId, channel, surfaceId }) => {
       const resolvedChannel = channel?.trim() || 'web';
       const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
@@ -7251,8 +7432,17 @@ function buildDashboardCallbacks(
           'CODE_SESSION_UNAVAILABLE',
         );
       }
+      const channelDefault = configRef.current.channels.web?.defaultAgent;
+      const pinnedAgentId = resolved.resolvedSession.session.agentId?.trim();
+      const routeDecision = pinnedAgentId
+        ? undefined
+        : resolveConfiguredAutoRoute(channelDefault, content);
       return dispatchDashboardMessage({
-        agentId: getDashboardPreferredAgentIdForCodeSession(resolved.resolvedSession.session, configRef.current.channels.web?.defaultAgent),
+        agentId: pinnedAgentId
+          || routeDecision?.agentId
+          || channelDefault
+          || configRef.current.agents[0]?.id
+          || 'default',
         msg: {
           content,
           userId,
@@ -7268,6 +7458,7 @@ function buildDashboardCallbacks(
             },
           },
         },
+        routeDecision,
         resolvedCodeSession: resolved.resolvedSession,
       });
     },
@@ -11823,12 +12014,6 @@ async function main(): Promise<void> {
   const channels: { name: string; stop: () => Promise<void> }[] = [];
 
   const defaultAgentId = config.agents[0]?.id ?? (localProviderName && externalProviderName ? 'local' : 'default');
-  const getPreferredAgentIdForCodeSession = (session: CodeSessionRecord, channelDefault?: string): string => (
-    session.agentId?.trim()
-    || router.findAgentByRole('local')?.id
-    || channelDefault
-    || defaultAgentId
-  );
 
   /** Resolve target agent with tier routing: channel override → tier router → plain router. */
   const resolveAgentWithTier = (channelDefault: string | undefined, content: string): RouteDecision => {
@@ -11836,7 +12021,7 @@ async function main(): Promise<void> {
       return { agentId: channelDefault, confidence: 'high', reason: 'channel default override' };
     }
     const routingCfg = configRef.current.routing;
-    const tierMode = routingCfg?.tierMode ?? 'auto';
+    const tierMode = normalizeTierModeForRouter(router, routingCfg?.tierMode);
     const threshold = routingCfg?.complexityThreshold ?? 0.5;
 
     // Only use tier routing when role-tagged agents exist
@@ -11863,12 +12048,21 @@ async function main(): Promise<void> {
       touchAttachment: false,
     });
     if (resolvedCodeSession) {
+      const pinnedAgentId = resolvedCodeSession.session.agentId?.trim();
+      if (pinnedAgentId) {
+        return {
+          agentId: pinnedAgentId,
+          confidence: 'high',
+          reason: requestedCodeContext?.sessionId
+            ? 'explicit backend-owned coding session'
+            : 'attached backend-owned coding session',
+        };
+      }
       return {
-        agentId: getPreferredAgentIdForCodeSession(resolvedCodeSession.session, channelDefault),
-        confidence: 'high',
+        ...resolveAgentWithTier(channelDefault, msg.content),
         reason: requestedCodeContext?.sessionId
-          ? 'explicit backend-owned coding session'
-          : 'attached backend-owned coding session',
+          ? 'explicit backend-owned coding session with auto routing'
+          : 'attached backend-owned coding session with auto routing',
       };
     }
     if (requestedCodeContext?.workspaceRoot) {
@@ -12269,8 +12463,16 @@ async function main(): Promise<void> {
   // Routing mode: read/write tier mode at runtime
   dashboardCallbacks.onRoutingMode = () => {
     const r = configRef.current.routing;
+    const tierMode = normalizeTierModeForRouter(router, r?.tierMode);
+    if (tierMode !== (r?.tierMode ?? 'auto')) {
+      configRef.current.routing = {
+        strategy: r?.strategy ?? 'keyword',
+        ...r,
+        tierMode,
+      };
+    }
     return {
-      tierMode: r?.tierMode ?? 'auto',
+      tierMode,
       complexityThreshold: r?.complexityThreshold ?? 0.5,
       fallbackOnFailure: r?.fallbackOnFailure !== false,
     };
@@ -12279,9 +12481,16 @@ async function main(): Promise<void> {
     if (!configRef.current.routing) {
       configRef.current.routing = { strategy: 'keyword' };
     }
-    configRef.current.routing.tierMode = mode;
-    log.info({ tierMode: mode }, 'Tier routing mode updated');
-    return { success: true, message: `Routing mode set to: ${mode}`, tierMode: mode };
+    const normalizedMode = normalizeTierModeForRouter(router, mode);
+    configRef.current.routing.tierMode = normalizedMode;
+    log.info({ requestedTierMode: mode, tierMode: normalizedMode }, 'Tier routing mode updated');
+    return {
+      success: normalizedMode === mode,
+      message: normalizedMode === mode
+        ? `Routing mode set to: ${mode}`
+        : `Routing mode ${mode} is unavailable right now. Falling back to: ${normalizedMode}`,
+      tierMode: normalizedMode,
+    };
   };
 
   // ─── Scheduled Tasks callbacks ─────────────────────────

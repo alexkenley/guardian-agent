@@ -2961,7 +2961,14 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
 
-        let parsed: { content?: unknown; userId?: string; agentId?: unknown; channel?: string; metadata?: Record<string, unknown> };
+        let parsed: {
+          content?: unknown;
+          userId?: string;
+          agentId?: unknown;
+          requestId?: unknown;
+          channel?: string;
+          metadata?: Record<string, unknown>;
+        };
         try {
           parsed = JSON.parse(body) as typeof parsed;
         } catch {
@@ -2971,8 +2978,9 @@ export class WebChannel implements ChannelAdapter {
 
         const content = asNonEmptyString(parsed.content);
         const agentId = trimOptionalString(parsed.agentId);
-        if (!content || !agentId) {
-          sendJSON(res, 400, { error: 'content and agentId are required' });
+        const requestId = trimOptionalString(parsed.requestId);
+        if (!content) {
+          sendJSON(res, 400, { error: 'content is required' });
           return;
         }
 
@@ -2989,6 +2997,7 @@ export class WebChannel implements ChannelAdapter {
           const result = await this.dashboard.onStreamDispatch(
             agentId,
             {
+              requestId,
               content,
               userId: parsed.userId,
               principalId: principal.principalId,

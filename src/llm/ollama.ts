@@ -93,12 +93,17 @@ export class OllamaProvider implements LLMProvider {
       : controller.signal;
 
     try {
-      const res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal,
-      });
+      let res: Response;
+      try {
+        res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal,
+        });
+      } catch (err) {
+        throw toOllamaConnectivityError(err, this.baseUrl);
+      }
 
       if (!res.ok) {
         const text = await res.text();
@@ -150,12 +155,17 @@ export class OllamaProvider implements LLMProvider {
       : controller.signal;
 
     try {
-      const res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal,
-      });
+      let res: Response;
+      try {
+        res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal,
+        });
+      } catch (err) {
+        throw toOllamaConnectivityError(err, this.baseUrl);
+      }
 
       if (!res.ok) {
         const text = await res.text();
@@ -262,6 +272,14 @@ function mapFinishReason(reason?: string): ChatResponse['finishReason'] {
     case 'length': return 'length';
     default: return 'stop';
   }
+}
+
+function toOllamaConnectivityError(err: unknown, baseUrl: string): Error {
+  if (err instanceof Error && err.name === 'AbortError') {
+    return err;
+  }
+  const detail = err instanceof Error ? err.message : String(err ?? 'unknown error');
+  return new Error(`Could not reach Ollama at ${baseUrl}. Check that the local Ollama server is running. (${detail})`);
 }
 
 /** Combine multiple AbortSignals into one. */

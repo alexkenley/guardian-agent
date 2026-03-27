@@ -13,6 +13,7 @@ import type { QuickActionDefinition } from '../quick-actions.js';
 import type { SetupStatus, SetupApplyInput, SearchConfigInput } from '../runtime/setup.js';
 import type { AnalyticsSummary, AnalyticsEventInput } from '../runtime/analytics.js';
 import type { ConversationSessionInfo } from '../runtime/conversation.js';
+import type { ResponseSourceMetadata } from '../runtime/model-routing-ux.js';
 import type { AssistantOrchestratorState } from '../runtime/orchestrator.js';
 import type { AssistantConnectorPackConfig, AssistantConnectorPlaybookDefinition, ConnectorExecutionMode } from '../config/types.js';
 import type {
@@ -94,6 +95,8 @@ export interface DashboardAgentInfo {
   canChat?: boolean;
   /** Internal agents are used by tier routing and hidden from user-facing selectors. */
   internal?: boolean;
+  /** Tier-routing role when this agent is the runtime's local or external lane. */
+  routingRole?: 'local' | 'external';
   capabilities: readonly string[];
   provider?: string;
   providerType?: string;
@@ -1129,8 +1132,9 @@ export interface DashboardCallbacks {
   onConnectorsPackUpsert?: (pack: AssistantConnectorPackConfig) => { success: boolean; message: string };
   onConnectorsPackDelete?: (packId: string) => { success: boolean; message: string };
   onStreamDispatch?: (
-    agentId: string,
+    agentId: string | undefined,
     message: {
+      requestId?: string;
       content: string;
       userId?: string;
       principalId?: string;
@@ -1139,7 +1143,14 @@ export interface DashboardCallbacks {
       metadata?: Record<string, unknown>;
     },
     emitSSE: (event: SSEEvent) => void,
-  ) => Promise<{ requestId: string; content: string; metadata?: Record<string, unknown> }>;
+  ) => Promise<{
+    requestId: string;
+    runId: string;
+    content: string;
+    metadata?: Record<string, unknown>;
+    error?: string;
+    errorCode?: string;
+  }>;
   onTelegramReload?: () => Promise<{ success: boolean; message: string }>;
   onCloudTest?: (provider: string, profileId: string) => Promise<{ success: boolean; message: string }>;
   onKillswitch?: () => void;
@@ -1517,6 +1528,7 @@ export interface DashboardCodeSessionSnapshot {
     role: 'user' | 'assistant';
     content: string;
     timestamp: number;
+    responseSource?: ResponseSourceMetadata;
   }>;
   attached: boolean;
   attachment?: CodeSessionAttachmentRecord | null;

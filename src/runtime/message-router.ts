@@ -141,8 +141,8 @@ export class MessageRouter {
   /**
    * Route with tier-aware complexity scoring.
    *
-   * - 'local-only'    → force local agent, no fallback
-   * - 'external-only' → force external agent, no fallback
+   * - 'local-only'    → force local agent when available
+   * - 'external-only' → force external agent when available
    * - 'auto'          → score complexity, pick tier, set fallback to opposite
    *
    * High-confidence pattern matches override tier scoring.
@@ -162,22 +162,36 @@ export class MessageRouter {
 
     // Forced modes
     if (tierMode === 'local-only') {
-      const agent = localAgent ?? externalAgent!;
+      if (localAgent) {
+        return {
+          agentId: localAgent.id,
+          confidence: 'high',
+          reason: 'tier mode: local-only',
+          tier: 'local',
+        };
+      }
       return {
-        agentId: agent.id,
-        confidence: 'high',
-        reason: 'tier mode: local-only',
-        tier: 'local',
+        agentId: externalAgent!.id,
+        confidence: 'medium',
+        reason: 'tier mode: local-only unavailable; only external tier available',
+        tier: 'external',
       };
     }
 
     if (tierMode === 'external-only') {
-      const agent = externalAgent ?? localAgent!;
+      if (externalAgent) {
+        return {
+          agentId: externalAgent.id,
+          confidence: 'high',
+          reason: 'tier mode: external-only',
+          tier: 'external',
+        };
+      }
       return {
-        agentId: agent.id,
-        confidence: 'high',
-        reason: 'tier mode: external-only',
-        tier: 'external',
+        agentId: localAgent!.id,
+        confidence: 'medium',
+        reason: 'tier mode: external-only unavailable; only local tier available',
+        tier: 'local',
       };
     }
 

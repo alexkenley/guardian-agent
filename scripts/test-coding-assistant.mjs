@@ -1158,6 +1158,11 @@ guardian:
       assert.match(String(messageResponse.content ?? ''), /src\/example\.ts/);
     }
     const postMessageSession = await getCodeSessionSnapshot(10);
+    assert.equal(
+      postMessageSession?.session?.agentId ?? null,
+      null,
+      `Expected auto-routed code session to remain unpinned after a turn: ${JSON.stringify(postMessageSession?.session)}`,
+    );
     assert.ok(
       String(postMessageSession?.session?.workState?.focusSummary ?? '').trim().length > 0,
       `Expected code-session focus summary after coding turn: ${JSON.stringify(postMessageSession)}`,

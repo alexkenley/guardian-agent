@@ -75,6 +75,34 @@ describe('ConversationService', () => {
     expect(after).not.toBe(before);
     service.close();
   });
+
+  it('should preserve assistant response source metadata in session history', () => {
+    const service = makeService();
+    const key = { agentId: 'assistant', userId: 'u1', channel: 'web' };
+
+    service.recordTurn(key, 'hello', 'hi there', {
+      assistantResponseSource: {
+        locality: 'external',
+        providerName: 'anthropic',
+        tier: 'external',
+        usedFallback: true,
+        notice: 'Retried on external.',
+      },
+    });
+
+    const history = service.getSessionHistory(key);
+
+    expect(history).toHaveLength(2);
+    expect(history[0].responseSource).toBeUndefined();
+    expect(history[1].responseSource).toEqual({
+      locality: 'external',
+      providerName: 'anthropic',
+      tier: 'external',
+      usedFallback: true,
+      notice: 'Retried on external.',
+    });
+    service.close();
+  });
 });
 
 describe('ConversationService FTS5 Search', () => {

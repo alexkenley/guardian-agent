@@ -99,6 +99,19 @@ describe('OllamaProvider', () => {
     vi.unstubAllGlobals();
   });
 
+  it('should surface a helpful connectivity error when Ollama is unreachable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')));
+
+    const config: LLMConfig = { provider: 'ollama', model: 'llama3.2' };
+    const provider = createProvider(config);
+
+    await expect(
+      provider.chat([{ role: 'user', content: 'hello' }]),
+    ).rejects.toThrow('Could not reach Ollama');
+
+    vi.unstubAllGlobals();
+  });
+
   it('should list models via /api/tags', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,

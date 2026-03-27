@@ -99,9 +99,9 @@ export class BrokerClient {
     messages: ChatMessage[],
     options?: ChatOptions,
     opts?: { useFallback?: boolean },
-  ): Promise<ChatResponse> {
+  ): Promise<ChatResponse & { providerName?: string; providerLocality?: 'local' | 'external' }> {
     // LLM calls can take up to 120s; use extended timeout
-    return this.sendRequest<ChatResponse>('llm.chat', {
+    return this.sendRequest<ChatResponse & { providerName?: string; providerLocality?: 'local' | 'external' }>('llm.chat', {
       messages,
       options: options ?? {},
       useFallback: opts?.useFallback ?? false,

@@ -32,7 +32,7 @@ export async function initChatPanel(container) {
 
   const chatAgents = agents.filter((a) => a.canChat !== false);
   const userAgents = chatAgents.filter((a) => !a.internal);
-  const hasInternalOnly = userAgents.length === 0 && chatAgents.length > 0;
+  const hasInternalOnly = userAgents.length === 0 && hasTierRoutingAgents(chatAgents);
   const webUserId = resolveWebUserId();
 
   container.innerHTML = '';
@@ -73,14 +73,16 @@ export async function initChatPanel(container) {
     modeSelect = document.createElement('select');
     modeSelect.id = 'chat-mode-select';
     modeSelect.style.cssText = 'flex:1;font-size:0.7rem;';
-    modeSelect.innerHTML = `
-      <option value="auto">Auto (recommended)</option>
-      <option value="local-only">Local Only</option>
-      <option value="external-only">External Only</option>
-    `;
+    modeSelect.innerHTML = getRoutingModeOptions(chatAgents).map((option) => (
+      `<option value="${esc(option.value)}">${esc(option.label)}</option>`
+    )).join('');
 
-    const currentMode = routingMode?.tierMode ?? sessionStorage.getItem(TIER_MODE_KEY) ?? 'auto';
+    const currentMode = normalizeRoutingMode(
+      routingMode?.tierMode ?? sessionStorage.getItem(TIER_MODE_KEY) ?? 'auto',
+      chatAgents,
+    );
     modeSelect.value = currentMode;
+    sessionStorage.setItem(TIER_MODE_KEY, currentMode);
 
     modeSelect.addEventListener('change', async () => {
       const mode = modeSelect.value;
@@ -164,8 +166,9 @@ export async function initChatPanel(container) {
     const resetId = hasInternalOnly ? '__guardian__' : (select?.value || '');
     if (!resetId) return;
     try {
-      // For unified mode, reset the default agent's conversation
-      const apiAgentId = resetId === '__guardian__' ? (chatAgents[0]?.id || 'default') : resetId;
+      const apiAgentId = resetId === '__guardian__'
+        ? (getRoutingModeAgentId(chatAgents, modeSelect?.value) || chatAgents[0]?.id || 'default')
+        : resetId;
       await api.resetConversation(apiAgentId, webUserId, 'web');
       chatHistoryByAgent.delete(resetId);
       renderHistory(history, resetId);
@@ -176,7 +179,11 @@ export async function initChatPanel(container) {
 
   // ── Helpers ──────────────────────────────────────────────────
 
-  const getAgentId = () => hasInternalOnly ? undefined : (select?.value || undefined);
+  const getAgentId = () => (
+    hasInternalOnly
+      ? getRoutingModeAgentId(chatAgents, modeSelect?.value)
+      : (select?.value || undefined)
+  );
   const getContextPrefix = () => `[Context: User is currently viewing the ${currentChatContext} panel] `;
 
   /**
@@ -287,105 +294,72 @@ export async function initChatPanel(container) {
     try {
       const contextPrefix = getContextPrefix();
       const agentId = getAgentId();
+      const requestId = createClientRequestId();
+      let cleanedUp = false;
+      let finalised = false;
 
-      // Try streaming first, fall back to regular send
-      if (agentId) {
-        try {
-          const streamResult = await api.sendMessageStream(contextPrefix + text, agentId, webUserId, 'web');
+      const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        offSSE('run.timeline', onRunTimeline);
+        offSSE('chat.done', onDone);
+        offSSE('chat.error', onError);
+      };
 
-          // If streaming worked, set up live rendering via SSE
-          if (streamResult?.requestId) {
-            const requestId = streamResult.requestId;
-            let liveContent = '';
-            let liveEl = null;
+      const finalizeSuccess = (data) => {
+        if (finalised) return;
+        finalised = true;
+        cleanup();
+        thinkingEl.remove();
+        addAgentMessage(data.content || '', data.metadata?.pendingApprovals, data.metadata?.responseSource);
+      };
 
-            const onToken = (data) => {
-              if (data.requestId !== requestId) return;
-              if (!liveEl) {
-                thinkingEl.remove();
-                liveEl = createMessageEl('agent', '');
-                liveEl.classList.add('streaming');
-                history.appendChild(liveEl);
-              }
-              liveContent += data.content || '';
-              const contentEl = liveEl.querySelector('.chat-msg-content') || liveEl;
-              contentEl.textContent = liveContent;
-              history.scrollTop = history.scrollHeight;
-            };
+      const finalizeError = (message) => {
+        if (finalised) return;
+        finalised = true;
+        cleanup();
+        thinkingEl.remove();
+        history.appendChild(createMessageEl('error', message || 'Stream error'));
+      };
 
-            const onToolCall = (data) => {
-              if (data.requestId !== requestId) return;
-              if (!liveEl) {
-                thinkingEl.remove();
-                liveEl = createMessageEl('agent', '');
-                liveEl.classList.add('streaming');
-                history.appendChild(liveEl);
-              }
-              const indicator = document.createElement('div');
-              indicator.className = 'tool-indicator';
-              indicator.textContent = `\u2699 ${data.toolName || 'tool'}`;
-              liveEl.appendChild(indicator);
-            };
+      const onRunTimeline = (data) => {
+        if (data?.summary?.runId !== requestId) return;
+        updateThinkingEl(thinkingEl, data);
+        history.scrollTop = history.scrollHeight;
+      };
 
-            const onDone = (data) => {
-              if (data.requestId !== requestId) return;
-              cleanup();
-              const finalContent = data.content || liveContent;
-              // Replace the streaming element with a final one that may include buttons
-              if (liveEl) {
-                liveEl.classList.remove('streaming');
-                const replacement = createMessageEl('agent', finalContent, {
-                  pendingApprovals: data.metadata?.pendingApprovals,
-                  responseSource: data.metadata?.responseSource,
-                  onApproval: handleApproval,
-                });
-                liveEl.replaceWith(replacement);
-              } else {
-                thinkingEl.remove();
-                addAgentMessage(finalContent, data.metadata?.pendingApprovals, data.metadata?.responseSource);
-              }
-              chatHistory.push({ role: 'agent', content: finalContent, responseSource: data.metadata?.responseSource, pendingApprovals: data.metadata?.pendingApprovals });
-            };
+      const onDone = (data) => {
+        if (data?.requestId !== requestId) return;
+        finalizeSuccess(data);
+      };
 
-            const onError = (data) => {
-              if (data.requestId !== requestId) return;
-              cleanup();
-              if (liveEl) liveEl.remove();
-              thinkingEl.remove();
-              history.appendChild(createMessageEl('error', data.error || 'Stream error'));
-            };
+      const onError = (data) => {
+        if (data?.requestId !== requestId) return;
+        finalizeError(data.error || 'Stream error');
+      };
 
-            const cleanup = () => {
-              offSSE('chat.token', onToken);
-              offSSE('chat.tool_call', onToolCall);
-              offSSE('chat.done', onDone);
-              offSSE('chat.error', onError);
-            };
+      onSSE('run.timeline', onRunTimeline);
+      onSSE('chat.done', onDone);
+      onSSE('chat.error', onError);
 
-            onSSE('chat.token', onToken);
-            onSSE('chat.tool_call', onToolCall);
-            onSSE('chat.done', onDone);
-            onSSE('chat.error', onError);
+      try {
+        const streamResult = await api.sendMessageStream(
+          contextPrefix + text,
+          agentId,
+          webUserId,
+          'web',
+          undefined,
+          requestId,
+        );
 
-            // If response already has content (non-streaming fallback), use it
-            if (streamResult.content) {
-              cleanup();
-              thinkingEl.remove();
-              addAgentMessage(streamResult.content, streamResult.metadata?.pendingApprovals, streamResult.metadata?.responseSource);
-            }
-          } else {
-            // No requestId — treat as regular response
-            thinkingEl.remove();
-            addAgentMessage(streamResult.content || '', streamResult.metadata?.pendingApprovals, streamResult.metadata?.responseSource);
-          }
-        } catch {
-          // Streaming failed — fall back to regular send
-          const response = await api.sendMessage(contextPrefix + text, agentId, webUserId, 'web');
-          thinkingEl.remove();
-          addAgentMessage(response.content, response.metadata?.pendingApprovals, response.metadata?.responseSource);
+        if (streamResult?.error) {
+          finalizeError(streamResult.error);
+        } else if (streamResult?.content) {
+          finalizeSuccess(streamResult);
         }
-      } else {
-        const response = await api.sendMessage(contextPrefix + text, getAgentId(), webUserId, 'web');
+      } catch {
+        cleanup();
+        const response = await api.sendMessage(contextPrefix + text, agentId, webUserId, 'web');
         thinkingEl.remove();
         addAgentMessage(response.content, response.metadata?.pendingApprovals, response.metadata?.responseSource);
       }
@@ -457,11 +431,135 @@ function renderHistory(historyEl, agentId) {
   historyEl.scrollTop = historyEl.scrollHeight;
 }
 
+function createClientRequestId() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+  return `web-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function getRoutingLaneAgents(agents) {
+  const chatAgents = Array.isArray(agents) ? agents.filter((agent) => agent?.canChat !== false) : [];
+  return {
+    local: chatAgents.find((agent) => agent.routingRole === 'local') || null,
+    external: chatAgents.find((agent) => agent.routingRole === 'external') || null,
+  };
+}
+
+function hasTierRoutingAgents(agents) {
+  const { local, external } = getRoutingLaneAgents(agents);
+  return !!(local || external);
+}
+
+function getRoutingModeOptions(agents) {
+  const { local, external } = getRoutingLaneAgents(agents);
+  return [
+    { value: 'auto', label: 'Auto' },
+    ...(local ? [{ value: 'local-only', label: 'Local' }] : []),
+    ...(external ? [{ value: 'external-only', label: 'External' }] : []),
+  ];
+}
+
+function normalizeRoutingMode(mode, agents) {
+  const availableModes = new Set(getRoutingModeOptions(agents).map((option) => option.value));
+  return availableModes.has(mode) ? mode : 'auto';
+}
+
+function getRoutingModeAgentId(agents, mode) {
+  const { local, external } = getRoutingLaneAgents(agents);
+  if (mode === 'local-only') return local?.id;
+  if (mode === 'external-only') return external?.id;
+  return undefined;
+}
+
 function createThinkingEl() {
   const el = document.createElement('div');
   el.className = 'chat-message agent is-thinking';
-  el.innerHTML = '<div class="msg-body"><div class="chat-thinking"><span class="chat-spinner" aria-hidden="true"></span><span>Thinking...</span></div></div>';
+  el.innerHTML = `
+    <div class="msg-body">
+      <div class="chat-thinking">
+        <span class="chat-spinner" aria-hidden="true"></span>
+        <span class="chat-thinking__label">Starting…</span>
+      </div>
+      <div class="chat-live-activity" hidden></div>
+    </div>
+  `;
   return el;
+}
+
+function updateThinkingEl(el, run) {
+  if (!el || !run?.summary) return;
+  const labelEl = el.querySelector('.chat-thinking__label');
+  const activityEl = el.querySelector('.chat-live-activity');
+  if (!labelEl || !activityEl) return;
+
+  const summary = summarizeTimelineRun(run);
+  labelEl.textContent = summary.label;
+  if (summary.items.length === 0) {
+    activityEl.hidden = true;
+    activityEl.innerHTML = '';
+    return;
+  }
+
+  activityEl.hidden = false;
+  activityEl.innerHTML = summary.items.map((item) => `
+    <div class="chat-live-activity__item">
+      <div class="chat-live-activity__title">${esc(item.title)}</div>
+      ${item.detail ? `<div class="chat-live-activity__detail">${esc(item.detail)}</div>` : ''}
+    </div>
+  `).join('');
+}
+
+function summarizeTimelineRun(run) {
+  const items = Array.isArray(run?.items) ? run.items : [];
+  const recentItems = items
+    .filter(isMeaningfulLiveItem)
+    .slice(-2)
+    .map((item) => ({
+    title: String(item?.title || '').trim(),
+    detail: String(item?.detail || '').trim(),
+    }))
+    .filter((item) => item.title);
+  const latestItem = recentItems[recentItems.length - 1];
+  const status = String(run?.summary?.status || '').trim();
+  if (latestItem) {
+    return {
+      label: latestItem.title,
+      items: recentItems,
+    };
+  }
+  return {
+    label: humanizeTimelineStatus(status),
+    items: [],
+  };
+}
+
+function humanizeTimelineStatus(status) {
+  switch (status) {
+    case 'queued':
+      return 'Queued';
+    case 'running':
+      return 'Working…';
+    case 'awaiting_approval':
+      return 'Waiting for approval';
+    case 'verification_pending':
+      return 'Verification pending';
+    case 'blocked':
+      return 'Blocked';
+    case 'completed':
+      return 'Done';
+    case 'failed':
+      return 'Failed';
+    default:
+      return 'Working…';
+  }
+}
+
+function isMeaningfulLiveItem(item) {
+  const type = String(item?.type || '').trim();
+  return type !== 'run_queued'
+    && type !== 'run_started'
+    && type !== 'run_completed';
 }
 
 /**
@@ -505,13 +603,19 @@ function buildSourceBadge(responseSource) {
   badge.className = 'chat-msg-source';
   badge.style.cssText = 'display:inline-flex;align-items:center;gap:0.35rem;margin-bottom:0.35rem;padding:0.15rem 0.4rem;border:1px solid var(--border);border-radius:999px;background:var(--bg-secondary);font-size:0.62rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em;';
   let label = responseSource.locality;
+  if (responseSource.providerName) {
+    label += ` · ${responseSource.providerName}`;
+  }
   if (responseSource.usedFallback) {
     label += ' fallback';
   }
   badge.textContent = label;
-  if (responseSource.notice) {
-    badge.title = responseSource.notice;
+  const titleParts = [];
+  if (responseSource.notice) titleParts.push(responseSource.notice);
+  if (responseSource.tier && responseSource.tier !== responseSource.locality) {
+    titleParts.push(`Requested ${responseSource.tier} route.`);
   }
+  if (titleParts.length > 0) badge.title = titleParts.join(' ');
   return badge;
 }
 

@@ -397,8 +397,10 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
-  sendMessageStream: (content, agentId, userId, channel = 'web', metadata) => {
-    const payload = { content, agentId, userId, channel };
+  sendMessageStream: (content, agentId, userId, channel = 'web', metadata, requestId) => {
+    const payload = { content, userId, channel };
+    if (agentId) payload.agentId = agentId;
+    if (requestId) payload.requestId = requestId;
     if (metadata && typeof metadata === 'object') payload.metadata = metadata;
     return request('/api/message/stream', {
       method: 'POST',

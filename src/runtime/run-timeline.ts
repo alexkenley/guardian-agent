@@ -630,6 +630,21 @@ function buildAssistantTraceItems(trace: AssistantDispatchTrace): DashboardRunTi
     });
   }
 
+  for (const step of trace.steps) {
+    const mapped = mapAssistantTraceStep(step.name, step.status);
+    if (!mapped) continue;
+    items.push({
+      id: `step:${trace.requestId}:${step.name}`,
+      runId: trace.runId,
+      timestamp: step.completedAt ?? step.startedAt,
+      type: 'note',
+      status: mapped.status,
+      source: 'orchestrator',
+      title: mapped.title,
+      ...(mapped.detail ? { detail: mapped.detail } : {}),
+    });
+  }
+
   for (const node of trace.nodes) {
     items.push(...buildTraceNodeItems(trace.runId, node));
   }
@@ -661,6 +676,48 @@ function buildAssistantTraceItems(trace: AssistantDispatchTrace): DashboardRunTi
   }
 
   return items;
+}
+
+function mapAssistantTraceStep(
+  stepName: string,
+  stepStatus: AssistantDispatchTrace['steps'][number]['status'],
+): { title: string; status: DashboardRunTimelineItem['status']; detail?: string } | null {
+  const normalized = nonEmptyText(stepName);
+  if (!normalized || normalized === 'queue_wait' || normalized === 'handler') {
+    return null;
+  }
+
+  const status = stepStatus === 'failed'
+    ? 'failed'
+    : stepStatus === 'running'
+      ? 'running'
+      : 'info';
+
+  switch (normalized) {
+    case 'message_built':
+      return { title: 'Prepared request', status };
+    case 'runtime_dispatch_message':
+      return { title: 'Agent is working', status };
+    case 'runtime_dispatch_fallback':
+      return { title: 'Retrying with fallback', status };
+    case 'quick_action_prompt_built':
+      return { title: 'Prepared quick action', status };
+    default:
+      return {
+        title: humanizeTraceStepName(normalized),
+        status,
+      };
+  }
+}
+
+function humanizeTraceStepName(stepName: string): string {
+  return stepName
+    .split(/[_-]+/g)
+    .filter(Boolean)
+    .map((part, index) => index === 0
+      ? part.charAt(0).toUpperCase() + part.slice(1)
+      : part)
+    .join(' ');
 }
 
 function buildTraceNodeItems(runId: string, node: WorkflowTraceNode): DashboardRunTimelineItem[] {

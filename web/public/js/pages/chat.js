@@ -8,6 +8,7 @@
  */
 
 import { api } from '../api.js';
+import { onSSE, offSSE } from '../app.js';
 import { applyInputTooltips } from '../tooltip.js';
 
 const chatHistoryByAgent = new Map();
@@ -35,7 +36,7 @@ export async function renderChat(container) {
 
   const chatAgents = agents.filter((a) => a.canChat !== false);
   const userAgents = chatAgents.filter((a) => !a.internal);
-  const hasInternalOnly = userAgents.length === 0 && chatAgents.length > 0;
+  const hasInternalOnly = userAgents.length === 0 && hasTierRoutingAgents(chatAgents);
   const webUserId = resolveWebUserId();
 
   container.innerHTML = '';
@@ -88,14 +89,16 @@ export async function renderChat(container) {
     modeSelect = document.createElement('select');
     modeSelect.id = 'chat-mode-select';
     modeSelect.style.fontSize = '0.75rem';
-    modeSelect.innerHTML = `
-      <option value="auto">Auto</option>
-      <option value="local-only">Local Only</option>
-      <option value="external-only">External Only</option>
-    `;
+    modeSelect.innerHTML = getRoutingModeOptions(chatAgents).map((option) => (
+      `<option value="${esc(option.value)}">${esc(option.label)}</option>`
+    )).join('');
 
-    const currentMode = routingMode?.tierMode ?? sessionStorage.getItem(TIER_MODE_KEY) ?? 'auto';
+    const currentMode = normalizeRoutingMode(
+      routingMode?.tierMode ?? sessionStorage.getItem(TIER_MODE_KEY) ?? 'auto',
+      chatAgents,
+    );
     modeSelect.value = currentMode;
+    sessionStorage.setItem(TIER_MODE_KEY, currentMode);
 
     modeSelect.addEventListener('change', async () => {
       const mode = modeSelect.value;
@@ -204,7 +207,9 @@ export async function renderChat(container) {
     resetBtn.textContent = 'Resetting...';
 
     try {
-      const apiAgentId = resetId === '__guardian__' ? (chatAgents[0]?.id || 'default') : resetId;
+      const apiAgentId = resetId === '__guardian__'
+        ? (getRoutingModeAgentId(chatAgents, modeSelect?.value) || chatAgents[0]?.id || 'default')
+        : resetId;
       await api.resetConversation(apiAgentId, webUserId, 'web');
       chatHistoryByAgent.delete(resetId);
       renderHistory(history, resetId);
@@ -240,13 +245,74 @@ export async function renderChat(container) {
     history.scrollTop = history.scrollHeight;
 
     try {
-      // In unified mode, don't send agentId — let tier routing decide
-      const agentId = hasInternalOnly ? undefined : (select?.value || undefined);
-      const response = await api.sendMessage(text, agentId, webUserId, 'web');
-      // Remove thinking indicator
-      thinkingEl.remove();
-      chatHistory.push({ role: 'agent', content: response.content });
-      history.appendChild(createMessageEl('agent', response.content));
+      const agentId = hasInternalOnly
+        ? getRoutingModeAgentId(chatAgents, modeSelect?.value)
+        : (select?.value || undefined);
+      const requestId = createClientRequestId();
+      let cleanedUp = false;
+      let finalised = false;
+
+      const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        offSSE('run.timeline', onRunTimeline);
+        offSSE('chat.done', onDone);
+        offSSE('chat.error', onError);
+      };
+
+      const finalizeSuccess = (data) => {
+        if (finalised) return;
+        finalised = true;
+        cleanup();
+        thinkingEl.remove();
+        chatHistory.push({ role: 'agent', content: data.content || '' });
+        history.appendChild(createMessageEl('agent', data.content || ''));
+      };
+
+      const finalizeError = (message) => {
+        if (finalised) return;
+        finalised = true;
+        cleanup();
+        thinkingEl.remove();
+        const errorMsg = message || 'Failed to get response';
+        chatHistory.push({ role: 'agent', content: `Error: ${errorMsg}` });
+        history.appendChild(createMessageEl('error', `Error: ${errorMsg}`));
+      };
+
+      const onRunTimeline = (data) => {
+        if (data?.summary?.runId !== requestId) return;
+        updateThinkingEl(thinkingEl, data);
+        history.scrollTop = history.scrollHeight;
+      };
+
+      const onDone = (data) => {
+        if (data?.requestId !== requestId) return;
+        finalizeSuccess(data);
+      };
+
+      const onError = (data) => {
+        if (data?.requestId !== requestId) return;
+        finalizeError(data.error || 'Failed to get response');
+      };
+
+      onSSE('run.timeline', onRunTimeline);
+      onSSE('chat.done', onDone);
+      onSSE('chat.error', onError);
+
+      try {
+        const response = await api.sendMessageStream(text, agentId, webUserId, 'web', undefined, requestId);
+        if (response?.error) {
+          finalizeError(response.error);
+        } else if (response?.content) {
+          finalizeSuccess(response);
+        }
+      } catch {
+        cleanup();
+        const response = await api.sendMessage(text, agentId, webUserId, 'web');
+        thinkingEl.remove();
+        chatHistory.push({ role: 'agent', content: response.content });
+        history.appendChild(createMessageEl('agent', response.content));
+      }
     } catch (err) {
       thinkingEl.remove();
       const errorMsg = err.message === 'AUTH_FAILED'
@@ -273,7 +339,9 @@ export async function renderChat(container) {
     if (!historyKey) return;
 
     // For quick actions, we need an actual agent ID for the API
-    const agentId = hasInternalOnly ? (chatAgents[0]?.id || 'default') : (select?.value || '');
+    const agentId = hasInternalOnly
+      ? (getRoutingModeAgentId(chatAgents, modeSelect?.value) || chatAgents[0]?.id || 'default')
+      : (select?.value || '');
 
     const chatHistory = getHistory(historyKey);
     const localPrompt = `[Quick:${actionId}] ${details}`;
@@ -367,28 +435,135 @@ function renderHistory(historyEl, agentId) {
   historyEl.scrollTop = historyEl.scrollHeight;
 }
 
+function createClientRequestId() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+  return `web-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function getRoutingLaneAgents(agents) {
+  const chatAgents = Array.isArray(agents) ? agents.filter((agent) => agent?.canChat !== false) : [];
+  return {
+    local: chatAgents.find((agent) => agent.routingRole === 'local') || null,
+    external: chatAgents.find((agent) => agent.routingRole === 'external') || null,
+  };
+}
+
+function hasTierRoutingAgents(agents) {
+  const { local, external } = getRoutingLaneAgents(agents);
+  return !!(local || external);
+}
+
+function getRoutingModeOptions(agents) {
+  const { local, external } = getRoutingLaneAgents(agents);
+  return [
+    { value: 'auto', label: 'Auto' },
+    ...(local ? [{ value: 'local-only', label: 'Local' }] : []),
+    ...(external ? [{ value: 'external-only', label: 'External' }] : []),
+  ];
+}
+
+function normalizeRoutingMode(mode, agents) {
+  const availableModes = new Set(getRoutingModeOptions(agents).map((option) => option.value));
+  return availableModes.has(mode) ? mode : 'auto';
+}
+
+function getRoutingModeAgentId(agents, mode) {
+  const { local, external } = getRoutingLaneAgents(agents);
+  if (mode === 'local-only') return local?.id;
+  if (mode === 'external-only') return external?.id;
+  return undefined;
+}
+
 function createThinkingEl() {
   const el = document.createElement('div');
-  el.className = 'chat-message agent';
+  el.className = 'chat-message agent is-thinking';
   el.innerHTML = `
     <div class="msg-header">Agent</div>
-    <div class="msg-body thinking">
-      <span class="thinking-dots">Thinking<span class="dot1">.</span><span class="dot2">.</span><span class="dot3">.</span></span>
+    <div class="msg-body">
+      <div class="chat-thinking">
+        <span class="chat-spinner" aria-hidden="true"></span>
+        <span class="chat-thinking__label">Starting…</span>
+      </div>
+      <div class="chat-live-activity" hidden></div>
     </div>
   `;
-  // Animate dots
-  const style = document.createElement('style');
-  style.textContent = `
-    .thinking-dots .dot1 { animation: blink 1.4s infinite 0s; }
-    .thinking-dots .dot2 { animation: blink 1.4s infinite 0.2s; }
-    .thinking-dots .dot3 { animation: blink 1.4s infinite 0.4s; }
-    @keyframes blink { 0%, 20% { opacity: 0; } 50% { opacity: 1; } 100% { opacity: 0; } }
-  `;
-  if (!document.querySelector('#thinking-style')) {
-    style.id = 'thinking-style';
-    document.head.appendChild(style);
-  }
   return el;
+}
+
+function updateThinkingEl(el, run) {
+  if (!el || !run?.summary) return;
+  const labelEl = el.querySelector('.chat-thinking__label');
+  const activityEl = el.querySelector('.chat-live-activity');
+  if (!labelEl || !activityEl) return;
+
+  const summary = summarizeTimelineRun(run);
+  labelEl.textContent = summary.label;
+  if (summary.items.length === 0) {
+    activityEl.hidden = true;
+    activityEl.innerHTML = '';
+    return;
+  }
+
+  activityEl.hidden = false;
+  activityEl.innerHTML = summary.items.map((item) => `
+    <div class="chat-live-activity__item">
+      <div class="chat-live-activity__title">${esc(item.title)}</div>
+      ${item.detail ? `<div class="chat-live-activity__detail">${esc(item.detail)}</div>` : ''}
+    </div>
+  `).join('');
+}
+
+function summarizeTimelineRun(run) {
+  const items = Array.isArray(run?.items) ? run.items : [];
+  const recentItems = items
+    .filter(isMeaningfulLiveItem)
+    .slice(-2)
+    .map((item) => ({
+    title: String(item?.title || '').trim(),
+    detail: String(item?.detail || '').trim(),
+    }))
+    .filter((item) => item.title);
+  const latestItem = recentItems[recentItems.length - 1];
+  if (latestItem) {
+    return {
+      label: latestItem.title,
+      items: recentItems,
+    };
+  }
+  return {
+    label: humanizeTimelineStatus(String(run?.summary?.status || '')),
+    items: [],
+  };
+}
+
+function humanizeTimelineStatus(status) {
+  switch (status) {
+    case 'queued':
+      return 'Queued';
+    case 'running':
+      return 'Working…';
+    case 'awaiting_approval':
+      return 'Waiting for approval';
+    case 'verification_pending':
+      return 'Verification pending';
+    case 'blocked':
+      return 'Blocked';
+    case 'completed':
+      return 'Done';
+    case 'failed':
+      return 'Failed';
+    default:
+      return 'Working…';
+  }
+}
+
+function isMeaningfulLiveItem(item) {
+  const type = String(item?.type || '').trim();
+  return type !== 'run_queued'
+    && type !== 'run_started'
+    && type !== 'run_completed';
 }
 
 function createMessageEl(role, content) {

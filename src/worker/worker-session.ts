@@ -63,6 +63,11 @@ interface AutomationApprovalContinuation {
   expiresAt: number;
 }
 
+type BrokeredChatResponse = ChatResponse & {
+  providerName?: string;
+  providerLocality?: 'local' | 'external';
+};
+
 export interface WorkerMessageHandleParams {
   message: UserMessage;
   systemPrompt: string;
@@ -550,7 +555,7 @@ export class BrokeredWorkerSession {
   private async executeLoop(
     message: UserMessage,
     llmMessages: ChatMessage[],
-    chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>,
+    chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<BrokeredChatResponse>,
     toolExecutor: BrokeredToolExecutor,
     params: WorkerMessageHandleParams,
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
@@ -558,7 +563,7 @@ export class BrokeredWorkerSession {
     let responseSource: ResponseSourceMetadata | undefined;
 
     // Fallback chat function: proxied through the broker with useFallback flag
-    let fallbackChatFn: ((msgs: ChatMessage[], opts?: ChatOptions) => Promise<ChatResponse>) | undefined;
+    let fallbackChatFn: ((msgs: ChatMessage[], opts?: ChatOptions) => Promise<BrokeredChatResponse>) | undefined;
     if (params.hasFallbackProvider) {
       fallbackChatFn = async (msgs, opts) => {
         responseSource = {
@@ -576,8 +581,16 @@ export class BrokeredWorkerSession {
       llmMessages,
       async (messages, options) => {
         try {
-          responseSource = responseSource ?? { locality: 'local' };
-          return await chatFn(messages, options);
+          const chatResponse = await chatFn(messages, options);
+          responseSource = responseSource ?? (
+            chatResponse.providerLocality === 'local' || chatResponse.providerLocality === 'external'
+              ? {
+                  locality: chatResponse.providerLocality,
+                  ...(typeof chatResponse.providerName === 'string' ? { providerName: chatResponse.providerName } : {}),
+                }
+              : undefined
+          );
+          return chatResponse;
         } catch (error) {
           if (isLocalToolCallParseError(error)) {
             if (shouldBypassLocalModelComplexityGuard()) {
