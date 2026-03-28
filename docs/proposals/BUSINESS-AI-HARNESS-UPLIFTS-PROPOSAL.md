@@ -215,10 +215,6 @@ Key design point:
 
 Every new capability should be added through the existing Guardian, approval, and sandbox model. Breadth must not bypass enforcement.
 
-Suggested starting point:
-
-- reuse the prioritization already captured in `OPENCLAW-CAPABILITY-ADOPTION.md`
-
 ### 5. Adapter SDK for External Agent Frameworks
 
 If GuardianAgent wants to compete as a business harness rather than only as a standalone app, it should secure other agent stacks too.
@@ -234,10 +230,6 @@ Recommended additions:
 Key design point:
 
 The adapter layer must route actions through GuardianAgent's controls rather than reimplementing partial wrapper checks in each integration.
-
-Suggested starting point:
-
-- reuse the adapter direction already outlined in `ZEROTRUSTAGENT-UPLIFTS-PROPOSAL.md`
 
 ### 6. Better Memory Ranking and Automatic Semantic Recall
 
@@ -281,10 +273,6 @@ Recommended additions:
 Key design point:
 
 Security posture is not just runtime behavior. It includes how the project itself is maintained and evidenced.
-
-Suggested starting point:
-
-- reuse the repo-guardrail direction already outlined in `ZEROTRUSTAGENT-UPLIFTS-PROPOSAL.md`
 
 ---
 
@@ -390,7 +378,7 @@ GuardianAgent's differentiator is not just that it can act. It is that it can ac
 1. Define a cost-accounting schema and budget policy model.
 2. Add approval-expiry and scope-drift logic to scheduled tasks.
 3. Introduce an auth-provider abstraction with OIDC/Entra as first targets.
-4. Start the browser uplift track using the existing OpenClaw capability analysis.
+4. Start the browser uplift track using the existing internal browser capability backlog.
 5. Define the public adapter contract for external frameworks.
 6. Add optional Ollama-backed harness lanes for automation/orchestration flows and document Windows-host reachability requirements for WSL-based runners.
 

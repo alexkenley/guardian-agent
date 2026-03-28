@@ -1,7 +1,7 @@
 /**
  * Exponential backoff utility.
  *
- * Schedule borrowed directly from OpenClaw's ERROR_BACKOFF_SCHEDULE_MS:
+ * Fixed retry schedule:
  * [30s, 1m, 5m, 15m, 60m]
  */
 

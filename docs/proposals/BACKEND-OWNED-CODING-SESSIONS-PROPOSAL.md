@@ -62,7 +62,7 @@ The target shape is consistent with how strong agentic systems model long-runnin
 - **OpenHands** models work as a backend conversation object reachable through WebSocket and Cloud APIs, with resume support.
 - **Goose** keeps shared session records across interfaces instead of making one UI the owner of the work.
 - **Claude Code** exposes session management and headless use through an SDK and GitHub Actions rather than limiting coding work to a single UI surface.
-- **OpenClaw** is especially relevant for its binding-router pattern: the important idea is that a surface can be explicitly bound to a runtime target without changing the overall identity model.
+- surface-aware routing patterns are especially relevant here: a surface can be explicitly bound to a runtime target without changing the overall identity model.
 
 Those systems differ in implementation details, but the architectural commonality is more important than the product surface: the session/work object lives in the backend, and UIs attach to it.
 
@@ -231,7 +231,7 @@ Routing order for coding continuation:
 4. most recently active session for the principal
 5. clarification prompt if still ambiguous
 
-This reuses the same surface-aware routing logic Guardian already needs for richer channels. It is very similar in spirit to the OpenClaw binding-router idea: channel or thread context can bind to a runtime target without collapsing all context into one pool.
+This reuses the same surface-aware routing logic Guardian already needs for richer channels: channel or thread context can bind to a runtime target without collapsing all context into one pool.
 
 ## Canonical Journal vs Channel Chat
 
@@ -429,7 +429,7 @@ For the first backend-owned session rollout:
 - store terminal metadata under the `CodeSession`
 - do not promise Telegram or main-chat remote shell control yet
 
-If remote terminal control is ever added, it should be treated as a separate high-risk capability with stronger approval and isolation, closer to an OpenClaw-style `tmux`/remote-control adapter than a casual extension of chat.
+If remote terminal control is ever added, it should be treated as a separate high-risk capability with stronger approval and isolation, closer to a dedicated remote-control adapter than a casual extension of chat.
 
 ## Migration Plan
 
@@ -509,7 +509,6 @@ In effect:
 
 - [CODING-ASSISTANT-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODING-ASSISTANT-SPEC.md)
 - [MEMORY-SYSTEM.md](/mnt/s/Development/GuardianAgent/docs/guides/MEMORY-SYSTEM.md)
-- [OPENDEV-INTEGRATION-AND-CODING-ASSISTANT-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/OPENDEV-INTEGRATION-AND-CODING-ASSISTANT-PROPOSAL.md)
 - [DISCORD-CHANNEL-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/DISCORD-CHANNEL-PROPOSAL.md)
 
 ## External References
@@ -520,4 +519,3 @@ In effect:
 - OpenHands docs: https://docs.openhands.dev/openhands/usage/cloud/cloud-api
 - Goose docs: https://block.github.io/goose/docs/guides/managing-goose-sessions
 - Claude Code docs: https://docs.anthropic.com/en/docs/claude-code/sdk
-- OpenClaw docs: https://docs.openclaw.ai/core-concepts/binding-router

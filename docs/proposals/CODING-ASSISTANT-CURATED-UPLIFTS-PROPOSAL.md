@@ -3,7 +3,7 @@
 **Status:** Draft  
 **Date:** 2026-03-26  
 **Primary Guardian files:** [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts), [src/runtime/runtime.ts](/mnt/s/Development/GuardianAgent/src/runtime/runtime.ts), [src/runtime/run-timeline.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-timeline.ts), [src/channels/web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts), [src/channels/cli.ts](/mnt/s/Development/GuardianAgent/src/channels/cli.ts), [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js), [web/public/js/pages/code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js), [web/public/js/pages/automations.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/automations.js)  
-**Related docs:** [CODING-ASSISTANT-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODING-ASSISTANT-SPEC.md), [BROKERED-AGENT-ISOLATION-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/BROKERED-AGENT-ISOLATION-SPEC.md), [RUN-TIMELINE-AND-EVENT-VIEWER-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/RUN-TIMELINE-AND-EVENT-VIEWER-SPEC.md), [EVENTBUS-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/EVENTBUS-SPEC.md), [UI-TARS-UPLIFT-ROADMAP.md](/mnt/s/Development/GuardianAgent/plans/UI-TARS-UPLIFT-ROADMAP.md), [OPENDEV-INTEGRATION-AND-CODING-ASSISTANT-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/OPENDEV-INTEGRATION-AND-CODING-ASSISTANT-PROPOSAL.md)
+**Related docs:** [CODING-ASSISTANT-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODING-ASSISTANT-SPEC.md), [BROKERED-AGENT-ISOLATION-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/BROKERED-AGENT-ISOLATION-SPEC.md), [RUN-TIMELINE-AND-EVENT-VIEWER-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/RUN-TIMELINE-AND-EVENT-VIEWER-SPEC.md), [EVENTBUS-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/EVENTBUS-SPEC.md), [UI-TARS-UPLIFT-ROADMAP.md](/mnt/s/Development/GuardianAgent/plans/UI-TARS-UPLIFT-ROADMAP.md)
 
 ## Goal
 
@@ -66,7 +66,7 @@ Do not borrow:
 
 - screenshot-first control as Guardian’s default path
 
-### From gru-ai and Broomy
+### From prior coding workspace analysis
 
 Borrow:
 
@@ -74,7 +74,7 @@ Borrow:
 - parent/child task visibility
 - small attention signals such as working, blocked, unread, waiting
 
-### From openclaw
+### Multi-agent guardrail
 
 Borrow the guardrail:
 

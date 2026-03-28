@@ -3,9 +3,8 @@
 **Status:** Draft  
 **Date:** 2026-03-27  
 **Primary source proposal:** [Coding Assistant Curated Uplifts Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/CODING-ASSISTANT-CURATED-UPLIFTS-PROPOSAL.md)  
-**Supporting proposal:** [OpenDev/Koan Integration, Coding Assistant & Orchestration Improvements Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/OPENDEV-INTEGRATION-AND-CODING-ASSISTANT-PROPOSAL.md)
 
-**Current implementation scope:** phases 1 through 5 only. The broader autonomous-operation backlog from the OpenDev proposal remains deferred unless explicitly pulled into a later plan.
+**Current implementation scope:** phases 1 through 5 only. Broader autonomous-operation follow-on work remains deferred unless explicitly pulled into a later plan.
 
 ## Objective
 

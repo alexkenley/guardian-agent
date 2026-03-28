@@ -2,7 +2,7 @@
 
 ## Goal
 
-Capture the architecture improvements currently implemented from the OpenClaw pattern proposal, and define the remaining work required to complete the rollout.
+Capture the architecture improvements currently implemented from the earlier eventbus and orchestration work, and define the remaining work required to complete the rollout.
 
 ## Scope
 

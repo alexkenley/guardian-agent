@@ -3,15 +3,8 @@
 **Status:** Implemented
 **Date:** 2026-03-16
 **Informed by:**
-- `docs/research/OPEN-SOURCE-AGENTIC-ORCHESTRATION-LANDSCAPE-2026-03-16.md`
-- `docs/research/GUARDIAN-OPEN-SOURCE-ORCHESTRATION-ADOPTION-MAP-2026-03-16.md`
 - GuardianAgent automation, orchestration, scheduling, and control-plane runtime
-- Local analysis of:
-  - `/mnt/s/Development/agentic-orchestration-repos/langgraphjs`
-  - `/mnt/s/Development/agentic-orchestration-repos/openai-agents-js`
-  - `/mnt/s/Development/agentic-orchestration-repos/mastra`
-  - `/mnt/s/Development/agentic-orchestration-repos/temporal`
-  - `/mnt/s/Development/agentic-orchestration-repos/pydantic-ai`
+- internal orchestration research across public agent and workflow frameworks
 
 ---
 

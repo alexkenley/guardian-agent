@@ -419,40 +419,6 @@ Code and global memory are intentionally separated.
 
 This keeps the Coding Assistant grounded in its session and repo without removing access to the wider tool inventory.
 
-## Comparison with OpenClaw
-
-| Feature | GuardianAgent | OpenClaw |
-|---------|--------------|----------|
-| **Storage backend** | SQLite with FTS5 + native hybrid search | SQLite FTS5 + optional QMD sidecar |
-| **Search** | FTS5 BM25 + native hybrid (BM25 + vector similarity + RRF) | Hybrid BM25 + vector similarity |
-| **Persistent memory** | Global agent markdown memory plus per-Code-session markdown memory | `MEMORY.md` + daily logs |
-| **Memory flush** | Auto-persist dropped context into the matching scope | LLM-prompted flush before compaction |
-| **Temporal decay** | No | Configurable half-life scoring |
-| **MMR diversity** | No | Maximal Marginal Relevance |
-| **Embedding providers** | Ollama, OpenAI (in-process, optional) | OpenAI, Gemini, Voyage, Ollama, local |
-| **Cross-channel identity** | IdentityService with aliases | Not documented |
-| **Session management** | Rotate, restore, list, Code-session attach/resume | Implicit via daily log files |
-| **Security** | Guardian admission on all memory and search tools | Not documented |
-
-### Key differences
-
-GuardianAgent advantages:
-
-- all memory tools pass through Guardian security controls
-- `memory_search`, `memory_recall`, and bridge results are scanned before reinjection into model context
-- persistent memory is trust-aware, with quarantine/expiry states instead of flat append-only storage
-- Code-session memory is isolated from global memory by default
-- explicit cross-channel identity unification
-- explicit session management with rotate/restore and backend-owned Code sessions
-
-OpenClaw advantages:
-
-- vector similarity search emphasis in the memory layer
-- LLM-powered memory flush
-- temporal decay scoring
-- MMR for result diversity
-- broader embedding-provider surface
-
 ## Future Enhancement Opportunities
 
 1. **Selective sync policies**: promote approved facts between Code-session and global memory without automatic context sharing.

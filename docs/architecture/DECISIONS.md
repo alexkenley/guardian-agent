@@ -36,13 +36,13 @@
 
 ---
 
-## ADR-004: Exponential Backoff Schedule from OpenClaw
+## ADR-004: Exponential Backoff Schedule
 
 **Status:** Accepted
 
-**Context:** Need a backoff strategy for agent errors. OpenClaw's schedule [30s, 1m, 5m, 15m, 60m] is battle-tested.
+**Context:** Need a fixed backoff strategy for agent errors that is simple, predictable, and wide enough to handle transient failures without causing retry storms.
 
-**Decision:** Adopt OpenClaw's `ERROR_BACKOFF_SCHEDULE_MS` directly.
+**Decision:** Use `ERROR_BACKOFF_SCHEDULE_MS = [30s, 1m, 5m, 15m, 60m]`.
 
 **Consequences:**
 - (+) Proven in production
@@ -109,7 +109,7 @@
 
 **Status:** Accepted (updated: added Layer 2 Guardian Agent inline evaluation)
 
-**Context:** The original Guardian (ADR-007) was built but **never wired into the Runtime dispatch path**. Messages reached agents without any security checks. Additionally, analysis of real AI agent incidents (see `docs/research/AI-AGENT-SECURITY-REPORT.md`) and OpenClaw patterns (see `docs/research/OPENCLAW-ANALYSIS.md`) revealed critical gaps: no input sanitization, no rate limiting, no output scanning, no audit trail, and no retrospective analysis. A further gap was identified: sync admission controllers cannot evaluate contextual risk of tool actions — only an LLM can reason about whether a tool invocation is appropriate given the conversation context.
+**Context:** The original Guardian (ADR-007) was built but **never wired into the Runtime dispatch path**. Messages reached agents without any security checks. Additionally, analysis of real AI agent incidents and internal security reviews revealed critical gaps: no input sanitization, no rate limiting, no output scanning, no audit trail, and no retrospective analysis. A further gap was identified: sync admission controllers cannot evaluate contextual risk of tool actions — only an LLM can reason about whether a tool invocation is appropriate given the conversation context.
 
 **Decision:** Expand Guardian into a four-layer defense system:
 

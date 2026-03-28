@@ -42,7 +42,7 @@ describe('Backoff', () => {
       expect(getBackoffDelayMs(100)).toBe(3_600_000);
     });
 
-    it('should match the OpenClaw schedule exactly', () => {
+    it('should match the configured retry schedule', () => {
       expect(ERROR_BACKOFF_SCHEDULE_MS).toEqual([
         30_000,
         60_000,

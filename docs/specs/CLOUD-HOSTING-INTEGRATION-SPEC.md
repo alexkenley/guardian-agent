@@ -1308,16 +1308,16 @@ Current state: initial slice implemented and covered by focused client/executor 
 
 This suite would give GuardianAgent a differentiated infrastructure-management story:
 
-| Capability | OpenClaw | Claude Code | Other Agents | GuardianAgent |
-|-----------|---------|------------|-------------|---------------|
-| cPanel/WHM management | Limited/none | No | Rare | **Implemented** |
-| Vercel deployment mgmt | Limited/none | No | Rare | **Implemented** |
-| AWS infrastructure | No | No | Limited | **Implemented foundation** |
-| GCP infrastructure | No | No | Limited | **Implemented foundation** |
-| Azure infrastructure | No | No | Limited | **Implemented foundation** |
-| Cloudflare WAF/DNS | Limited/none | No | Rare | **Implemented foundation** |
-| Security-gated cloud ops | N/A | N/A | N/A | **4-layer Guardian** |
-| Network + cloud unified | No | No | No | **Yes** |
+| Capability | Typical assistants | Typical coding agents | GuardianAgent |
+|-----------|---------------------|-----------------------|---------------|
+| cPanel/WHM management | Limited/none | Rare | **Implemented** |
+| Vercel deployment mgmt | Limited/none | Rare | **Implemented** |
+| AWS infrastructure | Limited | Limited | **Implemented foundation** |
+| GCP infrastructure | Limited | Limited | **Implemented foundation** |
+| Azure infrastructure | Limited | Limited | **Implemented foundation** |
+| Cloudflare WAF/DNS | Limited/none | Rare | **Implemented foundation** |
+| Security-gated cloud ops | Rare | Rare | **4-layer Guardian** |
+| Network + cloud unified | Rare | Rare | **Yes** |
 
 The combination of **local network security tools** (existing 19 net_* tools) + **cloud infrastructure management** + **Guardian security gating** creates a unique value proposition: a security-first infrastructure management agent that can monitor your network AND manage your hosting/cloud from a single interface.
 

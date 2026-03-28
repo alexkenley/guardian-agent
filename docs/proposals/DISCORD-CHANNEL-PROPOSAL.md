@@ -8,7 +8,7 @@
 This proposal evaluates Discord as a new GuardianAgent communication channel and recommends a practical path to support both:
 
 - normal single-agent chat, similar to today's Telegram flow
-- an OpenClaw-style multi-agent "mission control" layout with dedicated channels, status reporting, and agent-specific routing
+- a multi-agent "mission control" layout with dedicated channels, status reporting, and agent-specific routing
 
 The goal is to add Discord without weakening the existing Runtime security model or overcomplicating v1.
 
@@ -56,17 +56,15 @@ This means GuardianAgent can ship a good Discord v1 without privileged message-c
 - mentions
 - explicit channel bindings
 
-If GuardianAgent wants OpenClaw-style dedicated channels where a bot reads normal freeform text from the whole channel, it will need `MESSAGE_CONTENT`.
+If GuardianAgent wants dedicated channels where a bot reads normal freeform text from the whole channel, it will need `MESSAGE_CONTENT`.
 
-### OpenClaw pattern relevance
+### Pattern relevance
 
-The OpenClaw Discord pattern is useful as product inspiration, not as a drop-in implementation:
+The multi-channel Discord pattern is useful as product inspiration, not as a drop-in implementation:
 
 - it uses Discord as a multi-agent operations surface
 - it supports server-specific routing and role-aware bindings
 - it treats Discord sessions as more granular than a simple "user on channel type"
-
-Those OpenClaw-specific points are an inference from the user-provided video summary plus the referenced OpenClaw docs/pages, not a line-by-line transcript analysis of the video.
 
 That maps well to GuardianAgent's orchestration model, but it does not mean GuardianAgent should start with one Discord bot per agent.
 
@@ -82,7 +80,7 @@ Implement Discord as **one Discord application with one bot user**, with:
 - channel-to-agent bindings
 - scheduled reports to configured channels
 
-This gives GuardianAgent the important parts of the OpenClaw workflow:
+This gives GuardianAgent the important parts of the intended workflow:
 
 - a `#mission-control` channel
 - dedicated channels per agent if desired
@@ -321,7 +319,7 @@ Cons:
 
 Pros:
 
-- closest to the OpenClaw video workflow
+- closest to the multi-bot mission-control workflow
 - clear bot identity separation per specialist
 
 Cons:
@@ -437,7 +435,7 @@ Build Discord in two steps:
 2. **Discord v2**
    Optional privileged message-content mode for bound channels, then consider multi-bot only if separate bot identities are still clearly worth the operational cost.
 
-This delivers the useful part of the OpenClaw-style Discord workflow while staying consistent with GuardianAgent's current Runtime, security posture, and code structure.
+This delivers the useful part of that Discord workflow while staying consistent with GuardianAgent's current Runtime, security posture, and code structure.
 
 ## References
 
@@ -458,6 +456,4 @@ External sources:
 - Discord Developer Docs - Gateway intents: https://discord.com/developers/docs/events/gateway
 - Discord Developer Docs - Interactions overview: https://discord.com/developers/docs/interactions/overview
 - Discord support article - Message Content Intent policy: https://support-dev.discord.com/hc/en-us/articles/5324827539479-Message-Content-Intent-Review-Policy
-- OpenClaw Discord integration docs: https://docs.openclaw.ai/integrations/discord/discord
-- OpenClaw binding router docs: https://docs.openclaw.ai/core-concepts/binding-router
 - User-provided video reference: https://www.youtube.com/watch?v=GwSYhTrWWuA
