@@ -47,6 +47,18 @@ It registers built-in agents, injects SOUL personality profiles, starts channel 
 - **CronScheduler** — uses `croner` for periodic agent invocations
 - **ScheduledTaskService** — unified CRUD scheduling for tools and playbooks with persistence, presets, and EventBus integration
 
+### Intent Gateway (CRITICAL — read before adding any new routing)
+
+**All user intent classification MUST go through the Intent Gateway (`src/runtime/intent-gateway.ts`).** Never use regex, keyword matching, string includes, or any other ad-hoc pattern matching to determine what the user is asking for. The Intent Gateway is an LLM-powered classifier that routes user requests to the correct handler via structured tool calls.
+
+The dispatch flow is: **Channel → ChatAgent.onMessage → Intent Gateway classification → `resolveDirectIntentRoutingCandidates` → candidate handler dispatch loop → direct action or LLM tool-calling loop.**
+
+- **Adding a new route**: Add the route to `IntentGatewayRoute`, the tool schema enum, the system prompt, `normalizeRoute`, and `preferredCandidatesForDecision` in `direct-intent-routing.ts`. Then add a handler case in the candidate dispatch loop in `src/index.ts`.
+- **Entities**: If the new route needs to extract structured data from the user's message (e.g. a target name, path, or ID), add it to `IntentGatewayEntities`, the tool schema properties, and `normalizeIntentGatewayDecision`.
+- **Never intercept messages before the Intent Gateway**. Pre-gateway interception creates brittle regex that misses natural phrasings. The only pre-gateway handling allowed is slash-command parsing (e.g. `/code list`) in channel adapters, and continuation/approval flow detection.
+
+Current routes: `automation_authoring`, `automation_control`, `automation_output_task`, `ui_control`, `browser_task`, `workspace_task`, `email_task`, `search_task`, `filesystem_task`, `coding_task`, `coding_session_control`, `security_task`, `general_assistant`.
+
 ### LLM Provider Layer
 - Unified `LLMProvider` interface with `chat()` and `stream()` (AsyncGenerator) for **Ollama**, **Anthropic**, **OpenAI**, plus 6 OpenAI-compatible providers (**Groq**, **Mistral**, **DeepSeek**, **Together**, **xAI**, **Google Gemini**) via `ProviderRegistry`
 - No LangChain — direct SDK calls
@@ -169,6 +181,7 @@ Vanilla JavaScript — no framework, no build step. Static HTML/CSS/JS served di
 - Errors are values, not exceptions (discriminated unions where possible)
 - All time values in milliseconds unless suffixed
 - **Exponential backoff** on errors: [30s, 1m, 5m, 15m, 60m]
+- **No regex/keyword intent matching** — all user intent classification goes through the Intent Gateway. See the "Intent Gateway" section under Architecture.
 
 ## File Organization
 

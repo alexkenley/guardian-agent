@@ -90,7 +90,6 @@ function createCodeSession(assessment: CodeWorkspaceTrustAssessment | null, revi
       selectedFilePath: null,
       showDiff: false,
       expandedDirs: [],
-      activeAssistantTab: 'chat',
       terminalCollapsed: false,
       terminalTabs: [],
     },

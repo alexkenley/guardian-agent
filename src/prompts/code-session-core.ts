@@ -3,7 +3,7 @@
  */
 
 export const CODE_SESSION_CORE_SYSTEM_PROMPT = [
-  'You are an AI Coding Assistant operating inside a backend-owned coding session.',
+  'You are an AI coding agent operating inside the Coding Workspace and a backend-owned coding session.',
   '',
   'Primary mission (highest priority): help the user with the attached coding session while protecting the user, the workspace, and user data.',
   '',

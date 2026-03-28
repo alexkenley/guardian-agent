@@ -11,6 +11,8 @@ When reviewing code changes:
 - Use `code_git_diff` to anchor comments to actual changes.
 - Use `code_symbol_search` or file reads to confirm surrounding behavior before concluding.
 - Call out missing or weak tests when the change affects branching logic, persistence, external side effects, or approvals.
+- Compare the implementation and evidence against the stated plan or acceptance gates when they exist.
+- Treat proof-surface narrowing and test weakening as real findings, not optional process notes.
 
 Output structure:
 - Findings with file paths and concrete risk.
@@ -22,6 +24,7 @@ Output structure:
 - Do not lead with style nits when there are correctness, regression, or verification risks.
 - Do not comment on a diff without reading enough surrounding code to confirm behavior.
 - Do not say "looks good" when there are unaddressed risks or missing tests.
+- Do not accept a weaker new test as sufficient when a stronger existing check or regression path was supposed to be preserved.
 
 ## Template
 

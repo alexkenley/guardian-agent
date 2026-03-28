@@ -73,6 +73,110 @@ describe('CLIChannel', () => {
     await cli.stop();
   });
 
+  it('shows deduped live progress for streamed CLI replies', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const cli = new CLIChannel({
+      input,
+      output,
+      dashboard: {
+        onStreamDispatch: async (_agentId, msg, emitSSE) => {
+          expect(msg.surfaceId).toBe('cli-guardian-chat');
+          const runId = msg.requestId || 'cli-progress-run';
+          emitSSE({
+            type: 'run.timeline',
+            data: {
+              summary: { runId, status: 'queued' },
+              items: [{ id: 'queued', runId, type: 'run_queued', status: 'info', source: 'system', timestamp: Date.now(), title: 'Queued chat' }],
+            },
+          });
+          emitSSE({
+            type: 'run.timeline',
+            data: {
+              summary: { runId, status: 'running' },
+              items: [{ id: 'started', runId, type: 'run_started', status: 'running', source: 'system', timestamp: Date.now(), title: 'Started chat' }],
+            },
+          });
+          emitSSE({
+            type: 'run.timeline',
+            data: {
+              summary: { runId, status: 'running' },
+              items: [{
+                id: 'inspect',
+                runId,
+                type: 'tool_call_started',
+                status: 'running',
+                source: 'system',
+                timestamp: Date.now(),
+                title: 'Inspecting workspace',
+                detail: 'fs_list',
+              }],
+            },
+          });
+          emitSSE({
+            type: 'run.timeline',
+            data: {
+              summary: { runId, status: 'running' },
+              items: [{
+                id: 'inspect',
+                runId,
+                type: 'tool_call_started',
+                status: 'running',
+                source: 'system',
+                timestamp: Date.now(),
+                title: 'Inspecting workspace',
+                detail: 'fs_list',
+              }],
+            },
+          });
+          emitSSE({
+            type: 'run.timeline',
+            data: {
+              summary: { runId, status: 'awaiting_approval' },
+              items: [{
+                id: 'approval',
+                runId,
+                type: 'approval_requested',
+                status: 'warning',
+                source: 'system',
+                timestamp: Date.now(),
+                title: 'Waiting for approval',
+                detail: 'fs_write',
+              }],
+            },
+          });
+          return {
+            requestId: runId,
+            runId,
+            content: 'Completed.',
+            metadata: {
+              responseSource: {
+                locality: 'external',
+                providerName: 'anthropic',
+              },
+            },
+          };
+        },
+      },
+    });
+
+    await cli.start(async () => ({ content: 'fallback' }));
+    output.read();
+
+    input.write('inspect repo\n');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const text = output.read()?.toString() ?? '';
+    expect(text).toContain('[progress] Inspecting workspace — fs_list');
+    expect(text).toContain('[progress] Waiting for approval — fs_write');
+    expect(text).not.toContain('Queued chat');
+    expect(text).not.toContain('Started chat');
+    expect(text.match(/\[progress\] Inspecting workspace — fs_list/g)?.length ?? 0).toBe(1);
+    expect(text).toContain('[external] Completed.');
+
+    await cli.stop();
+  });
+
   it('should handle /agents command', async () => {
     const input = new PassThrough();
     const output = new PassThrough();
@@ -577,6 +681,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
     const text = readOutput(output);
 
     expect(text).toContain('/chat');
+    expect(text).toContain('/code');
     expect(text).toContain('/help <command>');
     expect(text).toContain('/agents');
     expect(text).toContain('/agent');
@@ -592,6 +697,229 @@ describe('CLIChannel with DashboardCallbacks', () => {
     expect(text).toContain('/models');
     expect(text).toContain('/clear');
     expect(text).toContain('/quit');
+
+    await cli.stop();
+  });
+
+  it('/help code should show coding-session controls', async () => {
+    const { input, output, cli } = makeCli();
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/help code');
+    const text = readOutput(output);
+
+    expect(text).toContain('/code attach <sessionId-or-match>');
+    expect(text).toContain('/code detach');
+    expect(text).toContain('/code create <workspaceRoot> [| title]');
+
+    await cli.stop();
+  });
+
+  it('/code list and current should show CLI coding session focus', async () => {
+    const codeSessions = {
+      currentSessionId: 'code-2',
+      sessions: [
+        {
+          id: 'code-1',
+          title: 'Repo One',
+          workspaceRoot: '/work/repo-one',
+          resolvedRoot: '/work/repo-one',
+          workState: { workspaceTrust: { state: 'trusted' } },
+        },
+        {
+          id: 'code-2',
+          title: 'Repo Two',
+          workspaceRoot: '/work/repo-two',
+          resolvedRoot: '/work/repo-two',
+          workState: { workspaceTrust: { state: 'caution' } },
+        },
+      ],
+    } as unknown as ReturnType<NonNullable<DashboardCallbacks['onCodeSessionsList']>>;
+    const { input, output, cli } = makeCli({
+      onCodeSessionsList: () => codeSessions,
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/code list');
+    let text = readOutput(output);
+    expect(text).toContain('code-1');
+    expect(text).toContain('Repo Two');
+    expect(text).toContain('current');
+
+    await sendCommand(input, '/code current');
+    text = readOutput(output);
+    expect(text).toContain('Current Coding Session');
+    expect(text).toContain('Repo Two');
+    expect(text).toContain('/work/repo-two');
+
+    await cli.stop();
+  });
+
+  it('/code attach should resolve a unique session match and forward CLI surface context', async () => {
+    const seen: Array<{ sessionId: string; surfaceId: string; channel: string; userId: string }> = [];
+    const codeSessions = {
+      currentSessionId: null,
+      sessions: [
+        {
+          id: 'code-1',
+          title: 'Test Tactical Game App',
+          workspaceRoot: '/work/test-app',
+          resolvedRoot: '/work/test-app',
+          workState: { workspaceTrust: null },
+        },
+      ],
+    } as unknown as ReturnType<NonNullable<DashboardCallbacks['onCodeSessionsList']>>;
+    const { input, output, cli } = makeCli({
+      onCodeSessionsList: () => codeSessions,
+      onCodeSessionAttach: (args) => {
+        seen.push({
+          sessionId: args.sessionId,
+          surfaceId: args.surfaceId,
+          channel: args.channel,
+          userId: args.userId,
+        });
+        return { success: true };
+      },
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/code attach tactical');
+    const text = readOutput(output);
+    expect(text).toContain('Attached');
+    expect(seen).toEqual([
+      {
+        sessionId: 'code-1',
+        surfaceId: 'cli-guardian-chat',
+        channel: 'cli',
+        userId: 'owner',
+      },
+    ]);
+
+    await cli.stop();
+  });
+
+  it('/code attach should resolve spaced queries against condensed session titles', async () => {
+    const seen: Array<{ sessionId: string; surfaceId: string; channel: string; userId: string }> = [];
+    const codeSessions = {
+      currentSessionId: null,
+      sessions: [
+        {
+          id: 'code-1',
+          title: 'TempInstallTest',
+          workspaceRoot: '/work/temp-install-test',
+          resolvedRoot: '/work/temp-install-test',
+          workState: { workspaceTrust: null },
+        },
+      ],
+    } as unknown as ReturnType<NonNullable<DashboardCallbacks['onCodeSessionsList']>>;
+    const { input, output, cli } = makeCli({
+      onCodeSessionsList: () => codeSessions,
+      onCodeSessionAttach: (args) => {
+        seen.push({
+          sessionId: args.sessionId,
+          surfaceId: args.surfaceId,
+          channel: args.channel,
+          userId: args.userId,
+        });
+        return { success: true };
+      },
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/code attach temp install test');
+    const text = readOutput(output);
+    expect(text).toContain('Attached');
+    expect(seen).toEqual([
+      {
+        sessionId: 'code-1',
+        surfaceId: 'cli-guardian-chat',
+        channel: 'cli',
+        userId: 'owner',
+      },
+    ]);
+
+    await cli.stop();
+  });
+
+  it('/code detach should forward CLI surface context', async () => {
+    const seen: Array<{ surfaceId: string; channel: string; userId: string }> = [];
+    const codeSessions = {
+      currentSessionId: 'code-1',
+      sessions: [
+        {
+          id: 'code-1',
+          title: 'Repo One',
+          workspaceRoot: '/work/repo-one',
+          resolvedRoot: '/work/repo-one',
+          workState: { workspaceTrust: null },
+        },
+      ],
+    } as unknown as ReturnType<NonNullable<DashboardCallbacks['onCodeSessionsList']>>;
+    const { input, output, cli } = makeCli({
+      onCodeSessionsList: () => codeSessions,
+      onCodeSessionDetach: (args) => {
+        seen.push({
+          surfaceId: args.surfaceId,
+          channel: args.channel,
+          userId: args.userId,
+        });
+        return { success: true };
+      },
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/code detach');
+    const text = readOutput(output);
+    expect(text).toContain('Detached the current coding session');
+    expect(seen).toEqual([
+      {
+        surfaceId: 'cli-guardian-chat',
+        channel: 'cli',
+        userId: 'owner',
+      },
+    ]);
+
+    await cli.stop();
+  });
+
+  it('/code create should create and attach a new CLI coding session', async () => {
+    const seen: Array<{ title: string; workspaceRoot: string; surfaceId: string; attach?: boolean }> = [];
+    const { input, output, cli } = makeCli({
+      onCodeSessionsList: () => ({
+        currentSessionId: null,
+        sessions: [],
+      }),
+      onCodeSessionCreate: (args) => {
+        seen.push({
+          title: args.title,
+          workspaceRoot: args.workspaceRoot,
+          surfaceId: args.surfaceId,
+          attach: args.attach,
+        });
+        return {
+          session: {
+            id: 'code-new',
+            title: args.title,
+            workspaceRoot: args.workspaceRoot,
+          },
+          history: [],
+          attached: true,
+        } as ReturnType<NonNullable<DashboardCallbacks['onCodeSessionCreate']>>;
+      },
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/code create /work/new-repo | New Repo');
+    const text = readOutput(output);
+    expect(text).toContain('Created and attached');
+    expect(seen).toEqual([
+      {
+        title: 'New Repo',
+        workspaceRoot: '/work/new-repo',
+        surfaceId: 'cli-guardian-chat',
+        attach: true,
+      },
+    ]);
 
     await cli.stop();
   });
@@ -1896,7 +2224,7 @@ describe('WebChannel', () => {
     const res = await fetch('http://localhost:18925/api/message', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders },
-      body: JSON.stringify({ content: 'Hello' }),
+      body: JSON.stringify({ content: 'Hello', surfaceId: 'web-guardian-chat' }),
     });
 
     const body = await res.json() as { content: string };
@@ -1904,6 +2232,7 @@ describe('WebChannel', () => {
     expect(res.status).toBe(200);
     expect(body.content).toBe('Echo: Hello');
     expect(received.length).toBe(1);
+    expect(received[0]?.surfaceId).toBe('web-guardian-chat');
   });
 
   it('should return 400 for missing content', async () => {
@@ -2828,6 +3157,35 @@ describe('WebChannel', () => {
       expect(body[0].name).toBe('ollama');
     });
 
+    it('GET /api/code/sessions should forward the explicit surfaceId query parameter', async () => {
+      const seen: Array<{ userId: string; channel: string; surfaceId: string }> = [];
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+        onCodeSessionsList: (args) => {
+          seen.push({
+            userId: args.userId,
+            channel: args.channel,
+            surfaceId: args.surfaceId,
+          });
+          return { sessions: [], currentSessionId: null };
+        },
+      };
+
+      web = new WebChannel({ port: 18974, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18974/api/code/sessions?userId=web-user&channel=web&surfaceId=web-guardian-chat', {
+        headers: authHeaders,
+      });
+
+      expect(res.status).toBe(200);
+      expect(seen).toEqual([{
+        userId: 'web-user',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      }]);
+    });
+
     it('GET /api/code/sessions/:id/structure should return deterministic structure data for the selected file', async () => {
       const workspaceRoot = join(process.cwd(), `__test_code_structure_${randomUUID()}`);
       const sourceDir = join(workspaceRoot, 'src');
@@ -2867,7 +3225,6 @@ describe('WebChannel', () => {
                 selectedFilePath: sourcePath,
                 showDiff: false,
                 expandedDirs: [],
-                activeAssistantTab: 'chat',
                 terminalCollapsed: false,
                 terminalTabs: [],
               },
@@ -2961,7 +3318,6 @@ describe('WebChannel', () => {
                 selectedFilePath: sourcePath,
                 showDiff: false,
                 expandedDirs: [],
-                activeAssistantTab: 'chat',
                 terminalCollapsed: false,
                 terminalTabs: [],
               },
@@ -3043,7 +3399,6 @@ describe('WebChannel', () => {
                 selectedFilePath: null,
                 showDiff: false,
                 expandedDirs: [],
-                activeAssistantTab: 'chat',
                 terminalCollapsed: false,
                 terminalTabs: [],
               },
@@ -3313,6 +3668,50 @@ describe('WebChannel', () => {
       expect(dispatched[0].agentId).toBe('agent-1');
     });
 
+    it('POST /api/tools/run forwards surfaceId to onToolsRun', async () => {
+      const calls: Array<{ toolName: string; userId?: string; surfaceId?: string; channel?: string }> = [];
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+        onToolsRun: async (input) => {
+          calls.push({
+            toolName: input.toolName,
+            userId: input.userId,
+            surfaceId: input.surfaceId,
+            channel: input.channel,
+          });
+          return {
+            success: true,
+            status: 'succeeded',
+            jobId: 'job-tools-run',
+            message: 'ok',
+            output: { ok: true },
+          };
+        },
+      };
+
+      web = new WebChannel({ port: 18970, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'fallback' }));
+
+      const res = await fetch('http://localhost:18970/api/tools/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({
+          toolName: 'code_session_current',
+          userId: 'web-user',
+          channel: 'web',
+          surfaceId: 'web-guardian-chat',
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(calls).toEqual([{
+        toolName: 'code_session_current',
+        userId: 'web-user',
+        surfaceId: 'web-guardian-chat',
+        channel: 'web',
+      }]);
+    });
+
     it('POST /api/message/stream rejects non-string content', async () => {
       const dashboard: DashboardCallbacks = {
         ...mockDashboard,
@@ -3333,12 +3732,17 @@ describe('WebChannel', () => {
       expect(body.error).toBe('content is required');
     });
 
-    it('POST /api/message/stream forwards requestId and allows default routing', async () => {
-      const calls: Array<{ agentId?: string; requestId?: string; content: string }> = [];
+    it('POST /api/message/stream forwards requestId, surfaceId, and allows default routing', async () => {
+      const calls: Array<{ agentId?: string; requestId?: string; content: string; surfaceId?: string }> = [];
       const dashboard: DashboardCallbacks = {
         ...mockDashboard,
         onStreamDispatch: async (agentId, message) => {
-          calls.push({ agentId, requestId: message.requestId, content: message.content });
+          calls.push({
+            agentId,
+            requestId: message.requestId,
+            content: message.content,
+            surfaceId: message.surfaceId,
+          });
           return { requestId: message.requestId || 'req-fallback', runId: message.requestId || 'req-fallback', content: 'Reply from stream' };
         },
       };
@@ -3349,7 +3753,7 @@ describe('WebChannel', () => {
       const res = await fetch('http://localhost:18969/api/message/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders },
-        body: JSON.stringify({ content: 'Hello', requestId: 'req-stream-1' }),
+        body: JSON.stringify({ content: 'Hello', requestId: 'req-stream-1', surfaceId: 'web-guardian-chat' }),
       });
 
       expect(res.status).toBe(200);
@@ -3357,7 +3761,12 @@ describe('WebChannel', () => {
       expect(body.requestId).toBe('req-stream-1');
       expect(body.runId).toBe('req-stream-1');
       expect(body.content).toBe('Reply from stream');
-      expect(calls).toEqual([{ agentId: undefined, requestId: 'req-stream-1', content: 'Hello' }]);
+      expect(calls).toEqual([{
+        agentId: undefined,
+        requestId: 'req-stream-1',
+        content: 'Hello',
+        surfaceId: 'web-guardian-chat',
+      }]);
     });
 
     it('does not expose internal error details from dashboard callbacks', async () => {

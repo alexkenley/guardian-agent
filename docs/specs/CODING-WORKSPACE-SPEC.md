@@ -1,4 +1,4 @@
-# Coding Assistant Spec
+# Coding Workspace Spec
 
 **Status:** As Built
 **Date:** 2026-03-21  
@@ -12,7 +12,7 @@
 
 ## Purpose
 
-The Coding Assistant is Guardian’s repo-scoped coding workflow surface.
+The Coding Workspace is Guardian’s repo-scoped coding workflow surface.
 
 It provides:
 
@@ -69,7 +69,6 @@ Primary persisted shape:
   - `selectedFilePath`
   - `showDiff`
   - `expandedDirs`
-  - `activeAssistantTab`
   - `terminalCollapsed`
   - `terminalTabs`
 - `CodeSessionWorkState`
@@ -101,7 +100,7 @@ Persistence uses SQLite when available and falls back to in-memory storage other
 
 ## Workspace Awareness Model
 
-The Coding Assistant no longer relies only on a workspace path and ad hoc prompt wording.
+The Coding Workspace no longer relies only on a workspace path and ad hoc prompt wording.
 
 Each backend `CodeSession` carries durable workspace awareness state:
 
@@ -148,7 +147,7 @@ When a user manually accepts the current findings, the session records `workspac
 
 When `workspaceTrust` is not `trusted`, prompt assembly suppresses README-derived summary text and raw working-set snippets and instead instructs the model to treat repo content as untrusted data, not instructions. The implementation details are in [CODE-WORKSPACE-TRUST-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODE-WORKSPACE-TRUST-SPEC.md).
 
-This is the mechanism that moves the Coding Assistant closer to a dedicated coding agent: not “all file contents in one prompt,” but backend repo awareness plus retrieval-backed working context.
+This is the mechanism that gives the Coding Workspace durable repo grounding: not “all file contents in one prompt,” but backend repo awareness plus retrieval-backed working context.
 
 ## Conversation Model
 
@@ -171,7 +170,7 @@ The Code page is still a separate coding conversation surface in UX terms, but i
 Guardian supports two ways to enter a coding session:
 
 1. Explicit session targeting  
-   A client targets a backend coding session directly. The web Code page does this with `POST /api/code/sessions/:id/message`. Other surfaces can still use `metadata.codeContext.sessionId`.
+   A client targets a backend coding session by attaching its conversational surface and then using the normal message path. Other surfaces can still use `metadata.codeContext.sessionId` for explicit one-off targeting.
 
 2. Surface attachment  
    A chat surface is attached to a `CodeSession`, and later messages on that surface inherit it automatically.
@@ -180,7 +179,7 @@ Surface attachment is tracked in `CodeSessionStore`.
 
 Current behavior:
 
-- the Code page sends turns through `POST /api/code/sessions/:id/message`
+- the canonical chat surface sends turns through the normal message path while attached to a code session
 - main chat, CLI, and Telegram can use `code_session_attach`
 - once attached, later messages on that surface resolve to the same coding session
 - cross-surface reuse shares the backend session and transcript, not the full Code-page explorer/tasks/approvals/checks/terminal UI
@@ -200,7 +199,7 @@ This prevents “continue that coding session” style follow-ups from being rou
 
 ## Capability Model
 
-The Coding Assistant is session-grounded, not host-app-grounded.
+The Coding Workspace is session-grounded, not host-app-grounded.
 
 That means:
 
@@ -210,7 +209,7 @@ That means:
 - Code sessions use a separate durable long-term memory store instead of preloading Guardian's global memory
 - repo-local actions such as file edits, shell commands, git operations, tests, builds, and lint runs stay scoped to the active `workspaceRoot`
 - Coding-session shell execution prefers structured direct exec for simple repo-local binaries and blocks known interpreter/launcher trampoline forms instead of treating every command as an opaque shell string
-- broader Guardian capabilities remain available from within the Coding Assistant, including research, web/docs lookup, automation creation, and unrelated assistant tasks
+- broader Guardian capabilities remain available from within the Coding Workspace, including research, web/docs lookup, automation creation, and unrelated assistant tasks
 - using broader capabilities does not replace the session's repo identity or current focus unless the user explicitly changes sessions or retargets the work
 
 In practice, Code and main chat differ by contextual grounding rather than by tool inventory. The active code session stays the anchor even when the user does something broader from that surface.
@@ -275,20 +274,17 @@ Theme selection persists in localStorage (`guardianagent_monaco_theme`). A dropd
 
 Monaco is installed as a devDependency (`monaco-editor`). The `postinstall` script copies `node_modules/monaco-editor/min/vs/` to `web/public/vendor/monaco/vs/`. The vendor directory is gitignored. The WebChannel serves it from `/vendor/monaco/` with caching headers.
 
-### Coding Assistant Sidebar
+### Workspace Activity Panel
 
-The assistant sidebar remains tabbed:
-
-- `Chat`
-- `Activity`
+The workbench no longer owns a duplicate coding chat surface.
 
 Behavior:
 
-- `Chat` is the main back-and-forth coding conversation
-- `Activity` consolidates approvals, task state, and verification outcomes in one surface
+- Guardian chat is the canonical conversation surface for coding work
+- the `#/code` workbench keeps the session-scoped `Activity` panel for approvals, trust state, recent work, and verification outcomes
 - `Activity` preserves its own scroll position across normal session rerenders so long review lists remain navigable
-- the UI does not auto-switch tabs when approvals appear
-- chat shows only a small approval notice instead of dumping approval cards inline
+- the UI does not auto-switch panels when approvals appear
+- session cards in the workbench decide which coding session is current for Guardian chat on the web surface
 
 ### Code Inspector
 
@@ -374,7 +370,7 @@ Primary backend-owned session methods:
   - returns deterministic structure analysis for the selected or requested file on disk
 - `POST /api/code/sessions/:id/structure-preview`
   - returns deterministic structure analysis for unsaved editor content without writing to disk
-- `POST /api/code/sessions/:id/message`
+- `POST /api/message`
   - sends a chat turn through the authoritative backend coding session
 - `POST /api/code/sessions/:id/approvals/:approvalId`
   - approves or denies an approval that belongs to that coding session
@@ -395,7 +391,7 @@ For `fs`, `diff`, and terminal open requests, the client can supply `sessionId`.
 
 Authoritative Code-page messaging uses:
 
-- `POST /api/code/sessions/:id/message`
+- `POST /api/message`
 
 The generic chat path can still carry coding context through `metadata.codeContext`, but it now follows stricter rules:
 
@@ -405,7 +401,8 @@ The generic chat path can still carry coding context through `metadata.codeConte
 
 Chat flow:
 
-- the Code page resolves a backend session id and sends the turn through the dedicated Code-session message endpoint
+- the Code page resolves a backend session id and keeps Guardian chat attached to that coding session
+- coding turns still use the normal Guardian message path
 - the backend resolves that session before routing or prompt assembly
 - if the session is missing or stale, the request returns a structured error instead of silently falling back to normal Guardian chat
 - `ChatAgent` and tool dispatch receive the authoritative backend session context
@@ -475,7 +472,7 @@ As built:
 
 - the active coding workspace root comes from the backend `CodeSession`
 - effective file access for coding requests is pinned to that single workspace root
-- coding requests use the Coding Assistant shell allowlist instead of widening the global assistant shell policy
+- coding requests use the Coding Workspace shell allowlist instead of widening the global assistant shell policy
 - path-like shell arguments are validated against the active workspace root
 - repo-escape patterns like `git -C`, `--git-dir`, `--work-tree`, `--prefix`, `--cwd`, `--cache*`, `--global`, `-g`, and similar global-install or external-path patterns are blocked
 - common command caches are redirected into `<workspaceRoot>/.guardianagent/cache`
@@ -533,7 +530,7 @@ If any link in this chain drops `codeContext`, auto-approve silently fails and t
 
 ### Code Session Prompt Isolation
 
-The code session uses a standalone system prompt (`code-session-core.ts`) that does not inherit the Guardian host-app identity. The model-facing context identifies as a neutral "AI Coding Assistant" attached to a workspace, not as GuardianAgent. This prevents deictic references like "this app" from resolving to the host product instead of the attached workspace.
+The code session uses a standalone system prompt (`code-session-core.ts`) that does not inherit the Guardian host-app identity. The model-facing context identifies as a neutral coding agent operating inside the Coding Workspace rather than as GuardianAgent. This prevents deictic references like "this app" from resolving to the host product instead of the attached workspace.
 
 ## Terminal Model
 
@@ -583,7 +580,7 @@ The global memory system is not the live coding session state machine. The backe
 
 ## Current Limitations
 
-As built, the Coding Assistant still does not provide:
+As built, the Coding Workspace still does not provide:
 
 - assistant-driven remote control of live PTY terminals
 - repo-jailed PTYs matching the assistant shell validator exactly
@@ -605,7 +602,7 @@ Relevant checks:
 - focused tests: `npx vitest run src/runtime/code-workspace-structure.test.ts`
 - WebChannel route tests: `npx vitest run src/channels/channels.test.ts src/runtime/code-workspace-structure.test.ts`
 - code UI smoke: [test-code-ui-smoke.mjs](/mnt/s/Development/GuardianAgent/scripts/test-code-ui-smoke.mjs)
-- coding assistant harness: [test-coding-assistant.mjs](/mnt/s/Development/GuardianAgent/scripts/test-coding-assistant.mjs)
+- coding workspace harness: [test-coding-assistant.mjs](/mnt/s/Development/GuardianAgent/scripts/test-coding-assistant.mjs)
 - contextual security harness: [test-contextual-security-uplifts.mjs](/mnt/s/Development/GuardianAgent/scripts/test-contextual-security-uplifts.mjs)
 - broader regression run: `npm test`
 - Windows Defender host helper: [test-windows-defender-workspace-scan.ps1](/mnt/s/Development/GuardianAgent/scripts/test-windows-defender-workspace-scan.ps1)

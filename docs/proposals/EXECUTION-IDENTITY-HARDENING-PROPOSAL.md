@@ -289,7 +289,7 @@ The model should not need `python -c` or `node -e` to run tests, builds, or repo
 - `src/tools/executor.ts`
 - `src/runtime/code-sessions.ts`
 - `src/prompts/code-session-core.ts`
-- `docs/specs/CODING-ASSISTANT-SPEC.md`
+- `docs/specs/CODING-WORKSPACE-SPEC.md`
 
 ---
 

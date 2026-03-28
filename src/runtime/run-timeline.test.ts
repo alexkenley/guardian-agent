@@ -28,7 +28,6 @@ function createCodeSession(
       selectedFilePath: null,
       showDiff: false,
       expandedDirs: [],
-      activeAssistantTab: 'activity',
       terminalCollapsed: false,
       terminalTabs: [],
     },

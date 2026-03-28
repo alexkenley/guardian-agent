@@ -388,20 +388,22 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(updates),
   }),
-  sendMessage:  (content, agentId, userId, channel = 'web', metadata) => {
+  sendMessage:  (content, agentId, userId, channel = 'web', metadata, surfaceId) => {
     const payload = { content, userId, channel };
     if (agentId) payload.agentId = agentId;
     if (metadata && typeof metadata === 'object') payload.metadata = metadata;
+    if (surfaceId) payload.surfaceId = surfaceId;
     return request('/api/message', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
   },
-  sendMessageStream: (content, agentId, userId, channel = 'web', metadata, requestId) => {
+  sendMessageStream: (content, agentId, userId, channel = 'web', metadata, requestId, surfaceId) => {
     const payload = { content, userId, channel };
     if (agentId) payload.agentId = agentId;
     if (requestId) payload.requestId = requestId;
     if (metadata && typeof metadata === 'object') payload.metadata = metadata;
+    if (surfaceId) payload.surfaceId = surfaceId;
     return request('/api/message/stream', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -584,10 +586,6 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(payload),
   }),
-  codeSessionSendMessage: (sessionId, payload) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/message`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  }),
   codeSessionDecideApproval: (sessionId, approvalId, payload) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`, {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -626,12 +624,12 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(payload),
   }),
-  codeGitStatus: (sessionId) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/git/status`),
+  codeGitStatus: (sessionId, params = {}) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/git/status${buildQueryString(params)}`),
   codeGitAction: (sessionId, payload) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/git/action`, {
     method: 'POST',
     body: JSON.stringify(payload),
   }),
-  codeGitGraph: (sessionId) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/git/graph`),
+  codeGitGraph: (sessionId, params = {}) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/git/graph${buildQueryString(params)}`),
 
   // Guardian Agent + Sentinel Audit
   guardianAgentStatus: () => request('/api/guardian-agent/status'),

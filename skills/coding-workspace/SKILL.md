@@ -18,9 +18,9 @@ Preferred loop:
 1. If the user wants to continue existing coding work, inspect the current attachment with `code_session_current` or list sessions with `code_session_list`.
 2. If no suitable session exists, create one with `code_session_create`, then treat that backend session as the shared source of truth across web, CLI, and Telegram. Shared session state does not mean those surfaces have the same UI or transport.
 3. Understand the request and inspect the relevant files or symbols first.
-4. Create or update a concise plan before broad or multi-file edits.
+4. Create or update a concise plan with explicit acceptance gates before broad or multi-file edits.
 5. Make the smallest safe change with `code_edit`, `code_patch`, or `code_create`.
-6. Verify with `code_git_diff` and targeted `code_test`, `code_lint`, or `code_build` runs.
+6. Verify with `code_git_diff` and the strongest existing relevant checks before falling back to narrower ad hoc tests.
 
 Guardrails:
 - Prefer attaching to the right backend coding session over guessing the active workspace from the current chat alone.
@@ -33,6 +33,7 @@ Guardrails:
 - It is valid to create automations or use non-coding tools from within the coding session, but do not lose the session’s repo context while doing so.
 - If you need to inspect global memory from a coding session, do it explicitly through the read-only memory bridge instead of treating it as default context.
 - If the session is getting noisy, summarize progress so it can be compacted without losing the plan.
+- Before calling work complete, make sure the real proof surface is fully green, not just the smallest local check.
 
 ## Gotchas
 

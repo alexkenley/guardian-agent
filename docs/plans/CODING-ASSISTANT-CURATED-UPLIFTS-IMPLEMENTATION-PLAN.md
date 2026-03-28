@@ -5,16 +5,19 @@
 **Primary source proposal:** [Coding Assistant Curated Uplifts Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/CODING-ASSISTANT-CURATED-UPLIFTS-PROPOSAL.md)  
 **Supporting proposal:** [OpenDev/Koan Integration, Coding Assistant & Orchestration Improvements Proposal](/mnt/s/Development/GuardianAgent/docs/proposals/OPENDEV-INTEGRATION-AND-CODING-ASSISTANT-PROPOSAL.md)
 
-**Current implementation scope:** phases 1 through 5 only. The broader autonomous-operation backlog from the OpenDev proposal remains deferred unless explicitly pulled into a later plan.
+## Current Note
+
+For the current implementation direction around general chat as the canonical coding surface, Code as a workbench, and external coding backends, use [GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md](/mnt/s/Development/GuardianAgent/docs/plans/GENERAL-CHAT-CANONICAL-CODING-SESSIONS-IMPLEMENTATION-PLAN.md).
 
 ## Objective
 
-Deliver the near-term coding-assistant uplift as one bounded program that:
+Deliver the near-term Coding Assistant uplift as a narrower program that:
 
 1. strengthens curated coding-process discipline
-2. adds shared live progress feedback in web chat, Code UI, and CLI
-3. adds curated task-style subagents for coding work
-4. preserves Guardian's existing runtime safety and approval model
+2. makes repo-specific planning and review evidence-first
+3. improves `Auto` routing and external-provider reliability
+4. preserves live progress visibility in web chat, Code UI, and CLI
+5. defers heavier task-subagent work until the bounded operator model proves insufficient
 
 ## Proposal Review
 
@@ -24,84 +27,89 @@ Use [CODING-ASSISTANT-CURATED-UPLIFTS-PROPOSAL.md](/mnt/s/Development/GuardianAg
 
 ### What to carry forward from the broader OpenDev proposal
 
-The OpenDev proposal is still useful, but only a small subset should shape the initial build:
+The broader proposal remains useful as a pattern bank, but only a narrow subset belongs in this implementation plan:
 
-- schema-level tool filtering for subagents (`§3.3`)
-- task-style subagents (`§3.3A`)
-- coding-tool and task-UX direction (`§4.4`, `§4.4A`)
-- minimal durable work-state concepts (`§5.5`)
-- workflow invariant validation (`§5.6`)
-- post-execution quality gates (`§6.5`)
+- schema-level tool filtering ideas where they help grounding and bounded execution
+- stronger routing patterns for higher-judgment turns
+- workflow-integrity evals
+- durable, readable run state instead of opaque pending states
 
 ### What to defer from the broader OpenDev proposal
 
-Do not pull these into the first implementation plan:
+Do not pull these into the near-term implementation plan:
 
-- full multi-session Code tab redesign from scratch
-- five-stage context compaction rewrite
-- per-workflow model routing
-- background task detection
-- playbook-memory scoring
+- full multi-session Code redesign from scratch
+- large context-compaction rewrites
+- generic task-subagent platform work
+- background-work detection
+- budget-aware modes
+- emergency-stop systems
+- drift detection
+- pre-task spec tooling
 - live operations monitor as a separate product surface
-- budget-aware modes, graduated e-stop, drift detection, and learning extraction
-- pre-task specification tooling
-
-Those remain valid future candidates, but they should not delay the narrower uplift now agreed.
 
 ## Sequencing Principles
 
-- **Process before autonomy.** Tighten planning, review, and verification rules before adding new child-task behaviors.
-- **Visibility before delegation.** Make existing runs readable and live before enabling task subagents for end-user coding turns.
-- **Shared transport, different surface depth.** Ship one feedback backbone for all channels, but keep general Guardian chat thinner while coding gets the richer task-aware UX first.
-- **Reuse current read models.** Build on `run.timeline`, current Code Activity, and current code-session work-state rather than creating a second execution log.
-- **Curated over generic.** Start with a first-party `task` primitive and curated roles, not a generic worker-side `dispatch.agent` surface.
-- **Parent owns approvals.** Child tasks may analyze, implement, or review, but the parent remains the user-facing approval and synthesis point.
-- **Ship shallow first.** Max depth `2`, max concurrent child tasks `2`, reviewer default read-only.
+- **Grounding before autonomy.** Fix repo evidence and plan quality before adding more delegation surfaces.
+- **Routing before cleverness.** Make `Auto` choose better lanes before trying to rescue weaker local models with more prompt complexity.
+- **Visibility stays structural.** Keep live feedback readable and useful without exposing raw reasoning.
+- **Forced modes stay forced.** If the user selects `Local` or `External`, stay in that lane when available.
+- **Same-tier fallback is acceptable.** If the preferred external provider is overloaded, retry another external provider rather than silently crossing tiers.
+- **Curated over generic.** If helper-task work is revisited later, start with bounded first-party roles, not a generic subagent runtime.
+
+## Current Implementation Status
+
+### Foundations already landed or partially landed
+
+- web chat, Code UI, and CLI now have shared structural live feedback
+- mode/source badging is wired through to the UI
+- forced lane behavior and tier-provider rebinding have been tightened
+- the initial process-skill uplift has already started
+- route-aware layout guardrails for wider chat surfaces have already started
+
+### Main remaining gaps
+
+- repo-specific plans still hallucinate files, layers, or workflows too easily
+- local models remain acceptable for bounded repo facts but weak on open-ended planning
+- `Auto` still needs stronger external preference for planning/review/verification-heavy turns
+- external-tier retry/failover is still missing
+- helper-task/subagent work is not yet justified by the current product posture
 
 ## Scope
 
 ### In scope
 
-- first-party skill updates for coding-process discipline
-- harness coverage for workflow integrity
-- `run.timeline` metadata extensions for parent/child runs and progress labels
-- minimal general Guardian chat live feedback
-- web-chat live activity via `/api/message/stream`
-- Code UI progress strip and grouped activity tree
-- CLI progress sink for interactive dispatch
-- supervisor-owned `task` tool with curated roles
-- schema-level tool filtering for child tasks
-- minimal durable task state attached to code sessions
-- workflow invariants and post-execution quality checks for coding flows
-- route-aware layout guardrails for wider chat and coding panels
+- first-party skill updates for stronger process discipline and grounded planning
+- harness coverage for workflow integrity and invented-repo-structure failures
+- `Auto` routing updates for higher-judgment coding turns
+- same-tier external failover and clearer routing/source notices
+- continued live progress refinement in web chat, Code UI, and CLI
+- route-aware width/layout guardrails for chat-heavy surfaces
 
 ### Out of scope
 
 - third-party skill imports or plugins
-- Telegram streaming or live task UI
-- raw prompt / chain-of-thought exposure
-- generic manager-of-managers orchestration
-- a full `WorkDirective` platform or separate operations dashboard in the first pass
+- parity-chasing with terminal-first coding agents
+- attempts to make weak local models good at broad architecture planning by prompt tweaks alone
+- a generic task-subagent platform in the near-term plan
+- Telegram streaming or richer live task UI outside the main web surfaces
+- raw prompt or chain-of-thought exposure
 
 ## Target End State
 
-By the end of this plan, Guardian should support:
+By the end of this plan, Guardian should behave like a safe, grounded coding operator:
 
-- stronger first-party planning and verification rules for coding work
-- live progress feedback for pending turns in web chat, Code UI, and CLI, with thinner general chat feedback and richer coding feedback
-- bounded task subagents with curated roles:
-  - `researcher`
-  - `implementer`
-  - `reviewer`
-  - `triager`
-- session-linked task visibility without merging raw child transcripts into the parent thread
-- mechanical checks for review separation, required artifacts, and completion quality
+- plans and reviews for coding work are structured and evidence-first
+- repo-specific claims are tied to inspected files or clearly marked as unknown
+- `Auto` routes harder planning/review/verification turns to external
+- forced `External` stays external, even if the preferred provider needs same-tier fallback
+- live progress remains visible and understandable in web chat, Code UI, and CLI
 
-## Phase 1: Process And Eval Baseline
+## Phase 1: Grounded Process And Eval Baseline
 
 ### Goal
 
-Strengthen the first-party coding process before runtime expansion.
+Finish the process-discipline uplift and make repo-grounded planning non-optional for repo-specific turns.
 
 ### Deliver
 
@@ -112,15 +120,21 @@ Strengthen the first-party coding process before runtime expansion.
   - [skills/verification-before-completion/SKILL.md](/mnt/s/Development/GuardianAgent/skills/verification-before-completion/SKILL.md)
   - [skills/code-review/SKILL.md](/mnt/s/Development/GuardianAgent/skills/code-review/SKILL.md)
   - [skills/coding-workspace/SKILL.md](/mnt/s/Development/GuardianAgent/skills/coding-workspace/SKILL.md)
-- implementation-plan template updated for:
+- updated implementation-plan template for:
   - explicit acceptance gates
   - existing checks to reuse
   - broader verification
+  - evidence sources or inspected files
+- runtime/prompt guidance for repo-specific planning:
+  - inspect first when needed
+  - do not invent files, endpoints, tables, or subsystems
+  - say what remains unknown instead of guessing
 - harness additions in [scripts/test-coding-assistant.mjs](/mnt/s/Development/GuardianAgent/scripts/test-coding-assistant.mjs) for:
   - acceptance-gate preservation
   - existing-check reuse
   - full legitimate green
   - anti-test-weakening
+  - invented-repo-structure failure cases
 
 ### Likely implementation areas
 
@@ -129,216 +143,116 @@ Strengthen the first-party coding process before runtime expansion.
 - `skills/verification-before-completion/SKILL.md`
 - `skills/code-review/SKILL.md`
 - `skills/coding-workspace/SKILL.md`
-- `scripts/test-coding-assistant.mjs`
+- [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
+- [src/worker/worker-llm-loop.ts](/mnt/s/Development/GuardianAgent/src/worker/worker-llm-loop.ts)
+- [scripts/test-coding-assistant.mjs](/mnt/s/Development/GuardianAgent/scripts/test-coding-assistant.mjs)
 
 ### Exit criteria
 
-- coding plans consistently surface acceptance gates
-- the assistant no longer defaults to inventing narrower tests when a stronger existing check exists
+- repo-specific plans stop naming obviously invented files, APIs, or data layers
+- the assistant inspects before planning when the prompt requires repo grounding
 - completion claims require evidence matching the real proof surface
-- harness coverage fails when those behaviors regress
+- harness coverage fails when these behaviors regress
 
-## Phase 2: Progress Transport And Timeline Backbone
+## Phase 2: Routing And External-Tier Reliability
 
 ### Goal
 
-Make live execution state available to all surfaces from one shared model.
+Make model selection better match the actual difficulty and failure modes of coding turns.
 
 ### Deliver
 
-- extend `run.timeline` summaries and items with:
-  - `rootRunId`
-  - consistent `parentRunId`
-  - safe progress labels
-  - child-run correlation metadata
-- implement `onStreamDispatch` in [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
-- update `/api/message/stream` usage so the client gets immediate `requestId` and `runId`
-- add CLI progress dispatch hooks without waiting for worker token streaming
-- keep progress structural and safe; do not expose raw prompts or scratchpads
+- update `Auto` routing heuristics so that planning/review/verification-heavy turns prefer external
+- preserve forced lane behavior in chat and Code
+- add retryable same-tier external failover for overload/5xx provider errors
+- preserve accurate response-source badging after failover
+- add minimal notices when:
+  - `Auto` chose external for a harder turn
+  - a second external provider answered after retry
 
 ### Likely implementation areas
 
-- [src/runtime/run-timeline.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-timeline.ts)
-- [src/channels/web-types.ts](/mnt/s/Development/GuardianAgent/src/channels/web-types.ts)
+- [src/runtime/message-router.ts](/mnt/s/Development/GuardianAgent/src/runtime/message-router.ts)
 - [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
-- [src/channels/web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts)
-- [src/channels/cli.ts](/mnt/s/Development/GuardianAgent/src/channels/cli.ts)
+- [src/runtime/runtime.ts](/mnt/s/Development/GuardianAgent/src/runtime/runtime.ts)
+- provider clients under [src/llm/](/mnt/s/Development/GuardianAgent/src/llm)
+- [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js)
+- [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js)
+- [web/public/js/pages/code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
 
 ### Exit criteria
 
-- web chat can subscribe to a live run before the final response completes
-- CLI can print meaningful progress lines during a turn
-- parent/child run grouping is available from the read model even before child tasks are enabled
+- `Auto` no longer defaults weaker local models into open-ended planning turns when an external lane is available
+- forced `External` never silently becomes local
+- retryable external-provider overloads can fall through to another configured external provider
+- the badge remains the actual final answering source
 
-## Phase 3: Surface The Progress In General Chat And Code UI
+## Phase 3: Feedback And Layout Refinement
 
 ### Goal
 
-Turn the shared progress model into readable product feedback without forcing one UX depth across every surface.
+Keep the live-feedback work useful and readable while the routing and grounding changes land.
 
 ### Deliver
 
-- minimal general chat live activity block in [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js)
-- general chat states kept intentionally thin, for example:
-  - `Thinking`
-  - `Using tools`
-  - `Researching`
-  - `Waiting for approval`
-  - `Done`
-- richer Code chat progress strip for active pending turns in [web/public/js/pages/code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
-- grouped Code Activity tree using `parentRunId` / `rootRunId`
-- coding-specific session-rail attention badges for:
-  - waiting approval
-  - active child task
-  - review findings
-  - unread completion
-- reference-guide updates for new chat/activity behavior
+- keep general chat feedback thin and structural
+- keep Code feedback richer but concise
+- align routing/fallback notices with the final response-source badge
+- continue CLI progress output for meaningful state changes only
+- preserve route-aware width/layout guardrails
 
 ### Layout guardrails
 
-The current web shell and coding layout mean panel-width changes must be route-aware:
+The current web shell and coding layout mean panel-width changes must stay route-aware:
 
-- the main app shell currently uses `var(--sidebar-width, 200px) 1fr 390px` in [web/public/css/style.css](/mnt/s/Development/GuardianAgent/web/public/css/style.css)
-- the code shell currently uses `clamp(372px, 24vw, 408px)` for the left side panel and `clamp(420px, 28vw, 480px)` for the right assistant panel in [web/public/css/style.css](/mnt/s/Development/GuardianAgent/web/public/css/style.css)
-- table-heavy pages such as Automations already depend on the remaining center-column width, especially the catalog and execution timeline tables rendered from [web/public/js/pages/automations.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/automations.js)
+- the main app shell currently uses route-sensitive width tokens in [web/public/css/style.css](/mnt/s/Development/GuardianAgent/web/public/css/style.css)
+- the code shell already carries its own panel clamps in [web/public/css/style.css](/mnt/s/Development/GuardianAgent/web/public/css/style.css)
+- table-heavy pages such as Automations still depend on the center-column width from [web/public/js/pages/automations.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/automations.js)
 
 Implementation rule:
 
 - do not widen the global web chat sidebar unconditionally across every route
-- introduce route-aware width tokens in [web/public/css/style.css](/mnt/s/Development/GuardianAgent/web/public/css/style.css), coordinated from [web/public/js/app.js](/mnt/s/Development/GuardianAgent/web/public/js/app.js)
-- allow slightly wider chat-heavy surfaces and coding panels where the viewport comfortably supports it
-- keep Automations, Config, and other table-dense pages at the current width unless verification shows no new cramping
-- verify the 1500px, 1280px, 1024px, and 900px breakpoints before widening defaults
+- keep Automations, Config, and other dense pages at current widths unless verification shows no regression
+- verify the 1500px, 1280px, 1024px, and 900px breakpoints before widening any defaults further
 
 ### Likely implementation areas
 
+- [src/channels/cli.ts](/mnt/s/Development/GuardianAgent/src/channels/cli.ts)
 - [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js)
-- [web/public/js/api.js](/mnt/s/Development/GuardianAgent/web/public/js/api.js)
+- [web/public/js/chat-panel.js](/mnt/s/Development/GuardianAgent/web/public/js/chat-panel.js)
 - [web/public/js/pages/code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
-- [web/public/js/pages/automations.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/automations.js)
 - [web/public/js/app.js](/mnt/s/Development/GuardianAgent/web/public/js/app.js)
 - [web/public/css/style.css](/mnt/s/Development/GuardianAgent/web/public/css/style.css)
-- [src/reference-guide.ts](/mnt/s/Development/GuardianAgent/src/reference-guide.ts)
 
 ### Exit criteria
 
-- general Guardian chat shows useful structural live activity without relying on final-response polling
-- general chat does not yet attempt to mirror coding-specific task trees or review artifacts
-- Code chat no longer shows only a generic thinking state for long-running turns
-- Code Activity reads as one parent/child execution story instead of unrelated rows
-- wider chat and coding panels do not introduce obvious new cramping on Automations or other dense pages
+- progress remains clear without becoming noisy
+- routing/fallback choices are visible enough to explain behavior without leaking internals
+- wider chat and coding panels do not introduce obvious new cramping on dense pages
 
-## Phase 4: Curated Task Subagents
+## Phase 4: Reassess Bounded Helper Tasks
 
 ### Goal
 
-Add bounded child-task delegation for coding and research work.
+Make an explicit go/no-go decision on helper-task work after grounding and routing have improved.
 
-### Deliver
+### Recommendation
 
-- supervisor-owned `task` tool as the first shipping primitive
-- curated roles:
-  - `researcher`
-  - `implementer`
-  - `reviewer`
-  - `triager`
-- schema-level tool filtering for child task contexts
-- child-run correlation into `run.timeline` and code-session state
-- initial role defaults:
-  - reviewer read-only
-  - researcher read/search only
-- safety limits:
-  - max depth `2`
-  - max concurrent child tasks per parent `2`
+Do not start this phase by default. Revisit it only if the narrower operator model still leaves a meaningful product gap.
 
-### Minimal durable task state
+If revisited later, start with:
 
-Do not build the full `WorkDirective` system in the first pass. Add a lighter code-session-linked task record first, for example:
+- supervisor-owned helper tasks
+- shallow depth
+- read-mostly roles first
+- the same run/timeline visibility model
 
-```ts
-interface CodeSessionTaskEntry {
-  id: string;
-  parentRunId: string;
-  runId: string;
-  role: 'researcher' | 'implementer' | 'reviewer' | 'triager';
-  title: string;
-  status: 'pending' | 'running' | 'blocked' | 'completed' | 'failed';
-  summary?: string;
-  artifactRefs: string[];
-}
-```
+### Not part of this near-term plan
 
-This gives the UI durable child-task visibility without blocking on the heavier `WorkDirective` design.
-
-### Likely implementation areas
-
-- [src/runtime/runtime.ts](/mnt/s/Development/GuardianAgent/src/runtime/runtime.ts)
-- [src/tools/executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts)
-- new `src/runtime/coding-task-runner.ts` or equivalent
-- [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)
-- [src/runtime/run-timeline.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-timeline.ts)
-- [src/index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
-
-### Exit criteria
-
-- the coding assistant can launch a bounded task and receive a structured result
-- users can see which child task is active and why
-- child tasks cannot silently widen authority beyond their curated role
-- parent remains the approval-facing actor
-
-## Phase 5: Workflow Invariants And Quality Gates
-
-### Goal
-
-Prevent weak review loops and weak completion claims after task delegation lands.
-
-### Deliver
-
-- minimal `WorkflowInvariantService` that enforces:
-  - builder and reviewer cannot be the same role/agent where review is required
-  - required artifacts must exist before completion
-  - approval-gated transitions need an approval record
-- post-execution coding quality checks for mutating flows:
-  - debug artifacts
-  - incomplete markers
-  - secret-in-diff
-  - optional lint/test/build status integration
-- UI surfacing for quality/invariant failures in Code Activity or the right-side assistant panel
-- harness additions for:
-  - reviewer separation
-  - child-task failure visibility
-  - blocked completion when required artifacts or reviews are missing
-
-### Likely implementation areas
-
-- new `src/runtime/workflow-invariant-service.ts`
-- new `src/runtime/quality-gate-service.ts`
-- [src/runtime/code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts)
-- [web/public/js/pages/code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
-- [scripts/test-coding-assistant.mjs](/mnt/s/Development/GuardianAgent/scripts/test-coding-assistant.mjs)
-- [scripts/test-code-ui-smoke.mjs](/mnt/s/Development/GuardianAgent/scripts/test-code-ui-smoke.mjs)
-
-### Exit criteria
-
-- substantial implementation work can require a separate reviewer task
-- completion is blocked when required evidence is missing
-- quality failures are visible without reading raw logs
-
-## Deferred Follow-Ups
-
-These are explicitly out of the current implementation plan, but should be kept as future backlog references:
-
-- five-stage context compaction rewrite
-- workflow-role model routing
-- full `WorkDirective` system
-- live operations monitor as a separate page/surface
-- richer general Guardian chat task/workflow UI beyond thin structural status
-- budget-aware modes
-- emergency stop system
-- drift detection
-- learning extraction from corrections and PR reviews
-- pre-task spec generation
-- worker token streaming beyond structural progress events
+- generic subagent runtime work
+- deep task trees
+- manager-of-managers orchestration
+- a large durable work-object platform
 
 ## Verification Order
 
@@ -346,15 +260,20 @@ Run focused checks during each phase, then broader coverage before completion.
 
 ### Focused checks
 
-- `npx vitest run src/runtime/run-timeline.test.ts`
+- `npx vitest run src/runtime/message-router.test.ts`
+- `npx vitest run src/runtime/runtime.test.ts`
 - `npx vitest run src/channels/channels.test.ts`
-- any new task-runner / invariant / quality-gate tests
+- any new routing/provider-client tests
+- any new coding-assistant grounding tests
 
 ### Harnesses
 
 - `node scripts/test-coding-assistant.mjs`
 - `node scripts/test-code-ui-smoke.mjs`
 - `node scripts/test-contextual-security-uplifts.mjs` when changes touch approval/security behavior
+- real-model lanes from [INTEGRATION-TEST-HARNESS.md](/mnt/s/Development/GuardianAgent/docs/guides/INTEGRATION-TEST-HARNESS.md):
+  - real Ollama lane for bounded local behavior
+  - configured external-provider lane for routing/fallback validation
 
 ### Final regression pass
 
@@ -365,8 +284,9 @@ Run focused checks during each phase, then broader coverage before completion.
 
 This plan is complete when Guardian can:
 
-- plan and verify coding work against explicit acceptance gates
-- show live progress for active turns in web chat, Code UI, and CLI
-- launch bounded child tasks with curated roles and visible status
-- preserve review separation and completion quality mechanically
-- do all of the above without introducing a second orchestration runtime or exposing raw chain-of-thought
+- produce structured coding plans and reviews without inventing repo structure
+- route harder coding turns toward external by default in `Auto`
+- keep forced `Local` and `External` behavior trustworthy
+- survive retryable external-provider overloads without silently crossing tiers
+- show live progress clearly in web chat, Code UI, and CLI
+- do all of the above without turning the Coding Assistant into an overengineered orchestration system

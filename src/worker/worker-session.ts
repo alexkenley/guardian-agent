@@ -168,6 +168,10 @@ export class BrokeredWorkerSession {
   }
 
   async handleMessage(params: WorkerMessageHandleParams): Promise<{ content: string; metadata?: Record<string, unknown> }> {
+    const codeContext = params.message.metadata?.codeContext as { workspaceRoot: string; sessionId?: string } | undefined;
+    if (codeContext?.workspaceRoot) {
+      await this.client.listLoadedTools({ codeContext });
+    }
     const toolExecutor = new BrokeredToolExecutor(this.client);
 
     // LLM calls are proxied through the broker — the worker has no network access.
@@ -385,6 +389,7 @@ export class BrokeredWorkerSession {
         const codeContext = message.metadata?.codeContext as { workspaceRoot: string; sessionId?: string } | undefined;
         return toolExecutor.executeModelTool(toolName, args, {
           ...request,
+          surfaceId: message.surfaceId,
           ...(codeContext ? { codeContext } : {}),
         });
       },
@@ -561,6 +566,7 @@ export class BrokeredWorkerSession {
   ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     const pendingTools: SuspendedToolCall[] = [];
     let responseSource: ResponseSourceMetadata | undefined;
+    const codeContext = params.message.metadata?.codeContext as { workspaceRoot: string; sessionId?: string } | undefined;
 
     // Fallback chat function: proxied through the broker with useFallback flag
     let fallbackChatFn: ((msgs: ChatMessage[], opts?: ChatOptions) => Promise<BrokeredChatResponse>) | undefined;
@@ -608,9 +614,9 @@ export class BrokeredWorkerSession {
         listAlwaysLoaded: () => toolExecutor.listAlwaysLoadedDefinitions(),
         searchTools: () => [],
         callTool: async (request) => {
-          const codeContext = params.message.metadata?.codeContext as { workspaceRoot: string; sessionId?: string } | undefined;
           const runResult = await toolExecutor.executeModelTool(request.toolName, request.args, {
             ...request,
+            surfaceId: message.surfaceId,
             ...(codeContext ? { codeContext } : {}),
           });
           return runResult as unknown as ToolRunResponse;

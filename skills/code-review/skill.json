@@ -3,6 +3,7 @@
   "name": "Code Review",
   "version": "0.1.0",
   "description": "Use when reviewing a diff, PR, or patch for bugs, regressions, missing tests, or operational risk.",
+  "role": "process",
   "tags": [
     "review",
     "regression",

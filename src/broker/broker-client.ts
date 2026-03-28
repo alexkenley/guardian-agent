@@ -62,8 +62,10 @@ export class BrokerClient {
     this.outputStream.write(`${JSON.stringify(notification)}\n`);
   }
 
-  async listLoadedTools(): Promise<ToolDefinition[]> {
-    const result = await this.sendRequest<{ tools: ToolDefinition[] }>('tool.listLoaded', {});
+  async listLoadedTools(input?: { codeContext?: { workspaceRoot: string; sessionId?: string } }): Promise<ToolDefinition[]> {
+    const result = await this.sendRequest<{ tools: ToolDefinition[] }>('tool.listLoaded', {
+      ...(input?.codeContext ? { codeContext: input.codeContext } : {}),
+    });
     this.alwaysLoadedTools = Array.isArray(result.tools) ? [...result.tools] : [];
     return this.getAlwaysLoadedTools();
   }

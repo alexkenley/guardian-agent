@@ -9,7 +9,8 @@ export type DirectIntentRoutingCandidate =
   | 'workspace_write'
   | 'workspace_read'
   | 'browser'
-  | 'web_search';
+  | 'web_search'
+  | 'coding_session_control';
 
 export function resolveDirectIntentRoutingCandidates(
   gateway: IntentGatewayRecord | null | undefined,
@@ -64,6 +65,8 @@ function preferredCandidatesForDecision(
       return ['web_search'];
     case 'filesystem_task':
       return ['filesystem'];
+    case 'coding_session_control':
+      return ['coding_session_control'];
     case 'coding_task':
     case 'security_task':
     case 'general_assistant':

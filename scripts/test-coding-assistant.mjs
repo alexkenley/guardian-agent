@@ -179,6 +179,20 @@ function createChatCompletionResponse({ model, content = '', finishReason = 'sto
   };
 }
 
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function extractSkillLocation(systemPrompt, skillName) {
+  const match = String(systemPrompt || '').match(
+    new RegExp(
+      `<skill>[\\s\\S]*?<name>${escapeRegex(skillName)}</name>[\\s\\S]*?<location>([^<]+)</location>[\\s\\S]*?</skill>`,
+      'i',
+    ),
+  );
+  return match?.[1]?.trim() || '';
+}
+
 function parseHarnessOptions() {
   const args = new Set(process.argv.slice(2));
   return {
@@ -307,7 +321,7 @@ async function maybeStartLocalOllama(options, candidate) {
   throw new Error(`Failed to autostart local Ollama at ${candidate}. See ${logPath}`);
 }
 
-async function startFakeProvider(workspaceRoot, scenarioLog) {
+async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog) {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
 
@@ -334,7 +348,88 @@ async function startFakeProvider(workspaceRoot, scenarioLog) {
         toolMessages: toolMessages.map((message) => String(message.content ?? '')),
       });
 
-      if (latestUser.includes('answerValue')) {
+      if (/write an implementation plan for adding archived routines/i.test(latestUser)) {
+        const writingPlansSkill = extractSkillLocation(systemPrompt, 'Writing Plans');
+        const sawAcceptanceGates = toolMessages.some((message) => /acceptance gates/i.test(String(message.content ?? message)));
+        const sawExistingChecks = toolMessages.some((message) => /existing checks to reuse/i.test(String(message.content ?? message)));
+        const sawWritingPlansRead = toolMessages.some((message) => {
+          const content = String(message.content ?? message);
+          return !!writingPlansSkill && content.includes(writingPlansSkill);
+        });
+        if (!sawWritingPlansRead && !sawAcceptanceGates && !sawExistingChecks && writingPlansSkill) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(createChatCompletionResponse({
+            model: 'coding-harness-model',
+            finishReason: 'tool_calls',
+            toolCalls: [{
+              id: 'read-writing-plans-skill',
+              name: 'fs_read',
+              arguments: JSON.stringify({
+                path: writingPlansSkill,
+              }),
+            }],
+          })));
+          return;
+        }
+
+        const content = sawAcceptanceGates && sawExistingChecks
+          ? [
+              'Acceptance gates:',
+              '- archived routines can be viewed without breaking the current dashboard flows',
+              '- existing routine and streak behaviour still works',
+              '',
+              'Existing checks to reuse:',
+              '- run the strongest existing dashboard or integration checks before adding narrower tests',
+              '- keep broader verification in scope instead of proving only the easiest subset',
+            ].join('\n')
+          : 'Goal: add archived routines.\nTasks: update code, add tests, verify.';
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(createChatCompletionResponse({
+          model: 'coding-harness-model',
+          content,
+        })));
+        return;
+      }
+
+      if (/about to claim this fix is done and passing/i.test(latestUser)) {
+        const verificationSkill = extractSkillLocation(systemPrompt, 'Verification Before Completion');
+        const sawFullLegitimateGreen = toolMessages.some((message) => /full legitimate green/i.test(String(message.content ?? message)));
+        const sawProofSurface = toolMessages.some((message) => /proof surface/i.test(String(message.content ?? message)));
+        const sawVerificationRead = toolMessages.some((message) => {
+          const content = String(message.content ?? message);
+          return !!verificationSkill && content.includes(verificationSkill);
+        });
+        if (!sawVerificationRead && !sawFullLegitimateGreen && !sawProofSurface && verificationSkill) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(createChatCompletionResponse({
+            model: 'coding-harness-model',
+            finishReason: 'tool_calls',
+            toolCalls: [{
+              id: 'read-verification-skill',
+              name: 'fs_read',
+              arguments: JSON.stringify({
+                path: verificationSkill,
+              }),
+            }],
+          })));
+          return;
+        }
+
+        const content = sawFullLegitimateGreen && sawProofSurface
+          ? 'Do not call it done yet. You need full legitimate green on the real proof surface; a weaker or narrower check is not enough.'
+          : 'Run a test and then it is probably done.';
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(createChatCompletionResponse({
+          model: 'coding-harness-model',
+          content,
+        })));
+        return;
+      }
+
+      if (latestUser.includes('answerValue') || latestUser.includes('scopedMessage')) {
+        const searchQuery = latestUser.includes('scopedMessage') ? 'scopedMessage' : 'answerValue';
+        const activeWorkspaceRoot = latestUser.includes('scopedMessage') ? scopedWorkspaceRoot : workspaceRoot;
+        const responsePath = latestUser.includes('scopedMessage') ? 'src/scoped.ts' : 'src/example.ts';
         if (toolMessages.length === 0) {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(createChatCompletionResponse({
@@ -361,8 +456,8 @@ async function startFakeProvider(workspaceRoot, scenarioLog) {
               id: 'code-symbol-search',
               name: 'code_symbol_search',
               arguments: JSON.stringify({
-                path: workspaceRoot,
-                query: 'answerValue',
+                path: activeWorkspaceRoot,
+                query: searchQuery,
                 mode: 'auto',
                 maxResults: 5,
               }),
@@ -374,7 +469,7 @@ async function startFakeProvider(workspaceRoot, scenarioLog) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(createChatCompletionResponse({
           model: 'coding-harness-model',
-          content: 'I found `answerValue` in `src/example.ts` inside the active coding workspace.',
+          content: `I found \`${searchQuery}\` in \`${responsePath}\` inside the active coding workspace.`,
         })));
         return;
       }
@@ -443,9 +538,9 @@ async function startFakeProvider(workspaceRoot, scenarioLog) {
   };
 }
 
-async function resolveHarnessProvider(options, workspaceRoot, scenarioLog) {
+async function resolveHarnessProvider(options, workspaceRoot, scopedWorkspaceRoot, scenarioLog) {
   if (!options.useRealOllama) {
-    return startFakeProvider(workspaceRoot, scenarioLog);
+    return startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog);
   }
 
   const candidates = collectOllamaBaseUrlCandidates(options);
@@ -525,6 +620,7 @@ async function runHarness() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardian-coding-harness-'));
   const workspaceRoot = path.join(tmpDir, 'workspace');
   const scopedWorkspaceRoot = path.join(tmpDir, 'scoped-workspace');
+  const tempInstallWorkspaceRoot = path.join(tmpDir, 'guardian-ui-package-test');
   const suspiciousWorkspaceRoot = path.join(tmpDir, 'suspicious-workspace');
   const fakeBinDir = path.join(tmpDir, 'fake-bin');
   const configPath = path.join(tmpDir, 'config.yaml');
@@ -607,6 +703,26 @@ async function runHarness() {
   ].join('\n'));
   setupGitWorkspace(scopedWorkspaceRoot);
 
+  fs.mkdirSync(path.join(tempInstallWorkspaceRoot, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(tempInstallWorkspaceRoot, 'README.md'), [
+    '# Temp Install Test',
+    '',
+    'Temporary install test workspace for session switching coverage.',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(tempInstallWorkspaceRoot, 'package.json'), JSON.stringify({
+    name: 'temp-install-test',
+    version: '1.0.0',
+    scripts: {
+      test: 'vitest',
+    },
+  }, null, 2));
+  fs.writeFileSync(path.join(tempInstallWorkspaceRoot, 'src', 'index.ts'), [
+    'export const tempInstallMessage = "temp-install";',
+    '',
+  ].join('\n'));
+  setupGitWorkspace(tempInstallWorkspaceRoot);
+
   fs.mkdirSync(path.join(suspiciousWorkspaceRoot, 'src'), { recursive: true });
   fs.writeFileSync(path.join(suspiciousWorkspaceRoot, 'README.md'), [
     '# Suspicious Workspace',
@@ -629,7 +745,7 @@ async function runHarness() {
   fs.writeFileSync(path.join(suspiciousWorkspaceRoot, '.clam-detect'), 'Harness.TestThreat\n');
   setupGitWorkspace(suspiciousWorkspaceRoot);
 
-  const provider = await resolveHarnessProvider(options, workspaceRoot, scenarioLog);
+  const provider = await resolveHarnessProvider(options, workspaceRoot, scopedWorkspaceRoot, scenarioLog);
   const config = `
 llm:
   local:
@@ -656,6 +772,7 @@ assistant:
     policyMode: approve_by_policy
     allowedPaths:
       - ${workspaceRoot}
+      - ${repoRoot}
     allowedCommands:
       - pwd
       - echo
@@ -670,7 +787,7 @@ guardian:
   enabled: true
   rateLimit:
     enabled: true
-    burstAllowed: 12
+    burstAllowed: 20
     burstWindowMs: 10000
 `;
   fs.writeFileSync(configPath, config);
@@ -703,6 +820,31 @@ guardian:
     const toolNames = Array.isArray(toolState?.tools) ? toolState.tools.map((tool) => tool.name) : [];
     assert.ok(toolNames.includes('code_edit'), 'Expected code_edit in tool catalog');
     assert.ok(toolNames.includes('code_symbol_search'), 'Expected code_symbol_search in tool catalog');
+
+    const planPrompt = 'Write an implementation plan for adding archived routines to this app. Break this down before editing anything.';
+    const planResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: planPrompt,
+      userId: 'process-skill-harness',
+      channel: 'web',
+    });
+    assert.match(String(planResponse?.content ?? ''), /acceptance gates/i, `Expected plan response to include acceptance gates: ${JSON.stringify(planResponse)}`);
+    assert.match(String(planResponse?.content ?? ''), /existing checks to reuse/i, `Expected plan response to include existing-check reuse: ${JSON.stringify(planResponse)}`);
+    assert.ok(Array.isArray(planResponse?.metadata?.activeSkills) && planResponse.metadata.activeSkills.includes('writing-plans'), `Expected writing-plans to be active: ${JSON.stringify(planResponse)}`);
+
+    const verificationPrompt = 'We are about to claim this fix is done and passing. What must be verified before completion?';
+    const verificationResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: verificationPrompt,
+      userId: 'process-skill-harness',
+      channel: 'web',
+    });
+    assert.match(String(verificationResponse?.content ?? ''), /full legitimate green/i, `Expected verification response to require full legitimate green: ${JSON.stringify(verificationResponse)}`);
+    assert.match(String(verificationResponse?.content ?? ''), /proof surface/i, `Expected verification response to mention the proof surface: ${JSON.stringify(verificationResponse)}`);
+    assert.ok(
+      Array.isArray(verificationResponse?.metadata?.activeSkills)
+      && verificationResponse.metadata.activeSkills.includes('verification-before-completion'),
+      `Expected verification-before-completion to be active: ${JSON.stringify(verificationResponse)}`,
+    );
+
     const codeSessionCreate = await requestJson(baseUrl, harnessToken, 'POST', '/api/code/sessions', {
       userId: 'web-code-harness',
       channel: 'web',
@@ -723,6 +865,15 @@ guardian:
     });
     assert.ok(scopedCodeSessionCreate?.session?.id, `Expected scoped code session creation to return a session id: ${JSON.stringify(scopedCodeSessionCreate)}`);
     const scopedCodeSessionId = scopedCodeSessionCreate.session.id;
+    const tempInstallSessionCreate = await requestJson(baseUrl, harnessToken, 'POST', '/api/code/sessions', {
+      userId: 'web-code-harness',
+      channel: 'web',
+      title: 'TempInstallTest',
+      workspaceRoot: tempInstallWorkspaceRoot,
+      attach: false,
+    });
+    assert.ok(tempInstallSessionCreate?.session?.id, `Expected temp install code session creation to return a session id: ${JSON.stringify(tempInstallSessionCreate)}`);
+    const tempInstallCodeSessionId = tempInstallSessionCreate.session.id;
     const policyAfterScopedSession = await requestJson(baseUrl, harnessToken, 'GET', '/api/tools?limit=20');
     const liveAllowedPaths = policyAfterScopedSession?.policy?.sandbox?.allowedPaths ?? [];
     assert.equal(
@@ -772,6 +923,146 @@ guardian:
         sessionId: codeSessionId,
       },
     };
+    const guardianChatSurfaceId = 'web-guardian-chat';
+    const guardianChatAttachment = await requestJson(
+      baseUrl,
+      harnessToken,
+      'POST',
+      `${codeSessionPath}/attach`,
+      {
+        userId: 'web-code-harness',
+        channel: 'web',
+        surfaceId: guardianChatSurfaceId,
+        mode: 'controller',
+      },
+    );
+    assert.equal(guardianChatAttachment?.success, true, `Expected Guardian chat surface attach to succeed: ${JSON.stringify(guardianChatAttachment)}`);
+    const guardianChatSessionRegistry = await requestJson(
+      baseUrl,
+      harnessToken,
+      'GET',
+      `/api/code/sessions?userId=web-code-harness&channel=web&surfaceId=${encodeURIComponent(guardianChatSurfaceId)}`,
+    );
+    assert.equal(
+      guardianChatSessionRegistry?.currentSessionId,
+      codeSessionId,
+      `Expected Guardian chat surface to focus the harness code session: ${JSON.stringify(guardianChatSessionRegistry)}`,
+    );
+    assert.ok(
+      Array.isArray(guardianChatSessionRegistry?.sessions)
+      && guardianChatSessionRegistry.sessions.some((session) => session.id === codeSessionId)
+      && guardianChatSessionRegistry.sessions.some((session) => session.id === scopedCodeSessionId)
+      && guardianChatSessionRegistry.sessions.some((session) => session.id === tempInstallCodeSessionId),
+      `Expected Guardian chat surface registry to expose multiple coding sessions: ${JSON.stringify(guardianChatSessionRegistry)}`,
+    );
+    const guardianChatSessionListTool = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {
+      toolName: 'code_session_list',
+      args: { limit: 10 },
+      origin: 'web',
+      userId: 'web-code-harness',
+      channel: 'web',
+      surfaceId: guardianChatSurfaceId,
+    });
+    assert.equal(guardianChatSessionListTool.success, true, `Expected code_session_list to succeed: ${JSON.stringify(guardianChatSessionListTool)}`);
+    assert.ok(
+      Array.isArray(guardianChatSessionListTool.output?.sessions)
+      && guardianChatSessionListTool.output.sessions.some((session) => session.id === codeSessionId)
+      && guardianChatSessionListTool.output.sessions.some((session) => session.id === scopedCodeSessionId)
+      && guardianChatSessionListTool.output.sessions.some((session) => session.id === tempInstallCodeSessionId),
+      `Expected code_session_list to expose all coding sessions: ${JSON.stringify(guardianChatSessionListTool)}`,
+    );
+    const guardianChatCurrentSessionTool = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {
+      toolName: 'code_session_current',
+      args: {},
+      origin: 'web',
+      userId: 'web-code-harness',
+      channel: 'web',
+      surfaceId: guardianChatSurfaceId,
+    });
+    assert.equal(guardianChatCurrentSessionTool.success, true, `Expected code_session_current to succeed: ${JSON.stringify(guardianChatCurrentSessionTool)}`);
+    assert.equal(
+      guardianChatCurrentSessionTool.output?.session?.id,
+      codeSessionId,
+      `Expected code_session_current to report the Guardian chat attachment: ${JSON.stringify(guardianChatCurrentSessionTool)}`,
+    );
+
+    const guardianChatCurrentResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: 'What coding workspace is this chat currently attached to?',
+      userId: 'web-code-harness',
+      channel: 'web',
+      surfaceId: guardianChatSurfaceId,
+    });
+    assert.match(String(guardianChatCurrentResponse.content ?? ''), /Harness Session/i);
+    assert.equal(
+      guardianChatCurrentResponse?.metadata?.codeSessionId,
+      codeSessionId,
+      `Expected natural-language current workspace response to keep the current session id: ${JSON.stringify(guardianChatCurrentResponse)}`,
+    );
+
+    const guardianChatListResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: 'List the coding sessions.',
+      userId: 'web-code-harness',
+      channel: 'web',
+      surfaceId: guardianChatSurfaceId,
+    });
+    assert.match(String(guardianChatListResponse.content ?? ''), /Harness Session/i);
+    assert.match(String(guardianChatListResponse.content ?? ''), /Scoped Session/i);
+    assert.match(String(guardianChatListResponse.content ?? ''), /TempInstallTest/i);
+
+    const guardianChatNaturalSwitchResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: 'Switch this chat to the coding workspace for Temp install test.',
+      userId: 'web-code-harness',
+      channel: 'web',
+      surfaceId: guardianChatSurfaceId,
+    });
+    assert.match(String(guardianChatNaturalSwitchResponse.content ?? ''), /TempInstallTest/i);
+    assert.equal(
+      guardianChatNaturalSwitchResponse?.metadata?.codeSessionId,
+      tempInstallCodeSessionId,
+      `Expected natural-language session switch to target the temp install session: ${JSON.stringify(guardianChatNaturalSwitchResponse)}`,
+    );
+    const guardianChatCurrentAfterNaturalSwitch = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {
+      toolName: 'code_session_current',
+      args: {},
+      origin: 'web',
+      userId: 'web-code-harness',
+      channel: 'web',
+      surfaceId: guardianChatSurfaceId,
+    });
+    assert.equal(
+      guardianChatCurrentAfterNaturalSwitch.output?.session?.id,
+      tempInstallCodeSessionId,
+      `Expected natural-language switch to update the Guardian chat attachment: ${JSON.stringify(guardianChatCurrentAfterNaturalSwitch)}`,
+    );
+
+    const guardianChatDetachResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: 'Detach this chat from the current coding workspace.',
+      userId: 'web-code-harness',
+      channel: 'web',
+      surfaceId: guardianChatSurfaceId,
+    });
+    assert.match(String(guardianChatDetachResponse.content ?? ''), /Detached|not attached/i);
+    const guardianChatCurrentAfterDetach = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {
+      toolName: 'code_session_current',
+      args: {},
+      origin: 'web',
+      userId: 'web-code-harness',
+      channel: 'web',
+      surfaceId: guardianChatSurfaceId,
+    });
+    assert.equal(
+      guardianChatCurrentAfterDetach.output?.session ?? null,
+      null,
+      `Expected natural-language detach to clear the Guardian chat attachment: ${JSON.stringify(guardianChatCurrentAfterDetach)}`,
+    );
+    await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {
+      toolName: 'code_session_attach',
+      args: { sessionId: codeSessionId },
+      origin: 'web',
+      userId: 'web-code-harness',
+      channel: 'web',
+      surfaceId: guardianChatSurfaceId,
+    });
     const nativeCleanSnapshot = await waitFor(async () => {
       const snapshot = await getCodeSessionSnapshot(5);
       return snapshot?.session?.workState?.workspaceTrust?.nativeProtection?.status === 'clean'
@@ -845,7 +1136,7 @@ guardian:
     });
     assert.equal(blockedShellEscape.success, false);
     assert.equal(blockedShellEscape.status, 'failed');
-    assert.match(String(blockedShellEscape.message ?? ''), /denied path|Coding Assistant|blocked/i);
+    assert.match(String(blockedShellEscape.message ?? ''), /denied path|Coding Workspace|blocked/i);
 
     const blockedInterpreterTrampoline = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {
       toolName: 'shell_safe',
@@ -911,15 +1202,11 @@ guardian:
     assert.equal(suspiciousNativeSnapshot.session.workState.workspaceTrust.nativeProtection.provider, 'clamav');
     assert.match(suspiciousNativeSnapshot.session.workState.workspaceTrust.summary, /Native AV:/i);
 
-    const suspiciousOverview = await requestJson(baseUrl, harnessToken, 'POST', `${suspiciousCodeSessionPath}/message`, {
+    const suspiciousOverview = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
       userId: 'web-code-harness',
       channel: 'web',
       content: 'Give me a brief overview of this repo.',
-      metadata: {
-        codeContext: {
-          sessionId: suspiciousCodeSessionId,
-        },
-      },
+      metadata: suspiciousCodeToolMetadata,
     });
     assert.ok(String(suspiciousOverview.content ?? '').trim().length > 0, `Expected non-empty suspicious repo overview: ${JSON.stringify(suspiciousOverview)}`);
     if (provider.mode === 'fake') {
@@ -1035,11 +1322,12 @@ guardian:
       baseUrl,
       harnessToken,
       'POST',
-      `${codeSessionPath}/message`,
+      '/api/message',
       {
         content: 'Give me a brief overview of this repo.',
         userId: 'web-code-harness',
         channel: 'web',
+        metadata: codeSessionMessageMetadata,
       },
     );
     assert.ok(String(overviewResponse.content ?? '').trim().length > 0, `Expected non-empty direct repo overview response: ${JSON.stringify(overviewResponse)}`);
@@ -1060,11 +1348,12 @@ guardian:
       baseUrl,
       harnessToken,
       'POST',
-      `${codeSessionPath}/message`,
+      '/api/message',
       {
         content: 'Yeah but what type of application is it?',
         userId: 'web-code-harness',
         channel: 'web',
+        metadata: codeSessionMessageMetadata,
       },
     );
     assert.ok(String(appTypeResponse.content ?? '').trim().length > 0, `Expected non-empty app type response: ${JSON.stringify(appTypeResponse)}`);
@@ -1083,11 +1372,12 @@ guardian:
       baseUrl,
       harnessToken,
       'POST',
-      `${codeSessionPath}/message`,
+      '/api/message',
       {
         content: 'Describe this app.',
         userId: 'web-code-harness',
         channel: 'web',
+        metadata: codeSessionMessageMetadata,
       },
     );
     assert.ok(String(describeAppResponse.content ?? '').trim().length > 0, `Expected non-empty describe-app response: ${JSON.stringify(describeAppResponse)}`);
@@ -1108,13 +1398,14 @@ guardian:
       baseUrl,
       harnessToken,
       'POST',
-      `${codeSessionPath}/message`,
+      '/api/message',
       {
         content: 'Give me a brief overview of this repo using @README.md and @src/example.ts.',
         userId: 'web-code-harness',
         channel: 'web',
         metadata: {
           codeContext: {
+            sessionId: codeSessionId,
             fileReferences: [
               { path: 'README.md' },
               { path: 'src/example.ts' },
@@ -1145,11 +1436,12 @@ guardian:
       baseUrl,
       harnessToken,
       'POST',
-      `${codeSessionPath}/message`,
+      '/api/message',
       {
         content: 'Search the workspace for answerValue and tell me where it is defined.',
         userId: 'web-code-harness',
         channel: 'web',
+        metadata: codeSessionMessageMetadata,
       },
     );
     assert.ok(String(messageResponse.content ?? '').trim().length > 0, `Expected non-empty coding response: ${JSON.stringify(messageResponse)}`);
@@ -1239,6 +1531,97 @@ guardian:
       );
     }
 
+    const toolsStateBeforeGuardianSurfaceMessage = await requestJson(baseUrl, harnessToken, 'GET', '/api/tools?limit=40');
+    const previousGuardianSurfaceJobIds = new Set(
+      (Array.isArray(toolsStateBeforeGuardianSurfaceMessage?.jobs) ? toolsStateBeforeGuardianSurfaceMessage.jobs : [])
+        .map((job) => job?.id)
+        .filter(Boolean),
+    );
+
+    const guardianSurfaceMessageResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: 'Search the workspace for answerValue and tell me where it is defined.',
+      userId: 'web-code-harness',
+      channel: 'web',
+      surfaceId: guardianChatSurfaceId,
+    });
+    assert.ok(
+      String(guardianSurfaceMessageResponse?.content ?? '').trim().length > 0,
+      `Expected non-empty Guardian chat coding response for attached surface: ${JSON.stringify(guardianSurfaceMessageResponse)}`,
+    );
+    assert.equal(
+      guardianSurfaceMessageResponse?.metadata?.codeSessionResolved,
+      true,
+      `Expected Guardian chat coding response to resolve the attached code session: ${JSON.stringify(guardianSurfaceMessageResponse)}`,
+    );
+    assert.equal(
+      guardianSurfaceMessageResponse?.metadata?.codeSessionId,
+      codeSessionId,
+      `Expected Guardian chat coding response metadata to point at the attached code session: ${JSON.stringify(guardianSurfaceMessageResponse)}`,
+    );
+
+    const toolsStateAfterGuardianSurfaceMessage = await requestJson(baseUrl, harnessToken, 'GET', '/api/tools?limit=40');
+    const guardianSurfaceJobs = (Array.isArray(toolsStateAfterGuardianSurfaceMessage?.jobs) ? toolsStateAfterGuardianSurfaceMessage.jobs : [])
+      .filter((job) => job?.id && !previousGuardianSurfaceJobIds.has(job.id));
+
+    if (provider.mode === 'fake') {
+      assert.match(String(guardianSurfaceMessageResponse.content ?? ''), /answerValue/);
+      assert.match(String(guardianSurfaceMessageResponse.content ?? ''), /src\/example\.ts/);
+      assert.ok(guardianSurfaceJobs.some((job) => job.toolName === 'find_tools'), 'Expected find_tools job from attached Guardian chat coding flow');
+      assert.ok(guardianSurfaceJobs.some((job) => job.toolName === 'code_symbol_search'), 'Expected code_symbol_search job from attached Guardian chat coding flow');
+    } else {
+      const acceptableAttachedToolNames = new Set(['find_tools', 'code_symbol_search', 'fs_search', 'fs_read', 'shell_safe']);
+      const groundedAttachedAnswer = /answerValue/i.test(String(guardianSurfaceMessageResponse.content ?? ''))
+        && /src\/example\.ts/i.test(String(guardianSurfaceMessageResponse.content ?? ''));
+      assert.ok(
+        groundedAttachedAnswer || guardianSurfaceJobs.some((job) => acceptableAttachedToolNames.has(job.toolName)),
+        `Expected either a grounded direct coding answer or a coding tool call from the attached Guardian chat surface flow, got content=${JSON.stringify(guardianSurfaceMessageResponse.content)} jobs=${JSON.stringify(guardianSurfaceJobs)}`,
+      );
+    }
+
+    const guardianChatSwitchTool = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {
+      toolName: 'code_session_attach',
+      args: { sessionId: scopedCodeSessionId },
+      origin: 'web',
+      userId: 'web-code-harness',
+      channel: 'web',
+      surfaceId: guardianChatSurfaceId,
+    });
+    assert.equal(guardianChatSwitchTool.success, true, `Expected code_session_attach to switch Guardian chat focus: ${JSON.stringify(guardianChatSwitchTool)}`);
+    const guardianChatCurrentScoped = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/run', {
+      toolName: 'code_session_current',
+      args: {},
+      origin: 'web',
+      userId: 'web-code-harness',
+      channel: 'web',
+      surfaceId: guardianChatSurfaceId,
+    });
+    assert.equal(
+      guardianChatCurrentScoped.output?.session?.id,
+      scopedCodeSessionId,
+      `Expected Guardian chat current session to switch to the scoped workspace: ${JSON.stringify(guardianChatCurrentScoped)}`,
+    );
+
+    const scopedGuardianSurfaceMessageResponse = await requestJson(baseUrl, harnessToken, 'POST', '/api/message', {
+      content: 'Search the workspace for scopedMessage and tell me where it is defined.',
+      userId: 'web-code-harness',
+      channel: 'web',
+      surfaceId: guardianChatSurfaceId,
+    });
+    assert.ok(
+      String(scopedGuardianSurfaceMessageResponse?.content ?? '').trim().length > 0,
+      `Expected non-empty Guardian chat response after switching to the scoped session: ${JSON.stringify(scopedGuardianSurfaceMessageResponse)}`,
+    );
+    assert.equal(
+      scopedGuardianSurfaceMessageResponse?.metadata?.codeSessionId,
+      scopedCodeSessionId,
+      `Expected switched Guardian chat response to target the scoped code session: ${JSON.stringify(scopedGuardianSurfaceMessageResponse)}`,
+    );
+    assert.match(
+      String(scopedGuardianSurfaceMessageResponse.content ?? ''),
+      /scopedMessage|src\/scoped\.ts/i,
+      `Expected Guardian chat to operate on the scoped workspace after switching attachment: ${JSON.stringify(scopedGuardianSurfaceMessageResponse)}`,
+    );
+
     const toolsStateBeforeGitMessage = await requestJson(baseUrl, harnessToken, 'GET', '/api/tools?limit=40');
     const previousGitMessageJobIds = new Set(
       (Array.isArray(toolsStateBeforeGitMessage?.jobs) ? toolsStateBeforeGitMessage.jobs : [])
@@ -1263,7 +1646,7 @@ guardian:
       assert.equal(/GuardianAgent/i.test(String(gitStatusResponse.content ?? '')), false, `Expected git status response to stay out of host-app context: ${JSON.stringify(gitStatusResponse)}`);
     }
 
-    console.log(`PASS coding assistant harness (${provider.mode})`);
+    console.log(`PASS coding workspace harness (${provider.mode})`);
   } finally {
     if (appProcess && !appProcess.killed) {
       appProcess.kill('SIGTERM');
@@ -1286,7 +1669,7 @@ runHarness()
     process.exit(0);
   })
   .catch((err) => {
-    console.error('FAIL coding assistant harness');
+    console.error('FAIL coding workspace harness');
     console.error(err);
     process.exit(1);
   });

@@ -3,6 +3,7 @@
   "name": "Coding Workspace",
   "version": "0.2.0",
   "description": "Use when the request is about a repo, codebase, implementation, bugfix, or backend-owned coding session that should stay anchored to the active workspace context.",
+  "role": "domain",
   "tags": [
     "coding",
     "code",

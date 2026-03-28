@@ -10,5 +10,8 @@
     "channels": ["cli", "web", "telegram"],
     "requestTypes": ["chat"]
   },
+  "triggers": {
+    "keywords": ["before completion", "before handoff", "done", "complete", "completed", "fixed", "passing", "ready to ship", "ready to hand off", "verify before"]
+  },
   "risk": "informational"
 }

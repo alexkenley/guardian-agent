@@ -32,13 +32,13 @@ afterEach(() => {
 describe('code-session-file-references', () => {
   it('sanitizes and deduplicates file references', () => {
     expect(sanitizeCodeSessionFileReferences([
-      { path: ' docs/specs/CODING-ASSISTANT-SPEC.md ' },
-      '@docs/specs/CODING-ASSISTANT-SPEC.md',
+      { path: ' docs/specs/CODING-WORKSPACE-SPEC.md ' },
+      '@docs/specs/CODING-WORKSPACE-SPEC.md',
       'src/index.ts',
       { path: '' },
       42,
     ])).toEqual([
-      { path: 'docs/specs/CODING-ASSISTANT-SPEC.md' },
+      { path: 'docs/specs/CODING-WORKSPACE-SPEC.md' },
       { path: 'src/index.ts' },
     ]);
   });

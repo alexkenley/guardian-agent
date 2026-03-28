@@ -126,6 +126,27 @@ describe('ToolExecutor', () => {
     expect(names).toContain('automation_output_read');
   });
 
+  it('limits eager code-session tools to the lightweight planning and verification subset', () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const eagerNames = executor.listCodeSessionEagerToolDefinitions().map((tool) => tool.name);
+    expect(eagerNames).toContain('code_plan');
+    expect(eagerNames).toContain('code_symbol_search');
+    expect(eagerNames).toContain('code_git_diff');
+    expect(eagerNames).toContain('code_test');
+    expect(eagerNames).not.toContain('code_edit');
+    expect(eagerNames).not.toContain('code_patch');
+    expect(eagerNames).not.toContain('automation_save');
+  });
+
   it('searches and reads stored automation output through dedicated tools', async () => {
     const root = createExecutorRoot();
     const outputStore = new AutomationOutputStore({ basePath: join(root, 'automation-output') });
@@ -2737,7 +2758,7 @@ describe('ToolExecutor', () => {
     });
     expect(flagEscape.success).toBe(false);
     expect(flagEscape.status).toBe('failed');
-    expect(flagEscape.message).toMatch(/denied path|Coding Assistant/i);
+    expect(flagEscape.message).toMatch(/denied path|Coding Workspace/i);
 
     const pathEscape = await executor.runTool({
       toolName: 'shell_safe',
@@ -5165,6 +5186,91 @@ describe('ToolExecutor', () => {
     expect(output.resultCount).toBeGreaterThan(0);
     expect(output.results.some((row) => row.content.includes('ARP conflict'))).toBe(true);
     conversations.close();
+  });
+
+  it('attaches a coding session by fuzzy title match for the current user', async () => {
+    const root = createExecutorRoot();
+    const workspaceRoot = join(root, 'guardian-ui-package-test');
+    mkdirSync(workspaceRoot, { recursive: true });
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(root, 'code-sessions.sqlite'),
+    });
+    const session = codeSessionStore.createSession({
+      ownerUserId: 'web-user',
+      title: 'TempInstallTest',
+      workspaceRoot,
+    });
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      codeSessionStore,
+    });
+
+    const result = await executor.runTool({
+      toolName: 'code_session_attach',
+      args: { sessionId: 'Temp install test' },
+      origin: 'web',
+      userId: 'web-user',
+      principalId: 'web-user',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({
+      session: {
+        id: session.id,
+        title: 'TempInstallTest',
+        workspaceRoot,
+      },
+    });
+  });
+
+  it('returns an ambiguity error when multiple coding sessions match the attach target', async () => {
+    const root = createExecutorRoot();
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(root, 'code-sessions.sqlite'),
+    });
+    codeSessionStore.createSession({
+      ownerUserId: 'web-user',
+      title: 'Temp Install Test Alpha',
+      workspaceRoot: join(root, 'alpha'),
+    });
+    codeSessionStore.createSession({
+      ownerUserId: 'web-user',
+      title: 'Temp Install Test Beta',
+      workspaceRoot: join(root, 'beta'),
+    });
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      codeSessionStore,
+    });
+
+    const result = await executor.runTool({
+      toolName: 'code_session_attach',
+      args: { sessionId: 'temp install test' },
+      origin: 'web',
+      userId: 'web-user',
+      principalId: 'web-user',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    });
+
+    expect(result.success).toBe(false);
+    expect(String(result.error ?? result.message)).toMatch(/more than one coding session matches/i);
   });
 
   it('merges conversation and persistent memory results in memory_search', async () => {

@@ -5,13 +5,15 @@ import { themes, getSavedTheme } from '../theme.js';
 
 const STORAGE_KEY = 'guardianagent_code_sessions_v2';
 const DEFAULT_USER_CHANNEL = 'web';
+const CODE_WORKBENCH_SURFACE_ID = 'web-code-workbench';
+const GUARDIAN_CHAT_SURFACE_ID = 'web-guardian-chat';
+const WEB_USER_KEY = 'guardianagent_web_user';
+const CODE_SESSIONS_CHANGED_EVENT = 'guardian:code-sessions-changed';
+const CODE_SESSION_FOCUS_CHANGED_EVENT = 'guardian:code-session-focus-changed';
 const MAX_TERMINAL_PANES = 3;
 const APPROVAL_BACKLOG_SOFT_CAP = 3;
 const MAX_SESSION_JOBS = 20;
 const MAX_TIMELINE_RUNS = 12;
-const MAX_CHAT_FILE_REFERENCES = 6;
-const MAX_CHAT_FILE_REFERENCE_SUGGESTIONS = 8;
-const ASSISTANT_TABS = ['chat', 'activity'];
 const INSPECTOR_TABS = ['investigate', 'flow', 'impact'];
 const SESSION_REFRESH_INTERVAL_MS = 5000;
 const STRUCTURE_PREVIEW_DEBOUNCE_MS = 350;
@@ -25,7 +27,6 @@ const MAX_INVESTIGATION_HOTSPOTS = 5;
 
 const SCROLL_SELECTORS = [
   '.code-file-list',
-  '.code-chat__history',
   '.code-rail__list',
   '.code-assistant-panel__scroll',
   '.code-session-form',
@@ -45,6 +46,7 @@ let detectedPlatform = 'linux'; // populated on first render from server
 let shellOptionsCache = [];
 let terminalListenersBound = false;
 let runTimelineListenersBound = false;
+let codeSessionListenersBound = false;
 let terminalRenderTimer = null;
 let terminalUnloadBound = false;
 let terminalLibPromise = null;
@@ -54,9 +56,11 @@ let pendingSessionUiStateById = new Map();
 let editorSearchStateBySessionId = new Map();
 let sessionRefreshInterval = null;
 let sessionPersistTimers = new Map();
+let sessionTimelineRefreshTimers = new Map();
 let pendingTerminalFocusTabId = null;
-let deferredSelectionRerenderTimer = null;
-let activeChatReferencePicker = null;
+let refreshSessionsIndexPromise = null;
+let pendingSessionSwitchId = null;
+let sessionSwitchPromise = null;
 
 // ─── Monaco Editor state ───────────────────────────────────
 let monacoLoadPromise = null;
@@ -73,9 +77,101 @@ let monacoStructureSelectionDecorations = null;
 let monacoStructureSelectionEditor = null;
 let monacoSearchDecorations = null;
 let monacoSearchDecorationEditor = null;
+let monacoProgrammaticSyncPaths = new Set();
 let structurePreviewStateBySessionId = new Map();
 let inspectorPopupWindow = null;
 let inspectorPopupSessionId = null;
+
+function codeSurfaceParams(params = {}) {
+  return {
+    ...params,
+    channel: DEFAULT_USER_CHANNEL,
+    surfaceId: CODE_WORKBENCH_SURFACE_ID,
+  };
+}
+
+function codeSurfacePayload(payload = {}) {
+  return {
+    ...payload,
+    channel: DEFAULT_USER_CHANNEL,
+    surfaceId: CODE_WORKBENCH_SURFACE_ID,
+  };
+}
+
+function normalizeCodeSessionId(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function currentCodeSessionParams(params = {}) {
+  return guardianChatSurfacePayload(params);
+}
+
+function currentCodeSessionPayload(payload = {}) {
+  return guardianChatSurfacePayload(payload);
+}
+
+function guardianChatSurfacePayload(payload = {}) {
+  return {
+    ...payload,
+    userId: resolveWebUserId(),
+    channel: DEFAULT_USER_CHANNEL,
+    surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+  };
+}
+
+function resolveWebUserId() {
+  const current = sessionStorage.getItem(WEB_USER_KEY);
+  const resolved = (current || 'web-user').trim();
+  sessionStorage.setItem(WEB_USER_KEY, resolved);
+  return resolved;
+}
+
+function notifyCodeSessionsChanged(detail = {}) {
+  window.dispatchEvent(new CustomEvent(CODE_SESSIONS_CHANGED_EVENT, { detail }));
+}
+
+function notifyGuardianChatFocus(sessionId, detail = {}) {
+  window.dispatchEvent(new CustomEvent(CODE_SESSION_FOCUS_CHANGED_EVENT, {
+    detail: {
+      ...detail,
+      sessionId: normalizeCodeSessionId(sessionId),
+    },
+  }));
+}
+
+async function syncGuardianChatSessionFocus(sessionId, detail = {}) {
+  const normalizedSessionId = normalizeCodeSessionId(sessionId);
+  if (normalizedSessionId) {
+    await api.codeSessionAttach(normalizedSessionId, guardianChatSurfacePayload({ mode: 'controller' }));
+  } else {
+    await api.codeSessionDetach(guardianChatSurfacePayload());
+  }
+  notifyGuardianChatFocus(normalizedSessionId, detail);
+  notifyCodeSessionsChanged({
+    ...detail,
+    sessionId: normalizedSessionId,
+    surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+  });
+}
+
+function resetActiveSessionViewState() {
+  cachedFileView = { source: '', diff: '', error: null };
+  disposeAllModels();
+}
+
+function setActiveSessionLocally(sessionId, { rerender = true } = {}) {
+  const normalizedSessionId = normalizeCodeSessionId(sessionId);
+  if (codeState.activeSessionId === normalizedSessionId) {
+    return false;
+  }
+  codeState.activeSessionId = normalizedSessionId;
+  resetActiveSessionViewState();
+  saveState(codeState);
+  if (rerender) {
+    rerenderFromState();
+  }
+  return true;
+}
 
 /**
  * Dynamically load Monaco's AMD loader, then load editor.main.
@@ -737,15 +833,6 @@ function buildImpactNextSteps(currentEntry, importedByFiles, importedFiles, work
   return steps.slice(0, 3);
 }
 
-function isAssistantTab(value) {
-  return ASSISTANT_TABS.includes(value);
-}
-
-function normalizeAssistantTabValue(value) {
-  if (value === 'tasks' || value === 'approvals' || value === 'checks') return 'activity';
-  return isAssistantTab(value) ? value : 'chat';
-}
-
 function isInspectorTab(value) {
   return INSPECTOR_TABS.includes(value);
 }
@@ -1192,6 +1279,23 @@ function saveMonacoViewState(filePath) {
   }
 }
 
+function removeDirtyEditorIndicator() {
+  const dirtyDot = currentContainer?.querySelector('.code-editor__dirty');
+  dirtyDot?.remove();
+  const saveButton = currentContainer?.querySelector('[data-code-save-file]');
+  saveButton?.remove();
+}
+
+function setModelValueFromDisk(filePath, model, content) {
+  if (!model || model.isDisposed()) return;
+  const nextValue = typeof content === 'string' ? content : '';
+  if (model.getValue() === nextValue) return;
+  if (filePath) {
+    monacoProgrammaticSyncPaths.add(filePath);
+  }
+  model.setValue(nextValue);
+}
+
 /**
  * Mount or update the Monaco editor in the given container for the active tab.
  */
@@ -1229,7 +1333,7 @@ function mountMonacoEditor(container, filePath, content, isDiff, diffContent) {
     const originalModel = monaco.editor.createModel(diffContent || '', lang);
     const modifiedModel = getOrCreateModel(filePath, content);
     if (modifiedModel) {
-      modifiedModel.setValue(content || '');
+      setModelValueFromDisk(filePath, modifiedModel, content || '');
     }
     monacoDiffInstance.setModel({ original: originalModel, modified: modifiedModel });
     return;
@@ -1249,7 +1353,7 @@ function mountMonacoEditor(container, filePath, content, isDiff, diffContent) {
   const tab = getActiveTab(session);
   const isTabDirty = tab?.dirty;
   if (!isTabDirty && model.getValue() !== (content || '')) {
-    model.setValue(content || '');
+    setModelValueFromDisk(filePath, model, content || '');
   }
 
   if (!monacoEditorInstance) {
@@ -1309,6 +1413,13 @@ function mountMonacoEditor(container, filePath, content, isDiff, diffContent) {
       if (!session) return;
       const tab = getActiveTab(session);
       if (!tab) return;
+      if (tab.filePath && monacoProgrammaticSyncPaths.has(tab.filePath)) {
+        monacoProgrammaticSyncPaths.delete(tab.filePath);
+        tab.content = null;
+        tab.dirty = false;
+        removeDirtyEditorIndicator();
+        return;
+      }
       tab.content = monacoEditorInstance.getValue();
       tab.dirty = true;
       scheduleStructurePreviewRefresh(session, tab.content);
@@ -1506,20 +1617,110 @@ function bindRunTimelineListeners() {
     session.timelineRuns = mergeTimelineRuns(session.timelineRuns, run);
     saveState(codeState);
     const activeSession = getActiveSession();
-    if (
-      window.location.hash.startsWith('#/code')
-      && activeSession?.id === codeSessionId
-      && (
-        normalizeAssistantTabValue(activeSession.activeAssistantTab) === 'activity'
-        || (
-          normalizeAssistantTabValue(activeSession.activeAssistantTab) === 'chat'
-          && activeSession.pendingResponse
-        )
-      )
-    ) {
+    if (window.location.hash.startsWith('#/code') && activeSession?.id === codeSessionId) {
       rerenderFromState();
+      if (isTimelineRunTerminal(run)) {
+        scheduleTimelineDrivenSessionRefresh(codeSessionId);
+      }
     }
   });
+}
+
+function bindCodeSessionListeners() {
+  if (codeSessionListenersBound) return;
+  codeSessionListenersBound = true;
+
+  window.addEventListener(CODE_SESSIONS_CHANGED_EVENT, (event) => {
+    if (!window.location.hash.startsWith('#/code') || !currentContainer) return;
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    if (detail?.surfaceId && detail.surfaceId !== GUARDIAN_CHAT_SURFACE_ID) return;
+    if (detail?.origin === CODE_WORKBENCH_SURFACE_ID && sessionSwitchPromise) return;
+    void (async () => {
+      await refreshSessionsIndex({
+        preferredCurrentSessionId: pendingSessionSwitchId,
+      }).catch(() => {});
+      const session = getActiveSession();
+      if (session) {
+        await refreshSessionData(session).catch(() => {});
+        scheduleTimelineDrivenSessionRefresh(session.id);
+      } else {
+        rerenderFromState();
+      }
+    })();
+  });
+
+  window.addEventListener(CODE_SESSION_FOCUS_CHANGED_EVENT, (event) => {
+    if (!window.location.hash.startsWith('#/code') || !currentContainer) return;
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    const nextSessionId = normalizeCodeSessionId(detail?.sessionId);
+    if (detail?.origin === CODE_WORKBENCH_SURFACE_ID && sessionSwitchPromise) return;
+    if (!setActiveSessionLocally(nextSessionId)) return;
+    const session = getActiveSession();
+    if (session) {
+      void refreshSessionData(session);
+    }
+  });
+}
+
+function getOpenTabSelectedFilePath(session) {
+  if (!session || !Array.isArray(session.openTabs) || session.openTabs.length === 0) return null;
+  const index = typeof session.activeTabIndex === 'number' ? session.activeTabIndex : -1;
+  const activePath = session.openTabs[index]?.filePath;
+  if (typeof activePath === 'string' && activePath.trim()) {
+    return activePath;
+  }
+  const firstPath = session.openTabs.find((tab) => typeof tab?.filePath === 'string' && tab.filePath.trim())?.filePath;
+  return typeof firstPath === 'string' && firstPath.trim() ? firstPath : null;
+}
+
+function getPreferredSelectedFilePath(session) {
+  const explicit = typeof session?.selectedFilePath === 'string' && session.selectedFilePath.trim()
+    ? session.selectedFilePath
+    : null;
+  return explicit || getOpenTabSelectedFilePath(session);
+}
+
+function ensureSessionSelectedFilePath(session) {
+  const preferred = getPreferredSelectedFilePath(session);
+  if (session && preferred && session.selectedFilePath !== preferred) {
+    session.selectedFilePath = preferred;
+  }
+  return preferred;
+}
+
+function syncSelectedEditorTabFromFileView(session, fileView) {
+  const selectedFilePath = ensureSessionSelectedFilePath(session);
+  if (!selectedFilePath) return;
+  const tab = getActiveTab(session);
+  if (!tab || tab.filePath !== selectedFilePath || tab.dirty) return;
+  const nextSource = typeof fileView?.source === 'string' ? fileView.source : '';
+  tab.content = null;
+  const modelEntry = monacoModels.get(tab.filePath);
+  const model = modelEntry?.model;
+  if (model && !model.isDisposed() && model.getValue() !== nextSource) {
+    setModelValueFromDisk(tab.filePath, model, nextSource);
+    tab.dirty = false;
+    removeDirtyEditorIndicator();
+  }
+}
+
+function isTimelineRunTerminal(run) {
+  const status = String(run?.summary?.status || '').toLowerCase();
+  return ['completed', 'failed', 'cancelled', 'timed_out'].includes(status);
+}
+
+function scheduleTimelineDrivenSessionRefresh(sessionId) {
+  if (!sessionId) return;
+  const existing = sessionTimelineRefreshTimers.get(sessionId);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    sessionTimelineRefreshTimers.delete(sessionId);
+    const session = getSessionById(sessionId);
+    if (session && currentContainer && window.location.hash.startsWith('#/code')) {
+      void refreshSessionData(session).catch(() => {});
+    }
+  }, 400);
+  sessionTimelineRefreshTimers.set(sessionId, timer);
 }
 
 function mergeTimelineRuns(existingRuns, nextRun) {
@@ -1657,14 +1858,18 @@ function normalizeTreeEntries(entries) {
 
 function normalizeSessionUiStateRecord(record, existing = {}) {
   const uiState = record?.uiState || {};
+  const fallbackSelectedFilePath = (
+    (typeof existing.selectedFilePath === 'string' && existing.selectedFilePath.trim())
+    || getOpenTabSelectedFilePath(existing)
+    || null
+  );
   return {
-    currentDirectory: uiState.currentDirectory || record?.resolvedRoot || record?.workspaceRoot || '.',
-    selectedFilePath: uiState.selectedFilePath || null,
+    currentDirectory: uiState.currentDirectory || existing.currentDirectory || record?.resolvedRoot || record?.workspaceRoot || '.',
+    selectedFilePath: uiState.selectedFilePath || fallbackSelectedFilePath,
     showDiff: !!uiState.showDiff,
     terminalTabs: normalizeTerminalTabs(uiState.terminalTabs, existing.terminalTabs),
     terminalCollapsed: !!uiState.terminalCollapsed,
     expandedDirs: Array.isArray(uiState.expandedDirs) ? uiState.expandedDirs : [],
-    activeAssistantTab: normalizeAssistantTabValue(uiState.activeAssistantTab || existing.activeAssistantTab),
   };
 }
 
@@ -1676,7 +1881,6 @@ function getSessionUiStateSignature(uiState) {
     terminalTabs: normalizeTerminalTabs(uiState?.terminalTabs, []),
     terminalCollapsed: !!uiState?.terminalCollapsed,
     expandedDirs: Array.isArray(uiState?.expandedDirs) ? uiState.expandedDirs : [],
-    activeAssistantTab: normalizeAssistantTabValue(uiState?.activeAssistantTab),
   });
 }
 
@@ -1693,7 +1897,6 @@ function getEffectiveSessionUiState(record, existing = {}) {
     ...pendingUiState,
     terminalTabs: normalizeTerminalTabs(pendingUiState.terminalTabs, serverUiState.terminalTabs),
     expandedDirs: Array.isArray(pendingUiState.expandedDirs) ? pendingUiState.expandedDirs : serverUiState.expandedDirs,
-    activeAssistantTab: normalizeAssistantTabValue(pendingUiState.activeAssistantTab || serverUiState.activeAssistantTab),
   };
 }
 
@@ -2260,219 +2463,6 @@ function collectCachedTreeFilePaths(dirPath, results = []) {
   return results;
 }
 
-function getCodeChatReferenceCatalog(session) {
-  const catalog = [];
-  const seen = new Set();
-  const workspaceRoot = session?.resolvedRoot || session?.workspaceRoot || '';
-  const addEntry = (pathValue, category = '', summary = '') => {
-    const normalizedPath = String(pathValue || '')
-      .trim()
-      .replace(/[\\/]+/g, '/')
-      .replace(/^\.\/+/, '');
-    if (!normalizedPath) return;
-    const key = normalizeComparablePath(normalizedPath);
-    if (!key || seen.has(key)) return;
-    seen.add(key);
-    catalog.push({ path: normalizedPath, category, summary });
-  };
-
-  if (session?.selectedFilePath && workspaceRoot) {
-    addEntry(toRelativePath(session.selectedFilePath, workspaceRoot), 'selected');
-  }
-  if (Array.isArray(session?.openTabs)) {
-    session.openTabs.forEach((tab) => {
-      addEntry(workspaceRoot ? toRelativePath(tab.filePath, workspaceRoot) : tab.filePath, 'open');
-    });
-  }
-  if (Array.isArray(session?.workspaceMap?.notableFiles)) {
-    session.workspaceMap.notableFiles.forEach((pathValue) => addEntry(pathValue, 'notable'));
-  }
-  if (Array.isArray(session?.workspaceMap?.files)) {
-    session.workspaceMap.files.forEach((entry) => addEntry(entry.path, entry.category, entry.summary));
-  }
-  if (catalog.length === 0 && workspaceRoot) {
-    collectCachedTreeFilePaths(workspaceRoot).forEach((fullPath) => addEntry(toRelativePath(fullPath, workspaceRoot), 'cached'));
-  }
-  return catalog;
-}
-
-function scoreCodeChatReference(entry, normalizedQuery) {
-  if (!normalizedQuery) return 1;
-  const pathValue = normalizeComparablePath(entry.path);
-  const baseValue = basename(entry.path).toLowerCase();
-  const queryTokens = normalizedQuery.split(/[./_-]+/).filter(Boolean);
-  let score = 0;
-  if (pathValue === normalizedQuery) score += 1200;
-  else if (baseValue === normalizedQuery) score += 1100;
-  if (pathValue.startsWith(normalizedQuery)) score += 950;
-  if (baseValue.startsWith(normalizedQuery)) score += 900;
-  if (pathValue.includes(`/${normalizedQuery}`)) score += 760;
-  if (pathValue.includes(normalizedQuery)) score += 620;
-  queryTokens.forEach((token) => {
-    if (token.length < 2) return;
-    if (baseValue.includes(token)) score += 55;
-    if (pathValue.includes(token)) score += 20;
-  });
-  return score;
-}
-
-function getCodeChatReferenceSuggestions(session, query) {
-  const catalog = getCodeChatReferenceCatalog(session);
-  if (catalog.length === 0) return [];
-  const normalizedQuery = normalizeComparablePath(query || '').replace(/^@/, '');
-  const scored = catalog
-    .map((entry) => ({ ...entry, score: scoreCodeChatReference(entry, normalizedQuery) }))
-    .filter((entry) => entry.score > 0)
-    .sort((left, right) => (
-      right.score - left.score
-      || left.path.split('/').length - right.path.split('/').length
-      || left.path.localeCompare(right.path)
-    ));
-  return scored.slice(0, MAX_CHAT_FILE_REFERENCE_SUGGESTIONS);
-}
-
-function findCodeChatMentionMatch(text, cursorIndex) {
-  if (!Number.isFinite(cursorIndex) || cursorIndex < 0) return null;
-  const beforeCursor = String(text || '').slice(0, cursorIndex);
-  const afterCursor = String(text || '').slice(cursorIndex);
-  if (/^[A-Za-z0-9_./\\-]/.test(afterCursor)) return null;
-  const match = beforeCursor.match(/(^|[\s([{])@([A-Za-z0-9_./\\-]*)$/);
-  if (!match) return null;
-  const query = match[2] || '';
-  const start = beforeCursor.length - query.length - 1;
-  return { start, end: cursorIndex, query };
-}
-
-function extractCodeChatFileReferences(session, text) {
-  const catalog = getCodeChatReferenceCatalog(session);
-  if (catalog.length === 0) return [];
-  const catalogByPath = new Map(catalog.map((entry) => [normalizeComparablePath(entry.path), entry.path]));
-  const references = [];
-  const seen = new Set();
-  const pattern = /(^|[\s([{])@([A-Za-z0-9_./\\-]+)/g;
-  let match;
-  while ((match = pattern.exec(String(text || '')))) {
-    const candidate = String(match[2] || '')
-      .trim()
-      .replace(/[)>}\],;:!?]+$/, '')
-      .replace(/[\\/]+/g, '/')
-      .replace(/^\.\/+/, '');
-    const resolved = catalogByPath.get(normalizeComparablePath(candidate));
-    if (!resolved || seen.has(resolved)) continue;
-    seen.add(resolved);
-    references.push(resolved);
-    if (references.length >= MAX_CHAT_FILE_REFERENCES) break;
-  }
-  return references;
-}
-
-function renderCodeChatDraftReferencesMarkup(references) {
-  const normalized = normalizeDraftFileReferences(references);
-  if (normalized.length === 0) return '';
-  return `
-    <div class="code-chat__refs-label">Tagged context</div>
-    <div class="code-chat__refs-pills">
-      ${normalized.map((pathValue) => `<span class="code-chat__ref-pill" title="${escAttr(pathValue)}">@${esc(pathValue)}</span>`).join('')}
-    </div>
-  `;
-}
-
-function renderCodeChatReferencePickerMarkup(picker) {
-  if (!picker || !Array.isArray(picker.suggestions) || picker.suggestions.length === 0) return '';
-  return picker.suggestions.map((entry, index) => {
-    const isActive = index === picker.selectedIndex;
-    const secondary = entry.path === basename(entry.path)
-      ? (entry.summary || entry.category || '')
-      : entry.path;
-    return `
-      <button
-        class="code-chat__mention-item ${isActive ? 'is-active' : ''}"
-        type="button"
-        data-code-chat-ref-suggestion="${escAttr(entry.path)}"
-      >
-        <span class="code-chat__mention-primary">@${esc(basename(entry.path))}</span>
-        <span class="code-chat__mention-secondary">${esc(secondary)}</span>
-      </button>
-    `;
-  }).join('');
-}
-
-function updateCodeChatReferenceList(form, references) {
-  const host = form?.querySelector('[data-code-chat-ref-list]');
-  if (!host) return;
-  const markup = renderCodeChatDraftReferencesMarkup(references);
-  host.innerHTML = markup;
-  host.hidden = !markup;
-}
-
-function updateCodeChatReferencePicker(form, picker) {
-  const host = form?.querySelector('[data-code-chat-mention-menu]');
-  if (!host) return;
-  const markup = renderCodeChatReferencePickerMarkup(picker);
-  host.innerHTML = markup;
-  host.hidden = !markup;
-}
-
-function syncCodeChatDraftReferences(session, form, textarea) {
-  if (!session || !textarea) return;
-  session.chatDraft = textarea.value;
-  session.draftFileReferences = extractCodeChatFileReferences(session, textarea.value);
-  updateCodeChatReferenceList(form, session.draftFileReferences);
-}
-
-function refreshCodeChatReferencePicker(session, form, textarea) {
-  if (!session || !textarea) return;
-  const mention = findCodeChatMentionMatch(textarea.value, textarea.selectionStart);
-  if (!mention) {
-    activeChatReferencePicker = null;
-    updateCodeChatReferencePicker(form, null);
-    return;
-  }
-  const suggestions = getCodeChatReferenceSuggestions(session, mention.query);
-  if (suggestions.length === 0) {
-    activeChatReferencePicker = null;
-    updateCodeChatReferencePicker(form, null);
-    return;
-  }
-  const previousPath = activeChatReferencePicker?.sessionId === session.id
-    ? activeChatReferencePicker.suggestions?.[activeChatReferencePicker.selectedIndex]?.path
-    : null;
-  let selectedIndex = 0;
-  if (previousPath) {
-    const matchIndex = suggestions.findIndex((entry) => entry.path === previousPath);
-    if (matchIndex >= 0) selectedIndex = matchIndex;
-  }
-  activeChatReferencePicker = {
-    sessionId: session.id,
-    start: mention.start,
-    end: mention.end,
-    query: mention.query,
-    suggestions,
-    selectedIndex,
-  };
-  updateCodeChatReferencePicker(form, activeChatReferencePicker);
-}
-
-function applyCodeChatReferenceSuggestion(session, form, textarea, pathValue) {
-  if (!session || !form || !textarea || !pathValue) return;
-  const picker = activeChatReferencePicker;
-  if (!picker || picker.sessionId !== session.id) return;
-  const before = textarea.value.slice(0, picker.start);
-  const after = textarea.value.slice(picker.end);
-  const insertion = `@${pathValue}`;
-  const shouldAppendSpace = !after || !/^[\s)\]}.,;:!?]/.test(after);
-  const nextValue = `${before}${insertion}${shouldAppendSpace ? ' ' : ''}${after}`;
-  const caretIndex = before.length + insertion.length + (shouldAppendSpace ? 1 : 0);
-  textarea.value = nextValue;
-  textarea.selectionStart = caretIndex;
-  textarea.selectionEnd = caretIndex;
-  activeChatReferencePicker = null;
-  syncCodeChatDraftReferences(session, form, textarea);
-  updateCodeChatReferencePicker(form, null);
-  saveState(codeState);
-  textarea.focus();
-}
-
 function getTaskBadgeCount(session) {
   return deriveTaskItems(session)
     .filter((item) => item.status !== 'completed')
@@ -2799,24 +2789,6 @@ function normalizeWorkspaceWorkingSet(workingSet) {
   };
 }
 
-function normalizeDraftFileReferences(value) {
-  if (!Array.isArray(value)) return [];
-  const deduped = [];
-  const seen = new Set();
-  for (const entry of value) {
-    const normalized = String(entry || '')
-      .trim()
-      .replace(/^@/, '')
-      .replace(/[\\/]+/g, '/')
-      .replace(/^\.\/+/, '');
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    deduped.push(normalized);
-    if (deduped.length >= MAX_CHAT_FILE_REFERENCES) break;
-  }
-  return deduped;
-}
-
 function normalizeServerSession(record, existing = {}) {
   const uiState = getEffectiveSessionUiState(record, existing);
   const workState = record?.workState || {};
@@ -2841,12 +2813,10 @@ function normalizeServerSession(record, existing = {}) {
     terminalTabs: normalizeTerminalTabs(uiState.terminalTabs, existing.terminalTabs),
     terminalCollapsed: !!uiState.terminalCollapsed,
     expandedDirs: Array.isArray(uiState.expandedDirs) ? uiState.expandedDirs : [],
-    chat: Array.isArray(existing.chat) ? existing.chat : [],
-    chatDraft: existing.chatDraft || '',
-    draftFileReferences: normalizeDraftFileReferences(existing.draftFileReferences),
     pendingApprovals: normalizePendingApprovals(workState.pendingApprovals, existing.pendingApprovals),
     activeSkills: Array.isArray(workState.activeSkills) ? workState.activeSkills.map((value) => String(value)) : [],
     recentJobs: Array.isArray(workState.recentJobs) ? workState.recentJobs.slice(0, MAX_SESSION_JOBS) : [],
+    activityMessages: Array.isArray(existing.activityMessages) ? existing.activityMessages.slice(-20) : [],
     verification: normalizeVerificationEntries(workState.verification, existing.verification),
     focusSummary: workState.focusSummary || '',
     planSummary: workState.planSummary || '',
@@ -2858,7 +2828,6 @@ function normalizeServerSession(record, existing = {}) {
     workingSet: hasWorkingSet ? normalizeWorkspaceWorkingSet(workState.workingSet) : (existing.workingSet || null),
     timelineRuns: normalizeTimelineRuns(existing.timelineRuns),
     structureView: normalizeStructureView(existing.structureView, existing.structureView),
-    activeAssistantTab: normalizeAssistantTabValue(uiState.activeAssistantTab || existing.activeAssistantTab),
     inspectorOpen: !!existing.inspectorOpen,
     inspectorDetached: !!existing.inspectorDetached,
     inspectorTab: normalizeInspectorTabValue(existing.inspectorTab),
@@ -2962,17 +2931,34 @@ function upsertSession(session) {
   return session;
 }
 
-function mergeSessionsFromServer(payload) {
+function mergeSessionsFromServer(payload, options = {}) {
   const previousById = new Map((codeState.sessions || []).map((session) => [session.id, session]));
-  const sessions = Array.isArray(payload?.sessions)
+  const previousOrder = new Map((codeState.sessions || []).map((session, index) => [session.id, index]));
+  const serverSessions = Array.isArray(payload?.sessions)
     ? payload.sessions.map((record) => normalizeServerSession(record, previousById.get(record.id) || {}))
     : [];
+  const serverOrder = new Map(serverSessions.map((session, index) => [session.id, index]));
+  const sessions = [...serverSessions].sort((left, right) => {
+    const leftPreviousIndex = previousOrder.get(left.id);
+    const rightPreviousIndex = previousOrder.get(right.id);
+    const leftKnown = Number.isInteger(leftPreviousIndex);
+    const rightKnown = Number.isInteger(rightPreviousIndex);
+    if (leftKnown && rightKnown) {
+      return leftPreviousIndex - rightPreviousIndex;
+    }
+    if (leftKnown) return -1;
+    if (rightKnown) return 1;
+    return (serverOrder.get(left.id) ?? 0) - (serverOrder.get(right.id) ?? 0);
+  });
   codeState.sessions = sessions;
-  const serverCurrentSessionId = typeof payload?.currentSessionId === 'string' ? payload.currentSessionId : null;
-  const preferredActiveId = codeState.activeSessionId && sessions.some((session) => session.id === codeState.activeSessionId)
-    ? codeState.activeSessionId
-    : (serverCurrentSessionId && sessions.some((session) => session.id === serverCurrentSessionId)
+  const preferredCurrentSessionId = normalizeCodeSessionId(options.preferredCurrentSessionId);
+  const serverCurrentSessionId = normalizeCodeSessionId(payload?.currentSessionId);
+  const preferredActiveId = preferredCurrentSessionId && sessions.some((session) => session.id === preferredCurrentSessionId)
+    ? preferredCurrentSessionId
+    : serverCurrentSessionId && sessions.some((session) => session.id === serverCurrentSessionId)
       ? serverCurrentSessionId
+    : (codeState.activeSessionId && sessions.some((session) => session.id === codeState.activeSessionId)
+      ? codeState.activeSessionId
       : sessions[0]?.id || null);
   codeState.activeSessionId = preferredActiveId;
 }
@@ -2981,23 +2967,33 @@ function applyCodeSessionSnapshot(snapshot) {
   if (!snapshot?.session) return null;
   const existing = codeState.sessions.find((session) => session.id === snapshot.session.id) || {};
   const merged = mergeCodeSessionRecord(snapshot, existing);
-  if (!merged) return null;
-  merged.chat = mapServerHistory(snapshot.history);
-  return merged;
+  return merged || null;
 }
 
-async function refreshSessionsIndex() {
-  const result = await api.codeSessions({ channel: DEFAULT_USER_CHANNEL });
-  mergeSessionsFromServer(result);
-  saveState(codeState);
-  return codeState.sessions;
+async function refreshSessionsIndex(options = {}) {
+  if (refreshSessionsIndexPromise) {
+    const result = await refreshSessionsIndexPromise;
+    if (options?.preferredCurrentSessionId) {
+      mergeSessionsFromServer(result, options);
+      saveState(codeState);
+    }
+    return result;
+  }
+  refreshSessionsIndexPromise = (async () => {
+    const result = await api.codeSessions(currentCodeSessionParams());
+    mergeSessionsFromServer(result, options);
+    saveState(codeState);
+    return result;
+  })();
+  try {
+    return await refreshSessionsIndexPromise;
+  } finally {
+    refreshSessionsIndexPromise = null;
+  }
 }
 
-async function refreshSessionSnapshot(sessionId, { historyLimit = 120 } = {}) {
-  const snapshot = await api.codeSessionGet(sessionId, {
-    channel: DEFAULT_USER_CHANNEL,
-    historyLimit,
-  });
+async function refreshSessionSnapshot(sessionId, { historyLimit = 1 } = {}) {
+  const snapshot = await api.codeSessionGet(sessionId, currentCodeSessionParams({ historyLimit }));
   const session = applyCodeSessionSnapshot(snapshot);
   saveState(codeState);
   return session;
@@ -3007,17 +3003,65 @@ async function ensureBackendSession(session) {
   if (!session?.id) return null;
   const fresh = await refreshSessionSnapshot(session.id).catch(() => null);
   if (!fresh) return null;
-  await api.codeSessionAttach(fresh.id, { channel: DEFAULT_USER_CHANNEL }).catch(() => {});
+  await syncGuardianChatSessionFocus(fresh.id).catch(() => {});
   return fresh;
+}
+
+async function switchCodeSession(sessionId, { rerender = true } = {}) {
+  const nextSessionId = normalizeCodeSessionId(sessionId);
+  if (sessionSwitchPromise) {
+    if (pendingSessionSwitchId === nextSessionId) {
+      return sessionSwitchPromise;
+    }
+    try {
+      await sessionSwitchPromise;
+    } catch {
+      // Ignore the prior switch failure and let the new request proceed.
+    }
+  }
+
+  const previousSessionId = normalizeCodeSessionId(codeState.activeSessionId);
+  pendingSessionSwitchId = nextSessionId;
+  setActiveSessionLocally(nextSessionId, { rerender: false });
+
+  let switchPromise = null;
+  switchPromise = (async () => {
+    try {
+      await syncGuardianChatSessionFocus(nextSessionId, {
+        origin: CODE_WORKBENCH_SURFACE_ID,
+      });
+      await refreshSessionsIndex({ preferredCurrentSessionId: nextSessionId });
+      const activeSession = getActiveSession();
+      if (activeSession?.id === nextSessionId) {
+        await refreshSessionData(activeSession);
+      } else {
+        rerenderFromState();
+      }
+    } catch (err) {
+      setActiveSessionLocally(previousSessionId, { rerender: false });
+      if (rerender) {
+        rerenderFromState();
+      }
+      throw err;
+    } finally {
+      if (sessionSwitchPromise === switchPromise) {
+        sessionSwitchPromise = null;
+      }
+      if (pendingSessionSwitchId === nextSessionId) {
+        pendingSessionSwitchId = null;
+      }
+    }
+  })();
+  sessionSwitchPromise = switchPromise;
+  return switchPromise;
 }
 
 function buildCodeSessionUiState(session) {
   return {
     currentDirectory: session.currentDirectory || session.resolvedRoot || session.workspaceRoot || '.',
-    selectedFilePath: session.selectedFilePath || null,
+    selectedFilePath: ensureSessionSelectedFilePath(session),
     showDiff: !!session.showDiff,
     expandedDirs: Array.isArray(session.expandedDirs) ? session.expandedDirs : [],
-    activeAssistantTab: normalizeAssistantTabValue(session.activeAssistantTab),
     terminalCollapsed: !!session.terminalCollapsed,
     terminalTabs: Array.isArray(session.terminalTabs)
       ? session.terminalTabs.map((tab) => ({
@@ -3038,9 +3082,9 @@ function queueSessionPersist(session) {
     sessionPersistTimers.delete(session.id);
     try {
       const snapshot = await api.codeSessionUpdate(session.id, {
-        channel: DEFAULT_USER_CHANNEL,
         uiState: buildCodeSessionUiState(session),
         agentId: session.agentId || null,
+      ...codeSurfacePayload(),
       });
       applyCodeSessionSnapshot(snapshot);
       saveState(codeState);
@@ -3062,7 +3106,9 @@ function ensureSessionRefreshLoop() {
       const previousTreeSignature = getVisibleTreeSignature(activeSession);
       const session = await refreshSessionSnapshot(activeSession.id);
       if (!session) return;
-      await refreshVisibleTreeDirs(session);
+      if (codeState.activePanel === 'explorer') {
+        await refreshVisibleTreeDirs(session);
+      }
       await refreshAssistantState(session, { rerender: false });
       if (getSessionRenderSignature(session) !== previousSignature || getVisibleTreeSignature(session) !== previousTreeSignature) {
         rerenderFromState();
@@ -3081,6 +3127,7 @@ export async function renderCode(container) {
   currentContainer = container;
   bindTerminalListeners();
   bindRunTimelineListeners();
+  bindCodeSessionListeners();
 
   // Start loading Monaco in parallel with data fetches
   loadMonaco().catch(() => {});
@@ -3099,8 +3146,9 @@ export async function renderCode(container) {
     if (Array.isArray(statusResult?.shellOptions)) shellOptionsCache = statusResult.shellOptions;
 
     codeState = normalizeState(codeState, cachedAgents);
-    await refreshSessionsIndex().catch(() => {
+    const sessionsIndex = await refreshSessionsIndex().catch(() => {
       saveState(codeState);
+      return null;
     });
     if (!isActiveCodeView(container, lifecycleId)) return;
     ensureSessionRefreshLoop();
@@ -3108,11 +3156,10 @@ export async function renderCode(container) {
     let activeSession = getActiveSession();
     if (activeSession) {
       activeSession = await refreshSessionSnapshot(activeSession.id).catch(() => activeSession);
-      // Re-attach on page load so the backend attachment record stays fresh.
-      // After a backend restart the in-memory session map is lost, so the old
-      // attachment (keyed by the previous principalId/surfaceId) may be stale.
-      if (activeSession?.id) {
-        await api.codeSessionAttach(activeSession.id, { channel: DEFAULT_USER_CHANNEL }).catch(() => {});
+      // Restore the selected web coding session only if the backend currently has
+      // no focused session for Guardian chat, such as after a backend restart.
+      if (activeSession?.id && !sessionsIndex?.currentSessionId) {
+        await syncGuardianChatSessionFocus(activeSession.id).catch(() => {});
       }
     }
     if (!isActiveCodeView(container, lifecycleId)) return;
@@ -3127,8 +3174,6 @@ export async function renderCode(container) {
         }
       }
       if (!isActiveCodeView(container, lifecycleId)) return;
-      // Load expanded dirs
-      await loadExpandedDirs(activeSession);
       const [fileView, structureView] = await Promise.all([
         loadFileView(activeSession),
         loadStructureView(activeSession),
@@ -3181,10 +3226,6 @@ export function teardownCode() {
   structurePreviewStateBySessionId = new Map();
   pendingSessionUiStateById = new Map();
   editorSearchStateBySessionId = new Map();
-  if (deferredSelectionRerenderTimer) {
-    clearTimeout(deferredSelectionRerenderTimer);
-    deferredSelectionRerenderTimer = null;
-  }
   if (sessionRefreshInterval) {
     clearInterval(sessionRefreshInterval);
     sessionRefreshInterval = null;
@@ -3192,22 +3233,11 @@ export function teardownCode() {
   disposeInactiveTerminalInstances([]);
   disposeMonacoEditors();
   disposeAllModels();
+  monacoProgrammaticSyncPaths = new Set();
 }
 
 function rerenderFromState() {
   if (!currentContainer) return;
-  if (hasActiveChatSelection(currentContainer)) {
-    if (deferredSelectionRerenderTimer) return;
-    deferredSelectionRerenderTimer = window.setTimeout(() => {
-      deferredSelectionRerenderTimer = null;
-      if (currentContainer) rerenderFromState();
-    }, 250);
-    return;
-  }
-  if (deferredSelectionRerenderTimer) {
-    clearTimeout(deferredSelectionRerenderTimer);
-    deferredSelectionRerenderTimer = null;
-  }
   renderDOM(currentContainer, { focusTerminalTabId: pendingTerminalFocusTabId });
   pendingTerminalFocusTabId = null;
   const activeSession = getActiveSession();
@@ -3245,10 +3275,6 @@ function captureFocusState(container) {
     };
   }
 
-  if (active.matches('[data-code-chat-form] textarea[name="message"]')) {
-    return captureSelectionState({ type: 'chat-input' }, active);
-  }
-
   if (active.matches('[data-code-session-form] [name]')) {
     return captureSelectionState({
       type: 'create-session-form',
@@ -3278,9 +3304,7 @@ function captureSelectionState(state, element) {
 function restoreFocusState(container, state) {
   if (!state || state.type === 'terminal') return;
   let selector = '';
-  if (state.type === 'chat-input') {
-    selector = '[data-code-chat-form] textarea[name="message"]';
-  } else if (state.type === 'create-session-form' && state.name) {
+  if (state.type === 'create-session-form' && state.name) {
     selector = `[data-code-session-form] [name="${state.name}"]`;
   } else if (state.type === 'edit-session-form' && state.name) {
     selector = `[data-code-edit-session-form] [name="${state.name}"]`;
@@ -3298,22 +3322,6 @@ function restoreFocusState(container, state) {
   }
 }
 
-function hasActiveChatSelection(container) {
-  const selection = window.getSelection?.();
-  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false;
-  const chatHistory = container.querySelector('.code-chat__history');
-  if (!chatHistory) return false;
-  for (let index = 0; index < selection.rangeCount; index += 1) {
-    const range = selection.getRangeAt(index);
-    const common = range.commonAncestorContainer;
-    const node = common?.nodeType === Node.TEXT_NODE ? common.parentNode : common;
-    if (node instanceof Node && chatHistory.contains(node)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function getSessionRenderSignature(session) {
   if (!session) return '';
   return JSON.stringify({
@@ -3325,14 +3333,6 @@ function getSessionRenderSignature(session) {
     showDiff: !!session.showDiff,
     status: session.status || '',
     expandedDirs: Array.isArray(session.expandedDirs) ? session.expandedDirs : [],
-    chat: Array.isArray(session.chat)
-      ? session.chat.map((message) => ({
-        role: message.role,
-        content: message.content,
-        timestamp: message.timestamp || 0,
-        responseSource: message.responseSource || null,
-      }))
-      : [],
     pendingApprovals: Array.isArray(session.pendingApprovals)
       ? session.pendingApprovals.map((approval) => ({
         id: approval.id,
@@ -3357,6 +3357,13 @@ function getSessionRenderSignature(session) {
         createdAt: job.createdAt || 0,
       }))
       : [],
+    activityMessages: Array.isArray(session.activityMessages)
+      ? session.activityMessages.map((message) => ({
+        role: message.role || 'agent',
+        content: message.content || '',
+        timestamp: message.timestamp || 0,
+      }))
+      : [],
     focusSummary: session.focusSummary || '',
     planSummary: session.planSummary || '',
     compactedSummary: session.compactedSummary || '',
@@ -3364,7 +3371,6 @@ function getSessionRenderSignature(session) {
     workspaceTrust: normalizeWorkspaceTrust(session.workspaceTrust),
     workspaceMap: normalizeWorkspaceMap(session.workspaceMap),
     workingSet: normalizeWorkspaceWorkingSet(session.workingSet),
-    activeAssistantTab: session.activeAssistantTab || 'chat',
     terminalCollapsed: !!session.terminalCollapsed,
     terminalTabs: Array.isArray(session.terminalTabs)
       ? session.terminalTabs.map((tab) => ({
@@ -3401,6 +3407,7 @@ async function ensureTerminalConnected(session, tab) {
       shell: normalizeTerminalShell(tab.shell),
       cols: 120,
       rows: 30,
+      ...codeSurfacePayload(),
     });
     tab.runtimeTerminalId = result?.terminalId || null;
     tab.connected = !!tab.runtimeTerminalId;
@@ -3447,7 +3454,7 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
   const focusState = captureFocusState(container);
   const activeSession = getActiveSession();
   const fileView = cachedFileView;
-  const activePanel = codeState.activePanel !== undefined ? codeState.activePanel : 'sessions'; // 'sessions' | 'explorer' | 'git' | null
+  const activePanel = codeState.activePanel !== undefined ? codeState.activePanel : 'sessions'; // 'sessions' | 'explorer' | 'git' | 'activity' | null
   const panelCollapsed = !activePanel;
 
   const activeTab = activeSession ? getActiveTab(activeSession) : null;
@@ -3478,6 +3485,7 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
             <button class="code-side-panel__nav-btn ${activePanel === 'sessions' ? 'is-active' : ''}" type="button" data-code-panel-switch="sessions" title="Sessions">&#128451;</button>
             <button class="code-side-panel__nav-btn ${activePanel === 'explorer' ? 'is-active' : ''}" type="button" data-code-panel-switch="explorer" title="Explorer">&#128193;</button>
             <button class="code-side-panel__nav-btn ${activePanel === 'git' ? 'is-active' : ''}" type="button" data-code-panel-switch="git" title="Source Control">&#9095;</button>
+            <button class="code-side-panel__nav-btn ${activePanel === 'activity' ? 'is-active' : ''}" type="button" data-code-panel-switch="activity" title="Workspace Activity">&#128202;</button>
           </nav>
           ${!panelCollapsed ? `
           ${activePanel === 'sessions' ? `
@@ -3486,6 +3494,7 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
                 <h3><span class="code-panel-title__icon">&#128451;</span> Sessions</h3>
                 <button class="btn btn-primary btn-sm" type="button" data-code-new-session>+</button>
               </div>
+              <div class="code-rail__subcopy">Click a session card to make it the current coding session for Guardian chat.</div>
               ${renderSessionForm()}
               <div class="code-rail__list">
                 ${codeState.sessions.map((session) => renderSessionCard(session)).join('')}
@@ -3520,6 +3529,16 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
                 ` : ''}
               </div>
               ${activeSession ? renderGitPanel(activeSession) : '<div class="empty-state">Create a session to view source control.</div>'}
+            </div>
+          ` : ''}
+          ${activePanel === 'activity' ? `
+            <div class="code-side-panel__section">
+              <div class="panel__header">
+                <h3 class="code-chat__title"><span class="code-chat__title-icon">&#128202;</span><span>Workspace Activity</span></h3>
+              </div>
+              ${activeSession ? `
+                <div class="code-assistant-panel" data-code-assistant-panel-host>${renderAssistantPanel(activeSession)}</div>
+              ` : '<div class="empty-state">Create a session to inspect approvals, trust state, and recent work.</div>'}
             </div>
           ` : ''}
           ` : ''}
@@ -3569,20 +3588,6 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
               ` : (!activeSession ? '<div class="empty-state">Create a session to open terminals.</div>' : '')}
             </section>
           </div>
-          <aside class="code-chat panel">
-            <div class="panel__header">
-              <h3 class="code-chat__title"><span class="code-chat__title-icon">&#x1F4BB;</span><span>Coding Assistant</span></h3>
-              ${activeSession ? `
-                <div class="panel__actions">
-                  <button class="btn btn-secondary btn-sm" type="button" data-code-reset-chat title="Clear conversation and start fresh">Clear Chat</button>
-                </div>
-              ` : ''}
-            </div>
-            ${activeSession ? `
-              <div data-code-assistant-tabs-host>${renderAssistantTabs(activeSession)}</div>
-              <div class="code-assistant-panel" data-code-assistant-panel-host>${renderAssistantPanel(activeSession)}</div>
-            ` : '<div class="empty-state">Create a session to start chatting.</div>'}
-          </aside>
         </section>
       </div>
     </div>
@@ -3672,10 +3677,10 @@ function renderTreeEntries(basePath, entries, depth, session) {
 }
 
 async function loadTreeDir(session, dirPath) {
-  const result = await api.codeFsList({
+  const result = await api.codeFsList(codeSurfacePayload({
     sessionId: session?.id,
     path: dirPath,
-  }).catch((err) => ({ success: false, error: err.message }));
+  })).catch((err) => ({ success: false, error: err.message }));
 
   if (!result?.success) {
     return { entries: [], error: result?.message || result?.error || 'Failed to list directory.', resolvedPath: dirPath };
@@ -3741,9 +3746,9 @@ async function navigateDirPicker(dirPath) {
   saveState(codeState);
   rerenderFromState();
 
-  const result = await api.codeFsList({
+  const result = await api.codeFsList(codeSurfacePayload({
     path: dirPath,
-  }).catch((err) => ({ success: false, error: err.message }));
+  })).catch((err) => ({ success: false, error: err.message }));
 
   if (!result?.success) {
     codeState.dirPickerError = result?.message || 'Failed to list directory.';
@@ -3801,59 +3806,6 @@ function renderTerminalPane(session, tab) {
   `;
 }
 
-function renderAssistantTabs(session) {
-  const approvalCount = Array.isArray(session?.pendingApprovals) ? session.pendingApprovals.length : 0;
-  const taskCount = getTaskBadgeCount(session);
-  const checkCount = getCheckBadgeCount(session);
-  const activeTab = normalizeAssistantTabValue(session?.activeAssistantTab);
-  const activityTotal = approvalCount + taskCount + checkCount;
-  const viewedActivityTotal = (session?.viewedApprovalCount || 0) + (session?.viewedTaskCount || 0) + (session?.viewedCheckCount || 0);
-  const unreadCounts = {
-    chat: 0,
-    activity: activeTab === 'activity' ? 0 : Math.max(0, activityTotal - viewedActivityTotal),
-  };
-  const providerOptions = getCodeProviderOptions(cachedAgents);
-
-  return `
-    <div class="code-assistant-tabs" role="tablist" aria-label="Coding assistant views">
-      ${ASSISTANT_TABS.map((tabId) => {
-        const label = tabId.charAt(0).toUpperCase() + tabId.slice(1);
-        const isActive = activeTab === tabId;
-        const count = unreadCounts[tabId] || 0;
-        return `
-          <button
-            class="code-assistant-tab ${isActive ? 'is-active' : ''}"
-            type="button"
-            role="tab"
-            aria-selected="${isActive ? 'true' : 'false'}"
-            data-code-assistant-tab="${escAttr(tabId)}"
-          >
-            <span>${label}</span>
-            ${count > 0 ? `<span class="code-assistant-tab__badge">${count}</span>` : ''}
-          </button>
-        `;
-      }).join('')}
-      <select class="code-chat__provider-select" data-code-provider-select title="LLM provider for this session">
-        ${providerOptions.map((option) => `<option value="${escAttr(option.value)}"${(session?.agentId || '') === option.value ? ' selected' : ''}>${esc(option.label)}</option>`).join('')}
-      </select>
-    </div>
-  `;
-}
-
-function renderChatNotice(session) {
-  const backlog = getApprovalBacklogState(session);
-  if (backlog.count === 0) return '';
-  const copy = backlog.blocked
-    ? `Too many approvals are waiting. New code changes are paused until you clear some of them.`
-    : `${backlog.count} ${pluralize(backlog.count, 'approval')} ${backlog.count === 1 ? 'is' : 'are'} waiting for your decision.`;
-  return `
-    <div class="code-chat__notice ${backlog.blocked ? 'is-warning' : ''}">
-      <span>${esc(copy)}</span>
-      <button class="btn btn-secondary btn-sm" type="button" data-code-switch-tab="activity">Review approvals</button>
-    </div>
-  `;
-}
-
 function renderWorkspaceTrustNotice(session) {
   const workspaceTrust = session?.workspaceTrust || null;
   const effectiveTrustState = getEffectiveWorkspaceTrustState(session);
@@ -3874,80 +3826,6 @@ function renderWorkspaceTrustNotice(session) {
   `;
 }
 
-function formatCodeMessageRole(role) {
-  switch (role) {
-    case 'user':
-      return 'You';
-    case 'error':
-      return 'System';
-    case 'agent':
-    default:
-      return 'Coding Assistant';
-  }
-}
-
-function renderCodeMessage(role, content, extraClass = '', approvals = null, responseSource = null) {
-  const className = `code-message ${role === 'user' ? 'is-user' : role === 'error' ? 'is-error' : 'is-agent'}${extraClass ? ` ${extraClass}` : ''}`;
-  const sourceBadge = responseSource?.locality
-    ? `<span class="code-message__source" title="${escAttr(buildCodeResponseSourceTitle(responseSource))}">${esc(buildCodeResponseSourceLabel(responseSource))}</span>`
-    : '';
-  const approvalButtons = Array.isArray(approvals) && approvals.length > 0
-    ? `<div class="code-message__approvals">
-        ${approvals.map((a) => `
-          <div class="code-message__approval">
-            <span class="code-message__approval-tool">${esc(a.toolName)}</span>
-            <span class="code-message__approval-args">${esc(a.argsPreview || '')}</span>
-            <span class="code-message__approval-actions">
-              <button class="btn btn-primary btn-sm" type="button" data-code-inline-approve="${escAttr(a.id)}">Approve</button>
-              <button class="btn btn-secondary btn-sm" type="button" data-code-inline-deny="${escAttr(a.id)}">Deny</button>
-            </span>
-          </div>
-        `).join('')}
-      </div>`
-    : '';
-  return `
-    <div class="${className}">
-      <div class="code-message__role">${esc(formatCodeMessageRole(role))}${sourceBadge}</div>
-      <div class="code-message__body">${esc(content)}</div>
-      ${approvalButtons}
-    </div>
-  `;
-}
-
-function buildCodeResponseSourceLabel(responseSource) {
-  if (!responseSource?.locality) return '';
-  let label = responseSource.locality;
-  if (responseSource.providerName) {
-    label += ` · ${responseSource.providerName}`;
-  }
-  if (responseSource.usedFallback) {
-    label += ' fallback';
-  }
-  return label;
-}
-
-function buildCodeResponseSourceTitle(responseSource) {
-  if (!responseSource) return '';
-  const parts = [];
-  if (responseSource.notice) parts.push(String(responseSource.notice));
-  if (responseSource.tier && responseSource.tier !== responseSource.locality) {
-    parts.push(`Requested ${responseSource.tier} route.`);
-  }
-  return parts.join(' ');
-}
-
-function renderCodeThinkingMessage() {
-  return `
-    <div class="code-message is-agent is-thinking">
-      <div class="code-message__role">Coding Assistant</div>
-      <div class="code-message__thinking">
-        <span class="chat-spinner" aria-hidden="true"></span>
-        <span>Thinking through the workspace...</span>
-      </div>
-    </div>
-  `;
-}
-
 function renderTaskList(session) {
   const items = deriveTaskItems(session);
   if (items.length === 0) {
@@ -3963,6 +3841,24 @@ function renderTaskList(session) {
           </div>
           <div class="code-status-card__detail">${esc(item.detail || '')}</div>
           ${renderWorkspaceTrustFindingsMarkup(item.workspaceTrust)}
+        </article>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderActivityMessages(session) {
+  const messages = Array.isArray(session?.activityMessages) ? session.activityMessages.slice(-6) : [];
+  if (messages.length === 0) return '';
+  return `
+    <div class="code-status-list">
+      ${messages.map((message) => `
+        <article class="code-status-card status-${escAttr(message.role === 'error' ? 'blocked' : 'info')}">
+          <div class="code-status-card__top">
+            <strong>${esc(message.role === 'error' ? 'Workbench Notice' : 'Workbench Update')}</strong>
+            <span class="code-status-card__meta">${esc(formatRelativeTime(message.timestamp))}</span>
+          </div>
+          <div class="code-status-card__detail">${esc(message.content || '')}</div>
         </article>
       `).join('')}
     </div>
@@ -3999,106 +3895,6 @@ function renderSessionRunTimeline(session) {
       `).join('')}
     </div>
   `;
-}
-
-function renderCodeLiveProgress(session) {
-  const pendingStartedAt = Number(session?.pendingResponse?.startedAt) || 0;
-  if (!pendingStartedAt) return '';
-
-  const run = findPendingTimelineRun(session, pendingStartedAt);
-  if (!run) {
-    return `
-      <div class="code-chat__progress">
-        <article class="code-status-card status-active">
-          <div class="code-status-card__top">
-            <strong>Starting request</strong>
-            <span class="code-status-card__meta">just now</span>
-          </div>
-          <div class="code-status-card__detail">Guardian is preparing this coding turn.</div>
-        </article>
-      </div>
-    `;
-  }
-
-  const summary = summarizeCodeLiveRun(run);
-  return `
-    <div class="code-chat__progress">
-      <article class="code-status-card status-${escAttr(mapTimelineRunTone(run.summary.status))}">
-        <div class="code-status-card__top">
-          <strong>${esc(summary.title)}</strong>
-          <span class="code-status-card__meta">${esc(formatTimelineRunMeta(run.summary))}</span>
-        </div>
-        ${summary.detail ? `<div class="code-status-card__detail">${esc(summary.detail)}</div>` : ''}
-        ${summary.items.length > 0
-          ? `<div class="code-chat__progress-items">
-              ${summary.items.map((item) => `
-                <div class="code-chat__progress-item">
-                  <div class="code-chat__progress-title">${esc(item.title)}</div>
-                  ${item.detail ? `<div class="code-chat__progress-detail">${esc(item.detail)}</div>` : ''}
-                </div>
-              `).join('')}
-            </div>`
-          : ''}
-      </article>
-    </div>
-  `;
-}
-
-function summarizeCodeLiveRun(run) {
-  const items = Array.isArray(run?.items)
-    ? run.items
-      .filter(isMeaningfulCodeLiveItem)
-      .slice(-2)
-      .map((item) => ({
-        title: String(item?.title || '').trim(),
-        detail: String(item?.detail || '').trim(),
-      }))
-      .filter((item) => item.title)
-    : [];
-  const latestItem = items[items.length - 1] || null;
-  return {
-    title: latestItem?.title || humanizeCodeLiveStatus(run?.summary?.status),
-    detail: latestItem?.detail || '',
-    items,
-  };
-}
-
-function isMeaningfulCodeLiveItem(item) {
-  const type = String(item?.type || '').trim();
-  return type !== 'run_queued'
-    && type !== 'run_started'
-    && type !== 'run_completed';
-}
-
-function humanizeCodeLiveStatus(status) {
-  switch (String(status || '')) {
-    case 'queued':
-      return 'Queued';
-    case 'running':
-      return 'Working…';
-    case 'awaiting_approval':
-      return 'Waiting for approval';
-    case 'verification_pending':
-      return 'Verification pending';
-    case 'blocked':
-      return 'Blocked';
-    case 'failed':
-      return 'Failed';
-    case 'completed':
-      return 'Done';
-    default:
-      return 'Working…';
-  }
-}
-
-function findPendingTimelineRun(session, pendingStartedAt) {
-  const activeStatuses = new Set(['queued', 'running', 'awaiting_approval', 'verification_pending', 'blocked']);
-  const runs = normalizeTimelineRuns(session?.timelineRuns);
-  const threshold = Math.max(0, pendingStartedAt - 5_000);
-  return runs.find((run) => {
-    const startedAt = Number(run?.summary?.startedAt) || Number(run?.summary?.lastUpdatedAt) || 0;
-    return activeStatuses.has(run.summary.status) && startedAt >= threshold;
-  }) || null;
 }
 
 function mapTimelineRunTone(status) {
@@ -5161,71 +4957,22 @@ function renderCodeInspector(session) {
 }
 
 function renderAssistantPanel(session) {
-  const activeTab = normalizeAssistantTabValue(session?.activeAssistantTab);
-  switch (activeTab) {
-    case 'activity':
-      return `
-        <div class="code-assistant-panel__body">
-          <div class="code-chat__meta">
-            <div class="code-chat__workspace">${esc(session.resolvedRoot || session.workspaceRoot)}</div>
-          </div>
-          ${renderWorkspaceTrustNotice(session)}
-          <div class="code-assistant-panel__scroll">
-            ${renderSessionRunTimeline(session)}
-            ${renderApprovalList(session)}
-            ${renderTaskList(session)}
-            ${renderCheckList(session)}
-          </div>
-        </div>
-      `;
-    case 'chat':
-    default:
-      const committedMessages = Array.isArray(session.chat) ? session.chat : [];
-      const pendingUserMessage = typeof session.pendingResponse?.message === 'string'
-        ? session.pendingResponse.message.trim()
-        : '';
-      const hasVisibleMessages = committedMessages.length > 0 || !!pendingUserMessage;
-      return `
-        <div class="code-assistant-panel__body">
-          <div class="code-chat__meta">
-            <div class="code-chat__workspace">${esc(session.resolvedRoot || session.workspaceRoot)}</div>
-          </div>
-          ${renderWorkspaceTrustNotice(session)}
-          ${renderChatNotice(session)}
-          ${renderCodeLiveProgress(session)}
-          <div class="code-chat__history">
-            ${!hasVisibleMessages
-              ? `<div class="code-chat__onboarding">
-                  <div class="code-chat__onboarding-title">Getting Started</div>
-                  <ul class="code-chat__onboarding-list">
-                    <li>Describe a bug, feature, or refactor in plain language</li>
-                    <li>The agent reads files, edits code, and runs commands</li>
-                    <li>Mutating actions go through Guardian approval automatically</li>
-                    <li>Coding tools are built in &mdash; just describe what you need</li>
-                  </ul>
-                </div>`
-              : `${committedMessages.map((message, idx) => {
-                  const isLastAgent = message.role === 'agent' && !committedMessages.slice(idx + 1).some((m) => m.role === 'agent');
-                  const inlineApprovals = isLastAgent && !pendingUserMessage && Array.isArray(session.pendingApprovals) && session.pendingApprovals.length > 0
-                    ? session.pendingApprovals
-                    : null;
-                  return renderCodeMessage(message.role, message.content, '', inlineApprovals, message.responseSource);
-                }).join('')}${pendingUserMessage ? renderCodeMessage('user', pendingUserMessage, 'is-pending') : ''}${pendingUserMessage ? renderCodeThinkingMessage() : ''}`}
-          </div>
-          <form class="code-chat__form" data-code-chat-form>
-            <div class="code-chat__refs" data-code-chat-ref-list${Array.isArray(session.draftFileReferences) && session.draftFileReferences.length > 0 ? '' : ' hidden'}>
-              ${renderCodeChatDraftReferencesMarkup(session.draftFileReferences)}
-            </div>
-            <div class="code-chat__composer">
-              <textarea name="message" rows="3" placeholder="Describe the change, bug, or refactor you want. Type @ to tag files or docs." title="Type @ to tag workspace files or docs and inject that context into this turn.">${esc(session.chatDraft || '')}</textarea>
-              <div class="code-chat__mention-menu" data-code-chat-mention-menu hidden></div>
-            </div>
-            <div class="code-chat__hint">Type <code>@</code> to tag files or docs into this turn's model context.</div>
-            <button class="btn btn-primary" type="submit">Send</button>
-          </form>
-        </div>
-      `;
-  }
+  return `
+    <div class="code-assistant-panel__body">
+      <div class="code-chat__meta">
+        <div class="code-chat__workspace">${esc(session.resolvedRoot || session.workspaceRoot)}</div>
+        <div class="code-chat__hint">Guardian chat stays available in the right rail and follows the selected workspace from this workbench.</div>
+      </div>
+      ${renderWorkspaceTrustNotice(session)}
+      <div class="code-assistant-panel__scroll">
+        ${renderSessionRunTimeline(session)}
+        ${renderApprovalList(session)}
+        ${renderTaskList(session)}
+        ${renderCheckList(session)}
+        ${renderActivityMessages(session)}
+      </div>
+    </div>
+  `;
 }
 
 function renderDetachedInspectorWindow(session) {
@@ -5642,7 +5389,6 @@ function renderSessionForm() {
       <div class="code-session-form__actions">
         <button class="btn btn-primary btn-sm" type="submit">${submitLabel}</button>
         <button class="btn btn-secondary btn-sm" type="button" ${cancelAttr}>Cancel</button>
-        ${isEdit ? `<button class="btn btn-danger btn-sm code-session-form__clear" type="button" data-code-clear-history="${escAttr(codeState.editingSessionId)}" title="Permanently clears all chat history for this session. This cannot be undone.">Clear History</button>` : ''}
       </div>
       ${trustReviewSection}
     </form>
@@ -5664,13 +5410,17 @@ function renderSessionCard(session) {
   return `
     <button class="code-session ${isActive ? 'is-active' : ''}" type="button" data-code-session-id="${escAttr(session.id)}">
       <div class="code-session__top">
-        <strong>${esc(session.title)}</strong>
+        <span style="display:flex;align-items:center;gap:0.45rem;min-width:0">
+          <strong>${esc(session.title)}</strong>
+          ${isActive ? '<span class="badge badge-info">CURRENT</span>' : ''}
+        </span>
         <span style="display:flex;gap:0.4rem;align-items:center">
           <span class="code-session__edit" data-code-edit-session="${escAttr(session.id)}" title="Edit session">&#9998;</span>
           <span class="code-session__delete" data-code-delete-session="${escAttr(session.id)}">&times;</span>
         </span>
       </div>
       <div class="code-session__meta">${esc(session.workspaceRoot)}</div>
+      <div class="code-session__hint">${isActive ? 'Current for Guardian chat' : 'Click to make current for Guardian chat'}</div>
       <div class="code-session__badges">
         ${workspaceTrust ? `<span class="badge ${trustBadgeClass}">TRUST: ${esc(reviewActive ? 'ACCEPTED' : String(effectiveTrustState || '').toUpperCase())}</span>` : ''}
         ${reviewActive ? `<span class="badge ${rawTrustBadgeClass}">RAW: ${esc(String(workspaceTrust?.state || '').toUpperCase())}</span>` : ''}
@@ -5767,11 +5517,11 @@ async function saveCodeTab(session, tab) {
   if (content == null) {
     throw new Error(`No staged editor content is available for ${basename(tab.filePath)}.`);
   }
-  const result = await api.codeFsWrite({
+  const result = await api.codeFsWrite(codeSurfacePayload({
     sessionId: session.id,
     path: tab.filePath,
     content,
-  });
+  }));
   if (!result?.success) {
     throw new Error(result?.error || `Failed to save ${basename(tab.filePath)}.`);
   }
@@ -5841,8 +5591,8 @@ async function refreshGitStatus(session) {
   rerenderFromState();
   try {
     const [statusResult, graphResult] = await Promise.all([
-      api.codeGitStatus(session.id),
-      api.codeGitGraph(session.id).catch(() => ({ success: false, entries: [] })),
+      api.codeGitStatus(session.id, codeSurfaceParams()),
+      api.codeGitGraph(session.id, codeSurfaceParams()).catch(() => ({ success: false, entries: [] })),
     ]);
     if (statusResult?.success) {
       session.gitState = {
@@ -5866,7 +5616,7 @@ async function refreshGitStatus(session) {
 
 async function runGitAction(session, action, args = {}) {
   try {
-    await api.codeGitAction(session.id, { action, ...args });
+    await api.codeGitAction(session.id, codeSurfacePayload({ action, ...args }));
   } catch (err) {
     appendChatMessage(session, 'error', `Git ${action} failed: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -5877,7 +5627,6 @@ async function runGitAction(session, action, args = {}) {
 
 async function refreshTree(session) {
   const rootPath = session.resolvedRoot || session.workspaceRoot || '.';
-  treeCache.clear();
   const rootData = await loadTreeDir(session, rootPath);
   treeCache.set(rootPath, rootData);
   if (!session.resolvedRoot && rootData.resolvedPath) {
@@ -5889,6 +5638,7 @@ async function refreshTree(session) {
 }
 
 async function refreshVisibleTreeDirs(session) {
+  if (codeState.activePanel !== 'explorer') return false;
   const visiblePaths = getVisibleTreePaths(session);
   if (visiblePaths.length === 0) return false;
 
@@ -5910,12 +5660,14 @@ async function refreshVisibleTreeDirs(session) {
 }
 
 async function refreshFileView(session) {
-  invalidateStructurePreviewState(session.id, session.selectedFilePath || '');
+  const selectedFilePath = ensureSessionSelectedFilePath(session) || '';
+  invalidateStructurePreviewState(session.id, selectedFilePath);
   const [fileView, structureView] = await Promise.all([
     loadFileView(session),
     loadStructureView(session),
   ]);
   cachedFileView = fileView;
+  syncSelectedEditorTabFromFileView(session, fileView);
   session.structureView = structureView;
   saveState(codeState);
   rerenderFromState();
@@ -5924,9 +5676,9 @@ async function refreshFileView(session) {
 async function refreshSessionData(session) {
   const latestSession = await refreshSessionSnapshot(session.id).catch(() => session);
   const currentSession = latestSession || session;
-  invalidateStructurePreviewState(currentSession.id, currentSession.selectedFilePath || '');
+  const selectedFilePath = ensureSessionSelectedFilePath(currentSession) || '';
+  invalidateStructurePreviewState(currentSession.id, selectedFilePath);
   const rootPath = currentSession.resolvedRoot || currentSession.workspaceRoot || '.';
-  treeCache.clear();
   const [rootData, fileView] = await Promise.all([
     loadTreeDir(currentSession, rootPath),
     loadFileView(currentSession),
@@ -5937,8 +5689,8 @@ async function refreshSessionData(session) {
     currentSession.resolvedRoot = rootData.resolvedPath;
   }
   cachedFileView = fileView;
+  syncSelectedEditorTabFromFileView(currentSession, fileView);
   currentSession.structureView = structureView;
-  await loadExpandedDirs(currentSession);
   await refreshAssistantState(currentSession, { rerender: false });
   saveState(codeState);
   rerenderFromState();
@@ -5947,21 +5699,22 @@ async function refreshSessionData(session) {
 // ─── API data loaders ──────────────────────────────────────
 
 async function loadFileView(session) {
-  if (!session.selectedFilePath) {
+  const selectedFilePath = ensureSessionSelectedFilePath(session);
+  if (!selectedFilePath) {
     return { source: '', diff: '', error: null };
   }
 
   const [sourceResult, diffResult] = await Promise.all([
-    api.codeFsRead({
+    api.codeFsRead(codeSurfacePayload({
       sessionId: session.id,
-      path: session.selectedFilePath,
+      path: selectedFilePath,
       maxBytes: 250000,
-    }).catch((err) => ({ success: false, error: err.message })),
-    api.codeGitDiff({
+    })).catch((err) => ({ success: false, error: err.message })),
+    api.codeGitDiff(codeSurfacePayload({
       sessionId: session.id,
       cwd: session.currentDirectory || session.resolvedRoot || session.workspaceRoot,
-      path: session.selectedFilePath,
-    }).catch((err) => ({ success: false, error: err.message })),
+      path: selectedFilePath,
+    })).catch((err) => ({ success: false, error: err.message })),
   ]);
 
   return {
@@ -5976,7 +5729,7 @@ async function loadStructureView(session) {
 }
 
 async function loadStructureViewWithOptions(session, options = {}) {
-  const selectedFilePath = session?.selectedFilePath || '';
+  const selectedFilePath = ensureSessionSelectedFilePath(session) || '';
   const content = typeof options.content === 'string' ? options.content : null;
   const preferredLineNumber = Number(options.lineNumber) || 0;
   const requestedSectionId = resolveStructureRequestSectionId(session, preferredLineNumber, options.sectionId);
@@ -5985,19 +5738,17 @@ async function loadStructureViewWithOptions(session, options = {}) {
   }
   try {
     const result = content !== null
-      ? await api.codeSessionStructurePreview(session.id, {
-        channel: DEFAULT_USER_CHANNEL,
+      ? await api.codeSessionStructurePreview(session.id, codeSurfacePayload({
         path: selectedFilePath,
         content,
         ...(preferredLineNumber > 0 ? { line: preferredLineNumber } : {}),
         ...(requestedSectionId ? { sectionId: requestedSectionId } : {}),
-      })
-      : await api.codeSessionStructure(session.id, {
-        channel: DEFAULT_USER_CHANNEL,
+      }))
+      : await api.codeSessionStructure(session.id, codeSurfaceParams({
         path: selectedFilePath,
         ...(preferredLineNumber > 0 ? { line: preferredLineNumber } : {}),
         ...(requestedSectionId ? { sectionId: requestedSectionId } : {}),
-      });
+      }));
     if (!result?.success) {
       return normalizeStructureView({
         path: toRelativePath(selectedFilePath, session.resolvedRoot || session.workspaceRoot || ''),
@@ -6091,14 +5842,12 @@ async function loadAssistantState(session) {
     };
   }
   const [snapshot, timeline] = await Promise.all([
-    api.codeSessionGet(session.id, {
-      channel: DEFAULT_USER_CHANNEL,
+    api.codeSessionGet(session.id, codeSurfaceParams({
       historyLimit: 1,
-    }),
-    api.codeSessionTimeline(session.id, {
-      channel: DEFAULT_USER_CHANNEL,
+    })),
+    api.codeSessionTimeline(session.id, codeSurfaceParams({
       limit: MAX_TIMELINE_RUNS,
-    }).catch(() => ({ runs: [] })),
+    })).catch(() => ({ runs: [] })),
   ]);
   const refreshedSession = mergeCodeSessionRecord(snapshot, resolveLiveSession(session.id, session) || session) || session;
 
@@ -6125,7 +5874,13 @@ async function refreshAssistantState(session, { rerender = true, fallbackPending
 
 function appendChatMessage(session, role, content, meta = {}) {
   if (!session || !content) return;
-  session.chat.push({ role, content, ...meta });
+  if (!Array.isArray(session.activityMessages)) {
+    session.activityMessages = [];
+  }
+  session.activityMessages.push({ role, content, ...meta, timestamp: Date.now() });
+  if (session.activityMessages.length > 20) {
+    session.activityMessages = session.activityMessages.slice(-20);
+  }
 }
 
 async function decideCodeApprovalWithRetry(session, approvalId, decision) {
@@ -6134,7 +5889,7 @@ async function decideCodeApprovalWithRetry(session, approvalId, decision) {
     try {
       const result = await api.codeSessionDecideApproval(session.id, approvalId, {
         decision,
-        channel: DEFAULT_USER_CHANNEL,
+        ...codeSurfacePayload(),
       });
       if (result?.success === false && isApprovalNotFoundMessage(result.message) && attempt < 4) {
         lastError = new Error(result.message);
@@ -6218,10 +5973,14 @@ async function handleCodeApprovalDecision(session, approvalIds, decision) {
       }
       const outboundSessionId = outboundSession.id;
       refreshSessionId = outboundSessionId;
-      const response = await api.codeSessionSendMessage(outboundSessionId, {
-        content: continuationMessage,
-        channel: DEFAULT_USER_CHANNEL,
-      });
+      const response = await api.sendMessage(
+        continuationMessage,
+        undefined,
+        resolveWebUserId(),
+        DEFAULT_USER_CHANNEL,
+        undefined,
+        GUARDIAN_CHAT_SURFACE_ID,
+      );
       const liveSession = resolveLiveSession(outboundSessionId, outboundSession || currentSession || session);
       if (Array.isArray(response?.metadata?.activeSkills)) {
         liveSession.activeSkills = response.metadata.activeSkills.map((value) => String(value));
@@ -6246,7 +6005,6 @@ async function handleCodeApprovalDecision(session, approvalIds, decision) {
   });
   saveState(codeState);
   rerenderFromState();
-  scrollToBottom(currentContainer, '.code-chat__history');
 }
 
 // ─── Event binding ─────────────────────────────────────────
@@ -6291,27 +6049,6 @@ function bindEvents(container) {
     codeState.editingSessionId = null;
     codeState.editDraft = null;
     closeDirPicker();
-    saveState(codeState);
-    rerenderFromState();
-  });
-
-  container.querySelector('[data-code-clear-history]')?.addEventListener('click', async () => {
-    const sessionId = container.querySelector('[data-code-clear-history]')?.dataset?.codeClearHistory;
-    const session = codeState.sessions.find((s) => s.id === sessionId);
-    if (!session) return;
-    if (!confirm(`Clear all conversation history for "${session.title}"? This cannot be undone.`)) return;
-    session.chat = [];
-    session.pendingResponse = null;
-    saveState(codeState);
-    try {
-      await api.codeSessionResetConversation(session.id, { channel: DEFAULT_USER_CHANNEL });
-    } catch {
-      // Keep local clear even if server reset fails.
-    }
-    const refreshedSession = await refreshSessionSnapshot(session.id).catch(() => session);
-    await refreshAssistantState(refreshedSession || session, { rerender: false });
-    codeState.editingSessionId = null;
-    codeState.editDraft = null;
     saveState(codeState);
     rerenderFromState();
   });
@@ -6418,8 +6155,8 @@ function bindEvents(container) {
       title,
       workspaceRoot,
       agentId: agentId || null,
-      channel: DEFAULT_USER_CHANNEL,
       attach: true,
+      ...currentCodeSessionPayload(),
     });
     const session = applyCodeSessionSnapshot(snapshot);
     codeState.activeSessionId = session?.id || null;
@@ -6430,7 +6167,14 @@ function bindEvents(container) {
     closeDirPicker();
     saveState(codeState);
     rerenderFromState();
-    if (session) void refreshSessionData(session);
+    if (session) {
+      notifyGuardianChatFocus(session.id, { origin: CODE_WORKBENCH_SURFACE_ID });
+      notifyCodeSessionsChanged({
+        sessionId: session.id,
+        surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+        origin: CODE_WORKBENCH_SURFACE_ID,
+      });
+    }
   });
 
   // Edit form
@@ -6468,7 +6212,7 @@ function bindEvents(container) {
     const snapshot = await api.codeSessionUpdate(session.id, {
       title: nextTitle,
       workspaceRoot: newRoot,
-      channel: DEFAULT_USER_CHANNEL,
+      ...currentCodeSessionPayload(),
       uiState: {
         ...buildCodeSessionUiState(session),
         currentDirectory: newRoot !== session.workspaceRoot
@@ -6486,6 +6230,11 @@ function bindEvents(container) {
     closeDirPicker();
     saveState(codeState);
     rerenderFromState();
+    notifyCodeSessionsChanged({
+      sessionId: session.id,
+      surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+      origin: CODE_WORKBENCH_SURFACE_ID,
+    });
     if (session.id === codeState.activeSessionId) {
       void refreshSessionData(session);
     }
@@ -6550,19 +6299,9 @@ function bindEvents(container) {
   // Switch session
   container.querySelectorAll('[data-code-session-id]').forEach((button) => {
     button.addEventListener('click', () => {
-      const prevId = codeState.activeSessionId;
-      codeState.activeSessionId = button.dataset.codeSessionId;
-      if (prevId === codeState.activeSessionId) return;
-      treeCache.clear();
-      cachedFileView = { source: '', diff: '', error: null };
-      disposeAllModels();
-      saveState(codeState);
-      rerenderFromState();
-      const session = getActiveSession();
-      if (session) {
-        void api.codeSessionAttach(session.id, { channel: DEFAULT_USER_CHANNEL }).catch(() => {});
-        void refreshSessionData(session);
-      }
+      const nextSessionId = normalizeCodeSessionId(button.dataset.codeSessionId);
+      if (!nextSessionId || nextSessionId === normalizeCodeSessionId(codeState.activeSessionId)) return;
+      void switchCodeSession(nextSessionId).catch(() => {});
     });
   });
 
@@ -6576,7 +6315,7 @@ function bindEvents(container) {
         await Promise.all((deletedSession.terminalTabs || []).map((tab) => closeTerminal(tab)));
       }
       if (deletedId) {
-        await api.codeSessionDelete(deletedId, { channel: DEFAULT_USER_CHANNEL }).catch(() => null);
+        await api.codeSessionDelete(deletedId, currentCodeSessionPayload()).catch(() => null);
         pendingSessionUiStateById.delete(deletedId);
         editorSearchStateBySessionId.delete(deletedId);
       }
@@ -6584,13 +6323,19 @@ function bindEvents(container) {
       const wasActive = codeState.activeSessionId === deletedId;
       codeState.activeSessionId = codeState.sessions[0]?.id || null;
       saveState(codeState);
+      notifyCodeSessionsChanged({
+        sessionId: codeState.activeSessionId,
+        surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+        origin: CODE_WORKBENCH_SURFACE_ID,
+      });
       if (wasActive) {
-        treeCache.clear();
-        cachedFileView = { source: '', diff: '', error: null };
-        disposeAllModels();
-        rerenderFromState();
         const session = getActiveSession();
-        if (session) void refreshSessionData(session);
+        if (session) {
+          void switchCodeSession(session.id).catch(() => {});
+        } else {
+          void syncGuardianChatSessionFocus(null, { origin: CODE_WORKBENCH_SURFACE_ID }).catch(() => {});
+          setActiveSessionLocally(null);
+        }
       } else {
         rerenderFromState();
       }
@@ -6843,26 +6588,6 @@ function bindEvents(container) {
     });
   });
 
-  // ── Assistant tabs ──
-
-  container.querySelectorAll('[data-code-assistant-tab], [data-code-switch-tab]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const session = getActiveSession();
-      if (!session) return;
-      const nextTab = button.dataset.codeAssistantTab || button.dataset.codeSwitchTab;
-      if (!isAssistantTab(nextTab)) return;
-      session.activeAssistantTab = nextTab;
-      // Clear badge counts when the user opens the activity tab
-      if (nextTab === 'activity') {
-        session.viewedApprovalCount = (session.pendingApprovals || []).length;
-        session.viewedTaskCount = getTaskBadgeCount(session);
-        session.viewedCheckCount = getCheckBadgeCount(session);
-      }
-      saveState(codeState);
-      queueSessionPersist(session);
-      rerenderFromState();
-    });
-  });
   bindInspectorEvents(container);
 
   container.querySelectorAll('[data-code-approval-id][data-code-approval-decision]').forEach((button) => {
@@ -6879,244 +6604,6 @@ function bindEvents(container) {
         button.removeAttribute('disabled');
       }
     });
-  });
-
-  // ── Inline approvals in chat ──
-
-  container.querySelectorAll('[data-code-inline-approve], [data-code-inline-deny]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const session = getActiveSession();
-      if (!session) return;
-      const approvalId = btn.dataset.codeInlineApprove || btn.dataset.codeInlineDeny;
-      const decision = btn.dataset.codeInlineApprove ? 'approved' : 'denied';
-      if (!approvalId) return;
-      btn.setAttribute('disabled', 'true');
-      // Disable the sibling button too
-      const parent = btn.closest('.code-message__approval-actions');
-      if (parent) parent.querySelectorAll('button').forEach((b) => b.setAttribute('disabled', 'true'));
-      try {
-        await handleCodeApprovalDecision(session, [approvalId], decision);
-      } finally {
-        btn.removeAttribute('disabled');
-      }
-    });
-  });
-
-  // ── Chat ──
-
-  container.querySelector('[data-code-chat-form]')?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const session = getActiveSession();
-    if (!session) return;
-    const sessionId = session.id;
-    const form = event.currentTarget;
-    const textarea = form.elements.message;
-    const message = textarea.value.trim();
-    if (!message) return;
-    session.chatDraft = '';
-    session.draftFileReferences = extractCodeChatFileReferences(session, textarea.value);
-    session.pendingResponse = { message, startedAt: Date.now() };
-    activeChatReferencePicker = null;
-    saveState(codeState);
-    rerenderFromState();
-    scrollToBottom(currentContainer, '.code-chat__history');
-
-    try {
-      const outboundSession = await ensureBackendSession(session);
-      if (!outboundSession?.id) {
-        throw Object.assign(new Error('This coding session is no longer available. Refresh the session list and reopen the workspace before sending another message.'), {
-          code: 'CODE_SESSION_UNAVAILABLE',
-        });
-      }
-      const outboundSessionId = outboundSession.id;
-      const fileReferences = normalizeDraftFileReferences(session.draftFileReferences);
-      const response = await api.codeSessionSendMessage(outboundSessionId, {
-        content: message,
-        channel: DEFAULT_USER_CHANNEL,
-        ...(fileReferences.length > 0
-          ? {
-            metadata: {
-              codeContext: {
-                fileReferences: fileReferences.map((pathValue) => ({ path: pathValue })),
-              },
-            },
-          }
-          : {}),
-      });
-      const liveSession = resolveLiveSession(outboundSessionId, outboundSession || session);
-      liveSession.chatDraft = '';
-      liveSession.draftFileReferences = [];
-      liveSession.activeSkills = Array.isArray(response?.metadata?.activeSkills)
-        ? response.metadata.activeSkills.map((value) => String(value))
-        : [];
-      const responsePendingApprovals = Array.isArray(response?.metadata?.pendingApprovals)
-        ? response.metadata.pendingApprovals
-        : null;
-      if (responsePendingApprovals) {
-        liveSession.pendingApprovals = normalizePendingApprovals(responsePendingApprovals, liveSession.pendingApprovals);
-      }
-      appendChatMessage(liveSession, 'user', message);
-      liveSession.pendingResponse = null;
-      const responseSource = response?.metadata?.responseSource || null;
-      appendChatMessage(liveSession, 'agent', response.content || 'No response content.', { responseSource });
-      // Refresh file view after assistant response — the assistant may have edited the open file.
-      const activeEditorTab = getActiveTab(liveSession);
-      if (activeEditorTab) { activeEditorTab.dirty = false; activeEditorTab.content = null; }
-      const refreshedSession = await refreshSessionSnapshot(outboundSessionId).catch(() => resolveLiveSession(outboundSessionId, liveSession));
-      await refreshAssistantState(refreshedSession || liveSession, {
-        rerender: false,
-        fallbackPendingApprovals: responsePendingApprovals,
-      });
-      if (liveSession.selectedFilePath) {
-        invalidateStructurePreviewState(liveSession.id, liveSession.selectedFilePath || '');
-        const [fileView, structureView] = await Promise.all([
-          loadFileView(liveSession),
-          loadStructureView(liveSession),
-        ]);
-        cachedFileView = fileView;
-        liveSession.structureView = structureView;
-      }
-    } catch (err) {
-      const liveSession = resolveLiveSession(sessionId, session);
-      liveSession.pendingResponse = null;
-      if (isCodeSessionUnavailableError(err)) {
-        liveSession.chatDraft = message;
-        liveSession.draftFileReferences = extractCodeChatFileReferences(liveSession, textarea.value);
-        textarea.value = message;
-        appendChatMessage(liveSession, 'error', err instanceof Error ? err.message : String(err));
-      } else {
-        appendChatMessage(liveSession, 'user', message);
-        appendChatMessage(liveSession, 'error', err instanceof Error ? err.message : String(err));
-      }
-    }
-    saveState(codeState);
-    rerenderFromState();
-    scrollToBottom(currentContainer, '.code-chat__history');
-  });
-
-  container.querySelector('[data-code-provider-select]')?.addEventListener('change', async (e) => {
-    const session = getActiveSession();
-    if (!session) return;
-    const nextAgentId = e.currentTarget.value || null;
-    session.agentId = nextAgentId;
-    saveState(codeState);
-    try {
-      await api.codeSessionUpdate(session.id, {
-        agentId: nextAgentId,
-        channel: DEFAULT_USER_CHANNEL,
-      });
-    } catch {
-      // Best-effort persist — local state already updated.
-    }
-  });
-
-  container.querySelector('[data-code-reset-chat]')?.addEventListener('click', async () => {
-    const session = getActiveSession();
-    if (!session) return;
-    session.chat = [];
-    session.pendingResponse = null;
-    saveState(codeState);
-    try {
-      await api.codeSessionResetConversation(session.id, { channel: DEFAULT_USER_CHANNEL });
-    } catch {
-      // Keep local reset even if server reset fails.
-    }
-    const refreshedSession = await refreshSessionSnapshot(session.id).catch(() => session);
-    await refreshAssistantState(refreshedSession || session, { rerender: false });
-    rerenderFromState();
-  });
-
-  const codeChatInput = container.querySelector('[data-code-chat-form] textarea[name="message"]');
-  const codeChatForm = codeChatInput?.form || container.querySelector('[data-code-chat-form]');
-  if (codeChatForm && codeChatInput) {
-    updateCodeChatReferenceList(codeChatForm, getActiveSession()?.draftFileReferences || []);
-    updateCodeChatReferencePicker(codeChatForm, null);
-  }
-  codeChatInput?.addEventListener('keydown', (event) => {
-    const input = event.currentTarget;
-    const form = input instanceof HTMLTextAreaElement ? input.form : null;
-    const session = getActiveSession();
-    if (!form || !session) return;
-    if (activeChatReferencePicker?.sessionId === session.id) {
-      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-        event.preventDefault();
-        const maxIndex = activeChatReferencePicker.suggestions.length - 1;
-        const delta = event.key === 'ArrowDown' ? 1 : -1;
-        activeChatReferencePicker.selectedIndex = Math.max(0, Math.min(maxIndex, activeChatReferencePicker.selectedIndex + delta));
-        updateCodeChatReferencePicker(form, activeChatReferencePicker);
-        return;
-      }
-      if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && !event.isComposing) {
-        event.preventDefault();
-        const selected = activeChatReferencePicker.suggestions[activeChatReferencePicker.selectedIndex];
-        if (selected) {
-          applyCodeChatReferenceSuggestion(session, form, input, selected.path);
-        }
-        return;
-      }
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        activeChatReferencePicker = null;
-        updateCodeChatReferencePicker(form, null);
-        return;
-      }
-    }
-    if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return;
-    event.preventDefault();
-    if (event.repeat) return;
-    if (!form) return;
-    if (typeof form.requestSubmit === 'function') {
-      form.requestSubmit();
-      return;
-    }
-    form.querySelector('button[type="submit"]')?.click();
-  });
-
-  codeChatInput?.addEventListener('input', (event) => {
-    const session = getActiveSession();
-    if (!session) return;
-    const input = event.currentTarget;
-    const form = input instanceof HTMLTextAreaElement ? input.form : null;
-    if (!form || !(input instanceof HTMLTextAreaElement)) return;
-    syncCodeChatDraftReferences(session, form, input);
-    refreshCodeChatReferencePicker(session, form, input);
-    saveState(codeState);
-  });
-
-  codeChatInput?.addEventListener('click', (event) => {
-    const session = getActiveSession();
-    const input = event.currentTarget;
-    const form = input instanceof HTMLTextAreaElement ? input.form : null;
-    if (!session || !form || !(input instanceof HTMLTextAreaElement)) return;
-    refreshCodeChatReferencePicker(session, form, input);
-  });
-
-  codeChatInput?.addEventListener('keyup', (event) => {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === 'Tab') return;
-    const session = getActiveSession();
-    const input = event.currentTarget;
-    const form = input instanceof HTMLTextAreaElement ? input.form : null;
-    if (!session || !form || !(input instanceof HTMLTextAreaElement)) return;
-    refreshCodeChatReferencePicker(session, form, input);
-  });
-
-  codeChatInput?.addEventListener('blur', (event) => {
-    const input = event.currentTarget;
-    const form = input instanceof HTMLTextAreaElement ? input.form : null;
-    if (!form) return;
-    setTimeout(() => {
-      if (document.activeElement && form.contains(document.activeElement)) return;
-      activeChatReferencePicker = null;
-      updateCodeChatReferencePicker(form, null);
-    }, 0);
-  });
-
-  codeChatForm?.addEventListener('mousedown', (event) => {
-    const button = event.target.closest('[data-code-chat-ref-suggestion]');
-    const session = getActiveSession();
-    if (!button || !session || !(codeChatInput instanceof HTMLTextAreaElement)) return;
-    event.preventDefault();
-    applyCodeChatReferenceSuggestion(session, codeChatForm, codeChatInput, button.dataset.codeChatRefSuggestion);
   });
 }
 
@@ -7168,12 +6655,10 @@ function normalizeState(raw, agents) {
         terminalTabs,
         terminalCollapsed: !!session.terminalCollapsed,
         expandedDirs: Array.isArray(session.expandedDirs) ? session.expandedDirs : [],
-        chat: Array.isArray(session.chat) ? session.chat.slice(-30) : [],
-        chatDraft: session.chatDraft || '',
-        draftFileReferences: normalizeDraftFileReferences(session.draftFileReferences),
         pendingApprovals: Array.isArray(session.pendingApprovals) ? session.pendingApprovals : [],
         activeSkills: Array.isArray(session.activeSkills) ? session.activeSkills : [],
         recentJobs: Array.isArray(session.recentJobs) ? session.recentJobs.slice(0, MAX_SESSION_JOBS) : [],
+        activityMessages: Array.isArray(session.activityMessages) ? session.activityMessages.slice(-20) : [],
         verification: normalizeVerificationEntries(session.verification),
         lastExplorerPath: session.lastExplorerPath || null,
         focusSummary: session.focusSummary || '',
@@ -7185,7 +6670,6 @@ function normalizeState(raw, agents) {
         workspaceMap: normalizeWorkspaceMap(session.workspaceMap),
         workingSet: normalizeWorkspaceWorkingSet(session.workingSet),
         structureView: normalizeStructureView(session.structureView, session.structureView),
-        activeAssistantTab: normalizeAssistantTabValue(session.activeAssistantTab),
         inspectorOpen: false,
         inspectorDetached: false,
         inspectorTab: normalizeInspectorTabValue(session.inspectorTab),
@@ -7249,9 +6733,8 @@ function saveState(state) {
     ...state,
     sessions: Array.isArray(state.sessions)
       ? state.sessions.map((session) => {
-        const { pendingResponse: _pendingResponse, ...persistedSession } = session;
         return {
-          ...persistedSession,
+          ...session,
           terminalTabs: Array.isArray(session.terminalTabs)
             ? session.terminalTabs.map((tab) => ({
               id: tab.id,
@@ -7270,11 +6753,9 @@ function saveState(state) {
           workspaceMap: normalizeWorkspaceMap(session.workspaceMap),
           workingSet: normalizeWorkspaceWorkingSet(session.workingSet),
           structureView: normalizeStructureView(session.structureView, session.structureView),
-          activeAssistantTab: normalizeAssistantTabValue(session.activeAssistantTab),
           inspectorOpen: false,
           inspectorDetached: false,
           inspectorTab: normalizeInspectorTabValue(session.inspectorTab),
-          draftFileReferences: normalizeDraftFileReferences(session.draftFileReferences),
         };
       })
       : [],

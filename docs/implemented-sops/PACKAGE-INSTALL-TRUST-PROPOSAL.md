@@ -4,7 +4,7 @@ Historical proposal. The shipped behavior now lives in [PACKAGE-INSTALL-TRUST-SP
 
 **Date:** 2026-03-26  
 **Status:** Historical Draft  
-**Related:** [Coding Assistant Spec](/mnt/s/Development/GuardianAgent/docs/specs/CODING-ASSISTANT-SPEC.md), [Code Workspace Trust Spec](/mnt/s/Development/GuardianAgent/docs/specs/CODE-WORKSPACE-TRUST-SPEC.md), [Agentic Defensive Security Suite - As-Built Spec](/mnt/s/Development/GuardianAgent/docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md), [executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts), [workspace-dependency-ledger.ts](/mnt/s/Development/GuardianAgent/src/runtime/workspace-dependency-ledger.ts), [ai-security.ts](/mnt/s/Development/GuardianAgent/src/runtime/ai-security.ts), [security-alerts.ts](/mnt/s/Development/GuardianAgent/src/runtime/security-alerts.ts), [host-monitor.ts](/mnt/s/Development/GuardianAgent/src/runtime/host-monitor.ts)
+**Related:** [Coding Workspace Spec](/mnt/s/Development/GuardianAgent/docs/specs/CODING-WORKSPACE-SPEC.md), [Code Workspace Trust Spec](/mnt/s/Development/GuardianAgent/docs/specs/CODE-WORKSPACE-TRUST-SPEC.md), [Agentic Defensive Security Suite - As-Built Spec](/mnt/s/Development/GuardianAgent/docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md), [executor.ts](/mnt/s/Development/GuardianAgent/src/tools/executor.ts), [workspace-dependency-ledger.ts](/mnt/s/Development/GuardianAgent/src/runtime/workspace-dependency-ledger.ts), [ai-security.ts](/mnt/s/Development/GuardianAgent/src/runtime/ai-security.ts), [security-alerts.ts](/mnt/s/Development/GuardianAgent/src/runtime/security-alerts.ts), [host-monitor.ts](/mnt/s/Development/GuardianAgent/src/runtime/host-monitor.ts)
 
 ## Executive Summary
 

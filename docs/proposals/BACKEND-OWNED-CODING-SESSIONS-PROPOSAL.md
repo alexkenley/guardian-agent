@@ -26,7 +26,7 @@ Today, the shipped Coding Assistant spec says:
 
 That model is documented in:
 
-- [CODING-ASSISTANT-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODING-ASSISTANT-SPEC.md)
+- [CODING-WORKSPACE-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODING-WORKSPACE-SPEC.md)
 - [code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
 
 This creates four architectural problems:
@@ -507,7 +507,7 @@ In effect:
 
 ## Related Guardian Documents
 
-- [CODING-ASSISTANT-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODING-ASSISTANT-SPEC.md)
+- [CODING-WORKSPACE-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/CODING-WORKSPACE-SPEC.md)
 - [MEMORY-SYSTEM.md](/mnt/s/Development/GuardianAgent/docs/guides/MEMORY-SYSTEM.md)
 - [OPENDEV-INTEGRATION-AND-CODING-ASSISTANT-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/OPENDEV-INTEGRATION-AND-CODING-ASSISTANT-PROPOSAL.md)
 - [DISCORD-CHANNEL-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/DISCORD-CHANNEL-PROPOSAL.md)

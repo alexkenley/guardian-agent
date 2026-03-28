@@ -12,6 +12,84 @@ const baseParams = {
 };
 
 describe('BrokeredWorkerSession automation control', () => {
+  it('refreshes loaded tools for code-session turns so coding helpers are visible to the worker', async () => {
+    let loadedTools = [
+      {
+        name: 'fs_list',
+        description: 'List files.',
+        parameters: { type: 'object', properties: {} },
+      },
+      {
+        name: 'code_plan',
+        description: 'Generate a coding plan.',
+        parameters: { type: 'object', properties: { task: { type: 'string' } } },
+      },
+    ];
+    const listLoadedTools = vi.fn(async () => loadedTools);
+    const llmChat = vi.fn(async (_messages, options) => {
+      const firstTool = options?.tools?.[0]?.name;
+      if (firstTool === 'route_intent') {
+        return {
+          content: JSON.stringify({
+            route: 'none',
+            confidence: 'low',
+            summary: 'Stay in the normal coding assistant path.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      return {
+        content: 'Acceptance Gates\n- Keep the change bounded.\n\nExisting Checks To Reuse\n- Run the existing coding harness.',
+        model: 'test-model',
+        finishReason: 'stop',
+        toolCalls: [],
+        providerLocality: 'external',
+        providerName: 'anthropic',
+      } as ChatResponse;
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => loadedTools,
+      listLoadedTools,
+      llmChat,
+      callTool: vi.fn(),
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-code-1',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Write an implementation plan before editing anything.',
+        timestamp: Date.now(),
+        metadata: {
+          codeContext: {
+            workspaceRoot: '/repo',
+            sessionId: 'code-1',
+          },
+        },
+      },
+    });
+
+    expect(listLoadedTools).toHaveBeenCalledWith({
+      codeContext: {
+        workspaceRoot: '/repo',
+        sessionId: 'code-1',
+      },
+    });
+    expect(llmChat).toHaveBeenCalled();
+    const codingCall = llmChat.mock.calls.find((call) => Array.isArray(call[1]?.tools) && call[1]?.tools.some((tool: { name: string }) => tool.name === 'code_plan'));
+    const seenTools = codingCall?.[1]?.tools?.map((tool: { name: string }) => tool.name) ?? [];
+    expect(seenTools).toContain('code_plan');
+  });
+
   it('inspects saved automations through the canonical automation catalog in brokered sessions', async () => {
     const llmChat = vi.fn(async (_messages, options) => {
       const firstTool = options?.tools?.[0]?.name;

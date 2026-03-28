@@ -30,6 +30,7 @@ let invalidationQueued = false;
 let securityAlertTray = null;
 let appStarted = false;
 let authRecoveryInProgress = false;
+const DENSE_CHAT_PANEL_ROUTES = new Set(['automations', 'config']);
 
 // ─── Auth ────────────────────────────────────────────────
 
@@ -390,15 +391,15 @@ async function navigate() {
   }
 
   currentPage = route.name;
-  if (currentPage !== 'code') {
-    setChatContext(currentPage);
-  }
+  setChatContext(currentPage);
 
   const isCodeRoute = currentPage === 'code';
+  const isWideChatRoute = !isCodeRoute && !DENSE_CHAT_PANEL_ROUTES.has(currentPage);
   layout?.classList.toggle('layout-code-page', isCodeRoute);
+  layout?.classList.toggle('layout-chat-wide', isWideChatRoute);
   content.classList.toggle('content-code-page', isCodeRoute);
   if (chatPanel) {
-    chatPanel.hidden = isCodeRoute;
+    chatPanel.hidden = false;
   }
 
   // Update nav

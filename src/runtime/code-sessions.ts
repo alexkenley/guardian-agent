@@ -95,7 +95,6 @@ export interface CodeSessionUiState {
   selectedFilePath: string | null;
   showDiff: boolean;
   expandedDirs: string[];
-  activeAssistantTab: string;
   terminalCollapsed: boolean;
   terminalTabs: Array<{
     id: string;
@@ -218,7 +217,6 @@ function defaultUiState(): CodeSessionUiState {
     selectedFilePath: null,
     showDiff: false,
     expandedDirs: [],
-    activeAssistantTab: 'chat',
     terminalCollapsed: false,
     terminalTabs: [],
   };

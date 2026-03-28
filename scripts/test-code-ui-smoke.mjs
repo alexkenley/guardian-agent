@@ -145,6 +145,15 @@ async function startFakeProvider(workspaceRoot) {
           return;
         }
 
+        if (toolMessages.length >= 2) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(createChatCompletionResponse({
+            model: 'code-ui-harness-model',
+            content: 'Updated the selected file so answerValue is now 42.',
+          })));
+          return;
+        }
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(createChatCompletionResponse({
           model: 'code-ui-harness-model',
@@ -388,7 +397,53 @@ guardian:
       await assertFirstGuideCollapsed(`${title} guides should start collapsed by default`);
     }
 
-    assert.equal(await page.locator('#chat-panel').isHidden(), true, 'Global chat panel should be hidden on the code route');
+    assert.equal(await page.locator('#chat-panel').isVisible(), true, 'Guardian chat should stay visible on the code route');
+
+    async function waitForGuardianChatMessage(expectedText, { timeout = 30000 } = {}) {
+      await page.waitForFunction((expected) => {
+        return Array.from(document.querySelectorAll('#chat-history .chat-message')).some((node) => {
+          return (node.textContent || '').includes(expected);
+        });
+      }, expectedText, { timeout });
+    }
+
+    async function openCodePanel(panel) {
+      const button = page.locator(`[data-code-panel-switch="${panel}"]`);
+      const alreadyActive = await button.evaluate((node) => node.classList.contains('is-active')).catch(() => false);
+      if (!alreadyActive) {
+        await button.click();
+      }
+      await page.waitForFunction((expectedPanel) => {
+        return document.querySelector(`[data-code-panel-switch="${expectedPanel}"]`)?.classList.contains('is-active') === true;
+      }, panel);
+    }
+
+    async function sendGuardianChatMessage(message) {
+      await page.fill('#chat-input', message);
+      await page.press('#chat-input', 'Enter');
+    }
+
+    async function getGuardianChatFocusSnapshot() {
+      return page.evaluate(async () => {
+        const response = await fetch('/api/code/sessions?userId=web-user&channel=web&surfaceId=web-guardian-chat', {
+          credentials: 'same-origin',
+        });
+        return response.json();
+      });
+    }
+
+    async function waitForGuardianChatFocusByWorkspace(expectedWorkspaceRoot) {
+      await page.waitForFunction(async (expectedRoot) => {
+        const response = await fetch('/api/code/sessions?userId=web-user&channel=web&surfaceId=web-guardian-chat', {
+          credentials: 'same-origin',
+        });
+        const payload = await response.json();
+        const sessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
+        const currentSessionId = typeof payload?.currentSessionId === 'string' ? payload.currentSessionId : null;
+        const current = currentSessionId ? sessions.find((session) => session.id === currentSessionId) : null;
+        return String(current?.workspaceRoot || '').includes(expectedRoot);
+      }, expectedWorkspaceRoot);
+    }
 
     await page.click('[data-code-new-session]');
     await page.fill('[data-code-session-form] input[name="title"]', 'Workspace A');
@@ -401,9 +456,22 @@ guardian:
     await page.waitForFunction(() => {
       return Array.from(document.querySelectorAll('.code-session__badges')).some((node) => (node.textContent || '').includes('TRUST: BLOCKED'));
     });
+    await openCodePanel('activity');
     await page.waitForFunction(() => {
       return Array.from(document.querySelectorAll('.code-chat__notice')).some((node) => (node.textContent || '').includes('Native host malware scanning reported a workspace detection'));
     });
+
+    assert.equal(await page.locator('#chat-panel #chat-panel-code-session-select').isVisible().catch(() => false), false, 'Code route should hide the duplicate session selector in Guardian chat');
+    assert.equal(await page.locator('#chat-panel [data-chat-code-session-create="toggle"]').isVisible().catch(() => false), false, 'Code route should hide duplicate session creation controls in Guardian chat');
+    await waitForGuardianChatFocusByWorkspace(workspaceRoot);
+
+    await openCodePanel('sessions');
+    await page.locator('.code-session').filter({ hasText: workspaceRoot }).click();
+    await page.waitForFunction((expected) => {
+      const activeMeta = document.querySelector('.code-session.is-active .code-session__meta');
+      return (activeMeta?.textContent || '').includes(expected);
+    }, workspaceRoot);
+    await waitForGuardianChatFocusByWorkspace(workspaceRoot);
 
     await page.click('[data-code-new-session]');
     await page.fill('[data-code-session-form] input[name="title"]', 'Workspace Review');
@@ -416,11 +484,13 @@ guardian:
     await page.waitForFunction(() => {
       return Array.from(document.querySelectorAll('.code-session__badges')).some((node) => (node.textContent || '').includes('TRUST: CAUTION'));
     });
+    await openCodePanel('activity');
     await page.waitForFunction(() => {
       return Array.from(document.querySelectorAll('.code-chat__notice')).some((node) => (node.textContent || '').includes('Static repo review found suspicious indicators'));
     });
 
-    const reviewedSessionCard = page.locator('.code-session').filter({ hasText: reviewedWorkspaceRoot });
+    await openCodePanel('sessions');
+    const reviewedSessionCard = page.locator('.code-session').filter({ hasText: 'Workspace Review' });
     await reviewedSessionCard.locator('[data-code-edit-session]').click();
     await page.waitForSelector('[data-code-edit-session-form]');
     await page.check('[data-code-edit-session-form] input[name="workspaceTrustOverrideAccepted"]');
@@ -432,6 +502,7 @@ guardian:
         return text.includes(expected) && text.includes('TRUST: ACCEPTED') && text.includes('RAW: CAUTION');
       });
     }, reviewedWorkspaceRoot);
+    await openCodePanel('activity');
     await page.waitForFunction(() => {
       return Array.from(document.querySelectorAll('.code-chat__notice')).some((node) => (node.textContent || '').includes('Effective trust is TRUSTED and repo-scoped tools run normally'));
     });
@@ -451,6 +522,7 @@ guardian:
     }, poisonedCurrentDirectory);
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.code-page');
+    await openCodePanel('sessions');
     await page.waitForFunction((expected) => {
       return Array.from(document.querySelectorAll('.code-session__meta')).some((node) => (node.textContent || '').includes(expected));
     }, workspaceRoot);
@@ -467,16 +539,9 @@ guardian:
     assert.equal(repairedSessionState?.currentDirectory, reviewedWorkspaceRoot, 'Code UI should replace stale local currentDirectory with the backend workspace root');
     assert.equal(repairedSessionState?.selectedFilePath, null, 'Code UI should not preserve a stale selected file outside the workspace');
 
-    const chatTab = page.locator('[data-code-assistant-tab="chat"]');
-    const activityTab = page.locator('[data-code-assistant-tab="activity"]');
-    await Promise.all([
-      chatTab.waitFor(),
-      activityTab.waitFor(),
-    ]);
-    assert.equal(await chatTab.getAttribute('aria-selected'), 'true', 'Chat tab should be active by default');
-    assert.match(await page.locator('.code-chat__title').textContent(), /Coding Assistant/);
-
-    await activityTab.click();
+    await openCodePanel('activity');
+    assert.match(await page.locator('.code-chat__title').textContent(), /Workspace Activity/);
+    assert.equal(await page.locator('[data-code-assistant-tab]').count(), 0, 'The workbench should not render a duplicate coding chat tab set');
     await page.waitForFunction(() => {
       return Array.from(document.querySelectorAll('.code-status-card strong, .approval-card')).length > 0
         || !!document.querySelector('.code-assistant-panel__body');
@@ -487,17 +552,47 @@ guardian:
     await page.waitForFunction(() => {
       return Array.from(document.querySelectorAll('.code-status-card')).some((node) => (node.textContent || '').includes('Raw scanner state remains caution'));
     });
-    await chatTab.click();
-    await page.waitForSelector('.code-chat__history');
+    await waitForGuardianChatFocusByWorkspace(reviewedWorkspaceRoot);
 
+    await openCodePanel('sessions');
     await page.locator('.code-session').filter({ hasText: workspaceRoot }).click();
     await page.waitForFunction((expected) => {
       const activeMeta = document.querySelector('.code-session.is-active .code-session__meta');
       return (activeMeta?.textContent || '').includes(expected);
     }, workspaceRoot);
+    await waitForGuardianChatFocusByWorkspace(workspaceRoot);
+    await openCodePanel('activity');
     await page.waitForFunction(() => {
       return Array.from(document.querySelectorAll('.code-chat__notice')).some((node) => (node.textContent || '').includes('Native host malware scanning reported a workspace detection'));
     });
+
+    for (const expectedWorkspaceRoot of [workspaceRoot, reviewedWorkspaceRoot, workspaceRoot]) {
+      await openCodePanel('sessions');
+      await page.locator('.code-session').filter({ hasText: expectedWorkspaceRoot }).click();
+      await page.waitForFunction((expected) => {
+        const activeMeta = document.querySelector('.code-session.is-active .code-session__meta');
+        return (activeMeta?.textContent || '').includes(expected);
+      }, expectedWorkspaceRoot);
+      await waitForGuardianChatFocusByWorkspace(expectedWorkspaceRoot);
+    }
+
+    await page.goto(`${baseUrl}/#/`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#chat-panel');
+    const dashboardFocus = await getGuardianChatFocusSnapshot();
+    assert.ok(
+      Array.isArray(dashboardFocus?.sessions)
+      && dashboardFocus.sessions.some((session) => session.id === dashboardFocus.currentSessionId && String(session.workspaceRoot || '').includes(workspaceRoot)),
+      `Expected Guardian chat focus to persist after leaving the coding workspace route: ${JSON.stringify(dashboardFocus)}`,
+    );
+
+    await page.goto(`${baseUrl}/#/code`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.code-page');
+    await openCodePanel('sessions');
+    await page.waitForFunction((expected) => {
+      const activeMeta = document.querySelector('.code-session.is-active .code-session__meta');
+      return (activeMeta?.textContent || '').includes(expected);
+    }, workspaceRoot);
+    await waitForGuardianChatFocusByWorkspace(workspaceRoot);
 
     // Icon rail panel switching — switch to explorer
     await page.locator('[data-code-panel-switch="explorer"]').click();
@@ -707,9 +802,6 @@ guardian:
     await page.click('.code-inspector__window .panel__actions [data-code-inspector-close]');
     await page.waitForFunction(() => !document.querySelector('.code-inspector-overlay'));
 
-    await chatTab.click();
-    await page.waitForSelector('.code-chat__history');
-
     const liveGeneratedPath = path.join(workspaceRoot, 'src', 'live-generated.ts');
     fs.writeFileSync(liveGeneratedPath, 'export const liveGenerated = true;\n');
     await page.waitForFunction(() => {
@@ -724,38 +816,32 @@ guardian:
     });
     await page.waitForSelector('.code-terminal__viewport .xterm');
 
-    const draftInput = page.locator('[data-code-chat-form] textarea[name="message"]');
+    const draftInput = page.locator('#chat-input');
     await draftInput.click();
-    await draftInput.type('Focus should stay in the code chat input.');
+    await draftInput.type('Focus should stay in Guardian chat input.');
     await page.waitForTimeout(6000);
     const draftFocusState = await page.evaluate(() => {
       const active = document.activeElement;
-      const draft = document.querySelector('[data-code-chat-form] textarea[name="message"]');
+      const draft = document.querySelector('#chat-input');
       return {
-        activeName: active?.getAttribute?.('name') || '',
-        inChat: !!active?.closest?.('[data-code-chat-form]'),
+        activeId: active?.id || '',
+        inChat: !!active?.closest?.('#chat-panel'),
         value: draft?.value || '',
       };
     });
-    assert.equal(draftFocusState.inChat, true, 'Code chat input should keep focus during background refresh');
-    assert.equal(draftFocusState.activeName, 'message', 'Code chat input should remain the active control');
-    assert.match(draftFocusState.value, /Focus should stay in the code chat input/);
+    assert.equal(draftFocusState.inChat, true, 'Guardian chat input should keep focus during background refresh');
+    assert.equal(draftFocusState.activeId, 'chat-input', 'Guardian chat input should remain the active control');
+    assert.match(draftFocusState.value, /Focus should stay in Guardian chat input/);
     await draftInput.fill('');
 
-    await page.fill('[data-code-chat-form] textarea[name="message"]', 'Search the workspace for answerValue and tell me where it is defined.');
-    await page.press('[data-code-chat-form] textarea[name="message"]', 'Enter');
+    await sendGuardianChatMessage('Search the workspace for answerValue and tell me where it is defined.');
     await page.waitForFunction(() => {
-      const pendingUser = document.querySelector('.code-message.is-pending');
-      const thinking = document.querySelector('.code-message.is-thinking');
-      return !!pendingUser && !!thinking && (pendingUser.textContent || '').includes('Search the workspace');
+      const pending = document.querySelector('#chat-history .chat-message.is-thinking');
+      return !!pending && (document.querySelector('#chat-history')?.textContent || '').includes('Search the workspace');
     });
-    await page.waitForFunction(() => {
-      return Array.from(document.querySelectorAll('.code-message')).some((node) => (node.textContent || '').includes('answerValue'));
-    });
-    assert.equal(await page.locator('.code-chat__history').textContent().then((text) => text.includes('[Code Workspace Context]')), false, 'Code chat should not render internal prompt wrapper text');
-    assert.equal(await chatTab.getAttribute('aria-selected'), 'true', 'Chat tab should stay active after a normal coding reply');
-
-    await activityTab.click();
+    await waitForGuardianChatMessage('answerValue');
+    assert.equal(await page.locator('#chat-history').textContent().then((text) => text.includes('[Code Workspace Context]')), false, 'Guardian chat should not render internal prompt wrapper text');
+    await openCodePanel('activity');
     await page.waitForFunction(() => {
       return Array.from(document.querySelectorAll('.code-status-card strong, .approval-card')).length > 0
         || !!document.querySelector('.code-assistant-panel__body');
@@ -766,35 +852,48 @@ guardian:
     await page.waitForFunction(() => {
       return Array.from(document.querySelectorAll('.code-status-card')).some((node) => (node.textContent || '').includes('ClamAV reported 1 detection'));
     });
-    await chatTab.click();
-    await page.waitForSelector('.code-chat__history');
 
-    await page.fill('[data-code-chat-form] textarea[name="message"]', 'Give me a slow repo summary.');
-    await page.click('[data-code-chat-form] button[type="submit"]');
+    await sendGuardianChatMessage('Give me a slow repo summary.');
     await page.waitForFunction(() => {
-      const history = Array.from(document.querySelectorAll('.code-message'));
+      const history = Array.from(document.querySelectorAll('#chat-history .chat-message'));
       const summaries = history.filter((node) => (node.textContent || '').includes('slow repo summary'));
       const finalReply = history.some((node) => (node.textContent || '').includes('This repo contains a src directory'));
-      const pending = document.querySelector('.code-message.is-pending');
-      const thinking = document.querySelector('.code-message.is-thinking');
-      return summaries.length === 1 && finalReply && !pending && !thinking;
+      const thinking = document.querySelector('#chat-history .chat-message.is-thinking');
+      return summaries.length === 1 && finalReply && !thinking;
     }, null, { timeout: 30000 });
 
     // Code tools within the workspace are auto-approved, so the edit should
     // complete without requiring manual approval.
-    await page.fill('[data-code-chat-form] textarea[name="message"]', 'Make the answer 42 in the selected file.');
-    await page.click('[data-code-chat-form] button[type="submit"]');
+    await sendGuardianChatMessage('Make the answer 42 in the selected file.');
     await page.waitForFunction(() => {
-      // Wait for the assistant reply (non-pending, non-thinking)
-      const messages = document.querySelectorAll('.code-message');
-      const thinking = document.querySelector('.code-message.is-thinking');
-      const pending = document.querySelector('.code-message.is-pending');
-      return messages.length >= 4 && !thinking && !pending;
+      const messages = document.querySelectorAll('#chat-history .chat-message');
+      const thinking = document.querySelector('#chat-history .chat-message.is-thinking');
+      return messages.length >= 4 && !thinking;
     }, null, { timeout: 30000 });
-    assert.match(fs.readFileSync(examplePath, 'utf-8'), /answerValue = 42/);
-
-    await chatTab.click();
-    await page.waitForSelector('.code-chat__history');
+    const editedFileContent = fs.readFileSync(examplePath, 'utf-8');
+    if (!/answerValue = 42/.test(editedFileContent)) {
+      const editDiagnostics = await page.evaluate(() => ({
+        chatHistory: document.querySelector('#chat-history')?.textContent || '',
+        focusedSession: (document.querySelector('#chat-panel-code-session-select') instanceof HTMLSelectElement)
+          ? document.querySelector('#chat-panel-code-session-select').selectedOptions?.[0]?.textContent || ''
+          : 'selector hidden on code route',
+        activitySummary: document.querySelector('[data-code-assistant-panel-host]')?.textContent || '',
+      }));
+      throw new assert.AssertionError({
+        message: `Expected answerValue edit to land before route-guard checks. Diagnostics: ${JSON.stringify(editDiagnostics)}`,
+        actual: editedFileContent,
+        expected: /answerValue = 42/,
+        operator: 'match',
+      });
+    }
+    await page.waitForFunction(() => {
+      const monaco = window.monaco;
+      if (!monaco) return false;
+      return monaco.editor.getModels().some((candidate) => {
+        return candidate.uri?.path?.endsWith('/src/example.ts')
+          && candidate.getValue().includes('answerValue = 42');
+      });
+    }, null, { timeout: 15000 });
 
     await page.evaluate(() => {
       const models = window.monaco?.editor?.getModels() || [];
@@ -834,10 +933,10 @@ guardian:
     await page.waitForSelector('.code-page', { state: 'detached' });
     assert.match(acceptedRoutePrompt, /Save changes to example\.ts before leaving the Code page\?/);
     assert.match(fs.readFileSync(examplePath, 'utf-8'), /route guard smoke/, 'Accepting the leave prompt should save the dirty editor content before leaving Code');
-    assert.equal(await page.locator('#chat-panel').isVisible(), true, 'Global chat panel should reappear off the code route');
+    assert.equal(await page.locator('#chat-panel').isVisible(), true, 'Guardian chat should remain visible off the code route');
     await page.waitForTimeout(6000);
     assert.equal(await page.locator('.code-page').count(), 0, 'Leaving Code should not be overwritten by a delayed Code rerender');
-    assert.equal(await page.locator('#chat-panel').isVisible(), true, 'Global chat panel should stay visible after leaving Code');
+    assert.equal(await page.locator('#chat-panel').isVisible(), true, 'Guardian chat should stay visible after leaving Code');
     await waitForPageTitle('Dashboard');
     await assertFirstGuideCollapsed('Dashboard guides should start collapsed by default');
 
@@ -900,18 +999,62 @@ guardian:
 
     await page.click('a[data-page="code"]');
     await page.waitForSelector('.code-page');
-    assert.equal(await page.locator('#chat-panel').isHidden(), true, 'Global chat panel should hide again on return to code');
+    assert.equal(await page.locator('#chat-panel').isVisible(), true, 'Guardian chat should still be visible on return to code');
+    await waitForGuardianChatFocusByWorkspace(workspaceRoot);
+    await page.waitForFunction((expected) => {
+      const workspace = document.querySelector('.code-chat__workspace');
+      return (workspace?.textContent || '').includes(expected);
+    }, workspaceRoot);
+    await page.evaluate(() => {
+      const button = document.querySelector('[data-code-panel-switch="explorer"]');
+      if (!(button instanceof HTMLElement)) return;
+      if (!button.classList.contains('is-active')) {
+        button.click();
+      }
+    });
+    await page.waitForSelector('.code-side-panel__nav-btn[data-code-panel-switch="explorer"].is-active');
+    await page.waitForSelector('[data-code-refresh-explorer]');
+    await page.click('[data-code-refresh-explorer]');
+    await page.waitForFunction(() => {
+      return document.querySelectorAll('[data-code-tree-toggle], [data-code-tree-file]').length > 0;
+    }, null, { timeout: 15000 });
+    const exampleFile = page.locator('[data-code-tree-file]').filter({ hasText: 'example.ts' }).first();
+    const srcToggle = page.locator('[data-code-tree-toggle]').filter({ hasText: 'src' }).first();
+    await srcToggle.waitFor({ state: 'visible', timeout: 15000 });
+    const exampleVisible = await exampleFile.isVisible().catch(() => false);
+    if (!exampleVisible) {
+      await srcToggle.click();
+    }
+    await exampleFile.waitFor({ state: 'visible', timeout: 15000 });
+    await exampleFile.click();
+    await page.waitForFunction(() => {
+      return (document.querySelector('.code-path')?.textContent || '').includes('example.ts');
+    }, null, { timeout: 15000 });
+    await page.waitForSelector('[data-code-refresh-file]');
     await page.click('[data-code-refresh-file]');
-    // Wait for Monaco to reload with updated content after refresh
     await page.waitForFunction(() => {
       const monaco = window.monaco;
       if (!monaco) return false;
       const models = monaco.editor.getModels();
-      return models.some((m) => m.getValue().includes('answerValue = 42'));
+      return models.some((m) => m.uri?.path?.endsWith('/src/example.ts'));
+    }, null, { timeout: 15000 });
+    // Wait for Monaco to reload the selected file with the saved content after refresh.
+    await page.waitForFunction(() => {
+      const monaco = window.monaco;
+      if (!monaco) return false;
+      return monaco.editor.getModels().some((candidate) => {
+        return candidate.uri?.path?.endsWith('/src/example.ts')
+          && candidate.getValue().includes('answerValue = 42')
+          && candidate.getValue().includes('route guard smoke');
+      });
     }, null, { timeout: 15000 });
     const refreshedContent = await page.evaluate(() => {
       const models = window.monaco?.editor?.getModels() || [];
-      const model = models.find((m) => m.getValue().includes('answerValue'));
+      const model = models.find((candidate) => {
+        return candidate.uri?.path?.endsWith('/src/example.ts')
+          && candidate.getValue().includes('answerValue = 42')
+          && candidate.getValue().includes('route guard smoke');
+      });
       return model ? model.getValue() : '';
     });
     assert.match(refreshedContent, /answerValue = 42/);

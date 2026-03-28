@@ -67,6 +67,8 @@ export interface UserMessage {
   id: string;
   /** User identifier. */
   userId: string;
+  /** Logical chat/client surface identifier for per-surface attachments. */
+  surfaceId?: string;
   /** Authenticated principal for authorization-sensitive flows. */
   principalId?: string;
   /** Principal role in the current channel/session. */

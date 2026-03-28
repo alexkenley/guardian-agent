@@ -167,6 +167,10 @@ function trimOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+function readSurfaceIdFromSearchParams(url: URL): string | undefined {
+  return trimOptionalString(url.searchParams.get('surfaceId'));
+}
+
 function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
 }
@@ -1080,6 +1084,7 @@ export class WebChannel implements ChannelAdapter {
           origin?: 'assistant' | 'cli' | 'web';
           agentId?: string;
           userId?: string;
+          surfaceId?: string;
           contentTrustLevel?: 'trusted' | 'low_trust' | 'quarantined';
           taintReasons?: string[];
           derivedFromTaintedContent?: boolean;
@@ -1091,12 +1096,13 @@ export class WebChannel implements ChannelAdapter {
           parsed = JSON.parse(body) as {
             toolName?: string;
             args?: Record<string, unknown>;
-            origin?: 'assistant' | 'cli' | 'web';
-            agentId?: string;
-            userId?: string;
-            contentTrustLevel?: 'trusted' | 'low_trust' | 'quarantined';
-            taintReasons?: string[];
-            derivedFromTaintedContent?: boolean;
+          origin?: 'assistant' | 'cli' | 'web';
+          agentId?: string;
+          userId?: string;
+          surfaceId?: string;
+          contentTrustLevel?: 'trusted' | 'low_trust' | 'quarantined';
+          taintReasons?: string[];
+          derivedFromTaintedContent?: boolean;
             scheduleId?: string;
             channel?: string;
             metadata?: Record<string, unknown>;
@@ -1116,6 +1122,7 @@ export class WebChannel implements ChannelAdapter {
           origin: parsed.origin ?? 'web',
           agentId: parsed.agentId,
           userId: parsed.userId ?? 'web-user',
+          surfaceId: trimOptionalString(parsed.surfaceId),
           principalId: principal.principalId,
           principalRole: principal.principalRole,
           contentTrustLevel: parsed.contentTrustLevel === 'quarantined'
@@ -2966,6 +2973,7 @@ export class WebChannel implements ChannelAdapter {
           userId?: string;
           agentId?: unknown;
           requestId?: unknown;
+          surfaceId?: unknown;
           channel?: string;
           metadata?: Record<string, unknown>;
         };
@@ -3000,6 +3008,7 @@ export class WebChannel implements ChannelAdapter {
               requestId,
               content,
               userId: parsed.userId,
+              surfaceId: trimOptionalString(parsed.surfaceId),
               principalId: principal.principalId,
               principalRole: principal.principalRole,
               channel: parsed.channel ?? 'web',
@@ -3035,7 +3044,14 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
 
-        let parsed: { content?: unknown; userId?: string; agentId?: unknown; channel?: string; metadata?: Record<string, unknown> };
+        let parsed: {
+          content?: unknown;
+          userId?: string;
+          agentId?: unknown;
+          surfaceId?: unknown;
+          channel?: string;
+          metadata?: Record<string, unknown>;
+        };
         try {
           parsed = JSON.parse(body) as typeof parsed;
         } catch {
@@ -3057,6 +3073,7 @@ export class WebChannel implements ChannelAdapter {
             const response = await this.dashboard.onDispatch(agentId, {
               content,
               userId: parsed.userId,
+              surfaceId: trimOptionalString(parsed.surfaceId),
               principalId: principal.principalId,
               principalRole: principal.principalRole,
               channel: parsed.channel ?? 'web',
@@ -3090,6 +3107,7 @@ export class WebChannel implements ChannelAdapter {
           const response = await this.onMessage({
             id: randomUUID(),
             userId: parsed.userId ?? 'web-user',
+            surfaceId: trimOptionalString(parsed.surfaceId),
             principalId: principal.principalId,
             principalRole: principal.principalRole,
             channel: parsed.channel ?? 'web',
@@ -4088,7 +4106,7 @@ export class WebChannel implements ChannelAdapter {
           userId,
           principalId: principal.principalId,
           channel,
-          surfaceId: '',
+          surfaceId: readSurfaceIdFromSearchParams(url) ?? userId,
         }));
         return;
       }
@@ -4102,6 +4120,7 @@ export class WebChannel implements ChannelAdapter {
         const parsed = JSON.parse(body || '{}') as {
           userId?: string;
           channel?: string;
+          surfaceId?: string;
           title?: string;
           workspaceRoot?: string;
           agentId?: string | null;
@@ -4116,7 +4135,7 @@ export class WebChannel implements ChannelAdapter {
           userId: parsed.userId || 'web-user',
           principalId: principal.principalId,
           channel: parsed.channel || 'web',
-          surfaceId: '',
+          surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
           title: parsed.title!,
           workspaceRoot: parsed.workspaceRoot!,
           agentId: trimOptionalString(parsed.agentId) ?? null,
@@ -4132,13 +4151,13 @@ export class WebChannel implements ChannelAdapter {
           return;
         }
         const body = await readBody(req, this.maxBodyBytes);
-        const parsed = JSON.parse(body || '{}') as { userId?: string; channel?: string };
+        const parsed = JSON.parse(body || '{}') as { userId?: string; channel?: string; surfaceId?: string };
         const principal = this.resolveRequestPrincipal(req);
         const result = this.dashboard.onCodeSessionDetach({
           userId: parsed.userId || 'web-user',
           principalId: principal.principalId,
           channel: parsed.channel || 'web',
-          surfaceId: '',
+          surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
         });
         sendJSON(res, 200, result);
         return;
@@ -4154,64 +4173,17 @@ export class WebChannel implements ChannelAdapter {
         }
         const sessionId = decodeURIComponent(codeSessionAttachMatch[1]);
         const body = await readBody(req, this.maxBodyBytes);
-        const parsed = JSON.parse(body || '{}') as { userId?: string; channel?: string; mode?: string };
+        const parsed = JSON.parse(body || '{}') as { userId?: string; channel?: string; surfaceId?: string; mode?: string };
         const principal = this.resolveRequestPrincipal(req);
         const result = this.dashboard.onCodeSessionAttach({
           sessionId,
           userId: parsed.userId || 'web-user',
           principalId: principal.principalId,
           channel: parsed.channel || 'web',
-          surfaceId: '',
+          surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
           mode: trimOptionalString(parsed.mode) as import('../runtime/code-sessions.js').CodeSessionAttachmentMode | undefined,
         });
         sendJSON(res, 200, result);
-        return;
-      }
-
-      const codeSessionMessageMatch = req.method === 'POST'
-        ? url.pathname.match(/^\/api\/code\/sessions\/([^/]+)\/message$/)
-        : null;
-      if (codeSessionMessageMatch) {
-        if (!this.dashboard.onCodeSessionMessage) {
-          sendJSON(res, 404, { error: 'Not available' });
-          return;
-        }
-        const sessionId = decodeURIComponent(codeSessionMessageMatch[1]);
-        const body = await readBody(req, this.maxBodyBytes);
-        const parsed = JSON.parse(body || '{}') as { userId?: string; channel?: string; content?: unknown; metadata?: unknown };
-        const content = asNonEmptyString(parsed.content);
-        if (!content) {
-          sendJSON(res, 400, { error: 'content is required' });
-          return;
-        }
-        const principal = this.resolveRequestPrincipal(req);
-        try {
-          const response = await this.dashboard.onCodeSessionMessage({
-            sessionId,
-            userId: parsed.userId || 'web-user',
-            principalId: principal.principalId,
-            principalRole: principal.principalRole,
-            channel: parsed.channel || 'web',
-            surfaceId: '',
-            content,
-            metadata: typeof parsed.metadata === 'object' && parsed.metadata && !Array.isArray(parsed.metadata)
-              ? parsed.metadata as Record<string, unknown>
-              : undefined,
-          });
-          sendJSON(res, 200, response);
-        } catch (err) {
-          const requestError = getRequestErrorDetails(err);
-          if (requestError) {
-            sendJSON(res, requestError.statusCode, {
-              error: requestError.error,
-              ...(requestError.errorCode ? { errorCode: requestError.errorCode } : {}),
-            });
-            return;
-          }
-          logInternalError('Code session message dispatch failed', err);
-          const detail = err instanceof Error ? err.message : String(err);
-          sendJSON(res, 500, { error: `Dispatch error: ${detail}` });
-        }
         return;
       }
 
@@ -4226,7 +4198,13 @@ export class WebChannel implements ChannelAdapter {
         const sessionId = decodeURIComponent(codeSessionApprovalMatch[1]);
         const approvalId = decodeURIComponent(codeSessionApprovalMatch[2]);
         const body = await readBody(req, this.maxBodyBytes);
-        const parsed = JSON.parse(body || '{}') as { userId?: string; channel?: string; decision?: 'approved' | 'denied'; reason?: string };
+        const parsed = JSON.parse(body || '{}') as {
+          userId?: string;
+          channel?: string;
+          surfaceId?: string;
+          decision?: 'approved' | 'denied';
+          reason?: string;
+        };
         if (!parsed.decision || (parsed.decision !== 'approved' && parsed.decision !== 'denied')) {
           sendJSON(res, 400, { error: 'decision is required' });
           return;
@@ -4241,7 +4219,7 @@ export class WebChannel implements ChannelAdapter {
             principalId: principal.principalId,
             principalRole: principal.principalRole,
             channel: parsed.channel || 'web',
-            surfaceId: '',
+            surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
             reason: trimOptionalString(parsed.reason),
           });
           sendJSON(res, 200, result);
@@ -4299,7 +4277,7 @@ export class WebChannel implements ChannelAdapter {
           userId,
           principalId: principal.principalId,
           channel,
-          surfaceId: '',
+          surfaceId: readSurfaceIdFromSearchParams(url) ?? userId,
           limit: Number.isFinite(limit) ? limit : 12,
         });
         if (!result) {
@@ -4328,7 +4306,7 @@ export class WebChannel implements ChannelAdapter {
             userId,
             principalId: principal.principalId,
             channel,
-            surfaceId: '',
+            surfaceId: readSurfaceIdFromSearchParams(url) ?? userId,
             historyLimit: Number.isFinite(historyLimit) ? historyLimit : 120,
           });
           if (!result) {
@@ -4348,6 +4326,7 @@ export class WebChannel implements ChannelAdapter {
           const parsed = JSON.parse(body || '{}') as {
             userId?: string;
             channel?: string;
+            surfaceId?: string;
             title?: string;
             workspaceRoot?: string;
             agentId?: string | null;
@@ -4360,7 +4339,7 @@ export class WebChannel implements ChannelAdapter {
             userId: parsed.userId || 'web-user',
             principalId: principal.principalId,
             channel: parsed.channel || 'web',
-            surfaceId: '',
+            surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
             title: trimOptionalString(parsed.title),
             workspaceRoot: trimOptionalString(parsed.workspaceRoot),
             agentId: hasOwn(parsed as object, 'agentId') ? (trimOptionalString(parsed.agentId) ?? null) : undefined,
@@ -4382,13 +4361,13 @@ export class WebChannel implements ChannelAdapter {
             return;
           }
           const body = await readBody(req, this.maxBodyBytes).catch(() => '');
-          const parsed = JSON.parse(body || '{}') as { userId?: string; channel?: string };
+          const parsed = JSON.parse(body || '{}') as { userId?: string; channel?: string; surfaceId?: string };
           const result = this.dashboard.onCodeSessionDelete({
             sessionId,
             userId: parsed.userId || 'web-user',
             principalId: principal.principalId,
             channel: parsed.channel || 'web',
-            surfaceId: '',
+            surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
           });
           sendJSON(res, result.success ? 200 : 404, result);
           return;
@@ -4405,12 +4384,14 @@ export class WebChannel implements ChannelAdapter {
         }
         const sessionId = decodeURIComponent(codeSessionStructureMatch[1]);
         const principal = this.resolveRequestPrincipal(req);
+        const userId = url.searchParams.get('userId') || 'web-user';
+        const channel = url.searchParams.get('channel') || 'web';
         const snapshot = this.dashboard.onCodeSessionGet({
           sessionId,
-          userId: url.searchParams.get('userId') || 'web-user',
+          userId,
           principalId: principal.principalId,
-          channel: url.searchParams.get('channel') || 'web',
-          surfaceId: '',
+          channel,
+          surfaceId: readSurfaceIdFromSearchParams(url) ?? userId,
           historyLimit: 1,
         });
         if (!snapshot) {
@@ -4472,6 +4453,7 @@ export class WebChannel implements ChannelAdapter {
         const parsed = JSON.parse(body || '{}') as {
           userId?: string;
           channel?: string;
+          surfaceId?: string;
           path?: string;
           content?: string;
           line?: number;
@@ -4482,7 +4464,7 @@ export class WebChannel implements ChannelAdapter {
           userId: parsed.userId || 'web-user',
           principalId: principal.principalId,
           channel: parsed.channel || 'web',
-          surfaceId: '',
+          surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
           historyLimit: 1,
         });
         if (!snapshot) {
@@ -4532,7 +4514,13 @@ export class WebChannel implements ChannelAdapter {
       // POST /api/code/fs/list — direct user directory listing for Code UI
       if (req.method === 'POST' && url.pathname === '/api/code/fs/list') {
         const body = await readBody(req, this.maxBodyBytes);
-        const parsed = JSON.parse(body || '{}') as { path?: string; sessionId?: string; userId?: string; channel?: string };
+        const parsed = JSON.parse(body || '{}') as {
+          path?: string;
+          sessionId?: string;
+          userId?: string;
+          channel?: string;
+          surfaceId?: string;
+        };
         let targetPath = resolve(parsed.path || '.');
         if (trimOptionalString(parsed.sessionId) && this.dashboard.onCodeSessionGet) {
           const principal = this.resolveRequestPrincipal(req);
@@ -4541,7 +4529,7 @@ export class WebChannel implements ChannelAdapter {
             userId: parsed.userId || 'web-user',
             principalId: principal.principalId,
             channel: parsed.channel || 'web',
-            surfaceId: '',
+            surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
             historyLimit: 1,
           });
           if (!snapshot) {
@@ -4576,7 +4564,14 @@ export class WebChannel implements ChannelAdapter {
       // POST /api/code/fs/read — direct user file read for Code UI
       if (req.method === 'POST' && url.pathname === '/api/code/fs/read') {
         const body = await readBody(req, this.maxBodyBytes);
-        const parsed = JSON.parse(body || '{}') as { path?: string; maxBytes?: number; sessionId?: string; userId?: string; channel?: string };
+        const parsed = JSON.parse(body || '{}') as {
+          path?: string;
+          maxBytes?: number;
+          sessionId?: string;
+          userId?: string;
+          channel?: string;
+          surfaceId?: string;
+        };
         let targetPath = resolve(parsed.path || '.');
         if (trimOptionalString(parsed.sessionId) && this.dashboard.onCodeSessionGet) {
           const principal = this.resolveRequestPrincipal(req);
@@ -4585,7 +4580,7 @@ export class WebChannel implements ChannelAdapter {
             userId: parsed.userId || 'web-user',
             principalId: principal.principalId,
             channel: parsed.channel || 'web',
-            surfaceId: '',
+            surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
             historyLimit: 1,
           });
           if (!snapshot) {
@@ -4616,7 +4611,14 @@ export class WebChannel implements ChannelAdapter {
       // POST /api/code/fs/write — direct user file write for Code UI editor
       if (req.method === 'POST' && url.pathname === '/api/code/fs/write') {
         const body = await readBody(req, this.maxBodyBytes);
-        const parsed = JSON.parse(body || '{}') as { path?: string; content?: string; sessionId?: string; userId?: string; channel?: string };
+        const parsed = JSON.parse(body || '{}') as {
+          path?: string;
+          content?: string;
+          sessionId?: string;
+          userId?: string;
+          channel?: string;
+          surfaceId?: string;
+        };
         if (typeof parsed.content !== 'string') {
           sendJSON(res, 400, { success: false, error: 'Missing content' });
           return;
@@ -4629,7 +4631,7 @@ export class WebChannel implements ChannelAdapter {
             userId: parsed.userId || 'web-user',
             principalId: principal.principalId,
             channel: parsed.channel || 'web',
-            surfaceId: '',
+            surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
             historyLimit: 1,
           });
           if (!snapshot) {
@@ -4656,7 +4658,15 @@ export class WebChannel implements ChannelAdapter {
       // POST /api/code/git/diff — direct user git diff for Code UI
       if (req.method === 'POST' && url.pathname === '/api/code/git/diff') {
         const body = await readBody(req, this.maxBodyBytes);
-        const parsed = JSON.parse(body || '{}') as { cwd?: string; path?: string; staged?: boolean; sessionId?: string; userId?: string; channel?: string };
+        const parsed = JSON.parse(body || '{}') as {
+          cwd?: string;
+          path?: string;
+          staged?: boolean;
+          sessionId?: string;
+          userId?: string;
+          channel?: string;
+          surfaceId?: string;
+        };
         let cwd = resolve(parsed.cwd || '.');
         let sessionPath = trimOptionalString(parsed.path);
         if (trimOptionalString(parsed.sessionId) && this.dashboard.onCodeSessionGet) {
@@ -4666,7 +4676,7 @@ export class WebChannel implements ChannelAdapter {
             userId: parsed.userId || 'web-user',
             principalId: principal.principalId,
             channel: parsed.channel || 'web',
-            surfaceId: '',
+            surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
             historyLimit: 1,
           });
           if (!snapshot) {
@@ -4710,12 +4720,14 @@ export class WebChannel implements ChannelAdapter {
       if (req.method === 'GET' && gitStatusMatch) {
         const sessionId = decodeURIComponent(gitStatusMatch[1]);
         const principal = this.resolveRequestPrincipal(req);
+        const userId = url.searchParams.get('userId') || 'web-user';
+        const channel = url.searchParams.get('channel') || 'web';
         const snapshot = this.dashboard.onCodeSessionGet?.({
           sessionId,
-          userId: 'web-user',
+          userId,
           principalId: principal.principalId,
-          channel: 'web',
-          surfaceId: '',
+          channel,
+          surfaceId: readSurfaceIdFromSearchParams(url) ?? userId,
           historyLimit: 1,
         });
         if (!snapshot) {
@@ -4768,14 +4780,21 @@ export class WebChannel implements ChannelAdapter {
       if (req.method === 'POST' && gitActionMatch) {
         const sessionId = decodeURIComponent(gitActionMatch[1]);
         const body = await readBody(req, this.maxBodyBytes);
-        const parsed = JSON.parse(body || '{}') as { action: string; path?: string; message?: string };
+        const parsed = JSON.parse(body || '{}') as {
+          action: string;
+          path?: string;
+          message?: string;
+          userId?: string;
+          channel?: string;
+          surfaceId?: string;
+        };
         const principal = this.resolveRequestPrincipal(req);
         const snapshot = this.dashboard.onCodeSessionGet?.({
           sessionId,
-          userId: 'web-user',
+          userId: parsed.userId || 'web-user',
           principalId: principal.principalId,
-          channel: 'web',
-          surfaceId: '',
+          channel: parsed.channel || 'web',
+          surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
           historyLimit: 1,
         });
         if (!snapshot) {
@@ -4843,12 +4862,14 @@ export class WebChannel implements ChannelAdapter {
       if (req.method === 'GET' && gitGraphMatch) {
         const sessionId = decodeURIComponent(gitGraphMatch[1]);
         const principal = this.resolveRequestPrincipal(req);
+        const userId = url.searchParams.get('userId') || 'web-user';
+        const channel = url.searchParams.get('channel') || 'web';
         const snapshot = this.dashboard.onCodeSessionGet?.({
           sessionId,
-          userId: 'web-user',
+          userId,
           principalId: principal.principalId,
-          channel: 'web',
-          surfaceId: '',
+          channel,
+          surfaceId: readSurfaceIdFromSearchParams(url) ?? userId,
           historyLimit: 1,
         });
         if (!snapshot) {
@@ -4910,6 +4931,7 @@ export class WebChannel implements ChannelAdapter {
           sessionId?: string;
           userId?: string;
           channel?: string;
+          surfaceId?: string;
         };
         const platform = process.platform;
         const shellType = parsed.shell || getDefaultShellForPlatform(platform);
@@ -4922,7 +4944,7 @@ export class WebChannel implements ChannelAdapter {
             userId: parsed.userId || 'web-user',
             principalId: principal.principalId,
             channel: parsed.channel || 'web',
-            surfaceId: '',
+            surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
             historyLimit: 1,
           });
           if (!snapshot) {

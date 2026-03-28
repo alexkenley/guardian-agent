@@ -214,6 +214,8 @@ export interface ToolExecutionRequest {
   origin: 'assistant' | 'cli' | 'web';
   agentId?: string;
   userId?: string;
+  /** Logical chat/client surface identifier for per-surface code-session focus. */
+  surfaceId?: string;
   principalId?: string;
   principalRole?: PrincipalRole;
   channel?: string;
@@ -244,7 +246,7 @@ export interface ToolExecutionRequest {
   /**
    * Optional Code-session sandbox context.
    * When present, file and shell actions are constrained to this workspace root
-   * and use the Coding Assistant command allowlist instead of the global shell policy.
+   * and use the Coding Workspace command allowlist instead of the global shell policy.
    */
   codeContext?: {
     workspaceRoot: string;
@@ -347,6 +349,7 @@ export interface ToolRunResponse {
   jobId: string;
   approvalId?: string;
   message: string;
+  error?: string;
   output?: unknown;
   verificationStatus?: VerificationStatus;
   trustLevel?: ContentTrustLevel;

@@ -248,6 +248,18 @@ import {
   shouldBypassLocalModelComplexityGuard,
   type ResponseSourceMetadata,
 } from './runtime/model-routing-ux.js';
+
+function getCodeSessionSurfaceId(args: { surfaceId?: string; userId?: string; principalId?: string }): string {
+  const surfaceId = typeof args.surfaceId === 'string' && args.surfaceId.trim()
+    ? args.surfaceId.trim()
+    : '';
+  if (surfaceId) return surfaceId;
+  const userId = typeof args.userId === 'string' && args.userId.trim()
+    ? args.userId.trim()
+    : '';
+  if (userId) return userId;
+  return 'default-surface';
+}
 import {
   getMemoryMutationIntentDeniedMessage,
   isMemoryMutationToolName,
@@ -379,6 +391,17 @@ function bindSecurityTriageProvider(runtime: Runtime, cfg: GuardianAgentConfig):
   const providerName = resolveSecurityTriageProviderName(cfg);
   triageInstance.definition.providerName = providerName;
   triageInstance.provider = runtime.getProvider(providerName);
+}
+
+function bindTierRoutingProviders(runtime: Runtime, router: MessageRouter, cfg: GuardianAgentConfig): void {
+  const localAgentId = router.findAgentByRole('local')?.id;
+  const externalAgentId = router.findAgentByRole('external')?.id;
+  if (localAgentId) {
+    runtime.rebindAgentProvider(localAgentId, findProviderByLocality(cfg, 'local') ?? undefined);
+  }
+  if (externalAgentId) {
+    runtime.rebindAgentProvider(externalAgentId, findProviderByLocality(cfg, 'external') ?? undefined);
+  }
 }
 
 type SoulInjectionMode = 'full' | 'summary' | 'disabled';
@@ -613,6 +636,7 @@ interface AutomationApprovalContinuation {
 
 type DirectIntentShadowCandidate =
   | 'filesystem'
+  | 'coding_session_control'
   | 'scheduled_email_automation'
   | 'automation'
   | 'automation_control'
@@ -621,6 +645,12 @@ type DirectIntentShadowCandidate =
   | 'workspace_read'
   | 'browser'
   | 'web_search';
+
+type DirectCodeSessionControlIntent =
+  | { kind: 'current' }
+  | { kind: 'list' }
+  | { kind: 'detach' }
+  | { kind: 'attach'; target: string };
 
 class ChatAgent extends BaseAgent {
   private systemPrompt: string;
@@ -804,6 +834,69 @@ class ChatAgent extends BaseAgent {
           requestType,
         },
       });
+    }
+  }
+
+  private formatSkillOutputContract(skills: readonly ResolvedSkill[]): string {
+    const sections: string[] = [];
+
+    if (skills.some((skill) => skill.id === 'writing-plans')) {
+      sections.push(
+        '<writing-plan-output-contract>',
+        'When producing a non-trivial implementation plan, include the headings "Acceptance Gates" and "Existing Checks To Reuse" in the written output.',
+        'If the exact repo checks are not known yet, still include "Existing Checks To Reuse" and say they must be identified before adding narrower new tests.',
+        'Do not block the first draft plan on repo inspection or tool use just to discover those checks.',
+        '</writing-plan-output-contract>',
+      );
+    }
+
+    if (skills.some((skill) => skill.id === 'verification-before-completion')) {
+      sections.push(
+        '<verification-output-contract>',
+        'Before claiming work is done, fixed, or passing, require fresh evidence on the real proof surface.',
+        'Use the phrases "proof surface" and "full legitimate green" in the written response.',
+        '</verification-output-contract>',
+      );
+    }
+
+    return sections.length > 0 ? `\n\n${sections.join('\n')}` : '';
+  }
+
+  private shouldPreferAnswerFirstForSkills(skills: readonly ResolvedSkill[]): boolean {
+    return skills.some((skill) => (
+      skill.id === 'writing-plans'
+      || skill.id === 'verification-before-completion'
+      || skill.id === 'code-review'
+    ));
+  }
+
+  private async tryRecoverDirectAnswerAfterTools(
+    llmMessages: ChatMessage[],
+    chatFn: (msgs: ChatMessage[], opts?: import('./llm/types.js').ChatOptions) => Promise<import('./llm/types.js').ChatResponse>,
+    currentContextTrustLevel: import('./tools/types.js').ContentTrustLevel,
+    currentTaintReasons: Set<string>,
+  ): Promise<string> {
+    const recoveryMessages: ChatMessage[] = [
+      ...llmMessages,
+      {
+        role: 'user',
+        content: [
+          'You already completed tool calls for this request.',
+          'Now answer the user directly in plain language using the tool results already in the conversation.',
+          'Do not call any more tools.',
+        ].join(' '),
+      },
+    ];
+
+    try {
+      const recovery = await chatFn(
+        withTaintedContentSystemPrompt(recoveryMessages, currentContextTrustLevel, currentTaintReasons),
+        { tools: [] },
+      );
+      const content = recovery.content?.trim() ?? '';
+      return content && !this.isResponseDegraded(content) ? content : '';
+    } catch {
+      return '';
     }
   }
 
@@ -1018,6 +1111,50 @@ class ChatAgent extends BaseAgent {
           : undefined,
       };
     }
+    // Classify intent early — session control is a control-plane operation that must
+    // be handled before the worker path (which would scope the userId to the code-session
+    // and return incomplete results). The gateway result is reused later to avoid a
+    // redundant LLM call in the non-worker direct-intent routing path.
+    let earlyGateway: import('./runtime/intent-gateway.js').IntentGatewayRecord | null = null;
+    if (ctx.llm && this.tools?.isEnabled()) {
+      earlyGateway = await this.classifyIntentGateway(contextAwareScopedMessage, ctx);
+      if (earlyGateway?.decision.route === 'coding_session_control') {
+        const sessionControlResult = await this.tryDirectCodeSessionControlFromGateway(
+          message, ctx, earlyGateway.decision,
+        );
+        if (!sessionControlResult && earlyGateway.available === false) {
+          // Gateway unavailable — try regex fallback
+          const regexFallback = await this.tryDirectCodeSessionControl(message, ctx);
+          if (regexFallback) {
+            return this.buildDirectIntentResponse({
+              candidate: 'coding_session_control',
+              result: regexFallback,
+              message,
+              routingMessage: contextAwareScopedMessage,
+              intentGateway: earlyGateway,
+              ctx,
+              userKey: `${conversationUserId}:${conversationChannel}`,
+              activeSkills: preResolvedSkills,
+              conversationKey,
+            });
+          }
+        }
+        if (sessionControlResult) {
+          return this.buildDirectIntentResponse({
+            candidate: 'coding_session_control',
+            result: sessionControlResult,
+            message,
+            routingMessage: contextAwareScopedMessage,
+            intentGateway: earlyGateway,
+            ctx,
+            userKey: `${conversationUserId}:${conversationChannel}`,
+            activeSkills: preResolvedSkills,
+            conversationKey,
+          });
+        }
+      }
+    }
+
     if (workerManager) {
       try {
         const knowledgeBase = this.loadScopedKnowledgeBase(resolvedCodeSession);
@@ -1055,7 +1192,7 @@ class ChatAgent extends BaseAgent {
             providerName: primaryName,
           };
         }
-        if (requestedCodeContext?.sessionId) {
+        if (requestedCodeContext?.sessionId || resolvedCodeSession) {
           workerMeta.codeSessionResolved = !!resolvedCodeSession;
           if (resolvedCodeSession) workerMeta.codeSessionId = resolvedCodeSession.session.id;
         }
@@ -1180,6 +1317,7 @@ class ChatAgent extends BaseAgent {
       if (activeSkills.length > 0) {
         this.trackResolvedSkills(message, 'chat', activeSkills, 'prompt_injected');
         enrichedSystemPrompt += `\n\n${formatAvailableSkillsPrompt(activeSkills, 'fs_read')}`;
+        enrichedSystemPrompt += this.formatSkillOutputContract(activeSkills);
       }
       if (this.tools) {
         enrichedSystemPrompt += `\n\n<tool-context>\n${this.tools.getToolContext({
@@ -1215,12 +1353,13 @@ class ChatAgent extends BaseAgent {
     const defaultToolResultProviderKind = this.resolveToolResultProviderKind(ctx);
     let responseSource: ResponseSourceMetadata | undefined;
     const directIntent = !skipDirectTools
-      ? await this.classifyIntentGateway(contextAwareScopedMessage, ctx)
+      ? (earlyGateway ?? await this.classifyIntentGateway(contextAwareScopedMessage, ctx))
       : null;
     const directIntentRouting = !skipDirectTools
       ? resolveDirectIntentRoutingCandidates(
         directIntent,
         [
+          'coding_session_control',
           'filesystem',
           'scheduled_email_automation',
           'automation',
@@ -1232,6 +1371,7 @@ class ChatAgent extends BaseAgent {
           'web_search',
         ],
         [
+          'coding_session_control',
           'filesystem',
           'scheduled_email_automation',
           'automation',
@@ -1276,6 +1416,26 @@ class ChatAgent extends BaseAgent {
       }
       for (const candidate of directIntentRouting.candidates) {
         switch (candidate) {
+          case 'coding_session_control': {
+            let sessionControlResult = await this.tryDirectCodeSessionControlFromGateway(
+              message, ctx, directIntent?.decision,
+            );
+            if (!sessionControlResult && directIntentRouting.gatewayUnavailable) {
+              sessionControlResult = await this.tryDirectCodeSessionControl(message, ctx);
+            }
+            if (!sessionControlResult) break;
+            return this.buildDirectIntentResponse({
+              candidate: 'coding_session_control',
+              result: sessionControlResult,
+              message,
+              routingMessage: contextAwareScopedMessage,
+              intentGateway: directIntent,
+              ctx,
+              userKey,
+              activeSkills,
+              conversationKey,
+            });
+          }
           case 'filesystem': {
             const directSearch = await this.tryDirectFilesystemSearch(
               contextAwareScopedMessage,
@@ -1553,7 +1713,7 @@ class ChatAgent extends BaseAgent {
     } else {
       let rounds = 0;
       // Deferred loading: start with always-loaded tools, expand via find_tools.
-      // In code sessions, eagerly include coding tools so the LLM can edit files immediately.
+      // In code sessions, only eager-load a small read-first coding subset.
       const baseToolDefs = this.tools.listAlwaysLoadedDefinitions();
       const eagerBrowserToolDefs = directBrowserIntent
         ? this.tools.listToolDefinitions().filter((definition) => definition.name.startsWith('browser_'))
@@ -1561,7 +1721,7 @@ class ChatAgent extends BaseAgent {
       const allToolDefs = [
         ...baseToolDefs,
         ...(resolvedCodeSession
-          ? this.tools.listCodingToolDefinitions().filter((d) => !baseToolDefs.some((b) => b.name === d.name))
+          ? this.tools.listCodeSessionEagerToolDefinitions().filter((d) => !baseToolDefs.some((b) => b.name === d.name))
           : []),
         ...eagerBrowserToolDefs.filter((d) => !baseToolDefs.some((b) => b.name === d.name)),
       ];
@@ -1572,7 +1732,26 @@ class ChatAgent extends BaseAgent {
       let forcedPolicyRetryUsed = false;
       let currentContextTrustLevel: import('./tools/types.js').ContentTrustLevel = 'trusted';
       const currentTaintReasons = new Set<string>();
+      if (this.shouldPreferAnswerFirstForSkills(activeSkills)) {
+        try {
+          const answerFirstResponse = await chatFn(
+            withTaintedContentSystemPrompt(llmMessages, currentContextTrustLevel, currentTaintReasons),
+            { tools: [] },
+          );
+          const answerFirstContent = answerFirstResponse.content?.trim() ?? '';
+          if (
+            answerFirstContent
+            && !this.isResponseDegraded(answerFirstContent)
+            && (!answerFirstResponse.toolCalls || answerFirstResponse.toolCalls.length === 0)
+          ) {
+            finalContent = answerFirstContent;
+          }
+        } catch {
+          finalContent = '';
+        }
+      }
       while (rounds < this.maxToolRounds) {
+        if (finalContent) break;
         // Context window awareness: if approaching budget, summarize oldest tool results
         compactMessagesIfOverBudget(llmMessages, contextBudget);
 
@@ -1679,6 +1858,7 @@ class ChatAgent extends BaseAgent {
           origin: 'assistant' as const,
           agentId: this.id,
           userId: conversationUserId,
+          surfaceId: message.surfaceId,
           principalId: message.principalId ?? conversationUserId,
           principalRole: message.principalRole ?? 'owner',
           channel: conversationChannel,
@@ -1852,6 +2032,15 @@ class ChatAgent extends BaseAgent {
         }
 
         rounds += 1;
+      }
+
+      if (!finalContent && lastToolRoundResults.length > 0) {
+        finalContent = await this.tryRecoverDirectAnswerAfterTools(
+          llmMessages,
+          chatFn,
+          currentContextTrustLevel,
+          currentTaintReasons,
+        );
       }
 
       // Quality-based fallback: if the local LLM produced an empty or degraded
@@ -2081,7 +2270,7 @@ class ChatAgent extends BaseAgent {
     if (pendingApprovalMeta?.length) metadata.pendingApprovals = pendingApprovalMeta;
     if (responseSource) metadata.responseSource = responseSource;
     // Signal code session resolution status so the frontend can detect drift.
-    if (requestedCodeContext?.sessionId) {
+    if (requestedCodeContext?.sessionId || resolvedCodeSession) {
       metadata.codeSessionResolved = !!resolvedCodeSession;
       if (resolvedCodeSession) {
         metadata.codeSessionId = resolvedCodeSession.session.id;
@@ -2113,11 +2302,7 @@ class ChatAgent extends BaseAgent {
   }
 
   private getCodeSessionSurfaceId(message: UserMessage): string {
-    // Use canonical userId (not principalId) for stable surfaceId across restarts.
-    // principalId depends on the ephemeral session cookie and changes when the
-    // backend restarts (in-memory session map is lost).
-    const userId = message.userId?.trim();
-    return userId || 'default-surface';
+    return message.surfaceId?.trim() || message.userId?.trim() || 'default-surface';
   }
 
   private resolveCodeSessionContext(message: UserMessage): ResolvedCodeSessionContext | null {
@@ -2544,6 +2729,267 @@ class ChatAgent extends BaseAgent {
 
     const report = _formatToolReport(jobs);
     return report || null;
+  }
+
+  private async executeDirectCodeSessionTool(
+    toolName: string,
+    args: Record<string, unknown>,
+    message: UserMessage,
+    ctx: AgentContext,
+  ): Promise<Record<string, unknown>> {
+    return this.tools!.executeModelTool(
+      toolName,
+      args,
+      {
+        origin: 'assistant',
+        agentId: this.id,
+        userId: message.userId,
+        surfaceId: message.surfaceId,
+        principalId: message.principalId ?? message.userId,
+        principalRole: message.principalRole,
+        channel: message.channel,
+        requestId: message.id,
+        agentContext: { checkAction: ctx.checkAction },
+      },
+    );
+  }
+
+  private async tryDirectCodeSessionControlFromGateway(
+    message: UserMessage,
+    ctx: AgentContext,
+    decision?: import('./runtime/intent-gateway.js').IntentGatewayDecision,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    if (!this.tools?.isEnabled()) return null;
+    if (!decision || decision.route !== 'coding_session_control') return null;
+
+    const operation = decision.operation;
+
+    if (operation === 'navigate' || operation === 'search' || operation === 'read') {
+      // navigate/search/read without a target → list all sessions
+      return this.handleCodeSessionList(message, ctx);
+    }
+    if (operation === 'inspect') {
+      return this.handleCodeSessionCurrent(message, ctx);
+    }
+    if (operation === 'delete') {
+      return this.handleCodeSessionDetach(message, ctx);
+    }
+    if (operation === 'update') {
+      const target = decision.entities.sessionTarget || decision.entities.query || '';
+      if (!target.trim()) {
+        return { content: 'Please specify which coding session or workspace to switch to.' };
+      }
+      return this.handleCodeSessionAttach(message, ctx, target);
+    }
+    if (operation === 'create') {
+      const target = decision.entities.sessionTarget || decision.entities.path || decision.entities.query || '';
+      if (!target.trim()) {
+        return { content: 'Please specify the workspace path or name for the new coding session.' };
+      }
+      return this.handleCodeSessionCreate(message, ctx, target);
+    }
+
+    // Unknown operation — list is the safest default for session control
+    return this.handleCodeSessionList(message, ctx);
+  }
+
+  /** Regex-based fallback for session control when Intent Gateway is unavailable. */
+  private async tryDirectCodeSessionControl(
+    message: UserMessage,
+    ctx: AgentContext,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    if (!this.tools?.isEnabled()) return null;
+    const intent = parseDirectCodeSessionControlIntent(message.content);
+    if (!intent) return null;
+
+    if (intent.kind === 'current') return this.handleCodeSessionCurrent(message, ctx);
+    if (intent.kind === 'list') return this.handleCodeSessionList(message, ctx);
+    if (intent.kind === 'detach') return this.handleCodeSessionDetach(message, ctx);
+    return this.handleCodeSessionAttach(message, ctx, intent.target ?? '');
+  }
+
+  private async handleCodeSessionCurrent(
+    message: UserMessage,
+    ctx: AgentContext,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    const result = await this.executeDirectCodeSessionTool('code_session_current', {}, message, ctx);
+    if (!toBoolean(result.success)) {
+      const failure = toString(result.message) || 'I could not inspect the current coding workspace.';
+      return { content: failure };
+    }
+    const session = isRecord(result.output) && isRecord(result.output.session) ? result.output.session : null;
+    if (!session) {
+      return { content: 'This chat is not currently attached to any coding workspace.' };
+    }
+    return {
+      content: [
+        'This chat is currently attached to:',
+        formatDirectCodeSessionLine(session, true),
+      ].join('\n'),
+      metadata: {
+        codeSessionResolved: true,
+        codeSessionId: toString(session.id),
+      },
+    };
+  }
+
+  private async handleCodeSessionList(
+    message: UserMessage,
+    ctx: AgentContext,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    const [listResult, currentResult] = await Promise.all([
+      this.executeDirectCodeSessionTool('code_session_list', { limit: 20 }, message, ctx),
+      this.executeDirectCodeSessionTool('code_session_current', {}, message, ctx),
+    ]);
+    if (!toBoolean(listResult.success)) {
+      const failure = toString(listResult.message) || 'I could not list coding workspaces.';
+      return { content: failure };
+    }
+    const sessions = isRecord(listResult.output) && Array.isArray(listResult.output.sessions)
+      ? listResult.output.sessions.filter((session) => isRecord(session))
+      : [];
+    const currentSession = isRecord(currentResult.output) && isRecord(currentResult.output.session)
+      ? currentResult.output.session
+      : null;
+    const currentSessionId = currentSession ? toString(currentSession.id) : '';
+
+    if (sessions.length === 0) {
+      if (currentSession) {
+        return {
+          content: [
+            'No owned coding workspaces were listed for this chat, but the surface is currently attached to:',
+            formatDirectCodeSessionLine(currentSession, true),
+          ].join('\n'),
+          metadata: {
+            codeSessionResolved: true,
+            codeSessionId: currentSessionId,
+          },
+        };
+      }
+      return { content: 'No coding workspaces are currently available for this chat.' };
+    }
+
+    const lines = ['Available coding workspaces:'];
+    for (const session of sessions) {
+      lines.push(formatDirectCodeSessionLine(session, toString(session.id) === currentSessionId));
+    }
+    return {
+      content: lines.join('\n'),
+      metadata: currentSessionId
+        ? {
+            codeSessionResolved: true,
+            codeSessionId: currentSessionId,
+          }
+        : undefined,
+    };
+  }
+
+  private async handleCodeSessionDetach(
+    message: UserMessage,
+    ctx: AgentContext,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    const result = await this.executeDirectCodeSessionTool('code_session_detach', {}, message, ctx);
+    if (!toBoolean(result.success)) {
+      const failure = toString(result.message) || 'I could not detach this chat from the current coding workspace.';
+      return { content: failure };
+    }
+    const detached = isRecord(result.output) ? toBoolean(result.output.detached) : false;
+    return {
+      content: detached
+        ? 'Detached this chat from the current coding workspace.'
+        : 'This chat was not attached to a coding workspace.',
+      metadata: {
+        codeSessionFocusChanged: true,
+        codeSessionDetached: true,
+      },
+    };
+  }
+
+  private async handleCodeSessionAttach(
+    message: UserMessage,
+    ctx: AgentContext,
+    target: string,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    if (!target.trim()) {
+      return { content: 'Please specify which coding session or workspace to switch to.' };
+    }
+    const currentResult = await this.executeDirectCodeSessionTool('code_session_current', {}, message, ctx);
+    const currentSession = isRecord(currentResult.output) && isRecord(currentResult.output.session)
+      ? currentResult.output.session
+      : null;
+    const attachResult = await this.executeDirectCodeSessionTool(
+      'code_session_attach',
+      { sessionId: target },
+      message,
+      ctx,
+    );
+    if (!toBoolean(attachResult.success)) {
+      const failure = toString(attachResult.error) || toString(attachResult.message) || `No coding workspace matched "${target}".`;
+      return { content: failure };
+    }
+
+    const session = isRecord(attachResult.output) && isRecord(attachResult.output.session)
+      ? attachResult.output.session
+      : null;
+    if (!session) {
+      return {
+        content: 'Attached this chat to the requested coding workspace.',
+        metadata: { codeSessionFocusChanged: true },
+      };
+    }
+
+    const sessionId = toString(session.id);
+    const alreadyAttached = currentSession && toString(currentSession.id) === sessionId;
+    return {
+      content: alreadyAttached
+        ? `This chat is already attached to:\n${formatDirectCodeSessionLine(session, true)}`
+        : `Switched this chat to:\n${formatDirectCodeSessionLine(session, true)}`,
+      metadata: {
+        codeSessionResolved: true,
+        codeSessionId: sessionId,
+        codeSessionFocusChanged: true,
+      },
+    };
+  }
+
+  private async handleCodeSessionCreate(
+    message: UserMessage,
+    ctx: AgentContext,
+    target: string,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    if (!target.trim()) {
+      return { content: 'Please specify the workspace path or name for the new coding session.' };
+    }
+    const parts = target.split('|').map((part) => part.trim());
+    const workspaceRoot = parts[0];
+    const title = parts[1] || undefined;
+    const result = await this.executeDirectCodeSessionTool(
+      'code_session_create',
+      { workspaceRoot, ...(title ? { title } : {}), attach: true },
+      message,
+      ctx,
+    );
+    if (!toBoolean(result.success)) {
+      const failure = toString(result.error) || toString(result.message) || `Could not create coding session for "${target}".`;
+      return { content: failure };
+    }
+    const session = isRecord(result.output) && isRecord(result.output.session)
+      ? result.output.session
+      : null;
+    if (!session) {
+      return {
+        content: `Created and attached to a new coding session for ${workspaceRoot}.`,
+        metadata: { codeSessionFocusChanged: true },
+      };
+    }
+    return {
+      content: `Created and attached to:\n${formatDirectCodeSessionLine(session, true)}`,
+      metadata: {
+        codeSessionResolved: true,
+        codeSessionId: toString(session.id),
+        codeSessionFocusChanged: true,
+      },
+    };
   }
 
   private isResponseDegraded(content: string | undefined): boolean {
@@ -3345,6 +3791,8 @@ class ChatAgent extends BaseAgent {
     candidate: DirectIntentShadowCandidate,
   ): Set<IntentGatewayRoute> {
     switch (candidate) {
+      case 'coding_session_control':
+        return new Set(['coding_session_control', 'coding_task', 'general_assistant']);
       case 'filesystem':
         return new Set(['filesystem_task', 'search_task']);
       case 'scheduled_email_automation':
@@ -3776,6 +4224,61 @@ function normalizeScheduledEmailBody(body: string | undefined, subject: string):
   if (/^the same as the subject\.?$/i.test(trimmed)) return subject;
   if (/^same as the subject\.?$/i.test(trimmed)) return subject;
   return trimmed;
+}
+
+function parseDirectCodeSessionControlIntent(content: string): DirectCodeSessionControlIntent | null {
+  const text = content.trim();
+  if (!text) return null;
+
+  if (
+    /^\s*(?:what|which)\s+coding\s+(?:workspace|session)\b/i.test(text)
+    || /^\s*are you attached to any coding workspace\b/i.test(text)
+    || /\b(?:coding workspace|code session)\b[\s\S]*\b(?:current|attached|using)\b/i.test(text)
+  ) {
+    return { kind: 'current' };
+  }
+
+  if (/^\s*(?:list|show)(?:\s+me)?\s+(?:the\s+)?(?:coding workspaces|coding sessions|code sessions?)\b/i.test(text)) {
+    return { kind: 'list' };
+  }
+
+  if (/\b(?:detach|disconnect|leave)\b[\s\S]*\b(?:coding workspace|code session)\b/i.test(text)) {
+    return { kind: 'detach' };
+  }
+
+  const attachPatterns = [
+    /^(?:switch|attach|change|move|set)(?:\s+this\s+chat)?\s+(?:to|into)?\s*(?:the\s+)?(?:coding workspace|code session)(?:\s+(?:for|to|named))?\s+(.+)$/i,
+    /^(?:switch|attach|change|move|set)\s+this\s+chat\s+to\s+(.+?)(?:\s+(?:coding workspace|code session))?$/i,
+    /^(?:use|focus on)\s+(?:the\s+)?(?:coding workspace|code session)(?:\s+(?:for|to|named))?\s+(.+)$/i,
+  ];
+  for (const pattern of attachPatterns) {
+    const match = text.match(pattern);
+    const target = normalizeDirectCodeSessionTarget(match?.[1]);
+    if (target) {
+      return { kind: 'attach', target };
+    }
+  }
+
+  return null;
+}
+
+function normalizeDirectCodeSessionTarget(value: string | undefined): string {
+  return (value ?? '')
+    .trim()
+    .replace(/^["'`“”‘’]+|["'`“”‘’]+$/g, '')
+    .replace(/[.?!]+$/g, '')
+    .trim();
+}
+
+function formatDirectCodeSessionLine(session: Record<string, unknown>, current: boolean): string {
+  const title = toString(session.title) || 'Untitled session';
+  const workspaceRoot = toString(session.workspaceRoot) || '(unknown workspace)';
+  const sessionId = toString(session.id);
+  const parts = [`- ${current ? 'CURRENT: ' : ''}${title} — ${workspaceRoot}`];
+  if (sessionId) {
+    parts.push(`id=${sessionId}`);
+  }
+  return parts.join(' ');
 }
 
 function isAffirmativeContinuation(content: string): boolean {
@@ -4413,6 +4916,11 @@ function hasOwnProp(value: object, key: string): boolean {
 
 function trimOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function readMessageSurfaceId(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  return trimOptionalString(value.surfaceId);
 }
 
 type ParsedCodeRequestMetadata = {
@@ -5163,12 +5671,6 @@ function buildDashboardCallbacks(
       },
     };
   };
-  const getCodeSessionSurfaceId = (args: { userId?: string; principalId?: string }): string => (
-    // Use canonical userId for stable surfaceId across restarts.
-    // principalId depends on ephemeral session cookies and drifts after restart.
-    trimOrUndefined(args.userId)
-    || 'default-surface'
-  );
   const getCodeSessionConversationKey = (session: CodeSessionRecord): ConversationKey => {
     const preferredAgentId = session.agentId
       ?? router.findAgentByRole('local')?.id
@@ -5207,16 +5709,21 @@ function buildDashboardCallbacks(
     const resolvedChannel = args.channel?.trim() || 'web';
     const channelUserId = args.userId?.trim() || `${resolvedChannel}-user`;
     const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
+    const resolvedSurfaceId = args.surfaceId?.trim() || getCodeSessionSurfaceId({
+      userId: canonicalUserId,
+      principalId: args.principalId,
+    });
     const resolvedSession = codeSessionStore.resolveForRequest({
       requestedSessionId: args.sessionId,
       userId: canonicalUserId,
       principalId: args.principalId,
       channel: resolvedChannel,
-      surfaceId: args.surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId: args.principalId }),
+      surfaceId: resolvedSurfaceId,
       touchAttachment: args.touchAttachment ?? false,
     });
     return {
       resolvedChannel,
+      resolvedSurfaceId,
       canonicalUserId,
       resolvedSession,
     };
@@ -5367,6 +5874,7 @@ function buildDashboardCallbacks(
         llm: resolvedNextCredentials.resolvedLLM,
         defaultProvider: nextConfig.defaultProvider,
       });
+      bindTierRoutingProviders(runtime, router, nextConfig);
       applyKnowledgeBaseConfigToMemoryStores(nextConfig);
       bindSecurityTriageProvider(runtime, nextConfig);
       identity.update(nextConfig.assistant.identity);
@@ -5834,6 +6342,7 @@ function buildDashboardCallbacks(
     msg: {
       content: string;
       userId?: string;
+      surfaceId?: string;
       principalId?: string;
       principalRole?: import('./tools/types.js').PrincipalRole;
       channel?: string;
@@ -5849,18 +6358,23 @@ function buildDashboardCallbacks(
     const priority = args.options?.priority ?? 'high';
     const requestType = args.options?.requestType?.trim() || 'chat';
     const requestedCodeContext = readCodeRequestMetadata(args.msg.metadata);
+    const surfaceId = getCodeSessionSurfaceId({
+      surfaceId: args.msg.surfaceId,
+      userId: canonicalUserId,
+      principalId: args.msg.principalId,
+    });
 
     let dispatchCodeSession = args.resolvedCodeSession ?? null;
-    if (!dispatchCodeSession && requestedCodeContext?.sessionId) {
+    if (!dispatchCodeSession) {
       dispatchCodeSession = codeSessionStore.resolveForRequest({
-        requestedSessionId: requestedCodeContext.sessionId,
+        requestedSessionId: requestedCodeContext?.sessionId,
         userId: canonicalUserId,
         principalId: args.msg.principalId ?? canonicalUserId,
         channel,
-        surfaceId: getCodeSessionSurfaceId({ userId: canonicalUserId, principalId: args.msg.principalId ?? canonicalUserId }),
+        surfaceId,
         touchAttachment: false,
       });
-      if (!dispatchCodeSession) {
+      if (requestedCodeContext?.sessionId && !dispatchCodeSession) {
         log.warn(
           {
             sessionId: requestedCodeContext.sessionId,
@@ -5950,6 +6464,7 @@ function buildDashboardCallbacks(
         const message: UserMessage = {
           id: randomUUID(),
           userId: canonicalUserId,
+          surfaceId,
           principalId: args.msg.principalId ?? canonicalUserId,
           principalRole: args.msg.principalRole ?? 'owner',
           channel,
@@ -6455,7 +6970,11 @@ function buildDashboardCallbacks(
           userId: canonicalUserId,
           principalId: input.principalId ?? input.userId,
           channel: resolvedChannel,
-          surfaceId: getCodeSessionSurfaceId({ userId: canonicalUserId, principalId: input.principalId ?? input.userId }),
+          surfaceId: getCodeSessionSurfaceId({
+            surfaceId: input.surfaceId ?? readMessageSurfaceId(input.metadata),
+            userId: canonicalUserId,
+            principalId: input.principalId ?? input.userId,
+          }),
           touchAttachment: false,
         });
         if (resolvedSession) {
@@ -6470,7 +6989,8 @@ function buildDashboardCallbacks(
         args: input.args ?? {},
         origin: input.origin ?? 'web',
         agentId: input.agentId ?? (configRef.current.channels.web?.defaultAgent ?? configRef.current.channels.cli?.defaultAgent),
-        userId: input.userId,
+        userId: canonicalUserId,
+        surfaceId: input.surfaceId ?? readMessageSurfaceId(input.metadata),
         principalId: input.principalId ?? input.userId,
         principalRole: input.principalRole ?? 'owner',
         contentTrustLevel: input.contentTrustLevel,
@@ -7124,12 +7644,17 @@ function buildDashboardCallbacks(
         const channelUserId = msg.userId?.trim() || `${resolvedChannel}-user`;
         const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
         const requestedCodeContext = readCodeRequestMetadata(msg.metadata);
+        const surfaceId = getCodeSessionSurfaceId({
+          surfaceId: msg.surfaceId,
+          userId: canonicalUserId,
+          principalId: msg.principalId,
+        });
         const resolvedCodeSession = codeSessionStore.resolveForRequest({
           requestedSessionId: requestedCodeContext?.sessionId,
           userId: canonicalUserId,
           principalId: msg.principalId,
           channel: resolvedChannel,
-          surfaceId: canonicalUserId,
+          surfaceId,
           touchAttachment: false,
         });
         const channelDefault = configRef.current.channels.web?.defaultAgent;
@@ -7195,6 +7720,7 @@ function buildDashboardCallbacks(
           msg: {
             content: msg.content,
             userId: msg.userId,
+            surfaceId: msg.surfaceId,
             principalId: msg.principalId,
             principalRole: msg.principalRole,
             channel: msg.channel,
@@ -7415,52 +7941,6 @@ function buildDashboardCallbacks(
       return {
         success,
       };
-    },
-
-    onCodeSessionMessage: async ({ sessionId, userId, principalId, principalRole, channel, surfaceId, content, metadata }) => {
-      const resolved = resolveDashboardCodeSessionRequest({
-        sessionId,
-        userId,
-        principalId,
-        channel,
-        surfaceId,
-      });
-      if (!resolved.resolvedSession) {
-        throw createStructuredRequestError(
-          `Code session '${sessionId}' is unavailable for this request.`,
-          409,
-          'CODE_SESSION_UNAVAILABLE',
-        );
-      }
-      const channelDefault = configRef.current.channels.web?.defaultAgent;
-      const pinnedAgentId = resolved.resolvedSession.session.agentId?.trim();
-      const routeDecision = pinnedAgentId
-        ? undefined
-        : resolveConfiguredAutoRoute(channelDefault, content);
-      return dispatchDashboardMessage({
-        agentId: pinnedAgentId
-          || routeDecision?.agentId
-          || channelDefault
-          || configRef.current.agents[0]?.id
-          || 'default',
-        msg: {
-          content,
-          userId,
-          principalId,
-          principalRole,
-          channel: resolved.resolvedChannel,
-          metadata: {
-            ...(metadata ?? {}),
-            codeContext: {
-              ...(isRecord(metadata?.codeContext) ? metadata.codeContext : {}),
-              sessionId: resolved.resolvedSession.session.id,
-              workspaceRoot: resolved.resolvedSession.session.resolvedRoot,
-            },
-          },
-        },
-        routeDecision,
-        resolvedCodeSession: resolved.resolvedSession,
-      });
     },
 
     onCodeSessionApprovalDecision: async ({ sessionId, approvalId, decision, userId, principalId, principalRole, channel, surfaceId, reason }) => {
@@ -12033,18 +12513,23 @@ async function main(): Promise<void> {
   };
   const resolveAgentForIncomingMessage = (
     channelDefault: string | undefined,
-    msg: Pick<UserMessage, 'content' | 'userId' | 'principalId' | 'channel' | 'metadata'>,
+    msg: Pick<UserMessage, 'content' | 'userId' | 'surfaceId' | 'principalId' | 'channel' | 'metadata'>,
   ): RouteDecision => {
     const channel = msg.channel?.trim() || 'web';
     const channelUserId = msg.userId?.trim() || `${channel}-user`;
     const canonicalUserId = identity.resolveCanonicalUserId(channel, channelUserId);
     const requestedCodeContext = readCodeRequestMetadata(msg.metadata);
+    const resolvedSurfaceId = getCodeSessionSurfaceId({
+      surfaceId: msg.surfaceId ?? readMessageSurfaceId(msg.metadata),
+      userId: canonicalUserId,
+      principalId: msg.principalId,
+    });
     const resolvedCodeSession = codeSessionStore.resolveForRequest({
       requestedSessionId: requestedCodeContext?.sessionId,
       userId: canonicalUserId,
       principalId: msg.principalId,
       channel,
-      surfaceId: canonicalUserId,
+      surfaceId: resolvedSurfaceId,
       touchAttachment: false,
     });
     if (resolvedCodeSession) {
@@ -12690,6 +13175,7 @@ async function main(): Promise<void> {
           {
             content: msg.content,
             userId: msg.userId,
+            surfaceId: msg.surfaceId,
             principalId: msg.principalId,
             principalRole: msg.principalRole,
             channel: msg.channel,
@@ -12762,6 +13248,7 @@ async function main(): Promise<void> {
           {
             content: msg.content,
             userId: msg.userId,
+            surfaceId: msg.surfaceId,
             principalId: msg.principalId,
             principalRole: msg.principalRole,
             channel: msg.channel,
@@ -12923,6 +13410,7 @@ async function main(): Promise<void> {
           {
             content: msg.content,
             userId: msg.userId,
+            surfaceId: msg.surfaceId,
             principalId: msg.principalId,
             principalRole: msg.principalRole,
             channel: msg.channel,

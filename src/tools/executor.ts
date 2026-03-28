@@ -66,6 +66,7 @@ import {
 import type { ConversationService } from '../runtime/conversation.js';
 import type { AgentMemoryStore } from '../runtime/agent-memory-store.js';
 import type { CodeSessionStore } from '../runtime/code-sessions.js';
+import { resolveCodeSessionTarget } from '../runtime/code-session-targets.js';
 import { getEffectiveCodeWorkspaceTrustState } from '../runtime/code-workspace-trust.js';
 import { isPrivateAddress } from '../guardian/ssrf-protection.js';
 import { sandboxedExec, sandboxedSpawn, type SandboxConfig, DEFAULT_SANDBOX_CONFIG } from '../sandbox/index.js';
@@ -239,32 +240,32 @@ const CODE_ASSISTANT_ALLOWED_COMMANDS = [
   'awk',
 ] as const;
 const CODE_DISALLOWED_SHELL_TOKENS = new Map<string, string>([
-  ['-C', 'Directory override flags like git -C are blocked in the Coding Assistant. Use cwd or the session workspace root instead.'],
-  ['--git-dir', 'Git repository indirection is blocked in the Coding Assistant.'],
-  ['--work-tree', 'Git work tree overrides are blocked in the Coding Assistant.'],
-  ['--super-prefix', 'Git prefix overrides are blocked in the Coding Assistant.'],
-  ['--exec-path', 'Git exec-path overrides are blocked in the Coding Assistant.'],
-  ['--prefix', 'Prefix overrides are blocked in the Coding Assistant.'],
-  ['--cwd', 'Working-directory override flags are blocked in the Coding Assistant. Use the tool cwd field instead.'],
-  ['--cache', 'Cache path overrides are blocked in the Coding Assistant.'],
-  ['--cache-dir', 'Cache path overrides are blocked in the Coding Assistant.'],
-  ['--userconfig', 'User config overrides are blocked in the Coding Assistant.'],
-  ['--globalconfig', 'Global config overrides are blocked in the Coding Assistant.'],
-  ['-g', 'Global installs are blocked in the Coding Assistant.'],
-  ['--global', 'Global installs are blocked in the Coding Assistant.'],
-  ['global', 'Global installs are blocked in the Coding Assistant.'],
-  ['--location=global', 'Global installs are blocked in the Coding Assistant.'],
-  ['--user', 'User-level installs are blocked in the Coding Assistant.'],
+  ['-C', 'Directory override flags like git -C are blocked in the Coding Workspace. Use cwd or the session workspace root instead.'],
+  ['--git-dir', 'Git repository indirection is blocked in the Coding Workspace.'],
+  ['--work-tree', 'Git work tree overrides are blocked in the Coding Workspace.'],
+  ['--super-prefix', 'Git prefix overrides are blocked in the Coding Workspace.'],
+  ['--exec-path', 'Git exec-path overrides are blocked in the Coding Workspace.'],
+  ['--prefix', 'Prefix overrides are blocked in the Coding Workspace.'],
+  ['--cwd', 'Working-directory override flags are blocked in the Coding Workspace. Use the tool cwd field instead.'],
+  ['--cache', 'Cache path overrides are blocked in the Coding Workspace.'],
+  ['--cache-dir', 'Cache path overrides are blocked in the Coding Workspace.'],
+  ['--userconfig', 'User config overrides are blocked in the Coding Workspace.'],
+  ['--globalconfig', 'Global config overrides are blocked in the Coding Workspace.'],
+  ['-g', 'Global installs are blocked in the Coding Workspace.'],
+  ['--global', 'Global installs are blocked in the Coding Workspace.'],
+  ['global', 'Global installs are blocked in the Coding Workspace.'],
+  ['--location=global', 'Global installs are blocked in the Coding Workspace.'],
+  ['--user', 'User-level installs are blocked in the Coding Workspace.'],
 ]);
 const CODE_DISALLOWED_SHELL_TOKEN_PREFIXES = new Map<string, string>([
-  ['--git-dir=', 'Git repository indirection is blocked in the Coding Assistant.'],
-  ['--work-tree=', 'Git work tree overrides are blocked in the Coding Assistant.'],
-  ['--prefix=', 'Prefix overrides are blocked in the Coding Assistant.'],
-  ['--cwd=', 'Working-directory override flags are blocked in the Coding Assistant.'],
-  ['--cache=', 'Cache path overrides are blocked in the Coding Assistant.'],
-  ['--cache-dir=', 'Cache path overrides are blocked in the Coding Assistant.'],
-  ['--userconfig=', 'User config overrides are blocked in the Coding Assistant.'],
-  ['--globalconfig=', 'Global config overrides are blocked in the Coding Assistant.'],
+  ['--git-dir=', 'Git repository indirection is blocked in the Coding Workspace.'],
+  ['--work-tree=', 'Git work tree overrides are blocked in the Coding Workspace.'],
+  ['--prefix=', 'Prefix overrides are blocked in the Coding Workspace.'],
+  ['--cwd=', 'Working-directory override flags are blocked in the Coding Workspace.'],
+  ['--cache=', 'Cache path overrides are blocked in the Coding Workspace.'],
+  ['--cache-dir=', 'Cache path overrides are blocked in the Coding Workspace.'],
+  ['--userconfig=', 'User config overrides are blocked in the Coding Workspace.'],
+  ['--globalconfig=', 'Global config overrides are blocked in the Coding Workspace.'],
 ]);
 const CODE_SESSION_SAFE_AUTO_APPROVED_TOOLS = new Set([
   'code_edit',
@@ -1369,6 +1370,26 @@ export class ToolExecutor {
     return defs;
   }
 
+  /** Return a small read-first coding subset for the first code-session tool round. */
+  listCodeSessionEagerToolDefinitions(): ToolDefinition[] {
+    const eagerToolNames = [
+      'code_plan',
+      'code_symbol_search',
+      'code_git_diff',
+      'code_test',
+      'code_build',
+      'code_lint',
+    ];
+    const defs: ToolDefinition[] = [];
+    for (const name of eagerToolNames) {
+      const entry = this.registry.get(name);
+      if (entry && this.isCategoryEnabled(entry.definition.category)) {
+        defs.push(entry.definition);
+      }
+    }
+    return defs;
+  }
+
   /** Search tools by keyword, returning full definitions (including deferred). */
   searchTools(query: string, maxResults: number = 10): ToolDefinition[] {
     return this.registry.searchTools(query, maxResults).filter(
@@ -1798,9 +1819,9 @@ export class ToolExecutor {
   }
 
   private getCodeSessionSurfaceId(request?: Partial<ToolExecutionRequest>): string {
-    const principalId = request?.principalId?.trim();
+    const surfaceId = request?.surfaceId?.trim();
     const userId = request?.userId?.trim();
-    return principalId || userId || 'default-surface';
+    return surfaceId || userId || 'default-surface';
   }
 
   private listOwnedCodeSessions(request?: Partial<ToolExecutionRequest>) {
@@ -1813,6 +1834,16 @@ export class ToolExecutor {
     const ownerUserId = request?.userId?.trim();
     if (!ownerUserId || !this.options.codeSessionStore) return null;
     return this.options.codeSessionStore.getSession(sessionId, ownerUserId);
+  }
+
+  private resolveOwnedCodeSessionTarget(
+    target: string,
+    request?: Partial<ToolExecutionRequest>,
+  ): {
+    session?: ReturnType<ToolExecutor['listOwnedCodeSessions']>[number];
+    error?: string;
+  } {
+    return resolveCodeSessionTarget(target, this.listOwnedCodeSessions(request));
   }
 
   private getCurrentCodeSessionRecord(request?: Partial<ToolExecutionRequest>) {
@@ -2312,7 +2343,7 @@ export class ToolExecutor {
     if (!validation.valid) {
       return {
         safe: false,
-        reason: validation.reason ?? 'Command failed Coding Assistant shell validation.',
+        reason: validation.reason ?? 'Command failed Coding Workspace shell validation.',
       };
     }
 
@@ -3057,6 +3088,7 @@ export class ToolExecutor {
       success: result.success,
       status: result.status,
       message: result.message,
+      error: result.error,
       jobId: result.jobId,
       approvalId: result.approvalId,
       output: result.output,
@@ -5739,7 +5771,7 @@ export class ToolExecutor {
         parameters: {
           type: 'object',
           properties: {
-            sessionId: { type: 'string', description: 'The code session id to attach to.' },
+            sessionId: { type: 'string', description: 'The code session target to attach to. This can be an id, title, or workspace path match.' },
           },
           required: ['sessionId'],
         },
@@ -5753,13 +5785,14 @@ export class ToolExecutor {
         if (!ownerUserId || !channel) {
           return { success: false, error: 'Current user context is unavailable.' };
         }
-        const sessionId = requireString(args.sessionId, 'sessionId').trim();
-        const session = this.getOwnedCodeSession(sessionId, request);
-        if (!session) {
-          return { success: false, error: `Code session '${sessionId}' was not found for the current user.` };
+        const target = requireString(args.sessionId, 'sessionId').trim();
+        const resolved = this.resolveOwnedCodeSessionTarget(target, request);
+        if (!resolved.session) {
+          return { success: false, error: resolved.error ?? `Code session '${target}' was not found for the current user.` };
         }
+        const session = resolved.session;
         const attachment = this.options.codeSessionStore.attachSession({
-          sessionId,
+          sessionId: session.id,
           userId: ownerUserId,
           principalId: request.principalId,
           channel,

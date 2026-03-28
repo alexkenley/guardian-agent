@@ -231,6 +231,10 @@ export async function runLlmLoop(
   }
 
   if (!finalContent && lastToolRoundResults.length > 0) {
+    finalContent = await tryRecoverDirectAnswer(messages, chatFn, options?.fallbackChatFn);
+  }
+
+  if (!finalContent && lastToolRoundResults.length > 0) {
     finalContent = summarizeToolRoundFallback(lastToolRoundResults);
   }
 
@@ -239,6 +243,43 @@ export async function runLlmLoop(
   }
 
   return { finalContent, messages, hasPendingApprovals };
+}
+
+async function tryRecoverDirectAnswer(
+  messages: ChatMessage[],
+  chatFn: (msgs: ChatMessage[], opts?: ChatOptions) => Promise<ChatResponse>,
+  fallbackChatFn?: (msgs: ChatMessage[], opts?: ChatOptions) => Promise<ChatResponse>,
+): Promise<string> {
+  const recoveryMessages: ChatMessage[] = [
+    ...messages,
+    {
+      role: 'user',
+      content: [
+        'You already completed tool calls for this request.',
+        'Now answer the user directly in plain language using the tool results already in the conversation.',
+        'Do not call any more tools.',
+      ].join(' '),
+    },
+  ];
+
+  try {
+    const recovery = await chatFn(recoveryMessages, { tools: [] });
+    const content = recovery.content?.trim() ?? '';
+    if (content && !isResponseDegraded(content)) {
+      return content;
+    }
+  } catch {
+    // Fall through to the fallback model or synthesized summary.
+  }
+
+  if (!fallbackChatFn) return '';
+
+  try {
+    const fallback = await fallbackChatFn(recoveryMessages, { tools: [] });
+    return fallback.content?.trim() ?? '';
+  } catch {
+    return '';
+  }
 }
 
 function shouldRetryPolicyUpdateCorrection(

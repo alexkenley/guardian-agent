@@ -639,6 +639,17 @@ export class Runtime {
     );
   }
 
+  /** Rebind a registered agent to a specific provider name without recreating the agent. */
+  rebindAgentProvider(agentId: string, providerName?: string): boolean {
+    const instance = this.registry.get(agentId);
+    if (!instance) return false;
+    instance.definition.providerName = providerName;
+    const effectiveProviderName = providerName ?? this.config.defaultProvider;
+    instance.provider = this.providers.get(effectiveProviderName);
+    log.info({ agentId, providerName: effectiveProviderName }, 'Rebound agent provider');
+    return true;
+  }
+
   /** Apply shell command allowlist changes immediately without restart. */
   applyShellAllowedCommands(allowedCommands: string[]): void {
     const currentAssistant = this.config.assistant ?? DEFAULT_CONFIG.assistant;

@@ -618,7 +618,7 @@ Additionally, auto-approving automation tools (`task_create`, `workflow_upsert`)
 
 The workspace root is authorized through `codeContext` while the request is inside a Code session. It is not added to the global `allowedPaths` policy, so ordinary non-Code chat does not inherit repo access just because a Code session exists.
 
-**Implementation note — codeContext propagation:** Auto-approve depends on `codeContext` reaching `ToolExecutor.decide()`. Three execution paths carry it: (1) the inline ChatAgent LLM loop, (2) the brokered worker pipeline (ChatAgent → message metadata → worker session → BrokerClient → BrokerServer → ToolExecutor), and (3) the supervisor-side `tryDirectAutomationAuthoring` pre-route in WorkerManager. All three must forward `codeContext` or auto-approve silently fails. See `docs/specs/CODING-ASSISTANT-SPEC.md` § codeContext Propagation.
+**Implementation note — codeContext propagation:** Auto-approve depends on `codeContext` reaching `ToolExecutor.decide()`. Three execution paths carry it: (1) the inline ChatAgent LLM loop, (2) the brokered worker pipeline (ChatAgent → message metadata → worker session → BrokerClient → BrokerServer → ToolExecutor), and (3) the supervisor-side `tryDirectAutomationAuthoring` pre-route in WorkerManager. All three must forward `codeContext` or auto-approve silently fails. See `docs/specs/CODING-WORKSPACE-SPEC.md` § codeContext Propagation.
 
 **Consequences:**
 - (+) Eliminates approval friction for coding workflow — edits, creates, tests, and automations execute immediately
@@ -630,4 +630,4 @@ The workspace root is authorized through `codeContext` while the request is insi
 - (-) If Guardian Agent is disabled or configured as fail-open, automation tools execute without any approval checkpoint
 - (-) codeContext propagation is fragile — if any layer in the broker/worker chain drops it, auto-approve silently degrades to require_approval
 
-**Refs:** `docs/specs/CODING-ASSISTANT-SPEC.md`, `src/tools/executor.ts` (`isCodeSessionWorkspaceTool`), `src/index.ts` (workspace root auto-add), `src/supervisor/worker-manager.ts` (automation pre-route codeContext), `src/broker/broker-client.ts` + `src/broker/broker-server.ts` (broker codeContext forwarding)
+**Refs:** `docs/specs/CODING-WORKSPACE-SPEC.md`, `src/tools/executor.ts` (`isCodeSessionWorkspaceTool`), `src/index.ts` (workspace root auto-add), `src/supervisor/worker-manager.ts` (automation pre-route codeContext), `src/broker/broker-client.ts` + `src/broker/broker-server.ts` (broker codeContext forwarding)

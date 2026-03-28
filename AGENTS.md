@@ -12,6 +12,9 @@
 - `npx vitest run src/path/file.test.ts`: run one test file.
 - `npm run helper:windows`: rebuild the Windows native helper when touching `native/windows-helper/`.
 
+## Intent Gateway (CRITICAL)
+All user intent classification must go through the Intent Gateway (`src/runtime/intent-gateway.ts`). **Never use regex, keyword matching, string includes, or any ad-hoc pattern matching to determine what the user is asking for.** The Intent Gateway is an LLM classifier that routes requests via structured tool calls. New routes must be added to `IntentGatewayRoute`, the tool schema, the system prompt, `normalizeRoute`, `preferredCandidatesForDecision` in `direct-intent-routing.ts`, and the candidate dispatch loop in `src/index.ts`. Pre-gateway interception is only permitted for slash-command parsing in channel adapters and continuation/approval flow detection.
+
 ## Coding Style & Naming Conventions
 This repo uses strict TypeScript with ESM output. Follow the existing style: 2-space indentation, semicolons, single quotes, and explicit `.js` extensions in relative imports from `.ts` files. Prefer kebab-case file names like `security-alerts.ts`, PascalCase for classes and types, camelCase for functions and variables, and UPPER_SNAKE_CASE for constants. Prefer pure helpers and isolate side effects. There is no checked-in ESLint or Prettier config, so match surrounding code and use `npm run check` as the baseline gate.
 

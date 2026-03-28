@@ -229,4 +229,115 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.automationName).toBe('Browser Read Smoke');
     expect(callCount).toBe(2);
   });
+
+  it('classifies session listing as coding_session_control with navigate operation', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'List my coding workspaces.',
+        channel: 'web',
+      },
+      async () => ({
+        content: '',
+        toolCalls: [{
+          id: 'call-1',
+          name: 'route_intent',
+          arguments: JSON.stringify({
+            route: 'coding_session_control',
+            confidence: 'high',
+            operation: 'navigate',
+            summary: 'Lists available coding workspace sessions.',
+          }),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_session_control');
+    expect(result.decision.operation).toBe('navigate');
+    expect(result.available).toBe(true);
+  });
+
+  it('classifies session switching as coding_session_control with sessionTarget entity', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Switch to the Guardian project workspace.',
+        channel: 'web',
+      },
+      async () => ({
+        content: '',
+        toolCalls: [{
+          id: 'call-1',
+          name: 'route_intent',
+          arguments: JSON.stringify({
+            route: 'coding_session_control',
+            confidence: 'high',
+            operation: 'update',
+            summary: 'Switches to a specific coding workspace session.',
+            sessionTarget: 'Guardian project',
+          }),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_session_control');
+    expect(result.decision.operation).toBe('update');
+    expect(result.decision.entities.sessionTarget).toBe('Guardian project');
+  });
+
+  it('classifies current session query as coding_session_control with inspect operation', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'What coding session am I on?',
+        channel: 'cli',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'coding_session_control',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Inspects the currently attached coding workspace session.',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_session_control');
+    expect(result.decision.operation).toBe('inspect');
+    expect(result.decision.entities.sessionTarget).toBeUndefined();
+  });
+
+  it('classifies actual code execution as coding_task, not coding_session_control', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Write a function that sorts an array by date.',
+        channel: 'web',
+      },
+      async () => ({
+        content: '',
+        toolCalls: [{
+          id: 'call-1',
+          name: 'route_intent',
+          arguments: JSON.stringify({
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'create',
+            summary: 'Code generation request for writing a sort function.',
+          }),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.route).not.toBe('coding_session_control');
+  });
 });

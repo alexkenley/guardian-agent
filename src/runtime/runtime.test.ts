@@ -128,6 +128,34 @@ describe('Runtime', () => {
 
       expect(runtime.registry.has('echo')).toBe(false);
     });
+
+    it('rebinds a registered agent to a new provider without recreating the agent', () => {
+      const configuredRuntime = new Runtime({
+        llm: {
+          openai: {
+            provider: 'openai',
+            apiKey: 'test-openai-key',
+            model: 'gpt-4o',
+          },
+          anthropic: {
+            provider: 'anthropic',
+            apiKey: 'test-anthropic-key',
+            model: 'claude-sonnet-4-6',
+          },
+        },
+        defaultProvider: 'openai',
+      });
+      const agent = new EchoAgent();
+      configuredRuntime.registerAgent(createAgentDefinition({ agent, providerName: 'openai' }));
+
+      const rebound = configuredRuntime.rebindAgentProvider('echo', 'anthropic');
+      expect(rebound).toBe(true);
+
+      const instance = configuredRuntime.registry.get('echo');
+      expect(instance?.definition.providerName).toBe('anthropic');
+      expect(configuredRuntime.getAgentProviderConfig('echo')?.provider).toBe('anthropic');
+      expect(configuredRuntime.getAgentProviderConfig('echo')?.model).toBe('claude-sonnet-4-6');
+    });
   });
 
   describe('message dispatch', () => {

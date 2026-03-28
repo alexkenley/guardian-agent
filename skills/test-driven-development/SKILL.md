@@ -13,6 +13,9 @@ No production code without a failing test first.
 
 If code already exists for the behavior you are adding, discard or ignore it until the test exists and fails.
 
+When multiple proof options exist, start with the strongest existing failing or high-fidelity check you can reasonably run.
+Do not invent a narrower test just to avoid the real proof surface.
+
 ## Red-Green-Refactor
 
 1. Red: write one small test for one behavior.
@@ -21,11 +24,12 @@ If code already exists for the behavior you are adding, discard or ignore it unt
 2. Verify red.
    - Run the narrowest test command.
    - Confirm it fails for the expected reason, not because of typos or broken setup.
+   - If an existing integration, scenario, or regression harness already covers the behavior, prefer that over a brand-new narrow unit test.
 3. Green: write the smallest implementation that passes.
    - Do not add extra features or cleanup yet.
 4. Verify green.
    - Re-run the focused test.
-   - Run any broader test scope needed to catch obvious regressions.
+   - Run any broader existing check needed to prove the real behavior, not just the easiest local assertion.
 5. Refactor while keeping tests green.
 
 ## Practical Rules
@@ -34,6 +38,7 @@ If code already exists for the behavior you are adding, discard or ignore it unt
 - Prefer narrow test runs while iterating.
 - For bug fixes, the regression test comes before the fix.
 - If a test is hard to write, examine the design. Difficult tests often reveal poor boundaries.
+- If a broader existing check fails, do not replace it with a weaker new test and call the work done.
 
 ## Stop Signs
 
@@ -43,6 +48,7 @@ Stop and restart if:
 - the first run passed immediately
 - you are testing mocks instead of behavior
 - you are bundling multiple behaviors into one test
+- you are narrowing the proof surface to avoid an existing failing harness
 
 ## Reference
 

@@ -62,6 +62,73 @@ describe('runLlmLoop', () => {
     expect(result.finalContent).toBe('Completed net_dns_lookup.');
   });
 
+  it('tries one tool-free recovery round before falling back to a raw tool summary', async () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: 'Inspect the repo and give me an implementation plan.' }];
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [{ id: 'call-1', name: 'fs_list', arguments: JSON.stringify({ path: 'src' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: '',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: 'Acceptance Gates\n- Ship a usable plan.\n\nExisting Checks To Reuse\n- Reuse the existing test harness before adding narrower checks.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const chatCalls: Array<{ messages: ChatMessage[]; options?: ChatOptions }> = [];
+
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [{
+          name: 'fs_list',
+          description: 'List files.',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+            },
+          },
+        }];
+      },
+      searchTools() {
+        return [];
+      },
+      async callTool(): Promise<ToolResult> {
+        return {
+          success: true,
+          output: { path: 'src', entries: [{ name: 'App.tsx', type: 'file' }] },
+        };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async (msgs: ChatMessage[], opts?: ChatOptions) => {
+        chatCalls.push({ messages: msgs, options: opts });
+        const next = responses.shift();
+        if (!next) {
+          throw new Error('Unexpected extra chatFn call');
+        }
+        return next;
+      },
+      toolCaller,
+      3,
+      32_000,
+    );
+
+    expect(chatCalls).toHaveLength(3);
+    expect(chatCalls[2]?.options?.tools).toEqual([]);
+    expect(result.finalContent).toContain('Acceptance Gates');
+    expect(result.finalContent).not.toBe('Completed fs_list.');
+  });
+
   it('re-prompts when the model falsely claims update_tool_policy is unavailable', async () => {
     const messages: ChatMessage[] = [
       { role: 'user', content: 'Add vmres13.web-servers.com.au to allowed domains and then test my social WHM.' },

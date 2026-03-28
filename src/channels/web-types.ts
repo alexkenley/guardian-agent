@@ -778,6 +778,7 @@ export interface DashboardCallbacks {
     message: {
       content: string;
       userId?: string;
+      surfaceId?: string;
       principalId?: string;
       principalRole?: import('../tools/types.js').PrincipalRole;
       channel?: string;
@@ -863,19 +864,6 @@ export interface DashboardCallbacks {
     channel: string;
     surfaceId: string;
   }) => { success: boolean };
-  onCodeSessionMessage?: (args: {
-    sessionId: string;
-    userId: string;
-    principalId?: string;
-    principalRole?: import('../tools/types.js').PrincipalRole;
-    channel: string;
-    surfaceId: string;
-    content: string;
-    metadata?: Record<string, unknown>;
-  }) => Promise<{
-    content: string;
-    metadata?: Record<string, unknown>;
-  }>;
   onCodeSessionApprovalDecision?: (input: {
     sessionId: string;
     approvalId: string;
@@ -998,6 +986,7 @@ export interface DashboardCallbacks {
     origin?: 'assistant' | 'cli' | 'web';
     agentId?: string;
     userId?: string;
+    surfaceId?: string;
     principalId?: string;
     principalRole?: import('../tools/types.js').PrincipalRole;
     contentTrustLevel?: import('../tools/types.js').ContentTrustLevel;
@@ -1137,6 +1126,7 @@ export interface DashboardCallbacks {
       requestId?: string;
       content: string;
       userId?: string;
+      surfaceId?: string;
       principalId?: string;
       principalRole?: import('../tools/types.js').PrincipalRole;
       channel?: string;

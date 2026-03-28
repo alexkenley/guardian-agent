@@ -28,7 +28,6 @@ Move from generic prompting to repeatable high-value workflows:
 - `POST /api/quick-actions/run`
 
 ## Channel Surface
-- Web: quick action bar in chat page
+- Web: quick action bar in Guardian chat
 - CLI: `/quick <email|task|calendar> <details>`
 - Telegram: `/quick <email|task|calendar> <details>`
-

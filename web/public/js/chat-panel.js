@@ -14,17 +14,29 @@ const chatHistoryByAgent = new Map();
 const ACTIVE_AGENT_KEY = 'guardianagent_active_agent';
 const TIER_MODE_KEY = 'guardianagent_tier_mode';
 const WEB_USER_KEY = 'guardianagent_web_user';
+const GUARDIAN_CHAT_SURFACE_ID = 'web-guardian-chat';
+const CODE_SESSIONS_CHANGED_EVENT = 'guardian:code-sessions-changed';
+const CODE_SESSION_FOCUS_CHANGED_EVENT = 'guardian:code-session-focus-changed';
 let currentChatContext = 'dashboard';
+let refreshCurrentCodeSessions = null;
+let refreshCodeSessionsPromise = null;
 
 export async function initChatPanel(container) {
   container.innerHTML = '<div class="loading">Loading Chat...</div>';
 
   let agents = [];
   let routingMode = null;
+  let codeSessionsState = { sessions: [], currentSessionId: null };
+  const webUserId = resolveWebUserId();
   try {
-    [agents, routingMode] = await Promise.all([
+    [agents, routingMode, codeSessionsState] = await Promise.all([
       api.agents().catch(() => []),
       api.routingMode().catch(() => null),
+      api.codeSessions({
+        userId: webUserId,
+        channel: 'web',
+        surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+      }).catch(() => ({ sessions: [], currentSessionId: null })),
     ]);
   } catch {
     // Continue with empty
@@ -33,7 +45,10 @@ export async function initChatPanel(container) {
   const chatAgents = agents.filter((a) => a.canChat !== false);
   const userAgents = chatAgents.filter((a) => !a.internal);
   const hasInternalOnly = userAgents.length === 0 && hasTierRoutingAgents(chatAgents);
-  const webUserId = resolveWebUserId();
+  let knownCodeSessions = Array.isArray(codeSessionsState?.sessions) ? codeSessionsState.sessions : [];
+  let currentCodeSessionId = typeof codeSessionsState?.currentSessionId === 'string'
+    ? codeSessionsState.currentSessionId
+    : null;
 
   container.innerHTML = '';
 
@@ -52,8 +67,7 @@ export async function initChatPanel(container) {
   // Toolbar
   const toolbar = document.createElement('div');
   toolbar.className = 'chat-toolbar';
-  toolbar.style.flexDirection = 'column';
-  toolbar.style.alignItems = 'stretch';
+  toolbar.style.flexWrap = 'wrap';
   toolbar.style.gap = '0.5rem';
 
   // Agent selector OR mode toggle
@@ -72,7 +86,7 @@ export async function initChatPanel(container) {
 
     modeSelect = document.createElement('select');
     modeSelect.id = 'chat-mode-select';
-    modeSelect.style.cssText = 'flex:1;font-size:0.7rem;';
+    modeSelect.style.cssText = 'font-size:0.7rem;';
     modeSelect.innerHTML = getRoutingModeOptions(chatAgents).map((option) => (
       `<option value="${esc(option.value)}">${esc(option.label)}</option>`
     )).join('');
@@ -103,7 +117,7 @@ export async function initChatPanel(container) {
     // Classic mode: user-visible agent dropdown
     select = document.createElement('select');
     select.id = 'chat-agent-select';
-    select.style.width = '100%';
+    select.style.minWidth = '10rem';
     select.innerHTML = userAgents.map(a =>
       `<option value="${esc(a.id)}">${esc(a.name)}</option>`
     ).join('');
@@ -124,10 +138,64 @@ export async function initChatPanel(container) {
   resetBtn.style.padding = '0.3rem 0.5rem';
 
   toolbar.appendChild(resetBtn);
+
+  let history = null;
+
+  const getHistoryKey = () => {
+    const baseKey = hasInternalOnly ? '__guardian__' : (select?.value || '');
+    if (!baseKey) return '';
+    return currentCodeSessionId ? `${baseKey}::code:${currentCodeSessionId}` : baseKey;
+  };
+
+  const refreshCodeSessions = async () => {
+    if (refreshCodeSessionsPromise) {
+      return refreshCodeSessionsPromise;
+    }
+    refreshCodeSessionsPromise = api.codeSessions({
+      userId: webUserId,
+      channel: 'web',
+      surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+    }).catch(() => ({ sessions: [], currentSessionId: null }));
+    const result = await refreshCodeSessionsPromise;
+    refreshCodeSessionsPromise = null;
+    knownCodeSessions = Array.isArray(result?.sessions) ? result.sessions : [];
+    currentCodeSessionId = normalizeCodeSessionId(result?.currentSessionId);
+    if (history) {
+      renderHistory(history, getHistoryKey());
+    }
+    return result;
+  };
+
+  refreshCurrentCodeSessions = () => {
+    void refreshCodeSessions();
+  };
+
+  const notifyCodeSessionsChanged = (detail = {}) => {
+    window.dispatchEvent(new CustomEvent(CODE_SESSIONS_CHANGED_EVENT, { detail }));
+  };
+
+  const notifyCodeSessionFocus = (sessionId) => {
+    window.dispatchEvent(new CustomEvent(CODE_SESSION_FOCUS_CHANGED_EVENT, {
+      detail: { sessionId: typeof sessionId === 'string' && sessionId.trim() ? sessionId.trim() : null },
+    }));
+  };
+
+  window.addEventListener(CODE_SESSIONS_CHANGED_EVENT, (event) => {
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    if (detail?.surfaceId && detail.surfaceId !== GUARDIAN_CHAT_SURFACE_ID) return;
+    void refreshCodeSessions();
+  });
+
+  window.addEventListener(CODE_SESSION_FOCUS_CHANGED_EVENT, (event) => {
+    const sessionId = event instanceof CustomEvent ? event.detail?.sessionId : null;
+    currentCodeSessionId = normalizeCodeSessionId(sessionId);
+    void refreshCodeSessions();
+  });
+
   wrapper.appendChild(toolbar);
 
   // Chat history
-  const history = document.createElement('div');
+  history = document.createElement('div');
   history.className = 'chat-history';
   history.id = 'chat-history';
   history.style.fontSize = '0.75rem';
@@ -149,7 +217,7 @@ export async function initChatPanel(container) {
   sendBtn.textContent = 'Send';
   sendBtn.style.padding = '0.5rem 0.8rem';
 
-  renderHistory(history, activeAgentId);
+  renderHistory(history, getHistoryKey() || activeAgentId);
 
   if (select) {
     select.addEventListener('change', () => {
@@ -158,18 +226,26 @@ export async function initChatPanel(container) {
         sessionStorage.setItem(ACTIVE_AGENT_KEY, selected);
         activeAgentId = selected;
       }
-      renderHistory(history, selected);
+      renderHistory(history, getHistoryKey() || selected);
     });
   }
 
   resetBtn.addEventListener('click', async () => {
-    const resetId = hasInternalOnly ? '__guardian__' : (select?.value || '');
+    const resetId = getHistoryKey();
     if (!resetId) return;
     try {
-      const apiAgentId = resetId === '__guardian__'
+      const apiAgentId = (hasInternalOnly ? '__guardian__' : (select?.value || '')) === '__guardian__'
         ? (getRoutingModeAgentId(chatAgents, modeSelect?.value) || chatAgents[0]?.id || 'default')
-        : resetId;
-      await api.resetConversation(apiAgentId, webUserId, 'web');
+        : (select?.value || '');
+      if (currentCodeSessionId) {
+        await api.codeSessionResetConversation(currentCodeSessionId, {
+          userId: webUserId,
+          channel: 'web',
+          surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+        });
+      } else {
+        await api.resetConversation(apiAgentId, webUserId, 'web');
+      }
       chatHistoryByAgent.delete(resetId);
       renderHistory(history, resetId);
     } catch (err) {
@@ -191,13 +267,22 @@ export async function initChatPanel(container) {
    * continuation message so the LLM can proceed with the original task.
    */
   const handleApproval = async (approvalIds, decision) => {
-    const chatHistory = getHistory(hasInternalOnly ? '__guardian__' : (select?.value || ''));
+    const historyKey = getHistoryKey();
+    const chatHistory = getHistory(historyKey);
+    const focusedSessionId = currentCodeSessionId;
 
     const results = [];
     const approvalResponses = [];
     for (const id of approvalIds) {
       try {
-        const result = await api.decideToolApproval({ approvalId: id, decision, actor: 'web-user' });
+        const result = focusedSessionId
+          ? await api.codeSessionDecideApproval(focusedSessionId, id, {
+            decision,
+            userId: webUserId,
+            channel: 'web',
+            surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+          })
+          : await api.decideToolApproval({ approvalId: id, decision, actor: 'web-user' });
         approvalResponses.push(result);
         results.push(result.success ? (result.message || `${decision}`) : `Failed: ${result.message || 'unknown error'}`);
       } catch (err) {
@@ -234,7 +319,14 @@ export async function initChatPanel(container) {
         const summary = results.join('; ');
         const allSucceeded = results.every(r => !r.startsWith('Failed:') && !r.startsWith('Error:'));
         const msg = getContextPrefix() + `[User approved the pending tool action(s). Result: ${summary}] ${allSucceeded ? 'Please continue with the original task.' : 'Some actions failed — adjust your approach accordingly.'}`;
-        const response = await api.sendMessage(msg, getAgentId(), webUserId, 'web');
+        const response = await api.sendMessage(
+          msg,
+          getAgentId(),
+          webUserId,
+          'web',
+          undefined,
+          GUARDIAN_CHAT_SURFACE_ID,
+        );
         thinkingEl.remove();
         addAgentMessage(response.content, response.metadata?.pendingApprovals, response.metadata?.responseSource);
       } catch (err) {
@@ -262,7 +354,7 @@ export async function initChatPanel(container) {
    * response includes structured pending approval data.
    */
   const addAgentMessage = (content, pendingApprovals, responseSource) => {
-    const chatHistory = getHistory(hasInternalOnly ? '__guardian__' : (select?.value || ''));
+    const chatHistory = getHistory(getHistoryKey());
     chatHistory.push({ role: 'agent', content, responseSource, pendingApprovals });
     history.appendChild(createMessageEl('agent', content, { pendingApprovals, responseSource, onApproval: handleApproval }));
   };
@@ -273,7 +365,7 @@ export async function initChatPanel(container) {
     const text = input.value.trim();
     if (!text) return;
 
-    const historyKey = hasInternalOnly ? '__guardian__' : (select?.value || '');
+    const historyKey = getHistoryKey();
     if (!historyKey) return;
 
     const chatHistory = getHistory(historyKey);
@@ -295,6 +387,7 @@ export async function initChatPanel(container) {
       const contextPrefix = getContextPrefix();
       const agentId = getAgentId();
       const requestId = createClientRequestId();
+      const focusedSessionId = currentCodeSessionId;
       let cleanedUp = false;
       let finalised = false;
 
@@ -312,6 +405,23 @@ export async function initChatPanel(container) {
         cleanup();
         thinkingEl.remove();
         addAgentMessage(data.content || '', data.metadata?.pendingApprovals, data.metadata?.responseSource);
+        const focusChanged = data?.metadata?.codeSessionFocusChanged === true
+          || data?.metadata?.codeSessionDetached === true
+          || (!focusedSessionId && typeof data?.metadata?.codeSessionId === 'string');
+        if (focusChanged) {
+          const nextSessionId = normalizeCodeSessionId(data?.metadata?.codeSessionId);
+          notifyCodeSessionFocus(nextSessionId);
+          notifyCodeSessionsChanged({
+            sessionId: nextSessionId,
+            surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+          });
+        }
+        if (focusedSessionId) {
+          notifyCodeSessionsChanged({
+            sessionId: focusedSessionId,
+            surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+          });
+        }
       };
 
       const finalizeError = (message) => {
@@ -323,7 +433,11 @@ export async function initChatPanel(container) {
       };
 
       const onRunTimeline = (data) => {
-        if (data?.summary?.runId !== requestId) return;
+        if (focusedSessionId) {
+          if (data?.summary?.codeSessionId !== focusedSessionId) return;
+        } else if (data?.summary?.runId !== requestId) {
+          return;
+        }
         updateThinkingEl(thinkingEl, data);
         history.scrollTop = history.scrollHeight;
       };
@@ -350,6 +464,7 @@ export async function initChatPanel(container) {
           'web',
           undefined,
           requestId,
+          GUARDIAN_CHAT_SURFACE_ID,
         );
 
         if (streamResult?.error) {
@@ -359,7 +474,14 @@ export async function initChatPanel(container) {
         }
       } catch {
         cleanup();
-        const response = await api.sendMessage(contextPrefix + text, agentId, webUserId, 'web');
+        const response = await api.sendMessage(
+          contextPrefix + text,
+          agentId,
+          webUserId,
+          'web',
+          undefined,
+          GUARDIAN_CHAT_SURFACE_ID,
+        );
         thinkingEl.remove();
         addAgentMessage(response.content, response.metadata?.pendingApprovals, response.metadata?.responseSource);
       }
@@ -389,6 +511,9 @@ export async function initChatPanel(container) {
 
 export function setChatContext(context) {
   currentChatContext = context;
+  if (refreshCurrentCodeSessions) {
+    refreshCurrentCodeSessions();
+  }
 }
 
 // ── Pure helpers (no closure dependencies) ──────────────────
@@ -409,6 +534,10 @@ function resolveWebUserId() {
   const resolved = (current || 'web-user').trim();
   sessionStorage.setItem(WEB_USER_KEY, resolved);
   return resolved;
+}
+
+function normalizeCodeSessionId(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function getHistory(agentId) {

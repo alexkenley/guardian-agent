@@ -28,8 +28,8 @@ Core harness scripts include:
 | **`scripts/test-cli-approvals.mjs`** | CLI approval UX regression harness: readline prompt capture, chained approvals, continuation flow, stale approval-ID refresh (Node.js) | ~10 |
 | **`scripts/test-contextual-security-uplifts.mjs`** | Contextual-security regression harness: quarantined remote content, trust-aware memory, principal-bound approvals, bounded schedules, runaway controls (Node.js) | ~20 |
 | **`scripts/test-automation-authoring-compiler.mjs`** | Conversational automation compiler harness: native task/workflow compilation, dedupe, and no-script drift (Node.js) | ~12 |
-| **`scripts/test-coding-assistant.mjs`** | Coding-session transport + repo-grounding harness against the dedicated Code-session API, including approval scoping, memory-scope isolation, and optional real Ollama smoke lane (Node.js) | focused Code-session assertions |
-| **`scripts/test-code-ui-smoke.mjs`** | Browser smoke for the `#/code` workspace: explorer refresh, focused chat, approval tab UX, and code-session persistence (Node.js + Playwright) | focused Code UI assertions |
+| **`scripts/test-coding-assistant.mjs`** | Coding-session transport + repo-grounding harness using canonical chat dispatch plus session attachments/overrides, including approval scoping, memory-scope isolation, and optional real Ollama smoke lane (Node.js) | focused Code-session assertions |
+| **`scripts/test-code-ui-smoke.mjs`** | Browser smoke for the `#/code` workspace: explorer refresh, Guardian-chat session focus, activity/trust UX, and code-session persistence (Node.js + Playwright) | focused Code UI assertions |
 | **`scripts/test-pdf-read.mjs`** | PDF filesystem-read harness against the real repo research PDFs through `POST /api/tools/run` (Node.js) | validates `fs_read` PDF extraction, MIME metadata, titles, and preview text |
 | **`scripts/test-llmmap-security.mjs`** | External `LLMMap` prompt-injection harness against `POST /api/message` using a real Ollama model (Node.js + Python) | preflight + LLMMap findings |
 
@@ -130,7 +130,7 @@ The **preferred method** for automated testing and bug reproduction is to write 
 
 For planner-path bugs such as tool discovery regressions, "tool is unavailable" chatter, or approval preamble wording, drive the scenario through `POST /api/message`. Direct `POST /api/tools/run` tests validate the approval transport, but they bypass the LLM's tool-selection and response-copy path.
 
-For Coding Assistant regressions, create a backend Code session first and drive chat through `POST /api/code/sessions/:id/message`, approvals through `POST /api/code/sessions/:id/approvals/:approvalId`, and session-state assertions through `GET /api/code/sessions/:id`. Keep `/api/message` coverage for two specific cases: ad hoc `workspaceRoot`-only coding context and fail-closed handling when a caller supplies an unresolved `metadata.codeContext.sessionId`.
+For coding-session regressions, create a backend Code session first, attach the relevant surface, and drive conversation through the normal `POST /api/message` or `POST /api/message/stream` path for that surface. Keep approvals on `POST /api/code/sessions/:id/approvals/:approvalId`, and keep session-state assertions on `GET /api/code/sessions/:id`. Also keep explicit `/api/message` coverage for ad hoc `workspaceRoot`-only coding context and fail-closed handling when a caller supplies an unresolved `metadata.codeContext.sessionId`.
 
 Recommended Coding Assistant regression loop:
 

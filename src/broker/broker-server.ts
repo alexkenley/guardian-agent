@@ -107,7 +107,15 @@ export class BrokerServer {
         }
 
         case 'tool.listLoaded': {
-          result = { tools: this.tools.listAlwaysLoadedDefinitions() };
+          const baseTools = this.tools.listAlwaysLoadedDefinitions();
+          const codeContext = isRecord(request.params.codeContext) ? request.params.codeContext : null;
+          const tools = codeContext
+            ? [
+                ...baseTools,
+                ...this.tools.listCodeSessionEagerToolDefinitions().filter((definition) => !baseTools.some((base) => base.name === definition.name)),
+              ]
+            : baseTools;
+          result = { tools };
           break;
         }
 

@@ -11,27 +11,42 @@
 
 import { createInterface, type Interface } from 'node:readline';
 import { readFileSync, appendFileSync, existsSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { ChannelAdapter, MessageCallback } from './types.js';
-import type { DashboardCallbacks } from './web-types.js';
+import type { DashboardCallbacks, DashboardCodeSessionsList, SSEEvent } from './web-types.js';
 import type { SetupApplyInput } from '../runtime/setup.js';
 import { createLogger } from '../util/logging.js';
 import { formatGuideForCLI } from '../reference-guide.js';
 import { formatPendingApprovalMessage } from '../runtime/pending-approval-copy.js';
 import { formatResponseSourceLabel } from '../runtime/model-routing-ux.js';
+import { resolveCodeSessionTarget } from '../runtime/code-session-targets.js';
+import type { DashboardRunDetail, DashboardRunTimelineItem, DashboardRunStatus } from '../runtime/run-timeline.js';
 
 const log = createLogger('channel:cli');
 
 const HISTORY_DIR = join(homedir(), '.guardianagent');
 const HISTORY_PATH = join(HISTORY_DIR, 'cli-history-v2');
 const MAX_HISTORY = 500;
+const CLI_GUARDIAN_CHAT_SURFACE_ID = 'cli-guardian-chat';
 
 interface PendingApprovalSummary {
   id: string;
   toolName: string;
   argsPreview: string;
+}
+
+interface CliLiveProgressState {
+  requestId: string;
+  lastSnapshotKey: string;
+}
+
+interface CliLiveProgressSnapshot {
+  key: string;
+  tone: 'info' | 'running' | 'warning' | 'failed';
+  title: string;
+  detail: string;
 }
 
 interface CliHelpTopic {
@@ -76,6 +91,31 @@ const CLI_HELP_TOPICS: readonly CliHelpTopic[] = [
     notes: [
       'Managed internal tier-routing agents cannot be selected directly here; use /mode for that.',
       'Plain text without a leading slash is sent to the current active agent.',
+    ],
+  },
+  {
+    aliases: ['code'],
+    title: '/code',
+    summary: 'List, create, attach, detach, and inspect the current coding session for this CLI surface.',
+    usage: [
+      '/code',
+      '/code list',
+      '/code current',
+      '/code create <workspaceRoot> [| title]',
+      '/code attach <sessionId-or-match>',
+      '/code detach',
+    ],
+    examples: [
+      '/code list',
+      '/code current',
+      '/code create /mnt/s/development/testapp | TestApp',
+      '/code attach testapp',
+      '/code detach',
+    ],
+    notes: [
+      'The CLI keeps one focused coding session at a time for implicit repo work.',
+      'Attach can resolve a unique session by exact id, title, or workspace match.',
+      'Natural-language chat can also ask Guardian to switch or detach on the fly; /code is the explicit fallback control.',
     ],
   },
   {
@@ -596,6 +636,74 @@ function formatCliResponseContent(response: { content: string; metadata?: Record
   return sourceLabel ? `${sourceLabel} ${content}` : content;
 }
 
+function isDashboardRunDetail(value: unknown): value is DashboardRunDetail {
+  if (!value || typeof value !== 'object') return false;
+  const summary = (value as { summary?: unknown }).summary;
+  return !!summary
+    && typeof summary === 'object'
+    && typeof (summary as { runId?: unknown }).runId === 'string'
+    && Array.isArray((value as { items?: unknown }).items);
+}
+
+function isMeaningfulCliTimelineItem(item: DashboardRunTimelineItem | undefined): boolean {
+  const type = String(item?.type || '').trim();
+  return type !== 'run_queued'
+    && type !== 'run_started'
+    && type !== 'run_completed';
+}
+
+function humanizeCliRunStatus(status: DashboardRunStatus | string | undefined): string {
+  switch (String(status || '')) {
+    case 'awaiting_approval':
+      return 'Waiting for approval';
+    case 'verification_pending':
+      return 'Verification pending';
+    case 'blocked':
+      return 'Blocked';
+    case 'failed':
+      return 'Failed';
+    default:
+      return '';
+  }
+}
+
+function mapCliProgressTone(
+  itemStatus: DashboardRunTimelineItem['status'] | undefined,
+  runStatus: DashboardRunStatus | string | undefined,
+): CliLiveProgressSnapshot['tone'] {
+  if (itemStatus === 'failed' || runStatus === 'failed' || runStatus === 'blocked') return 'failed';
+  if (itemStatus === 'warning' || itemStatus === 'blocked' || runStatus === 'awaiting_approval' || runStatus === 'verification_pending') return 'warning';
+  if (itemStatus === 'running' || runStatus === 'running') return 'running';
+  return 'info';
+}
+
+function extractCliLiveProgressSnapshot(event: SSEEvent, requestId: string): CliLiveProgressSnapshot | null {
+  if (event.type !== 'run.timeline' || !isDashboardRunDetail(event.data)) return null;
+  const detail = event.data;
+  if (detail.summary.runId !== requestId) return null;
+
+  const meaningfulItems = detail.items.filter(isMeaningfulCliTimelineItem);
+  const latestItem = meaningfulItems[meaningfulItems.length - 1];
+  if (latestItem && latestItem.title.trim()) {
+    const detailText = String(latestItem.detail || '').trim();
+    return {
+      key: `${latestItem.id}:${latestItem.status}:${latestItem.title}:${detailText}`,
+      tone: mapCliProgressTone(latestItem.status, detail.summary.status),
+      title: latestItem.title.trim(),
+      detail: detailText,
+    };
+  }
+
+  const summaryTitle = humanizeCliRunStatus(detail.summary.status);
+  if (!summaryTitle) return null;
+  return {
+    key: `summary:${detail.summary.status}`,
+    tone: mapCliProgressTone(undefined, detail.summary.status),
+    title: summaryTitle,
+    detail: '',
+  };
+}
+
 function normalizeApprovalStatusMessage(message: string, decision: 'approved' | 'denied'): string {
   const normalized = message.trim();
   if (!normalized) {
@@ -857,12 +965,11 @@ export class CLIChannel implements ChannelAdapter {
     });
 
     // If active agent is set and dashboard dispatch is available, use it
-    if (this.activeAgentId && this.dashboard?.onDispatch) {
+    if (this.activeAgentId && (this.dashboard?.onStreamDispatch || this.dashboard?.onDispatch)) {
       try {
-        const response = await this.dashboard.onDispatch(this.activeAgentId, {
+        const response = await this.dispatchAssistantTurn({
+          agentId: this.activeAgentId,
           content: text,
-          userId: this.defaultUserId,
-          channel: 'cli',
         });
         this.trackAnalytics({
           type: 'message_success',
@@ -892,12 +999,8 @@ export class CLIChannel implements ChannelAdapter {
     if (!this.onMessage) return;
 
     try {
-      const response = await this.onMessage({
-        id: randomUUID(),
-        userId: this.defaultUserId,
-        channel: 'cli',
+      const response = await this.dispatchAssistantTurn({
         content: text,
-        timestamp: Date.now(),
       });
       this.trackAnalytics({
         type: 'message_success',
@@ -1015,13 +1118,12 @@ export class CLIChannel implements ChannelAdapter {
     this.write('\n' + resultMessages.join('\n') + '\n\n');
 
     // On approval, auto-continue so the LLM can complete the original task
-    if (decision === 'approved' && agentId && this.dashboard?.onDispatch) {
+    if (decision === 'approved' && agentId && (this.dashboard?.onStreamDispatch || this.dashboard?.onDispatch)) {
       const summary = resultMessages.map((r) => r.replace(/\x1b\[\d+m/g, '')).join('; ');
       try {
-        const continuation = await this.dashboard.onDispatch(agentId, {
+        const continuation = await this.dispatchAssistantTurn({
+          agentId,
           content: `[User approved the pending tool action(s). Result: ${summary}] ${allSucceeded ? 'Please continue with the current request only. Do not resume older unrelated pending tasks.' : 'Some actions failed — adjust your approach accordingly. Focus only on the current request.'}`,
-          userId: this.defaultUserId,
-          channel: 'cli',
         });
         this.write(`\nguardian-agent> ${formatCliResponseContent(continuation)}\n\n`);
         // Recurse for chained approvals (e.g. add path → then write file)
@@ -1030,6 +1132,80 @@ export class CLIChannel implements ChannelAdapter {
         this.write(`\n${this.red('[error]')} Continuation failed: ${err instanceof Error ? err.message : String(err)}\n\n`);
       }
     }
+  }
+
+  private async dispatchAssistantTurn(
+    input: {
+      agentId?: string;
+      content: string;
+      metadata?: Record<string, unknown>;
+    },
+  ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
+    if (this.dashboard?.onStreamDispatch) {
+      const requestId = randomUUID();
+      const progressState: CliLiveProgressState = {
+        requestId,
+        lastSnapshotKey: '',
+      };
+      const response = await this.dashboard.onStreamDispatch(
+        input.agentId,
+        {
+          requestId,
+          content: input.content,
+          userId: this.defaultUserId,
+          surfaceId: CLI_GUARDIAN_CHAT_SURFACE_ID,
+          channel: 'cli',
+          metadata: input.metadata,
+        },
+        (event) => this.handleStreamProgressEvent(event, progressState),
+      );
+      if (typeof response.error === 'string' && response.error.trim()) {
+        throw new Error(response.error.trim());
+      }
+      return {
+        content: response.content,
+        ...(response.metadata ? { metadata: response.metadata } : {}),
+      };
+    }
+
+    if (input.agentId && this.dashboard?.onDispatch) {
+      return this.dashboard.onDispatch(input.agentId, {
+        content: input.content,
+        userId: this.defaultUserId,
+        surfaceId: CLI_GUARDIAN_CHAT_SURFACE_ID,
+        channel: 'cli',
+        metadata: input.metadata,
+      });
+    }
+
+    if (this.onMessage) {
+      return this.onMessage({
+        id: randomUUID(),
+        userId: this.defaultUserId,
+        surfaceId: CLI_GUARDIAN_CHAT_SURFACE_ID,
+        channel: 'cli',
+        content: input.content,
+        timestamp: Date.now(),
+        metadata: input.metadata,
+      });
+    }
+
+    throw new Error('No CLI dispatch handler is available.');
+  }
+
+  private handleStreamProgressEvent(event: SSEEvent, progressState: CliLiveProgressState): void {
+    const snapshot = extractCliLiveProgressSnapshot(event, progressState.requestId);
+    if (!snapshot || snapshot.key === progressState.lastSnapshotKey) return;
+    progressState.lastSnapshotKey = snapshot.key;
+    const badge = snapshot.tone === 'failed'
+      ? this.red('[progress]')
+      : snapshot.tone === 'warning'
+        ? this.yellow('[progress]')
+        : snapshot.tone === 'running'
+          ? this.cyan('[progress]')
+          : this.dim('[progress]');
+    const suffix = snapshot.detail ? ` — ${snapshot.detail}` : '';
+    this.write(`\n${badge} ${snapshot.title}${suffix}\n`);
   }
 
   /**
@@ -1044,6 +1220,32 @@ export class CLIChannel implements ChannelAdapter {
       this.write(prompt);
       this.pendingPromptResolver = resolve;
     });
+  }
+
+  private listCliCodeSessions(): DashboardCodeSessionsList | null {
+    if (!this.dashboard?.onCodeSessionsList) return null;
+    return this.dashboard.onCodeSessionsList({
+      userId: this.defaultUserId,
+      channel: 'cli',
+      surfaceId: CLI_GUARDIAN_CHAT_SURFACE_ID,
+    });
+  }
+
+  private resolveCodeSessionTarget(query: string, sessions: DashboardCodeSessionsList['sessions']): {
+    session?: DashboardCodeSessionsList['sessions'][number];
+    error?: string;
+  } {
+    return resolveCodeSessionTarget(query, sessions);
+  }
+
+  private formatCodeSessionSummary(
+    session: DashboardCodeSessionsList['sessions'][number],
+    currentSessionId: string | null,
+  ): string {
+    const markers: string[] = [];
+    if (session.id === currentSessionId) markers.push(this.green('current'));
+    if (session.workState.workspaceTrust?.state) markers.push(`trust=${session.workState.workspaceTrust.state}`);
+    return `${session.title} — ${session.workspaceRoot}${markers.length > 0 ? ` [${markers.join(', ')}]` : ''}`;
   }
 
   // ─── Command dispatch ────────────────────────────────────────
@@ -1134,6 +1336,9 @@ export class CLIChannel implements ChannelAdapter {
         break;
       case 'session':
         await this.handleSession(args);
+        break;
+      case 'code':
+        await this.handleCode(args);
         break;
       case 'quick':
         await this.handleQuick(args);
@@ -1226,6 +1431,7 @@ export class CLIChannel implements ChannelAdapter {
     this.write(this.bold('Chat\n'));
     this.write('  /chat [agentId]                        Switch active agent or show current\n');
     this.write('  /mode [auto|local|external]            Switch routing mode (auto / local-only / external-only)\n');
+    this.write('  /code [list|current|create|attach|detach]  Coding-session focus controls for the CLI\n');
     this.write('  /approve [approvalId ...]              Approve pending chat tool action(s)\n');
     this.write('  /deny [approvalId ...]                 Deny pending chat tool action(s)\n');
     this.write('  <text>                                 Send message to active agent\n');
@@ -2768,6 +2974,7 @@ export class CLIChannel implements ChannelAdapter {
       origin: 'cli',
       agentId: this.activeAgentId ?? this.defaultAgentId,
       userId: this.defaultUserId,
+      surfaceId: CLI_GUARDIAN_CHAT_SURFACE_ID,
       channel: 'cli',
     });
     this.write(`\n${result.success ? this.green('OK') : this.yellow('INFO')}: ${result.message}\n`);
@@ -3862,6 +4069,137 @@ export class CLIChannel implements ChannelAdapter {
     }
 
     this.write('\nUsage: /session [list|use|new] ...\n\n');
+  }
+
+  // ─── /code ──────────────────────────────────────────────────
+
+  private async handleCode(args: string[]): Promise<void> {
+    if (!this.dashboard?.onCodeSessionsList) {
+      this.write('\nCoding sessions are not available.\n\n');
+      return;
+    }
+
+    const sub = (args[0] ?? 'current').toLowerCase();
+    const sessionsState = this.listCliCodeSessions();
+    if (!sessionsState) {
+      this.write('\nCoding sessions are not available.\n\n');
+      return;
+    }
+
+    if (sub === 'list') {
+      if (sessionsState.sessions.length === 0) {
+        this.write('\nNo coding sessions exist yet.\n\n');
+        return;
+      }
+      this.write('\nCoding sessions:\n');
+      for (const session of sessionsState.sessions) {
+        this.write(`  ${session.id} — ${this.formatCodeSessionSummary(session, sessionsState.currentSessionId)}\n`);
+      }
+      this.write('\n');
+      return;
+    }
+
+    if (sub === 'current' || args.length === 0) {
+      const current = sessionsState.currentSessionId
+        ? sessionsState.sessions.find((session) => session.id === sessionsState.currentSessionId) ?? null
+        : null;
+      if (!current) {
+        this.write('\nNo coding session is currently attached to this CLI surface.\n');
+        this.write(`Use ${this.cyan('/code list')} to inspect available sessions or ${this.cyan('/code create <workspaceRoot> [| title]')} to start a new one.\n\n`);
+        return;
+      }
+      this.write('\n');
+      this.write(this.bold('Current Coding Session\n'));
+      this.write(`  ID: ${current.id}\n`);
+      this.write(`  Title: ${current.title}\n`);
+      this.write(`  Workspace: ${current.workspaceRoot}\n`);
+      if (current.resolvedRoot && current.resolvedRoot !== current.workspaceRoot) {
+        this.write(`  Resolved root: ${current.resolvedRoot}\n`);
+      }
+      if (current.workState.workspaceTrust?.state) {
+        this.write(`  Trust: ${current.workState.workspaceTrust.state}\n`);
+      }
+      this.write('\n');
+      return;
+    }
+
+    if (sub === 'attach' || sub === 'use' || sub === 'switch') {
+      if (!this.dashboard.onCodeSessionAttach) {
+        this.write('\nCoding session attach is not available.\n\n');
+        return;
+      }
+      const query = args.slice(1).join(' ').trim();
+      if (!query) {
+        this.write('\nUsage: /code attach <sessionId-or-match>\n\n');
+        return;
+      }
+      const resolved = this.resolveCodeSessionTarget(query, sessionsState.sessions);
+      if (!resolved.session) {
+        this.write(`\n${this.red('FAIL')}: ${resolved.error}\n\n`);
+        return;
+      }
+      const result = this.dashboard.onCodeSessionAttach({
+        sessionId: resolved.session.id,
+        userId: this.defaultUserId,
+        channel: 'cli',
+        surfaceId: CLI_GUARDIAN_CHAT_SURFACE_ID,
+        mode: 'controller',
+      });
+      if (!result.success) {
+        this.write(`\n${this.red('FAIL')}: Could not attach coding session.\n\n`);
+        return;
+      }
+      this.write(`\n${this.green('OK')}: Attached ${this.cyan(resolved.session.title)} (${resolved.session.workspaceRoot}).\n\n`);
+      return;
+    }
+
+    if (sub === 'detach') {
+      if (!this.dashboard.onCodeSessionDetach) {
+        this.write('\nCoding session detach is not available.\n\n');
+        return;
+      }
+      const result = this.dashboard.onCodeSessionDetach({
+        userId: this.defaultUserId,
+        channel: 'cli',
+        surfaceId: CLI_GUARDIAN_CHAT_SURFACE_ID,
+      });
+      this.write(`\n${result.success ? this.green('OK') : this.yellow('INFO')}: ${result.success ? 'Detached the current coding session.' : 'No coding session was attached.'}\n\n`);
+      return;
+    }
+
+    if (sub === 'create' || sub === 'new') {
+      if (!this.dashboard.onCodeSessionCreate) {
+        this.write('\nCoding session creation is not available.\n\n');
+        return;
+      }
+      const raw = args.slice(1).join(' ').trim();
+      if (!raw) {
+        this.write('\nUsage: /code create <workspaceRoot> [| title]\n\n');
+        return;
+      }
+      const [workspacePart, ...titleParts] = raw.split(/\s*\|\s*/);
+      const workspaceRoot = workspacePart?.trim() || '';
+      if (!workspaceRoot) {
+        this.write('\nUsage: /code create <workspaceRoot> [| title]\n\n');
+        return;
+      }
+      const fallbackTitle = basename(workspaceRoot.replace(/[\\/]+$/, '')) || 'Coding Session';
+      const title = titleParts.join(' | ').trim() || fallbackTitle;
+      const snapshot = this.dashboard.onCodeSessionCreate({
+        userId: this.defaultUserId,
+        channel: 'cli',
+        surfaceId: CLI_GUARDIAN_CHAT_SURFACE_ID,
+        title,
+        workspaceRoot,
+        attach: true,
+      });
+      this.write(`\n${this.green('OK')}: Created and attached ${this.cyan(snapshot.session.title)} (${snapshot.session.workspaceRoot}).\n\n`);
+      return;
+    }
+
+    this.write('\nUsage: /code [list|current|create|attach|detach]\n');
+    this.write('       /code create <workspaceRoot> [| title]\n');
+    this.write('       /code attach <sessionId-or-match>\n\n');
   }
 
   // ─── /quick ──────────────────────────────────────────────────

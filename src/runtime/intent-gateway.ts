@@ -11,6 +11,7 @@ export type IntentGatewayRoute =
   | 'search_task'
   | 'filesystem_task'
   | 'coding_task'
+  | 'coding_session_control'
   | 'security_task'
   | 'general_assistant'
   | 'unknown';
@@ -42,6 +43,7 @@ export interface IntentGatewayEntities {
   urls?: string[];
   query?: string;
   path?: string;
+  sessionTarget?: string;
 }
 
 export interface IntentGatewayDecision {
@@ -91,6 +93,7 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
           'search_task',
           'filesystem_task',
           'coding_task',
+          'coding_session_control',
           'security_task',
           'general_assistant',
         ],
@@ -134,6 +137,9 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
       path: {
         type: 'string',
       },
+      sessionTarget: {
+        type: 'string',
+      },
     },
     required: ['route', 'confidence', 'operation', 'summary'],
   },
@@ -163,13 +169,14 @@ const INTENT_GATEWAY_SYSTEM_PROMPT = [
   '- automation_authoring: creating or changing an automation or workflow definition.',
   '- automation_control: operating on an existing automation definition or run, such as delete, toggle, clone, inspect, or run.',
   '- automation_output_task: searching, reading, or analyzing previously stored output from a saved automation run.',
-  '- ui_control: requests about Guardian UI pages or catalog surfaces such as the automations page, dashboard, config, or chat page.',
+  '- ui_control: requests about Guardian UI pages or catalog surfaces such as automations, dashboard, config, or Guardian chat.',
   '- browser_task: external website navigation, reading, extraction, or interaction.',
   '- workspace_task: reading or mutating managed workspace tools such as Gmail, Calendar, Drive, Docs, Sheets, or Microsoft 365.',
   '- email_task: composing, drafting, sending, or replying to a direct email or Gmail message.',
   '- search_task: generic web or document search and result retrieval.',
   '- filesystem_task: filesystem lookup or read/write operations such as file search.',
-  '- coding_task: coding-session or code-execution requests.',
+  '- coding_task: code execution, code generation, debugging, or programming work within a coding workspace. NOT session management.',
+  '- coding_session_control: managing coding workspace sessions — listing, inspecting current session, switching/attaching, detaching, or creating sessions.',
   '- security_task: security triage, containment, or security-control operations.',
   '- general_assistant: everything else.',
   'Prefer ui_control over browser_task when the request refers to Guardian pages or internal catalog views.',
@@ -180,6 +187,10 @@ const INTENT_GATEWAY_SYSTEM_PROMPT = [
   'When the request refers to a specific existing automation, workflow, scheduled task, or assistant automation, always set automationName to the exact human-readable name from the request.',
   'Examples: "Run Browser Read Smoke now" -> automationName = "Browser Read Smoke"; "Show me the automation Browser Read Smoke" -> automationName = "Browser Read Smoke".',
   'Example: "Analyze the output from the last HN Snapshot Smoke automation run" -> route = "automation_output_task", automationName = "HN Snapshot Smoke".',
+  'Prefer coding_session_control over coding_task when the user asks about which session is active, lists sessions, switches workspaces, attaches, detaches, or creates a new coding session.',
+  'coding_session_control operation mapping: navigate = list/show all sessions or workspaces; inspect = check which single session is currently active or attached; update = switch/attach to a different session; delete = detach/disconnect from current session; create = create a new session.',
+  'Examples: "list my coding workspaces" -> route=coding_session_control, operation=navigate; "what session am I on?" -> route=coding_session_control, operation=inspect; "switch to the Guardian project" -> route=coding_session_control, operation=update, sessionTarget="Guardian project"; "detach from workspace" -> route=coding_session_control, operation=delete; "what other sessions are there?" -> route=coding_session_control, operation=navigate.',
+  'When the request mentions a specific coding session or workspace to switch to, set sessionTarget to the session name, id, or workspace path mentioned.',
   'For enable/disable requests, set enabled=true or enabled=false when explicit.',
 ].join(' ');
 
@@ -385,6 +396,9 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
   const path = typeof parsed.path === 'string' && parsed.path.trim()
     ? parsed.path.trim()
     : undefined;
+  const sessionTarget = typeof parsed.sessionTarget === 'string' && parsed.sessionTarget.trim()
+    ? parsed.sessionTarget.trim()
+    : undefined;
 
   return {
     route,
@@ -400,6 +414,7 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
       ...(urls && urls.length > 0 ? { urls } : {}),
       ...(query ? { query } : {}),
       ...(path ? { path } : {}),
+      ...(sessionTarget ? { sessionTarget } : {}),
     },
   };
 }
@@ -443,6 +458,7 @@ function normalizeRoute(value: unknown): IntentGatewayRoute {
     case 'search_task':
     case 'filesystem_task':
     case 'coding_task':
+    case 'coding_session_control':
     case 'security_task':
     case 'general_assistant':
       return value;

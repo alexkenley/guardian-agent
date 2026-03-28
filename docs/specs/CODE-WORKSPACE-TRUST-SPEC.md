@@ -3,7 +3,7 @@
 **Status:** As Built  
 **Date:** 2026-03-20  
 **Primary Runtime:** [code-workspace-trust.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-workspace-trust.ts)  
-**Related Specs:** [Coding Assistant Spec](/mnt/s/Development/GuardianAgent/docs/specs/CODING-ASSISTANT-SPEC.md), [Contextual Security Uplift Spec](/mnt/s/Development/GuardianAgent/docs/specs/CONTEXTUAL-SECURITY-UPLIFT-SPEC.md)
+**Related Specs:** [Coding Workspace Spec](/mnt/s/Development/GuardianAgent/docs/specs/CODING-WORKSPACE-SPEC.md), [Contextual Security Uplift Spec](/mnt/s/Development/GuardianAgent/docs/specs/CONTEXTUAL-SECURITY-UPLIFT-SPEC.md)
 
 ## Purpose
 
