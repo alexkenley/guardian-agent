@@ -473,6 +473,8 @@ As built:
 - the runtime exposes `coding_backend_list`, `coding_backend_run`, and `coding_backend_status`
 - delegation is opt-in and should only happen when the user explicitly asks to use an external coding tool such as Claude Code, Codex, Gemini CLI, or Aider
 - backend launches are tied to the current coding session and open a visible terminal tab so the operator can observe progress
+- approval copy for delegated backend runs names the active coding workspace before launch so the operator can verify the target repo
+- if a delegated coding request explicitly names a different coding workspace than the current attachment, Guardian should stop and require the operator to switch that chat surface first rather than silently writing into the wrong repo
 - the web config surface for this lives at `Configuration > Integrations > Coding Assistants`
 - that config panel now shows a fixed built-in list of Claude Code, Codex, Gemini CLI, and Aider rather than a preset add/remove editor
 - each built-in backend row supports `Enable` / `Disable` plus `Set Default`

@@ -144,6 +144,58 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.query).toBe('latest Playwright MCP news');
   });
 
+  it('normalizes placeholder coding backend values away', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Did that backend run finish?',
+        channel: 'telegram',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Checks the status of the most recent backend run.',
+          turnRelation: 'follow_up',
+          codingBackend: 'unknown',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('inspect');
+    expect(result.decision.entities.codingBackend).toBeUndefined();
+  });
+
+  it('preserves an explicit session target on coding tasks', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Use Codex in the Test Tactical Game App workspace to create a smoke test file.',
+        channel: 'cli',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'create',
+          summary: 'Runs Codex in the requested coding workspace.',
+          codingBackend: 'codex',
+          sessionTarget: 'Test Tactical Game App workspace',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.entities.codingBackend).toBe('codex');
+    expect(result.decision.entities.sessionTarget).toBe('Test Tactical Game App workspace');
+  });
+
   it('captures explicit enable and disable intent metadata', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(

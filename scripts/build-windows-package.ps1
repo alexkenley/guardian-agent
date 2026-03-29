@@ -23,6 +23,7 @@ $BinDir = Join-Path $StageRoot "bin"
 $ConfigDir = Join-Path $StageRoot "config"
 $LogsDir = Join-Path $StageRoot "logs"
 $WebDir = Join-Path $StageRoot "web"
+$PoliciesDir = Join-Path $StageRoot "policies"
 $PortableDir = Join-Path $OutputRoot "portable"
 $packageJson = Get-Content (Join-Path $RepoRoot "package.json") -Raw | ConvertFrom-Json
 $AppVersion = $packageJson.version
@@ -92,6 +93,38 @@ function Remove-PathWithRetry {
     "Close any running GuardianAgent portable windows (or stop related node.exe processes) and retry. Last error: {1}") -f $Path, $lastError.Exception.Message
 }
 
+function Copy-OptionalFile {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$SourcePath,
+    [Parameter(Mandatory = $true)]
+    [string]$DestinationPath
+  )
+
+  if (-not (Test-Path $SourcePath)) {
+    return $false
+  }
+
+  Copy-Item $SourcePath $DestinationPath -Force
+  return $true
+}
+
+function Copy-OptionalDirectory {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$SourcePath,
+    [Parameter(Mandatory = $true)]
+    [string]$DestinationPath
+  )
+
+  if (-not (Test-Path $SourcePath)) {
+    return $false
+  }
+
+  Copy-Item -Recurse $SourcePath $DestinationPath -Force
+  return $true
+}
+
 Push-Location $RepoRoot
 try {
   if (Test-Path $OutputRoot) {
@@ -106,9 +139,10 @@ try {
   Write-Host "Building TypeScript..." -ForegroundColor Cyan
   npm run build
 
-  New-Item -ItemType Directory -Force -Path $StageRoot, $BinDir, $ConfigDir, $LogsDir, $WebDir, $PortableDir | Out-Null
+  New-Item -ItemType Directory -Force -Path $StageRoot, $BinDir, $ConfigDir, $LogsDir, $WebDir, $PoliciesDir, $PortableDir | Out-Null
 
-  Copy-Item package.json, package-lock.json, README.md, LICENSE -Destination $StageRoot
+  Copy-Item package.json, package-lock.json, README.md, LICENSE, INSTALLATION.md, USAGE.md, SECURITY.md, THIRD_PARTY_NOTICES.md -Destination $StageRoot
+  Copy-OptionalFile -SourcePath (Join-Path $RepoRoot "SOUL.md") -DestinationPath $StageRoot | Out-Null
   Copy-Item -Recurse dist -Destination $StageRoot
   if (Test-Path (Join-Path $RepoRoot "web/public")) {
     Copy-Item -Recurse (Join-Path $RepoRoot "web/public") -Destination $WebDir
@@ -119,6 +153,12 @@ try {
   # Copy skills into staged app
   if (Test-Path (Join-Path $RepoRoot "skills")) {
     Copy-Item -Recurse (Join-Path $RepoRoot "skills") -Destination $StageRoot
+  }
+
+  if (Test-Path (Join-Path $RepoRoot "policies")) {
+    Copy-Item -Recurse (Join-Path $RepoRoot "policies") -Destination $StageRoot
+  } else {
+    throw "Required policy files were not found at policies/."
   }
 
   Write-Host "Installing production dependencies into staged app..." -ForegroundColor Cyan
@@ -139,10 +179,20 @@ try {
   }
   Copy-Item $nodeExe (Join-Path $StageRoot "node.exe")
 
+  $nodeRuntimeRoot = Split-Path -Parent $nodeExe
+  $runtimeNodeModules = Join-Path $nodeRuntimeRoot "node_modules"
+  foreach ($runtimeCli in @("npm", "npm.cmd", "npm.ps1", "npx", "npx.cmd", "npx.ps1", "corepack", "corepack.cmd", "corepack.ps1")) {
+    Copy-OptionalFile -SourcePath (Join-Path $nodeRuntimeRoot $runtimeCli) -DestinationPath $StageRoot | Out-Null
+  }
+  foreach ($runtimePackage in @("npm", "corepack")) {
+    Copy-OptionalDirectory -SourcePath (Join-Path $runtimeNodeModules $runtimePackage) -DestinationPath (Join-Path $StageRoot "node_modules") | Out-Null
+  }
+
   $launcher = @'
 @echo off
 setlocal
 set SCRIPT_DIR=%~dp0
+cd /d "%SCRIPT_DIR%"
 if defined GUARDIAN_CONFIG_PATH (
   set CONFIG_PATH=%GUARDIAN_CONFIG_PATH%
 ) else (

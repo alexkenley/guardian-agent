@@ -1,5 +1,5 @@
 export interface PendingClarificationState {
-  kind: 'email_provider' | 'coding_backend' | 'generic';
+  kind: 'email_provider' | 'coding_backend' | 'coding_workspace_switch' | 'generic';
   originalUserContent: string;
   prompt: string;
   createdAt: number;

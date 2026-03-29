@@ -169,9 +169,12 @@ npm run portable:windows
 
 The zip contains a self-contained app with:
 - `node.exe` — bundled Node.js runtime
+- `npm.cmd` / `npx.cmd` / `corepack.cmd` — bundled when available from the Windows Node.js install used for packaging
 - `dist/` — compiled JavaScript
 - `web/public/` — dashboard static assets
 - `skills/` — bundled skill packs (native manifests and frontmatter-compatible reviewed imports)
+- `policies/` — bundled default policy rules
+- `SOUL.md` — bundled default SOUL profile when present in the repo
 - `node_modules/` — production dependencies
 - `bin/guardian-sandbox-win.exe` — AppContainer sandbox helper (if built)
 - `config/portable-config.yaml` — default config with sandbox enabled
@@ -259,10 +262,15 @@ build/
         windows-portable-isolation.example.yaml
       dist/                       # Compiled JS
       node_modules/               # Production deps
+      policies/                   # Default policy rules
       skills/                     # Skill packs (native + reviewed imports)
+      SOUL.md                     # Default SOUL profile when present
       web/public/                 # Dashboard assets
       guardianagent.cmd           # Launcher
       node.exe                    # Bundled Node.js
+      npm.cmd                     # Bundled when available from local Node install
+      npx.cmd                     # Bundled when available from local Node install
+      corepack.cmd                # Bundled when available from local Node install
       package.json
       package-lock.json
     helper/

@@ -3838,6 +3838,72 @@ describe('ToolExecutor', () => {
     expect(approved.message).toContain('Hello from Codex.');
   });
 
+  it('scopes coding backend status to the active code session by default', async () => {
+    const root = createExecutorRoot();
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(root, '.guardianagent', 'code-sessions.sqlite'),
+    });
+    const sessionA = codeSessionStore.createSession({
+      ownerUserId: 'tester',
+      title: 'Session A',
+      workspaceRoot: join(root, 'a'),
+    });
+    const sessionB = codeSessionStore.createSession({
+      ownerUserId: 'tester',
+      title: 'Session B',
+      workspaceRoot: join(root, 'b'),
+    });
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      codeSessionStore,
+      codingBackendService: {
+        listBackends: () => [],
+        getStatus: () => ([
+          { id: 'cb-a', backendId: 'codex', backendName: 'OpenAI Codex CLI', codeSessionId: sessionA.id, terminalId: 't-a', task: 'Task A', status: 'succeeded', startedAt: 1, completedAt: 2, durationMs: 1 },
+          { id: 'cb-b', backendId: 'codex', backendName: 'OpenAI Codex CLI', codeSessionId: sessionB.id, terminalId: 't-b', task: 'Task B', status: 'succeeded', startedAt: 3, completedAt: 4, durationMs: 1 },
+        ]),
+        run: async () => ({
+          success: true,
+          backendId: 'codex',
+          backendName: 'OpenAI Codex CLI',
+          task: 'unused',
+          status: 'succeeded',
+          durationMs: 1,
+          output: 'unused',
+          terminalTabId: 'term-unused',
+        }),
+      },
+    });
+
+    const result = await executor.runTool({
+      toolName: 'coding_backend_status',
+      args: {},
+      origin: 'web',
+      userId: 'tester',
+      principalId: 'tester',
+      channel: 'web',
+      codeContext: {
+        sessionId: sessionA.id,
+        workspaceRoot: join(root, 'a'),
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('succeeded');
+    const sessions = Array.isArray((result.output as { sessions?: unknown })?.sessions)
+      ? ((result.output as { sessions: Array<{ id: string }> }).sessions)
+      : [];
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.id).toBe('cb-a');
+  });
+
   it('rejects invalid tool args before creating approval requests', async () => {
     const root = createExecutorRoot();
     const executor = new ToolExecutor({

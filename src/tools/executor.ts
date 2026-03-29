@@ -6415,12 +6415,15 @@ export class ToolExecutor {
           },
         },
       },
-      async (args) => {
+      async (args, request) => {
         if (!this.options.codingBackendService) {
           return { success: false, error: 'Coding backend orchestration is not enabled.' };
         }
         const sessionId = typeof args.sessionId === 'string' ? args.sessionId.trim() : undefined;
-        const sessions = this.options.codingBackendService.getStatus(sessionId);
+        const codeSessionId = request.codeContext?.sessionId?.trim();
+        const sessions = this.options.codingBackendService
+          .getStatus(sessionId)
+          .filter((session) => sessionId || !codeSessionId || session.codeSessionId === codeSessionId);
         return {
           success: true,
           output: { sessions },

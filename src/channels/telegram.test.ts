@@ -68,8 +68,10 @@ describe('Telegram approval flow', () => {
 
   function createFakeCallbackCtx(data = 'approve:approval-1', text = '⚠️ fs_write — {"path":"S:\\\\Development\\\\test.txt"}') {
     const edits: string[] = [];
+    const replies: Array<{ text: string; extra?: unknown }> = [];
     return {
       edits,
+      replies,
       ctx: {
         chat: { id: 1001 },
         from: { id: 2002 },
@@ -82,7 +84,10 @@ describe('Telegram approval flow', () => {
           edits.push(nextText);
           return {} as unknown;
         }),
-        reply: vi.fn(async () => ({} as unknown)),
+        reply: vi.fn(async (text: string, extra?: unknown) => {
+          replies.push({ text, extra });
+          return {} as unknown;
+        }),
       },
     };
   }
@@ -236,6 +241,44 @@ describe('Telegram approval flow', () => {
 
     expect(edits.at(-1)).toContain('✅ fs_write: Approved and executed');
     expect(ctx.reply).toHaveBeenCalledWith('Done — wrote the requested file.');
+  });
+
+  it('uses continued approval responses directly instead of dispatching a second continuation', async () => {
+    const onDispatch = vi.fn();
+    const channel = new TelegramChannel({
+      botToken: '123:abc',
+      onToolsApprovalDecision: async () => ({
+        success: true,
+        message: "Tool 'coding_backend_run' completed.",
+        continuedResponse: {
+          content: 'OpenAI Codex CLI completed.\n\nHello! I am working.',
+        },
+      }),
+      onDispatch,
+    });
+    const { ctx, edits, replies } = createFakeCallbackCtx('approve:approval-codex-1');
+    (
+      channel as unknown as {
+        pendingApprovalsByChat: Map<string, { approvals: Array<{ id: string; toolName: string; argsPreview: string }>; agentId: string }>;
+      }
+    ).pendingApprovalsByChat.set('1001:2002', {
+      approvals: [
+        {
+          id: 'approval-codex-1',
+          toolName: 'coding_backend_run',
+          argsPreview: '{"backend":"codex"}',
+        },
+      ],
+      agentId: 'default',
+    });
+
+    await (channel as unknown as {
+      handleInlineApprovalCallback: (ctx: unknown) => Promise<void>;
+    }).handleInlineApprovalCallback(ctx);
+
+    expect(edits.at(-1)).toContain('✅ coding_backend_run: Approved and executed');
+    expect(replies.map((reply) => reply.text).join('\n')).toContain('OpenAI Codex CLI completed.');
+    expect(onDispatch).not.toHaveBeenCalled();
   });
 
   it('prefixes source labels on normal Telegram replies', async () => {

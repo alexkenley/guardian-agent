@@ -67,7 +67,10 @@ function preferredCandidatesForDecision(
     case 'filesystem_task':
       return ['filesystem'];
     case 'coding_task':
-      return decision.entities.codingBackend ? ['coding_backend'] : [];
+      if (decision.entities.codingBackend) return ['coding_backend'];
+      return decision.operation === 'inspect' && decision.turnRelation === 'follow_up'
+        ? ['coding_backend']
+        : [];
     case 'coding_session_control':
       return ['coding_session_control'];
     case 'security_task':

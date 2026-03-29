@@ -1084,11 +1084,19 @@ export interface DashboardCallbacks {
     message: string;
     continueConversation?: boolean;
     displayMessage?: string;
+    continuedResponse?: {
+      content: string;
+      metadata?: Record<string, unknown>;
+    };
   }> | {
     success: boolean;
     message: string;
     continueConversation?: boolean;
     displayMessage?: string;
+    continuedResponse?: {
+      content: string;
+      metadata?: Record<string, unknown>;
+    };
   };
   onConnectorsState?: (args?: { limitRuns?: number }) => ConnectorFrameworkState;
   onNetworkDevices?: () => {

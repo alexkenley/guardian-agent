@@ -220,6 +220,8 @@ export function getReferenceGuide(): ReferenceGuide {
                   'If the saved config contains custom non-built-in coding backends, Guardian preserves them, but the simplified web panel does not edit them.',
                   'Guardian only uses these backends when the user explicitly asks to delegate coding work to an external tool. Direct coding requests should still run through Guardian’s built-in coding tools by default.',
                   'In Auto mode, explicit backend delegation such as `Use Codex ...` is treated as a local orchestration task even inside an attached Coding Workspace session. The local Guardian tier should launch the CLI; the hosted model should not roleplay its result.',
+                  'Approval copy for delegated coding backends now includes the active coding workspace so you can see which repo Guardian will launch the CLI in before you approve it.',
+                  'If a delegated coding request explicitly mentions a different coding workspace than the current attachment, Guardian should stop and ask you to switch instead of silently running the CLI in the wrong repo.',
                 ],
               },
               {

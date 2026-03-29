@@ -245,12 +245,18 @@ const INTENT_GATEWAY_SYSTEM_PROMPT = [
   'coding_session_control operation mapping: navigate = list/show all sessions or workspaces; inspect = check which single session is currently active or attached; update = switch/attach to a different session; delete = detach/disconnect from current session; create = create a new session.',
   'Examples: "list my coding workspaces" -> route=coding_session_control, operation=navigate; "what session am I on?" -> route=coding_session_control, operation=inspect; "switch to the Guardian project" -> route=coding_session_control, operation=update, sessionTarget="Guardian project"; "detach from workspace" -> route=coding_session_control, operation=delete; "what other sessions are there?" -> route=coding_session_control, operation=navigate.',
   'When the request mentions a specific coding session or workspace to switch to, set sessionTarget to the session name, id, or workspace path mentioned.',
+  'When a coding_task explicitly names a different coding workspace to operate in, keep route=coding_task and also set sessionTarget to that workspace name, id, or path.',
   'For enable/disable requests, set enabled=true or enabled=false when explicit.',
   'Set emailProvider=gws for Gmail or Google Workspace requests. Set emailProvider=m365 for Outlook or Microsoft 365 requests.',
   'Set codingBackend when the user explicitly names Codex, Claude Code, Gemini CLI, or Aider.',
   'If both Google Workspace and Microsoft 365 are available and the user asks for direct mailbox work without specifying one, keep route=email_task and set resolution=needs_clarification, missingFields=["email_provider"].',
   'Example: prior user request "Use Codex to say hello and confirm you are working." then user says "Codex, the CLI coding assistant." -> route=coding_task, turnRelation=correction, resolution=ready, codingBackend=codex, resolvedContent="Use Codex to say hello and confirm you are working. Just respond with a brief confirmation message. Do not change any files."',
+  'Example: "Use Codex in the Test Tactical Game App workspace to create a smoke test file." -> route=coding_task, operation=create, codingBackend=codex, sessionTarget="Test Tactical Game App workspace".',
+  'Example: prior assistant said a Codex request named a different coding workspace and asked the user to switch first; then the user says "Okay, switch to Test Tactical Game App." -> route=coding_session_control, turnRelation=clarification_answer, operation=update, sessionTarget="Test Tactical Game App".',
+  'Example: prior assistant said to switch workspaces first before running the deferred Codex request; after switching, the user says "Okay, now we\'re on the previous request that I asked." -> route=coding_task, turnRelation=follow_up, resolution=ready, resolvedContent should restate the original deferred coding request.',
   'Example: prior assistant asked which mail provider to use and the user replies "Use Outlook." -> route=email_task, turnRelation=clarification_answer, resolution=ready, emailProvider=m365, resolvedContent should restate the original mail request with Outlook / Microsoft 365 selected.',
+  'Example: prior assistant asked which mail provider to use and the user replies "Google Workspace." or "Gmail." -> route=email_task, turnRelation=clarification_answer, resolution=ready, emailProvider=gws, resolvedContent should restate the original mail request with Gmail / Google Workspace selected.',
+  'Example: prior user request "Use Codex to update the proposal in the workspace." then user says "Did Codex complete that work? Can you check?" -> route=coding_task, turnRelation=follow_up, operation=inspect, resolution=ready, codingBackend=codex, resolvedContent should restate that this is a status check for the most recent Codex run related to that request.',
 ].join(' ');
 
 const AUTOMATION_NAME_REPAIR_SYSTEM_PROMPT = [
@@ -572,9 +578,7 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
     ? parsed.sessionTarget.trim()
     : undefined;
   const emailProvider = normalizeEmailProvider(parsed.emailProvider);
-  const codingBackend = typeof parsed.codingBackend === 'string' && parsed.codingBackend.trim()
-    ? parsed.codingBackend.trim()
-    : undefined;
+  const codingBackend = normalizeCodingBackend(parsed.codingBackend);
 
   return {
     route,
@@ -727,6 +731,37 @@ function normalizeEmailProvider(
       return value;
     default:
       return undefined;
+  }
+}
+
+function normalizeCodingBackend(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const lower = trimmed.toLowerCase();
+  switch (lower) {
+    case 'unknown':
+    case 'none':
+    case 'n/a':
+    case 'not specified':
+    case 'unspecified':
+      return undefined;
+    case 'codex':
+    case 'openai codex':
+    case 'openai codex cli':
+    case 'codex cli':
+      return 'codex';
+    case 'claude code':
+    case 'claude-code':
+      return 'claude-code';
+    case 'gemini':
+    case 'gemini cli':
+    case 'gemini-cli':
+      return 'gemini-cli';
+    case 'aider':
+      return 'aider';
+    default:
+      return trimmed;
   }
 }
 

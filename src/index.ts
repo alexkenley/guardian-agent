@@ -60,6 +60,7 @@ import { withTaintedContentSystemPrompt } from './util/tainted-content.js';
 import { mkdirSecureSync, tightenSecureTree, writeSecureFileSync } from './util/secure-fs.js';
 import { ConversationService, type ConversationKey } from './runtime/conversation.js';
 import { CodeSessionStore, type CodeSessionRecord, type ResolvedCodeSessionContext } from './runtime/code-sessions.js';
+import { resolveCodingBackendSessionTarget } from './runtime/coding-backend-session-target.js';
 import { CodeWorkspaceNativeProtectionScanner } from './runtime/code-workspace-native-protection.js';
 import { inspectCodeWorkspaceSync, type CodeWorkspaceProfile } from './runtime/code-workspace-profile.js';
 import {
@@ -1177,7 +1178,7 @@ class ChatAgent extends BaseAgent {
           content: resolvedGatewayContent,
         };
       }
-      if (earlyGateway?.decision.resolution === 'ready') {
+      if (this.shouldClearPendingClarificationAfterTurn(earlyGateway?.decision, pendingClarification)) {
         this.clearPendingClarification(conversationUserId, conversationChannel);
       }
 
@@ -2884,6 +2885,12 @@ class ChatAgent extends BaseAgent {
       return `Use ${providerLabel} for this request: ${input.pendingClarification.originalUserContent}`;
     }
 
+    if (input.pendingClarification?.kind === 'coding_workspace_switch'
+      && decision.route === 'coding_task'
+      && decision.turnRelation !== 'new_request') {
+      return input.pendingClarification.originalUserContent;
+    }
+
     if (decision.turnRelation === 'correction' && decision.entities.codingBackend) {
       const priorRequest = this.findLatestActionableUserRequest(input.priorHistory);
       if (priorRequest) {
@@ -2895,6 +2902,20 @@ class ChatAgent extends BaseAgent {
     }
 
     return null;
+  }
+
+  private shouldClearPendingClarificationAfterTurn(
+    decision: IntentGatewayDecision | undefined,
+    pendingClarification: PendingClarificationState | null,
+  ): boolean {
+    if (!decision || decision.resolution !== 'ready') return false;
+    if (!pendingClarification) return true;
+    if (pendingClarification.kind === 'coding_workspace_switch'
+      && decision.route === 'coding_session_control'
+      && decision.operation === 'update') {
+      return false;
+    }
+    return true;
   }
 
   private findLatestActionableUserRequest(
@@ -3004,8 +3025,163 @@ class ChatAgent extends BaseAgent {
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
     if (!decision || decision.route !== 'coding_task') return null;
-    const backendId = decision.entities.codingBackend?.trim();
-    if (!backendId) return null;
+    const backendId = normalizeCodingBackendSelection(decision.entities.codingBackend);
+    const currentSessionRecord = codeContext?.sessionId
+      ? this.codeSessionStore?.getSession(codeContext.sessionId, message.userId?.trim())
+        ?? this.codeSessionStore?.getSession(codeContext.sessionId)
+      : null;
+    const codeSessionOwnerUserId = currentSessionRecord?.ownerUserId ?? message.userId?.trim();
+    const mentionedSessionResolution = this.codeSessionStore && codeSessionOwnerUserId
+      ? resolveCodingBackendSessionTarget({
+          requestedSessionTarget: decision.entities.sessionTarget,
+          currentSessionId: currentSessionRecord?.id ?? codeContext?.sessionId,
+          sessions: this.codeSessionStore.listSessionsForUser(codeSessionOwnerUserId),
+        })
+      : null;
+    if (mentionedSessionResolution?.status === 'target_unresolved') {
+      const lines = currentSessionRecord
+        ? [
+            'This chat is currently attached to:',
+            formatDirectCodeSessionLine(currentSessionRecord, true),
+          ]
+        : ['This chat is not currently attached to a coding workspace.'];
+      lines.push(`I couldn't match the coding workspace you mentioned: "${mentionedSessionResolution.requestedSessionTarget}".`);
+      lines.push(mentionedSessionResolution.error);
+      lines.push(`Switch or attach to the intended coding workspace first, then ask me to run ${backendId || 'the coding backend'} there.`);
+      return {
+        content: lines.join('\n'),
+        metadata: currentSessionRecord
+          ? {
+              codeSessionResolved: true,
+              codeSessionId: currentSessionRecord.id,
+            }
+          : undefined,
+      };
+    }
+    if (mentionedSessionResolution?.status === 'switch_required') {
+      const lines = currentSessionRecord
+        ? [
+            'This chat is currently attached to:',
+            formatDirectCodeSessionLine(currentSessionRecord, true),
+            'You mentioned a different coding workspace:',
+            formatDirectCodeSessionLine(mentionedSessionResolution.targetSession, false),
+          ]
+        : [
+            'This chat is not currently attached to a coding workspace.',
+            'You mentioned this coding workspace:',
+            formatDirectCodeSessionLine(mentionedSessionResolution.targetSession, false),
+          ];
+      lines.push(`I won't run ${backendId || 'the coding backend'} in the wrong workspace.`);
+      lines.push(`Switch this chat to ${mentionedSessionResolution.targetSession.title} first, then ask me to run it there.`);
+      this.setPendingClarification(message.userId, message.channel, {
+        kind: 'coding_workspace_switch',
+        originalUserContent: message.content,
+        prompt: lines.join('\n'),
+      });
+      this.recordIntentRoutingTrace('clarification_requested', {
+        message,
+        details: {
+          kind: 'coding_workspace_switch',
+          route: decision.route,
+          backendId,
+          currentSessionId: currentSessionRecord?.id,
+          targetSessionId: mentionedSessionResolution.targetSession.id,
+          targetSessionTitle: mentionedSessionResolution.targetSession.title,
+          prompt: lines.join('\n'),
+        },
+      });
+      return {
+        content: lines.join('\n'),
+        metadata: currentSessionRecord
+          ? {
+              codeSessionResolved: true,
+              codeSessionId: currentSessionRecord.id,
+            }
+          : undefined,
+      };
+    }
+    if (!backendId && decision.operation !== 'inspect') return null;
+    if (decision.operation === 'inspect') {
+      if (!codeContext?.sessionId) {
+        return { content: `I can only check recent ${backendId || 'coding backend'} runs from an active coding workspace.` };
+      }
+
+      this.recordIntentRoutingTrace('direct_tool_call_started', {
+        message,
+        details: {
+          toolName: 'coding_backend_status',
+          ...(backendId ? { backendId } : {}),
+          codeSessionId: codeContext.sessionId,
+          workspaceRoot: codeContext.workspaceRoot,
+        },
+      });
+      const statusResult = await this.tools.executeModelTool(
+        'coding_backend_status',
+        {},
+        {
+          origin: 'assistant',
+          agentId: this.id,
+          userId: message.userId,
+          surfaceId: message.surfaceId,
+          principalId: message.principalId ?? message.userId,
+          principalRole: message.principalRole,
+          channel: message.channel,
+          requestId: message.id,
+          agentContext: { checkAction: ctx.checkAction },
+          codeContext,
+        },
+      );
+      this.recordIntentRoutingTrace('direct_tool_call_completed', {
+        message,
+        details: {
+          toolName: 'coding_backend_status',
+          ...(backendId ? { backendId } : {}),
+          status: statusResult.status,
+          success: toBoolean(statusResult.success),
+          message: toString(statusResult.message),
+        },
+      });
+      if (!toBoolean(statusResult.success)) {
+        const failure = toString(statusResult.message) || toString(statusResult.error) || `I could not inspect recent ${backendId || 'coding backend'} runs.`;
+        return { content: failure };
+      }
+
+      const sessions = (isRecord(statusResult.output) && Array.isArray(statusResult.output.sessions)
+        ? statusResult.output.sessions
+        : []) as Array<Record<string, unknown>>;
+      const matches = sessions
+        .filter((session) => !backendId || toString(session.backendId) === backendId)
+        .sort((a, b) => {
+          const aTime = toNumber(a.completedAt) || toNumber(a.startedAt) || 0;
+          const bTime = toNumber(b.completedAt) || toNumber(b.startedAt) || 0;
+          return bTime - aTime;
+        });
+      if (matches.length === 0) {
+        return { content: `I couldn't find any recent ${backendId || 'coding backend'} runs for this coding workspace.` };
+      }
+
+      const latest = matches[0];
+      const backendName = toString(latest.backendName) || backendId;
+      const status = toString(latest.status) || 'unknown';
+      const task = toString(latest.task);
+      const durationMs = toNumber(latest.durationMs);
+      const exitCode = toNumber(latest.exitCode);
+      const statusLabel = status === 'running'
+        ? 'is still running'
+        : status === 'succeeded'
+          ? 'completed successfully'
+          : status === 'timed_out'
+            ? 'timed out'
+            : 'failed';
+      const lines = [`The most recent ${backendName} run ${statusLabel}.`];
+      if (task) lines.push(`Task: ${task}`);
+      if (durationMs !== null) lines.push(`Duration: ${durationMs}ms`);
+      if (exitCode !== null) lines.push(`Exit code: ${exitCode}`);
+      if (status === 'succeeded') {
+        lines.push('If you want, I can also inspect the repo diff or recent changes from that run.');
+      }
+      return { content: lines.join('\n') };
+    }
 
     this.recordIntentRoutingTrace('direct_tool_call_started', {
       message,
@@ -3060,7 +3236,13 @@ class ChatAgent extends BaseAgent {
       const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
       const pendingApprovalMeta = buildPendingApprovalMetadata(pendingIds, summaries);
       return {
-        content: `I need approval to run ${backendId} for this coding task. Once approved, I'll launch it in the active coding workspace.`,
+        content: [
+          `I need approval to run ${backendId} for this coding task.`,
+          'Once approved, I\'ll launch it in:',
+          currentSessionRecord
+            ? formatDirectCodeSessionLine(currentSessionRecord, true)
+            : `- CURRENT: ${codeContext?.workspaceRoot ?? '(unknown workspace)'}`,
+        ].join('\n'),
         metadata: {
           ...(codeContext?.sessionId ? { codeSessionResolved: true, codeSessionId: codeContext.sessionId } : {}),
           ...(pendingApprovalMeta.length > 0 ? { pendingApprovals: pendingApprovalMeta } : {}),
@@ -4692,6 +4874,17 @@ function toString(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+function normalizeCodingBackendSelection(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const lower = trimmed.toLowerCase();
+  if (lower === 'unknown' || lower === 'none' || lower === 'unspecified' || lower === 'not specified' || lower === 'n/a') {
+    return undefined;
+  }
+  return trimmed;
+}
+
 function normalizeScheduledEmailBody(body: string | undefined, subject: string): string {
   const trimmed = (body ?? '').trim();
   if (!trimmed) return subject;
@@ -4744,10 +4937,13 @@ function normalizeDirectCodeSessionTarget(value: string | undefined): string {
     .trim();
 }
 
-function formatDirectCodeSessionLine(session: Record<string, unknown>, current: boolean): string {
-  const title = toString(session.title) || 'Untitled session';
-  const workspaceRoot = toString(session.workspaceRoot) || '(unknown workspace)';
-  const sessionId = toString(session.id);
+function formatDirectCodeSessionLine(
+  session: { title?: string | null; workspaceRoot?: string | null; id?: string | null },
+  current: boolean,
+): string {
+  const title = session.title?.trim() || 'Untitled session';
+  const workspaceRoot = session.workspaceRoot?.trim() || '(unknown workspace)';
+  const sessionId = session.id?.trim() || '';
   const parts = [`- ${current ? 'CURRENT: ' : ''}${title} — ${workspaceRoot}`];
   if (sessionId) {
     parts.push(`id=${sessionId}`);

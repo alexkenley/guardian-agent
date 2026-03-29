@@ -30,6 +30,7 @@ const HISTORY_DIR = join(homedir(), '.guardianagent');
 const HISTORY_PATH = join(HISTORY_DIR, 'cli-history-v2');
 const MAX_HISTORY = 500;
 const CLI_GUARDIAN_CHAT_SURFACE_ID = 'cli-guardian-chat';
+const CLI_PASTED_MESSAGE_DEBOUNCE_MS = 15;
 
 interface PendingApprovalSummary {
   id: string;
@@ -839,6 +840,8 @@ export class CLIChannel implements ChannelAdapter {
   private historyEnabled: boolean;
   private pendingPromptResolver: ((answer: string) => void) | null = null;
   private pendingInlineApprovalState: InlineApprovalState | null = null;
+  private pendingPastedMessageLines: string[] = [];
+  private pendingPastedMessageTimer: ReturnType<typeof setTimeout> | null = null;
   private shutdownRequested = false;
 
   constructor(options: CLIChannelOptions = {}) {
@@ -924,8 +927,7 @@ export class CLIChannel implements ChannelAdapter {
       }
 
       // Send message to agent
-      await this.handleUserMessage(trimmed);
-      this.promptIfReady();
+      this.queueUserMessage(trimmed);
     });
 
     this.rl.on('close', () => {
@@ -937,6 +939,7 @@ export class CLIChannel implements ChannelAdapter {
 
   async stop(): Promise<void> {
     this.shutdownRequested = true;
+    this.clearPendingPastedMessageTimer();
     const rl = this.rl;
     this.rl = null;
     if (rl) {
@@ -955,6 +958,32 @@ export class CLIChannel implements ChannelAdapter {
     } catch (err) {
       log.debug({ err }, 'Skipped prompt on closing readline');
     }
+  }
+
+  private clearPendingPastedMessageTimer(): void {
+    if (this.pendingPastedMessageTimer) {
+      clearTimeout(this.pendingPastedMessageTimer);
+      this.pendingPastedMessageTimer = null;
+    }
+  }
+
+  private queueUserMessage(text: string): void {
+    this.pendingPastedMessageLines.push(text);
+    this.clearPendingPastedMessageTimer();
+    this.pendingPastedMessageTimer = setTimeout(() => {
+      this.pendingPastedMessageTimer = null;
+      const lines = [...this.pendingPastedMessageLines];
+      this.pendingPastedMessageLines = [];
+      const content = lines.join('\n').trim();
+      if (!content) {
+        this.promptIfReady();
+        return;
+      }
+      void this.handleUserMessage(content)
+        .finally(() => {
+          this.promptIfReady();
+        });
+    }, CLI_PASTED_MESSAGE_DEBOUNCE_MS);
   }
 
   private requestShutdown(): void {
@@ -1099,6 +1128,13 @@ export class CLIChannel implements ChannelAdapter {
     if (!approvalDecisionHandler) return;
 
     // Execute decisions and collect results
+    const results: Array<{
+      toolName: string;
+      success: boolean;
+      message: string;
+      continueConversation?: boolean;
+      continuedResponse?: { content: string; metadata?: Record<string, unknown> };
+    }> = [];
     const resultMessages: string[] = [];
     let allSucceeded = true;
     let allMissingApprovals = decision === 'approved' && approvals.length > 0;
@@ -1109,18 +1145,32 @@ export class CLIChannel implements ChannelAdapter {
           decision,
           actor: 'cli-user',
         });
+        const message = normalizeApprovalStatusMessage(result.displayMessage || result.message || '', decision);
         if (result.success) {
           allMissingApprovals = false;
-          resultMessages.push(`${decision === 'approved' ? this.green('✓') : this.red('✗')} ${approval.toolName}: ${normalizeApprovalStatusMessage(result.message || '', decision)}`);
+          resultMessages.push(`${decision === 'approved' ? this.green('✓') : this.red('✗')} ${approval.toolName}: ${message}`);
         } else {
           allSucceeded = false;
           allMissingApprovals = allMissingApprovals && isMissingApprovalMessage(result.message || '');
-          resultMessages.push(`${this.red('✗')} ${approval.toolName}: ${normalizeApprovalStatusMessage(result.message || 'failed', decision)}`);
+          resultMessages.push(`${this.red('✗')} ${approval.toolName}: ${message || normalizeApprovalStatusMessage(result.message || 'failed', decision)}`);
         }
+        results.push({
+          toolName: approval.toolName,
+          success: result.success,
+          message,
+          continueConversation: result.continueConversation,
+          continuedResponse: result.continuedResponse,
+        });
       } catch (err) {
         allSucceeded = false;
         allMissingApprovals = false;
-        resultMessages.push(`${this.red('✗')} ${approval.toolName}: ${err instanceof Error ? err.message : String(err)}`);
+        const message = err instanceof Error ? err.message : String(err);
+        resultMessages.push(`${this.red('✗')} ${approval.toolName}: ${message}`);
+        results.push({
+          toolName: approval.toolName,
+          success: false,
+          message,
+        });
       }
     }
 
@@ -1146,8 +1196,24 @@ export class CLIChannel implements ChannelAdapter {
 
     this.write('\n' + resultMessages.join('\n') + '\n\n');
 
-    // On approval, auto-continue so the LLM can complete the original task
-    if (decision === 'approved' && agentId && (this.dashboard?.onStreamDispatch || this.dashboard?.onDispatch)) {
+    const directContinuation = decision === 'approved'
+      ? results.find((result) => result.continuedResponse)?.continuedResponse
+      : undefined;
+    if (directContinuation) {
+      this.write(`\nguardian-agent> ${formatCliResponseContent(directContinuation)}\n\n`);
+      await this.handleApprovalPrompt(directContinuation, agentId, depth + 1);
+      return;
+    }
+
+    const hasExplicitContinuationDirective = results.some((result) => result.continuedResponse || result.continueConversation !== undefined);
+    const needsSyntheticContinuation = decision === 'approved'
+      && agentId
+      && (this.dashboard?.onStreamDispatch || this.dashboard?.onDispatch)
+      && (
+        results.some((result) => result.continueConversation)
+        || !hasExplicitContinuationDirective
+      );
+    if (needsSyntheticContinuation) {
       const summary = resultMessages.map((r) => r.replace(/\x1b\[\d+m/g, '')).join('; ');
       try {
         const continuation = await this.dispatchAssistantTurn({

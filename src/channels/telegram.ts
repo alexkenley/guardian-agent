@@ -113,7 +113,19 @@ export interface TelegramChannelOptions {
     decision: 'approved' | 'denied';
     actor: string;
     reason?: string;
-  }) => Promise<{ success: boolean; message: string }> | { success: boolean; message: string };
+  }) => Promise<{
+    success: boolean;
+    message: string;
+    continueConversation?: boolean;
+    displayMessage?: string;
+    continuedResponse?: { content: string; metadata?: Record<string, unknown> };
+  }> | {
+    success: boolean;
+    message: string;
+    continueConversation?: boolean;
+    displayMessage?: string;
+    continuedResponse?: { content: string; metadata?: Record<string, unknown> };
+  };
   /** Dispatch a follow-up message to an agent (for auto-continuation after approval). */
   onDispatch?: (agentId: string, message: { content: string; userId?: string; channel?: string }) => Promise<{ content: string; metadata?: Record<string, unknown> }>;
 }
@@ -615,7 +627,14 @@ export class TelegramChannel implements ChannelAdapter {
 
     const state = this.pendingApprovalsByChat.get(input.approvalKey);
     const approvalLookup = new Map((state?.approvals ?? []).map((approval) => [approval.id, approval] as const));
-    const results: Array<{ approvalId: string; toolName: string; success: boolean; message: string }> = [];
+    const results: Array<{
+      approvalId: string;
+      toolName: string;
+      success: boolean;
+      message: string;
+      continueConversation?: boolean;
+      continuedResponse?: { content: string; metadata?: Record<string, unknown> };
+    }> = [];
     let allSucceeded = true;
 
     for (const approvalId of input.approvalIds) {
@@ -627,9 +646,16 @@ export class TelegramChannel implements ChannelAdapter {
           decision: input.decision,
           actor: input.actor,
         });
-        const message = normalizeApprovalStatusMessage(result.message || '', input.decision);
+        const message = normalizeApprovalStatusMessage(result.displayMessage || result.message || '', input.decision);
         if (!result.success) allSucceeded = false;
-        results.push({ approvalId, toolName, success: result.success, message });
+        results.push({
+          approvalId,
+          toolName,
+          success: result.success,
+          message,
+          continueConversation: result.continueConversation,
+          continuedResponse: result.continuedResponse,
+        });
       } catch (err) {
         allSucceeded = false;
         results.push({
@@ -661,7 +687,26 @@ export class TelegramChannel implements ChannelAdapter {
         : `⚠️ ${result.toolName}: ${result.message}`;
     });
 
-    if (input.decision === 'approved' && this.onDispatchMsg) {
+    const directContinuation = input.decision === 'approved'
+      ? results.find((result) => result.continuedResponse)?.continuedResponse
+      : undefined;
+    if (directContinuation) {
+      await this.replyWithApprovalSupport(ctx, directContinuation, state?.agentId ?? this.defaultAgent);
+      return {
+        statusLines,
+        callbackText: results[0]?.message,
+        continued: true,
+      };
+    }
+
+    const hasExplicitContinuationDirective = results.some((result) => result.continuedResponse || result.continueConversation !== undefined);
+    const needsSyntheticContinuation = input.decision === 'approved'
+      && this.onDispatchMsg
+      && (
+        results.some((result) => result.continueConversation)
+        || (!hasExplicitContinuationDirective && allSucceeded)
+      );
+    if (needsSyntheticContinuation && this.onDispatchMsg) {
       const agentId = state?.agentId ?? this.defaultAgent;
       const summary = results.map((result) => `${result.toolName}: ${result.message}`).join('; ');
       try {

@@ -49,6 +49,33 @@ describe('CLIChannel', () => {
     await cli.stop();
   });
 
+  it('coalesces pasted multi-line chat input into a single user message', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const cli = new CLIChannel({ input, output });
+    const received: UserMessage[] = [];
+
+    await cli.start(async (msg) => {
+      received.push(msg);
+      return { content: `Echo: ${msg.content}` };
+    });
+
+    input.write('Use Codex to create docs/proposals/CODEX-SMOKE-TEST-5.md with title\n');
+    input.write('"# Codex Smoke Test 5" and bullets "CLI attach test" and "Status\n');
+    input.write('follow-up", then tell me exactly what changed.\n');
+
+    await new Promise((resolve) => setTimeout(resolve, 180));
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.content).toBe([
+      'Use Codex to create docs/proposals/CODEX-SMOKE-TEST-5.md with title',
+      '"# Codex Smoke Test 5" and bullets "CLI attach test" and "Status',
+      'follow-up", then tell me exactly what changed.',
+    ].join('\n'));
+
+    await cli.stop();
+  });
+
   it('shows response source labels for chat replies', async () => {
     const input = new PassThrough();
     const output = new PassThrough();
@@ -1328,6 +1355,51 @@ describe('CLIChannel with DashboardCallbacks', () => {
     expect(text).toContain('It used fs_write.');
     expect(decisions).toEqual([{ approvalId: 'approval-empty-1', decision: 'approved' }]);
     expect(dispatches[1]?.content).toContain('Some actions failed — adjust your approach accordingly. Focus only on the current request.');
+
+    await cli.stop();
+  });
+
+  it('uses direct approval continuation responses in CLI without dispatching a second follow-up turn', async () => {
+    const dispatches: Array<{ agentId: string; content: string }> = [];
+    const { input, output, cli } = makeCli({
+      onDispatch: async (agentId, msg) => {
+        dispatches.push({ agentId, content: msg.content });
+        return {
+          content: 'Waiting for approval to run codex.',
+          metadata: {
+            pendingApprovals: [
+              {
+                id: 'approval-codex-1',
+                toolName: 'coding_backend_run',
+                argsPreview: '{"backend":"codex"}',
+              },
+            ],
+          },
+        };
+      },
+      onToolsApprovalDecision: async () => ({
+        success: true,
+        message: "Tool 'coding_backend_run' completed.",
+        displayMessage: 'OpenAI Codex CLI completed.',
+        continuedResponse: {
+          content: 'Created `docs/proposals/CODEX-SMOKE-TEST-6.md`.\n\nNo other files changed.',
+        },
+      }),
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/chat agent-1');
+    readOutput(output);
+    await sendCommand(input, 'Use Codex to create the smoke test file.');
+    await sendCommand(input, 'y');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const text = readOutput(output);
+    expect(text).toContain('Waiting for approval to run coding_backend_run');
+    expect(text).toContain('✓ coding_backend_run: OpenAI Codex CLI completed.');
+    expect(text).toContain('Created `docs/proposals/CODEX-SMOKE-TEST-6.md`.');
+    expect(text).not.toContain('Please continue with the current request only.');
+    expect(dispatches).toHaveLength(1);
 
     await cli.stop();
   });

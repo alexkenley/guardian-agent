@@ -5,8 +5,36 @@ export interface CodeSessionTargetRecord {
   resolvedRoot?: string | null;
 }
 
+const GENERIC_CODE_SESSION_TOKENS = new Set([
+  'a',
+  'an',
+  'the',
+  'my',
+  'this',
+  'that',
+  'workspace',
+  'workspaces',
+  'session',
+  'sessions',
+  'coding',
+  'code',
+  'project',
+  'repo',
+  'repository',
+]);
+
 function normalizeCodeSessionTarget(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function normalizeSemanticCodeSessionTarget(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .split(/[^a-z0-9]+/g)
+    .filter(Boolean)
+    .filter((token) => !GENERIC_CODE_SESSION_TOKENS.has(token))
+    .join('');
 }
 
 function resolveMatchSet<T>(matches: T[], query: string): { session?: T; error?: string } | null {
@@ -68,6 +96,27 @@ export function resolveCodeSessionTarget<T extends CodeSessionTargetRecord>(
   ));
   const normalizedFuzzyResult = resolveMatchSet(normalizedFuzzyMatches, query);
   if (normalizedFuzzyResult) return normalizedFuzzyResult;
+
+  const semanticNeedle = normalizeSemanticCodeSessionTarget(query);
+  if (semanticNeedle) {
+    const semanticExactMatches = sessions.filter((session) => (
+      normalizeSemanticCodeSessionTarget(session.id) === semanticNeedle
+      || normalizeSemanticCodeSessionTarget(session.title) === semanticNeedle
+      || normalizeSemanticCodeSessionTarget(session.workspaceRoot) === semanticNeedle
+      || normalizeSemanticCodeSessionTarget(session.resolvedRoot ?? '') === semanticNeedle
+    ));
+    const semanticExactResult = resolveMatchSet(semanticExactMatches, query);
+    if (semanticExactResult) return semanticExactResult;
+
+    const semanticFuzzyMatches = sessions.filter((session) => (
+      normalizeSemanticCodeSessionTarget(session.id).includes(semanticNeedle)
+      || normalizeSemanticCodeSessionTarget(session.title).includes(semanticNeedle)
+      || normalizeSemanticCodeSessionTarget(session.workspaceRoot).includes(semanticNeedle)
+      || normalizeSemanticCodeSessionTarget(session.resolvedRoot ?? '').includes(semanticNeedle)
+    ));
+    const semanticFuzzyResult = resolveMatchSet(semanticFuzzyMatches, query);
+    if (semanticFuzzyResult) return semanticFuzzyResult;
+  }
 
   return { error: `No coding session matched "${query}".` };
 }

@@ -6,6 +6,7 @@ function mockGateway(partial: {
   route: string;
   operation?: string;
   confidence?: string;
+  turnRelation?: string;
   entities?: Record<string, unknown>;
 }): IntentGatewayRecord {
   return {
@@ -18,6 +19,9 @@ function mockGateway(partial: {
       confidence: (partial.confidence ?? 'high') as IntentGatewayRecord['decision']['confidence'],
       operation: (partial.operation ?? 'unknown') as IntentGatewayRecord['decision']['operation'],
       summary: 'Test classification.',
+      turnRelation: (partial.turnRelation ?? 'new_request') as IntentGatewayRecord['decision']['turnRelation'],
+      resolution: 'ready',
+      missingFields: [],
       entities: (partial.entities ?? {}) as IntentGatewayRecord['decision']['entities'],
     },
   };
@@ -65,6 +69,16 @@ describe('resolveDirectIntentRoutingCandidates', () => {
       [...ALL_CANDIDATES],
     );
     expect(result.candidates).toEqual([]);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
+  it('maps coding_task follow-up inspect requests to coding_backend candidate even without explicit backend', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({ route: 'coding_task', operation: 'inspect', turnRelation: 'follow_up' }),
+      [...ALL_CANDIDATES],
+      [...ALL_CANDIDATES],
+    );
+    expect(result.candidates).toEqual(['coding_backend']);
     expect(result.gatewayDirected).toBe(true);
   });
 
