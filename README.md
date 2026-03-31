@@ -103,57 +103,56 @@
 
 **AI & LLM**
 - Multi-provider support — Ollama (local), Anthropic, OpenAI, plus Groq, Mistral, DeepSeek, Together, xAI, and Google Gemini
-- Smart LLM routing — automatically directs tools to local or external models by category
-- Circuit breaker, automatic failover, and quality-based fallback between providers
-- Prompt caching for Anthropic (reduced latency on repeated system prompts)
+- Smart provider routing — chooses local or external models based on task type and availability
+- Circuit breaker, automatic failover, and fallback between providers
+- Anthropic prompt caching support
 
 **Agent Orchestration**
-- Four orchestration primitives — Sequential, Parallel, Loop, and Conditional agents
-- Native automation authoring compiler — conversational automation requests compile into Guardian workflows or scheduled agent tasks instead of drifting into ad hoc script generation
-- Graph-backed workflow runtime with checkpointed runs and deterministic playback
+- Sequential, parallel, loop, and conditional workflow patterns
+- Native automation authoring compiler — conversational automation requests compile into Guardian workflows or scheduled tasks
+- Checkpointed workflow runtime with approval-safe resume and run history
 - Runtime-enforced agent handoffs for bounded delegation and context filtering
-- Per-step retry with exponential backoff and fail-branch error handling
-- Inter-agent state passing through SharedState
-- SOUL personality system with configurable profiles
+- Per-step retry, fail branches, and shared workflow state
+- Guardian SOUL operating constitution with configurable injection modes
 
 **Security**
 - Four-layer defense — admission controls, inline LLM action evaluation, output leak prevention, and retrospective audit
 - Brokered agent isolation — the chat/planner loop runs in a separate worker process by default
 - Guardian admission pipeline — capabilities, secret/PII scanning, path blocking, SSRF protection, prompt injection detection, rate limiting
 - Contextual policy enforcement — principal-bound approvals, taint-aware mutation gating, and fail-closed schedule authority
-- Managed package-install trust — stages public package artifacts before install, applies bounded static review plus native AV when available, then blocks, pauses for caution acceptance, or proceeds
+- Managed package-install trust — staged review for public package installs before execution
 - Cryptographic audit trail — SHA-256 hash-chained, tamper-evident event log
 
 **Tools & Integrations**
-- 70+ built-in tools with deferred loading and parallel execution
+- Dozens of built-in tools with deferred loading and parallel execution
 - MCP tool server integration with namespaced tools and Guardian admission on every call
-- Native skills layer with trigger-aware routing, Guardian manifests, and reviewed imports for reusable workflow guidance, templates, and helper scripts
-- Dedicated `package_install` tool for managed public package installs to explicit targets such as working directories, prefixes, and pip target directories
+- Native skills layer for reusable workflow guidance, templates, and helper scripts
+- Dedicated `package_install` path for managed public package installs to explicit targets
 - Connector and playbook framework with allowlists, bounded execution, and dry-run mode
-- Google Workspace integration (Gmail, Calendar, Drive, Docs, Sheets) — native googleapis SDK (default) or gws CLI
+- Google Workspace integration (Gmail, Calendar, Drive, Docs, Sheets, Contacts) — native mode by default, CLI fallback available
 - Microsoft 365 integration (Outlook Mail, Calendar, OneDrive, Contacts) — native Graph REST API with OAuth 2.0 PKCE
 - Tool governance — approval workflows, per-tool policy overrides, risk-tiered tool classes
 
 **Channels & Dashboard**
-- CLI, Web UI, and Telegram bot with cross-channel identity mapping
+- CLI, Web UI, and Telegram bot with shared identity and continuity
 - Web dashboard — real-time status, providers, agents, sessions, jobs, alerts, traces, and integrated chat
-- Coding Assistant (`#/code`) — multi-session coding workspace with Monaco Editor, repo explorer, PTY-backed terminals, session-scoped approvals, and repo-scoped assistant execution
+- Coding Assistant (`#/code`) — repo-scoped coding workspace with editor, explorer, terminals, approvals, and session activity
 - SSE-driven live refresh when config, automation, or network state changes
 
 **Memory & Search**
 - SQLite-backed conversation memory with FTS5 full-text search
-- Trust-aware memory with quarantine states, structured flush, and durable per-agent knowledge
-- Native document search — hybrid BM25 keyword + vector similarity over directories, git repos, URLs, and files
+- Trust-aware memory with quarantine states, structured flushes, and per-agent knowledge storage
+- Hybrid document search over directories, git repos, URLs, and files
 
 **Monitoring & Operations**
 - Host workstation monitoring — process, persistence, path, network, and firewall drift detection
 - Gateway firewall monitoring for edge devices (OPNsense, pfSense, UniFi)
 - Security alert routing — CLI, web, and Telegram delivery with severity and event-type filters
-- Scheduled task management with presets, run history, approval expiry, scope drift detection, run/token caps, and auto-pause
+- Scheduled task management with run history, approval expiry, budgets, and drift detection
 - Scheduled execution durability — per-task active-run locks prevent overlapping self-runs from duplicating side effects
-- Readiness-aware automation creation — save-time validation blocks broken automations, bounded workspace output writes are treated as covered by the approved automation definition, and fixable policy blockers can now be turned into chained approval prompts and retried automatically
+- Automation readiness checks with save-time validation and guided approval/policy follow-up
 - Threat intelligence — watchlist scanning, findings triage, and approval-gated response actions
-- SQLite-backed analytics and usage tracking, including skill routing/read/use telemetry
+- SQLite-backed analytics and usage tracking
 
 ## Project Structure
 
