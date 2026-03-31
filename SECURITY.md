@@ -32,8 +32,8 @@ GuardianAgent is an AI agent orchestration system where:
 
 For the shipped local defensive overlay on top of the runtime security model, see:
 
-- [Agentic Defensive Security Suite - As-Built Spec](/mnt/s/Development/GuardianAgent/docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md)
-- [Contextual Security Uplift Spec](/mnt/s/Development/GuardianAgent/docs/specs/CONTEXTUAL-SECURITY-UPLIFT-SPEC.md)
+- [Agentic Defensive Security Suite - As-Built Spec](docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md)
+- [Contextual Security Uplift Spec](docs/specs/CONTEXTUAL-SECURITY-UPLIFT-SPEC.md)
 
 ### Threats Addressed
 

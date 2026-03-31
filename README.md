@@ -109,9 +109,9 @@
 
 **Agent Orchestration**
 - Four orchestration primitives — Sequential, Parallel, Loop, and Conditional agents
-- Native automation authoring compiler — conversational automation requests now flow through a typed `AutomationIR`, repair/validation, and then compile into Guardian workflows or scheduled agent tasks before the generic chat/tool loop, and this compiler-first route is enforced in both direct and brokered worker execution paths
-- Graph-backed workflow runtime — deterministic playbooks execute as checkpointed node graphs with run ids and orchestration events instead of only ad hoc step lists
-- Runtime-enforced agent handoffs — multi-agent delegation can carry explicit handoff contracts for context filtering, taint preservation, and capability checks
+- Native automation authoring compiler — conversational automation requests compile into Guardian workflows or scheduled agent tasks instead of drifting into ad hoc script generation
+- Graph-backed workflow runtime with checkpointed runs and deterministic playback
+- Runtime-enforced agent handoffs for bounded delegation and context filtering
 - Per-step retry with exponential backoff and fail-branch error handling
 - Inter-agent state passing through SharedState
 - SOUL personality system with configurable profiles
@@ -136,13 +136,13 @@
 
 **Channels & Dashboard**
 - CLI, Web UI, and Telegram bot with cross-channel identity mapping
-- Web dashboard — real-time status, providers, agents, sessions, jobs, alerts, and integrated chat
-- Coding Assistant (`#/code`) — multi-session coding workspace with Monaco Editor (syntax highlighting for 100+ languages, line numbers, code folding, find/replace, minimap, autocomplete, command palette, side-by-side diff editor, 11 bundled themes), repo explorer, PTY-backed xterm terminals, a dedicated coding sidebar split into Chat, Tasks, Approvals, and Checks, backend workspace profiling/focus state, and repo-scoped assistant file/shell execution
+- Web dashboard — real-time status, providers, agents, sessions, jobs, alerts, traces, and integrated chat
+- Coding Assistant (`#/code`) — multi-session coding workspace with Monaco Editor, repo explorer, PTY-backed terminals, session-scoped approvals, and repo-scoped assistant execution
 - SSE-driven live refresh when config, automation, or network state changes
 
 **Memory & Search**
 - SQLite-backed conversation memory with FTS5 full-text search
-- Trust-aware per-agent knowledge base with markdown + sidecar metadata, quarantine states, and automatic memory flush
+- Trust-aware memory with quarantine states, structured flush, and durable per-agent knowledge
 - Native document search — hybrid BM25 keyword + vector similarity over directories, git repos, URLs, and files
 
 **Monitoring & Operations**
@@ -154,6 +154,34 @@
 - Readiness-aware automation creation — save-time validation blocks broken automations, bounded workspace output writes are treated as covered by the approved automation definition, and fixable policy blockers can now be turned into chained approval prompts and retried automatically
 - Threat intelligence — watchlist scanning, findings triage, and approval-gated response actions
 - SQLite-backed analytics and usage tracking, including skill routing/read/use telemetry
+
+## Project Structure
+
+- `src/` — core application runtime, orchestration, tools, channels, prompts, and memory systems
+- `web/public/` — dashboard UI, chat panel, code workspace UI, and browser-side assets
+- `scripts/` — setup helpers, test harnesses, and verification scripts
+- `docs/` — architecture notes, specs, guides, research, and supporting documentation
+- `plans/` — implementation roadmaps and status trackers
+- `policies/` — rule and policy files
+- `native/windows-helper/` — Windows native helper components
+
+## Development Commands
+
+- `npm run dev` — start GuardianAgent in development mode
+- `npm run build` — compile TypeScript into `dist/`
+- `npm run check` — run TypeScript checking without emitting output
+- `npm test` — run the Vitest suite
+- `node scripts/test-code-ui-smoke.mjs` — run the web/code UI smoke harness
+- `node scripts/test-coding-assistant.mjs` — run the coding assistant smoke harness
+
+## Documentation
+
+- [README.md](README.md) — product overview, setup, and main features
+- [SECURITY.md](SECURITY.md) — security model, threat boundaries, and controls
+- [docs/architecture/OVERVIEW.md](docs/architecture/OVERVIEW.md) — architecture overview
+- [docs/specs/CODING-WORKSPACE-SPEC.md](docs/specs/CODING-WORKSPACE-SPEC.md) — coding workspace details
+- [docs/guides/INTEGRATION-TEST-HARNESS.md](docs/guides/INTEGRATION-TEST-HARNESS.md) — test and harness guidance
+- [docs/](docs/) — full specs, guides, proposals, and research
 
 ---
 
@@ -250,20 +278,17 @@ For scheduled automations, the intended workflow is:
 The web `Code` page is a dedicated coding workspace, not just the general chat panel pointed at a repo.
 
 - Each Code session keeps its own coding conversation history separate from the rest of the web chat
-- Each Code session also keeps backend-owned workspace identity, an indexed repo map, a per-turn working set, and focus state derived from repo inspection and retrieval over the attached workspace
-- Repo/app answers are retrieval-backed: Code starts from the current working set and repo map instead of trying to answer from generic host-app context or prompt heuristics
-- The Coding Assistant's default reasoning context is the active code session and attached workspace, not GuardianAgent's own host-app repo or docs
-- Each Code session now also has its own durable long-term memory, separate from GuardianAgent's global memory
-- The Code page sends chat and approval actions through session-owned backend routes, so approvals, recent jobs, and repo grounding stay bound to the active coding session
-- The workspace combines a session rail, file explorer, Monaco Editor with side-by-side diff, 11 editor themes, and PTY-backed `xterm.js` terminals
+- Each Code session keeps its own workspace focus, approvals, recent jobs, and memory
+- Repo answers are grounded in the active attached workspace instead of the host app repo
+- The Code page sends chat and approval actions through session-owned backend routes so coding work stays bound to the active session
+- The workspace combines a session rail, file explorer, Monaco Editor with side-by-side diff, themes, and PTY-backed `xterm.js` terminals
 - The assistant sidebar is split into `Chat`, `Tasks`, `Approvals`, and `Checks` so operational detail does not flood the transcript
 - Approval-heavy coding flows stay in the same workspace; pending approvals appear in their own tab and as a small non-blocking chat notice instead of hijacking the page
 - Assistant-driven file and shell tools are pinned to the active workspace root, so Code can use repo-local `git` and verification commands without broadening the main chat shell policy
-- Global memory is not preloaded into Code sessions; cross-memory lookups are explicit and read-only through `memory_bridge_search`
 - Broader Guardian capabilities remain available from the Coding Assistant, including research, automation creation, and other assistant tasks, without replacing the session's repo anchor
 - Main chat, CLI, and Telegram can attach to the same backend code session and continue its transcript, but they remain normal chat surfaces rather than the full Code-page client
 
-Implementation detail and current limitations are documented in [docs/specs/CODING-ASSISTANT-SPEC.md](docs/specs/CODING-ASSISTANT-SPEC.md).
+Implementation detail and current limitations are documented in [docs/specs/CODING-WORKSPACE-SPEC.md](docs/specs/CODING-WORKSPACE-SPEC.md).
 
 ### Telegram Setup
 
