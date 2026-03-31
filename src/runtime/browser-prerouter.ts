@@ -11,7 +11,7 @@ export interface BrowserPendingApprovalMetadata {
 export interface BrowserPreRouteResult {
   content: string;
   metadata?: {
-    pendingApprovals?: BrowserPendingApprovalMetadata[];
+    pendingAction?: Record<string, unknown>;
   };
 }
 
@@ -208,7 +208,18 @@ async function executeDirectBrowserAction(
         `I located ref '${match.ref}' for ${describeTargetSelector(intent.target)}${state.url ? ` on ${state.url}` : ''} and prepared the ${action} action.`,
         prompt,
       ].filter(Boolean).join('\n\n'),
-      metadata: pendingApprovals.length > 0 ? { pendingApprovals } : undefined,
+      metadata: pendingApprovals.length > 0
+        ? {
+            pendingAction: {
+              status: 'pending',
+              blocker: {
+                kind: 'approval',
+                prompt,
+                approvalSummaries: pendingApprovals,
+              },
+            },
+          }
+        : undefined,
     };
   }
 

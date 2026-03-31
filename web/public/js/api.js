@@ -280,6 +280,10 @@ export const api = {
     body: JSON.stringify({ name }),
   }),
   assistantState: () => request('/api/assistant/state'),
+  assistantJobFollowUp: (payload) => request('/api/assistant/jobs/follow-up', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
   assistantRuns: (params = {}) => request(`/api/assistant/runs${buildQueryString(params)}`),
   assistantRun: (runId) => request(`/api/assistant/runs/${encodeURIComponent(runId)}`),
   toolsState: (limit = 50) => request(`/api/tools?limit=${limit}`),
@@ -409,6 +413,11 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
+  currentPendingAction: (userId = 'web-user', channel = 'web', surfaceId = 'web-guardian-chat') => {
+    const qs = new URLSearchParams({ userId, channel, surfaceId });
+    return request(`/api/chat/pending-action?${qs.toString()}`);
+  },
+  routingTrace: (params = {}) => request(`/api/routing/trace${buildQueryString(params)}`),
   routingMode: () => request('/api/routing/mode'),
   setRoutingMode: (mode) => request('/api/routing/mode', {
     method: 'POST',

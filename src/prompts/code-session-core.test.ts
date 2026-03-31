@@ -30,4 +30,11 @@ describe('code-session-core prompt', () => {
     expect(prompt).toContain('outside the allowed paths');
     expect(prompt).toContain('ignore the stale workspace reference');
   });
+
+  it('tells coding-session agents how to answer Guardian CLI command questions', () => {
+    const prompt = composeCodeSessionSystemPrompt();
+    expect(prompt).toContain('<cli-command-guide>');
+    expect(prompt).toContain('answer from that guide instead of guessing');
+    expect(prompt).toContain('Do not invent slash commands or hidden subcommands');
+  });
 });

@@ -83,13 +83,20 @@ describe('tryBrowserPreRoute', () => {
     expect(result).not.toBeNull();
     expect(result?.content).toContain("prepared the click action");
     expect(result?.content).toContain('Approval UI rendered.');
-    expect(result?.metadata?.pendingApprovals).toEqual([
-      {
-        id: 'approval-1',
-        toolName: 'browser_act',
-        argsPreview: '{"stateId":"state-1","action":"click","ref":"link-more-info"}',
+    expect(result?.metadata).toMatchObject({
+      pendingAction: {
+        blocker: {
+          kind: 'approval',
+          approvalSummaries: [
+            {
+              id: 'approval-1',
+              toolName: 'browser_act',
+              argsPreview: '{"stateId":"state-1","action":"click","ref":"link-more-info"}',
+            },
+          ],
+        },
       },
-    ]);
+    });
     expect(trackPendingApproval).toHaveBeenCalledWith('approval-1');
     expect(onPendingApproval).toHaveBeenCalledWith({
       approvalId: 'approval-1',
@@ -203,7 +210,7 @@ describe('tryBrowserPreRoute', () => {
     });
 
     expect(result?.content).toContain("prepared the click action");
-    expect(result?.metadata?.pendingApprovals?.[0]?.id).toBe('approval-nested');
+    expect((result?.metadata?.pendingAction as { blocker?: { approvalSummaries?: Array<{ id?: string }> } } | undefined)?.blocker?.approvalSummaries?.[0]?.id).toBe('approval-nested');
   });
 
   it('renders link details from stringified browser_links output', async () => {

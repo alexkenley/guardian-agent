@@ -8,6 +8,7 @@ import type {
 import type { AssistantDispatchTrace, WorkflowTraceNode } from './orchestrator.js';
 import type { OrchestrationRunEvent } from './run-events.js';
 import type { ScheduledTaskHistoryEntry } from './scheduled-tasks.js';
+import { runDetailMatchesContextFilters } from './trace-context-filters.js';
 
 export type DashboardRunStatus =
   | 'queued'
@@ -53,6 +54,31 @@ export interface DashboardRunTimelineItem {
   toolName?: string;
   approvalId?: string;
   verificationKind?: 'test' | 'lint' | 'build' | 'manual';
+  contextAssembly?: DashboardRunTimelineContextAssembly;
+}
+
+export interface DashboardRunTimelineContextMemoryEntry {
+  category: string;
+  createdAt: string;
+  preview: string;
+  renderMode: 'full' | 'summary';
+  queryScore: number;
+  isContextFlush: boolean;
+  matchReasons?: string[];
+}
+
+export interface DashboardRunTimelineContextAssembly {
+  summary?: string;
+  detail?: string;
+  memoryScope?: 'global' | 'coding_session' | 'none';
+  knowledgeBaseLoaded?: boolean;
+  knowledgeBaseQueryPreview?: string;
+  continuityKey?: string;
+  activeExecutionRefs?: string[];
+  linkedSurfaceCount?: number;
+  selectedMemoryEntryCount?: number;
+  omittedMemoryEntryCount?: number;
+  selectedMemoryEntries?: DashboardRunTimelineContextMemoryEntry[];
 }
 
 export interface DashboardRunSummary {
@@ -101,6 +127,8 @@ export interface RunTimelineListFilters {
   channel?: string;
   agentId?: string;
   codeSessionId?: string;
+  continuityKey?: string;
+  activeExecutionRef?: string;
 }
 
 export interface RunTimelineStoreOptions {
@@ -158,6 +186,7 @@ export class RunTimelineStore {
         if (filters.channel && detail.summary.channel !== filters.channel) return false;
         if (filters.agentId && detail.summary.agentId !== filters.agentId) return false;
         if (filters.codeSessionId && detail.summary.codeSessionId !== filters.codeSessionId) return false;
+        if (!runDetailMatchesContextFilters(detail, filters)) return false;
         return true;
       })
       .slice(0, Math.max(1, filters.limit ?? 20))
@@ -458,7 +487,21 @@ function cloneDetail(detail: DashboardRunDetail): DashboardRunDetail {
       ...detail.summary,
       tags: [...detail.summary.tags],
     },
-    items: detail.items.map((item) => ({ ...item })),
+    items: detail.items.map((item) => ({
+      ...item,
+      ...(item.contextAssembly
+        ? {
+            contextAssembly: {
+              ...item.contextAssembly,
+              ...(item.contextAssembly.selectedMemoryEntries
+                ? {
+                    selectedMemoryEntries: item.contextAssembly.selectedMemoryEntries.map((entry) => ({ ...entry })),
+                  }
+                : {}),
+            },
+          }
+        : {}),
+    })),
   };
 }
 
@@ -721,6 +764,33 @@ function humanizeTraceStepName(stepName: string): string {
 }
 
 function buildTraceNodeItems(runId: string, node: WorkflowTraceNode): DashboardRunTimelineItem[] {
+  const contextAssembly = extractContextAssembly(node);
+  if (node.kind === 'handoff') {
+    return [{
+      id: `node:${node.id}:${node.status === 'running' ? 'handoff_started' : 'handoff_completed'}`,
+      runId,
+      timestamp: node.completedAt ?? node.startedAt,
+      type: node.status === 'running' ? 'handoff_started' : 'handoff_completed',
+      status: node.status === 'failed'
+        ? 'failed'
+        : node.status === 'blocked'
+          ? 'blocked'
+          : node.status === 'running'
+            ? 'running'
+            : 'succeeded',
+      source: 'orchestrator',
+      title: node.status === 'failed'
+        ? `Handoff failed: ${node.name}`
+        : node.status === 'blocked'
+          ? `Handoff blocked: ${node.name}`
+          : node.status === 'running'
+            ? `Handoff: ${node.name}`
+            : `Handoff completed: ${node.name}`,
+      detail: extractNodeDetail(node),
+      nodeId: node.id,
+      ...(contextAssembly ? { contextAssembly } : {}),
+    }];
+  }
   if (node.kind === 'tool_call') {
     const items: DashboardRunTimelineItem[] = [{
       id: `node:${node.id}:started`,
@@ -733,6 +803,7 @@ function buildTraceNodeItems(runId: string, node: WorkflowTraceNode): DashboardR
       detail: extractNodeDetail(node),
       nodeId: node.id,
       toolName: node.name,
+      ...(contextAssembly ? { contextAssembly } : {}),
     }];
     if (node.completedAt) {
       items.push({
@@ -746,6 +817,7 @@ function buildTraceNodeItems(runId: string, node: WorkflowTraceNode): DashboardR
         detail: extractNodeDetail(node),
         nodeId: node.id,
         toolName: node.name,
+        ...(contextAssembly ? { contextAssembly } : {}),
       });
     }
     return items;
@@ -762,6 +834,7 @@ function buildTraceNodeItems(runId: string, node: WorkflowTraceNode): DashboardR
     title: mapped.title(node.name),
     detail: extractNodeDetail(node),
     nodeId: node.id,
+    ...(contextAssembly ? { contextAssembly } : {}),
   }];
 }
 
@@ -934,10 +1007,84 @@ function buildNodeCompletionTitle(node: WorkflowTraceNode): string {
 
 function extractNodeDetail(node: WorkflowTraceNode): string | undefined {
   const metadata = isRecord(node.metadata) ? node.metadata : null;
+  const explicitDetail = metadata && typeof metadata.detail === 'string' ? metadata.detail : null;
+  const summary = metadata && typeof metadata.summary === 'string' ? metadata.summary : null;
   const result = metadata && isRecord(metadata.result) ? metadata.result : null;
   const error = result && typeof result.error === 'string' ? result.error : null;
   const message = result && typeof result.message === 'string' ? result.message : null;
-  return truncateText(nonEmptyText(error) ?? nonEmptyText(message), 220);
+  return truncateText(nonEmptyText(explicitDetail) ?? nonEmptyText(summary) ?? nonEmptyText(error) ?? nonEmptyText(message), 220);
+}
+
+function extractContextAssembly(node: WorkflowTraceNode): DashboardRunTimelineContextAssembly | undefined {
+  const metadata = isRecord(node.metadata) ? node.metadata : null;
+  if (!metadata) return undefined;
+  const memoryScope = metadata.memoryScope === 'global' || metadata.memoryScope === 'coding_session' || metadata.memoryScope === 'none'
+    ? metadata.memoryScope
+    : undefined;
+  const selectedMemoryEntries = Array.isArray(metadata.selectedMemoryEntries)
+    ? metadata.selectedMemoryEntries
+      .map((entry) => {
+        if (!isRecord(entry)) return null;
+        const category = nonEmptyText(typeof entry.category === 'string' ? entry.category : undefined);
+        const createdAt = nonEmptyText(typeof entry.createdAt === 'string' ? entry.createdAt : undefined);
+        const preview = nonEmptyText(typeof entry.preview === 'string' ? entry.preview : undefined);
+        const renderMode = entry.renderMode === 'full' || entry.renderMode === 'summary'
+          ? entry.renderMode
+          : null;
+        const queryScore = typeof entry.queryScore === 'number' && Number.isFinite(entry.queryScore)
+          ? entry.queryScore
+          : 0;
+        if (!category || !createdAt || !preview || !renderMode) return null;
+        return {
+          category,
+          createdAt,
+          preview,
+          renderMode,
+          queryScore,
+          isContextFlush: entry.isContextFlush === true,
+          ...(Array.isArray(entry.matchReasons)
+            ? {
+                matchReasons: entry.matchReasons
+                  .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+                  .slice(0, 3),
+              }
+            : {}),
+        };
+      })
+      .filter((entry): entry is DashboardRunTimelineContextMemoryEntry => !!entry)
+    : [];
+  const selectedMemoryEntryCount = typeof metadata.selectedMemoryEntryCount === 'number' && Number.isFinite(metadata.selectedMemoryEntryCount)
+    ? metadata.selectedMemoryEntryCount
+    : undefined;
+  const omittedMemoryEntryCount = typeof metadata.omittedMemoryEntryCount === 'number' && Number.isFinite(metadata.omittedMemoryEntryCount)
+    ? metadata.omittedMemoryEntryCount
+    : undefined;
+  const contextAssembly: DashboardRunTimelineContextAssembly = {
+    ...(nonEmptyText(typeof metadata.summary === 'string' ? metadata.summary : undefined) ? { summary: nonEmptyText(typeof metadata.summary === 'string' ? metadata.summary : undefined) } : {}),
+    ...(nonEmptyText(typeof metadata.detail === 'string' ? metadata.detail : undefined) ? { detail: nonEmptyText(typeof metadata.detail === 'string' ? metadata.detail : undefined) } : {}),
+    ...(memoryScope ? { memoryScope } : {}),
+    ...(typeof metadata.knowledgeBaseLoaded === 'boolean' ? { knowledgeBaseLoaded: metadata.knowledgeBaseLoaded } : {}),
+    ...(nonEmptyText(typeof metadata.knowledgeBaseQueryPreview === 'string' ? metadata.knowledgeBaseQueryPreview : undefined)
+      ? { knowledgeBaseQueryPreview: nonEmptyText(typeof metadata.knowledgeBaseQueryPreview === 'string' ? metadata.knowledgeBaseQueryPreview : undefined) }
+      : {}),
+    ...(nonEmptyText(typeof metadata.continuityKey === 'string' ? metadata.continuityKey : undefined)
+      ? { continuityKey: nonEmptyText(typeof metadata.continuityKey === 'string' ? metadata.continuityKey : undefined) }
+      : {}),
+    ...(Array.isArray(metadata.activeExecutionRefs)
+      ? {
+          activeExecutionRefs: metadata.activeExecutionRefs
+            .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+            .map((value) => value.trim()),
+        }
+      : {}),
+    ...(typeof metadata.linkedSurfaceCount === 'number' && Number.isFinite(metadata.linkedSurfaceCount)
+      ? { linkedSurfaceCount: metadata.linkedSurfaceCount }
+      : {}),
+    ...(typeof selectedMemoryEntryCount === 'number' ? { selectedMemoryEntryCount } : {}),
+    ...(typeof omittedMemoryEntryCount === 'number' ? { omittedMemoryEntryCount } : {}),
+    ...(selectedMemoryEntries.length > 0 ? { selectedMemoryEntries } : {}),
+  };
+  return Object.keys(contextAssembly).length > 0 ? contextAssembly : undefined;
 }
 
 function mapTraceNodeKind(kind: WorkflowTraceNode['kind']): {

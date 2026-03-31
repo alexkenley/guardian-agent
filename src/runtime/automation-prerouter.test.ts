@@ -98,13 +98,20 @@ describe('tryAutomationPreRoute', () => {
 
     expect(result).not.toBeNull();
     expect(result?.content).toContain("scheduled assistant task 'Weekday Lead Research'");
-    expect(result?.metadata?.pendingApprovals).toEqual([
-      {
-        id: 'approval-1',
-        toolName: 'automation_save',
-        argsPreview: expect.any(String),
+    expect(result?.metadata).toMatchObject({
+      pendingAction: {
+        blocker: {
+          kind: 'approval',
+          approvalSummaries: [
+            {
+              id: 'approval-1',
+              toolName: 'automation_save',
+              argsPreview: expect.any(String),
+            },
+          ],
+        },
       },
-    ]);
+    });
     expect(executeTool).toHaveBeenNthCalledWith(
       1,
       'automation_list',
@@ -395,14 +402,19 @@ describe('tryAutomationPreRoute', () => {
     });
 
     expect(result?.content).toContain('fixable policy blockers');
-    expect(result?.metadata).toEqual({
-      pendingApprovals: [
-        {
-          id: 'approval-policy-1',
-          toolName: 'update_tool_policy',
-          argsPreview: expect.any(String),
+    expect(result?.metadata).toMatchObject({
+      pendingAction: {
+        blocker: {
+          kind: 'approval',
+          approvalSummaries: [
+            {
+              id: 'approval-policy-1',
+              toolName: 'update_tool_policy',
+              argsPreview: expect.any(String),
+            },
+          ],
         },
-      ],
+      },
       resumeAutomationAfterApprovals: true,
     });
   });
@@ -530,13 +542,20 @@ describe('tryAutomationPreRoute', () => {
     expect(pathAllowed).toBe(true);
     expect(result?.content).toContain('scheduled assistant task');
     expect(result?.content).not.toContain('not execution-ready');
-    expect(result?.metadata?.pendingApprovals).toEqual([
-      {
-        id: 'approval-task-missing-parent-1',
-        toolName: 'automation_save',
-        argsPreview: expect.any(String),
+    expect(result?.metadata).toMatchObject({
+      pendingAction: {
+        blocker: {
+          kind: 'approval',
+          approvalSummaries: [
+            {
+              id: 'approval-task-missing-parent-1',
+              toolName: 'automation_save',
+              argsPreview: expect.any(String),
+            },
+          ],
+        },
       },
-    ]);
+    });
     expect(executeTool.mock.calls.some((call) => (
       call[0] === 'automation_save'
       && call[1]?.name === 'Daily Lead Summary'
@@ -650,13 +669,20 @@ describe('tryAutomationPreRoute', () => {
     });
 
     expect(result?.content).toContain('native Guardian step-based automation');
-    expect(result?.metadata?.pendingApprovals).toEqual([
-      {
-        id: 'approval-workflow-relative-1',
-        toolName: 'automation_save',
-        argsPreview: expect.any(String),
+    expect(result?.metadata).toMatchObject({
+      pendingAction: {
+        blocker: {
+          kind: 'approval',
+          approvalSummaries: [
+            {
+              id: 'approval-workflow-relative-1',
+              toolName: 'automation_save',
+              argsPreview: expect.any(String),
+            },
+          ],
+        },
       },
-    ]);
+    });
     expect(executeTool).toHaveBeenCalledWith(
       'automation_save',
       expect.objectContaining({

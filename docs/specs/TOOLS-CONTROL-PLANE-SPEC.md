@@ -258,7 +258,9 @@ This keeps direct API execution aligned with the brokered and planner-driven exe
 
 ### Structured Approval UX (all channels)
 
-When a tool returns `pending_approval`, the response includes structured metadata (`response.metadata.pendingApprovals`) with an array of `{ id, toolName, argsPreview }` objects. Channels use that metadata as the canonical approval source instead of trusting model-written approval prose.
+When a tool returns `pending_approval`, Guardian surfaces the blocked work through `response.metadata.pendingAction`.
+
+For approval blockers, `pendingAction.blocker.approvalSummaries` contains the structured approval summaries (`{ id, toolName, argsPreview }`) that channels use as the canonical approval source instead of trusting model-written approval prose.
 
 #### Shared chat-flow rules
 
@@ -274,21 +276,22 @@ When a tool returns `pending_approval`, the response includes structured metadat
   3. `Waiting for approval to write S:\Development\test26.txt.`
   4. user approves
   5. final completion message
-- The approval decision executes immediately in `ToolExecutor.decideApproval`; the continuation message is only for getting the LLM to finish the original task cleanly.
+- The approval decision executes immediately in `ToolExecutor.decideApproval`; higher-level blocked-work ownership belongs to the pending-action orchestration layer.
 
 #### Channel-specific behavior
 
 - **Web UI**
   - Renders native Approve / Deny buttons in the chat panel.
   - Button clicks call `api.decideToolApproval()` directly.
-  - The web channel then sends a continuation message so the LLM finishes the suspended task.
-  - Web should not expose model-written approval chatter when structured metadata is present.
-  - Web remains the reference UX for approval wording.
+  - Web renders approval controls from `pendingAction.blocker.approvalSummaries`.
+  - The same blocked response that asks for approval should already carry `response.metadata.pendingAction`; web should not require a second approval turn to discover the approval state.
+  - Web may fall back to the canonical current-surface pending-action lookup when streamed metadata is missing, but that is recovery behavior rather than the primary contract.
+  - Web should not depend on model-written approval chatter.
 
 - **Telegram**
   - Sends the approval prompt as a separate message with inline keyboard buttons (✅ Approve / ❌ Deny).
   - Plain-text approvals such as `approved` / `yes approved` are also supported as a fallback for the current pending approval state.
-  - Telegram ignores model-written manual approval prose when `pendingApprovals` metadata exists and always renders channel-owned copy instead.
+  - Telegram uses `pendingAction.blocker.approvalSummaries` as the source of truth for the approval buttons.
   - Approval status lines are normalized to user-facing text such as `Approved and executed`; raw backend strings like `Tool 'fs_write' completed.` should not leak.
 
 - **CLI**
@@ -297,7 +300,7 @@ When a tool returns `pending_approval`, the response includes structured metadat
   - The CLI should not show legacy chat-style helper text such as:
     - `Reply "yes" to approve or "no" to deny`
     - `Approval ID: ...`
-  - On approval, the CLI auto-dispatches a continuation message and handles chained approvals inline.
+  - CLI uses `pendingAction.blocker.approvalSummaries` as the source of truth for the inline approval prompt and handles chained approvals inline.
   - If an inline prompt references a stale approval ID, the CLI refreshes the current scoped pending approvals and re-prompts instead of surfacing raw `Approval '<id>' not found.` text.
   - If a bare `y/yes/no/deny` leaks through the normal readline message path while an inline approval is active, CLI intercepts it locally and routes it through the pending inline approval flow instead of sending it as a normal chat message.
 

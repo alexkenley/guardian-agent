@@ -1,5 +1,6 @@
 import { api } from '../api.js';
 import { onSSE } from '../app.js';
+import { normalizeRunTimelineContextAssembly, renderRunTimelineContextAssembly } from '../components/run-timeline-context.js';
 import { registerAllThemes, THEME_REGISTRY } from '../monaco-themes.js';
 import { themes, getSavedTheme } from '../theme.js';
 
@@ -14,6 +15,8 @@ const MAX_TERMINAL_PANES = 3;
 const APPROVAL_BACKLOG_SOFT_CAP = 3;
 const MAX_SESSION_JOBS = 20;
 const MAX_TIMELINE_RUNS = 12;
+const MAX_TIMELINE_VISIBLE_ITEMS = 6;
+const TIMELINE_FOCUS_CONTEXT_RADIUS = 2;
 const INSPECTOR_TABS = ['investigate', 'flow', 'impact'];
 const SESSION_REFRESH_INTERVAL_MS = 5000;
 const STRUCTURE_PREVIEW_DEBOUNCE_MS = 350;
@@ -100,6 +103,31 @@ function codeSurfacePayload(payload = {}) {
 
 function normalizeCodeSessionId(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function getCodeHashQueryParam(name) {
+  const raw = window.location.hash || '';
+  const [, query = ''] = raw.split('?');
+  return new URLSearchParams(query).get(name) || '';
+}
+
+function getRequestedCodeSessionId() {
+  return getCodeHashQueryParam('sessionId') || getCodeHashQueryParam('codeSessionId');
+}
+
+function getRequestedCodeAssistantRunId() {
+  return getCodeHashQueryParam('assistantRunId');
+}
+
+function getRequestedCodeAssistantRunItemId() {
+  return getCodeHashQueryParam('assistantRunItemId');
+}
+
+function shouldOpenRequestedCodeActivityPanel() {
+  return Boolean(
+    getRequestedCodeAssistantRunId().trim()
+    || getRequestedCodeAssistantRunItemId().trim(),
+  );
 }
 
 function currentCodeSessionParams(params = {}) {
@@ -2870,6 +2898,7 @@ function normalizeTimelineItem(item) {
     source: typeof item.source === 'string' ? item.source : 'system',
     title,
     detail: typeof item.detail === 'string' ? item.detail : '',
+    contextAssembly: normalizeRunTimelineContextAssembly(item.contextAssembly),
   };
 }
 
@@ -2934,6 +2963,8 @@ function upsertSession(session) {
 function mergeSessionsFromServer(payload, options = {}) {
   const previousById = new Map((codeState.sessions || []).map((session) => [session.id, session]));
   const previousOrder = new Map((codeState.sessions || []).map((session, index) => [session.id, index]));
+  const previousAttachedSessionId = normalizeCodeSessionId(codeState.attachedSessionId);
+  const previousActiveSessionId = normalizeCodeSessionId(codeState.activeSessionId);
   const serverSessions = Array.isArray(payload?.sessions)
     ? payload.sessions.map((record) => normalizeServerSession(record, previousById.get(record.id) || {}))
     : [];
@@ -2953,8 +2984,16 @@ function mergeSessionsFromServer(payload, options = {}) {
   codeState.sessions = sessions;
   const preferredCurrentSessionId = normalizeCodeSessionId(options.preferredCurrentSessionId);
   const serverCurrentSessionId = normalizeCodeSessionId(payload?.currentSessionId);
+  const previouslyViewedSessionId = previousActiveSessionId
+    && previousActiveSessionId !== previousAttachedSessionId
+    && sessions.some((session) => session.id === previousActiveSessionId)
+      ? previousActiveSessionId
+      : null;
+  codeState.attachedSessionId = serverCurrentSessionId;
   const preferredActiveId = preferredCurrentSessionId && sessions.some((session) => session.id === preferredCurrentSessionId)
     ? preferredCurrentSessionId
+    : previouslyViewedSessionId
+      ? previouslyViewedSessionId
     : serverCurrentSessionId && sessions.some((session) => session.id === serverCurrentSessionId)
       ? serverCurrentSessionId
     : (codeState.activeSessionId && sessions.some((session) => session.id === codeState.activeSessionId)
@@ -3146,7 +3185,14 @@ export async function renderCode(container) {
     if (Array.isArray(statusResult?.shellOptions)) shellOptionsCache = statusResult.shellOptions;
 
     codeState = normalizeState(codeState, cachedAgents);
-    const sessionsIndex = await refreshSessionsIndex().catch(() => {
+    if (shouldOpenRequestedCodeActivityPanel() && codeState.activePanel !== 'activity') {
+      codeState.activePanel = 'activity';
+      saveState(codeState);
+    }
+    const requestedSessionId = normalizeCodeSessionId(getRequestedCodeSessionId());
+    const sessionsIndex = await refreshSessionsIndex({
+      ...(requestedSessionId ? { preferredCurrentSessionId: requestedSessionId } : {}),
+    }).catch(() => {
       saveState(codeState);
       return null;
     });
@@ -3190,6 +3236,7 @@ export async function renderCode(container) {
     if (!isActiveCodeView(container, lifecycleId)) return;
 
     renderDOM(container);
+    focusRequestedCodeContext(container);
     hasRenderedOnce = true;
   } catch (err) {
     if (isActiveCodeView(container, lifecycleId)) {
@@ -3199,6 +3246,43 @@ export async function renderCode(container) {
     if (lifecycleId === codeViewLifecycleId) {
       renderInFlight = false;
     }
+  }
+}
+
+function focusRequestedCodeContext(container) {
+  const requestedSessionId = normalizeCodeSessionId(getRequestedCodeSessionId());
+  const requestedRunId = getRequestedCodeAssistantRunId().trim();
+  const requestedRunItemId = getRequestedCodeAssistantRunItemId().trim();
+
+  if (requestedRunItemId) {
+    const itemCard = container.querySelector(`#code-session-run-item-${CSS.escape(requestedRunItemId)}`);
+    if (itemCard instanceof HTMLElement) {
+      const runCard = itemCard.closest('details');
+      if (runCard instanceof HTMLDetailsElement) {
+        runCard.open = true;
+      }
+      itemCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+  }
+
+  if (requestedRunId) {
+    const runCard = container.querySelector(`#code-session-run-${CSS.escape(requestedRunId)}`);
+    if (runCard instanceof HTMLDetailsElement) {
+      runCard.open = true;
+      runCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    if (runCard instanceof HTMLElement) {
+      runCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+  }
+
+  if (!requestedSessionId) return;
+  const sessionButton = container.querySelector(`[data-code-session-id="${CSS.escape(requestedSessionId)}"]`);
+  if (sessionButton instanceof HTMLElement) {
+    sessionButton.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 }
 
@@ -3865,34 +3949,76 @@ function renderActivityMessages(session) {
   `;
 }
 
+function runContainsRequestedTimelineItem(run, requestedItemId) {
+  if (!requestedItemId) return false;
+  return Array.isArray(run?.items) && run.items.some((item) => item?.id === requestedItemId);
+}
+
+function getVisibleTimelineItems(run, requestedItemId) {
+  const items = Array.isArray(run?.items) ? run.items : [];
+  if (items.length <= MAX_TIMELINE_VISIBLE_ITEMS || !requestedItemId) {
+    return items.slice(-MAX_TIMELINE_VISIBLE_ITEMS);
+  }
+  const targetIndex = items.findIndex((item) => item?.id === requestedItemId);
+  if (targetIndex === -1) {
+    return items.slice(-MAX_TIMELINE_VISIBLE_ITEMS);
+  }
+  const windowStart = Math.max(
+    0,
+    Math.min(targetIndex - TIMELINE_FOCUS_CONTEXT_RADIUS, items.length - MAX_TIMELINE_VISIBLE_ITEMS),
+  );
+  return items.slice(windowStart, windowStart + MAX_TIMELINE_VISIBLE_ITEMS);
+}
+
 function renderSessionRunTimeline(session) {
   const runs = normalizeTimelineRuns(session?.timelineRuns);
+  const requestedRunId = getRequestedCodeAssistantRunId();
+  const requestedItemId = getRequestedCodeAssistantRunItemId().trim();
   if (runs.length === 0) {
     return '<div class="empty-state">Live run activity will appear here when this coding session dispatches work.</div>';
   }
 
   return `
     <div class="code-status-list">
-      ${runs.map((run, index) => `
-        <details class="code-status-card status-${escAttr(mapTimelineRunTone(run.summary.status))}"${index === 0 ? ' open' : ''}>
+      ${runs.map((run, index) => {
+        const itemHighlightedRun = runContainsRequestedTimelineItem(run, requestedItemId);
+        const highlighted = run.summary.runId === requestedRunId || (!requestedRunId && itemHighlightedRun);
+        const shouldOpen = highlighted || itemHighlightedRun || (!requestedRunId && !requestedItemId && index === 0);
+        const visibleItems = getVisibleTimelineItems(run, itemHighlightedRun ? requestedItemId : '');
+        return `
+        <details
+          id="code-session-run-${escAttr(run.summary.runId)}"
+          data-code-session-run-id="${escAttr(run.summary.runId)}"
+          class="code-status-card status-${escAttr(mapTimelineRunTone(run.summary.status))}"
+          ${highlighted ? 'style="outline:2px solid var(--accent);outline-offset:2px"' : ''}
+          ${shouldOpen ? 'open' : ''}
+        >
           <summary class="code-status-card__top">
             <strong>${esc(run.summary.title)}</strong>
             <span class="code-status-card__meta">${esc(formatTimelineRunMeta(run.summary))}</span>
           </summary>
           ${run.summary.subtitle ? `<div class="code-status-card__detail">${esc(run.summary.subtitle)}</div>` : ''}
+          ${itemHighlightedRun ? '<div class="code-status-card__detail">Showing the requested event with nearby run context.</div>' : ''}
           <div class="code-status-list" style="margin-top:0.75rem">
-            ${run.items.slice(-6).map((item) => `
-              <article class="code-status-card status-${escAttr(mapTimelineItemTone(item.status))}">
+            ${visibleItems.map((item) => `
+              <article
+                id="code-session-run-item-${escAttr(item.id)}"
+                data-code-session-run-item-id="${escAttr(item.id)}"
+                class="code-status-card status-${escAttr(mapTimelineItemTone(item.status))}"
+                ${item.id === requestedItemId ? 'style="outline:2px solid var(--accent);outline-offset:2px"' : ''}
+              >
                 <div class="code-status-card__top">
                   <strong>${esc(item.title)}</strong>
                   <span class="code-status-card__meta">${esc(formatRelativeTime(item.timestamp))}</span>
                 </div>
                 ${item.detail ? `<div class="code-status-card__detail">${esc(item.detail)}</div>` : ''}
+                ${renderRunTimelineContextAssembly(item.contextAssembly, esc)}
               </article>
             `).join('')}
           </div>
         </details>
-      `).join('')}
+      `;
+      }).join('')}
     </div>
   `;
 }
@@ -5397,6 +5523,7 @@ function renderSessionForm() {
 
 function renderSessionCard(session) {
   const isActive = session.id === codeState.activeSessionId;
+  const isAttached = session.id === normalizeCodeSessionId(codeState.attachedSessionId);
   const approvalCount = Array.isArray(session.pendingApprovals) ? session.pendingApprovals.length : 0;
   const checkCount = getCheckBadgeCount(session);
   const taskCount = getTaskBadgeCount(session);
@@ -5412,7 +5539,8 @@ function renderSessionCard(session) {
       <div class="code-session__top">
         <span style="display:flex;align-items:center;gap:0.45rem;min-width:0">
           <strong>${esc(session.title)}</strong>
-          ${isActive ? '<span class="badge badge-info">CURRENT</span>' : ''}
+          ${isAttached ? '<span class="badge badge-info">CURRENT</span>' : ''}
+          ${isActive && !isAttached ? '<span class="badge badge-idle">VIEWING</span>' : ''}
         </span>
         <span style="display:flex;gap:0.4rem;align-items:center">
           <span class="code-session__edit" data-code-edit-session="${escAttr(session.id)}" title="Edit session">&#9998;</span>
@@ -5420,7 +5548,13 @@ function renderSessionCard(session) {
         </span>
       </div>
       <div class="code-session__meta">${esc(session.workspaceRoot)}</div>
-      <div class="code-session__hint">${isActive ? 'Current for Guardian chat' : 'Click to make current for Guardian chat'}</div>
+      <div class="code-session__hint">${
+        isAttached
+          ? 'Current for Guardian chat'
+          : isActive
+            ? 'Viewing in code workbench. Click to make current for Guardian chat'
+            : 'Click to make current for Guardian chat'
+      }</div>
       <div class="code-session__badges">
         ${workspaceTrust ? `<span class="badge ${trustBadgeClass}">TRUST: ${esc(reviewActive ? 'ACCEPTED' : String(effectiveTrustState || '').toUpperCase())}</span>` : ''}
         ${reviewActive ? `<span class="badge ${rawTrustBadgeClass}">RAW: ${esc(String(workspaceTrust?.state || '').toUpperCase())}</span>` : ''}
@@ -6160,6 +6294,7 @@ function bindEvents(container) {
     });
     const session = applyCodeSessionSnapshot(snapshot);
     codeState.activeSessionId = session?.id || null;
+    codeState.attachedSessionId = session?.id || null;
     codeState.showCreateForm = false;
     codeState.createDraft = { title: '', workspaceRoot: '.', agentId: '' };
     treeCache.clear();
@@ -6300,7 +6435,9 @@ function bindEvents(container) {
   container.querySelectorAll('[data-code-session-id]').forEach((button) => {
     button.addEventListener('click', () => {
       const nextSessionId = normalizeCodeSessionId(button.dataset.codeSessionId);
-      if (!nextSessionId || nextSessionId === normalizeCodeSessionId(codeState.activeSessionId)) return;
+      const alreadyViewing = nextSessionId === normalizeCodeSessionId(codeState.activeSessionId);
+      const alreadyAttached = nextSessionId === normalizeCodeSessionId(codeState.attachedSessionId);
+      if (!nextSessionId || (alreadyViewing && alreadyAttached)) return;
       void switchCodeSession(nextSessionId).catch(() => {});
     });
   });
@@ -6322,6 +6459,9 @@ function bindEvents(container) {
       codeState.sessions = codeState.sessions.filter((session) => session.id !== deletedId);
       const wasActive = codeState.activeSessionId === deletedId;
       codeState.activeSessionId = codeState.sessions[0]?.id || null;
+      if (wasActive && !codeState.activeSessionId) {
+        codeState.attachedSessionId = null;
+      }
       saveState(codeState);
       notifyCodeSessionsChanged({
         sessionId: codeState.activeSessionId,
@@ -6615,6 +6755,7 @@ function loadState() {
     return raw ? JSON.parse(raw) : {
       sessions: [],
       activeSessionId: null,
+      attachedSessionId: null,
       showCreateForm: false,
       activePanel: 'sessions',
       createDraft: { title: '', workspaceRoot: '.', agentId: '' },
@@ -6623,6 +6764,7 @@ function loadState() {
     return {
       sessions: [],
       activeSessionId: null,
+      attachedSessionId: null,
       showCreateForm: false,
       activePanel: 'sessions',
       createDraft: { title: '', workspaceRoot: '.', agentId: '' },
@@ -6680,6 +6822,7 @@ function normalizeState(raw, agents) {
       };
     }) : [],
     activeSessionId: raw?.activeSessionId || null,
+    attachedSessionId: normalizeCodeSessionId(raw?.attachedSessionId),
     showCreateForm: !!raw?.showCreateForm,
     activePanel: raw?.activePanel || (raw?.railCollapsed ? null : 'sessions'),
     editingSessionId: raw?.editingSessionId || null,

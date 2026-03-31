@@ -184,6 +184,7 @@ describe('IntentGateway', () => {
           operation: 'create',
           summary: 'Runs Codex in the requested coding workspace.',
           codingBackend: 'codex',
+          codingBackendRequested: true,
           sessionTarget: 'Test Tactical Game App workspace',
         }),
         model: 'test-model',
@@ -193,7 +194,174 @@ describe('IntentGateway', () => {
 
     expect(result.decision.route).toBe('coding_task');
     expect(result.decision.entities.codingBackend).toBe('codex');
+    expect(result.decision.entities.codingBackendRequested).toBe(true);
     expect(result.decision.entities.sessionTarget).toBe('Test Tactical Game App workspace');
+  });
+
+  it('includes guidance that unrelated new requests should not be absorbed by an active pending action', async () => {
+    const gateway = new IntentGateway();
+    let capturedSystem = '';
+    let capturedUser = '';
+
+    await gateway.classify(
+      {
+        content: 'Check my email.',
+        channel: 'web',
+        pendingAction: {
+          id: 'pending-1',
+          status: 'pending',
+          blockerKind: 'approval',
+          transferPolicy: 'origin_surface_only',
+          route: 'coding_task',
+          operation: 'run',
+          prompt: 'Approval required for a Codex run.',
+          originalRequest: 'Use Codex to say hello and confirm you are working.',
+        },
+      },
+      async (messages) => {
+        capturedSystem = messages[0]?.content ?? '';
+        capturedUser = messages[1]?.content ?? '';
+        return {
+          content: JSON.stringify({
+            route: 'email_task',
+            confidence: 'high',
+            operation: 'read',
+            summary: 'Checks the mailbox.',
+            turnRelation: 'new_request',
+            resolution: 'needs_clarification',
+            missingFields: ['email_provider'],
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(capturedSystem).toContain('An active pending action does not automatically make the next turn a follow_up');
+    expect(capturedSystem).toContain('active pending action is approval for a Codex run, then the user says "Check my email."');
+    expect(capturedUser).toContain('Pending action context (only relevant if the current turn is actually continuing or resolving it):');
+    expect(capturedUser).toContain('transfer policy: origin_surface_only');
+  });
+
+  it('includes continuity thread context when available', async () => {
+    const gateway = new IntentGateway();
+    let capturedUser = '';
+
+    await gateway.classify(
+      {
+        content: 'Did Codex finish that file update?',
+        channel: 'cli',
+        continuity: {
+          continuityKey: 'shared-tier:owner',
+          linkedSurfaceCount: 2,
+          linkedSurfaces: ['web:chat-main', 'cli:owner'],
+          focusSummary: 'Continue the active coding task.',
+          lastActionableRequest: 'Use Codex to create the smoke test file.',
+          activeExecutionRefs: ['code_session:Test Tactical Game App'],
+        },
+      },
+      async (messages) => {
+        capturedUser = messages[1]?.content ?? '';
+        return {
+          content: JSON.stringify({
+            route: 'coding_task',
+            confidence: 'high',
+            operation: 'inspect',
+            summary: 'Checks the status of the current coding task.',
+            turnRelation: 'follow_up',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(capturedUser).toContain('Continuity thread context:');
+    expect(capturedUser).toContain('focus summary: Continue the active coding task.');
+    expect(capturedUser).toContain('last actionable request: Use Codex to create the smoke test file.');
+  });
+
+  it('preserves coding run status check metadata', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Did Codex complete that work? Can you check?',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Checks the status of the most recent Codex run.',
+          turnRelation: 'follow_up',
+          codingBackend: 'codex',
+          codingRunStatusCheck: true,
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('inspect');
+    expect(result.decision.entities.codingBackend).toBe('codex');
+    expect(result.decision.entities.codingRunStatusCheck).toBe(true);
+  });
+
+  it('preserves coding backend request metadata separately from backend mentions', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Use Codex to investigate the failing build.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Uses Codex to investigate the failing build.',
+          codingBackend: 'codex',
+          codingBackendRequested: true,
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.entities.codingBackend).toBe('codex');
+    expect(result.decision.entities.codingBackendRequested).toBe(true);
+  });
+
+  it('includes guidance that coding artifact explanations are not backend status checks', async () => {
+    const gateway = new IntentGateway();
+    let capturedSystem = '';
+
+    await gateway.classify(
+      {
+        content: 'Why did Codex make that text artifact executable?',
+        channel: 'web',
+      },
+      async (messages) => {
+        capturedSystem = messages[0]?.content ?? '';
+        return {
+          content: JSON.stringify({
+            route: 'general_assistant',
+            confidence: 'high',
+            operation: 'unknown',
+            summary: 'Explains the file mode behavior.',
+            turnRelation: 'new_request',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(capturedSystem).toContain('Do not set codingRunStatusCheck for questions asking why a coding backend produced a particular file');
+    expect(capturedSystem).toContain('codingBackendRequested=true only when the user is explicitly asking Guardian to use or launch that coding backend for work');
+    expect(capturedSystem).toContain('executable bit, mode bit, output, or artifact');
   });
 
   it('captures explicit enable and disable intent metadata', async () => {
@@ -441,10 +609,15 @@ describe('IntentGateway', () => {
       {
         content: 'Use Outlook.',
         channel: 'web',
-        pendingClarification: {
-          kind: 'email_provider',
-          originalRequest: 'Check my email.',
+        pendingAction: {
+          id: 'pending-email-provider',
+          status: 'pending',
+          blockerKind: 'clarification',
+          field: 'email_provider',
+          route: 'email_task',
+          operation: 'read',
           prompt: 'I can use either Google Workspace (Gmail) or Microsoft 365 (Outlook) for that email task. Which one do you want me to use?',
+          originalRequest: 'Check my email.',
         },
       },
       async () => ({

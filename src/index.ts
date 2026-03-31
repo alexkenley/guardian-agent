@@ -27,6 +27,8 @@ import { normalizeHttpUrlRecord, normalizeOptionalHttpUrlInput } from './config/
 import yaml from 'js-yaml';
 import { Runtime } from './runtime/runtime.js';
 import { CLIChannel } from './channels/cli.js';
+import { findCliHelpTopic } from './channels/cli-command-guide.js';
+import { formatCliCommandGuideForPrompt } from './channels/cli-command-guide.js';
 import { TelegramChannel } from './channels/telegram.js';
 import { WebChannel, type WebAuthRuntimeConfig } from './channels/web.js';
 import type {
@@ -161,13 +163,18 @@ import {
 import { createAutomationRuntimeService } from './runtime/automation-runtime-service.js';
 import { MoltbookConnector } from './runtime/moltbook-connector.js';
 import { AssistantOrchestrator } from './runtime/orchestrator.js';
-import { AgentMemoryStore } from './runtime/agent-memory-store.js';
-import { AssistantJobTracker } from './runtime/assistant-jobs.js';
+import {
+  AgentMemoryStore,
+  type MemoryContextLoadResult,
+  type MemoryContextQuery,
+} from './runtime/agent-memory-store.js';
+import { AssistantJobTracker, buildAssistantJobDisplay, mergeAssistantJobStates } from './runtime/assistant-jobs.js';
 import { RunTimelineStore } from './runtime/run-timeline.js';
 import { NotificationService, notificationDestinationEnabled } from './runtime/notifications.js';
 import { normalizeAutomationOutputHandling, promoteAutomationFindings } from './runtime/automation-output.js';
 import { AutomationOutputStore } from './runtime/automation-output-store.js';
 import { AutomationOutputPersistenceService } from './runtime/automation-output-persistence.js';
+import { buildMemoryFlushEntry } from './runtime/memory-flush.js';
 import { buildGmailRawMessage, parseDirectGmailWriteIntent } from './runtime/gmail-compose.js';
 import {
   parseScheduledEmailAutomationIntent,
@@ -220,10 +227,36 @@ import { composeCodeSessionSystemPrompt } from './prompts/code-session-core.js';
 import { MessageRouter, type RouteDecision } from './runtime/message-router.js';
 import { resolveAgentStateId, SHARED_TIER_AGENT_STATE_ID } from './runtime/agent-state-context.js';
 import {
-  PendingClarificationStore,
-  type PendingClarificationState,
-} from './runtime/pending-clarification-store.js';
+  clearApprovalIdFromPendingAction,
+  PendingActionStore,
+  defaultPendingActionTransferPolicy,
+  isPendingActionActive,
+  summarizePendingActionForGateway,
+  toPendingActionClientMetadata,
+  type PendingActionApprovalSummary,
+  type PendingActionBlocker,
+  type PendingActionRecord,
+  type PendingActionScope,
+} from './runtime/pending-actions.js';
+import {
+  ContinuityThreadStore,
+  summarizeContinuityThreadForGateway,
+  toContinuityThreadClientMetadata,
+  type ContinuityThreadRecord,
+  type ContinuityThreadScope,
+} from './runtime/continuity-threads.js';
+import {
+  buildChatMessagesFromHistory,
+  buildPromptAssemblyDiagnostics,
+  buildSystemPromptWithContext,
+  type PromptAssemblyDiagnostics,
+} from './runtime/context-assembly.js';
+import {
+  isGenericPendingActionContinuationRequest,
+  isWorkspaceSwitchPendingActionSatisfied,
+} from './runtime/pending-action-resume.js';
 import { IntentRoutingTraceLog } from './runtime/intent-routing-trace.js';
+import { pickRoutingTraceFocusItem } from './runtime/routing-trace-focus.js';
 import { ModelFallbackChain } from './llm/model-fallback.js';
 import { TRUST_PRESETS, type TrustPresetName } from './guardian/trust-presets.js';
 import type { Capability } from './guardian/capabilities.js';
@@ -296,7 +329,6 @@ let sharedPackageInstallTrustService: PackageInstallTrustService | undefined;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-/** Default chat agent that uses the configured LLM provider. */
 const APPROVAL_CONFIRM_PATTERN = /^(?:\/)?(?:approve|approved|yes|yep|yeah|y|go ahead|do it|confirm|ok|okay|sure|proceed|accept)\b/i;
 const APPROVAL_DENY_PATTERN = /^(?:\/)?(?:deny|denied|reject|decline|cancel|no|nope|nah|n)\b/i;
 const APPROVAL_COMMAND_PATTERN = /^\/?(approve|deny)\b/i;
@@ -306,6 +338,16 @@ const MAX_TOOL_RESULT_MESSAGE_CHARS = 8_000;
 const MAX_TOOL_RESULT_STRING_CHARS = 600;
 const MAX_TOOL_RESULT_ARRAY_ITEMS = 10;
 const MAX_TOOL_RESULT_OBJECT_KEYS = 20;
+
+function stripLeadingContextPrefix(input: string): string {
+  let normalized = input.trimStart();
+  while (normalized.startsWith('[Context:')) {
+    const end = normalized.indexOf(']');
+    if (end === -1) break;
+    normalized = normalized.slice(end + 1).trimStart();
+  }
+  return normalized;
+}
 
 interface PendingApprovalState {
   ids: string[];
@@ -674,16 +716,16 @@ class ChatAgent extends BaseAgent {
   private skillResolver?: SkillResolver;
   private enabledManagedProviders?: ReadonlySet<string>;
   private maxToolRounds: number;
-  /** Pending approval IDs from the last tool round, keyed by user+channel. */
-  private pendingApprovals: Map<string, PendingApprovalState> = new Map();
   /** Suspended tool loops waiting for approval, keyed by user+channel. */
   private suspendedSessions = new Map<string, SuspendedSession>();
   /** Direct-tool approval follow-ups that should not go back through the LLM. */
   private approvalFollowUps = new Map<string, ApprovalFollowUpCopy>();
   /** Native automation requests waiting for remediation approvals before they can be retried. */
   private automationApprovalContinuations = new Map<string, AutomationApprovalContinuation>();
-  /** Shared clarification prompts waiting for a follow-up answer. */
-  private pendingClarificationStore?: PendingClarificationStore;
+  /** Shared blocked-work store for approvals, clarifications, and prerequisite gates. */
+  private pendingActionStore?: PendingActionStore;
+  /** Shared bounded continuity state across linked first-party surfaces. */
+  private continuityThreadStore?: ContinuityThreadStore;
   /** Durable trace for intent gateway, tier routing, and direct execution decisions. */
   private intentRoutingTrace?: IntentRoutingTraceLog;
   /** Optional model fallback chain for retrying failed LLM calls. */
@@ -789,7 +831,8 @@ class ChatAgent extends BaseAgent {
     analytics?: AnalyticsService,
     resolveRoutedProviderForTools?: (tools: Array<{ name: string; category?: string }>) => { provider: LLMProvider; locality: 'local' | 'external' } | undefined,
     intentRoutingTrace?: IntentRoutingTraceLog,
-    pendingClarificationStore?: PendingClarificationStore,
+    pendingActionStore?: PendingActionStore,
+    continuityThreadStore?: ContinuityThreadStore,
   ) {
     super(id, name, { handleMessages: true });
     this.systemPrompt = composeGuardianSystemPrompt(systemPrompt, soulPrompt);
@@ -822,7 +865,8 @@ class ChatAgent extends BaseAgent {
     this.analytics = analytics;
     this.resolveRoutedProviderForTools = resolveRoutedProviderForTools;
     this.intentRoutingTrace = intentRoutingTrace;
-    this.pendingClarificationStore = pendingClarificationStore;
+    this.pendingActionStore = pendingActionStore;
+    this.continuityThreadStore = continuityThreadStore;
     this.intentGateway = new IntentGateway();
   }
 
@@ -835,6 +879,15 @@ class ChatAgent extends BaseAgent {
       contentPreview?: string;
     },
   ): void {
+    const continuity = input.message?.userId
+      ? summarizeContinuityThreadForGateway(this.getContinuityThread(input.message.userId))
+      : null;
+    const details = {
+      ...(continuity?.continuityKey ? { continuityKey: continuity.continuityKey } : {}),
+      ...(continuity?.activeExecutionRefs?.length ? { activeExecutionRefs: continuity.activeExecutionRefs } : {}),
+      ...(typeof continuity?.linkedSurfaceCount === 'number' ? { linkedSurfaceCount: continuity.linkedSurfaceCount } : {}),
+      ...(input.details ?? {}),
+    };
     this.intentRoutingTrace?.record({
       stage,
       requestId: input.requestId,
@@ -842,8 +895,9 @@ class ChatAgent extends BaseAgent {
       userId: input.message?.userId,
       channel: input.message?.channel,
       agentId: this.id,
-      contentPreview: input.contentPreview ?? input.message?.content,
-      details: input.details,
+      contentPreview: input.contentPreview
+        ?? (input.message?.content ? stripLeadingContextPrefix(input.message.content) : undefined),
+      details: Object.keys(details).length > 0 ? details : undefined,
     });
   }
 
@@ -1060,6 +1114,9 @@ class ChatAgent extends BaseAgent {
       userId: conversationUserId,
       channel: conversationChannel,
     };
+    const pendingActionUserId = message.userId;
+    const pendingActionChannel = message.channel;
+    const pendingActionUserKey = `${pendingActionUserId}:${pendingActionChannel}`;
     const effectiveCodeContext = resolvedCodeSession
       ? {
           sessionId: resolvedCodeSession.session.id,
@@ -1097,6 +1154,13 @@ class ChatAgent extends BaseAgent {
       channel: conversationChannel,
     }) ?? [];
     const userKey = `${conversationUserId}:${conversationChannel}`;
+    const pendingActionSurfaceId = this.getCodeSessionSurfaceId(message);
+    let continuityThread = this.touchContinuityThread(
+      pendingActionUserId,
+      pendingActionChannel,
+      pendingActionSurfaceId,
+      effectiveCodeContext?.sessionId,
+    );
     const groundedScopedMessage = scopedMessage;
     const preResolvedSkills = this.skillResolver?.resolve({
       agentId: this.id,
@@ -1107,11 +1171,17 @@ class ChatAgent extends BaseAgent {
       availableCapabilities: new Set(ctx.capabilities),
     }) ?? [];
     this.trackResolvedSkills(message, 'chat', preResolvedSkills, 'resolved');
-    this.syncPendingApprovalsFromExecutor(userKey, conversationUserId, conversationChannel);
+    this.syncPendingApprovalsFromExecutor(
+      conversationUserId,
+      conversationChannel,
+      pendingActionUserId,
+      pendingActionChannel,
+      pendingActionSurfaceId,
+    );
 
     // Approval continuation is a control-plane path and must not go back through
     // normal intent classification or worker dispatch.
-    const approvalResult = await this.tryHandleApproval(groundedScopedMessage, userKey, ctx);
+    const approvalResult = await this.tryHandleApproval(message, ctx);
     if (approvalResult) {
       if (this.conversationService) {
         this.conversationService.recordTurn(
@@ -1139,20 +1209,32 @@ class ChatAgent extends BaseAgent {
     // and return incomplete results). The gateway result is reused later to avoid a
     // redundant LLM call in the non-worker direct-intent routing path.
     let earlyGateway: import('./runtime/intent-gateway.js').IntentGatewayRecord | null = readPreRoutedIntentGatewayMetadata(groundedScopedMessage.metadata);
-    const pendingClarification = this.getPendingClarification(conversationUserId, conversationChannel);
-    let routedScopedMessage = groundedScopedMessage;
+    const pendingAction = this.getActivePendingAction(pendingActionUserId, pendingActionChannel, pendingActionSurfaceId);
+    const resolvedPendingActionContinuation = this.resolvePendingActionContinuationContent(
+      groundedScopedMessage.content,
+      pendingAction,
+      effectiveCodeContext?.sessionId,
+    );
+    let routedScopedMessage = resolvedPendingActionContinuation
+      ? {
+          ...groundedScopedMessage,
+          content: resolvedPendingActionContinuation,
+        }
+      : groundedScopedMessage;
     if (ctx.llm || earlyGateway) {
-      earlyGateway = earlyGateway ?? await this.classifyIntentGateway(groundedScopedMessage, ctx, {
+      earlyGateway = earlyGateway ?? await this.classifyIntentGateway(routedScopedMessage, ctx, {
         recentHistory: priorHistory,
-        pendingClarification,
+        pendingAction,
+        continuityThread,
       });
       const clarificationResponse = this.buildGatewayClarificationResponse({
         gateway: earlyGateway,
-        userKey,
-        conversationUserId,
-        conversationChannel,
+        surfaceUserId: pendingActionUserId,
+        surfaceChannel: pendingActionChannel,
         message,
         activeSkills: preResolvedSkills,
+        surfaceId: pendingActionSurfaceId,
+        pendingAction,
       });
       if (clarificationResponse) {
         if (this.conversationService) {
@@ -1169,7 +1251,7 @@ class ChatAgent extends BaseAgent {
       }
       const resolvedGatewayContent = this.resolveIntentGatewayContent({
         gateway: earlyGateway,
-        pendingClarification,
+        pendingAction,
         priorHistory,
       });
       if (resolvedGatewayContent && resolvedGatewayContent !== groundedScopedMessage.content) {
@@ -1178,8 +1260,17 @@ class ChatAgent extends BaseAgent {
           content: resolvedGatewayContent,
         };
       }
-      if (this.shouldClearPendingClarificationAfterTurn(earlyGateway?.decision, pendingClarification)) {
-        this.clearPendingClarification(conversationUserId, conversationChannel);
+      continuityThread = this.updateContinuityThreadFromIntent({
+        userId: pendingActionUserId,
+        channel: pendingActionChannel,
+        surfaceId: pendingActionSurfaceId,
+        continuityThread,
+        gateway: earlyGateway,
+        routingContent: routedScopedMessage.content,
+        codeSessionId: effectiveCodeContext?.sessionId,
+      });
+      if (pendingAction && this.shouldClearPendingActionAfterTurn(earlyGateway?.decision, pendingAction)) {
+        this.completePendingAction(pendingAction.id);
       }
 
       const directSkillInventory = this.tryDirectSkillInventoryResponse(routedScopedMessage.content);
@@ -1232,7 +1323,6 @@ class ChatAgent extends BaseAgent {
               routingMessage: routedScopedMessage,
               intentGateway: earlyGateway,
               ctx,
-              userKey,
               activeSkills: preResolvedSkills,
               conversationKey,
             });
@@ -1246,7 +1336,6 @@ class ChatAgent extends BaseAgent {
             routingMessage: routedScopedMessage,
             intentGateway: earlyGateway,
             ctx,
-            userKey,
             activeSkills: preResolvedSkills,
             conversationKey,
           });
@@ -1261,6 +1350,21 @@ class ChatAgent extends BaseAgent {
       ? suspended.originalMessage.content
       : routedScopedMessage.content;
     const allowModelMemoryMutation = shouldAllowModelMemoryMutation(requestIntentContent);
+    const existingPendingIds = this.getPendingApprovalIds(
+      pendingActionUserId,
+      pendingActionChannel,
+      pendingActionSurfaceId,
+    );
+    const pendingApprovalNotice = existingPendingIds.length > 0
+      ? `Note: ${existingPendingIds.length} tool action(s) are awaiting user approval. The approval UI is presented to the user automatically — do NOT mention approval IDs or ask the user to approve manually. Process the current request normally and call tools as needed.`
+      : undefined;
+    const knowledgeBaseQuery = this.buildKnowledgeBaseContextQuery({
+      messageContent: routedScopedMessage.content,
+      continuityThread,
+      pendingAction,
+      resolvedCodeSession,
+    });
+    let contextAssemblyMeta: PromptAssemblyDiagnostics | undefined;
 
     let llmMessages: import('./llm/types.js').ChatMessage[];
     let skipDirectTools = false;
@@ -1286,60 +1390,62 @@ class ChatAgent extends BaseAgent {
       this.suspendedSessions.delete(userKey);
       skipDirectTools = true;
     } else {
-      // Non-blocking pending approval context (approvals no longer block new messages)
-      const existingPending = this.getPendingApprovals(userKey);
-      const pendingApprovalContext = existingPending
-        ? `\nNote: ${existingPending.ids.length} tool action(s) are awaiting user approval. The approval UI is presented to the user automatically — do NOT mention approval IDs or ask the user to approve manually. Process the current request normally and call tools as needed.`
-        : '';
-
-      // Inject knowledge base into system prompt if available
       activeSkills = preResolvedSkills;
-      const scopedKnowledgeBase = this.loadScopedKnowledgeBase(resolvedCodeSession);
-      if (scopedKnowledgeBase) {
-        enrichedSystemPrompt += this.formatScopedKnowledgeBaseSection(scopedKnowledgeBase, resolvedCodeSession);
-      }
+      const scopedKnowledgeBase = this.loadScopedKnowledgeBase(resolvedCodeSession, knowledgeBaseQuery);
+      contextAssemblyMeta = this.buildContextAssemblyMetadata({
+        memoryScope: resolvedCodeSession ? 'coding_session' : 'global',
+        knowledgeBase: scopedKnowledgeBase.content,
+        memorySelection: scopedKnowledgeBase.selection,
+        knowledgeBaseQuery: scopedKnowledgeBase.selection?.queryPreview,
+        activeSkillCount: activeSkills.length,
+        pendingAction,
+        continuityThread,
+        codeSessionId: resolvedCodeSession?.session.id,
+      });
       if (activeSkills.length > 0) {
         this.trackResolvedSkills(message, 'chat', activeSkills, 'prompt_injected');
-        enrichedSystemPrompt += `\n\n${formatAvailableSkillsPrompt(activeSkills, 'fs_read')}`;
-        enrichedSystemPrompt += this.formatSkillOutputContract(activeSkills);
       }
-      if (this.tools) {
-        enrichedSystemPrompt += `\n\n<tool-context>\n${this.tools.getToolContext({
+      enrichedSystemPrompt = this.buildAssembledSystemPrompt({
+        baseSystemPrompt: enrichedSystemPrompt,
+        knowledgeBase: scopedKnowledgeBase.content,
+        resolvedCodeSession,
+        activeSkills,
+        toolContext: this.tools?.getToolContext({
           userId: conversationUserId,
           principalId: message.principalId ?? conversationUserId,
           channel: conversationChannel,
           codeContext: effectiveCodeContext,
-        })}\n</tool-context>`;
-      }
-      const toolRuntimeNotices = this.tools?.getRuntimeNotices() ?? [];
-      if (toolRuntimeNotices.length > 0) {
-        enrichedSystemPrompt += `\n\n<tool-runtime-notices>\n${toolRuntimeNotices.map((notice) => `- ${notice.message}`).join('\n')}\n</tool-runtime-notices>`;
-      }
-      if (pendingApprovalContext) {
-        enrichedSystemPrompt += pendingApprovalContext;
-      }
-
-      llmMessages = this.conversationService
-        ? this.conversationService.buildMessages(
-          conversationKey,
-          enrichedSystemPrompt,
-          routedScopedMessage.content,
-        )
-        : [
-          { role: 'system', content: enrichedSystemPrompt },
-          { role: 'user', content: routedScopedMessage.content },
-        ];
+        }) ?? '',
+        runtimeNotices: this.tools?.getRuntimeNotices() ?? [],
+        pendingAction,
+        pendingApprovalNotice,
+        continuityThread,
+        additionalSections: [
+          formatAvailableSkillsPrompt(activeSkills, 'fs_read'),
+          this.formatSkillOutputContract(activeSkills),
+        ],
+      });
+      llmMessages = buildChatMessagesFromHistory({
+        systemPrompt: enrichedSystemPrompt,
+        history: priorHistory,
+        userContent: routedScopedMessage.content,
+      });
     }
 
     let finalContent = '';
-    let pendingApprovalMeta: Array<{ id: string; toolName: string; argsPreview: string }> | undefined;
+    let pendingActionMeta: Record<string, unknown> | undefined;
     let lastToolRoundResults: Array<{ toolName: string; result: Record<string, unknown> }> = [];
     const defaultToolResultProviderKind = this.resolveToolResultProviderKind(ctx);
     let responseSource: ResponseSourceMetadata | undefined;
     const directIntent = !skipDirectTools
       ? (earlyGateway ?? await this.classifyIntentGateway(routedScopedMessage, ctx, {
         recentHistory: priorHistory,
-        pendingClarification: this.getPendingClarification(conversationUserId, conversationChannel),
+        pendingAction: this.getActivePendingAction(
+          pendingActionUserId,
+          pendingActionChannel,
+          pendingActionSurfaceId,
+        ),
+        continuityThread,
       }))
       : null;
     const directIntentRouting = !skipDirectTools
@@ -1376,9 +1482,10 @@ class ChatAgent extends BaseAgent {
         candidates: [] as DirectIntentRoutingCandidate[],
         gatewayDirected: false,
         gatewayUnavailable: false,
+        gatewayHeuristicFallback: false,
       };
     const directBrowserIntent = directIntent?.decision.route === 'browser_task'
-      || (directIntentRouting.gatewayUnavailable && isDirectBrowserAutomationIntent(routedScopedMessage.content));
+      || (directIntentRouting.gatewayHeuristicFallback && isDirectBrowserAutomationIntent(routedScopedMessage.content));
     const skipDirectWebSearch = !!resolvedCodeSession
       || !!effectiveCodeContext
       || directBrowserIntent
@@ -1394,6 +1501,7 @@ class ChatAgent extends BaseAgent {
         details: {
           gatewayDirected: directIntentRouting.gatewayDirected,
           gatewayUnavailable: directIntentRouting.gatewayUnavailable,
+          gatewayHeuristicFallback: directIntentRouting.gatewayHeuristicFallback,
           route: directIntent?.decision.route,
           codingBackend: directIntent?.decision.entities.codingBackend,
           candidates: directIntentRouting.candidates,
@@ -1411,7 +1519,7 @@ class ChatAgent extends BaseAgent {
             let sessionControlResult = await this.tryDirectCodeSessionControlFromGateway(
               message, ctx, directIntent?.decision,
             );
-            if (!sessionControlResult && directIntentRouting.gatewayUnavailable) {
+            if (!sessionControlResult && directIntentRouting.gatewayHeuristicFallback) {
               sessionControlResult = await this.tryDirectCodeSessionControl(message, ctx);
             }
             if (!sessionControlResult) break;
@@ -1422,7 +1530,6 @@ class ChatAgent extends BaseAgent {
               routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
-              userKey,
               activeSkills,
               conversationKey,
             });
@@ -1431,7 +1538,7 @@ class ChatAgent extends BaseAgent {
             const directCodingBackend = await this.tryDirectCodingBackendDelegation(
               routedScopedMessage,
               ctx,
-              userKey,
+              pendingActionUserKey,
               directIntent?.decision,
               effectiveCodeContext,
             );
@@ -1443,7 +1550,6 @@ class ChatAgent extends BaseAgent {
               routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
-              userKey,
               activeSkills,
               conversationKey,
             });
@@ -1452,7 +1558,7 @@ class ChatAgent extends BaseAgent {
             const directSearch = await this.tryDirectFilesystemSearch(
               routedScopedMessage,
               ctx,
-              userKey,
+              pendingActionUserKey,
               effectiveCodeContext,
             );
             if (!directSearch) break;
@@ -1463,7 +1569,6 @@ class ChatAgent extends BaseAgent {
               routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
-              userKey,
               activeSkills,
               conversationKey,
             });
@@ -1472,7 +1577,7 @@ class ChatAgent extends BaseAgent {
             const directScheduledEmailAutomation = await this.tryDirectScheduledEmailAutomation(
               routedScopedMessage,
               ctx,
-              userKey,
+              pendingActionUserKey,
               stateAgentId,
             );
             if (!directScheduledEmailAutomation) break;
@@ -1483,7 +1588,6 @@ class ChatAgent extends BaseAgent {
               routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
-              userKey,
               activeSkills,
               conversationKey,
             });
@@ -1492,12 +1596,12 @@ class ChatAgent extends BaseAgent {
             const directAutomationAuthoring = await this.tryDirectAutomationAuthoring(
               routedScopedMessage,
               ctx,
-              userKey,
+              pendingActionUserKey,
               effectiveCodeContext,
               {
                 intentDecision: directIntent?.decision,
                 assumeAuthoring: directIntentRouting.gatewayDirected,
-                allowHeuristicFallback: directIntentRouting.gatewayUnavailable,
+                allowHeuristicFallback: directIntentRouting.gatewayHeuristicFallback,
               },
             );
             if (!directAutomationAuthoring) break;
@@ -1508,7 +1612,6 @@ class ChatAgent extends BaseAgent {
               routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
-              userKey,
               activeSkills,
               conversationKey,
             });
@@ -1517,9 +1620,9 @@ class ChatAgent extends BaseAgent {
             const directAutomationControl = await this.tryDirectAutomationControl(
               routedScopedMessage,
               ctx,
-              userKey,
+              pendingActionUserKey,
               directIntent?.decision,
-              directIntentRouting.gatewayUnavailable,
+              directIntentRouting.gatewayHeuristicFallback,
             );
             if (!directAutomationControl) break;
             return this.buildDirectIntentResponse({
@@ -1529,7 +1632,6 @@ class ChatAgent extends BaseAgent {
               routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
-              userKey,
               activeSkills,
               conversationKey,
             });
@@ -1548,13 +1650,17 @@ class ChatAgent extends BaseAgent {
               routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
-              userKey,
               activeSkills,
               conversationKey,
             });
           }
           case 'workspace_write': {
-            const directWorkspaceWrite = await this.tryDirectGoogleWorkspaceWrite(routedScopedMessage, ctx, userKey);
+            const directWorkspaceWrite = await this.tryDirectGoogleWorkspaceWrite(
+              routedScopedMessage,
+              ctx,
+              pendingActionUserKey,
+              directIntent?.decision,
+            );
             if (!directWorkspaceWrite) break;
             return this.buildDirectIntentResponse({
               candidate,
@@ -1563,13 +1669,17 @@ class ChatAgent extends BaseAgent {
               routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
-              userKey,
               activeSkills,
               conversationKey,
             });
           }
           case 'workspace_read': {
-            const directWorkspaceRead = await this.tryDirectGoogleWorkspaceRead(routedScopedMessage, ctx, userKey);
+            const directWorkspaceRead = await this.tryDirectGoogleWorkspaceRead(
+              routedScopedMessage,
+              ctx,
+              pendingActionUserKey,
+              directIntent?.decision,
+            );
             if (!directWorkspaceRead) break;
             return this.buildDirectIntentResponse({
               candidate,
@@ -1578,7 +1688,6 @@ class ChatAgent extends BaseAgent {
               routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
-              userKey,
               activeSkills,
               conversationKey,
             });
@@ -1587,10 +1696,10 @@ class ChatAgent extends BaseAgent {
             const directBrowserAutomation = await this.tryDirectBrowserAutomation(
               routedScopedMessage,
               ctx,
-              userKey,
+              pendingActionUserKey,
               effectiveCodeContext,
               directIntent?.decision,
-              directIntentRouting.gatewayUnavailable,
+              directIntentRouting.gatewayHeuristicFallback,
             );
             if (!directBrowserAutomation) break;
             return this.buildDirectIntentResponse({
@@ -1600,7 +1709,6 @@ class ChatAgent extends BaseAgent {
               routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
-              userKey,
               activeSkills,
               conversationKey,
             });
@@ -1649,7 +1757,6 @@ class ChatAgent extends BaseAgent {
               routingMessage: routedScopedMessage,
               intentGateway: directIntent,
               ctx,
-              userKey,
               activeSkills,
               conversationKey,
             });
@@ -1662,8 +1769,19 @@ class ChatAgent extends BaseAgent {
 
     if (workerManager) {
       try {
-        const knowledgeBase = this.loadScopedKnowledgeBase(resolvedCodeSession);
+        const knowledgeBase = this.loadScopedKnowledgeBase(resolvedCodeSession, knowledgeBaseQuery);
+        const workerContextAssemblyMeta = this.buildContextAssemblyMetadata({
+          memoryScope: resolvedCodeSession ? 'coding_session' : 'global',
+          knowledgeBase: knowledgeBase.content,
+          memorySelection: knowledgeBase.selection,
+          knowledgeBaseQuery: knowledgeBase.selection?.queryPreview,
+          activeSkillCount: preResolvedSkills.length,
+          pendingAction,
+          continuityThread,
+          codeSessionId: resolvedCodeSession?.session.id,
+        });
         const workerSystemPrompt = this.buildScopedSystemPrompt(resolvedCodeSession, message);
+        const continuitySummary = summarizeContinuityThreadForGateway(continuityThread);
         // Attach codeContext to the message metadata so the worker can forward it
         // through the broker to the tool executor for auto-approve decisions.
         const workerMessage = effectiveCodeContext
@@ -1677,7 +1795,8 @@ class ChatAgent extends BaseAgent {
           message: workerMessage,
           systemPrompt: workerSystemPrompt,
           history: priorHistory,
-          knowledgeBase,
+          knowledgeBase: knowledgeBase.content,
+          knowledgeBaseScope: resolvedCodeSession ? 'coding_session' : 'global',
           activeSkills: preResolvedSkills,
           toolContext: this.tools?.getToolContext({
             userId: conversationUserId,
@@ -1686,6 +1805,18 @@ class ChatAgent extends BaseAgent {
             codeContext: effectiveCodeContext,
           }) ?? '',
           runtimeNotices: this.tools?.getRuntimeNotices() ?? [],
+          continuity: continuitySummary,
+          pendingAction: this.buildPendingActionPromptContext(pendingAction),
+          pendingApprovalNotice,
+          delegation: {
+            requestId: message.id,
+            originChannel: message.channel,
+            ...(message.surfaceId ? { originSurfaceId: message.surfaceId } : {}),
+            ...(continuitySummary?.continuityKey ? { continuityKey: continuitySummary.continuityKey } : {}),
+            ...(continuitySummary?.activeExecutionRefs?.length ? { activeExecutionRefs: continuitySummary.activeExecutionRefs } : {}),
+            ...(pendingAction?.id ? { pendingActionId: pendingAction.id } : {}),
+            ...(resolvedCodeSession?.session.id ? { codeSessionId: resolvedCodeSession.session.id } : {}),
+          },
         });
         const workerMeta: Record<string, unknown> = { ...(result.metadata ?? {}) };
         // Ensure responseSource is present — if the worker didn't provide one,
@@ -1704,13 +1835,27 @@ class ChatAgent extends BaseAgent {
         // Sync pending approvals from the executor into response metadata so the
         // frontend can render inline approval buttons (worker path does not do this
         // automatically like the inline ChatAgent LLM loop does).
-        const workerUserKey = `${conversationUserId}:${conversationChannel}`;
-        this.syncPendingApprovalsFromExecutor(workerUserKey, conversationUserId, conversationChannel);
-        const workerPending = this.getPendingApprovals(workerUserKey);
-        if (workerPending && workerPending.ids.length > 0) {
-          const summaries = this.tools?.getApprovalSummaries(workerPending.ids);
-          workerMeta.pendingApprovals = buildPendingApprovalMetadata(workerPending.ids, summaries);
+        this.syncPendingApprovalsFromExecutor(
+          conversationUserId,
+          conversationChannel,
+          pendingActionUserId,
+          pendingActionChannel,
+          pendingActionSurfaceId,
+          routedScopedMessage.content,
+        );
+        const workerPendingAction = this.getActivePendingAction(
+          pendingActionUserId,
+          pendingActionChannel,
+          pendingActionSurfaceId,
+        );
+        const workerPendingActionMeta = toPendingActionClientMetadata(workerPendingAction);
+        if (workerPendingActionMeta) {
+          workerMeta.pendingAction = workerPendingActionMeta;
         }
+        if (workerContextAssemblyMeta) {
+          workerMeta.contextAssembly = workerContextAssemblyMeta;
+        }
+        delete workerMeta.pendingApprovals;
         if (preResolvedSkills.length > 0) {
           workerMeta.activeSkills = preResolvedSkills.map((skill) => skill.id);
         }
@@ -2323,16 +2468,37 @@ class ChatAgent extends BaseAgent {
 
       // Store pending approvals for this user so they can be approved/denied explicitly
       if (pendingIds.length > 0) {
-        const existing = this.getPendingApprovals(userKey)?.ids ?? [];
+        const existing = this.getPendingApprovalIds(
+          pendingActionUserId,
+          pendingActionChannel,
+          pendingActionSurfaceId,
+        );
         const merged = [...new Set([...existing, ...pendingIds])];
-        this.setPendingApprovals(userKey, merged);
+        this.setPendingApprovals(pendingActionUserKey, merged, pendingActionSurfaceId);
         const summaries = this.tools?.getApprovalSummaries(merged);
-        // Build structured approval metadata — all channels render native approval UI
-        // (web: buttons, CLI: readline prompt, Telegram: inline keyboard).
-        // No text prompt is appended to finalContent; the metadata is the canonical source.
-        pendingApprovalMeta = buildPendingApprovalMetadata(merged, summaries);
-        if (shouldUseStructuredPendingApprovalMessage(finalContent) || this.isResponseDegraded(finalContent)) {
-          finalContent = formatPendingApprovalMessage(pendingApprovalMeta);
+        const approvalSummaries = merged.map((id) => {
+          const summary = summaries?.get(id);
+          return {
+            id,
+            toolName: summary?.toolName ?? 'unknown',
+            argsPreview: summary?.argsPreview ?? '',
+          };
+        });
+        const pendingAction = this.setPendingApprovalAction(
+          pendingActionUserId,
+          pendingActionChannel,
+          pendingActionSurfaceId,
+          {
+            prompt: 'Approval required for the pending action.',
+            approvalIds: merged,
+            approvalSummaries,
+            originalUserContent: routedScopedMessage.content,
+          },
+        );
+        pendingActionMeta = toPendingActionClientMetadata(pendingAction);
+        if (pendingAction?.blocker.approvalSummaries?.length
+          && (shouldUseStructuredPendingApprovalMessage(finalContent) || this.isResponseDegraded(finalContent))) {
+          finalContent = formatPendingApprovalMessage(pendingAction.blocker.approvalSummaries);
         }
       }
 
@@ -2343,7 +2509,7 @@ class ChatAgent extends BaseAgent {
       // Local models sometimes emit generic approval copy without ever producing
       // a real pending approval object. Never show approval text unless the
       // runtime actually has pending approval metadata to back it.
-      if (!pendingApprovalMeta?.length && isPhantomPendingApprovalMessage(finalContent)) {
+      if (!pendingActionMeta && isPhantomPendingApprovalMessage(finalContent)) {
         finalContent = lastToolRoundResults.length > 0
           ? summarizeToolRoundFallback(lastToolRoundResults)
           : 'I did not create a real approval request for that action. Please try again.';
@@ -2356,7 +2522,8 @@ class ChatAgent extends BaseAgent {
 
     const metadata: Record<string, unknown> = {};
     if (activeSkills.length > 0) metadata.activeSkills = activeSkills.map((skill) => skill.id);
-    if (pendingApprovalMeta?.length) metadata.pendingApprovals = pendingApprovalMeta;
+    if (pendingActionMeta) metadata.pendingAction = pendingActionMeta;
+    if (contextAssemblyMeta) metadata.contextAssembly = contextAssemblyMeta;
     if (responseSource) metadata.responseSource = responseSource;
     // Signal code session resolution status so the frontend can detect drift.
     if (requestedCodeContext?.sessionId || resolvedCodeSession) {
@@ -2561,7 +2728,15 @@ class ChatAgent extends BaseAgent {
     resolvedCodeSession?: ResolvedCodeSessionContext | null,
     message?: UserMessage,
   ): string {
-    if (!resolvedCodeSession) return this.systemPrompt;
+    const cliCommandGuide = this.shouldIncludeCliCommandGuide(message?.content)
+      ? `<cli-command-guide>\n${formatCliCommandGuideForPrompt()}\n</cli-command-guide>`
+      : '';
+    if (!resolvedCodeSession) {
+      return [
+        this.systemPrompt,
+        cliCommandGuide,
+      ].filter((section) => section && section.trim()).join('\n\n');
+    }
     const requestedCodeContext = readCodeRequestMetadata(message?.metadata);
     const taggedFileContext = buildCodeSessionTaggedFilePromptContext(
       resolvedCodeSession.session.resolvedRoot,
@@ -2571,25 +2746,191 @@ class ChatAgent extends BaseAgent {
       this.codeSessionSystemPrompt,
       this.buildCodeSessionSystemContext(resolvedCodeSession.session),
       taggedFileContext,
+      cliCommandGuide,
     ].filter((section) => section && section.trim()).join('\n\n');
   }
 
-  private loadScopedKnowledgeBase(resolvedCodeSession?: ResolvedCodeSessionContext | null): string {
+  private loadScopedKnowledgeBase(
+    resolvedCodeSession?: ResolvedCodeSessionContext | null,
+    query?: MemoryContextQuery,
+  ): { content: string; selection?: MemoryContextLoadResult } {
     if (resolvedCodeSession) {
-      return this.codeSessionMemoryStore?.loadForContext(resolvedCodeSession.session.id) ?? '';
+      const selection = this.codeSessionMemoryStore?.loadForContextWithSelection(resolvedCodeSession.session.id, { query });
+      return {
+        content: selection?.content ?? '',
+        ...(selection ? { selection } : {}),
+      };
     }
-    return this.memoryStore?.loadForContext(this.stateAgentId) ?? '';
+    const selection = this.memoryStore?.loadForContextWithSelection(this.stateAgentId, { query });
+    return {
+      content: selection?.content ?? '',
+      ...(selection ? { selection } : {}),
+    };
   }
 
-  private formatScopedKnowledgeBaseSection(
-    knowledgeBase: string,
-    resolvedCodeSession?: ResolvedCodeSessionContext | null,
-  ): string {
-    if (!knowledgeBase.trim()) return '';
-    if (resolvedCodeSession) {
-      return `\n\n<coding-memory>\nThe following is the durable memory for this coding session only. Use it as session-local context.\n\n${knowledgeBase}\n</coding-memory>`;
+  private buildKnowledgeBaseContextQuery(input: {
+    messageContent: string;
+    continuityThread?: ContinuityThreadRecord | null;
+    pendingAction?: PendingActionRecord | null;
+    resolvedCodeSession?: ResolvedCodeSessionContext | null;
+  }): MemoryContextQuery | undefined {
+    const normalize = (value: string | undefined | null): string => value?.replace(/\s+/g, ' ').trim() ?? '';
+    const text = normalize(input.messageContent);
+    const focusTexts = [
+      input.continuityThread?.focusSummary,
+      input.continuityThread?.lastActionableRequest,
+      input.pendingAction?.intent.originalUserContent,
+      input.pendingAction?.blocker.prompt,
+      input.resolvedCodeSession?.session.workState.focusSummary,
+      input.resolvedCodeSession?.session.workState.planSummary,
+    ]
+      .map((value) => normalize(value))
+      .filter(Boolean);
+    const tags = [
+      input.pendingAction?.blocker.kind,
+      input.pendingAction?.intent.route,
+      input.pendingAction?.intent.operation,
+      input.continuityThread ? 'continuity' : '',
+      input.resolvedCodeSession ? 'coding' : '',
+    ]
+      .map((value) => normalize(value))
+      .filter(Boolean);
+    const identifiers = [
+      input.continuityThread?.continuityKey,
+      ...((input.continuityThread?.activeExecutionRefs ?? []).map((ref) =>
+        ref.label ? `${ref.kind}:${ref.label}` : `${ref.kind}:${ref.id}`)),
+      input.resolvedCodeSession?.session.id,
+    ]
+      .map((value) => normalize(value))
+      .filter(Boolean);
+    const categoryHints = [
+      input.pendingAction ? 'Context Flushes' : '',
+      input.resolvedCodeSession?.session.workState.planSummary ? 'Project Notes' : '',
+      input.resolvedCodeSession?.session.workState.focusSummary ? 'Decisions' : '',
+    ]
+      .map((value) => normalize(value))
+      .filter(Boolean);
+
+    if (!text && focusTexts.length === 0 && tags.length === 0 && identifiers.length === 0 && categoryHints.length === 0) {
+      return undefined;
     }
-    return `\n\n<knowledge-base>\nThe following is your persistent knowledge base — facts, preferences, and summaries you have remembered across conversations:\n\n${knowledgeBase}\n</knowledge-base>`;
+
+    return {
+      ...(text ? { text } : {}),
+      ...(focusTexts.length > 0 ? { focusTexts } : {}),
+      ...(tags.length > 0 ? { tags } : {}),
+      ...(identifiers.length > 0 ? { identifiers } : {}),
+      ...(categoryHints.length > 0 ? { categoryHints } : {}),
+    };
+  }
+
+  private buildContextAssemblyMetadata(input: {
+    memoryScope: 'global' | 'coding_session';
+    knowledgeBase: string;
+    memorySelection?: MemoryContextLoadResult;
+    knowledgeBaseQuery?: string;
+    activeSkillCount: number;
+    pendingAction?: PendingActionRecord | null;
+    continuityThread?: ContinuityThreadRecord | null;
+    codeSessionId?: string;
+  }): PromptAssemblyDiagnostics {
+    return buildPromptAssemblyDiagnostics({
+      memoryScope: input.memoryScope,
+      knowledgeBaseContent: input.knowledgeBase,
+      knowledgeBaseQuery: input.knowledgeBaseQuery,
+      ...(input.memorySelection
+        ? {
+            memorySelection: {
+              candidateEntryCount: input.memorySelection.candidateEntries,
+              omittedEntryCount: input.memorySelection.omittedEntries,
+              entries: input.memorySelection.selectedEntries.map((entry) => ({
+                category: entry.category,
+                createdAt: entry.createdAt,
+                preview: entry.preview,
+                renderMode: entry.renderMode,
+                queryScore: entry.queryScore,
+                isContextFlush: entry.isContextFlush,
+                ...(entry.matchReasons?.length ? { matchReasons: entry.matchReasons.slice(0, 3) } : {}),
+              })),
+            },
+          }
+        : {}),
+      pendingAction: this.buildPendingActionPromptContext(input.pendingAction),
+      continuity: summarizeContinuityThreadForGateway(input.continuityThread),
+      activeSkillCount: input.activeSkillCount,
+      codeSessionId: input.codeSessionId,
+    });
+  }
+
+  private shouldIncludeCliCommandGuide(content?: string): boolean {
+    const normalized = content?.trim().toLowerCase() ?? '';
+    if (!normalized) return false;
+    if (findCliHelpTopic(normalized)) return true;
+    return /\bcli\b/.test(normalized)
+      || /\bslash commands?\b/.test(normalized)
+      || (/\bterminal\b/.test(normalized) && /\bguardian\b/.test(normalized))
+      || /\/(?:help|chat|code|tools|assistant|guide|config|models|security|automations|connectors)\b/.test(normalized);
+  }
+
+  private buildPendingActionPromptContext(
+    pendingAction: PendingActionRecord | null | undefined,
+  ): {
+    kind: string;
+    prompt: string;
+    field?: string;
+    route?: string;
+    operation?: string;
+    transferPolicy?: string;
+    originChannel?: string;
+    originSurfaceId?: string;
+  } | null {
+    if (!pendingAction || !isPendingActionActive(pendingAction.status)) return null;
+    return {
+      kind: pendingAction.blocker.kind,
+      prompt: pendingAction.blocker.prompt,
+      ...(pendingAction.blocker.field ? { field: pendingAction.blocker.field } : {}),
+      ...(pendingAction.intent.route ? { route: pendingAction.intent.route } : {}),
+      ...(pendingAction.intent.operation ? { operation: pendingAction.intent.operation } : {}),
+      transferPolicy: pendingAction.transferPolicy,
+      originChannel: pendingAction.scope.channel,
+      originSurfaceId: pendingAction.scope.surfaceId,
+    };
+  }
+
+  private buildAssembledSystemPrompt(input: {
+    baseSystemPrompt: string;
+    knowledgeBase: string;
+    resolvedCodeSession?: ResolvedCodeSessionContext | null;
+    activeSkills: readonly ResolvedSkill[];
+    toolContext?: string;
+    runtimeNotices?: Array<{ level: 'info' | 'warn'; message: string }>;
+    pendingAction?: PendingActionRecord | null;
+    pendingApprovalNotice?: string;
+    continuityThread?: ContinuityThreadRecord | null;
+    additionalSections?: string[];
+  }): string {
+    return buildSystemPromptWithContext({
+      baseSystemPrompt: input.baseSystemPrompt,
+      ...(input.knowledgeBase.trim()
+        ? {
+            knowledgeBase: {
+              scope: input.resolvedCodeSession ? 'coding_session' : 'global',
+              content: input.knowledgeBase,
+            },
+          }
+        : {}),
+      activeSkills: input.activeSkills.map((skill) => ({
+        id: skill.id,
+        name: skill.name,
+        summary: skill.summary,
+      })),
+      toolContext: input.toolContext,
+      runtimeNotices: input.runtimeNotices,
+      pendingAction: this.buildPendingActionPromptContext(input.pendingAction),
+      pendingApprovalNotice: input.pendingApprovalNotice,
+      continuity: summarizeContinuityThreadForGateway(input.continuityThread),
+      additionalSections: input.additionalSections,
+    });
   }
 
   private buildCodeSessionSystemContext(session: CodeSessionRecord): string {
@@ -2746,39 +3087,55 @@ class ChatAgent extends BaseAgent {
 
   private buildImmediateResponseMetadata(
     activeSkills: ResolvedSkill[],
-    userKey: string,
+    userId: string,
+    channel: string,
+    surfaceId?: string,
   ): Record<string, unknown> | undefined {
     const metadata: Record<string, unknown> = {};
     if (activeSkills.length > 0) {
       metadata.activeSkills = activeSkills.map((skill) => skill.id);
     }
-
-    const pending = this.getPendingApprovals(userKey);
-    if (pending?.ids.length) {
-      const summaries = this.tools?.getApprovalSummaries(pending.ids);
-      const pendingApprovalMeta = pending.ids.map((id) => {
-        const summary = summaries?.get(id);
-        return {
-          id,
-          toolName: summary?.toolName ?? 'unknown',
-          argsPreview: summary?.argsPreview ?? '',
-        };
-      });
-      if (pendingApprovalMeta.length > 0) {
-        metadata.pendingApprovals = pendingApprovalMeta;
-      }
+    const pendingAction = this.getActivePendingAction(userId, channel, surfaceId);
+    const pendingActionMeta = toPendingActionClientMetadata(pendingAction);
+    if (pendingActionMeta) {
+      metadata.pendingAction = pendingActionMeta;
+    }
+    const continuityMeta = toContinuityThreadClientMetadata(this.getContinuityThread(userId));
+    if (continuityMeta) {
+      metadata.continuity = continuityMeta;
     }
 
     return Object.keys(metadata).length > 0 ? metadata : undefined;
   }
 
+  private withCurrentPendingActionMetadata(
+    metadata: Record<string, unknown> | undefined,
+    userId: string,
+    channel: string,
+    surfaceId?: string,
+  ): Record<string, unknown> | undefined {
+    const pendingAction = this.getActivePendingAction(userId, channel, surfaceId);
+    const pendingActionMeta = toPendingActionClientMetadata(pendingAction);
+    const next = { ...(metadata ?? {}) };
+    delete next.pendingApprovals;
+    if (pendingActionMeta) {
+      next.pendingAction = pendingActionMeta;
+    }
+    const continuityMeta = toContinuityThreadClientMetadata(this.getContinuityThread(userId));
+    if (continuityMeta) {
+      next.continuity = continuityMeta;
+    }
+    return Object.keys(next).length > 0 ? next : undefined;
+  }
+
   private buildGatewayClarificationResponse(input: {
     gateway: IntentGatewayRecord | null;
-    userKey: string;
-    conversationUserId: string;
-    conversationChannel: string;
+    surfaceUserId: string;
+    surfaceChannel: string;
     message: UserMessage;
     activeSkills: ResolvedSkill[];
+    surfaceId?: string;
+    pendingAction: PendingActionRecord | null;
   }): AgentResponse | null {
     const decision = input.gateway?.decision;
     if (!decision) return null;
@@ -2791,11 +3148,28 @@ class ChatAgent extends BaseAgent {
       && (decision.resolution === 'needs_clarification' || missingFields.has('email_provider'));
     if (needsEmailProvider) {
       const prompt = 'I can use either Google Workspace (Gmail) or Microsoft 365 (Outlook) for that email task. Which one do you want me to use?';
-      this.setPendingClarification(input.conversationUserId, input.conversationChannel, {
-        kind: 'email_provider',
-        originalUserContent: input.message.content,
-        prompt,
-      });
+      this.setClarificationPendingAction(
+        input.surfaceUserId,
+        input.surfaceChannel,
+        input.surfaceId,
+        {
+          blockerKind: 'clarification',
+          field: 'email_provider',
+          prompt,
+          originalUserContent: input.message.content,
+          route: decision.route,
+          operation: decision.operation,
+          summary: decision.summary,
+          turnRelation: decision.turnRelation,
+          resolution: decision.resolution,
+          missingFields: decision.missingFields,
+          entities: this.toPendingActionEntities(decision.entities),
+          options: [
+            { value: 'gws', label: 'Gmail / Google Workspace' },
+            { value: 'm365', label: 'Outlook / Microsoft 365' },
+          ],
+        },
+      );
       this.recordIntentRoutingTrace('clarification_requested', {
         message: input.message,
         details: {
@@ -2808,7 +3182,12 @@ class ChatAgent extends BaseAgent {
       return {
         content: prompt,
         metadata: {
-          ...(this.buildImmediateResponseMetadata(input.activeSkills, input.userKey) ?? {}),
+          ...(this.buildImmediateResponseMetadata(
+            input.activeSkills,
+            input.surfaceUserId,
+            input.surfaceChannel,
+            input.surfaceId,
+          ) ?? {}),
           ...(toIntentGatewayClientMetadata(input.gateway) ? { intentGateway: toIntentGatewayClientMetadata(input.gateway) } : {}),
         },
       };
@@ -2816,11 +3195,30 @@ class ChatAgent extends BaseAgent {
 
     if (decision.resolution === 'needs_clarification' && missingFields.has('coding_backend')) {
       const prompt = 'Which coding backend do you want me to use: Codex, Claude Code, Gemini CLI, or Aider?';
-      this.setPendingClarification(input.conversationUserId, input.conversationChannel, {
-        kind: 'coding_backend',
-        originalUserContent: input.message.content,
-        prompt,
-      });
+      this.setClarificationPendingAction(
+        input.surfaceUserId,
+        input.surfaceChannel,
+        input.surfaceId,
+        {
+          blockerKind: 'clarification',
+          field: 'coding_backend',
+          prompt,
+          originalUserContent: input.message.content,
+          route: decision.route,
+          operation: decision.operation,
+          summary: decision.summary,
+          turnRelation: decision.turnRelation,
+          resolution: decision.resolution,
+          missingFields: decision.missingFields,
+          entities: this.toPendingActionEntities(decision.entities),
+          options: [
+            { value: 'codex', label: 'Codex' },
+            { value: 'claude-code', label: 'Claude Code' },
+            { value: 'gemini-cli', label: 'Gemini CLI' },
+            { value: 'aider', label: 'Aider' },
+          ],
+        },
+      );
       this.recordIntentRoutingTrace('clarification_requested', {
         message: input.message,
         details: {
@@ -2833,7 +3231,12 @@ class ChatAgent extends BaseAgent {
       return {
         content: prompt,
         metadata: {
-          ...(this.buildImmediateResponseMetadata(input.activeSkills, input.userKey) ?? {}),
+          ...(this.buildImmediateResponseMetadata(
+            input.activeSkills,
+            input.surfaceUserId,
+            input.surfaceChannel,
+            input.surfaceId,
+          ) ?? {}),
           ...(toIntentGatewayClientMetadata(input.gateway) ? { intentGateway: toIntentGatewayClientMetadata(input.gateway) } : {}),
         },
       };
@@ -2841,11 +3244,23 @@ class ChatAgent extends BaseAgent {
 
     if (decision.resolution === 'needs_clarification' && decision.summary.trim()) {
       const prompt = decision.summary.trim();
-      this.setPendingClarification(input.conversationUserId, input.conversationChannel, {
-        kind: 'generic',
-        originalUserContent: input.message.content,
-        prompt,
-      });
+      this.setClarificationPendingAction(
+        input.surfaceUserId,
+        input.surfaceChannel,
+        input.surfaceId,
+        {
+          blockerKind: 'clarification',
+          prompt,
+          originalUserContent: input.message.content,
+          route: decision.route,
+          operation: decision.operation,
+          summary: decision.summary,
+          turnRelation: decision.turnRelation,
+          resolution: decision.resolution,
+          missingFields: decision.missingFields,
+          entities: this.toPendingActionEntities(decision.entities),
+        },
+      );
       this.recordIntentRoutingTrace('clarification_requested', {
         message: input.message,
         details: {
@@ -2858,7 +3273,12 @@ class ChatAgent extends BaseAgent {
       return {
         content: prompt,
         metadata: {
-          ...(this.buildImmediateResponseMetadata(input.activeSkills, input.userKey) ?? {}),
+          ...(this.buildImmediateResponseMetadata(
+            input.activeSkills,
+            input.surfaceUserId,
+            input.surfaceChannel,
+            input.surfaceId,
+          ) ?? {}),
           ...(toIntentGatewayClientMetadata(input.gateway) ? { intentGateway: toIntentGatewayClientMetadata(input.gateway) } : {}),
         },
       };
@@ -2869,7 +3289,7 @@ class ChatAgent extends BaseAgent {
 
   private resolveIntentGatewayContent(input: {
     gateway: IntentGatewayRecord | null;
-    pendingClarification: PendingClarificationState | null;
+    pendingAction: PendingActionRecord | null;
     priorHistory: Array<{ role: 'user' | 'assistant'; content: string }>;
   }): string | null {
     const decision = input.gateway?.decision;
@@ -2878,17 +3298,25 @@ class ChatAgent extends BaseAgent {
       return decision.resolvedContent.trim();
     }
 
-    if (input.pendingClarification?.kind === 'email_provider' && decision.entities.emailProvider) {
+    if (input.pendingAction?.blocker.kind === 'clarification'
+      && input.pendingAction.blocker.field === 'email_provider'
+      && decision.entities.emailProvider) {
       const providerLabel = decision.entities.emailProvider === 'm365'
         ? 'Outlook / Microsoft 365'
         : 'Gmail / Google Workspace';
-      return `Use ${providerLabel} for this request: ${input.pendingClarification.originalUserContent}`;
+      return `Use ${providerLabel} for this request: ${input.pendingAction.intent.originalUserContent}`;
     }
 
-    if (input.pendingClarification?.kind === 'coding_workspace_switch'
+    if (input.pendingAction?.blocker.kind === 'workspace_switch'
       && decision.route === 'coding_task'
       && decision.turnRelation !== 'new_request') {
-      return input.pendingClarification.originalUserContent;
+      return input.pendingAction.intent.originalUserContent;
+    }
+
+    if (input.pendingAction?.blocker.kind === 'clarification'
+      && input.pendingAction.blocker.field === 'coding_backend'
+      && decision.entities.codingBackend) {
+      return `Use ${decision.entities.codingBackend} for this request: ${input.pendingAction.intent.originalUserContent}`;
     }
 
     if (decision.turnRelation === 'correction' && decision.entities.codingBackend) {
@@ -2904,18 +3332,45 @@ class ChatAgent extends BaseAgent {
     return null;
   }
 
-  private shouldClearPendingClarificationAfterTurn(
+  private resolvePendingActionContinuationContent(
+    content: string,
+    pendingAction: PendingActionRecord | null,
+    currentCodeSessionId?: string,
+  ): string | null {
+    if (!pendingAction) return null;
+    if (!isGenericPendingActionContinuationRequest(stripLeadingContextPrefix(content))) {
+      return null;
+    }
+    if (isWorkspaceSwitchPendingActionSatisfied(pendingAction, currentCodeSessionId)) {
+      return pendingAction.intent.originalUserContent;
+    }
+    return null;
+  }
+
+  private shouldClearPendingActionAfterTurn(
     decision: IntentGatewayDecision | undefined,
-    pendingClarification: PendingClarificationState | null,
+    pendingAction: PendingActionRecord | null,
   ): boolean {
     if (!decision || decision.resolution !== 'ready') return false;
-    if (!pendingClarification) return true;
-    if (pendingClarification.kind === 'coding_workspace_switch'
+    if (!pendingAction) return true;
+    if (pendingAction.blocker.kind === 'workspace_switch'
       && decision.route === 'coding_session_control'
       && decision.operation === 'update') {
       return false;
     }
     return true;
+  }
+
+  private toPendingActionEntities(
+    entities?: Record<string, unknown> | IntentGatewayDecision['entities'],
+  ): Record<string, unknown> | undefined {
+    if (!entities) return undefined;
+    const normalized = Object.entries(entities).reduce<Record<string, unknown>>((acc, [key, value]) => {
+      if (value === undefined) return acc;
+      acc[key] = Array.isArray(value) ? [...value] : value;
+      return acc;
+    }, {});
+    return Object.keys(normalized).length > 0 ? normalized : undefined;
   }
 
   private findLatestActionableUserRequest(
@@ -2941,7 +3396,6 @@ class ChatAgent extends BaseAgent {
     routingMessage?: UserMessage;
     intentGateway?: IntentGatewayRecord | null;
     ctx: AgentContext;
-    userKey: string;
     activeSkills: ResolvedSkill[];
     conversationKey: ConversationKey;
   }): Promise<AgentResponse> {
@@ -2960,6 +3414,12 @@ class ChatAgent extends BaseAgent {
     const intentGateway = input.intentGateway ?? await this.classifyIntentGateway(routingMessage, input.ctx);
     this.logIntentGateway(input.candidate, routingMessage, intentGateway, true);
     const gatewayMeta = toIntentGatewayClientMetadata(intentGateway);
+    const normalizedMetadata = this.withCurrentPendingActionMetadata(
+      normalized.metadata,
+      input.message.userId,
+      input.message.channel,
+      input.message.surfaceId,
+    );
     this.recordIntentRoutingTrace('direct_intent_response', {
       message: input.message,
       details: {
@@ -2967,13 +3427,18 @@ class ChatAgent extends BaseAgent {
         route: intentGateway?.decision.route,
         gatewayAvailable: intentGateway?.available ?? false,
         handled: true,
-        metadataKeys: normalized.metadata ? Object.keys(normalized.metadata) : [],
+        metadataKeys: normalizedMetadata ? Object.keys(normalizedMetadata) : [],
       },
       contentPreview: normalized.content,
     });
     const metadata = {
-      ...(this.buildImmediateResponseMetadata(input.activeSkills, input.userKey) ?? {}),
-      ...(normalized.metadata ?? {}),
+      ...(this.buildImmediateResponseMetadata(
+        input.activeSkills,
+        input.message.userId,
+        input.message.channel,
+        input.message.surfaceId,
+      ) ?? {}),
+      ...(normalizedMetadata ?? {}),
       ...(gatewayMeta ? { intentGateway: gatewayMeta } : {}),
     };
     return {
@@ -3025,7 +3490,9 @@ class ChatAgent extends BaseAgent {
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
     if (!decision || decision.route !== 'coding_task') return null;
+    const { userId: pendingUserId, channel: pendingChannel } = this.parsePendingActionUserKey(userKey);
     const backendId = normalizeCodingBackendSelection(decision.entities.codingBackend);
+    const isCodingRunStatusCheck = decision.entities.codingRunStatusCheck === true;
     const currentSessionRecord = codeContext?.sessionId
       ? this.codeSessionStore?.getSession(codeContext.sessionId, message.userId?.trim())
         ?? this.codeSessionStore?.getSession(codeContext.sessionId)
@@ -3073,11 +3540,28 @@ class ChatAgent extends BaseAgent {
           ];
       lines.push(`I won't run ${backendId || 'the coding backend'} in the wrong workspace.`);
       lines.push(`Switch this chat to ${mentionedSessionResolution.targetSession.title} first, then ask me to run it there.`);
-      this.setPendingClarification(message.userId, message.channel, {
-        kind: 'coding_workspace_switch',
-        originalUserContent: message.content,
-        prompt: lines.join('\n'),
-      });
+      this.setClarificationPendingAction(
+        pendingUserId,
+        pendingChannel,
+        message.surfaceId,
+        {
+          blockerKind: 'workspace_switch',
+          prompt: lines.join('\n'),
+          originalUserContent: message.content,
+          route: decision.route,
+          operation: decision.operation,
+          summary: decision.summary,
+          turnRelation: decision.turnRelation,
+          resolution: decision.resolution,
+          missingFields: decision.missingFields,
+          entities: this.toPendingActionEntities(decision.entities),
+          codeSessionId: currentSessionRecord?.id ?? codeContext?.sessionId,
+          currentSessionId: currentSessionRecord?.id ?? codeContext?.sessionId,
+          currentSessionLabel: currentSessionRecord ? formatDirectCodeSessionLine(currentSessionRecord, true) : undefined,
+          targetSessionId: mentionedSessionResolution.targetSession.id,
+          targetSessionLabel: formatDirectCodeSessionLine(mentionedSessionResolution.targetSession, false),
+        },
+      );
       this.recordIntentRoutingTrace('clarification_requested', {
         message,
         details: {
@@ -3100,8 +3584,8 @@ class ChatAgent extends BaseAgent {
           : undefined,
       };
     }
-    if (!backendId && decision.operation !== 'inspect') return null;
-    if (decision.operation === 'inspect') {
+    if (!backendId && !isCodingRunStatusCheck) return null;
+    if (decision.operation === 'inspect' && isCodingRunStatusCheck) {
       if (!codeContext?.sessionId) {
         return { content: `I can only check recent ${backendId || 'coding backend'} runs from an active coding workspace.` };
       }
@@ -3183,8 +3667,10 @@ class ChatAgent extends BaseAgent {
       return { content: lines.join('\n') };
     }
 
+    const delegatedTask = stripLeadingContextPrefix(decision.resolvedContent?.trim() || message.content).trim();
     this.recordIntentRoutingTrace('direct_tool_call_started', {
       message,
+      contentPreview: delegatedTask,
       details: {
         toolName: 'coding_backend_run',
         backendId,
@@ -3195,7 +3681,7 @@ class ChatAgent extends BaseAgent {
     const result = await this.tools.executeModelTool(
       'coding_backend_run',
       {
-        task: decision.resolvedContent?.trim() || message.content,
+        task: delegatedTask,
         backend: backendId,
       },
       {
@@ -3226,26 +3712,61 @@ class ChatAgent extends BaseAgent {
 
     if (result.status === 'pending_approval') {
       const approvalId = toString(result.approvalId);
+      let pendingIds: string[] = [];
       if (approvalId) {
-        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
-        this.setPendingApprovals(userKey, [...existingIds, approvalId]);
+        const existingIds = this.getPendingApprovalIds(pendingUserId, pendingChannel, message.surfaceId);
+        pendingIds = [...new Set([...existingIds, approvalId])];
+        this.setPendingApprovals(userKey, pendingIds, message.surfaceId);
       } else {
-        this.syncPendingApprovalsFromExecutor(userKey, message.userId, message.channel);
+        this.syncPendingApprovalsFromExecutor(
+          message.userId,
+          message.channel,
+          pendingUserId,
+          pendingChannel,
+          message.surfaceId,
+          message.content,
+        );
+        pendingIds = this.getPendingApprovalIds(pendingUserId, pendingChannel, message.surfaceId);
       }
-      const pendingIds = this.getPendingApprovals(userKey)?.ids ?? (approvalId ? [approvalId] : []);
       const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
-      const pendingApprovalMeta = buildPendingApprovalMetadata(pendingIds, summaries);
+      const prompt = [
+        `I need approval to run ${backendId} for this coding task.`,
+        'Once approved, I\'ll launch it in:',
+        currentSessionRecord
+          ? formatDirectCodeSessionLine(currentSessionRecord, true)
+          : `- CURRENT: ${codeContext?.workspaceRoot ?? '(unknown workspace)'}`,
+      ].join('\n');
+      const pendingAction = this.setPendingApprovalAction(
+        pendingUserId,
+        pendingChannel,
+        message.surfaceId,
+        {
+          prompt,
+          approvalIds: pendingIds,
+          approvalSummaries: pendingIds.map((id) => {
+            const summary = summaries?.get(id);
+            return {
+              id,
+              toolName: summary?.toolName ?? 'unknown',
+              argsPreview: summary?.argsPreview ?? '',
+            };
+          }),
+          originalUserContent: delegatedTask,
+          route: decision.route,
+          operation: decision.operation,
+          summary: decision.summary,
+          turnRelation: decision.turnRelation,
+          resolution: decision.resolution,
+          missingFields: decision.missingFields,
+          entities: this.toPendingActionEntities(decision.entities),
+          codeSessionId: codeContext?.sessionId,
+        },
+      );
       return {
-        content: [
-          `I need approval to run ${backendId} for this coding task.`,
-          'Once approved, I\'ll launch it in:',
-          currentSessionRecord
-            ? formatDirectCodeSessionLine(currentSessionRecord, true)
-            : `- CURRENT: ${codeContext?.workspaceRoot ?? '(unknown workspace)'}`,
-        ].join('\n'),
+        content: prompt,
         metadata: {
           ...(codeContext?.sessionId ? { codeSessionResolved: true, codeSessionId: codeContext.sessionId } : {}),
-          ...(pendingApprovalMeta.length > 0 ? { pendingApprovals: pendingApprovalMeta } : {}),
+          ...(toPendingActionClientMetadata(pendingAction) ? { pendingAction: toPendingActionClientMetadata(pendingAction) } : {}),
         },
       };
     }
@@ -3440,6 +3961,7 @@ class ChatAgent extends BaseAgent {
     const currentSession = isRecord(currentResult.output) && isRecord(currentResult.output.session)
       ? currentResult.output.session
       : null;
+    const pendingActionBeforeAttach = this.getActivePendingAction(message.userId, message.channel, message.surfaceId);
     const attachResult = await this.executeDirectCodeSessionTool(
       'code_session_attach',
       { sessionId: target },
@@ -3463,14 +3985,130 @@ class ChatAgent extends BaseAgent {
 
     const sessionId = toString(session.id);
     const alreadyAttached = currentSession && toString(currentSession.id) === sessionId;
-    return {
-      content: alreadyAttached
+    const resumePendingWorkspaceSwitch = isWorkspaceSwitchPendingActionSatisfied(pendingActionBeforeAttach, sessionId);
+    const response = {
+      content: alreadyAttached && !resumePendingWorkspaceSwitch
         ? `This chat is already attached to:\n${formatDirectCodeSessionLine(session, true)}`
         : `Switched this chat to:\n${formatDirectCodeSessionLine(session, true)}`,
       metadata: {
         codeSessionResolved: true,
         codeSessionId: sessionId,
         codeSessionFocusChanged: true,
+      },
+    };
+    const resumed = await this.tryResumePendingActionAfterWorkspaceSwitch(
+      message,
+      ctx,
+      sessionId,
+      {
+        sessionId,
+        workspaceRoot: toString(session.resolvedRoot) || toString(session.workspaceRoot),
+      },
+      response,
+      pendingActionBeforeAttach,
+    );
+    return resumed ?? response;
+  }
+
+  private async tryResumePendingActionAfterWorkspaceSwitch(
+    message: UserMessage,
+    ctx: AgentContext,
+    sessionId: string,
+    codeContext: { sessionId: string; workspaceRoot?: string },
+    switchResponse: { content: string; metadata?: Record<string, unknown> },
+    pendingActionOverride?: PendingActionRecord | null,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    const pendingAction = pendingActionOverride
+      ?? this.getActivePendingAction(message.userId, message.channel, message.surfaceId);
+    if (!isWorkspaceSwitchPendingActionSatisfied(pendingAction, sessionId)) {
+      return null;
+    }
+    const originalUserContent = pendingAction?.intent.originalUserContent?.trim();
+    if (!originalUserContent) {
+      if (pendingAction) this.completePendingAction(pendingAction.id);
+      return null;
+    }
+    if (pendingAction) {
+      this.completePendingAction(pendingAction.id);
+    }
+    const resumedDecision = this.buildPendingActionResumeDecision(pendingAction);
+    const resumed = resumedDecision
+      ? await this.tryDirectCodingBackendDelegation(
+          {
+            ...message,
+            id: randomUUID(),
+            content: originalUserContent,
+          },
+          ctx,
+          `${message.userId}:${message.channel}`,
+          resumedDecision,
+          codeContext.workspaceRoot
+            ? {
+                sessionId: codeContext.sessionId,
+                workspaceRoot: codeContext.workspaceRoot,
+              }
+            : undefined,
+        ) ?? await this.onMessage(
+          {
+            ...message,
+            id: randomUUID(),
+            content: originalUserContent,
+          },
+          ctx,
+        )
+      : await this.onMessage(
+          {
+            ...message,
+            id: randomUUID(),
+            content: originalUserContent,
+          },
+          ctx,
+        );
+    return {
+      content: `${switchResponse.content}\n\n${resumed.content}`,
+      metadata: {
+        ...(switchResponse.metadata ?? {}),
+        ...(resumed.metadata ?? {}),
+      },
+    };
+  }
+
+  private buildPendingActionResumeDecision(
+    pendingAction: PendingActionRecord | null | undefined,
+  ): import('./runtime/intent-gateway.js').IntentGatewayDecision | undefined {
+    if (!pendingAction || pendingAction.intent.route !== 'coding_task') {
+      return undefined;
+    }
+    const entities = isRecord(pendingAction.intent.entities)
+      ? pendingAction.intent.entities
+      : {};
+    const uiSurface = toString(entities.uiSurface);
+    const emailProvider = toString(entities.emailProvider);
+    return {
+      route: 'coding_task',
+      confidence: 'high',
+      operation: pendingAction.intent.operation === 'inspect' ? 'inspect' : 'run',
+      summary: pendingAction.intent.summary?.trim() || 'Resume the pending coding task.',
+      turnRelation: 'follow_up',
+      resolution: 'ready',
+      missingFields: [],
+      resolvedContent: pendingAction.intent.originalUserContent?.trim() || undefined,
+      entities: {
+        ...(typeof entities.automationName === 'string' ? { automationName: entities.automationName } : {}),
+        ...(typeof entities.manualOnly === 'boolean' ? { manualOnly: entities.manualOnly } : {}),
+        ...(typeof entities.scheduled === 'boolean' ? { scheduled: entities.scheduled } : {}),
+        ...(typeof entities.enabled === 'boolean' ? { enabled: entities.enabled } : {}),
+        ...((uiSurface === 'automations' || uiSurface === 'dashboard' || uiSurface === 'config' || uiSurface === 'chat' || uiSurface === 'unknown')
+          ? { uiSurface }
+          : {}),
+        ...(Array.isArray(entities.urls) ? { urls: entities.urls.filter((value): value is string => typeof value === 'string') } : {}),
+        ...(typeof entities.query === 'string' ? { query: entities.query } : {}),
+        ...(typeof entities.path === 'string' ? { path: entities.path } : {}),
+        ...(typeof entities.sessionTarget === 'string' ? { sessionTarget: entities.sessionTarget } : {}),
+        ...((emailProvider === 'gws' || emailProvider === 'm365') ? { emailProvider } : {}),
+        ...(typeof entities.codingBackend === 'string' ? { codingBackend: entities.codingBackend } : {}),
+        ...(typeof entities.codingBackendRequested === 'boolean' ? { codingBackendRequested: entities.codingBackendRequested } : {}),
+        ...(typeof entities.codingRunStatusCheck === 'boolean' ? { codingRunStatusCheck: entities.codingRunStatusCheck } : {}),
       },
     };
   }
@@ -3611,15 +4249,22 @@ class ChatAgent extends BaseAgent {
    */
   private async tryHandleApproval(
     message: UserMessage,
-    userKey: string,
     ctx: AgentContext,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
 
-    const pending = this.getPendingApprovals(userKey);
+    const userKey = `${message.userId}:${message.channel}`;
+    const pendingAction = this.getPendingApprovalAction(message.userId, message.channel, message.surfaceId);
+    const pending = pendingAction
+      ? {
+          ids: pendingAction.blocker.approvalIds ?? [],
+          createdAt: pendingAction.createdAt,
+          expiresAt: pendingAction.expiresAt,
+        }
+      : null;
     if (!pending?.ids.length) return null;
 
-    const input = message.content.trim();
+    const input = stripLeadingContextPrefix(message.content).trim();
     const isApprove = APPROVAL_CONFIRM_PATTERN.test(input);
     const isDeny = APPROVAL_DENY_PATTERN.test(input);
     if (!isApprove && !isDeny) return null;
@@ -3647,7 +4292,7 @@ class ChatAgent extends BaseAgent {
     }
 
     const remaining = pending.ids.filter((id) => !targetIds.includes(id));
-    this.setPendingApprovals(userKey, remaining);
+    this.setPendingApprovals(userKey, remaining, message.surfaceId);
     const results: string[] = [];
     const approvedIds = new Set<string>();
     const failedIds = new Set<string>();
@@ -3695,7 +4340,12 @@ class ChatAgent extends BaseAgent {
             results.push(retry.content);
             return {
               content: results.join('\n'),
-              metadata: retry.metadata,
+              metadata: this.withCurrentPendingActionMetadata(
+                retry.metadata,
+                message.userId,
+                message.channel,
+                message.surfaceId,
+              ),
             };
           }
         } else {
@@ -3727,7 +4377,12 @@ class ChatAgent extends BaseAgent {
           results.push(retry.content);
           return {
             content: results.join('\n'),
-            metadata: retry.metadata,
+            metadata: this.withCurrentPendingActionMetadata(
+              retry.metadata,
+              message.userId,
+              message.channel,
+              message.surfaceId,
+            ),
           };
         }
       } else if (stillPending.length !== fallbackContinuation.pendingApprovalIds.length) {
@@ -3745,69 +4400,395 @@ class ChatAgent extends BaseAgent {
       const summaries = this.tools?.getApprovalSummaries(remaining);
       results.push('');
       results.push(this.formatPendingApprovalPrompt(remaining, summaries));
+      const approvalSummaries = remaining.map((id) => {
+        const summary = summaries?.get(id);
+        return {
+          id,
+          toolName: summary?.toolName ?? 'unknown',
+          argsPreview: summary?.argsPreview ?? '',
+        };
+      });
+      const nextAction = this.setPendingApprovalAction(
+        message.userId,
+        message.channel,
+        message.surfaceId,
+        {
+          prompt: pendingAction?.blocker.prompt ?? 'Approval required for the pending action.',
+          approvalIds: remaining,
+          approvalSummaries,
+          originalUserContent: pendingAction?.intent.originalUserContent ?? message.content,
+          route: pendingAction?.intent.route,
+          operation: pendingAction?.intent.operation,
+          summary: pendingAction?.intent.summary,
+          turnRelation: pendingAction?.intent.turnRelation,
+          resolution: pendingAction?.intent.resolution,
+          missingFields: pendingAction?.intent.missingFields,
+          entities: pendingAction?.intent.entities,
+          resume: pendingAction?.resume,
+          codeSessionId: pendingAction?.codeSessionId,
+        },
+      );
+      return {
+        content: results.join('\n'),
+        metadata: nextAction ? { pendingAction: toPendingActionClientMetadata(nextAction) } : undefined,
+      };
+    }
+    if (pendingAction) {
+      this.completePendingAction(pendingAction.id);
     }
     return { content: results.join('\n') };
   }
 
-  private getPendingApprovals(userKey: string, nowMs: number = Date.now()): PendingApprovalState | null {
-    const state = this.pendingApprovals.get(userKey);
-    if (!state) return null;
-    if (state.expiresAt <= nowMs) {
-      this.pendingApprovals.delete(userKey);
-      return null;
-    }
-    return state;
-  }
-
-  private setPendingApprovals(userKey: string, ids: string[], nowMs: number = Date.now()): void {
-    const uniqueIds = [...new Set(ids.filter((id) => id.trim().length > 0))];
-    if (uniqueIds.length === 0) {
-      this.pendingApprovals.delete(userKey);
-      return;
-    }
-    const existing = this.pendingApprovals.get(userKey);
-    this.pendingApprovals.set(userKey, {
-      ids: uniqueIds,
-      createdAt: existing?.createdAt ?? nowMs,
-      expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
-    });
-  }
-
-  private getPendingClarification(
-    userId: string,
-    channel: string,
-    nowMs: number = Date.now(),
-  ): PendingClarificationState | null {
-    return this.pendingClarificationStore?.get({
+  private buildPendingActionScope(userId: string, channel: string, surfaceId?: string): PendingActionScope {
+    return {
       agentId: this.stateAgentId,
       userId,
       channel,
-    }, nowMs) ?? null;
+      surfaceId: surfaceId?.trim() || userId || 'default-surface',
+    };
   }
 
-  private setPendingClarification(
+  private buildContinuityThreadScope(userId: string): ContinuityThreadScope {
+    return {
+      assistantId: this.stateAgentId,
+      userId: userId.trim(),
+    };
+  }
+
+  private getContinuityThread(
+    userId: string,
+    nowMs: number = Date.now(),
+  ): ContinuityThreadRecord | null {
+    const normalizedUserId = userId.trim();
+    if (!normalizedUserId) return null;
+    return this.continuityThreadStore?.get(this.buildContinuityThreadScope(normalizedUserId), nowMs) ?? null;
+  }
+
+  private touchContinuityThread(
     userId: string,
     channel: string,
-    input: Pick<PendingClarificationState, 'kind' | 'originalUserContent' | 'prompt'>,
+    surfaceId?: string,
+    codeSessionId?: string,
+    nowMs: number = Date.now(),
+  ): ContinuityThreadRecord | null {
+    const normalizedUserId = userId.trim();
+    const normalizedChannel = channel.trim();
+    if (!normalizedUserId || !normalizedChannel || !this.continuityThreadStore) return null;
+    const normalizedSurfaceId = surfaceId?.trim() || normalizedUserId || 'default-surface';
+    return this.continuityThreadStore.upsert(
+      this.buildContinuityThreadScope(normalizedUserId),
+      {
+        touchSurface: {
+          channel: normalizedChannel,
+          surfaceId: normalizedSurfaceId,
+        },
+        ...(codeSessionId?.trim()
+          ? {
+              activeExecutionRefs: [{
+                kind: 'code_session',
+                id: codeSessionId.trim(),
+              }],
+            }
+          : {}),
+      },
+      nowMs,
+    );
+  }
+
+  private updateContinuityThreadFromIntent(input: {
+    userId: string;
+    channel: string;
+    surfaceId?: string;
+    continuityThread: ContinuityThreadRecord | null;
+    gateway: IntentGatewayRecord | null;
+    routingContent: string;
+    codeSessionId?: string;
+  }): ContinuityThreadRecord | null {
+    if (!this.continuityThreadStore) return input.continuityThread;
+    const decision = input.gateway?.decision;
+    const normalizedUserId = input.userId.trim();
+    const normalizedChannel = input.channel.trim();
+    if (!normalizedUserId || !normalizedChannel || !decision) {
+      return input.continuityThread;
+    }
+    const routingContent = input.routingContent.trim();
+    const resolvedContent = decision.resolvedContent?.trim();
+    const nextLastActionableRequest = decision.turnRelation === 'new_request'
+      ? (routingContent || undefined)
+      : (resolvedContent || undefined);
+    return this.continuityThreadStore.upsert(
+      this.buildContinuityThreadScope(normalizedUserId),
+      {
+        touchSurface: {
+          channel: normalizedChannel,
+          surfaceId: input.surfaceId?.trim() || normalizedUserId || 'default-surface',
+        },
+        ...(decision.summary.trim() ? { focusSummary: decision.summary.trim() } : {}),
+        ...(nextLastActionableRequest ? { lastActionableRequest: nextLastActionableRequest } : {}),
+        ...(decision.summary.trim() ? { safeSummary: decision.summary.trim() } : {}),
+        ...(input.codeSessionId?.trim()
+          ? {
+              activeExecutionRefs: [{
+                kind: 'code_session',
+                id: input.codeSessionId.trim(),
+              }],
+            }
+          : {}),
+      },
+    );
+  }
+
+  private getActivePendingAction(
+    userId: string,
+    channel: string,
+    surfaceId?: string,
+    nowMs: number = Date.now(),
+  ): PendingActionRecord | null {
+    const primaryScope = this.buildPendingActionScope(userId, channel, surfaceId);
+    return this.pendingActionStore?.resolveActiveForSurface(primaryScope, nowMs) ?? null;
+  }
+
+  private replacePendingAction(
+    userId: string,
+    channel: string,
+    surfaceId: string | undefined,
+    input: Omit<PendingActionRecord, 'id' | 'createdAt' | 'updatedAt' | 'scope'> & { id?: string },
+    nowMs: number = Date.now(),
+  ): PendingActionRecord | null {
+    if (!this.pendingActionStore) return null;
+    return this.pendingActionStore.replaceActive(
+      this.buildPendingActionScope(userId, channel, surfaceId),
+      input,
+      nowMs,
+    );
+  }
+
+  private updatePendingAction(
+    actionId: string,
+    patch: Partial<Omit<PendingActionRecord, 'id' | 'scope' | 'createdAt'>>,
+    nowMs: number = Date.now(),
+  ): PendingActionRecord | null {
+    return this.pendingActionStore?.update(actionId, patch, nowMs) ?? null;
+  }
+
+  private completePendingAction(actionId: string, nowMs: number = Date.now()): void {
+    this.pendingActionStore?.complete(actionId, nowMs);
+  }
+
+  private cancelPendingAction(actionId: string, nowMs: number = Date.now()): void {
+    this.pendingActionStore?.cancel(actionId, nowMs);
+  }
+
+  private clearActivePendingAction(
+    userId: string,
+    channel: string,
+    surfaceId?: string,
     nowMs: number = Date.now(),
   ): void {
-    this.pendingClarificationStore?.set({
-      agentId: this.stateAgentId,
-      userId,
-      channel,
-    }, {
-      ...input,
-      createdAt: nowMs,
-      expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
-    });
+    const active = this.getActivePendingAction(userId, channel, surfaceId, nowMs);
+    if (active) {
+      this.cancelPendingAction(active.id, nowMs);
+    }
   }
 
-  private clearPendingClarification(userId: string, channel: string): void {
-    this.pendingClarificationStore?.clear({
-      agentId: this.stateAgentId,
+  private parsePendingActionUserKey(userKey: string): { userId: string; channel: string } {
+    const trimmed = userKey.trim();
+    const splitAt = trimmed.lastIndexOf(':');
+    if (splitAt <= 0) {
+      return { userId: trimmed, channel: 'web' };
+    }
+    return {
+      userId: trimmed.slice(0, splitAt),
+      channel: trimmed.slice(splitAt + 1),
+    };
+  }
+
+  private getPendingApprovals(
+    userKey: string,
+    surfaceId?: string,
+    nowMs: number = Date.now(),
+  ): PendingApprovalState | null {
+    const { userId, channel } = this.parsePendingActionUserKey(userKey);
+    const pending = this.getPendingApprovalAction(userId, channel, surfaceId, nowMs);
+    if (!pending?.blocker.approvalIds?.length) return null;
+    return {
+      ids: [...pending.blocker.approvalIds],
+      createdAt: pending.createdAt,
+      expiresAt: pending.expiresAt,
+    };
+  }
+
+  private setPendingApprovals(
+    userKey: string,
+    ids: string[],
+    surfaceId?: string,
+    nowMs: number = Date.now(),
+  ): void {
+    const { userId, channel } = this.parsePendingActionUserKey(userKey);
+    const active = this.getPendingApprovalAction(userId, channel, surfaceId, nowMs);
+    const approvalIds = [...new Set(ids.filter((id) => id.trim().length > 0))];
+    if (approvalIds.length === 0) {
+      if (active) this.completePendingAction(active.id, nowMs);
+      return;
+    }
+    const summaries = this.tools?.getApprovalSummaries(approvalIds);
+    const approvalSummaries = approvalIds.map((id) => {
+      const summary = summaries?.get(id);
+      return {
+        id,
+        toolName: summary?.toolName ?? 'unknown',
+        argsPreview: summary?.argsPreview ?? '',
+      };
+    });
+    this.setPendingApprovalAction(
       userId,
       channel,
-    });
+      surfaceId,
+      {
+        prompt: active?.blocker.prompt ?? 'Approval required for the pending action.',
+        approvalIds,
+        approvalSummaries,
+        originalUserContent: active?.intent.originalUserContent ?? '',
+        route: active?.intent.route,
+        operation: active?.intent.operation,
+        summary: active?.intent.summary,
+        turnRelation: active?.intent.turnRelation,
+        resolution: active?.intent.resolution,
+        missingFields: active?.intent.missingFields,
+        entities: active?.intent.entities,
+        resume: active?.resume,
+        codeSessionId: active?.codeSessionId,
+      },
+      nowMs,
+    );
+  }
+
+  private getPendingApprovalAction(
+    userId: string,
+    channel: string,
+    surfaceId?: string,
+    nowMs: number = Date.now(),
+  ): PendingActionRecord | null {
+    const active = this.getActivePendingAction(userId, channel, surfaceId, nowMs);
+    if (!active || !isPendingActionActive(active.status) || active.blocker.kind !== 'approval') {
+      return null;
+    }
+    return active;
+  }
+
+  private getPendingApprovalIds(
+    userId: string,
+    channel: string,
+    surfaceId?: string,
+    nowMs: number = Date.now(),
+  ): string[] {
+    return this.getPendingApprovalAction(userId, channel, surfaceId, nowMs)?.blocker.approvalIds ?? [];
+  }
+
+  private setPendingApprovalAction(
+    userId: string,
+    channel: string,
+    surfaceId: string | undefined,
+    input: {
+      prompt: string;
+      approvalIds: string[];
+      approvalSummaries?: PendingActionApprovalSummary[];
+      originalUserContent: string;
+      route?: string;
+      operation?: string;
+      summary?: string;
+      turnRelation?: string;
+      resolution?: string;
+      missingFields?: string[];
+      entities?: Record<string, unknown>;
+      resume?: PendingActionRecord['resume'];
+      codeSessionId?: string;
+    },
+    nowMs: number = Date.now(),
+  ): PendingActionRecord | null {
+    const approvalIds = [...new Set(input.approvalIds.map((id) => id.trim()).filter(Boolean))];
+    if (approvalIds.length === 0) {
+      this.clearActivePendingAction(userId, channel, surfaceId, nowMs);
+      return null;
+    }
+    return this.replacePendingAction(userId, channel, surfaceId, {
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: input.prompt,
+        approvalIds,
+        ...(input.approvalSummaries?.length ? { approvalSummaries: input.approvalSummaries.map((item) => ({ ...item })) } : {}),
+      },
+      intent: {
+        ...(input.route ? { route: input.route } : {}),
+        ...(input.operation ? { operation: input.operation } : {}),
+        ...(input.summary ? { summary: input.summary } : {}),
+        ...(input.turnRelation ? { turnRelation: input.turnRelation } : {}),
+        ...(input.resolution ? { resolution: input.resolution } : {}),
+        ...(input.missingFields?.length ? { missingFields: [...input.missingFields] } : {}),
+        originalUserContent: input.originalUserContent,
+        ...(input.entities ? { entities: { ...input.entities } } : {}),
+      },
+      ...(input.resume ? { resume: input.resume } : {}),
+      ...(input.codeSessionId ? { codeSessionId: input.codeSessionId } : {}),
+      expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
+    }, nowMs);
+  }
+
+  private setClarificationPendingAction(
+    userId: string,
+    channel: string,
+    surfaceId: string | undefined,
+    input: {
+      blockerKind: PendingActionBlocker['kind'];
+      field?: string;
+      prompt: string;
+      originalUserContent: string;
+      options?: PendingActionBlocker['options'];
+      route?: string;
+      operation?: string;
+      summary?: string;
+      turnRelation?: string;
+      resolution?: string;
+      missingFields?: string[];
+      entities?: Record<string, unknown>;
+      codeSessionId?: string;
+      currentSessionId?: string;
+      currentSessionLabel?: string;
+      targetSessionId?: string;
+      targetSessionLabel?: string;
+      metadata?: Record<string, unknown>;
+    },
+    nowMs: number = Date.now(),
+  ): PendingActionRecord | null {
+    return this.replacePendingAction(userId, channel, surfaceId, {
+      status: 'pending',
+      transferPolicy: defaultPendingActionTransferPolicy(input.blockerKind),
+      blocker: {
+        kind: input.blockerKind,
+        prompt: input.prompt,
+        ...(input.field ? { field: input.field } : {}),
+        ...(input.options?.length ? { options: input.options.map((option) => ({ ...option })) } : {}),
+        ...(input.currentSessionId ? { currentSessionId: input.currentSessionId } : {}),
+        ...(input.currentSessionLabel ? { currentSessionLabel: input.currentSessionLabel } : {}),
+        ...(input.targetSessionId ? { targetSessionId: input.targetSessionId } : {}),
+        ...(input.targetSessionLabel ? { targetSessionLabel: input.targetSessionLabel } : {}),
+        ...(input.metadata ? { metadata: { ...input.metadata } } : {}),
+      },
+      intent: {
+        ...(input.route ? { route: input.route } : {}),
+        ...(input.operation ? { operation: input.operation } : {}),
+        ...(input.summary ? { summary: input.summary } : {}),
+        ...(input.turnRelation ? { turnRelation: input.turnRelation } : {}),
+        ...(input.resolution ? { resolution: input.resolution } : {}),
+        ...(input.missingFields?.length ? { missingFields: [...input.missingFields] } : {}),
+        originalUserContent: input.originalUserContent,
+        ...(input.entities ? { entities: { ...input.entities } } : {}),
+      },
+      ...(input.codeSessionId ? { codeSessionId: input.codeSessionId } : {}),
+      expiresAt: nowMs + PENDING_APPROVAL_TTL_MS,
+    }, nowMs);
   }
 
   private setApprovalFollowUp(approvalId: string, copy: ApprovalFollowUpCopy): void {
@@ -3916,12 +4897,31 @@ class ChatAgent extends BaseAgent {
     return null;
   }
 
-  private syncPendingApprovalsFromExecutor(userKey: string, userId: string, channel: string): void {
+  private syncPendingApprovalsFromExecutor(
+    sourceUserId: string,
+    sourceChannel: string,
+    targetUserId: string,
+    targetChannel: string,
+    surfaceId?: string,
+    originalUserContent: string = '',
+  ): void {
     if (!this.tools?.isEnabled()) return;
-    const ids = this.tools.listPendingApprovalIdsForUser(userId, channel, {
-      includeUnscoped: channel === 'web',
+    const ids = this.tools.listPendingApprovalIdsForUser(sourceUserId, sourceChannel, {
+      includeUnscoped: sourceChannel === 'web',
     });
-    this.setPendingApprovals(userKey, ids);
+    const userKey = `${targetUserId}:${targetChannel}`;
+    this.setPendingApprovals(userKey, ids, surfaceId);
+    if (ids.length > 0 && originalUserContent.trim()) {
+      const active = this.getPendingApprovalAction(targetUserId, targetChannel, surfaceId);
+      if (active && !active.intent.originalUserContent.trim()) {
+        this.updatePendingAction(active.id, {
+          intent: {
+            ...active.intent,
+            originalUserContent,
+          },
+        });
+      }
+    }
   }
 
   private resolveApprovalTargets(
@@ -4056,8 +5056,13 @@ class ChatAgent extends BaseAgent {
     message: UserMessage,
     ctx: AgentContext,
     userKey: string,
+    decision?: IntentGatewayDecision,
   ): Promise<string | null> {
     if (!this.tools?.isEnabled()) return null;
+
+    if (decision?.route === 'email_task' && decision.entities.emailProvider === 'm365') {
+      return this.tryDirectMicrosoft365Write(message, ctx, userKey);
+    }
 
     const intent = parseDirectGmailWriteIntent(message.content);
     if (!intent) return null;
@@ -4313,7 +5318,8 @@ class ChatAgent extends BaseAgent {
     ctx: AgentContext,
     options?: {
       recentHistory?: Array<{ role: 'user' | 'assistant'; content: string }>;
-      pendingClarification?: PendingClarificationState | null;
+      pendingAction?: PendingActionRecord | null;
+      continuityThread?: ContinuityThreadRecord | null;
     },
   ): Promise<IntentGatewayRecord | null> {
     const preRouted = readPreRoutedIntentGatewayMetadata(message.metadata);
@@ -4342,13 +5348,10 @@ class ChatAgent extends BaseAgent {
         content: message.content,
         channel: message.channel,
         recentHistory: options?.recentHistory,
-        pendingClarification: options?.pendingClarification
-          ? {
-              kind: options.pendingClarification.kind,
-              originalRequest: options.pendingClarification.originalUserContent,
-              prompt: options.pendingClarification.prompt,
-            }
+        pendingAction: options?.pendingAction
+          ? summarizePendingActionForGateway(options.pendingAction)
           : null,
+        continuity: summarizeContinuityThreadForGateway(options?.continuityThread),
         enabledManagedProviders: this.enabledManagedProviders ? [...this.enabledManagedProviders] : [],
         availableCodingBackends: ['codex', 'claude-code', 'gemini-cli', 'aider'],
       },
@@ -4367,6 +5370,7 @@ class ChatAgent extends BaseAgent {
             missingFields: classified.decision.missingFields,
             emailProvider: classified.decision.entities.emailProvider,
             codingBackend: classified.decision.entities.codingBackend,
+            continuityKey: options?.continuityThread?.continuityKey,
             latencyMs: classified.latencyMs,
             model: classified.model,
           }
@@ -4424,7 +5428,7 @@ class ChatAgent extends BaseAgent {
       case 'workspace_write':
         return new Set(['workspace_task', 'email_task']);
       case 'workspace_read':
-        return new Set(['workspace_task']);
+        return new Set(['workspace_task', 'email_task']);
       case 'browser':
         return new Set(['browser_task']);
       case 'web_search':
@@ -4602,8 +5606,13 @@ class ChatAgent extends BaseAgent {
     message: UserMessage,
     ctx: AgentContext,
     userKey: string,
+    decision?: IntentGatewayDecision,
   ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
+
+    if (decision?.route === 'email_task' && decision.entities.emailProvider === 'm365') {
+      return this.tryDirectMicrosoft365Read(message, ctx, userKey);
+    }
 
     const intent = parseDirectGoogleWorkspaceIntent(message.content);
     if (!intent) return null;
@@ -4766,6 +5775,198 @@ class ChatAgent extends BaseAgent {
       lines.push('Ask me to read or summarize any of these if you want the full details.');
     }
 
+    return lines.join('\n');
+  }
+
+  private async tryDirectMicrosoft365Write(
+    message: UserMessage,
+    ctx: AgentContext,
+    userKey: string,
+  ): Promise<string | null> {
+    if (!this.tools?.isEnabled()) return null;
+
+    const intent = parseDirectGmailWriteIntent(message.content);
+    if (!intent) return null;
+
+    const missing: string[] = [];
+    if (!intent.to) missing.push('recipient email');
+    if (!intent.subject) missing.push('subject');
+    if (!intent.body) missing.push('body');
+    if (missing.length > 0) {
+      return `To ${intent.mode} an Outlook email, I need the ${missing.join(', ')}.`;
+    }
+
+    const to = intent.to!;
+    const subject = intent.subject!;
+    const body = intent.body!;
+    const toolName = intent.mode === 'send' ? 'outlook_send' : 'outlook_draft';
+    const toolRequest = {
+      origin: 'assistant' as const,
+      agentId: this.id,
+      userId: message.userId,
+      channel: message.channel,
+      requestId: message.id,
+      agentContext: { checkAction: ctx.checkAction },
+    };
+
+    const toolResult = await this.tools.executeModelTool(
+      toolName,
+      { to, subject, body },
+      toolRequest,
+    );
+
+    if (!toBoolean(toolResult.success)) {
+      const status = toString(toolResult.status);
+      if (status === 'pending_approval') {
+        const approvalId = toString(toolResult.approvalId);
+        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
+        if (approvalId) {
+          this.setPendingApprovals(userKey, [...existingIds, approvalId]);
+          this.setApprovalFollowUp(approvalId, {
+            approved: intent.mode === 'send'
+              ? 'I sent the Outlook message.'
+              : 'I drafted the Outlook message.',
+            denied: intent.mode === 'send'
+              ? 'I did not send the Outlook message.'
+              : 'I did not draft the Outlook message.',
+          });
+        }
+        const prompt = this.formatPendingApprovalPrompt(approvalId ? [approvalId] : []);
+        return [
+          `I prepared an Outlook ${intent.mode} to ${to} with subject "${subject}", but it needs approval first.`,
+          prompt,
+        ].filter(Boolean).join('\n\n');
+      }
+      const msg = toString(toolResult.message) || toString(toolResult.error) || 'Microsoft 365 request failed.';
+      return `I tried to ${intent.mode} the Outlook message, but it failed: ${msg}`;
+    }
+
+    return intent.mode === 'send'
+      ? `I sent the Outlook message to ${to} with subject "${subject}".`
+      : `I drafted an Outlook message to ${to} with subject "${subject}".`;
+  }
+
+  private async tryDirectMicrosoft365Read(
+    message: UserMessage,
+    ctx: AgentContext,
+    userKey: string,
+  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
+    if (!this.tools?.isEnabled()) return null;
+
+    const intent = parseDirectGoogleWorkspaceIntent(message.content);
+    if (!intent) return null;
+
+    const toolRequest = {
+      origin: 'assistant' as const,
+      agentId: this.id,
+      userId: message.userId,
+      channel: message.channel,
+      requestId: message.id,
+      agentContext: { checkAction: ctx.checkAction },
+    };
+
+    const listParams: Record<string, unknown> = {
+      $top: intent.kind === 'gmail_unread' ? Math.max(intent.count, 10) : intent.count,
+      $select: 'id,subject,receivedDateTime,from,isRead',
+      $orderby: 'receivedDateTime desc',
+    };
+    if (intent.kind === 'gmail_unread') {
+      listParams.$filter = 'isRead eq false';
+    }
+
+    const listResult = await this.tools.executeModelTool(
+      'm365',
+      {
+        service: 'mail',
+        resource: 'me/messages',
+        method: 'list',
+        params: listParams,
+      },
+      toolRequest,
+    );
+
+    if (!toBoolean(listResult.success)) {
+      const status = toString(listResult.status);
+      if (status === 'pending_approval') {
+        const approvalId = toString(listResult.approvalId);
+        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
+        if (approvalId) {
+          this.setPendingApprovals(userKey, [...existingIds, approvalId]);
+          this.setApprovalFollowUp(approvalId, {
+            approved: 'I completed the Outlook inbox check.',
+            denied: 'I did not check Outlook.',
+          });
+        }
+        const pendingIds = approvalId ? [approvalId] : [];
+        const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
+        const pendingApprovals = buildPendingApprovalMetadata(pendingIds, summaries);
+        const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
+        return {
+          content: [
+            'I prepared an Outlook inbox check, but it needs approval first.',
+            prompt,
+          ].filter(Boolean).join('\n\n'),
+          metadata: pendingApprovals.length > 0 ? { pendingApprovals } : undefined,
+        };
+      }
+      const msg = toString(listResult.message) || toString(listResult.error) || 'Microsoft 365 request failed.';
+      return `I tried to check Outlook for messages, but it failed: ${msg}`;
+    }
+
+    const output = isRecord(listResult.output) ? listResult.output : null;
+    const messages = Array.isArray(output?.value)
+      ? output.value.filter((entry): entry is Record<string, unknown> => isRecord(entry))
+      : [];
+    const unreadCount = intent.kind === 'gmail_unread'
+      ? messages.length
+      : messages.filter((entry) => entry.isRead === false).length;
+
+    if (messages.length === 0) {
+      if (intent.kind === 'gmail_recent_senders') {
+        return 'I checked Outlook and could not find any recent messages.';
+      }
+      if (intent.kind === 'gmail_recent_summary') {
+        return 'I checked Outlook and could not find any recent messages to summarize.';
+      }
+      return 'I checked Outlook and found no unread messages.';
+    }
+
+    if (intent.kind === 'gmail_recent_senders') {
+      const lines = [`The senders of the last ${messages.length} Outlook email${messages.length === 1 ? '' : 's'} are:`];
+      for (const [index, entry] of messages.entries()) {
+        const from = summarizeM365From(entry.from) || 'Unknown sender';
+        const subject = toString(entry.subject) || '(no subject)';
+        lines.push(`${index + 1}. ${from} — ${subject}`);
+      }
+      return lines.join('\n');
+    }
+
+    if (intent.kind === 'gmail_recent_summary') {
+      const lines = [`Here are the last ${messages.length} Outlook email${messages.length === 1 ? '' : 's'}:`];
+      for (const [index, entry] of messages.entries()) {
+        const subject = toString(entry.subject) || '(no subject)';
+        const from = summarizeM365From(entry.from) || 'Unknown sender';
+        lines.push(`${index + 1}. ${subject} — ${from}`);
+        const received = toString(entry.receivedDateTime);
+        if (received) lines.push(`   ${received}`);
+      }
+      return lines.join('\n');
+    }
+
+    const lines = [
+      `I checked Outlook and found ${unreadCount} unread message${unreadCount === 1 ? '' : 's'}.`,
+    ];
+    for (const [index, entry] of messages.slice(0, 5).entries()) {
+      const subject = toString(entry.subject) || '(no subject)';
+      const from = summarizeM365From(entry.from) || 'Unknown sender';
+      lines.push(`${index + 1}. ${subject} — ${from}`);
+      const received = toString(entry.receivedDateTime);
+      if (received) lines.push(`   ${received}`);
+    }
+    if (messages.length > 5) {
+      lines.push(`...and ${messages.length - 5} more unread message${messages.length - 5 === 1 ? '' : 's'}.`);
+    }
+    lines.push('Ask me to read or summarize any of these if you want the full details.');
     return lines.join('\n');
   }
 
@@ -4997,6 +6198,18 @@ interface GmailMessageSummary {
   subject: string;
   date: string;
   snippet: string;
+}
+
+function summarizeM365From(value: unknown): string {
+  if (!value || typeof value !== 'object') return '';
+  const record = value as Record<string, unknown>;
+  const emailAddress = record.emailAddress;
+  if (!emailAddress || typeof emailAddress !== 'object') return '';
+  const addressRecord = emailAddress as Record<string, unknown>;
+  const name = typeof addressRecord.name === 'string' ? addressRecord.name.trim() : '';
+  const address = typeof addressRecord.address === 'string' ? addressRecord.address.trim() : '';
+  if (name && address) return `${name} <${address}>`;
+  return name || address;
 }
 
 function summarizeGmailMessage(output: unknown): GmailMessageSummary | null {
@@ -6270,6 +7483,7 @@ interface IncomingDispatchMessage {
   principalRole?: import('./tools/types.js').PrincipalRole;
   channel?: string;
   metadata?: Record<string, unknown>;
+  requestId?: string;
 }
 
 /** Build dashboard callbacks wired to runtime internals. */
@@ -6333,6 +7547,7 @@ function buildDashboardCallbacks(
   microsoftAuthRef: { current: import('./microsoft/microsoft-auth.js').MicrosoftAuth | null },
   microsoftServiceRef: { current: import('./microsoft/microsoft-service.js').MicrosoftService | null },
   toolExecutorRef: { current: import('./tools/executor.js').ToolExecutor | null },
+  pendingActionStore: PendingActionStore,
   codingBackendServiceRef: { current: CodingBackendService | null },
   prepareIncomingDispatch: (
     channelDefault: string | undefined,
@@ -7211,7 +8426,7 @@ function buildDashboardCallbacks(
       const mismatchNotice = requestedTier && locality && requestedTier !== locality
         ? `Requested ${requestedTier} route, final response came from ${locality}${providerName ? ` (${providerName})` : ''}.`
         : undefined;
-      const mergedMetadata = {
+      const mergedMetadata: Record<string, unknown> = {
         ...(metadata ?? {}),
         ...((requestedTier || mismatchNotice)
           ? {
@@ -7223,7 +8438,155 @@ function buildDashboardCallbacks(
             }
           : {}),
       };
+      delete mergedMetadata.pendingApprovals;
       return Object.keys(mergedMetadata).length > 0 ? mergedMetadata : undefined;
+    };
+    const readContextAssemblyTraceDetails = (metadata: Record<string, unknown> | undefined): {
+      summary?: string;
+      detail?: string;
+      memoryScope?: string;
+      knowledgeBaseLoaded?: boolean;
+      knowledgeBaseQueryPreview?: string;
+      continuityKey?: string;
+      activeExecutionRefs?: string[];
+      linkedSurfaceCount?: number;
+      selectedMemoryEntryCount?: number;
+      omittedMemoryEntryCount?: number;
+      selectedMemoryEntries?: Array<{
+        category: string;
+        createdAt: string;
+        preview: string;
+        renderMode: 'full' | 'summary';
+        queryScore: number;
+        isContextFlush: boolean;
+        matchReasons?: string[];
+      }>;
+    } | null => {
+      const contextAssembly = metadata?.contextAssembly;
+      if (!contextAssembly || typeof contextAssembly !== 'object') {
+        return null;
+      }
+      const record = contextAssembly as Record<string, unknown>;
+      return {
+        ...(typeof record.summary === 'string' ? { summary: record.summary } : {}),
+        ...(typeof record.detail === 'string' ? { detail: record.detail } : {}),
+        ...(typeof record.memoryScope === 'string' ? { memoryScope: record.memoryScope } : {}),
+        ...(typeof record.knowledgeBaseLoaded === 'boolean' ? { knowledgeBaseLoaded: record.knowledgeBaseLoaded } : {}),
+        ...(typeof record.knowledgeBaseQueryPreview === 'string' ? { knowledgeBaseQueryPreview: record.knowledgeBaseQueryPreview } : {}),
+        ...(typeof record.continuityKey === 'string' ? { continuityKey: record.continuityKey } : {}),
+        ...(Array.isArray(record.activeExecutionRefs)
+          ? {
+              activeExecutionRefs: record.activeExecutionRefs
+                .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+                .slice(0, 6),
+            }
+          : {}),
+        ...(typeof record.linkedSurfaceCount === 'number' ? { linkedSurfaceCount: record.linkedSurfaceCount } : {}),
+        ...(typeof record.selectedMemoryEntryCount === 'number' ? { selectedMemoryEntryCount: record.selectedMemoryEntryCount } : {}),
+        ...(typeof record.omittedMemoryEntryCount === 'number' ? { omittedMemoryEntryCount: record.omittedMemoryEntryCount } : {}),
+        ...(Array.isArray(record.selectedMemoryEntries)
+          ? {
+              selectedMemoryEntries: record.selectedMemoryEntries
+                .filter((entry): entry is {
+                  category: string;
+                  createdAt: string;
+                  preview: string;
+                  renderMode: 'full' | 'summary';
+                  queryScore: number;
+                  isContextFlush: boolean;
+                  matchReasons?: string[];
+                } => {
+                  return !!entry
+                    && typeof entry === 'object'
+                    && typeof (entry as Record<string, unknown>).category === 'string'
+                    && typeof (entry as Record<string, unknown>).createdAt === 'string'
+                    && typeof (entry as Record<string, unknown>).preview === 'string'
+                    && ((entry as Record<string, unknown>).renderMode === 'full' || (entry as Record<string, unknown>).renderMode === 'summary')
+                    && typeof (entry as Record<string, unknown>).queryScore === 'number';
+                })
+                .map((entry) => ({
+                  ...entry,
+                  ...(Array.isArray(entry.matchReasons)
+                    ? {
+                        matchReasons: entry.matchReasons
+                          .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+                          .slice(0, 3),
+                      }
+                    : {}),
+                }))
+                .slice(0, 4),
+            }
+          : {}),
+      };
+    };
+    const addContextAssemblyTraceNode = (
+      dispatchCtx: import('./runtime/orchestrator.js').AssistantDispatchContext,
+      metadata: Record<string, unknown> | undefined,
+      startedAt: number,
+      completedAt: number,
+    ): void => {
+      const details = readContextAssemblyTraceDetails(metadata);
+      if (!details) return;
+      dispatchCtx.addNode({
+        kind: 'compile',
+        name: 'Assembled context',
+        startedAt,
+        completedAt,
+        status: 'succeeded',
+        metadata: {
+          ...details,
+          detail: details.detail ?? details.summary,
+        },
+      });
+    };
+    const readDelegatedHandoffTraceDetails = (metadata: Record<string, unknown> | undefined): {
+      summary?: string;
+      reportingMode?: 'inline_response' | 'held_for_approval' | 'status_only' | 'held_for_operator';
+      unresolvedBlockerKind?: string;
+      approvalCount?: number;
+      nextAction?: string;
+    } | null => {
+      const delegatedHandoff = metadata?.delegatedHandoff;
+      if (!delegatedHandoff || typeof delegatedHandoff !== 'object') {
+        return null;
+      }
+      const record = delegatedHandoff as Record<string, unknown>;
+      return {
+        ...(typeof record.summary === 'string' ? { summary: record.summary } : {}),
+        ...(record.reportingMode === 'inline_response'
+          || record.reportingMode === 'held_for_approval'
+          || record.reportingMode === 'status_only'
+          || record.reportingMode === 'held_for_operator'
+          ? { reportingMode: record.reportingMode }
+          : {}),
+        ...(typeof record.unresolvedBlockerKind === 'string'
+          ? { unresolvedBlockerKind: record.unresolvedBlockerKind }
+          : {}),
+        ...(typeof record.approvalCount === 'number' ? { approvalCount: record.approvalCount } : {}),
+        ...(typeof record.nextAction === 'string' ? { nextAction: record.nextAction } : {}),
+      };
+    };
+    const addDelegatedHandoffTraceNode = (
+      dispatchCtx: import('./runtime/orchestrator.js').AssistantDispatchContext,
+      metadata: Record<string, unknown> | undefined,
+      startedAt: number,
+      completedAt: number,
+    ): void => {
+      const details = readDelegatedHandoffTraceDetails(metadata);
+      if (!details) return;
+      dispatchCtx.addNode({
+        kind: 'handoff',
+        name: 'Delegated follow-up',
+        startedAt,
+        completedAt,
+        status: details.reportingMode === 'inline_response'
+          ? 'succeeded'
+          : 'blocked',
+        metadata: {
+          ...details,
+          detail: details.nextAction ?? details.summary,
+        },
+      });
     };
 
     return orchestrator.dispatch(
@@ -7265,6 +8628,10 @@ function buildDashboardCallbacks(
           });
           const mergedMetadata = mergeResponseSourceMetadata(response.metadata);
           const responseSource = readResponseSourceMetadata(mergedMetadata);
+          addContextAssemblyTraceNode(dispatchCtx, mergedMetadata, message.timestamp, Date.now());
+          addDelegatedHandoffTraceNode(dispatchCtx, mergedMetadata, message.timestamp, Date.now());
+          const contextAssembly = readContextAssemblyTraceDetails(mergedMetadata);
+          const delegatedHandoff = readDelegatedHandoffTraceDetails(mergedMetadata);
           intentRoutingTrace.record({
             stage: 'dispatch_response',
             requestId: dispatchCtx.requestId,
@@ -7280,7 +8647,28 @@ function buildDashboardCallbacks(
               routeReason: args.routeDecision?.reason,
               responseLocality: responseSource?.locality,
               responseProviderName: responseSource?.providerName,
-              pendingApprovals: Array.isArray(mergedMetadata?.pendingApprovals) ? mergedMetadata.pendingApprovals.length : 0,
+              ...(contextAssembly?.summary ? { contextAssemblySummary: contextAssembly.summary } : {}),
+              ...(contextAssembly?.memoryScope ? { memoryScope: contextAssembly.memoryScope } : {}),
+              ...(typeof contextAssembly?.knowledgeBaseLoaded === 'boolean'
+                ? { knowledgeBaseLoaded: contextAssembly.knowledgeBaseLoaded }
+                : {}),
+              ...(contextAssembly?.continuityKey ? { continuityKey: contextAssembly.continuityKey } : {}),
+              ...(contextAssembly?.activeExecutionRefs?.length ? { activeExecutionRefs: contextAssembly.activeExecutionRefs } : {}),
+              ...(typeof contextAssembly?.linkedSurfaceCount === 'number'
+                ? { linkedSurfaceCount: contextAssembly.linkedSurfaceCount }
+                : {}),
+              ...(typeof contextAssembly?.selectedMemoryEntryCount === 'number'
+                ? { selectedMemoryEntryCount: contextAssembly.selectedMemoryEntryCount }
+                : {}),
+              ...(typeof contextAssembly?.omittedMemoryEntryCount === 'number'
+                ? { omittedMemoryEntryCount: contextAssembly.omittedMemoryEntryCount }
+                : {}),
+              pendingApprovals: Array.isArray((mergedMetadata?.pendingAction as { blocker?: { approvalSummaries?: unknown[] } } | undefined)?.blocker?.approvalSummaries)
+                ? (mergedMetadata?.pendingAction as { blocker: { approvalSummaries: unknown[] } }).blocker.approvalSummaries.length
+                : 0,
+              ...(delegatedHandoff?.reportingMode ? { delegatedReportingMode: delegatedHandoff.reportingMode } : {}),
+              ...(delegatedHandoff?.unresolvedBlockerKind ? { delegatedBlockerKind: delegatedHandoff.unresolvedBlockerKind } : {}),
+              ...(typeof delegatedHandoff?.approvalCount === 'number' ? { delegatedApprovalCount: delegatedHandoff.approvalCount } : {}),
             },
           });
           return {
@@ -7330,6 +8718,10 @@ function buildDashboardCallbacks(
                 },
               });
               const responseSource = readResponseSourceMetadata(mergedMetadata);
+              addContextAssemblyTraceNode(dispatchCtx, mergedMetadata, message.timestamp, Date.now());
+              addDelegatedHandoffTraceNode(dispatchCtx, mergedMetadata, message.timestamp, Date.now());
+              const contextAssembly = readContextAssemblyTraceDetails(mergedMetadata);
+              const delegatedHandoff = readDelegatedHandoffTraceDetails(mergedMetadata);
               intentRoutingTrace.record({
                 stage: 'dispatch_response',
                 requestId: dispatchCtx.requestId,
@@ -7346,6 +8738,25 @@ function buildDashboardCallbacks(
                   routeReason: args.routeDecision?.reason,
                   responseLocality: responseSource?.locality,
                   responseProviderName: responseSource?.providerName,
+                  ...(contextAssembly?.summary ? { contextAssemblySummary: contextAssembly.summary } : {}),
+                  ...(contextAssembly?.memoryScope ? { memoryScope: contextAssembly.memoryScope } : {}),
+                  ...(typeof contextAssembly?.knowledgeBaseLoaded === 'boolean'
+                    ? { knowledgeBaseLoaded: contextAssembly.knowledgeBaseLoaded }
+                    : {}),
+                  ...(contextAssembly?.continuityKey ? { continuityKey: contextAssembly.continuityKey } : {}),
+                  ...(contextAssembly?.activeExecutionRefs?.length ? { activeExecutionRefs: contextAssembly.activeExecutionRefs } : {}),
+                  ...(typeof contextAssembly?.linkedSurfaceCount === 'number'
+                    ? { linkedSurfaceCount: contextAssembly.linkedSurfaceCount }
+                    : {}),
+                  ...(typeof contextAssembly?.selectedMemoryEntryCount === 'number'
+                    ? { selectedMemoryEntryCount: contextAssembly.selectedMemoryEntryCount }
+                    : {}),
+                  ...(typeof contextAssembly?.omittedMemoryEntryCount === 'number'
+                    ? { omittedMemoryEntryCount: contextAssembly.omittedMemoryEntryCount }
+                    : {}),
+                  ...(delegatedHandoff?.reportingMode ? { delegatedReportingMode: delegatedHandoff.reportingMode } : {}),
+                  ...(delegatedHandoff?.unresolvedBlockerKind ? { delegatedBlockerKind: delegatedHandoff.unresolvedBlockerKind } : {}),
+                  ...(typeof delegatedHandoff?.approvalCount === 'number' ? { delegatedApprovalCount: delegatedHandoff.approvalCount } : {}),
                 },
               });
               return {
@@ -7404,6 +8815,7 @@ function buildDashboardCallbacks(
       input.actorRole ?? 'owner',
       input.reason,
     );
+    clearApprovalIdFromPendingAction(pendingActionStore, input.approvalId);
     if (!result.success) {
       log.warn({
         approvalId: input.approvalId,
@@ -7663,10 +9075,22 @@ function buildDashboardCallbacks(
           reason: typeof event.details.reason === 'string' ? event.details.reason : undefined,
         }));
 
+      const mergedJobs = mergeAssistantJobStates([
+        jobTracker.getState(30),
+        runtime.workerManager?.getJobState(30) ?? { summary: { total: 0, running: 0, succeeded: 0, failed: 0 }, jobs: [] },
+      ], 30);
+      const jobsWithDisplay = mergedJobs.jobs.map((job) => ({
+        ...job,
+        display: buildAssistantJobDisplay(job),
+      }));
+
       return {
         orchestrator: orchestrator.getState(),
         intentRoutingTrace: intentRoutingTrace.getStatus(),
-        jobs: jobTracker.getState(30),
+        jobs: {
+          ...mergedJobs,
+          jobs: jobsWithDisplay,
+        },
         lastPolicyDecisions: decisions,
         defaultProvider: configRef.current.defaultProvider,
         guardianEnabled: configRef.current.guardian.enabled,
@@ -7680,7 +9104,19 @@ function buildDashboardCallbacks(
       };
     },
 
-    onAssistantRuns: ({ limit, status, kind, channel, agentId, codeSessionId }) => {
+    onAssistantJobFollowUpAction: ({ jobId, action }) => {
+      if (!runtime.workerManager) {
+        return {
+          success: false,
+          message: 'Delegated worker follow-up controls are not available.',
+          statusCode: 404,
+          errorCode: 'WORKER_MANAGER_UNAVAILABLE',
+        };
+      }
+      return runtime.workerManager.applyJobFollowUpAction(jobId, action);
+    },
+
+    onAssistantRuns: ({ limit, status, kind, channel, agentId, codeSessionId, continuityKey, activeExecutionRef }) => {
       refreshRunTimelineSnapshots();
       return {
         runs: runTimeline.listRuns({
@@ -7690,9 +9126,54 @@ function buildDashboardCallbacks(
           ...(channel ? { channel } : {}),
           ...(agentId ? { agentId } : {}),
           ...(codeSessionId ? { codeSessionId } : {}),
+          ...(continuityKey ? { continuityKey } : {}),
+          ...(activeExecutionRef ? { activeExecutionRef } : {}),
         }),
       };
     },
+
+    onIntentRoutingTrace: async ({ limit, continuityKey, activeExecutionRef, stage, channel, agentId, userId, requestId }) => ({
+      entries: (await intentRoutingTrace.listRecent({
+        limit,
+        ...(continuityKey ? { continuityKey } : {}),
+        ...(activeExecutionRef ? { activeExecutionRef } : {}),
+        ...(stage ? { stage: stage as import('./runtime/intent-routing-trace.js').IntentRoutingTraceStage } : {}),
+        ...(channel ? { channel } : {}),
+        ...(agentId ? { agentId } : {}),
+        ...(userId ? { userId } : {}),
+        ...(requestId ? { requestId } : {}),
+      })).map((entry) => {
+        const matchedRun = entry.requestId ? runTimeline.getRun(entry.requestId) : null;
+        const codeSessionId = matchedRun?.summary.codeSessionId?.trim();
+        const focusItem = matchedRun ? pickRoutingTraceFocusItem(entry, matchedRun) : null;
+        return {
+          ...entry,
+          ...(matchedRun
+            ? {
+                matchedRun: {
+                  runId: matchedRun.summary.runId,
+                  title: matchedRun.summary.title,
+                  status: matchedRun.summary.status,
+                  kind: matchedRun.summary.kind,
+                  href: `#/automations?assistantRunId=${encodeURIComponent(matchedRun.summary.runId)}`,
+                  ...(codeSessionId ? { codeSessionId } : {}),
+                  ...(codeSessionId
+                    ? {
+                        codeSessionHref: `#/code?sessionId=${encodeURIComponent(codeSessionId)}&assistantRunId=${encodeURIComponent(matchedRun.summary.runId)}${focusItem ? `&assistantRunItemId=${encodeURIComponent(focusItem.itemId)}` : ''}`,
+                      }
+                    : {}),
+                  ...(focusItem ? { focusItemId: focusItem.itemId, focusItemTitle: focusItem.title } : {}),
+                  ...(focusItem
+                    ? {
+                        focusItemHref: `#/automations?assistantRunId=${encodeURIComponent(matchedRun.summary.runId)}&assistantRunItemId=${encodeURIComponent(focusItem.itemId)}`,
+                      }
+                    : {}),
+                },
+              }
+            : {}),
+        };
+      }),
+    }),
 
     onAssistantRunDetail: (runId) => {
       refreshRunTimelineSnapshots();
@@ -7730,6 +9211,23 @@ function buildDashboardCallbacks(
           argsPreview: summary?.argsPreview ?? '',
         };
       });
+    },
+
+    onPendingActionCurrent: ({ userId, channel, surfaceId }) => {
+      const preferredAgentId = configRef.current.channels.web?.defaultAgent
+        || configRef.current.agents[0]?.id
+        || 'default';
+      const stateAgentId = resolveSharedStateAgentId(preferredAgentId) ?? preferredAgentId;
+      const canonicalUserId = identity.resolveCanonicalUserId(channel, userId);
+      const pendingAction = pendingActionStore.resolveActiveForSurface({
+        agentId: stateAgentId,
+        userId: canonicalUserId,
+        channel,
+        surfaceId,
+      });
+      return {
+        pendingAction: toPendingActionClientMetadata(pendingAction) ?? null,
+      };
     },
 
     onSkillsState: () => {
@@ -10803,7 +12301,7 @@ async function main(): Promise<void> {
   const identity = new IdentityService(config.assistant.identity);
   let analytics: AnalyticsService | null = null;
   const onSQLiteSecurityEvent = (event: {
-    service: 'conversation' | 'analytics' | 'code_sessions';
+    service: 'conversation' | 'analytics' | 'code_sessions' | 'pending_actions' | 'continuity_threads';
     severity: 'info' | 'warn';
     code: string;
     message: string;
@@ -10883,6 +12381,8 @@ async function main(): Promise<void> {
   const conversationDbPath = resolveAssistantDbPath(config.assistant.memory.sqlitePath, 'assistant-memory.sqlite');
   const analyticsDbPath = resolveAssistantDbPath(config.assistant.analytics.sqlitePath, 'assistant-analytics.sqlite');
   const codeSessionDbPath = resolveAssistantDbPath(undefined, 'assistant-code-sessions.sqlite');
+  const pendingActionDbPath = resolveAssistantDbPath(undefined, 'assistant-pending-actions.sqlite');
+  const continuityThreadDbPath = resolveAssistantDbPath(undefined, 'assistant-continuity-threads.sqlite');
   const conversations = new ConversationService({
     enabled: config.assistant.memory.enabled,
     sqlitePath: conversationDbPath,
@@ -10891,71 +12391,71 @@ async function main(): Promise<void> {
     maxContextChars: config.assistant.memory.maxContextChars,
     retentionDays: config.assistant.memory.retentionDays,
     onSecurityEvent: onSQLiteSecurityEvent,
-    onMemoryFlush: (kbConfig?.autoFlush ?? true) ? (key, droppedMessages) => {
-      if (droppedMessages.length === 0) return;
+    onMemoryFlush: (kbConfig?.autoFlush ?? true) ? (key, flush) => {
+      if (flush.droppedMessages.length === 0) return;
 
       const timestamp = new Date().toISOString().slice(0, 10);
       const maxEntryChars = Math.max(200, kbConfig?.maxEntryChars ?? 2000);
-      const header = `## Context from ${timestamp}`;
-      let remainingChars = Math.max(0, maxEntryChars - header.length - 1);
-      const summaryLines: string[] = [];
-
-      for (const message of droppedMessages) {
-        const normalized = message.content.replace(/\s+/g, ' ').trim();
-        if (normalized.length <= 20) continue;
-
-        const prefix = `- [${message.role}] `;
-        const lineBudget = remainingChars - prefix.length - (summaryLines.length > 0 ? 1 : 0);
-        if (lineBudget < 24) break;
-
-        const preview = normalized.length > lineBudget
-          ? `${normalized.slice(0, Math.max(0, lineBudget - 3)).trimEnd()}...`
-          : normalized;
-        if (!preview) continue;
-
-        const line = `${prefix}${preview}`;
-        if (line.length > remainingChars) break;
-
-        summaryLines.push(line);
-        remainingChars -= line.length + 1;
-        if (summaryLines.length >= 10) break;
-      }
-
-      if (summaryLines.length === 0) return;
-
-      const block = `${header}\n${summaryLines.join('\n')}`;
-      const summary = `Context flush from ${timestamp} (${summaryLines.length} captured line${summaryLines.length === 1 ? '' : 's'})`;
       const isCodeSessionConversation = key.channel === 'code-session' && key.userId.startsWith('code-session:');
+      const codeSessionId = isCodeSessionConversation ? key.userId.slice('code-session:'.length) : undefined;
+      const codeSession = codeSessionId ? codeSessionStore.getSession(codeSessionId) : null;
+      const continuityUserId = codeSession?.ownerUserId ?? key.userId;
+      const continuity = continuityThreadStore.get({
+        assistantId: key.agentId,
+        userId: continuityUserId,
+      });
+      const pendingAction = !isCodeSessionConversation
+        ? pendingActionStore.resolveActiveForSurface({
+            agentId: key.agentId,
+            userId: key.userId,
+            channel: key.channel,
+            surfaceId: key.userId,
+          })
+        : null;
+      const memoryEntry = buildMemoryFlushEntry({
+        key,
+        flush,
+        createdAt: timestamp,
+        maxEntryChars,
+        continuity: summarizeContinuityThreadForGateway(continuity),
+        pendingAction: pendingAction
+          ? {
+              blockerKind: pendingAction.blocker.kind,
+              prompt: pendingAction.blocker.prompt,
+              route: pendingAction.intent.route,
+              operation: pendingAction.intent.operation,
+            }
+          : null,
+        codeSession: codeSession
+          ? {
+              codeSessionId: codeSession.id,
+              title: codeSession.title,
+              focusSummary: codeSession.workState.focusSummary,
+              planSummary: codeSession.workState.planSummary,
+              compactedSummary: codeSession.workState.compactedSummary,
+              pendingApprovalCount: codeSession.workState.pendingApprovals.length,
+            }
+          : null,
+      });
+      if (!memoryEntry) return;
+
       if (isCodeSessionConversation) {
-        const sessionId = key.userId.slice('code-session:'.length);
         if (codeSessionMemoryStore.isReadOnly()) {
           log.debug(
-            { codeSessionId: sessionId, droppedCount: droppedMessages.length },
+            { codeSessionId, droppedCount: flush.newlyDroppedCount },
             'Memory flush skipped because code-session memory is read-only',
           );
           return;
         }
         try {
-          codeSessionMemoryStore.append(sessionId, {
-            content: block,
-            summary,
-            createdAt: timestamp,
-            category: 'General',
-            sourceType: 'system',
-            trustLevel: 'trusted',
-            status: 'active',
-            createdByPrincipal: 'system:auto_flush',
-            provenance: {
-              sessionId,
-            },
-          });
+          codeSessionMemoryStore.append(codeSessionId!, memoryEntry);
           log.debug(
-            { codeSessionId: sessionId, droppedCount: droppedMessages.length, flushedLines: summaryLines.length },
-            'Memory flush: persisted dropped context to code-session memory',
+            { codeSessionId, droppedCount: flush.newlyDroppedCount, summary: memoryEntry.summary },
+            'Memory flush: persisted structured context to code-session memory',
           );
         } catch (err) {
           log.warn(
-            { codeSessionId: sessionId, droppedCount: droppedMessages.length, err },
+            { codeSessionId, droppedCount: flush.newlyDroppedCount, err },
             'Memory flush failed for code-session memory',
           );
         }
@@ -10964,29 +12464,20 @@ async function main(): Promise<void> {
 
       if (agentMemoryStore.isReadOnly()) {
         log.debug(
-          { agentId: key.agentId, droppedCount: droppedMessages.length },
+          { agentId: key.agentId, droppedCount: flush.newlyDroppedCount },
           'Memory flush skipped because knowledge base is read-only',
         );
         return;
       }
       try {
-        agentMemoryStore.append(key.agentId, {
-          content: block,
-          summary,
-          createdAt: timestamp,
-          category: 'General',
-          sourceType: 'system',
-          trustLevel: 'trusted',
-          status: 'active',
-          createdByPrincipal: 'system:auto_flush',
-        });
+        agentMemoryStore.append(key.agentId, memoryEntry);
         log.debug(
-          { agentId: key.agentId, droppedCount: droppedMessages.length, flushedLines: summaryLines.length },
-          'Memory flush: persisted dropped context to knowledge base',
+          { agentId: key.agentId, droppedCount: flush.newlyDroppedCount, summary: memoryEntry.summary },
+          'Memory flush: persisted structured context to knowledge base',
         );
       } catch (err) {
         log.warn(
-          { agentId: key.agentId, droppedCount: droppedMessages.length, err },
+          { agentId: key.agentId, droppedCount: flush.newlyDroppedCount, err },
           'Memory flush failed for knowledge base',
         );
       }
@@ -10995,6 +12486,17 @@ async function main(): Promise<void> {
   const codeSessionStore = new CodeSessionStore({
     enabled: true,
     sqlitePath: codeSessionDbPath,
+    onSecurityEvent: onSQLiteSecurityEvent,
+  });
+  const pendingActionStore = new PendingActionStore({
+    enabled: true,
+    sqlitePath: pendingActionDbPath,
+    onSecurityEvent: onSQLiteSecurityEvent,
+  });
+  const continuityThreadStore = new ContinuityThreadStore({
+    enabled: true,
+    sqlitePath: continuityThreadDbPath,
+    retentionDays: config.assistant.memory.retentionDays,
     onSecurityEvent: onSQLiteSecurityEvent,
   });
   const runTimeline = new RunTimelineStore();
@@ -13085,7 +14587,6 @@ async function main(): Promise<void> {
     ? [...TRUST_PRESETS[presetName].capabilities]
     : DEFAULT_AGENT_CAPABILITIES;
   const chatAgents = new Map<string, ChatAgent>();
-  const pendingClarificationStore = new PendingClarificationStore();
   const intentRoutingTrace = new IntentRoutingTraceLog(config.routing?.intentTrace);
   await intentRoutingTrace.init();
 
@@ -13123,7 +14624,8 @@ async function main(): Promise<void> {
         analytics ?? undefined,
         resolveRoutedProviderForTools,
         intentRoutingTrace,
-        pendingClarificationStore,
+        pendingActionStore,
+        continuityThreadStore,
       );
       chatAgents.set(agentConfig.id, agent);
       runtime.registerAgent(createAgentDefinition({
@@ -13168,7 +14670,8 @@ async function main(): Promise<void> {
       analytics ?? undefined,
       resolveRoutedProviderForTools,
       intentRoutingTrace,
-      pendingClarificationStore,
+      pendingActionStore,
+      continuityThreadStore,
     );
     chatAgents.set('local', localAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -13200,7 +14703,8 @@ async function main(): Promise<void> {
       analytics ?? undefined,
       resolveRoutedProviderForTools,
       intentRoutingTrace,
-      pendingClarificationStore,
+      pendingActionStore,
+      continuityThreadStore,
     );
     chatAgents.set('external', externalAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -13258,7 +14762,8 @@ async function main(): Promise<void> {
       analytics ?? undefined,
       resolveRoutedProviderForTools,
       intentRoutingTrace,
-      pendingClarificationStore,
+      pendingActionStore,
+      continuityThreadStore,
     );
     chatAgents.set('default', defaultAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -13293,7 +14798,8 @@ async function main(): Promise<void> {
       analytics ?? undefined,
       resolveRoutedProviderForTools,
       intentRoutingTrace,
-      pendingClarificationStore,
+      pendingActionStore,
+      continuityThreadStore,
     );
     chatAgents.set(SECURITY_TRIAGE_AGENT_ID, securityTriageAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -13400,6 +14906,10 @@ async function main(): Promise<void> {
     const channel = msg.channel?.trim() || 'web';
     const channelUserId = msg.userId?.trim() || `${channel}-user`;
     const canonicalUserId = identity.resolveCanonicalUserId(channel, channelUserId);
+    const surfaceId = getCodeSessionSurfaceId({
+      surfaceId: msg.surfaceId,
+      userId: canonicalUserId,
+    });
     const currentConfig = configRef.current;
     const primaryProviderName = findProviderByLocality(currentConfig, 'local')
       ?? currentConfig.defaultProvider
@@ -13411,10 +14921,15 @@ async function main(): Promise<void> {
       userId: canonicalUserId,
       channel,
     });
-    const pendingClarification = pendingClarificationStore.get({
+    const pendingAction = pendingActionStore.resolveActiveForSurface({
       agentId: stateAgentId,
       userId: canonicalUserId,
       channel,
+      surfaceId,
+    });
+    const continuity = continuityThreadStore.get({
+      assistantId: stateAgentId,
+      userId: canonicalUserId,
     });
     const classifyWithProvider = async (providerName: string | null): Promise<IntentGatewayRecord | null> => {
       if (!providerName) return null;
@@ -13425,13 +14940,8 @@ async function main(): Promise<void> {
           content: msg.content,
           channel,
           recentHistory,
-          pendingClarification: pendingClarification
-            ? {
-                kind: pendingClarification.kind,
-                originalRequest: pendingClarification.originalUserContent,
-                prompt: pendingClarification.prompt,
-              }
-            : null,
+          pendingAction: summarizePendingActionForGateway(pendingAction),
+          continuity: summarizeContinuityThreadForGateway(continuity),
           enabledManagedProviders: enabledManagedProviders ? [...enabledManagedProviders] : [],
           availableCodingBackends: ['codex', 'claude-code', 'gemini-cli', 'aider'],
         },
@@ -13453,23 +14963,46 @@ async function main(): Promise<void> {
     stage: import('./runtime/intent-routing-trace.js').IntentRoutingTraceStage,
     input: {
       msg: IncomingDispatchMessage;
+      requestId?: string;
       agentId?: string;
       details?: Record<string, unknown>;
       contentPreview?: string;
     },
   ): void => {
+    const channel = input.msg.channel?.trim() || 'web';
+    const channelUserId = input.msg.userId?.trim() || `${channel}-user`;
+    const canonicalUserId = identity.resolveCanonicalUserId(channel, channelUserId);
+    const continuity = continuityThreadStore
+      ? summarizeContinuityThreadForGateway(
+          continuityThreadStore.get(
+            {
+              assistantId: resolveRoutingStateAgentId(input.agentId),
+              userId: canonicalUserId,
+            },
+            Date.now(),
+          ),
+        )
+      : null;
+    const details = {
+      ...(continuity?.continuityKey ? { continuityKey: continuity.continuityKey } : {}),
+      ...(continuity?.activeExecutionRefs?.length ? { activeExecutionRefs: continuity.activeExecutionRefs } : {}),
+      ...(typeof continuity?.linkedSurfaceCount === 'number' ? { linkedSurfaceCount: continuity.linkedSurfaceCount } : {}),
+      ...(input.details ?? {}),
+    };
     intentRoutingTrace.record({
       stage,
+      requestId: input.requestId,
       userId: input.msg.userId,
       channel: input.msg.channel,
       agentId: input.agentId,
       contentPreview: input.contentPreview ?? input.msg.content,
-      details: input.details,
+      details: Object.keys(details).length > 0 ? details : undefined,
     });
   };
   const resolveAgentForIncomingMessage = async (
     channelDefault: string | undefined,
     msg: IncomingDispatchMessage,
+    requestId?: string,
   ): Promise<{ decision: RouteDecision; gateway: IntentGatewayRecord | null }> => {
     const channel = msg.channel?.trim() || 'web';
     const channelUserId = msg.userId?.trim() || `${channel}-user`;
@@ -13492,6 +15025,7 @@ async function main(): Promise<void> {
       if (gateway) {
         recordIntentRoutingTrace('gateway_classified', {
           msg,
+          requestId,
           details: {
             source: 'routing',
             route: gateway.decision.route,
@@ -13509,6 +15043,7 @@ async function main(): Promise<void> {
       }
       recordIntentRoutingTrace('tier_routing_decided', {
         msg,
+        requestId,
         agentId: decision.agentId,
         details: {
           confidence: decision.confidence,
@@ -13609,18 +15144,21 @@ async function main(): Promise<void> {
     channelDefault: string | undefined,
     msg: IncomingDispatchMessage,
   ): Promise<{
+    requestId: string;
     decision: RouteDecision;
     gateway: IntentGatewayRecord | null;
     routedMessage: IncomingDispatchMessage;
   }> => {
+    const requestId = msg.requestId?.trim() || randomUUID();
     recordIntentRoutingTrace('incoming_dispatch', {
       msg,
+      requestId,
       details: {
         hasMetadata: !!msg.metadata,
         channelDefault,
       },
     });
-    const routed = await resolveAgentForIncomingMessage(channelDefault, msg);
+    const routed = await resolveAgentForIncomingMessage(channelDefault, msg, requestId);
     const sanitizedMetadata = isRecord(msg.metadata)
       ? Object.fromEntries(
           Object.entries(msg.metadata).filter(([key]) => key !== PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY),
@@ -13632,6 +15170,7 @@ async function main(): Promise<void> {
     if (routed.gateway) {
       recordIntentRoutingTrace('pre_routed_metadata_attached', {
         msg,
+        requestId,
         agentId: routed.decision.agentId,
         details: {
           route: routed.gateway.decision.route,
@@ -13640,6 +15179,7 @@ async function main(): Promise<void> {
       });
     }
     return {
+      requestId,
       decision: routed.decision,
       gateway: routed.gateway,
       routedMessage: {
@@ -13650,6 +15190,7 @@ async function main(): Promise<void> {
         principalRole: msg.principalRole,
         channel: msg.channel,
         metadata: routedMetadata,
+        requestId,
       },
     };
   };
@@ -13844,6 +15385,7 @@ async function main(): Promise<void> {
     microsoftAuthRef,
     microsoftServiceRef,
     { current: toolExecutor },
+    pendingActionStore,
     codingBackendServiceRef,
     prepareIncomingDispatch,
   );
@@ -14271,7 +15813,7 @@ async function main(): Promise<void> {
           prepared.decision.agentId,
           prepared.routedMessage,
           prepared.decision,
-          undefined,
+          { requestId: prepared.requestId },
           prepared.gateway,
         );
       }
@@ -14341,7 +15883,7 @@ async function main(): Promise<void> {
           prepared.decision.agentId,
           prepared.routedMessage,
           prepared.decision,
-          undefined,
+          { requestId: prepared.requestId },
           prepared.gateway,
         );
       }
@@ -14522,7 +16064,7 @@ async function main(): Promise<void> {
           prepared.decision.agentId,
           prepared.routedMessage,
           prepared.decision,
-          undefined,
+          { requestId: prepared.requestId },
           prepared.gateway,
         );
       }

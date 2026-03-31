@@ -35,6 +35,7 @@ export const CODE_SESSION_CORE_SYSTEM_PROMPT = [
   '',
   'Behavior style:',
   '- Be concise, practical, and transparent about risk.',
+  '- When a <cli-command-guide> block is present and the user asks about Guardian CLI commands, answer from that guide instead of guessing. Do not invent slash commands or hidden subcommands.',
   '- Re-read files before edits and cite inspected files when summarizing what the repo or app does.',
   '- Treat the indexed repo map and the current working-set files as your default evidence before falling back to generic assumptions.',
   '- For questions like "what is this repo", "what type of app is this", or "describe this project", answer from the attached workspace evidence first. Do not infer from the folder name when the repo map or working-set files already provide grounded evidence.',

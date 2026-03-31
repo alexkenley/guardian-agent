@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildAutomationCatalogEntries,
   buildSavedAutomationCatalogEntries,
+  resolveSavedAutomationCatalogEntry,
   selectSavedAutomationCatalogEntry,
 } from './automation-catalog.js';
 import type { AssistantConnectorPlaybookDefinition } from '../config/types.js';
@@ -167,5 +168,32 @@ describe('selectSavedAutomationCatalogEntry', () => {
 
     expect(selectSavedAutomationCatalogEntry(catalog, 'Browser Read Smoke')?.id).toBe('browser-read-smoke');
     expect(selectSavedAutomationCatalogEntry(catalog, 'Inbox')?.id).toBe('inbox-triage');
+  });
+
+  it('resolves a unique closest match when the request only differs by a trailing version token', () => {
+    const catalog = [
+      {
+        id: 'browser-read-smoke',
+        name: 'Browser Read Smoke',
+        description: '',
+        kind: 'workflow' as const,
+        enabled: true,
+      },
+      {
+        id: 'inbox-triage',
+        name: 'Inbox Triage',
+        description: '',
+        kind: 'assistant_task' as const,
+        enabled: true,
+      },
+    ];
+
+    const selection = resolveSavedAutomationCatalogEntry(catalog, 'Browser Read Smoke 2');
+    expect(selection).toMatchObject({
+      matchType: 'closest',
+      entry: {
+        id: 'browser-read-smoke',
+      },
+    });
   });
 });

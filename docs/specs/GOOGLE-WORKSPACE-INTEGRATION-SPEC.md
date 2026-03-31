@@ -227,7 +227,7 @@ The Enable button saves `gws.enabled: true` and selected services directly to co
 
 A March 9, 2026 regression in the Gmail Web UI flow exposed three requirements for direct Gmail compose/send handling:
 
-1. Direct Gmail send/draft responses must include structured `metadata.pendingApprovals` when approval is required. Plain text such as "it needs approval first" is not sufficient for the Web UI approval buttons.
+1. Direct Gmail send/draft responses must include structured `metadata.pendingAction` for approval blockers. Plain text such as "it needs approval first" is not sufficient for the Web UI approval buttons.
 2. The Web UI must only send an LLM continuation message after approval when the backend confirms there is suspended chat/tool-call context to resume. Direct Gmail shortcuts do not always create suspended LLM state.
 3. Natural-language compose parsing must stop subject extraction at connector phrases such as `and in the body ...`, otherwise prompts like `subject test and in the body put ...` will corrupt the subject/body split.
 
@@ -442,7 +442,7 @@ The assistant should prefer workflows like:
 - GWS provider error handling with graceful fallback to `chatWithFallback`
 - Ollama exclusion from GWS provider resolution (prevents silent tool-call failures)
 - Gmail Web UI regression fix:
-  direct Gmail approval responses now emit structured `pendingApprovals`, Web UI continuation is gated on resumable suspended context, and direct Gmail approvals return immediate confirmation when no continuation is needed
+  direct Gmail approval responses now emit structured `pendingAction` approval metadata, Web UI continuation is gated on resumable suspended context, and direct Gmail approvals return immediate confirmation when no continuation is needed
 - Gmail natural-language compose parsing fix:
   subject/body extraction now handles phrasing like `with subject test and in the body put hello`
 

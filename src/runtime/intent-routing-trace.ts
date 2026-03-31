@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { appendSecureFile, mkdirSecure } from '../util/secure-fs.js';
 import { createLogger } from '../util/logging.js';
+import { intentRoutingTraceEntryMatchesContextFilters } from './trace-context-filters.js';
 
 const log = createLogger('intent-routing-trace');
 
@@ -49,6 +50,17 @@ export interface IntentRoutingTraceOptions {
   maxFileSizeBytes?: number;
   maxFiles?: number;
   previewChars?: number;
+}
+
+export interface IntentRoutingTraceListOptions {
+  limit?: number;
+  continuityKey?: string;
+  activeExecutionRef?: string;
+  stage?: IntentRoutingTraceStage;
+  channel?: string;
+  agentId?: string;
+  userId?: string;
+  requestId?: string;
 }
 
 let nextTraceId = 1;
@@ -125,6 +137,30 @@ export class IntentRoutingTraceLog {
 
   async readTail(count: number): Promise<IntentRoutingTraceEntry[]> {
     if (!this.enabled || count <= 0) return [];
+    const entries = await this.readAllEntries();
+    return entries.slice(-count);
+  }
+
+  async listRecent(options: IntentRoutingTraceListOptions = {}): Promise<IntentRoutingTraceEntry[]> {
+    if (!this.enabled) return [];
+    const limit = Math.max(1, options.limit ?? 20);
+    const entries = await this.readAllEntries();
+    return entries
+      .filter((entry) => {
+        if (options.stage && entry.stage !== options.stage) return false;
+        if (options.channel && entry.channel !== options.channel) return false;
+        if (options.agentId && entry.agentId !== options.agentId) return false;
+        if (options.userId && entry.userId !== options.userId) return false;
+        if (options.requestId && entry.requestId !== options.requestId) return false;
+        if (!intentRoutingTraceEntryMatchesContextFilters(entry, options)) return false;
+        return true;
+      })
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, limit);
+  }
+
+  private async readAllEntries(): Promise<IntentRoutingTraceEntry[]> {
+    if (!this.enabled) return [];
     const files: string[] = [];
     for (let index = this.maxFiles - 1; index >= 0; index--) {
       const path = this.tracePathForIndex(index);
@@ -152,7 +188,7 @@ export class IntentRoutingTraceLog {
         // ignore read failures for tail inspection
       }
     }
-    return entries.slice(-count);
+    return entries;
   }
 
   getStatus(): IntentRoutingTraceStatus {

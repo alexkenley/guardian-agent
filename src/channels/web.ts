@@ -1349,6 +1349,25 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // GET /api/chat/pending-action — current blocked-work state for a surface
+      if (req.method === 'GET' && url.pathname === '/api/chat/pending-action') {
+        if (!this.dashboard.onPendingActionCurrent) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const principal = this.resolveRequestPrincipal(req);
+        const userId = url.searchParams.get('userId') ?? 'web-user';
+        const channel = url.searchParams.get('channel') ?? 'web';
+        const surfaceId = trimOptionalString(url.searchParams.get('surfaceId')) ?? 'web-guardian-chat';
+        sendJSON(res, 200, this.dashboard.onPendingActionCurrent({
+          userId,
+          principalId: principal.principalId,
+          channel,
+          surfaceId,
+        }));
+        return;
+      }
+
       // POST /api/tools/approvals/decision — approve or deny pending request
       if (req.method === 'POST' && url.pathname === '/api/tools/approvals/decision') {
         if (!this.dashboard.onToolsApprovalDecision) {
@@ -2971,6 +2990,44 @@ export class WebChannel implements ChannelAdapter {
         return;
       }
 
+      // POST /api/assistant/jobs/follow-up — operator follow-up action for delegated jobs
+      if (req.method === 'POST' && url.pathname === '/api/assistant/jobs/follow-up') {
+        if (!this.dashboard.onAssistantJobFollowUpAction) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        let body = '';
+        try {
+          body = await readBody(req, this.maxBodyBytes);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Bad request';
+          sendJSON(res, 400, { success: false, message });
+          return;
+        }
+        let parsed: { jobId?: string; action?: 'replay' | 'keep_held' | 'dismiss' };
+        try {
+          parsed = JSON.parse(body) as { jobId?: string; action?: 'replay' | 'keep_held' | 'dismiss' };
+        } catch {
+          sendJSON(res, 400, { success: false, message: 'Invalid JSON' });
+          return;
+        }
+        if (!parsed.jobId || typeof parsed.jobId !== 'string') {
+          sendJSON(res, 400, { success: false, message: 'Missing jobId' });
+          return;
+        }
+        if (parsed.action !== 'replay' && parsed.action !== 'keep_held' && parsed.action !== 'dismiss') {
+          sendJSON(res, 400, { success: false, message: 'Invalid follow-up action' });
+          return;
+        }
+        const result = await this.dashboard.onAssistantJobFollowUpAction({
+          jobId: parsed.jobId,
+          action: parsed.action,
+        });
+        sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+        this.maybeEmitUIInvalidation(result, ['assistant', 'dashboard'], 'assistant.jobs.followup', url.pathname);
+        return;
+      }
+
       // GET /api/assistant/runs — recent assistant/orchestration runs
       if (req.method === 'GET' && url.pathname === '/api/assistant/runs') {
         if (!this.dashboard.onAssistantRuns) {
@@ -2983,6 +3040,8 @@ export class WebChannel implements ChannelAdapter {
         const channel = trimOptionalString(url.searchParams.get('channel'));
         const agentId = trimOptionalString(url.searchParams.get('agentId'));
         const codeSessionId = trimOptionalString(url.searchParams.get('codeSessionId'));
+        const continuityKey = trimOptionalString(url.searchParams.get('continuityKey'));
+        const activeExecutionRef = trimOptionalString(url.searchParams.get('activeExecutionRef'));
         sendJSON(res, 200, this.dashboard.onAssistantRuns({
           limit: Number.isFinite(limit) ? limit : 20,
           ...(status ? { status } : {}),
@@ -2990,6 +3049,35 @@ export class WebChannel implements ChannelAdapter {
           ...(channel ? { channel } : {}),
           ...(agentId ? { agentId } : {}),
           ...(codeSessionId ? { codeSessionId } : {}),
+          ...(continuityKey ? { continuityKey } : {}),
+          ...(activeExecutionRef ? { activeExecutionRef } : {}),
+        }));
+        return;
+      }
+
+      // GET /api/routing/trace — recent durable intent-routing trace entries
+      if (req.method === 'GET' && url.pathname === '/api/routing/trace') {
+        if (!this.dashboard.onIntentRoutingTrace) {
+          sendJSON(res, 404, { error: 'Not available' });
+          return;
+        }
+        const limit = Number.parseInt(url.searchParams.get('limit') || '20', 10);
+        const continuityKey = trimOptionalString(url.searchParams.get('continuityKey'));
+        const activeExecutionRef = trimOptionalString(url.searchParams.get('activeExecutionRef'));
+        const stage = trimOptionalString(url.searchParams.get('stage'));
+        const channel = trimOptionalString(url.searchParams.get('channel'));
+        const agentId = trimOptionalString(url.searchParams.get('agentId'));
+        const userId = trimOptionalString(url.searchParams.get('userId'));
+        const requestId = trimOptionalString(url.searchParams.get('requestId'));
+        sendJSON(res, 200, await this.dashboard.onIntentRoutingTrace({
+          limit: Number.isFinite(limit) ? limit : 20,
+          ...(continuityKey ? { continuityKey } : {}),
+          ...(activeExecutionRef ? { activeExecutionRef } : {}),
+          ...(stage ? { stage } : {}),
+          ...(channel ? { channel } : {}),
+          ...(agentId ? { agentId } : {}),
+          ...(userId ? { userId } : {}),
+          ...(requestId ? { requestId } : {}),
         }));
         return;
       }

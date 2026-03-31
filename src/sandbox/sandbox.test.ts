@@ -99,6 +99,35 @@ describe('buildBwrapArgs', () => {
     const bindPaths = args.filter((_, i) => args[i - 1] === '--bind');
     expect(bindPaths).not.toContain('');
   });
+
+  it('builds agent-worker with a real /lib64 bind when /lib64 exists', () => {
+    const args = buildBwrapArgs('agent-worker', workspace, { hostLib64Exists: true });
+
+    expect(args).toContain('--ro-bind-try');
+    expect(args).toContain('/lib64');
+    expect(args).not.toContain('--symlink');
+  });
+
+  it('builds agent-worker with a /lib64 fallback symlink only when /lib64 is absent', () => {
+    const args = buildBwrapArgs('agent-worker', workspace, { hostLib64Exists: false });
+    const symlinkIndex = args.findIndex((arg, index) =>
+      arg === '--symlink' && args[index + 1] === 'usr/lib' && args[index + 2] === '/lib64');
+
+    expect(symlinkIndex).toBeGreaterThanOrEqual(0);
+    expect(args.some((arg, index) =>
+      arg === '--ro-bind-try' && args[index + 1] === '/lib64' && args[index + 2] === '/lib64')).toBe(false);
+  });
+
+  it('adds additional read-only paths for agent-worker profiles', () => {
+    const args = buildBwrapArgs('agent-worker', workspace, {
+      additionalReadPaths: ['/opt/guardian-runtime'],
+    });
+    const hasReadPath = args.some((arg, index) =>
+      arg === '--ro-bind-try'
+      && args[index + 1] === '/opt/guardian-runtime'
+      && args[index + 2] === '/opt/guardian-runtime');
+    expect(hasReadPath).toBe(true);
+  });
 });
 
 // ─── Ulimit Tests ────────────────────────────────────────────

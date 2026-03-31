@@ -42,7 +42,7 @@ describe('AgentMemoryStore context packing', () => {
     const store = makeStore(170);
     store.append('agent1', {
       content: 'User prefers concise status updates.',
-      createdAt: '2026-03-20',
+      createdAt: '2026-03-19',
       category: 'Preferences',
     });
     store.append('agent1', {
@@ -58,5 +58,140 @@ describe('AgentMemoryStore context packing', () => {
     expect(context).toContain('Importer overhaul note covering checkpoints, migration, retries, and verification.');
     expect(context).not.toContain('should not be cut off mid-sentence');
     expect(context).not.toContain('[... knowledge base truncated');
+  });
+
+  it('keeps explicit memories ahead of newer context-flush artifacts in prompt context', () => {
+    const store = makeStore(220);
+    store.append('agent1', {
+      content: 'User prefers concise status updates.',
+      createdAt: '2026-03-20',
+      category: 'Preferences',
+      sourceType: 'user',
+    });
+    store.append('agent1', {
+      content: 'Detailed dropped transcript line about a browser automation approval flow that should stay out of prompt context unless explicitly recalled.'.repeat(2),
+      summary: 'Browser automation approval flow context flush.',
+      createdAt: '2026-03-21',
+      category: 'Context Flushes',
+      sourceType: 'system',
+      tags: ['context_flush'],
+    });
+    store.append('agent1', {
+      content: 'Detailed dropped transcript line about a workspace-switch blocker that should be summarized, not injected in full.'.repeat(2),
+      summary: 'Workspace-switch blocker context flush.',
+      createdAt: '2026-03-22',
+      category: 'Context Flushes',
+      sourceType: 'system',
+      tags: ['context_flush'],
+    });
+
+    const context = store.loadForContext('agent1');
+
+    expect(context).toContain('User prefers concise status updates.');
+    expect(context).toContain('Workspace-switch blocker context flush.');
+    expect(context).not.toContain('should be summarized, not injected in full');
+  });
+
+  it('selects relevant older memories when a context query is provided', () => {
+    const store = makeStore(220);
+    store.append('agent1', {
+      content: 'Current weather note for a short-lived discussion.',
+      createdAt: '2026-03-22',
+      category: 'General',
+      sourceType: 'user',
+    });
+    store.append('agent1', {
+      content: 'The importer overhaul must keep parser checkpoints, schema migration handling, retry safety, and verification coverage aligned.',
+      summary: 'Importer overhaul note covering checkpoints, migration, retries, and verification.',
+      createdAt: '2026-03-20',
+      category: 'Project Notes',
+      sourceType: 'user',
+    });
+
+    const context = store.loadForContext('agent1', {
+      query: 'importer overhaul verification checkpoints',
+    });
+
+    expect(context).toContain('The importer overhaul must keep parser checkpoints, schema migration handling, retry safety, and verification coverage aligned.');
+    expect(context).not.toContain('Current weather note');
+  });
+
+  it('reports which memory entries were selected for prompt context', () => {
+    const store = makeStore(220);
+    store.append('agent1', {
+      content: 'Current weather note for a short-lived discussion.',
+      createdAt: '2026-03-22',
+      category: 'General',
+      sourceType: 'user',
+    });
+    store.append('agent1', {
+      content: 'The importer overhaul must keep parser checkpoints, schema migration handling, retry safety, and verification coverage aligned.',
+      summary: 'Importer overhaul note covering checkpoints, migration, retries, and verification.',
+      createdAt: '2026-03-20',
+      category: 'Project Notes',
+      sourceType: 'user',
+    });
+    store.append('agent1', {
+      content: 'Detailed dropped transcript line about a workspace-switch blocker that should be summarized, not injected in full.'.repeat(2),
+      summary: 'Workspace-switch blocker context flush.',
+      createdAt: '2026-03-21',
+      category: 'Context Flushes',
+      sourceType: 'system',
+      tags: ['context_flush'],
+    });
+
+    const result = store.loadForContextWithSelection('agent1', {
+      query: 'importer overhaul verification checkpoints',
+    });
+
+    expect(result.content).toContain('The importer overhaul must keep parser checkpoints, schema migration handling, retry safety, and verification coverage aligned.');
+    expect(result.queryPreview).toBe('importer overhaul verification checkpoints');
+    expect(result.selectedEntries[0]).toMatchObject({
+      category: 'Project Notes',
+      renderMode: 'full',
+      isContextFlush: false,
+    });
+    expect(result.selectedEntries[0]?.preview).toContain('Importer overhaul note covering checkpoints');
+    expect(result.selectedEntries[0]?.matchReasons?.length).toBeGreaterThan(0);
+    expect(result.omittedEntries).toBeGreaterThanOrEqual(1);
+    expect(result.selectedEntries.some((entry) => entry.preview.includes('Current weather note'))).toBe(false);
+  });
+
+  it('supports structured context queries with blocker and route signals', () => {
+    const store = makeStore(260);
+    store.append('agent1', {
+      content: 'General note about a completed weather check.',
+      createdAt: '2026-03-22',
+      category: 'General',
+      sourceType: 'user',
+    });
+    store.append('agent1', {
+      content: '## Context Flush\ndate: 2026-03-21\nobjective:\nCreate the browser automation and save the artifact.\nactiveBlocker:\nkind: clarification | route: automation | operation: create | prompt: Which output path should I use?',
+      summary: 'Browser automation clarification blocker.',
+      createdAt: '2026-03-21',
+      category: 'Context Flushes',
+      sourceType: 'system',
+      tags: ['context_flush', 'continuity', 'clarification', 'automation', 'create'],
+    });
+
+    const result = store.loadForContextWithSelection('agent1', {
+      query: {
+        text: 'Save the browser automation artifact',
+        focusTexts: ['Which output path should I use?'],
+        tags: ['clarification', 'automation', 'create'],
+        categoryHints: ['Context Flushes'],
+      },
+    });
+
+    expect(result.content).toContain('Which output path should I use?');
+    expect(result.selectedEntries[0]).toMatchObject({
+      category: 'Context Flushes',
+      isContextFlush: true,
+    });
+    expect(result.selectedEntries[0]?.matchReasons).toEqual(expect.arrayContaining([
+      'focus content',
+      'tag clarification',
+    ]));
+    expect(result.queryPreview).toContain('save the browser automation artifact');
   });
 });

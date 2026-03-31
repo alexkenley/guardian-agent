@@ -8,8 +8,9 @@ import type {
 } from '../config/types.js';
 import type { ScheduledTaskDefinition } from './scheduled-tasks.js';
 import {
-  selectSavedAutomationCatalogEntry,
+  resolveSavedAutomationCatalogEntry,
   type SavedAutomationCatalogEntry,
+  type SavedAutomationCatalogSelection,
 } from './automation-catalog.js';
 import { extractAutomationListEntries } from './automation-tool-results.js';
 
@@ -22,7 +23,7 @@ export interface AutomationControlPendingApprovalMetadata {
 export interface AutomationControlPreRouteResult {
   content: string;
   metadata?: {
-    pendingApprovals?: AutomationControlPendingApprovalMetadata[];
+    pendingAction?: Record<string, unknown>;
   };
 }
 
@@ -75,13 +76,19 @@ export async function tryAutomationControlPreRoute(
   const toolRequest = toolRequestFor(params);
   const catalogLookup = await listAutomationCatalog(params.executeTool, toolRequest);
   const catalog = catalogLookup.entries;
-  const selected = intent.automationName
-    ? selectSavedAutomationCatalogEntry(catalog, intent.automationName)
+  const resolvedSelection = intent.automationName
+    ? resolveSavedAutomationCatalogEntry(catalog, intent.automationName)
     : null;
+  const selection = resolvedSelection && (resolvedSelection.matchType !== 'closest'
+    || intent.operation === 'inspect'
+    || intent.operation === 'run')
+    ? resolvedSelection
+    : null;
+  const selected = selection?.entry ?? null;
 
   if (intent.operation === 'inspect') {
     return {
-      content: renderAutomationInspectCopy(catalog, selected, catalogLookup.error),
+      content: renderAutomationInspectCopy(catalog, selected, catalogLookup.error, selection, intent.automationName),
     };
   }
 
@@ -99,7 +106,7 @@ export async function tryAutomationControlPreRoute(
 
   switch (intent.operation) {
     case 'run':
-      return runAutomationEntry(params, toolRequest, selected);
+      return runAutomationEntry(params, toolRequest, selected, selection, intent.automationName);
     case 'toggle':
       return toggleAutomationEntry(params, toolRequest, selected, intent.enabled);
     case 'delete':
@@ -193,12 +200,19 @@ function renderAutomationInspectCopy(
   catalog: SavedAutomationCatalogEntry[],
   selected: SavedAutomationCatalogEntry | null,
   error?: string,
+  selection?: SavedAutomationCatalogSelection | null,
+  requestedName?: string,
 ): string {
+  const lines: string[] = [];
+  if (selection && requestedName?.trim() && selection.matchType === 'closest') {
+    lines.push(`I couldn't find an exact automation named '${requestedName}'. Closest match: '${selection.entry.name}'.`);
+    lines.push('');
+  }
   if (selected) {
-    const lines = [
+    lines.push(
       `${selected.name} (${selected.kind === 'workflow' ? 'workflow' : selected.kind === 'assistant_task' ? 'assistant automation' : 'task'})`,
       `Enabled: ${selected.enabled ? 'yes' : 'no'}`,
-    ];
+    );
     if (selected.builtin) {
       lines.push('Catalog: built-in starter example');
     }
@@ -228,15 +242,15 @@ function renderAutomationInspectCopy(
       : 'There are no automations in the catalog.';
   }
 
-  const lines = [`Automation catalog (${catalog.length}):`];
+  const listLines = [`Automation catalog (${catalog.length}):`];
   for (const entry of catalog.slice(0, 20)) {
     const schedule = toString(entry.task?.cron) || readEventType(entry.task) || 'manual';
-    lines.push(`- ${entry.name} [${entry.kind === 'workflow' ? 'workflow' : entry.kind === 'assistant_task' ? 'assistant' : 'task'} · ${entry.builtin ? 'catalog' : (entry.enabled ? 'enabled' : 'disabled')} · ${schedule}]`);
+    listLines.push(`- ${entry.name} [${entry.kind === 'workflow' ? 'workflow' : entry.kind === 'assistant_task' ? 'assistant' : 'task'} · ${entry.builtin ? 'catalog' : (entry.enabled ? 'enabled' : 'disabled')} · ${schedule}]`);
   }
   if (catalog.length > 20) {
-    lines.push(`- ...and ${catalog.length - 20} more`);
+    listLines.push(`- ...and ${catalog.length - 20} more`);
   }
-  return lines.join('\n');
+  return listLines.join('\n');
 }
 
 function resolveHeuristicAutomationControlIntent(content: string): AutomationControlIntent | null {
@@ -309,6 +323,8 @@ async function runAutomationEntry(
   params: AutomationControlPreRouteParams,
   toolRequest: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
   entry: SavedAutomationCatalogEntry,
+  selection?: SavedAutomationCatalogSelection | null,
+  requestedName?: string,
 ): Promise<AutomationControlPreRouteResult> {
   if (entry.builtin) {
     return {
@@ -316,7 +332,7 @@ async function runAutomationEntry(
     };
   }
   const result = await params.executeTool('automation_run', { automationId: entry.id }, toolRequest);
-  return formatSingleAutomationMutationResult(
+  const formatted = formatSingleAutomationMutationResult(
     params,
     result,
     'automation_run',
@@ -326,6 +342,17 @@ async function runAutomationEntry(
     `I did not run '${entry.name}'.`,
     `I ran '${entry.name}'.`,
   );
+  if (selection?.matchType === 'closest' && requestedName?.trim()) {
+    return {
+      ...formatted,
+      content: [
+        `I couldn't find an exact automation named '${requestedName}'. I used the closest saved automation: '${entry.name}'.`,
+        '',
+        formatted.content,
+      ].join('\n'),
+    };
+  }
+  return formatted;
 }
 
 async function toggleAutomationEntry(
@@ -414,7 +441,18 @@ function formatSingleAutomationMutationResult(
         pendingLeadCopy,
         prompt,
       ].filter(Boolean).join('\n\n'),
-      metadata: resolvedPending.length > 0 ? { pendingApprovals: resolvedPending } : undefined,
+      metadata: resolvedPending.length > 0
+        ? {
+            pendingAction: {
+              status: 'pending',
+              blocker: {
+                kind: 'approval',
+                prompt,
+                approvalSummaries: resolvedPending,
+              },
+            },
+          }
+        : undefined,
     };
   }
 

@@ -1,6 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 import { TelegramChannel, splitTelegramMessage } from './telegram.js';
 
+function approvalPendingActionMetadata(
+  approvals: Array<{ id: string; toolName: string; argsPreview: string }>,
+): Record<string, unknown> {
+  return {
+    pendingAction: {
+      status: 'pending',
+      blocker: {
+        kind: 'approval',
+        approvalSummaries: approvals,
+      },
+    },
+  };
+}
+
 describe('splitTelegramMessage', () => {
   it('returns a single chunk when under limit', () => {
     const text = 'hello world';
@@ -111,15 +125,13 @@ describe('Telegram approval flow', () => {
         if (dispatches.length === 1) {
           return {
             content: 'Waiting for approval to write S:\\Development\\test26.txt.',
-            metadata: {
-              pendingApprovals: [
-                {
-                  id: 'approval-write-1',
-                  toolName: 'fs_write',
-                  argsPreview: '{"path":"S:\\\\Development\\\\test26.txt","content":"This is a test file.","append":false}',
-                },
-              ],
-            },
+            metadata: approvalPendingActionMetadata([
+              {
+                id: 'approval-write-1',
+                toolName: 'fs_write',
+                argsPreview: '{"path":"S:\\\\Development\\\\test26.txt","content":"This is a test file.","append":false}',
+              },
+            ]),
           };
         }
         return {
@@ -134,15 +146,13 @@ describe('Telegram approval flow', () => {
       handlePendingApprovalInput: (ctx: unknown, text: string, approvalKey: string, userId: string) => Promise<void>;
     }).replyWithApprovalSupport(ctx, {
       content: 'Waiting for approval to add S:\\Development to allowed paths.',
-      metadata: {
-        pendingApprovals: [
-          {
-            id: 'approval-path-1',
-            toolName: 'update_tool_policy',
-            argsPreview: '{"action":"add_path","value":"S:\\\\Development"}',
-          },
-        ],
-      },
+      metadata: approvalPendingActionMetadata([
+        {
+          id: 'approval-path-1',
+          toolName: 'update_tool_policy',
+          argsPreview: '{"action":"add_path","value":"S:\\\\Development"}',
+        },
+      ]),
     }, 'default');
 
     await (channel as unknown as {
@@ -173,7 +183,7 @@ describe('Telegram approval flow', () => {
     expect(output).not.toContain('tool is unavailable');
   });
 
-  it('replaces model approval preamble with structured Telegram approval copy', async () => {
+  it('keeps assistant approval content while still rendering Telegram approval controls from metadata', async () => {
     const channel = new TelegramChannel({
       botToken: '123:abc',
       onToolsApprovalDecision: async () => ({ success: true, message: 'Approved and executed' }),
@@ -184,19 +194,17 @@ describe('Telegram approval flow', () => {
       replyWithApprovalSupport: (ctx: unknown, response: { content: string; metadata?: Record<string, unknown> }, agentId?: string) => Promise<void>;
     }).replyWithApprovalSupport(ctx, {
       content: "Let's add `S:\\Development` to the allowed paths, then I'll create the file **test32.txt** there. Please approve this action.",
-      metadata: {
-        pendingApprovals: [
-          {
-            id: 'approval-path-1',
-            toolName: 'update_tool_policy',
-            argsPreview: '{"action":"add_path","value":"S:\\\\Development"}',
-          },
-        ],
-      },
+      metadata: approvalPendingActionMetadata([
+        {
+          id: 'approval-path-1',
+          toolName: 'update_tool_policy',
+          argsPreview: '{"action":"add_path","value":"S:\\\\Development"}',
+        },
+      ]),
     }, 'default');
 
-    expect(replies[0]?.text).toBe('Waiting for approval to add S:\\Development to allowed paths.');
-    expect(replies.map((reply) => reply.text).join('\n')).not.toContain('Please approve this action.');
+    expect(replies[0]?.text).toBe("Let's add `S:\\Development` to the allowed paths, then I'll create the file **test32.txt** there. Please approve this action.");
+    expect(replies[1]?.text).toContain('⚠️ update_tool_policy');
   });
 
   it('acknowledges inline approval buttons immediately before slow continuation finishes', async () => {

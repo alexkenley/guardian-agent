@@ -8,7 +8,7 @@ import { dirname } from 'node:path';
 import type { SQLiteDatabase } from './sqlite-driver.js';
 
 export interface SQLiteSecurityEvent {
-  service: 'conversation' | 'analytics' | 'code_sessions';
+  service: 'conversation' | 'analytics' | 'code_sessions' | 'pending_actions' | 'continuity_threads';
   severity: 'info' | 'warn';
   code:
     | 'permissions_hardened'
@@ -23,7 +23,7 @@ export interface SQLiteSecurityEvent {
 }
 
 export interface SQLiteSecurityMonitorOptions {
-  service: 'conversation' | 'analytics' | 'code_sessions';
+  service: 'conversation' | 'analytics' | 'code_sessions' | 'pending_actions' | 'continuity_threads';
   db: SQLiteDatabase;
   sqlitePath: string;
   onEvent?: (event: SQLiteSecurityEvent) => void;
@@ -33,7 +33,7 @@ export interface SQLiteSecurityMonitorOptions {
 }
 
 export class SQLiteSecurityMonitor {
-  private readonly service: 'conversation' | 'analytics' | 'code_sessions';
+  private readonly service: 'conversation' | 'analytics' | 'code_sessions' | 'pending_actions' | 'continuity_threads';
   private readonly db: SQLiteDatabase;
   private readonly sqlitePath: string;
   private readonly onEvent?: (event: SQLiteSecurityEvent) => void;

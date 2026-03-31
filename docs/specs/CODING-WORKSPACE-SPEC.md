@@ -285,6 +285,10 @@ Behavior:
 - `Activity` preserves its own scroll position across normal session rerenders so long review lists remain navigable
 - the UI does not auto-switch panels when approvals appear
 - session cards in the workbench decide which coding session is current for Guardian chat on the web surface
+- the workbench may also open a session in a temporary `VIEWING` state from a trace/run deep link without reattaching Guardian chat to that session
+- trace/run deep links that include `assistantRunId` or `assistantRunItemId` should open the `Activity` panel automatically for that inspected session
+- when a deep link includes `assistantRunItemId`, the activity panel should render and highlight the exact matching event with a bounded nearby-context window instead of only showing the last few items
+- `CURRENT` means the session currently attached to Guardian chat on that web surface; `VIEWING` means the operator is inspecting a different session in the workbench only
 
 ### Code Inspector
 
@@ -410,6 +414,7 @@ Chat flow:
 - prompt assembly for Code uses Code-session memory only; Guardian global memory is not injected into Code-session turns
 - tool execution gets a repo-scoped `codeContext`
 - session snapshots expose `pendingApprovals` and `recentJobs` derived from records bound to that code session id
+- chat/blocking state for coding flows is tracked separately through the cross-channel `PendingActionStore`
 
 ## Main Chat And Remote Channels
 
@@ -472,9 +477,14 @@ As built:
 
 - the runtime exposes `coding_backend_list`, `coding_backend_run`, and `coding_backend_status`
 - delegation is opt-in and should only happen when the user explicitly asks to use an external coding tool such as Claude Code, Codex, Gemini CLI, or Aider
+- mentioning Codex or another backend as the subject of a question should not relaunch it by itself; explanation or investigation questions about backend-produced artifacts should stay on the normal assistant path unless the user explicitly asks Guardian to use that backend
 - backend launches are tied to the current coding session and open a visible terminal tab so the operator can observe progress
 - approval copy for delegated backend runs names the active coding workspace before launch so the operator can verify the target repo
 - if a delegated coding request explicitly names a different coding workspace than the current attachment, Guardian should stop and require the operator to switch that chat surface first rather than silently writing into the wrong repo
+- once that required workspace switch is satisfied on the same chat surface, Guardian should resume the stored delegated coding request automatically instead of asking for the request again
+- UI-only chat context prefixes should not be forwarded into the external coding backend task payload or shown verbatim in operator-facing delegated-task previews
+- switching the focused coding workspace should not fork or clear the visible Guardian chat transcript on that surface; the transcript belongs to the chat surface and the coding workspace is attached execution context inside it
+- trace- and run-driven workbench deep links may open a different session for inspection and may land on an exact session-local timeline event, but they must not silently retarget the attached Guardian chat session
 - the web config surface for this lives at `Configuration > Integrations > Coding Assistants`
 - that config panel now shows a fixed built-in list of Claude Code, Codex, Gemini CLI, and Aider rather than a preset add/remove editor
 - each built-in backend row supports `Enable` / `Disable` plus `Set Default`

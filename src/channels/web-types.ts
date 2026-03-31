@@ -621,6 +621,20 @@ export interface DashboardAssistantState {
       detail?: string;
       error?: string;
       metadata?: Record<string, unknown>;
+      display?: {
+        originSummary: string;
+        outcomeSummary: string;
+        followUp?: {
+          reportingMode: 'inline_response' | 'held_for_approval' | 'status_only' | 'held_for_operator';
+          label: string;
+          needsOperatorAction: boolean;
+          blockerKind?: string;
+          approvalCount?: number;
+          nextAction?: string;
+          operatorState?: 'pending' | 'kept_held' | 'replayed' | 'dismissed';
+          actions?: Array<'replay' | 'keep_held' | 'dismiss'>;
+        };
+      };
     }>;
   };
   lastPolicyDecisions: Array<{
@@ -641,6 +655,35 @@ export interface DashboardAssistantState {
     cron: string;
     nextRun?: number;
   }>;
+}
+
+export interface DashboardIntentRoutingTraceEntry {
+  id: string;
+  timestamp: number;
+  stage: string;
+  requestId?: string;
+  messageId?: string;
+  userId?: string;
+  channel?: string;
+  agentId?: string;
+  contentPreview?: string;
+  details?: Record<string, unknown>;
+  matchedRun?: {
+    runId: string;
+    title: string;
+    status: string;
+    kind: string;
+    href: string;
+    codeSessionId?: string;
+    codeSessionHref?: string;
+    focusItemId?: string;
+    focusItemTitle?: string;
+    focusItemHref?: string;
+  };
+}
+
+export interface DashboardIntentRoutingTraceResponse {
+  entries: DashboardIntentRoutingTraceEntry[];
 }
 
 export interface UIInvalidationEvent {
@@ -811,6 +854,10 @@ export interface DashboardCallbacks {
   onProviderModels?: (input: DashboardProviderModelsInput) => Promise<{ models: string[] }>;
   onCodingBackendStatus?: (sessionId?: string) => DashboardCodingBackendSession[];
   onAssistantState?: () => DashboardAssistantState;
+  onAssistantJobFollowUpAction?: (input: {
+    jobId: string;
+    action: 'replay' | 'keep_held' | 'dismiss';
+  }) => Promise<DashboardMutationResult> | DashboardMutationResult;
   onAssistantRuns?: (args: {
     limit?: number;
     status?: DashboardRunStatus;
@@ -818,7 +865,19 @@ export interface DashboardCallbacks {
     channel?: string;
     agentId?: string;
     codeSessionId?: string;
+    continuityKey?: string;
+    activeExecutionRef?: string;
   }) => DashboardRunListResponse;
+  onIntentRoutingTrace?: (args: {
+    limit?: number;
+    continuityKey?: string;
+    activeExecutionRef?: string;
+    stage?: string;
+    channel?: string;
+    agentId?: string;
+    userId?: string;
+    requestId?: string;
+  }) => Promise<DashboardIntentRoutingTraceResponse> | DashboardIntentRoutingTraceResponse;
   onAssistantRunDetail?: (runId: string) => DashboardRunDetail | null;
   onSSESubscribe?: (listener: SSEListener) => () => void;
   onDispatch?: (
@@ -833,7 +892,7 @@ export interface DashboardCallbacks {
       metadata?: Record<string, unknown>;
     },
     routeDecision?: RouteDecision,
-    options?: { priority?: 'high' | 'normal' | 'low'; requestType?: string },
+    options?: { priority?: 'high' | 'normal' | 'low'; requestType?: string; requestId?: string },
     precomputedIntentGateway?: import('../runtime/intent-gateway.js').IntentGatewayRecord | null,
   ) => Promise<{ content: string; metadata?: Record<string, unknown> }>;
   onConfigUpdate?: (updates: ConfigUpdate) => Promise<DashboardMutationResult>;
@@ -1024,6 +1083,14 @@ export interface DashboardCallbacks {
     toolName: string;
     argsPreview: string;
   }>;
+  onPendingActionCurrent?: (args: {
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+  }) => {
+    pendingAction?: Record<string, unknown> | null;
+  };
   onSkillsState?: () => DashboardSkillsState;
   onSkillsUpdate?: (input: { skillId: string; enabled: boolean }) => { success: boolean; message: string };
   onToolsCategories?: () => Array<{ category: ToolCategory; label: string; description: string; toolCount: number; enabled: boolean; disabledReason?: string }>;

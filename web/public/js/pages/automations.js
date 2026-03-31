@@ -9,6 +9,7 @@
 import { api } from '../api.js';
 import { onSSE, offSSE } from '../app.js';
 import { activateContextHelp, enhanceSectionHelp, renderGuidancePanel } from '../components/context-help.js';
+import { normalizeRunTimelineContextAssembly, renderRunTimelineContextAssembly } from '../components/run-timeline-context.js';
 import { createTabs } from '../components/tabs.js';
 import { applyInputTooltips } from '../tooltip.js';
 
@@ -19,6 +20,10 @@ const automationUiState = {
   placement: null,
   activeTab: 'catalog',
   tabs: null,
+  timelineFilters: {
+    continuityKey: '',
+    activeExecutionRef: '',
+  },
 };
 
 const AUTOMATION_HELP = {
@@ -62,10 +67,36 @@ function getRequestedRunId() {
   return new URLSearchParams(query).get('runId') || '';
 }
 
+function getRequestedAssistantRunId() {
+  const raw = window.location.hash || '';
+  const [, query = ''] = raw.split('?');
+  return new URLSearchParams(query).get('assistantRunId') || '';
+}
+
+function getRequestedAssistantRunItemId() {
+  const raw = window.location.hash || '';
+  const [, query = ''] = raw.split('?');
+  return new URLSearchParams(query).get('assistantRunItemId') || '';
+}
+
 function normalizeAutomationTab(tab) {
   return tab === 'catalog' || tab === 'output' || tab === 'history'
     ? tab
     : 'catalog';
+}
+
+function normalizeTimelineFilterValue(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function buildAssistantRunQueryParams(limit = 15) {
+  const continuityKey = normalizeTimelineFilterValue(automationUiState.timelineFilters?.continuityKey);
+  const activeExecutionRef = normalizeTimelineFilterValue(automationUiState.timelineFilters?.activeExecutionRef);
+  return {
+    limit,
+    ...(continuityKey ? { continuityKey } : {}),
+    ...(activeExecutionRef ? { activeExecutionRef } : {}),
+  };
 }
 
 // ─── Public API ───────────────────────────────────────────
@@ -108,7 +139,7 @@ export async function renderAutomations(container) {
       api.automationsCatalog().catch(() => []),
       api.automationRunHistory().catch(() => []),
       api.agents().catch(() => []),
-      api.assistantRuns({ limit: 15 }).catch(() => ({ runs: [] })),
+      api.assistantRuns(buildAssistantRunQueryParams(15)).catch(() => ({ runs: [] })),
     ]);
 
     const summary = connState.summary || {};
@@ -117,7 +148,6 @@ export async function renderAutomations(container) {
     const studio = connState.studio || {};
     const tools = Array.isArray(toolsState?.tools) ? toolsState.tools : [];
     const agents = Array.isArray(agentsState) ? agentsState : [];
-    const recentAssistantRuns = Array.isArray(assistantRuns?.runs) ? assistantRuns.runs : [];
 
     const automations = reorderAutomationsForUi(
       normalizeAutomationViews(Array.isArray(automationCatalog) ? automationCatalog : []),
@@ -127,8 +157,18 @@ export async function renderAutomations(container) {
     const totalRuns = Number(summary.runCount || 0) + automations.reduce((sum, automation) => sum + (automation.runCount || 0), 0);
 
     const requestedRunId = getRequestedRunId();
+    const requestedAssistantRunId = getRequestedAssistantRunId();
+    const requestedAssistantRun = requestedAssistantRunId
+      ? await api.assistantRun(requestedAssistantRunId).catch(() => null)
+      : null;
+    const recentAssistantRuns = normalizeAssistantRuns(
+      Array.isArray(assistantRuns?.runs) ? assistantRuns.runs : [],
+      requestedAssistantRun,
+    );
     const defaultTab = requestedRunId
       ? 'output'
+      : requestedAssistantRunId
+        ? 'history'
       : normalizeAutomationTab(automationUiState.activeTab);
 
     container.innerHTML = `
@@ -317,6 +357,8 @@ function renderOutputTabContent(history) {
 }
 
 function renderHistoryTabContent(history, recentAssistantRuns) {
+  const continuityKey = normalizeTimelineFilterValue(automationUiState.timelineFilters?.continuityKey);
+  const activeExecutionRef = normalizeTimelineFilterValue(automationUiState.timelineFilters?.activeExecutionRef);
   return `
     <div class="table-container">
       <div class="table-header"><h3>History & Timeline</h3></div>
@@ -329,7 +371,24 @@ function renderHistoryTabContent(history, recentAssistantRuns) {
     </div>
 
     <div class="table-container">
-      <div class="table-header"><h3>Execution Timeline</h3></div>
+      <div class="table-header">
+        <h3>Execution Timeline</h3>
+        <div class="ops-task-sub">Filter by continuity thread or active execution ref.</div>
+      </div>
+      <form id="auto-execution-filter-form" style="padding:0 1rem 1rem;display:flex;gap:0.6rem;flex-wrap:wrap;align-items:flex-end">
+        <div class="cfg-field" style="flex:1 1 16rem;min-width:14rem;margin:0">
+          <label for="auto-timeline-continuity-key">Continuity Key</label>
+          <input id="auto-timeline-continuity-key" type="text" placeholder="continuity-123" value="${escAttr(continuityKey)}">
+        </div>
+        <div class="cfg-field" style="flex:1 1 16rem;min-width:14rem;margin:0">
+          <label for="auto-timeline-active-exec-ref">Active Execution Ref</label>
+          <input id="auto-timeline-active-exec-ref" type="text" placeholder="code_session:Repo Fix" value="${escAttr(activeExecutionRef)}">
+        </div>
+        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-secondary btn-sm" type="submit">Apply</button>
+          <button class="btn btn-secondary btn-sm" type="button" id="auto-execution-filter-clear">Clear</button>
+        </div>
+      </form>
       <table id="auto-execution-timeline-table">
         <thead><tr><th>Time</th><th>Run</th><th>Kind</th><th>Status</th><th>Owner</th><th>Timeline</th></tr></thead>
         <tbody>
@@ -359,15 +418,35 @@ function bindRunTimelineUpdates() {
 
 function focusRequestedRun(container) {
   const runId = getRequestedRunId();
-  if (!runId) return;
-  automationUiState.tabs?.switchTo('output');
-  automationUiState.activeTab = 'output';
-  const row = container.querySelector(`#auto-run-detail-${CSS.escape(runId)}`);
-  const trigger = container.querySelector(`.auto-run-details[data-run-id="${CSS.escape(runId)}"]`);
-  if (!(row instanceof HTMLElement) || !(trigger instanceof HTMLElement)) return;
-  row.style.display = '';
-  trigger.textContent = 'Hide Output';
-  trigger.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (runId) {
+    automationUiState.tabs?.switchTo('output');
+    automationUiState.activeTab = 'output';
+    const row = container.querySelector(`#auto-run-detail-${CSS.escape(runId)}`);
+    const trigger = container.querySelector(`.auto-run-details[data-run-id="${CSS.escape(runId)}"]`);
+    if ((row instanceof HTMLElement) && (trigger instanceof HTMLElement)) {
+      row.style.display = '';
+      trigger.textContent = 'Hide Output';
+      trigger.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+  }
+
+  const assistantRunId = getRequestedAssistantRunId();
+  if (!assistantRunId) return;
+  automationUiState.tabs?.switchTo('history');
+  automationUiState.activeTab = 'history';
+  const assistantRunItemId = getRequestedAssistantRunItemId();
+  if (assistantRunItemId) {
+    const itemEl = container.querySelector(`#auto-execution-item-${CSS.escape(assistantRunItemId)}`);
+    if (itemEl instanceof HTMLElement) {
+      itemEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+  }
+  const timelineRow = container.querySelector(`#auto-execution-run-${CSS.escape(assistantRunId)}`);
+  if (timelineRow instanceof HTMLElement) {
+    timelineRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
 }
 
 function reorderAutomationsForUi(automations) {
@@ -1054,12 +1133,14 @@ function renderExecutionTimeline(runs) {
     return '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No recent agent runs yet.</td></tr>';
   }
 
+  const requestedRunId = getRequestedAssistantRunId();
   return runs.slice(0, 20).map((entry) => {
     const summary = entry?.summary || {};
     const items = Array.isArray(entry?.items) ? entry.items : [];
     const owner = summary.agentId || summary.channel || '-';
+    const highlighted = summary.runId === requestedRunId;
     return `
-      <tr>
+      <tr id="auto-execution-run-${escAttr(summary.runId || '')}" ${highlighted ? 'style="outline:2px solid var(--accent);outline-offset:-2px"' : ''}>
         <td>${formatTime(summary.lastUpdatedAt || summary.startedAt || 0)}</td>
         <td>
           <div style="font-weight:600">${esc(summary.title || summary.runId || 'Run')}</div>
@@ -1073,34 +1154,65 @@ function renderExecutionTimeline(runs) {
           </div>
         </td>
         <td>${esc(owner)}</td>
-        <td>${renderExecutionTimelineItems(items)}</td>
+        <td>${renderExecutionTimelineItems(items, summary.runId || '')}</td>
       </tr>
     `;
   }).join('');
 }
 
-function renderExecutionTimelineItems(items) {
+function selectExecutionTimelineItems(items, requestedItemId) {
+  if (!Array.isArray(items) || items.length === 0) return [];
+  if (!requestedItemId) return items.slice(-8);
+  const requestedIndex = items.findIndex((item) => item?.id === requestedItemId);
+  if (requestedIndex === -1) return items.slice(-8);
+  const windowSize = 8;
+  let start = Math.max(0, requestedIndex - 2);
+  let end = Math.min(items.length, start + windowSize);
+  start = Math.max(0, end - windowSize);
+  return items.slice(start, end);
+}
+
+function renderExecutionTimelineItems(items, runId) {
   if (!Array.isArray(items) || items.length === 0) {
     return '<span class="ops-history-message">No visible events.</span>';
   }
-  const recent = items.slice(-8);
+  const requestedRunId = getRequestedAssistantRunId();
+  const requestedItemId = requestedRunId === runId ? getRequestedAssistantRunItemId() : '';
+  const recent = selectExecutionTimelineItems(items, requestedItemId);
   return `
-    <details>
+    <details ${requestedItemId ? 'open' : ''}>
       <summary>${recent.length} event${recent.length === 1 ? '' : 's'}</summary>
       <div style="margin-top:0.5rem;display:flex;flex-direction:column;gap:0.45rem">
-        ${recent.map((item) => `
-          <div style="padding:0.45rem 0.6rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-secondary)">
+        ${recent.map((item) => {
+          const contextAssembly = normalizeRunTimelineContextAssembly(item?.contextAssembly);
+          const highlighted = requestedItemId && item?.id === requestedItemId;
+          return `
+          <div
+            id="auto-execution-item-${escAttr(item.id || '')}"
+            style="padding:0.45rem 0.6rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-secondary);${highlighted ? 'outline:2px solid var(--accent);outline-offset:2px;' : ''}"
+          >
             <div style="display:flex;gap:0.5rem;align-items:center;justify-content:space-between">
               <strong>${esc(item.title || item.type || 'Event')}</strong>
               <span style="color:${timelineStatusColor(item.status)}">${esc(item.status || 'info')}</span>
             </div>
             <div class="ops-task-sub">${esc(formatTime(item.timestamp))}</div>
             ${item.detail ? `<div style="margin-top:0.35rem;color:var(--text-secondary)">${esc(item.detail)}</div>` : ''}
+            ${renderRunTimelineContextAssembly(contextAssembly, esc)}
           </div>
-        `).join('')}
+        `;
+        }).join('')}
       </div>
     </details>
   `;
+}
+
+function normalizeAssistantRuns(runs, requestedRun) {
+  const normalized = Array.isArray(runs) ? runs.slice() : [];
+  if (!requestedRun?.summary?.runId) return normalized;
+  if (normalized.some((entry) => entry?.summary?.runId === requestedRun.summary.runId)) {
+    return normalized;
+  }
+  return [requestedRun, ...normalized];
 }
 
 function renderRunOutputContent(entry) {
@@ -1402,6 +1514,28 @@ function bindEvents(container, ctx) {
 
   // Refresh
   container.querySelector('#auto-refresh')?.addEventListener('click', () => renderAutomations(container));
+
+  const executionFilterForm = container.querySelector('#auto-execution-filter-form');
+  executionFilterForm?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    automationUiState.timelineFilters = {
+      continuityKey: normalizeTimelineFilterValue(container.querySelector('#auto-timeline-continuity-key')?.value),
+      activeExecutionRef: normalizeTimelineFilterValue(container.querySelector('#auto-timeline-active-exec-ref')?.value),
+    };
+    void renderAutomationsPreserveScroll(container);
+  });
+
+  container.querySelector('#auto-execution-filter-clear')?.addEventListener('click', () => {
+    automationUiState.timelineFilters = {
+      continuityKey: '',
+      activeExecutionRef: '',
+    };
+    const continuityInput = container.querySelector('#auto-timeline-continuity-key');
+    const activeExecutionInput = container.querySelector('#auto-timeline-active-exec-ref');
+    if (continuityInput) continuityInput.value = '';
+    if (activeExecutionInput) activeExecutionInput.value = '';
+    void renderAutomationsPreserveScroll(container);
+  });
 
   // Catalog search
   const catalogSearch = container.querySelector('#auto-catalog-search');

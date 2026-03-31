@@ -1,7 +1,7 @@
 # Brokered Agent Isolation
 
 **Status:** Implemented
-**Date:** 2026-03-12
+**Date:** 2026-03-31
 **Proposal:** `docs/implemented-sops/BROKERED-AGENT-ISOLATION-PROPOSAL.md`
 **Code:** `src/broker/`, `src/supervisor/`, `src/worker/`
 
@@ -158,6 +158,7 @@ LLM API calls are proxied through the broker via the `llm.chat` RPC. The worker 
 
 When sandbox availability is `strong`, the worker uses the `agent-worker` sandbox profile:
 - dedicated writable workspace
+- explicit read-only bind for the worker runtime bundle (entrypoint plus the supporting app/runtime tree it imports from)
 - `HOME` and `TMPDIR` remapped into that workspace
 - pid/ipc/network namespace isolation via bwrap (`--unshare-net`)
 
@@ -183,6 +184,7 @@ Implemented and accurate:
 - all tool execution still flows through supervisor-side `ToolExecutor`
 - LLM API calls are proxied through the broker — the worker has no network access
 - approvals remain supervisor-side
+- supervisor-owned delegated follow-up policy can normalize delegated completion output before it reaches channels, while keeping the worker unable to widen authority
 - final responses are still scanned by `OutputGuardian`
 - tool results returned across the broker now include `trustLevel` and `taintReasons`
 - quarantined tool output is suppressed from raw planner reinjection in the worker loop
@@ -193,11 +195,14 @@ Implemented and accurate:
 - context budget compaction applied in the worker loop
 - quality-based fallback to external provider via broker-proxied `llm.chat`
 - degraded hosts use `workspace-write` profile (not `full-access`)
+- delegated follow-up metadata is attached as bounded response metadata rather than exposing raw worker-only status internals to channels
+- held delegated-result replay runs back through supervisor-owned output scanning before it is returned to the operator
 
 Not yet guaranteed:
 - streaming responses from worker to channels
 - a universal persistent taint graph across every subsystem
 - broker-native memory/event/dispatch APIs
+- fine-grained per-tool or per-category capability narrowing inside broker capability tokens
 - full isolation of every possible developer-authored agent implementation
 
 ## Files
@@ -223,13 +228,20 @@ Focused validation currently used for this feature:
 - `npm run build`
 - `node scripts/test-brokered-isolation.mjs` — basic brokered smoke test
 - `node scripts/test-brokered-approvals.mjs` — multi-step approval flow, memory_save suppression, direct tool report via `job.list`
+- `node scripts/test-security-verification.mjs` — privileged policy reads, approval-gated writes, and brokered safety controls
+- `node scripts/test-policy-update-visibility.mjs` — policy-update request visibility and approval routing through the brokered path
+
+Harness note:
+- brokered harnesses should spawn Guardian with an isolated temporary `HOME`/`USERPROFILE`/`XDG_*` directory so SQLite state, routing traces, and other runtime artifacts do not bleed in from the operator's real host profile during validation
 
 The brokered approval harness validates:
 - supervisor starts with brokered execution enabled
 - multi-step approval flow (update_tool_policy -> approve -> fs_write -> approve -> final response)
 - no spurious `memory_save` calls during operational flow
 - direct tool report via `job.list` RPC returns formatted records
-- `pendingApprovals` metadata propagated correctly through the brokered path
+- `pendingAction` approval metadata propagated correctly through the brokered path
+- delegated follow-up metadata survives the brokered path without bypassing supervisor-side approval control
+- held delegated-result replay stays supervisor-mediated and output-scanned instead of reading raw worker memory directly from a channel
 
 ## Unified Operator Controls
 

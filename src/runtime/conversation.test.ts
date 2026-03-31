@@ -170,12 +170,12 @@ describe('ConversationService FTS5 Search', () => {
 
 describe('ConversationService Memory Flush', () => {
   it('should call onMemoryFlush when messages are dropped from context', () => {
-    const flushedMessages: Array<{ key: ConversationKey; count: number }> = [];
+    const flushedMessages: Array<{ key: ConversationKey; count: number; sessionId: string }> = [];
 
     const service = makeService({
       maxContextChars: 100, // Very small to force trimming
-      onMemoryFlush: (key, dropped) => {
-        flushedMessages.push({ key, count: dropped.length });
+      onMemoryFlush: (key, payload) => {
+        flushedMessages.push({ key, count: payload.droppedMessages.length, sessionId: payload.sessionId });
       },
     });
 
@@ -194,6 +194,7 @@ describe('ConversationService Memory Flush', () => {
     if (flushedMessages.length > 0) {
       expect(flushedMessages[0].key.agentId).toBe('assistant');
       expect(flushedMessages[0].count).toBeGreaterThan(0);
+      expect(flushedMessages[0].sessionId).toBeTruthy();
     }
     service.close();
   });
@@ -213,6 +214,30 @@ describe('ConversationService Memory Flush', () => {
     service.buildMessages(key, 'system', 'question');
 
     expect(flushCalled).toBe(false);
+    service.close();
+  });
+
+  it('only flushes newly dropped context once per session', () => {
+    const flushedCounts: number[] = [];
+
+    const service = makeService({
+      maxContextChars: 120,
+      onMemoryFlush: (_key, payload) => {
+        flushedCounts.push(payload.newlyDroppedCount);
+      },
+    });
+
+    const key = { agentId: 'assistant', userId: 'u1', channel: 'web' };
+    service.recordTurn(key, 'First message with substantial context that will age out soon.', 'First reply with matching detail.');
+    service.recordTurn(key, 'Second message with more substantial context.', 'Second reply with more detail.');
+    service.recordTurn(key, 'Third message that forces trimming.', 'Third reply.');
+
+    service.buildMessages(key, 'system', 'follow up one');
+    const afterFirstBuild = [...flushedCounts];
+    service.buildMessages(key, 'system', 'follow up two');
+
+    expect(afterFirstBuild.length).toBeGreaterThanOrEqual(1);
+    expect(flushedCounts).toEqual(afterFirstBuild);
     service.close();
   });
 });

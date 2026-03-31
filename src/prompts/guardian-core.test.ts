@@ -24,6 +24,12 @@ describe('guardian-core prompt', () => {
     expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('Do not narrate tool availability, argument schemas, or internal parameter names');
   });
 
+  it('tells the model to answer CLI command questions from the shared command guide', () => {
+    expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('<cli-command-guide>');
+    expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('Do not invent slash commands or hidden subcommands');
+    expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('Prefer /help <command> for exact syntax and /guide for broader operator workflows');
+  });
+
   it('tells the model to use configured cloud profiles from tool context', () => {
     expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('inspect <tool-context> for configured cloud profiles before asking follow-up questions');
     expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('use that profile id directly');

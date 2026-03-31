@@ -16,7 +16,7 @@ This spec does **not** define per-tool provider routing. Tool provider routing i
 
 - `src/runtime/intent-gateway.ts`
 - `src/runtime/message-router.ts`
-- `src/runtime/pending-clarification-store.ts`
+- `src/runtime/pending-actions.ts`
 - `src/index.ts`
 - `src/runtime/direct-intent-routing.ts`
 
@@ -50,6 +50,11 @@ Incoming message
 
 Key rule:
 - slash commands and real approval/continuation resumes are the only allowed pre-gateway intercepts
+
+Approval fallback detail:
+- plain-text approval detection is a control-plane path
+- runtime strips leading UI context wrappers such as `[Context: ...]` before matching fallback approval text
+- this fallback exists for cases where a channel cannot use its native approval controls, but the primary UX remains the structured pending-action controls
 
 ## Intent Gateway Contract
 
@@ -104,35 +109,46 @@ The gateway must classify whether the request is:
 
 When `needs_clarification` is returned, `missingFields` must identify the unresolved requirement.
 
-## Clarification State
+## Pending Action And Continuity Context
 
-Clarification state is stored in `PendingClarificationStore`.
+The gateway no longer receives a dedicated pending-clarification object. It receives:
+- a summarized active `PendingAction`
+- a summarized active continuity thread when one exists
 
 Keying:
 - logical assistant context
 - canonical user id
 - channel
+- surface id
 
-This means clarification state survives local/external tier selection when both tiers share one logical assistant state.
+This means blocked-work context survives local/external tier selection and remains aligned with the specific chat surface.
 
-Clarification kinds currently include:
-- `email_provider`
-- `coding_backend`
-- `generic`
+Pending-action blocker kinds currently include:
+- `approval`
+- `clarification`
+- `workspace_switch`
+- `auth`
+- `policy`
+- `missing_context`
 
-Behavior:
-- if the gateway requests clarification, Guardian stores a typed pending clarification
-- if the next user turn is a short answer like `Use Outlook` or `Codex`, the next gateway call sees the pending clarification and resolves it in context
+Gateway behavior:
+- if the runtime creates a pending action, the next gateway call sees the blocker summary and original request
+- short answers like `Use Outlook`, `Codex`, `switch to Test Tactical Game App`, or `okay, now do that` are interpreted against that active pending action before ordinary bounded-history repair logic
+- an active pending action does not automatically make the next turn a follow-up; a clearly different request such as `Check my email.` must still classify as a fresh `new_request`
 
 Current implementation details:
-- clarification state is a single pending slot per logical assistant context, canonical user id, and channel
-- clarification state currently uses the same 30 minute TTL as pending approvals
-- if a later turn is fully resolved (`resolution: ready`), Guardian clears the older pending clarification
+- pending action state is a single active slot per logical assistant context, canonical user id, channel, and surface
+- blocked-work state currently uses the same 30 minute TTL family as approval flows
+- if a later turn fully resolves the blocker or replaces the blocked request, the older pending action is completed or cancelled
 
-Current limitation:
-- Guardian does not maintain a full stack of unresolved clarifications
-- if the user pivots to a different resolved request in the middle of a clarification exchange, then later returns with a short answer such as `Use Outlook`, that short answer may no longer attach to the earlier request
-- clarification resume is therefore best-effort recent-context repair, not general multi-task workflow state
+Continuity summary currently includes:
+- continuity key
+- linked-surface count
+- optional focus summary
+- optional last actionable request
+- optional active execution refs
+
+This continuity summary is bounded context for the classifier. It is not a second transcript.
 
 ## Conversation Context Window
 
@@ -149,7 +165,8 @@ Current defaults:
 Intent Gateway prompt inputs:
 - the current user message
 - the last 6 recent conversation entries, if available
-- any typed pending clarification state
+- any summarized active pending action
+- any summarized active continuity thread
 - enabled provider / coding-backend context
 
 Implications:
@@ -193,11 +210,12 @@ Auto-mode tier routing is owned by `MessageRouter.routeWithTierFromIntent(...)`.
 ### Preference Rules
 
 Hard local preference:
-- any request with `entities.codingBackend`
+- any request with `entities.codingBackend` and `entities.codingBackendRequested=true`
 
 Attached coding sessions:
 - an attached coding session may carry a remembered `agentId`, but tier-tagged session agents such as `local` or `external` do not override gateway-first Auto routing
 - explicit coding-backend delegation such as `Use Codex ...` or `Use Claude Code ...` must still prefer the local Guardian tier, because Guardian is orchestrating the CLI rather than acting as the coding model itself
+- questions about why Codex or another backend produced a given artifact, permission, diff, or output should not be treated as explicit backend delegation unless the user actually asks Guardian to use that backend for investigation
 
 Local-preferred routes:
 - `filesystem_task`
@@ -298,6 +316,11 @@ Persistence:
 - rotation defaults: 5 MB active file, 5 retained files total
 - config knob: `routing.intentTrace`
 
+Operator affordances:
+- the routing trace is filterable by `continuityKey` and `activeExecutionRef`
+- dashboard rows can correlate a routing decision to the matched run, the best-fit execution-timeline event, and the attached coding session when one exists
+- routing-trace deep links are allowed to land on `assistantRunId` plus a specific `assistantRunItemId` so operators can open the exact timeline event that best explains the routed outcome
+
 Expected operator-visible behavior:
 - clear direct routing when intent is obvious
 - one targeted clarification when a required field is missing
@@ -312,7 +335,7 @@ The implementation is correct when all of the following hold:
 - `Check my email.` asks for Gmail vs Outlook only when both providers are enabled and the provider is still unspecified.
 - `Use Outlook.` continues the earlier mailbox request instead of creating a new unrelated task.
 - approval continuations bypass normal gateway interpretation and resume the suspended action.
-- bounded recent history and pending clarification state are sufficient for short repairs, but unrelated resolved pivots can clear the pending clarification slot.
+- bounded recent history plus active pending-action context are sufficient for short repairs, while unrelated replacement actions can still supersede the older blocked request.
 - if only one tier is configured, Auto mode still works without special-case user handling.
 - a client cannot inject fake pre-routed intent metadata to override server-side interpretation.
 

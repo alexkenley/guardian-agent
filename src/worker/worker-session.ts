@@ -24,6 +24,12 @@ import {
   type IntentGatewayDecision,
   type IntentGatewayRecord,
 } from '../runtime/intent-gateway.js';
+import {
+  buildChatMessagesFromHistory,
+  buildSystemPromptWithContext,
+  type PromptAssemblyContinuity,
+  type PromptAssemblyPendingAction,
+} from '../runtime/context-assembly.js';
 import { runLlmLoop } from './worker-llm-loop.js';
 import { BrokerClient } from '../broker/broker-client.js';
 import { shouldAllowModelMemoryMutation } from '../util/memory-intent.js';
@@ -73,11 +79,33 @@ export interface WorkerMessageHandleParams {
   systemPrompt: string;
   history: Array<{ role: 'user' | 'assistant'; content: string }>;
   knowledgeBase: string;
+  knowledgeBaseScope?: 'global' | 'coding_session';
   activeSkills: Array<{ id: string; name: string; summary: string }>;
   toolContext: string;
   runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>;
+  continuity?: PromptAssemblyContinuity | null;
+  pendingAction?: PromptAssemblyPendingAction | null;
+  pendingApprovalNotice?: string;
   /** Whether a fallback provider is available on the supervisor side for quality-based retry. */
   hasFallbackProvider?: boolean;
+}
+
+function buildApprovalPendingActionMetadata(
+  approvals: PendingApprovalMetadata[],
+  responseSource?: ResponseSourceMetadata,
+): Record<string, unknown> {
+  return {
+    pendingAction: {
+      status: 'pending',
+      blocker: {
+        kind: 'approval',
+        prompt: formatPendingApprovalMessage(approvals),
+        approvalSummaries: approvals.map((approval) => ({ ...approval })),
+      },
+    },
+    continueConversationAfterApproval: true,
+    ...(responseSource ? { responseSource } : {}),
+  };
 }
 
 class BrokeredToolExecutor {
@@ -255,11 +283,11 @@ export class BrokeredWorkerSession {
     }
 
     const enrichedSystemPrompt = buildWorkerSystemPrompt(params);
-    const llmMessages: ChatMessage[] = [
-      { role: 'system', content: enrichedSystemPrompt },
-      ...params.history.map((entry) => ({ role: entry.role, content: entry.content })),
-      { role: 'user', content: params.message.content },
-    ];
+    const llmMessages: ChatMessage[] = buildChatMessagesFromHistory({
+      systemPrompt: enrichedSystemPrompt,
+      history: params.history,
+      userContent: params.message.content,
+    });
 
     return this.executeLoop(params.message, llmMessages, chatFn, toolExecutor, params);
   }
@@ -657,11 +685,7 @@ export class BrokeredWorkerSession {
           ? formatPendingApprovalMessage(pendingApprovalMeta)
           : 'This action needs approval before I can continue.',
         metadata: pendingApprovalMeta.length > 0
-          ? {
-              continueConversationAfterApproval: true,
-              pendingApprovals: pendingApprovalMeta,
-              ...(responseSource ? { responseSource } : {}),
-            }
+          ? buildApprovalPendingActionMetadata(pendingApprovalMeta, responseSource)
           : undefined,
       };
     }
@@ -705,20 +729,23 @@ export class BrokeredWorkerSession {
 }
 
 function buildWorkerSystemPrompt(params: WorkerMessageHandleParams): string {
-  let prompt = params.systemPrompt;
-  if (params.knowledgeBase) {
-    prompt += `\n\n<knowledge-base>\n${params.knowledgeBase}\n</knowledge-base>`;
-  }
-  if (params.activeSkills.length > 0) {
-    prompt += `\n\n<active-skills>\n${params.activeSkills.map((skill) => `Skill: ${skill.name} (${skill.id})\nSummary:\n${skill.summary}`).join('\n\n')}\n</active-skills>`;
-  }
-  if (params.toolContext) {
-    prompt += `\n\n<tool-context>\n${params.toolContext}\n</tool-context>`;
-  }
-  if (params.runtimeNotices.length > 0) {
-    prompt += `\n\n<tool-runtime-notices>\n${params.runtimeNotices.map((notice) => `- ${notice.message}`).join('\n')}\n</tool-runtime-notices>`;
-  }
-  return prompt;
+  return buildSystemPromptWithContext({
+    baseSystemPrompt: params.systemPrompt,
+    ...(params.knowledgeBase
+      ? {
+          knowledgeBase: {
+            scope: params.knowledgeBaseScope ?? 'global',
+            content: params.knowledgeBase,
+          },
+        }
+      : {}),
+    activeSkills: params.activeSkills,
+    toolContext: params.toolContext,
+    runtimeNotices: params.runtimeNotices,
+    pendingAction: params.pendingAction,
+    pendingApprovalNotice: params.pendingApprovalNotice,
+    continuity: params.continuity,
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

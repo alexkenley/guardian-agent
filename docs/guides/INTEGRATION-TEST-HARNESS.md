@@ -27,6 +27,8 @@ Core harness scripts include:
 | **`scripts/test-security-content.ps1`** | Focused content-security suite: injection, denied paths, shell validation, PII/secret redaction (PowerShell) | ~18 |
 | **`scripts/test-cli-approvals.mjs`** | CLI approval UX regression harness: readline prompt capture, chained approvals, continuation flow, stale approval-ID refresh (Node.js) | ~10 |
 | **`scripts/test-contextual-security-uplifts.mjs`** | Contextual-security regression harness: quarantined remote content, trust-aware memory, principal-bound approvals, bounded schedules, runaway controls (Node.js) | ~20 |
+| **`scripts/test-brokered-isolation.mjs`** | Brokered worker smoke harness: isolated worker startup, broker-mediated chat path, and health under agent isolation (Node.js) | focused brokered-worker assertions |
+| **`scripts/test-brokered-approvals.mjs`** | Brokered approval harness: multi-step approvals, broker-mediated continuation, memory-save suppression, and tool-reporting (Node.js) | focused brokered approval assertions |
 | **`scripts/test-automation-authoring-compiler.mjs`** | Conversational automation compiler harness: native task/workflow compilation, dedupe, and no-script drift (Node.js) | ~12 |
 | **`scripts/test-coding-assistant.mjs`** | Coding-session transport + repo-grounding harness using canonical chat dispatch plus session attachments/overrides, including approval scoping, memory-scope isolation, and optional real Ollama smoke lane (Node.js) | focused Code-session assertions |
 | **`scripts/test-code-ui-smoke.mjs`** | Browser smoke for the `#/code` workspace: explorer refresh, Guardian-chat session focus, activity/trust UX, and code-session persistence (Node.js + Playwright) | focused Code UI assertions |
@@ -230,6 +232,9 @@ Recommended usage:
 - WSL-local smoke lane: install Ollama in WSL, pull a model once, then run `HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=<your-model> node scripts/test-automation-authoring-compiler.mjs --use-ollama`
 - brokered-worker smoke lane: add `HARNESS_AGENT_ISOLATION=1` so the harness validates the brokered worker path that the web UI uses when agent isolation is enabled
 - Windows-hosted smoke lane: set `HARNESS_OLLAMA_BASE_URL` to the Windows host IP because WSL loopback may not reach the Windows-bound service
+
+Isolation note:
+- brokered/security Node harnesses should spawn Guardian with an isolated temporary `HOME`/`USERPROFILE`/`XDG_*` directory so runtime SQLite files, routing traces, and other operator-local state do not contaminate the test lane
 
 The WSL-local smoke lane is intentionally on-demand. The harness will spin up `ollama serve` only when needed and stop it when the test exits, so it does not consume resources between runs.
 

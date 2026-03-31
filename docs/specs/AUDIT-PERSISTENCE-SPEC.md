@@ -12,6 +12,7 @@ The AuditLog is an in-memory ring buffer. Events are lost on restart. There is n
 - Runtime wiring: `src/runtime/runtime.ts` (init + wire on startup)
 - Dashboard API: `GET /api/audit/verify` (chain integrity check)
 - Web Security page: "Verify Audit Chain" button
+- Audit event families include brokered and delegated-worker lifecycle breadcrumbs such as `delegated_worker_started`, `delegated_worker_completed`, and `delegated_worker_failed`
 
 ## Design
 
@@ -95,3 +96,4 @@ The Security page includes an "Audit Chain Integrity" section with a "Verify Aud
 1. Write events, restart process, verify events survive via `readTail()`
 2. Tamper a line in the JSONL file, verify `verifyChain()` detects the correct index
 3. Handle empty file, concurrent writes, and re-init recovery
+4. Confirm brokered/delegated audit breadcrumbs persist with the same hash-chain guarantees as other audit events

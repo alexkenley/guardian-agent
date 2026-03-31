@@ -293,8 +293,9 @@ The built-in chat/planner execution path runs in a separate brokered worker proc
 
 - The worker has no network access — LLM API calls are proxied through the broker RPC (`llm.chat`)
 - Tool execution and approvals are mediated through broker RPC — the worker has no direct `Runtime` or `ToolExecutor` reference
-- On strong hosts the worker uses the `agent-worker` sandbox profile with full namespace isolation
+- On strong hosts the worker uses the `agent-worker` sandbox profile with full namespace isolation, an ephemeral writable worker workspace, and an explicit read-only bind for the worker runtime bundle it needs to boot
 - On degraded hosts the worker uses the `workspace-write` profile with a hardened environment
+- Capability tokens remain the worker-side authority boundary; fine-grained per-tool capability narrowing is still future work
 
 There is no `ctx.fs`, `ctx.http`, or `ctx.exec`. Framework-managed interaction points are `ctx.llm` (guarded), `ctx.emit()` (scanned), `ctx.dispatch()` (Guardian-checked per call), managed tools, and returning a response (scanned).
 
@@ -481,7 +482,7 @@ The brokered chat worker is also launched through the managed sandbox layer with
 |---------|-----------|---------|----------|
 | `read-only` | Root bind (read-only), `/tmp` writable | Isolated by default | System info, document search, network probes |
 | `workspace-write` | Workspace writable, `.git`/`.env*` forced read-only | Isolated by default | `execute_command`, MCP servers, browser |
-| `agent-worker` | Dedicated worker workspace, remapped `HOME`/`TMPDIR` | Network-disabled (LLM proxied via broker) | Brokered chat/planner worker (strong hosts) |
+| `agent-worker` | Dedicated worker workspace, read-only runtime bundle bind, remapped `HOME`/`TMPDIR` | Network-disabled (LLM proxied via broker) | Brokered chat/planner worker (strong hosts) |
 | `full-access` | No isolation (env hardening only) | Full access | Explicitly trusted operations |
 
 ### Isolation Mechanisms

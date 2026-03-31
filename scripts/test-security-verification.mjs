@@ -62,6 +62,16 @@ async function request(pathname, init = {}, options = {}) {
   return { status: response.status, body };
 }
 
+async function issuePrivilegedTicket(action) {
+  const response = await request('/api/auth/ticket', {
+    method: 'POST',
+    body: JSON.stringify({ action }),
+  });
+  assert(response.status === 200, `Expected 200 from /api/auth/ticket for ${action}, got ${response.status}`);
+  assert(typeof response.body?.ticket === 'string' && response.body.ticket.length > 0, `Expected privileged ticket for ${action}`);
+  return response.body.ticket;
+}
+
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -218,6 +228,14 @@ async function main() {
   const app = spawn(process.execPath, [distEntry, configPath], {
     cwd: projectRoot,
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      HOME: tempRoot,
+      USERPROFILE: tempRoot,
+      XDG_CONFIG_HOME: tempRoot,
+      XDG_DATA_HOME: tempRoot,
+      XDG_CACHE_HOME: tempRoot,
+    },
   });
   app.stdout.pipe(createWriteStream(stdoutLogPath, { flags: 'a' }));
   app.stderr.pipe(createWriteStream(stderrLogPath, { flags: 'a' }));
@@ -330,6 +348,7 @@ async function main() {
     });
 
     await runTest(results, 'approval-gated writes do not execute before approval', async () => {
+      const ticket = await issuePrivilegedTicket('tools.policy');
       const policyUpdate = await request('/api/tools/policy', {
         method: 'POST',
         body: JSON.stringify({
@@ -339,6 +358,7 @@ async function main() {
             allowedCommands: ['echo'],
             allowedDomains: ['example.com'],
           },
+          ticket,
         }),
       });
       assert(policyUpdate.status === 200, `Expected 200 from /api/tools/policy, got ${policyUpdate.status}`);

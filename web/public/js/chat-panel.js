@@ -3,11 +3,13 @@
  * Integrated into the right-hand sidebar.
  *
  * Approval buttons are rendered from structured metadata returned by the
- * agent (response.metadata.pendingApprovals), not from text parsing.
+ * agent (response.metadata.pendingAction), not from text parsing.
  */
 
 import { api } from './api.js';
 import { onSSE, offSSE } from './app.js';
+import { decideChatApproval } from './chat-approval.js';
+import { resolveChatHistoryKey } from './chat-history.js';
 import { applyInputTooltips } from './tooltip.js';
 
 const chatHistoryByAgent = new Map();
@@ -144,8 +146,7 @@ export async function initChatPanel(container) {
 
   const getHistoryKey = () => {
     const baseKey = hasInternalOnly ? '__guardian__' : (select?.value || '');
-    if (!baseKey) return '';
-    return currentCodeSessionId ? `${baseKey}::code:${currentCodeSessionId}` : baseKey;
+    return resolveChatHistoryKey(baseKey);
   };
 
   const refreshCodeSessions = async () => {
@@ -276,14 +277,14 @@ export async function initChatPanel(container) {
     const approvalResponses = [];
     for (const id of approvalIds) {
       try {
-        const result = focusedSessionId
-          ? await api.codeSessionDecideApproval(focusedSessionId, id, {
-            decision,
-            userId: webUserId,
-            channel: 'web',
-            surfaceId: GUARDIAN_CHAT_SURFACE_ID,
-          })
-          : await api.decideToolApproval({ approvalId: id, decision, actor: 'web-user' });
+        const result = await decideChatApproval({
+          apiClient: api,
+          approvalId: id,
+          decision,
+          webUserId,
+          focusedSessionId,
+          surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+        });
         approvalResponses.push(result);
         results.push(result.success ? (result.message || `${decision}`) : `Failed: ${result.message || 'unknown error'}`);
       } catch (err) {
@@ -304,7 +305,7 @@ export async function initChatPanel(container) {
         addAgentMessage(immediateMessages.join('\n'));
       }
       for (const response of continuedResponses) {
-        addAgentMessage(response.content, response.metadata?.pendingApprovals, response.metadata?.responseSource);
+        addAgentMessage(response.content, response.metadata?.pendingAction, response.metadata?.responseSource);
       }
       history.scrollTop = history.scrollHeight;
       return;
@@ -329,7 +330,7 @@ export async function initChatPanel(container) {
           GUARDIAN_CHAT_SURFACE_ID,
         );
         thinkingEl.remove();
-        addAgentMessage(response.content, response.metadata?.pendingApprovals, response.metadata?.responseSource);
+        addAgentMessage(response.content, response.metadata?.pendingAction, response.metadata?.responseSource);
       } catch (err) {
         thinkingEl.remove();
         history.appendChild(createMessageEl('error', err.message || 'Continuation failed'));
@@ -356,10 +357,29 @@ export async function initChatPanel(container) {
    * Append an agent message to the chat, with approval buttons when the
    * response includes structured pending approval data.
    */
-  const addAgentMessage = (content, pendingApprovals, responseSource) => {
+  const addAgentMessage = (content, pendingAction, responseSource) => {
     const chatHistory = getHistory(getHistoryKey());
-    chatHistory.push({ role: 'agent', content, responseSource, pendingApprovals });
-    history.appendChild(createMessageEl('agent', content, { pendingApprovals, responseSource, onApproval: handleApproval }));
+    chatHistory.push({ role: 'agent', content, responseSource, pendingAction });
+    history.appendChild(createMessageEl('agent', content, { pendingAction, responseSource, onApproval: handleApproval }));
+  };
+
+  const restoreInput = () => {
+    input.disabled = false;
+    sendBtn.disabled = false;
+    input.focus();
+  };
+
+  const resolvePendingActionForDisplay = async (metadata) => {
+    const direct = metadata?.pendingAction;
+    if (direct && typeof direct === 'object') return direct;
+    try {
+      const current = await api.currentPendingAction(webUserId, 'web', GUARDIAN_CHAT_SURFACE_ID);
+      return current?.pendingAction && typeof current.pendingAction === 'object'
+        ? current.pendingAction
+        : undefined;
+    } catch {
+      return undefined;
+    }
   };
 
   // ── Send logic ──────────────────────────────────────────────
@@ -407,24 +427,32 @@ export async function initChatPanel(container) {
         finalised = true;
         cleanup();
         thinkingEl.remove();
-        addAgentMessage(data.content || '', data.metadata?.pendingApprovals, data.metadata?.responseSource);
-        const focusChanged = data?.metadata?.codeSessionFocusChanged === true
-          || data?.metadata?.codeSessionDetached === true
-          || (!focusedSessionId && typeof data?.metadata?.codeSessionId === 'string');
-        if (focusChanged) {
-          const nextSessionId = normalizeCodeSessionId(data?.metadata?.codeSessionId);
-          notifyCodeSessionFocus(nextSessionId);
-          notifyCodeSessionsChanged({
-            sessionId: nextSessionId,
-            surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+        restoreInput();
+        Promise.resolve(resolvePendingActionForDisplay(data?.metadata))
+          .then((pendingAction) => {
+            addAgentMessage(data.content || '', pendingAction, data.metadata?.responseSource);
+            const focusChanged = data?.metadata?.codeSessionFocusChanged === true
+              || data?.metadata?.codeSessionDetached === true
+              || (!focusedSessionId && typeof data?.metadata?.codeSessionId === 'string');
+            if (focusChanged) {
+              const nextSessionId = normalizeCodeSessionId(data?.metadata?.codeSessionId);
+              notifyCodeSessionFocus(nextSessionId);
+              notifyCodeSessionsChanged({
+                sessionId: nextSessionId,
+                surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+              });
+            }
+            if (focusedSessionId) {
+              notifyCodeSessionsChanged({
+                sessionId: focusedSessionId,
+                surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+              });
+            }
+            history.scrollTop = history.scrollHeight;
+          })
+          .catch(() => {
+            addAgentMessage(data.content || '', data.metadata?.pendingAction, data.metadata?.responseSource);
           });
-        }
-        if (focusedSessionId) {
-          notifyCodeSessionsChanged({
-            sessionId: focusedSessionId,
-            surfaceId: GUARDIAN_CHAT_SURFACE_ID,
-          });
-        }
       };
 
       const finalizeError = (message) => {
@@ -432,6 +460,7 @@ export async function initChatPanel(container) {
         finalised = true;
         cleanup();
         thinkingEl.remove();
+        restoreInput();
         history.appendChild(createMessageEl('error', message || 'Stream error'));
       };
 
@@ -486,7 +515,7 @@ export async function initChatPanel(container) {
           GUARDIAN_CHAT_SURFACE_ID,
         );
         thinkingEl.remove();
-        addAgentMessage(response.content, response.metadata?.pendingApprovals, response.metadata?.responseSource);
+        addAgentMessage(response.content, response.metadata?.pendingAction, response.metadata?.responseSource);
       }
     } catch (err) {
       thinkingEl.remove();
@@ -495,9 +524,7 @@ export async function initChatPanel(container) {
     }
 
     history.scrollTop = history.scrollHeight;
-    input.disabled = false;
-    sendBtn.disabled = false;
-    input.focus();
+    restoreInput();
   };
 
   sendBtn.addEventListener('click', send);
@@ -556,7 +583,7 @@ function renderHistory(historyEl, agentId, onApproval) {
   const chatHistory = getHistory(agentId);
   for (const msg of chatHistory) {
     historyEl.appendChild(createMessageEl(msg.role, msg.content, {
-      pendingApprovals: msg.pendingApprovals,
+      pendingAction: msg.pendingAction,
       responseSource: msg.responseSource,
       onApproval,
     }));
@@ -698,7 +725,7 @@ function isMeaningfulLiveItem(item) {
 /**
  * Create a chat message element.
  *
- * opts.pendingApprovals — structured array from response.metadata.pendingApprovals
+ * opts.pendingAction — structured object from response.metadata.pendingAction
  * opts.onApproval       — callback(ids[], decision) for button clicks
  */
 function createMessageEl(role, content, opts) {
@@ -721,13 +748,27 @@ function createMessageEl(role, content, opts) {
   body.appendChild(contentEl);
 
   // Render approval buttons from structured metadata (not text parsing)
-  const approvals = opts?.pendingApprovals;
+  const approvals = extractPendingActionApprovals(opts?.pendingAction);
   if (approvals?.length && opts?.onApproval) {
     body.appendChild(buildApprovalButtons(approvals, opts.onApproval));
   }
 
   msg.appendChild(body);
   return msg;
+}
+
+function extractPendingActionApprovals(pendingAction) {
+  if (!pendingAction || typeof pendingAction !== 'object') return [];
+  const blocker = pendingAction.blocker;
+  if (!blocker || typeof blocker !== 'object' || blocker.kind !== 'approval') return [];
+  if (!Array.isArray(blocker.approvalSummaries)) return [];
+  return blocker.approvalSummaries
+    .filter((approval) => approval && typeof approval === 'object' && typeof approval.id === 'string' && typeof approval.toolName === 'string')
+    .map((approval) => ({
+      id: approval.id,
+      toolName: approval.toolName,
+      argsPreview: typeof approval.argsPreview === 'string' ? approval.argsPreview : '',
+    }));
 }
 
 function buildSourceBadge(responseSource) {

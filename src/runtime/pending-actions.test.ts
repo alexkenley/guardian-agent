@@ -1,0 +1,295 @@
+import { describe, expect, it } from 'vitest';
+import {
+  PendingActionStore,
+  clearApprovalIdFromPendingAction,
+  defaultPendingActionTransferPolicy,
+  isPendingActionActive,
+  summarizePendingActionForGateway,
+  toPendingActionClientMetadata,
+  type PendingActionRecord,
+  type PendingActionScope,
+} from './pending-actions.js';
+
+function createScope(): PendingActionScope {
+  return {
+    agentId: 'local',
+    userId: 'user-1',
+    channel: 'web',
+    surfaceId: 'surface-1',
+  };
+}
+
+function createStore(nowMs = 1_710_000_000_000): PendingActionStore {
+  return new PendingActionStore({
+    enabled: false,
+    sqlitePath: '/tmp/guardianagent-pending-actions.test.sqlite',
+    now: () => nowMs,
+  });
+}
+
+function createRecord(overrides?: Partial<PendingActionRecord>): Omit<PendingActionRecord, 'id' | 'createdAt' | 'updatedAt' | 'scope'> {
+  return {
+    status: 'pending',
+    transferPolicy: defaultPendingActionTransferPolicy('clarification'),
+    blocker: {
+      kind: 'clarification',
+      prompt: 'Which provider should I use?',
+      field: 'email_provider',
+      options: [
+        { value: 'gws', label: 'Gmail' },
+        { value: 'm365', label: 'Outlook' },
+      ],
+    },
+    intent: {
+      route: 'email_task',
+      operation: 'read',
+      originalUserContent: 'Check my email.',
+      entities: { emailProvider: undefined },
+    },
+    expiresAt: 1_710_000_000_000 + 30 * 60 * 1000,
+    ...(overrides ? {
+      ...(overrides.status ? { status: overrides.status } : {}),
+      ...(overrides.transferPolicy ? { transferPolicy: overrides.transferPolicy } : {}),
+      ...(overrides.blocker ? { blocker: overrides.blocker } : {}),
+      ...(overrides.intent ? { intent: overrides.intent } : {}),
+      ...(overrides.resume ? { resume: overrides.resume } : {}),
+      ...(overrides.codeSessionId ? { codeSessionId: overrides.codeSessionId } : {}),
+      ...(overrides.expiresAt ? { expiresAt: overrides.expiresAt } : {}),
+    } : {}),
+  };
+}
+
+describe('PendingActionStore', () => {
+  it('stores and returns the active pending action for a scope', () => {
+    const store = createStore();
+    const scope = createScope();
+    const created = store.replaceActive(scope, createRecord());
+
+    const active = store.getActive(scope);
+
+    expect(active).not.toBeNull();
+    expect(active?.id).toBe(created.id);
+    expect(active?.blocker.kind).toBe('clarification');
+    expect(active?.intent.originalUserContent).toBe('Check my email.');
+  });
+
+  it('replaces the active pending action and cancels the older one', () => {
+    const store = createStore();
+    const scope = createScope();
+    const first = store.replaceActive(scope, createRecord());
+    const second = store.replaceActive(scope, createRecord({
+      blocker: {
+        kind: 'workspace_switch',
+        prompt: 'Switch to Test Tactical Game App first.',
+        targetSessionId: 'session-2',
+        targetSessionLabel: 'Test Tactical Game App',
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'create',
+        originalUserContent: 'Use Codex in Test Tactical Game App to create a file.',
+      },
+    }));
+
+    const firstRecord = store.get(first.id);
+    const active = store.getActive(scope);
+
+    expect(firstRecord?.status).toBe('cancelled');
+    expect(active?.id).toBe(second.id);
+    expect(active?.blocker.kind).toBe('workspace_switch');
+  });
+
+  it('finds active approval blockers by approval id', () => {
+    const store = createStore();
+    const scope = createScope();
+    const created = store.replaceActive(scope, createRecord({
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve the coding backend run.',
+        approvalIds: ['approval-1'],
+        approvalSummaries: [
+          { id: 'approval-1', toolName: 'coding_backend_run', argsPreview: '{"backend":"codex"}' },
+        ],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'create',
+        originalUserContent: 'Use Codex to create a file.',
+      },
+    }));
+
+    const match = store.findActiveByApprovalId('approval-1');
+
+    expect(match?.id).toBe(created.id);
+    expect(match?.blocker.kind).toBe('approval');
+  });
+
+  it('clears a single approval id from an active approval blocker', () => {
+    const store = createStore();
+    const scope = createScope();
+    const created = store.replaceActive(scope, createRecord({
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve the coding backend run.',
+        approvalIds: ['approval-1', 'approval-2'],
+        approvalSummaries: [
+          { id: 'approval-1', toolName: 'coding_backend_run', argsPreview: '{"backend":"codex"}' },
+          { id: 'approval-2', toolName: 'fs_write', argsPreview: '{"path":"./tmp/test.txt"}' },
+        ],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'create',
+        originalUserContent: 'Use Codex to create a file.',
+      },
+    }));
+
+    const updated = clearApprovalIdFromPendingAction(store, 'approval-1', created.updatedAt + 1);
+
+    expect(updated).not.toBeNull();
+    expect(updated?.status).toBe('pending');
+    expect(updated?.blocker.approvalIds).toEqual(['approval-2']);
+    expect(updated?.blocker.approvalSummaries).toEqual([
+      { id: 'approval-2', toolName: 'fs_write', argsPreview: '{"path":"./tmp/test.txt"}' },
+    ]);
+    expect(store.get(created.id)?.blocker.approvalIds).toEqual(['approval-2']);
+  });
+
+  it('completes the pending action when the last approval id is cleared', () => {
+    const store = createStore();
+    const scope = createScope();
+    const created = store.replaceActive(scope, createRecord({
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve the coding backend run.',
+        approvalIds: ['approval-1'],
+        approvalSummaries: [
+          { id: 'approval-1', toolName: 'coding_backend_run', argsPreview: '{"backend":"codex"}' },
+        ],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'create',
+        originalUserContent: 'Use Codex to create a file.',
+      },
+    }));
+
+    const completed = clearApprovalIdFromPendingAction(store, 'approval-1', created.updatedAt + 1);
+
+    expect(completed).not.toBeNull();
+    expect(completed?.status).toBe('completed');
+    expect(isPendingActionActive(completed?.status ?? 'expired')).toBe(false);
+    expect(store.get(created.id)?.status).toBe('completed');
+  });
+
+  it('expires active records when their ttl has passed', () => {
+    const nowMs = 1_710_000_000_000;
+    const store = new PendingActionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-pending-actions-expired.test.sqlite',
+      now: () => nowMs + 60_000,
+    });
+    const scope = createScope();
+    const created = store.replaceActive(scope, createRecord({
+      expiresAt: nowMs + 1_000,
+    }), nowMs);
+
+    const expired = store.get(created.id, nowMs + 60_000);
+
+    expect(expired?.status).toBe('expired');
+    expect(isPendingActionActive(expired?.status ?? 'expired')).toBe(false);
+  });
+
+  it('builds gateway and client metadata from active records', () => {
+    const store = createStore();
+    const scope = createScope();
+    const created = store.replaceActive(scope, createRecord({
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve the coding backend run.',
+        approvalIds: ['approval-1'],
+        approvalSummaries: [
+          { id: 'approval-1', toolName: 'coding_backend_run', argsPreview: '{"backend":"codex"}' },
+        ],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'create',
+        summary: 'Runs Codex in the current coding workspace.',
+        originalUserContent: 'Use Codex to create a file.',
+      },
+      codeSessionId: 'session-1',
+    }));
+
+    const gatewaySummary = summarizePendingActionForGateway(created);
+    const clientMetadata = toPendingActionClientMetadata(created);
+
+    expect(gatewaySummary).toMatchObject({
+      id: created.id,
+      blockerKind: 'approval',
+      route: 'coding_task',
+      operation: 'create',
+      transferPolicy: 'origin_surface_only',
+    });
+    expect(clientMetadata).toMatchObject({
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      codeSessionId: 'session-1',
+      blocker: {
+        kind: 'approval',
+      },
+    });
+  });
+
+  it('can resolve portable blocked work for the same assistant and user across surfaces', () => {
+    const store = createStore();
+    const webScope = createScope();
+    const telegramScope: PendingActionScope = {
+      agentId: webScope.agentId,
+      userId: webScope.userId,
+      channel: 'telegram',
+      surfaceId: 'thread-1',
+    };
+    store.replaceActive(webScope, createRecord({
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve the coding backend run.',
+        approvalIds: ['approval-1'],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'create',
+        originalUserContent: 'Use Codex to create a file.',
+      },
+    }));
+    const portable = store.replaceActive(telegramScope, createRecord({
+      transferPolicy: 'linked_surfaces_same_user',
+      blocker: {
+        kind: 'clarification',
+        prompt: 'Which mail provider should I use?',
+        field: 'email_provider',
+      },
+      intent: {
+        route: 'email_task',
+        operation: 'read',
+        originalUserContent: 'Check my email.',
+      },
+    }));
+
+    const resolved = store.resolveActiveForSurface({
+      agentId: webScope.agentId,
+      userId: webScope.userId,
+      channel: 'cli',
+      surfaceId: 'owner',
+    });
+
+    expect(resolved?.id).toBe(portable.id);
+    expect(resolved?.transferPolicy).toBe('linked_surfaces_same_user');
+    expect(resolved?.blocker.kind).toBe('clarification');
+  });
+});

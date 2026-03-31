@@ -11,7 +11,6 @@ import type { ChannelAdapter, MessageCallback } from './types.js';
 import { createLogger } from '../util/logging.js';
 import type { AnalyticsEventInput } from '../runtime/analytics.js';
 import type { ThreatIntelSummary, ThreatIntelScanInput, ThreatIntelFinding, IntelStatus } from '../runtime/threat-intel.js';
-import { formatPendingApprovalMessage } from '../runtime/pending-approval-copy.js';
 import { formatResponseSourceLabel } from '../runtime/model-routing-ux.js';
 
 const log = createLogger('channel:telegram');
@@ -32,6 +31,30 @@ interface PendingTelegramApproval {
 interface PendingTelegramApprovalState {
   approvals: PendingTelegramApproval[];
   agentId: string;
+}
+
+function extractPendingActionApprovals(
+  response: { content: string; metadata?: Record<string, unknown> },
+): PendingTelegramApproval[] {
+  const pendingAction = response.metadata?.pendingAction;
+  if (!pendingAction || typeof pendingAction !== 'object') return [];
+  const blocker = (pendingAction as { blocker?: unknown }).blocker;
+  if (!blocker || typeof blocker !== 'object') return [];
+  if ((blocker as { kind?: unknown }).kind !== 'approval') return [];
+  const approvalSummaries = (blocker as { approvalSummaries?: unknown }).approvalSummaries;
+  if (!Array.isArray(approvalSummaries)) return [];
+  return approvalSummaries
+    .filter((approval): approval is PendingTelegramApproval => {
+      return !!approval
+        && typeof approval === 'object'
+        && typeof (approval as { id?: unknown }).id === 'string'
+        && typeof (approval as { toolName?: unknown }).toolName === 'string';
+    })
+    .map((approval) => ({
+      id: approval.id,
+      toolName: approval.toolName,
+      argsPreview: typeof approval.argsPreview === 'string' ? approval.argsPreview : '',
+    }));
 }
 
 function normalizeApprovalStatusMessage(message: string, decision: 'approved' | 'denied'): string {
@@ -474,15 +497,13 @@ export class TelegramChannel implements ChannelAdapter {
     response: { content: string; metadata?: Record<string, unknown> },
     agentId: string = this.defaultAgent,
   ): Promise<void> {
-    const approvals = response.metadata?.pendingApprovals as
-      | Array<{ id: string; toolName: string; argsPreview: string }>
-      | undefined;
+    const approvals = extractPendingActionApprovals(response);
     const approvalKey = this.buildApprovalKey(ctx);
 
     const sourceLabel = formatResponseSourceLabel(response.metadata);
     const contentWithSource = sourceLabel ? `${sourceLabel} ${response.content}` : response.content;
 
-    if (!approvals?.length || !this.onToolsApprovalDecision) {
+    if (!approvals.length || !this.onToolsApprovalDecision) {
       this.pendingApprovalsByChat.delete(approvalKey);
       await this.replyInChunks(ctx, contentWithSource);
       return;
@@ -497,9 +518,7 @@ export class TelegramChannel implements ChannelAdapter {
       agentId,
     });
 
-    // Telegram owns the approval copy when structured approval metadata exists.
-    const approvalCopy = formatPendingApprovalMessage(approvals);
-    await this.replyInChunks(ctx, sourceLabel ? `${sourceLabel} ${approvalCopy}` : approvalCopy);
+    await this.replyInChunks(ctx, contentWithSource);
 
     // Build an inline keyboard with approve/deny per approval
     // For simplicity, use a single approve-all / deny-all row when there's one approval,

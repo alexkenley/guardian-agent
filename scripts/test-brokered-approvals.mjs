@@ -148,6 +148,15 @@ function requestJson(baseUrl, token, method, pathname, body) {
   });
 }
 
+function getPendingApprovalSummaries(response) {
+  const metadata = response?.metadata;
+  if (Array.isArray(metadata?.pendingApprovals)) {
+    return metadata.pendingApprovals;
+  }
+  const pendingActionApprovals = metadata?.pendingAction?.blocker?.approvalSummaries;
+  return Array.isArray(pendingActionApprovals) ? pendingActionApprovals : [];
+}
+
 async function getFreePort() {
   const server = http.createServer();
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -173,6 +182,7 @@ async function waitForHealth(baseUrl) {
 }
 
 async function runBrokeredApprovalHarness() {
+  const preserveArtifacts = process.env.HARNESS_KEEP_TMP === '1';
   const harnessPort = await getFreePort();
   const harnessToken = `brokered-approval-harness-${Date.now()}`;
   const baseUrl = `http://127.0.0.1:${harnessPort}`;
@@ -235,10 +245,19 @@ guardian:
 
   fs.writeFileSync(configPath, config);
   let appProcess;
+  let completed = false;
   try {
     appProcess = spawn(process.execPath, [distEntry, configPath], {
       cwd: projectRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        HOME: tmpDir,
+        USERPROFILE: tmpDir,
+        XDG_CONFIG_HOME: tmpDir,
+        XDG_DATA_HOME: tmpDir,
+        XDG_CACHE_HOME: tmpDir,
+      },
     });
     const stdout = fs.createWriteStream(logPath);
     const stderr = fs.createWriteStream(`${logPath}.err`);
@@ -254,15 +273,16 @@ guardian:
       userId: 'harness',
       channel: 'web',
     });
+    const firstPending = getPendingApprovalSummaries(first);
     assert.ok(
-      first?.metadata?.pendingApprovals?.length > 0,
+      firstPending.length > 0,
       `Expected pending approval from initial message: ${JSON.stringify(first)}`,
     );
-    assert.equal(first.metadata.pendingApprovals[0].toolName, 'update_tool_policy');
+    assert.equal(firstPending[0].toolName, 'update_tool_policy');
 
     // Approve first tool
     const firstDecision = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/approvals/decision', {
-      approvalId: first.metadata.pendingApprovals[0].id,
+      approvalId: firstPending[0].id,
       decision: 'approved',
       actor: 'brokered-user',
     });
@@ -274,15 +294,16 @@ guardian:
       userId: 'harness',
       channel: 'web',
     });
+    const secondPending = getPendingApprovalSummaries(second);
     assert.ok(
-      second?.metadata?.pendingApprovals?.length > 0,
+      secondPending.length > 0,
       `Expected pending fs_write approval: ${JSON.stringify(second)}`,
     );
-    assert.equal(second.metadata.pendingApprovals[0].toolName, 'fs_write');
+    assert.equal(secondPending[0].toolName, 'fs_write');
 
     // Approve second tool
     const secondDecision = await requestJson(baseUrl, harnessToken, 'POST', '/api/tools/approvals/decision', {
-      approvalId: second.metadata.pendingApprovals[0].id,
+      approvalId: secondPending[0].id,
       decision: 'approved',
       actor: 'brokered-user',
     });
@@ -298,7 +319,7 @@ guardian:
       typeof third.content === 'string' && third.content.length > 0,
       `Expected final response text: ${JSON.stringify(third)}`,
     );
-    assert.ok(!third.metadata?.pendingApprovals?.length, 'No more pending approvals expected');
+    assert.equal(getPendingApprovalSummaries(third).length, 0, 'No more pending approvals expected');
     assert.match(third.content, /created .*brokered-test\.txt/i);
 
     // Verify file was actually created
@@ -328,10 +349,11 @@ guardian:
     assert.ok(typeof followUp.content === 'string' && followUp.content.length > 0, 'Expected tool report response');
     assert.match(followUp.content, /update_tool_policy/);
     assert.match(followUp.content, /fs_write/);
-    assert.ok(!followUp.metadata?.pendingApprovals?.length, 'No pending approvals on follow-up');
+    assert.equal(getPendingApprovalSummaries(followUp).length, 0, 'No pending approvals on follow-up');
     console.log('  PASS: Tool report returned expected tool names.');
 
     console.log('PASS: All brokered approval harness tests passed.');
+    completed = true;
   } finally {
     if (appProcess && !appProcess.killed) {
       appProcess.kill('SIGTERM');
@@ -339,7 +361,11 @@ guardian:
       if (!appProcess.killed) appProcess.kill('SIGKILL');
     }
     await provider.close();
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (!completed || preserveArtifacts) {
+      console.log(`Harness artifacts preserved at: ${tmpDir}`);
+    } else {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   }
 }
 

@@ -20,6 +20,13 @@ export interface SavedAutomationCatalogEntry {
   task?: ScheduledTaskDefinition;
 }
 
+export type SavedAutomationCatalogMatchType = 'exact' | 'partial' | 'closest';
+
+export interface SavedAutomationCatalogSelection {
+  entry: SavedAutomationCatalogEntry;
+  matchType: SavedAutomationCatalogMatchType;
+}
+
 interface AutomationCatalogTemplateInput extends Pick<BuiltinAutomationExample, 'id' | 'category' | 'playbooks'> {
   materialized: boolean;
 }
@@ -161,22 +168,55 @@ export function selectSavedAutomationCatalogEntry(
   catalog: SavedAutomationCatalogEntry[],
   requestedName: string,
 ): SavedAutomationCatalogEntry | null {
+  return resolveSavedAutomationCatalogEntry(catalog, requestedName)?.entry ?? null;
+}
+
+export function resolveSavedAutomationCatalogEntry(
+  catalog: SavedAutomationCatalogEntry[],
+  requestedName: string,
+): SavedAutomationCatalogSelection | null {
   const normalized = normalizeAutomationCatalogLookupKey(requestedName);
   const exact = catalog.find((entry) => (
     normalizeAutomationCatalogLookupKey(entry.name) === normalized
     || normalizeAutomationCatalogLookupKey(entry.id) === normalized
   ));
-  if (exact) return exact;
+  if (exact) return { entry: exact, matchType: 'exact' };
 
   const partial = catalog.filter((entry) => (
     normalizeAutomationCatalogLookupKey(entry.name).includes(normalized)
     || normalizeAutomationCatalogLookupKey(entry.id).includes(normalized)
   ));
-  return partial.length === 1 ? partial[0] : null;
+  if (partial.length === 1) {
+    return { entry: partial[0], matchType: 'partial' };
+  }
+
+  const simplifiedRequested = stripTrailingVersionTokens(normalized);
+  if (!simplifiedRequested || simplifiedRequested === normalized) {
+    return null;
+  }
+
+  const closest = catalog.filter((entry) => {
+    const entryAliases = [
+      normalizeAutomationCatalogLookupKey(entry.name),
+      normalizeAutomationCatalogLookupKey(entry.id),
+    ]
+      .map((value) => stripTrailingVersionTokens(value))
+      .filter(Boolean);
+    return entryAliases.includes(simplifiedRequested);
+  });
+  return closest.length === 1
+    ? { entry: closest[0], matchType: 'closest' }
+    : null;
 }
 
 export function normalizeAutomationCatalogLookupKey(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function stripTrailingVersionTokens(value: string): string {
+  return value
+    .replace(/\s+(?:v)?\d+(?:\.\d+)*$/i, '')
+    .trim();
 }
 
 function buildPresetInstallationKey(task: Pick<ScheduledTaskDefinition, 'name' | 'target' | 'type'>): string {

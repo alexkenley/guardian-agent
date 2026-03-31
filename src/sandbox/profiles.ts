@@ -5,6 +5,7 @@
  * variables for OS-level process isolation.
  */
 
+import { existsSync } from 'node:fs';
 import type { SandboxProfile, SandboxResourceLimits, SandboxConfig } from './types.js';
 
 /** Paths that must stay read-only even when their parent is writable. */
@@ -51,6 +52,7 @@ export function buildBwrapArgs(
     networkAccess?: boolean;
     additionalWritePaths?: string[];
     additionalReadPaths?: string[];
+    hostLib64Exists?: boolean;
   } = {},
 ): string[] {
   if (profile === 'full-access') {
@@ -63,11 +65,14 @@ export function buildBwrapArgs(
     // Agent Worker: strictest isolation. Only essentials, writable ephemeral workspace.
     args.push('--ro-bind', '/usr', '/usr');
     args.push('--ro-bind', '/lib', '/lib');
-    args.push('--ro-bind-try', '/lib64', '/lib64');
     args.push('--ro-bind', '/bin', '/bin');
     args.push('--ro-bind-try', '/etc/resolv.conf', '/etc/resolv.conf');
     args.push('--ro-bind-try', '/etc/ssl', '/etc/ssl');
-    args.push('--symlink', 'usr/lib', '/lib64'); // Fallback symlink if no real /lib64
+    if (opts.hostLib64Exists ?? existsSync('/lib64')) {
+      args.push('--ro-bind-try', '/lib64', '/lib64');
+    } else {
+      args.push('--symlink', 'usr/lib', '/lib64'); // Fallback symlink if no real /lib64
+    }
     
     args.push('--proc', '/proc');
     args.push('--dev', '/dev');
@@ -91,7 +96,8 @@ export function buildBwrapArgs(
     } else {
       args.push('--unshare-net');
     }
-    
+
+    appendAdditionalPathBinds(args, opts);
     return args;
   }
 
@@ -130,21 +136,29 @@ export function buildBwrapArgs(
     }
   }
 
-  // Additional writable paths
+  appendAdditionalPathBinds(args, opts);
+
+  return args;
+}
+
+function appendAdditionalPathBinds(
+  args: string[],
+  opts: {
+    additionalWritePaths?: string[];
+    additionalReadPaths?: string[];
+  },
+): void {
   if (opts.additionalWritePaths) {
     for (const p of opts.additionalWritePaths) {
       if (p) args.push('--bind', p, p);
     }
   }
 
-  // Additional read-only paths
   if (opts.additionalReadPaths) {
     for (const p of opts.additionalReadPaths) {
       if (p) args.push('--ro-bind-try', p, p);
     }
   }
-
-  return args;
 }
 
 /**

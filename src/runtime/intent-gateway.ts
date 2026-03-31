@@ -56,6 +56,8 @@ export interface IntentGatewayEntities {
   sessionTarget?: string;
   emailProvider?: 'gws' | 'm365';
   codingBackend?: string;
+  codingBackendRequested?: boolean;
+  codingRunStatusCheck?: boolean;
 }
 
 export interface IntentGatewayDecision {
@@ -85,10 +87,24 @@ export interface IntentGatewayInput {
   content: string;
   channel?: string;
   recentHistory?: Array<{ role: 'user' | 'assistant'; content: string }>;
-  pendingClarification?: {
-    kind: string;
-    originalRequest: string;
+  pendingAction?: {
+    id: string;
+    status: string;
+    blockerKind: string;
+    field?: string;
+    route?: string;
+    operation?: string;
     prompt: string;
+    originalRequest: string;
+    transferPolicy: string;
+  } | null;
+  continuity?: {
+    continuityKey: string;
+    linkedSurfaceCount: number;
+    linkedSurfaces?: string[];
+    focusSummary?: string;
+    lastActionableRequest?: string;
+    activeExecutionRefs?: string[];
   } | null;
   enabledManagedProviders?: string[];
   availableCodingBackends?: string[];
@@ -190,6 +206,12 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
       codingBackend: {
         type: 'string',
       },
+      codingBackendRequested: {
+        type: 'boolean',
+      },
+      codingRunStatusCheck: {
+        type: 'boolean',
+      },
     },
     required: ['route', 'confidence', 'operation', 'summary'],
   },
@@ -230,6 +252,9 @@ const INTENT_GATEWAY_SYSTEM_PROMPT = [
   '- security_task: security triage, containment, or security-control operations.',
   '- general_assistant: everything else.',
   'Set turnRelation to new_request, follow_up, clarification_answer, or correction.',
+  'An active pending action does not automatically make the next turn a follow_up, clarification_answer, or correction.',
+  'If the user is clearly asking for a different task, classify it as turnRelation=new_request and route it on its own merits, even when a pending action exists.',
+  'Only use pending action context when the current turn is clearly resolving, continuing, correcting, approving, denying, switching, or clarifying that same blocked request.',
   'Set resolution to needs_clarification when the user\'s goal is clear but a targeted missing detail is required before execution.',
   'When resolution=needs_clarification, populate missingFields with the concrete missing detail names such as email_provider, coding_backend, session_target, path, recipient, or automation_name.',
   'When the current turn is a clarification answer or correction and the prior context makes the intended action clear, set resolvedContent to a single actionable restatement of the full corrected request.',
@@ -249,14 +274,20 @@ const INTENT_GATEWAY_SYSTEM_PROMPT = [
   'For enable/disable requests, set enabled=true or enabled=false when explicit.',
   'Set emailProvider=gws for Gmail or Google Workspace requests. Set emailProvider=m365 for Outlook or Microsoft 365 requests.',
   'Set codingBackend when the user explicitly names Codex, Claude Code, Gemini CLI, or Aider.',
+  'Set codingBackendRequested=true only when the user is explicitly asking Guardian to use or launch that coding backend for work. If Codex, Claude Code, Gemini CLI, or Aider is only the subject of a question, codingBackendRequested must be false or unset.',
+  'Set codingRunStatusCheck=true only when the user is explicitly asking whether the most recent coding backend run completed, failed, timed out, exited with a code, or otherwise asking for recent-run status.',
+  'Do not set codingRunStatusCheck for questions asking why a coding backend produced a particular file, diff, permission, executable bit, mode bit, output, or artifact. Those are explanation or investigation requests, not recent-run status checks.',
   'If both Google Workspace and Microsoft 365 are available and the user asks for direct mailbox work without specifying one, keep route=email_task and set resolution=needs_clarification, missingFields=["email_provider"].',
-  'Example: prior user request "Use Codex to say hello and confirm you are working." then user says "Codex, the CLI coding assistant." -> route=coding_task, turnRelation=correction, resolution=ready, codingBackend=codex, resolvedContent="Use Codex to say hello and confirm you are working. Just respond with a brief confirmation message. Do not change any files."',
-  'Example: "Use Codex in the Test Tactical Game App workspace to create a smoke test file." -> route=coding_task, operation=create, codingBackend=codex, sessionTarget="Test Tactical Game App workspace".',
+  'Example: prior user request "Use Codex to say hello and confirm you are working." then user says "Codex, the CLI coding assistant." -> route=coding_task, turnRelation=correction, resolution=ready, codingBackend=codex, codingBackendRequested=true, resolvedContent="Use Codex to say hello and confirm you are working. Just respond with a brief confirmation message. Do not change any files."',
+  'Example: "Use Codex in the Test Tactical Game App workspace to create a smoke test file." -> route=coding_task, operation=create, codingBackend=codex, codingBackendRequested=true, sessionTarget="Test Tactical Game App workspace".',
   'Example: prior assistant said a Codex request named a different coding workspace and asked the user to switch first; then the user says "Okay, switch to Test Tactical Game App." -> route=coding_session_control, turnRelation=clarification_answer, operation=update, sessionTarget="Test Tactical Game App".',
   'Example: prior assistant said to switch workspaces first before running the deferred Codex request; after switching, the user says "Okay, now we\'re on the previous request that I asked." -> route=coding_task, turnRelation=follow_up, resolution=ready, resolvedContent should restate the original deferred coding request.',
   'Example: prior assistant asked which mail provider to use and the user replies "Use Outlook." -> route=email_task, turnRelation=clarification_answer, resolution=ready, emailProvider=m365, resolvedContent should restate the original mail request with Outlook / Microsoft 365 selected.',
   'Example: prior assistant asked which mail provider to use and the user replies "Google Workspace." or "Gmail." -> route=email_task, turnRelation=clarification_answer, resolution=ready, emailProvider=gws, resolvedContent should restate the original mail request with Gmail / Google Workspace selected.',
-  'Example: prior user request "Use Codex to update the proposal in the workspace." then user says "Did Codex complete that work? Can you check?" -> route=coding_task, turnRelation=follow_up, operation=inspect, resolution=ready, codingBackend=codex, resolvedContent should restate that this is a status check for the most recent Codex run related to that request.',
+  'Example: prior user request "Use Codex to update the proposal in the workspace." then user says "Did Codex complete that work? Can you check?" -> route=coding_task, turnRelation=follow_up, operation=inspect, resolution=ready, codingBackend=codex, codingRunStatusCheck=true, resolvedContent should restate that this is a status check for the most recent Codex run related to that request.',
+  'Example: "Why did Codex make that text file executable?" -> this is about Codex as the subject of the question, not a request to launch Codex. codingBackend may be set to codex, but codingBackendRequested=false and codingRunStatusCheck=false.',
+  'Example: active pending action is approval for a Codex run, then the user says "Check my email." -> route=email_task, turnRelation=new_request, resolution should be based on the email request, and codingBackend should be unset.',
+  'Example: active pending action is an email-provider clarification, then the user says "Use Codex to say hello and confirm you are working." -> route=coding_task, turnRelation=new_request, codingBackend=codex, codingBackendRequested=true.',
 ].join(' ');
 
 const AUTOMATION_NAME_REPAIR_SYSTEM_PROMPT = [
@@ -413,12 +444,30 @@ function buildIntentGatewayMessages(input: IntentGatewayInput): ChatMessage[] {
         '',
       ].join('\n')
     : '';
-  const pendingClarificationSection = input.pendingClarification
+  const pendingActionSection = input.pendingAction
     ? [
-        'Pending clarification:',
-        `kind: ${input.pendingClarification.kind}`,
-        `prompt: ${input.pendingClarification.prompt}`,
-        `original request: ${input.pendingClarification.originalRequest}`,
+        'Pending action context (only relevant if the current turn is actually continuing or resolving it):',
+        `id: ${input.pendingAction.id}`,
+        `status: ${input.pendingAction.status}`,
+        `blocker kind: ${input.pendingAction.blockerKind}`,
+        `transfer policy: ${input.pendingAction.transferPolicy}`,
+        ...(input.pendingAction.field ? [`field: ${input.pendingAction.field}`] : []),
+        ...(input.pendingAction.route ? [`route: ${input.pendingAction.route}`] : []),
+        ...(input.pendingAction.operation ? [`operation: ${input.pendingAction.operation}`] : []),
+        `prompt: ${input.pendingAction.prompt}`,
+        `original request: ${input.pendingAction.originalRequest}`,
+        '',
+      ].join('\n')
+    : '';
+  const continuitySection = input.continuity
+    ? [
+        'Continuity thread context:',
+        `continuity key: ${input.continuity.continuityKey}`,
+        `linked surfaces: ${input.continuity.linkedSurfaceCount}`,
+        ...(input.continuity.linkedSurfaces?.length ? [`surface list: ${input.continuity.linkedSurfaces.join(', ')}`] : []),
+        ...(input.continuity.focusSummary ? [`focus summary: ${input.continuity.focusSummary}`] : []),
+        ...(input.continuity.lastActionableRequest ? [`last actionable request: ${input.continuity.lastActionableRequest}`] : []),
+        ...(input.continuity.activeExecutionRefs?.length ? [`active execution refs: ${input.continuity.activeExecutionRefs.join(', ')}`] : []),
         '',
       ].join('\n')
     : '';
@@ -442,7 +491,8 @@ function buildIntentGatewayMessages(input: IntentGatewayInput): ChatMessage[] {
         'Classify this request.',
         '',
         historySection,
-        pendingClarificationSection,
+        pendingActionSection,
+        continuitySection,
         input.content.trim(),
       ].filter(Boolean).join('\n'),
     },
@@ -579,6 +629,12 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
     : undefined;
   const emailProvider = normalizeEmailProvider(parsed.emailProvider);
   const codingBackend = normalizeCodingBackend(parsed.codingBackend);
+  const codingBackendRequested = typeof parsed.codingBackendRequested === 'boolean'
+    ? parsed.codingBackendRequested
+    : undefined;
+  const codingRunStatusCheck = typeof parsed.codingRunStatusCheck === 'boolean'
+    ? parsed.codingRunStatusCheck
+    : undefined;
 
   return {
     route,
@@ -601,6 +657,8 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
       ...(sessionTarget ? { sessionTarget } : {}),
       ...(emailProvider ? { emailProvider } : {}),
       ...(codingBackend ? { codingBackend } : {}),
+      ...(typeof codingBackendRequested === 'boolean' ? { codingBackendRequested } : {}),
+      ...(typeof codingRunStatusCheck === 'boolean' ? { codingRunStatusCheck } : {}),
     },
   };
 }

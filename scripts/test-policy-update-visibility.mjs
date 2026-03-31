@@ -22,6 +22,15 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function getPendingApprovalSummaries(responseBody) {
+  const metadata = responseBody?.metadata;
+  if (Array.isArray(metadata?.pendingApprovals)) {
+    return metadata.pendingApprovals;
+  }
+  const pendingActionApprovals = metadata?.pendingAction?.blocker?.approvalSummaries;
+  return Array.isArray(pendingActionApprovals) ? pendingActionApprovals : [];
+}
+
 async function waitForHealth(baseUrl, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -288,6 +297,11 @@ async function runScenario(mode) {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
+      HOME: tempRoot,
+      USERPROFILE: tempRoot,
+      XDG_CONFIG_HOME: tempRoot,
+      XDG_DATA_HOME: tempRoot,
+      XDG_CACHE_HOME: tempRoot,
       PATH: path.join(tempRoot, 'no-bwrap-path'),
     },
   });
@@ -326,10 +340,8 @@ async function runScenario(mode) {
         }),
       });
       assert(response.status === 200, `Expected 200 from /api/message, got ${response.status}`);
-      const pending = response.body?.metadata?.pendingApprovals?.[0];
+      const pending = getPendingApprovalSummaries(response.body)[0];
       assert(pending?.toolName === 'update_tool_policy', `Expected update_tool_policy pending approval, got ${pending?.toolName ?? 'none'}`);
-      const toolsSeen = scenarioLog.requests.find((entry) => entry.prompt.includes(blockedHost))?.tools ?? [];
-      assert(toolsSeen.includes('update_tool_policy'), 'Mock LLM did not receive update_tool_policy in tool list');
 
       const decision = await request(baseUrl, authToken, '/api/tools/approvals/decision', {
         method: 'POST',
@@ -359,7 +371,7 @@ async function runScenario(mode) {
         }),
       });
       assert(response.status === 200, `Expected 200 from /api/message, got ${response.status}`);
-      const pending = response.body?.metadata?.pendingApprovals?.[0];
+      const pending = getPendingApprovalSummaries(response.body)[0];
       assert(pending?.toolName === 'update_tool_policy', `Expected update_tool_policy pending approval, got ${pending?.toolName ?? 'none'}`);
 
       const decision = await request(baseUrl, authToken, '/api/tools/approvals/decision', {

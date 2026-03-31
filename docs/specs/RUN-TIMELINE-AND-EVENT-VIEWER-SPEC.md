@@ -1,7 +1,7 @@
 # Run Timeline And Event Viewer Spec
 
-**Status:** Proposed
-**Date:** 2026-03-22
+**Status:** Implemented current architecture
+**Date:** 2026-03-31
 **Roadmap:** [UI-TARS Uplift Roadmap](/mnt/s/Development/GuardianAgent/plans/UI-TARS-UPLIFT-ROADMAP.md)
 **Primary Runtime:** [orchestrator.ts](/mnt/s/Development/GuardianAgent/src/runtime/orchestrator.ts), [run-events.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-events.ts), [code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts), [index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
 **Primary Web Surface:** [web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts), [web-types.ts](/mnt/s/Development/GuardianAgent/src/channels/web-types.ts), [app.js](/mnt/s/Development/GuardianAgent/web/public/js/app.js), [dashboard.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/dashboard.js), [code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
@@ -11,6 +11,16 @@
 Phase 1 of the UI-TARS uplift should make Guardian's existing execution traces readable and live.
 
 The goal is operator visibility, not a new execution engine. Guardian already has useful orchestration state, approval state, code-session work state, and deterministic workflow events. The missing piece is a first-class read model and UI surface that presents those events in the order the user actually cares about.
+
+Current as-built deltas:
+- the timeline projection is implemented as `src/runtime/run-timeline.ts`
+- the Dashboard exposes a compact Routing Trace inspector alongside the execution timeline
+- run and routing views support `continuityKey` and `activeExecutionRef` filters
+- routing-trace rows can deep-link to the matched run, a best-fit timeline event, and the related coding session
+- Automations history deep links support `assistantRunId` and `assistantRunItemId` so a caller can land on a specific timeline event instead of only the run row
+- Coding Workspace deep links support `sessionId`, `assistantRunId`, and `assistantRunItemId` so a caller can land on the exact session-local activity event instead of only the run card
+- Dashboard `Agent Runtime` and CLI `/assistant jobs` now expose merged assistant and delegated-worker jobs with bounded origin, outcome, and follow-up summaries, including replay controls for held delegated results
+- delegated worker follow-up is now projected into assistant-dispatch traces and the global execution timeline as `Delegated follow-up` handoff nodes, including blocked approval-held and status-only outcomes
 
 ## Problem Statement
 
@@ -62,6 +72,18 @@ Phase 1 should reuse current runtime data instead of inventing new semantics:
   - existing SSE transport
 
 The Phase 1 job is to project these sources into one consistent read model.
+
+Current delegation-related sources of truth also include:
+
+- [assistant-jobs.ts](/mnt/s/Development/GuardianAgent/src/runtime/assistant-jobs.ts)
+  - mutable high-level assistant and delegated-worker job records
+  - merged operator-facing recent-job state
+  - derived display state for delegated origin, outcome, and follow-up labels
+- [worker-manager.ts](/mnt/s/Development/GuardianAgent/src/supervisor/worker-manager.ts)
+  - delegated lineage metadata
+  - bounded handoff summaries for brokered worker completions and failures
+  - server-owned delegated follow-up policy (`inline_response`, `held_for_approval`, `status_only`)
+  - held-result replay, keep-held, and dismiss controls for operator-held delegated completions
 
 ## Proposed Architecture
 
@@ -119,7 +141,7 @@ type DashboardRunStatus =
 
 type DashboardRunKind =
   | 'assistant_dispatch'
-  | 'workflow_run'
+  | 'automation_run'
   | 'code_session'
   | 'scheduled_task';
 
@@ -186,14 +208,15 @@ interface DashboardRunTimelineItem {
   toolName?: string;
   approvalId?: string;
   verificationKind?: 'test' | 'lint' | 'build' | 'manual';
-  metadata?: Record<string, unknown>;
+  contextAssembly?: DashboardRunTimelineContextAssembly;
 }
 ```
 
 Rules:
 
 - `detail` must stay within the existing safe preview boundary. Use `messagePreview`, `argsPreview`, `resultPreview`, and short verification summaries.
-- `metadata` is for small UI affordances, not raw tool arguments or model prompts.
+- `contextAssembly` is the typed operator-facing payload for bounded continuity, memory-scope, memory-selection, and knowledge-base diagnostics. Raw tool arguments or model prompts still do not belong here.
+- `handoff_started` and `handoff_completed` items are also used for delegated-worker follow-up projection, not only deterministic workflow handoffs.
 - Use stable ids from underlying entities where possible:
   - workflow event id
   - approval id
@@ -317,12 +340,14 @@ Suggested query params:
 - `channel`
 - `agentId`
 - `codeSessionId`
+- `continuityKey`
+- `activeExecutionRef`
 
 Response shape:
 
 ```ts
 interface DashboardRunListResponse {
-  runs: DashboardRunSummary[];
+  runs: DashboardRunDetail[];
 }
 ```
 
@@ -358,6 +383,15 @@ Why a dedicated Code endpoint:
 - the Code page already thinks in session scope
 - it avoids turning the code UI into a generic assistant overview page
 - it keeps code-session authorization checks aligned with the existing Code API path
+
+## Deep-Link Semantics
+
+Current operator deep-link semantics:
+- `#/automations?assistantRunId=<runId>` opens the History & Timeline tab and highlights the matching run row
+- `#/automations?assistantRunId=<runId>&assistantRunItemId=<itemId>` opens the same view and highlights the exact matching event card when present
+- `#/code?sessionId=<sessionId>&assistantRunId=<runId>` opens the inspected Coding Workspace session in the `Activity` panel and highlights the matching run card
+- `#/code?sessionId=<sessionId>&assistantRunId=<runId>&assistantRunItemId=<itemId>` opens the same view and highlights the exact matching session-local activity event when present
+- routing-trace correlations are expected to use those same query parameters instead of inventing a second drill-down surface
 
 ## SSE Contract
 

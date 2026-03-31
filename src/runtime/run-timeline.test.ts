@@ -193,4 +193,132 @@ describe('RunTimelineStore', () => {
     expect(run?.items.some((item) => item.title === 'Prepared request')).toBe(true);
     expect(run?.items.some((item) => item.title === 'Agent is working')).toBe(true);
   });
+
+  it('surfaces context assembly trace details from compile nodes', () => {
+    const store = new RunTimelineStore({ now: () => 500 });
+    store.ingestAssistantTrace(createTrace({
+      requestId: 'req-context-assembly',
+      runId: 'req-context-assembly',
+      steps: [],
+      nodes: [{
+        id: 'compile-1',
+        kind: 'compile',
+        name: 'Assembled context',
+        startedAt: 118,
+        completedAt: 119,
+        status: 'succeeded',
+        metadata: {
+          summary: 'global memory loaded | continuity 2 surfaces | blocker approval',
+          detail: 'memoryScope=global; knowledgeBase=188 chars; continuityKey=continuity-1; linkedSurfaces=2; pendingAction=approval',
+          memoryScope: 'global',
+          knowledgeBaseLoaded: true,
+          knowledgeBaseQueryPreview: 'importer overhaul verification checkpoints',
+          activeExecutionRefs: ['code_session:Repo Fix', 'pending_action:approval-1'],
+          selectedMemoryEntryCount: 2,
+          omittedMemoryEntryCount: 1,
+          selectedMemoryEntries: [
+            {
+              category: 'Project Notes',
+              createdAt: '2026-03-20',
+              preview: 'Importer overhaul note covering checkpoints, migration, retries, and verification.',
+              renderMode: 'summary',
+              queryScore: 312,
+              isContextFlush: false,
+              matchReasons: ['query summary', 'summary terms 4'],
+            },
+          ],
+        },
+      }],
+    }));
+
+    const run = store.getRun('req-context-assembly');
+    expect(run?.items.some((item) =>
+      item.title === 'Assembled context'
+      && item.detail === 'memoryScope=global; knowledgeBase=188 chars; continuityKey=continuity-1; linkedSurfaces=2; pendingAction=approval'
+    )).toBe(true);
+    const contextItem = run?.items.find((item) => item.title === 'Assembled context');
+    expect(contextItem?.contextAssembly?.memoryScope).toBe('global');
+    expect(contextItem?.contextAssembly?.knowledgeBaseQueryPreview).toBe('importer overhaul verification checkpoints');
+    expect(contextItem?.contextAssembly?.activeExecutionRefs).toEqual(['code_session:Repo Fix', 'pending_action:approval-1']);
+    expect(contextItem?.contextAssembly?.selectedMemoryEntries?.[0]?.category).toBe('Project Notes');
+    expect(contextItem?.contextAssembly?.selectedMemoryEntries?.[0]?.matchReasons).toEqual(['query summary', 'summary terms 4']);
+  });
+
+  it('filters runs by continuity key and active execution ref from context assembly details', () => {
+    const store = new RunTimelineStore({ now: () => 500 });
+    store.ingestAssistantTrace(createTrace({
+      requestId: 'req-match',
+      runId: 'req-match',
+      nodes: [{
+        id: 'compile-match',
+        kind: 'compile',
+        name: 'Assembled context',
+        startedAt: 118,
+        completedAt: 119,
+        status: 'succeeded',
+        metadata: {
+          summary: 'global memory loaded | continuity 2 surfaces',
+          detail: 'memoryScope=global; continuityKey=continuity-keep',
+          continuityKey: 'continuity-keep',
+          activeExecutionRefs: ['code_session:Repo Fix'],
+        },
+      }],
+    }));
+    store.ingestAssistantTrace(createTrace({
+      requestId: 'req-other',
+      runId: 'req-other',
+      nodes: [{
+        id: 'compile-other',
+        kind: 'compile',
+        name: 'Assembled context',
+        startedAt: 118,
+        completedAt: 119,
+        status: 'succeeded',
+        metadata: {
+          summary: 'global memory loaded | continuity 1 surface',
+          detail: 'memoryScope=global; continuityKey=continuity-other',
+          continuityKey: 'continuity-other',
+          activeExecutionRefs: ['pending_action:approval-2'],
+        },
+      }],
+    }));
+
+    expect(store.listRuns({ continuityKey: 'continuity-keep' }).map((run) => run.summary.runId)).toEqual(['req-match']);
+    expect(store.listRuns({ activeExecutionRef: 'repo fix' }).map((run) => run.summary.runId)).toEqual(['req-match']);
+    expect(store.listRuns({
+      continuityKey: 'continuity-keep',
+      activeExecutionRef: 'approval-2',
+    })).toEqual([]);
+  });
+
+  it('renders delegated handoff nodes with blocked follow-up detail', () => {
+    const store = new RunTimelineStore({ now: () => 500 });
+    store.ingestAssistantTrace(createTrace({
+      requestId: 'req-handoff',
+      runId: 'req-handoff',
+      nodes: [{
+        id: 'handoff-1',
+        kind: 'handoff',
+        name: 'Delegated follow-up',
+        startedAt: 130,
+        completedAt: 132,
+        status: 'blocked',
+        metadata: {
+          summary: 'Waiting for approval to write the report.',
+          detail: 'Resolve the pending approval(s) to continue the delegated run.',
+          reportingMode: 'held_for_approval',
+          unresolvedBlockerKind: 'approval',
+          approvalCount: 1,
+        },
+      }],
+    }));
+
+    const run = store.getRun('req-handoff');
+    expect(run?.items.some((item) =>
+      item.type === 'handoff_completed'
+      && item.status === 'blocked'
+      && item.title === 'Handoff blocked: Delegated follow-up'
+      && item.detail === 'Resolve the pending approval(s) to continue the delegated run.'
+    )).toBe(true);
+  });
 });

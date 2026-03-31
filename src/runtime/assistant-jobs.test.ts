@@ -1,61 +1,148 @@
 import { describe, expect, it } from 'vitest';
-import { AssistantJobTracker } from './assistant-jobs.js';
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+import { AssistantJobTracker, buildAssistantJobDisplay, mergeAssistantJobStates } from './assistant-jobs.js';
 
 describe('AssistantJobTracker', () => {
-  it('records successful jobs', async () => {
-    const tracker = new AssistantJobTracker();
-    const result = await tracker.run(
-      { type: 'intel.scan', source: 'manual', detail: 'Scan requested by user' },
-      async () => {
-        await sleep(5);
-        return 42;
-      },
-    );
-    expect(result).toBe(42);
+  it('supports mutable job updates and completion handoff metadata', () => {
+    let now = 1000;
+    const tracker = new AssistantJobTracker({ now: () => now });
 
-    const state = tracker.getState();
+    const started = tracker.start({
+      type: 'delegated_worker',
+      source: 'system',
+      detail: 'Brokered worker dispatch for local',
+      metadata: {
+        delegation: {
+          kind: 'brokered_worker',
+          lifecycle: 'running',
+        },
+      },
+    });
+
+    now = 1200;
+    tracker.update(started.id, {
+      metadata: {
+        delegation: {
+          kind: 'brokered_worker',
+          lifecycle: 'completed',
+          handoff: {
+            summary: 'Summarized delegated result.',
+            nextAction: 'Review the delegated result.',
+          },
+        },
+      },
+    });
+
+    now = 1500;
+    tracker.succeed(started.id);
+
+    const state = tracker.getState(5);
     expect(state.summary.total).toBe(1);
     expect(state.summary.succeeded).toBe(1);
-    expect(state.summary.failed).toBe(0);
-    expect(state.jobs[0].status).toBe('succeeded');
-    expect(state.jobs[0].durationMs).toBeGreaterThanOrEqual(0);
-  });
-
-  it('records failed jobs', async () => {
-    const tracker = new AssistantJobTracker();
-
-    await expect(
-      tracker.run(
-        { type: 'intel.autoscan', source: 'scheduled' },
-        async () => {
-          await sleep(5);
-          throw new Error('network unavailable');
+    expect(state.jobs[0]).toMatchObject({
+      type: 'delegated_worker',
+      status: 'succeeded',
+      durationMs: 500,
+      metadata: {
+        delegation: {
+          lifecycle: 'completed',
+          handoff: {
+            summary: 'Summarized delegated result.',
+          },
         },
-      ),
-    ).rejects.toThrow('network unavailable');
-
-    const state = tracker.getState();
-    expect(state.summary.total).toBe(1);
-    expect(state.summary.failed).toBe(1);
-    expect(state.jobs[0].status).toBe('failed');
-    expect(state.jobs[0].error).toBe('network unavailable');
+      },
+    });
   });
 
-  it('limits retained history to maxJobs', async () => {
-    const tracker = new AssistantJobTracker({ maxJobs: 2 });
+  it('merges multiple job states for unified operator views', () => {
+    const trackerA = new AssistantJobTracker({ now: () => 1000 });
+    const trackerB = new AssistantJobTracker({ now: () => 2000 });
 
-    await tracker.run({ type: 'a' }, async () => 1);
-    await tracker.run({ type: 'b' }, async () => 2);
-    await tracker.run({ type: 'c' }, async () => 3);
+    trackerA.start({ type: 'security_scan', source: 'system', detail: 'Scanning' });
+    const workerJob = trackerB.start({
+      type: 'delegated_worker',
+      source: 'system',
+      detail: 'Brokered worker dispatch',
+      metadata: {
+        delegation: {
+          kind: 'brokered_worker',
+          lifecycle: 'running',
+        },
+      },
+    });
+    trackerB.succeed(workerJob.id);
 
-    const state = tracker.getState(10);
-    expect(state.jobs.length).toBe(2);
-    expect(state.jobs[0].type).toBe('c');
-    expect(state.jobs[1].type).toBe('b');
+    const merged = mergeAssistantJobStates([
+      trackerA.getState(10),
+      trackerB.getState(10),
+    ], 10);
+
+    expect(merged.summary.total).toBe(2);
+    expect(merged.summary.running).toBe(1);
+    expect(merged.summary.succeeded).toBe(1);
+    expect(merged.jobs[0]?.type).toBe('delegated_worker');
+    expect(merged.jobs[1]?.type).toBe('security_scan');
+  });
+
+  it('derives delegated follow-up display state for operator surfaces', () => {
+    const display = buildAssistantJobDisplay({
+      source: 'system',
+      detail: 'Brokered worker dispatch for local',
+      metadata: {
+        delegation: {
+          kind: 'brokered_worker',
+          originChannel: 'web',
+          codeSessionId: 'code-1',
+          continuityKey: 'continuity-1',
+          handoff: {
+            summary: 'Importer fix is paused.',
+            unresolvedBlockerKind: 'approval',
+            approvalCount: 2,
+            nextAction: 'Resolve the pending approval(s) to continue the delegated run.',
+            reportingMode: 'held_for_approval',
+          },
+        },
+      },
+    });
+
+    expect(display.originSummary).toBe('web • code code-1 • continuity continuity-1');
+    expect(display.outcomeSummary).toBe('Importer fix is paused.');
+    expect(display.followUp).toMatchObject({
+      reportingMode: 'held_for_approval',
+      label: '2 approvals pending',
+      needsOperatorAction: true,
+      blockerKind: 'approval',
+      approvalCount: 2,
+    });
+  });
+
+  it('derives held-for-operator replay controls for long-running delegated jobs', () => {
+    const display = buildAssistantJobDisplay({
+      source: 'system',
+      detail: 'Brokered worker dispatch for local',
+      metadata: {
+        delegation: {
+          kind: 'brokered_worker',
+          originChannel: 'web',
+          runClass: 'long_running',
+          handoff: {
+            summary: 'Repository digest is complete.',
+            runClass: 'long_running',
+            nextAction: 'Replay or dismiss the held delegated result.',
+            reportingMode: 'held_for_operator',
+            operatorState: 'pending',
+          },
+        },
+      },
+    });
+
+    expect(display.originSummary).toBe('web');
+    expect(display.outcomeSummary).toBe('Repository digest is complete.');
+    expect(display.followUp).toMatchObject({
+      reportingMode: 'held_for_operator',
+      label: 'Held for operator review',
+      needsOperatorAction: true,
+      operatorState: 'pending',
+      actions: ['replay', 'keep_held', 'dismiss'],
+    });
   });
 });
-

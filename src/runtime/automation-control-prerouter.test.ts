@@ -336,13 +336,20 @@ describe('tryAutomationControlPreRoute', () => {
 
     expect(result?.content).toContain("I prepared deletion of 'Browser Read Smoke'.");
     expect(result?.content).toContain('Approval UI rendered.');
-    expect(result?.metadata?.pendingApprovals).toEqual([
-      {
-        id: 'approval-automation',
-        toolName: 'automation_delete',
-        argsPreview: '{"automationId":"browser-read-smoke"}',
+    expect(result?.metadata).toMatchObject({
+      pendingAction: {
+        blocker: {
+          kind: 'approval',
+          approvalSummaries: [
+            {
+              id: 'approval-automation',
+              toolName: 'automation_delete',
+              argsPreview: '{"automationId":"browser-read-smoke"}',
+            },
+          ],
+        },
       },
-    ]);
+    });
     expect(trackPendingApproval).toHaveBeenCalledWith('approval-automation');
     expect(onPendingApproval).toHaveBeenCalledTimes(1);
   });
@@ -426,6 +433,109 @@ describe('tryAutomationControlPreRoute', () => {
     });
 
     expect(result?.content).toContain('Browser Read Smoke (workflow)');
+  });
+
+  it('shows the closest saved automation on inspect when the request only differs by a trailing version token', async () => {
+    const executeTool = vi.fn(async (toolName: string) => {
+      if (toolName === 'automation_list') {
+        return {
+          success: true,
+          output: {
+            automations: [{
+              id: 'browser-read-smoke',
+              name: 'Browser Read Smoke',
+              kind: 'workflow',
+              enabled: true,
+              workflow: {
+                id: 'browser-read-smoke',
+                name: 'Browser Read Smoke',
+                enabled: true,
+                mode: 'sequential',
+                steps: [{ id: 'step-1', toolName: 'browser_navigate' }],
+              },
+            }],
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryAutomationControlPreRoute({
+      agentId: 'default',
+      message: {
+        ...baseMessage,
+        content: 'Show me the automation Browser Read Smoke 2.',
+      },
+      executeTool,
+    }, {
+      intentDecision: {
+        route: 'automation_control',
+        confidence: 'high',
+        operation: 'inspect',
+        summary: 'Inspect an existing automation.',
+        entities: {
+          automationName: 'Browser Read Smoke 2',
+        },
+      },
+    });
+
+    expect(result?.content).toContain("I couldn't find an exact automation named 'Browser Read Smoke 2'.");
+    expect(result?.content).toContain('Browser Read Smoke (workflow)');
+  });
+
+  it('runs the closest saved automation when the request only differs by a trailing version token', async () => {
+    const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName === 'automation_list') {
+        return {
+          success: true,
+          output: {
+            automations: [{
+              id: 'browser-read-smoke',
+              name: 'Browser Read Smoke',
+              kind: 'workflow',
+              enabled: true,
+              workflow: {
+                id: 'browser-read-smoke',
+                name: 'Browser Read Smoke',
+                enabled: true,
+                mode: 'sequential',
+                steps: [{ id: 'step-1', toolName: 'browser_navigate' }],
+              },
+            }],
+          },
+        };
+      }
+      if (toolName === 'automation_run') {
+        expect(args).toEqual({ automationId: 'browser-read-smoke' });
+        return {
+          success: true,
+          message: "Ran 'Browser Read Smoke'.",
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryAutomationControlPreRoute({
+      agentId: 'default',
+      message: {
+        ...baseMessage,
+        content: 'Run Browser Read Smoke 2 now.',
+      },
+      executeTool,
+    }, {
+      intentDecision: {
+        route: 'automation_control',
+        confidence: 'high',
+        operation: 'run',
+        summary: 'Run an existing automation.',
+        entities: {
+          automationName: 'Browser Read Smoke 2',
+        },
+      },
+    });
+
+    expect(result?.content).toContain("I couldn't find an exact automation named 'Browser Read Smoke 2'. I used the closest saved automation: 'Browser Read Smoke'.");
+    expect(result?.content).toContain("Ran 'Browser Read Smoke'.");
   });
 
   it('refuses to run built-in starter catalog entries', async () => {

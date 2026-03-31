@@ -39,7 +39,8 @@ Conversation history is separate from long-term memory.
 - stored in SQLite
 - searched by `memory_search`
 - trimmed to fit prompt context
-- flushed into the matching long-term memory scope when old messages are dropped
+- incrementally flushed into the matching long-term memory scope when new messages fall out of prompt context
+- flush records preserve objective/focus/blocker context in a structured summary rather than duplicating raw transcript prefixes on every prompt build
 
 ### Automation output references
 
@@ -74,6 +75,10 @@ Layer 1: Persistent Memory Stores (AgentMemoryStore)
   The `.index.json` file is the canonical state and is HMAC-verified through the control-plane integrity manifest
   The `.md` file is a derived readable view rebuilt from the index
   Only active/reviewed content from a verified index is loaded into prompt context
+  Prompt-time packing is entry-aware and query-biased rather than blindly taking the newest entries
+  Current request, continuity summary, blocker state, and Code-session focus/plan now feed a structured signal-aware query, not just one flat text string
+  Prompt-time ranking can now match on text, focus phrases, tags, category hints, and identifiers such as continuity or execution refs
+  The runtime now records bounded selection diagnostics with compact match reasons so traces can show which memory entries won context selection and why
   Written via memory_save or automatic memory flush with trust/provenance metadata
 
 Layer 2: FTS5 Search Index (ConversationService)
@@ -88,9 +93,10 @@ Layer 3: Conversation History (ConversationService)
 
 Layer 4: Memory Flush (automatic)
   Detects when messages are dropped from the context window
-  Persists dated context blocks into the matching long-term memory scope
+  Persists incremental structured context-flush entries into the matching long-term memory scope
   Normal chat flushes to global memory
   Code-session chat flushes to that code session's memory
+  Flush summaries preserve current objective/focus/blocker state when available
 
 Layer 5: Cross-Memory Bridge
   Explicit read-only bridge search across global/code-session boundaries
@@ -109,19 +115,19 @@ Layer 6: Automation Output Store + Reference Memory
 ```text
 Normal chat turn
   User message
-    -> global memory excerpt loaded into system prompt
+    -> global memory excerpt loaded into system prompt with entry-aware, signal-aware packing
     -> recent conversation history trimmed to maxContextChars
     -> LLM receives: prompt + global memory + recent history + user message
-    -> dropped history (if any) flushed into global memory
+    -> newly dropped history (if any) flushed into global memory as a structured context-flush record
 
 Code-session turn
   User message
     -> dedicated Code-session prompt
     -> workspace profile + indexed repo map + current working set injected as repo-local evidence
-    -> Code-session memory excerpt loaded for that codeSessionId only
+    -> Code-session memory excerpt loaded for that codeSessionId only, with entry-aware, signal-aware packing
     -> recent Code-session conversation history trimmed to maxContextChars
     -> LLM receives: code prompt + repo evidence + code-session memory + recent history + user message
-    -> dropped history (if any) flushed into Code-session memory
+    -> newly dropped history (if any) flushed into Code-session memory as a structured context-flush record
     -> optional memory_bridge_search may return reference-only results from the other scope
 
 Automation run with historical analysis enabled
@@ -391,17 +397,17 @@ When `buildMessages()` trims conversation history to fit `maxContextChars`, mess
 1. The sliding window walks backwards from the most recent message.
 2. When the character budget is exhausted, earlier messages are identified as dropped.
 3. If substantive content is being dropped, the `onMemoryFlush` callback fires.
-4. The callback extracts preview lines.
-5. Those lines are written as a bounded summary entry in either global memory or Code-session memory, depending on the conversation scope.
+4. The callback builds a bounded structured memory entry from only the newly dropped content.
+5. The structured entry preserves available focus, blocker, and Code-session state, then writes to either global memory or Code-session memory depending on the conversation scope.
 
 ### Flush behavior
 
 - normal chat flushes to global agent memory
 - Code-session chat flushes to that session's long-term memory
 - only fires when substantive content is being dropped
-- each message preview is capped at 200 characters
-- max 10 messages per flush event
-- flush writes carry `sourceType: system` and a short derived summary
+- flush writes are incremental; already-flushed dropped prefixes are not re-written on every prompt build
+- flush writes carry `sourceType: system`, a short derived summary, and the `context_flush` tag
+- prompt packing de-prioritizes `context_flush` records behind explicit durable memories unless the active request matches them well
 - flush failures are silently caught and never break message building
 - controlled by `knowledgeBase.autoFlush` config (default: `true`)
 - skipped entirely when `knowledgeBase.readOnly` is `true`

@@ -106,6 +106,14 @@ async function main() {
   const app = spawn(process.execPath, [distEntry, configPath], {
     cwd: projectRoot,
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      HOME: tempDir,
+      USERPROFILE: tempDir,
+      XDG_CONFIG_HOME: tempDir,
+      XDG_DATA_HOME: tempDir,
+      XDG_CACHE_HOME: tempDir,
+    },
   });
 
   app.stdout.pipe(createWriteStream(logPath, { flags: 'a' }));

@@ -31,6 +31,16 @@ Unify user identity across channels and persist conversation memory with session
 - Quarantined/expired/rejected entries do not enter normal planner context
 - Remote-derived memory writes default to quarantine rather than active durable memory
 
+## Prompt-Time Memory Assembly
+
+Current memory assembly behavior is structured rather than raw text concatenation:
+
+- conversation compaction flushes dropped history incrementally into durable `context_flush` entries instead of repeatedly rewriting the same prefix
+- flush payloads preserve bounded objective, blocker, continuity, and code-session summaries when available
+- prompt-time memory loading is signal-aware and entry-aware; the current request, continuity state, blocker state, and code-session focus/plan now produce a structured retrieval query rather than one flat string
+- ranking can match on text, focus phrases, tags, category hints, and identifiers such as continuity or execution refs; explicit durable entries still outrank low-signal `context_flush` artifacts unless the active request matches the flush closely
+- context assembly diagnostics record selected memory previews, compact match reasons, and omitted counts so operator traces can explain why a memory entry was surfaced on a turn
+
 ## SQLite Protection & Monitoring
 - Directory permissions are hardened toward `0700`
 - SQLite file permissions are hardened toward `0600`

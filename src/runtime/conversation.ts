@@ -22,7 +22,7 @@ export interface ConversationKey {
   channel: string;
 }
 
-interface ConversationEntry {
+export interface ConversationEntry {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
@@ -86,9 +86,16 @@ export interface ConversationSessionInfo {
  * Receives the dropped messages so they can be summarized and persisted
  * to the agent's knowledge base (memory flush).
  */
+export interface MemoryFlushPayload {
+  sessionId: string;
+  droppedMessages: ConversationEntry[];
+  totalDroppedCount: number;
+  newlyDroppedCount: number;
+}
+
 export type MemoryFlushCallback = (
   key: ConversationKey,
-  droppedMessages: ConversationEntry[],
+  payload: MemoryFlushPayload,
 ) => void;
 
 export interface ConversationServiceOptions {
@@ -135,6 +142,7 @@ export class ConversationService {
     conversations: new Map(),
     activeSessions: new Map(),
   };
+  private readonly flushedMessageCounts = new Map<string, number>();
   private insertStmt: SQLiteStatement | null = null;
   private upsertActiveStmt: SQLiteStatement | null = null;
   private nextPruneAt = 0;
@@ -292,6 +300,7 @@ export class ConversationService {
   resetConversation(key: ConversationKey): boolean {
     const previousSessionId = this.getActiveSessionId(key);
     const newSessionId = this.rotateSession(key);
+    this.flushedMessageCounts.delete(this.toMapKey(key, previousSessionId));
 
     if (this.mode === 'sqlite' && this.db) {
       const result = this.db
@@ -311,6 +320,7 @@ export class ConversationService {
 
   /** Remove all conversations for one user/channel, optionally scoped to agent. */
   resetUserConversations(userId: string, channel: string, agentId?: string): number {
+    this.clearFlushedMessageCountsForUser(userId, channel, agentId);
     if (this.mode === 'sqlite' && this.db) {
       let removed = 0;
 
@@ -525,6 +535,7 @@ export class ConversationService {
     this.insertStmt = null;
     this.upsertActiveStmt = null;
     this.securityMonitor = null;
+    this.flushedMessageCounts.clear();
   }
 
   private getTrimmedHistoryForContext(key: ConversationKey): ConversationEntry[] {
@@ -552,11 +563,19 @@ export class ConversationService {
 
     // Memory flush: notify callback about messages being dropped from context
     if (cutoffIndex >= 0 && this.options.onMemoryFlush) {
-      const dropped = history.slice(0, cutoffIndex + 1);
-      // Only flush if we're actually dropping substantive content (>2 messages)
+      const totalDroppedCount = cutoffIndex + 1;
+      const contextKey = this.toMapKey(key, sessionId);
+      const flushedCount = Math.min(this.flushedMessageCounts.get(contextKey) ?? 0, totalDroppedCount);
+      const dropped = history.slice(flushedCount, totalDroppedCount);
       if (dropped.length >= 2) {
         try {
-          this.options.onMemoryFlush(key, dropped);
+          this.options.onMemoryFlush(key, {
+            sessionId,
+            droppedMessages: dropped.map((entry) => ({ ...entry })),
+            totalDroppedCount,
+            newlyDroppedCount: dropped.length,
+          });
+          this.flushedMessageCounts.set(contextKey, totalDroppedCount);
         } catch {
           // Flush failure should never break message building
         }
@@ -909,6 +928,17 @@ export class ConversationService {
       return this.normalizeResponseSource(parsed);
     } catch {
       return undefined;
+    }
+  }
+
+  private clearFlushedMessageCountsForUser(userId: string, channel: string, agentId?: string): void {
+    for (const key of this.flushedMessageCounts.keys()) {
+      const parts = key.split('::');
+      if (parts.length !== 4) continue;
+      const [storedAgentId, storedUserId, storedChannel] = parts;
+      if (storedUserId !== userId || storedChannel !== channel) continue;
+      if (agentId && storedAgentId !== agentId) continue;
+      this.flushedMessageCounts.delete(key);
     }
   }
 

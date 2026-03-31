@@ -76,14 +76,58 @@ export interface StoredMemoryEntry extends MemoryEntry {
   contentHash: string;
 }
 
+export interface MemoryContextSelectionEntry {
+  id: string;
+  category: string;
+  createdAt: string;
+  preview: string;
+  renderMode: 'full' | 'summary';
+  queryScore: number;
+  sourceType?: MemorySourceType;
+  trustLevel?: MemoryTrustLevel;
+  isContextFlush: boolean;
+  matchReasons?: string[];
+}
+
+export interface MemoryContextLoadResult {
+  content: string;
+  candidateEntries: number;
+  selectedEntries: MemoryContextSelectionEntry[];
+  omittedEntries: number;
+  queryPreview?: string;
+}
+
+export interface MemoryContextQuery {
+  text?: string;
+  focusTexts?: string[];
+  tags?: string[];
+  identifiers?: string[];
+  categoryHints?: string[];
+}
+
+export interface MemoryContextLoadOptions {
+  query?: string | MemoryContextQuery;
+}
+
 interface MemoryIndexFile {
   version: 1 | 2;
   entries: StoredMemoryEntry[];
 }
 
+interface NormalizedMemoryContextQuery {
+  preview: string;
+  fullText?: string;
+  focusTexts: string[];
+  tags: string[];
+  identifiers: string[];
+  categoryHints: string[];
+  terms: string[];
+}
+
 const EMPTY_INDEX: MemoryIndexFile = { version: 2, entries: [] };
 const MEMORY_CONTEXT_BLOCK_THRESHOLD = 3;
 const MEMORY_SUMMARY_MAX_CHARS = 200;
+const MEMORY_CONTEXT_FLUSH_TAG = 'context_flush';
 
 export class AgentMemoryStore {
   private basePath: string;
@@ -130,6 +174,87 @@ export class AgentMemoryStore {
     const breakIndex = candidate.lastIndexOf(' ');
     const cutIndex = breakIndex >= Math.floor(maxChars * 0.6) ? breakIndex : maxChars;
     return `${candidate.slice(0, cutIndex).trim().replace(/[,:;\-]+$/, '')}...`;
+  }
+
+  private normalizeSignalList(values: readonly unknown[] | undefined): string[] {
+    if (!Array.isArray(values)) return [];
+    const seen = new Set<string>();
+    const normalized: string[] = [];
+    for (const value of values) {
+      const cleaned = this.normalizeInlineText(String(value ?? '')).toLowerCase();
+      if (!cleaned || seen.has(cleaned)) continue;
+      seen.add(cleaned);
+      normalized.push(cleaned);
+    }
+    return normalized;
+  }
+
+  private extractQueryTerms(values: string[]): string[] {
+    const seen = new Set<string>();
+    const terms: string[] = [];
+    for (const value of values) {
+      for (const term of value.split(/[^a-z0-9]+/).filter((candidate) => candidate.length >= 2)) {
+        if (seen.has(term)) continue;
+        seen.add(term);
+        terms.push(term);
+      }
+    }
+    return terms;
+  }
+
+  private normalizeContextQueryInput(options?: MemoryContextLoadOptions): NormalizedMemoryContextQuery | null {
+    const rawQuery = options?.query;
+    if (typeof rawQuery === 'string') {
+      const fullText = this.normalizeInlineText(rawQuery).toLowerCase();
+      if (!fullText) return null;
+      return {
+        preview: this.truncateInlineText(fullText, 120),
+        fullText,
+        focusTexts: [],
+        tags: [],
+        identifiers: [],
+        categoryHints: [],
+        terms: this.extractQueryTerms([fullText]),
+      };
+    }
+    if (!rawQuery || typeof rawQuery !== 'object') {
+      return null;
+    }
+
+    const fullText = this.normalizeInlineText(rawQuery.text ?? '').toLowerCase();
+    const focusTexts = this.normalizeSignalList(rawQuery.focusTexts);
+    const tags = this.normalizeSignalList(rawQuery.tags);
+    const identifiers = this.normalizeSignalList(rawQuery.identifiers);
+    const categoryHints = this.normalizeSignalList(rawQuery.categoryHints);
+
+    const previewParts = [
+      ...(fullText ? [fullText] : []),
+      ...focusTexts.slice(0, 2),
+      ...tags.slice(0, 2).map((tag) => `tag:${tag}`),
+      ...identifiers.slice(0, 2).map((identifier) => `id:${identifier}`),
+    ];
+    const preview = this.truncateInlineText(previewParts.join(' | '), 120);
+    const terms = this.extractQueryTerms([
+      ...(fullText ? [fullText] : []),
+      ...focusTexts,
+      ...tags,
+      ...identifiers,
+      ...categoryHints,
+    ]);
+
+    if (!preview && terms.length === 0) {
+      return null;
+    }
+
+    return {
+      preview,
+      ...(fullText ? { fullText } : {}),
+      focusTexts,
+      tags,
+      identifiers,
+      categoryHints,
+      terms,
+    };
   }
 
   private normalizeSummary(summary: string | undefined, content: string): string | undefined {
@@ -400,15 +525,30 @@ export class AgentMemoryStore {
     }
   }
 
-  loadForContext(agentId: string): string {
+  loadForContext(agentId: string, options?: MemoryContextLoadOptions): string {
     const indexPath = this.indexPath(agentId);
     const full = existsSync(indexPath)
-      ? this.renderContextMarkdown(agentId, this.readIndex(agentId))
+      ? this.renderContextMarkdownResult(agentId, this.readIndex(agentId), options).content
       : this.load(agentId);
     if (!full) return '';
 
     if (full.length <= this.config.maxContextChars) return full;
     return full.slice(0, this.config.maxContextChars) + '\n\n[... knowledge base truncated — use memory_search to find specific facts]';
+  }
+
+  loadForContextWithSelection(agentId: string, options?: MemoryContextLoadOptions): MemoryContextLoadResult {
+    const query = this.normalizeContextQueryInput(options);
+    const indexPath = this.indexPath(agentId);
+    if (!existsSync(indexPath)) {
+      return {
+        content: this.loadForContext(agentId, options),
+        candidateEntries: 0,
+        selectedEntries: [],
+        omittedEntries: 0,
+        ...(query?.preview ? { queryPreview: query.preview } : {}),
+      };
+    }
+    return this.renderContextMarkdownResult(agentId, this.readIndex(agentId), options);
   }
 
   save(agentId: string, content: string): void {
@@ -628,49 +768,60 @@ export class AgentMemoryStore {
     return detection.score >= MEMORY_CONTEXT_BLOCK_THRESHOLD ? 'General' : cleaned;
   }
 
-  private renderContextMarkdown(agentId: string, index: MemoryIndexFile): string {
-    const grouped = new Map<string, Array<{ fullLine: string; summaryLine?: string }>>();
-
-    for (const entry of index.entries) {
-      if (entry.status !== 'active') continue;
-
-      const renderedContent = this.sanitizeEntryForPrompt(agentId, entry);
-      if (!renderedContent) continue;
-
-      const heading = this.sanitizeHeadingForPrompt(entry.category);
-      const suffix = `${entry.trustLevel && entry.trustLevel !== 'trusted' ? ` [${entry.trustLevel}]` : ''} _(${entry.createdAt})_`;
-      const fullLine = `- ${renderedContent}${suffix}`;
-      const renderedSummary = this.sanitizeSummaryForPrompt(agentId, entry);
-      const summaryLine = renderedSummary && renderedSummary !== renderedContent
-        ? `- ${renderedSummary}${suffix}`
-        : undefined;
-      const list = grouped.get(heading) ?? [];
-      list.push({ fullLine, summaryLine });
-      grouped.set(heading, list);
-    }
+  private renderContextMarkdownResult(
+    agentId: string,
+    index: MemoryIndexFile,
+    options?: MemoryContextLoadOptions,
+  ): MemoryContextLoadResult {
+    const query = this.normalizeContextQueryInput(options);
+    const grouped = new Map<string, Array<{
+      entry: StoredMemoryEntry;
+      heading: string;
+      fullLine: string;
+      summaryLine?: string;
+      preferSummary: boolean;
+      preview: string;
+      queryScore: number;
+      matchReasons: string[];
+    }>>();
+    const entries = this.prepareContextEntries(agentId, index, query);
 
     let output = '';
     let omittedEntries = 0;
+    const selectedEntries: MemoryContextSelectionEntry[] = [];
 
-    for (const [heading, entries] of grouped.entries()) {
+    for (const prepared of entries) {
+      const list = grouped.get(prepared.heading) ?? [];
+      list.push(prepared);
+      grouped.set(prepared.heading, list);
+    }
+
+    for (const [heading, groupedEntries] of grouped.entries()) {
       let headingRendered = false;
-      for (const entry of entries) {
+      for (const entry of groupedEntries) {
         const prefix = headingRendered
           ? ''
           : `${output ? '\n\n' : ''}## ${heading}\n`;
         const fullChunk = `${prefix}${entry.fullLine}`;
+        const summaryChunk = entry.summaryLine ? `${prefix}${entry.summaryLine}` : null;
+        const preferSummary = entry.preferSummary;
+        if (preferSummary && summaryChunk && output.length + summaryChunk.length <= this.config.maxContextChars) {
+          output += summaryChunk;
+          headingRendered = true;
+          selectedEntries.push(this.buildContextSelectionEntry(entry, 'summary'));
+          continue;
+        }
         if (output.length + fullChunk.length <= this.config.maxContextChars) {
           output += fullChunk;
           headingRendered = true;
+          selectedEntries.push(this.buildContextSelectionEntry(entry, 'full'));
           continue;
         }
-        if (entry.summaryLine) {
-          const summaryChunk = `${prefix}${entry.summaryLine}`;
-          if (output.length + summaryChunk.length <= this.config.maxContextChars) {
-            output += summaryChunk;
-            headingRendered = true;
-            continue;
-          }
+        if (summaryChunk && output.length + summaryChunk.length <= this.config.maxContextChars) {
+          output += summaryChunk;
+          headingRendered = true;
+          selectedEntries.push(this.buildContextSelectionEntry(entry, 'summary'));
+          continue;
         }
         omittedEntries += 1;
       }
@@ -683,7 +834,95 @@ export class AgentMemoryStore {
       }
     }
 
-    return output;
+    return {
+      content: output,
+      candidateEntries: entries.length,
+      selectedEntries,
+      omittedEntries,
+      ...(query?.preview ? { queryPreview: query.preview } : {}),
+    };
+  }
+
+  private prepareContextEntries(
+    agentId: string,
+    index: MemoryIndexFile,
+    query: NormalizedMemoryContextQuery | null,
+  ): Array<{
+    entry: StoredMemoryEntry;
+    heading: string;
+    fullLine: string;
+    summaryLine?: string;
+    preferSummary: boolean;
+    preview: string;
+    queryScore: number;
+    matchReasons: string[];
+  }> {
+    const prepared: Array<{
+      entry: StoredMemoryEntry;
+      heading: string;
+      fullLine: string;
+      summaryLine?: string;
+      preferSummary: boolean;
+      preview: string;
+      queryScore: number;
+      matchReasons: string[];
+    }> = [];
+
+    for (const entry of this.getContextEntries(index, query)) {
+      const renderedContent = this.sanitizeEntryForPrompt(agentId, entry);
+      if (!renderedContent) continue;
+
+      const heading = this.sanitizeHeadingForPrompt(entry.category);
+      const suffix = `${entry.trustLevel && entry.trustLevel !== 'trusted' ? ` [${entry.trustLevel}]` : ''} _(${entry.createdAt})_`;
+      const fullLine = `- ${renderedContent}${suffix}`;
+      const renderedSummary = this.sanitizeSummaryForPrompt(agentId, entry);
+      const summaryLine = renderedSummary && renderedSummary !== renderedContent
+        ? `- ${renderedSummary}${suffix}`
+        : undefined;
+      const match = this.scoreContextEntry(entry, query);
+      const preferSummary = (entry.tags?.includes(MEMORY_CONTEXT_FLUSH_TAG) ?? false)
+        && !match.reasons.some((reason) =>
+          reason.startsWith('focus ')
+          || reason.startsWith('tag ')
+          || reason.startsWith('id ')
+          || reason.startsWith('provenance '));
+      prepared.push({
+        entry,
+        heading,
+        fullLine,
+        summaryLine,
+        preferSummary,
+        preview: this.truncateInlineText(renderedSummary ?? renderedContent, 96),
+        queryScore: match.score,
+        matchReasons: match.reasons,
+      });
+    }
+
+    return prepared;
+  }
+
+  private buildContextSelectionEntry(
+    prepared: {
+      entry: StoredMemoryEntry;
+      heading: string;
+      preview: string;
+      queryScore: number;
+      matchReasons: string[];
+    },
+    renderMode: 'full' | 'summary',
+  ): MemoryContextSelectionEntry {
+    return {
+      id: prepared.entry.id,
+      category: prepared.heading,
+      createdAt: prepared.entry.createdAt,
+      preview: prepared.preview,
+      renderMode,
+      queryScore: prepared.queryScore,
+      sourceType: prepared.entry.sourceType,
+      trustLevel: prepared.entry.trustLevel,
+      isContextFlush: prepared.entry.tags?.includes(MEMORY_CONTEXT_FLUSH_TAG) ?? false,
+      ...(prepared.matchReasons.length > 0 ? { matchReasons: prepared.matchReasons.slice(0, 3) } : {}),
+    };
   }
 
   private sanitizeSummaryForPrompt(agentId: string, entry: StoredMemoryEntry): string | null {
@@ -734,5 +973,186 @@ export class AgentMemoryStore {
       return null;
     }
     return cleaned;
+  }
+
+  private getContextEntries(index: MemoryIndexFile, query: NormalizedMemoryContextQuery | null): StoredMemoryEntry[] {
+    return index.entries
+      .filter((entry) => entry.status === 'active')
+      .sort((left, right) => this.compareContextEntries(left, right, query));
+  }
+
+  private compareContextEntries(
+    left: StoredMemoryEntry,
+    right: StoredMemoryEntry,
+    query: NormalizedMemoryContextQuery | null,
+  ): number {
+    const leftQueryScore = this.scoreContextEntry(left, query).score;
+    const rightQueryScore = this.scoreContextEntry(right, query).score;
+    if (leftQueryScore !== rightQueryScore) {
+      return rightQueryScore - leftQueryScore;
+    }
+    const leftIsFlush = left.tags?.includes(MEMORY_CONTEXT_FLUSH_TAG) ?? false;
+    const rightIsFlush = right.tags?.includes(MEMORY_CONTEXT_FLUSH_TAG) ?? false;
+    if (leftIsFlush !== rightIsFlush) {
+      return leftIsFlush ? 1 : -1;
+    }
+    const createdAtDelta = right.createdAt.localeCompare(left.createdAt);
+    if (createdAtDelta !== 0) return createdAtDelta;
+    return right.id.localeCompare(left.id);
+  }
+
+  private scoreContextEntry(
+    entry: StoredMemoryEntry,
+    query: NormalizedMemoryContextQuery | null,
+  ): { score: number; reasons: string[] } {
+    if (!query) return { score: 0, reasons: [] };
+
+    const content = entry.content.toLowerCase();
+    const summary = entry.summary?.toLowerCase() ?? '';
+    const category = entry.category?.toLowerCase() ?? '';
+    const entryTags = this.normalizeSignalList(entry.tags);
+    const tags = entryTags.join(' ');
+    const provenanceIdentifiers = this.normalizeSignalList([
+      entry.provenance?.sessionId,
+      entry.provenance?.requestId,
+      entry.provenance?.toolName,
+      entry.provenance?.domain,
+    ]);
+
+    let score = 0;
+    const reasons: string[] = [];
+    const pushReason = (reason: string) => {
+      if (!reason || reasons.includes(reason) || reasons.length >= 3) return;
+      reasons.push(reason);
+    };
+    const addPhraseScore = (label: string, phrase: string, weights: {
+      summary: number;
+      content: number;
+      category?: number;
+      tags?: number;
+    }) => {
+      if (!phrase) return;
+      if (summary.includes(phrase)) {
+        score += weights.summary;
+        pushReason(`${label} summary`);
+      }
+      if (content.includes(phrase)) {
+        score += weights.content;
+        pushReason(`${label} content`);
+      }
+      if (weights.category && category.includes(phrase)) {
+        score += weights.category;
+        pushReason(`${label} category`);
+      }
+      if (weights.tags && tags.includes(phrase)) {
+        score += weights.tags;
+        pushReason(`${label} tag`);
+      }
+    };
+
+    if (query.fullText) {
+      addPhraseScore('query', query.fullText, {
+        summary: 220,
+        content: 180,
+        category: 120,
+        tags: 90,
+      });
+      if (summary.startsWith(query.fullText)) {
+        score += 40;
+        pushReason('query summary prefix');
+      }
+      if (content.startsWith(query.fullText)) {
+        score += 25;
+        pushReason('query content prefix');
+      }
+    }
+
+    for (const focusText of query.focusTexts) {
+      addPhraseScore('focus', focusText, {
+        summary: 120,
+        content: 90,
+        category: 55,
+      });
+    }
+
+    for (const tag of query.tags) {
+      if (entryTags.includes(tag)) {
+        score += 150;
+        pushReason(`tag ${tag}`);
+      } else if (tags.includes(tag)) {
+        score += 60;
+        pushReason(`tag text ${tag}`);
+      }
+    }
+
+    for (const hint of query.categoryHints) {
+      if (category.includes(hint)) {
+        score += 130;
+        pushReason(`category ${hint}`);
+      }
+    }
+
+    for (const identifier of query.identifiers) {
+      if (provenanceIdentifiers.includes(identifier)) {
+        score += 180;
+        pushReason(`provenance ${this.truncateInlineText(identifier, 24)}`);
+      } else {
+        if (summary.includes(identifier)) {
+          score += 120;
+          pushReason(`id ${this.truncateInlineText(identifier, 24)}`);
+        }
+        if (content.includes(identifier)) {
+          score += 100;
+          pushReason(`id ${this.truncateInlineText(identifier, 24)}`);
+        }
+        if (tags.includes(identifier)) {
+          score += 90;
+          pushReason(`id tag ${this.truncateInlineText(identifier, 24)}`);
+        }
+      }
+    }
+
+    let matchedSummaryTerms = 0;
+    let matchedContentTerms = 0;
+    let matchedCategoryTerms = 0;
+    let matchedTagTerms = 0;
+    let matchedProvenanceTerms = 0;
+    for (const term of query.terms) {
+      if (summary.includes(term)) {
+        score += 24;
+        matchedSummaryTerms += 1;
+      }
+      if (content.includes(term)) {
+        score += 18;
+        matchedContentTerms += 1;
+      }
+      if (category.includes(term)) {
+        score += 10;
+        matchedCategoryTerms += 1;
+      }
+      if (tags.includes(term)) {
+        score += 8;
+        matchedTagTerms += 1;
+      }
+      if (provenanceIdentifiers.some((value) => value.includes(term))) {
+        score += 12;
+        matchedProvenanceTerms += 1;
+      }
+    }
+
+    if (matchedSummaryTerms > 0) pushReason(`summary terms ${matchedSummaryTerms}`);
+    if (matchedContentTerms > 0) pushReason(`content terms ${matchedContentTerms}`);
+    if (matchedCategoryTerms > 0) pushReason(`category terms ${matchedCategoryTerms}`);
+    if (matchedTagTerms > 0) pushReason(`tag terms ${matchedTagTerms}`);
+    if (matchedProvenanceTerms > 0) pushReason(`provenance terms ${matchedProvenanceTerms}`);
+
+    const isContextFlush = entry.tags?.includes(MEMORY_CONTEXT_FLUSH_TAG) ?? false;
+    const exactSignalMatched = query.tags.some((tag) => entryTags.includes(tag))
+      || query.identifiers.some((identifier) => provenanceIdentifiers.includes(identifier) || content.includes(identifier) || summary.includes(identifier));
+    if (isContextFlush && score > 0 && !exactSignalMatched) {
+      score = Math.max(0, score - 18);
+    }
+
+    return { score, reasons };
   }
 }

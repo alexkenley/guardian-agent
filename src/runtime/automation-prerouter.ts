@@ -24,7 +24,7 @@ export interface AutomationPendingApprovalMetadata {
 export interface AutomationPreRouteResult {
   content: string;
   metadata?: {
-    pendingApprovals?: AutomationPendingApprovalMetadata[];
+    pendingAction?: Record<string, unknown>;
     resumeAutomationAfterApprovals?: boolean;
   };
 }
@@ -319,7 +319,18 @@ function formatAutomationPreRouteResult(input: {
         : 'This action needs approval before I can continue.';
       return {
         content: [pendingSummary, prompt].filter(Boolean).join('\n\n'),
-        metadata: pendingApprovals.length > 0 ? { pendingApprovals } : undefined,
+        metadata: pendingApprovals.length > 0
+          ? {
+              pendingAction: {
+                status: 'pending',
+                blocker: {
+                  kind: 'approval',
+                  prompt,
+                  approvalSummaries: pendingApprovals,
+                },
+              },
+            }
+          : undefined,
       };
     }
     const msg = toString(input.toolResult.message) || 'Automation change failed.';
@@ -474,7 +485,14 @@ async function tryAutomationRemediation(
     return {
       content: [summary, prompt].filter(Boolean).join('\n\n'),
       metadata: {
-        pendingApprovals,
+        pendingAction: {
+          status: 'pending',
+          blocker: {
+            kind: 'approval',
+            prompt,
+            approvalSummaries: pendingApprovals,
+          },
+        },
         resumeAutomationAfterApprovals: true,
       },
     };

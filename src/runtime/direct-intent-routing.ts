@@ -17,13 +17,28 @@ export function resolveDirectIntentRoutingCandidates(
   gateway: IntentGatewayRecord | null | undefined,
   fallbackOrder: DirectIntentRoutingCandidate[],
   available: ReadonlyArray<DirectIntentRoutingCandidate>,
-): { candidates: DirectIntentRoutingCandidate[]; gatewayDirected: boolean; gatewayUnavailable: boolean } {
+): {
+  candidates: DirectIntentRoutingCandidate[];
+  gatewayDirected: boolean;
+  gatewayUnavailable: boolean;
+  gatewayHeuristicFallback: boolean;
+} {
   const availableSet = new Set(available);
   if (!gateway || gateway.available === false) {
     return {
       candidates: fallbackOrder.filter((candidate) => availableSet.has(candidate)),
       gatewayDirected: false,
       gatewayUnavailable: true,
+      gatewayHeuristicFallback: true,
+    };
+  }
+
+  if (shouldUseHeuristicFallback(gateway.decision)) {
+    return {
+      candidates: fallbackOrder.filter((candidate) => availableSet.has(candidate)),
+      gatewayDirected: false,
+      gatewayUnavailable: false,
+      gatewayHeuristicFallback: true,
     };
   }
 
@@ -33,7 +48,13 @@ export function resolveDirectIntentRoutingCandidates(
     candidates: dedupeCandidates(ordered),
     gatewayDirected: true,
     gatewayUnavailable: false,
+    gatewayHeuristicFallback: false,
   };
+}
+
+function shouldUseHeuristicFallback(decision: IntentGatewayDecision): boolean {
+  return decision.confidence === 'low'
+    && (decision.route === 'unknown' || decision.route === 'general_assistant');
 }
 
 function preferredCandidatesForDecision(
@@ -67,8 +88,12 @@ function preferredCandidatesForDecision(
     case 'filesystem_task':
       return ['filesystem'];
     case 'coding_task':
-      if (decision.entities.codingBackend) return ['coding_backend'];
-      return decision.operation === 'inspect' && decision.turnRelation === 'follow_up'
+      if (decision.entities.codingBackend && decision.entities.codingBackendRequested === true) {
+        return ['coding_backend'];
+      }
+      return decision.operation === 'inspect'
+        && decision.turnRelation === 'follow_up'
+        && decision.entities.codingRunStatusCheck === true
         ? ['coding_backend']
         : [];
     case 'coding_session_control':

@@ -9,6 +9,20 @@ import type { DashboardCallbacks, DashboardAgentInfo, DashboardAgentDetail } fro
 import type { UserMessage, AgentResponse } from '../agent/types.js';
 import { randomUUID } from 'node:crypto';
 
+function approvalPendingActionMetadata(
+  approvals: Array<{ id: string; toolName: string; argsPreview: string }>,
+): Record<string, unknown> {
+  return {
+    pendingAction: {
+      status: 'pending',
+      blocker: {
+        kind: 'approval',
+        approvalSummaries: approvals,
+      },
+    },
+  };
+}
+
 describe('CLIChannel', () => {
   it('should start and stop without errors', async () => {
     const input = new PassThrough();
@@ -1176,29 +1190,25 @@ describe('CLIChannel with DashboardCallbacks', () => {
         if (dispatches.length === 1) {
           return {
             content: 'Action: fs_write — {"path":"S:/Development/test50.txt","content":"This is test50.txt","append":false}\nApproval ID: approval-write-1\nReply "yes" to approve or "no" to deny (expires in 30 minutes).\nOptional: /approve or /deny',
-            metadata: {
-              pendingApprovals: [
-                {
-                  id: 'approval-write-1',
-                  toolName: 'fs_write',
-                  argsPreview: '{"path":"S:/Development/test50.txt","content":"This is test50.txt","append":false}',
-                },
-              ],
-            },
+            metadata: approvalPendingActionMetadata([
+              {
+                id: 'approval-write-1',
+                toolName: 'fs_write',
+                argsPreview: '{"path":"S:/Development/test50.txt","content":"This is test50.txt","append":false}',
+              },
+            ]),
           };
         }
         if (dispatches.length === 2) {
           return {
             content: 'Waiting for approval to add S:\\Development to allowed paths.',
-            metadata: {
-              pendingApprovals: [
-                {
-                  id: 'approval-path-1',
-                  toolName: 'update_tool_policy',
-                  argsPreview: '{"action":"add_path","value":"S:\\\\Development"}',
-                },
-              ],
-            },
+            metadata: approvalPendingActionMetadata([
+              {
+                id: 'approval-path-1',
+                toolName: 'update_tool_policy',
+                argsPreview: '{"action":"add_path","value":"S:\\\\Development"}',
+              },
+            ]),
           };
         }
         return {
@@ -1252,15 +1262,13 @@ describe('CLIChannel with DashboardCallbacks', () => {
         if (dispatches.length === 1) {
           return {
             content: 'Waiting for approval to write S:/Development/Test60.txt.',
-            metadata: {
-              pendingApprovals: [
-                {
-                  id: 'stale-write-1',
-                  toolName: 'fs_write',
-                  argsPreview: '{"path":"S:/Development/Test60.txt","content":"This is Test60.txt","append":false}',
-                },
-              ],
-            },
+            metadata: approvalPendingActionMetadata([
+              {
+                id: 'stale-write-1',
+                toolName: 'fs_write',
+                argsPreview: '{"path":"S:/Development/Test60.txt","content":"This is Test60.txt","append":false}',
+              },
+            ]),
           };
         }
         return {
@@ -1312,15 +1320,13 @@ describe('CLIChannel with DashboardCallbacks', () => {
         if (dispatches.length === 1) {
           return {
             content: 'Waiting for approval to write S:/Development/Test100.',
-            metadata: {
-              pendingApprovals: [
-                {
-                  id: 'approval-empty-1',
-                  toolName: 'fs_write',
-                  argsPreview: '{"path":"S:/Development/Test100","content":"","append":false}',
-                },
-              ],
-            },
+            metadata: approvalPendingActionMetadata([
+              {
+                id: 'approval-empty-1',
+                toolName: 'fs_write',
+                argsPreview: '{"path":"S:/Development/Test100","content":"","append":false}',
+              },
+            ]),
           };
         }
         if (dispatches.length === 2) {
@@ -1366,15 +1372,13 @@ describe('CLIChannel with DashboardCallbacks', () => {
         dispatches.push({ agentId, content: msg.content });
         return {
           content: 'Waiting for approval to run codex.',
-          metadata: {
-            pendingApprovals: [
-              {
-                id: 'approval-codex-1',
-                toolName: 'coding_backend_run',
-                argsPreview: '{"backend":"codex"}',
-              },
-            ],
-          },
+          metadata: approvalPendingActionMetadata([
+            {
+              id: 'approval-codex-1',
+              toolName: 'coding_backend_run',
+              argsPreview: '{"backend":"codex"}',
+            },
+          ]),
         };
       },
       onToolsApprovalDecision: async () => ({
@@ -1395,7 +1399,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     const text = readOutput(output);
-    expect(text).toContain('Waiting for approval to run coding_backend_run');
+    expect(text).toContain('Waiting for approval to run codex.');
     expect(text).toContain('✓ coding_backend_run: OpenAI Codex CLI completed.');
     expect(text).toContain('Created `docs/proposals/CODEX-SMOKE-TEST-6.md`.');
     expect(text).not.toContain('Please continue with the current request only.');
@@ -1718,6 +1722,19 @@ describe('CLIChannel with DashboardCallbacks', () => {
                 { name: 'queue_wait', status: 'succeeded', startedAt: now - 500, completedAt: now - 450, durationMs: 50 },
                 { name: 'runtime_dispatch_message', status: 'succeeded', startedAt: now - 450, completedAt: now - 300, durationMs: 150 },
               ],
+              nodes: [
+                {
+                  id: 'compile-1',
+                  kind: 'compile',
+                  name: 'Assembled context',
+                  startedAt: now - 448,
+                  completedAt: now - 447,
+                  status: 'succeeded',
+                  metadata: {
+                    summary: 'global memory loaded | continuity 2 surfaces',
+                  },
+                },
+              ],
             },
           ],
         },
@@ -1746,6 +1763,308 @@ describe('CLIChannel with DashboardCallbacks', () => {
     expect(text).toContain('runtime_dispatch_message');
     expect(text).toContain('chat');
     expect(text).toContain('high');
+    expect(text).toContain('global memory loaded');
+
+    await cli.stop();
+  });
+
+  it('/assistant traces should filter by continuity key and active execution ref', async () => {
+    const now = Date.now();
+    const { input, output, cli } = makeCli({
+      onAssistantState: () => ({
+        orchestrator: {
+          summary: {
+            startedAt: now - 10_000,
+            uptimeMs: 10_000,
+            sessionCount: 1,
+            runningCount: 0,
+            queuedCount: 0,
+            totalRequests: 2,
+            completedRequests: 2,
+            failedRequests: 0,
+            avgExecutionMs: 150,
+            avgEndToEndMs: 180,
+            queuedByPriority: {
+              high: 0,
+              normal: 0,
+              low: 0,
+            },
+          },
+          sessions: [],
+          traces: [
+            {
+              requestId: 'req-1',
+              sessionId: 'cli:owner:agent-1',
+              agentId: 'agent-1',
+              userId: 'owner',
+              channel: 'cli',
+              requestType: 'chat',
+              priority: 'high',
+              status: 'succeeded',
+              queuedAt: now - 500,
+              startedAt: now - 450,
+              completedAt: now - 300,
+              queueWaitMs: 50,
+              executionMs: 150,
+              endToEndMs: 200,
+              steps: [
+                { name: 'runtime_dispatch_message', status: 'succeeded', startedAt: now - 450, completedAt: now - 300, durationMs: 150 },
+              ],
+              nodes: [
+                {
+                  id: 'compile-1',
+                  kind: 'compile',
+                  name: 'Assembled context',
+                  startedAt: now - 448,
+                  completedAt: now - 447,
+                  status: 'succeeded',
+                  metadata: {
+                    summary: 'global memory loaded | continuity 2 surfaces',
+                    continuityKey: 'continuity-keep',
+                    activeExecutionRefs: ['code_session:Repo Fix'],
+                  },
+                },
+              ],
+            },
+            {
+              requestId: 'req-2',
+              sessionId: 'cli:owner:agent-1',
+              agentId: 'agent-1',
+              userId: 'owner',
+              channel: 'cli',
+              requestType: 'automation',
+              priority: 'normal',
+              status: 'succeeded',
+              queuedAt: now - 250,
+              startedAt: now - 240,
+              completedAt: now - 200,
+              queueWaitMs: 10,
+              executionMs: 40,
+              endToEndMs: 50,
+              steps: [
+                { name: 'runtime_dispatch_message', status: 'succeeded', startedAt: now - 240, completedAt: now - 200, durationMs: 40 },
+              ],
+              nodes: [
+                {
+                  id: 'compile-2',
+                  kind: 'compile',
+                  name: 'Assembled context',
+                  startedAt: now - 239,
+                  completedAt: now - 238,
+                  status: 'succeeded',
+                  metadata: {
+                    summary: 'global memory loaded | continuity 1 surface',
+                    continuityKey: 'continuity-other',
+                    activeExecutionRefs: ['pending_action:approval-2'],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        jobs: {
+          summary: {
+            total: 0,
+            running: 0,
+            succeeded: 0,
+            failed: 0,
+          },
+          jobs: [],
+        },
+        lastPolicyDecisions: [],
+        defaultProvider: 'ollama',
+        guardianEnabled: true,
+        providerCount: 1,
+        providers: ['ollama'],
+        scheduledJobs: [],
+      }),
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/assistant traces continuity=continuity-keep exec=repo');
+    const text = readOutput(output);
+
+    expect(text).toContain('chat');
+    expect(text).toContain('global memory loaded');
+    expect(text).not.toContain('automation');
+
+    await cli.stop();
+  });
+
+  it('/assistant routing should show filtered durable routing trace entries', async () => {
+    const now = Date.now();
+    const { input, output, cli } = makeCli({
+      onIntentRoutingTrace: async () => ({
+        entries: [
+          {
+            id: 'route-1',
+            timestamp: now - 200,
+            stage: 'gateway_classified',
+            userId: 'owner',
+            channel: 'cli',
+            agentId: 'agent-1',
+            contentPreview: 'Use Codex to fix the repo',
+            details: {
+              route: 'coding_task',
+              continuityKey: 'continuity-keep',
+              activeExecutionRefs: ['code_session:Repo Fix'],
+            },
+          },
+        ],
+      }),
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/assistant routing continuity=continuity-keep exec=repo');
+    const text = readOutput(output);
+
+    expect(text).toContain('gateway_classified');
+    expect(text).toContain('continuity continuity-keep');
+    expect(text).toContain('Use Codex to fix the repo');
+
+    await cli.stop();
+  });
+
+  it('/assistant jobs followup should invoke delegated job follow-up controls', async () => {
+    const onAssistantJobFollowUpAction = vi.fn(async () => ({
+      success: true,
+      message: 'Replayed held delegated result.',
+      details: {
+        content: 'Held delegated output',
+      },
+    }));
+    const { input, output, cli } = makeCli({
+      onAssistantJobFollowUpAction,
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/assistant jobs followup job-123 replay');
+    const text = readOutput(output);
+
+    expect(onAssistantJobFollowUpAction).toHaveBeenCalledWith({
+      jobId: 'job-123',
+      action: 'replay',
+    });
+    expect(text).toContain('Success: Replayed held delegated result.');
+    expect(text).toContain('Held delegated output');
+
+    await cli.stop();
+  });
+
+  it('/assistant jobs should prioritize operator-relevant jobs over routine successful delegated background work', async () => {
+    const { input, output, cli } = makeCli({
+      onAssistantState: () => ({
+        orchestrator: {
+          summary: {
+            startedAt: Date.now() - 60_000,
+            uptimeMs: 60_000,
+            sessionCount: 1,
+            runningCount: 0,
+            queuedCount: 0,
+            totalRequests: 3,
+            completedRequests: 3,
+            failedRequests: 0,
+            avgExecutionMs: 180,
+            avgEndToEndMs: 240,
+            queuedByPriority: {
+              high: 0,
+              normal: 0,
+              low: 0,
+            },
+          },
+          sessions: [],
+          traces: [],
+        },
+        jobs: {
+          summary: {
+            total: 2,
+            running: 0,
+            succeeded: 2,
+            failed: 0,
+            lastStartedAt: Date.now() - 30_000,
+            lastCompletedAt: Date.now() - 20_000,
+          },
+          jobs: [
+            {
+              id: 'job-routine',
+              type: 'delegated_worker',
+              source: 'system',
+              status: 'succeeded',
+              startedAt: Date.now() - 5_000,
+              durationMs: 25,
+              detail: "scheduled • continuity security-triage:owner • I could not find an automation named 'scans'.",
+              metadata: {
+                delegation: {
+                  kind: 'brokered_worker',
+                  lifecycle: 'completed',
+                  originChannel: 'scheduled',
+                  continuityKey: 'security-triage:owner',
+                  handoff: {
+                    summary: "I could not find an automation named 'scans'.",
+                    reportingMode: 'inline_response',
+                    runClass: 'short_lived',
+                  },
+                },
+              },
+              display: {
+                originSummary: 'scheduled • continuity security-triage:owner',
+                outcomeSummary: "I could not find an automation named 'scans'.",
+              },
+            },
+            {
+              id: 'job-relevant',
+              type: 'delegated_worker',
+              source: 'manual',
+              status: 'succeeded',
+              startedAt: Date.now() - 10_000,
+              durationMs: 190,
+              detail: 'web • continuity __tier_shared__:owner • Approval pending',
+              metadata: {
+                delegation: {
+                  kind: 'brokered_worker',
+                  lifecycle: 'blocked',
+                  originChannel: 'web',
+                  continuityKey: '__tier_shared__:owner',
+                  handoff: {
+                    summary: 'Waiting for approval to run Codex.',
+                    unresolvedBlockerKind: 'approval',
+                    approvalCount: 1,
+                    nextAction: 'Approve the pending coding backend run.',
+                    reportingMode: 'held_for_approval',
+                    runClass: 'short_lived',
+                  },
+                },
+              },
+              display: {
+                originSummary: 'web • continuity __tier_shared__:owner',
+                outcomeSummary: 'Waiting for approval to run Codex.',
+                followUp: {
+                  reportingMode: 'held_for_approval',
+                  label: 'Approval pending',
+                  needsOperatorAction: true,
+                  approvalCount: 1,
+                  nextAction: 'Approve the pending coding backend run.',
+                },
+              },
+            },
+          ],
+        },
+        lastPolicyDecisions: [],
+        defaultProvider: 'ollama',
+        guardianEnabled: true,
+        providerCount: 2,
+        providers: ['ollama', 'claude'],
+        scheduledJobs: [],
+      }),
+    });
+    await cli.start(async () => ({ content: 'ok' }));
+
+    await sendCommand(input, '/assistant jobs 1');
+    const text = readOutput(output);
+
+    expect(text).toContain('Approval pending');
+    expect(text).toContain('Showing operator-relevant jobs.');
+    expect(text).not.toContain("automation named 'scans'");
 
     await cli.stop();
   });
@@ -3604,6 +3923,175 @@ describe('WebChannel', () => {
       expect(body.defaultProvider).toBe('ollama');
       expect(body.orchestrator.summary.totalRequests).toBe(9);
       expect(body.orchestrator.summary.sessionCount).toBe(2);
+    });
+
+    it('POST /api/assistant/jobs/follow-up should forward operator actions for delegated jobs', async () => {
+      let received: Record<string, unknown> | null = null;
+      web = new WebChannel({
+        port: 18961,
+        authToken: TEST_TOKEN,
+        dashboard: {
+          onAssistantJobFollowUpAction: async (input) => {
+            received = input as Record<string, unknown>;
+            return {
+              success: true,
+              message: 'Replayed held delegated result.',
+              details: {
+                content: 'Held delegated output',
+              },
+            };
+          },
+        },
+      });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18961/api/assistant/jobs/follow-up', {
+        method: 'POST',
+        headers: {
+          ...authHeaders,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          jobId: 'job-123',
+          action: 'replay',
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json() as {
+        success: boolean;
+        message: string;
+        details?: { content?: string };
+      };
+      expect(body).toMatchObject({
+        success: true,
+        message: 'Replayed held delegated result.',
+        details: {
+          content: 'Held delegated output',
+        },
+      });
+      expect(received).toEqual({
+        jobId: 'job-123',
+        action: 'replay',
+      });
+    });
+
+    it('GET /api/routing/trace should forward continuity and execution-ref filters', async () => {
+      let receivedArgs: Record<string, unknown> | null = null;
+      web = new WebChannel({
+        port: 18980,
+        authToken: TEST_TOKEN,
+        dashboard: {
+          onIntentRoutingTrace: async (args) => {
+            receivedArgs = args as Record<string, unknown>;
+            return { entries: [] };
+          },
+        },
+      });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch(
+        'http://localhost:18980/api/routing/trace?limit=7&continuityKey=continuity-1&activeExecutionRef=code_session%3ARepo%20Fix',
+        { headers: authHeaders },
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json() as { entries: unknown[] };
+      expect(body.entries).toEqual([]);
+      expect(receivedArgs).toEqual({
+        limit: 7,
+        continuityKey: 'continuity-1',
+        activeExecutionRef: 'code_session:Repo Fix',
+      });
+    });
+
+    it('GET /api/routing/trace should return matched run and code session links when provided', async () => {
+      web = new WebChannel({
+        port: 18978,
+        authToken: TEST_TOKEN,
+        dashboard: {
+          onIntentRoutingTrace: async () => ({
+            entries: [
+              {
+                id: 'route-1',
+                timestamp: Date.now(),
+                stage: 'dispatch_response',
+                requestId: 'req-1',
+                matchedRun: {
+                  runId: 'req-1',
+                  title: 'Fix repo',
+                  status: 'completed',
+                  kind: 'assistant_dispatch',
+                  href: '#/automations?assistantRunId=req-1',
+                  codeSessionId: 'session-1',
+                  codeSessionHref: '#/code?sessionId=session-1&assistantRunId=req-1&assistantRunItemId=item-context',
+                  focusItemId: 'item-context',
+                  focusItemTitle: 'Assembled context',
+                  focusItemHref: '#/automations?assistantRunId=req-1&assistantRunItemId=item-context',
+                },
+              },
+            ],
+          }),
+        },
+      });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18978/api/routing/trace?limit=1', { headers: authHeaders });
+
+      expect(res.status).toBe(200);
+      const body = await res.json() as {
+        entries: Array<{
+          matchedRun?: {
+            runId: string;
+            codeSessionId?: string;
+            codeSessionHref?: string;
+            focusItemId?: string;
+            focusItemHref?: string;
+          };
+        }>;
+      };
+      expect(body.entries).toHaveLength(1);
+      expect(body.entries[0]?.matchedRun).toEqual({
+        runId: 'req-1',
+        title: 'Fix repo',
+        status: 'completed',
+        kind: 'assistant_dispatch',
+        href: '#/automations?assistantRunId=req-1',
+        codeSessionId: 'session-1',
+        codeSessionHref: '#/code?sessionId=session-1&assistantRunId=req-1&assistantRunItemId=item-context',
+        focusItemId: 'item-context',
+        focusItemTitle: 'Assembled context',
+        focusItemHref: '#/automations?assistantRunId=req-1&assistantRunItemId=item-context',
+      });
+    });
+
+    it('GET /api/assistant/runs should forward continuity and execution-ref filters', async () => {
+      let receivedArgs: Record<string, unknown> | null = null;
+      web = new WebChannel({
+        port: 18979,
+        authToken: TEST_TOKEN,
+        dashboard: {
+          onAssistantRuns: (args) => {
+            receivedArgs = args as Record<string, unknown>;
+            return { runs: [] };
+          },
+        },
+      });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch(
+        'http://localhost:18979/api/assistant/runs?limit=5&continuityKey=continuity-1&activeExecutionRef=code_session%3ARepo%20Fix',
+        { headers: authHeaders },
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json() as { runs: unknown[] };
+      expect(body.runs).toEqual([]);
+      expect(receivedArgs).toEqual({
+        limit: 5,
+        continuityKey: 'continuity-1',
+        activeExecutionRef: 'code_session:Repo Fix',
+      });
     });
 
     it('GET /api/threat-intel/summary should return threat summary', async () => {
