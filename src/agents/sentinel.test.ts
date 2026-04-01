@@ -207,6 +207,50 @@ describe('SentinelAgent', () => {
       expect(llmCalls[0][0].content).toContain('Primary mission');
       expect(llmCalls[0][0].content).toContain('Sentinel');
     });
+
+    it('should accept markdown-wrapped JSON findings from the LLM', async () => {
+      for (let i = 0; i < 40; i += 1) {
+        auditLog.record({
+          type: 'action_denied',
+          severity: 'warn',
+          agentId: 'bad-agent',
+          details: {},
+        });
+      }
+
+      const ctx = {
+        agentId: 'sentinel',
+        capabilities: [] as string[],
+        emit: async () => {},
+        checkAction: () => {},
+        schedule: '*/5 * * * *',
+        auditLog,
+        llm: {
+          chat: async () => ({
+            content: [
+              '```json',
+              '{',
+              '  "findings": [',
+              '    {',
+              '      "severity": "critical",',
+              '      "description": "Repeated denial probing detected.",',
+              '      "recommendation": "Inspect the blocked actions."',
+              '    }',
+              '  ]',
+              '}',
+              '```',
+            ].join('\n'),
+          }),
+        },
+      };
+
+      await sentinel.onSchedule(ctx);
+
+      const llmFindings = auditLog.query({ type: 'anomaly_detected' })
+        .filter((event) => event.details['source'] === 'llm_analysis');
+      expect(llmFindings).toHaveLength(1);
+      expect(String(llmFindings[0]?.details['description'] ?? '')).toContain('Repeated denial probing');
+    });
   });
 
   describe('agent properties', () => {

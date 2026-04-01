@@ -14,6 +14,7 @@ import type { AgentContext, ScheduleContext } from '../agent/types.js';
 import type { AgentEvent } from '../queue/event-bus.js';
 import type { AuditLog, AuditSummary } from '../guardian/audit-log.js';
 import { composeGuardianSystemPrompt } from '../prompts/guardian-core.js';
+import { parseStructuredJsonObject } from '../util/structured-json.js';
 
 /** Anomaly detected by the Sentinel. */
 export interface Anomaly {
@@ -110,24 +111,20 @@ export class SentinelAgent extends BaseAgent {
           { role: 'user', content: JSON.stringify({ summary, anomalies }) },
         ]);
         // Parse LLM response — findings are informational
-        try {
-          const parsed = JSON.parse(analysis.content);
-          if (parsed.findings && Array.isArray(parsed.findings)) {
-            for (const finding of parsed.findings) {
-              auditLog.record({
-                type: 'anomaly_detected',
-                severity: finding.severity === 'critical' ? 'critical' : 'warn',
-                agentId: 'sentinel',
-                details: {
-                  source: 'llm_analysis',
-                  description: finding.description,
-                  recommendation: finding.recommendation,
-                },
-              });
-            }
+        const parsed = parseStructuredJsonObject<{ findings?: Array<{ severity?: string; description?: string; recommendation?: string }> }>(analysis.content);
+        if (parsed?.findings && Array.isArray(parsed.findings)) {
+          for (const finding of parsed.findings) {
+            auditLog.record({
+              type: 'anomaly_detected',
+              severity: finding.severity === 'critical' ? 'critical' : 'warn',
+              agentId: 'sentinel',
+              details: {
+                source: 'llm_analysis',
+                description: finding.description,
+                recommendation: finding.recommendation,
+              },
+            });
           }
-        } catch {
-          // LLM response wasn't valid JSON — log but don't fail
         }
       } catch {
         // LLM call failed — heuristic analysis still recorded

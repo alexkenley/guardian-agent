@@ -21,6 +21,7 @@
 import type { LLMProvider, ChatMessage } from '../llm/types.js';
 import type { AuditLog, AuditSummary } from '../guardian/audit-log.js';
 import { createLogger } from '../util/logging.js';
+import { parseStructuredJsonObject } from '../util/structured-json.js';
 
 const log = createLogger('guardian-agent');
 
@@ -262,29 +263,24 @@ export class GuardianAgentService {
   }
 
   private parseEvaluation(content: string): GuardianAgentEvaluation {
-    try {
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        return { allowed: true, riskLevel: 'low', reason: 'Could not parse Guardian Agent response' };
-      }
-      const parsed = JSON.parse(jsonMatch[0]) as {
-        allowed?: boolean;
-        riskLevel?: string;
-        reason?: string;
-      };
-
-      const riskLevel = (['safe', 'low', 'medium', 'high', 'critical'] as const)
-        .find(r => r === parsed.riskLevel) ?? 'low';
-
-      // High/critical risk → block regardless of what the LLM said for `allowed`
-      const allowed = riskLevel === 'high' || riskLevel === 'critical'
-        ? false
-        : parsed.allowed !== false;
-
-      return { allowed, riskLevel, reason: parsed.reason };
-    } catch {
+    const parsed = parseStructuredJsonObject<{
+      allowed?: boolean;
+      riskLevel?: string;
+      reason?: string;
+    }>(content);
+    if (!parsed) {
       return { allowed: true, riskLevel: 'low', reason: 'Could not parse Guardian Agent response' };
     }
+
+    const riskLevel = (['safe', 'low', 'medium', 'high', 'critical'] as const)
+      .find(r => r === parsed.riskLevel) ?? 'low';
+
+    // High/critical risk -> block regardless of what the LLM said for `allowed`
+    const allowed = riskLevel === 'high' || riskLevel === 'critical'
+      ? false
+      : parsed.allowed !== false;
+
+    return { allowed, riskLevel, reason: parsed.reason };
   }
 }
 
@@ -379,8 +375,8 @@ export class SentinelAuditService {
         { role: 'system', content: SENTINEL_AUDIT_SYSTEM_PROMPT },
         { role: 'user', content: JSON.stringify({ summary, anomalies }) },
       ]);
-      const parsed = JSON.parse(response.content) as { findings?: AuditFinding[] };
-      if (parsed.findings && Array.isArray(parsed.findings)) {
+      const parsed = parseStructuredJsonObject<{ findings?: AuditFinding[] }>(response.content);
+      if (parsed?.findings && Array.isArray(parsed.findings)) {
         return parsed.findings;
       }
     } catch {

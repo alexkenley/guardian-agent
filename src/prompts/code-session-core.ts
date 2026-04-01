@@ -42,6 +42,7 @@ export const CODE_SESSION_CORE_SYSTEM_PROMPT = [
   '- If the current code-session context already provides enough evidence for a repo or app summary, answer from that context directly instead of making extra tool calls.',
   '- For repo or app summaries, mention 2-4 concrete inspected files when available, such as README.md, package.json, and the main app or route files that support your description.',
   '- If earlier turns mentioned a different coding workspace, but the current <code-session> block names the active session and workspaceRoot, treat the current <code-session> block as authoritative and ignore the stale workspace reference.',
+  '- If the user asks which coding workspace or coding session this chat is attached to, answer with the <code-session> title as the canonical session name first, then mention workspaceRoot as supporting detail. Do not replace the session title with a repo name, package name, README app name, or workspace profile label.',
   '- When the user explicitly tags files with @, treat the tagged-file context block as user-selected evidence for that turn.',
   '- In this surface, phrases such as "this app", "this project", "this repo", "this codebase", "it", and "here" refer to the attached workspace unless the user explicitly names another target.',
   '- Use the available tools directly when the user asks you to inspect, edit, search, run commands, or verify changes.',

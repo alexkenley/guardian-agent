@@ -87,6 +87,42 @@ describe('IntentGateway', () => {
     expect(result.decision.confidence).toBe('low');
   });
 
+  it('retries with a JSON-only fallback when the tool-call gateway path throws', async () => {
+    const gateway = new IntentGateway();
+    let callCount = 0;
+
+    const result = await gateway.classify(
+      {
+        content: 'What coding session am I on?',
+        channel: 'web',
+      },
+      async (_messages, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          expect(options?.tools?.[0]?.name).toBe('route_intent');
+          throw new Error('ollama api error: failed to format route_intent tool call');
+        }
+
+        expect(options?.tools).toBeUndefined();
+        return {
+          content: JSON.stringify({
+            route: 'coding_session_control',
+            confidence: 'high',
+            operation: 'inspect',
+            summary: 'Inspects the currently attached coding workspace session.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(callCount).toBe(2);
+    expect(result.mode).toBe('json_fallback');
+    expect(result.decision.route).toBe('coding_session_control');
+    expect(result.decision.operation).toBe('inspect');
+  });
+
   it('converts shadow decisions into client-safe metadata', () => {
     const metadata = toIntentGatewayClientMetadata({
       mode: 'primary',
@@ -568,6 +604,58 @@ describe('IntentGateway', () => {
     expect(result.decision.route).toBe('coding_session_control');
     expect(result.decision.operation).toBe('inspect');
     expect(result.decision.entities.sessionTarget).toBeUndefined();
+  });
+
+  it('normalizes natural route and operation variants from local-model JSON fallbacks', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'What coding workspace is this chat currently attached to?',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'coding session control',
+          confidence: 'high',
+          operation: 'current',
+          summary: 'Checks the current attached coding workspace session.',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_session_control');
+    expect(result.decision.operation).toBe('inspect');
+  });
+
+  it('parses fenced JSON fallbacks with smart quotes and session-switch variants', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Switch this chat to the coding workspace for Temp install test.',
+        channel: 'web',
+      },
+      async () => ({
+        content: [
+          '```json',
+          '{',
+          '  \u201croute\u201d: \u201ccoding workspace management\u201d,',
+          '  \u201cconfidence\u201d: \u201chigh\u201d,',
+          '  \u201coperation\u201d: \u201cswitch workspace\u201d,',
+          '  \u201csummary\u201d: \u201cSwitch the attached coding workspace session.\u201d,',
+          '  \u201csessionTarget\u201d: \u201cTemp install test\u201d',
+          '}',
+          '```',
+        ].join('\n'),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_session_control');
+    expect(result.decision.operation).toBe('update');
+    expect(result.decision.entities.sessionTarget).toBe('Temp install test');
   });
 
   it('classifies actual code execution as coding_task, not coding_session_control', async () => {

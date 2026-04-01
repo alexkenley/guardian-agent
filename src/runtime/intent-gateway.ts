@@ -1,4 +1,5 @@
 import type { ChatMessage, ChatOptions, ChatResponse, ToolDefinition } from '../llm/types.js';
+import { parseStructuredJsonObject } from '../util/structured-json.js';
 
 export type IntentGatewayRoute =
   | 'automation_authoring'
@@ -75,7 +76,7 @@ export interface IntentGatewayDecision {
 }
 
 export interface IntentGatewayRecord {
-  mode: 'primary';
+  mode: 'primary' | 'json_fallback';
   available: boolean;
   model: string;
   latencyMs: number;
@@ -235,11 +236,7 @@ const AUTOMATION_NAME_REPAIR_TOOL: ToolDefinition = {
   },
 };
 
-const INTENT_GATEWAY_SYSTEM_PROMPT = [
-  'You are Guardian\'s intent gateway.',
-  'Your job is to classify the top-level route for a user request and determine whether the current turn is a new request, a follow-up, a clarification answer, or a correction.',
-  'Never plan, explain, or execute the request.',
-  'You must call the route_intent tool exactly once.',
+const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Route definitions:',
   '- automation_authoring: creating or changing an automation or workflow definition.',
   '- automation_control: operating on an existing automation definition or run, such as delete, toggle, clone, inspect, or run.',
@@ -262,6 +259,7 @@ const INTENT_GATEWAY_SYSTEM_PROMPT = [
   'Set resolution to needs_clarification when the user\'s goal is clear but a targeted missing detail is required before execution.',
   'When resolution=needs_clarification, populate missingFields with the concrete missing detail names such as email_provider, coding_backend, session_target, path, recipient, or automation_name.',
   'When the current turn is a clarification answer or correction and the prior context makes the intended action clear, set resolvedContent to a single actionable restatement of the full corrected request.',
+  'Use only the exact enum values defined by the schema for route, confidence, operation, turnRelation, resolution, uiSurface, and emailProvider. Do not paraphrase enum names.',
   'Prefer ui_control over browser_task when the request refers to Guardian pages or internal catalog views.',
   'Prefer email_task over workspace_task for direct mailbox or email requests.',
   'Prefer search_task over browser_task for generic web search.',
@@ -298,6 +296,36 @@ const INTENT_GATEWAY_SYSTEM_PROMPT = [
   'Example: "Why did Codex make that text file executable?" -> this is about Codex as the subject of the question, not a request to launch Codex. codingBackend may be set to codex, but codingBackendRequested=false and codingRunStatusCheck=false.',
   'Example: active pending action is approval for a Codex run, then the user says "Check my email." -> route=email_task, turnRelation=new_request, resolution should be based on the email request, and codingBackend should be unset.',
   'Example: active pending action is an email-provider clarification, then the user says "Use Codex to say hello and confirm you are working." -> route=coding_task, turnRelation=new_request, codingBackend=codex, codingBackendRequested=true.',
+];
+
+const INTENT_GATEWAY_SYSTEM_PROMPT = [
+  'You are Guardian\'s intent gateway.',
+  'Your job is to classify the top-level route for a user request and determine whether the current turn is a new request, a follow-up, a clarification answer, or a correction.',
+  'Never plan, explain, or execute the request.',
+  'You must call the route_intent tool exactly once.',
+  ...INTENT_GATEWAY_INSTRUCTION_LINES,
+].join(' ');
+
+const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
+  'You are Guardian\'s intent gateway.',
+  'Classify the user request and return exactly one JSON object. Do not explain anything and do not call tools.',
+  'Use only these exact route values: automation_authoring, automation_control, automation_output_task, ui_control, browser_task, workspace_task, email_task, search_task, memory_task, filesystem_task, coding_task, coding_session_control, security_task, general_assistant, unknown.',
+  'Use only these exact operation values: create, update, delete, run, toggle, clone, inspect, navigate, read, search, save, send, draft, schedule, unknown.',
+  'Use only these exact turnRelation values: new_request, follow_up, clarification_answer, correction.',
+  'Use only these exact resolution values: ready, needs_clarification.',
+  'coding_session_control means current session, list sessions, switch or attach to another session, detach, or create a coding session.',
+  'coding_task means code work inside a workspace, including explicit backend delegation such as Codex, Claude Code, Gemini CLI, or Aider.',
+  'memory_task means explicit remember, save, recall, or search memory requests.',
+  'email_task means direct email inbox, read, send, reply, forward, or draft work. workspace_task means managed workspace tools such as calendar, drive, docs, or sheets.',
+  'ui_control means Guardian pages or internal catalog surfaces. browser_task means external website navigation or interaction. search_task means generic web search.',
+  'If the user names a coding session or workspace to switch to, set sessionTarget.',
+  'If the user names Gmail or Google Workspace, set emailProvider to gws. If the user names Outlook or Microsoft 365, set emailProvider to m365.',
+  'If the user explicitly asks Guardian to use Codex, Claude Code, Gemini CLI, or Aider, set codingBackend and codingBackendRequested=true.',
+  'If the request needs a missing detail before execution, set resolution=needs_clarification and include missingFields.',
+  'Examples: "What coding workspace is this chat currently attached to?" -> route="coding_session_control", operation="inspect".',
+  'Examples: "List the coding sessions." -> route="coding_session_control", operation="navigate".',
+  'Examples: "Switch this chat to the coding workspace for Temp install test." -> route="coding_session_control", operation="update", sessionTarget="Temp install test".',
+  'Return valid JSON with double-quoted keys and string values only.',
 ].join(' ');
 
 const AUTOMATION_NAME_REPAIR_SYSTEM_PROMPT = [
@@ -313,40 +341,59 @@ export class IntentGateway {
     chat: IntentGatewayChatFn,
   ): Promise<IntentGatewayRecord> {
     const startedAt = Date.now();
+    const primary = await this.classifyOnce(input, chat, {
+      mode: 'primary',
+      systemPrompt: INTENT_GATEWAY_SYSTEM_PROMPT,
+      useTools: true,
+      startedAt,
+    });
+    if (primary.available) {
+      return this.repairAutomationNameIfNeeded(input, primary, chat);
+    }
+
+    const fallback = await this.classifyOnce(input, chat, {
+      mode: 'json_fallback',
+      systemPrompt: INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT,
+      useTools: false,
+      startedAt,
+    });
+    if (fallback.available || fallback.rawResponsePreview || fallback.model !== 'unknown') {
+      return this.repairAutomationNameIfNeeded(input, fallback, chat);
+    }
+    return this.repairAutomationNameIfNeeded(input, primary, chat);
+  }
+
+  private async classifyOnce(
+    input: IntentGatewayInput,
+    chat: IntentGatewayChatFn,
+    options: {
+      mode: IntentGatewayRecord['mode'];
+      systemPrompt: string;
+      useTools: boolean;
+      startedAt: number;
+    },
+  ): Promise<IntentGatewayRecord> {
     try {
-      const response = await chat(buildIntentGatewayMessages(input), {
+      const response = await chat(buildIntentGatewayMessages(input, options.systemPrompt), {
         maxTokens: 220,
         temperature: 0,
-        tools: [INTENT_GATEWAY_TOOL],
+        ...(options.useTools ? { tools: [INTENT_GATEWAY_TOOL] } : {}),
       });
       const parsed = parseIntentGatewayDecision(response);
-      let decision = parsed.decision;
-      if (needsAutomationNameRepair(decision)) {
-        const repairedName = await repairAutomationName(input, decision, chat);
-        if (repairedName) {
-          decision = {
-            ...decision,
-            entities: {
-              ...decision.entities,
-              automationName: repairedName,
-            },
-          };
-        }
-      }
       return {
-        mode: 'primary',
+        mode: options.mode,
         available: parsed.available,
         model: response.model,
-        latencyMs: Date.now() - startedAt,
-        decision,
+        latencyMs: Date.now() - options.startedAt,
+        decision: parsed.decision,
         rawResponsePreview: buildRawResponsePreview(response),
       };
     } catch (error) {
       return {
-        mode: 'primary',
+        mode: options.mode,
         available: false,
         model: 'unknown',
-        latencyMs: Date.now() - startedAt,
+        latencyMs: Date.now() - options.startedAt,
         decision: {
           route: 'unknown',
           confidence: 'low',
@@ -359,6 +406,30 @@ export class IntentGateway {
         },
       };
     }
+  }
+
+  private async repairAutomationNameIfNeeded(
+    input: IntentGatewayInput,
+    record: IntentGatewayRecord,
+    chat: IntentGatewayChatFn,
+  ): Promise<IntentGatewayRecord> {
+    let decision = record.decision;
+    if (needsAutomationNameRepair(decision)) {
+      const repairedName = await repairAutomationName(input, decision, chat);
+      if (repairedName) {
+        decision = {
+          ...decision,
+          entities: {
+            ...decision.entities,
+            automationName: repairedName,
+          },
+        };
+      }
+    }
+    return {
+      ...record,
+      decision,
+    };
   }
 }
 
@@ -451,7 +522,7 @@ export function shouldReusePreRoutedIntentGateway(
   return !!record && record.available !== false;
 }
 
-function buildIntentGatewayMessages(input: IntentGatewayInput): ChatMessage[] {
+function buildIntentGatewayMessages(input: IntentGatewayInput, systemPrompt: string): ChatMessage[] {
   const channelLabel = input.channel?.trim() || 'unknown';
   const historySection = input.recentHistory && input.recentHistory.length > 0
     ? [
@@ -496,7 +567,7 @@ function buildIntentGatewayMessages(input: IntentGatewayInput): ChatMessage[] {
   return [
     {
       role: 'system',
-      content: INTENT_GATEWAY_SYSTEM_PROMPT,
+      content: systemPrompt,
     },
     {
       role: 'user',
@@ -587,19 +658,7 @@ function parseAutomationNameRepair(response: ChatResponse): string | undefined {
 }
 
 function parseStructuredContent(content: string): Record<string, unknown> | null {
-  const trimmed = content.trim();
-  if (!trimmed) return null;
-  try {
-    return JSON.parse(trimmed) as Record<string, unknown>;
-  } catch {
-    const jsonObject = extractJsonObject(trimmed);
-    if (!jsonObject) return null;
-    try {
-      return JSON.parse(jsonObject) as Record<string, unknown>;
-    } catch {
-      return null;
-    }
-  }
+  return parseStructuredJsonObject<Record<string, unknown>>(content);
 }
 
 function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): IntentGatewayDecision {
@@ -707,7 +766,9 @@ function needsAutomationNameRepair(decision: IntentGatewayDecision): boolean {
 }
 
 function normalizeRoute(value: unknown): IntentGatewayRoute {
-  switch (value) {
+  if (typeof value !== 'string') return 'unknown';
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  switch (normalized) {
     case 'automation_authoring':
     case 'automation_control':
     case 'automation_output_task':
@@ -722,7 +783,49 @@ function normalizeRoute(value: unknown): IntentGatewayRoute {
     case 'coding_session_control':
     case 'security_task':
     case 'general_assistant':
-      return value;
+      return normalized;
+    case 'automation_output':
+      return 'automation_output_task';
+    case 'ui':
+    case 'ui_task':
+      return 'ui_control';
+    case 'browser':
+      return 'browser_task';
+    case 'workspace':
+      return 'workspace_task';
+    case 'email':
+    case 'mail':
+      return 'email_task';
+    case 'search':
+    case 'web_search':
+      return 'search_task';
+    case 'memory':
+      return 'memory_task';
+    case 'filesystem':
+    case 'file_system':
+    case 'file':
+      return 'filesystem_task';
+    case 'coding':
+      return 'coding_task';
+    case 'coding_session':
+    case 'code_session':
+    case 'coding_workspace':
+    case 'coding_workspace_session':
+    case 'session_control':
+    case 'session_management':
+    case 'coding_session_management':
+    case 'workspace_management':
+    case 'coding_workspace_management':
+    case 'coding_workspace_session_control':
+    case 'coding_workspace_control':
+    case 'workspace_session_control':
+    case 'workspace_switch_control':
+      return 'coding_session_control';
+    case 'security':
+      return 'security_task';
+    case 'general':
+    case 'assistant':
+      return 'general_assistant';
     default:
       return 'unknown';
   }
@@ -740,7 +843,9 @@ function normalizeConfidence(value: unknown): IntentGatewayConfidence {
 }
 
 function normalizeOperation(value: unknown): IntentGatewayOperation {
-  switch (value) {
+  if (typeof value !== 'string') return 'unknown';
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  switch (normalized) {
     case 'create':
     case 'update':
     case 'delete':
@@ -755,7 +860,52 @@ function normalizeOperation(value: unknown): IntentGatewayOperation {
     case 'send':
     case 'draft':
     case 'schedule':
-      return value;
+      return normalized;
+    case 'list':
+    case 'browse':
+      return 'navigate';
+    case 'show':
+      return 'inspect';
+    case 'current':
+    case 'check':
+    case 'status':
+    case 'current_session':
+    case 'current_workspace':
+      return 'inspect';
+    case 'switch':
+    case 'attach':
+    case 'change':
+    case 'select':
+    case 'switch_session':
+    case 'switch_workspace':
+    case 'attach_session':
+    case 'attach_workspace':
+    case 'change_workspace':
+      return 'update';
+    case 'detach':
+    case 'disconnect':
+    case 'remove':
+    case 'detach_session':
+    case 'detach_workspace':
+      return 'delete';
+    case 'execute':
+    case 'start':
+      return 'run';
+    case 'copy':
+    case 'duplicate':
+      return 'clone';
+    case 'recall':
+      return 'read';
+    case 'find':
+      return 'search';
+    case 'remember':
+    case 'store':
+      return 'save';
+    case 'compose':
+      return 'draft';
+    case 'enable':
+    case 'disable':
+      return 'toggle';
     default:
       return 'unknown';
   }
@@ -846,11 +996,4 @@ function buildRawResponsePreview(response: ChatResponse): string | undefined {
   if (toolArguments) return toolArguments.slice(0, 200);
   const content = response.content.trim();
   return content ? content.slice(0, 200) : undefined;
-}
-
-function extractJsonObject(content: string): string | null {
-  const firstBrace = content.indexOf('{');
-  const lastBrace = content.lastIndexOf('}');
-  if (firstBrace < 0 || lastBrace <= firstBrace) return null;
-  return content.slice(firstBrace, lastBrace + 1);
 }

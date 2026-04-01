@@ -3368,6 +3368,7 @@ class ChatAgent extends BaseAgent {
       'This chat is attached to a backend-owned coding session.',
       `sessionId: ${session.id}`,
       `title: ${session.title}`,
+      `canonicalSessionTitle: ${session.title}`,
       `workspaceRoot: ${session.resolvedRoot}`,
       `currentDirectory: ${currentDirectory}`,
       `selectedFile: ${selectedFile}`,
@@ -3389,6 +3390,7 @@ class ChatAgent extends BaseAgent {
         ? `compactedSummary:\n${session.workState.compactedSummary}`
         : 'compactedSummary: (none)',
       'Use this backend session as the authoritative coding context for subsequent tool calls.',
+      'If the user asks which coding workspace or session is attached here, answer with canonicalSessionTitle first and workspaceRoot second. Do not substitute repo/package/profile names for the session title.',
       'This coding session is workspace-centered. Broader tools remain available from this surface without changing the session anchor.',
       'Do not treat the attached workspace as the subject of every reply. For greetings, general Guardian capability questions, configuration questions, and other non-repo requests, answer at the broader product surface first and mention the coding session only when it is directly relevant.',
       'Coding-session long-term memory is session-local only. Cross-memory access must be explicit and read-only.',
@@ -6549,6 +6551,8 @@ class ChatAgent extends BaseAgent {
         message,
         details: {
           source: 'pre_routed',
+          mode: preRouted.mode,
+          available: preRouted.available,
           route: preRouted.decision.route,
           confidence: preRouted.decision.confidence,
           operation: preRouted.decision.operation,
@@ -6559,6 +6563,7 @@ class ChatAgent extends BaseAgent {
           codingBackend: preRouted.decision.entities.codingBackend,
           latencyMs: preRouted.latencyMs,
           model: preRouted.model,
+          rawResponsePreview: preRouted.rawResponsePreview,
         },
       });
       return preRouted;
@@ -6583,6 +6588,8 @@ class ChatAgent extends BaseAgent {
       details: classified
         ? {
             source: 'agent',
+            mode: classified.mode,
+            available: classified.available,
             route: classified.decision.route,
             confidence: classified.decision.confidence,
             operation: classified.decision.operation,
@@ -6594,6 +6601,7 @@ class ChatAgent extends BaseAgent {
             continuityKey: options?.continuityThread?.continuityKey,
             latencyMs: classified.latencyMs,
             model: classified.model,
+            rawResponsePreview: classified.rawResponsePreview,
           }
         : { source: 'agent', available: false },
     });
@@ -16407,6 +16415,8 @@ async function main(): Promise<void> {
           requestId,
           details: {
             source: 'routing',
+            mode: gateway.mode,
+            available: gateway.available,
             route: gateway.decision.route,
             confidence: gateway.decision.confidence,
             operation: gateway.decision.operation,
@@ -16417,6 +16427,7 @@ async function main(): Promise<void> {
             codingBackend: gateway.decision.entities.codingBackend,
             latencyMs: gateway.latencyMs,
             model: gateway.model,
+            rawResponsePreview: gateway.rawResponsePreview,
           },
         });
       }
