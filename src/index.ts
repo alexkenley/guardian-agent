@@ -13,11 +13,10 @@ import { homedir } from 'node:os';
 import { readFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { loadConfig, DEFAULT_CONFIG_PATH, deepMerge, validateConfig } from './config/loader.js';
+import { loadConfig, DEFAULT_CONFIG_PATH } from './config/loader.js';
 import type {
   AssistantConnectorPlaybookDefinition,
   BrowserConfig,
-  CredentialRefConfig,
   GuardianAgentConfig,
   MCPServerEntry,
   WebSearchConfig,
@@ -98,7 +97,6 @@ import type { ChatMessage, LLMProvider } from './llm/types.js';
 import { IdentityService } from './runtime/identity.js';
 import { AnalyticsService } from './runtime/analytics.js';
 import { buildQuickActionPrompt, getQuickActions } from './quick-actions.js';
-import { evaluateSetupStatus } from './runtime/setup.js';
 import { AiSecurityService, createAiSecuritySessionSnapshot } from './runtime/ai-security.js';
 import { ThreatIntelService } from './runtime/threat-intel.js';
 import { createThreatIntelSourceScanners } from './runtime/threat-intel-osint.js';
@@ -121,18 +119,9 @@ import { NetworkTrafficService } from './runtime/network-traffic.js';
 import { HostMonitoringService, type HostMonitorReport } from './runtime/host-monitor.js';
 import { GatewayFirewallMonitoringService, type GatewayMonitorReport } from './runtime/gateway-monitor.js';
 import {
-  acknowledgeUnifiedSecurityAlert,
   availableSecurityAlertSources,
   collectUnifiedSecurityAlerts,
-  matchesSecurityAlertQuery,
-  normalizeSecurityAlertSeverity,
-  normalizeSecurityAlertSources,
-  resolveUnifiedSecurityAlert,
-  suppressUnifiedSecurityAlert,
-  type SecurityAlertSeverity,
-  type SecurityAlertSource,
 } from './runtime/security-alerts.js';
-import { isSecurityAlertStatus } from './runtime/security-alert-lifecycle.js';
 import {
   DEFAULT_ASSISTANT_SECURITY_AUTO_CONTAINMENT_CATEGORIES,
   DEFAULT_ASSISTANT_SECURITY_AUTO_CONTAINMENT_CONFIDENCE,
@@ -142,9 +131,6 @@ import {
   DEFAULT_DEPLOYMENT_PROFILE,
   DEFAULT_SECURITY_OPERATING_MODE,
   DEFAULT_SECURITY_TRIAGE_LLM_PROVIDER,
-  isDeploymentProfile,
-  isSecurityOperatingMode,
-  isSecurityTriageLlmProvider,
 } from './runtime/security-controls.js';
 import { ContainmentService } from './runtime/containment-service.js';
 import { assessSecurityPosture } from './runtime/security-posture.js';
@@ -209,9 +195,15 @@ import {
   parseDirectFileSearchIntent,
   parseWebSearchIntent,
 } from './runtime/search-intent.js';
-import { applyCredentialRefInput } from './runtime/credential-ref-input.js';
 import { createConfigPersistenceService } from './runtime/control-plane/config-persistence-service.js';
+import { createAuthControlCallbacks } from './runtime/control-plane/auth-control-callbacks.js';
+import { createDirectConfigUpdateHandler } from './runtime/control-plane/direct-config-update.js';
+import { createOperationsDashboardCallbacks } from './runtime/control-plane/operations-dashboard-callbacks.js';
 import { createProviderIntegrationCallbacks } from './runtime/control-plane/provider-integration-callbacks.js';
+import { createSecurityDashboardCallbacks } from './runtime/control-plane/security-dashboard-callbacks.js';
+import { createSetupConfigDashboardCallbacks } from './runtime/control-plane/setup-config-dashboard-callbacks.js';
+import { createToolsDashboardCallbacks } from './runtime/control-plane/tools-dashboard-callbacks.js';
+import { createWorkspaceDashboardCallbacks } from './runtime/control-plane/workspace-dashboard-callbacks.js';
 
 let syncAssistantSecurityMonitoringTask: () => void = () => {};
 import { ToolExecutor } from './tools/executor.js';
@@ -9109,40 +9101,6 @@ function buildDashboardCallbacks(
     },
   });
 
-  const persistThreatIntelState = (): { success: boolean; message: string } => {
-    const rawConfig = loadRawConfig();
-    rawConfig.assistant = rawConfig.assistant ?? {};
-    const rawAssistant = rawConfig.assistant as Record<string, unknown>;
-    const existingThreatIntel = (rawAssistant.threatIntel as Record<string, unknown> | undefined) ?? {};
-
-    rawAssistant.threatIntel = {
-      ...existingThreatIntel,
-      enabled: configRef.current.assistant.threatIntel.enabled,
-      allowDarkWeb: configRef.current.assistant.threatIntel.allowDarkWeb,
-      responseMode: threatIntel.getSummary().responseMode,
-      watchlist: threatIntel.listWatchlist(),
-      autoScanIntervalMinutes: configRef.current.assistant.threatIntel.autoScanIntervalMinutes,
-    };
-
-    return persistAndApplyConfig(rawConfig, {
-      changedBy: 'threat-intel',
-      reason: 'threat intel settings update',
-    });
-  };
-
-  const getAuthStatus = () => ({
-    mode: webAuthStateRef.current.mode,
-    tokenConfigured: !!webAuthStateRef.current.token,
-    tokenSource: webAuthStateRef.current.tokenSource ?? 'ephemeral',
-    tokenPreview: webAuthStateRef.current.token
-      ? `${webAuthStateRef.current.token.slice(0, 4)}...${webAuthStateRef.current.token.slice(-4)}`
-      : undefined,
-    rotateOnStartup: !!webAuthStateRef.current.rotateOnStartup,
-    sessionTtlMinutes: webAuthStateRef.current.sessionTtlMinutes,
-    host: configRef.current.channels.web?.host ?? 'localhost',
-    port: configRef.current.channels.web?.port ?? 3000,
-  });
-
   const normalizeCredentialRefUpdates = (refs: Record<string, {
     source?: 'env' | 'local';
     env?: string;
@@ -9241,27 +9199,6 @@ function buildDashboardCallbacks(
     }
   };
 
-  const persistAuthState = (): { success: boolean; message: string } => {
-    const rawConfig = loadRawConfig();
-    rawConfig.channels = rawConfig.channels ?? {};
-    const rawChannels = rawConfig.channels as Record<string, unknown>;
-    const rawWeb = (rawChannels.web as Record<string, unknown> | undefined) ?? {};
-    rawWeb.enabled = rawWeb.enabled ?? true;
-    rawWeb.auth = {
-      mode: webAuthStateRef.current.mode,
-      rotateOnStartup: webAuthStateRef.current.rotateOnStartup ?? false,
-      sessionTtlMinutes: webAuthStateRef.current.sessionTtlMinutes,
-      tokenSource: webAuthStateRef.current.tokenSource ?? 'ephemeral',
-    };
-    delete (rawWeb.auth as Record<string, unknown>).token;
-    delete rawWeb.authToken;
-    rawChannels.web = rawWeb;
-    return persistAndApplyConfig(rawConfig, {
-      changedBy: 'auth-control',
-      reason: 'web auth settings update',
-    });
-  };
-
   const persistToolsState = (policy: ToolPolicySnapshot): { success: boolean; message: string } => {
     const rawConfig = loadRawConfig();
     rawConfig.assistant = rawConfig.assistant ?? {};
@@ -9316,59 +9253,33 @@ function buildDashboardCallbacks(
       reason: 'connector/playbook update',
     });
   };
-  const connectorWorkflowOps = {
-    upsert: (playbook: AssistantConnectorPlaybookDefinition) => {
-      const before = connectors.getConfig();
-      const result = connectors.upsertPlaybook(playbook);
-      if (!result.success) return result;
-      const persisted = persistConnectorsState();
-      if (!persisted.success) {
-        connectors.updateConfig(before);
-        return persisted;
-      }
+  const operationsDashboard = createOperationsDashboardCallbacks({
+    configRef,
+    connectors,
+    deviceInventory,
+    networkBaseline,
+    hostMonitor,
+    gatewayMonitor,
+    windowsDefender,
+    aiSecurity,
+    packageInstallTrust: sharedPackageInstallTrustService,
+    containmentService,
+    securityActivityLog,
+    persistConnectorsState,
+    runNetworkAnalysis,
+    runHostMonitoring,
+    runGatewayMonitoring,
+    runWindowsDefenderRefresh,
+    getSecurityContainmentInputs,
+    trackSystemAnalytics: (type, metadata) => {
       analytics.track({
-        type: 'playbook_upserted',
+        type,
         channel: 'system',
         canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        metadata: { playbookId: playbook.id, enabled: String(playbook.enabled), mode: playbook.mode },
+        metadata,
       });
-      return result;
     },
-    delete: (playbookId: string) => {
-      const before = connectors.getConfig();
-      const result = connectors.deletePlaybook(playbookId);
-      if (!result.success) return result;
-      const persisted = persistConnectorsState();
-      if (!persisted.success) {
-        connectors.updateConfig(before);
-        return persisted;
-      }
-      analytics.track({
-        type: 'playbook_deleted',
-        channel: 'system',
-        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        metadata: { playbookId },
-      });
-      return result;
-    },
-    run: async (input: {
-      playbookId: string;
-      dryRun?: boolean;
-      origin?: 'assistant' | 'cli' | 'web';
-      agentId?: string;
-      userId?: string;
-      channel?: string;
-      requestedBy?: string;
-    }) => {
-      const result = await connectors.runPlaybook({
-        playbookId: input.playbookId,
-        dryRun: input.dryRun,
-        origin: input.origin ?? 'web',
-        agentId: input.agentId,
-        userId: input.userId,
-        channel: input.channel,
-        requestedBy: input.requestedBy,
-      });
+    trackConnectorRunAnalytics: (input, result) => {
       analytics.track({
         type: result.success ? 'playbook_run_succeeded' : 'playbook_run_failed',
         channel: input.channel ?? 'system',
@@ -9381,20 +9292,8 @@ function buildDashboardCallbacks(
           dryRun: String(!!input.dryRun),
         },
       });
-      if (result.run?.steps) {
-        deviceInventory.ingestPlaybookResults(result.run.steps);
-        const hasNetworkScanSteps = result.run.steps.some((step) =>
-          step.toolName === 'net_arp_scan'
-          || step.toolName === 'net_port_check'
-          || step.toolName === 'net_dns_lookup',
-        );
-        if (hasNetworkScanSteps) {
-          runNetworkAnalysis('playbook-run:web');
-        }
-      }
-      return result;
     },
-  };
+  });
 
   const buildProviderInfo = async (withConnectivity: boolean): Promise<DashboardProviderInfo[]> => {
     const results: DashboardProviderInfo[] = [];
@@ -10173,6 +10072,62 @@ function buildDashboardCallbacks(
       ...(continuedResponse ? { continuedResponse } : {}),
     };
   };
+  const applyDirectConfigUpdate = createDirectConfigUpdateHandler({
+    configRef,
+    jobTracker,
+    loadRawConfig,
+    persistAndApplyConfig,
+    normalizeCredentialRefUpdates,
+    storeSecret: (secretId, value) => {
+      secretStore.set(secretId, value);
+    },
+    deleteUnusedLocalSecrets,
+    mergeCloudConfigForValidation: (current, update) => (
+      update ? mergeCloudConfigForValidation(current, update) : current
+    ),
+    previewSecurityBaselineViolations,
+    buildSecurityBaselineRejection: (violations, source, attemptedChange) =>
+      buildSecurityBaselineRejection(
+        violations as SecurityBaselineViolation[],
+        source,
+        attemptedChange,
+      ),
+    trackSystemAnalytics: (type, metadata) => {
+      analytics.track({
+        type,
+        channel: 'system',
+        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
+        metadata,
+      });
+    },
+    upsertLocalCredentialRef,
+    existingProfilesById,
+    trimOrUndefined,
+    hasOwn,
+    isRecord,
+    sanitizeNormalizedUrlRecord,
+  });
+  const setupConfigCallbacks = createSetupConfigDashboardCallbacks({
+    configRef,
+    toolExecutor,
+    buildProviderInfo,
+    jobTracker,
+    loadRawConfig,
+    persistAndApplyConfig,
+    upsertLocalCredentialRef,
+    isLocalProviderEndpoint,
+    getProviderLocality: (llmCfg) => getProviderLocality(
+      llmCfg as Pick<LLMConfig, 'provider' | 'baseUrl'> | undefined,
+    ) ?? 'external',
+    trackSystemAnalytics: (type, metadata) => {
+      analytics.track({
+        type,
+        channel: 'system',
+        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
+        metadata,
+      });
+    },
+  });
 
   return {
     onAgents: (): DashboardAgentInfo[] => {
@@ -10211,65 +10166,21 @@ function buildDashboardCallbacks(
 
     onConfig: () => redactConfig(configRef.current),
 
-    onAuthStatus: () => getAuthStatus(),
-
-    onAuthUpdate: async (input) => {
-      if (input.token?.trim()) {
-        return {
-          success: false,
-          message: 'Dashboard auth no longer accepts raw token values. Use Rotate Token for an ephemeral runtime token instead.',
-          status: getAuthStatus(),
-        };
-      }
-      const nextMode = input.mode ?? webAuthStateRef.current.mode;
-      const nextToken = nextMode === 'bearer_required'
-        ? (webAuthStateRef.current.token || generateSecureToken())
-        : webAuthStateRef.current.token;
-      webAuthStateRef.current = {
-        ...webAuthStateRef.current,
-        mode: nextMode,
-        token: nextToken,
-        rotateOnStartup: input.rotateOnStartup ?? webAuthStateRef.current.rotateOnStartup,
-        sessionTtlMinutes: input.sessionTtlMinutes ?? webAuthStateRef.current.sessionTtlMinutes,
-        tokenSource: nextToken ? (webAuthStateRef.current.tokenSource ?? 'ephemeral') : 'ephemeral',
-      };
-      applyWebAuthRuntime(webAuthStateRef.current);
-      const persisted = persistAuthState();
-      if (!persisted.success) {
-        return { success: false, message: persisted.message, status: getAuthStatus() };
-      }
-      analytics.track({
-        type: 'auth_updated',
-        channel: 'system',
-        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        metadata: { mode: nextMode },
-      });
-      return { success: true, message: 'Web auth settings saved.', status: getAuthStatus() };
-    },
-
-    onAuthRotate: async () => {
-      const token = generateSecureToken();
-      webAuthStateRef.current = {
-        ...webAuthStateRef.current,
-        token,
-        tokenSource: 'ephemeral',
-      };
-      applyWebAuthRuntime(webAuthStateRef.current);
-      const persisted = persistAuthState();
-      if (!persisted.success) {
-        return { success: false, message: persisted.message, status: getAuthStatus() };
-      }
-      analytics.track({
-        type: 'auth_token_rotated',
-        channel: 'system',
-        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-      });
-      return { success: true, message: 'Bearer token rotated.', token, status: getAuthStatus() };
-    },
-
-    onAuthReveal: () => ({
-      success: !!webAuthStateRef.current.token,
-      token: webAuthStateRef.current.token,
+    ...createAuthControlCallbacks({
+      configRef,
+      webAuthStateRef,
+      applyWebAuthRuntime,
+      generateSecureToken,
+      loadRawConfig,
+      persistAndApplyConfig,
+      trackAnalytics: (type, metadata) => {
+        analytics.track({
+          type,
+          channel: 'system',
+          canonicalUserId: configRef.current.assistant.identity.primaryUserId,
+          metadata,
+        });
+      },
     }),
 
     onBudget: () => {
@@ -10479,739 +10390,53 @@ function buildDashboardCallbacks(
       return runTimeline.getRun(runId);
     },
 
-    onToolsState: ({ limit } = {}) => ({
-      enabled: toolExecutor.isEnabled(),
-      tools: toolExecutor.listToolDefinitions(),
-      policy: toolExecutor.getPolicy(),
-      approvals: toolExecutor.listApprovals(limit ?? 50),
-      jobs: toolExecutor.listJobs(limit ?? 50),
-      notices: toolExecutor.getRuntimeNotices(),
-      sandbox: toolExecutor.getSandboxHealth(),
-      categories: toolExecutor.getCategoryInfo(),
-      disabledCategories: toolExecutor.getDisabledCategories(),
-      providerRouting: configRef.current.assistant.tools.providerRouting ?? {},
-      providerRoutingEnabled: configRef.current.assistant.tools.providerRoutingEnabled !== false,
-      defaultProviderLocality: (configRef.current.llm[configRef.current.defaultProvider]?.provider === 'ollama' ? 'local' : 'external') as 'local' | 'external',
-      categoryDefaults: computeCategoryDefaults(configRef.current.llm as Record<string, { provider?: string }>),
-    }),
-
-    onToolsPendingApprovals: ({ userId, channel, principalId, limit }) => {
-      const ids = toolExecutor.listPendingApprovalIdsForUser(userId, channel, {
-        limit: limit ?? 20,
-        includeUnscoped: channel === 'web',
-        principalId,
-      });
-      const summaries = toolExecutor.getApprovalSummaries(ids);
-      return ids.map((id) => {
-        const summary = summaries.get(id);
-        return {
-          id,
-          toolName: summary?.toolName ?? 'unknown',
-          argsPreview: summary?.argsPreview ?? '',
-        };
-      });
-    },
-
-    onPendingActionCurrent: ({ userId, channel, surfaceId }) => {
-      const preferredAgentId = configRef.current.channels.web?.defaultAgent
-        || configRef.current.agents[0]?.id
-        || 'default';
-      const stateAgentId = resolveSharedStateAgentId(preferredAgentId) ?? preferredAgentId;
-      const canonicalUserId = identity.resolveCanonicalUserId(channel, userId);
-      const pendingAction = pendingActionStore.resolveActiveForSurface({
-        agentId: stateAgentId,
-        userId: canonicalUserId,
-        channel,
-        surfaceId,
-      });
-      return {
-        pendingAction: toPendingActionClientMetadata(pendingAction) ?? null,
-      };
-    },
-
-    onSkillsState: () => {
-      const config = configRef.current.assistant.skills;
-      const statuses = skillRegistry?.listStatus() ?? [];
-      const managedProviderIds = new Set<string>(['gws', 'm365']);
-      for (const skill of statuses) {
-        if (skill.requiredManagedProvider) {
-          managedProviderIds.add(skill.requiredManagedProvider);
-        }
-      }
-      return {
-        enabled: config.enabled,
-        autoSelect: config.autoSelect,
-        maxActivePerRequest: config.maxActivePerRequest,
-        managedProviders: [...managedProviderIds]
-          .sort((a, b) => a.localeCompare(b))
-          .map((id) => ({
-            id,
-            enabled: enabledManagedProviders.has(id),
-          })),
-        skills: statuses.map((skill) => {
-          const requiresProvider = skill.requiredManagedProvider;
-          const providerReady = requiresProvider ? enabledManagedProviders.has(requiresProvider) : undefined;
-          let disabledReason: string | undefined;
-          if (!skill.enabled) {
-            disabledReason = 'Disabled at runtime.';
-          } else if (requiresProvider && !providerReady) {
-            disabledReason = `Requires managed provider '${requiresProvider}' to be enabled and connected.`;
-          }
-          return {
-            ...skill,
-            providerReady,
-            disabledReason,
-          };
-        }),
-      };
-    },
-
-    onSkillsUpdate: ({ skillId, enabled }) => {
-      if (!skillRegistry) {
-        return { success: false, message: 'Skills runtime is not available.' };
-      }
-      const updated = enabled ? skillRegistry.enable(skillId) : skillRegistry.disable(skillId);
-      if (!updated) {
-        return { success: false, message: `Skill '${skillId}' was not found.` };
-      }
-      const disabledIds = skillRegistry.listStatus()
-        .filter((skill) => !skill.enabled)
-        .map((skill) => skill.id);
-      configRef.current.assistant.skills.disabledSkills = disabledIds;
-      const persisted = persistSkillsState();
-      if (!persisted.success) {
-        if (enabled) {
-          skillRegistry.disable(skillId);
-        } else {
-          skillRegistry.enable(skillId);
-        }
-        configRef.current.assistant.skills.disabledSkills = skillRegistry.listStatus()
-          .filter((skill) => !skill.enabled)
-          .map((skill) => skill.id);
-        return { success: false, message: persisted.message };
-      }
-      return {
-        success: true,
-        message: enabled
-          ? `Skill '${skillId}' enabled and persisted to config.`
-          : `Skill '${skillId}' disabled and persisted to config.`,
-      };
-    },
-
-    onToolsRun: async (input) => {
-      const resolvedChannel = input.channel?.trim() || 'web';
-      const channelUserId = input.userId?.trim() || `${resolvedChannel}-user`;
-      const canonicalUserId = (resolvedChannel === 'code-session' && channelUserId.startsWith('code-session:'))
-        ? channelUserId
-        : identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
-      const requestedCodeContext = readCodeRequestMetadata(input.metadata);
-      let resolvedCodeContext = requestedCodeContext?.workspaceRoot
-        ? {
-            workspaceRoot: requestedCodeContext.workspaceRoot,
-            ...(requestedCodeContext.sessionId ? { sessionId: requestedCodeContext.sessionId } : {}),
-          }
-        : undefined;
-      if (requestedCodeContext?.sessionId) {
-        const resolvedSession = codeSessionStore.resolveForRequest({
-          requestedSessionId: requestedCodeContext.sessionId,
-          userId: canonicalUserId,
-          principalId: input.principalId ?? input.userId,
-          channel: resolvedChannel,
-          surfaceId: getCodeSessionSurfaceId({
-            surfaceId: input.surfaceId ?? readMessageSurfaceId(input.metadata),
-            userId: canonicalUserId,
-            principalId: input.principalId ?? input.userId,
-          }),
-          touchAttachment: false,
+    ...createToolsDashboardCallbacks({
+      configRef,
+      toolExecutor,
+      skillRegistry: skillRegistry ?? null,
+      enabledManagedProviders,
+      identity,
+      pendingActionStore,
+      codeSessionStore,
+      resolveSharedStateAgentId,
+      getCodeSessionSurfaceId,
+      readMessageSurfaceId,
+      readCodeRequestMetadata,
+      persistToolsState: (policy) => {
+        runtime.applyShellAllowedCommands(policy.sandbox.allowedCommands);
+        return persistToolsState(policy);
+      },
+      persistSkillsState,
+      applyBrowserRuntimeConfig,
+      decideDashboardToolApproval,
+      getCategoryDefaults: () => computeCategoryDefaults(configRef.current.llm as Record<string, { provider?: string }>),
+      trackSystemAnalytics: (type, metadata) => {
+        analytics.track({
+          type,
+          channel: 'system',
+          canonicalUserId: configRef.current.assistant.identity.primaryUserId,
+          metadata,
         });
-        if (resolvedSession) {
-          resolvedCodeContext = {
-            sessionId: resolvedSession.session.id,
-            workspaceRoot: resolvedSession.session.resolvedRoot,
-          };
-        }
-      }
-      const result = await toolExecutor.runTool({
-        toolName: input.toolName,
-        args: input.args ?? {},
-        origin: input.origin ?? 'web',
-        agentId: input.agentId ?? (configRef.current.channels.web?.defaultAgent ?? configRef.current.channels.cli?.defaultAgent),
-        userId: canonicalUserId,
-        surfaceId: input.surfaceId ?? readMessageSurfaceId(input.metadata),
-        principalId: input.principalId ?? input.userId,
-        principalRole: input.principalRole ?? 'owner',
-        contentTrustLevel: input.contentTrustLevel,
-        taintReasons: input.taintReasons,
-        derivedFromTaintedContent: input.derivedFromTaintedContent,
-        scheduleId: input.scheduleId,
-        channel: input.channel,
-        codeContext: resolvedCodeContext,
-      });
-      analytics.track({
-        type: result.success ? 'tool_run_succeeded' : 'tool_run_failed',
-        channel: input.channel ?? 'system',
-        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        channelUserId: input.userId ?? 'system',
-        agentId: input.agentId,
-        metadata: {
-          tool: input.toolName,
-          status: result.status,
-          approvalId: result.approvalId,
-        },
-      });
-      return result;
-    },
-
-    onToolsPreflight: ({ tools, requests }) => {
-      const inputs = Array.isArray(requests) && requests.length > 0 ? requests : (tools ?? []);
-      const results = toolExecutor.preflightTools(inputs);
-      const policy = toolExecutor.getPolicy();
-      return {
-        results,
-        policy: {
-          mode: policy.mode,
-          allowedPaths: [...policy.sandbox.allowedPaths],
-          allowedCommands: [...policy.sandbox.allowedCommands],
-          allowedDomains: [...policy.sandbox.allowedDomains],
-        },
-      };
-    },
-
-    onToolsPolicyUpdate: (input) => {
-      const policy = toolExecutor.updatePolicy(input);
-      runtime.applyShellAllowedCommands(policy.sandbox.allowedCommands);
-      configRef.current.assistant.tools = {
-        ...configRef.current.assistant.tools,
-        policyMode: policy.mode,
-        toolPolicies: { ...policy.toolPolicies },
-        allowedPaths: [...policy.sandbox.allowedPaths],
-        allowedCommands: [...policy.sandbox.allowedCommands],
-        allowedDomains: [...policy.sandbox.allowedDomains],
-      };
-      const persisted = persistToolsState(policy);
-      if (!persisted.success) {
-        return { success: false, message: persisted.message };
-      }
-      analytics.track({
-        type: 'tool_policy_updated',
-        channel: 'system',
-        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        metadata: {
-          mode: policy.mode,
-          paths: policy.sandbox.allowedPaths.length,
-          commands: policy.sandbox.allowedCommands.length,
-          domains: policy.sandbox.allowedDomains.length,
-        },
-      });
-      return {
-        success: true,
-        message: 'Tool policy updated and applied live (no restart required).',
-        policy,
-      };
-    },
-
-    onBrowserConfigState: () => {
-      const browser = configRef.current.assistant.tools.browser;
-      return {
-        enabled: browser?.enabled ?? true,
-        allowedDomains: browser?.allowedDomains ?? configRef.current.assistant.tools.allowedDomains ?? [],
-        playwrightEnabled: browser?.playwrightEnabled ?? true,
-        playwrightBrowser: browser?.playwrightBrowser ?? 'chromium',
-        playwrightCaps: browser?.playwrightCaps ?? 'network,storage',
-      };
-    },
-
-    onBrowserConfigUpdate: async (input) => {
-      const current = configRef.current.assistant.tools.browser ?? { enabled: true };
-      const updated = {
-        enabled: input.enabled ?? current.enabled ?? true,
-        allowedDomains: input.allowedDomains ?? current.allowedDomains,
-        playwrightEnabled: input.playwrightEnabled ?? current.playwrightEnabled ?? true,
-        playwrightBrowser: (input.playwrightBrowser ?? current.playwrightBrowser ?? 'chromium') as BrowserConfig['playwrightBrowser'],
-        playwrightCaps: input.playwrightCaps ?? current.playwrightCaps ?? 'network,storage',
-        playwrightArgs: current.playwrightArgs,
-      };
-      configRef.current.assistant.tools.browser = updated;
-      const persisted = persistToolsState(toolExecutor.getPolicy());
-      if (!persisted.success) {
-        return { success: false, message: persisted.message };
-      }
-      const liveResult = await applyBrowserRuntimeConfig(configRef.current.assistant.tools.browser);
-      analytics.track({
-        type: 'browser_config_updated',
-        channel: 'system',
-        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        metadata: { enabled: updated.enabled, liveApplied: liveResult.success },
-      });
-      return liveResult;
-    },
-
-    onToolsApprovalDecision: async (input) => {
-      return decideDashboardToolApproval(input);
-    },
-
-    onToolsCategories: () => toolExecutor.getCategoryInfo(),
-
-    onToolsCategoryToggle: (input) => {
-      const { category, enabled } = input;
-      toolExecutor.setCategoryEnabled(category, enabled);
-      const disabled = toolExecutor.getDisabledCategories();
-      configRef.current.assistant.tools.disabledCategories = disabled;
-      const persisted = persistToolsState(toolExecutor.getPolicy());
-      if (!persisted.success) {
-        return { success: false, message: persisted.message };
-      }
-      analytics.track({
-        type: 'tool_category_toggled',
-        channel: 'system',
-        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        metadata: { category, enabled },
-      });
-      return {
-        success: true,
-        message: `Category '${category}' ${enabled ? 'enabled' : 'disabled'}.`,
-      };
-    },
-
-    onToolsProviderRoutingUpdate: (input) => {
-      // Handle enabled/disabled toggle
-      if (typeof input.enabled === 'boolean') {
-        configRef.current.assistant.tools.providerRoutingEnabled = input.enabled;
-      }
-
-      // Handle routing map update (if provided)
-      if (input.routing) {
-        const validValues = new Set(['local', 'external', 'default']);
-        const routing: Record<string, 'local' | 'external' | 'default'> = {};
-        for (const [key, value] of Object.entries(input.routing)) {
-          if (!validValues.has(value as string)) {
-            return { success: false, message: `Invalid routing value '${value}' for '${key}'. Must be local, external, or default.` };
-          }
-          // Strip 'default' entries — they're no-ops and clutter the config
-          if (value !== 'default') {
-            routing[key] = value as 'local' | 'external' | 'default';
-          }
-        }
-        configRef.current.assistant.tools.providerRouting = routing;
-      }
-
-      const persisted = persistToolsState(toolExecutor.getPolicy());
-      if (!persisted.success) {
-        return { success: false, message: persisted.message };
-      }
-      return { success: true, message: 'Provider routing updated.' };
-    },
-
-    onConnectorsState: ({ limitRuns } = {}) => connectors.getState(limitRuns ?? 50),
-
-    onConnectorsSettingsUpdate: (input) => {
-      const before = connectors.getConfig();
-      const result = connectors.updateSettings(input);
-      if (!result.success) return result;
-      const persisted = persistConnectorsState();
-      if (!persisted.success) {
-        connectors.updateConfig(before);
-        return persisted;
-      }
-
-      analytics.track({
-        type: 'connector_settings_updated',
-        channel: 'system',
-        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        metadata: {
-          enabled: String(input.enabled ?? ''),
-          executionMode: input.executionMode ?? '',
-        },
-      });
-      return result;
-    },
-
-    onConnectorsPackUpsert: (pack) => {
-      const before = connectors.getConfig();
-      const result = connectors.upsertPack(pack);
-      if (!result.success) return result;
-      const persisted = persistConnectorsState();
-      if (!persisted.success) {
-        connectors.updateConfig(before);
-        return persisted;
-      }
-
-      analytics.track({
-        type: 'connector_pack_upserted',
-        channel: 'system',
-        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        metadata: { packId: pack.id, enabled: String(pack.enabled) },
-      });
-      return result;
-    },
-
-    onConnectorsPackDelete: (packId) => {
-      const before = connectors.getConfig();
-      const result = connectors.deletePack(packId);
-      if (!result.success) return result;
-      const persisted = persistConnectorsState();
-      if (!persisted.success) {
-        connectors.updateConfig(before);
-        return persisted;
-      }
-
-      analytics.track({
-        type: 'connector_pack_deleted',
-        channel: 'system',
-        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        metadata: { packId },
-      });
-      return result;
-    },
-
-    connectorWorkflowOps,
-
-    onNetworkDevices: () => ({
-      devices: deviceInventory.listDevices(),
+      },
+      trackToolRunAnalytics: (input, result) => {
+        analytics.track({
+          type: result.success ? 'tool_run_succeeded' : 'tool_run_failed',
+          channel: input.channel ?? 'system',
+          canonicalUserId: configRef.current.assistant.identity.primaryUserId,
+          channelUserId: input.userId ?? 'system',
+          agentId: input.agentId,
+          metadata: {
+            tool: input.toolName,
+            status: result.status,
+            approvalId: result.approvalId,
+          },
+        });
+      },
     }),
 
-    onNetworkScan: async () => {
-      // Try to run the network-discovery workflow if it already exists.
-      const state = connectors.getState();
-      const pb = state.playbooks.find((p) => p.id === 'network-discovery');
-      if (!pb) {
-        // Materialize the built-in Home Network example and retry.
-        const materialized = materializeBuiltinAutomationExample('home-network', connectors);
-        if (!materialized.success) {
-          return { success: false, message: 'Could not create the Home Network starter example for scanning.', devicesFound: 0 };
-        }
-        persistConnectorsState();
-      }
-      const result = await connectors.runPlaybook({
-        playbookId: 'network-discovery',
-        origin: 'web',
-        userId: 'web-user',
-        channel: 'web',
-        requestedBy: 'web-user',
-      });
-      if (result.run?.steps) {
-        deviceInventory.ingestPlaybookResults(result.run.steps);
-      }
-      const report = runNetworkAnalysis('network-scan:web');
-      return {
-        success: result.success,
-        message: report.anomalies.length > 0
-          ? `${result.message} (${report.anomalies.length} network anomalies detected)`
-          : result.message,
-        devicesFound: deviceInventory.size,
-        run: result.run,
-      };
-    },
+    ...operationsDashboard.callbacks,
 
-    onNetworkBaseline: () => networkBaseline.getSnapshot(),
-
-    onNetworkThreats: (args) => {
-      const includeAcknowledged = !!args?.includeAcknowledged;
-      const parsedLimit = Number(args?.limit ?? 100);
-      const limit = Number.isFinite(parsedLimit) ? Math.max(1, Math.min(500, parsedLimit)) : 100;
-      const alerts = networkBaseline.listAlerts({ includeAcknowledged, limit });
-      const bySeverity = {
-        low: alerts.filter((a) => a.severity === 'low').length,
-        medium: alerts.filter((a) => a.severity === 'medium').length,
-        high: alerts.filter((a) => a.severity === 'high').length,
-        critical: alerts.filter((a) => a.severity === 'critical').length,
-      };
-      const baseline = networkBaseline.getSnapshot();
-      return {
-        alerts,
-        activeAlertCount: alerts.length,
-        bySeverity,
-        baselineReady: baseline.baselineReady,
-        snapshotCount: baseline.snapshotCount,
-      };
-    },
-
-    onNetworkThreatAcknowledge: (alertId) => {
-      if (!alertId.trim()) {
-        return { success: false, message: 'alertId is required' };
-      }
-      return networkBaseline.acknowledgeAlert(alertId.trim());
-    },
-
-    onSecurityAlerts: (args) => {
-      const includeAcknowledged = !!args?.includeAcknowledged;
-      const includeInactive = !!args?.includeInactive;
-      const parsedLimit = Number(args?.limit ?? 100);
-      const limit = Number.isFinite(parsedLimit) ? Math.max(1, Math.min(500, parsedLimit)) : 100;
-      const query = typeof args?.query === 'string' ? args.query.trim() : '';
-      const severity = normalizeSecurityAlertSeverity(args?.severity);
-      const status = typeof args?.status === 'string' && isSecurityAlertStatus(args.status)
-        ? args.status
-        : undefined;
-      const typeFilter = typeof args?.type === 'string' ? args.type.trim().toLowerCase() : '';
-      const selectedSources = normalizeSecurityAlertSources(args?.source, args?.sources);
-
-      let alerts = collectUnifiedSecurityAlerts({
-        hostMonitor,
-        networkBaseline,
-        gatewayMonitor,
-        windowsDefender,
-        assistantSecurity: aiSecurity,
-        packageInstallTrust: sharedPackageInstallTrustService,
-        includeAcknowledged,
-        includeInactive,
-      });
-      if (selectedSources.length > 0) {
-        const allowed = new Set(selectedSources);
-        alerts = alerts.filter((alert) => allowed.has(alert.source));
-      }
-      if (severity) {
-        alerts = alerts.filter((alert) => alert.severity === severity);
-      }
-      if (status) {
-        alerts = alerts.filter((alert) => alert.status === status);
-      }
-      if (typeFilter) {
-        alerts = alerts.filter((alert) => alert.type.toLowerCase() === typeFilter);
-      }
-      if (query) {
-        alerts = alerts.filter((alert) => matchesSecurityAlertQuery(alert, query));
-      }
-
-      alerts.sort((a, b) => b.lastSeenAt - a.lastSeenAt);
-      const bySource: Record<SecurityAlertSource, number> = { host: 0, network: 0, gateway: 0, native: 0, assistant: 0, install: 0 };
-      const bySeverity: Record<SecurityAlertSeverity, number> = { low: 0, medium: 0, high: 0, critical: 0 };
-      for (const alert of alerts) {
-        bySource[alert.source] += 1;
-        bySeverity[alert.severity] += 1;
-      }
-
-      return {
-        alerts: alerts.slice(0, limit),
-        totalMatches: alerts.length,
-        returned: Math.min(alerts.length, limit),
-        searchedSources: selectedSources.length > 0 ? selectedSources : availableSecurityAlertSources({
-          hostMonitor,
-          networkBaseline,
-          gatewayMonitor,
-          windowsDefender,
-          assistantSecurity: aiSecurity,
-          packageInstallTrust: sharedPackageInstallTrustService,
-        }),
-        includeAcknowledged,
-        includeInactive,
-        query: query || undefined,
-        severity: severity ?? undefined,
-        status,
-        type: typeFilter || undefined,
-        bySource,
-        bySeverity,
-      };
-    },
-
-    onSecurityAlertAcknowledge: ({ alertId, source }) => {
-      if (!alertId.trim()) {
-        return { success: false, message: 'alertId is required' };
-      }
-      const result = acknowledgeUnifiedSecurityAlert({
-        alertId: alertId.trim(),
-        source,
-        hostMonitor,
-        networkBaseline,
-        gatewayMonitor,
-        windowsDefender,
-        assistantSecurity: aiSecurity,
-        packageInstallTrust: sharedPackageInstallTrustService,
-      });
-      return {
-        success: result.success,
-        message: result.message,
-        source: result.source,
-      };
-    },
-
-    onSecurityAlertResolve: ({ alertId, source, reason }) => {
-      if (!alertId.trim()) {
-        return { success: false, message: 'alertId is required' };
-      }
-      const result = resolveUnifiedSecurityAlert({
-        alertId: alertId.trim(),
-        source,
-        reason,
-        hostMonitor,
-        networkBaseline,
-        gatewayMonitor,
-        windowsDefender,
-        assistantSecurity: aiSecurity,
-        packageInstallTrust: sharedPackageInstallTrustService,
-      });
-      return {
-        success: result.success,
-        message: result.message,
-        source: result.source,
-      };
-    },
-
-    onSecurityAlertSuppress: ({ alertId, source, suppressedUntil, reason }) => {
-      if (!alertId.trim()) {
-        return { success: false, message: 'alertId is required' };
-      }
-      const result = suppressUnifiedSecurityAlert({
-        alertId: alertId.trim(),
-        source,
-        suppressedUntil,
-        reason,
-        hostMonitor,
-        networkBaseline,
-        gatewayMonitor,
-        windowsDefender,
-        assistantSecurity: aiSecurity,
-        packageInstallTrust: sharedPackageInstallTrustService,
-      });
-      return {
-        success: result.success,
-        message: result.message,
-        source: result.source,
-      };
-    },
-
-    onSecurityPosture: (args) => {
-      const configuredSecurity = configRef.current.assistant.security;
-      const profile = args?.profile
-        ?? configuredSecurity?.deploymentProfile
-        ?? DEFAULT_DEPLOYMENT_PROFILE;
-      const currentMode = args?.currentMode
-        ?? configuredSecurity?.operatingMode
-        ?? DEFAULT_SECURITY_OPERATING_MODE;
-      const includeAcknowledged = !!args?.includeAcknowledged;
-      const alerts = collectUnifiedSecurityAlerts({
-        hostMonitor,
-        networkBaseline,
-        gatewayMonitor,
-        windowsDefender,
-        assistantSecurity: aiSecurity,
-        packageInstallTrust: sharedPackageInstallTrustService,
-        includeAcknowledged,
-        includeInactive: false,
-      });
-      return assessSecurityPosture({
-        profile,
-        currentMode,
-        alerts,
-        availableSources: availableSecurityAlertSources({
-          hostMonitor,
-          networkBaseline,
-          gatewayMonitor,
-          windowsDefender,
-          assistantSecurity: aiSecurity,
-          packageInstallTrust: sharedPackageInstallTrustService,
-        }),
-      });
-    },
-
-    onSecurityContainmentStatus: (args) => {
-      const base = getSecurityContainmentInputs();
-      const profile = args?.profile ?? base.profile;
-      const currentMode = args?.currentMode ?? base.currentMode;
-      const posture = assessSecurityPosture({
-        profile,
-        currentMode,
-        alerts: base.alerts,
-        availableSources: availableSecurityAlertSources({
-          hostMonitor,
-          networkBaseline,
-          gatewayMonitor,
-          windowsDefender,
-          assistantSecurity: aiSecurity,
-          packageInstallTrust: sharedPackageInstallTrustService,
-        }),
-      });
-      return containmentService.getState({
-        profile,
-        currentMode,
-        alerts: base.alerts,
-        posture,
-        assistantAutoContainment: configRef.current.assistant.security?.autoContainment,
-      });
-    },
-
-    onSecurityActivityLog: (args) => {
-      const status = typeof args?.status === 'string' ? args.status : undefined;
-      return securityActivityLog.list({
-        limit: args?.limit,
-        status,
-        agentId: args?.agentId,
-      });
-    },
-
-    onWindowsDefenderStatus: () => ({
-      status: windowsDefender.getStatus(),
-      alerts: windowsDefender.listAlerts({
-        includeAcknowledged: true,
-        includeInactive: true,
-        limit: 100,
-      }),
-    }),
-
-    onWindowsDefenderRefresh: async () => ({
-      status: await runWindowsDefenderRefresh('web:manual'),
-      alerts: windowsDefender.listAlerts({
-        includeAcknowledged: true,
-        includeInactive: true,
-        limit: 100,
-      }),
-    }),
-
-    onWindowsDefenderScan: async ({ type, path }) => windowsDefender.runScan({ type, path }),
-
-    onWindowsDefenderUpdateSignatures: async () => windowsDefender.updateSignatures(),
-
-    onHostMonitorStatus: () => hostMonitor.getStatus(),
-
-    onHostMonitorAlerts: (args) => {
-      const includeAcknowledged = !!args?.includeAcknowledged;
-      const parsedLimit = Number(args?.limit ?? 100);
-      const limit = Number.isFinite(parsedLimit) ? Math.max(1, Math.min(500, parsedLimit)) : 100;
-      const alerts = hostMonitor.listAlerts({ includeAcknowledged, limit });
-      const status = hostMonitor.getStatus();
-      return {
-        alerts,
-        activeAlertCount: alerts.length,
-        bySeverity: status.bySeverity,
-        baselineReady: status.baselineReady,
-        lastUpdatedAt: status.lastUpdatedAt,
-      };
-    },
-
-    onHostMonitorAcknowledge: (alertId) => {
-      if (!alertId.trim()) {
-        return { success: false, message: 'alertId is required' };
-      }
-      return hostMonitor.acknowledgeAlert(alertId.trim());
-    },
-
-    onHostMonitorCheck: () => runHostMonitoring('web:manual'),
-
-    onGatewayMonitorStatus: () => gatewayMonitor.getStatus(),
-
-    onGatewayMonitorAlerts: (args) => {
-      const includeAcknowledged = !!args?.includeAcknowledged;
-      const parsedLimit = Number(args?.limit ?? 100);
-      const limit = Number.isFinite(parsedLimit) ? Math.max(1, Math.min(500, parsedLimit)) : 100;
-      const alerts = gatewayMonitor.listAlerts({ includeAcknowledged, limit });
-      const status = gatewayMonitor.getStatus();
-      return {
-        alerts,
-        activeAlertCount: alerts.length,
-        bySeverity: status.bySeverity,
-        baselineReady: status.baselineReady,
-        lastUpdatedAt: status.lastUpdatedAt,
-      };
-    },
-
-    onGatewayMonitorAcknowledge: (alertId) => {
-      if (!alertId.trim()) {
-        return { success: false, message: 'alertId is required' };
-      }
-      return gatewayMonitor.acknowledgeAlert(alertId.trim());
-    },
-
-    onGatewayMonitorCheck: () => runGatewayMonitoring('web:manual'),
+    connectorWorkflowOps: operationsDashboard.connectorWorkflowOps,
 
     onSSESubscribe: (listener: SSEListener): (() => void) => {
       const cleanups: Array<() => void> = [];
@@ -11370,261 +10595,36 @@ function buildDashboardCallbacks(
       }
     },
 
-    onCodeSessionsList: ({ userId, principalId, channel, surfaceId }) => {
-      const resolvedChannel = channel?.trim() || 'web';
-      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
-      const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
-      const sessions = codeSessionStore.listSessionsForUser(canonicalUserId).map((session) => hydrateCodeSessionRuntimeState(session));
-      const current = codeSessionStore.resolveForRequest({
-        userId: canonicalUserId,
-        principalId,
-        channel: resolvedChannel,
-        surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
-        touchAttachment: false,
-      });
-      return {
-        sessions,
-        currentSessionId: current?.session.id ?? null,
-      };
-    },
-
-    onCodeSessionGet: ({ sessionId, userId, principalId, channel, surfaceId, historyLimit }) => {
-      const resolvedChannel = channel?.trim() || 'web';
-      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
-      const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
-      const session = codeSessionStore.getSession(sessionId, canonicalUserId);
-      if (!session) return null;
-      const enrichedSession = sharedCodeWorkspaceTrustService?.maybeSchedule(session) ?? session;
-      return buildCodeSessionSnapshot(enrichedSession, {
-        ownerUserId: canonicalUserId,
-        principalId,
-        channel: resolvedChannel,
-        surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
-        historyLimit,
-      });
-    },
-
-    onCodeSessionTimeline: ({ sessionId, userId, channel, principalId: _principalId, limit }) => {
-      const resolvedChannel = channel?.trim() || 'web';
-      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
-      const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
-      const session = codeSessionStore.getSession(sessionId, canonicalUserId);
-      if (!session) return null;
-      const hydrated = hydrateCodeSessionRuntimeState(session);
-      refreshRunTimelineSnapshots();
-      return {
-        codeSessionId: hydrated.id,
-        runs: runTimeline.listRunsForCodeSession(hydrated.id, limit ?? 12),
-      };
-    },
-
-    onCodeSessionCreate: ({ userId, principalId, channel, surfaceId, title, workspaceRoot, agentId, attach }) => {
-      const resolvedChannel = channel?.trim() || 'web';
-      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
-      const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
-      const created = codeSessionStore.createSession({
-        ownerUserId: canonicalUserId,
-        ownerPrincipalId: principalId ?? canonicalUserId,
-        title,
-        workspaceRoot,
-        agentId: agentId?.trim() || null,
-      });
-      const session = sharedCodeWorkspaceTrustService?.maybeSchedule(created) ?? created;
-      // Code-session workspace access is scoped via codeContext, not by mutating
-      // the global live allowlist visible to non-Code surfaces.
-      toolExecutor.updatePolicy({ sandbox: { allowedPaths: [...configRef.current.assistant.tools.allowedPaths] } });
-      if (attach !== false) {
-        codeSessionStore.attachSession({
-          sessionId: session.id,
-          userId: canonicalUserId,
-          principalId,
-          channel: resolvedChannel,
-          surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
-          mode: 'controller',
+    ...createWorkspaceDashboardCallbacks({
+      codeSessionStore,
+      identity,
+      conversations,
+      runTimeline,
+      refreshRunTimelineSnapshots,
+      maybeScheduleCodeSession: (session) => sharedCodeWorkspaceTrustService?.maybeSchedule(session) ?? session,
+      hydrateCodeSessionRuntimeState,
+      buildCodeSessionSnapshot,
+      getCodeSessionSurfaceId,
+      resetCodeSessionWorkspacePolicy: () => {
+        toolExecutor.updatePolicy({ sandbox: { allowedPaths: [...configRef.current.assistant.tools.allowedPaths] } });
+      },
+      reconcileConfiguredAllowedPaths,
+      approvalBelongsToCodeSession: (approvalId, sessionId) => toolExecutor.approvalBelongsToCodeSession(approvalId, sessionId),
+      resolveDashboardCodeSessionRequest,
+      decideDashboardToolApproval,
+      createStructuredRequestError,
+      getCodeSessionConversationKey,
+      resolveSharedStateAgentId,
+      trackConversationReset: ({ agentId, channel, channelUserId, canonicalUserId }) => {
+        analytics.track({
+          type: 'conversation_reset',
+          channel,
+          canonicalUserId,
+          channelUserId,
+          agentId,
         });
-      }
-      return buildCodeSessionSnapshot(session, {
-        ownerUserId: canonicalUserId,
-        principalId,
-        channel: resolvedChannel,
-        surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
-      });
-    },
-
-    onCodeSessionUpdate: ({ sessionId, userId, principalId, channel, surfaceId, title, workspaceRoot, agentId, uiState, workState, status }) => {
-      const resolvedChannel = channel?.trim() || 'web';
-      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
-      const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
-      const updated = codeSessionStore.updateSession({
-        sessionId,
-        ownerUserId: canonicalUserId,
-        ...(title !== undefined ? { title } : {}),
-        ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
-        ...(agentId !== undefined ? { agentId } : {}),
-        ...(status !== undefined ? { status } : {}),
-        ...(uiState ? { uiState } : {}),
-        ...(workState ? { workState } : {}),
-      });
-      if (!updated) return null;
-      const enrichedUpdated = sharedCodeWorkspaceTrustService?.maybeSchedule(updated) ?? updated;
-      return buildCodeSessionSnapshot(enrichedUpdated, {
-        ownerUserId: canonicalUserId,
-        principalId,
-        channel: resolvedChannel,
-        surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
-      });
-    },
-
-    onCodeSessionDelete: ({ sessionId, userId, principalId, channel, surfaceId }) => {
-      const resolvedChannel = channel?.trim() || 'web';
-      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
-      const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
-      const deleted = codeSessionStore.deleteSession(sessionId, canonicalUserId);
-      toolExecutor.updatePolicy({ sandbox: { allowedPaths: [...configRef.current.assistant.tools.allowedPaths] } });
-      const current = codeSessionStore.resolveForRequest({
-        userId: canonicalUserId,
-        principalId,
-        channel: resolvedChannel,
-        surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
-        touchAttachment: false,
-      });
-      return {
-        success: deleted,
-        currentSessionId: current?.session.id ?? null,
-      };
-    },
-
-    onCodeSessionAttach: ({ sessionId, userId, principalId, channel, surfaceId, mode }) => {
-      const resolvedChannel = channel?.trim() || 'web';
-      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
-      const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
-      const attachment = codeSessionStore.attachSession({
-        sessionId,
-        userId: canonicalUserId,
-        principalId,
-        channel: resolvedChannel,
-        surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
-        mode,
-      });
-      const session = codeSessionStore.getSession(sessionId, canonicalUserId);
-      reconcileConfiguredAllowedPaths();
-      return {
-        success: !!attachment && !!session,
-        ...(session ? {
-          snapshot: buildCodeSessionSnapshot(session, {
-            ownerUserId: canonicalUserId,
-            principalId,
-            channel: resolvedChannel,
-            surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
-          }),
-        } : {}),
-      };
-    },
-
-    onCodeSessionDetach: ({ userId, principalId, channel, surfaceId }) => {
-      const resolvedChannel = channel?.trim() || 'web';
-      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
-      const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
-      const success = codeSessionStore.detachSession({
-        userId: canonicalUserId,
-        channel: resolvedChannel,
-        surfaceId: surfaceId?.trim() || getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
-      });
-      reconcileConfiguredAllowedPaths();
-      return {
-        success,
-      };
-    },
-
-    onCodeSessionApprovalDecision: async ({ sessionId, approvalId, decision, userId, principalId, principalRole, channel, surfaceId, reason }) => {
-      const resolved = resolveDashboardCodeSessionRequest({
-        sessionId,
-        userId,
-        principalId,
-        channel,
-        surfaceId,
-      });
-      if (!resolved.resolvedSession) {
-        throw createStructuredRequestError(
-          `Code session '${sessionId}' is unavailable for this request.`,
-          409,
-          'CODE_SESSION_UNAVAILABLE',
-        );
-      }
-      if (!toolExecutor.approvalBelongsToCodeSession(approvalId, resolved.resolvedSession.session.id)) {
-        throw createStructuredRequestError(
-          `Approval '${approvalId}' was not found for code session '${resolved.resolvedSession.session.id}'.`,
-          404,
-          'CODE_SESSION_APPROVAL_NOT_FOUND',
-        );
-      }
-      return decideDashboardToolApproval({
-        approvalId,
-        decision,
-        actor: principalId ?? resolved.canonicalUserId,
-        actorRole: principalRole ?? 'owner',
-        userId: resolved.canonicalUserId,
-        channel: resolved.resolvedChannel,
-        surfaceId: resolved.resolvedSurfaceId,
-        reason,
-      });
-    },
-
-    onCodeSessionResetConversation: ({ sessionId, userId, channel }) => {
-      const resolvedChannel = channel?.trim() || 'web';
-      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
-      const canonicalUserId = identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
-      const session = codeSessionStore.getSession(sessionId, canonicalUserId);
-      if (!session) {
-        return { success: false, message: `Code session '${sessionId}' was not found.` };
-      }
-      const removed = conversations.resetConversation(getCodeSessionConversationKey(session));
-      return {
-        success: true,
-        message: removed
-          ? `Conversation reset for coding session '${session.title}'.`
-          : `No stored conversation found for coding session '${session.title}'.`,
-      };
-    },
-
-    onConversationReset: async ({ agentId, userId, channel }) => {
-      const canonicalUserId = identity.resolveCanonicalUserId(channel, userId);
-      const stateAgentId = resolveSharedStateAgentId(agentId) ?? agentId;
-      const removed = conversations.resetConversation({ agentId: stateAgentId, userId: canonicalUserId, channel });
-      analytics.track({
-        type: 'conversation_reset',
-        channel,
-        canonicalUserId,
-        channelUserId: userId,
-        agentId,
-      });
-      return {
-        success: true,
-        message: removed
-          ? `Conversation reset for '${agentId}'.`
-          : `No stored conversation found for '${agentId}'.`,
-      };
-    },
-
-    onConversationSessions: ({ userId, channel, agentId }) => {
-      const canonicalUserId = identity.resolveCanonicalUserId(channel, userId);
-      return conversations.listSessions(canonicalUserId, channel, resolveSharedStateAgentId(agentId) ?? agentId);
-    },
-
-    onConversationUseSession: ({ agentId, userId, channel, sessionId }) => {
-      const canonicalUserId = identity.resolveCanonicalUserId(channel, userId);
-      const ok = conversations.setActiveSession({
-        agentId: resolveSharedStateAgentId(agentId) ?? agentId,
-        userId: canonicalUserId,
-        channel,
-      }, sessionId);
-      return {
-        success: ok,
-        message: ok
-          ? `Switched to session '${sessionId}'.`
-          : `Session '${sessionId}' was not found.`,
-      };
-    },
+      },
+    }),
 
     onReferenceGuide: () => getReferenceGuide(),
 
@@ -11671,1178 +10671,9 @@ function buildDashboardCallbacks(
       );
     },
 
-    onSetupStatus: async () => {
-      const providers = await buildProviderInfo(true);
-      return evaluateSetupStatus(configRef.current, providers, toolExecutor.getSandboxHealth());
-    },
+    ...setupConfigCallbacks,
 
-    onSetupApply: async (input) => {
-      return jobTracker.run(
-        {
-          type: 'config.apply',
-          source: 'manual',
-          detail: 'Config Center apply',
-          metadata: { llmMode: input.llmMode, telegramEnabled: input.telegramEnabled },
-        },
-        async () => {
-          const providerName = input.providerName?.trim() || (input.llmMode === 'ollama' ? 'ollama' : 'primary');
-          const existingProvider = configRef.current.llm[providerName];
-          const providerType = input.providerType
-            ?? (input.llmMode === 'ollama' ? 'ollama' : undefined)
-            ?? existingProvider?.provider;
-          if (!providerType) {
-            return { success: false, message: 'providerType is required for new providers' };
-          }
-          const model = input.model?.trim();
-          if (!model) {
-            return { success: false, message: 'model is required' };
-          }
-          // Start from disk refs merged with in-memory to prevent drift
-          const diskRefsForSetup = (() => {
-            try {
-              const raw = loadRawConfig();
-              const creds = (raw?.assistant as Record<string, unknown>)?.credentials as Record<string, unknown> | undefined;
-              return (creds?.refs ?? {}) as Record<string, CredentialRefConfig>;
-            } catch { return {} as Record<string, CredentialRefConfig>; }
-          })();
-          const nextCredentialRefs = { ...diskRefsForSetup, ...(configRef.current.assistant.credentials.refs ?? {}) };
-          const pendingLocalSecrets: Array<{ refName: string; secretId: string; value: string; description: string }> = [];
-          let providerCredentialRef = input.credentialRef?.trim() || existingProvider?.credentialRef?.trim() || undefined;
-          if (input.apiKey?.trim()) {
-            const refName = input.credentialRef?.trim() || providerCredentialRef || `llm.${providerName}.local`;
-            const existingRef = nextCredentialRefs[refName];
-            const secretId = existingRef?.source === 'local' && existingRef.secretId?.trim()
-              ? existingRef.secretId.trim()
-              : randomUUID();
-            nextCredentialRefs[refName] = {
-              source: 'local',
-              secretId,
-              description: `${providerName} ${providerType} credential`,
-            };
-            pendingLocalSecrets.push({
-              refName,
-              secretId,
-              value: input.apiKey.trim(),
-              description: `${providerName} ${providerType} credential`,
-            });
-            providerCredentialRef = refName;
-          } else if (input.credentialRef !== undefined) {
-            providerCredentialRef = input.credentialRef.trim() || undefined;
-          }
-
-          const localProviderEndpoint = isLocalProviderEndpoint(input.baseUrl?.trim() || existingProvider?.baseUrl, providerType);
-          const providerLocality: 'local' | 'external' = localProviderEndpoint ? 'local' : 'external';
-          if (providerType !== 'ollama'
-            && !localProviderEndpoint
-            && !providerCredentialRef) {
-            return { success: false, message: 'apiKey or credentialRef is required for external providers' };
-          }
-
-          const explicitPreferredProvider = configRef.current.assistant.tools.preferredProviders?.[providerLocality]?.trim();
-          const shouldSetPreferredProvider = !explicitPreferredProvider
-            || getProviderLocality(configRef.current.llm[explicitPreferredProvider]) !== providerLocality;
-
-          let telegramCredentialRef = configRef.current.channels.telegram?.botTokenCredentialRef?.trim() || undefined;
-          if (input.telegramBotToken?.trim()) {
-            telegramCredentialRef = telegramCredentialRef || 'telegram.bot.primary';
-            const existingRef = nextCredentialRefs[telegramCredentialRef];
-            const secretId = existingRef?.source === 'local' && existingRef.secretId?.trim()
-              ? existingRef.secretId.trim()
-              : randomUUID();
-            nextCredentialRefs[telegramCredentialRef] = {
-              source: 'local',
-              secretId,
-              description: 'Telegram bot token',
-            };
-            pendingLocalSecrets.push({
-              refName: telegramCredentialRef,
-              secretId,
-              value: input.telegramBotToken.trim(),
-              description: 'Telegram bot token',
-            });
-          } else if (telegramCredentialRef && !nextCredentialRefs[telegramCredentialRef]) {
-            // Ref name set but entry missing — recover from disk config
-            try {
-              const rawOnDisk = loadRawConfig();
-              const diskRefs = (rawOnDisk?.assistant as Record<string, unknown>)?.credentials as Record<string, unknown> | undefined;
-              const diskRef = (diskRefs?.refs as Record<string, Record<string, unknown>> | undefined)?.[telegramCredentialRef];
-              if (diskRef && typeof diskRef.secretId === 'string') {
-                nextCredentialRefs[telegramCredentialRef] = {
-                  source: (diskRef.source as string) || 'local',
-                  secretId: diskRef.secretId,
-                  description: (diskRef.description as string) || 'Telegram bot token',
-                } as typeof nextCredentialRefs[string];
-              }
-            } catch {
-              // Best-effort — validation will flag if still missing
-            }
-          }
-
-          const patch: Partial<GuardianAgentConfig> = {
-            llm: {
-              [providerName]: {
-                provider: providerType,
-                model,
-                credentialRef: providerCredentialRef,
-                baseUrl: input.baseUrl?.trim() || (providerType === 'ollama' ? 'http://127.0.0.1:11434' : undefined),
-              },
-            } as GuardianAgentConfig['llm'],
-            assistant: {
-              ...configRef.current.assistant,
-              credentials: {
-                refs: nextCredentialRefs,
-              },
-              setup: {
-                completed: input.setupCompleted ?? true,
-              },
-            },
-          };
-
-          if (shouldSetPreferredProvider) {
-            patch.assistant = {
-              ...(patch.assistant ?? configRef.current.assistant),
-              tools: {
-                ...configRef.current.assistant.tools,
-                preferredProviders: {
-                  ...configRef.current.assistant.tools.preferredProviders,
-                  [providerLocality]: providerName,
-                },
-              },
-            };
-          }
-
-          if (input.setDefaultProvider !== false) {
-            patch.defaultProvider = providerName;
-          }
-
-          if (input.telegramEnabled !== undefined) {
-            patch.channels = {
-              ...configRef.current.channels,
-              telegram: {
-                enabled: input.telegramEnabled,
-                polling: configRef.current.channels.telegram?.polling ?? true,
-                botTokenCredentialRef: telegramCredentialRef,
-                allowedChatIds: input.telegramAllowedChatIds ?? configRef.current.channels.telegram?.allowedChatIds,
-                defaultAgent: configRef.current.channels.telegram?.defaultAgent,
-              },
-            };
-          }
-
-          const nextConfig = deepMerge(configRef.current, patch);
-          const errors = validateConfig(nextConfig);
-          if (errors.length > 0) {
-            analytics.track({
-              type: 'setup_apply_failed',
-              channel: 'system',
-              canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-              metadata: { errors },
-            });
-            return { success: false, message: `Validation failed: ${errors.join('; ')}` };
-          }
-
-          const rawConfig = loadRawConfig();
-          rawConfig.assistant = rawConfig.assistant ?? {};
-          const rawAssistant = rawConfig.assistant as Record<string, unknown>;
-          rawAssistant.setup = {
-            ...(rawAssistant.setup as Record<string, unknown> ?? {}),
-            completed: input.setupCompleted ?? true,
-          };
-          rawAssistant.credentials = (rawAssistant.credentials as Record<string, unknown> | undefined) ?? {};
-          (rawAssistant.credentials as Record<string, unknown>).refs = {
-            ...((rawAssistant.credentials as Record<string, unknown>).refs as Record<string, unknown> ?? {}),
-          };
-          for (const pending of pendingLocalSecrets) {
-            upsertLocalCredentialRef(rawConfig, pending.refName, pending.value, pending.description);
-          }
-
-          rawConfig.llm = rawConfig.llm ?? {};
-          const rawLLM = rawConfig.llm as Record<string, Record<string, unknown>>;
-          rawLLM[providerName] = {
-            ...(rawLLM[providerName] ?? {}),
-            provider: providerType,
-            model,
-          };
-          if (input.baseUrl?.trim()) rawLLM[providerName].baseUrl = input.baseUrl.trim();
-          if (providerType === 'ollama' && !rawLLM[providerName].baseUrl) {
-            rawLLM[providerName].baseUrl = 'http://127.0.0.1:11434';
-          }
-          delete rawLLM[providerName].apiKey;
-          if (providerCredentialRef !== undefined) {
-            const trimmed = providerCredentialRef.trim();
-            if (trimmed) rawLLM[providerName].credentialRef = trimmed;
-            else delete rawLLM[providerName].credentialRef;
-          }
-
-          if (input.setDefaultProvider !== false) {
-            rawConfig.defaultProvider = providerName;
-          }
-
-          if (shouldSetPreferredProvider) {
-            rawConfig.assistant = rawConfig.assistant ?? {};
-            const rawAssistantObj = rawConfig.assistant as Record<string, unknown>;
-            rawAssistantObj.tools = (rawAssistantObj.tools as Record<string, unknown> | undefined) ?? {};
-            const rawTools = rawAssistantObj.tools as Record<string, unknown>;
-            rawTools.preferredProviders = {
-              ...((rawTools.preferredProviders as Record<string, unknown> | undefined) ?? {}),
-              [providerLocality]: providerName,
-            };
-          }
-
-          if (input.telegramEnabled !== undefined) {
-            rawConfig.channels = rawConfig.channels ?? {};
-            const rawChannels = rawConfig.channels as Record<string, unknown>;
-            const rawTelegram = (rawChannels.telegram as Record<string, unknown> | undefined) ?? {};
-            rawTelegram.enabled = input.telegramEnabled;
-            rawTelegram.polling = rawTelegram.polling ?? true;
-            delete rawTelegram.botToken;
-            if (telegramCredentialRef) rawTelegram.botTokenCredentialRef = telegramCredentialRef;
-            if (input.telegramAllowedChatIds) rawTelegram.allowedChatIds = input.telegramAllowedChatIds;
-            rawChannels.telegram = rawTelegram;
-          }
-
-          // Fallbacks
-          if (input.fallbacks !== undefined) {
-            rawConfig.fallbacks = input.fallbacks.length > 0 ? input.fallbacks : undefined;
-          }
-
-          // Web search config
-          const hasWebSearch = input.webSearchProvider
-            || input.perplexityApiKey !== undefined
-            || input.openRouterApiKey !== undefined
-            || input.braveApiKey !== undefined
-            || input.perplexityCredentialRef !== undefined
-            || input.openRouterCredentialRef !== undefined
-            || input.braveCredentialRef !== undefined;
-          if (hasWebSearch) {
-            rawConfig.assistant = rawConfig.assistant ?? {};
-            const rawAssistantObj = rawConfig.assistant as Record<string, unknown>;
-            rawAssistantObj.tools = rawAssistantObj.tools ?? {};
-            const rawTools = rawAssistantObj.tools as Record<string, unknown>;
-            rawTools.webSearch = rawTools.webSearch ?? {};
-            const rawWS = rawTools.webSearch as Record<string, unknown>;
-            if (input.webSearchProvider) rawWS.provider = input.webSearchProvider;
-            const perplexityApiKey = input.perplexityApiKey?.trim();
-            const hasPerplexityApiKey = !!perplexityApiKey;
-            if (perplexityApiKey) {
-              const refName = input.perplexityCredentialRef?.trim() || rawWS.perplexityCredentialRef as string || 'search.perplexity.local';
-              rawWS.perplexityCredentialRef = upsertLocalCredentialRef(rawConfig, refName, perplexityApiKey, 'Perplexity search API key');
-            }
-            delete rawWS.perplexityApiKey;
-            applyCredentialRefInput(rawWS, 'perplexityCredentialRef', input.perplexityCredentialRef, hasPerplexityApiKey);
-            const openRouterApiKey = input.openRouterApiKey?.trim();
-            const hasOpenRouterApiKey = !!openRouterApiKey;
-            if (openRouterApiKey) {
-              const refName = input.openRouterCredentialRef?.trim() || rawWS.openRouterCredentialRef as string || 'search.openrouter.local';
-              rawWS.openRouterCredentialRef = upsertLocalCredentialRef(rawConfig, refName, openRouterApiKey, 'OpenRouter search API key');
-            }
-            delete rawWS.openRouterApiKey;
-            applyCredentialRefInput(rawWS, 'openRouterCredentialRef', input.openRouterCredentialRef, hasOpenRouterApiKey);
-            const braveApiKey = input.braveApiKey?.trim();
-            const hasBraveApiKey = !!braveApiKey;
-            if (braveApiKey) {
-              const refName = input.braveCredentialRef?.trim() || rawWS.braveCredentialRef as string || 'search.brave.local';
-              rawWS.braveCredentialRef = upsertLocalCredentialRef(rawConfig, refName, braveApiKey, 'Brave search API key');
-            }
-            delete rawWS.braveApiKey;
-            applyCredentialRefInput(rawWS, 'braveCredentialRef', input.braveCredentialRef, hasBraveApiKey);
-          }
-
-          const result = persistAndApplyConfig(rawConfig, {
-            changedBy: 'setup-wizard',
-            reason: 'setup apply',
-          });
-          analytics.track({
-            type: result.success ? 'setup_applied' : 'setup_apply_failed',
-            channel: 'system',
-            canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-            metadata: { providerName, providerType, telegramEnabled: input.telegramEnabled, result: result.message },
-          });
-          if (!result.success) return result;
-
-          return {
-            success: true,
-            message: input.telegramEnabled
-              ? 'Setup saved and applied. Telegram channel is being reloaded.'
-              : 'Setup saved and applied.',
-          };
-        },
-      );
-    },
-
-    onSearchConfigUpdate: async (input) => {
-      const rawConfig = loadRawConfig();
-      rawConfig.assistant = rawConfig.assistant ?? {};
-      const rawAssistant = rawConfig.assistant as Record<string, unknown>;
-      rawAssistant.tools = rawAssistant.tools ?? {};
-      const rawTools = rawAssistant.tools as Record<string, unknown>;
-      rawTools.webSearch = rawTools.webSearch ?? {};
-      const rawWS = rawTools.webSearch as Record<string, unknown>;
-
-      if (input.webSearchProvider) rawWS.provider = input.webSearchProvider;
-      const perplexityApiKey = input.perplexityApiKey?.trim();
-      const hasPerplexityApiKey = !!perplexityApiKey;
-      if (perplexityApiKey) {
-        const refName = input.perplexityCredentialRef?.trim() || (typeof rawWS.perplexityCredentialRef === 'string' ? rawWS.perplexityCredentialRef : '') || 'search.perplexity.local';
-        rawWS.perplexityCredentialRef = upsertLocalCredentialRef(rawConfig, refName, perplexityApiKey, 'Perplexity search API key');
-      }
-      delete rawWS.perplexityApiKey;
-      applyCredentialRefInput(rawWS, 'perplexityCredentialRef', input.perplexityCredentialRef, hasPerplexityApiKey);
-      const openRouterApiKey = input.openRouterApiKey?.trim();
-      const hasOpenRouterApiKey = !!openRouterApiKey;
-      if (openRouterApiKey) {
-        const refName = input.openRouterCredentialRef?.trim() || (typeof rawWS.openRouterCredentialRef === 'string' ? rawWS.openRouterCredentialRef : '') || 'search.openrouter.local';
-        rawWS.openRouterCredentialRef = upsertLocalCredentialRef(rawConfig, refName, openRouterApiKey, 'OpenRouter search API key');
-      }
-      delete rawWS.openRouterApiKey;
-      applyCredentialRefInput(rawWS, 'openRouterCredentialRef', input.openRouterCredentialRef, hasOpenRouterApiKey);
-      const braveApiKey = input.braveApiKey?.trim();
-      const hasBraveApiKey = !!braveApiKey;
-      if (braveApiKey) {
-        const refName = input.braveCredentialRef?.trim() || (typeof rawWS.braveCredentialRef === 'string' ? rawWS.braveCredentialRef : '') || 'search.brave.local';
-        rawWS.braveCredentialRef = upsertLocalCredentialRef(rawConfig, refName, braveApiKey, 'Brave search API key');
-      }
-      delete rawWS.braveApiKey;
-      applyCredentialRefInput(rawWS, 'braveCredentialRef', input.braveCredentialRef, hasBraveApiKey);
-
-      if (input.fallbacks !== undefined) {
-        rawConfig.fallbacks = input.fallbacks.length > 0 ? input.fallbacks : undefined;
-      }
-
-      const result = persistAndApplyConfig(rawConfig, {
-        changedBy: 'config-center',
-        reason: 'search config update',
-      });
-      if (!result.success) return result;
-      return { success: true, message: 'Search and fallback settings saved.' };
-    },
-
-    onConfigUpdate: async (updates) => {
-      return jobTracker.run(
-        {
-          type: 'config.update',
-          source: 'manual',
-          detail: 'Direct config update',
-          metadata: { defaultProvider: updates.defaultProvider },
-        },
-        async () => {
-          const currentConfig = configRef.current;
-          let credentialRefsChanged = !!updates.assistant?.credentials?.refs;
-          // Start from disk refs so we never silently drop refs that exist on disk
-          // but drifted out of in-memory state.
-          const diskRefsForBase = (() => {
-            try {
-              const raw = loadRawConfig();
-              const creds = (raw?.assistant as Record<string, unknown>)?.credentials as Record<string, unknown> | undefined;
-              return (creds?.refs ?? {}) as Record<string, CredentialRefConfig>;
-            } catch { return {} as Record<string, CredentialRefConfig>; }
-          })();
-          const nextCredentialRefs = updates.assistant?.credentials?.refs
-            ? normalizeCredentialRefUpdates(updates.assistant.credentials.refs)
-            : { ...diskRefsForBase, ...(currentConfig.assistant.credentials.refs ?? {}) };
-          const llmPatch = updates.llm
-            ? Object.fromEntries(Object.entries(updates.llm).map(([name, providerUpdates]) => {
-              let credentialRef = providerUpdates.credentialRef;
-              if (providerUpdates.apiKey?.trim()) {
-                const refName = providerUpdates.credentialRef?.trim()
-                  || currentConfig.llm[name]?.credentialRef?.trim()
-                  || `llm.${name}.local`;
-                const existingRef = nextCredentialRefs[refName];
-                const secretId = existingRef?.source === 'local' && existingRef.secretId?.trim()
-                  ? existingRef.secretId.trim()
-                  : randomUUID();
-                nextCredentialRefs[refName] = {
-                  source: 'local',
-                  secretId,
-                  description: `${name} provider credential`,
-                };
-                credentialRefsChanged = true;
-                secretStore.set(secretId, providerUpdates.apiKey.trim());
-                credentialRef = refName;
-              }
-              return [name, {
-                ...providerUpdates,
-                apiKey: undefined,
-                credentialRef,
-              }];
-            }))
-            : undefined;
-          const telegramUpdates = updates.channels?.telegram
-            ? { ...updates.channels.telegram }
-            : undefined;
-          if (telegramUpdates?.botToken?.trim()) {
-            const refName = telegramUpdates.botTokenCredentialRef?.trim()
-              || currentConfig.channels.telegram?.botTokenCredentialRef?.trim()
-              || 'telegram.bot.primary';
-            const existingRef = nextCredentialRefs[refName];
-            const secretId = existingRef?.source === 'local' && existingRef.secretId?.trim()
-              ? existingRef.secretId.trim()
-              : randomUUID();
-            nextCredentialRefs[refName] = {
-              source: 'local',
-              secretId,
-              description: 'Telegram bot token',
-            };
-            credentialRefsChanged = true;
-            secretStore.set(secretId, telegramUpdates.botToken.trim());
-            telegramUpdates.botTokenCredentialRef = refName;
-            telegramUpdates.botToken = undefined;
-          } else if (telegramUpdates) {
-            // No new token — carry forward the existing credential ref entry so validation doesn't fail.
-            const existingRefName = telegramUpdates.botTokenCredentialRef?.trim()
-              || currentConfig.channels.telegram?.botTokenCredentialRef?.trim();
-            if (existingRefName && !nextCredentialRefs[existingRefName]) {
-              // Ref name is set but entry is missing (e.g. config YAML was edited manually,
-              // or previous save didn't persist the refs section). Try to recover the entry
-              // from the raw config file on disk.
-              try {
-                const rawOnDisk = loadRawConfig();
-                const diskRefs = (rawOnDisk?.assistant as Record<string, unknown>)?.credentials as Record<string, unknown> | undefined;
-                const diskRef = (diskRefs?.refs as Record<string, Record<string, unknown>> | undefined)?.[existingRefName];
-                if (diskRef && typeof diskRef.secretId === 'string') {
-                  nextCredentialRefs[existingRefName] = {
-                    source: (diskRef.source as string) || 'local',
-                    secretId: diskRef.secretId,
-                    description: (diskRef.description as string) || 'Telegram bot token',
-                  } as typeof nextCredentialRefs[string];
-                  credentialRefsChanged = true;
-                }
-              } catch {
-                // Best-effort recovery — validation will flag the missing ref
-              }
-            }
-          }
-          const cloudPatch = updates.assistant?.tools?.cloud
-            ? mergeCloudConfigForValidation(currentConfig.assistant.tools.cloud, updates.assistant.tools.cloud)
-            : undefined;
-          const assistantPatch = updates.assistant || credentialRefsChanged
-            ? {
-              ...(updates.assistant ?? {}),
-              credentials: credentialRefsChanged || updates.assistant?.credentials
-                ? {
-                  refs: nextCredentialRefs,
-                }
-                : undefined,
-              tools: updates.assistant?.tools
-                ? {
-                  ...updates.assistant.tools,
-                  ...(cloudPatch ? { cloud: cloudPatch } : {}),
-                }
-                : undefined,
-            }
-            : undefined;
-
-          // Validate the next in-memory config first.
-          const patch = {
-            defaultProvider: updates.defaultProvider,
-            llm: llmPatch as unknown as GuardianAgentConfig['llm'] | undefined,
-            channels: updates.channels
-              ? {
-                ...updates.channels,
-                telegram: telegramUpdates,
-              } as unknown as GuardianAgentConfig['channels']
-              : undefined,
-            assistant: assistantPatch as unknown as GuardianAgentConfig['assistant'] | undefined,
-          } as Partial<GuardianAgentConfig>;
-          const nextConfig = deepMerge(currentConfig, patch);
-          const baselineViolations = previewSecurityBaselineViolations(nextConfig, 'web_api');
-          if (baselineViolations.length > 0) {
-            return buildSecurityBaselineRejection(
-              baselineViolations,
-              'config_update',
-              updates as unknown as Record<string, unknown>,
-            );
-          }
-          const errors = validateConfig(nextConfig);
-          if (errors.length > 0) {
-            analytics.track({
-              type: 'config_update_failed',
-              channel: 'system',
-              canonicalUserId: currentConfig.assistant.identity.primaryUserId,
-              metadata: { errors },
-            });
-            return {
-              success: false,
-              message: `Validation failed: ${errors.join('; ')}`,
-            };
-          }
-
-          // Read existing file or start fresh
-          const rawConfig = loadRawConfig();
-
-          // Apply updates
-          if (updates.defaultProvider) {
-            rawConfig.defaultProvider = updates.defaultProvider;
-          }
-
-          if (llmPatch) {
-            const llmSection = (rawConfig.llm ?? {}) as Record<string, Record<string, unknown>>;
-            for (const [name, providerUpdates] of Object.entries(llmPatch)) {
-              if (!llmSection[name]) {
-                llmSection[name] = {};
-              }
-              if (providerUpdates.provider) llmSection[name].provider = providerUpdates.provider;
-              if (providerUpdates.model) llmSection[name].model = providerUpdates.model;
-              delete llmSection[name].apiKey;
-              if (providerUpdates.credentialRef !== undefined) {
-                const trimmed = providerUpdates.credentialRef.trim();
-                if (trimmed) llmSection[name].credentialRef = trimmed;
-                else delete llmSection[name].credentialRef;
-              }
-	              if (providerUpdates.baseUrl !== undefined) {
-	                const trimmed = normalizeOptionalHttpUrlInput(providerUpdates.baseUrl);
-	                if (trimmed) llmSection[name].baseUrl = trimmed;
-	                else delete llmSection[name].baseUrl;
-	              }
-            }
-            rawConfig.llm = llmSection;
-          }
-
-          if (telegramUpdates) {
-            rawConfig.channels = rawConfig.channels ?? {};
-            const rawChannels = rawConfig.channels as Record<string, unknown>;
-            const rawTelegram = (rawChannels.telegram as Record<string, unknown> | undefined) ?? {};
-
-            if (typeof telegramUpdates.enabled === 'boolean') {
-              rawTelegram.enabled = telegramUpdates.enabled;
-            }
-            if (typeof telegramUpdates.polling === 'boolean') {
-              rawTelegram.polling = telegramUpdates.polling;
-            }
-            if (telegramUpdates.defaultAgent !== undefined) {
-              const trimmed = telegramUpdates.defaultAgent.trim();
-              if (trimmed) rawTelegram.defaultAgent = trimmed;
-              else delete rawTelegram.defaultAgent;
-            }
-            delete rawTelegram.botToken;
-            if (telegramUpdates.botTokenCredentialRef !== undefined) {
-              const trimmed = telegramUpdates.botTokenCredentialRef.trim();
-              if (trimmed) rawTelegram.botTokenCredentialRef = trimmed;
-              else delete rawTelegram.botTokenCredentialRef;
-            }
-            if (telegramUpdates.allowedChatIds !== undefined) {
-              if (telegramUpdates.allowedChatIds.length > 0) rawTelegram.allowedChatIds = telegramUpdates.allowedChatIds;
-              else delete rawTelegram.allowedChatIds;
-            }
-
-            rawChannels.telegram = rawTelegram;
-          }
-
-          if (credentialRefsChanged) {
-            rawConfig.assistant = rawConfig.assistant ?? {};
-            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
-            rawAssistant.credentials = (rawAssistant.credentials as Record<string, unknown> | undefined) ?? {};
-            const rawCredentials = rawAssistant.credentials as Record<string, unknown>;
-            const existingDiskRefs = (rawCredentials.refs as Record<string, unknown>) ?? {};
-            rawCredentials.refs = { ...existingDiskRefs, ...nextCredentialRefs };
-          }
-
-          const securityUpdates = updates.assistant?.security;
-          if (securityUpdates && typeof securityUpdates === 'object') {
-            rawConfig.assistant = rawConfig.assistant ?? {};
-            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
-            rawAssistant.security = (rawAssistant.security as Record<string, unknown> | undefined) ?? {};
-            const rawSecurity = rawAssistant.security as Record<string, unknown>;
-
-            if (securityUpdates.deploymentProfile !== undefined) {
-              const trimmed = securityUpdates.deploymentProfile.trim();
-              if (!trimmed) {
-                delete rawSecurity.deploymentProfile;
-              } else if (isDeploymentProfile(trimmed)) {
-                rawSecurity.deploymentProfile = trimmed;
-              }
-            }
-            if (securityUpdates.operatingMode !== undefined) {
-              const trimmed = securityUpdates.operatingMode.trim();
-              if (!trimmed) {
-                delete rawSecurity.operatingMode;
-              } else if (isSecurityOperatingMode(trimmed)) {
-                rawSecurity.operatingMode = trimmed;
-              }
-            }
-            if (securityUpdates.triageLlmProvider !== undefined) {
-              const trimmed = securityUpdates.triageLlmProvider.trim().toLowerCase();
-              if (!trimmed) {
-                delete rawSecurity.triageLlmProvider;
-              } else if (isSecurityTriageLlmProvider(trimmed)) {
-                rawSecurity.triageLlmProvider = trimmed;
-              }
-            }
-            const monitoringUpdates = securityUpdates.continuousMonitoring;
-            if (monitoringUpdates && typeof monitoringUpdates === 'object') {
-              rawSecurity.continuousMonitoring = (rawSecurity.continuousMonitoring as Record<string, unknown> | undefined) ?? {};
-              const rawMonitoring = rawSecurity.continuousMonitoring as Record<string, unknown>;
-              if (typeof monitoringUpdates.enabled === 'boolean') {
-                rawMonitoring.enabled = monitoringUpdates.enabled;
-              }
-              if (monitoringUpdates.profileId !== undefined) {
-                const trimmed = monitoringUpdates.profileId.trim();
-                if (trimmed) rawMonitoring.profileId = trimmed;
-                else delete rawMonitoring.profileId;
-              }
-              if (monitoringUpdates.cron !== undefined) {
-                const trimmed = monitoringUpdates.cron.trim();
-                if (trimmed) rawMonitoring.cron = trimmed;
-                else delete rawMonitoring.cron;
-              }
-            }
-            const autoContainmentUpdates = securityUpdates.autoContainment;
-            if (autoContainmentUpdates && typeof autoContainmentUpdates === 'object') {
-              rawSecurity.autoContainment = (rawSecurity.autoContainment as Record<string, unknown> | undefined) ?? {};
-              const rawAutoContainment = rawSecurity.autoContainment as Record<string, unknown>;
-              if (typeof autoContainmentUpdates.enabled === 'boolean') {
-                rawAutoContainment.enabled = autoContainmentUpdates.enabled;
-              }
-              if (autoContainmentUpdates.minSeverity !== undefined) {
-                const trimmed = autoContainmentUpdates.minSeverity.trim();
-                if (trimmed) rawAutoContainment.minSeverity = trimmed;
-                else delete rawAutoContainment.minSeverity;
-              }
-              if (typeof autoContainmentUpdates.minConfidence === 'number' && Number.isFinite(autoContainmentUpdates.minConfidence)) {
-                rawAutoContainment.minConfidence = autoContainmentUpdates.minConfidence;
-              }
-              if (Array.isArray(autoContainmentUpdates.categories)) {
-                rawAutoContainment.categories = autoContainmentUpdates.categories
-                  .map((category) => category?.trim())
-                  .filter((category): category is string => !!category);
-              }
-            }
-          }
-
-          const memoryUpdates = updates.assistant?.memory;
-          if (memoryUpdates && typeof memoryUpdates === 'object') {
-            rawConfig.assistant = rawConfig.assistant ?? {};
-            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
-            rawAssistant.memory = (rawAssistant.memory as Record<string, unknown> | undefined) ?? {};
-            const rawMemory = rawAssistant.memory as Record<string, unknown>;
-
-            const knowledgeBaseUpdates = (memoryUpdates.knowledgeBase && typeof memoryUpdates.knowledgeBase === 'object')
-              ? memoryUpdates.knowledgeBase
-              : undefined;
-            if (knowledgeBaseUpdates) {
-              rawMemory.knowledgeBase = (rawMemory.knowledgeBase as Record<string, unknown> | undefined) ?? {};
-              const rawKnowledgeBase = rawMemory.knowledgeBase as Record<string, unknown>;
-
-              if (typeof knowledgeBaseUpdates.enabled === 'boolean') {
-                rawKnowledgeBase.enabled = knowledgeBaseUpdates.enabled;
-              }
-              if (knowledgeBaseUpdates.basePath !== undefined) {
-                const trimmed = trimOrUndefined(knowledgeBaseUpdates.basePath);
-                if (trimmed) rawKnowledgeBase.basePath = trimmed;
-                else delete rawKnowledgeBase.basePath;
-              }
-              if (typeof knowledgeBaseUpdates.readOnly === 'boolean') {
-                rawKnowledgeBase.readOnly = knowledgeBaseUpdates.readOnly;
-              }
-              if (typeof knowledgeBaseUpdates.maxContextChars === 'number' && Number.isFinite(knowledgeBaseUpdates.maxContextChars)) {
-                rawKnowledgeBase.maxContextChars = knowledgeBaseUpdates.maxContextChars;
-              }
-              if (typeof knowledgeBaseUpdates.maxFileChars === 'number' && Number.isFinite(knowledgeBaseUpdates.maxFileChars)) {
-                rawKnowledgeBase.maxFileChars = knowledgeBaseUpdates.maxFileChars;
-              }
-              if (typeof knowledgeBaseUpdates.maxEntryChars === 'number' && Number.isFinite(knowledgeBaseUpdates.maxEntryChars)) {
-                rawKnowledgeBase.maxEntryChars = knowledgeBaseUpdates.maxEntryChars;
-              }
-              if (typeof knowledgeBaseUpdates.maxEntriesPerScope === 'number' && Number.isFinite(knowledgeBaseUpdates.maxEntriesPerScope)) {
-                rawKnowledgeBase.maxEntriesPerScope = knowledgeBaseUpdates.maxEntriesPerScope;
-              }
-              if (typeof knowledgeBaseUpdates.maxEmbeddingCacheBytes === 'number' && Number.isFinite(knowledgeBaseUpdates.maxEmbeddingCacheBytes)) {
-                rawKnowledgeBase.maxEmbeddingCacheBytes = knowledgeBaseUpdates.maxEmbeddingCacheBytes;
-              }
-              if (typeof knowledgeBaseUpdates.autoFlush === 'boolean') {
-                rawKnowledgeBase.autoFlush = knowledgeBaseUpdates.autoFlush;
-              }
-            }
-          }
-
-          const notificationUpdates = updates.assistant?.notifications;
-          if (notificationUpdates && typeof notificationUpdates === 'object') {
-            rawConfig.assistant = rawConfig.assistant ?? {};
-            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
-            rawAssistant.notifications = (rawAssistant.notifications as Record<string, unknown> | undefined) ?? {};
-            const rawNotifications = rawAssistant.notifications as Record<string, unknown>;
-
-            if (typeof notificationUpdates.enabled === 'boolean') {
-              rawNotifications.enabled = notificationUpdates.enabled;
-            }
-            if (notificationUpdates.minSeverity === 'info' || notificationUpdates.minSeverity === 'warn' || notificationUpdates.minSeverity === 'critical') {
-              rawNotifications.minSeverity = notificationUpdates.minSeverity;
-            }
-            if (Array.isArray(notificationUpdates.auditEventTypes)) {
-              rawNotifications.auditEventTypes = notificationUpdates.auditEventTypes;
-            }
-            if (Array.isArray(notificationUpdates.suppressedDetailTypes)) {
-              rawNotifications.suppressedDetailTypes = notificationUpdates.suppressedDetailTypes;
-            }
-            if (typeof notificationUpdates.cooldownMs === 'number' && Number.isFinite(notificationUpdates.cooldownMs)) {
-              rawNotifications.cooldownMs = notificationUpdates.cooldownMs;
-            }
-            if (notificationUpdates.deliveryMode === 'all' || notificationUpdates.deliveryMode === 'selected') {
-              rawNotifications.deliveryMode = notificationUpdates.deliveryMode;
-            }
-            if (notificationUpdates.destinations && typeof notificationUpdates.destinations === 'object') {
-              rawNotifications.destinations = (rawNotifications.destinations as Record<string, unknown> | undefined) ?? {};
-              const rawDestinations = rawNotifications.destinations as Record<string, unknown>;
-              if (typeof notificationUpdates.destinations.web === 'boolean') rawDestinations.web = notificationUpdates.destinations.web;
-              if (typeof notificationUpdates.destinations.cli === 'boolean') rawDestinations.cli = notificationUpdates.destinations.cli;
-              if (typeof notificationUpdates.destinations.telegram === 'boolean') rawDestinations.telegram = notificationUpdates.destinations.telegram;
-            }
-          }
-
-          const preferredProviderUpdates = updates.assistant?.tools?.preferredProviders;
-          if (preferredProviderUpdates && typeof preferredProviderUpdates === 'object') {
-            rawConfig.assistant = rawConfig.assistant ?? {};
-            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
-            rawAssistant.tools = (rawAssistant.tools as Record<string, unknown> | undefined) ?? {};
-            const rawTools = rawAssistant.tools as Record<string, unknown>;
-            rawTools.preferredProviders = {
-              ...((rawTools.preferredProviders as Record<string, unknown> | undefined) ?? {}),
-            };
-            const rawPreferredProviders = rawTools.preferredProviders as Record<string, unknown>;
-
-            if (preferredProviderUpdates.local !== undefined) {
-              const trimmed = preferredProviderUpdates.local.trim();
-              if (trimmed) rawPreferredProviders.local = trimmed;
-              else delete rawPreferredProviders.local;
-            }
-            if (preferredProviderUpdates.external !== undefined) {
-              const trimmed = preferredProviderUpdates.external.trim();
-              if (trimmed) rawPreferredProviders.external = trimmed;
-              else delete rawPreferredProviders.external;
-            }
-          }
-
-          const cloudUpdate = updates.assistant?.tools?.cloud;
-          if (cloudUpdate && typeof cloudUpdate === 'object') {
-            rawConfig.assistant = rawConfig.assistant ?? {};
-            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
-            rawAssistant.tools = (rawAssistant.tools as Record<string, unknown> | undefined) ?? {};
-            const rawTools = rawAssistant.tools as Record<string, unknown>;
-            rawTools.cloud = (rawTools.cloud as Record<string, unknown> | undefined) ?? {};
-            const rawCloud = rawTools.cloud as Record<string, unknown>;
-
-            if (typeof cloudUpdate.enabled === 'boolean') {
-              rawCloud.enabled = cloudUpdate.enabled;
-            }
-
-            if (Array.isArray(cloudUpdate.cpanelProfiles)) {
-              const previous = existingProfilesById(rawCloud, 'cpanelProfiles');
-              rawCloud.cpanelProfiles = cloudUpdate.cpanelProfiles.map((profile) => {
-                const current = previous.get(profile.id);
-                const normalized = normalizeCpanelConnectionConfig({
-                  host: profile.host.trim(),
-                  port: typeof profile.port === 'number' && Number.isFinite(profile.port)
-                    ? profile.port
-                    : typeof current?.port === 'number' && Number.isFinite(current.port)
-                      ? current.port
-                      : undefined,
-                  ssl: typeof profile.ssl === 'boolean'
-                    ? profile.ssl
-                    : typeof current?.ssl === 'boolean'
-                      ? current.ssl
-                      : undefined,
-                });
-                const next: Record<string, unknown> = {
-                  id: profile.id.trim(),
-                  name: profile.name.trim(),
-                  type: profile.type,
-                  host: normalized.host,
-                  username: profile.username.trim(),
-                };
-                if (normalized.port !== undefined) next.port = normalized.port;
-                if (normalized.ssl !== undefined) next.ssl = normalized.ssl;
-                if (typeof profile.allowSelfSigned === 'boolean') next.allowSelfSigned = profile.allowSelfSigned;
-                if (hasOwn(profile, 'defaultCpanelUser')) {
-                  const trimmed = trimOrUndefined(profile.defaultCpanelUser);
-                  if (trimmed) next.defaultCpanelUser = trimmed;
-                } else if (typeof current?.defaultCpanelUser === 'string') {
-                  next.defaultCpanelUser = current.defaultCpanelUser;
-                }
-                if (hasOwn(profile, 'credentialRef')) {
-                  const trimmed = trimOrUndefined(profile.credentialRef);
-                  if (trimmed) next.credentialRef = trimmed;
-                } else if (typeof current?.credentialRef === 'string') {
-                  next.credentialRef = current.credentialRef;
-                }
-                if (hasOwn(profile, 'apiToken')) {
-                  const trimmed = trimOrUndefined(profile.apiToken);
-                  if (trimmed) next.apiToken = trimmed;
-                } else if (typeof current?.apiToken === 'string') {
-                  next.apiToken = current.apiToken;
-                }
-                return next;
-              });
-            }
-
-            if (Array.isArray(cloudUpdate.vercelProfiles)) {
-              const previous = existingProfilesById(rawCloud, 'vercelProfiles');
-              rawCloud.vercelProfiles = cloudUpdate.vercelProfiles.map((profile) => {
-                const current = previous.get(profile.id);
-                const next: Record<string, unknown> = {
-                  id: profile.id.trim(),
-                  name: profile.name.trim(),
-                };
-	                if (hasOwn(profile, 'apiBaseUrl')) {
-	                  const trimmed = normalizeOptionalHttpUrlInput(typeof profile.apiBaseUrl === 'string' ? profile.apiBaseUrl : undefined);
-	                  if (trimmed) next.apiBaseUrl = trimmed;
-	                } else if (typeof current?.apiBaseUrl === 'string') {
-	                  next.apiBaseUrl = current.apiBaseUrl;
-                }
-                if (hasOwn(profile, 'credentialRef')) {
-                  const trimmed = trimOrUndefined(profile.credentialRef);
-                  if (trimmed) next.credentialRef = trimmed;
-                } else if (typeof current?.credentialRef === 'string') {
-                  next.credentialRef = current.credentialRef;
-                }
-                if (hasOwn(profile, 'apiToken')) {
-                  const trimmed = trimOrUndefined(profile.apiToken);
-                  if (trimmed) next.apiToken = trimmed;
-                } else if (typeof current?.apiToken === 'string') {
-                  next.apiToken = current.apiToken;
-                }
-                if (hasOwn(profile, 'teamId')) {
-                  const trimmed = trimOrUndefined(profile.teamId);
-                  if (trimmed) next.teamId = trimmed;
-                } else if (typeof current?.teamId === 'string') {
-                  next.teamId = current.teamId;
-                }
-                if (hasOwn(profile, 'slug')) {
-                  const trimmed = trimOrUndefined(profile.slug);
-                  if (trimmed) next.slug = trimmed;
-                } else if (typeof current?.slug === 'string') {
-                  next.slug = current.slug;
-                }
-                return next;
-              });
-            }
-
-            if (Array.isArray(cloudUpdate.cloudflareProfiles)) {
-              const previous = existingProfilesById(rawCloud, 'cloudflareProfiles');
-              rawCloud.cloudflareProfiles = cloudUpdate.cloudflareProfiles.map((profile) => {
-                const current = previous.get(profile.id);
-                const next: Record<string, unknown> = {
-                  id: profile.id.trim(),
-                  name: profile.name.trim(),
-                };
-	                if (hasOwn(profile, 'apiBaseUrl')) {
-	                  const trimmed = normalizeOptionalHttpUrlInput(typeof profile.apiBaseUrl === 'string' ? profile.apiBaseUrl : undefined);
-	                  if (trimmed) next.apiBaseUrl = trimmed;
-	                } else if (typeof current?.apiBaseUrl === 'string') {
-	                  next.apiBaseUrl = current.apiBaseUrl;
-                }
-                if (hasOwn(profile, 'credentialRef')) {
-                  const trimmed = trimOrUndefined(profile.credentialRef);
-                  if (trimmed) next.credentialRef = trimmed;
-                } else if (typeof current?.credentialRef === 'string') {
-                  next.credentialRef = current.credentialRef;
-                }
-                if (hasOwn(profile, 'apiToken')) {
-                  const trimmed = trimOrUndefined(profile.apiToken);
-                  if (trimmed) next.apiToken = trimmed;
-                } else if (typeof current?.apiToken === 'string') {
-                  next.apiToken = current.apiToken;
-                }
-                if (hasOwn(profile, 'accountId')) {
-                  const trimmed = trimOrUndefined(profile.accountId);
-                  if (trimmed) next.accountId = trimmed;
-                } else if (typeof current?.accountId === 'string') {
-                  next.accountId = current.accountId;
-                }
-                if (hasOwn(profile, 'defaultZoneId')) {
-                  const trimmed = trimOrUndefined(profile.defaultZoneId);
-                  if (trimmed) next.defaultZoneId = trimmed;
-                } else if (typeof current?.defaultZoneId === 'string') {
-                  next.defaultZoneId = current.defaultZoneId;
-                }
-                return next;
-              });
-            }
-
-            if (Array.isArray(cloudUpdate.awsProfiles)) {
-              const previous = existingProfilesById(rawCloud, 'awsProfiles');
-              rawCloud.awsProfiles = cloudUpdate.awsProfiles.map((profile) => {
-                const current = previous.get(profile.id);
-                const next: Record<string, unknown> = {
-                  id: profile.id.trim(),
-                  name: profile.name.trim(),
-                  region: profile.region.trim(),
-                };
-                for (const field of [
-                  'accessKeyId',
-                  'accessKeyIdCredentialRef',
-                  'secretAccessKey',
-                  'secretAccessKeyCredentialRef',
-                  'sessionToken',
-                  'sessionTokenCredentialRef',
-                ] as const) {
-                  if (hasOwn(profile, field)) {
-                    const trimmed = trimOrUndefined(profile[field]);
-                    if (trimmed) next[field] = trimmed;
-                  } else if (typeof current?.[field] === 'string') {
-                    next[field] = current[field];
-                  }
-                }
-	                if (hasOwn(profile, 'endpoints')) {
-	                  const endpoints = sanitizeNormalizedUrlRecord(profile.endpoints);
-	                  if (endpoints) next.endpoints = endpoints;
-	                } else if (isRecord(current?.endpoints)) {
-	                  next.endpoints = current.endpoints;
-                }
-                return next;
-              });
-            }
-
-            if (Array.isArray(cloudUpdate.gcpProfiles)) {
-              const previous = existingProfilesById(rawCloud, 'gcpProfiles');
-              rawCloud.gcpProfiles = cloudUpdate.gcpProfiles.map((profile) => {
-                const current = previous.get(profile.id);
-                const next: Record<string, unknown> = {
-                  id: profile.id.trim(),
-                  name: profile.name.trim(),
-                  projectId: profile.projectId.trim(),
-                };
-                if (hasOwn(profile, 'location')) {
-                  const trimmed = trimOrUndefined(profile.location);
-                  if (trimmed) next.location = trimmed;
-                } else if (typeof current?.location === 'string') {
-                  next.location = current.location;
-                }
-                for (const field of [
-                  'accessToken',
-                  'accessTokenCredentialRef',
-                  'serviceAccountJson',
-                  'serviceAccountCredentialRef',
-                ] as const) {
-                  if (hasOwn(profile, field)) {
-                    const trimmed = trimOrUndefined(profile[field]);
-                    if (trimmed) next[field] = trimmed;
-                  } else if (typeof current?.[field] === 'string') {
-                    next[field] = current[field];
-                  }
-                }
-	                if (hasOwn(profile, 'endpoints')) {
-	                  const endpoints = sanitizeNormalizedUrlRecord(profile.endpoints);
-	                  if (endpoints) next.endpoints = endpoints;
-	                } else if (isRecord(current?.endpoints)) {
-	                  next.endpoints = current.endpoints;
-                }
-                return next;
-              });
-            }
-
-            if (Array.isArray(cloudUpdate.azureProfiles)) {
-              const previous = existingProfilesById(rawCloud, 'azureProfiles');
-              rawCloud.azureProfiles = cloudUpdate.azureProfiles.map((profile) => {
-                const current = previous.get(profile.id);
-                const next: Record<string, unknown> = {
-                  id: profile.id.trim(),
-                  name: profile.name.trim(),
-                  subscriptionId: profile.subscriptionId.trim(),
-                };
-	                for (const field of [
-	                  'tenantId',
-	                  'accessToken',
-	                  'accessTokenCredentialRef',
-	                  'clientId',
-                  'clientIdCredentialRef',
-                  'clientSecret',
-                  'clientSecretCredentialRef',
-                  'defaultResourceGroup',
-                  'blobBaseUrl',
-                ] as const) {
-	                  if (hasOwn(profile, field)) {
-	                    const trimmed = field === 'blobBaseUrl'
-	                      ? normalizeOptionalHttpUrlInput(typeof profile[field] === 'string' ? profile[field] : undefined)
-	                      : trimOrUndefined(profile[field]);
-	                    if (trimmed) next[field] = trimmed;
-	                  } else if (typeof current?.[field] === 'string') {
-	                    next[field] = current[field];
-	                  }
-	                }
-	                if (hasOwn(profile, 'endpoints')) {
-	                  const endpoints = sanitizeNormalizedUrlRecord(profile.endpoints);
-	                  if (endpoints) next.endpoints = endpoints;
-	                } else if (isRecord(current?.endpoints)) {
-	                  next.endpoints = current.endpoints;
-                }
-                return next;
-              });
-            }
-          }
-
-          const searchUpdate = updates.assistant?.tools?.search;
-          if (searchUpdate && typeof searchUpdate === 'object') {
-            rawConfig.assistant = rawConfig.assistant ?? {};
-            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
-            rawAssistant.tools = (rawAssistant.tools as Record<string, unknown> | undefined) ?? {};
-            const rawTools = rawAssistant.tools as Record<string, unknown>;
-            rawTools.search = (rawTools.search as Record<string, unknown> | undefined) ?? {};
-            const rawSearch = rawTools.search as Record<string, unknown>;
-            if (!Array.isArray(rawSearch.sources)) {
-              rawSearch.sources = [];
-            }
-            if (typeof searchUpdate.enabled === 'boolean') {
-              rawSearch.enabled = searchUpdate.enabled;
-            }
-            if (Array.isArray(searchUpdate.sources)) {
-              rawSearch.sources = searchUpdate.sources;
-            }
-          }
-
-          const codingBackendsUpdate = updates.assistant?.tools?.codingBackends;
-          if (codingBackendsUpdate && typeof codingBackendsUpdate === 'object') {
-            rawConfig.assistant = rawConfig.assistant ?? {};
-            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
-            rawAssistant.tools = (rawAssistant.tools as Record<string, unknown> | undefined) ?? {};
-            const rawTools = rawAssistant.tools as Record<string, unknown>;
-            rawTools.codingBackends = (rawTools.codingBackends as Record<string, unknown> | undefined) ?? {};
-            const rawCodingBackends = rawTools.codingBackends as Record<string, unknown>;
-
-            if (typeof codingBackendsUpdate.enabled === 'boolean') {
-              rawCodingBackends.enabled = codingBackendsUpdate.enabled;
-            }
-            if (codingBackendsUpdate.defaultBackend !== undefined) {
-              const trimmed = trimOrUndefined(codingBackendsUpdate.defaultBackend);
-              if (trimmed) rawCodingBackends.defaultBackend = trimmed;
-              else delete rawCodingBackends.defaultBackend;
-            }
-            if (typeof codingBackendsUpdate.maxConcurrentSessions === 'number' && Number.isFinite(codingBackendsUpdate.maxConcurrentSessions)) {
-              rawCodingBackends.maxConcurrentSessions = codingBackendsUpdate.maxConcurrentSessions;
-            }
-            if (typeof codingBackendsUpdate.autoUpdate === 'boolean') {
-              rawCodingBackends.autoUpdate = codingBackendsUpdate.autoUpdate;
-            }
-            if (typeof codingBackendsUpdate.versionCheckIntervalMs === 'number' && Number.isFinite(codingBackendsUpdate.versionCheckIntervalMs)) {
-              rawCodingBackends.versionCheckIntervalMs = codingBackendsUpdate.versionCheckIntervalMs;
-            }
-            if (Array.isArray(codingBackendsUpdate.backends)) {
-              const previousBackends = new Map(
-                (Array.isArray(rawCodingBackends.backends) ? rawCodingBackends.backends : [])
-                  .filter(isRecord)
-                  .map((backend) => [typeof backend.id === 'string' ? backend.id.trim() : '', backend] as const)
-                  .filter(([id]) => !!id),
-              );
-              rawCodingBackends.backends = codingBackendsUpdate.backends
-                .map((backend) => {
-                  const id = backend.id.trim();
-                  const name = backend.name.trim();
-                  const command = backend.command.trim();
-                  if (!id || !name || !command) return null;
-                  const current = previousBackends.get(id);
-                  const next: Record<string, unknown> = {
-                    id,
-                    name,
-                    enabled: backend.enabled !== false,
-                    command,
-                    args: Array.isArray(backend.args)
-                      ? backend.args
-                        .map((arg) => arg?.trim())
-                        .filter((arg): arg is string => !!arg)
-                      : [],
-                  };
-                  if (backend.shell?.trim()) next.shell = backend.shell.trim();
-                  if (backend.versionCommand?.trim()) next.versionCommand = backend.versionCommand.trim();
-                  if (backend.updateCommand?.trim()) next.updateCommand = backend.updateCommand.trim();
-                  if (typeof backend.timeoutMs === 'number' && Number.isFinite(backend.timeoutMs)) {
-                    next.timeoutMs = backend.timeoutMs;
-                  }
-                  if (typeof backend.nonInteractive === 'boolean') {
-                    next.nonInteractive = backend.nonInteractive;
-                  }
-                  if (backend.env && typeof backend.env === 'object') {
-                    const envEntries = Object.entries(backend.env)
-                      .map(([key, value]) => [key.trim(), typeof value === 'string' ? value.trim() : ''] as const)
-                      .filter(([key, value]) => !!key && value.length > 0);
-                    if (envEntries.length > 0) {
-                      next.env = Object.fromEntries(envEntries);
-                    }
-                  } else if (isRecord(current?.env)) {
-                    next.env = current.env;
-                  }
-                  return next;
-                })
-                .filter((backend): backend is Record<string, unknown> => backend !== null);
-            }
-          }
-
-          // Sandbox enforcement mode
-          const sandboxUpdate = updates.assistant?.tools?.sandbox;
-          if (sandboxUpdate && typeof sandboxUpdate === 'object') {
-            rawConfig.assistant = rawConfig.assistant ?? {};
-            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
-            rawAssistant.tools = (rawAssistant.tools as Record<string, unknown> | undefined) ?? {};
-            const rawTools = rawAssistant.tools as Record<string, unknown>;
-            rawTools.sandbox = (rawTools.sandbox as Record<string, unknown> | undefined) ?? {};
-            const rawSandbox = rawTools.sandbox as Record<string, unknown>;
-            if (sandboxUpdate.enforcementMode === 'strict' || sandboxUpdate.enforcementMode === 'permissive') {
-              rawSandbox.enforcementMode = sandboxUpdate.enforcementMode;
-            }
-            const degradedFallbackUpdate = sandboxUpdate.degradedFallback;
-            if (degradedFallbackUpdate && typeof degradedFallbackUpdate === 'object') {
-              rawSandbox.degradedFallback = (rawSandbox.degradedFallback as Record<string, unknown> | undefined) ?? {};
-              const rawDegradedFallback = rawSandbox.degradedFallback as Record<string, unknown>;
-              if (typeof degradedFallbackUpdate.allowNetworkTools === 'boolean') rawDegradedFallback.allowNetworkTools = degradedFallbackUpdate.allowNetworkTools;
-              if (typeof degradedFallbackUpdate.allowBrowserTools === 'boolean') rawDegradedFallback.allowBrowserTools = degradedFallbackUpdate.allowBrowserTools;
-              if (typeof degradedFallbackUpdate.allowMcpServers === 'boolean') rawDegradedFallback.allowMcpServers = degradedFallbackUpdate.allowMcpServers;
-              if (typeof degradedFallbackUpdate.allowPackageManagers === 'boolean') rawDegradedFallback.allowPackageManagers = degradedFallbackUpdate.allowPackageManagers;
-              if (typeof degradedFallbackUpdate.allowManualCodeTerminals === 'boolean') rawDegradedFallback.allowManualCodeTerminals = degradedFallbackUpdate.allowManualCodeTerminals;
-            }
-          }
-
-          // Agent policy updates (which policy areas the assistant can modify via chat)
-          const agentPolicyUpdatesUpdate = updates.assistant?.tools?.agentPolicyUpdates;
-          if (agentPolicyUpdatesUpdate && typeof agentPolicyUpdatesUpdate === 'object') {
-            rawConfig.assistant = rawConfig.assistant ?? {};
-            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
-            rawAssistant.tools = (rawAssistant.tools as Record<string, unknown> | undefined) ?? {};
-            const rawTools = rawAssistant.tools as Record<string, unknown>;
-            rawTools.agentPolicyUpdates = (rawTools.agentPolicyUpdates as Record<string, unknown> | undefined) ?? {};
-            const rawAPU = rawTools.agentPolicyUpdates as Record<string, unknown>;
-            if (typeof agentPolicyUpdatesUpdate.allowedPaths === 'boolean') rawAPU.allowedPaths = agentPolicyUpdatesUpdate.allowedPaths;
-            if (typeof agentPolicyUpdatesUpdate.allowedCommands === 'boolean') rawAPU.allowedCommands = agentPolicyUpdatesUpdate.allowedCommands;
-            if (typeof agentPolicyUpdatesUpdate.allowedDomains === 'boolean') rawAPU.allowedDomains = agentPolicyUpdatesUpdate.allowedDomains;
-            if (typeof agentPolicyUpdatesUpdate.toolPolicies === 'boolean') rawAPU.toolPolicies = agentPolicyUpdatesUpdate.toolPolicies;
-          }
-
-          // MCP + GWS managed provider updates
-          const mcpUpdate = updates.assistant?.tools?.mcp;
-          if (mcpUpdate && typeof mcpUpdate === 'object') {
-            rawConfig.assistant = rawConfig.assistant ?? {};
-            const rawAssistant = rawConfig.assistant as Record<string, unknown>;
-            rawAssistant.tools = (rawAssistant.tools as Record<string, unknown> | undefined) ?? {};
-            const rawTools = rawAssistant.tools as Record<string, unknown>;
-            rawTools.mcp = (rawTools.mcp as Record<string, unknown> | undefined) ?? {};
-            const rawMcp = rawTools.mcp as Record<string, unknown>;
-            if (typeof mcpUpdate.enabled === 'boolean') rawMcp.enabled = mcpUpdate.enabled;
-
-            const gwsUpdate = mcpUpdate.managedProviders?.gws;
-            if (gwsUpdate && typeof gwsUpdate === 'object') {
-              rawMcp.managedProviders = (rawMcp.managedProviders as Record<string, unknown> | undefined) ?? {};
-              const rawManaged = rawMcp.managedProviders as Record<string, unknown>;
-              rawManaged.gws = (rawManaged.gws as Record<string, unknown> | undefined) ?? {};
-              const rawGws = rawManaged.gws as Record<string, unknown>;
-              if (typeof gwsUpdate.enabled === 'boolean') rawGws.enabled = gwsUpdate.enabled;
-              if (Array.isArray(gwsUpdate.services)) rawGws.services = gwsUpdate.services;
-              if (typeof gwsUpdate.command === 'string') rawGws.command = gwsUpdate.command;
-            }
-          }
-
-          const result = persistAndApplyConfig(rawConfig, {
-            changedBy: 'config-center',
-            reason: 'direct config update',
-          });
-          analytics.track({
-            type: result.success ? 'config_update_success' : 'config_update_failed',
-            channel: 'system',
-            canonicalUserId: currentConfig.assistant.identity.primaryUserId,
-            metadata: { result: result.message },
-          });
-          if (result.success && credentialRefsChanged) {
-            deleteUnusedLocalSecrets(currentConfig.assistant.credentials.refs, nextCredentialRefs);
-          }
-          return result;
-        },
-      );
-    },
+    onConfigUpdate: async (updates) => applyDirectConfigUpdate(updates),
 
     onAnalyticsTrack: (event) => {
       const channel = event.channel ?? 'system';
@@ -12863,184 +10694,24 @@ function buildDashboardCallbacks(
 
     onAnalyticsSummary: (windowMs) => analytics.summary(windowMs),
 
-    onAiSecuritySummary: () => aiSecurity.getSummary(),
-
-    onAiSecurityProfiles: () => aiSecurity.getProfiles(),
-
-    onAiSecurityTargets: () => aiSecurity.listTargets(),
-
-    onAiSecurityRuns: (limit) => aiSecurity.listRuns(limit ?? 20),
-
-    onAiSecurityScan: async (input) => runAssistantSecurityScan({
-      profileId: input?.profileId,
-      targetIds: input?.targetIds,
-      source: input?.source ?? 'manual',
-      requestedBy: 'web-security-page',
+    ...createSecurityDashboardCallbacks({
+      configRef,
+      loadRawConfig,
+      persistAndApplyConfig,
+      aiSecurity,
+      runAssistantSecurityScan,
+      threatIntel,
+      jobTracker,
+      auditLog: runtime.auditLog,
+      trackAnalytics: (type, metadata) => {
+        analytics.track({
+          type,
+          channel: 'system',
+          canonicalUserId: configRef.current.assistant.identity.primaryUserId,
+          metadata,
+        });
+      },
     }),
-
-    onAiSecurityFindings: ({ limit, status }) => aiSecurity.listFindings(limit ?? 50, status),
-
-    onAiSecurityUpdateFindingStatus: ({ findingId, status }) => {
-      const result = aiSecurity.updateFindingStatus(findingId, status);
-      analytics.track({
-        type: result.success ? 'assistant_security_finding_status_updated' : 'assistant_security_finding_status_failed',
-        channel: 'system',
-        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        metadata: { findingId, status, success: result.success },
-      });
-      return result;
-    },
-
-    onThreatIntelSummary: () => threatIntel.getSummary(),
-
-    onThreatIntelPlan: () => threatIntel.getPlan(),
-
-    onThreatIntelWatchlist: () => threatIntel.listWatchlist(),
-
-    onThreatIntelWatchAdd: (target) => {
-      const result = threatIntel.addWatchTarget(target);
-      if (!result.success) return result;
-
-      const persisted = persistThreatIntelState();
-      if (!persisted.success) {
-        threatIntel.removeWatchTarget(target);
-        return {
-          success: false,
-          message: `${result.message} Rollback applied. ${persisted.message}`,
-        };
-      }
-
-      analytics.track({
-        type: 'threat_intel_watch_add',
-        channel: 'system',
-        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        metadata: { target },
-      });
-      return result;
-    },
-
-    onThreatIntelWatchRemove: (target) => {
-      const result = threatIntel.removeWatchTarget(target);
-      if (!result.success) return result;
-
-      const persisted = persistThreatIntelState();
-      if (!persisted.success) {
-        threatIntel.addWatchTarget(target);
-        return {
-          success: false,
-          message: `${result.message} Rollback applied. ${persisted.message}`,
-        };
-      }
-
-      analytics.track({
-        type: 'threat_intel_watch_remove',
-        channel: 'system',
-        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        metadata: { target },
-      });
-      return result;
-    },
-
-    onThreatIntelScan: async (input) => {
-      return jobTracker.run(
-        {
-          type: 'threat_intel.scan',
-          source: 'manual',
-          detail: input.query
-            ? `Manual scan for '${input.query}'`
-            : 'Manual scan for configured watchlist',
-          metadata: {
-            includeDarkWeb: !!input.includeDarkWeb,
-            sources: input.sources,
-          },
-        },
-        async () => {
-          const result = await threatIntel.scan(input);
-          analytics.track({
-            type: result.success ? 'threat_intel_scan' : 'threat_intel_scan_failed',
-            channel: 'system',
-            canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-            metadata: {
-              query: input.query,
-              includeDarkWeb: input.includeDarkWeb,
-              findings: result.findings.length,
-              success: result.success,
-            },
-          });
-
-          const highRisk = result.findings.filter((f) => f.severity === 'high' || f.severity === 'critical');
-          if (highRisk.length > 0) {
-            runtime.auditLog.record({
-              type: 'anomaly_detected',
-              severity: 'warn',
-              agentId: 'threat-intel',
-              details: {
-                source: 'threat_intel_scan',
-                anomalyType: 'high_risk_signal',
-                description: `${highRisk.length} high-risk finding(s) detected in threat-intel scan.`,
-                evidence: {
-                  findingIds: highRisk.map((finding) => finding.id),
-                  targets: highRisk.map((finding) => finding.target),
-                },
-              },
-            });
-          }
-          return result;
-        },
-      );
-    },
-
-    onThreatIntelFindings: ({ limit, status }) => {
-      const safeLimit = limit && limit > 0 ? limit : 50;
-      return threatIntel.listFindings(safeLimit, status);
-    },
-
-    onThreatIntelUpdateFindingStatus: ({ findingId, status }) => {
-      const result = threatIntel.updateFindingStatus(findingId, status);
-      analytics.track({
-        type: result.success ? 'threat_intel_finding_status_updated' : 'threat_intel_finding_status_failed',
-        channel: 'system',
-        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        metadata: { findingId, status, success: result.success },
-      });
-      return result;
-    },
-
-    onThreatIntelActions: (limit) => threatIntel.listActions(limit ?? 50),
-
-    onThreatIntelDraftAction: ({ findingId, type }) => {
-      const result = threatIntel.draftAction(findingId, type);
-      analytics.track({
-        type: result.success ? 'threat_intel_action_drafted' : 'threat_intel_action_draft_failed',
-        channel: 'system',
-        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        metadata: { findingId, type, success: result.success },
-      });
-      return result;
-    },
-
-    onThreatIntelSetResponseMode: (mode) => {
-      const previousMode = threatIntel.getSummary().responseMode;
-      const result = threatIntel.setResponseMode(mode);
-      if (!result.success) return result;
-
-      const persisted = persistThreatIntelState();
-      if (!persisted.success) {
-        threatIntel.setResponseMode(previousMode);
-        return {
-          success: false,
-          message: `Failed to persist mode change. ${persisted.message}`,
-        };
-      }
-
-      analytics.track({
-        type: 'threat_intel_response_mode_updated',
-        channel: 'system',
-        canonicalUserId: configRef.current.assistant.identity.primaryUserId,
-        metadata: { mode },
-      });
-      return result;
-    },
 
     ...createProviderIntegrationCallbacks({
       configRef,
