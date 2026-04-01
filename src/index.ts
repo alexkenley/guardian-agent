@@ -210,6 +210,7 @@ import {
   parseWebSearchIntent,
 } from './runtime/search-intent.js';
 import { applyCredentialRefInput } from './runtime/credential-ref-input.js';
+import { createConfigPersistenceService } from './runtime/control-plane/config-persistence-service.js';
 
 let syncAssistantSecurityMonitoringTask: () => void = () => {};
 import { ToolExecutor } from './tools/executor.js';
@@ -265,7 +266,6 @@ import { TRUST_PRESETS, type TrustPresetName } from './guardian/trust-presets.js
 import type { Capability } from './guardian/capabilities.js';
 import type { OutputGuardian } from './guardian/output-guardian.js';
 import { createProviders, getProviderRegistry } from './llm/provider.js';
-import { hashObjectSha256Hex } from './util/crypto-guardrails.js';
 import { detectCapabilities as detectSandboxCapabilities, detectSandboxHealth, DEFAULT_SANDBOX_CONFIG, type SandboxConfig } from './sandbox/index.js';
 import {
   isDegradedSandboxFallbackActive,
@@ -9080,119 +9080,33 @@ function buildDashboardCallbacks(
     toolExecutor.updatePolicy({ sandbox: { allowedPaths: configuredAllowedPaths } });
   };
 
-  const persistAndApplyConfig = (
-    rawConfig: Record<string, unknown>,
-    meta?: { changedBy?: string; reason?: string },
-  ): { success: boolean; message: string } => {
-    try {
-      const previousRawConfig = loadRawConfig();
-      const oldPolicyHash = hashObjectSha256Hex(previousRawConfig);
-      const newPolicyHash = hashObjectSha256Hex(rawConfig);
-
-      const yamlStr = yaml.dump(rawConfig, { lineWidth: -1, noRefs: true });
-      writeSecureFileSync(configPath, yamlStr);
-      controlPlaneIntegrity.signFileSync(configPath, meta?.changedBy ?? 'dashboard_config_update');
-
-      // Reload with defaults/env interpolation to maintain canonical runtime config.
-      const nextConfig = loadConfig(configPath, {
-        integrity: controlPlaneIntegrity,
-        adoptUntrackedIntegrity: true,
-      });
-      const resolvedNextCredentials = resolveRuntimeCredentialView(nextConfig, secretStore);
-      runtime.applyLLMConfiguration({
-        llm: resolvedNextCredentials.resolvedLLM,
-        defaultProvider: nextConfig.defaultProvider,
-      });
-      bindTierRoutingProviders(runtime, router, nextConfig);
-      applyKnowledgeBaseConfigToMemoryStores(nextConfig);
-      bindSecurityTriageProvider(runtime, nextConfig);
-      identity.update(nextConfig.assistant.identity);
-      connectors.updateConfig(nextConfig.assistant.connectors);
-      toolExecutor.updatePolicy({
-        mode: nextConfig.assistant.tools.policyMode,
-        toolPolicies: nextConfig.assistant.tools.toolPolicies,
-        sandbox: {
-          allowedPaths: nextConfig.assistant.tools.allowedPaths,
-          allowedCommands: nextConfig.assistant.tools.allowedCommands,
-          allowedDomains: nextConfig.assistant.tools.allowedDomains,
-        },
-      });
-      runtime.applyShellAllowedCommands(nextConfig.assistant.tools.allowedCommands);
-      toolExecutor.updateWebSearchConfig(resolvedNextCredentials.resolvedWebSearch ?? {});
-      threatIntelWebSearchConfigRef.current = resolvedNextCredentials.resolvedWebSearch ?? {};
-      toolExecutor.setCloudConfig(resolvedNextCredentials.resolvedCloud);
-      codingBackendServiceRef.current?.updateConfig(
-        nextConfig.assistant.tools.codingBackends ?? DEFAULT_CODING_BACKENDS_CONFIG,
-      );
-      const persistedToken = nextConfig.channels.web?.auth?.token?.trim()
-        || nextConfig.channels.web?.authToken?.trim();
-      const nextWebAuthMode = nextConfig.channels.web?.auth?.mode ?? 'bearer_required';
-      const nextRuntimeToken = persistedToken
-        || webAuthStateRef.current.token
-        || (nextWebAuthMode === 'bearer_required' ? generateSecureToken() : undefined);
-      webAuthStateRef.current = {
-        ...webAuthStateRef.current,
-        mode: nextWebAuthMode,
-        token: nextRuntimeToken,
-        tokenSource: persistedToken
-          ? 'config'
-          : (nextRuntimeToken ? (webAuthStateRef.current.tokenSource ?? 'ephemeral') : 'ephemeral'),
-        rotateOnStartup: nextConfig.channels.web?.auth?.rotateOnStartup ?? false,
-        sessionTtlMinutes: nextConfig.channels.web?.auth?.sessionTtlMinutes,
-      };
-      applyWebAuthRuntime(webAuthStateRef.current);
-      const prevTelegram = configRef.current.channels.telegram;
-      const prevSearch = configRef.current.assistant?.tools?.search;
-      configRef.current = nextConfig;
-      syncAssistantSecurityMonitoringTask();
-
-      // Hot-reload Telegram channel when config changes
-      const nextTelegram = nextConfig.channels.telegram;
-      const telegramChanged =
-        (prevTelegram?.enabled !== nextTelegram?.enabled)
-        || (prevTelegram?.botToken !== nextTelegram?.botToken)
-        || (prevTelegram?.botTokenCredentialRef !== nextTelegram?.botTokenCredentialRef)
-        || (prevTelegram?.defaultAgent !== nextTelegram?.defaultAgent)
-        || (JSON.stringify(prevTelegram?.allowedChatIds) !== JSON.stringify(nextTelegram?.allowedChatIds));
-      if (telegramChanged && telegramReloadRef.current) {
-        telegramReloadRef.current().catch(err => {
-          log.error({ err }, 'Telegram hot-reload failed');
-        });
-      }
-
-      // Hot-reload Search engine when config changes
-      const nextSearch = nextConfig.assistant?.tools?.search;
-      const searchChanged =
-        (prevSearch?.enabled !== nextSearch?.enabled)
-        || (JSON.stringify(prevSearch?.sources) !== JSON.stringify(nextSearch?.sources))
-        || (prevSearch?.sqlitePath !== nextSearch?.sqlitePath)
-        || (JSON.stringify(prevSearch?.embedding) !== JSON.stringify(nextSearch?.embedding));
-      if (searchChanged && reloadSearchRef.current) {
-        reloadSearchRef.current().catch(err => {
-          log.error({ err }, 'Search engine hot-reload failed');
-        });
-      }
-
-      if (oldPolicyHash !== newPolicyHash) {
-        runtime.auditLog.record({
-          type: 'policy_changed',
-          severity: 'info',
-          agentId: 'config-center',
-          controller: 'ConfigCenter',
-          details: {
-            oldPolicyHash,
-            newPolicyHash,
-            changedBy: meta?.changedBy ?? 'dashboard',
-            reason: meta?.reason ?? 'config update',
-          },
-        });
-      }
-      return { success: true, message: 'Config saved and applied.' };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return { success: false, message: `Failed to save config: ${message}` };
-    }
-  };
+  const { persistAndApplyConfig } = createConfigPersistenceService({
+    configPath,
+    controlPlaneIntegrity,
+    loadRawConfig,
+    configRef,
+    threatIntelWebSearchConfigRef,
+    secretStore,
+    runtime,
+    router,
+    bindTierRoutingProviders,
+    applyKnowledgeBaseConfigToMemoryStores,
+    bindSecurityTriageProvider,
+    identity,
+    connectors,
+    toolExecutor,
+    codingBackendServiceRef,
+    codingBackendsDefaultConfig: DEFAULT_CODING_BACKENDS_CONFIG,
+    webAuthStateRef,
+    applyWebAuthRuntime,
+    generateSecureToken,
+    syncAssistantSecurityMonitoringTask: () => syncAssistantSecurityMonitoringTask(),
+    telegramReloadRef,
+    reloadSearchRef,
+    logError: (message, err) => {
+      log.error({ err }, message);
+    },
+  });
 
   const persistThreatIntelState = (): { success: boolean; message: string } => {
     const rawConfig = loadRawConfig();
