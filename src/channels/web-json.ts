@@ -25,3 +25,28 @@ export function readBody(req: IncomingMessage, maxBytes: number): Promise<string
     req.on('error', reject);
   });
 }
+
+export async function readJsonBody<T>(req: IncomingMessage, maxBytes: number): Promise<T> {
+  const body = await readBody(req, maxBytes);
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new Error('Invalid JSON');
+  }
+}
+
+export async function readOptionalJsonBody<T>(
+  req: IncomingMessage,
+  maxBytes: number,
+  emptyValue: T,
+): Promise<T> {
+  const body = await readBody(req, maxBytes);
+  if (!body.trim()) {
+    return emptyValue;
+  }
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new Error('Invalid JSON');
+  }
+}

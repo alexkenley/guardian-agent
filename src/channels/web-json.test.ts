@@ -3,7 +3,7 @@ import { PassThrough } from 'node:stream';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { readBody, sendJSON } from './web-json.js';
+import { readBody, readJsonBody, readOptionalJsonBody, sendJSON } from './web-json.js';
 
 describe('sendJSON', () => {
   it('writes a JSON response when headers have not been sent', () => {
@@ -57,5 +57,45 @@ describe('readBody', () => {
 
     await expect(bodyPromise).rejects.toThrow('Request body too large (limit: 4 bytes)');
     expect(destroy).toHaveBeenCalledOnce();
+  });
+});
+
+describe('readJsonBody', () => {
+  it('parses a JSON request body', async () => {
+    const req = new PassThrough() as PassThrough & IncomingMessage;
+
+    const bodyPromise = readJsonBody<{ action: string }>(req as IncomingMessage, 1024);
+    req.end('{"action":"rotate"}');
+
+    await expect(bodyPromise).resolves.toEqual({ action: 'rotate' });
+  });
+
+  it('rejects invalid JSON payloads', async () => {
+    const req = new PassThrough() as PassThrough & IncomingMessage;
+
+    const bodyPromise = readJsonBody<{ action: string }>(req as IncomingMessage, 1024);
+    req.end('{invalid');
+
+    await expect(bodyPromise).rejects.toThrow('Invalid JSON');
+  });
+});
+
+describe('readOptionalJsonBody', () => {
+  it('returns the provided empty value for blank bodies', async () => {
+    const req = new PassThrough() as PassThrough & IncomingMessage;
+
+    const bodyPromise = readOptionalJsonBody(req as IncomingMessage, 1024, { ticket: undefined as string | undefined });
+    req.end('   ');
+
+    await expect(bodyPromise).resolves.toEqual({ ticket: undefined });
+  });
+
+  it('parses JSON when content is present', async () => {
+    const req = new PassThrough() as PassThrough & IncomingMessage;
+
+    const bodyPromise = readOptionalJsonBody(req as IncomingMessage, 1024, {});
+    req.end('{"enabled":true}');
+
+    await expect(bodyPromise).resolves.toEqual({ enabled: true });
   });
 });

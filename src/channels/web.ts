@@ -18,7 +18,7 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import { spawn as spawnPty, type IPty } from 'node-pty';
 import type { ChannelAdapter, MessageCallback } from './types.js';
 import type { DashboardCallbacks, SSEEvent, SSEListener, UIInvalidationEvent } from './web-types.js';
-import { readBody, sendJSON } from './web-json.js';
+import { readBody, readJsonBody, readOptionalJsonBody, sendJSON } from './web-json.js';
 import {
   getDefaultShellForPlatform,
   getPtyShellLaunch,
@@ -973,38 +973,29 @@ export class WebChannel implements ChannelAdapter {
 
       // POST /api/auth/ticket — issue short-lived HMAC ticket for privileged auth operations
       if (req.method === 'POST' && url.pathname === '/api/auth/ticket') {
-        let body: string;
         try {
-          body = await readBody(req, this.maxBodyBytes);
+          const parsed = await readOptionalJsonBody<{ action?: string }>(req, this.maxBodyBytes, {});
+          const action = (parsed.action ?? '').trim();
+          if (!this.isPrivilegedTicketAction(action)) {
+            sendJSON(res, 400, { error: 'Invalid privileged action' });
+            return;
+          }
+          const retryAfterMs = this.recordPrivilegedTicketMint(req);
+          if (retryAfterMs > 0) {
+            this.sendPrivilegedTicketRateLimited(res, retryAfterMs);
+            return;
+          }
+          const ticket = this.mintPrivilegedTicket(action);
+          sendJSON(res, 200, {
+            action,
+            ticket,
+            expiresIn: PRIVILEGED_TICKET_TTL_SECONDS,
+          });
+          return;
         } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          sendJSON(res, 400, { error: message });
+          sendBadRequestError(res, err);
           return;
         }
-        let parsed: { action?: string };
-        try {
-          parsed = body.trim() ? (JSON.parse(body) as { action?: string }) : {};
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON' });
-          return;
-        }
-        const action = (parsed.action ?? '').trim();
-        if (!this.isPrivilegedTicketAction(action)) {
-          sendJSON(res, 400, { error: 'Invalid privileged action' });
-          return;
-        }
-        const retryAfterMs = this.recordPrivilegedTicketMint(req);
-        if (retryAfterMs > 0) {
-          this.sendPrivilegedTicketRateLimited(res, retryAfterMs);
-          return;
-        }
-        const ticket = this.mintPrivilegedTicket(action);
-        sendJSON(res, 200, {
-          action,
-          ticket,
-          expiresIn: PRIVILEGED_TICKET_TTL_SECONDS,
-        });
-        return;
       }
 
       // POST /api/auth/config — update auth mode and token settings
@@ -1013,41 +1004,24 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
-        let body: string;
         try {
-          body = await readBody(req, this.maxBodyBytes);
+          const parsed = await readOptionalJsonBody<{
+            mode?: 'bearer_required' | 'disabled';
+            token?: string;
+            rotateOnStartup?: boolean;
+            sessionTtlMinutes?: number;
+            ticket?: string;
+          }>(req, this.maxBodyBytes, {});
+          if (!this.requirePrivilegedTicket(req, res, url, 'auth.config', parsed.ticket)) {
+            return;
+          }
+          const result = await this.dashboard.onAuthUpdate(parsed);
+          sendJSON(res, 200, result);
+          return;
         } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          sendJSON(res, 400, { error: message });
+          sendBadRequestError(res, err);
           return;
         }
-        let parsed: {
-          mode?: 'bearer_required' | 'disabled';
-          token?: string;
-          rotateOnStartup?: boolean;
-          sessionTtlMinutes?: number;
-          ticket?: string;
-        };
-        try {
-          parsed = body.trim()
-            ? (JSON.parse(body) as {
-              mode?: 'bearer_required' | 'disabled';
-              token?: string;
-              rotateOnStartup?: boolean;
-              sessionTtlMinutes?: number;
-              ticket?: string;
-            })
-            : {};
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON' });
-          return;
-        }
-        if (!this.requirePrivilegedTicket(req, res, url, 'auth.config', parsed.ticket)) {
-          return;
-        }
-        const result = await this.dashboard.onAuthUpdate(parsed);
-        sendJSON(res, 200, result);
-        return;
       }
 
       // POST /api/auth/token/rotate — rotate bearer token
@@ -1056,28 +1030,17 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
-        let body = '';
         try {
-          body = await readBody(req, this.maxBodyBytes);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          sendJSON(res, 400, { error: message });
-          return;
-        }
-        let parsed: { ticket?: string } = {};
-        if (body.trim()) {
-          try {
-            parsed = JSON.parse(body) as { ticket?: string };
-          } catch {
-            sendJSON(res, 400, { error: 'Invalid JSON' });
+          const parsed = await readOptionalJsonBody<{ ticket?: string }>(req, this.maxBodyBytes, {});
+          if (!this.requirePrivilegedTicket(req, res, url, 'auth.rotate', parsed.ticket)) {
             return;
           }
-        }
-        if (!this.requirePrivilegedTicket(req, res, url, 'auth.rotate', parsed.ticket)) {
+          sendJSON(res, 200, await this.dashboard.onAuthRotate());
+          return;
+        } catch (err) {
+          sendBadRequestError(res, err);
           return;
         }
-        sendJSON(res, 200, await this.dashboard.onAuthRotate());
-        return;
       }
 
       // POST /api/auth/token/reveal — reveal current bearer token
@@ -1086,28 +1049,17 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
-        let body = '';
         try {
-          body = await readBody(req, this.maxBodyBytes);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          sendJSON(res, 400, { error: message });
-          return;
-        }
-        let parsed: { ticket?: string } = {};
-        if (body.trim()) {
-          try {
-            parsed = JSON.parse(body) as { ticket?: string };
-          } catch {
-            sendJSON(res, 400, { error: 'Invalid JSON' });
+          const parsed = await readOptionalJsonBody<{ ticket?: string }>(req, this.maxBodyBytes, {});
+          if (!this.requirePrivilegedTicket(req, res, url, 'auth.reveal', parsed.ticket)) {
             return;
           }
-        }
-        if (!this.requirePrivilegedTicket(req, res, url, 'auth.reveal', parsed.ticket)) {
+          sendJSON(res, 200, await this.dashboard.onAuthReveal());
+          return;
+        } catch (err) {
+          sendBadRequestError(res, err);
           return;
         }
-        sendJSON(res, 200, await this.dashboard.onAuthReveal());
-        return;
       }
 
       // GET /api/tools — tools catalog + policy + jobs + approvals
@@ -1137,32 +1089,23 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
-        let body: string;
         try {
-          body = await readBody(req, this.maxBodyBytes);
+          const parsed = await readJsonBody<{ skillId?: string; enabled?: boolean }>(req, this.maxBodyBytes);
+          if (!parsed.skillId || typeof parsed.enabled !== 'boolean') {
+            sendJSON(res, 400, { error: 'skillId and enabled are required' });
+            return;
+          }
+          const result = this.dashboard.onSkillsUpdate({
+            skillId: parsed.skillId,
+            enabled: parsed.enabled,
+          });
+          sendJSON(res, 200, result);
+          this.maybeEmitUIInvalidation(result, ['config', 'skills'], 'skills.updated', url.pathname);
+          return;
         } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          sendJSON(res, 400, { error: message });
+          sendBadRequestError(res, err);
           return;
         }
-        let parsed: { skillId?: string; enabled?: boolean };
-        try {
-          parsed = JSON.parse(body) as { skillId?: string; enabled?: boolean };
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON' });
-          return;
-        }
-        if (!parsed.skillId || typeof parsed.enabled !== 'boolean') {
-          sendJSON(res, 400, { error: 'skillId and enabled are required' });
-          return;
-        }
-        const result = this.dashboard.onSkillsUpdate({
-          skillId: parsed.skillId,
-          enabled: parsed.enabled,
-        });
-        sendJSON(res, 200, result);
-        this.maybeEmitUIInvalidation(result, ['config', 'skills'], 'skills.updated', url.pathname);
-        return;
       }
 
       // POST /api/tools/run — execute a tool
@@ -1171,79 +1114,57 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
-        let body: string;
         try {
-          body = await readBody(req, this.maxBodyBytes);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          sendJSON(res, 400, { error: message });
-          return;
-        }
-        let parsed: {
-          toolName?: string;
-          args?: Record<string, unknown>;
-          origin?: 'assistant' | 'cli' | 'web';
-          agentId?: string;
-          userId?: string;
-          surfaceId?: string;
-          contentTrustLevel?: 'trusted' | 'low_trust' | 'quarantined';
-          taintReasons?: string[];
-          derivedFromTaintedContent?: boolean;
-          scheduleId?: string;
-          channel?: string;
-          metadata?: Record<string, unknown>;
-        };
-        try {
-          parsed = JSON.parse(body) as {
+          const parsed = await readJsonBody<{
             toolName?: string;
             args?: Record<string, unknown>;
-          origin?: 'assistant' | 'cli' | 'web';
-          agentId?: string;
-          userId?: string;
-          surfaceId?: string;
-          contentTrustLevel?: 'trusted' | 'low_trust' | 'quarantined';
-          taintReasons?: string[];
-          derivedFromTaintedContent?: boolean;
+            origin?: 'assistant' | 'cli' | 'web';
+            agentId?: string;
+            userId?: string;
+            surfaceId?: string;
+            contentTrustLevel?: 'trusted' | 'low_trust' | 'quarantined';
+            taintReasons?: string[];
+            derivedFromTaintedContent?: boolean;
             scheduleId?: string;
             channel?: string;
             metadata?: Record<string, unknown>;
-          };
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON' });
+          }>(req, this.maxBodyBytes);
+          if (!parsed.toolName) {
+            sendJSON(res, 400, { error: 'toolName is required' });
+            return;
+          }
+          const principal = this.resolveRequestPrincipal(req);
+          const result = await this.dashboard.onToolsRun({
+            toolName: parsed.toolName,
+            args: parsed.args ?? {},
+            origin: parsed.origin ?? 'web',
+            agentId: parsed.agentId,
+            userId: parsed.userId ?? 'web-user',
+            surfaceId: trimOptionalString(parsed.surfaceId),
+            principalId: principal.principalId,
+            principalRole: principal.principalRole,
+            contentTrustLevel: parsed.contentTrustLevel === 'quarantined'
+              ? 'quarantined'
+              : parsed.contentTrustLevel === 'low_trust'
+                ? 'low_trust'
+                : parsed.contentTrustLevel === 'trusted'
+                  ? 'trusted'
+                  : undefined,
+            taintReasons: Array.isArray(parsed.taintReasons)
+              ? parsed.taintReasons.filter((value): value is string => typeof value === 'string')
+              : undefined,
+            derivedFromTaintedContent: parsed.derivedFromTaintedContent === true,
+            scheduleId: typeof parsed.scheduleId === 'string' ? parsed.scheduleId : undefined,
+            channel: parsed.channel ?? 'web',
+            metadata: asRecord(parsed.metadata),
+          });
+          sendJSON(res, 200, result);
+          this.maybeEmitUIInvalidation(result, toolInvalidationTopics(parsed.toolName), 'tools.run', url.pathname);
+          return;
+        } catch (err) {
+          sendBadRequestError(res, err);
           return;
         }
-        if (!parsed.toolName) {
-          sendJSON(res, 400, { error: 'toolName is required' });
-          return;
-        }
-        const principal = this.resolveRequestPrincipal(req);
-        const result = await this.dashboard.onToolsRun({
-          toolName: parsed.toolName,
-          args: parsed.args ?? {},
-          origin: parsed.origin ?? 'web',
-          agentId: parsed.agentId,
-          userId: parsed.userId ?? 'web-user',
-          surfaceId: trimOptionalString(parsed.surfaceId),
-          principalId: principal.principalId,
-          principalRole: principal.principalRole,
-          contentTrustLevel: parsed.contentTrustLevel === 'quarantined'
-            ? 'quarantined'
-            : parsed.contentTrustLevel === 'low_trust'
-              ? 'low_trust'
-              : parsed.contentTrustLevel === 'trusted'
-                ? 'trusted'
-                : undefined,
-          taintReasons: Array.isArray(parsed.taintReasons)
-            ? parsed.taintReasons.filter((value): value is string => typeof value === 'string')
-            : undefined,
-          derivedFromTaintedContent: parsed.derivedFromTaintedContent === true,
-          scheduleId: typeof parsed.scheduleId === 'string' ? parsed.scheduleId : undefined,
-          channel: parsed.channel ?? 'web',
-          metadata: asRecord(parsed.metadata),
-        });
-        sendJSON(res, 200, result);
-        this.maybeEmitUIInvalidation(result, toolInvalidationTopics(parsed.toolName), 'tools.run', url.pathname);
-        return;
       }
 
       // POST /api/tools/preflight — pre-flight approval check for automation tools
@@ -1252,34 +1173,28 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
-        let body: string;
         try {
-          body = await readBody(req, this.maxBodyBytes);
+          const parsed = await readOptionalJsonBody<{
+            tools?: string[];
+            requests?: Array<{ name?: string; args?: Record<string, unknown> }>;
+          }>(req, this.maxBodyBytes, {});
+          const tools = Array.isArray(parsed.tools) ? parsed.tools.filter((t): t is string => typeof t === 'string') : [];
+          const requests = Array.isArray(parsed.requests)
+            ? parsed.requests
+              .filter((item): item is { name: string; args?: Record<string, unknown> } =>
+                !!item && typeof item.name === 'string' && item.name.trim().length > 0)
+              .map((item) => ({ name: item.name, ...(item.args && typeof item.args === 'object' ? { args: item.args } : {}) }))
+            : [];
+          if (tools.length === 0 && requests.length === 0) {
+            sendJSON(res, 400, { error: 'tools array or requests array is required' });
+            return;
+          }
+          sendJSON(res, 200, this.dashboard.onToolsPreflight({ tools, requests }));
+          return;
         } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          sendJSON(res, 400, { error: message });
+          sendBadRequestError(res, err);
           return;
         }
-        let parsed: { tools?: string[]; requests?: Array<{ name?: string; args?: Record<string, unknown> }> };
-        try {
-          parsed = body.trim() ? (JSON.parse(body) as { tools?: string[]; requests?: Array<{ name?: string; args?: Record<string, unknown> }> }) : {};
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON' });
-          return;
-        }
-        const tools = Array.isArray(parsed.tools) ? parsed.tools.filter((t): t is string => typeof t === 'string') : [];
-        const requests = Array.isArray(parsed.requests)
-          ? parsed.requests
-            .filter((item): item is { name: string; args?: Record<string, unknown> } =>
-              !!item && typeof item.name === 'string' && item.name.trim().length > 0)
-            .map((item) => ({ name: item.name, ...(item.args && typeof item.args === 'object' ? { args: item.args } : {}) }))
-          : [];
-        if (tools.length === 0 && requests.length === 0) {
-          sendJSON(res, 400, { error: 'tools array or requests array is required' });
-          return;
-        }
-        sendJSON(res, 200, this.dashboard.onToolsPreflight({ tools, requests }));
-        return;
       }
 
       // POST /api/tools/policy — update tool policy/sandbox
@@ -1288,48 +1203,28 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
-        let body: string;
         try {
-          body = await readBody(req, this.maxBodyBytes);
+          const parsed = await readOptionalJsonBody<{
+            mode?: 'approve_each' | 'approve_by_policy' | 'autonomous';
+            toolPolicies?: Record<string, 'auto' | 'policy' | 'manual' | 'deny'>;
+            sandbox?: {
+              allowedPaths?: string[];
+              allowedCommands?: string[];
+              allowedDomains?: string[];
+            };
+            ticket?: string;
+          }>(req, this.maxBodyBytes, {});
+          if (!this.requirePrivilegedTicket(req, res, url, 'tools.policy', parsed.ticket)) {
+            return;
+          }
+          const result = this.dashboard.onToolsPolicyUpdate(parsed);
+          sendJSON(res, 200, result);
+          this.maybeEmitUIInvalidation(result, ['config', 'tools', 'security'], 'tools.policy.updated', url.pathname);
+          return;
         } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          sendJSON(res, 400, { error: message });
+          sendBadRequestError(res, err);
           return;
         }
-        let parsed: {
-          mode?: 'approve_each' | 'approve_by_policy' | 'autonomous';
-          toolPolicies?: Record<string, 'auto' | 'policy' | 'manual' | 'deny'>;
-          sandbox?: {
-            allowedPaths?: string[];
-            allowedCommands?: string[];
-            allowedDomains?: string[];
-          };
-          ticket?: string;
-        };
-        try {
-          parsed = body.trim()
-            ? (JSON.parse(body) as {
-              mode?: 'approve_each' | 'approve_by_policy' | 'autonomous';
-              toolPolicies?: Record<string, 'auto' | 'policy' | 'manual' | 'deny'>;
-              sandbox?: {
-                allowedPaths?: string[];
-                allowedCommands?: string[];
-                allowedDomains?: string[];
-              };
-              ticket?: string;
-            })
-            : {};
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON' });
-          return;
-        }
-        if (!this.requirePrivilegedTicket(req, res, url, 'tools.policy', parsed.ticket)) {
-          return;
-        }
-        const result = this.dashboard.onToolsPolicyUpdate(parsed);
-        sendJSON(res, 200, result);
-        this.maybeEmitUIInvalidation(result, ['config', 'tools', 'security'], 'tools.policy.updated', url.pathname);
-        return;
       }
 
       // GET /api/tools/approvals/pending — list pending approvals scoped to user/channel
@@ -1372,25 +1267,8 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
-        let body: string;
         try {
-          body = await readBody(req, this.maxBodyBytes);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          sendJSON(res, 400, { error: message });
-          return;
-        }
-        let parsed: {
-          approvalId?: string;
-          decision?: 'approved' | 'denied';
-          actor?: string;
-          userId?: string;
-          channel?: string;
-          surfaceId?: string;
-          reason?: string;
-        };
-        try {
-          parsed = JSON.parse(body) as {
+          const parsed = await readJsonBody<{
             approvalId?: string;
             decision?: 'approved' | 'denied';
             actor?: string;
@@ -1398,32 +1276,32 @@ export class WebChannel implements ChannelAdapter {
             channel?: string;
             surfaceId?: string;
             reason?: string;
-          };
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON' });
+          }>(req, this.maxBodyBytes);
+          if (!parsed.approvalId || !parsed.decision) {
+            sendJSON(res, 400, { error: 'approvalId and decision are required' });
+            return;
+          }
+          const principal = this.resolveRequestPrincipal(req);
+          const userId = trimOptionalString(parsed.userId) ?? 'web-user';
+          const channel = trimOptionalString(parsed.channel) ?? 'web';
+          const surfaceId = trimOptionalString(parsed.surfaceId) ?? userId;
+          const result = await this.dashboard.onToolsApprovalDecision({
+            approvalId: parsed.approvalId,
+            decision: parsed.decision,
+            actor: principal.principalId,
+            actorRole: principal.principalRole,
+            userId,
+            channel,
+            surfaceId,
+            reason: parsed.reason,
+          });
+          sendJSON(res, 200, result);
+          this.maybeEmitUIInvalidation(result, ['config', 'tools', 'automations'], 'tools.approval.decided', url.pathname);
+          return;
+        } catch (err) {
+          sendBadRequestError(res, err);
           return;
         }
-        if (!parsed.approvalId || !parsed.decision) {
-          sendJSON(res, 400, { error: 'approvalId and decision are required' });
-          return;
-        }
-        const principal = this.resolveRequestPrincipal(req);
-        const userId = trimOptionalString(parsed.userId) ?? 'web-user';
-        const channel = trimOptionalString(parsed.channel) ?? 'web';
-        const surfaceId = trimOptionalString(parsed.surfaceId) ?? userId;
-        const result = await this.dashboard.onToolsApprovalDecision({
-          approvalId: parsed.approvalId,
-          decision: parsed.decision,
-          actor: principal.principalId,
-          actorRole: principal.principalRole,
-          userId,
-          channel,
-          surfaceId,
-          reason: parsed.reason,
-        });
-        sendJSON(res, 200, result);
-        this.maybeEmitUIInvalidation(result, ['config', 'tools', 'automations'], 'tools.approval.decided', url.pathname);
-        return;
       }
 
       // GET /api/tools/categories — list tool categories with status
@@ -1442,29 +1320,20 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
-        let body: string;
         try {
-          body = await readBody(req, this.maxBodyBytes);
+          const parsed = await readJsonBody<{ category: string; enabled: boolean }>(req, this.maxBodyBytes);
+          if (!parsed.category || typeof parsed.enabled !== 'boolean') {
+            sendJSON(res, 400, { error: 'Missing category or enabled field' });
+            return;
+          }
+          const result = this.dashboard.onToolsCategoryToggle(parsed as Parameters<NonNullable<typeof this.dashboard.onToolsCategoryToggle>>[0]);
+          sendJSON(res, 200, result);
+          this.maybeEmitUIInvalidation(result, ['config', 'tools'], 'tools.category.updated', url.pathname);
+          return;
         } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          sendJSON(res, 400, { error: message });
+          sendBadRequestError(res, err);
           return;
         }
-        let parsed: { category: string; enabled: boolean };
-        try {
-          parsed = JSON.parse(body) as { category: string; enabled: boolean };
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON' });
-          return;
-        }
-        if (!parsed.category || typeof parsed.enabled !== 'boolean') {
-          sendJSON(res, 400, { error: 'Missing category or enabled field' });
-          return;
-        }
-        const result = this.dashboard.onToolsCategoryToggle(parsed as Parameters<NonNullable<typeof this.dashboard.onToolsCategoryToggle>>[0]);
-        sendJSON(res, 200, result);
-        this.maybeEmitUIInvalidation(result, ['config', 'tools'], 'tools.category.updated', url.pathname);
-        return;
       }
 
       // POST /api/tools/provider-routing — update per-tool/per-category LLM provider routing
@@ -1473,32 +1342,23 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
-        let body: string;
         try {
-          body = await readBody(req, this.maxBodyBytes);
+          const parsed = await readJsonBody<{ routing?: Record<string, string>; enabled?: boolean }>(req, this.maxBodyBytes);
+          if (!parsed.routing && typeof parsed.enabled !== 'boolean') {
+            sendJSON(res, 400, { error: 'routing object or enabled flag is required' });
+            return;
+          }
+          const result = this.dashboard.onToolsProviderRoutingUpdate({
+            routing: parsed.routing as Record<string, 'local' | 'external' | 'default'> | undefined,
+            enabled: parsed.enabled,
+          });
+          sendJSON(res, 200, result);
+          this.maybeEmitUIInvalidation(result, ['config', 'tools'], 'tools.routing.updated', url.pathname);
+          return;
         } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          sendJSON(res, 400, { error: message });
+          sendBadRequestError(res, err);
           return;
         }
-        let parsed: { routing?: Record<string, string>; enabled?: boolean };
-        try {
-          parsed = JSON.parse(body) as { routing?: Record<string, string>; enabled?: boolean };
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON' });
-          return;
-        }
-        if (!parsed.routing && typeof parsed.enabled !== 'boolean') {
-          sendJSON(res, 400, { error: 'routing object or enabled flag is required' });
-          return;
-        }
-        const result = this.dashboard.onToolsProviderRoutingUpdate({
-          routing: parsed.routing as Record<string, 'local' | 'external' | 'default'> | undefined,
-          enabled: parsed.enabled,
-        });
-        sendJSON(res, 200, result);
-        this.maybeEmitUIInvalidation(result, ['config', 'tools'], 'tools.routing.updated', url.pathname);
-        return;
       }
 
       // GET /api/tools/browser — browser automation config
@@ -1517,25 +1377,22 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
-        let body: string;
         try {
-          body = await readBody(req, this.maxBodyBytes);
+          const parsed = await readJsonBody<{
+            enabled?: boolean;
+            allowedDomains?: string[];
+            playwrightEnabled?: boolean;
+            playwrightBrowser?: string;
+            playwrightCaps?: string;
+          }>(req, this.maxBodyBytes);
+          const result = await this.dashboard.onBrowserConfigUpdate(parsed);
+          sendJSON(res, 200, result);
+          this.maybeEmitUIInvalidation(result, ['config', 'tools'], 'tools.browser.updated', url.pathname);
+          return;
         } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          sendJSON(res, 400, { error: message });
+          sendBadRequestError(res, err);
           return;
         }
-        let parsed: { enabled?: boolean; allowedDomains?: string[]; playwrightEnabled?: boolean; playwrightBrowser?: string; playwrightCaps?: string };
-        try {
-          parsed = JSON.parse(body) as { enabled?: boolean; allowedDomains?: string[]; playwrightEnabled?: boolean; playwrightBrowser?: string; playwrightCaps?: string };
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON' });
-          return;
-        }
-        const result = await this.dashboard.onBrowserConfigUpdate(parsed);
-        sendJSON(res, 200, result);
-        this.maybeEmitUIInvalidation(result, ['config', 'tools'], 'tools.browser.updated', url.pathname);
-        return;
       }
 
       // GET /api/connectors/state — connector packs/playbooks/runs
@@ -1557,31 +1414,22 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
-        let body = '';
         try {
-          body = await readBody(req, this.maxBodyBytes);
+          const parsed = await readOptionalJsonBody<
+            Parameters<NonNullable<DashboardCallbacks['onConnectorsSettingsUpdate']>>[0] & { ticket?: string }
+          >(req, this.maxBodyBytes, {} as Parameters<NonNullable<DashboardCallbacks['onConnectorsSettingsUpdate']>>[0] & { ticket?: string });
+          const requireTicket = this.dashboard.onConnectorsState?.({ limitRuns: 1 }).studio.requirePrivilegedTicket ?? false;
+          if (requireTicket && !this.requirePrivilegedTicket(req, res, url, 'connectors.config', parsed.ticket)) {
+            return;
+          }
+          const result = this.dashboard.onConnectorsSettingsUpdate(parsed);
+          sendJSON(res, 200, result);
+          this.maybeEmitUIInvalidation(result, ['automations', 'config'], 'connectors.settings.updated', url.pathname);
+          return;
         } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          sendJSON(res, 400, { error: message });
+          sendBadRequestError(res, err);
           return;
         }
-        let parsed: Parameters<NonNullable<DashboardCallbacks['onConnectorsSettingsUpdate']>>[0] & { ticket?: string };
-        try {
-          parsed = body.trim()
-            ? (JSON.parse(body) as Parameters<NonNullable<DashboardCallbacks['onConnectorsSettingsUpdate']>>[0] & { ticket?: string })
-            : {};
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON' });
-          return;
-        }
-        const requireTicket = this.dashboard.onConnectorsState?.({ limitRuns: 1 }).studio.requirePrivilegedTicket ?? false;
-        if (requireTicket && !this.requirePrivilegedTicket(req, res, url, 'connectors.config', parsed.ticket)) {
-          return;
-        }
-        const result = this.dashboard.onConnectorsSettingsUpdate(parsed);
-        sendJSON(res, 200, result);
-        this.maybeEmitUIInvalidation(result, ['automations', 'config'], 'connectors.settings.updated', url.pathname);
-        return;
       }
 
       // POST /api/connectors/packs/upsert — add or update connector pack
@@ -1590,33 +1438,26 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
-        let body = '';
         try {
-          body = await readBody(req, this.maxBodyBytes);
+          const parsed = await readJsonBody<
+            Parameters<NonNullable<DashboardCallbacks['onConnectorsPackUpsert']>>[0] & { ticket?: string }
+          >(req, this.maxBodyBytes);
+          if (!parsed?.id) {
+            sendJSON(res, 400, { error: 'pack.id is required' });
+            return;
+          }
+          const requireTicket = this.dashboard.onConnectorsState?.({ limitRuns: 1 }).studio.requirePrivilegedTicket ?? false;
+          if (requireTicket && !this.requirePrivilegedTicket(req, res, url, 'connectors.pack', parsed.ticket)) {
+            return;
+          }
+          const result = this.dashboard.onConnectorsPackUpsert(parsed);
+          sendJSON(res, 200, result);
+          this.maybeEmitUIInvalidation(result, ['automations', 'config'], 'connectors.pack.upserted', url.pathname);
+          return;
         } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          sendJSON(res, 400, { error: message });
+          sendBadRequestError(res, err);
           return;
         }
-        let parsed: Parameters<NonNullable<DashboardCallbacks['onConnectorsPackUpsert']>>[0] & { ticket?: string };
-        try {
-          parsed = JSON.parse(body) as Parameters<NonNullable<DashboardCallbacks['onConnectorsPackUpsert']>>[0] & { ticket?: string };
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON' });
-          return;
-        }
-        if (!parsed?.id) {
-          sendJSON(res, 400, { error: 'pack.id is required' });
-          return;
-        }
-        const requireTicket = this.dashboard.onConnectorsState?.({ limitRuns: 1 }).studio.requirePrivilegedTicket ?? false;
-        if (requireTicket && !this.requirePrivilegedTicket(req, res, url, 'connectors.pack', parsed.ticket)) {
-          return;
-        }
-        const result = this.dashboard.onConnectorsPackUpsert(parsed);
-        sendJSON(res, 200, result);
-        this.maybeEmitUIInvalidation(result, ['automations', 'config'], 'connectors.pack.upserted', url.pathname);
-        return;
       }
 
       // POST /api/connectors/packs/delete — delete connector pack
@@ -1625,33 +1466,24 @@ export class WebChannel implements ChannelAdapter {
           sendJSON(res, 404, { error: 'Not available' });
           return;
         }
-        let body = '';
         try {
-          body = await readBody(req, this.maxBodyBytes);
+          const parsed = await readJsonBody<{ packId?: string; ticket?: string }>(req, this.maxBodyBytes);
+          if (!parsed.packId?.trim()) {
+            sendJSON(res, 400, { error: 'packId is required' });
+            return;
+          }
+          const requireTicket = this.dashboard.onConnectorsState?.({ limitRuns: 1 }).studio.requirePrivilegedTicket ?? false;
+          if (requireTicket && !this.requirePrivilegedTicket(req, res, url, 'connectors.pack', parsed.ticket)) {
+            return;
+          }
+          const result = this.dashboard.onConnectorsPackDelete(parsed.packId.trim());
+          sendJSON(res, 200, result);
+          this.maybeEmitUIInvalidation(result, ['automations', 'config'], 'connectors.pack.deleted', url.pathname);
+          return;
         } catch (err) {
-          const message = err instanceof Error ? err.message : 'Bad request';
-          sendJSON(res, 400, { error: message });
+          sendBadRequestError(res, err);
           return;
         }
-        let parsed: { packId?: string; ticket?: string };
-        try {
-          parsed = JSON.parse(body) as { packId?: string; ticket?: string };
-        } catch {
-          sendJSON(res, 400, { error: 'Invalid JSON' });
-          return;
-        }
-        if (!parsed.packId?.trim()) {
-          sendJSON(res, 400, { error: 'packId is required' });
-          return;
-        }
-        const requireTicket = this.dashboard.onConnectorsState?.({ limitRuns: 1 }).studio.requirePrivilegedTicket ?? false;
-        if (requireTicket && !this.requirePrivilegedTicket(req, res, url, 'connectors.pack', parsed.ticket)) {
-          return;
-        }
-        const result = this.dashboard.onConnectorsPackDelete(parsed.packId.trim());
-        sendJSON(res, 200, result);
-        this.maybeEmitUIInvalidation(result, ['automations', 'config'], 'connectors.pack.deleted', url.pathname);
-        return;
       }
 
       // GET /api/network/devices — device inventory
@@ -5459,6 +5291,10 @@ export class WebChannel implements ChannelAdapter {
 
 function logInternalError(message: string, err: unknown): void {
   log.error({ err }, message);
+}
+
+function sendBadRequestError(res: ServerResponse, err: unknown): void {
+  sendJSON(res, 400, { error: err instanceof Error ? err.message : 'Bad request' });
 }
 
 function previewToken(token: string): string {
