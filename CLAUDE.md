@@ -31,6 +31,8 @@ npx tsx examples/llm-chat.ts         # LLM provider demo
 
 ## Architecture
 
+Before making large structural changes, also read `docs/architecture/FORWARD-ARCHITECTURE.md`. `docs/architecture/OVERVIEW.md` describes the current shipped system; the forward-architecture document defines the target layering and module boundaries the ongoing refactor should converge toward.
+
 ### Runtime Bootstrap (`src/index.ts`)
 
 The entry point is a large (~107KB) bootstrap that wires everything together:
@@ -237,6 +239,7 @@ See README.md for the full config reference.
 
 - Keep `src/reference-guide.ts` in sync with the app. Any change to user-facing behavior, workflows, controls, tool output, exports, automation behavior, or navigation should include a Reference Guide update in the same change.
 - If a feature is exposed in multiple channels, document the shared behavior once in the Reference Guide and keep channel-specific notes aligned in the relevant docs.
+- Keep `docs/architecture/FORWARD-ARCHITECTURE.md` aligned with the intended target structure as modularization work lands, and keep `docs/architecture/OVERVIEW.md` aligned with what currently ships.
 
 ## Testing
 
