@@ -72,7 +72,9 @@ Current checkpoint:
 - `src/runtime/control-plane/dashboard-runtime-callbacks.ts` now owns dashboard SSE subscription fan-out, streaming chat dispatch, direct dashboard dispatch delegation, and quick-action orchestration callbacks for the web control-plane surface.
 - `src/runtime/control-plane/governance-dashboard-callbacks.ts` now owns the governance/admin callback surface for Guardian Agent status updates, Policy-as-Code controls, and Sentinel audit execution.
 - `src/runtime/control-plane/provider-runtime-adapters.ts` now owns provider-runtime adapter construction that does not belong in the entrypoint: the GWS CLI probe and the cloud connection test adapter set used by provider integration callbacks.
-- The remaining `src/index.ts` work is now mostly residual callback-factory assembly, provider/config helper cleanup, and final orchestration trimming so `main()` becomes composition-only.
+- `src/chat-agent.ts` now owns the primary chat-turn orchestration path that used to live inline in `src/index.ts`: LLM/tool loop handling, direct-intent shortcuts, approval continuation handling, code-session interaction, and shared pending-action coordination.
+- `src/chat-agent-helpers.ts` now owns the shared support helpers used by the chat agent and control-plane surface for tool-result shaping, code-session prompt context, provider-routing defaults, Gmail/M365 summarization, and config redaction.
+- `src/index.ts` is now below 5k lines and the remaining work is mostly residual callback-factory assembly, provider/config helper cleanup, and final composition-root trimming so `main()` becomes composition-only.
 
 Suggested structure:
 
@@ -190,7 +192,7 @@ Current checkpoint:
 - `src/runtime/control-plane/dashboard-runtime-callbacks.ts` now keeps dashboard SSE fan-out, stream dispatch, direct dispatch delegation, and quick-action orchestration out of the callback factory.
 - `src/runtime/control-plane/governance-dashboard-callbacks.ts` now keeps Guardian Agent, Policy-as-Code, and Sentinel audit callback logic out of the callback factory.
 - `src/runtime/control-plane/provider-runtime-adapters.ts` now keeps provider-specific runtime probing and cloud test adapter construction out of the callback factory.
-- The remaining `src/index.ts` work is now centered on callback-factory cleanup, provider/config helper trimming, and final orchestration cleanup rather than the core message dispatch path.
+- `src/chat-agent.ts` now isolates the main conversational agent runtime from the composition root, so the remaining `src/index.ts` work is centered on callback-factory cleanup, provider/config helper trimming, and final orchestration cleanup rather than the core message dispatch path.
 
 ### 5. Tool Execution Core
 
