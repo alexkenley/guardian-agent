@@ -271,6 +271,50 @@ export async function initChatPanel(container) {
   );
   const getContextPrefix = () => `[Context: User is currently viewing the ${currentChatContext} panel] `;
 
+  const restoreInput = () => {
+    input.disabled = false;
+    sendBtn.disabled = false;
+    autoResizeChatInput(input);
+    input.focus();
+  };
+
+  const beginApprovalProgress = (sessionId) => {
+    if (!history) {
+      return {
+        setLabel: () => {},
+        finish: () => {},
+      };
+    }
+
+    input.disabled = true;
+    sendBtn.disabled = true;
+
+    const thinkingEl = createThinkingEl('Continuing after approval…');
+    history.appendChild(thinkingEl);
+    history.scrollTop = history.scrollHeight;
+
+    const onRunTimeline = (data) => {
+      if (!sessionId || data?.summary?.codeSessionId !== sessionId) return;
+      updateThinkingEl(thinkingEl, data);
+      history.scrollTop = history.scrollHeight;
+    };
+
+    if (sessionId) {
+      onSSE('run.timeline', onRunTimeline);
+    }
+
+    return {
+      setLabel: (label) => setThinkingLabel(thinkingEl, label),
+      finish: () => {
+        if (sessionId) {
+          offSSE('run.timeline', onRunTimeline);
+        }
+        thinkingEl.remove();
+        restoreInput();
+      },
+    };
+  };
+
   /**
    * Handle approval button clicks: call the REST API directly, then send a
    * continuation message so the LLM can proceed with the original task.
@@ -280,107 +324,108 @@ export async function initChatPanel(container) {
     const historyKey = getHistoryKey();
     const chatHistory = getHistory(historyKey);
     const focusedSessionId = currentCodeSessionId;
+    const progress = decision === 'approved' ? beginApprovalProgress(focusedSessionId) : null;
 
-    const results = [];
-    const approvalResponses = [];
-    for (const id of approvalIds) {
-      try {
-        const result = await decideChatApproval({
-          apiClient: api,
-          approvalId: id,
-          decision,
-          webUserId,
-          focusedSessionId,
-          surfaceId: GUARDIAN_CHAT_SURFACE_ID,
-        });
-        approvalResponses.push(result);
-        results.push(result.success ? (result.message || `${decision}`) : `Failed: ${result.message || 'unknown error'}`);
-      } catch (err) {
-        approvalResponses.push({ success: false, message: err.message || 'unknown error', continueConversation: false });
-        results.push(`Error: ${err.message || 'unknown'}`);
+    try {
+      const results = [];
+      const approvalResponses = [];
+      for (const id of approvalIds) {
+        try {
+          const result = await decideChatApproval({
+            apiClient: api,
+            approvalId: id,
+            decision,
+            webUserId,
+            focusedSessionId,
+            surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+          });
+          approvalResponses.push(result);
+          results.push(result.success ? (result.message || `${decision}`) : `Failed: ${result.message || 'unknown error'}`);
+        } catch (err) {
+          approvalResponses.push({ success: false, message: err.message || 'unknown error', continueConversation: false });
+          results.push(`Error: ${err.message || 'unknown'}`);
+        }
       }
-    }
 
-    const immediateMessages = approvalResponses
-      .map((result) => result.displayMessage)
-      .filter((value) => typeof value === 'string' && value.trim().length > 0);
-    const continuedResponses = approvalResponses
-      .map((result) => result.continuedResponse)
-      .filter((value) => value && typeof value.content === 'string');
-    const allSucceeded = approvalResponses.every((result) => result?.success !== false);
+      const immediateMessages = approvalResponses
+        .map((result) => result.displayMessage)
+        .filter((value) => typeof value === 'string' && value.trim().length > 0);
+      const continuedResponses = approvalResponses
+        .map((result) => result.continuedResponse)
+        .filter((value) => value && typeof value.content === 'string');
+      const allSucceeded = approvalResponses.every((result) => result?.success !== false);
 
-    if (continuedResponses.length > 0) {
-      if (allSucceeded) {
-        markApprovalUiResolved(approvalIds, decision);
-      } else {
-        markApprovalUiError(approvalIds, results.join('; '));
-      }
-      if (immediateMessages.length > 0) {
-        addAgentMessage(immediateMessages.join('\n'));
-      }
-      for (const response of continuedResponses) {
-        addAgentMessage(response.content, response.metadata?.pendingAction, response.metadata?.responseSource);
-      }
-      history.scrollTop = history.scrollHeight;
-      return;
-    }
-
-    // Only continue when the backend confirms there is suspended chat context to resume.
-    if (decision === 'approved' && approvalResponses.some((result) => result.continueConversation !== false)) {
-      const thinkingEl = createThinkingEl();
-      history.appendChild(thinkingEl);
-      history.scrollTop = history.scrollHeight;
-
-      try {
-        const summary = results.join('; ');
-        const msg = getContextPrefix() + `[User approved the pending tool action(s). Result: ${summary}] ${allSucceeded ? 'Please continue with the current request only. Do not resume older unrelated pending tasks.' : 'Some actions failed — adjust your approach accordingly. Focus only on the current request.'}`;
-        const response = await api.sendMessage(
-          msg,
-          getAgentId(),
-          webUserId,
-          'web',
-          undefined,
-          GUARDIAN_CHAT_SURFACE_ID,
-        );
-        thinkingEl.remove();
+      if (continuedResponses.length > 0) {
         if (allSucceeded) {
           markApprovalUiResolved(approvalIds, decision);
         } else {
-          markApprovalUiError(approvalIds, summary);
+          markApprovalUiError(approvalIds, results.join('; '));
         }
-        addAgentMessage(response.content, response.metadata?.pendingAction, response.metadata?.responseSource);
-      } catch (err) {
-        thinkingEl.remove();
-        markApprovalUiError(approvalIds, err instanceof Error ? err.message : String(err));
-        history.appendChild(createMessageEl('error', err.message || 'Continuation failed'));
+        if (immediateMessages.length > 0) {
+          addAgentMessage(immediateMessages.join('\n'));
+        }
+        for (const response of continuedResponses) {
+          addAgentMessage(response.content, response.metadata?.pendingAction, response.metadata?.responseSource);
+        }
+        history.scrollTop = history.scrollHeight;
+        return;
       }
-      history.scrollTop = history.scrollHeight;
-      return;
-    }
 
-    if (immediateMessages.length > 0) {
-      if (allSucceeded) {
-        markApprovalUiResolved(approvalIds, decision);
-      } else {
-        markApprovalUiError(approvalIds, results.join('; '));
+      // Only continue when the backend confirms there is suspended chat context to resume.
+      if (decision === 'approved' && approvalResponses.some((result) => result.continueConversation !== false)) {
+        progress?.setLabel('Finalizing response…');
+
+        try {
+          const summary = results.join('; ');
+          const msg = getContextPrefix() + `[User approved the pending tool action(s). Result: ${summary}] ${allSucceeded ? 'Please continue with the current request only. Do not resume older unrelated pending tasks.' : 'Some actions failed — adjust your approach accordingly. Focus only on the current request.'}`;
+          const response = await api.sendMessage(
+            msg,
+            getAgentId(),
+            webUserId,
+            'web',
+            undefined,
+            GUARDIAN_CHAT_SURFACE_ID,
+          );
+          if (allSucceeded) {
+            markApprovalUiResolved(approvalIds, decision);
+          } else {
+            markApprovalUiError(approvalIds, summary);
+          }
+          addAgentMessage(response.content, response.metadata?.pendingAction, response.metadata?.responseSource);
+        } catch (err) {
+          markApprovalUiError(approvalIds, err instanceof Error ? err.message : String(err));
+          history.appendChild(createMessageEl('error', err.message || 'Continuation failed'));
+        }
+        history.scrollTop = history.scrollHeight;
+        return;
       }
-      addAgentMessage(immediateMessages.join('\n'));
-      history.scrollTop = history.scrollHeight;
-      return;
-    }
 
-    if (results.length > 0) {
-      if (allSucceeded) {
-        markApprovalUiResolved(approvalIds, decision);
-      } else {
-        markApprovalUiError(approvalIds, results.join('; '));
+      if (immediateMessages.length > 0) {
+        if (allSucceeded) {
+          markApprovalUiResolved(approvalIds, decision);
+        } else {
+          markApprovalUiError(approvalIds, results.join('; '));
+        }
+        addAgentMessage(immediateMessages.join('\n'));
+        history.scrollTop = history.scrollHeight;
+        return;
       }
-      addAgentMessage(results.join('\n'));
-      history.scrollTop = history.scrollHeight;
-      return;
-    }
 
-    markApprovalUiError(approvalIds);
+      if (results.length > 0) {
+        if (allSucceeded) {
+          markApprovalUiResolved(approvalIds, decision);
+        } else {
+          markApprovalUiError(approvalIds, results.join('; '));
+        }
+        addAgentMessage(results.join('\n'));
+        history.scrollTop = history.scrollHeight;
+        return;
+      }
+
+      markApprovalUiError(approvalIds);
+    } finally {
+      progress?.finish();
+    }
   };
   approvalHandler = handleApproval;
   renderHistory(history, getHistoryKey() || activeAgentId, approvalHandler);
@@ -393,13 +438,6 @@ export async function initChatPanel(container) {
     const chatHistory = getHistory(getHistoryKey());
     chatHistory.push({ role: 'agent', content, responseSource, pendingAction });
     history.appendChild(createMessageEl('agent', content, { pendingAction, responseSource, onApproval: handleApproval }));
-  };
-
-  const restoreInput = () => {
-    input.disabled = false;
-    sendBtn.disabled = false;
-    autoResizeChatInput(input);
-    input.focus();
   };
 
   const resolvePendingActionForDisplay = async (metadata) => {
@@ -665,19 +703,26 @@ function getRoutingModeAgentId(agents, mode) {
   return undefined;
 }
 
-function createThinkingEl() {
+function createThinkingEl(initialLabel = 'Starting…') {
   const el = document.createElement('div');
   el.className = 'chat-message agent is-thinking';
   el.innerHTML = `
     <div class="msg-body">
       <div class="chat-thinking">
         <span class="chat-spinner" aria-hidden="true"></span>
-        <span class="chat-thinking__label">Starting…</span>
+        <span class="chat-thinking__label">${esc(initialLabel)}</span>
       </div>
       <div class="chat-live-activity" hidden></div>
     </div>
   `;
   return el;
+}
+
+function setThinkingLabel(el, label) {
+  const labelEl = el?.querySelector?.('.chat-thinking__label');
+  if (labelEl) {
+    labelEl.textContent = String(label || 'Working…');
+  }
 }
 
 function updateThinkingEl(el, run) {
@@ -893,19 +938,21 @@ function buildApprovalButtons(approvals, onApproval) {
   };
 
   approveBtn.addEventListener('click', async () => {
+    const approvalIds = approvals.map((approval) => approval.id);
     disable();
     statusEl.textContent = 'Approving\u2026';
-    await onApproval(approvals.map(a => a.id), 'approved');
-    statusEl.textContent = 'Approved';
-    statusEl.style.color = 'var(--success)';
+    statusEl.style.color = 'var(--text-muted)';
+    await onApproval(approvalIds, 'approved');
+    applyUiState(getApprovalUiGroupState(approvalIds));
   });
 
   denyBtn.addEventListener('click', async () => {
+    const approvalIds = approvals.map((approval) => approval.id);
     disable();
     statusEl.textContent = 'Denying\u2026';
-    await onApproval(approvals.map(a => a.id), 'denied');
-    statusEl.textContent = 'Denied';
-    statusEl.style.color = 'var(--error)';
+    statusEl.style.color = 'var(--text-muted)';
+    await onApproval(approvalIds, 'denied');
+    applyUiState(getApprovalUiGroupState(approvalIds));
   });
 
   btnRow.append(approveBtn, denyBtn, statusEl);

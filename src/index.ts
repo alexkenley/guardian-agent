@@ -3837,6 +3837,7 @@ async function main(): Promise<void> {
     : DEFAULT_AGENT_CAPABILITIES;
   const chatAgents = new Map<string, ChatAgentInstance>();
   const intentRoutingTrace = new IntentRoutingTraceLog(config.routing?.intentTrace);
+  const routingIntentGateway = new IntentGateway();
   await intentRoutingTrace.init();
 
   if (config.agents.length > 0) {
@@ -3875,6 +3876,7 @@ async function main(): Promise<void> {
         intentRoutingTrace,
         pendingActionStore,
         continuityThreadStore,
+        routingIntentGateway,
       );
       chatAgents.set(agentConfig.id, agent);
       runtime.registerAgent(createAgentDefinition({
@@ -3921,6 +3923,7 @@ async function main(): Promise<void> {
       intentRoutingTrace,
       pendingActionStore,
       continuityThreadStore,
+      routingIntentGateway,
     );
     chatAgents.set('local', localAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -3954,6 +3957,7 @@ async function main(): Promise<void> {
       intentRoutingTrace,
       pendingActionStore,
       continuityThreadStore,
+      routingIntentGateway,
     );
     chatAgents.set('external', externalAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -4013,6 +4017,7 @@ async function main(): Promise<void> {
       intentRoutingTrace,
       pendingActionStore,
       continuityThreadStore,
+      routingIntentGateway,
     );
     chatAgents.set('default', defaultAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -4049,6 +4054,7 @@ async function main(): Promise<void> {
       intentRoutingTrace,
       pendingActionStore,
       continuityThreadStore,
+      routingIntentGateway,
     );
     chatAgents.set(SECURITY_TRIAGE_AGENT_ID, securityTriageAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -4141,7 +4147,6 @@ async function main(): Promise<void> {
   const channels: BootstrapChannelStopEntry[] = [];
 
   const defaultAgentId = config.agents[0]?.id ?? (localProviderName && externalProviderName ? 'local' : 'default');
-  const routingIntentGateway = new IntentGateway();
   const prepareIncomingDispatch = createIncomingDispatchPreparer({
     defaultAgentId,
     configRef,

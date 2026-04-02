@@ -69,8 +69,8 @@ describe('web shell launch helpers', () => {
     expect(launch.file).toMatch(/C:\\Program Files[\\/]Git[\\/]bin[\\/]bash\.exe$/);
     expect(launch.args).toEqual(['--noprofile', '--norc', '-i']);
     expect(launch.cwd).toBe('C:\\repo');
-    expect(launch.env.PATH).toMatch(/(^|;)cmd(;|$)/);
-    expect(launch.env.PATH).toContain('C:\\Windows\\System32');
+    expect(launch.env.PATH.split(';')).toContain('C:\\Program Files\\Git\\cmd');
+    expect(launch.env.PATH.split(';')).toContain('C:\\Windows\\System32');
     expect(launch.env.MSYSTEM).toBe('MINGW64');
     expect(launch.env.PS1).toBe('\\w$ ');
   });

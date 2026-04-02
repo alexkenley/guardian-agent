@@ -1331,7 +1331,15 @@ tr:hover td {
   background: rgba(79, 172, 254, 0.06);
 }
 
+.chat-message.is-thinking {
+  width: fit-content;
+  max-width: min(88%, 32rem);
+}
+
 .chat-message.is-thinking .msg-body {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
   color: var(--text-secondary);
 }
 

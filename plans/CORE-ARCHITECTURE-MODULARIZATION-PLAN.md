@@ -1,7 +1,7 @@
 # Core Architecture Modularization Plan
 
 **Date:** 2026-04-02  
-**Status:** Active, checkpoint updated after provider and agent dashboard extraction  
+**Status:** Active, checkpoint updated after chat-agent separation  
 **Origin:** Large-file architecture review of the composition root, web channel, and tool runtime  
 **Key files:** `src/index.ts`, `src/tools/executor.ts`, `src/channels/web.ts`  
 **Related docs:** `docs/architecture/FORWARD-ARCHITECTURE.md`, `docs/architecture/OVERVIEW.md`, `docs/guides/INTEGRATION-TEST-HARNESS.md`
@@ -117,19 +117,26 @@ This track is complete for the original registrar-extraction goal.
 
 #### `src/index.ts` control-plane extraction
 
-This track is materially advanced but not finished.
+This track is materially advanced and the largest remaining structural extraction is now complete.
 
-- `src/index.ts` is down to **13434 lines** from roughly **17.7k**.
+- `src/index.ts` is down to **4871 lines** from roughly **17.7k**.
+- `src/chat-agent.ts` now owns the extracted conversational agent runtime at **6922 lines**.
+- `src/chat-agent-helpers.ts` now owns the extracted support/helper surface that was previously shared inline between the chat-turn loop and control-plane shaping.
+- `src/index.ts` and `src/chat-agent.ts` now share the same `IntentGateway` instance so pre-dispatch routing and in-agent fallback classification stay aligned with the routing spec's "classify once and reuse" contract.
 - Extracted control-plane modules now live under `src/runtime/control-plane/`:
   - `agent-dashboard-callbacks.ts`
+  - `assistant-dashboard-callbacks.ts`
   - `auth-control-callbacks.ts`
   - `config-persistence-service.ts`
   - `config-state-helpers.ts`
+  - `dashboard-runtime-callbacks.ts`
   - `direct-config-update.ts`
+  - `governance-dashboard-callbacks.ts`
   - `operations-dashboard-callbacks.ts`
   - `provider-config-helpers.ts`
   - `provider-dashboard-callbacks.ts`
   - `provider-integration-callbacks.ts`
+  - `provider-runtime-adapters.ts`
   - `security-dashboard-callbacks.ts`
   - `setup-config-dashboard-callbacks.ts`
   - `tools-dashboard-callbacks.ts`
@@ -149,20 +156,23 @@ This track is materially advanced but not finished.
   - `provider-config-helpers.ts` owns provider snapshot/status shaping, provider credential resolution for ad hoc model discovery, and existing-profile lookup helpers reused by direct config updates.
   - `provider-dashboard-callbacks.ts` owns the provider listing/type/model callbacks that used to sit inline in the callback factory.
   - `agent-dashboard-callbacks.ts` owns dashboard agent listing/detail shaping, including internal-agent classification and routing-role exposure.
+  - `assistant-dashboard-callbacks.ts` owns assistant-state summaries, delegated-worker follow-up actions, run-history callbacks, and routing-trace decoration used by the dashboard surface.
+  - `dashboard-runtime-callbacks.ts` now owns dashboard SSE subscription fan-out, direct dashboard dispatch delegation, stream dispatch, and quick-action orchestration callbacks that used to sit inline in the callback factory.
+  - `governance-dashboard-callbacks.ts` now owns Guardian Agent status/update callbacks, Policy-as-Code dashboard controls, and Sentinel audit execution callbacks that used to sit inline in the callback factory.
+  - `provider-runtime-adapters.ts` now owns the GWS CLI probe and cloud connection test adapter construction that used to sit inline next to provider integration callback wiring.
+  - `chat-agent.ts` now owns the main chat-turn orchestration loop that used to sit inline in `src/index.ts`: LLM/tool rounds, direct-intent handling, approval continuation flow, code-session interaction, and shared pending-action coordination.
+  - `chat-agent-helpers.ts` now owns the extracted helper surface for tool result shaping, code-session prompt context, provider-routing defaults, Gmail/M365 summaries, and config redaction.
 
 ### What is still left
 
-The main remaining architecture work is now concentrated in `src/index.ts`.
+The main remaining architecture work is now concentrated in the final `src/index.ts` composition-root cleanup and any follow-on trimming that becomes obvious after the chat-agent split.
 
 #### Remaining `src/index.ts` work
 
-- Extract the remaining callback-factory helper clusters so `main()` and the entrypoint factory stop owning residual dashboard glue directly.
-- The remaining `src/bootstrap/` extraction work is limited; the main effort is now trimming residual helper glue out of `src/index.ts` around provider/config shaping, callback-factory assembly, and final orchestration.
-- Move remaining helper clusters out of `src/index.ts` when they have clear homes, especially:
-  - assistant state / SSE metrics shaping helpers
-  - residual config-persist/apply glue still local to the entrypoint
-  - callback-factory helpers that still do not belong in `src/index.ts`
-- Reassess whether `buildDashboardCallbacks()` should become a thinner factory wrapper over already-extracted modules, or whether parts of dispatch/runtime coordination belong under `src/runtime/` instead.
+- Finish thinning the callback factory so `main()` and the entrypoint stop owning residual dashboard glue directly.
+- Reassess the remaining provider/config shaping helpers that still sit inline and move them only where there is a clear stable home.
+- Do a final composition-root pass so `src/index.ts` stays focused on bootstrap, service assembly, channel startup, and registration rather than helper ownership.
+- Reassess whether any of the remaining entrypoint-local helpers are better left in place to avoid over-fragmenting low-churn code now that the major runtime path is extracted.
 
 #### Optional follow-up cleanup
 
@@ -170,6 +180,12 @@ These are lower priority than the remaining `index.ts` work:
 
 - further split remaining auth/SSE/session internals out of `src/channels/web.ts` if churn resumes there
 - extract additional shared helpers from executor-adjacent code only when duplication is proven by real follow-on work
+- monitor `src/chat-agent.ts` as the next likely monolith: if capability churn continues there, split it by concern instead of letting new work accumulate in the extracted runtime class
+- likely future `src/chat-agent.ts` split points are:
+  - direct deterministic route handlers
+  - approval and pending-action continuation logic
+  - code-session prompt/context assembly
+  - provider fallback and response-quality recovery
 
 ---
 
@@ -203,7 +219,11 @@ These are lower priority than the remaining `index.ts` work:
 - `d671755` `refactor(runtime): extract incoming dispatch preparation`
 - `370053f` `refactor(runtime): extract dashboard dispatch`
 - `d5755ba` `refactor(control-plane): extract config state helpers`
-- current checkpoint extracts provider and agent dashboard callback modules plus shared provider config helpers
+- `5c7203a` `refactor(control-plane): extract agent and provider callbacks`
+- `3bcb02a` `refactor(control-plane): extract assistant dashboard callbacks`
+- `4a99f40` `refactor(control-plane): extract dashboard runtime callbacks`
+- `741a31e` `refactor(control-plane): extract governance dashboard callbacks`
+- current checkpoint extracts provider runtime adapters and validates the provider/control-plane path with focused tests, `test-cloud-config`, and full Vitest
 
 #### Tool executor modularization
 
@@ -227,7 +247,7 @@ These are lower priority than the remaining `index.ts` work:
 
 `src/index.ts` still acts as the composition root, but several control-plane domains are now delegated to focused modules instead of living inline.
 
-The bootstrap path is now mostly split under `src/bootstrap/`: runtime creation, service wiring, channel startup, and shutdown sequencing are extracted. `src/runtime/incoming-dispatch.ts` now carries the shared channel pre-dispatch/routing-preparation path that used to sit inline in `main()`, and `src/runtime/dashboard-dispatch.ts` now carries the shared dashboard/runtime dispatch path that used to sit inline in the callback factory. The remaining `index.ts` work is helper cleanup and final orchestration thinning.
+The bootstrap path is now mostly split under `src/bootstrap/`: runtime creation, service wiring, channel startup, and shutdown sequencing are extracted. `src/runtime/incoming-dispatch.ts` now carries the shared channel pre-dispatch/routing-preparation path that used to sit inline in `main()`, `src/runtime/dashboard-dispatch.ts` now carries the shared dashboard/runtime dispatch path that used to sit inline in the callback factory, `src/runtime/control-plane/dashboard-runtime-callbacks.ts` now carries the dashboard SSE/stream/quick-action runtime callback cluster that used to live inline in `buildDashboardCallbacks()`, `src/runtime/control-plane/governance-dashboard-callbacks.ts` now carries the governance/admin callback cluster for Guardian Agent, Policy-as-Code, and Sentinel audit controls, `src/runtime/control-plane/provider-runtime-adapters.ts` now carries provider-specific runtime probe/test adapter wiring, and `src/chat-agent.ts` now carries the primary conversational runtime path that used to dominate the entrypoint. The remaining `index.ts` work is final provider/config helper cleanup and composition-root thinning.
 
 #### Web channel
 
@@ -277,6 +297,7 @@ Move remaining `index.ts` helpers into clearer homes based on responsibility:
 - control-plane helpers stay under `src/runtime/control-plane/`
 - bootstrap and startup helpers move under `src/bootstrap/`
 - config-mutation helpers move beside `config-persistence-service.ts` or `direct-config-update.ts` if they are part of those flows
+- chat-turn/runtime helpers should now default to `src/chat-agent.ts` or `src/chat-agent-helpers.ts`, not back into `src/index.ts`
 
 ### 4C. Make `main()` orchestration-only
 
@@ -345,6 +366,15 @@ Each remaining phase should run:
 
 One earlier `node scripts/test-code-ui-smoke.mjs` run hit a transient UI timing assertion during the `d7e04da` validation pass, but the immediate rerun passed with no code changes. Treat that as harness flakiness to watch, not as a known deterministic regression.
 
+For the chat-agent separation checkpoint:
+
+- `npm run check` passed
+- `npm test` passed with **190 files / 2080 tests**
+- `node scripts/test-contextual-security-uplifts.mjs` passed
+- `node scripts/test-code-ui-smoke.mjs` passed
+- `node scripts/test-cloud-config.mjs` passed
+- `node scripts/test-coding-assistant.mjs` failed once on initial server-health startup timing, then passed on the immediate rerun with no code changes
+
 ---
 
 ## Definition Of Done
@@ -361,12 +391,12 @@ This modularization program is complete only when all of the following are true:
 
 ## Next Session Restart Point
 
-If this plan is resumed in a later session, start with `src/index.ts`.
+If this plan is resumed in a later session, start with the remaining `src/index.ts` cleanup around the callback factory and provider/config glue.
 
 Immediate next move:
 
-1. inspect the remaining provider/config helper clusters in `src/index.ts`
-2. decide the next clean ownership move under `src/runtime/` or `src/runtime/control-plane/`
+1. inspect the remaining callback-factory and provider/config helper clusters in `src/index.ts`
+2. decide whether each remaining helper should move under `src/runtime/control-plane/`, `src/bootstrap/`, or simply stay in the composition root
 3. add or tighten focused coverage for that slice if needed
 4. extract mechanically, then run the mapped harness set
 

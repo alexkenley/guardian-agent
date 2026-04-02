@@ -42,6 +42,17 @@ describe('search-intent parser', () => {
     });
   });
 
+  it('uses the active workspace as a fallback path for repo-scoped searches', () => {
+    const text = 'Search the workspace for answerValue and tell me where it is defined.';
+    const intent = parseDirectFileSearchIntent(text, policy, {
+      fallbackPath: 'S:\\Development\\GuardianAgent',
+    });
+    expect(intent).toEqual({
+      path: 'S:\\Development\\GuardianAgent',
+      query: 'answerValue',
+    });
+  });
+
   it('detects explicit browser URL automation requests', () => {
     expect(isDirectBrowserAutomationIntent('Open https://httpbin.org/forms/post and list the interactive elements on the page.')).toBe(true);
     expect(isDirectBrowserAutomationIntent('Go to https://example.com and click the More information link.')).toBe(true);

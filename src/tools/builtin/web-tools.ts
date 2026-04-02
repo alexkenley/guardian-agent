@@ -24,6 +24,7 @@ interface WebToolRegistrarContext {
   assertWebSearchHostsAllowed: (provider: 'duckduckgo' | 'brave' | 'perplexity') => void;
   searchCache: Map<string, { results: unknown; timestamp: number }>;
   webSearchConfig: WebSearchConfig;
+  getWebSearchConfig?: () => WebSearchConfig;
   defaultSearchCacheTtlMs: number;
   now: () => number;
   searchBrave: (query: string, maxResults: number) => Promise<WebSearchResults>;
@@ -31,6 +32,10 @@ interface WebToolRegistrarContext {
   searchDuckDuckGo: (query: string, maxResults: number) => Promise<WebSearchResults>;
   maxFetchBytes: number;
   maxWebFetchChars: number;
+}
+
+function resolveWebSearchConfig(context: WebToolRegistrarContext): WebSearchConfig {
+  return context.getWebSearchConfig?.() ?? context.webSearchConfig;
 }
 
 export function registerBuiltinWebTools(context: WebToolRegistrarContext): void {
@@ -132,7 +137,8 @@ export function registerBuiltinWebTools(context: WebToolRegistrarContext): void 
       const provider = context.resolveSearchProvider(context.asString(args.provider, 'auto'));
       context.assertWebSearchHostsAllowed(provider);
 
-      const cacheTtl = context.webSearchConfig.cacheTtlMs ?? context.defaultSearchCacheTtlMs;
+      const webSearchConfig = resolveWebSearchConfig(context);
+      const cacheTtl = webSearchConfig.cacheTtlMs ?? context.defaultSearchCacheTtlMs;
       const cacheKey = `${provider}:${query}:${maxResults}`;
       const cached = context.searchCache.get(cacheKey);
       if (cached && (context.now() - cached.timestamp) < cacheTtl) {

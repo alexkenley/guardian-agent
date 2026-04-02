@@ -103,6 +103,7 @@ interface CodingToolRegistrarContext {
   packageInstallTrust?: PackageInstallTrustService;
   codeSessionStore?: CodeSessionStore;
   codingBackendService?: CodingBackendService;
+  getCodingBackendService?: () => CodingBackendService | undefined;
   listOwnedCodeSessions: (request?: Partial<ToolExecutionRequest>) => CodeSessionRecord[];
   summarizeCodeSession: (session: CodeSessionRecord) => Record<string, unknown>;
   getCodeSessionSurfaceId: (request?: Partial<ToolExecutionRequest>) => string;
@@ -115,6 +116,10 @@ interface CodingToolRegistrarContext {
 
 function normalizeCodeText(value: string): string {
   return value.replace(/\r\n/g, '\n');
+}
+
+function resolveCodingBackendService(context: CodingToolRegistrarContext): CodingBackendService | undefined {
+  return context.getCodingBackendService?.() ?? context.codingBackendService;
 }
 
 function buildNormalizedIndexMap(original: string): number[] {
@@ -1203,10 +1208,11 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
       parameters: { type: 'object', properties: {} },
     },
     async () => {
-      if (!context.codingBackendService) {
+      const codingBackendService = resolveCodingBackendService(context);
+      if (!codingBackendService) {
         return { success: false, error: 'Coding backend orchestration is not enabled. Enable it in Configuration > Integrations > Coding Assistants.' };
       }
-      const backends = context.codingBackendService.listBackends();
+      const backends = codingBackendService.listBackends();
       return {
         success: true,
         output: {
@@ -1246,7 +1252,8 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
       ],
     },
     async (args, request) => {
-      if (!context.codingBackendService) {
+      const codingBackendService = resolveCodingBackendService(context);
+      if (!codingBackendService) {
         return { success: false, error: 'Coding backend orchestration is not enabled. Enable it in Configuration > Integrations > Coding Assistants.' };
       }
       const task = requireString(args.task, 'task');
@@ -1260,7 +1267,7 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
       if (!workspaceRoot) {
         return { success: false, error: 'Could not determine workspace root for the current coding session.' };
       }
-      const result = await context.codingBackendService.run({
+      const result = await codingBackendService.run({
         task,
         backendId,
         codeSessionId,
@@ -1289,12 +1296,13 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
       },
     },
     async (args, request) => {
-      if (!context.codingBackendService) {
+      const codingBackendService = resolveCodingBackendService(context);
+      if (!codingBackendService) {
         return { success: false, error: 'Coding backend orchestration is not enabled.' };
       }
       const sessionId = typeof args.sessionId === 'string' ? args.sessionId.trim() : undefined;
       const codeSessionId = request.codeContext?.sessionId?.trim();
-      const sessions = context.codingBackendService
+      const sessions = codingBackendService
         .getStatus(sessionId)
         .filter((session) => sessionId || !codeSessionId || session.codeSessionId === codeSessionId);
       return {

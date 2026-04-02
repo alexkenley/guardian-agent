@@ -247,6 +247,7 @@ export interface ChatAgentConstructor {
     intentRoutingTrace?: IntentRoutingTraceLog,
     pendingActionStore?: PendingActionStore,
     continuityThreadStore?: ContinuityThreadStore,
+    intentGateway?: IntentGateway,
   ): ChatAgentPublicApi;
 }
 
@@ -420,6 +421,7 @@ type DirectIntentShadowCandidate =
     intentRoutingTrace?: IntentRoutingTraceLog,
     pendingActionStore?: PendingActionStore,
     continuityThreadStore?: ContinuityThreadStore,
+    intentGateway?: IntentGateway,
   ) {
     super(id, name, { handleMessages: true });
     this.systemPrompt = composeGuardianSystemPrompt(systemPrompt, soulPrompt);
@@ -454,7 +456,7 @@ type DirectIntentShadowCandidate =
     this.intentRoutingTrace = intentRoutingTrace;
     this.pendingActionStore = pendingActionStore;
     this.continuityThreadStore = continuityThreadStore;
-    this.intentGateway = new IntentGateway();
+    this.intentGateway = intentGateway ?? new IntentGateway();
   }
 
   private recordIntentRoutingTrace(
@@ -6816,7 +6818,9 @@ type DirectIntentShadowCandidate =
   ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
 
-    const intent = parseDirectFileSearchIntent(message.content, this.tools.getPolicy());
+    const intent = parseDirectFileSearchIntent(message.content, this.tools.getPolicy(), {
+      fallbackPath: codeContext?.workspaceRoot,
+    });
     if (!intent) return null;
 
     const toolResult = await this.tools.executeModelTool(

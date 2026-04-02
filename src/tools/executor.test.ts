@@ -3847,6 +3847,66 @@ describe('ToolExecutor', () => {
     expect(approved.message).toContain('Hello from Codex.');
   });
 
+  it('uses a coding backend service attached after executor startup', async () => {
+    const root = createExecutorRoot();
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(root, '.guardianagent', 'code-sessions.sqlite'),
+    });
+    const session = codeSessionStore.createSession({
+      ownerUserId: 'tester',
+      title: 'Late Coding Backend Session',
+      workspaceRoot: root,
+    });
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      codeSessionStore,
+    });
+
+    executor.setCodingBackendService({
+      listBackends: () => [],
+      getStatus: () => [],
+      run: async () => ({
+        success: true,
+        backendId: 'codex',
+        backendName: 'OpenAI Codex CLI',
+        task: 'Inspect repo',
+        status: 'succeeded',
+        durationMs: 42,
+        output: 'Changed files: src/index.ts',
+        terminalTabId: 'term-late',
+      }),
+    } as never);
+
+    const run = await executor.runTool({
+      toolName: 'coding_backend_run',
+      args: { task: 'Inspect repo', backend: 'codex' },
+      origin: 'web',
+      userId: 'tester',
+      principalId: 'tester',
+      channel: 'web',
+      codeContext: {
+        sessionId: session.id,
+        workspaceRoot: root,
+      },
+    });
+
+    expect(run.success).toBe(false);
+    expect(run.status).toBe('pending_approval');
+    expect(run.approvalId).toBeDefined();
+
+    const approved = await executor.decideApproval(run.approvalId!, 'approved', 'tester');
+    expect(approved.success).toBe(true);
+    expect(approved.message).toContain('OpenAI Codex CLI completed.');
+    expect(approved.message).toContain('Changed files: src/index.ts');
+  });
+
   it('scopes coding backend status to the active code session by default', async () => {
     const root = createExecutorRoot();
     const codeSessionStore = new CodeSessionStore({
@@ -5823,6 +5883,64 @@ describe('ToolExecutor', () => {
         const output = run.output as { provider: string; results: Array<{ title: string }> };
         expect(output.provider).toBe('brave');
         expect(output.results[0].title).toBe('Brave Result');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('uses updated web search config after executor startup', async () => {
+      const root = createExecutorRoot();
+      const originalFetch = globalThis.fetch;
+      let fetchCount = 0;
+      const ddgHtml = `
+        <html><body>
+          <div class="result results_links">
+            <a class="result__a" href="https://example.com/live">Live Result</a>
+            <a class="result__snippet">Live snippet.</a>
+          </div>
+        </body></html>
+      `;
+      globalThis.fetch = (async () => {
+        fetchCount++;
+        return new Response(ddgHtml, { status: 200, headers: { 'Content-Type': 'text/html' } });
+      }) as typeof fetch;
+      try {
+        const executor = new ToolExecutor({
+          enabled: true,
+          workspaceRoot: root,
+          policyMode: 'autonomous',
+          allowedPaths: [root],
+          allowedCommands: [],
+          allowedDomains: ['html.duckduckgo.com'],
+          webSearch: { cacheTtlMs: 60_000 },
+        });
+
+        const run1 = await executor.runTool({
+          toolName: 'web_search',
+          args: { query: 'live config cache test', provider: 'duckduckgo' },
+          origin: 'web',
+        });
+        expect(run1.success).toBe(true);
+        expect((run1.output as { cached: boolean }).cached).toBe(false);
+
+        executor.updateWebSearchConfig({ cacheTtlMs: 0 });
+
+        const run2 = await executor.runTool({
+          toolName: 'web_search',
+          args: { query: 'live config cache test', provider: 'duckduckgo' },
+          origin: 'web',
+        });
+        expect(run2.success).toBe(true);
+        expect((run2.output as { cached: boolean }).cached).toBe(false);
+
+        const run3 = await executor.runTool({
+          toolName: 'web_search',
+          args: { query: 'live config cache test', provider: 'duckduckgo' },
+          origin: 'web',
+        });
+        expect(run3.success).toBe(true);
+        expect((run3.output as { cached: boolean }).cached).toBe(false);
+        expect(fetchCount).toBe(3);
       } finally {
         globalThis.fetch = originalFetch;
       }

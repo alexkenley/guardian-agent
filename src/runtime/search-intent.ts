@@ -9,6 +9,10 @@ export interface DirectFileSearchIntent {
   query: string;
 }
 
+interface DirectFileSearchIntentOptions {
+  fallbackPath?: string;
+}
+
 export function isDirectBrowserAutomationIntent(content: string): boolean {
   const text = content.trim();
   if (!text || text.length < 5) return false;
@@ -72,11 +76,12 @@ export function parseWebSearchIntent(content: string): string | null {
 export function parseDirectFileSearchIntent(
   content: string,
   policy: ToolPolicySnapshot,
+  options: DirectFileSearchIntentOptions = {},
 ): DirectFileSearchIntent | null {
   const text = content.trim();
   if (!text) return null;
   if (!/\b(search|find|locate|look\s+for)\b/i.test(text)) return null;
-  if (!/\b(file|folder|directory|path|onedrive|drive)\b/i.test(text)) return null;
+  if (!/\b(file|folder|directory|path|onedrive|drive|workspace|repo|repository|project|codebase)\b/i.test(text)) return null;
 
   const query = extractSearchQuery(text);
   if (!query) return null;
@@ -93,6 +98,10 @@ export function parseDirectFileSearchIntent(
     }
   }
 
+  if (options.fallbackPath && /\b(workspace|repo|repository|project|codebase)\b/i.test(text)) {
+    return { path: options.fallbackPath, query };
+  }
+
   return null;
 }
 
@@ -100,8 +109,10 @@ export function extractSearchQuery(text: string): string | null {
   const quoted = text.match(/["']([^"']{2,120})["']/);
   if (quoted?.[1]) return quoted[1].trim();
 
-  const forMatch = text.match(/\bfor\s+(.+?)(?:\s+\b(?:in|inside|within|under)\b|$)/i);
-  const candidate = (forMatch?.[1] ?? '').trim().replace(/[.,;:!?]+$/, '');
+  const forMatch = text.match(/\bfor\s+(.+?)(?=\s+\b(?:in|inside|within|under|and\s+(?:tell|show|list|summari[sz]e|explain|report)|then\s+(?:tell|show|list|summari[sz]e|explain|report))\b|$)/i);
+  const candidate = (forMatch?.[1] ?? '')
+    .trim()
+    .replace(/[.,;:!?]+$/, '');
   if (candidate.length >= 2) return candidate;
   return null;
 }

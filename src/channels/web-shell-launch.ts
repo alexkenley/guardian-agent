@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { win32 as win32Path } from 'node:path';
 
 export interface ShellOptionDescriptor {
   id: string;
@@ -91,25 +91,25 @@ function inferWindowsGitRoot(executablePath: string): string {
   const normalized = executablePath.replace(/\//g, '\\');
   const lower = normalized.toLowerCase();
   if (lower.endsWith('\\usr\\bin\\bash.exe')) {
-    return dirname(dirname(dirname(normalized)));
+    return win32Path.dirname(win32Path.dirname(win32Path.dirname(normalized)));
   }
   if (lower.endsWith('\\bin\\bash.exe')) {
-    return dirname(dirname(normalized));
+    return win32Path.dirname(win32Path.dirname(normalized));
   }
   if (lower.endsWith('\\git-bash.exe')) {
-    return dirname(normalized);
+    return win32Path.dirname(normalized);
   }
-  return dirname(dirname(normalized));
+  return win32Path.dirname(win32Path.dirname(normalized));
 }
 
 function buildWindowsGitBashEnv(executablePath: string): Record<string, string> {
   const gitRoot = inferWindowsGitRoot(executablePath);
   const existingPath = process.env.Path || process.env.PATH || '';
   const pathEntries = [
-    join(gitRoot, 'cmd'),
-    join(gitRoot, 'usr', 'bin'),
-    join(gitRoot, 'bin'),
-    join(gitRoot, 'mingw64', 'bin'),
+    win32Path.join(gitRoot, 'cmd'),
+    win32Path.join(gitRoot, 'usr', 'bin'),
+    win32Path.join(gitRoot, 'bin'),
+    win32Path.join(gitRoot, 'mingw64', 'bin'),
   ].filter((entry) => entry && existsSync(entry));
   const mergedPath = Array.from(new Set([
     ...pathEntries,
@@ -149,10 +149,10 @@ function resolveWindowsGitBashExecutable(): string {
   const programFiles = process.env.ProgramFiles || 'C:\\Program Files';
   const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
   const preferred = [
-    join(programFiles, 'Git', 'bin', 'bash.exe'),
-    join(programFiles, 'Git', 'usr', 'bin', 'bash.exe'),
-    join(programFilesX86, 'Git', 'bin', 'bash.exe'),
-    join(programFilesX86, 'Git', 'usr', 'bin', 'bash.exe'),
+    win32Path.join(programFiles, 'Git', 'bin', 'bash.exe'),
+    win32Path.join(programFiles, 'Git', 'usr', 'bin', 'bash.exe'),
+    win32Path.join(programFilesX86, 'Git', 'bin', 'bash.exe'),
+    win32Path.join(programFilesX86, 'Git', 'usr', 'bin', 'bash.exe'),
   ];
   const gitBash = preferred.find((candidate) => candidate && existsSync(candidate))
     || listWindowsExecutableCandidates('bash.exe')
@@ -181,7 +181,7 @@ export function getPtyShellLaunch(shellType: string, platform: NodeJS.Platform, 
     case 'wsl': {
       const systemRoot = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
       const wslExe = platform === 'win32'
-        ? tryResolveWindowsExecutable('wsl.exe', [join(systemRoot, 'System32', 'wsl.exe')])
+        ? tryResolveWindowsExecutable('wsl.exe', [win32Path.join(systemRoot, 'System32', 'wsl.exe')])
         : 'wsl';
       if (platform === 'win32' && !wslExe) {
         throw new Error('WSL was not found. Install Windows Subsystem for Linux or use PowerShell.');
