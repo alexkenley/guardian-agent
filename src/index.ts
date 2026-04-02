@@ -205,6 +205,7 @@ import { createAssistantDashboardCallbacks } from './runtime/control-plane/assis
 import { createConfigStateHelpers } from './runtime/control-plane/config-state-helpers.js';
 import { createAuthControlCallbacks } from './runtime/control-plane/auth-control-callbacks.js';
 import { createDirectConfigUpdateHandler } from './runtime/control-plane/direct-config-update.js';
+import { createGovernanceDashboardCallbacks } from './runtime/control-plane/governance-dashboard-callbacks.js';
 import { createOperationsDashboardCallbacks } from './runtime/control-plane/operations-dashboard-callbacks.js';
 import { createProviderDashboardCallbacks } from './runtime/control-plane/provider-dashboard-callbacks.js';
 import { createProviderConfigHelpers } from './runtime/control-plane/provider-config-helpers.js';
@@ -9349,6 +9350,17 @@ function buildDashboardCallbacks(
     analytics,
     orchestrator,
   });
+  const governanceDashboard = createGovernanceDashboardCallbacks({
+    configRef,
+    guardianAgentService,
+    previewSecurityBaselineViolations,
+    buildSecurityBaselineRejection: (violations, source, attemptedChange) => (
+      buildSecurityBaselineRejection(violations, source, attemptedChange)
+    ),
+    policyState,
+    sentinelAuditService,
+    auditLog: runtime.auditLog,
+  });
 
   return {
     ...agentDashboard,
@@ -9578,78 +9590,7 @@ function buildDashboardCallbacks(
         },
       },
     }),
-    onGuardianAgentStatus: () => {
-      const cfg = guardianAgentService.getConfig();
-      return {
-        enabled: cfg.enabled,
-        llmProvider: cfg.llmProvider,
-        failOpen: cfg.failOpen,
-        timeoutMs: cfg.timeoutMs,
-        actionTypes: cfg.actionTypes,
-      };
-    },
-    onGuardianAgentUpdate: (input) => {
-      const nextConfig = structuredClone(configRef.current);
-      nextConfig.guardian.guardianAgent = {
-        enabled: true,
-        llmProvider: 'auto',
-        failOpen: false,
-        ...(nextConfig.guardian.guardianAgent ?? {}),
-        ...input,
-      };
-      const baselineViolations = previewSecurityBaselineViolations(nextConfig, 'web_api');
-      if (baselineViolations.length > 0) {
-        return buildSecurityBaselineRejection(
-          baselineViolations,
-          'guardian_agent_update',
-          input as Record<string, unknown>,
-        );
-      }
-      guardianAgentService.updateConfig(input);
-      return { success: true, message: 'Guardian Agent configuration updated.' };
-    },
-    onPolicyStatus: policyState.getStatus,
-    onPolicyUpdate: (input) => {
-      const nextConfig = structuredClone(configRef.current);
-      const currentPolicy = nextConfig.guardian.policy;
-      nextConfig.guardian.policy = {
-        ...(currentPolicy ?? { enabled: true, mode: 'shadow' as const }),
-        enabled: input.enabled ?? currentPolicy?.enabled ?? true,
-        mode: input.mode ?? currentPolicy?.mode ?? 'shadow',
-        families: input.families
-          ? {
-            ...(currentPolicy?.families ?? {}),
-            ...input.families,
-          }
-          : currentPolicy?.families,
-        mismatchLogLimit: input.mismatchLogLimit ?? currentPolicy?.mismatchLogLimit,
-      };
-      const baselineViolations = previewSecurityBaselineViolations(nextConfig, 'web_api');
-      if (baselineViolations.length > 0) {
-        return buildSecurityBaselineRejection(
-          baselineViolations,
-          'policy_update',
-          input as Record<string, unknown>,
-        );
-      }
-      return policyState.update(input);
-    },
-    onPolicyReload: policyState.reload,
-    onSentinelAuditRun: async (windowMs) => {
-      const result = await sentinelAuditService.runAudit(runtime.auditLog, windowMs);
-      return {
-        success: true,
-        anomalies: result.anomalies.map((a: { type: string; severity: string; description: string; agentId?: string }) => ({
-          type: a.type,
-          severity: a.severity,
-          description: a.description,
-          agentId: a.agentId,
-        })),
-        llmFindings: result.llmFindings,
-        timestamp: result.timestamp,
-        windowMs: result.windowMs,
-      };
-    },
+    ...governanceDashboard,
 
     set onTelegramReload(fn: (() => Promise<{ success: boolean; message: string }>) | undefined) {
       telegramReloadRef.current = fn ?? null;
