@@ -1,7 +1,7 @@
 # Core Architecture Modularization Plan
 
 **Date:** 2026-04-02  
-**Status:** Active, checkpoint updated after incoming-dispatch extraction  
+**Status:** Active, checkpoint updated after dashboard-dispatch extraction  
 **Origin:** Large-file architecture review of the composition root, web channel, and tool runtime  
 **Key files:** `src/index.ts`, `src/tools/executor.ts`, `src/channels/web.ts`  
 **Related docs:** `docs/architecture/FORWARD-ARCHITECTURE.md`, `docs/architecture/OVERVIEW.md`, `docs/guides/INTEGRATION-TEST-HARNESS.md`
@@ -119,7 +119,7 @@ This track is complete for the original registrar-extraction goal.
 
 This track is materially advanced but not finished.
 
-- `src/index.ts` is down to **14305 lines** from roughly **17.7k**.
+- `src/index.ts` is down to **13717 lines** from roughly **17.7k**.
 - Extracted control-plane modules now live under `src/runtime/control-plane/`:
   - `auth-control-callbacks.ts`
   - `config-persistence-service.ts`
@@ -138,6 +138,7 @@ This track is materially advanced but not finished.
   - `shutdown.ts` owns graceful shutdown sequencing for channels, managed intervals, MCP cleanup, executor disposal, runtime stop, store shutdown, and terminal exit settlement.
 - Runtime orchestration extraction is now active under `src/runtime/`:
   - `incoming-dispatch.ts` owns shared pre-dispatch preparation for channel messages: request-id assignment, code-session-aware route resolution, pinned-session agent handling, pre-routed intent metadata attachment, and early routing trace recording.
+  - `dashboard-dispatch.ts` owns shared post-routing dashboard/runtime dispatch: code-session-aware message shaping, orchestrator handoff, response-source enrichment, fallback-tier retries, and dispatch-response trace recording.
   - `channel-startup.ts` now depends on the shared `PrepareIncomingDispatch` contract from `src/runtime/incoming-dispatch.ts` instead of shadowing that type and shape locally.
 
 ### What is still left
@@ -146,13 +147,13 @@ The main remaining architecture work is now concentrated in `src/index.ts`.
 
 #### Remaining `src/index.ts` work
 
-- Extract the remaining dashboard-dispatch/runtime-dispatch helper cluster so `main()` and the entrypoint factory stop owning request-pipeline logic directly.
-- The remaining `src/bootstrap/` extraction work is limited; the main effort is now trimming residual helper glue out of `src/index.ts` around dashboard dispatch, provider/config shaping, credential mutation, and final orchestration.
+- Extract the remaining callback-factory helper clusters so `main()` and the entrypoint factory stop owning provider/config shaping and residual dashboard glue directly.
+- The remaining `src/bootstrap/` extraction work is limited; the main effort is now trimming residual helper glue out of `src/index.ts` around provider/config shaping, credential mutation, callback-factory assembly, and final orchestration.
 - Move remaining helper clusters out of `src/index.ts` when they have clear homes, especially:
-  - dashboard dispatch/helpers
   - provider info/config shaping helpers
   - credential-ref/local-secret mutation helpers
   - residual config-persist/apply glue still local to the entrypoint
+  - callback-factory helpers that still do not belong in `src/index.ts`
 - Reassess whether `buildDashboardCallbacks()` should become a thinner factory wrapper over already-extracted modules, or whether parts of dispatch/runtime coordination belong under `src/runtime/` instead.
 
 #### Optional follow-up cleanup
@@ -192,6 +193,7 @@ These are lower priority than the remaining `index.ts` work:
 - `d01cbbd` `refactor(bootstrap): extract channel startup`
 - `1c6caa2` `refactor(control-plane): extract cloud test callback`
 - latest checkpoint extracts shared incoming-dispatch preparation into `src/runtime/incoming-dispatch.ts`
+- current checkpoint extracts shared dashboard dispatch into `src/runtime/dashboard-dispatch.ts`
 
 #### Tool executor modularization
 
@@ -215,7 +217,7 @@ These are lower priority than the remaining `index.ts` work:
 
 `src/index.ts` still acts as the composition root, but several control-plane domains are now delegated to focused modules instead of living inline.
 
-The bootstrap path is now mostly split under `src/bootstrap/`: runtime creation, service wiring, channel startup, and shutdown sequencing are extracted. `src/runtime/incoming-dispatch.ts` now also carries the shared channel pre-dispatch/routing-preparation path that used to sit inline in `main()`. The remaining `index.ts` work is helper cleanup and final orchestration thinning.
+The bootstrap path is now mostly split under `src/bootstrap/`: runtime creation, service wiring, channel startup, and shutdown sequencing are extracted. `src/runtime/incoming-dispatch.ts` now carries the shared channel pre-dispatch/routing-preparation path that used to sit inline in `main()`, and `src/runtime/dashboard-dispatch.ts` now carries the shared dashboard/runtime dispatch path that used to sit inline in the callback factory. The remaining `index.ts` work is helper cleanup and final orchestration thinning.
 
 #### Web channel
 
@@ -353,7 +355,7 @@ If this plan is resumed in a later session, start with `src/index.ts`.
 
 Immediate next move:
 
-1. inspect the remaining dashboard-dispatch helper cluster in `src/index.ts`
+1. inspect the remaining callback-factory and provider/config helper clusters in `src/index.ts`
 2. decide the next clean ownership move under `src/runtime/` or `src/runtime/control-plane/`
 3. add or tighten focused coverage for that slice if needed
 4. extract mechanically, then run the mapped harness set

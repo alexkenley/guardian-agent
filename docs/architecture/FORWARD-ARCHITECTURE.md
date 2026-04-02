@@ -63,6 +63,7 @@ Current checkpoint:
 - `src/bootstrap/channel-startup.ts` now owns CLI, Telegram, and Web channel construction, startup logging, channel registration, Telegram reload wiring, and coding-backend bootstrap for the web surface.
 - `src/bootstrap/shutdown.ts` now owns graceful shutdown sequencing for channels, managed intervals, MCP cleanup, executor disposal, runtime stop, and terminal exit settlement.
 - `src/runtime/incoming-dispatch.ts` now owns shared pre-dispatch preparation for channel messages: request-id assignment, code-session attachment/pinning, gateway-first tier routing, pre-routed metadata attachment, and the early routing trace stages before the Runtime handles the turn.
+- `src/runtime/dashboard-dispatch.ts` now owns the shared dashboard/runtime dispatch path: code-session-aware message shaping, pre-routed metadata attachment at dispatch time, orchestrator handoff, response-source enrichment, fallback-tier dispatch, and dispatch-response trace recording.
 - The remaining `src/index.ts` work is now mostly residual helper glue around dashboard dispatch, provider/config shaping, credential mutation, and final orchestration trimming so `main()` becomes composition-only.
 
 Suggested structure:
@@ -165,7 +166,8 @@ Rules:
 Current checkpoint:
 - `src/runtime/incoming-dispatch.ts` is now the shared boundary between channel adapters/bootstrap startup and the Runtime dispatch pipeline.
 - `src/runtime/incoming-dispatch.ts` exists to keep request normalization, code-session-aware routing, and pre-routed intent metadata out of `src/index.ts` and out of per-channel adapters.
-- `src/index.ts` still owns the large dashboard dispatch helper cluster; that remains the next orchestration-heavy extraction target.
+- `src/runtime/dashboard-dispatch.ts` now owns the shared dispatch path used by dashboard callbacks and the web chat flow after route selection has been made.
+- The remaining `src/index.ts` work is now centered on callback-factory cleanup, provider/config shaping helpers, and final orchestration trimming rather than the core message dispatch path.
 
 ### 5. Tool Execution Core
 
@@ -269,12 +271,13 @@ Constraints:
 
 1. Channel adapter authenticates and normalizes the request.
 2. Shared incoming-dispatch preparation resolves request id, code-session attachment, pinned-agent behavior, and pre-routed intent metadata.
-3. Runtime receives the prepared message.
-4. Intent Gateway classifies the turn if it was not already pre-routed.
-5. Shared orchestration decides direct route vs normal assistant path.
-6. Pending-action and approval state are resolved through shared contracts.
-7. Tool execution, if needed, runs through ToolExecutor and Guardian enforcement.
-8. Response metadata is rendered by the channel without inventing channel-specific semantics.
+3. Shared dashboard/runtime dispatch shapes the runtime message, attaches code-session context, and enters the orchestrator queue.
+4. Runtime receives the prepared message.
+5. Intent Gateway classifies the turn if it was not already pre-routed.
+6. Shared orchestration decides direct route vs normal assistant path.
+7. Pending-action and approval state are resolved through shared contracts.
+8. Tool execution, if needed, runs through ToolExecutor and Guardian enforcement.
+9. Response metadata is rendered by the channel without inventing channel-specific semantics.
 
 ### Config Update
 
