@@ -210,6 +210,10 @@ import { createOperationsDashboardCallbacks } from './runtime/control-plane/oper
 import { createProviderDashboardCallbacks } from './runtime/control-plane/provider-dashboard-callbacks.js';
 import { createProviderConfigHelpers } from './runtime/control-plane/provider-config-helpers.js';
 import { createProviderIntegrationCallbacks } from './runtime/control-plane/provider-integration-callbacks.js';
+import {
+  createCloudConnectionTesters,
+  createGwsCliProbe,
+} from './runtime/control-plane/provider-runtime-adapters.js';
 import { createDashboardRuntimeCallbacks } from './runtime/control-plane/dashboard-runtime-callbacks.js';
 import { createSecurityDashboardCallbacks } from './runtime/control-plane/security-dashboard-callbacks.js';
 import { createSetupConfigDashboardCallbacks } from './runtime/control-plane/setup-config-dashboard-callbacks.js';
@@ -222,12 +226,6 @@ import type { ToolExecutorOptions } from './tools/executor.js';
 import type { ToolExecutionRequest } from './tools/types.js';
 import { MCPClientManager, assessMcpStartupAdmission } from './tools/mcp-client.js';
 import { normalizeCpanelConnectionConfig } from './tools/cloud/cpanel-profile.js';
-import { CpanelClient } from './tools/cloud/cpanel-client.js';
-import { VercelClient } from './tools/cloud/vercel-client.js';
-import { CloudflareClient } from './tools/cloud/cloudflare-client.js';
-import { AwsClient } from './tools/cloud/aws-client.js';
-import { GcpClient } from './tools/cloud/gcp-client.js';
-import { AzureClient } from './tools/cloud/azure-client.js';
 import type { MCPServerConfig } from './tools/mcp-client.js';
 import { composeGuardianSystemPrompt } from './prompts/guardian-core.js';
 import { composeCodeSessionSystemPrompt } from './prompts/code-session-core.js';
@@ -592,6 +590,8 @@ function buildManagedMCPServers(_config: GuardianAgentConfig): Array<MCPServerEn
 }
 
 const execFileAsync = promisify(execFileCb);
+const probeGwsCli = createGwsCliProbe(log);
+const cloudConnectionTesters = createCloudConnectionTesters();
 
 async function pickNativeSearchPath(kind: 'directory' | 'file'): Promise<{
   success: boolean;
@@ -671,36 +671,6 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK -and $dialog.SelectedPat
       canceled: false,
       message: `Failed to open native ${kind} picker: ${message}`,
     };
-  }
-}
-
-/**
- * Probe the GWS CLI by running `gws --version` and `gws auth status`.
- * Uses the configured command or falls back to 'gws' on PATH.
- */
-async function probeGwsCli(config: GuardianAgentConfig): Promise<{
-  installed: boolean;
-  version?: string;
-  authenticated: boolean;
-  authMethod?: string;
-}> {
-  const command = config.assistant.tools.mcp?.managedProviders?.gws?.command?.trim() || 'gws';
-  const execOpts = { timeout: 5000, shell: process.platform === 'win32' };
-  try {
-    const { stdout } = await execFileAsync(command, ['--version'], execOpts);
-    const version = stdout.trim();
-    try {
-      const { stdout: statusJson } = await execFileAsync(command, ['auth', 'status'], execOpts);
-      const status = JSON.parse(statusJson) as { auth_method?: string; storage?: string };
-      const authenticated = !!status.auth_method && status.auth_method !== 'none';
-      return { installed: true, version, authenticated, authMethod: authenticated ? status.auth_method : undefined };
-    } catch (err) {
-      log.debug({ err, command }, 'GWS auth status check failed, reporting as not authenticated');
-      return { installed: true, version, authenticated: false };
-    }
-  } catch (err) {
-    log.debug({ err, command }, 'GWS CLI not found or version check failed');
-    return { installed: false, authenticated: false };
   }
 }
 
@@ -9563,32 +9533,7 @@ function buildDashboardCallbacks(
       loadRawConfig,
       persistAndApplyConfig,
       probeGwsCli,
-      testCloudConnections: {
-        cpanel: async (profile) => {
-          const client = new CpanelClient(profile as unknown as ConstructorParameters<typeof CpanelClient>[0]);
-          await client.whm('version');
-        },
-        vercel: async (profile) => {
-          const client = new VercelClient(profile as unknown as ConstructorParameters<typeof VercelClient>[0]);
-          await client.listProjects({ limit: 1 });
-        },
-        cloudflare: async (profile) => {
-          const client = new CloudflareClient(profile as unknown as ConstructorParameters<typeof CloudflareClient>[0]);
-          await client.verifyToken();
-        },
-        aws: async (profile) => {
-          const client = new AwsClient(profile as unknown as ConstructorParameters<typeof AwsClient>[0]);
-          await client.getCallerIdentity();
-        },
-        gcp: async (profile) => {
-          const client = new GcpClient(profile as unknown as ConstructorParameters<typeof GcpClient>[0]);
-          await client.getProject();
-        },
-        azure: async (profile) => {
-          const client = new AzureClient(profile as unknown as ConstructorParameters<typeof AzureClient>[0]);
-          await client.getSubscription();
-        },
-      },
+      testCloudConnections: cloudConnectionTesters,
     }),
     ...governanceDashboard,
 
