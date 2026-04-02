@@ -205,6 +205,7 @@ import {
   parseWebSearchIntent,
 } from './runtime/search-intent.js';
 import { createConfigPersistenceService } from './runtime/control-plane/config-persistence-service.js';
+import { createConfigStateHelpers } from './runtime/control-plane/config-state-helpers.js';
 import { createAuthControlCallbacks } from './runtime/control-plane/auth-control-callbacks.js';
 import { createDirectConfigUpdateHandler } from './runtime/control-plane/direct-config-update.js';
 import { createOperationsDashboardCallbacks } from './runtime/control-plane/operations-dashboard-callbacks.js';
@@ -217,7 +218,7 @@ import { createWorkspaceDashboardCallbacks } from './runtime/control-plane/works
 let syncAssistantSecurityMonitoringTask: () => void = () => {};
 import { ToolExecutor } from './tools/executor.js';
 import type { ToolExecutorOptions } from './tools/executor.js';
-import type { ToolPolicySnapshot, ToolExecutionRequest } from './tools/types.js';
+import type { ToolExecutionRequest } from './tools/types.js';
 import { MCPClientManager, assessMcpStartupAdmission } from './tools/mcp-client.js';
 import { normalizeCpanelConnectionConfig } from './tools/cloud/cpanel-profile.js';
 import { CpanelClient } from './tools/cloud/cpanel-client.js';
@@ -9099,158 +9100,20 @@ function buildDashboardCallbacks(
     },
   });
 
-  const normalizeCredentialRefUpdates = (refs: Record<string, {
-    source?: 'env' | 'local';
-    env?: string;
-    secretId?: string;
-    secretValue?: string;
-    description?: string;
-  }>): Record<string, {
-    source: 'env' | 'local';
-    env?: string;
-    secretId?: string;
-    description?: string;
-  }> => {
-    const entries: Array<[string, {
-      source: 'env' | 'local';
-      env?: string;
-      secretId?: string;
-      description?: string;
-    }]> = [];
-    for (const [name, ref] of Object.entries(refs)) {
-      const normalizedName = name.trim();
-      const normalizedDescription = ref.description?.trim() || undefined;
-      if (!normalizedName) continue;
-
-      if ((ref.source ?? 'env') === 'local') {
-        const secretId = ref.secretId?.trim() || randomUUID();
-        const secretValue = ref.secretValue?.trim();
-        if (secretValue) {
-          secretStore.set(secretId, secretValue);
-        }
-        entries.push([normalizedName, {
-          source: 'local',
-          secretId,
-          description: normalizedDescription,
-        }]);
-        continue;
-      }
-
-      const normalizedEnv = ref.env?.trim();
-      if (!normalizedEnv) continue;
-      entries.push([normalizedName, {
-        source: 'env',
-        env: normalizedEnv,
-        description: normalizedDescription,
-      }]);
-    }
-    return Object.fromEntries(entries);
-  };
-
-  const upsertLocalCredentialRef = (
-    rawConfig: Record<string, unknown>,
-    refName: string,
-    secretValue: string,
-    description: string,
-  ): string => {
-    const normalizedRefName = refName.trim();
-    if (!normalizedRefName) {
-      throw new Error('credentialRef is required to store a local secret');
-    }
-
-    rawConfig.assistant = rawConfig.assistant ?? {};
-    const rawAssistant = rawConfig.assistant as Record<string, unknown>;
-    rawAssistant.credentials = (rawAssistant.credentials as Record<string, unknown> | undefined) ?? {};
-    const rawCredentials = rawAssistant.credentials as Record<string, unknown>;
-    rawCredentials.refs = (rawCredentials.refs as Record<string, unknown> | undefined) ?? {};
-    const rawRefs = rawCredentials.refs as Record<string, Record<string, unknown>>;
-    const existing = rawRefs[normalizedRefName];
-    const existingSecretId = typeof existing?.secretId === 'string' ? existing.secretId.trim() : '';
-    const secretId = existingSecretId || randomUUID();
-
-    secretStore.set(secretId, secretValue);
-    rawRefs[normalizedRefName] = {
-      source: 'local',
-      secretId,
-      description,
-    };
-    return normalizedRefName;
-  };
-
-  const deleteUnusedLocalSecrets = (
-    previousRefs: Record<string, { source: 'env' | 'local'; env?: string; secretId?: string; description?: string }>,
-    nextRefs: Record<string, { source: 'env' | 'local'; env?: string; secretId?: string; description?: string }>,
-  ): void => {
-    const nextSecretIds = new Set(
-      Object.values(nextRefs)
-        .filter((ref) => ref.source === 'local')
-        .map((ref) => ref.secretId?.trim())
-        .filter((secretId): secretId is string => !!secretId),
-    );
-
-    for (const ref of Object.values(previousRefs)) {
-      if (ref.source !== 'local') continue;
-      const secretId = ref.secretId?.trim();
-      if (secretId && !nextSecretIds.has(secretId)) {
-        secretStore.delete(secretId);
-      }
-    }
-  };
-
-  const persistToolsState = (policy: ToolPolicySnapshot): { success: boolean; message: string } => {
-    const rawConfig = loadRawConfig();
-    rawConfig.assistant = rawConfig.assistant ?? {};
-    const rawAssistant = rawConfig.assistant as Record<string, unknown>;
-    const existingTools = (rawAssistant.tools as Record<string, unknown> | undefined) ?? {};
-    rawAssistant.tools = {
-      ...existingTools,
-      enabled: configRef.current.assistant.tools.enabled,
-      policyMode: policy.mode,
-      toolPolicies: policy.toolPolicies,
-      allowExternalPosting: configRef.current.assistant.tools.allowExternalPosting,
-      allowedPaths: policy.sandbox.allowedPaths,
-      allowedCommands: policy.sandbox.allowedCommands,
-      allowedDomains: policy.sandbox.allowedDomains,
-      browser: configRef.current.assistant.tools.browser,
-      disabledCategories: configRef.current.assistant.tools.disabledCategories ?? [],
-      providerRouting: configRef.current.assistant.tools.providerRouting ?? {},
-      providerRoutingEnabled: configRef.current.assistant.tools.providerRoutingEnabled !== false,
-    };
-    return persistAndApplyConfig(rawConfig, {
-      changedBy: 'tools-control-plane',
-      reason: 'tool policy update',
-    });
-  };
-
-  const persistSkillsState = (): { success: boolean; message: string } => {
-    const rawConfig = loadRawConfig();
-    rawConfig.assistant = rawConfig.assistant ?? {};
-    const rawAssistant = rawConfig.assistant as Record<string, unknown>;
-    const existingSkills = (rawAssistant.skills as Record<string, unknown> | undefined) ?? {};
-    rawAssistant.skills = {
-      ...existingSkills,
-      enabled: configRef.current.assistant.skills.enabled,
-      roots: [...configRef.current.assistant.skills.roots],
-      autoSelect: configRef.current.assistant.skills.autoSelect,
-      maxActivePerRequest: configRef.current.assistant.skills.maxActivePerRequest,
-      disabledSkills: [...configRef.current.assistant.skills.disabledSkills],
-    };
-    return persistAndApplyConfig(rawConfig, {
-      changedBy: 'skills-control-plane',
-      reason: 'skills runtime update',
-    });
-  };
-
-  const persistConnectorsState = (): { success: boolean; message: string } => {
-    const rawConfig = loadRawConfig();
-    rawConfig.assistant = rawConfig.assistant ?? {};
-    const rawAssistant = rawConfig.assistant as Record<string, unknown>;
-    rawAssistant.connectors = connectors.getConfig();
-    return persistAndApplyConfig(rawConfig, {
-      changedBy: 'connectors-control-plane',
-      reason: 'connector/playbook update',
-    });
-  };
+  const {
+    normalizeCredentialRefUpdates,
+    upsertLocalCredentialRef,
+    deleteUnusedLocalSecrets,
+    persistToolsState,
+    persistSkillsState,
+    persistConnectorsState,
+  } = createConfigStateHelpers({
+    configRef,
+    loadRawConfig,
+    persistAndApplyConfig,
+    secretStore,
+    connectors,
+  });
   const operationsDashboard = createOperationsDashboardCallbacks({
     configRef,
     connectors,

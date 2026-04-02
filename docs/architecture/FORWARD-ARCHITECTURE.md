@@ -64,7 +64,8 @@ Current checkpoint:
 - `src/bootstrap/shutdown.ts` now owns graceful shutdown sequencing for channels, managed intervals, MCP cleanup, executor disposal, runtime stop, and terminal exit settlement.
 - `src/runtime/incoming-dispatch.ts` now owns shared pre-dispatch preparation for channel messages: request-id assignment, code-session attachment/pinning, gateway-first tier routing, pre-routed metadata attachment, and the early routing trace stages before the Runtime handles the turn.
 - `src/runtime/dashboard-dispatch.ts` now owns the shared dashboard/runtime dispatch path: code-session-aware message shaping, pre-routed metadata attachment at dispatch time, orchestrator handoff, response-source enrichment, fallback-tier dispatch, and dispatch-response trace recording.
-- The remaining `src/index.ts` work is now mostly residual helper glue around dashboard dispatch, provider/config shaping, credential mutation, and final orchestration trimming so `main()` becomes composition-only.
+- `src/runtime/control-plane/config-state-helpers.ts` now owns shared config-state helper logic used by dashboard/control-plane flows: credential-ref normalization, local-secret upserts/deletes, and persistence helpers for tool, skill, and connector state.
+- The remaining `src/index.ts` work is now mostly residual helper glue around provider/config shaping, callback-factory assembly, and final orchestration trimming so `main()` becomes composition-only.
 
 Suggested structure:
 
@@ -136,6 +137,7 @@ Suggested structure:
 ```text
 src/runtime/control-plane/
   config-persistence-service.ts
+  config-state-helpers.ts
   config-apply-service.ts
   config-validation-service.ts
   provider-routing-service.ts
@@ -167,6 +169,7 @@ Current checkpoint:
 - `src/runtime/incoming-dispatch.ts` is now the shared boundary between channel adapters/bootstrap startup and the Runtime dispatch pipeline.
 - `src/runtime/incoming-dispatch.ts` exists to keep request normalization, code-session-aware routing, and pre-routed intent metadata out of `src/index.ts` and out of per-channel adapters.
 - `src/runtime/dashboard-dispatch.ts` now owns the shared dispatch path used by dashboard callbacks and the web chat flow after route selection has been made.
+- `src/runtime/control-plane/config-state-helpers.ts` now owns the shared config-state helper surface that used to live inline in the callback factory.
 - The remaining `src/index.ts` work is now centered on callback-factory cleanup, provider/config shaping helpers, and final orchestration trimming rather than the core message dispatch path.
 
 ### 5. Tool Execution Core
