@@ -49,6 +49,7 @@ export type IntentGatewayResolution =
 
 export interface IntentGatewayEntities {
   automationName?: string;
+  newAutomationName?: string;
   manualOnly?: boolean;
   scheduled?: boolean;
   enabled?: boolean;
@@ -175,6 +176,9 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
       automationName: {
         type: 'string',
       },
+      newAutomationName: {
+        type: 'string',
+      },
       manualOnly: {
         type: 'boolean',
       },
@@ -238,8 +242,8 @@ const AUTOMATION_NAME_REPAIR_TOOL: ToolDefinition = {
 
 const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Route definitions:',
-  '- automation_authoring: creating or changing an automation or workflow definition.',
-  '- automation_control: operating on an existing automation definition or run, such as delete, toggle, clone, inspect, or run.',
+  '- automation_authoring: creating a new automation or changing automation definition content from freeform requirements.',
+  '- automation_control: operating on an existing automation definition or run, such as rename, delete, toggle, clone, inspect, or run.',
   '- automation_output_task: searching, reading, or analyzing previously stored output from a saved automation run.',
   '- ui_control: requests about Guardian UI pages or catalog surfaces such as automations, dashboard, config, or Guardian chat.',
   '- browser_task: external website navigation, reading, extraction, or interaction.',
@@ -264,12 +268,17 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Prefer email_task over workspace_task for direct mailbox or email requests.',
   'Prefer search_task over browser_task for generic web search.',
   'Prefer memory_task for explicit persistent-memory requests such as "remember this", "what do you remember about ...", or "search memory for ...".',
-  'Prefer automation_authoring for create/build/setup requests and automation_control for delete/toggle/run/clone/inspect requests.',
+  'Prefer automation_authoring for create/build/setup requests and automation_control for rename/delete/toggle/run/clone/inspect requests on an existing automation.',
   'Questions about automation capabilities, examples, supported shapes, or how automations work are general_assistant unless the user is actually asking you to create or change a specific automation or workflow definition.',
   'Do not use automation_authoring just because the words "automation" and "create" both appear in a capability question such as "What automations can you create?"',
   'Requests to analyze, summarize, explain, compare, review, or investigate the output or findings of a previous automation run should route to automation_output_task, not automation_control.',
+  'When the user asks to edit or change an existing automation, such as renaming it, changing its schedule, or switching it between scheduled and manual mode, use automation_control with operation=update rather than automation_authoring.',
   'When the request refers to a specific existing automation, workflow, scheduled task, or assistant automation, always set automationName to the exact human-readable name from the request.',
   'Examples: "Run Browser Read Smoke now" -> automationName = "Browser Read Smoke"; "Show me the automation Browser Read Smoke" -> automationName = "Browser Read Smoke".',
+  'When renaming an existing automation, set route=automation_control, operation=update, automationName to the current automation name when known, and newAutomationName to the requested new human-readable name.',
+  'Example: "Rename Browser Read Smoke to Browser Read Smoke Daily." -> route=automation_control, operation=update, automationName="Browser Read Smoke", newAutomationName="Browser Read Smoke Daily".',
+  'Example: prior assistant just created "It Should Check Account" and the user says "Rename that automation to WHM Social Check Disk Quota." -> route=automation_control, turnRelation=follow_up, operation=update, automationName="It Should Check Account", newAutomationName="WHM Social Check Disk Quota".',
+  'Example: "Edit the WHM Social Check Disk Quota automation and make it run daily at 9:00 AM." -> route=automation_control, operation=update, automationName="WHM Social Check Disk Quota".',
   'Example: "Analyze the output from the last HN Snapshot Smoke automation run" -> route = "automation_output_task", automationName = "HN Snapshot Smoke".',
   'Example: "What sort of automations can you create?" -> route = "general_assistant", operation = "inspect".',
   'memory_task operation mapping: save = remember/store durable memory; read = recall or list remembered information; search = search conversation or persistent memory.',
@@ -292,6 +301,7 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Example: prior assistant said to switch workspaces first before running the deferred Codex request; after switching, the user says "Okay, now we\'re on the previous request that I asked." -> route=coding_task, turnRelation=follow_up, resolution=ready, resolvedContent should restate the original deferred coding request.',
   'Example: prior assistant asked which mail provider to use and the user replies "Use Outlook." -> route=email_task, turnRelation=clarification_answer, resolution=ready, emailProvider=m365, resolvedContent should restate the original mail request with Outlook / Microsoft 365 selected.',
   'Example: prior assistant asked which mail provider to use and the user replies "Google Workspace." or "Gmail." -> route=email_task, turnRelation=clarification_answer, resolution=ready, emailProvider=gws, resolvedContent should restate the original mail request with Gmail / Google Workspace selected.',
+  'Example: prior assistant asked which automation to edit and the user replies "WHM Social Check Disk Quota." -> route=automation_control, turnRelation=clarification_answer, operation=update, automationName="WHM Social Check Disk Quota", resolvedContent should restate the original automation-edit request when possible.',
   'Example: prior user request "Use Codex to update the proposal in the workspace." then user says "Did Codex complete that work? Can you check?" -> route=coding_task, turnRelation=follow_up, operation=inspect, resolution=ready, codingBackend=codex, codingRunStatusCheck=true, resolvedContent should restate that this is a status check for the most recent Codex run related to that request.',
   'Example: "Why did Codex make that text file executable?" -> this is about Codex as the subject of the question, not a request to launch Codex. codingBackend may be set to codex, but codingBackendRequested=false and codingRunStatusCheck=false.',
   'Example: active pending action is approval for a Codex run, then the user says "Check my email." -> route=email_task, turnRelation=new_request, resolution should be based on the email request, and codingBackend should be unset.',
@@ -318,6 +328,8 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'memory_task means explicit remember, save, recall, or search memory requests.',
   'email_task means direct email inbox, read, send, reply, forward, or draft work. workspace_task means managed workspace tools such as calendar, drive, docs, or sheets.',
   'ui_control means Guardian pages or internal catalog surfaces. browser_task means external website navigation or interaction. search_task means generic web search.',
+  'For rename requests on an existing automation, use route=automation_control, operation=update, and set newAutomationName to the requested new name.',
+  'For edits to an existing automation such as changing its schedule or switching between scheduled and manual mode, use route=automation_control and operation=update.',
   'If the user names a coding session or workspace to switch to, set sessionTarget.',
   'If the user names Gmail or Google Workspace, set emailProvider to gws. If the user names Outlook or Microsoft 365, set emailProvider to m365.',
   'If the user explicitly asks Guardian to use Codex, Claude Code, Gemini CLI, or Aider, set codingBackend and codingBackendRequested=true.',
@@ -595,6 +607,18 @@ function buildAutomationNameRepairMessages(
   decision: IntentGatewayDecision,
 ): ChatMessage[] {
   const channelLabel = input.channel?.trim() || 'unknown';
+  const historySection = Array.isArray(input.recentHistory) && input.recentHistory.length > 0
+    ? input.recentHistory
+      .slice(-6)
+      .map((entry) => `${entry.role}: ${entry.content}`)
+      .join('\n')
+    : '';
+  const continuitySection = input.continuity
+    ? [
+        input.continuity.focusSummary ? `Focus summary: ${input.continuity.focusSummary}` : '',
+        input.continuity.lastActionableRequest ? `Last actionable request: ${input.continuity.lastActionableRequest}` : '',
+      ].filter(Boolean).join('\n')
+    : '';
   return [
     {
       role: 'system',
@@ -608,6 +632,8 @@ function buildAutomationNameRepairMessages(
         `Operation: ${decision.operation}`,
         'Extract the saved automation name from this request.',
         '',
+        historySection ? `Recent history:\n${historySection}` : '',
+        continuitySection,
         input.content.trim(),
       ].join('\n'),
     },
@@ -683,6 +709,9 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
   const automationName = typeof parsed.automationName === 'string' && parsed.automationName.trim()
     ? parsed.automationName.trim()
     : undefined;
+  const newAutomationName = typeof parsed.newAutomationName === 'string' && parsed.newAutomationName.trim()
+    ? parsed.newAutomationName.trim()
+    : undefined;
   const manualOnly = typeof parsed.manualOnly === 'boolean' ? parsed.manualOnly : undefined;
   const scheduled = typeof parsed.scheduled === 'boolean' ? parsed.scheduled : undefined;
   const enabled = typeof parsed.enabled === 'boolean' ? parsed.enabled : undefined;
@@ -722,6 +751,7 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
     ...(resolvedContent ? { resolvedContent } : {}),
     entities: {
       ...(automationName ? { automationName } : {}),
+      ...(newAutomationName ? { newAutomationName } : {}),
       ...(typeof manualOnly === 'boolean' ? { manualOnly } : {}),
       ...(typeof scheduled === 'boolean' ? { scheduled } : {}),
       ...(typeof enabled === 'boolean' ? { enabled } : {}),
@@ -758,11 +788,11 @@ async function repairAutomationName(
 function needsAutomationNameRepair(decision: IntentGatewayDecision): boolean {
   if (decision.entities.automationName?.trim()) return false;
   if (decision.route === 'automation_control' || decision.route === 'automation_output_task') {
-    return ['delete', 'toggle', 'run', 'inspect', 'clone'].includes(decision.operation);
+    return ['delete', 'toggle', 'run', 'inspect', 'clone', 'update'].includes(decision.operation);
   }
   return decision.route === 'ui_control'
     && decision.entities.uiSurface === 'automations'
-    && ['delete', 'toggle', 'run', 'inspect', 'clone'].includes(decision.operation);
+    && ['delete', 'toggle', 'run', 'inspect', 'clone', 'update'].includes(decision.operation);
 }
 
 function normalizeRoute(value: unknown): IntentGatewayRoute {

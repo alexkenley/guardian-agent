@@ -1,6 +1,11 @@
 import type { AgentContext, UserMessage } from '../agent/types.js';
 import type { ToolExecutionRequest } from '../tools/types.js';
 import type { IntentGatewayDecision } from './intent-gateway.js';
+import type { AutomationSaveInput } from './automation-save.js';
+import {
+  parseAutomationSchedule,
+  type AutomationScheduleSpec,
+} from './automation-authoring.js';
 import type {
   AssistantConnectorPlaybookDefinition,
   AssistantConnectorPlaybookStepDefinition,
@@ -24,11 +29,13 @@ export interface AutomationControlPreRouteResult {
   content: string;
   metadata?: {
     pendingAction?: Record<string, unknown>;
+    clarification?: Record<string, unknown>;
   };
 }
 
 type AutomationControlToolName =
   | 'automation_list'
+  | 'automation_save'
   | 'automation_set_enabled'
   | 'automation_run'
   | 'automation_delete';
@@ -49,14 +56,28 @@ interface AutomationControlPreRouteParams {
 }
 
 interface AutomationControlIntent {
-  operation: 'delete' | 'toggle' | 'run' | 'inspect' | 'clone' | 'unknown';
+  operation: 'delete' | 'toggle' | 'run' | 'inspect' | 'clone' | 'update' | 'unknown';
   automationName?: string;
+  newAutomationName?: string;
   enabled?: boolean;
 }
 
 interface AutomationCatalogLookupResult {
   entries: SavedAutomationCatalogEntry[];
   error?: string;
+}
+
+interface AutomationScheduleChange {
+  enabled: boolean;
+  cron?: string;
+  runOnce?: boolean;
+  label?: string;
+}
+
+interface AutomationControlUpdateRequest {
+  nextName?: string;
+  schedule?: AutomationScheduleChange;
+  needsScheduleClarification?: boolean;
 }
 
 export async function tryAutomationControlPreRoute(
@@ -92,9 +113,17 @@ export async function tryAutomationControlPreRoute(
   }
 
   if (!intent.automationName) {
-    return {
-      content: 'Tell me which automation you want to run, enable, disable, or delete.',
-    };
+    return buildAutomationClarificationResult(
+      'Tell me which automation you want to inspect, run, rename, enable, disable, or edit.',
+      {
+        field: 'automation_name',
+        route: 'automation_control',
+        operation: intent.operation,
+        summary: 'Select the saved automation to update or control.',
+        missingFields: ['automation_name'],
+        entities: buildAutomationControlIntentEntities(intent),
+      },
+    );
   }
 
   if (!selected) {
@@ -106,6 +135,8 @@ export async function tryAutomationControlPreRoute(
   switch (intent.operation) {
     case 'run':
       return runAutomationEntry(params, toolRequest, selected, selection, intent.automationName);
+    case 'update':
+      return updateAutomationEntry(params, toolRequest, selected, catalog, intent);
     case 'toggle':
       return toggleAutomationEntry(params, toolRequest, selected, intent.enabled);
     case 'delete':
@@ -158,13 +189,14 @@ function resolveDecisionBackedIntent(
     return null;
   }
 
-  if (!['delete', 'toggle', 'run', 'inspect', 'clone'].includes(decision.operation)) {
+  if (!['delete', 'toggle', 'run', 'inspect', 'clone', 'update'].includes(decision.operation)) {
     return null;
   }
 
   return {
     operation: decision.operation as AutomationControlIntent['operation'],
     automationName: decision.entities.automationName,
+    newAutomationName: decision.entities.newAutomationName,
     ...(typeof decision.entities.enabled === 'boolean'
       ? { enabled: decision.entities.enabled }
       : {}),
@@ -327,6 +359,93 @@ async function toggleAutomationEntry(
   );
 }
 
+async function updateAutomationEntry(
+  params: AutomationControlPreRouteParams,
+  toolRequest: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
+  entry: SavedAutomationCatalogEntry,
+  catalog: SavedAutomationCatalogEntry[],
+  intent: AutomationControlIntent,
+): Promise<AutomationControlPreRouteResult> {
+  if (entry.builtin) {
+    return {
+      content: `'${entry.name}' is a built-in starter example. Create a copy first, then edit the saved automation.`,
+    };
+  }
+
+  const update = readAutomationControlUpdateRequest(params.message.content, intent);
+  if (!update.nextName && !update.schedule && !update.needsScheduleClarification) {
+    return {
+      content: `Tell me what you want to change about '${entry.name}'. You can rename it, schedule it, or switch it back to manual run mode.`,
+    };
+  }
+
+  if (update.needsScheduleClarification) {
+    return {
+      content: `Tell me when '${entry.name}' should run, for example "daily at 9:00 AM" or "every weekday at 7:30 AM".`,
+      metadata: {
+        clarification: {
+          blockerKind: 'clarification',
+          field: 'schedule',
+          prompt: `Tell me when '${entry.name}' should run, for example "daily at 9:00 AM" or "every weekday at 7:30 AM".`,
+          route: 'automation_control',
+          operation: 'update',
+          summary: `Choose a schedule for '${entry.name}'.`,
+          resolution: 'needs_clarification',
+          missingFields: ['schedule'],
+          entities: {
+            ...buildAutomationControlIntentEntities(intent),
+            automationName: entry.name,
+          },
+        },
+      },
+    };
+  }
+
+  const nextName = update.nextName?.trim() || entry.name;
+  const normalizedNextName = normalizeAutomationName(nextName);
+  const normalizedCurrentName = normalizeAutomationName(entry.name);
+  const hasNameChange = normalizedNextName !== normalizedCurrentName;
+
+  if (hasNameChange) {
+    const conflicting = catalog.find((candidate) => (
+      candidate.id !== entry.id
+      && normalizeAutomationName(candidate.name) === normalizedNextName
+    ));
+    if (conflicting) {
+      return {
+        content: `I found another automation already named '${conflicting.name}'. Choose a different name so I don't create an ambiguous catalog entry.`,
+      };
+    }
+  }
+
+  const existingSchedule = readAutomationScheduleFromEntry(entry);
+  const nextSchedule = update.schedule ?? existingSchedule;
+  const scheduleChanged = hasScheduleChanged(existingSchedule, nextSchedule);
+  if (!hasNameChange && !scheduleChanged) {
+    return {
+      content: `'${entry.name}' is already configured that way.`,
+    };
+  }
+
+  const saveInput = buildAutomationSaveInputFromEntry(entry, {
+    name: nextName,
+    schedule: nextSchedule,
+  });
+  const result = await params.executeTool('automation_save', saveInput as unknown as Record<string, unknown>, toolRequest);
+  const copy = describeAutomationUpdateCopy(entry.name, nextName, nextSchedule, hasNameChange, scheduleChanged);
+  return formatSingleAutomationMutationResult(
+    params,
+    result,
+    'automation_save',
+    saveInput as unknown as Record<string, unknown>,
+    nextName,
+    copy.approved,
+    copy.denied,
+    copy.success,
+    copy.pending,
+  );
+}
+
 async function deleteAutomationEntry(
   params: AutomationControlPreRouteParams,
   toolRequest: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
@@ -354,7 +473,7 @@ async function deleteAutomationEntry(
 function formatSingleAutomationMutationResult(
   params: AutomationControlPreRouteParams,
   result: Record<string, unknown>,
-  toolName: 'automation_set_enabled' | 'automation_run' | 'automation_delete',
+  toolName: 'automation_save' | 'automation_set_enabled' | 'automation_run' | 'automation_delete',
   args: Record<string, unknown>,
   automationName: string,
   approvedCopy: string,
@@ -405,15 +524,18 @@ function formatSingleAutomationMutationResult(
     };
   }
 
+  const successMessage = extractSuccessMessage(result);
   return {
-    content: extractSuccessMessage(result) || successCopy,
+    content: toolName === 'automation_save' && (!successMessage || successMessage === 'Saved.')
+      ? successCopy
+      : successMessage || successCopy,
   };
 }
 
 function collectPendingMutation(
   params: AutomationControlPreRouteParams,
   result: Record<string, unknown>,
-  toolName: 'automation_set_enabled' | 'automation_run' | 'automation_delete',
+  toolName: 'automation_save' | 'automation_set_enabled' | 'automation_run' | 'automation_delete',
   args: Record<string, unknown>,
   approvedCopy: string,
   deniedCopy: string,
@@ -600,6 +722,264 @@ function toWorkflowStepSummary(value: Record<string, unknown>): AssistantConnect
     ...(toString(value.evidenceMode) ? { evidenceMode: toString(value.evidenceMode) as AssistantConnectorPlaybookStepDefinition['evidenceMode'] } : {}),
     ...(toString(value.citationStyle) ? { citationStyle: toString(value.citationStyle) as AssistantConnectorPlaybookStepDefinition['citationStyle'] } : {}),
   };
+}
+
+function buildAutomationSaveInputFromEntry(
+  entry: SavedAutomationCatalogEntry,
+  overrides: {
+    name?: string;
+    schedule?: AutomationScheduleChange;
+  },
+): AutomationSaveInput {
+  const nextName = overrides.name?.trim() || entry.name;
+  const schedule = overrides.schedule ?? readAutomationScheduleFromEntry(entry);
+
+  if (entry.workflow) {
+    return {
+      id: entry.workflow.id || entry.id,
+      name: nextName,
+      description: entry.workflow.description || entry.description || '',
+      enabled: entry.enabled !== false,
+      kind: 'workflow',
+      sourceKind: 'workflow',
+      ...(entry.task?.type === 'playbook' ? { existingTaskId: entry.task.id } : {}),
+      mode: entry.workflow.mode === 'parallel' ? 'parallel' : 'sequential',
+      steps: entry.workflow.steps.map((step) => ({
+        ...step,
+        ...(step.args ? { args: { ...step.args } } : {}),
+      })),
+      schedule: schedule.enabled && schedule.cron
+        ? {
+            enabled: true,
+            cron: schedule.cron,
+            runOnce: schedule.runOnce === true,
+          }
+        : { enabled: false },
+      ...(entry.task?.emitEvent ? { emitEvent: entry.task.emitEvent } : {}),
+      ...(entry.workflow.outputHandling
+        ? { outputHandling: { ...entry.workflow.outputHandling } }
+        : entry.task?.outputHandling
+          ? { outputHandling: { ...entry.task.outputHandling } }
+          : {}),
+    };
+  }
+
+  if (!entry.task) {
+    throw new Error(`Automation '${entry.name}' is missing task data.`);
+  }
+
+  if (entry.kind === 'assistant_task') {
+    return {
+      id: entry.task.id,
+      name: nextName,
+      description: entry.task.description || entry.description || '',
+      enabled: entry.enabled !== false,
+      kind: 'assistant_task',
+      sourceKind: 'task',
+      existingTaskId: entry.task.id,
+      task: {
+        target: entry.task.target,
+        prompt: entry.task.prompt || '',
+        channel: entry.task.channel || 'scheduled',
+        deliver: entry.task.deliver !== false,
+        ...(isRecord(entry.task.args) && typeof entry.task.args.llmProvider === 'string'
+          ? { llmProvider: entry.task.args.llmProvider }
+          : {}),
+      },
+      schedule: schedule.enabled && schedule.cron
+        ? {
+            enabled: true,
+            cron: schedule.cron,
+            runOnce: schedule.runOnce === true,
+          }
+        : { enabled: false },
+      ...(entry.task.emitEvent ? { emitEvent: entry.task.emitEvent } : {}),
+      ...(entry.task.outputHandling ? { outputHandling: { ...entry.task.outputHandling } } : {}),
+    };
+  }
+
+  return {
+    id: entry.task.id,
+    name: nextName,
+    description: entry.task.description || entry.description || '',
+    enabled: entry.enabled !== false,
+    kind: 'standalone_task',
+    sourceKind: 'task',
+    existingTaskId: entry.task.id,
+    task: {
+      target: entry.task.target,
+      ...(isRecord(entry.task.args) ? { args: { ...entry.task.args } } : {}),
+    },
+    schedule: schedule.enabled && schedule.cron
+      ? {
+          enabled: true,
+          cron: schedule.cron,
+          runOnce: schedule.runOnce === true,
+        }
+      : { enabled: false },
+    ...(entry.task.emitEvent ? { emitEvent: entry.task.emitEvent } : {}),
+    ...(entry.task.outputHandling ? { outputHandling: { ...entry.task.outputHandling } } : {}),
+  };
+}
+
+function readAutomationScheduleFromEntry(entry: SavedAutomationCatalogEntry): AutomationScheduleChange {
+  if (!entry.task?.cron) {
+    return { enabled: false };
+  }
+  return {
+    enabled: true,
+    cron: entry.task.cron,
+    runOnce: entry.task.runOnce === true,
+  };
+}
+
+function readAutomationControlUpdateRequest(
+  content: string,
+  intent: AutomationControlIntent,
+  now: Date = new Date(),
+): AutomationControlUpdateRequest {
+  const nextName = intent.newAutomationName?.trim() || undefined;
+  const trimmedContent = content.trim();
+  if (!trimmedContent) {
+    return { ...(nextName ? { nextName } : {}) };
+  }
+
+  const scheduleChange = parseAutomationScheduleChange(trimmedContent, now);
+  return {
+    ...(nextName ? { nextName } : {}),
+    ...(scheduleChange ? { schedule: scheduleChange } : {}),
+    ...(hasExplicitScheduleRequestWithoutTiming(trimmedContent) && !scheduleChange ? { needsScheduleClarification: true } : {}),
+  };
+}
+
+function parseAutomationScheduleChange(
+  text: string,
+  now: Date,
+): AutomationScheduleChange | null {
+  if (/\b(unschedule|disable (?:the )?schedule|make (?:it|this) manual|manual(?:ly)?(?: run)? only|run (?:it|this) manually|on demand only|do not schedule(?: it| this)?|don't schedule(?: it| this)?)\b/i.test(text)) {
+    return {
+      enabled: false,
+      label: 'Manual',
+    };
+  }
+
+  const schedule = parseAutomationSchedule(text, now);
+  if (!schedule) return null;
+  return toAutomationScheduleChange(schedule);
+}
+
+function toAutomationScheduleChange(
+  schedule: AutomationScheduleSpec,
+): AutomationScheduleChange {
+  return {
+    enabled: true,
+    cron: schedule.cron,
+    runOnce: schedule.runOnce,
+    label: schedule.label,
+  };
+}
+
+function hasExplicitScheduleRequestWithoutTiming(text: string): boolean {
+  if (!/\b(schedule|scheduled)\b/i.test(text)) {
+    return false;
+  }
+  return !parseAutomationScheduleChange(text, new Date());
+}
+
+function hasScheduleChanged(
+  current: AutomationScheduleChange,
+  next: AutomationScheduleChange,
+): boolean {
+  return current.enabled !== next.enabled
+    || (current.enabled && next.enabled && (
+      (current.cron || '') !== (next.cron || '')
+      || (current.runOnce === true) !== (next.runOnce === true)
+    ));
+}
+
+function describeAutomationUpdateCopy(
+  previousName: string,
+  nextName: string,
+  schedule: AutomationScheduleChange,
+  hasNameChange: boolean,
+  scheduleChanged: boolean,
+): {
+  approved: string;
+  denied: string;
+  success: string;
+  pending: string;
+} {
+  if (hasNameChange && !scheduleChanged) {
+    return {
+      approved: `I renamed '${previousName}' to '${nextName}'.`,
+      denied: `I did not rename '${previousName}'.`,
+      success: `Renamed '${previousName}' to '${nextName}'.`,
+      pending: `I prepared renaming '${previousName}' to '${nextName}'.`,
+    };
+  }
+
+  const targetName = hasNameChange ? nextName : previousName;
+  const scheduleSummary = schedule.enabled && schedule.cron
+    ? `${schedule.label ? `${schedule.label} ` : ''}schedule (${schedule.cron})`.trim()
+    : 'manual run mode';
+
+  return {
+    approved: hasNameChange
+      ? `I updated '${previousName}' to '${nextName}' and set it to ${scheduleSummary}.`
+      : `I updated '${targetName}' to ${scheduleSummary}.`,
+    denied: hasNameChange
+      ? `I did not update '${previousName}'.`
+      : `I did not update '${targetName}'.`,
+    success: hasNameChange
+      ? `Updated '${previousName}' to '${nextName}' and set it to ${scheduleSummary}.`
+      : `Updated '${targetName}' to ${scheduleSummary}.`,
+    pending: hasNameChange
+      ? `I prepared updating '${previousName}' to '${nextName}'.`
+      : `I prepared updating '${targetName}'.`,
+  };
+}
+
+function buildAutomationClarificationResult(
+  prompt: string,
+  input: {
+    field?: string;
+    route: string;
+    operation?: string;
+    summary: string;
+    missingFields?: string[];
+    entities?: Record<string, unknown>;
+  },
+): AutomationControlPreRouteResult {
+  return {
+    content: prompt,
+    metadata: {
+      clarification: {
+        blockerKind: 'clarification',
+        ...(input.field ? { field: input.field } : {}),
+        prompt,
+        route: input.route,
+        ...(input.operation ? { operation: input.operation } : {}),
+        summary: input.summary,
+        resolution: 'needs_clarification',
+        ...(input.missingFields?.length ? { missingFields: [...input.missingFields] } : {}),
+        ...(input.entities ? { entities: { ...input.entities } } : {}),
+      },
+    },
+  };
+}
+
+function buildAutomationControlIntentEntities(
+  intent: AutomationControlIntent,
+): Record<string, unknown> {
+  return {
+    ...(intent.automationName ? { automationName: intent.automationName } : {}),
+    ...(intent.newAutomationName ? { newAutomationName: intent.newAutomationName } : {}),
+    ...(typeof intent.enabled === 'boolean' ? { enabled: intent.enabled } : {}),
+  };
+}
+
+function normalizeAutomationName(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 function toOutputHandling(value: unknown): AutomationOutputHandlingConfig | undefined {

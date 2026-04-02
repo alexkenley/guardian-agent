@@ -105,6 +105,7 @@ const FORBID_CODE_PATTERN = /\b(not a shell script|not .*code file|do not create
 const MANUAL_ONLY_PATTERN = /\b(do not schedule(?: it| this)?(?: yet)?|don't schedule(?: it| this)?(?: yet)?|manual(?:ly)?(?: run)? only|run (?:it|this) manually|on demand only)\b/i;
 const EXPLICIT_ASSISTANT_TASK_PATTERN = /\b(scheduled assistant task|assistant task|assistant automation|agent task|assistant turn)\b/i;
 const EXPLICIT_WORKFLOW_PATTERN = /\b(workflow called|workflow named|workflow titled|playbook called|playbook named|playbook titled|create a sequential workflow|build a sequential workflow|create a parallel workflow|build a parallel workflow)\b/i;
+const EXPLICIT_NON_ASSISTANT_WORKFLOW_PATTERN = /\b(do not create an assistant automation|don't create an assistant automation|not an assistant automation|do not create a scheduled assistant task|don't create a scheduled assistant task|step[- ]based workflow|deterministic scheduled automation|deterministic workflow|fixed tool steps)\b/i;
 const NAMED_AUTOMATION_PATTERN = /\b(automation|workflow|playbook|scheduled assistant task|assistant automation|assistant task)\b[\s\S]{0,40}\b(called|named|titled)\b/i;
 const OPEN_ENDED_PATTERNS = [
   /\b(research|enrich|score|classify|triage|monitor|summari[sz]e|draft|compare|diff|analy[sz]e|prioriti[sz]e|review)\b/i,
@@ -221,13 +222,15 @@ function classifyAutomationShape(
   schedule: AutomationScheduleSpec | null,
 ): AutomationAuthoringShape {
   const explicitScheduledAssistantTask = /\bscheduled assistant task\b/i.test(text);
-  const explicitAssistantTask = EXPLICIT_ASSISTANT_TASK_PATTERN.test(text);
+  const explicitNonAssistantWorkflow = EXPLICIT_NON_ASSISTANT_WORKFLOW_PATTERN.test(text);
+  const explicitAssistantTask = EXPLICIT_ASSISTANT_TASK_PATTERN.test(text) && !explicitNonAssistantWorkflow;
   const openEndedSignals = OPEN_ENDED_PATTERNS.filter((pattern) => pattern.test(text)).length;
   const explicitWorkflow = EXPLICIT_WORKFLOW_PATTERN.test(text) && !explicitAssistantTask && openEndedSignals === 0;
   const explicitWorkflowSignals = EXPLICIT_WORKFLOW_PATTERNS.filter((pattern) => pattern.test(text)).length;
   const deterministicInstructionWorkflow = looksLikeDeterministicInstructionWorkflow(text);
   if (explicitScheduledAssistantTask) return 'scheduled_agent';
   if (explicitAssistantTask) return schedule ? 'scheduled_agent' : 'manual_agent';
+  if (explicitNonAssistantWorkflow) return 'workflow';
   if (looksLikeBrowserWorkflow(text)) return 'workflow';
   if (deterministicInstructionWorkflow) return 'workflow';
   if (explicitWorkflowSignals >= 2) return 'workflow';
@@ -293,6 +296,14 @@ function buildAutomationAuthoringCompilation(
   }
 
   if (!ir.agent) return null;
+  const scheduledAgent = parsed.desiredShape === 'scheduled_agent';
+  const requestedChannel = inferRequestedDeliveryChannel(parsed.text)
+    || options?.channel?.trim()
+    || ir.metadata.channel?.trim()
+    || 'scheduled';
+  const taskChannel = scheduledAgent
+    ? normalizeScheduledAutomationChannel(requestedChannel)
+    : requestedChannel;
   const taskCreate: CompiledAutomationTaskCreate = {
     name: ir.name,
     description: ir.description,
@@ -304,12 +315,12 @@ function buildAutomationAuthoringCompilation(
         nativeOnly: ir.constraints.nativeOnly,
         forbidCodeArtifacts: ir.constraints.forbidCodeArtifacts,
       },
-      parsed.desiredShape === 'scheduled_agent' ? 'scheduled' : 'manual',
+      scheduledAgent ? 'scheduled' : 'manual',
     ),
-    channel: options?.channel?.trim() || ir.metadata.channel?.trim() || 'scheduled',
+    channel: taskChannel,
     userId: options?.userId?.trim() || ir.metadata.userId?.trim() || undefined,
-    deliver: (options?.channel?.trim() || ir.metadata.channel?.trim() || 'scheduled') !== 'scheduled',
-    ...(parsed.desiredShape === 'scheduled_agent' && ir.schedule
+    deliver: taskChannel !== 'scheduled',
+    ...(scheduledAgent && ir.schedule
       ? {
           cron: ir.schedule.cron,
           runOnce: ir.schedule.runOnce,
@@ -819,7 +830,7 @@ function buildDeterministicInstructionWorkflow(text: string): AutomationIRWorkfl
   };
 }
 
-function parseAutomationSchedule(text: string, now: Date): AutomationScheduleSpec | null {
+export function parseAutomationSchedule(text: string, now: Date): AutomationScheduleSpec | null {
   const everyMinutes = extractEveryMinutes(text);
   if (everyMinutes) {
     return {
@@ -915,6 +926,32 @@ function buildAssistantAutomationPrompt(
   lines.push('Operator request:');
   lines.push(request.trim());
   return lines.join('\n');
+}
+
+function inferRequestedDeliveryChannel(text: string): string | null {
+  if (/\b(do not send a notification|do not send any notification|do not send a message|no direct (?:message )?delivery|keep the results? in the automation run output only)\b/i.test(text)) {
+    return 'scheduled';
+  }
+  if (/\b(?:web channel|guardian web channel|dashboard|web ui)\b/i.test(text)) {
+    return 'web';
+  }
+  if (/\b(?:telegram|telegram channel)\b/i.test(text)) {
+    return 'telegram';
+  }
+  if (/\b(?:cli|terminal channel|command line)\b/i.test(text)) {
+    return 'cli';
+  }
+  return null;
+}
+
+function normalizeScheduledAutomationChannel(channel: string): string {
+  const normalized = channel.trim().toLowerCase();
+  if (!normalized) return 'scheduled';
+  if (normalized === 'code-session') return 'web';
+  if (normalized === 'web' || normalized === 'cli' || normalized === 'telegram' || normalized === 'scheduled') {
+    return normalized;
+  }
+  return 'scheduled';
 }
 
 function inferAutomationName(text: string, schedule: AutomationScheduleSpec | null): string {

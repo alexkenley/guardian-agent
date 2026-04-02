@@ -178,6 +178,74 @@ const APPROVAL_ID_TOKEN_PATTERN = /^(?=.*(?:-|\d))[a-z0-9-]{4,}$/i;
 const PENDING_APPROVAL_TTL_MS = 30 * 60_000;
 const PENDING_ACTION_SWITCH_CONFIRM_PATTERN = /^(?:yes|yep|yeah|y|ok|okay|sure|switch|replace|switch it|switch to (?:that|the new one|the new request)|replace it|do that instead)\b/i;
 const PENDING_ACTION_SWITCH_DENY_PATTERN = /^(?:no|nope|nah|keep|keep current|keep the current one|keep the existing one|stay on current|don'?t switch)\b/i;
+
+interface DirectAutomationClarificationMetadata {
+  blockerKind: PendingActionBlocker['kind'];
+  field?: string;
+  prompt: string;
+  route?: string;
+  operation?: string;
+  summary?: string;
+  resolution?: string;
+  missingFields?: string[];
+  entities?: Record<string, unknown>;
+  options?: PendingActionBlocker['options'];
+}
+
+function readDirectAutomationClarificationMetadata(
+  metadata: Record<string, unknown> | undefined,
+): DirectAutomationClarificationMetadata | null {
+  if (!metadata || !isRecord(metadata.clarification)) return null;
+  const clarification = metadata.clarification;
+  const prompt = toString(clarification.prompt).trim();
+  if (!prompt) return null;
+  return {
+    blockerKind: clarification.blockerKind === 'workspace_switch'
+      ? 'workspace_switch'
+      : clarification.blockerKind === 'auth'
+        ? 'auth'
+        : clarification.blockerKind === 'policy'
+          ? 'policy'
+          : clarification.blockerKind === 'missing_context'
+            ? 'missing_context'
+            : 'clarification',
+    ...(toString(clarification.field).trim() ? { field: toString(clarification.field).trim() } : {}),
+    prompt,
+    ...(toString(clarification.route).trim() ? { route: toString(clarification.route).trim() } : {}),
+    ...(toString(clarification.operation).trim() ? { operation: toString(clarification.operation).trim() } : {}),
+    ...(toString(clarification.summary).trim() ? { summary: toString(clarification.summary).trim() } : {}),
+    ...(toString(clarification.resolution).trim() ? { resolution: toString(clarification.resolution).trim() } : {}),
+    ...(Array.isArray(clarification.missingFields)
+      ? {
+          missingFields: clarification.missingFields
+            .filter((value): value is string => typeof value === 'string')
+            .map((value) => value.trim())
+            .filter(Boolean),
+        }
+      : {}),
+    ...(isRecord(clarification.entities) ? { entities: { ...clarification.entities } } : {}),
+    ...(Array.isArray(clarification.options)
+      ? {
+          options: clarification.options
+            .filter((value): value is Record<string, unknown> => isRecord(value) && toString(value.value).trim().length > 0)
+            .map((value) => ({
+              value: toString(value.value).trim(),
+              label: toString(value.label).trim() || toString(value.value).trim(),
+              ...(toString(value.description).trim() ? { description: toString(value.description).trim() } : {}),
+            })),
+        }
+      : {}),
+  };
+}
+
+function stripDirectAutomationClarificationMetadata(
+  metadata: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!metadata) return undefined;
+  const next = { ...metadata };
+  delete next.clarification;
+  return Object.keys(next).length > 0 ? next : undefined;
+}
 const PENDING_ACTION_SWITCH_CANDIDATE_TYPE = 'pending_action_switch_candidate';
 
 interface PendingApprovalState {
@@ -3327,6 +3395,13 @@ type DirectIntentShadowCandidate =
       return `Use ${decision.entities.codingBackend} for this request: ${input.pendingAction.intent.originalUserContent}`;
     }
 
+    if (input.pendingAction?.blocker.kind === 'clarification'
+      && input.pendingAction.blocker.field === 'automation_name'
+      && decision.entities.automationName
+      && decision.turnRelation !== 'new_request') {
+      return input.pendingAction.intent.originalUserContent;
+    }
+
     if (decision.turnRelation === 'correction' && decision.entities.codingBackend) {
       const priorRequest = this.findLatestActionableUserRequest(input.priorHistory);
       if (priorRequest) {
@@ -5960,6 +6035,36 @@ type DirectIntentShadowCandidate =
       },
     }, { intentDecision });
     if (!result) return null;
+    const clarification = readDirectAutomationClarificationMetadata(result.metadata);
+    if (clarification) {
+      const { userId, channel } = this.parsePendingActionUserKey(userKey);
+      const pendingActionResult = this.setClarificationPendingAction(
+        userId,
+        channel,
+        message.surfaceId,
+        {
+          blockerKind: clarification.blockerKind,
+          ...(clarification.field ? { field: clarification.field } : {}),
+          prompt: clarification.prompt,
+          originalUserContent: message.content,
+          route: clarification.route ?? intentDecision?.route ?? 'automation_control',
+          operation: clarification.operation ?? intentDecision?.operation ?? 'update',
+          summary: clarification.summary ?? intentDecision?.summary ?? clarification.prompt,
+          turnRelation: intentDecision?.turnRelation ?? 'new_request',
+          resolution: clarification.resolution ?? intentDecision?.resolution ?? 'needs_clarification',
+          missingFields: clarification.missingFields ?? intentDecision?.missingFields,
+          entities: this.toPendingActionEntities(clarification.entities ?? intentDecision?.entities),
+          options: clarification.options,
+        },
+      );
+      return {
+        content: pendingActionResult.collisionPrompt ?? clarification.prompt,
+        metadata: {
+          ...(stripDirectAutomationClarificationMetadata(result.metadata) ?? {}),
+          ...(pendingActionResult.action ? { pendingAction: toPendingActionClientMetadata(pendingActionResult.action) } : {}),
+        },
+      };
+    }
     if (trackedPendingApprovalIds.length > 0) {
       const prompt = isRecord(result.metadata?.pendingAction) && isRecord(result.metadata?.pendingAction.blocker)
         && typeof result.metadata.pendingAction.blocker.prompt === 'string'

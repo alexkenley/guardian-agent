@@ -362,6 +362,26 @@ describe('ScheduledTaskService', () => {
       expect((deps.eventBus as any).subscribeByType).toHaveBeenCalledWith('security:alert', expect.any(Function));
     });
 
+    it('should switch a task from event trigger to cron', () => {
+      const { task } = service.create({
+        ...validInput,
+        cron: '',
+        eventTrigger: {
+          eventType: 'automation:manual:test-task',
+        },
+      });
+      vi.mocked(deps.scheduler.schedule).mockClear();
+
+      const result = service.update(task!.id, {
+        cron: '0 9 * * *',
+      });
+
+      expect(result.success).toBe(true);
+      expect(service.get(task!.id)?.cron).toBe('0 9 * * *');
+      expect(service.get(task!.id)?.eventTrigger).toBeUndefined();
+      expect(deps.scheduler.schedule).toHaveBeenCalledTimes(1);
+    });
+
     it('should clear preset linkage when a preset task changes target', () => {
       const { task } = service.installPreset('network-watch');
       const result = service.update(task!.id, { target: 'sys_info' });

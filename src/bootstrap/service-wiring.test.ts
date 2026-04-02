@@ -62,6 +62,66 @@ describe('service wiring helpers', () => {
     });
   });
 
+  it('maps scheduled code-session delivery onto the web channel', async () => {
+    let executor: { runAgentTask: (input: Record<string, unknown>) => Promise<Record<string, unknown>> } | undefined;
+    const scheduledTasks = {
+      setAgentExecutor(value: unknown) {
+        executor = value as typeof executor;
+      },
+    };
+    const jobTracker = {
+      run: vi.fn(async (_input, handler: () => Promise<unknown>) => handler()),
+    };
+    const dashboardCallbacks = {
+      onDispatch: vi.fn(async () => ({ content: 'Scheduled task complete.', metadata: { ok: true } })),
+    };
+    const webChannel = {
+      send: vi.fn(async () => {}),
+    };
+    const configRef = {
+      current: structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig,
+    };
+
+    wireScheduledAgentExecutor({
+      scheduledTasks,
+      jobTracker,
+      dashboardCallbacks,
+      configRef,
+      defaultAgentId: 'default-agent',
+      getCliChannel: () => null,
+      getTelegramChannel: () => null,
+      getWebChannel: () => webChannel,
+    });
+
+    const result = await executor!.runAgentTask({
+      agentId: 'default',
+      prompt: 'Run the report',
+      taskId: 'task-1',
+      taskName: 'Daily Report',
+      channel: 'code-session',
+      deliver: true,
+    });
+
+    expect(dashboardCallbacks.onDispatch).toHaveBeenCalledWith(
+      'default-agent',
+      expect.objectContaining({ channel: 'web' }),
+      undefined,
+      { priority: 'normal', requestType: 'scheduled_task' },
+    );
+    expect(webChannel.send).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      success: true,
+      status: 'succeeded',
+      output: {
+        delivery: {
+          attempted: true,
+          delivered: true,
+          channel: 'web',
+        },
+      },
+    });
+  });
+
   it('starts runtime support services and returns monitoring interval handles', async () => {
     const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
     config.assistant.hostMonitoring.enabled = true;

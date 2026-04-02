@@ -136,6 +136,242 @@ describe('tryAutomationControlPreRoute', () => {
     );
   });
 
+  it('renames existing assistant automations in place through automation_save', async () => {
+    const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName === 'automation_list') {
+        return {
+          success: true,
+          output: {
+            automations: [{
+              id: 'it-should-check-account',
+              name: 'It Should Check Account',
+              kind: 'assistant_task',
+              enabled: true,
+              task: {
+                id: 'it-should-check-account',
+                name: 'It Should Check Account',
+                description: 'Checks WHM disk quota headroom.',
+                type: 'agent',
+                target: 'default',
+                eventTrigger: { eventType: 'automation:manual:it-should-check-account' },
+                prompt: 'Check the WHM social profile for disk quota pressure.',
+                channel: 'code-session',
+                deliver: true,
+                enabled: true,
+              },
+            }],
+          },
+        };
+      }
+      if (toolName === 'automation_save') {
+        expect(args).toMatchObject({
+          id: 'it-should-check-account',
+          name: 'WHM Social Check Disk Quota',
+          kind: 'assistant_task',
+          existingTaskId: 'it-should-check-account',
+          task: {
+            target: 'default',
+            prompt: 'Check the WHM social profile for disk quota pressure.',
+            channel: 'code-session',
+            deliver: true,
+          },
+          schedule: {
+            enabled: false,
+          },
+        });
+        return {
+          success: true,
+          output: {
+            success: true,
+            message: 'Saved.',
+            automationId: 'it-should-check-account',
+            taskId: 'it-should-check-account',
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryAutomationControlPreRoute({
+      agentId: 'default',
+      message: {
+        ...baseMessage,
+        content: 'Rename that automation to WHM Social Check Disk Quota.',
+      },
+      executeTool,
+    }, {
+      intentDecision: {
+        route: 'automation_control',
+        confidence: 'high',
+        operation: 'update',
+        summary: 'Rename an existing automation.',
+        turnRelation: 'follow_up',
+        resolution: 'ready',
+        missingFields: [],
+        entities: {
+          automationName: 'It Should Check Account',
+          newAutomationName: 'WHM Social Check Disk Quota',
+        },
+      },
+    });
+
+    expect(result?.content).toContain("Renamed 'It Should Check Account' to 'WHM Social Check Disk Quota'.");
+    expect(executeTool).toHaveBeenNthCalledWith(
+      2,
+      'automation_save',
+      expect.objectContaining({
+        id: 'it-should-check-account',
+        name: 'WHM Social Check Disk Quota',
+        existingTaskId: 'it-should-check-account',
+      }),
+      expect.objectContaining({ channel: 'web', userId: 'owner' }),
+    );
+  });
+
+  it('updates existing assistant automations in place when scheduling them', async () => {
+    const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName === 'automation_list') {
+        return {
+          success: true,
+          output: {
+            automations: [{
+              id: 'whm-social-check-disk-quota',
+              name: 'WHM Social Check Disk Quota',
+              kind: 'assistant_task',
+              enabled: true,
+              task: {
+                id: 'whm-social-check-disk-quota',
+                name: 'WHM Social Check Disk Quota',
+                description: 'Checks WHM disk quota headroom.',
+                type: 'agent',
+                target: 'default',
+                eventTrigger: { eventType: 'automation:manual:whm-social-check-disk-quota' },
+                prompt: 'Check the WHM social profile for disk quota pressure.',
+                channel: 'code-session',
+                deliver: true,
+                enabled: true,
+              },
+            }],
+          },
+        };
+      }
+      if (toolName === 'automation_save') {
+        expect(args).toMatchObject({
+          id: 'whm-social-check-disk-quota',
+          name: 'WHM Social Check Disk Quota',
+          kind: 'assistant_task',
+          existingTaskId: 'whm-social-check-disk-quota',
+          task: {
+            target: 'default',
+            prompt: 'Check the WHM social profile for disk quota pressure.',
+            channel: 'code-session',
+            deliver: true,
+          },
+          schedule: {
+            enabled: true,
+            cron: '0 9 * * *',
+            runOnce: false,
+          },
+        });
+        return {
+          success: true,
+          output: {
+            success: true,
+            message: 'Saved.',
+            automationId: 'whm-social-check-disk-quota',
+            taskId: 'whm-social-check-disk-quota',
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryAutomationControlPreRoute({
+      agentId: 'default',
+      message: {
+        ...baseMessage,
+        content: 'Edit the WHM Social Check Disk Quota automation and make it scheduled to run daily at 9:00 AM.',
+      },
+      executeTool,
+    }, {
+      intentDecision: {
+        route: 'automation_control',
+        confidence: 'high',
+        operation: 'update',
+        summary: 'Update an existing automation.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: {
+          automationName: 'WHM Social Check Disk Quota',
+        },
+      },
+    });
+
+    expect(result?.content).toContain("Updated 'WHM Social Check Disk Quota' to Daily schedule (0 9 * * *).");
+    expect(executeTool).toHaveBeenNthCalledWith(
+      2,
+      'automation_save',
+      expect.objectContaining({
+        id: 'whm-social-check-disk-quota',
+        existingTaskId: 'whm-social-check-disk-quota',
+        schedule: {
+          enabled: true,
+          cron: '0 9 * * *',
+          runOnce: false,
+        },
+      }),
+      expect.objectContaining({ channel: 'web', userId: 'owner' }),
+    );
+  });
+
+  it('returns clarification metadata when an automation update is missing the target automation name', async () => {
+    const executeTool = vi.fn(async (toolName: string) => {
+      if (toolName === 'automation_list') {
+        return {
+          success: true,
+          output: {
+            automations: [],
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryAutomationControlPreRoute({
+      agentId: 'default',
+      message: {
+        ...baseMessage,
+        content: 'Now edit that automation, make it scheduled and run daily at 9:00 AM.',
+      },
+      executeTool,
+    }, {
+      intentDecision: {
+        route: 'automation_control',
+        confidence: 'high',
+        operation: 'update',
+        summary: 'Update an existing automation.',
+        turnRelation: 'follow_up',
+        resolution: 'ready',
+        missingFields: [],
+        entities: {},
+      },
+    });
+
+    expect(result?.content).toContain('Tell me which automation');
+    expect(result?.metadata).toMatchObject({
+      clarification: {
+        blockerKind: 'clarification',
+        field: 'automation_name',
+        route: 'automation_control',
+        operation: 'update',
+        resolution: 'needs_clarification',
+        missingFields: ['automation_name'],
+      },
+    });
+    expect(executeTool).toHaveBeenCalledTimes(1);
+  });
+
   it('requires an explicit gateway decision before running automation control', async () => {
     const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
       if (toolName === 'automation_list') {

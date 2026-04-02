@@ -132,6 +132,32 @@ describe('automation-save', () => {
     }));
   });
 
+  it('normalizes invalid scheduled assistant delivery channels away from code-session', () => {
+    const controlPlane = makeControlPlane();
+
+    const result = saveAutomationDefinition(controlPlane, {
+      id: 'quota-watch',
+      name: 'Quota Watch',
+      enabled: true,
+      kind: 'assistant_task',
+      existingTaskId: 'task-quota-1',
+      task: {
+        target: 'default',
+        prompt: 'Check account quota headroom.',
+        channel: 'code-session',
+        deliver: true,
+      },
+      schedule: { enabled: true, cron: '0 9 * * *', runOnce: false },
+    });
+
+    expect(result).toMatchObject({ success: true, automationId: 'task-quota-1', taskId: 'task-quota-1' });
+    expect(controlPlane.updateTask).toHaveBeenCalledWith('task-quota-1', expect.objectContaining({
+      channel: 'web',
+      deliver: true,
+      cron: '0 9 * * *',
+    }));
+  });
+
   it('creates manual assistant automations with an event trigger instead of a cron schedule', () => {
     const controlPlane = makeControlPlane();
 

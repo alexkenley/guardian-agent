@@ -81,6 +81,11 @@ export function saveAutomationDefinition(
     if (!prompt) {
       return { success: false, message: 'Assistant prompt is required.' };
     }
+    const normalizedTaskDelivery = normalizeAgentTaskDelivery(
+      input.task?.channel?.trim() || 'scheduled',
+      input.task?.deliver !== false,
+      scheduleEnabled,
+    );
     const taskInput = buildAgentTaskInput({
       automationId,
       name,
@@ -88,8 +93,8 @@ export function saveAutomationDefinition(
       enabled: input.enabled,
       target: input.task?.target?.trim() || 'default',
       prompt,
-      channel: input.task?.channel?.trim() || 'scheduled',
-      deliver: input.task?.deliver !== false,
+      channel: normalizedTaskDelivery.channel,
+      deliver: normalizedTaskDelivery.deliver,
       cron: scheduleEnabled ? cron : '',
       runOnce,
       emitEvent,
@@ -264,6 +269,29 @@ function buildStandaloneTaskInput(input: {
 function buildManualAutomationEventTrigger(automationId: string): { eventType: string } {
   return {
     eventType: `automation:manual:${automationId}`,
+  };
+}
+
+function normalizeAgentTaskDelivery(
+  channel: string,
+  deliver: boolean,
+  scheduled: boolean,
+): { channel: string; deliver: boolean } {
+  const trimmed = channel.trim().toLowerCase() || 'scheduled';
+  if (!scheduled) {
+    return {
+      channel: trimmed || 'scheduled',
+      deliver,
+    };
+  }
+  const normalizedChannel = trimmed === 'code-session'
+    ? 'web'
+    : (trimmed === 'web' || trimmed === 'cli' || trimmed === 'telegram' || trimmed === 'scheduled')
+      ? trimmed
+      : 'scheduled';
+  return {
+    channel: normalizedChannel,
+    deliver: deliver && normalizedChannel !== 'scheduled',
   };
 }
 

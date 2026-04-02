@@ -531,6 +531,16 @@ export function getReferenceGuide(): ReferenceGuide {
                 ],
               },
               {
+                title: 'Ask For The Right Shape',
+                items: [
+                  'For repeatable monitoring and threshold checks, ask for a deterministic workflow explicitly. Example: `Create a deterministic scheduled automation named "WHM Social Check Disk Quota". Run it daily at 9:00 AM. Do not create an assistant automation. Create a step-based workflow using built-in tools only. Query the WHM Social profile for all accounts with disk used and quota, compute remaining MB, and notify me in the web channel only when any account has 100 MB or less remaining. If no account is near quota, do not send a notification.`',
+                  'For recurring open-ended research or briefing work, ask for a scheduled assistant task explicitly. Example: `Create a scheduled assistant automation named "Daily Threat Brief". Run it every weekday at 8:00 AM. Use built-in tools to review saved watchlists, summarize the most important changes, and deliver the report to the web channel.`',
+                  'For operator-triggered work that should not run on a timer, ask for a manual assistant automation explicitly. Example: `Create a manual assistant automation named "Investigate New Domain". Do not schedule it. When I run it, inspect the supplied domain with built-in tools, summarize findings, and stop for approval before any outreach or mutation.`',
+                  'Be explicit about delivery. Scheduled automations should normally deliver to `web`, `telegram`, or `cli`, or stay `scheduled` with no direct message delivery. Do not use `code-session` as the delivery channel for recurring scheduled runs.',
+                ],
+                note: 'If you only describe the goal in open-ended language, Guardian may choose an assistant automation. If you want fixed tool steps, say `deterministic`, `step-based workflow`, and `do not create an assistant automation`.',
+              },
+              {
                 title: 'Scheduling And Limits',
                 items: [
                   'Any automation can be given a cron schedule and turned into a recurring task, or left manual-only so it runs only when an operator triggers it.',

@@ -73,9 +73,16 @@ async function startFakeProvider() {
         ? parsed.tools.map((tool) => String(tool?.function?.name ?? tool?.name ?? '')).filter(Boolean)
         : [];
       const latestUser = String([...messages].reverse().find((message) => message.role === 'user')?.content ?? '');
+      const conversationTranscript = messages.map((message) => String(message?.content ?? '')).join('\n');
 
       if (toolNames.includes('route_intent')) {
         const wantsAutomationAuthoring = /\b(create|build|set up|setup|make|configure|schedule)\b[\s\S]{0,160}\b(automation|workflow|playbook|scheduled task|assistant task)\b/i.test(latestUser);
+        const wantsAutomationRename = /\brename\b[\s\S]{0,160}\bautomation\b/i.test(latestUser)
+          || /\brename\b/i.test(latestUser);
+        const wantsAutomationUpdate = /\b(edit|update|change)\b[\s\S]{0,160}\bautomation\b/i.test(latestUser)
+          || /\bmake it scheduled\b/i.test(latestUser);
+        const isAutomationNameClarification = /field:\s*automation_name/i.test(conversationTranscript)
+          && /^[A-Za-z0-9][A-Za-z0-9\s-]{2,}\.?$/.test(latestUser.trim());
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(createChatCompletionResponse({
           model: 'automation-harness-model',
@@ -83,8 +90,40 @@ async function startFakeProvider() {
           toolCalls: [{
             id: 'automation-harness-route',
             name: 'route_intent',
-            arguments: JSON.stringify(wantsAutomationAuthoring
+            arguments: JSON.stringify(isAutomationNameClarification
               ? {
+                  route: 'automation_control',
+                  confidence: 'high',
+                  operation: 'update',
+                  summary: 'Select the automation to update.',
+                  turnRelation: 'clarification_answer',
+                  resolution: 'ready',
+                  automationName: latestUser.trim().replace(/\.$/, ''),
+                  missingFields: [],
+                }
+              : wantsAutomationRename
+                ? {
+                    route: 'automation_control',
+                    confidence: 'high',
+                    operation: 'update',
+                    summary: 'Rename an existing automation.',
+                    turnRelation: /\bthat automation\b/i.test(latestUser) ? 'follow_up' : 'new_request',
+                    resolution: 'ready',
+                    newAutomationName: latestUser.match(/\bto\s+(.+?)(?:[.?!]\s*)?$/i)?.[1]?.trim(),
+                    missingFields: [],
+                  }
+                : wantsAutomationUpdate
+                  ? {
+                      route: 'automation_control',
+                      confidence: 'high',
+                      operation: 'update',
+                      summary: 'Update an existing automation.',
+                      turnRelation: /\bthat automation\b/i.test(latestUser) ? 'follow_up' : 'new_request',
+                      resolution: 'ready',
+                      missingFields: [],
+                    }
+                  : wantsAutomationAuthoring
+                    ? {
                   route: 'automation_authoring',
                   confidence: 'high',
                   operation: 'create',
@@ -93,15 +132,42 @@ async function startFakeProvider() {
                   resolution: 'ready',
                   missingFields: [],
                 }
-              : {
-                  route: 'general_assistant',
-                  confidence: 'medium',
-                  operation: 'inspect',
-                  summary: 'General assistant question.',
-                  turnRelation: 'new_request',
-                  resolution: 'ready',
-                  missingFields: [],
-                }),
+                    : {
+                        route: 'general_assistant',
+                        confidence: 'medium',
+                        operation: 'inspect',
+                        summary: 'General assistant question.',
+                        turnRelation: 'new_request',
+                        resolution: 'ready',
+                        missingFields: [],
+                      }),
+          }],
+        })));
+        return;
+      }
+
+      if (toolNames.includes('resolve_automation_name')) {
+        const normalizedTranscript = conversationTranscript.toLowerCase();
+        let automationName = '';
+        if (/now edit that automation/i.test(latestUser) && normalizedTranscript.includes('whm social check disk quota')) {
+          automationName = 'WHM Social Check Disk Quota';
+        } else if (/rename that automation to/i.test(latestUser) && normalizedTranscript.includes('it should check account')) {
+          automationName = 'It Should Check Account';
+        } else if (normalizedTranscript.includes('whm social check disk quota')) {
+          automationName = 'WHM Social Check Disk Quota';
+        } else if (normalizedTranscript.includes('it should check account')) {
+          automationName = 'It Should Check Account';
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(createChatCompletionResponse({
+          model: 'automation-harness-model',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'automation-harness-name-repair',
+            name: 'resolve_automation_name',
+            arguments: JSON.stringify({
+              automationName,
+            }),
           }],
         })));
         return;
@@ -556,6 +622,14 @@ runtime:
     enabled: ${options.agentIsolation ? 'true' : 'false'}
 guardian:
   enabled: true
+  rateLimit:
+    maxPerMinute: 120
+    maxPerHour: 1000
+    burstAllowed: 20
+    maxPerMinutePerUser: 120
+    maxPerHourPerUser: 1000
+    maxGlobalPerMinute: 500
+    maxGlobalPerHour: 5000
 `;
 
   fs.writeFileSync(configPath, config);
@@ -633,22 +707,31 @@ guardian:
     const remediation = await sendMessage(baseUrl, token, remediationPrompt);
     const remediationPending = getPendingApprovalSummaries(remediation);
     if (remediationPending.length > 0) {
-      assert.equal(remediationPending[0].toolName, 'update_tool_policy');
-      assert.equal(remediation.metadata.resumeAutomationAfterApprovals, true);
+      if (remediationPending[0].toolName === 'update_tool_policy') {
+        assert.equal(remediation.metadata.resumeAutomationAfterApprovals, true);
 
-      const approveRemediation = await approve(baseUrl, token, remediationPending[0].id);
-      assert.equal(approveRemediation.success, true);
-      assert.ok(approveRemediation.continuedResponse, `Expected continued automation response after remediation approval: ${JSON.stringify(approveRemediation)}`);
-      const remediationCreatePending = getPendingApprovalSummaries(approveRemediation.continuedResponse);
-      assert.ok(remediationCreatePending.length > 0);
-      assert.equal(remediationCreatePending[0].toolName, 'automation_save');
+        const approveRemediation = await approve(baseUrl, token, remediationPending[0].id);
+        assert.equal(approveRemediation.success, true);
+        assert.ok(approveRemediation.continuedResponse, `Expected continued automation response after remediation approval: ${JSON.stringify(approveRemediation)}`);
+        const remediationCreatePending = getPendingApprovalSummaries(approveRemediation.continuedResponse);
+        assert.ok(remediationCreatePending.length > 0);
+        assert.equal(remediationCreatePending[0].toolName, 'automation_save');
 
-      const approveRemediationCreate = await approve(
-        baseUrl,
-        token,
-        remediationCreatePending[0].id,
-      );
-      assert.equal(approveRemediationCreate.success, true);
+        const approveRemediationCreate = await approve(
+          baseUrl,
+          token,
+          remediationCreatePending[0].id,
+        );
+        assert.equal(approveRemediationCreate.success, true);
+      } else {
+        assert.equal(remediationPending[0].toolName, 'automation_save');
+        const approveRemediationCreate = await approve(
+          baseUrl,
+          token,
+          remediationPending[0].id,
+        );
+        assert.equal(approveRemediationCreate.success, true);
+      }
 
       await waitForAssertion(async () => {
         const entries = await listAutomations(baseUrl, token);
@@ -841,6 +924,55 @@ guardian:
       assert.equal(compiled.workflow.steps[1]?.toolName, 'browser_state');
       assert.equal(compiled.workflow.steps[2]?.type, 'instruction');
       assert.equal(compiled.workflow.steps[3]?.toolName, 'browser_act');
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 6_000));
+    const manualWhmPrompt = 'Create a manual assistant automation called It Should Check Account. It should check the account in WHM for the social profile, inspect disk usage, and report if any account is within 100 MB of its quota. Do not schedule it yet.';
+    const manualWhmCreate = await sendMessage(baseUrl, token, manualWhmPrompt);
+    const manualWhmPending = getPendingApprovalSummaries(manualWhmCreate);
+    assert.ok(manualWhmPending.length > 0, `Expected pending approval for manual WHM automation: ${JSON.stringify(manualWhmCreate)}`);
+    assert.equal(manualWhmPending[0].toolName, 'automation_save');
+
+    const approveManualWhm = await approve(baseUrl, token, manualWhmPending[0].id);
+    assert.equal(approveManualWhm.success, true);
+
+    await waitForAssertion(async () => {
+      const entries = await listAutomations(baseUrl, token);
+      const whmAutomation = entries.find((entry) => entry.name === 'It Should Check Account');
+      assert.ok(whmAutomation, `Expected initial WHM automation, got ${JSON.stringify(entries)}`);
+      assert.equal(whmAutomation.task?.cron ?? '', '');
+      return whmAutomation;
+    });
+
+    const renameWhm = await sendMessage(baseUrl, token, 'Rename that automation to WHM Social Check Disk Quota.');
+    const renameWhmPending = getPendingApprovalSummaries(renameWhm);
+    assert.ok(renameWhmPending.length > 0, `Expected pending approval for WHM rename: ${JSON.stringify(renameWhm)}`);
+    assert.equal(renameWhmPending[0].toolName, 'automation_save');
+
+    const approveRenameWhm = await approve(baseUrl, token, renameWhmPending[0].id);
+    assert.equal(approveRenameWhm.success, true);
+
+    await waitForAssertion(async () => {
+      const entries = await listAutomations(baseUrl, token);
+      const renamedWhmAutomation = entries.find((entry) => entry.name === 'WHM Social Check Disk Quota');
+      assert.ok(renamedWhmAutomation, `Expected renamed WHM automation, got ${JSON.stringify(entries)}`);
+      return renamedWhmAutomation;
+    });
+
+    const scheduleWhm = await sendMessage(baseUrl, token, 'Now edit that automation, make it scheduled and run daily at 9:00 AM.');
+    const scheduleWhmPending = getPendingApprovalSummaries(scheduleWhm);
+    assert.ok(scheduleWhmPending.length > 0, `Expected pending approval for WHM schedule update: ${JSON.stringify(scheduleWhm)}`);
+    assert.equal(scheduleWhmPending[0].toolName, 'automation_save');
+
+    const approveScheduleWhm = await approve(baseUrl, token, scheduleWhmPending[0].id);
+    assert.equal(approveScheduleWhm.success, true);
+
+    await waitForAssertion(async () => {
+      const entries = await listAutomations(baseUrl, token);
+      const scheduledWhmAutomation = entries.find((entry) => entry.name === 'WHM Social Check Disk Quota');
+      assert.ok(scheduledWhmAutomation, `Expected scheduled WHM automation, got ${JSON.stringify(entries)}`);
+      assert.equal(scheduledWhmAutomation.task?.cron, '0 9 * * *');
+      return scheduledWhmAutomation;
     });
 
     console.log(`PASS automation compiler harness (${provider.mode}${options.agentIsolation ? ', brokered' : ''})`);

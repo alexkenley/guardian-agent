@@ -69,6 +69,33 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.uiSurface).toBe('automations');
   });
 
+  it('captures rename metadata for existing automation updates', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Rename Browser Read Smoke to Browser Read Smoke Daily.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'automation_control',
+          confidence: 'high',
+          operation: 'update',
+          summary: 'Renames an existing automation.',
+          automationName: 'Browser Read Smoke',
+          newAutomationName: 'Browser Read Smoke Daily',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('automation_control');
+    expect(result.decision.operation).toBe('update');
+    expect(result.decision.entities.automationName).toBe('Browser Read Smoke');
+    expect(result.decision.entities.newAutomationName).toBe('Browser Read Smoke Daily');
+  });
+
   it('returns an unknown decision when the model response is not structured', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
@@ -523,6 +550,65 @@ describe('IntentGateway', () => {
     expect(callCount).toBe(2);
   });
 
+  it('repairs missing automation names for follow-up rename requests using recent history', async () => {
+    const gateway = new IntentGateway();
+    let callCount = 0;
+
+    const result = await gateway.classify(
+      {
+        content: 'Rename that automation to WHM Social Check Disk Quota.',
+        channel: 'web',
+        recentHistory: [
+          { role: 'user', content: 'Create a manual automation that checks WHM quota headroom.' },
+          { role: 'assistant', content: "I created the native Guardian manual assistant automation 'It Should Check Account'." },
+        ],
+        continuity: {
+          continuityKey: 'default:web-user',
+          linkedSurfaceCount: 1,
+          focusSummary: 'Automation authoring follow-up',
+          lastActionableRequest: 'Rename It Should Check Account to WHM Social Check Disk Quota.',
+        },
+      },
+      async (messages, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          expect(options?.tools?.[0]?.name).toBe('route_intent');
+          return {
+            content: JSON.stringify({
+              route: 'automation_control',
+              confidence: 'high',
+              operation: 'update',
+              summary: 'Renames the previously created automation.',
+              newAutomationName: 'WHM Social Check Disk Quota',
+              turnRelation: 'follow_up',
+            }),
+            model: 'test-model',
+            finishReason: 'stop',
+          } satisfies ChatResponse;
+        }
+
+        expect(options?.tools?.[0]?.name).toBe('resolve_automation_name');
+        const userPrompt = messages[messages.length - 1]?.content || '';
+        expect(userPrompt).toContain('It Should Check Account');
+        expect(userPrompt).toContain('Last actionable request');
+        return {
+          content: JSON.stringify({
+            automationName: 'It Should Check Account',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(result.decision.route).toBe('automation_control');
+    expect(result.decision.operation).toBe('update');
+    expect(result.decision.turnRelation).toBe('follow_up');
+    expect(result.decision.entities.automationName).toBe('It Should Check Account');
+    expect(result.decision.entities.newAutomationName).toBe('WHM Social Check Disk Quota');
+    expect(callCount).toBe(2);
+  });
+
   it('classifies session listing as coding_session_control with navigate operation', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
@@ -757,6 +843,43 @@ describe('IntentGateway', () => {
     expect(result.decision.turnRelation).toBe('clarification_answer');
     expect(result.decision.entities.emailProvider).toBe('m365');
     expect(result.decision.resolvedContent).toContain('Outlook / Microsoft 365');
+  });
+
+  it('captures clarification answers for automation-selection follow-ups', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'WHM Social Check Disk Quota.',
+        channel: 'web',
+        pendingAction: {
+          id: 'pending-automation-name',
+          status: 'pending',
+          blockerKind: 'clarification',
+          field: 'automation_name',
+          route: 'automation_control',
+          operation: 'update',
+          prompt: 'Tell me which automation you want to inspect, run, rename, enable, disable, or edit.',
+          originalRequest: 'No edit that automation, make it scheduled and run daily at 9:00 am.',
+        },
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'automation_control',
+          confidence: 'high',
+          operation: 'update',
+          summary: 'Selects the automation to update.',
+          turnRelation: 'clarification_answer',
+          resolution: 'ready',
+          automationName: 'WHM Social Check Disk Quota',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('automation_control');
+    expect(result.decision.turnRelation).toBe('clarification_answer');
+    expect(result.decision.entities.automationName).toBe('WHM Social Check Disk Quota');
   });
 
   it('round-trips pre-routed gateway metadata for downstream reuse', () => {

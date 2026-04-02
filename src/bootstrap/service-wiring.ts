@@ -56,7 +56,7 @@ export function wireScheduledAgentExecutor(args: {
     runAgentTask: async (input) => {
       const requestedAgentId = input.agentId.trim();
       const resolvedAgentId = requestedAgentId === 'default' ? args.defaultAgentId : requestedAgentId;
-      const channel = input.channel?.trim() || 'scheduled';
+      const channel = normalizeScheduledDeliveryChannel(input.channel?.trim() || 'scheduled');
       const userId = input.userId?.trim() || args.configRef.current.assistant.identity.primaryUserId;
       const shouldDeliver = input.deliver ?? channel !== 'scheduled';
 
@@ -139,6 +139,13 @@ export function wireScheduledAgentExecutor(args: {
       };
     },
   });
+}
+
+function normalizeScheduledDeliveryChannel(channel: string): string {
+  const normalized = channel.trim().toLowerCase();
+  if (!normalized) return 'scheduled';
+  if (normalized === 'code-session') return 'web';
+  return normalized;
 }
 
 export function createRuntimeNotificationService(args: {

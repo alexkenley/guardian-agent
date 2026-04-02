@@ -20,6 +20,18 @@ describe('compileAutomationAuthoringRequest', () => {
     expect(compilation?.taskCreate?.prompt).toContain('asks for approval before sending');
   });
 
+  it('normalizes scheduled assistant delivery from code-session to web', () => {
+    const compilation = compileAutomationAuthoringRequest(
+      'Create a scheduled assistant automation named "Daily Threat Brief". Run it daily at 8:00 AM. Review my saved watchlists and deliver the report to the Guardian web channel.',
+      { channel: 'code-session', userId: 'owner' },
+    );
+
+    expect(compilation).not.toBeNull();
+    expect(compilation?.shape).toBe('scheduled_agent');
+    expect(compilation?.taskCreate?.channel).toBe('web');
+    expect(compilation?.taskCreate?.deliver).toBe(true);
+  });
+
   it('defaults weekday automations without a time to 9 AM', () => {
     const compilation = compileAutomationAuthoringRequest(
       'Build a weekday lead research workflow that reads ./companies.csv, researches each company website and public presence, scores fit from 1-5 using a simple B2B SaaS ICP, writes results to ./lead-research-output.csv, and creates ./lead-research-summary.md.',
@@ -353,6 +365,22 @@ describe('compileAutomationAuthoringRequest', () => {
       path: './network-analysis.md',
       content: '${analyze_content.output}',
     });
+  });
+
+  it('returns a deterministic workflow draft instead of silently creating an assistant task for unsupported step-based monitoring requests', () => {
+    const outcome = compileAutomationAuthoringOutcome(
+      'Create a deterministic scheduled automation named "WHM Social Check Disk Quota". Run it daily at 9:00 AM. Do not create an assistant automation. Create a step-based workflow using built-in tools only. Steps: 1. Query the WHM Social profile for all accounts, including disk used and disk quota. 2. Compute remaining disk space in MB for each account. 3. If any account has 100 MB or less remaining, send an alert to the Guardian web channel. 4. Include username, domain, disk used, disk quota, and remaining MB in the alert. 5. If no accounts are within 100 MB of quota, do not send a notification.',
+      { channel: 'code-session', userId: 'owner' },
+    );
+
+    expect(outcome).not.toBeNull();
+    expect(outcome?.status).toBe('draft');
+    if (outcome?.status !== 'draft') return;
+    expect(outcome.draft.shape).toBe('workflow');
+    expect(outcome.draft.name).toBe('WHM Social Check Disk Quota');
+    expect(outcome.draft.missingFields).toEqual([
+      expect.objectContaining({ key: 'workflow_steps' }),
+    ]);
   });
 
   it('returns null when the request is not an automation authoring request', () => {

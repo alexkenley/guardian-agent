@@ -997,8 +997,16 @@ export class ScheduledTaskService {
     }
 
     const previousScopeHash = task.scopeHash;
-    const nextCron = input.cron !== undefined ? input.cron.trim() : task.cron;
-    const nextEventTrigger = input.eventTrigger !== undefined ? normalizeEventTrigger(input.eventTrigger) : task.eventTrigger;
+    const nextCron = input.cron !== undefined
+      ? input.cron.trim()
+      : input.eventTrigger !== undefined
+        ? undefined
+        : task.cron;
+    const nextEventTrigger = input.eventTrigger !== undefined
+      ? normalizeEventTrigger(input.eventTrigger)
+      : input.cron !== undefined
+        ? undefined
+        : task.eventTrigger;
     const cronChanged = input.cron !== undefined && nextCron !== task.cron;
     const eventTriggerChanged = input.eventTrigger !== undefined && JSON.stringify(nextEventTrigger ?? null) !== JSON.stringify(task.eventTrigger ?? null);
     const enableChanged = input.enabled !== undefined && input.enabled !== task.enabled;
@@ -1026,8 +1034,10 @@ export class ScheduledTaskService {
     if (input.principalRole !== undefined) task.principalRole = input.principalRole;
     if (input.deliver !== undefined) task.deliver = input.deliver;
     if (input.runOnce !== undefined) task.runOnce = input.runOnce === true;
-    if (input.cron !== undefined) task.cron = nextCron || undefined;
-    if (input.eventTrigger !== undefined) task.eventTrigger = nextEventTrigger;
+    if (input.cron !== undefined || input.eventTrigger !== undefined) {
+      task.cron = nextCron || undefined;
+      task.eventTrigger = nextEventTrigger;
+    }
     if (input.enabled !== undefined) task.enabled = input.enabled;
     if (input.maxRunsPerWindow !== undefined) task.maxRunsPerWindow = Math.max(1, input.maxRunsPerWindow);
     if (input.dailySpendCap !== undefined) task.dailySpendCap = Math.max(0, input.dailySpendCap);
