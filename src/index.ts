@@ -40,12 +40,9 @@ import { type WebAuthRuntimeConfig } from './channels/web.js';
 import type {
   ConfigUpdate,
   DashboardCallbacks,
-  DashboardAgentInfo,
-  DashboardAgentDetail,
   DashboardCodingBackendInfo,
   DashboardCodingBackendSession,
   DashboardMutationResult,
-  DashboardProviderInfo,
   RedactedCloudConfig,
   RedactedConfig,
   SSEListener,
@@ -205,10 +202,13 @@ import {
   parseWebSearchIntent,
 } from './runtime/search-intent.js';
 import { createConfigPersistenceService } from './runtime/control-plane/config-persistence-service.js';
+import { createAgentDashboardCallbacks } from './runtime/control-plane/agent-dashboard-callbacks.js';
 import { createConfigStateHelpers } from './runtime/control-plane/config-state-helpers.js';
 import { createAuthControlCallbacks } from './runtime/control-plane/auth-control-callbacks.js';
 import { createDirectConfigUpdateHandler } from './runtime/control-plane/direct-config-update.js';
 import { createOperationsDashboardCallbacks } from './runtime/control-plane/operations-dashboard-callbacks.js';
+import { createProviderDashboardCallbacks } from './runtime/control-plane/provider-dashboard-callbacks.js';
+import { createProviderConfigHelpers } from './runtime/control-plane/provider-config-helpers.js';
 import { createProviderIntegrationCallbacks } from './runtime/control-plane/provider-integration-callbacks.js';
 import { createSecurityDashboardCallbacks } from './runtime/control-plane/security-dashboard-callbacks.js';
 import { createSetupConfigDashboardCallbacks } from './runtime/control-plane/setup-config-dashboard-callbacks.js';
@@ -268,7 +268,7 @@ import { ModelFallbackChain } from './llm/model-fallback.js';
 import { TRUST_PRESETS, type TrustPresetName } from './guardian/trust-presets.js';
 import type { Capability } from './guardian/capabilities.js';
 import type { OutputGuardian } from './guardian/output-guardian.js';
-import { createProviders, getProviderRegistry } from './llm/provider.js';
+import { createProviders } from './llm/provider.js';
 import { detectCapabilities as detectSandboxCapabilities, detectSandboxHealth, DEFAULT_SANDBOX_CONFIG, type SandboxConfig } from './sandbox/index.js';
 import {
   isDegradedSandboxFallbackActive,
@@ -9012,16 +9012,6 @@ function buildDashboardCallbacks(
       : session;
     return sharedCodeWorkspaceTrustService?.maybeSchedule(updatedSession) ?? updatedSession;
   };
-  const existingProfilesById = (rawCloud: Record<string, unknown>, key: string): Map<string, Record<string, unknown>> => {
-    const profiles = Array.isArray(rawCloud[key]) ? rawCloud[key] : [];
-    return new Map(
-      profiles
-        .filter(isRecord)
-        .map((profile) => [typeof profile.id === 'string' ? profile.id : '', profile] as const)
-        .filter(([id]) => !!id),
-    );
-  };
-
   /** Mutable ref set from main() to enable hot-reload of the Telegram channel. */
   const telegramReloadRef: { current: (() => Promise<{ success: boolean; message: string }>) | null } = { current: null };
 
@@ -9114,6 +9104,18 @@ function buildDashboardCallbacks(
     secretStore,
     connectors,
   });
+  const {
+    existingProfilesById,
+    getProviderInfoSnapshot,
+    buildProviderInfo,
+    getDefaultModelForProviderType,
+    resolveCredentialForProviderInput,
+  } = createProviderConfigHelpers({
+    configRef,
+    runtimeProviders: runtime.providers,
+    secretStore,
+    isLocalProviderEndpoint,
+  });
   const operationsDashboard = createOperationsDashboardCallbacks({
     configRef,
     connectors,
@@ -9155,98 +9157,23 @@ function buildDashboardCallbacks(
       });
     },
   });
-
-  const buildProviderInfo = async (withConnectivity: boolean): Promise<DashboardProviderInfo[]> => {
-    const results: DashboardProviderInfo[] = [];
-    for (const [name, provider] of runtime.providers) {
-      const llmConfig = configRef.current.llm[name] as LLMConfig | undefined;
-      const isLocal = isLocalProviderEndpoint(llmConfig?.baseUrl, provider.name);
-
-      let connected = false;
-      let availableModels: string[] | undefined;
-      if (withConnectivity) {
-        try {
-          const models = await provider.listModels();
-          connected = true;
-          if (models.length > 0) {
-            availableModels = models.map((m) => m.id);
-          }
-        } catch {
-          connected = false;
-        }
-      }
-
-      results.push({
-        name,
-        type: provider.name,
-        model: llmConfig?.model ?? 'unknown',
-        baseUrl: llmConfig?.baseUrl,
-        locality: isLocal ? 'local' : 'external',
-        connected,
-        availableModels,
-      });
-    }
-    return results;
-  };
-
-  const getDefaultModelForProviderType = (providerType: string): string => {
-    switch (providerType.trim().toLowerCase()) {
-      case 'ollama': return 'llama3.2';
-      case 'anthropic': return 'claude-sonnet-4-6';
-      case 'openai': return 'gpt-4o';
-      case 'groq': return 'llama-3.3-70b-versatile';
-      case 'mistral': return 'mistral-large-latest';
-      case 'deepseek': return 'deepseek-chat';
-      case 'together': return 'meta-llama/Llama-3.3-70B-Instruct-Turbo';
-      case 'xai': return 'grok-2-latest';
-      case 'google': return 'gemini-2.0-flash';
-      default: return 'provider-model';
-    }
-  };
-
-  const resolveCredentialForProviderInput = (credentialRef: string | undefined, apiKey: string | undefined): string | undefined => {
-    const direct = apiKey?.trim();
-    if (direct) return direct;
-    const ref = credentialRef?.trim();
-    if (!ref) return undefined;
-    const runtimeCredentials = resolveRuntimeCredentialView(configRef.current, secretStore);
-    return runtimeCredentials.credentialProvider.resolve(ref);
-  };
-
-  const isInternalDashboardAgent = (agentId: string): boolean => (
-    router.findAgentByRole('local')?.id === agentId
-    || router.findAgentByRole('external')?.id === agentId
-    || agentId === SECURITY_TRIAGE_AGENT_ID
-    || agentId === SECURITY_TRIAGE_DISPATCHER_AGENT_ID
-  );
-
-  const toDashboardAgentInfo = (inst: ReturnType<typeof runtime.registry.getAll>[number]): DashboardAgentInfo => {
-    const providerName = inst.definition.providerName ?? configRef.current.defaultProvider;
-    const providerConfig = configRef.current.llm[providerName];
-    const providerLocality = getProviderLocality(providerConfig);
-    const isInternal = isInternalDashboardAgent(inst.agent.id);
-    const routingRole = router.findAgentByRole('local')?.id === inst.agent.id
-      ? 'local'
-      : router.findAgentByRole('external')?.id === inst.agent.id
-        ? 'external'
-        : undefined;
-    return {
-      id: inst.agent.id,
-      name: inst.agent.name,
-      state: inst.state,
-      canChat: inst.agent.capabilities.handleMessages,
-      internal: isInternal,
-      ...(routingRole ? { routingRole } : {}),
-      capabilities: inst.definition.grantedCapabilities,
-      provider: providerName,
-      providerType: providerConfig?.provider,
-      providerModel: providerConfig?.model,
-      providerLocality,
-      schedule: inst.definition.schedule,
-      lastActivityMs: inst.lastActivityMs,
-      consecutiveErrors: inst.consecutiveErrors,
-    };
-  };
+  const agentDashboard = createAgentDashboardCallbacks({
+    configRef,
+    runtimeRegistry: runtime.registry,
+    router,
+    getProviderLocality,
+    internalAgentIds: new Set([
+      SECURITY_TRIAGE_AGENT_ID,
+      SECURITY_TRIAGE_DISPATCHER_AGENT_ID,
+    ]),
+  });
+  const providerDashboard = createProviderDashboardCallbacks({
+    getProviderInfoSnapshot,
+    buildProviderInfo,
+    resolveCredentialForProviderInput,
+    getDefaultModelForProviderType,
+    isLocalProviderEndpoint,
+  });
 
   const dispatchDashboardMessage = createDashboardMessageDispatcher({
     configRef,
@@ -9404,33 +9331,7 @@ function buildDashboardCallbacks(
   });
 
   return {
-    onAgents: (): DashboardAgentInfo[] => {
-      return runtime.registry.getAll().map((inst) => toDashboardAgentInfo(inst));
-    },
-
-    onAgentDetail: (id: string): DashboardAgentDetail | null => {
-      const inst = runtime.registry.get(id);
-      if (!inst) return null;
-      const isInternal = isInternalDashboardAgent(id);
-      const providerName = inst.definition.providerName ?? configRef.current.defaultProvider;
-      const providerConfig = configRef.current.llm[providerName];
-      return {
-        id: inst.agent.id,
-        name: inst.agent.name,
-        state: inst.state,
-        canChat: inst.agent.capabilities.handleMessages,
-        internal: isInternal,
-        capabilities: inst.definition.grantedCapabilities,
-        provider: providerName,
-        providerType: providerConfig?.provider,
-        providerModel: providerConfig?.model,
-        providerLocality: getProviderLocality(providerConfig),
-        schedule: inst.definition.schedule,
-        lastActivityMs: inst.lastActivityMs,
-        consecutiveErrors: inst.consecutiveErrors,
-        resourceLimits: { ...inst.definition.resourceLimits },
-      };
-    },
+    ...agentDashboard,
 
     onAuditQuery: (filter) => runtime.auditLog.query(filter),
 
@@ -9471,54 +9372,7 @@ function buildDashboardCallbacks(
     },
 
     onWatchdog: () => runtime.watchdog.check(),
-
-    onProviders: () => {
-      const providers: DashboardProviderInfo[] = [];
-      for (const [name, provider] of runtime.providers) {
-        const llmConfig = configRef.current.llm[name] as LLMConfig | undefined;
-        const isLocal = isLocalProviderEndpoint(llmConfig?.baseUrl, provider.name);
-        providers.push({
-          name,
-          type: provider.name,
-          model: llmConfig?.model ?? 'unknown',
-          baseUrl: llmConfig?.baseUrl,
-          locality: isLocal ? 'local' : 'external',
-          connected: false,
-        });
-      }
-      return providers;
-    },
-
-    onProviderTypes: () => getProviderRegistry().listProviderTypes().map((type) => ({
-      ...type,
-      locality: isLocalProviderEndpoint(undefined, type.name) ? 'local' : 'external',
-    })),
-
-    onProvidersStatus: async () => buildProviderInfo(true),
-
-    onProviderModels: async (input) => {
-      const providerType = input.providerType.trim().toLowerCase();
-      if (!getProviderRegistry().hasProvider(providerType)) {
-        throw new Error(`Unknown provider type '${providerType}'`);
-      }
-
-      const apiKey = resolveCredentialForProviderInput(input.credentialRef, input.apiKey);
-      const providerConfig: LLMConfig = {
-        provider: providerType,
-        model: input.model?.trim() || getDefaultModelForProviderType(providerType),
-        baseUrl: input.baseUrl?.trim() || undefined,
-        apiKey,
-      };
-
-      if (providerType !== 'ollama' && !providerConfig.apiKey) {
-        throw new Error('Provide an API key or credential ref to load models for this provider.');
-      }
-
-      const models = await getProviderRegistry().createProvider(providerConfig).listModels();
-      return {
-        models: models.map((model) => model.id),
-      };
-    },
+    ...providerDashboard,
 
     onCodingBackendStatus: (sessionId) => (
       codingBackendServiceRef.current?.getStatus(sessionId).map((session): DashboardCodingBackendSession => ({
@@ -9742,7 +9596,7 @@ function buildDashboardCallbacks(
 
       // Metrics every 5s
       const metricsInterval = setInterval(() => {
-        const agents = runtime.registry.getAll().map((inst) => toDashboardAgentInfo(inst));
+        const agents = agentDashboard.onAgents?.() ?? [];
         listener({
           type: 'metrics',
           data: {

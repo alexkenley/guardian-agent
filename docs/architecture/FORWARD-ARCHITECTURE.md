@@ -65,7 +65,10 @@ Current checkpoint:
 - `src/runtime/incoming-dispatch.ts` now owns shared pre-dispatch preparation for channel messages: request-id assignment, code-session attachment/pinning, gateway-first tier routing, pre-routed metadata attachment, and the early routing trace stages before the Runtime handles the turn.
 - `src/runtime/dashboard-dispatch.ts` now owns the shared dashboard/runtime dispatch path: code-session-aware message shaping, pre-routed metadata attachment at dispatch time, orchestrator handoff, response-source enrichment, fallback-tier dispatch, and dispatch-response trace recording.
 - `src/runtime/control-plane/config-state-helpers.ts` now owns shared config-state helper logic used by dashboard/control-plane flows: credential-ref normalization, local-secret upserts/deletes, and persistence helpers for tool, skill, and connector state.
-- The remaining `src/index.ts` work is now mostly residual helper glue around provider/config shaping, callback-factory assembly, and final orchestration trimming so `main()` becomes composition-only.
+- `src/runtime/control-plane/provider-config-helpers.ts` now owns shared provider/config shaping helpers used by multiple control-plane flows: provider snapshot/status construction, provider credential resolution for ad hoc model discovery, and cloud profile lookup helpers used by direct config updates.
+- `src/runtime/control-plane/provider-dashboard-callbacks.ts` now owns provider discovery and model-enumeration callbacks for the dashboard surface.
+- `src/runtime/control-plane/agent-dashboard-callbacks.ts` now owns dashboard agent listing/detail shaping, including internal-agent classification and routing-role exposure.
+- The remaining `src/index.ts` work is now mostly residual callback-factory glue, assistant-state shaping, and final orchestration trimming so `main()` becomes composition-only.
 
 Suggested structure:
 
@@ -136,8 +139,11 @@ Suggested structure:
 
 ```text
 src/runtime/control-plane/
+  agent-dashboard-callbacks.ts
   config-persistence-service.ts
   config-state-helpers.ts
+  provider-config-helpers.ts
+  provider-dashboard-callbacks.ts
   config-apply-service.ts
   config-validation-service.ts
   provider-routing-service.ts
@@ -170,7 +176,9 @@ Current checkpoint:
 - `src/runtime/incoming-dispatch.ts` exists to keep request normalization, code-session-aware routing, and pre-routed intent metadata out of `src/index.ts` and out of per-channel adapters.
 - `src/runtime/dashboard-dispatch.ts` now owns the shared dispatch path used by dashboard callbacks and the web chat flow after route selection has been made.
 - `src/runtime/control-plane/config-state-helpers.ts` now owns the shared config-state helper surface that used to live inline in the callback factory.
-- The remaining `src/index.ts` work is now centered on callback-factory cleanup, provider/config shaping helpers, and final orchestration trimming rather than the core message dispatch path.
+- `src/runtime/control-plane/provider-config-helpers.ts` and `src/runtime/control-plane/provider-dashboard-callbacks.ts` now keep provider-state shaping and provider dashboard callbacks out of the entrypoint factory.
+- `src/runtime/control-plane/agent-dashboard-callbacks.ts` now keeps agent dashboard shaping and internal-agent classification out of the callback factory.
+- The remaining `src/index.ts` work is now centered on callback-factory cleanup, assistant/control-plane shaping, and final orchestration trimming rather than the core message dispatch path.
 
 ### 5. Tool Execution Core
 
