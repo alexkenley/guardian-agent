@@ -69,7 +69,8 @@ Current checkpoint:
 - `src/runtime/control-plane/provider-dashboard-callbacks.ts` now owns provider discovery and model-enumeration callbacks for the dashboard surface.
 - `src/runtime/control-plane/agent-dashboard-callbacks.ts` now owns dashboard agent listing/detail shaping, including internal-agent classification and routing-role exposure.
 - `src/runtime/control-plane/assistant-dashboard-callbacks.ts` now owns assistant-state summaries, worker follow-up actions, run timeline listing/detail callbacks, and routing-trace decoration for the dashboard surface.
-- The remaining `src/index.ts` work is now mostly residual callback-factory glue, SSE/stream wiring, and final orchestration trimming so `main()` becomes composition-only.
+- `src/runtime/control-plane/dashboard-runtime-callbacks.ts` now owns dashboard SSE subscription fan-out, streaming chat dispatch, direct dashboard dispatch delegation, and quick-action orchestration callbacks for the web control-plane surface.
+- The remaining `src/index.ts` work is now mostly residual callback-factory assembly, provider/config helper cleanup, and final orchestration trimming so `main()` becomes composition-only.
 
 Suggested structure:
 
@@ -142,6 +143,7 @@ Suggested structure:
 src/runtime/control-plane/
   agent-dashboard-callbacks.ts
   assistant-dashboard-callbacks.ts
+  dashboard-runtime-callbacks.ts
   config-persistence-service.ts
   config-state-helpers.ts
   provider-config-helpers.ts
@@ -181,7 +183,8 @@ Current checkpoint:
 - `src/runtime/control-plane/provider-config-helpers.ts` and `src/runtime/control-plane/provider-dashboard-callbacks.ts` now keep provider-state shaping and provider dashboard callbacks out of the entrypoint factory.
 - `src/runtime/control-plane/agent-dashboard-callbacks.ts` now keeps agent dashboard shaping and internal-agent classification out of the callback factory.
 - `src/runtime/control-plane/assistant-dashboard-callbacks.ts` now keeps assistant-state summaries, run-history routing, and routing-trace decoration out of the callback factory.
-- The remaining `src/index.ts` work is now centered on callback-factory cleanup, SSE/dispatch glue, and final orchestration trimming rather than the core message dispatch path.
+- `src/runtime/control-plane/dashboard-runtime-callbacks.ts` now keeps dashboard SSE fan-out, stream dispatch, direct dispatch delegation, and quick-action orchestration out of the callback factory.
+- The remaining `src/index.ts` work is now centered on callback-factory cleanup, provider/config helper trimming, and final orchestration cleanup rather than the core message dispatch path.
 
 ### 5. Tool Execution Core
 

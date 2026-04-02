@@ -45,7 +45,6 @@ import type {
   DashboardMutationResult,
   RedactedCloudConfig,
   RedactedConfig,
-  SSEListener,
 } from './channels/web-types.js';
 import type { LLMConfig } from './config/types.js';
 import { BaseAgent } from './agent/agent.js';
@@ -99,7 +98,7 @@ import { getReferenceGuide, formatGuideForTelegram } from './reference-guide.js'
 import type { ChatMessage, LLMProvider } from './llm/types.js';
 import { IdentityService } from './runtime/identity.js';
 import { AnalyticsService } from './runtime/analytics.js';
-import { buildQuickActionPrompt, getQuickActions } from './quick-actions.js';
+import { getQuickActions } from './quick-actions.js';
 import { AiSecurityService, createAiSecuritySessionSnapshot } from './runtime/ai-security.js';
 import { ThreatIntelService } from './runtime/threat-intel.js';
 import { createThreatIntelSourceScanners } from './runtime/threat-intel-osint.js';
@@ -160,7 +159,6 @@ import {
 } from './runtime/agent-memory-store.js';
 import { AssistantJobTracker } from './runtime/assistant-jobs.js';
 import { RunTimelineStore } from './runtime/run-timeline.js';
-import { notificationDestinationEnabled } from './runtime/notifications.js';
 import { normalizeAutomationOutputHandling, promoteAutomationFindings } from './runtime/automation-output.js';
 import { AutomationOutputStore } from './runtime/automation-output-store.js';
 import { AutomationOutputPersistenceService } from './runtime/automation-output-persistence.js';
@@ -211,6 +209,7 @@ import { createOperationsDashboardCallbacks } from './runtime/control-plane/oper
 import { createProviderDashboardCallbacks } from './runtime/control-plane/provider-dashboard-callbacks.js';
 import { createProviderConfigHelpers } from './runtime/control-plane/provider-config-helpers.js';
 import { createProviderIntegrationCallbacks } from './runtime/control-plane/provider-integration-callbacks.js';
+import { createDashboardRuntimeCallbacks } from './runtime/control-plane/dashboard-runtime-callbacks.js';
 import { createSecurityDashboardCallbacks } from './runtime/control-plane/security-dashboard-callbacks.js';
 import { createSetupConfigDashboardCallbacks } from './runtime/control-plane/setup-config-dashboard-callbacks.js';
 import { createToolsDashboardCallbacks } from './runtime/control-plane/tools-dashboard-callbacks.js';
@@ -9338,6 +9337,18 @@ function buildDashboardCallbacks(
       });
     },
   });
+  const dashboardRuntime = createDashboardRuntimeCallbacks({
+    configRef,
+    runtime,
+    securityActivityLog,
+    runTimeline,
+    agentDashboard,
+    dispatchDashboardMessage,
+    prepareIncomingDispatch,
+    identity,
+    analytics,
+    orchestrator,
+  });
 
   return {
     ...agentDashboard,
@@ -9449,162 +9460,7 @@ function buildDashboardCallbacks(
 
     connectorWorkflowOps: operationsDashboard.connectorWorkflowOps,
 
-    onSSESubscribe: (listener: SSEListener): (() => void) => {
-      const cleanups: Array<() => void> = [];
-
-      // Real-time audit events
-      const unsubAudit = runtime.auditLog.addListener((event) => {
-        listener({ type: 'audit', data: event });
-      });
-      cleanups.push(unsubAudit);
-
-      const onSecurityAlert = (event: import('./queue/event-bus.js').AgentEvent): void => {
-        if (!notificationDestinationEnabled(configRef.current.assistant.notifications, 'web')) {
-          return;
-        }
-        listener({ type: 'security.alert', data: event.payload });
-      };
-      runtime.eventBus.subscribeByType('security:alert', onSecurityAlert);
-      cleanups.push(() => runtime.eventBus.unsubscribeByType('security:alert', onSecurityAlert));
-
-      const unsubSecurityTriage = securityActivityLog.addListener((entry) => {
-        listener({ type: 'security.triage', data: entry });
-      });
-      cleanups.push(unsubSecurityTriage);
-
-      const unsubRunTimeline = runTimeline.subscribe((detail) => {
-        listener({ type: 'run.timeline', data: detail });
-      });
-      cleanups.push(unsubRunTimeline);
-
-      // Metrics every 5s
-      const metricsInterval = setInterval(() => {
-        const agents = agentDashboard.onAgents?.() ?? [];
-        listener({
-          type: 'metrics',
-          data: {
-            agents,
-            eventBusPending: runtime.eventBus.pending,
-            timestamp: Date.now(),
-          },
-        });
-      }, 5_000);
-      cleanups.push(() => clearInterval(metricsInterval));
-
-      // Watchdog every 10s
-      const watchdogInterval = setInterval(() => {
-        listener({
-          type: 'watchdog',
-          data: {
-            results: runtime.watchdog.check(),
-            timestamp: Date.now(),
-          },
-        });
-      }, 10_000);
-      cleanups.push(() => clearInterval(watchdogInterval));
-
-      return () => {
-        for (const cleanup of cleanups) {
-          cleanup();
-        }
-      };
-    },
-
-    onDispatch: async (agentId, msg, routeDecision, options, precomputedIntentGateway) => {
-      return dispatchDashboardMessage({
-        agentId,
-        msg,
-        routeDecision,
-        options,
-        precomputedIntentGateway,
-      });
-    },
-
-    onStreamDispatch: async (agentId, msg, emitSSE) => {
-      const requestId = msg.requestId?.trim() || randomUUID();
-      emitSSE({
-        type: 'chat.thinking',
-        data: {
-          requestId,
-          runId: requestId,
-        },
-      });
-
-      try {
-        const prepared = agentId?.trim()
-          ? {
-              decision: undefined,
-              gateway: null,
-              routedMessage: {
-                content: msg.content,
-                userId: msg.userId,
-                surfaceId: msg.surfaceId,
-                principalId: msg.principalId,
-                principalRole: msg.principalRole,
-                channel: msg.channel,
-                metadata: msg.metadata,
-              },
-            }
-          : await prepareIncomingDispatch(configRef.current.channels.web?.defaultAgent, msg);
-        const resolvedAgentId = agentId?.trim()
-          || prepared.decision?.agentId
-          || configRef.current.channels.web?.defaultAgent
-          || configRef.current.agents[0]?.id
-          || 'default';
-        const response = await dispatchDashboardMessage({
-          agentId: resolvedAgentId,
-          msg: prepared.routedMessage,
-          routeDecision: prepared.decision,
-          precomputedIntentGateway: prepared.gateway,
-          options: {
-            priority: 'high',
-            requestType: 'chat',
-            requestId,
-          },
-        });
-        emitSSE({
-          type: 'chat.done',
-          data: {
-            requestId,
-            runId: requestId,
-            content: response.content,
-            metadata: response.metadata,
-          },
-        });
-        return {
-          requestId,
-          runId: requestId,
-          content: response.content,
-          metadata: response.metadata,
-        };
-      } catch (err) {
-        const requestError = err instanceof Error && typeof (err as { statusCode?: unknown }).statusCode === 'number'
-          ? {
-              error: err.message || 'Stream dispatch failed',
-              errorCode: typeof (err as unknown as { errorCode?: unknown }).errorCode === 'string'
-                ? (err as unknown as { errorCode: string }).errorCode
-                : undefined,
-            }
-          : null;
-        const error = requestError?.error ?? (err instanceof Error ? err.message : String(err));
-        emitSSE({
-          type: 'chat.error',
-          data: {
-            requestId,
-            runId: requestId,
-            error,
-            ...(requestError?.errorCode ? { errorCode: requestError.errorCode } : {}),
-          },
-        });
-        return {
-          requestId,
-          runId: requestId,
-          content: '',
-          error,
-          ...(requestError?.errorCode ? { errorCode: requestError.errorCode } : {}),
-        };
-      }
-    },
+    ...dashboardRuntime,
 
     ...createWorkspaceDashboardCallbacks({
       codeSessionStore,
@@ -9640,47 +9496,6 @@ function buildDashboardCallbacks(
     onReferenceGuide: () => getReferenceGuide(),
 
     onQuickActions: () => getQuickActions(configRef.current.assistant.quickActions),
-
-    onQuickActionRun: async ({ actionId, details, agentId, userId, channel }) => {
-      const canonicalUserId = identity.resolveCanonicalUserId(channel, userId);
-      const built = buildQuickActionPrompt(configRef.current.assistant.quickActions, actionId, details);
-      if (!built) {
-        throw new Error(`Unknown quick action '${actionId}'`);
-      }
-      analytics.track({
-        type: 'quick_action_triggered',
-        channel,
-        canonicalUserId,
-        channelUserId: userId,
-        agentId,
-        metadata: { actionId },
-      });
-      return orchestrator.dispatch(
-        {
-          agentId,
-          userId: canonicalUserId,
-          channel,
-          content: built.prompt,
-          priority: 'high',
-          requestType: 'quick_action',
-        },
-        async (dispatchCtx) => {
-          const message: UserMessage = {
-            id: randomUUID(),
-            userId: canonicalUserId,
-            channel,
-            content: built.prompt,
-            timestamp: Date.now(),
-          };
-          dispatchCtx.markStep('quick_action_prompt_built', `action=${actionId}`);
-          return dispatchCtx.runStep(
-            'runtime_dispatch_message',
-            async () => runtime.dispatchMessage(agentId, message),
-            `agent=${agentId}`,
-          );
-        },
-      );
-    },
 
     ...setupConfigCallbacks,
 
