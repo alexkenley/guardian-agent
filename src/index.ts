@@ -10727,9 +10727,36 @@ function buildDashboardCallbacks(
       microsoftServiceRef,
       toolExecutorRef,
       enabledManagedProviders,
+      secretStore,
       loadRawConfig,
       persistAndApplyConfig,
       probeGwsCli,
+      testCloudConnections: {
+        cpanel: async (profile) => {
+          const client = new CpanelClient(profile as unknown as ConstructorParameters<typeof CpanelClient>[0]);
+          await client.whm('version');
+        },
+        vercel: async (profile) => {
+          const client = new VercelClient(profile as unknown as ConstructorParameters<typeof VercelClient>[0]);
+          await client.listProjects({ limit: 1 });
+        },
+        cloudflare: async (profile) => {
+          const client = new CloudflareClient(profile as unknown as ConstructorParameters<typeof CloudflareClient>[0]);
+          await client.verifyToken();
+        },
+        aws: async (profile) => {
+          const client = new AwsClient(profile as unknown as ConstructorParameters<typeof AwsClient>[0]);
+          await client.getCallerIdentity();
+        },
+        gcp: async (profile) => {
+          const client = new GcpClient(profile as unknown as ConstructorParameters<typeof GcpClient>[0]);
+          await client.getProject();
+        },
+        azure: async (profile) => {
+          const client = new AzureClient(profile as unknown as ConstructorParameters<typeof AzureClient>[0]);
+          await client.getSubscription();
+        },
+      },
     }),
     onGuardianAgentStatus: () => {
       const cfg = guardianAgentService.getConfig();
@@ -14431,69 +14458,6 @@ async function main(): Promise<void> {
     log.info({ intervalMinutes: autoScanMinutes }, 'Threat-intel auto-scan enabled');
   }
 
-  dashboardCallbacks.onCloudTest = async (providerKey: string, profileId: string) => {
-    const runtimeCreds = resolveRuntimeCredentialView(configRef.current, secretStore);
-    const cloud = runtimeCreds.resolvedCloud;
-    if (!cloud) return { success: false, message: 'Cloud tools are not configured.' };
-
-    try {
-      switch (providerKey) {
-        case 'cpanelProfiles': {
-          const profile = cloud.cpanelProfiles?.find(p => p.id === profileId);
-          if (!profile) return { success: false, message: `cPanel profile '${profileId}' not found.` };
-          if (!profile.apiToken) return { success: false, message: `No credential resolved for cPanel profile '${profileId}'.` };
-          const client = new CpanelClient(profile as unknown as ConstructorParameters<typeof CpanelClient>[0]);
-          await client.whm('version');
-          return { success: true, message: `cPanel profile '${profile.name}': connected.` };
-        }
-        case 'vercelProfiles': {
-          const profile = cloud.vercelProfiles?.find(p => p.id === profileId);
-          if (!profile) return { success: false, message: `Vercel profile '${profileId}' not found.` };
-          if (!profile.apiToken) return { success: false, message: `No credential resolved for Vercel profile '${profileId}'.` };
-          const client = new VercelClient(profile as unknown as ConstructorParameters<typeof VercelClient>[0]);
-          await client.listProjects({ limit: 1 });
-          return { success: true, message: `Vercel profile '${profile.name}': connected.` };
-        }
-        case 'cloudflareProfiles': {
-          const profile = cloud.cloudflareProfiles?.find(p => p.id === profileId);
-          if (!profile) return { success: false, message: `Cloudflare profile '${profileId}' not found.` };
-          if (!profile.apiToken) return { success: false, message: `No credential resolved for Cloudflare profile '${profileId}'.` };
-          const client = new CloudflareClient(profile as unknown as ConstructorParameters<typeof CloudflareClient>[0]);
-          await client.verifyToken();
-          return { success: true, message: `Cloudflare profile '${profile.name}': connected.` };
-        }
-        case 'awsProfiles': {
-          const profile = cloud.awsProfiles?.find(p => p.id === profileId);
-          if (!profile) return { success: false, message: `AWS profile '${profileId}' not found.` };
-          if (!profile.accessKeyId && !profile.sessionToken) return { success: false, message: `No credential resolved for AWS profile '${profileId}'.` };
-          const client = new AwsClient(profile as unknown as ConstructorParameters<typeof AwsClient>[0]);
-          await client.getCallerIdentity();
-          return { success: true, message: `AWS profile '${profile.name}': connected.` };
-        }
-        case 'gcpProfiles': {
-          const profile = cloud.gcpProfiles?.find(p => p.id === profileId);
-          if (!profile) return { success: false, message: `GCP profile '${profileId}' not found.` };
-          if (!profile.accessToken && !profile.serviceAccountJson) return { success: false, message: `No credential resolved for GCP profile '${profileId}'.` };
-          const client = new GcpClient(profile as unknown as ConstructorParameters<typeof GcpClient>[0]);
-          await client.getProject();
-          return { success: true, message: `GCP profile '${profile.name}': connected.` };
-        }
-        case 'azureProfiles': {
-          const profile = cloud.azureProfiles?.find(p => p.id === profileId);
-          if (!profile) return { success: false, message: `Azure profile '${profileId}' not found.` };
-          if (!profile.accessToken && !profile.clientId) return { success: false, message: `No credential resolved for Azure profile '${profileId}'.` };
-          const client = new AzureClient(profile as unknown as ConstructorParameters<typeof AzureClient>[0]);
-          await client.getSubscription();
-          return { success: true, message: `Azure profile '${profile.name}': connected.` };
-        }
-        default:
-          return { success: false, message: `Unknown cloud provider: '${providerKey}'.` };
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return { success: false, message: `Connection failed: ${message}` };
-    }
-  };
   const startedChannels = await startBootstrapChannels({
     config,
     configRef,

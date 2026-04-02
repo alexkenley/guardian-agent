@@ -1,11 +1,21 @@
 import { homedir } from 'node:os';
 
 import type { DashboardCallbacks } from '../../channels/web-types.js';
-import type { GuardianAgentConfig } from '../../config/types.js';
+import type {
+  AssistantCloudAwsProfileConfig,
+  AssistantCloudAzureProfileConfig,
+  AssistantCloudCloudflareProfileConfig,
+  AssistantCloudCpanelProfileConfig,
+  AssistantCloudGcpProfileConfig,
+  AssistantCloudVercelProfileConfig,
+  GuardianAgentConfig,
+} from '../../config/types.js';
 import type { GoogleAuth } from '../../google/google-auth.js';
 import type { GoogleService } from '../../google/google-service.js';
 import type { MicrosoftAuth } from '../../microsoft/microsoft-auth.js';
 import type { MicrosoftService } from '../../microsoft/microsoft-service.js';
+import { resolveRuntimeCredentialView } from '../../runtime/credentials.js';
+import type { LocalSecretStore } from '../../runtime/secret-store.js';
 import type { ToolExecutor } from '../../tools/executor.js';
 
 type ProviderIntegrationCallbacks = Pick<
@@ -19,6 +29,7 @@ type ProviderIntegrationCallbacks = Pick<
   | 'onMicrosoftAuthStart'
   | 'onMicrosoftConfig'
   | 'onMicrosoftDisconnect'
+  | 'onCloudTest'
 >;
 
 interface ProviderIntegrationCallbackOptions {
@@ -29,6 +40,7 @@ interface ProviderIntegrationCallbackOptions {
   microsoftServiceRef: { current: MicrosoftService | null };
   toolExecutorRef: { current: ToolExecutor | null };
   enabledManagedProviders: Set<string>;
+  secretStore: LocalSecretStore;
   loadRawConfig: () => Record<string, unknown>;
   persistAndApplyConfig: (rawConfig: Record<string, unknown>, meta?: { changedBy?: string; reason?: string }) => {
     success: boolean;
@@ -40,6 +52,14 @@ interface ProviderIntegrationCallbackOptions {
     authenticated: boolean;
     authMethod?: string;
   }>;
+  testCloudConnections: {
+    cpanel: (profile: AssistantCloudCpanelProfileConfig) => Promise<void>;
+    vercel: (profile: AssistantCloudVercelProfileConfig) => Promise<void>;
+    cloudflare: (profile: AssistantCloudCloudflareProfileConfig) => Promise<void>;
+    aws: (profile: AssistantCloudAwsProfileConfig) => Promise<void>;
+    gcp: (profile: AssistantCloudGcpProfileConfig) => Promise<void>;
+    azure: (profile: AssistantCloudAzureProfileConfig) => Promise<void>;
+  };
 }
 
 export function createProviderIntegrationCallbacks(
@@ -218,6 +238,70 @@ export function createProviderIntegrationCallbacks(
         return { success: true, message: 'Disconnected.' };
       } catch (err) {
         return { success: false, message: err instanceof Error ? err.message : String(err) };
+      }
+    },
+
+    onCloudTest: async (providerKey: string, profileId: string) => {
+      const runtimeCreds = resolveRuntimeCredentialView(options.configRef.current, options.secretStore);
+      const cloud = runtimeCreds.resolvedCloud;
+      if (!cloud) return { success: false, message: 'Cloud tools are not configured.' };
+
+      try {
+        switch (providerKey) {
+          case 'cpanelProfiles': {
+            const profile = cloud.cpanelProfiles?.find((entry) => entry.id === profileId);
+            if (!profile) return { success: false, message: `cPanel profile '${profileId}' not found.` };
+            if (!profile.apiToken) return { success: false, message: `No credential resolved for cPanel profile '${profileId}'.` };
+            await options.testCloudConnections.cpanel(profile);
+            return { success: true, message: `cPanel profile '${profile.name}': connected.` };
+          }
+          case 'vercelProfiles': {
+            const profile = cloud.vercelProfiles?.find((entry) => entry.id === profileId);
+            if (!profile) return { success: false, message: `Vercel profile '${profileId}' not found.` };
+            if (!profile.apiToken) return { success: false, message: `No credential resolved for Vercel profile '${profileId}'.` };
+            await options.testCloudConnections.vercel(profile);
+            return { success: true, message: `Vercel profile '${profile.name}': connected.` };
+          }
+          case 'cloudflareProfiles': {
+            const profile = cloud.cloudflareProfiles?.find((entry) => entry.id === profileId);
+            if (!profile) return { success: false, message: `Cloudflare profile '${profileId}' not found.` };
+            if (!profile.apiToken) return { success: false, message: `No credential resolved for Cloudflare profile '${profileId}'.` };
+            await options.testCloudConnections.cloudflare(profile);
+            return { success: true, message: `Cloudflare profile '${profile.name}': connected.` };
+          }
+          case 'awsProfiles': {
+            const profile = cloud.awsProfiles?.find((entry) => entry.id === profileId);
+            if (!profile) return { success: false, message: `AWS profile '${profileId}' not found.` };
+            if (!profile.accessKeyId && !profile.sessionToken) {
+              return { success: false, message: `No credential resolved for AWS profile '${profileId}'.` };
+            }
+            await options.testCloudConnections.aws(profile);
+            return { success: true, message: `AWS profile '${profile.name}': connected.` };
+          }
+          case 'gcpProfiles': {
+            const profile = cloud.gcpProfiles?.find((entry) => entry.id === profileId);
+            if (!profile) return { success: false, message: `GCP profile '${profileId}' not found.` };
+            if (!profile.accessToken && !profile.serviceAccountJson) {
+              return { success: false, message: `No credential resolved for GCP profile '${profileId}'.` };
+            }
+            await options.testCloudConnections.gcp(profile);
+            return { success: true, message: `GCP profile '${profile.name}': connected.` };
+          }
+          case 'azureProfiles': {
+            const profile = cloud.azureProfiles?.find((entry) => entry.id === profileId);
+            if (!profile) return { success: false, message: `Azure profile '${profileId}' not found.` };
+            if (!profile.accessToken && !profile.clientId) {
+              return { success: false, message: `No credential resolved for Azure profile '${profileId}'.` };
+            }
+            await options.testCloudConnections.azure(profile);
+            return { success: true, message: `Azure profile '${profile.name}': connected.` };
+          }
+          default:
+            return { success: false, message: `Unknown cloud provider: '${providerKey}'.` };
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { success: false, message: `Connection failed: ${message}` };
       }
     },
   };
