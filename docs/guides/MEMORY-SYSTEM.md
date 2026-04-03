@@ -429,7 +429,7 @@ When `buildMessages()` trims conversation history to fit `maxContextChars`, mess
 
 Code and global memory are intentionally separated.
 
-- Code does not preload global memory
+- Code-session turns load Guardian's global memory first as the primary durable memory and then add the attached Code-session memory as a bounded session-local augment
 - global chat does not preload Code-session memory
 - `memory_bridge_search` is the only built-in cross-scope lookup path
 - bridge results are reference material, not a context switch
@@ -438,12 +438,73 @@ Code and global memory are intentionally separated.
 
 This keeps Guardian grounded in its attached session and repo without removing access to the wider tool inventory.
 
+## Near-Term Uplift Direction
+
+The next memory wave is about lower prompt weight, better retrieval timing, and stronger background hygiene without weakening the existing trust and scope boundaries.
+
+### 1. Maintained session summary artifacts
+
+The current Code-session `compactedSummary` should evolve from a pressure-triggered by-product into a maintained bounded summary artifact.
+
+Target behavior:
+- refresh incrementally instead of rebuilding from raw history every time
+- preserve current objective, blockers, and active execution refs
+- become the first source used when the runtime needs to compact older history
+
+### 2. Metadata-first candidate selection
+
+Prompt-time retrieval should bias toward cheap metadata and summary inspection before loading full entry content.
+
+Target behavior:
+- rank candidates from sidecar metadata, summaries, tags, categories, and identifiers first
+- load full entry bodies only for the smaller winning subset
+- keep trust, provenance, and quarantine semantics unchanged
+
+### 3. Non-blocking prompt-time retrieval
+
+Memory retrieval should be able to help without always becoming a latency tax.
+
+Target behavior:
+- start relevant retrieval work opportunistically
+- consume those results if they are ready in time
+- proceed with bounded fallback context if they are not
+- record selection diagnostics either way
+
+### 4. Background extraction and consolidation
+
+Memory hygiene should move toward explicit system-owned maintenance jobs instead of trying to do every expensive operation inline with the user turn.
+
+Target behavior:
+- thresholded extraction of durable facts from richer recent context
+- coalescing of overlapping short-term summaries
+- periodic consolidation of stale or redundant entries
+- locking and idempotency so maintenance work does not race transcript writes
+
+### 5. Compaction invariant preservation
+
+Conversation compaction must preserve protocol-critical structure before feeding any summaries back into memory.
+
+Target behavior:
+- keep assistant tool-call and tool-result relationships intact
+- preserve user corrections, blockers, and active execution references
+- treat aggressive trim as a correctness boundary, not just a token-saving helper
+
+### 6. Shared orchestration boundary
+
+Background memory work should live under the same job/orchestration visibility model as other system-owned runtime work.
+
+Target behavior:
+- no hidden new authority
+- bounded budgets and timeouts
+- audit visibility
+- skip-safe behavior when retrieval or consolidation cannot complete
+
 ## Future Enhancement Opportunities
 
 1. **Selective sync policies**: promote approved facts between Code-session and global memory without automatic context sharing.
-2. **LLM-powered flush**: generate actual summaries instead of raw preview blocks.
-3. **Temporal decay**: add timestamp-based scoring to memory retrieval.
-4. **Daily logs**: add automatic daily logs alongside curated markdown memory.
+2. **Temporal decay**: add timestamp-based scoring to memory retrieval.
+3. **Daily logs**: add automatic daily logs alongside curated markdown memory.
+4. **Richer operator review surfaces**: add first-class review/promote/quarantine inspection for remote-derived or system-extracted memories.
 
 ## Factory Reset
 

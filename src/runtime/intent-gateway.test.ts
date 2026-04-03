@@ -208,6 +208,63 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.query).toBe('latest Playwright MCP news');
   });
 
+  it('preserves explicit cloud tool and profile entities without collapsing to automation control', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Run the cloud tool whm_status using profileId social.',
+        channel: 'web',
+      },
+      async () => ({
+        content: '',
+        toolCalls: [{
+          id: 'call-cloud-1',
+          name: 'route_intent',
+          arguments: JSON.stringify({
+            route: 'general_assistant',
+            confidence: 'high',
+            operation: 'run',
+            summary: 'Runs an explicitly named cloud tool.',
+            toolName: 'whm_status',
+            profileId: 'social',
+          }),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).not.toBe('automation_control');
+    expect(result.decision.entities.toolName).toBe('whm_status');
+    expect(result.decision.entities.profileId).toBe('social');
+  });
+
+  it('preserves natural-language WHM status requests as explicit tool/profile entities', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Check the social WHM account status.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'general_assistant',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Checks WHM status for a configured hosting profile.',
+          toolName: 'whm_status',
+          profileId: 'social',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).not.toBe('automation_control');
+    expect(result.decision.entities.toolName).toBe('whm_status');
+    expect(result.decision.entities.profileId).toBe('social');
+  });
+
   it('supports memory_task classifications for explicit remember requests', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(

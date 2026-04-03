@@ -78,6 +78,7 @@ export interface CodeSessionWorkState {
   focusSummary: string;
   planSummary: string;
   compactedSummary: string;
+  compactedSummaryUpdatedAt?: number;
   workspaceProfile: CodeWorkspaceProfile | null;
   workspaceTrust: CodeWorkspaceTrustAssessment | null;
   workspaceTrustReview: CodeWorkspaceTrustReview | null;
@@ -227,6 +228,7 @@ function defaultWorkState(): CodeSessionWorkState {
     focusSummary: '',
     planSummary: '',
     compactedSummary: '',
+    compactedSummaryUpdatedAt: undefined,
     workspaceProfile: null,
     workspaceTrust: null,
     workspaceTrustReview: null,
@@ -372,8 +374,12 @@ function sanitizeUiState(uiState: CodeSessionUiState, workspaceRoot: string): Co
   };
 }
 
-function conversationUserIdForSession(sessionId: string): string {
-  return `code-session:${sessionId}`;
+function conversationUserIdForSession(sessionId: string, resolvedRoot?: string): string {
+  if (!resolvedRoot?.trim()) {
+    return `code-session:${sessionId}`;
+  }
+  const normalized = resolvedRoot.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return `code-session:${sessionId}:${normalized}`;
 }
 
 function toAttachmentKey(userId: string, channel: string, surfaceId: string): string {
@@ -576,7 +582,7 @@ export class CodeSessionStore {
       createdAt: now,
       updatedAt: now,
       lastActivityAt: now,
-      conversationUserId: conversationUserIdForSession(id),
+      conversationUserId: conversationUserIdForSession(id, resolvedRoot),
       conversationChannel: 'code-session',
       uiState: defaultUiState(),
       workState: {
@@ -657,6 +663,9 @@ export class CodeSessionStore {
       resolvedRoot: nextResolvedRoot,
       updatedAt: now,
       lastActivityAt: now,
+      conversationUserId: workspaceRootChanged
+        ? conversationUserIdForSession(existing.id, nextResolvedRoot)
+        : existing.conversationUserId,
       uiState: sanitizeUiState(mergedUiState, nextResolvedRoot),
       workState: {
         ...(workspaceRootChanged ? defaultWorkState() : existing.workState),

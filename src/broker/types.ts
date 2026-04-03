@@ -53,7 +53,7 @@ export interface ProvenanceMetadata {
 
 export interface ToolCaller {
   listAlwaysLoaded(): ToolDefinition[];
-  searchTools(query: string): ToolDefinition[];
+  searchTools(query: string): ToolDefinition[] | Promise<ToolDefinition[]>;
   callTool(request: ToolExecutionRequest): Promise<ToolRunResponse>;
   getApprovalStatus?(approvalId: string): Promise<'pending' | 'approved' | 'denied'>;
 }

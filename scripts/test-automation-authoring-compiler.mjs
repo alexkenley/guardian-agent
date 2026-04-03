@@ -6,6 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { URL } from 'node:url';
 
+import { DEFAULT_HARNESS_OLLAMA_MODEL, resolveHarnessOllamaModel } from './ollama-harness-defaults.mjs';
+
 function createChatCompletionResponse({ model, content = '', finishReason = 'stop', toolCalls }) {
   const message = {
     role: 'assistant',
@@ -401,9 +403,11 @@ async function resolveHarnessProvider(options) {
           throw error;
         }
       }
-      const resolvedModel = options.ollamaModel || models[0]?.name;
+      const resolvedModel = resolveHarnessOllamaModel(options.ollamaModel, models);
       if (!resolvedModel) {
-        throw new Error(`No models available at ${candidate}. Set HARNESS_OLLAMA_MODEL or pull a model first.`);
+        throw new Error(
+          `No models available at ${candidate}. Pull ${DEFAULT_HARNESS_OLLAMA_MODEL} or set HARNESS_OLLAMA_MODEL first.`,
+        );
       }
       return {
         baseUrl: candidate,

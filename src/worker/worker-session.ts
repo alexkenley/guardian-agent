@@ -82,7 +82,7 @@ export interface WorkerMessageHandleParams {
   systemPrompt: string;
   history: Array<{ role: 'user' | 'assistant'; content: string }>;
   knowledgeBases: PromptAssemblyKnowledgeBase[];
-  activeSkills: Array<{ id: string; name: string; summary: string }>;
+  activeSkills: Array<{ id: string; name: string; summary: string; description?: string; role?: string; sourcePath?: string }>;
   toolContext: string;
   runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>;
   continuity?: PromptAssemblyContinuity | null;

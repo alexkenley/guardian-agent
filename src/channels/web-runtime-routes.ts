@@ -170,6 +170,19 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     return true;
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/chat/pending-action') {
+    if (!dashboard.onPendingActionCurrent) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    const userId = url.searchParams.get('userId') ?? 'web-user';
+    const channel = url.searchParams.get('channel') ?? 'web';
+    const surfaceId = url.searchParams.get('surfaceId') ?? 'web-guardian-chat';
+    sendJSON(res, 200, dashboard.onPendingActionCurrent({ userId, channel, surfaceId }));
+    return true;
+  }
+
+
   if (req.method === 'POST' && url.pathname === '/api/config') {
     if (!dashboard.onConfigUpdate) {
       sendJSON(res, 404, { error: 'Not available' });

@@ -62,6 +62,8 @@ export interface IntentGatewayEntities {
   codingBackend?: string;
   codingBackendRequested?: boolean;
   codingRunStatusCheck?: boolean;
+  toolName?: string;
+  profileId?: string;
 }
 
 export interface IntentGatewayDecision {
@@ -220,6 +222,12 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
       codingRunStatusCheck: {
         type: 'boolean',
       },
+      toolName: {
+        type: 'string',
+      },
+      profileId: {
+        type: 'string',
+      },
     },
     required: ['route', 'confidence', 'operation', 'summary'],
   },
@@ -269,6 +277,10 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Prefer search_task over browser_task for generic web search.',
   'Prefer memory_task for explicit persistent-memory requests such as "remember this", "what do you remember about ...", or "search memory for ...".',
   'Prefer automation_authoring for create/build/setup requests and automation_control for rename/delete/toggle/run/clone/inspect requests on an existing automation.',
+  'Do not use automation_control for explicit built-in tool execution requests, cloud-hosting status checks, or direct tool names such as whm_status, vercel_status, aws_status, gcp_status, azure_status, or cf_status.',
+  'If the user explicitly names a built-in tool, set entities.toolName to that exact tool name.',
+  'If the user explicitly names a configured provider profile id such as profileId social, set entities.profileId to that exact profile id.',
+  'Direct cloud/hosting status or inspection requests for configured profiles are not automation control unless the user explicitly refers to an existing saved automation/workflow/task.',
   'Questions about automation capabilities, examples, supported shapes, or how automations work are general_assistant unless the user is actually asking you to create or change a specific automation or workflow definition.',
   'Do not use automation_authoring just because the words "automation" and "create" both appear in a capability question such as "What automations can you create?"',
   'Requests to analyze, summarize, explain, compare, review, or investigate the output or findings of a previous automation run should route to automation_output_task, not automation_control.',
@@ -281,6 +293,8 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Example: "Edit the WHM Social Check Disk Quota automation and make it run daily at 9:00 AM." -> route=automation_control, operation=update, automationName="WHM Social Check Disk Quota".',
   'Example: "Analyze the output from the last HN Snapshot Smoke automation run" -> route = "automation_output_task", automationName = "HN Snapshot Smoke".',
   'Example: "What sort of automations can you create?" -> route = "general_assistant", operation = "inspect".',
+  'Example: "Run the cloud tool whm_status using profileId social." -> route = "general_assistant", operation = "run", toolName = "whm_status", profileId = "social".',
+  'Example: "Check the social WHM account status." -> route = "general_assistant", operation = "inspect", toolName = "whm_status", profileId = "social".',
   'memory_task operation mapping: save = remember/store durable memory; read = recall or list remembered information; search = search conversation or persistent memory.',
   'Examples: "Remember globally that my test marker is cedar-47." -> route=memory_task, operation=save; "What do you remember about cedar-47?" -> route=memory_task, operation=read; "Search memory for cedar-47." -> route=memory_task, operation=search.',
   'Prefer coding_session_control over coding_task when the user asks about which session is active, lists sessions, switches workspaces, attaches, detaches, or creates a new coding session.',
@@ -329,13 +343,16 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'email_task means direct email inbox, read, send, reply, forward, or draft work. workspace_task means managed workspace tools such as calendar, drive, docs, or sheets.',
   'ui_control means Guardian pages or internal catalog surfaces. browser_task means external website navigation or interaction. search_task means generic web search.',
   'For rename requests on an existing automation, use route=automation_control, operation=update, and set newAutomationName to the requested new name.',
+  'If the user explicitly asks to run a built-in tool by name, keep the request out of automation_control even if it uses verbs like run, check, inspect, or status.',
   'For edits to an existing automation such as changing its schedule or switching between scheduled and manual mode, use route=automation_control and operation=update.',
   'If the user names a coding session or workspace to switch to, set sessionTarget.',
   'If the user names Gmail or Google Workspace, set emailProvider to gws. If the user names Outlook or Microsoft 365, set emailProvider to m365.',
+  'If the user names a cloud-hosting profile id such as profileId social or refers to a known hosting profile by id, set profileId when possible.',
   'If the user explicitly asks Guardian to use Codex, Claude Code, Gemini CLI, or Aider, set codingBackend and codingBackendRequested=true.',
   'If the request needs a missing detail before execution, set resolution=needs_clarification and include missingFields.',
   'Examples: "What coding workspace is this chat currently attached to?" -> route="coding_session_control", operation="inspect".',
   'Examples: "List the coding sessions." -> route="coding_session_control", operation="navigate".',
+  'Examples: "Run the cloud tool whm_status using profileId social." -> route="general_assistant", operation="run", toolName="whm_status", profileId="social".',
   'Examples: "Switch this chat to the coding workspace for Temp install test." -> route="coding_session_control", operation="update", sessionTarget="Temp install test".',
   'Return valid JSON with double-quoted keys and string values only.',
 ].join(' ');
@@ -739,6 +756,12 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
   const codingRunStatusCheck = typeof parsed.codingRunStatusCheck === 'boolean'
     ? parsed.codingRunStatusCheck
     : undefined;
+  const toolName = typeof parsed.toolName === 'string' && parsed.toolName.trim()
+    ? parsed.toolName.trim()
+    : undefined;
+  const profileId = typeof parsed.profileId === 'string' && parsed.profileId.trim()
+    ? parsed.profileId.trim()
+    : undefined;
 
   return {
     route,
@@ -764,6 +787,8 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
       ...(codingBackend ? { codingBackend } : {}),
       ...(typeof codingBackendRequested === 'boolean' ? { codingBackendRequested } : {}),
       ...(typeof codingRunStatusCheck === 'boolean' ? { codingRunStatusCheck } : {}),
+      ...(toolName ? { toolName } : {}),
+      ...(profileId ? { profileId } : {}),
     },
   };
 }

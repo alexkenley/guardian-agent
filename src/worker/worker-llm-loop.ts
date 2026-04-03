@@ -5,6 +5,7 @@ import { compactMessagesIfOverBudget } from '../util/context-budget.js';
 import { getMemoryMutationIntentDeniedMessage, isMemoryMutationToolName } from '../util/memory-intent.js';
 import { isResponseDegraded } from '../util/response-quality.js';
 import { withTaintedContentSystemPrompt } from '../util/tainted-content.js';
+import { formatToolResultForLLM, toLLMToolDef } from '../chat-agent-helpers.js';
 
 export interface LlmLoopOptions {
   /** When true, model-authored memory mutation tool calls are allowed. */
@@ -32,15 +33,75 @@ export async function runLlmLoop(
   const currentTaintReasons = new Set<string>();
 
   const allToolDefs = toolCaller ? toolCaller.listAlwaysLoaded() : [];
+  let llmToolDefs = allToolDefs.map((definition) => toLLMToolDef(definition, 'external'));
 
-  // Basic mock mapping function since we lack the full toLLMToolDef context here
-  const toLLMToolDef = (def: ToolDefinition): import('../llm/types.js').ToolDefinition => ({
-    name: def.name,
-    description: def.description,
-    parameters: def.parameters,
-  });
+  const formatToolResult = (toolName: string, result: unknown): string => {
+    if (toolCaller && typeof (toolCaller as unknown as { formatToolResultForLlm?: (name: string, value: unknown) => string }).formatToolResultForLlm === 'function') {
+      return (toolCaller as unknown as { formatToolResultForLlm: (name: string, value: unknown) => string }).formatToolResultForLlm(toolName, result);
+    }
+    return formatToolResultForLLM(toolName, result, []);
+  };
 
-  let llmToolDefs = allToolDefs.map(toLLMToolDef);
+  const searchDeferredTools = async (query: string): Promise<ToolDefinition[]> => {
+    if (!toolCaller) return [];
+    const searched = await toolCaller.searchTools(query);
+    return Array.isArray(searched) ? searched : [];
+  };
+
+  const mergeDiscoveredTools = (tools: ToolDefinition[]): void => {
+    for (const discovered of tools) {
+      if (!llmToolDefs.some((tool) => tool.name === discovered.name)) {
+        allToolDefs.push(discovered);
+        llmToolDefs.push(toLLMToolDef(discovered, 'external'));
+      }
+    }
+  };
+
+  const mergeFindToolsOutput = (toolName: string, result: Record<string, unknown>): void => {
+    if (toolName !== 'find_tools' || result.success !== true || !result.output || typeof result.output !== 'object') {
+      return;
+    }
+    const output = result.output as { tools?: ToolDefinition[] };
+    if (Array.isArray(output.tools)) {
+      mergeDiscoveredTools(output.tools);
+    }
+  };
+
+  const searchIfToolMissing = async (name: string): Promise<void> => {
+    if (llmToolDefs.some((tool) => tool.name === name)) return;
+    const query = name.includes('_') ? name.replace(/_/g, ' ') : name;
+    mergeDiscoveredTools(await searchDeferredTools(query));
+  };
+
+  const formatToolError = (message: string): string => formatToolResultForLLM('tool_error', { success: false, error: message }, []);
+
+  const extractToolNameFromSearchQuery = (args: Record<string, unknown>): string | null => {
+    const query = typeof args.query === 'string' ? args.query.trim() : '';
+    if (!query) return null;
+    const exact = query.match(/^[a-z0-9_:-]{3,}$/i)?.[0];
+    return exact ?? null;
+  };
+
+  const locateDiscoveredTool = async (toolName: string, args: Record<string, unknown>): Promise<void> => {
+    await searchIfToolMissing(toolName);
+    if (toolName === 'find_tools') {
+      const hinted = extractToolNameFromSearchQuery(args);
+      if (hinted) {
+        await searchIfToolMissing(hinted);
+      }
+    }
+  };
+
+  const toolCallerWithDiscovery = async (
+    toolName: string,
+    args: Record<string, unknown>,
+    request: Parameters<ToolCaller['callTool']>[0],
+  ): Promise<ToolRunResponse> => {
+    await locateDiscoveredTool(toolName, args);
+    const result = await toolCaller!.callTool(request);
+    mergeFindToolsOutput(toolName, result as unknown as Record<string, unknown>);
+    return result;
+  };
 
   while (rounds < maxRounds) {
     // Context window awareness: compact oldest tool results if approaching budget
@@ -112,7 +173,7 @@ export async function runLlmLoop(
           return { toolCall: tc, result: denied };
         }
 
-        const res = await toolCaller.callTool({
+        const res = await toolCallerWithDiscovery(tc.name, parsedArgs, {
           origin: 'assistant',
           toolName: tc.name,
           args: parsedArgs,
@@ -172,27 +233,16 @@ export async function runLlmLoop(
         messages.push({
           role: 'tool',
           toolCallId: toolCall.id,
-          content: JSON.stringify(resultForLlm),
+          content: formatToolResult(toolCall.name, resultForLlm),
         });
 
-        // Deferred tool loading simulation (simplified)
-        if (toolCall.name === 'find_tools' && result.success && (result as any).output) {
-           const output = (result as any).output as { tools?: ToolDefinition[] };
-           if (output.tools) {
-              for (const t of output.tools) {
-                 if (!llmToolDefs.some(d => d.name === t.name)) {
-                    allToolDefs.push(t);
-                    llmToolDefs.push(toLLMToolDef(t));
-                 }
-              }
-           }
-        }
+        mergeFindToolsOutput(toolCall.name, result as unknown as Record<string, unknown>);
       } else {
         const failedTc = response.toolCalls[toolResults.indexOf(settled)];
         messages.push({
           role: 'tool',
           toolCallId: failedTc?.id ?? '',
-          content: JSON.stringify({ success: false, error: settled.reason?.message ?? 'Tool execution failed' }),
+          content: formatToolError(settled.reason?.message ?? 'Tool execution failed'),
         });
       }
     }

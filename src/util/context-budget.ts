@@ -9,6 +9,111 @@ export interface ContextCompactionResult {
   summary?: string;
 }
 
+function summarizeObjective(messages: ChatMessage[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role !== 'user') continue;
+    const compact = message.content.replace(/\s+/g, ' ').trim();
+    if (!compact) continue;
+    return truncateText(compact, 140);
+  }
+  return undefined;
+}
+
+function expandRetainedMessagesWithToolPairs(messages: ChatMessage[], retainedBase: ChatMessage[]): ChatMessage[] {
+  const retainedRefs = new Set<ChatMessage>(retainedBase);
+  const requiredToolCallIds = new Set<string>();
+
+  const seedRequiredIds = (message: ChatMessage) => {
+    if (message.role === 'tool' && typeof message.toolCallId === 'string' && message.toolCallId.trim().length > 0) {
+      requiredToolCallIds.add(message.toolCallId);
+    }
+    if (message.role === 'assistant' && Array.isArray(message.toolCalls)) {
+      for (const toolCall of message.toolCalls) {
+        requiredToolCallIds.add(toolCall.id);
+      }
+    }
+  };
+
+  for (const message of retainedBase) {
+    seedRequiredIds(message);
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const message of messages) {
+      const needsAssistant = message.role === 'assistant'
+        && Array.isArray(message.toolCalls)
+        && message.toolCalls.some((toolCall) => requiredToolCallIds.has(toolCall.id));
+      const needsTool = message.role === 'tool'
+        && typeof message.toolCallId === 'string'
+        && requiredToolCallIds.has(message.toolCallId);
+      if ((needsAssistant || needsTool) && !retainedRefs.has(message)) {
+        retainedRefs.add(message);
+        seedRequiredIds(message);
+        changed = true;
+      }
+    }
+  }
+
+  return messages.filter((message) => retainedRefs.has(message));
+}
+
+function expandTailWithRequiredToolPairs(messages: ChatMessage[], tail: ChatMessage[]): ChatMessage[] {
+  return expandRetainedMessagesWithToolPairs(messages, tail);
+}
+
+function dedupeMessages(messages: ChatMessage[]): ChatMessage[] {
+  return messages.filter((message, index, array) => array.findIndex((candidate) => candidate === message) === index);
+}
+
+function buildHistoricalSummary(historical: ChatMessage[], objectiveSource: ChatMessage[]): string | undefined {
+  const objective = summarizeObjective(objectiveSource);
+  const summaryParts: string[] = objective ? [`objective:${objective}`] : [];
+  for (const message of historical) {
+    if (message.role === 'tool' && message.content) {
+      summaryParts.push(`tool:${truncateText(message.content, 120)}`);
+    } else if (message.role === 'assistant' && message.content) {
+      summaryParts.push(`assistant:${truncateText(message.content, 120)}`);
+    }
+    if (summaryParts.length >= 5) break;
+  }
+  return summaryParts.length > 0
+    ? `Compacted prior work summary:\n${summaryParts.join('\n')}`
+    : undefined;
+}
+
+function isHistoricalUserAnchor(message: ChatMessage): boolean {
+  return message.role === 'user';
+}
+
+function preserveHistoricalAnchors(historical: ChatMessage[]): ChatMessage[] {
+  return historical.filter(isHistoricalUserAnchor).slice(-2);
+}
+
+function aggressivelyTrimHistoricalMessages(messages: ChatMessage[], keepCount: number): string | undefined {
+  const systemMessages = messages.filter((message) => message.role === 'system');
+  const historical = messages.slice(0, Math.max(0, messages.length - keepCount));
+  const preservedHistorical = preserveHistoricalAnchors(historical);
+  const tail = expandTailWithRequiredToolPairs(messages, messages.slice(-keepCount));
+  const summary = buildHistoricalSummary(historical, messages);
+  const summaryMessage: ChatMessage | null = summary
+    ? {
+      role: 'system',
+      content: summary,
+    }
+    : null;
+
+  messages.splice(0, messages.length, ...dedupeMessages([
+    ...systemMessages,
+    ...(summaryMessage ? [summaryMessage] : []),
+    ...preservedHistorical,
+    ...tail,
+  ]));
+  return summaryMessage?.content;
+}
+
 function truncateText(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value;
   return `${value.slice(0, Math.max(0, maxChars - 16))}[...truncated]`;
@@ -67,39 +172,6 @@ function compactHistoricalAssistantToolCalls(messages: ChatMessage[], protectedS
     if (touched) compacted += 1;
   }
   return compacted;
-}
-
-function aggressivelyTrimHistoricalMessages(messages: ChatMessage[], keepCount: number): string | undefined {
-  const systemMessages = messages.filter((message) => message.role === 'system');
-  const tail = messages.slice(-keepCount);
-  const historical = messages.slice(0, Math.max(0, messages.length - keepCount));
-  const preservedHistorical = historical.filter((message) => message.role === 'user').slice(-2);
-
-  const summaryParts: string[] = [];
-  for (const message of historical) {
-    if (message.role === 'tool' && message.content) {
-      summaryParts.push(`tool:${truncateText(message.content, 120)}`);
-    } else if (message.role === 'assistant' && message.content) {
-      summaryParts.push(`assistant:${truncateText(message.content, 120)}`);
-    }
-    if (summaryParts.length >= 4) break;
-  }
-
-  const summaryMessage: ChatMessage | null = summaryParts.length > 0
-    ? {
-      role: 'system',
-      content: `Compacted prior work summary:\n${summaryParts.join('\n')}`,
-    }
-    : null;
-
-  messages.splice(0, messages.length, ...systemMessages);
-  if (summaryMessage) messages.push(summaryMessage);
-  messages.push(...preservedHistorical);
-  messages.push(...tail.filter((message, index, array) => {
-    const firstIndex = array.findIndex((candidate) => candidate === message);
-    return firstIndex === index;
-  }));
-  return summaryMessage?.content;
 }
 
 /**

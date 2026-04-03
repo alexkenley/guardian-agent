@@ -144,6 +144,29 @@ Current as-built delegation foundations:
 - delegated follow-up state is projected into both assistant-job views and assistant-dispatch trace/timeline nodes instead of being implicit in raw worker prose
 - delegated-worker lifecycle breadcrumbs are also recorded in audit
 
+## 5a. System-Owned Background Maintenance
+
+**Primary files:** `src/runtime/orchestrator.ts`, `src/runtime/assistant-jobs.ts`, `src/runtime/conversation.ts`, `src/runtime/agent-memory-store.ts`
+
+This layer owns bounded runtime hygiene work that should not run as ad hoc prompt logic or as a second hidden assistant.
+
+Companion contracts:
+- `docs/specs/CONTEXT-ASSEMBLY-SPEC.md`
+- `docs/guides/MEMORY-SYSTEM.md`
+
+Representative jobs:
+- maintained session-summary refresh
+- memory extraction from compacted/dropped context
+- periodic consolidation or coalescing of durable memory
+- non-blocking retrieval prefetch or cache refresh work when surfaced as explicit runtime jobs
+
+Key rules:
+- these jobs are server-owned and do not create new user-facing authority
+- they run with explicit budgets, locking, and idempotent retry/skip behavior
+- they must remain visible in shared job/timeline/audit surfaces instead of becoming invisible background prompt work
+- their outputs enter user-facing context only through bounded artifacts such as maintained summaries, reviewed memory entries, or trace-safe diagnostics
+- they do not bypass approval, trust, or memory-scope boundaries
+
 ## 6. Deterministic Workflow Runtime
 
 **Primary files:** `src/runtime/connectors.ts`, `src/runtime/graph-runner.ts`, `src/runtime/graph-types.ts`, `src/runtime/run-state-store.ts`, `src/runtime/run-events.ts`
@@ -182,7 +205,7 @@ Important distinction:
 - a saved automation is the product object
 - schedule, manual trigger, and run history are execution properties of that object
 
-## 7. Agent Composition
+## 8. Agent Composition
 
 **Primary files:** `src/agent/orchestration.ts`, `src/agent/conditional.ts`, `src/agent/recipes.ts`
 
@@ -238,3 +261,4 @@ User message / scheduled trigger / manual automation trigger
 - Use the deterministic workflow runtime for explicit repeatable step graphs.
 - Use assistant automations when runtime inspection and synthesis must remain adaptive.
 - Use agent recipes for developer-authored multi-agent flows inside one request, not as a second end-user automation system.
+- Use system-owned background maintenance for bounded summary refresh, extraction, consolidation, and other hygiene work instead of hiding those behaviors inside ad hoc prompt assembly.

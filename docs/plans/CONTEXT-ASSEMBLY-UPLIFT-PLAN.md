@@ -1,5 +1,7 @@
 # Context Assembly Uplift Plan
 
+> Superseded as the primary implementation sequence by [Context, Memory, and Orchestration Uplift Plan](/mnt/s/Development/GuardianAgent/docs/plans/CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md). This document remains as narrower historical planning context.
+
 **Date:** 2026-03-30  
 **Status:** Draft  
 **Origin:** Prompt-grounding and context-packaging review  

@@ -72,10 +72,19 @@ export interface AssistantJobDisplayFollowUp {
   actions?: DelegatedWorkerOperatorAction[];
 }
 
+export interface AssistantJobMaintenanceDisplay {
+  kind: 'memory_hygiene';
+  maintenanceType?: string;
+  artifact?: string;
+  bounded?: boolean;
+  scope?: string;
+}
+
 export interface AssistantJobDisplay {
   originSummary: string;
   outcomeSummary: string;
   followUp?: AssistantJobDisplayFollowUp;
+  maintenance?: AssistantJobMaintenanceDisplay;
 }
 
 export interface AssistantJobInput {
@@ -228,12 +237,28 @@ export class AssistantJobTracker {
   }
 }
 
+function readMaintenanceMetadata(metadata: Record<string, unknown> | undefined): AssistantJobMaintenanceDisplay | undefined {
+  const maintenance = metadata?.maintenance;
+  if (!isRecord(maintenance)) return undefined;
+  const kind = maintenance.kind === 'memory_hygiene' ? 'memory_hygiene' : null;
+  if (!kind) return undefined;
+  return {
+    kind,
+    ...(typeof maintenance.maintenanceType === 'string' ? { maintenanceType: maintenance.maintenanceType } : {}),
+    ...(typeof maintenance.artifact === 'string' ? { artifact: maintenance.artifact } : {}),
+    ...(typeof maintenance.bounded === 'boolean' ? { bounded: maintenance.bounded } : {}),
+    ...(typeof maintenance.scope === 'string' ? { scope: maintenance.scope } : {}),
+  };
+}
+
 export function buildAssistantJobDisplay(job: Pick<AssistantJobRecord, 'detail' | 'error' | 'metadata' | 'source'>): AssistantJobDisplay {
   const delegated = readDelegatedWorkerMetadata(job.metadata);
+  const maintenance = readMaintenanceMetadata(job.metadata);
   if (!delegated) {
     return {
       originSummary: job.source || '-',
       outcomeSummary: job.detail || job.error || '-',
+      ...(maintenance ? { maintenance } : {}),
     };
   }
 
@@ -248,6 +273,7 @@ export function buildAssistantJobDisplay(job: Pick<AssistantJobRecord, 'detail' 
     originSummary: originParts.join(' • ') || job.source || '-',
     outcomeSummary: delegated.handoff?.summary || job.detail || job.error || '-',
     ...(followUp ? { followUp } : {}),
+    ...(maintenance ? { maintenance } : {}),
   };
 }
 

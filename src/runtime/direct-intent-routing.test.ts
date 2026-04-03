@@ -46,6 +46,18 @@ const ALL_CANDIDATES = [
   'web_search',
 ] as const;
 
+function assertNoAutomationControlForToolLikeCloudRequest() {
+  const result = resolveDirectIntentRoutingCandidates(
+    mockGateway({
+      route: 'general_assistant',
+      operation: 'run',
+      entities: { toolName: 'whm_status', profileId: 'social' },
+    }),
+    [...ALL_CANDIDATES],
+  );
+  expect(result.candidates).not.toContain('automation_control');
+}
+
 describe('resolveDirectIntentRoutingCandidates', () => {
   it('maps create-style automation authoring routes to automation candidates', () => {
     const result = resolveDirectIntentRoutingCandidates(
@@ -206,6 +218,10 @@ describe('resolveDirectIntentRoutingCandidates', () => {
     expect(result.candidates).toEqual([]);
     expect(result.gatewayDirected).toBe(false);
     expect(result.gatewayUnavailable).toBe(false);
+  });
+
+  it('does not reinterpret explicit tool-like cloud requests as automation control', () => {
+    assertNoAutomationControlForToolLikeCloudRequest();
   });
 
   it('filters candidates by available set', () => {

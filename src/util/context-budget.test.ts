@@ -77,8 +77,34 @@ describe('compactMessagesIfOverBudget', () => {
     expect(result.applied).toBe(true);
     expect(result.stages).toContain('aggressive_trim');
     expect(result.summary).toContain('Compacted prior work summary');
+    expect(result.summary).toContain('objective:keep me');
     expect(messages.length).toBeLessThan(8);
     expect(messages.some((message) => message.role === 'system' && message.content.includes('Compacted prior work summary'))).toBe(true);
     expect(messages[messages.length - 1].content).toBe('final answer in progress');
+  });
+
+  it('preserves assistant tool calls that match kept tool results during aggressive trim', () => {
+    const messages: ChatMessage[] = [
+      { role: 'system', content: 'system rules' },
+      {
+        role: 'assistant',
+        content: 'calling browser read',
+        toolCalls: [{ id: 'call-1', name: 'browser_read', arguments: JSON.stringify({ url: 'https://example.com' }) }],
+      },
+      { role: 'tool', toolCallId: 'call-1', content: JSON.stringify({ success: true, output: { content: 'Example Domain' } }) },
+      ...Array.from({ length: 8 }, (_, index) => ({
+        role: index % 2 === 0 ? 'assistant' : 'tool',
+        content: `message-${index}-` + 'y'.repeat(1000),
+        ...(index % 2 === 1 ? { toolCallId: `tool-${index}` } : {}),
+      })) as ChatMessage[],
+      { role: 'user', content: 'summarize the page result' },
+      { role: 'tool', toolCallId: 'call-1', content: JSON.stringify({ success: true, output: { content: 'Example Domain final' } }) },
+      { role: 'assistant', content: 'final answer in progress' },
+    ];
+
+    compactMessagesIfOverBudget(messages, 80);
+
+    expect(messages.some((message) => message.role === 'assistant' && Array.isArray(message.toolCalls) && message.toolCalls.some((toolCall) => toolCall.id === 'call-1'))).toBe(true);
+    expect(messages.some((message) => message.role === 'tool' && message.toolCallId === 'call-1')).toBe(true);
   });
 });

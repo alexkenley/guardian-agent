@@ -59,6 +59,16 @@ The broader compact-inventory and drilldown contract for prompt context is defin
 
 This reduces tool definition tokens from ~15-25K to ~5K per request.
 
+### Deferred discovery uplift direction
+
+The next uplift wave should improve discovery quality without breaking deferred loading:
+
+- `find_tools` matching should favor exact-name, family-prefix, category, and keyword matching before looser description search
+- compact deferred inventories should become more legible for weaker local models, but still stop short of shipping full schemas by default
+- rendered tool-definition payloads should stay stable within an active tool loop unless discovery or provider locality materially changes
+- discovery bugs should be fixed in the search/discovery path, not by promoting deferred tools into the always-loaded set
+- provider/model inventories and other control-plane catalogs should use the same compact-inventory-plus-drilldown pattern
+
 **Local model adaptation:** When the active LLM provider is local (Ollama), always-loaded tools are sent with full `description` instead of `shortDescription` to improve tool selection accuracy. External providers (OpenAI, Anthropic) continue using short descriptions to save tokens.
 
 **Quality-based fallback:** When the local LLM produces a degraded response (empty, refusal, or "I could not generate"), the system automatically retries the request through the fallback chain (typically an external provider like OpenAI). A fallback chain is auto-configured when multiple LLM providers are available, or can be explicitly set via `config.fallbacks`.

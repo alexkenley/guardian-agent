@@ -116,6 +116,8 @@ export function createIncomingDispatchPreparer(args: {
       agentId: stateAgentId,
       userId: canonicalUserId,
       channel,
+    }, {
+      query: msg.content,
     });
     const pendingAction = args.pendingActionStore.resolveActiveForSurface({
       agentId: stateAgentId,

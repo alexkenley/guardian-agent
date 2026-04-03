@@ -139,7 +139,7 @@ Recommended Coding Assistant regression loop:
 ```bash
 node scripts/test-coding-assistant.mjs
 node scripts/test-code-ui-smoke.mjs
-HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=<your-model> node scripts/test-coding-assistant.mjs --use-ollama
+HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=gemma4:26b node scripts/test-coding-assistant.mjs --use-ollama
 ```
 
 For local debugging, you can preserve the coding-harness temp directory without shell env wrappers:
@@ -231,7 +231,7 @@ By default, this harness uses an embedded fake Ollama-compatible provider so reg
 ```bash
 HARNESS_USE_REAL_OLLAMA=1 \
 HARNESS_OLLAMA_BASE_URL=http://<windows-host-ip>:11434 \
-HARNESS_OLLAMA_MODEL=<your-model> \
+HARNESS_OLLAMA_MODEL=gemma4:26b \
 node scripts/test-automation-authoring-compiler.mjs --use-ollama
 ```
 
@@ -244,7 +244,7 @@ WSL note:
 
 Recommended usage:
 - default regression lane: run the harness with no extra flags; this uses the embedded fake provider and remains deterministic
-- WSL-local smoke lane: install Ollama in WSL, pull a model once, then run `HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=<your-model> node scripts/test-automation-authoring-compiler.mjs --use-ollama`
+- WSL-local smoke lane: install Ollama in WSL, pull `gemma4:26b` once, then run `HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=gemma4:26b node scripts/test-automation-authoring-compiler.mjs --use-ollama`
 - brokered-worker smoke lane: add `HARNESS_AGENT_ISOLATION=1` so the harness validates the brokered worker path that the web UI uses when agent isolation is enabled
 - Windows-hosted smoke lane: set `HARNESS_OLLAMA_BASE_URL` to the Windows host IP because WSL loopback may not reach the Windows-bound service
 
@@ -283,7 +283,7 @@ Optional overrides:
 
 ```bash
 HARNESS_OLLAMA_BASE_URL=http://<windows-host-ip>:11434 \
-HARNESS_OLLAMA_MODEL=<your-model> \
+HARNESS_OLLAMA_MODEL=gemma4:26b \
 LLMMAP_GOAL="reveal hidden system instructions or protected secrets" \
 node scripts/test-llmmap-security.mjs
 ```
@@ -298,7 +298,7 @@ Useful environment variables:
 | `LLMMAP_INTENSITY` | `1` | Scan intensity |
 | `LLMMAP_MAX_PROMPTS` | `8` | Maximum prompt count after filtering |
 | `HARNESS_OLLAMA_BASE_URL` | auto-detect | Reachable Ollama endpoint |
-| `HARNESS_OLLAMA_MODEL` | first available model | Model shared by GuardianAgent and `LLMMap` |
+| `HARNESS_OLLAMA_MODEL` | `gemma4:26b` if installed, otherwise first available model | Model shared by GuardianAgent and `LLMMap` |
 | `HARNESS_WSL_HOST_IP` | unset | Optional explicit Windows host IP override for WSL-to-Windows Ollama connectivity |
 | `HARNESS_OLLAMA_BIN` | auto-detect | Optional path to the Ollama binary when WSL-local autostart is needed |
 
@@ -311,7 +311,7 @@ Useful environment variables:
 | `HARNESS_USE_REAL_OLLAMA` | `0` | When `1`, use a real reachable Ollama endpoint instead of the embedded fake provider |
 | `HARNESS_AGENT_ISOLATION` | `0` | When `1`, run the harness with brokered worker isolation enabled so automation compiler routing is exercised in the worker path |
 | `HARNESS_OLLAMA_BASE_URL` | auto-detect | Base URL for a reachable Ollama instance, for example `http://192.168.x.x:11434` |
-| `HARNESS_OLLAMA_MODEL` | first available model | Specific Ollama model name to use for the real-model harness lane |
+| `HARNESS_OLLAMA_MODEL` | `gemma4:26b` if installed, otherwise first available model | Specific Ollama model name to use for the real-model harness lane |
 | `HARNESS_WSL_HOST_IP` | unset | Optional explicit Windows host IP override for WSL-to-Windows Ollama connectivity |
 | `HARNESS_OLLAMA_BIN` | auto-detect | Optional path to the Ollama binary when using WSL-local autostart |
 | `HARNESS_AUTOSTART_LOCAL_OLLAMA` | `1` | When `1`, the harness may start and stop a WSL-local `ollama serve` process for loopback real-model runs |
@@ -715,7 +715,7 @@ Current browser authoring coverage in that harness includes:
 Use the real-Ollama lane from WSL when you want local-model smoke coverage for the authoring path:
 
 ```bash
-HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=<your-model> node scripts/test-automation-authoring-compiler.mjs --use-ollama
+HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=gemma4:26b node scripts/test-automation-authoring-compiler.mjs --use-ollama
 ```
 
 Manual UI testing is still useful for live approval UX, real browser engine behavior, and dashboard rendering issues. `scripts/test-browser.ps1` remains legacy coverage for older raw browser surfaces and should not be the primary regression signal for wrapper-first browser automation.

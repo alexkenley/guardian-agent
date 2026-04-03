@@ -4392,6 +4392,63 @@ describe('WebChannel', () => {
       }]);
     });
 
+    it('GET /api/chat/pending-action returns the current surface-scoped pending action', async () => {
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+        onPendingActionCurrent: ({ userId, channel, surfaceId }) => ({
+          pendingAction: {
+            status: 'pending',
+            blocker: {
+              kind: 'approval',
+              approvalSummaries: [{ id: 'approval-1', toolName: 'update_tool_policy', argsPreview: 'add S:\\Temp' }],
+            },
+            scope: { userId, channel, surfaceId },
+          },
+        }),
+      };
+
+      web = new WebChannel({ port: 18979, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'fallback' }));
+
+      const res = await fetch('http://localhost:18979/api/chat/pending-action?userId=web-user&channel=web&surfaceId=web-guardian-chat', {
+        headers: authHeaders,
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json() as { pendingAction?: { blocker?: { kind?: string; approvalSummaries?: Array<{ id: string }> } } };
+      expect(body.pendingAction?.blocker?.kind).toBe('approval');
+      expect(body.pendingAction?.blocker?.approvalSummaries?.[0]?.id).toBe('approval-1');
+    });
+
+    it('GET /api/chat/pending-action returns 404 when the callback is unavailable', async () => {
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+      };
+      delete dashboard.onPendingActionCurrent;
+
+      web = new WebChannel({ port: 18980, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'fallback' }));
+
+      const res = await fetch('http://localhost:18980/api/chat/pending-action?userId=web-user&channel=web&surfaceId=web-guardian-chat', {
+        headers: authHeaders,
+      });
+
+      expect(res.status).toBe(404);
+    });
+
+    it('GET /api/chat/pending-action requires auth', async () => {
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+        onPendingActionCurrent: () => ({ pendingAction: null }),
+      };
+
+      web = new WebChannel({ port: 18981, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'fallback' }));
+
+      const res = await fetch('http://localhost:18981/api/chat/pending-action?userId=web-user&channel=web&surfaceId=web-guardian-chat');
+      expect(res.status).toBe(401);
+    });
+
     it('POST /api/message/stream rejects non-string content', async () => {
       const dashboard: DashboardCallbacks = {
         ...mockDashboard,

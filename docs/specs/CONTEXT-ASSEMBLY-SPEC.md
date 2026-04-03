@@ -31,6 +31,7 @@ This spec is cross-cutting. Route-specific, tool-specific, memory-specific, skil
 - Preserve safety-critical state even when prompt budgets are tight.
 - Reduce default prompt weight for both local and external providers.
 - Prefer compact availability inventories plus explicit drilldown over large default catalogs.
+- Prefer maintained bounded summaries over repeated ad hoc re-summarization of raw history.
 - Keep context semantics shared across chat, brokered workers, and coding-session flows.
 - Make compaction and retrieval decisions visible in diagnostics and traces.
 
@@ -140,9 +141,17 @@ If the model only needs to know that a capability exists, send a compact invento
 
 Use retrieval-backed working context, not broad prompt stuffing, for code, memory, skills, and tool discovery.
 
+### Maintained Summaries Beat Re-Summarizing Raw History
+
+If a bounded session or continuity summary already exists, the runtime should refresh and reuse that maintained artifact rather than repeatedly deriving a new summary from a growing raw transcript on every turn.
+
 ### Semantic Parity Across Local And External
 
 Local and external paths may differ in description length or formatting, but they must receive the same availability semantics. A tool, provider, or backend must not "exist" for one tier and be silently undiscoverable for the other.
+
+### Compaction Must Preserve Message Invariants
+
+Prompt compaction is a correctness boundary, not only an optimization. When history is trimmed, Guardian must preserve protocol-critical relationships such as assistant tool calls and corresponding tool results, along with the current user objective, blocker state, and active execution references.
 
 ### One Owner Per Section
 
@@ -208,6 +217,34 @@ Prompt-time memory loading is selected and ranked rather than appended wholesale
 
 Code-session prompts already prefer workspace identity, trust, profile, repo map, and working-set evidence over generic host-app context.
 
+### Prompt Compaction
+
+The current runtime already exposes compaction diagnostics and can persist a bounded Code-session compacted summary, but the summary artifact is still too incidental. The next uplift should turn compaction into a maintained, reusable summary path with stronger invariant preservation.
+
+## Additional Target Patterns
+
+The next optimization wave should adopt these shared patterns across the owning subsystems.
+
+### Session-Stable Tool Definition Shaping
+
+Within one tool loop or active session, the model should see a stable set of rendered tool definitions unless discovery or provider locality actually changes. We should avoid unnecessary tool-schema churn between adjacent rounds.
+
+### Stronger Deferred Discovery
+
+Deferred tool discovery should support exact-name, family-prefix, category, and keyword matching without requiring the model to guess the right search phrasing. Discovery quality should improve at the registry/search layer rather than by promoting deferred tools into the always-loaded set.
+
+### Maintained Session Summary Artifacts
+
+Coding sessions and longer-running chat threads should keep a bounded maintained summary artifact that can be refreshed incrementally and used as the first compaction source before raw history re-summarization.
+
+### Non-Blocking Retrieval Prefetch
+
+Memory and other retrieval-backed evidence should be prefetched when likely useful, but prompt assembly should remain able to proceed without blocking if those results are not ready in time. Retrieval should be consume-if-ready, not an unconditional latency tax.
+
+### Background Memory Hygiene
+
+Extraction, consolidation, and summary-refresh work should run as system-owned background maintenance with bounded budgets and shared orchestration visibility rather than as hidden ad hoc prompt work.
+
 ## Target Implementation Shape
 
 The optimization work should stay incremental and aligned with the current architecture.
@@ -253,83 +290,103 @@ Every payload reduction should preserve enough metadata to answer:
 
 The following items are the intended implementation program, in priority order.
 
-### Phase 1: Unify Skill Catalog Injection
+### Phase 0: Compaction Invariant Preservation
 
 Problem:
-- execution prompts currently carry both `<active-skills>` summary data and a separate `<available_skills>` block with overlapping catalog content
+- current history compaction is still vulnerable to treating protocol structure as disposable text
+
+Target:
+- preserve assistant tool-call and tool-result relationships
+- preserve current objective, blocker state, and active execution refs during aggressive trim
+- treat compaction regressions as correctness bugs, not only quality regressions
+
+Likely touchpoints:
+- `src/util/context-budget.ts`
+- `src/chat-agent.ts`
+- `src/runtime/context-assembly.ts`
+
+### Phase 1: Stronger Deferred Discovery And Compact Inventories
+
+Problem:
+- deferred capability discovery still depends too heavily on the model guessing the right `find_tools` phrasing
+- default inventories are compact, but they are not yet rich enough to support consistently good discovery on weaker local models
+
+Target:
+- improve discovery matching for exact names, family prefixes, categories, and keywords
+- keep deferred tools deferred
+- preserve local/external semantic parity for discovery
+- keep compact inventories small while making drilldown paths more obvious
+
+Likely touchpoints:
+- `src/tools/registry.ts`
+- `src/tools/executor.ts`
+- `src/chat-agent.ts`
+
+### Phase 2: Session-Stable Tool Definition Shaping And Skill Catalog Unification
+
+Problem:
+- tool-definition payloads can churn between adjacent rounds
+- execution prompts still carry overlapping skill-catalog content
 
 Target:
 - keep one canonical compact skill catalog
-- keep the explicit "read `SKILL.md` before acting when relevant" instruction
-- keep skill-specific output contracts only when they materially change response shape
+- keep rendered tool definitions stable within an active loop unless discovery or provider locality changes
+- keep full skill/tool detail behind explicit drilldown
 
 Likely touchpoints:
-- `src/runtime/context-assembly.ts`
 - `src/chat-agent.ts`
+- `src/chat-agent-helpers.ts`
 - `src/skills/prompt.ts`
 - `src/worker/worker-session.ts`
 
-### Phase 2: Compact Cloud Profile Inventory
+### Phase 3: Compact Operational Inventories
 
 Problem:
-- tool context currently injects rich per-profile lines with endpoint, username, readiness, allowlist state, and provider-specific details
+- cloud profiles, provider/model state, allowlists, and browser capability guidance can dominate `<tool-context>`
 
 Target:
-- default prompt should carry only:
-  - profile id
-  - provider family
-  - label
-  - credential readiness
-  - allowlist readiness
-  - narrow read-only probe hint
-- richer profile detail should be loaded only when the current turn is clearly about that provider or profile
-
-Likely touchpoints:
-- `src/tools/executor.ts`
-- future `src/tools/helpers/tool-context.ts`
-
-### Phase 3: Add Provider/Model Summary Context
-
-Problem:
-- provider switching tools exist, but default prompt context does not yet carry a compact provider/model summary for ordinary disambiguation
-
-Target:
-- inject a compact provider summary:
-  - provider id
-  - default / preferred-local / preferred-external role
-  - current configured model
-- keep full model lists behind `llm_provider_models`
+- default prompt should carry only bounded operational summaries:
+  - compact cloud profile inventory
+  - compact provider/model role summary
+  - capped allowlist summaries
+  - tightened browser capability summary
+- richer detail remains behind explicit control-plane drilldown
 
 Likely touchpoints:
 - `src/tools/executor.ts`
 - provider dashboard/control-plane helpers
+- future `src/tools/helpers/tool-context.ts`
 
-### Phase 4: Compact Large Allowlists
-
-Problem:
-- allowed paths, commands, and domains can grow until they dominate `<tool-context>`
-
-Target:
-- default prompt should use a capped summary with counts and a small number of representative entries
-- if a path/domain/command likely matters to the current request, include the matching item
-- full inventories should be available through explicit lookup or control-plane drilldown, not injected into every turn
-
-Likely touchpoints:
-- `src/tools/executor.ts`
-- policy/control-plane read surface
-
-### Phase 5: Browser Capability Summary Tightening
+### Phase 4: Maintained Session Summary Artifacts
 
 Problem:
-- browser wrapper guidance is useful, but it can drift into too much default detail
+- compaction summaries still behave too much like ad hoc by-products of pressure rather than first-class maintained context artifacts
 
 Target:
-- keep wrapper availability, backend readiness, and allowed-domain summary in default prompt context
-- push detailed capability explanation behind `browser_capabilities`
+- keep bounded maintained summaries for coding sessions and longer-running execution threads
+- refresh them incrementally instead of repeatedly summarizing raw history
+- use maintained summaries as the first compaction source
 
 Likely touchpoints:
-- `src/tools/executor.ts`
-- browser wrapper docs/prompts
+- `src/runtime/code-sessions.ts`
+- `src/chat-agent.ts`
+- `src/runtime/memory-flush.ts`
+
+### Phase 5: Non-Blocking Memory Prefetch And Retrieval-Backed Evidence Loading
+
+Problem:
+- prompt-time retrieval can either be too eager or too blocking
+
+Target:
+- prefetch likely-relevant memory/evidence opportunistically
+- consume retrieval if ready, without stalling the turn if it is not
+- keep selection traceable and trust-aware
+
+Likely touchpoints:
+- `src/index.ts`
+- `src/runtime/context-assembly.ts`
+- `src/runtime/agent-memory-store.ts`
+- `src/runtime/conversation.ts`
 
 ### Phase 6: Coding Evidence Budgeting
 
@@ -346,7 +403,23 @@ Likely touchpoints:
 - code-session working-set builders
 - `src/util/context-budget.ts`
 
-### Phase 7: Section Budgets And Section Diagnostics
+### Phase 7: Background Memory Hygiene
+
+Problem:
+- extraction, summary refresh, and consolidation work is still too coupled to foreground request paths
+
+Target:
+- run thresholded extraction, coalescing, summary refresh, and periodic consolidation as system-owned background jobs
+- keep locking, budgets, and audit visibility shared with the broader orchestration model
+- avoid transcript races or hidden authority expansion
+
+Likely touchpoints:
+- `src/runtime/agent-memory-store.ts`
+- `src/runtime/conversation.ts`
+- `src/runtime/orchestrator.ts`
+- `src/runtime/assistant-jobs.ts`
+
+### Phase 8: Section Budgets And Section Diagnostics
 
 Problem:
 - current diagnostics report overall compaction, but not per-section footprint
@@ -386,9 +459,11 @@ When implementing the optimization phases:
 Primary verification surfaces:
 - `src/runtime/context-assembly.test.ts`
 - `src/tools/executor.test.ts`
+- `src/tools/registry.test.ts`
 - `src/skills/prompt.test.ts`
 - `src/runtime/intent-gateway.test.ts`
 - `src/worker/worker-session.test.ts`
+- `src/util/context-budget.test.ts`
 - prompt-footprint regression coverage in relevant chat/runtime tests
 
 Operator-facing verification should continue to rely on:

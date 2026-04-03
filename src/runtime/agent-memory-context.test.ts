@@ -220,4 +220,27 @@ describe('AgentMemoryStore context packing', () => {
     ]));
     expect(result.queryPreview).toContain('save the browser automation artifact');
   });
+
+  it('caps the winning set before prompt packing when many active entries exist', () => {
+    const store = makeStore(2000);
+    for (let index = 0; index < 40; index += 1) {
+      store.append('agent1', {
+        content: `Importer verification note ${index} covering checkpoints and follow-up details.`,
+        summary: `Importer verification note ${index}.`,
+        createdAt: `2026-03-${String((index % 28) + 1).padStart(2, '0')}`,
+        category: index % 2 === 0 ? 'Project Notes' : 'Context Flushes',
+        sourceType: index % 2 === 0 ? 'user' : 'system',
+        ...(index % 2 === 1 ? { tags: ['context_flush', 'verification'] } : {}),
+      });
+    }
+
+    const result = store.loadForContextWithSelection('agent1', {
+      query: 'importer verification checkpoints',
+      maxChars: 800,
+    });
+
+    expect(result.candidateEntries).toBe(40);
+    expect(result.selectedEntries.length).toBeLessThanOrEqual(24);
+    expect(result.omittedEntries).toBeGreaterThan(0);
+  });
 });

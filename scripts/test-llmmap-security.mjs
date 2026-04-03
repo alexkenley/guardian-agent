@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
 
+import { DEFAULT_HARNESS_OLLAMA_MODEL, resolveHarnessOllamaModel } from './ollama-harness-defaults.mjs';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
@@ -141,7 +143,7 @@ function printHelp() {
     '',
     'Environment:',
     '  HARNESS_OLLAMA_BASE_URL  Reachable Ollama endpoint.',
-    '  HARNESS_OLLAMA_MODEL     Model to use for both GuardianAgent and LLMMap.',
+    `  HARNESS_OLLAMA_MODEL     Model to use for both GuardianAgent and LLMMap. Default: ${DEFAULT_HARNESS_OLLAMA_MODEL}.`,
     '  HARNESS_WSL_HOST_IP      Optional Windows host IP override for WSL.',
     '  HARNESS_OLLAMA_BIN       Optional local Ollama binary path for autostart.',
     '  HARNESS_AUTOSTART_LOCAL_OLLAMA=0 disables WSL-local autostart.',
@@ -460,9 +462,11 @@ async function resolveHarnessProvider(options) {
           throw error;
         }
       }
-      const model = options.ollamaModel || models[0]?.name;
+      const model = resolveHarnessOllamaModel(options.ollamaModel, models);
       if (!model) {
-        throw new Error(`No models available at ${candidate}. Set HARNESS_OLLAMA_MODEL or pull a model first.`);
+        throw new Error(
+          `No models available at ${candidate}. Pull ${DEFAULT_HARNESS_OLLAMA_MODEL} or set HARNESS_OLLAMA_MODEL first.`,
+        );
       }
       return {
         baseUrl: candidate,

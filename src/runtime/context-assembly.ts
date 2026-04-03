@@ -14,6 +14,9 @@ export interface PromptAssemblySkill {
   id: string;
   name: string;
   summary: string;
+  description?: string;
+  role?: string;
+  sourcePath?: string;
 }
 
 export interface PromptAssemblyRuntimeNotice {
@@ -53,6 +56,21 @@ export interface PromptAssemblyInput {
   additionalSections?: string[];
 }
 
+export interface PromptAssemblySectionFootprint {
+  section: string;
+  chars: number;
+  included: boolean;
+  mode?: string;
+  itemCount?: number;
+}
+
+export interface PromptAssemblyPreservedExecutionState {
+  objective?: string;
+  blockerSummary?: string;
+  activeExecutionRefs?: string[];
+  maintainedSummarySource?: string;
+}
+
 export interface PromptAssemblyDiagnostics {
   summary: string;
   detail: string;
@@ -77,6 +95,8 @@ export interface PromptAssemblyDiagnostics {
   contextCharsAfterCompaction?: number;
   contextCompactionStages?: string[];
   compactedSummaryPreview?: string;
+  sectionFootprints?: PromptAssemblySectionFootprint[];
+  preservedExecutionState?: PromptAssemblyPreservedExecutionState;
 }
 
 export interface PromptAssemblyMemorySelectionEntry {
@@ -106,6 +126,8 @@ export interface PromptAssemblyDiagnosticsInput {
   continuity?: PromptAssemblyContinuity | null;
   codeSessionId?: string;
   activeSkillCount?: number;
+  sectionFootprints?: PromptAssemblySectionFootprint[];
+  preservedExecutionState?: PromptAssemblyPreservedExecutionState;
   contextCompaction?: {
     applied: boolean;
     beforeChars: number;
@@ -119,6 +141,20 @@ function wrapTaggedSection(tag: string, content: string): string {
   const trimmed = content.trim();
   if (!trimmed) return '';
   return `<${tag}>\n${trimmed}\n</${tag}>`;
+}
+
+function measureSection(section: string, content: string, options?: {
+  mode?: string;
+  itemCount?: number;
+}): PromptAssemblySectionFootprint {
+  const trimmed = content.trim();
+  return {
+    section,
+    chars: trimmed.length,
+    included: trimmed.length > 0,
+    ...(options?.mode ? { mode: options.mode } : {}),
+    ...(typeof options?.itemCount === 'number' ? { itemCount: options.itemCount } : {}),
+  };
 }
 
 function truncateInline(value: string | undefined, maxChars: number): string | undefined {
@@ -149,14 +185,60 @@ function formatKnowledgeBaseSections(knowledgeBases: PromptAssemblyKnowledgeBase
     .filter(Boolean);
 }
 
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function formatActiveSkillBehaviorContracts(skills: PromptAssemblySkill[] | undefined): string[] {
+  if (!skills || skills.length === 0) return [];
+  const sections: string[] = [];
+
+  if (skills.some((skill) => skill.id === 'writing-plans')) {
+    sections.push([
+      '<writing-plan-output-contract>',
+      'When producing a non-trivial implementation plan, include the headings "Acceptance Gates" and "Existing Checks To Reuse" in the written output.',
+      'If the exact repo checks are not known yet, still include "Existing Checks To Reuse" and say they must be identified before adding narrower new tests.',
+      'Do not block the first draft plan on repo inspection or tool use just to discover those checks.',
+      '</writing-plan-output-contract>',
+    ].join('\n'));
+  }
+
+  if (skills.some((skill) => skill.id === 'verification-before-completion')) {
+    sections.push([
+      '<verification-output-contract>',
+      'Before claiming work is done, fixed, or passing, require fresh evidence on the real proof surface.',
+      'Use the phrases "proof surface" and "full legitimate green" in the written response.',
+      '</verification-output-contract>',
+    ].join('\n'));
+  }
+
+  return sections;
+}
+
 function formatActiveSkillsSection(skills: PromptAssemblySkill[] | undefined): string {
   if (!skills || skills.length === 0) return '';
-  return wrapTaggedSection(
-    'active-skills',
-    skills
-      .map((skill) => `Skill: ${skill.name} (${skill.id})\nSummary:\n${skill.summary}`)
-      .join('\n\n'),
-  );
+  const behaviorContracts = formatActiveSkillBehaviorContracts(skills);
+  const lines = [
+    'Before any reply, clarifying question, or tool call: scan the listed skills.',
+    '- If a listed skill is clearly relevant, read its SKILL.md at <location> before acting.',
+    '- If multiple skills could apply, choose the most specific one first.',
+    '- Read at most two SKILL.md files up front unless the task clearly needs more.',
+    ...skills.flatMap((skill) => ([
+      '<skill>',
+      `  <name>${escapeXml(skill.name)}</name>`,
+      `  <id>${escapeXml(skill.id)}</id>`,
+      ...(skill.description ? [`  <description>${escapeXml(skill.description)}</description>`] : []),
+      ...(skill.role ? [`  <role>${escapeXml(skill.role)}</role>`] : []),
+      `  <summary>${escapeXml(skill.summary)}</summary>`,
+      ...(skill.sourcePath ? [`  <location>${escapeXml(skill.sourcePath)}</location>`] : []),
+      '</skill>',
+    ])),
+    ...behaviorContracts,
+  ];
+  return wrapTaggedSection('active-skills', lines.join('\n'));
 }
 
 function formatToolContextSection(toolContext: string | undefined): string {
@@ -229,6 +311,102 @@ export function buildSystemPromptWithContext(input: PromptAssemblyInput): string
   return sections.join('\n\n');
 }
 
+export function buildPromptAssemblySectionFootprints(input: PromptAssemblyInput): PromptAssemblySectionFootprint[] {
+  const knowledgeBaseSections = formatKnowledgeBaseSections(input.knowledgeBases);
+  const activeSkillsSection = formatActiveSkillsSection(input.activeSkills);
+  const pendingActionSection = formatPendingActionSection(input.pendingAction);
+  const continuitySection = formatContinuitySection(input.continuity);
+  const toolContextSection = formatToolContextSection(input.toolContext);
+  const runtimeNoticesSection = formatRuntimeNoticesSection(input.runtimeNotices);
+  const pendingApprovalSection = input.pendingApprovalNotice?.trim() ?? '';
+  const additionalSections = (input.additionalSections ?? []).map((section) => section.trim());
+
+  return [
+    measureSection('base_system_prompt', input.baseSystemPrompt, { mode: 'explicit' }),
+    measureSection(
+      'knowledge_bases',
+      knowledgeBaseSections.join('\n\n'),
+      { mode: 'retrieval', itemCount: input.knowledgeBases?.length ?? 0 },
+    ),
+    measureSection(
+      'active_skills',
+      activeSkillsSection,
+      { mode: 'inventory', itemCount: input.activeSkills?.length ?? 0 },
+    ),
+    measureSection('pending_action', pendingActionSection, { mode: 'explicit' }),
+    measureSection('continuity', continuitySection, { mode: 'explicit' }),
+    measureSection('tool_context', toolContextSection, { mode: 'inventory' }),
+    measureSection(
+      'runtime_notices',
+      runtimeNoticesSection,
+      { mode: 'explicit', itemCount: input.runtimeNotices?.length ?? 0 },
+    ),
+    measureSection('pending_approval_notice', pendingApprovalSection, { mode: 'explicit' }),
+    measureSection(
+      'additional_sections',
+      additionalSections.join('\n\n'),
+      { mode: 'targeted', itemCount: additionalSections.filter(Boolean).length },
+    ),
+  ];
+}
+
+export function buildPromptAssemblyPreservedExecutionState(input: {
+  pendingAction?: PromptAssemblyPendingAction | null;
+  continuity?: PromptAssemblyContinuity | null;
+  maintainedSummarySource?: string;
+}): PromptAssemblyPreservedExecutionState | undefined {
+  const objective = truncateInline(
+    input.continuity?.lastActionableRequest || input.continuity?.focusSummary,
+    140,
+  );
+  const blockerSummary = truncateInline(
+    input.pendingAction
+      ? [
+          input.pendingAction.kind,
+          input.pendingAction.route,
+          input.pendingAction.operation,
+          input.pendingAction.prompt,
+        ].filter(Boolean).join(' | ')
+      : undefined,
+    140,
+  );
+  const activeExecutionRefs = Array.isArray(input.continuity?.activeExecutionRefs)
+    ? input.continuity.activeExecutionRefs.filter((value) => typeof value === 'string' && value.trim().length > 0)
+    : [];
+  const maintainedSummarySource = truncateInline(input.maintainedSummarySource, 80);
+
+  if (!objective && !blockerSummary && activeExecutionRefs.length === 0 && !maintainedSummarySource) {
+    return undefined;
+  }
+
+  return {
+    ...(objective ? { objective } : {}),
+    ...(blockerSummary ? { blockerSummary } : {}),
+    ...(activeExecutionRefs.length > 0 ? { activeExecutionRefs } : {}),
+    ...(maintainedSummarySource ? { maintainedSummarySource } : {}),
+  };
+}
+
+export function summarizeCompactedPreview(summary: string | undefined, maxChars: number = 84): string | undefined {
+  return truncateInline(summary, maxChars);
+}
+
+export function buildContextCompactionDiagnostics(input: {
+  applied: boolean;
+  beforeChars: number;
+  afterChars: number;
+  stages: string[];
+  summary?: string;
+}): PromptAssemblyDiagnosticsInput['contextCompaction'] {
+  return {
+    applied: input.applied,
+    beforeChars: input.beforeChars,
+    afterChars: input.afterChars,
+    stages: input.stages,
+    ...(input.summary ? { summary: input.summary } : {}),
+  };
+}
+
 export function buildChatMessagesFromHistory(input: {
   systemPrompt: string;
   history?: PromptAssemblyHistoryEntry[];
@@ -272,10 +450,35 @@ export function buildPromptAssemblyDiagnostics(
       )
     : undefined;
   const compactionApplied = input.contextCompaction?.applied === true;
-  const compactionSummaryPreview = truncateInline(input.contextCompaction?.summary, 84);
+  const compactionSummaryPreview = summarizeCompactedPreview(input.contextCompaction?.summary, 84);
   const compactionStages = Array.isArray(input.contextCompaction?.stages)
     ? input.contextCompaction.stages.filter((value) => typeof value === 'string' && value.trim().length > 0)
     : [];
+  const sectionFootprints = Array.isArray(input.sectionFootprints)
+    ? input.sectionFootprints
+        .filter((entry) => !!entry && typeof entry.section === 'string')
+        .slice(0, 12)
+    : [];
+  const preservedExecutionState = input.preservedExecutionState;
+  const sectionPreview = sectionFootprints.length > 0
+    ? truncateInline(
+        sectionFootprints
+          .filter((entry) => entry.included)
+          .map((entry) => `${entry.section}:${entry.chars}`)
+          .join(' | '),
+        84,
+      )
+    : undefined;
+  const preservedStatePreview = truncateInline(
+    [
+      preservedExecutionState?.objective,
+      preservedExecutionState?.blockerSummary,
+      preservedExecutionState?.maintainedSummarySource
+        ? `summary ${preservedExecutionState.maintainedSummarySource}`
+        : undefined,
+    ].filter(Boolean).join(' | '),
+    84,
+  );
 
   const summaryParts = [
     `${memoryLabel} ${knowledgeBaseLoaded ? 'loaded' : 'empty'}`,
@@ -294,6 +497,8 @@ export function buildPromptAssemblyDiagnostics(
       : []),
     ...(selectedMemoryEntries.length > 0 ? [`memory picks ${selectedMemoryEntries.length}`] : []),
     ...(selectedMemoryPreview ? [`top ${selectedMemoryPreview}`] : []),
+    ...(sectionPreview ? [`sections ${sectionPreview}`] : []),
+    ...(preservedStatePreview ? [`preserved ${preservedStatePreview}`] : []),
     ...(compactionSummaryPreview ? [`compacted ${compactionSummaryPreview}`] : []),
   ];
   const detailParts = [
@@ -314,6 +519,12 @@ export function buildPromptAssemblyDiagnostics(
     ...(typeof input.activeSkillCount === 'number' && input.activeSkillCount > 0
       ? [`activeSkills=${input.activeSkillCount}`]
       : []),
+    ...(sectionFootprints.length > 0
+      ? [`sections=${sectionFootprints.map((entry) => `${entry.section}:${entry.included ? entry.chars : 0}`).join('|')}`]
+      : []),
+    ...(preservedExecutionState?.objective ? [`objective="${preservedExecutionState.objective}"`] : []),
+    ...(preservedExecutionState?.blockerSummary ? [`blockerSummary="${preservedExecutionState.blockerSummary}"`] : []),
+    ...(preservedExecutionState?.maintainedSummarySource ? [`maintainedSummarySource=${preservedExecutionState.maintainedSummarySource}`] : []),
     ...(compactionApplied
       ? [
           `contextCompacted=${input.contextCompaction?.beforeChars ?? 0}->${input.contextCompaction?.afterChars ?? 0}`,
@@ -355,6 +566,8 @@ export function buildPromptAssemblyDiagnostics(
       : {}),
     ...(compactionStages.length > 0 ? { contextCompactionStages: compactionStages } : {}),
     ...(compactionSummaryPreview ? { compactedSummaryPreview: compactionSummaryPreview } : {}),
+    ...(sectionFootprints.length > 0 ? { sectionFootprints } : {}),
+    ...(preservedExecutionState ? { preservedExecutionState } : {}),
     ...(selectedMemoryEntries.length > 0
       ? {
           selectedMemoryEntryCount: selectedMemoryEntries.length,

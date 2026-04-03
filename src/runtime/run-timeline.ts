@@ -68,6 +68,21 @@ export interface DashboardRunTimelineContextMemoryEntry {
   matchReasons?: string[];
 }
 
+export interface DashboardRunTimelineContextSectionFootprint {
+  section: string;
+  chars: number;
+  included: boolean;
+  mode?: string;
+  itemCount?: number;
+}
+
+export interface DashboardRunTimelinePreservedExecutionState {
+  objective?: string;
+  blockerSummary?: string;
+  activeExecutionRefs?: string[];
+  maintainedSummarySource?: string;
+}
+
 export interface DashboardRunTimelineContextAssembly {
   summary?: string;
   detail?: string;
@@ -87,6 +102,8 @@ export interface DashboardRunTimelineContextAssembly {
   contextCharsAfterCompaction?: number;
   contextCompactionStages?: string[];
   compactedSummaryPreview?: string;
+  sectionFootprints?: DashboardRunTimelineContextSectionFootprint[];
+  preservedExecutionState?: DashboardRunTimelinePreservedExecutionState;
 }
 
 export interface DashboardRunSummary {
@@ -1071,6 +1088,46 @@ function extractContextAssembly(node: WorkflowTraceNode): DashboardRunTimelineCo
   const omittedMemoryEntryCount = typeof metadata.omittedMemoryEntryCount === 'number' && Number.isFinite(metadata.omittedMemoryEntryCount)
     ? metadata.omittedMemoryEntryCount
     : undefined;
+  const sectionFootprints = Array.isArray(metadata.sectionFootprints)
+    ? metadata.sectionFootprints
+      .map((entry) => {
+        if (!isRecord(entry)) return null;
+        const section = nonEmptyText(typeof entry.section === 'string' ? entry.section : undefined);
+        const chars = typeof entry.chars === 'number' && Number.isFinite(entry.chars) ? entry.chars : null;
+        const included = entry.included === true || entry.included === false ? entry.included : null;
+        const mode = nonEmptyText(typeof entry.mode === 'string' ? entry.mode : undefined);
+        const itemCount = typeof entry.itemCount === 'number' && Number.isFinite(entry.itemCount) ? entry.itemCount : undefined;
+        if (!section || chars === null || included === null) return null;
+        return {
+          section,
+          chars,
+          included,
+          ...(mode ? { mode } : {}),
+          ...(typeof itemCount === 'number' ? { itemCount } : {}),
+        };
+      })
+      .filter((entry): entry is NonNullable<DashboardRunTimelineContextAssembly['sectionFootprints']>[number] => !!entry)
+    : [];
+  const preservedExecutionState = isRecord(metadata.preservedExecutionState)
+    ? {
+        ...(nonEmptyText(typeof metadata.preservedExecutionState.objective === 'string' ? metadata.preservedExecutionState.objective : undefined)
+          ? { objective: nonEmptyText(typeof metadata.preservedExecutionState.objective === 'string' ? metadata.preservedExecutionState.objective : undefined) }
+          : {}),
+        ...(nonEmptyText(typeof metadata.preservedExecutionState.blockerSummary === 'string' ? metadata.preservedExecutionState.blockerSummary : undefined)
+          ? { blockerSummary: nonEmptyText(typeof metadata.preservedExecutionState.blockerSummary === 'string' ? metadata.preservedExecutionState.blockerSummary : undefined) }
+          : {}),
+        ...(Array.isArray(metadata.preservedExecutionState.activeExecutionRefs)
+          ? {
+              activeExecutionRefs: metadata.preservedExecutionState.activeExecutionRefs
+                .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+                .map((value) => value.trim()),
+            }
+          : {}),
+        ...(nonEmptyText(typeof metadata.preservedExecutionState.maintainedSummarySource === 'string' ? metadata.preservedExecutionState.maintainedSummarySource : undefined)
+          ? { maintainedSummarySource: nonEmptyText(typeof metadata.preservedExecutionState.maintainedSummarySource === 'string' ? metadata.preservedExecutionState.maintainedSummarySource : undefined) }
+          : {}),
+      }
+    : undefined;
   const contextAssembly: DashboardRunTimelineContextAssembly = {
     ...(nonEmptyText(typeof metadata.summary === 'string' ? metadata.summary : undefined) ? { summary: nonEmptyText(typeof metadata.summary === 'string' ? metadata.summary : undefined) } : {}),
     ...(nonEmptyText(typeof metadata.detail === 'string' ? metadata.detail : undefined) ? { detail: nonEmptyText(typeof metadata.detail === 'string' ? metadata.detail : undefined) } : {}),
@@ -1116,6 +1173,8 @@ function extractContextAssembly(node: WorkflowTraceNode): DashboardRunTimelineCo
     ...(nonEmptyText(typeof metadata.compactedSummaryPreview === 'string' ? metadata.compactedSummaryPreview : undefined)
       ? { compactedSummaryPreview: nonEmptyText(typeof metadata.compactedSummaryPreview === 'string' ? metadata.compactedSummaryPreview : undefined) }
       : {}),
+    ...(sectionFootprints.length > 0 ? { sectionFootprints } : {}),
+    ...(preservedExecutionState && Object.keys(preservedExecutionState).length > 0 ? { preservedExecutionState } : {}),
   };
   return Object.keys(contextAssembly).length > 0 ? contextAssembly : undefined;
 }

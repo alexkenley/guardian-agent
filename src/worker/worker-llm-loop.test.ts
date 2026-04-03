@@ -258,6 +258,53 @@ describe('runLlmLoop', () => {
     expect(result.finalContent).toContain('explicitly ask');
   });
 
+  it('discovers deferred tools through search when the tool is not initially loaded', async () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: 'Read the page.' }];
+    const responses: ChatResponse[] = [
+      {
+        content: '',
+        toolCalls: [{ id: 'call-1', name: 'browser_read', arguments: JSON.stringify({ url: 'https://example.com' }) }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      },
+      {
+        content: 'Read complete.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const searchQueries: string[] = [];
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [];
+      },
+      async searchTools(query) {
+        searchQueries.push(query);
+        return [{
+          name: 'browser_read',
+          description: 'Read page content.',
+          parameters: { type: 'object', properties: { url: { type: 'string' } } },
+          risk: 'read_only',
+          category: 'browser',
+        }];
+      },
+      async callTool(request): Promise<ToolResult> {
+        expect(request.toolName).toBe('browser_read');
+        return { success: true, output: { content: 'Example Domain' } };
+      },
+    };
+
+    const result = await runLlmLoop(messages, async () => {
+      const next = responses.shift();
+      if (!next) throw new Error('Unexpected extra chatFn call');
+      return next;
+    }, toolCaller, 3, 32_000);
+
+    expect(searchQueries.length).toBeGreaterThan(0);
+    expect(result.finalContent).toContain('Read complete.');
+    expect(messages.some((message) => message.role === 'tool' && message.content.includes('<tool_result name="browser_read"'))).toBe(true);
+  });
+
   it('passes the model memory-mutation allowance through to the tool caller', async () => {
     const messages: ChatMessage[] = [{ role: 'user', content: 'Please remember that I prefer terse updates.' }];
     const responses: ChatResponse[] = [

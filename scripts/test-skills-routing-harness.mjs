@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { URL } from 'node:url';
 import yaml from 'js-yaml';
 
+import { DEFAULT_HARNESS_OLLAMA_MODEL, resolveHarnessOllamaModel } from './ollama-harness-defaults.mjs';
 import { SkillRegistry } from '../src/skills/registry.ts';
 import { SkillResolver } from '../src/skills/resolver.ts';
 
@@ -290,9 +291,11 @@ async function resolveHarnessProvider(options) {
         }
       }
 
-      const resolvedModel = options.ollamaModel || models[0]?.name;
+      const resolvedModel = resolveHarnessOllamaModel(options.ollamaModel, models);
       if (!resolvedModel) {
-        throw new Error(`No models available at ${candidate}. Set HARNESS_OLLAMA_MODEL or pull a model first.`);
+        throw new Error(
+          `No models available at ${candidate}. Pull ${DEFAULT_HARNESS_OLLAMA_MODEL} or set HARNESS_OLLAMA_MODEL first.`,
+        );
       }
 
       return {

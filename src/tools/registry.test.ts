@@ -121,5 +121,33 @@ describe('ToolRegistry', () => {
       const results = registry.searchTools('unicorn');
       expect(results).toHaveLength(1);
     });
+
+    it('prefers exact tool names over looser keyword matches', () => {
+      const registry = new ToolRegistry();
+      registry.register(makeTool({ name: 'browser_read', description: 'Read page content' }), handler);
+      registry.register(makeTool({ name: 'browser_links', description: 'List links from a page' }), handler);
+
+      const results = registry.searchTools('browser_read');
+      expect(results[0]?.name).toBe('browser_read');
+    });
+
+    it('matches tool families by prefix', () => {
+      const registry = new ToolRegistry();
+      registry.register(makeTool({ name: 'browser_read', category: 'browser' }), handler);
+      registry.register(makeTool({ name: 'browser_act', category: 'browser' }), handler);
+      registry.register(makeTool({ name: 'fs_read', category: 'filesystem' }), handler);
+
+      const results = registry.searchTools('browser');
+      expect(results.map((tool) => tool.name)).toEqual(['browser_act', 'browser_read']);
+    });
+
+    it('matches categories ahead of description fallback', () => {
+      const registry = new ToolRegistry();
+      registry.register(makeTool({ name: 'browser_read', category: 'browser', description: 'Inspect the active page' }), handler);
+      registry.register(makeTool({ name: 'web_fetch', category: 'web', description: 'Browser compatibility fetch helper' }), handler);
+
+      const results = registry.searchTools('browser');
+      expect(results[0]?.name).toBe('browser_read');
+    });
   });
 });

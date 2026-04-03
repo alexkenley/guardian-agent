@@ -1,5 +1,7 @@
 # Memory System Uplift Plan
 
+> Superseded as the primary implementation sequence by [Context, Memory, and Orchestration Uplift Plan](/mnt/s/Development/GuardianAgent/docs/plans/CONTEXT-MEMORY-ORCHESTRATION-UPLIFT-PLAN.md). This document remains as narrower historical planning context.
+
 **Date:** 2026-03-20
 **Status:** Draft (revised after implementation review)
 **Origin:** Analysis of [Clawmark](https://github.com/jackccrawford/clawmark) memory system against GuardianAgent's existing memory architecture

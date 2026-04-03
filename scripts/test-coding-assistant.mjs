@@ -6,6 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
 
+import { DEFAULT_HARNESS_OLLAMA_MODEL, resolveHarnessOllamaModel } from './ollama-harness-defaults.mjs';
+
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -208,7 +210,7 @@ function printHelp() {
     'Environment:',
     '  HARNESS_USE_REAL_OLLAMA=1                    Enable the real-Ollama lane.',
     '  HARNESS_KEEP_TMP=1                           Preserve the harness temp directory.',
-    '  HARNESS_OLLAMA_BASE_URL, HARNESS_OLLAMA_MODEL, HARNESS_WSL_HOST_IP',
+    `  HARNESS_OLLAMA_BASE_URL, HARNESS_OLLAMA_MODEL (default ${DEFAULT_HARNESS_OLLAMA_MODEL}), HARNESS_WSL_HOST_IP`,
     '  HARNESS_OLLAMA_BIN, HARNESS_AUTOSTART_LOCAL_OLLAMA,',
     '  HARNESS_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD',
   ].join('\n'));
@@ -635,9 +637,11 @@ async function resolveHarnessProvider(options, workspaceRoot, scopedWorkspaceRoo
           throw error;
         }
       }
-      const resolvedModel = options.ollamaModel || models[0]?.name;
+      const resolvedModel = resolveHarnessOllamaModel(options.ollamaModel, models);
       if (!resolvedModel) {
-        throw new Error(`No models available at ${candidate}. Set HARNESS_OLLAMA_MODEL or pull a model first.`);
+        throw new Error(
+          `No models available at ${candidate}. Pull ${DEFAULT_HARNESS_OLLAMA_MODEL} or set HARNESS_OLLAMA_MODEL first.`,
+        );
       }
       return {
         baseUrl: candidate,

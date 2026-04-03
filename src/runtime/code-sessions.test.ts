@@ -207,6 +207,34 @@ describe('CodeSessionStore', () => {
     expect(updated?.resolvedRoot).toBe(secondRoot);
   });
 
+  it('persists compacted summary refresh timestamps in work state', () => {
+    const workspaceRoot = createWorkspace('summary-refresh', {
+      'package.json': JSON.stringify({ name: 'summary-refresh-app' }),
+    });
+    const store = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(workspaceRoot, '.guardianagent', 'code-sessions.sqlite'),
+      now: () => 123456,
+    });
+
+    const session = store.createSession({
+      ownerUserId: 'owner',
+      title: 'Summary Refresh',
+      workspaceRoot,
+    });
+    const updated = store.updateSession({
+      sessionId: session.id,
+      ownerUserId: 'owner',
+      workState: {
+        compactedSummary: 'Compacted summary for the current code session.',
+        compactedSummaryUpdatedAt: 123456,
+      },
+    });
+
+    expect(updated?.workState.compactedSummary).toBe('Compacted summary for the current code session.');
+    expect(updated?.workState.compactedSummaryUpdatedAt).toBe(123456);
+  });
+
   it('normalizes Windows and WSL-style workspace roots to the current host format', () => {
     const seedRoot = createWorkspace('normalize-host-path', {
       'package.json': JSON.stringify({ name: 'normalize-host-path' }),
@@ -391,10 +419,13 @@ describe('CodeSessionStore', () => {
     });
 
     expect(updated?.resolvedRoot).toBe(secondRoot);
+    expect(updated?.conversationUserId).not.toBe(session.conversationUserId);
     expect(updated?.uiState.currentDirectory).toBeNull();
     expect(updated?.uiState.selectedFilePath).toBeNull();
     expect(updated?.workState.focusSummary).toBe('');
     expect(updated?.workState.planSummary).toBe('');
+    expect(updated?.conversationUserId).toContain(session.id);
+    expect(updated?.conversationUserId).toContain('second_state');
     expect(updated?.workState.compactedSummary).toBe('');
     expect(updated?.workState.workspaceMap).toBeNull();
     expect(updated?.workState.workingSet).toBeNull();

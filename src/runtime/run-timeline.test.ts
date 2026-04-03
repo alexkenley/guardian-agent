@@ -285,6 +285,47 @@ describe('RunTimelineStore', () => {
     expect(contextItem?.contextAssembly?.selectedMemoryEntries?.[0]?.matchReasons).toEqual(['query summary', 'summary terms 4']);
   });
 
+  it('preserves section footprints and execution state in context assembly timeline details', () => {
+    const store = new RunTimelineStore({ now: () => 500 });
+    store.ingestAssistantTrace(createTrace({
+      requestId: 'req-context-state',
+      runId: 'req-context-state',
+      nodes: [{
+        id: 'compile-context-state',
+        kind: 'compile',
+        name: 'Assembled context',
+        startedAt: 118,
+        completedAt: 119,
+        status: 'succeeded',
+        metadata: {
+          summary: 'global memory loaded | sections tool_context:420',
+          detail: 'memoryScope=global; objective="Fix importer"',
+          sectionFootprints: [
+            { section: 'tool_context', chars: 420, included: true, mode: 'inventory' },
+          ],
+          preservedExecutionState: {
+            objective: 'Fix importer',
+            blockerSummary: 'approval | coding_task | Approve the write operation.',
+            maintainedSummarySource: 'code_session_compacted_summary',
+          },
+        },
+      }],
+    }));
+
+    const contextItem = store.getRun('req-context-state')?.items.find((item) => item.title === 'Assembled context');
+    expect(contextItem?.contextAssembly?.sectionFootprints?.[0]).toMatchObject({
+      section: 'tool_context',
+      chars: 420,
+      included: true,
+      mode: 'inventory',
+    });
+    expect(contextItem?.contextAssembly?.preservedExecutionState).toEqual({
+      objective: 'Fix importer',
+      blockerSummary: 'approval | coding_task | Approve the write operation.',
+      maintainedSummarySource: 'code_session_compacted_summary',
+    });
+  });
+
   it('filters runs by continuity key and active execution ref from context assembly details', () => {
     const store = new RunTimelineStore({ now: () => 500 });
     store.ingestAssistantTrace(createTrace({

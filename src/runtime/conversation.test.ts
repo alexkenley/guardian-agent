@@ -256,4 +256,22 @@ describe('ConversationService Memory Flush', () => {
     expect(flushedCounts).toEqual(afterFirstBuild);
     service.close();
   });
+
+  it('prefers a contiguous history window that matches the active query over pure recency', () => {
+    const service = makeService({
+      maxContextChars: 140,
+    });
+    const key = { agentId: 'assistant', userId: 'u1', channel: 'web' };
+
+    service.recordTurn(key, 'alpha deployment issue root cause', 'alpha reply with deployment details');
+    service.recordTurn(key, 'misc small talk', 'misc reply');
+    service.recordTurn(key, 'beta rollout notes', 'beta reply');
+
+    const history = service.getHistoryForContext(key, {
+      query: 'alpha deployment',
+    });
+
+    expect(history.some((entry) => entry.content.includes('alpha deployment issue root cause'))).toBe(true);
+    service.close();
+  });
 });

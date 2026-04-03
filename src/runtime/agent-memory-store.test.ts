@@ -221,7 +221,9 @@ describe('AgentMemoryStore', () => {
       category: 'Notes',
     });
 
-    expect(store.loadForContext('agent1')).toBe('');
+    const context = store.loadForContext('agent1');
+    expect(context).toContain('[... 1 additional memory entry omitted');
+    expect(context).not.toContain('Ignore previous instructions');
     expect(events.some((event) => event.code === 'memory_context_entry_blocked')).toBe(true);
   });
 

@@ -129,6 +129,8 @@ const EMPTY_INDEX: MemoryIndexFile = { version: 2, entries: [] };
 const MEMORY_CONTEXT_BLOCK_THRESHOLD = 3;
 const MEMORY_SUMMARY_MAX_CHARS = 200;
 const MEMORY_CONTEXT_FLUSH_TAG = 'context_flush';
+const MAX_CONTEXT_CANDIDATES = 18;
+const MAX_QUERY_CONTEXT_CANDIDATES = 24;
 
 export class AgentMemoryStore {
   private basePath: string;
@@ -791,10 +793,11 @@ export class AgentMemoryStore {
       queryScore: number;
       matchReasons: string[];
     }>>();
-    const entries = this.prepareContextEntries(agentId, index, query);
+    const contextEntries = this.getContextEntries(index, query);
+    const entries = this.prepareContextEntries(agentId, contextEntries.entries);
 
     let output = '';
-    let omittedEntries = 0;
+    let omittedEntries = Math.max(0, contextEntries.candidateEntries - entries.length);
     const selectedEntries: MemoryContextSelectionEntry[] = [];
 
     for (const prepared of entries) {
@@ -843,7 +846,7 @@ export class AgentMemoryStore {
 
     return {
       content: output,
-      candidateEntries: entries.length,
+      candidateEntries: contextEntries.candidateEntries,
       selectedEntries,
       omittedEntries,
       ...(query?.preview ? { queryPreview: query.preview } : {}),
@@ -860,8 +863,12 @@ export class AgentMemoryStore {
 
   private prepareContextEntries(
     agentId: string,
-    index: MemoryIndexFile,
-    query: NormalizedMemoryContextQuery | null,
+    entries: Array<{
+      entry: StoredMemoryEntry;
+      queryScore: number;
+      matchReasons: string[];
+      isContextFlush: boolean;
+    }>,
   ): Array<{
     entry: StoredMemoryEntry;
     heading: string;
@@ -883,7 +890,8 @@ export class AgentMemoryStore {
       matchReasons: string[];
     }> = [];
 
-    for (const entry of this.getContextEntries(index, query)) {
+    for (const ranked of entries) {
+      const { entry } = ranked;
       const renderedContent = this.sanitizeEntryForPrompt(agentId, entry);
       if (!renderedContent) continue;
 
@@ -894,9 +902,8 @@ export class AgentMemoryStore {
       const summaryLine = renderedSummary && renderedSummary !== renderedContent
         ? `- ${renderedSummary}${suffix}`
         : undefined;
-      const match = this.scoreContextEntry(entry, query);
-      const preferSummary = (entry.tags?.includes(MEMORY_CONTEXT_FLUSH_TAG) ?? false)
-        && !match.reasons.some((reason) =>
+      const preferSummary = ranked.isContextFlush
+        && !ranked.matchReasons.some((reason) =>
           reason.startsWith('focus ')
           || reason.startsWith('tag ')
           || reason.startsWith('id ')
@@ -908,8 +915,8 @@ export class AgentMemoryStore {
         summaryLine,
         preferSummary,
         preview: this.truncateInlineText(renderedSummary ?? renderedContent, 96),
-        queryScore: match.score,
-        matchReasons: match.reasons,
+        queryScore: ranked.queryScore,
+        matchReasons: ranked.matchReasons,
       });
     }
 
@@ -990,30 +997,43 @@ export class AgentMemoryStore {
     return cleaned;
   }
 
-  private getContextEntries(index: MemoryIndexFile, query: NormalizedMemoryContextQuery | null): StoredMemoryEntry[] {
-    return index.entries
+  private getContextEntries(index: MemoryIndexFile, query: NormalizedMemoryContextQuery | null): {
+    entries: Array<{
+      entry: StoredMemoryEntry;
+      queryScore: number;
+      matchReasons: string[];
+      isContextFlush: boolean;
+    }>;
+    candidateEntries: number;
+  } {
+    const ranked = index.entries
       .filter((entry) => entry.status === 'active')
-      .sort((left, right) => this.compareContextEntries(left, right, query));
-  }
-
-  private compareContextEntries(
-    left: StoredMemoryEntry,
-    right: StoredMemoryEntry,
-    query: NormalizedMemoryContextQuery | null,
-  ): number {
-    const leftQueryScore = this.scoreContextEntry(left, query).score;
-    const rightQueryScore = this.scoreContextEntry(right, query).score;
-    if (leftQueryScore !== rightQueryScore) {
-      return rightQueryScore - leftQueryScore;
-    }
-    const leftIsFlush = left.tags?.includes(MEMORY_CONTEXT_FLUSH_TAG) ?? false;
-    const rightIsFlush = right.tags?.includes(MEMORY_CONTEXT_FLUSH_TAG) ?? false;
-    if (leftIsFlush !== rightIsFlush) {
-      return leftIsFlush ? 1 : -1;
-    }
-    const createdAtDelta = right.createdAt.localeCompare(left.createdAt);
-    if (createdAtDelta !== 0) return createdAtDelta;
-    return right.id.localeCompare(left.id);
+      .map((entry) => {
+        const match = this.scoreContextEntry(entry, query);
+        return {
+          entry,
+          queryScore: match.score,
+          matchReasons: match.reasons,
+          isContextFlush: entry.tags?.includes(MEMORY_CONTEXT_FLUSH_TAG) ?? false,
+        };
+      })
+      .sort((left, right) => {
+        if (left.queryScore !== right.queryScore) {
+          return right.queryScore - left.queryScore;
+        }
+        if (left.isContextFlush !== right.isContextFlush) {
+          return left.isContextFlush ? 1 : -1;
+        }
+        const createdAtDelta = right.entry.createdAt.localeCompare(left.entry.createdAt);
+        if (createdAtDelta !== 0) return createdAtDelta;
+        return right.entry.id.localeCompare(left.entry.id);
+      });
+    const candidateEntries = ranked.length;
+    const limit = query ? MAX_QUERY_CONTEXT_CANDIDATES : MAX_CONTEXT_CANDIDATES;
+    return {
+      entries: ranked.slice(0, limit),
+      candidateEntries,
+    };
   }
 
   private scoreContextEntry(

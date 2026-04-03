@@ -442,7 +442,15 @@ export async function initChatPanel(container) {
 
   const resolvePendingActionForDisplay = async (metadata) => {
     const direct = metadata?.pendingAction;
-    return direct && typeof direct === 'object' ? direct : undefined;
+    if (direct && typeof direct === 'object') return direct;
+    try {
+      const current = await api.currentPendingAction(webUserId, 'web', GUARDIAN_CHAT_SURFACE_ID);
+      return current?.pendingAction && typeof current.pendingAction === 'object'
+        ? current.pendingAction
+        : undefined;
+    } catch {
+      return undefined;
+    }
   };
 
   // ── Send logic ──────────────────────────────────────────────

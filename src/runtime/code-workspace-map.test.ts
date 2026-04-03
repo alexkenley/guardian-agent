@@ -90,6 +90,9 @@ describe('code-workspace-map', () => {
     expect(workingSet.files.some((entry) => entry.path === 'package.json')).toBe(true);
     expect(workingSet.files.some((entry) => entry.path === 'src/App.tsx')).toBe(true);
     expect(workingSet.snippets.some((entry) => /habit|weekly goals/i.test(entry.excerpt))).toBe(true);
+    expect(workingSet.files.length).toBeLessThanOrEqual(6);
+    expect(workingSet.snippets.length).toBeLessThanOrEqual(4);
+    expect(workingSet.snippets.every((entry) => entry.excerpt.length <= 900)).toBe(true);
   });
 
   it('keeps the previous working set alive for vague follow-up questions', () => {

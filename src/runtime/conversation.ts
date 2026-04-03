@@ -81,6 +81,400 @@ export interface ConversationSessionInfo {
   isActive: boolean;
 }
 
+export interface ConversationContextQuery {
+  text?: string;
+  focusTexts?: string[];
+  tags?: string[];
+  identifiers?: string[];
+}
+
+export interface ConversationContextOptions {
+  query?: string | ConversationContextQuery;
+}
+
+interface NormalizedConversationContextQuery {
+  text?: string;
+  focusTexts: string[];
+  tags: string[];
+  identifiers: string[];
+  terms: string[];
+}
+
+interface TrimmedHistorySelection {
+  entries: ConversationEntry[];
+  cutoffIndex: number;
+}
+
+function normalizeContextText(value: string | undefined): string {
+  return (value ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function uniqueNormalized(values: readonly unknown[] | undefined): string[] {
+  if (!Array.isArray(values)) return [];
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of values) {
+    const next = normalizeContextText(typeof value === 'string' ? value : '');
+    if (!next || seen.has(next)) continue;
+    seen.add(next);
+    normalized.push(next);
+  }
+  return normalized;
+}
+
+function extractQueryTerms(values: string[]): string[] {
+  const seen = new Set<string>();
+  const terms: string[] = [];
+  for (const value of values) {
+    for (const term of value.split(/[^a-z0-9]+/).filter((candidate) => candidate.length >= 2)) {
+      if (seen.has(term)) continue;
+      seen.add(term);
+      terms.push(term);
+    }
+  }
+  return terms;
+}
+
+function normalizeConversationContextQuery(
+  query: string | ConversationContextQuery | undefined,
+): NormalizedConversationContextQuery | null {
+  if (typeof query === 'string') {
+    const text = normalizeContextText(query);
+    if (!text) return null;
+    return { text, focusTexts: [], tags: [], identifiers: [], terms: extractQueryTerms([text]) };
+  }
+  if (!query) return null;
+  const text = normalizeContextText(query.text);
+  const focusTexts = uniqueNormalized(query.focusTexts);
+  const tags = uniqueNormalized(query.tags);
+  const identifiers = uniqueNormalized(query.identifiers);
+  const terms = extractQueryTerms([...(text ? [text] : []), ...focusTexts, ...tags, ...identifiers]);
+  if (!text && focusTexts.length === 0 && tags.length === 0 && identifiers.length === 0 && terms.length === 0) {
+    return null;
+  }
+  return {
+    ...(text ? { text } : {}),
+    focusTexts,
+    tags,
+    identifiers,
+    terms,
+  };
+}
+
+function scoreConversationEntry(
+  entry: ConversationEntry,
+  index: number,
+  total: number,
+  query: NormalizedConversationContextQuery | null,
+): number {
+  const content = normalizeContextText(entry.content);
+  let score = Math.round(((index + 1) / Math.max(1, total)) * 40);
+  if (entry.role === 'user') score += 12;
+  if (!query || !content) return score;
+  if (query.text && content.includes(query.text)) score += 140;
+  for (const focusText of query.focusTexts) {
+    if (content.includes(focusText)) score += 90;
+  }
+  for (const identifier of query.identifiers) {
+    if (content.includes(identifier)) score += 100;
+  }
+  for (const tag of query.tags) {
+    if (content.includes(tag)) score += 50;
+  }
+  for (const term of query.terms) {
+    if (content.includes(term)) score += 12;
+  }
+  return score;
+}
+
+function selectContiguousHistoryWindow(
+  history: ConversationEntry[],
+  maxChars: number,
+  query: NormalizedConversationContextQuery | null,
+): TrimmedHistorySelection {
+  let bestStart = history.length;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  let found = false;
+  for (let start = history.length - 1; start >= 0; start -= 1) {
+    const suffix = history.slice(start);
+    const chars = suffix.reduce((sum, entry) => sum + entry.content.length, 0);
+    if (chars > maxChars) continue;
+    found = true;
+    const score = suffix.reduce((sum, entry, offset) => (
+      sum + scoreConversationEntry(entry, start + offset, history.length, query)
+    ), 0) - Math.round(chars / 64);
+    if (score >= bestScore) {
+      bestScore = score;
+      bestStart = start;
+    }
+  }
+  if (!found) {
+    const last = history[history.length - 1];
+    return {
+      entries: last ? [last] : [],
+      cutoffIndex: Math.max(-1, history.length - 2),
+    };
+  }
+  return {
+    entries: history.slice(bestStart),
+    cutoffIndex: bestStart - 1,
+  };
+}
+
+function selectRecentHistoryWindow(history: ConversationEntry[], maxChars: number): TrimmedHistorySelection {
+  const reversed: ConversationEntry[] = [];
+  let totalChars = 0;
+  let cutoffIndex = -1;
+
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const entry = history[i];
+    const nextTotal = totalChars + entry.content.length;
+    if (nextTotal > maxChars) {
+      cutoffIndex = i;
+      break;
+    }
+    reversed.push(entry);
+    totalChars = nextTotal;
+  }
+
+  return {
+    entries: reversed.reverse(),
+    cutoffIndex,
+  };
+}
+
+function trimHistoryForContext(
+  history: ConversationEntry[],
+  maxChars: number,
+  query: string | ConversationContextQuery | undefined,
+): TrimmedHistorySelection {
+  const normalizedQuery = normalizeConversationContextQuery(query);
+  if (!normalizedQuery) {
+    return selectRecentHistoryWindow(history, maxChars);
+  }
+  return selectContiguousHistoryWindow(history, maxChars, normalizedQuery);
+}
+
+function mapTrimmedHistoryEntries(entries: ConversationEntry[]): Array<{ role: 'user' | 'assistant'; content: string }> {
+  return entries.map((entry) => ({ role: entry.role, content: entry.content }));
+}
+
+function mapHistoryToChatMessages(entries: ConversationEntry[]): ChatMessage[] {
+  return entries.map((entry): ChatMessage => ({ role: entry.role, content: entry.content }));
+}
+
+function findFlushedMessages(
+  history: ConversationEntry[],
+  cutoffIndex: number,
+  flushedCount: number,
+): ConversationEntry[] {
+  if (cutoffIndex < 0) return [];
+  const totalDroppedCount = cutoffIndex + 1;
+  const boundedFlushedCount = Math.min(flushedCount, totalDroppedCount);
+  return history.slice(boundedFlushedCount, totalDroppedCount);
+}
+
+function computeTotalDroppedCount(cutoffIndex: number): number {
+  return cutoffIndex >= 0 ? cutoffIndex + 1 : 0;
+}
+
+function shouldFlushDroppedMessages(dropped: ConversationEntry[]): boolean {
+  return dropped.length >= 2;
+}
+
+function countHistoryChars(entries: ConversationEntry[]): number {
+  return entries.reduce((sum, entry) => sum + entry.content.length, 0);
+}
+
+function selectTrimmedHistory(
+  history: ConversationEntry[],
+  maxChars: number,
+  query: string | ConversationContextQuery | undefined,
+): TrimmedHistorySelection {
+  return trimHistoryForContext(history, maxChars, query);
+}
+
+function resolveTrimmedHistory(
+  history: ConversationEntry[],
+  maxChars: number,
+  query: string | ConversationContextQuery | undefined,
+): TrimmedHistorySelection {
+  return selectTrimmedHistory(history, maxChars, query);
+}
+
+function trimmedHistoryFits(result: TrimmedHistorySelection, maxChars: number): boolean {
+  return countHistoryChars(result.entries) <= maxChars;
+}
+
+function buildTrimmedHistory(
+  history: ConversationEntry[],
+  maxChars: number,
+  query: string | ConversationContextQuery | undefined,
+): TrimmedHistorySelection {
+  const result = resolveTrimmedHistory(history, maxChars, query);
+  return trimmedHistoryFits(result, maxChars) ? result : selectRecentHistoryWindow(history, maxChars);
+}
+
+function toHistoryContextQuery(options?: ConversationContextOptions): string | ConversationContextQuery | undefined {
+  return options?.query;
+}
+
+function normalizeHistoryContextQuery(options?: ConversationContextOptions): string | ConversationContextQuery | undefined {
+  return toHistoryContextQuery(options);
+}
+
+function historyWasTrimmed(result: TrimmedHistorySelection): boolean {
+  return result.cutoffIndex >= 0;
+}
+
+function filteredDroppedMessages(history: ConversationEntry[], result: TrimmedHistorySelection, flushedCount: number): ConversationEntry[] {
+  return findFlushedMessages(history, result.cutoffIndex, flushedCount);
+}
+
+function droppedMessageCount(result: TrimmedHistorySelection): number {
+  return computeTotalDroppedCount(result.cutoffIndex);
+}
+
+function trimmedHistoryEntries(result: TrimmedHistorySelection): ConversationEntry[] {
+  return result.entries;
+}
+
+function trimConversationHistory(
+  history: ConversationEntry[],
+  maxChars: number,
+  options?: ConversationContextOptions,
+): TrimmedHistorySelection {
+  return buildTrimmedHistory(history, maxChars, normalizeHistoryContextQuery(options));
+}
+
+function mapHistoryForPrompt(entries: ConversationEntry[]): Array<{ role: 'user' | 'assistant'; content: string }> {
+  return mapTrimmedHistoryEntries(entries);
+}
+
+function mapHistoryForMessages(entries: ConversationEntry[]): ChatMessage[] {
+  return mapHistoryToChatMessages(entries);
+}
+
+function trimHistoryEntries(
+  history: ConversationEntry[],
+  maxChars: number,
+  options?: ConversationContextOptions,
+): TrimmedHistorySelection {
+  return trimConversationHistory(history, maxChars, options);
+}
+
+function trimmedHistoryDroppedMessages(
+  history: ConversationEntry[],
+  result: TrimmedHistorySelection,
+  flushedCount: number,
+): ConversationEntry[] {
+  return filteredDroppedMessages(history, result, flushedCount);
+}
+
+function trimmedHistoryTotalDroppedCount(result: TrimmedHistorySelection): number {
+  return droppedMessageCount(result);
+}
+
+function shouldRecordHistoryFlush(result: TrimmedHistorySelection): boolean {
+  return historyWasTrimmed(result);
+}
+
+function buildHistoryForContext(
+  history: ConversationEntry[],
+  maxChars: number,
+  options?: ConversationContextOptions,
+): TrimmedHistorySelection {
+  return trimHistoryEntries(history, maxChars, options);
+}
+
+function mapPromptHistory(entries: ConversationEntry[]): Array<{ role: 'user' | 'assistant'; content: string }> {
+  return mapHistoryForPrompt(entries);
+}
+
+function mapBuildMessagesHistory(entries: ConversationEntry[]): ChatMessage[] {
+  return mapHistoryForMessages(entries);
+}
+
+function normalizeConversationOptions(options?: ConversationContextOptions): ConversationContextOptions | undefined {
+  return options;
+}
+
+function readConversationQuery(options?: ConversationContextOptions): string | ConversationContextQuery | undefined {
+  return normalizeConversationOptions(options)?.query;
+}
+
+function trimConversationHistoryForContext(
+  history: ConversationEntry[],
+  maxChars: number,
+  options?: ConversationContextOptions,
+): TrimmedHistorySelection {
+  return buildHistoryForContext(history, maxChars, { query: readConversationQuery(options) });
+}
+
+function toConversationPromptHistory(entries: ConversationEntry[]): Array<{ role: 'user' | 'assistant'; content: string }> {
+  return mapPromptHistory(entries);
+}
+
+function toConversationChatMessages(entries: ConversationEntry[]): ChatMessage[] {
+  return mapBuildMessagesHistory(entries);
+}
+
+function flushableDroppedMessages(
+  history: ConversationEntry[],
+  result: TrimmedHistorySelection,
+  flushedCount: number,
+): ConversationEntry[] {
+  return trimmedHistoryDroppedMessages(history, result, flushedCount);
+}
+
+function flushableDroppedCount(result: TrimmedHistorySelection): number {
+  return trimmedHistoryTotalDroppedCount(result);
+}
+
+function shouldFlushHistory(result: TrimmedHistorySelection): boolean {
+  return shouldRecordHistoryFlush(result);
+}
+
+function trimHistoryWithOptions(
+  history: ConversationEntry[],
+  maxChars: number,
+  options?: ConversationContextOptions,
+): TrimmedHistorySelection {
+  return trimConversationHistoryForContext(history, maxChars, options);
+}
+
+function toContextHistory(entries: ConversationEntry[]): Array<{ role: 'user' | 'assistant'; content: string }> {
+  return toConversationPromptHistory(entries);
+}
+
+function toContextMessages(entries: ConversationEntry[]): ChatMessage[] {
+  return toConversationChatMessages(entries);
+}
+
+function droppedHistoryForFlush(
+  history: ConversationEntry[],
+  result: TrimmedHistorySelection,
+  flushedCount: number,
+): ConversationEntry[] {
+  return flushableDroppedMessages(history, result, flushedCount);
+}
+
+function totalDroppedForFlush(result: TrimmedHistorySelection): number {
+  return flushableDroppedCount(result);
+}
+
+function canFlushHistory(result: TrimmedHistorySelection): boolean {
+  return shouldFlushHistory(result);
+}
+
+function trimContextHistory(
+  history: ConversationEntry[],
+  maxChars: number,
+  options?: ConversationContextOptions,
+): TrimmedHistorySelection {
+  return trimHistoryWithOptions(history, maxChars, options);
+}
+
 /**
  * Callback invoked when messages are dropped from context during trimming.
  * Receives the dropped messages so they can be summarized and persisted
@@ -204,25 +598,20 @@ export class ConversationService {
     key: ConversationKey,
     systemPrompt: string,
     userContent: string,
+    options?: ConversationContextOptions,
   ): ChatMessage[] {
-    const history = this.getTrimmedHistoryForContext(key);
+    const history = this.getTrimmedHistoryForContext(key, options);
 
     return [
       { role: 'system', content: systemPrompt },
-      ...history.map((entry): ChatMessage => ({
-        role: entry.role,
-        content: entry.content,
-      })),
+      ...toContextMessages(history),
       { role: 'user', content: userContent },
     ];
   }
 
   /** Return trimmed prior user/assistant turns for worker-side prompt assembly. */
-  getHistoryForContext(key: ConversationKey): Array<{ role: 'user' | 'assistant'; content: string }> {
-    return this.getTrimmedHistoryForContext(key).map((entry) => ({
-      role: entry.role,
-      content: entry.content,
-    }));
+  getHistoryForContext(key: ConversationKey, options?: ConversationContextOptions): Array<{ role: 'user' | 'assistant'; content: string }> {
+    return toContextHistory(this.getTrimmedHistoryForContext(key, options));
   }
 
   /** Return stored history for the active session without context trimming. */
@@ -538,7 +927,7 @@ export class ConversationService {
     this.flushedMessageCounts.clear();
   }
 
-  private getTrimmedHistoryForContext(key: ConversationKey): ConversationEntry[] {
+  private getTrimmedHistoryForContext(key: ConversationKey, options?: ConversationContextOptions): ConversationEntry[] {
     const sessionId = this.getActiveSessionId(key);
     const history = this.mode === 'sqlite'
       ? this.getSessionHistorySQLite(key, sessionId)
@@ -546,28 +935,14 @@ export class ConversationService {
 
     if (history.length === 0) return [];
 
-    const reversed: ConversationEntry[] = [];
-    let totalChars = 0;
-    let cutoffIndex = -1;
+    const trimmed = trimContextHistory(history, this.options.maxContextChars, options);
 
-    for (let i = history.length - 1; i >= 0; i--) {
-      const entry = history[i];
-      const nextTotal = totalChars + entry.content.length;
-      if (nextTotal > this.options.maxContextChars) {
-        cutoffIndex = i;
-        break;
-      }
-      reversed.push(entry);
-      totalChars = nextTotal;
-    }
-
-    // Memory flush: notify callback about messages being dropped from context
-    if (cutoffIndex >= 0 && this.options.onMemoryFlush) {
-      const totalDroppedCount = cutoffIndex + 1;
+    if (canFlushHistory(trimmed) && this.options.onMemoryFlush) {
+      const totalDroppedCount = totalDroppedForFlush(trimmed);
       const contextKey = this.toMapKey(key, sessionId);
       const flushedCount = Math.min(this.flushedMessageCounts.get(contextKey) ?? 0, totalDroppedCount);
-      const dropped = history.slice(flushedCount, totalDroppedCount);
-      if (dropped.length >= 2) {
+      const dropped = droppedHistoryForFlush(history, trimmed, flushedCount);
+      if (shouldFlushDroppedMessages(dropped)) {
         try {
           this.options.onMemoryFlush(key, {
             sessionId,
@@ -582,7 +957,7 @@ export class ConversationService {
       }
     }
 
-    return reversed.reverse();
+    return trimmedHistoryEntries(trimmed);
   }
 
   private getSessionHistorySQLite(key: ConversationKey, sessionId: string): ConversationEntry[] {
