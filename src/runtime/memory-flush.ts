@@ -34,6 +34,93 @@ export interface BuildMemoryFlushEntryInput {
   codeSession?: MemoryFlushCodeSessionContext | null;
 }
 
+export interface MemoryFlushMaintenanceMetadata {
+  maintenance: {
+    kind: 'memory_hygiene';
+    maintenanceType: 'context_flush';
+    artifact: 'memory_entry';
+    bounded: true;
+    scope: 'global' | 'code_session';
+    sessionId: string;
+    totalDroppedCount: number;
+    newlyDroppedCount: number;
+    continuityKey?: string;
+    codeSessionId?: string;
+    route?: string;
+  };
+}
+
+export interface BuildMemoryFlushMaintenanceMetadataInput {
+  key: ConversationKey;
+  flush: MemoryFlushPayload;
+  continuity?: MemoryFlushContinuityContext | null;
+  pendingAction?: MemoryFlushPendingActionContext | null;
+  codeSession?: MemoryFlushCodeSessionContext | null;
+}
+
+export function buildMemoryFlushMaintenanceMetadata(
+  input: BuildMemoryFlushMaintenanceMetadataInput,
+): MemoryFlushMaintenanceMetadata {
+  return {
+    maintenance: {
+      kind: 'memory_hygiene',
+      maintenanceType: 'context_flush',
+      artifact: 'memory_entry',
+      bounded: true,
+      scope: input.codeSession?.codeSessionId ? 'code_session' : 'global',
+      sessionId: input.flush.sessionId,
+      totalDroppedCount: input.flush.totalDroppedCount,
+      newlyDroppedCount: input.flush.newlyDroppedCount,
+      ...(input.continuity?.continuityKey ? { continuityKey: input.continuity.continuityKey } : {}),
+      ...(input.codeSession?.codeSessionId ? { codeSessionId: input.codeSession.codeSessionId } : {}),
+      ...(input.pendingAction?.route ? { route: input.pendingAction.route } : {}),
+    },
+  };
+}
+
+export function describeMemoryFlushMaintenanceDetail(input: {
+  scope: 'global' | 'code_session';
+  newlyDroppedCount: number;
+  summary?: string;
+  codeSessionId?: string;
+}): string {
+  const subject = truncateInlineText(normalizeInlineText(input.summary) || 'context flush', 120);
+  const scopeLabel = input.scope === 'code_session'
+    ? `code session${input.codeSessionId ? ` ${input.codeSessionId}` : ''}`
+    : 'global memory';
+  return `Context flush persisted to ${scopeLabel}: ${subject} (${input.newlyDroppedCount} captured line${input.newlyDroppedCount === 1 ? '' : 's'}).`;
+}
+
+export function describeMemoryFlushSkipDetail(input: {
+  scope: 'global' | 'code_session';
+  reason: 'read_only' | 'empty_entry';
+  codeSessionId?: string;
+  newlyDroppedCount: number;
+}): string {
+  const scopeLabel = input.scope === 'code_session'
+    ? `code session${input.codeSessionId ? ` ${input.codeSessionId}` : ''}`
+    : 'global memory';
+  const reasonText = input.reason === 'read_only'
+    ? 'store is read-only'
+    : 'no durable summary could be derived';
+  return `Context flush skipped for ${scopeLabel}: ${reasonText} (${input.newlyDroppedCount} dropped line${input.newlyDroppedCount === 1 ? '' : 's'}).`;
+}
+
+export function describeMemoryFlushFailureDetail(input: {
+  scope: 'global' | 'code_session';
+  codeSessionId?: string;
+  newlyDroppedCount: number;
+}): string {
+  const scopeLabel = input.scope === 'code_session'
+    ? `code session${input.codeSessionId ? ` ${input.codeSessionId}` : ''}`
+    : 'global memory';
+  return `Context flush failed for ${scopeLabel} (${input.newlyDroppedCount} dropped line${input.newlyDroppedCount === 1 ? '' : 's'}).`;
+}
+
+export function inferMemoryFlushScope(codeSession?: MemoryFlushCodeSessionContext | null): 'global' | 'code_session' {
+  return codeSession?.codeSessionId ? 'code_session' : 'global';
+}
+
 const MEMORY_FLUSH_SUMMARY_MAX_CHARS = 200;
 const MIN_TRANSCRIPT_LINE_CHARS = 18;
 

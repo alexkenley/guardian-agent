@@ -145,4 +145,60 @@ describe('AssistantJobTracker', () => {
       actions: ['replay', 'keep_held', 'dismiss'],
     });
   });
+
+  it('surfaces bounded memory hygiene metadata for maintenance jobs', () => {
+    const display = buildAssistantJobDisplay({
+      source: 'system',
+      detail: 'Refreshed compacted summary for code session.',
+      metadata: {
+        maintenance: {
+          kind: 'memory_hygiene',
+          maintenanceType: 'summary_refresh',
+          artifact: 'compacted_summary',
+          bounded: true,
+          scope: 'code_session',
+        },
+      },
+    });
+
+    expect(display.maintenance).toEqual({
+      kind: 'memory_hygiene',
+      maintenanceType: 'summary_refresh',
+      artifact: 'compacted_summary',
+      bounded: true,
+      scope: 'code_session',
+    });
+  });
+
+  it('keeps memory hygiene maintenance metadata when context flush jobs complete', () => {
+    const tracker = new AssistantJobTracker({ now: () => 1000 });
+    const started = tracker.start({
+      type: 'memory_hygiene.context_flush',
+      source: 'system',
+      detail: 'Context flush captured 2 lines',
+      metadata: {
+        maintenance: {
+          kind: 'memory_hygiene',
+          maintenanceType: 'context_flush',
+          artifact: 'memory_entry',
+          bounded: true,
+          scope: 'global',
+        },
+      },
+    });
+    tracker.succeed(started.id, {
+      detail: 'Context flush persisted to global memory: Context flush for browser automation (2 captured lines).',
+    });
+
+    const state = tracker.getState(5);
+    const display = buildAssistantJobDisplay(state.jobs[0]!);
+    expect(display.maintenance).toEqual({
+      kind: 'memory_hygiene',
+      maintenanceType: 'context_flush',
+      artifact: 'memory_entry',
+      bounded: true,
+      scope: 'global',
+    });
+    expect(display.outcomeSummary).toContain('Context flush persisted to global memory');
+  });
 });

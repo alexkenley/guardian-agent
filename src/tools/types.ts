@@ -218,6 +218,7 @@ export interface ToolExecutionRequest {
   toolName: string;
   args: Record<string, unknown>;
   origin: 'assistant' | 'cli' | 'web';
+  requestText?: string;
   agentId?: string;
   userId?: string;
   /** Logical chat/client surface identifier for per-surface code-session focus. */

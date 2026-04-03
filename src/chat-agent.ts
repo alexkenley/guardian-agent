@@ -131,7 +131,10 @@ import {
 } from './runtime/continuity-threads.js';
 import {
   buildChatMessagesFromHistory,
+  buildContextCompactionDiagnostics,
   buildPromptAssemblyDiagnostics,
+  buildPromptAssemblyPreservedExecutionState,
+  buildPromptAssemblySectionFootprints,
   buildSystemPromptWithContext,
   type PromptAssemblyDiagnostics,
   type PromptAssemblyKnowledgeBase,
@@ -143,7 +146,6 @@ import {
 import type { IntentRoutingTraceLog } from './runtime/intent-routing-trace.js';
 import type { ModelFallbackChain } from './llm/model-fallback.js';
 import type { OutputGuardian } from './guardian/output-guardian.js';
-import { formatAvailableSkillsPrompt } from './skills/prompt.js';
 import { SkillRegistry } from './skills/registry.js';
 import { SkillResolver } from './skills/resolver.js';
 import type { ResolvedSkill } from './skills/types.js';
@@ -646,31 +648,6 @@ type DirectIntentShadowCandidate =
     }
   }
 
-  private formatSkillOutputContract(skills: readonly ResolvedSkill[]): string {
-    const sections: string[] = [];
-
-    if (skills.some((skill) => skill.id === 'writing-plans')) {
-      sections.push(
-        '<writing-plan-output-contract>',
-        'When producing a non-trivial implementation plan, include the headings "Acceptance Gates" and "Existing Checks To Reuse" in the written output.',
-        'If the exact repo checks are not known yet, still include "Existing Checks To Reuse" and say they must be identified before adding narrower new tests.',
-        'Do not block the first draft plan on repo inspection or tool use just to discover those checks.',
-        '</writing-plan-output-contract>',
-      );
-    }
-
-    if (skills.some((skill) => skill.id === 'verification-before-completion')) {
-      sections.push(
-        '<verification-output-contract>',
-        'Before claiming work is done, fixed, or passing, require fresh evidence on the real proof surface.',
-        'Use the phrases "proof surface" and "full legitimate green" in the written response.',
-        '</verification-output-contract>',
-      );
-    }
-
-    return sections.length > 0 ? `\n\n${sections.join('\n')}` : '';
-  }
-
   private shouldPreferAnswerFirstForSkills(skills: readonly ResolvedSkill[]): boolean {
     return skills.some((skill) => (
       skill.id === 'writing-plans'
@@ -877,6 +854,8 @@ type DirectIntentShadowCandidate =
       agentId: stateAgentId,
       userId: conversationUserId,
       channel: conversationChannel,
+    }, {
+      query: scopedMessage.content,
     }) ?? [];
     const pendingActionSurfaceId = this.getCodeSessionSurfaceId(message);
     const suspendedScope = normalizeApprovalContinuationScope({
@@ -1151,23 +1130,85 @@ type DirectIntentShadowCandidate =
       compaction: ContextCompactionResult | undefined,
     ): PromptAssemblyDiagnostics | undefined => {
       if (!diagnostics || !compaction?.applied) return diagnostics;
-      const stages = compaction.stages.filter((value) => typeof value === 'string' && value.trim().length > 0);
-      const compactedSummaryPreview = (() => {
-        const normalized = compaction.summary?.replace(/\s+/g, ' ').trim() || '';
-        if (!normalized) return undefined;
-        return normalized.length <= 160
-          ? normalized
-          : `${normalized.slice(0, 157).trimEnd()}...`;
-      })();
       return {
         ...diagnostics,
         contextCompactionApplied: true,
         contextCharsBeforeCompaction: compaction.beforeChars,
         contextCharsAfterCompaction: compaction.afterChars,
-        ...(stages.length > 0 ? { contextCompactionStages: stages } : {}),
-        ...(compactedSummaryPreview ? { compactedSummaryPreview } : {}),
+        ...(compaction.stages.length > 0 ? { contextCompactionStages: [...compaction.stages] } : {}),
+        ...(compaction.summary ? { compactedSummaryPreview: compaction.summary.replace(/\s+/g, ' ').trim().slice(0, 160) } : {}),
       };
     };
+    type PromptKnowledgeBundle = {
+      knowledgeBases: PromptAssemblyKnowledgeBase[];
+      globalContent: string;
+      globalSelection?: MemoryContextLoadResult;
+      codingMemoryContent: string;
+      codingMemorySelection?: MemoryContextLoadResult;
+      queryPreview?: string;
+    };
+    const maintainedSummarySource = resolvedCodeSession?.session.workState.compactedSummary?.trim()
+      ? 'code_session_compacted_summary'
+      : resolvedCodeSession?.session.workState.planSummary?.trim()
+        ? 'code_session_plan_summary'
+        : resolvedCodeSession?.session.workState.focusSummary?.trim()
+          ? 'code_session_focus_summary'
+          : undefined;
+    const buildSectionFootprints = (
+      baseSystemPrompt: string,
+      promptKnowledge: PromptKnowledgeBundle | undefined,
+      runtimeSkills: ResolvedSkill[],
+      toolContext: string,
+      runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>,
+    ) => buildPromptAssemblySectionFootprints({
+      baseSystemPrompt,
+      knowledgeBases: promptKnowledge?.knowledgeBases ?? [],
+      activeSkills: runtimeSkills.map((skill) => ({ id: skill.id, name: skill.name, summary: skill.summary })),
+      toolContext,
+      runtimeNotices,
+      pendingAction: this.buildPendingActionPromptContext(pendingAction),
+      pendingApprovalNotice,
+      continuity: summarizeContinuityThreadForGateway(continuityThread),
+    });
+    const buildContextDiagnostics = (input: {
+      promptKnowledge: PromptKnowledgeBundle | undefined;
+      runtimeSkills: ResolvedSkill[];
+      toolContext: string;
+      runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>;
+      baseSystemPrompt: string;
+      codeSessionId?: string;
+      compaction?: ContextCompactionResult;
+    }): PromptAssemblyDiagnostics => this.buildContextAssemblyMetadata({
+      memoryScope: 'global',
+      knowledgeBase: input.promptKnowledge?.globalContent ?? '',
+      codingMemory: input.promptKnowledge?.codingMemoryContent,
+      globalMemorySelection: input.promptKnowledge?.globalSelection,
+      codingMemorySelection: input.promptKnowledge?.codingMemorySelection,
+      knowledgeBaseQuery: input.promptKnowledge?.queryPreview,
+      activeSkillCount: input.runtimeSkills.length,
+      pendingAction,
+      continuityThread,
+      codeSessionId: input.codeSessionId,
+      sectionFootprints: buildSectionFootprints(
+        input.baseSystemPrompt,
+        input.promptKnowledge,
+        input.runtimeSkills,
+        input.toolContext,
+        input.runtimeNotices,
+      ),
+      preservedExecutionState: buildPreservedExecutionState(),
+      ...(input.compaction?.applied
+        ? { contextCompaction: buildCompactionContext(input.compaction) }
+        : {}),
+    });
+    const buildPreservedExecutionState = () => buildPromptAssemblyPreservedExecutionState({
+      pendingAction: this.buildPendingActionPromptContext(pendingAction),
+      continuity: summarizeContinuityThreadForGateway(continuityThread),
+      maintainedSummarySource,
+    });
+    const buildCompactionContext = (compaction?: ContextCompactionResult) => (
+      compaction?.applied ? buildContextCompactionDiagnostics(compaction) : undefined
+    );
     const buildResponseSourceMetadata = (input: {
       locality: 'local' | 'external';
       providerName: string;
@@ -1227,39 +1268,35 @@ type DirectIntentShadowCandidate =
     } else {
       activeSkills = preResolvedSkills;
       const promptKnowledge = this.loadPromptKnowledgeBases(resolvedCodeSession, knowledgeBaseQuery);
-      contextAssemblyMeta = this.buildContextAssemblyMetadata({
-        memoryScope: 'global',
-        knowledgeBase: promptKnowledge.globalContent,
-        codingMemory: promptKnowledge.codingMemoryContent,
-        globalMemorySelection: promptKnowledge.globalSelection,
-        codingMemorySelection: promptKnowledge.codingMemorySelection,
-        knowledgeBaseQuery: promptKnowledge.queryPreview,
-        activeSkillCount: activeSkills.length,
-        pendingAction,
-        continuityThread,
-        codeSessionId: resolvedCodeSession?.session.id,
-      });
       if (activeSkills.length > 0) {
         this.trackResolvedSkills(message, 'chat', activeSkills, 'prompt_injected');
       }
+      const toolContext = this.tools?.getToolContext({
+        userId: conversationUserId,
+        principalId: message.principalId ?? conversationUserId,
+        channel: conversationChannel,
+        codeContext: effectiveCodeContext,
+        requestText: routedScopedMessage.content,
+      }) ?? '';
+      const runtimeNotices = this.tools?.getRuntimeNotices() ?? [];
+      const baseSystemPrompt = enrichedSystemPrompt;
       enrichedSystemPrompt = this.buildAssembledSystemPrompt({
-        baseSystemPrompt: enrichedSystemPrompt,
+        baseSystemPrompt,
         knowledgeBases: promptKnowledge.knowledgeBases,
         activeSkills,
-        toolContext: this.tools?.getToolContext({
-          userId: conversationUserId,
-          principalId: message.principalId ?? conversationUserId,
-          channel: conversationChannel,
-          codeContext: effectiveCodeContext,
-        }) ?? '',
-        runtimeNotices: this.tools?.getRuntimeNotices() ?? [],
+        toolContext,
+        runtimeNotices,
         pendingAction,
         pendingApprovalNotice,
         continuityThread,
-        additionalSections: [
-          formatAvailableSkillsPrompt(activeSkills, 'fs_read'),
-          this.formatSkillOutputContract(activeSkills),
-        ],
+      });
+      contextAssemblyMeta = buildContextDiagnostics({
+        promptKnowledge,
+        runtimeSkills: activeSkills,
+        toolContext,
+        runtimeNotices,
+        baseSystemPrompt,
+        codeSessionId: resolvedCodeSession?.session.id,
       });
       llmMessages = buildChatMessagesFromHistory({
         systemPrompt: enrichedSystemPrompt,
@@ -1646,19 +1683,24 @@ type DirectIntentShadowCandidate =
     if (workerManager) {
       try {
         const promptKnowledge = this.loadPromptKnowledgeBases(resolvedCodeSession, knowledgeBaseQuery);
-        const workerContextAssemblyMeta = this.buildContextAssemblyMetadata({
-          memoryScope: 'global',
-          knowledgeBase: promptKnowledge.globalContent,
-          codingMemory: promptKnowledge.codingMemoryContent,
-          globalMemorySelection: promptKnowledge.globalSelection,
-          codingMemorySelection: promptKnowledge.codingMemorySelection,
-          knowledgeBaseQuery: promptKnowledge.queryPreview,
-          activeSkillCount: preResolvedSkills.length,
-          pendingAction,
-          continuityThread,
-          codeSessionId: resolvedCodeSession?.session.id,
-        });
         const workerSystemPrompt = this.buildScopedSystemPrompt(resolvedCodeSession, message);
+        const workerToolContext = this.tools?.getToolContext({
+          userId: conversationUserId,
+          principalId: message.principalId ?? conversationUserId,
+          channel: conversationChannel,
+          codeContext: effectiveCodeContext,
+          requestText: routedScopedMessage.content,
+        }) ?? '';
+        const workerRuntimeNotices = this.tools?.getRuntimeNotices() ?? [];
+        const workerContextAssemblyMeta = buildContextDiagnostics({
+          promptKnowledge,
+          runtimeSkills: preResolvedSkills,
+          toolContext: workerToolContext,
+          runtimeNotices: workerRuntimeNotices,
+          baseSystemPrompt: workerSystemPrompt,
+          codeSessionId: resolvedCodeSession?.session.id,
+          compaction: latestContextCompaction,
+        });
         const continuitySummary = summarizeContinuityThreadForGateway(continuityThread);
         // Attach codeContext to the message metadata so the worker can forward it
         // through the broker to the tool executor for auto-approve decisions.
@@ -1675,12 +1717,7 @@ type DirectIntentShadowCandidate =
           history: priorHistory,
           knowledgeBases: promptKnowledge.knowledgeBases,
           activeSkills: preResolvedSkills,
-          toolContext: this.tools?.getToolContext({
-            userId: conversationUserId,
-            principalId: message.principalId ?? conversationUserId,
-            channel: conversationChannel,
-            codeContext: effectiveCodeContext,
-          }) ?? '',
+          toolContext: workerToolContext,
           runtimeNotices: this.tools?.getRuntimeNotices() ?? [],
           continuity: continuitySummary,
           pendingAction: this.buildPendingActionPromptContext(pendingAction),
@@ -2855,6 +2892,9 @@ type DirectIntentShadowCandidate =
     pendingAction?: PendingActionRecord | null;
     continuityThread?: ContinuityThreadRecord | null;
     codeSessionId?: string;
+    sectionFootprints?: ReturnType<typeof buildPromptAssemblySectionFootprints>;
+    preservedExecutionState?: ReturnType<typeof buildPromptAssemblyPreservedExecutionState>;
+    contextCompaction?: ReturnType<typeof buildContextCompactionDiagnostics>;
   }): PromptAssemblyDiagnostics {
     const selectedMemoryEntries = [
       ...((input.globalMemorySelection?.selectedEntries ?? []).map((entry) => ({
@@ -2898,6 +2938,9 @@ type DirectIntentShadowCandidate =
       continuity: summarizeContinuityThreadForGateway(input.continuityThread),
       activeSkillCount: input.activeSkillCount,
       codeSessionId: input.codeSessionId,
+      ...(input.sectionFootprints ? { sectionFootprints: input.sectionFootprints } : {}),
+      ...(input.preservedExecutionState ? { preservedExecutionState: input.preservedExecutionState } : {}),
+      ...(input.contextCompaction ? { contextCompaction: input.contextCompaction } : {}),
     });
   }
 
@@ -3100,7 +3143,7 @@ type DirectIntentShadowCandidate =
         requestId: job.requestId,
       }));
     const planSummary = this.formatCodePlanSummary(lastToolRoundResults) || session.workState.planSummary;
-    const compactedSummary = runtimeState?.contextAssembly?.compactedSummaryPreview
+    const nextCompactedSummary = runtimeState?.contextAssembly?.compactedSummaryPreview
       || (
         runtimeState?.contextAssembly?.contextCompactionApplied
           && typeof runtimeState.contextAssembly.contextCharsBeforeCompaction === 'number'
@@ -3108,6 +3151,10 @@ type DirectIntentShadowCandidate =
           ? `Older context was compacted from ${runtimeState.contextAssembly.contextCharsBeforeCompaction} to ${runtimeState.contextAssembly.contextCharsAfterCompaction} chars.${Array.isArray(runtimeState.contextAssembly.contextCompactionStages) && runtimeState.contextAssembly.contextCompactionStages.length > 0 ? ` Stages: ${runtimeState.contextAssembly.contextCompactionStages.join(', ')}.` : ''}`
           : session.workState.compactedSummary
       );
+    const compactedSummaryUpdatedAt = nextCompactedSummary && nextCompactedSummary !== session.workState.compactedSummary
+      ? Date.now()
+      : session.workState.compactedSummaryUpdatedAt;
+    const compactedSummary = nextCompactedSummary;
     const status = pendingApprovals.length > 0
       ? 'awaiting_approval'
       : recentJobs.some((job) => job.status === 'failed' || job.status === 'denied')
@@ -3126,6 +3173,7 @@ type DirectIntentShadowCandidate =
         workspaceProfile: session.workState.workspaceProfile,
         planSummary,
         compactedSummary,
+        compactedSummaryUpdatedAt,
         activeSkills: activeSkills.map((skill) => skill.id),
         pendingApprovals,
         recentJobs,

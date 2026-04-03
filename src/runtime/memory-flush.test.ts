@@ -1,19 +1,106 @@
 import { describe, expect, it } from 'vitest';
-import { buildMemoryFlushEntry } from './memory-flush.js';
+import {
+  buildMemoryFlushEntry,
+  buildMemoryFlushMaintenanceMetadata,
+  describeMemoryFlushFailureDetail,
+  describeMemoryFlushMaintenanceDetail,
+  describeMemoryFlushSkipDetail,
+  inferMemoryFlushScope,
+} from './memory-flush.js';
+
+const sampleFlush = {
+  sessionId: 'session-1',
+  droppedMessages: [
+    { role: 'user' as const, content: 'Create a browser automation that captures the page title and H1.', timestamp: 1 },
+    { role: 'assistant' as const, content: 'I can do that once you confirm the target output path.', timestamp: 2 },
+  ],
+  totalDroppedCount: 2,
+  newlyDroppedCount: 2,
+};
+
+const sampleCodeSession = {
+  codeSessionId: 'code-1',
+  title: 'Repo Fix',
+  focusSummary: 'Fix the parser regression safely.',
+  planSummary: 'Check tokenizer, parser, and regression tests.',
+  compactedSummary: 'Compacted repo context.',
+  pendingApprovalCount: 1,
+};
+
+const sampleContinuity = {
+  continuityKey: 'continuity-1',
+  focusSummary: 'Continue the browser automation authoring flow.',
+  lastActionableRequest: 'Create the browser automation and save the artifact.',
+};
+
+const samplePendingAction = {
+  blockerKind: 'clarification',
+  prompt: 'Which output path should I use?',
+  route: 'automation',
+  operation: 'create',
+};
+
+describe('memory flush helpers', () => {
+  it('builds maintenance metadata for global and code-session flushes', () => {
+    expect(buildMemoryFlushMaintenanceMetadata({
+      key: { agentId: 'assistant', userId: 'user-1', channel: 'web' },
+      flush: sampleFlush,
+      continuity: sampleContinuity,
+      pendingAction: samplePendingAction,
+      codeSession: null,
+    })).toEqual({
+      maintenance: {
+        kind: 'memory_hygiene',
+        maintenanceType: 'context_flush',
+        artifact: 'memory_entry',
+        bounded: true,
+        scope: 'global',
+        sessionId: 'session-1',
+        totalDroppedCount: 2,
+        newlyDroppedCount: 2,
+        continuityKey: 'continuity-1',
+        route: 'automation',
+      },
+    });
+
+    expect(buildMemoryFlushMaintenanceMetadata({
+      key: { agentId: 'assistant', userId: 'code-session:code-1', channel: 'code-session' },
+      flush: sampleFlush,
+      continuity: sampleContinuity,
+      pendingAction: null,
+      codeSession: sampleCodeSession,
+    }).maintenance.scope).toBe('code_session');
+  });
+
+  it('describes success, skip, and failure detail strings', () => {
+    expect(describeMemoryFlushMaintenanceDetail({
+      scope: 'global',
+      newlyDroppedCount: 2,
+      summary: 'Context flush for browser automation 2 captured lines',
+    })).toContain('Context flush persisted to global memory');
+    expect(describeMemoryFlushSkipDetail({
+      scope: 'code_session',
+      reason: 'read_only',
+      codeSessionId: 'code-1',
+      newlyDroppedCount: 2,
+    })).toContain('Context flush skipped for code session code-1: store is read-only');
+    expect(describeMemoryFlushFailureDetail({
+      scope: 'global',
+      newlyDroppedCount: 2,
+    })).toContain('Context flush failed for global memory');
+  });
+
+  it('infers the maintenance scope from code-session context', () => {
+    expect(inferMemoryFlushScope(null)).toBe('global');
+    expect(inferMemoryFlushScope(sampleCodeSession)).toBe('code_session');
+  });
+});
 
 describe('buildMemoryFlushEntry', () => {
   it('builds a structured flush record that preserves objective and blocker context', () => {
     const entry = buildMemoryFlushEntry({
       key: { agentId: 'assistant', userId: 'user-1', channel: 'web' },
-      flush: {
-        sessionId: 'session-1',
-        droppedMessages: [
-          { role: 'user', content: 'Create a browser automation that captures the page title and H1.', timestamp: 1 },
-          { role: 'assistant', content: 'I can do that once you confirm the target output path.', timestamp: 2 },
-        ],
-        totalDroppedCount: 2,
-        newlyDroppedCount: 2,
-      },
+      flush: sampleFlush,
       createdAt: '2026-03-30',
       maxEntryChars: 900,
       continuity: {

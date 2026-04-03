@@ -36,6 +36,7 @@ import { runLlmLoop } from './worker-llm-loop.js';
 import { BrokerClient } from '../broker/broker-client.js';
 import { shouldAllowModelMemoryMutation } from '../util/memory-intent.js';
 import { isToolReportQuery, formatToolReport } from '../util/tool-report.js';
+import { formatToolResultForLLM, toLLMToolDef } from '../chat-agent-helpers.js';
 
 const APPROVAL_CONFIRM_PATTERN = /^(?:\/)?(?:approve|approved|yes|yep|yeah|y|go ahead|do it|confirm|ok|okay|sure|proceed|accept)\b/i;
 const APPROVAL_DENY_PATTERN = /^(?:\/)?(?:deny|denied|reject|decline|cancel|no|nope|nah|n)\b/i;
@@ -136,6 +137,10 @@ class BrokeredToolExecutor {
     return [...this.toolDefinitions.values()];
   }
 
+  listAlwaysLoadedForLlm(locality: 'local' | 'external' = 'external'): import('../llm/types.js').ToolDefinition[] {
+    return this.listAlwaysLoadedDefinitions().map((definition) => toLLMToolDef(definition, locality));
+  }
+
   getToolDefinition(name: string): ToolDefinition | undefined {
     return this.toolDefinitions.get(name);
   }
@@ -144,6 +149,18 @@ class BrokeredToolExecutor {
     return ids
       .map((id) => this.approvalMetadata.get(id))
       .filter((value): value is PendingApprovalMetadata => !!value);
+  }
+
+  async searchTools(query: string): Promise<ToolDefinition[]> {
+    const results = await this.client.searchTools(query);
+    for (const definition of results) {
+      this.toolDefinitions.set(definition.name, definition);
+    }
+    return results;
+  }
+
+  formatToolResultForLlm(toolName: string, result: unknown): string {
+    return formatToolResultForLLM(toolName, result, []);
   }
 
   async executeModelTool(
@@ -630,7 +647,7 @@ export class BrokeredWorkerSession {
       },
       {
         listAlwaysLoaded: () => toolExecutor.listAlwaysLoadedDefinitions(),
-        searchTools: () => [],
+        searchTools: (query) => toolExecutor.searchTools(query),
         callTool: async (request) => {
           const runResult = await toolExecutor.executeModelTool(request.toolName, request.args, {
             ...request,

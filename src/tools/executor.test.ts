@@ -444,11 +444,12 @@ describe('ToolExecutor', () => {
     expect(context).toContain('Enabled tool categories:');
     expect(context).toContain('Policy updates via chat: enabled via update_tool_policy (add_path, remove_path, add_domain, remove_domain)');
     expect(context).toContain('Provider/model management via find_tools: llm_provider_list, llm_provider_models, llm_provider_update.');
+    expect(context).toContain('Provider/model summary: use llm_provider_list for configured providers and llm_provider_models for detailed model catalogs.');
     expect(context).toContain('Additional tools may be hidden by deferred loading. Use find_tools to discover tools that are not currently visible.');
     expect(context).toContain('Deferred tool inventory (compact names only).');
-    expect(context).toContain('Deferred system tools:');
+    expect(context).toContain('Deferred system tools (');
     expect(context).toContain('llm_provider_update');
-    expect(context).toContain('Deferred cloud tools:');
+    expect(context).toContain('Deferred cloud tools (');
     expect(context).toContain('whm_status');
     expect(context).toContain('Cloud tools: enabled');
     expect(context).toContain('Cloud tool families available via find_tools: cpanel_*, whm_*, vercel_*, cf_*, aws_*, gcp_*, azure_*');
@@ -2837,7 +2838,7 @@ describe('ToolExecutor', () => {
     });
 
     expect(context).toContain(`Workspace root (default for file operations): ${codeRoot}`);
-    expect(context).toContain(`Allowed paths: ${codeRoot}`);
+    expect(context).toContain(`Allowed paths (1): ${codeRoot}`);
     expect(context).toContain('Active coding session workspace:');
     expect(context).toContain('already trusted');
   });
@@ -2886,6 +2887,88 @@ describe('ToolExecutor', () => {
     const context = executor.getToolContext();
 
     expect(context).toContain('Browser allowed domains: example.com, httpbin.org');
+  });
+
+  it('surfaces relevant browser and general domains when the request text mentions them', () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost', 'api.example.com', 'docs.example.com'],
+      browserConfig: {
+        enabled: true,
+        allowedDomains: ['example.com', 'httpbin.org'],
+      },
+      mcpManager: {
+        getAllToolDefinitions: () => [
+          {
+            name: 'mcp-playwright-browser_navigate',
+            description: 'Navigate browser',
+            risk: 'network' as const,
+            category: 'browser' as const,
+            parameters: { type: 'object', properties: { url: { type: 'string' } } },
+          },
+          {
+            name: 'mcp-playwright-browser_snapshot',
+            description: 'Snapshot browser',
+            risk: 'read_only' as const,
+            category: 'browser' as const,
+            parameters: { type: 'object', properties: {} },
+          },
+          {
+            name: 'mcp-playwright-browser_click',
+            description: 'Click browser element',
+            risk: 'mutating' as const,
+            category: 'browser' as const,
+            parameters: { type: 'object', properties: { element: { type: 'string' } } },
+          },
+        ],
+        callTool: async () => ({ success: true, output: { ok: true } }),
+      } as unknown as import('./mcp-client.js').MCPClientManager,
+    });
+
+    const context = executor.getToolContext({ requestText: 'Open https://httpbin.org and check api.example.com after that.' });
+
+    expect(context).toContain('Allowed domains (3, relevant: api.example.com):');
+    expect(context).toContain('Browser allowed domains (2, relevant: example.com, httpbin.org):');
+  });
+
+  it('surfaces relevant cloud profiles when the request text matches them', () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost', 'host.social.example'],
+      cloudConfig: {
+        enabled: true,
+        cpanelProfiles: [{
+          id: 'social',
+          name: 'Social Hosting',
+          type: 'whm',
+          host: 'https://host.social.example/',
+          username: 'root',
+          apiToken: 'secret',
+          defaultCpanelUser: 'socialuser',
+        }],
+        vercelProfiles: [{
+          id: 'web-prod',
+          name: 'Web Production',
+          apiToken: 'vercel-secret',
+        }],
+      },
+    });
+
+    const context = executor.getToolContext({ requestText: 'Check the social WHM account status.' });
+
+    expect(context).toContain('- social: provider=whm');
+    expect(context).not.toContain('- web-prod: provider=vercel');
+    expect(context).toContain('Configured cloud profiles: cpanel/whm=1, vercel=1');
   });
 
   it('syncs add_domain into the explicit browser allowlist when browser uses its own domain list', async () => {

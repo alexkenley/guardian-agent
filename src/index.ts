@@ -130,7 +130,14 @@ import { RunTimelineStore } from './runtime/run-timeline.js';
 import { normalizeAutomationOutputHandling, promoteAutomationFindings } from './runtime/automation-output.js';
 import { AutomationOutputStore } from './runtime/automation-output-store.js';
 import { AutomationOutputPersistenceService } from './runtime/automation-output-persistence.js';
-import { buildMemoryFlushEntry } from './runtime/memory-flush.js';
+import {
+  buildMemoryFlushEntry,
+  buildMemoryFlushMaintenanceMetadata,
+  describeMemoryFlushFailureDetail,
+  describeMemoryFlushMaintenanceDetail,
+  describeMemoryFlushSkipDetail,
+  inferMemoryFlushScope,
+} from './runtime/memory-flush.js';
 import {
   IntentGateway,
   type IntentGatewayRecord,
@@ -1734,35 +1741,70 @@ async function main(): Promise<void> {
             surfaceId: key.userId,
           })
         : null;
+      const continuitySummary = summarizeContinuityThreadForGateway(continuity);
+      const pendingActionSummary = pendingAction
+        ? {
+            blockerKind: pendingAction.blocker.kind,
+            prompt: pendingAction.blocker.prompt,
+            route: pendingAction.intent.route,
+            operation: pendingAction.intent.operation,
+          }
+        : null;
+      const codeSessionSummary = codeSession
+        ? {
+            codeSessionId: codeSession.id,
+            title: codeSession.title,
+            focusSummary: codeSession.workState.focusSummary,
+            planSummary: codeSession.workState.planSummary,
+            compactedSummary: codeSession.workState.compactedSummary,
+            pendingApprovalCount: codeSession.workState.pendingApprovals.length,
+          }
+        : null;
+      const flushScope = inferMemoryFlushScope(codeSessionSummary);
+      const maintenanceMetadata: Record<string, unknown> = buildMemoryFlushMaintenanceMetadata({
+        key,
+        flush,
+        continuity: continuitySummary,
+        pendingAction: pendingActionSummary,
+        codeSession: codeSessionSummary,
+      }) as unknown as Record<string, unknown>;
+      const flushJob = jobTracker.start({
+        type: 'memory_hygiene.context_flush',
+        source: 'system',
+        detail: `Context flush captured ${flush.newlyDroppedCount} line${flush.newlyDroppedCount === 1 ? '' : 's'}`,
+        metadata: maintenanceMetadata,
+      });
       const memoryEntry = buildMemoryFlushEntry({
         key,
         flush,
         createdAt: timestamp,
         maxEntryChars,
-        continuity: summarizeContinuityThreadForGateway(continuity),
-        pendingAction: pendingAction
-          ? {
-              blockerKind: pendingAction.blocker.kind,
-              prompt: pendingAction.blocker.prompt,
-              route: pendingAction.intent.route,
-              operation: pendingAction.intent.operation,
-            }
-          : null,
-        codeSession: codeSession
-          ? {
-              codeSessionId: codeSession.id,
-              title: codeSession.title,
-              focusSummary: codeSession.workState.focusSummary,
-              planSummary: codeSession.workState.planSummary,
-              compactedSummary: codeSession.workState.compactedSummary,
-              pendingApprovalCount: codeSession.workState.pendingApprovals.length,
-            }
-          : null,
+        continuity: continuitySummary,
+        pendingAction: pendingActionSummary,
+        codeSession: codeSessionSummary,
       });
-      if (!memoryEntry) return;
+      if (!memoryEntry) {
+        jobTracker.succeed(flushJob.id, {
+          detail: describeMemoryFlushSkipDetail({
+            scope: flushScope,
+            reason: 'empty_entry',
+            codeSessionId,
+            newlyDroppedCount: flush.newlyDroppedCount,
+          }),
+        });
+        return;
+      }
 
       if (isCodeSessionConversation) {
         if (codeSessionMemoryStore.isReadOnly()) {
+          jobTracker.succeed(flushJob.id, {
+            detail: describeMemoryFlushSkipDetail({
+              scope: flushScope,
+              reason: 'read_only',
+              codeSessionId,
+              newlyDroppedCount: flush.newlyDroppedCount,
+            }),
+          });
           log.debug(
             { codeSessionId, droppedCount: flush.newlyDroppedCount },
             'Memory flush skipped because code-session memory is read-only',
@@ -1771,11 +1813,26 @@ async function main(): Promise<void> {
         }
         try {
           codeSessionMemoryStore.append(codeSessionId!, memoryEntry);
+          jobTracker.succeed(flushJob.id, {
+            detail: describeMemoryFlushMaintenanceDetail({
+              scope: flushScope,
+              newlyDroppedCount: flush.newlyDroppedCount,
+              summary: memoryEntry.summary,
+              codeSessionId,
+            }),
+          });
           log.debug(
             { codeSessionId, droppedCount: flush.newlyDroppedCount, summary: memoryEntry.summary },
             'Memory flush: persisted structured context to code-session memory',
           );
         } catch (err) {
+          jobTracker.fail(flushJob.id, err, {
+            detail: describeMemoryFlushFailureDetail({
+              scope: flushScope,
+              codeSessionId,
+              newlyDroppedCount: flush.newlyDroppedCount,
+            }),
+          });
           log.warn(
             { codeSessionId, droppedCount: flush.newlyDroppedCount, err },
             'Memory flush failed for code-session memory',
@@ -1785,6 +1842,13 @@ async function main(): Promise<void> {
       }
 
       if (agentMemoryStore.isReadOnly()) {
+        jobTracker.succeed(flushJob.id, {
+          detail: describeMemoryFlushSkipDetail({
+            scope: flushScope,
+            reason: 'read_only',
+            newlyDroppedCount: flush.newlyDroppedCount,
+          }),
+        });
         log.debug(
           { agentId: key.agentId, droppedCount: flush.newlyDroppedCount },
           'Memory flush skipped because knowledge base is read-only',
@@ -1793,11 +1857,24 @@ async function main(): Promise<void> {
       }
       try {
         agentMemoryStore.append(key.agentId, memoryEntry);
+        jobTracker.succeed(flushJob.id, {
+          detail: describeMemoryFlushMaintenanceDetail({
+            scope: flushScope,
+            newlyDroppedCount: flush.newlyDroppedCount,
+            summary: memoryEntry.summary,
+          }),
+        });
         log.debug(
           { agentId: key.agentId, droppedCount: flush.newlyDroppedCount, summary: memoryEntry.summary },
           'Memory flush: persisted structured context to knowledge base',
         );
       } catch (err) {
+        jobTracker.fail(flushJob.id, err, {
+          detail: describeMemoryFlushFailureDetail({
+            scope: flushScope,
+            newlyDroppedCount: flush.newlyDroppedCount,
+          }),
+        });
         log.warn(
           { agentId: key.agentId, droppedCount: flush.newlyDroppedCount, err },
           'Memory flush failed for knowledge base',
