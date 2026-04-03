@@ -322,6 +322,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Pull at least one model first, for example `ollama pull llama3.2`.',
                   'In Configuration > AI Providers choose the local provider path, then set a profile name and model.',
                   'CLI equivalent: `/config add ollama ollama llama3.2` followed by `/config set default ollama`.',
+                  'With approval, Guardian can also inspect configured provider profiles and switch between already-available models through the normal chat/tool path.',
                 ],
               },
               {

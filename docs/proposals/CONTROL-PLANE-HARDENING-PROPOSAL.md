@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-20
 **Status:** Draft
-**Cross-references:** [Agentic Defensive Security Suite Spec](/mnt/s/Development/GuardianAgent/docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md), [Policy as Code Spec](/mnt/s/Development/GuardianAgent/docs/specs/POLICY-AS-CODE-SPEC.md), [Brokered Agent Isolation Proposal](/mnt/s/Development/GuardianAgent/docs/implemented-sops/BROKERED-AGENT-ISOLATION-PROPOSAL.md), [Memory System Uplift Plan](/mnt/s/Development/GuardianAgent/plans/MEMORY-SYSTEM-UPLIFT-PLAN.md)
+**Cross-references:** [Agentic Defensive Security Suite Spec](/mnt/s/Development/GuardianAgent/docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md), [Policy as Code Spec](/mnt/s/Development/GuardianAgent/docs/specs/POLICY-AS-CODE-SPEC.md), [Brokered Agent Isolation Proposal](/mnt/s/Development/GuardianAgent/docs/implemented/BROKERED-AGENT-ISOLATION-PROPOSAL.md), [Memory System Uplift Plan](/mnt/s/Development/GuardianAgent/docs/plans/MEMORY-SYSTEM-UPLIFT-PLAN.md)
 
 ---
 

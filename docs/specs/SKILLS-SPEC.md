@@ -140,6 +140,9 @@ Bundle contents are treated as reviewed static artifacts. Persistent runtime dat
 
 ### Prompt Discipline
 
+Shared prompt/context contract:
+- `docs/specs/CONTEXT-ASSEMBLY-SPEC.md`
+
 - Default to metadata catalog injection, not full `SKILL.md` body injection.
 - Descriptions should be written for triggerability, not marketing copy; the resolver and prompt both rely on them.
 - The model should read relevant skills before replying, asking clarifying questions, or calling tools.

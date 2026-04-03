@@ -12,6 +12,9 @@ It is the authoritative spec for:
 
 This spec does **not** define per-tool provider routing. Tool provider routing is a separate control-plane concern.
 
+Shared prompt-footprint and compact-inventory rules live in:
+- `docs/specs/CONTEXT-ASSEMBLY-SPEC.md`
+
 ## Primary Files
 
 - `src/runtime/intent-gateway.ts`
@@ -177,6 +180,17 @@ Implications:
 - Guardian usually understands recent pivots and short repairs when the relevant request is still inside the bounded history window
 - older requests outside that bounded window are not guaranteed to be reconstructable from ordinary conversation history alone
 - dropped history can be summarized into the knowledge base, but that summary is not a byte-for-byte replacement for the recent-turn window
+
+## Compact Availability Inventories
+
+The gateway follows the shared context-assembly rule: route-relevant availability data should be compact by default and detailed only when the classifier actually needs more. The authoritative contract for that pattern, including local/external parity and follow-on optimization work, lives in:
+
+- `docs/specs/CONTEXT-ASSEMBLY-SPEC.md`
+
+Gateway-specific application:
+- `enabledManagedProviders` stays a compact provider-identity list
+- `availableCodingBackends` stays a compact backend-identity list
+- pending actions and continuity remain explicit bounded state, not deferred detail
 
 ## Correction Handling
 

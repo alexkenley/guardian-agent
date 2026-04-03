@@ -115,11 +115,13 @@ import { registerBuiltinFilesystemTools } from './builtin/filesystem-tools.js';
 import { registerBuiltinMemoryTools } from './builtin/memory-tools.js';
 import { registerBuiltinNetworkSystemTools } from './builtin/network-system-tools.js';
 import { registerBuiltinPolicyTools } from './builtin/policy-tools.js';
+import { registerBuiltinProviderTools } from './builtin/provider-tools.js';
 import { registerBuiltinSecurityIntelTools } from './builtin/security-intel-tools.js';
 import { registerBuiltinSearchTools } from './builtin/search-tools.js';
 import { registerBuiltinWorkspaceTools } from './builtin/workspace-tools.js';
 import { registerBuiltinCloudTools } from './builtin/cloud-tools.js';
 import { syncBuiltinBrowserTools } from './builtin/browser-tools.js';
+import type { ConfigUpdate, DashboardMutationResult } from '../channels/web-types.js';
 export { validateHostParam } from './builtin/network-system-tools.js';
 
 const MAX_JOBS = 200;
@@ -466,6 +468,23 @@ export interface ToolExecutorOptions {
     policy: ToolPolicySnapshot,
     meta?: { browserAllowedDomains?: string[] },
   ) => void;
+  /** Inspect configured LLM provider profiles and routing flags. */
+  listLlmProviders?: () => Promise<Array<{
+    name: string;
+    type: string;
+    model: string;
+    baseUrl?: string;
+    locality: 'local' | 'external';
+    connected: boolean;
+    availableModels?: string[];
+    isDefault?: boolean;
+    isPreferredLocal?: boolean;
+    isPreferredExternal?: boolean;
+  }>>;
+  /** Load the available models for one configured LLM provider profile. */
+  listModelsForLlmProvider?: (providerName: string) => Promise<string[]>;
+  /** Persist approval-gated provider/default/preferred routing updates. */
+  onLlmProviderConfigUpdate?: (updates: ConfigUpdate) => Promise<DashboardMutationResult>;
   /** Async pre-execution hook (Guardian Agent inline evaluation). Called after
    *  sync Guardian checks pass but before the tool handler runs. Can deny. */
   onPreExecute?: (action: {
@@ -894,6 +913,16 @@ export class ToolExecutor {
     return defs;
   }
 
+  /** Return deferred tools that remain hidden until explicitly loaded via find_tools. */
+  listDeferredToolDefinitions(): ToolDefinition[] {
+    return this.registry.listDefinitions().filter(
+      (def) => def.deferLoading
+        && this.isAssistantVisibleTool(def)
+        && this.isCategoryEnabled(def.category)
+        && !this.getSandboxBlockReason(def.name, def.category),
+    );
+  }
+
   /** Search tools by keyword, returning full definitions (including deferred). */
   searchTools(query: string, maxResults: number = 10): ToolDefinition[] {
     return this.registry.searchTools(query, maxResults).filter(
@@ -942,6 +971,7 @@ export class ToolExecutor {
       'Execution mode: simple direct-binary commands run without shell parsing when possible; shell fallback is reserved for shell-builtins, chained commands, redirects, and platform wrapper cases.',
       `Enabled tool categories: ${enabledCategories.join(', ') || '(none)'}`,
       policyUpdateActions,
+      'Provider/model management via find_tools: llm_provider_list, llm_provider_models, llm_provider_update.',
       'Additional tools may be hidden by deferred loading. Use find_tools to discover tools that are not currently visible.',
     ];
     if (codeWorkspaceRoot) {
@@ -951,6 +981,7 @@ export class ToolExecutor {
       );
     }
     lines.push(...this.getDependencyAwarenessContextLines(effectiveWorkspaceRoot));
+    lines.push(...this.describeDeferredToolInventoryLines());
     if (this.policy.sandbox.allowedDomains.length > 0) {
       lines.push(`Allowed domains: ${this.policy.sandbox.allowedDomains.join(', ')}`);
     }
@@ -970,6 +1001,36 @@ export class ToolExecutor {
       return 'Policy updates via chat: disabled';
     }
     return `Policy updates via chat: enabled via update_tool_policy (${enabledActions.join(', ')})`;
+  }
+
+  private describeDeferredToolInventoryLines(): string[] {
+    const deferredDefinitions = this.listDeferredToolDefinitions();
+    if (deferredDefinitions.length === 0) return [];
+
+    const grouped = new Map<string, string[]>();
+    for (const definition of deferredDefinitions) {
+      const category = definition.category ?? 'other';
+      const existing = grouped.get(category) ?? [];
+      existing.push(definition.name);
+      grouped.set(category, existing);
+    }
+
+    const lines = [
+      'Deferred tool inventory (compact names only). If you need one of these tools and it is not already in your current tool list, call find_tools with the tool name or category keyword first to load its schema.',
+    ];
+
+    for (const category of Object.keys(TOOL_CATEGORIES) as ToolCategory[]) {
+      const names = grouped.get(category);
+      if (!names || names.length === 0) continue;
+      lines.push(`Deferred ${category} tools: ${names.join(', ')}`);
+    }
+
+    const uncategorized = grouped.get('other');
+    if (uncategorized?.length) {
+      lines.push(`Deferred other tools: ${uncategorized.join(', ')}`);
+    }
+
+    return lines;
   }
 
   private describeBrowserContextLines(): string[] {
@@ -4709,6 +4770,14 @@ export class ToolExecutor {
         };
       },
     });
+
+    registerBuiltinProviderTools({
+      registry: this.registry,
+      requireString,
+      listProviders: this.options.listLlmProviders,
+      listModelsForProvider: this.options.listModelsForLlmProvider,
+      updateConfig: this.options.onLlmProviderConfigUpdate,
+    });
   }
 
   private assertGmailHostAllowed(): void {
@@ -5543,7 +5612,13 @@ export class ToolExecutor {
   private getSandboxBlockReason(toolName: string, category?: string): string | null {
     const health = this.sandboxHealth;
     if (!health || !this.sandboxConfig.enabled) return null;
-    if (toolName === 'find_tools' || toolName === 'update_tool_policy') {
+    if (
+      toolName === 'find_tools'
+      || toolName === 'update_tool_policy'
+      || toolName === 'llm_provider_list'
+      || toolName === 'llm_provider_models'
+      || toolName === 'llm_provider_update'
+    ) {
       return null;
     }
 

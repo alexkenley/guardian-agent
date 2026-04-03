@@ -141,6 +141,9 @@ Each backend `CodeSession` carries durable workspace awareness state:
 
 Workspace profiling is still built from lightweight backend inspection of the session root, `README`, and primary manifest/config files, but Code sessions now also maintain workspace trust assessment, async native-AV scan status, a bounded repo map, and a per-turn working set. The coding-session prompt gets the repo profile plus the current working-set evidence, so the model starts from actual repo files rather than generic host-app context or ad hoc prompt wording.
 
+The shared prompt-footprint, compaction, and compact-inventory rules for coding-session context are defined centrally in:
+- `docs/specs/CONTEXT-ASSEMBLY-SPEC.md`
+
 The shipped repo-assessment boundary is intentionally narrow: `workspaceTrust` is a bounded static heuristic review plus optional native AV enrichment. It is not an agentic repo assessment, it does not execute repo code, and a `trusted` result only means the shipped checks did not find current indicators.
 
 Current trust-review heuristics also distinguish between strong execution indicators and review-only context:

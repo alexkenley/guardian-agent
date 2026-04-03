@@ -18,6 +18,21 @@ All user intent classification must go through the Intent Gateway (`src/runtime/
 ## Shared Orchestration (CRITICAL)
 When a bug is about blocked execution, prerequisites, approvals, clarifications, cross-turn resume, workspace switching, or channel-specific drift, fix it by extending the shared orchestration/state system first. In the current architecture that means the Intent Gateway contract, `PendingActionStore`, shared response metadata, and shared channel rendering. Do not add bespoke per-tool or per-capability resume flows unless the shared model cannot represent the behavior.
 
+## Architecture Discipline (CRITICAL)
+Do not ship tactical workarounds that bypass the intended architecture just to make a failing path appear to work. Fix the root cause in the layer that owns the behavior:
+- intent/routing bugs: `IntentGateway` and shared routing/orchestration
+- blocked-work / approval drift: shared pending-action and channel metadata flow
+- config/provider mutation: control-plane services and transactional config update paths
+- tool visibility/discovery: the deferred-loading / `find_tools` design, unless there is an intentional architecture change
+
+If a proposed fix would bypass the documented design, stop and reconsider. Examples of fixes that are not acceptable by default:
+- promoting deferred tools to always-loaded just because a model failed to call `find_tools`
+- adding one-off channel behavior that duplicates shared orchestration
+- bypassing control-plane callbacks with ad hoc config writes
+- adding special-case routing logic before the Intent Gateway
+
+If the right fix is to change the architecture, make that an explicit architectural change and update the relevant docs/specs in the same change rather than sneaking in a workaround. For tool-loading changes, read `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md`. For module boundaries and ownership, read `docs/architecture/FORWARD-ARCHITECTURE.md`.
+
 ## Routing Trace (CRITICAL)
 When troubleshooting intent classification, smart routing, pending actions, approvals, direct tool dispatch, or cross-channel continuation behavior, inspect the intent routing trace before guessing from transcripts alone. The canonical log is `~/.guardianagent/routing/intent-routing.jsonl` on the host running Guardian (for Windows installs this is typically `C:\Users\<user>\.guardianagent\routing\intent-routing.jsonl`). Use it to confirm gateway classification, tier selection, direct-candidate evaluation, tool start/completion, pending-action creation, and approval propagation. For web-specific failures, combine the trace with server/channel inspection and `web/public/js/chat-panel.js`, because the routing trace will not show frontend rendering or input-lock bugs by itself.
 
@@ -31,4 +46,4 @@ Vitest is configured for `src/**/*.test.ts`. Coverage thresholds are 70% for lin
 Recent history mostly follows Conventional Commit style, for example `feat(memory): ...`, `fix(code-ui): ...`, and `chore: ...`. Keep subjects imperative and add a scope when useful. PRs should summarize the behavior change, list verification commands, link the issue when applicable, and include screenshots for `web/` changes. Call out security, policy, or config impacts when changing `src/guardian/`, `src/runtime/`, `policies/`, or auth/integration code.
 
 ## Documentation & Security Tips
-Keep `src/reference-guide.ts` in sync with any user-facing behavior, workflow, navigation, or output change. Do not commit secrets, bearer tokens, or local config from `~/.guardianagent/`. Treat `tmp/` as scratch output unless you are intentionally updating a tracked fixture. Read `SECURITY.md` and `docs/architecture/OVERVIEW.md` before changing sandboxing, approvals, audit logging, or other trust-boundary behavior. Read `docs/architecture/FORWARD-ARCHITECTURE.md` before large refactors or when adding new capabilities, control-plane surfaces, or channel routes so new code follows the target module boundaries instead of extending the existing monoliths.
+Keep `src/reference-guide.ts` in sync with any user-facing behavior, workflow, navigation, or output change. Do not commit secrets, bearer tokens, or local config from `~/.guardianagent/`. Treat `tmp/` as scratch output unless you are intentionally updating a tracked fixture. Read `SECURITY.md` and `docs/architecture/OVERVIEW.md` before changing sandboxing, approvals, audit logging, or other trust-boundary behavior. Read `docs/architecture/FORWARD-ARCHITECTURE.md` before large refactors or when adding new capabilities, control-plane surfaces, or channel routes so new code follows the target module boundaries instead of extending the existing monoliths. Read `docs/specs/TOOLS-CONTROL-PLANE-SPEC.md` before changing tool discovery, always-loaded vs deferred tool sets, approval UX, or tool control-plane behavior.

@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-31  
 **Status:** Active tracker  
-**Companion roadmap:** [ASSISTANT-CAPABILITY-UPLIFT-ROADMAP.md](/mnt/s/development/guardianagent/plans/ASSISTANT-CAPABILITY-UPLIFT-ROADMAP.md)
+**Companion roadmap:** [ASSISTANT-CAPABILITY-UPLIFT-ROADMAP.md](/mnt/s/Development/GuardianAgent/docs/plans/ASSISTANT-CAPABILITY-UPLIFT-ROADMAP.md)
 
 ---
 

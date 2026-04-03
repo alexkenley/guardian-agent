@@ -2,7 +2,7 @@
 
 **Status:** Implemented
 **Date:** 2026-03-31
-**Proposal:** `docs/implemented-sops/BROKERED-AGENT-ISOLATION-PROPOSAL.md`
+**Proposal:** `docs/implemented/BROKERED-AGENT-ISOLATION-PROPOSAL.md`
 **Code:** `src/broker/`, `src/supervisor/`, `src/worker/`
 
 ## Overview
@@ -22,6 +22,9 @@ The worker process owns:
 - the LLM chat/tool loop
 - pending-approval continuation state
 - post-gateway direct deterministic handling that reuses the same structured intent contract as the supervisor path
+
+The shared prompt/context contract for both supervisor-provided state and worker-side assembly is defined in:
+- `docs/specs/CONTEXT-ASSEMBLY-SPEC.md`
 
 For Code-session turns, that supervisor-provided state now includes the resolved backend coding-session context, including workspace root, workspace profile, repo map, working set, Guardian global memory, and bounded session-local Code-session memory context. The brokered worker should reason from that structured session-owned state rather than from stale host-app identity assumptions or unscoped prior chat context.
 

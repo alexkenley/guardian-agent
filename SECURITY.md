@@ -1068,3 +1068,14 @@ Primary executable harnesses:
 - `scripts/test-contextual-security-uplifts.mjs`
 - `scripts/test-web-approvals.mjs`
 - `scripts/test-cli-approvals.mjs`
+
+---
+
+## External Coding Backend Boundary Note
+
+Optional external coding backends such as Claude Code, Codex CLI, Gemini CLI, or Aider are a separate delegated trust surface.
+
+- Guardian governs launch approval, workspace/session binding, orchestration, audit, and post-run verification expectations for these delegated runs.
+- Guardian does **not** replace the backend CLI's own internal parser, permission, or sandbox model after launch.
+- As a result, upstream security flaws in an enabled delegated coding backend can still affect delegated runs even when Guardian's native managed shell validation remains fail-closed.
+- Keep external coding backends disabled by default unless there is a clear operator need, and prefer running them with stronger host sandboxing, reduced credentials, and constrained network access.

@@ -1,5 +1,7 @@
 # Stream B: Security Uplift Plan
 
+> Archived on 2026-04-03. Most code items in this stream have shipped. Remaining active work was rolled into [Agent Traps Security Uplift Plan](/mnt/s/Development/GuardianAgent/docs/plans/AGENT-TRAPS-SECURITY-UPLIFT-PLAN.md).
+
 ## Context
 
 This plan was generated from analysis of Anthropic's [Advanced Tool Use](https://www.anthropic.com/engineering/advanced-tool-use) guide and the [claude-code-agentic-rag-series](https://github.com/theaiautomators/claude-code-agentic-rag-series) (particularly Episode 3: PII Redaction). It addresses security gaps in GuardianAgent's tool execution pipeline.

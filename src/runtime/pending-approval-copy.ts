@@ -71,6 +71,27 @@ function describePolicyUpdate(preview: string): string | null {
   }
 }
 
+function describeProviderUpdate(preview: string): string | null {
+  const parsed = tryParsePreview(preview);
+  if (!parsed) return null;
+
+  const action = asString(parsed.action);
+  const provider = asString(parsed.provider);
+  const model = asString(parsed.model);
+  const locality = asString(parsed.locality);
+
+  switch (action) {
+    case 'set_model':
+      return provider && model ? `switch ${provider} to model ${model}` : null;
+    case 'set_default':
+      return provider ? `set default provider to ${provider}` : null;
+    case 'set_preferred':
+      return provider && locality ? `set preferred ${locality} provider to ${provider}` : null;
+    default:
+      return null;
+  }
+}
+
 function describeFilesystemWrite(toolName: string, preview: string): string | null {
   const parsed = tryParsePreview(preview);
   if (!parsed) return null;
@@ -143,6 +164,11 @@ export function describePendingApproval(summary: PendingApprovalSummary): string
   if (summary.toolName === 'update_tool_policy') {
     const policyDescription = describePolicyUpdate(preview);
     if (policyDescription) return policyDescription;
+  }
+
+  if (summary.toolName === 'llm_provider_update') {
+    const providerDescription = describeProviderUpdate(preview);
+    if (providerDescription) return providerDescription;
   }
 
   if (summary.toolName === 'fs_write' || summary.toolName === 'doc_create') {

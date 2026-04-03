@@ -3,7 +3,7 @@
 **Status:** Implemented for the current local-defense scope  
 **Date:** 2026-03-20  
 **Proposal origin:** [Agentic Defensive Security Suite](/mnt/s/Development/GuardianAgent/docs/proposals/AGENTIC-DEFENSIVE-SECURITY-SUITE-PROPOSAL.md)  
-**Implementation plan:** [Agentic Defensive Security Suite - Implementation Plan](/mnt/s/Development/GuardianAgent/plans/AGENTIC-DEFENSIVE-SECURITY-SUITE-IMPLEMENTATION-PLAN.md)
+**Implementation plan:** [Agentic Defensive Security Suite - Implementation Plan](/mnt/s/Development/GuardianAgent/docs/plans/AGENTIC-DEFENSIVE-SECURITY-SUITE-IMPLEMENTATION-PLAN.md)
 
 ## Purpose
 

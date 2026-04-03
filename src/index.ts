@@ -194,7 +194,7 @@ import { IntentRoutingTraceLog } from './runtime/intent-routing-trace.js';
 import { ModelFallbackChain } from './llm/model-fallback.js';
 import { TRUST_PRESETS, type TrustPresetName } from './guardian/trust-presets.js';
 import type { Capability } from './guardian/capabilities.js';
-import { createProviders } from './llm/provider.js';
+import { createProviders, getProviderRegistry } from './llm/provider.js';
 import { detectCapabilities as detectSandboxCapabilities, detectSandboxHealth, DEFAULT_SANDBOX_CONFIG, type SandboxConfig } from './sandbox/index.js';
 import {
   isDegradedSandboxFallbackActive,
@@ -642,6 +642,20 @@ function buildDashboardCallbacks(
   };
   telegramReloadRef: { current: (() => Promise<{ success: boolean; message: string }>) | null };
   reloadSearchRef: { current: (() => Promise<{ success: boolean; message: string }>) | null };
+  listConfiguredLlmProviders: () => Promise<Array<{
+    name: string;
+    type: string;
+    model: string;
+    baseUrl?: string;
+    locality: 'local' | 'external';
+    connected: boolean;
+    availableModels?: string[];
+    isDefault?: boolean;
+    isPreferredLocal?: boolean;
+    isPreferredExternal?: boolean;
+  }>>;
+  listModelsForConfiguredLlmProvider: (providerName: string) => Promise<string[]>;
+  applyDirectLlmProviderConfigUpdate: (updates: import('./channels/web-types.js').ConfigUpdate) => Promise<DashboardMutationResult>;
 } {
   const loadRawConfig = (): Record<string, unknown> => {
     if (!existsSync(configPath)) return {};
@@ -997,6 +1011,59 @@ function buildDashboardCallbacks(
     getDefaultModelForProviderType,
     isLocalProviderEndpoint,
   });
+  const listConfiguredLlmProviders = async () => {
+    const currentConfig = configRef.current;
+    const runtimeProviderInfo = await buildProviderInfo(true);
+    const runtimeProvidersByName = new Map(
+      runtimeProviderInfo.map((provider) => [provider.name, provider] as const),
+    );
+    const configuredProviderNames = new Set<string>([
+      ...Object.keys(currentConfig.llm),
+      ...runtimeProvidersByName.keys(),
+    ]);
+    const preferredLocal = currentConfig.assistant.tools.preferredProviders?.local?.trim();
+    const preferredExternal = currentConfig.assistant.tools.preferredProviders?.external?.trim();
+    const defaultProvider = currentConfig.defaultProvider.trim();
+
+    return [...configuredProviderNames]
+      .sort((left, right) => left.localeCompare(right))
+      .map((name) => {
+        const configured = currentConfig.llm[name];
+        const runtimeInfo = runtimeProvidersByName.get(name);
+        return {
+          name,
+          type: configured?.provider ?? runtimeInfo?.type ?? 'unknown',
+          model: configured?.model ?? runtimeInfo?.model ?? 'unknown',
+          baseUrl: configured?.baseUrl ?? runtimeInfo?.baseUrl,
+          locality: getProviderLocality(configured) ?? runtimeInfo?.locality ?? 'external',
+          connected: runtimeInfo?.connected ?? false,
+          availableModels: runtimeInfo?.availableModels,
+          isDefault: name === defaultProvider,
+          isPreferredLocal: name === preferredLocal,
+          isPreferredExternal: name === preferredExternal,
+        };
+      });
+  };
+  const listModelsForConfiguredLlmProvider = async (providerName: string): Promise<string[]> => {
+    const normalizedProviderName = providerName.trim();
+    if (!normalizedProviderName) {
+      throw new Error('Provider name is required to load available models.');
+    }
+    const configured = configRef.current.llm[normalizedProviderName];
+    if (!configured) {
+      throw new Error(`Provider '${normalizedProviderName}' is not configured.`);
+    }
+    const apiKey = resolveCredentialForProviderInput(configured.credentialRef, configured.apiKey);
+    const resolvedConfig: LLMConfig = {
+      ...configured,
+      apiKey,
+    };
+    if (resolvedConfig.provider !== 'ollama' && !resolvedConfig.apiKey) {
+      throw new Error(`Provider '${normalizedProviderName}' is missing a resolved credential, so available models cannot be loaded.`);
+    }
+    const models = await getProviderRegistry().createProvider(resolvedConfig).listModels();
+    return Array.from(new Set(models.map((model) => model.id)));
+  };
   const assistantDashboard = createAssistantDashboardCallbacks({
     configRef,
     runtime,
@@ -1333,6 +1400,12 @@ function buildDashboardCallbacks(
     onQuickActions: () => getQuickActions(configRef.current.assistant.quickActions),
 
     ...setupConfigCallbacks,
+
+    listConfiguredLlmProviders,
+
+    listModelsForConfiguredLlmProvider,
+
+    applyDirectLlmProviderConfigUpdate: applyDirectConfigUpdate,
 
     onConfigUpdate: async (updates) => applyDirectConfigUpdate(updates),
 
@@ -3029,6 +3102,9 @@ async function main(): Promise<void> {
     externalAgentId: router.findAgentByRole('external')?.id,
   });
   let connectors: ConnectorPlaybookService;
+  let listConfiguredLlmProvidersForTools: ToolExecutorOptions['listLlmProviders'];
+  let listModelsForConfiguredLlmProviderForTools: ToolExecutorOptions['listModelsForLlmProvider'];
+  let applyDirectLlmProviderConfigUpdateForTools: ToolExecutorOptions['onLlmProviderConfigUpdate'];
   const codingBackendServiceRef: { current: CodingBackendService | null } = { current: null };
 
   const toolExecutorOptions: ToolExecutorOptions = {
@@ -3041,6 +3117,22 @@ async function main(): Promise<void> {
     allowedDomains: config.assistant.tools.allowedDomains,
     allowExternalPosting: config.assistant.tools.allowExternalPosting,
     agentPolicyUpdates: config.assistant.tools.agentPolicyUpdates,
+    listLlmProviders: async () => listConfiguredLlmProvidersForTools?.() ?? [],
+    listModelsForLlmProvider: async (providerName) => {
+      if (!listModelsForConfiguredLlmProviderForTools) {
+        throw new Error('LLM model discovery is not available in this runtime.');
+      }
+      return listModelsForConfiguredLlmProviderForTools(providerName);
+    },
+    onLlmProviderConfigUpdate: async (updates) => {
+      if (!applyDirectLlmProviderConfigUpdateForTools) {
+        return {
+          success: false,
+          message: 'LLM provider updates are not available in this runtime.',
+        };
+      }
+      return applyDirectLlmProviderConfigUpdateForTools(updates);
+    },
     onApprovalDecided: async (approvalId, decision, result) => {
       await connectors?.continueAfterApprovalDecision(approvalId, decision, result);
     },
@@ -4309,6 +4401,9 @@ async function main(): Promise<void> {
     connectorWorkflowOps,
     telegramReloadRef,
     reloadSearchRef,
+    listConfiguredLlmProviders,
+    listModelsForConfiguredLlmProvider,
+    applyDirectLlmProviderConfigUpdate,
     ...dashboardCallbacks
   } = buildDashboardCallbacks(
     runtime,
@@ -4364,6 +4459,9 @@ async function main(): Promise<void> {
     codingBackendServiceRef,
     prepareIncomingDispatch,
   );
+  listConfiguredLlmProvidersForTools = listConfiguredLlmProviders;
+  listModelsForConfiguredLlmProviderForTools = listModelsForConfiguredLlmProvider;
+  applyDirectLlmProviderConfigUpdateForTools = applyDirectLlmProviderConfigUpdate;
 
   dashboardCallbacks.onCodeTerminalAccessCheck = () => {
     const liveSandboxConfig = buildRuntimeSandboxConfig();

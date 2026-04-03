@@ -160,7 +160,7 @@
 - `web/public/` — dashboard UI, chat panel, code workspace UI, and browser-side assets
 - `scripts/` — setup helpers, test harnesses, and verification scripts
 - `docs/` — architecture notes, specs, guides, research, and supporting documentation
-- `plans/` — implementation roadmaps and status trackers
+- `docs/plans/` — implementation roadmaps and status trackers
 - `policies/` — rule and policy files
 - `native/windows-helper/` — Windows native helper components
 

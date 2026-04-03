@@ -900,7 +900,7 @@ Monitoring is not a substitute for isolation. The right GuardianAgent position i
 
 This proposal aligns with:
 
-- [BROKERED-AGENT-ISOLATION-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/implemented-sops/BROKERED-AGENT-ISOLATION-PROPOSAL.md)
+- [BROKERED-AGENT-ISOLATION-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/implemented/BROKERED-AGENT-ISOLATION-PROPOSAL.md)
 - [WINDOWS-PORTABLE-ISOLATION-OPTION.md](/mnt/s/Development/GuardianAgent/docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md)
 - existing runtime services such as Sentinel audit, audit persistence, network baseline, network traffic heuristics, and the Security monitoring UI
 

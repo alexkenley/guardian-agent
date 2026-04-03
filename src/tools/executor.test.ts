@@ -122,6 +122,9 @@ describe('ToolExecutor', () => {
     expect(names).toContain('campaign_run');
     expect(names).toContain('gmail_draft');
     expect(names).toContain('gmail_send');
+    expect(names).toContain('llm_provider_list');
+    expect(names).toContain('llm_provider_models');
+    expect(names).toContain('llm_provider_update');
     expect(names).toContain('automation_output_search');
     expect(names).toContain('automation_output_read');
   });
@@ -440,7 +443,13 @@ describe('ToolExecutor', () => {
     const context = executor.getToolContext();
     expect(context).toContain('Enabled tool categories:');
     expect(context).toContain('Policy updates via chat: enabled via update_tool_policy (add_path, remove_path, add_domain, remove_domain)');
+    expect(context).toContain('Provider/model management via find_tools: llm_provider_list, llm_provider_models, llm_provider_update.');
     expect(context).toContain('Additional tools may be hidden by deferred loading. Use find_tools to discover tools that are not currently visible.');
+    expect(context).toContain('Deferred tool inventory (compact names only).');
+    expect(context).toContain('Deferred system tools:');
+    expect(context).toContain('llm_provider_update');
+    expect(context).toContain('Deferred cloud tools:');
+    expect(context).toContain('whm_status');
     expect(context).toContain('Cloud tools: enabled');
     expect(context).toContain('Cloud tool families available via find_tools: cpanel_*, whm_*, vercel_*, cf_*, aws_*, gcp_*, azure_*');
     expect(context).toContain('Use configured cloud profile ids exactly as listed below when calling cloud tools.');
@@ -478,6 +487,134 @@ describe('ToolExecutor', () => {
     expect(context).toContain('Google Workspace: connected');
     expect(context).toContain('Google Workspace services: gmail, calendar');
     expect(context).toContain('Do not ask the user for OAuth access tokens.');
+  });
+
+  it('exposes deferred tools through a compact manifest while keeping them out of the always-loaded set', () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+    });
+
+    const alwaysLoaded = executor.listAlwaysLoadedDefinitions().map((tool) => tool.name);
+    expect(alwaysLoaded).not.toContain('llm_provider_update');
+
+    const deferred = executor.listDeferredToolDefinitions().map((tool) => tool.name);
+    expect(deferred).toContain('llm_provider_list');
+    expect(deferred).toContain('llm_provider_models');
+    expect(deferred).toContain('llm_provider_update');
+  });
+
+  it('lists configured LLM provider profiles through the dedicated provider tool', async () => {
+    const root = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      listLlmProviders: async () => [
+        {
+          name: 'ollama',
+          type: 'ollama',
+          model: 'llama3.2',
+          locality: 'local',
+          connected: true,
+          availableModels: ['llama3.2', 'gemma3:latest'],
+          isDefault: true,
+          isPreferredLocal: true,
+        },
+        {
+          name: 'openai',
+          type: 'openai',
+          model: 'gpt-4o',
+          locality: 'external',
+          connected: false,
+          isPreferredExternal: true,
+        },
+      ],
+    });
+
+    const result = await executor.runTool({
+      toolName: 'llm_provider_list',
+      args: {},
+      origin: 'cli',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({
+      providerCount: 2,
+      providers: [
+        expect.objectContaining({
+          name: 'ollama',
+          isDefault: true,
+          isPreferredLocal: true,
+        }),
+        expect.objectContaining({
+          name: 'openai',
+          isPreferredExternal: true,
+        }),
+      ],
+    });
+  });
+
+  it('requires approval before mutating the active LLM provider model', async () => {
+    const root = createExecutorRoot();
+    const onLlmProviderConfigUpdate = vi.fn(async () => ({ success: true, message: 'updated' }));
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [root],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      listLlmProviders: async () => [{
+        name: 'ollama',
+        type: 'ollama',
+        model: 'llama3.2',
+        locality: 'local',
+        connected: true,
+        availableModels: ['llama3.2', 'gemma3:latest'],
+        isDefault: true,
+        isPreferredLocal: true,
+      }],
+      listModelsForLlmProvider: async () => ['llama3.2', 'gemma3:latest'],
+      onLlmProviderConfigUpdate,
+    });
+
+    const pending = await executor.runTool({
+      toolName: 'llm_provider_update',
+      args: {
+        action: 'set_model',
+        provider: 'ollama',
+        model: 'gemma3:latest',
+      },
+      origin: 'assistant',
+      channel: 'telegram',
+      userId: 'telegram-user',
+      principalId: 'telegram-user',
+    });
+
+    expect(pending.success).toBe(false);
+    expect(pending.status).toBe('pending_approval');
+    expect(pending.approvalId).toBeDefined();
+    expect(onLlmProviderConfigUpdate).not.toHaveBeenCalled();
+
+    const approved = await executor.decideApproval(pending.approvalId!, 'approved', 'telegram-user');
+    expect(approved.success).toBe(true);
+    expect(approved.result?.success).toBe(true);
+    expect(onLlmProviderConfigUpdate).toHaveBeenCalledWith({
+      llm: {
+        ollama: {
+          model: 'gemma3:latest',
+        },
+      },
+    });
   });
 
   it('includes workspace dependency awareness in tool context when recent package changes are recorded', () => {
@@ -6787,6 +6924,9 @@ describe('ToolExecutor', () => {
 
       const names = executor.listToolDefinitions().map((t) => t.name);
       expect(names).toContain('find_tools');
+      expect(names).toContain('llm_provider_list');
+      expect(names).toContain('llm_provider_models');
+      expect(names).toContain('llm_provider_update');
       expect(names).not.toContain('shell_safe');
       expect(names).not.toContain('net_ping');
       expect(names).not.toContain('doc_search');

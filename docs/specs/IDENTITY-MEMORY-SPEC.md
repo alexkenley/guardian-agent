@@ -35,6 +35,9 @@ Unify user identity across channels and persist conversation memory with session
 
 Current memory assembly behavior is structured rather than raw text concatenation:
 
+Shared prompt/context contract:
+- `docs/specs/CONTEXT-ASSEMBLY-SPEC.md`
+
 - conversation compaction flushes dropped history incrementally into durable `context_flush` entries instead of repeatedly rewriting the same prefix
 - flush payloads preserve bounded objective, blocker, continuity, and code-session summaries when available
 - prompt-time memory loading is signal-aware and entry-aware; the current request, continuity state, blocker state, and code-session focus/plan now produce a structured retrieval query rather than one flat string

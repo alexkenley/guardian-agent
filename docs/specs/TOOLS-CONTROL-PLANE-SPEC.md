@@ -52,6 +52,11 @@ If `assistant.tools.agentPolicyUpdates` is disabled, `update_tool_policy` is not
 
 All other tools have `deferLoading: true` and are only discovered via `find_tools`. When the LLM calls `find_tools`, matching tool definitions (including full parameter schemas) are merged into the active tool set for subsequent rounds.
 
+To improve discovery without re-expanding the full schema payload, both local and external providers also receive a compact deferred-tool inventory inside `<tool-context>`. That inventory lists deferred tool names grouped by category, but it does **not** include parameter schemas or mark those tools as loaded. Deferred tools still require `find_tools` before the model should call them.
+
+The broader compact-inventory and drilldown contract for prompt context is defined in:
+- `docs/specs/CONTEXT-ASSEMBLY-SPEC.md`
+
 This reduces tool definition tokens from ~15-25K to ~5K per request.
 
 **Local model adaptation:** When the active LLM provider is local (Ollama), always-loaded tools are sent with full `description` instead of `shortDescription` to improve tool selection accuracy. External providers (OpenAI, Anthropic) continue using short descriptions to save tokens.

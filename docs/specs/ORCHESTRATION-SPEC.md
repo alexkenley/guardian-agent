@@ -69,6 +69,9 @@ Key rules:
 
 This layer owns the bounded state that lets linked first-party surfaces behave like one continuing task without collapsing them into one giant session model.
 
+Authoritative shared prompt/context contract:
+- `docs/specs/CONTEXT-ASSEMBLY-SPEC.md`
+
 It provides:
 - one continuity thread per logical assistant and canonical user
 - linked-surface summaries, focus summaries, last actionable request, and active execution refs

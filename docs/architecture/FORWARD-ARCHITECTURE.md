@@ -195,6 +195,9 @@ Current checkpoint:
 - `src/runtime/control-plane/provider-runtime-adapters.ts` now keeps provider-specific runtime probing and cloud test adapter construction out of the callback factory.
 - `src/chat-agent.ts` now isolates the main conversational agent runtime from the composition root, so the remaining `src/index.ts` work is centered on callback-factory cleanup, provider/config helper trimming, and final orchestration cleanup rather than the core message dispatch path.
 
+Authoritative shared prompt/context contract:
+- `docs/specs/CONTEXT-ASSEMBLY-SPEC.md`
+
 ### 5. Tool Execution Core
 
 Primary responsibility:

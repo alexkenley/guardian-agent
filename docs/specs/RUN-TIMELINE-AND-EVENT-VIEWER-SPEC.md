@@ -2,7 +2,7 @@
 
 **Status:** Implemented current architecture
 **Date:** 2026-03-31
-**Roadmap:** [UI-TARS Uplift Roadmap](/mnt/s/Development/GuardianAgent/plans/UI-TARS-UPLIFT-ROADMAP.md)
+**Roadmap:** [UI-TARS Uplift Roadmap](/mnt/s/Development/GuardianAgent/docs/plans/UI-TARS-UPLIFT-ROADMAP.md)
 **Primary Runtime:** [orchestrator.ts](/mnt/s/Development/GuardianAgent/src/runtime/orchestrator.ts), [run-events.ts](/mnt/s/Development/GuardianAgent/src/runtime/run-events.ts), [code-sessions.ts](/mnt/s/Development/GuardianAgent/src/runtime/code-sessions.ts), [index.ts](/mnt/s/Development/GuardianAgent/src/index.ts)
 **Primary Web Surface:** [web.ts](/mnt/s/Development/GuardianAgent/src/channels/web.ts), [web-types.ts](/mnt/s/Development/GuardianAgent/src/channels/web-types.ts), [app.js](/mnt/s/Development/GuardianAgent/web/public/js/app.js), [dashboard.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/dashboard.js), [code.js](/mnt/s/Development/GuardianAgent/web/public/js/pages/code.js)
 

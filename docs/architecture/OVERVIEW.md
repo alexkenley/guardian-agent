@@ -372,6 +372,8 @@ Worker responsibilities:
 - context budget compaction
 - quality-based fallback (requests via broker with `useFallback` flag)
 
+Shared prompt/context rules are specified in [Context Assembly Spec](../specs/CONTEXT-ASSEMBLY-SPEC.md).
+
 What this does not mean:
 
 - orchestration agents are not moved into the worker

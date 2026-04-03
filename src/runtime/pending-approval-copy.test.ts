@@ -53,6 +53,15 @@ describe('pending approval copy', () => {
     ])).toBe('Waiting for approval to save automation Minute Net Scans.');
   });
 
+  it('formats LLM provider updates as concrete approval copy', () => {
+    expect(formatPendingApprovalMessage([
+      {
+        toolName: 'llm_provider_update',
+        argsPreview: '{"action":"set_model","provider":"ollama","model":"gemma3:latest"}',
+      },
+    ])).toBe('Waiting for approval to switch ollama to model gemma3:latest.');
+  });
+
   it('formats multiple approvals as a short action list', () => {
     expect(formatPendingApprovalMessage([
       {
