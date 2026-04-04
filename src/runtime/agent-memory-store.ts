@@ -15,7 +15,33 @@ import { mkdirSecureSync, writeSecureFileSync } from '../util/secure-fs.js';
 
 export type MemorySourceType = 'user' | 'local_tool' | 'remote_tool' | 'system' | 'operator';
 export type MemoryTrustLevel = 'trusted' | 'untrusted' | 'reviewed';
-export type MemoryStatus = 'active' | 'quarantined' | 'expired' | 'rejected';
+export type MemoryStatus = 'active' | 'quarantined' | 'expired' | 'rejected' | 'archived';
+export type MemoryArtifactClass = 'canonical' | 'operator_curated' | 'derived' | 'linked_output';
+export type MemoryArtifactKind =
+  | 'memory_entry'
+  | 'wiki_page'
+  | 'topic_index'
+  | 'decision_index'
+  | 'automation_index'
+  | 'review_queue'
+  | 'lint_report'
+  | 'session_summary'
+  | 'linked_output';
+
+export interface MemoryArtifactMetadata {
+  sourceClass?: MemoryArtifactClass;
+  kind?: MemoryArtifactKind;
+  title?: string;
+  slug?: string;
+  retrievalHints?: string[];
+  refreshable?: boolean;
+  lastBuiltAt?: string;
+  sourceEntryIds?: string[];
+  updatedAt?: string;
+  updatedByPrincipal?: string;
+  changeReason?: string;
+  archivedAt?: string;
+}
 
 /** Configuration for the agent knowledge base. */
 export interface AgentMemoryStoreConfig {
@@ -69,6 +95,7 @@ export interface MemoryEntry {
   expiresAt?: string;
   tags?: string[];
   provenance?: MemoryProvenance;
+  artifact?: MemoryArtifactMetadata;
 }
 
 export interface StoredMemoryEntry extends MemoryEntry {
@@ -83,6 +110,7 @@ export interface MemoryContextSelectionEntry {
   preview: string;
   renderMode: 'full' | 'summary';
   queryScore: number;
+  sourceClass: MemoryArtifactClass;
   sourceType?: MemorySourceType;
   trustLevel?: MemoryTrustLevel;
   isContextFlush: boolean;
@@ -110,6 +138,16 @@ export interface MemoryContextLoadOptions {
   maxChars?: number;
 }
 
+export function classifyMemoryEntrySource(
+  entry: Pick<MemoryEntry, 'sourceType' | 'category' | 'tags' | 'artifact'>,
+): MemoryArtifactClass {
+  if (entry.artifact?.sourceClass) return entry.artifact.sourceClass;
+  if (entry.sourceType === 'operator' || entry.category === 'Operator Wiki') return 'operator_curated';
+  if (entry.tags?.includes('automation_output_reference')) return 'linked_output';
+  if (entry.sourceType === 'system' || entry.tags?.includes(MEMORY_CONTEXT_FLUSH_TAG)) return 'derived';
+  return 'canonical';
+}
+
 interface MemoryIndexFile {
   version: 1 | 2;
   entries: StoredMemoryEntry[];
@@ -131,6 +169,19 @@ const MEMORY_SUMMARY_MAX_CHARS = 200;
 const MEMORY_CONTEXT_FLUSH_TAG = 'context_flush';
 const MAX_CONTEXT_CANDIDATES = 18;
 const MAX_QUERY_CONTEXT_CANDIDATES = 24;
+
+function memorySourceClassPriority(sourceClass: MemoryArtifactClass): number {
+  switch (sourceClass) {
+    case 'operator_curated':
+      return 3;
+    case 'canonical':
+      return 2;
+    case 'linked_output':
+      return 1;
+    default:
+      return 0;
+  }
+}
 
 export class AgentMemoryStore {
   private basePath: string;
@@ -276,6 +327,75 @@ export class AgentMemoryStore {
     return this.truncateInlineText(candidate, MEMORY_SUMMARY_MAX_CHARS);
   }
 
+  private normalizeArtifactMetadata(metadata: MemoryArtifactMetadata | undefined): MemoryArtifactMetadata | undefined {
+    if (!metadata || typeof metadata !== 'object') {
+      return undefined;
+    }
+
+    const normalized: MemoryArtifactMetadata = {};
+    if (metadata.sourceClass) normalized.sourceClass = metadata.sourceClass;
+    if (metadata.kind) normalized.kind = metadata.kind;
+
+    const title = this.normalizeInlineText(metadata.title ?? '');
+    if (title) normalized.title = this.truncateInlineText(title, 120);
+
+    const slug = stripInvisibleChars(metadata.slug?.trim() ?? '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+    if (slug) normalized.slug = slug;
+
+    const retrievalHints = this.normalizeSignalList(metadata.retrievalHints);
+    if (retrievalHints.length > 0) normalized.retrievalHints = retrievalHints;
+
+    const sourceEntryIds = Array.isArray(metadata.sourceEntryIds)
+      ? [...new Set(metadata.sourceEntryIds.map((value) => String(value ?? '').trim()).filter(Boolean))]
+      : [];
+    if (sourceEntryIds.length > 0) normalized.sourceEntryIds = sourceEntryIds;
+
+    if (typeof metadata.refreshable === 'boolean') normalized.refreshable = metadata.refreshable;
+
+    const lastBuiltAt = metadata.lastBuiltAt?.trim();
+    if (lastBuiltAt) normalized.lastBuiltAt = lastBuiltAt;
+
+    const updatedAt = metadata.updatedAt?.trim();
+    if (updatedAt) normalized.updatedAt = updatedAt;
+
+    const updatedByPrincipal = this.normalizeInlineText(metadata.updatedByPrincipal ?? '');
+    if (updatedByPrincipal) normalized.updatedByPrincipal = this.truncateInlineText(updatedByPrincipal, 80);
+
+    const changeReason = this.normalizeInlineText(metadata.changeReason ?? '');
+    if (changeReason) normalized.changeReason = this.truncateInlineText(changeReason, 220);
+
+    const archivedAt = metadata.archivedAt?.trim();
+    if (archivedAt) normalized.archivedAt = archivedAt;
+
+    return Object.keys(normalized).length > 0 ? normalized : undefined;
+  }
+
+  private mergeArtifactMetadata(
+    existing: MemoryArtifactMetadata | undefined,
+    patch: MemoryArtifactMetadata | undefined,
+  ): MemoryArtifactMetadata | undefined {
+    if (!patch) {
+      return existing ? this.normalizeArtifactMetadata(existing) : undefined;
+    }
+
+    return this.normalizeArtifactMetadata({
+      ...(existing ?? {}),
+      ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)),
+    });
+  }
+
+  private renderEntryTextWithTitle(entry: Pick<MemoryEntry, 'artifact'>, text: string): string {
+    const title = this.normalizeInlineText(entry.artifact?.title ?? '');
+    if (!title) {
+      return text;
+    }
+    const normalizedText = this.normalizeInlineText(text).toLowerCase();
+    if (normalizedText.startsWith(title.toLowerCase())) {
+      return text;
+    }
+    return `${title}: ${text}`;
+  }
+
   private emitSecurityEvent(event: {
     severity: 'info' | 'warn' | 'critical';
     code: string;
@@ -391,6 +511,7 @@ export class AgentMemoryStore {
         ? this.sanitizeEntryForPrompt(agentId, entry)
         : entry.content;
       if (!renderedContent) continue;
+      const titledContent = this.renderEntryTextWithTitle(entry, renderedContent);
 
       const heading = sanitizeForPrompt
         ? this.sanitizeHeadingForPrompt(entry.category)
@@ -399,7 +520,7 @@ export class AgentMemoryStore {
       const trust = entry.trustLevel && entry.trustLevel !== 'trusted'
         ? ` [${entry.trustLevel}]`
         : '';
-      list.push(`- ${renderedContent}${trust} _(${entry.createdAt})_`);
+      list.push(`- ${titledContent}${trust} _(${entry.createdAt})_`);
       grouped.set(heading, list);
     }
 
@@ -597,6 +718,7 @@ export class AgentMemoryStore {
       expiresAt: entry.expiresAt,
       tags: entry.tags ? [...entry.tags] : undefined,
       provenance: entry.provenance ? { ...entry.provenance } : undefined,
+      artifact: this.normalizeArtifactMetadata(entry.artifact),
       contentHash: this.computeContentHash(entry.content),
     };
 
@@ -640,6 +762,73 @@ export class AgentMemoryStore {
     return this.findEntry(agentId, entryId)?.status === 'active';
   }
 
+  updateEntry(agentId: string, entryId: string, updates: Partial<MemoryEntry>): StoredMemoryEntry {
+    if (!this.config.enabled) {
+      throw new Error('Persistent memory is not enabled.');
+    }
+    this.assertWritable();
+
+    const index = this.readIndex(agentId);
+    const entryIndex = index.entries.findIndex((entry) => entry.id === entryId);
+    if (entryIndex < 0) {
+      throw new Error(`Memory entry '${entryId}' was not found.`);
+    }
+
+    const current = index.entries[entryIndex]!;
+    const nextContent = updates.content ?? current.content;
+    if (nextContent.length > this.config.maxEntryChars) {
+      throw new Error(`Persistent memory entry exceeds maxEntryChars (${this.config.maxEntryChars}).`);
+    }
+
+    const nextEntry: StoredMemoryEntry = {
+      ...current,
+      ...(updates.content !== undefined ? { content: updates.content } : {}),
+      ...(updates.category !== undefined ? { category: updates.category } : {}),
+      ...(updates.sourceType !== undefined ? { sourceType: updates.sourceType } : {}),
+      ...(updates.trustLevel !== undefined ? { trustLevel: updates.trustLevel } : {}),
+      ...(updates.status !== undefined ? { status: updates.status } : {}),
+      ...(updates.createdByPrincipal !== undefined ? { createdByPrincipal: updates.createdByPrincipal } : {}),
+      ...(updates.expiresAt !== undefined ? { expiresAt: updates.expiresAt } : {}),
+      ...(updates.tags !== undefined ? { tags: [...updates.tags] } : {}),
+      ...(updates.provenance !== undefined ? { provenance: { ...updates.provenance } } : {}),
+      summary: updates.summary !== undefined || updates.content !== undefined
+        ? this.normalizeSummary(updates.summary ?? current.summary, nextContent)
+        : current.summary,
+      artifact: this.mergeArtifactMetadata(current.artifact, updates.artifact),
+      contentHash: this.computeContentHash(nextContent),
+    };
+
+    const nextEntries = [...index.entries];
+    nextEntries[entryIndex] = nextEntry;
+    const nextIndex = this.enforceFileBudget(
+      agentId,
+      this.enforceEntryCountBudget(agentId, {
+        ...index,
+        entries: nextEntries,
+      }),
+    );
+    this.writeIndex(agentId, nextIndex);
+    this.rebuildMarkdown(agentId, nextIndex);
+    return nextIndex.entries[entryIndex] ?? nextEntry;
+  }
+
+  archiveEntry(agentId: string, entryId: string, options?: {
+    archivedAt?: string;
+    archivedByPrincipal?: string;
+    reason?: string;
+  }): StoredMemoryEntry {
+    const archivedAt = options?.archivedAt?.trim() || new Date().toISOString();
+    return this.updateEntry(agentId, entryId, {
+      status: 'archived',
+      artifact: {
+        archivedAt,
+        updatedAt: archivedAt,
+        updatedByPrincipal: options?.archivedByPrincipal,
+        changeReason: options?.reason,
+      },
+    });
+  }
+
   searchEntries(
     agentId: string,
     query: string,
@@ -656,10 +845,16 @@ export class AgentMemoryStore {
         const category = entry.category?.toLowerCase() ?? '';
         const tags = Array.isArray(entry.tags) ? entry.tags.join(' ').toLowerCase() : '';
         const summary = entry.summary?.toLowerCase() ?? '';
+        const title = entry.artifact?.title?.toLowerCase() ?? '';
+        const retrievalHints = Array.isArray(entry.artifact?.retrievalHints)
+          ? entry.artifact.retrievalHints.join(' ').toLowerCase()
+          : '';
         return entry.content.toLowerCase().includes(normalizedQuery)
           || summary.includes(normalizedQuery)
           || category.includes(normalizedQuery)
-          || tags.includes(normalizedQuery);
+          || tags.includes(normalizedQuery)
+          || title.includes(normalizedQuery)
+          || retrievalHints.includes(normalizedQuery);
       })
       .slice(0, limit)
       .map((entry) => ({ ...entry }));
@@ -897,10 +1092,14 @@ export class AgentMemoryStore {
 
       const heading = this.sanitizeHeadingForPrompt(entry.category);
       const suffix = `${entry.trustLevel && entry.trustLevel !== 'trusted' ? ` [${entry.trustLevel}]` : ''} _(${entry.createdAt})_`;
-      const fullLine = `- ${renderedContent}${suffix}`;
+      const titledContent = this.renderEntryTextWithTitle(entry, renderedContent);
+      const fullLine = `- ${titledContent}${suffix}`;
       const renderedSummary = this.sanitizeSummaryForPrompt(agentId, entry);
-      const summaryLine = renderedSummary && renderedSummary !== renderedContent
-        ? `- ${renderedSummary}${suffix}`
+      const titledSummary = renderedSummary
+        ? this.renderEntryTextWithTitle(entry, renderedSummary)
+        : undefined;
+      const summaryLine = titledSummary && titledSummary !== titledContent
+        ? `- ${titledSummary}${suffix}`
         : undefined;
       const preferSummary = ranked.isContextFlush
         && !ranked.matchReasons.some((reason) =>
@@ -914,7 +1113,7 @@ export class AgentMemoryStore {
         fullLine,
         summaryLine,
         preferSummary,
-        preview: this.truncateInlineText(renderedSummary ?? renderedContent, 96),
+        preview: this.truncateInlineText(titledSummary ?? titledContent, 96),
         queryScore: ranked.queryScore,
         matchReasons: ranked.matchReasons,
       });
@@ -940,6 +1139,7 @@ export class AgentMemoryStore {
       preview: prepared.preview,
       renderMode,
       queryScore: prepared.queryScore,
+      sourceClass: classifyMemoryEntrySource(prepared.entry),
       sourceType: prepared.entry.sourceType,
       trustLevel: prepared.entry.trustLevel,
       isContextFlush: prepared.entry.tags?.includes(MEMORY_CONTEXT_FLUSH_TAG) ?? false,
@@ -1024,6 +1224,11 @@ export class AgentMemoryStore {
         if (left.isContextFlush !== right.isContextFlush) {
           return left.isContextFlush ? 1 : -1;
         }
+        const sourcePriorityDelta = memorySourceClassPriority(classifyMemoryEntrySource(right.entry))
+          - memorySourceClassPriority(classifyMemoryEntrySource(left.entry));
+        if (sourcePriorityDelta !== 0) {
+          return sourcePriorityDelta;
+        }
         const createdAtDelta = right.entry.createdAt.localeCompare(left.entry.createdAt);
         if (createdAtDelta !== 0) return createdAtDelta;
         return right.entry.id.localeCompare(left.entry.id);
@@ -1044,9 +1249,10 @@ export class AgentMemoryStore {
 
     const content = entry.content.toLowerCase();
     const summary = entry.summary?.toLowerCase() ?? '';
-    const category = entry.category?.toLowerCase() ?? '';
+    const category = `${entry.category?.toLowerCase() ?? ''}\n${entry.artifact?.title?.toLowerCase() ?? ''}`.trim();
     const entryTags = this.normalizeSignalList(entry.tags);
-    const tags = entryTags.join(' ');
+    const retrievalHints = this.normalizeSignalList(entry.artifact?.retrievalHints);
+    const tags = [...entryTags, ...retrievalHints].join(' ');
     const provenanceIdentifiers = this.normalizeSignalList([
       entry.provenance?.sessionId,
       entry.provenance?.requestId,
@@ -1186,6 +1392,23 @@ export class AgentMemoryStore {
       || query.identifiers.some((identifier) => provenanceIdentifiers.includes(identifier) || content.includes(identifier) || summary.includes(identifier));
     if (isContextFlush && score > 0 && !exactSignalMatched) {
       score = Math.max(0, score - 18);
+    }
+
+    switch (classifyMemoryEntrySource(entry)) {
+      case 'operator_curated':
+        score += 60;
+        break;
+      case 'canonical':
+        score += 8;
+        break;
+      case 'linked_output':
+        if (!exactSignalMatched) {
+          score = Math.max(0, score - 18);
+        }
+        break;
+      case 'derived':
+        score = Math.max(0, score - (isContextFlush ? 24 : 12));
+        break;
     }
 
     return { score, reasons };

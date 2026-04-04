@@ -124,7 +124,14 @@ import {
 import { createAutomationRuntimeService } from './runtime/automation-runtime-service.js';
 import { MoltbookConnector } from './runtime/moltbook-connector.js';
 import { AssistantOrchestrator } from './runtime/orchestrator.js';
-import { AgentMemoryStore } from './runtime/agent-memory-store.js';
+import {
+  AgentMemoryStore,
+  classifyMemoryEntrySource,
+  type MemorySourceType,
+  type MemoryStatus,
+  type MemoryTrustLevel,
+  type StoredMemoryEntry,
+} from './runtime/agent-memory-store.js';
 import { AssistantJobTracker } from './runtime/assistant-jobs.js';
 import { RunTimelineStore } from './runtime/run-timeline.js';
 import { normalizeAutomationOutputHandling, promoteAutomationFindings } from './runtime/automation-output.js';
@@ -664,6 +671,419 @@ function buildDashboardCallbacks(
   listModelsForConfiguredLlmProvider: (providerName: string) => Promise<string[]>;
   applyDirectLlmProviderConfigUpdate: (updates: import('./channels/web-types.js').ConfigUpdate) => Promise<DashboardMutationResult>;
 } {
+  const summarizeMemoryText = (value: string | undefined, maxChars = 160): string => {
+    const normalized = String(value ?? '').replace(/\s+/g, ' ').trim();
+    if (!normalized) return '';
+    return normalized.length > maxChars
+      ? `${normalized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`
+      : normalized;
+  };
+  const slugifyMemoryTitle = (value: string): string => {
+    const normalized = String(value ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    return normalized || 'memory-page';
+  };
+  const getPrincipalMemoryAgentId = (): string => (
+    configRef.current.channels.web?.defaultAgent
+      ?? configRef.current.channels.cli?.defaultAgent
+      ?? configRef.current.agents[0]?.id
+      ?? 'default'
+  );
+  const inferMemoryEntryTitle = (entry: StoredMemoryEntry): string => (
+    entry.artifact?.title?.trim()
+      || summarizeMemoryText(entry.summary, 72)
+      || summarizeMemoryText(entry.content, 72)
+      || entry.category?.trim()
+      || 'Memory entry'
+  );
+  const parseIsoDateMs = (value: string | undefined): number | null => {
+    const parsed = Date.parse(value ?? '');
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const isOlderThanDays = (value: string | undefined, days: number): boolean => {
+    const parsed = parseIsoDateMs(value);
+    return parsed != null && parsed <= (Date.now() - days * 24 * 60 * 60 * 1000);
+  };
+  const isDecisionLikeEntry = (entry: StoredMemoryEntry): boolean => /decision|constraint|instruction|runbook/i.test([
+    entry.category,
+    entry.artifact?.title,
+    Array.isArray(entry.tags) ? entry.tags.join(' ') : '',
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' '));
+  const toDashboardMemoryEntryView = (entry: StoredMemoryEntry) => {
+    const sourceClass = classifyMemoryEntrySource(entry);
+    return {
+      ...entry,
+      displayTitle: inferMemoryEntryTitle(entry),
+      sourceClass,
+      editable: sourceClass === 'operator_curated',
+      reviewOnly: entry.status !== 'active',
+    };
+  };
+  const buildMemorySummary = (entries: StoredMemoryEntry[]) => ({
+    activeEntries: entries.filter((entry) => entry.status === 'active').length,
+    inactiveEntries: entries.filter((entry) => entry.status !== 'active').length,
+    quarantinedEntries: entries.filter((entry) => entry.status === 'quarantined').length,
+    operatorEntries: entries.filter((entry) => classifyMemoryEntrySource(entry) === 'operator_curated').length,
+    derivedEntries: entries.filter((entry) => classifyMemoryEntrySource(entry) === 'derived').length,
+    contextFlushEntries: entries.filter((entry) => entry.tags?.includes('context_flush')).length,
+    categories: [...new Set(entries.map((entry) => entry.category?.trim() || 'General'))].sort((left, right) => left.localeCompare(right)),
+    lastCreatedAt: entries.reduce<string | undefined>((latest, entry) => {
+      if (!entry.createdAt) return latest;
+      return !latest || entry.createdAt > latest ? entry.createdAt : latest;
+    }, undefined),
+  });
+  const matchesMemoryFilters = (
+    entry: StoredMemoryEntry,
+    filter: {
+      query?: string;
+      sourceType?: MemorySourceType;
+      trustLevel?: MemoryTrustLevel;
+      status?: MemoryStatus;
+    },
+  ): boolean => {
+    if (filter.sourceType && entry.sourceType !== filter.sourceType) return false;
+    if (filter.trustLevel && entry.trustLevel !== filter.trustLevel) return false;
+    if (filter.status && entry.status !== filter.status) return false;
+    const normalizedQuery = filter.query?.trim().toLowerCase();
+    if (!normalizedQuery) return true;
+    const haystack = [
+      entry.content,
+      entry.summary,
+      entry.category,
+      entry.artifact?.title,
+      Array.isArray(entry.artifact?.retrievalHints) ? entry.artifact.retrievalHints.join(' ') : '',
+      Array.isArray(entry.tags) ? entry.tags.join(' ') : '',
+      entry.createdByPrincipal,
+    ]
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .join('\n')
+      .toLowerCase();
+    return haystack.includes(normalizedQuery);
+  };
+  const buildMemoryWikiPages = (
+    scope: 'global' | 'code_session',
+    scopeId: string,
+    entries: StoredMemoryEntry[],
+    query?: string,
+  ) => {
+    const normalizedQuery = query?.trim().toLowerCase();
+    const activeEntries = entries.filter((entry) => entry.status === 'active');
+    const operatorEntries = activeEntries.filter((entry) => classifyMemoryEntrySource(entry) === 'operator_curated');
+    const linkedOutputEntries = activeEntries.filter((entry) => classifyMemoryEntrySource(entry) === 'linked_output');
+    const decisionEntries = activeEntries.filter((entry) => isDecisionLikeEntry(entry));
+    const contextFlushEntries = activeEntries.filter((entry) => entry.tags?.includes('context_flush'));
+    const reviewOnlyEntries = entries.filter((entry) => entry.status !== 'active');
+    const categoryLines = [...new Map(
+      activeEntries.map((entry) => [
+        entry.category?.trim() || 'General',
+        {
+          category: entry.category?.trim() || 'General',
+          count: activeEntries.filter((candidate) => (candidate.category?.trim() || 'General') === (entry.category?.trim() || 'General')).length,
+        },
+      ]),
+    ).values()]
+      .sort((left, right) => left.category.localeCompare(right.category))
+      .map((item) => `- ${item.category}: ${item.count} active entr${item.count === 1 ? 'y' : 'ies'}`);
+    const pages = [
+      ...(categoryLines.length > 0 ? [{
+        id: `${scopeId}:topic-index`,
+        scope,
+        scopeId,
+        title: 'Topic Index',
+        slug: 'topic-index',
+        kind: 'topic_index' as const,
+        sourceClass: 'derived' as const,
+        editable: false,
+        reviewOnly: false,
+        status: 'active' as const,
+        summary: `Summarizes ${categoryLines.length} category buckets across active durable memory.`,
+        body: categoryLines.join('\n'),
+        renderedMarkdown: ['# Topic Index', '', ...categoryLines].join('\n'),
+        tags: ['derived', 'topics'],
+        createdAt: buildMemorySummary(entries).lastCreatedAt,
+      }] : []),
+      ...operatorEntries.map((entry) => {
+        const title = inferMemoryEntryTitle(entry);
+        const body = entry.content.trim();
+        return {
+          id: `${scopeId}:curated:${entry.id}`,
+          entryId: entry.id,
+          scope,
+          scopeId,
+          title,
+          slug: entry.artifact?.slug || slugifyMemoryTitle(title),
+          kind: 'curated_page' as const,
+          sourceClass: 'operator_curated' as const,
+          editable: true,
+          reviewOnly: false,
+          status: entry.status ?? 'active',
+          summary: summarizeMemoryText(entry.summary, 140) || summarizeMemoryText(body, 140),
+          body,
+          renderedMarkdown: [`# ${title}`, '', body].filter(Boolean).join('\n'),
+          tags: entry.tags ?? [],
+          createdAt: entry.createdAt,
+          updatedAt: entry.artifact?.updatedAt,
+          createdByPrincipal: entry.createdByPrincipal,
+          reason: entry.artifact?.changeReason,
+        };
+      }),
+      ...(decisionEntries.length > 0 ? [{
+        id: `${scopeId}:decisions`,
+        scope,
+        scopeId,
+        title: 'Decisions And Constraints',
+        slug: 'decisions-and-constraints',
+        kind: 'decision_index' as const,
+        sourceClass: 'derived' as const,
+        editable: false,
+        reviewOnly: false,
+        status: 'active' as const,
+        summary: `${decisionEntries.length} active decision-oriented memor${decisionEntries.length === 1 ? 'y' : 'ies'}.`,
+        body: decisionEntries.map((entry) => `- ${inferMemoryEntryTitle(entry)} (${entry.createdAt})`).join('\n'),
+        renderedMarkdown: ['# Decisions And Constraints', '', ...decisionEntries.map((entry) => `- ${inferMemoryEntryTitle(entry)} (${entry.createdAt})`)].join('\n'),
+        tags: ['derived', 'decisions'],
+        createdAt: buildMemorySummary(decisionEntries).lastCreatedAt,
+        sourceEntryIds: decisionEntries.map((entry) => entry.id),
+      }] : []),
+      ...(linkedOutputEntries.length > 0 ? [{
+        id: `${scopeId}:automation-index`,
+        scope,
+        scopeId,
+        title: 'Automation Output Index',
+        slug: 'automation-output-index',
+        kind: 'automation_index' as const,
+        sourceClass: 'derived' as const,
+        editable: false,
+        reviewOnly: false,
+        status: 'active' as const,
+        summary: `${linkedOutputEntries.length} linked automation output referenc${linkedOutputEntries.length === 1 ? 'e' : 'es'}.`,
+        body: linkedOutputEntries.map((entry) => `- ${inferMemoryEntryTitle(entry)} (${entry.createdAt})`).join('\n'),
+        renderedMarkdown: ['# Automation Output Index', '', ...linkedOutputEntries.map((entry) => `- ${inferMemoryEntryTitle(entry)} (${entry.createdAt})`)].join('\n'),
+        tags: ['derived', 'automation_output_reference'],
+        createdAt: buildMemorySummary(linkedOutputEntries).lastCreatedAt,
+        sourceEntryIds: linkedOutputEntries.map((entry) => entry.id),
+      }] : []),
+      ...(contextFlushEntries.length > 0 ? [{
+        id: `${scopeId}:context-flushes`,
+        scope,
+        scopeId,
+        title: 'Context Flush Index',
+        slug: 'context-flush-index',
+        kind: 'context_flush_index' as const,
+        sourceClass: 'derived' as const,
+        editable: false,
+        reviewOnly: false,
+        status: 'active' as const,
+        summary: `${contextFlushEntries.length} active context-flush artifact${contextFlushEntries.length === 1 ? '' : 's'}.`,
+        body: contextFlushEntries.map((entry) => `- ${summarizeMemoryText(entry.summary || entry.content, 120)} (${entry.createdAt})`).join('\n'),
+        renderedMarkdown: ['# Context Flush Index', '', ...contextFlushEntries.map((entry) => `- ${summarizeMemoryText(entry.summary || entry.content, 120)} (${entry.createdAt})`)].join('\n'),
+        tags: ['derived', 'context_flush'],
+        createdAt: buildMemorySummary(contextFlushEntries).lastCreatedAt,
+        sourceEntryIds: contextFlushEntries.map((entry) => entry.id),
+      }] : []),
+      ...(reviewOnlyEntries.length > 0 ? [{
+        id: `${scopeId}:review-queue`,
+        scope,
+        scopeId,
+        title: 'Review Queue',
+        slug: 'review-queue',
+        kind: 'review_queue' as const,
+        sourceClass: 'derived' as const,
+        editable: false,
+        reviewOnly: true,
+        status: 'active' as const,
+        summary: `${reviewOnlyEntries.length} inactive/review-only entr${reviewOnlyEntries.length === 1 ? 'y' : 'ies'} remain inspectable.`,
+        body: reviewOnlyEntries.map((entry) => `- [${entry.status}] ${inferMemoryEntryTitle(entry)} (${entry.createdAt})`).join('\n'),
+        renderedMarkdown: ['# Review Queue', '', ...reviewOnlyEntries.map((entry) => `- [${entry.status}] ${inferMemoryEntryTitle(entry)} (${entry.createdAt})`)].join('\n'),
+        tags: ['derived', 'review_only'],
+        createdAt: buildMemorySummary(reviewOnlyEntries).lastCreatedAt,
+        sourceEntryIds: reviewOnlyEntries.map((entry) => entry.id),
+      }] : []),
+    ];
+
+    if (!normalizedQuery) {
+      return pages;
+    }
+    return pages.filter((page) => [page.title, page.summary, page.body, page.tags.join(' ')].join('\n').toLowerCase().includes(normalizedQuery));
+  };
+  const buildMemoryLintFindings = (scope: 'global' | 'code_session', scopeId: string, entries: StoredMemoryEntry[]) => {
+    const findings: Array<{
+      id: string;
+      scope: 'global' | 'code_session';
+      scopeId: string;
+      severity: 'info' | 'warn' | 'critical';
+      kind: 'duplicate' | 'stale' | 'oversized' | 'orphan_reference' | 'review_queue';
+      title: string;
+      detail: string;
+      entryIds?: string[];
+    }> = [];
+    const activeEntries = entries.filter((entry) => entry.status === 'active');
+    const duplicateGroups = new Map<string, StoredMemoryEntry[]>();
+    for (const entry of activeEntries) {
+      const list = duplicateGroups.get(entry.contentHash) ?? [];
+      list.push(entry);
+      duplicateGroups.set(entry.contentHash, list);
+    }
+    for (const group of duplicateGroups.values()) {
+      if (group.length < 2) continue;
+      findings.push({
+        id: `${scopeId}:duplicate:${group[0]!.contentHash}`,
+        scope,
+        scopeId,
+        severity: 'warn',
+        kind: 'duplicate',
+        title: 'Duplicate durable memory',
+        detail: `${group.length} active entries share the same content hash. Review whether they should be consolidated.`,
+        entryIds: group.map((entry) => entry.id),
+      });
+    }
+    for (const entry of activeEntries) {
+      const sourceClass = classifyMemoryEntrySource(entry);
+      const staleDays = sourceClass === 'derived' ? 30 : 180;
+      if (isOlderThanDays(entry.artifact?.updatedAt || entry.createdAt, staleDays)) {
+        findings.push({
+          id: `${scopeId}:stale:${entry.id}`,
+          scope,
+          scopeId,
+          severity: sourceClass === 'derived' ? 'warn' : 'info',
+          kind: 'stale',
+          title: 'Stale memory artifact',
+          detail: `${inferMemoryEntryTitle(entry)} has not been refreshed in at least ${staleDays} days.`,
+          entryIds: [entry.id],
+        });
+      }
+      if (entry.content.length > 1200 || (!entry.summary && entry.content.length > 480)) {
+        findings.push({
+          id: `${scopeId}:oversized:${entry.id}`,
+          scope,
+          scopeId,
+          severity: 'warn',
+          kind: 'oversized',
+          title: 'Oversized or low-signal entry',
+          detail: `${inferMemoryEntryTitle(entry)} is large relative to its summary signal and should be compacted or summarized.`,
+          entryIds: [entry.id],
+        });
+      }
+      if (classifyMemoryEntrySource(entry) === 'linked_output'
+        && !entry.provenance?.requestId
+        && !entry.provenance?.toolName) {
+        findings.push({
+          id: `${scopeId}:orphan:${entry.id}`,
+          scope,
+          scopeId,
+          severity: 'warn',
+          kind: 'orphan_reference',
+          title: 'Linked output missing dereference metadata',
+          detail: `${inferMemoryEntryTitle(entry)} is tagged as a linked output but lacks request/tool provenance.`,
+          entryIds: [entry.id],
+        });
+      }
+    }
+    const reviewOnlyEntries = entries.filter((entry) => entry.status !== 'active');
+    if (reviewOnlyEntries.length > 0) {
+      findings.push({
+        id: `${scopeId}:review-queue`,
+        scope,
+        scopeId,
+        severity: 'info',
+        kind: 'review_queue',
+        title: 'Review-only entries remain surfaced',
+        detail: `${reviewOnlyEntries.length} entr${reviewOnlyEntries.length === 1 ? 'y is' : 'ies are'} inactive and visible for review/audit.`,
+        entryIds: reviewOnlyEntries.map((entry) => entry.id),
+      });
+    }
+    return findings;
+  };
+  const buildRecentMemoryAudit = () => runtime.auditLog
+    .getRecentEvents(250)
+    .filter((event) => event.type.startsWith('memory_') || event.controller === 'MemoryWiki')
+    .slice()
+    .reverse()
+    .slice(0, 30)
+    .map((event) => {
+      const scope = event.details.scope === 'global' || event.details.scope === 'code_session'
+        ? event.details.scope as 'global' | 'code_session'
+        : undefined;
+      return {
+        id: event.id,
+        timestamp: event.timestamp,
+        severity: event.severity,
+        type: event.type,
+        summary: typeof event.details.summary === 'string'
+          ? event.details.summary
+          : event.type.replace(/[._:]+/g, ' '),
+        detail: typeof event.details.detail === 'string'
+          ? event.details.detail
+          : typeof event.details.reason === 'string'
+            ? event.details.reason
+            : undefined,
+        actor: typeof event.details.actor === 'string' ? event.details.actor : undefined,
+        entryId: typeof event.details.entryId === 'string' ? event.details.entryId : undefined,
+        scope,
+        scopeId: typeof event.details.scopeId === 'string' ? event.details.scopeId : undefined,
+      };
+    });
+  const buildRecentMemoryJobs = () => jobTracker
+    .getState(120)
+    .jobs
+    .filter((job) => job.type.startsWith('memory_hygiene'))
+    .slice(0, 30)
+    .map((job) => ({
+      id: job.id,
+      type: job.type,
+      status: job.status,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+      detail: job.detail,
+      scope: typeof job.metadata?.maintenance === 'object' && job.metadata?.maintenance && 'scope' in job.metadata.maintenance
+        ? String((job.metadata.maintenance as Record<string, unknown>).scope ?? '')
+        : undefined,
+      artifact: typeof job.metadata?.maintenance === 'object' && job.metadata?.maintenance && 'artifact' in job.metadata.maintenance
+        ? String((job.metadata.maintenance as Record<string, unknown>).artifact ?? '')
+        : undefined,
+    }));
+  const buildMemoryScopeView = (
+    scope: 'global' | 'code_session',
+    scopeId: string,
+    title: string,
+    description: string,
+    store: AgentMemoryStore,
+    filter: {
+      includeInactive: boolean;
+      query?: string;
+      sourceType?: MemorySourceType;
+      trustLevel?: MemoryTrustLevel;
+      status?: MemoryStatus;
+      limit: number;
+    },
+  ) => {
+    const rawEntries = store.getEntries(scopeId, filter.includeInactive);
+    const wikiPages = buildMemoryWikiPages(scope, scopeId, rawEntries, filter.query);
+    const lintFindings = buildMemoryLintFindings(scope, scopeId, rawEntries);
+    const filteredEntries = rawEntries
+      .filter((entry) => matchesMemoryFilters(entry, filter))
+      .slice(0, filter.limit)
+      .map((entry) => toDashboardMemoryEntryView(entry));
+    const summary = buildMemorySummary(rawEntries);
+    return {
+      scope,
+      scopeId,
+      title,
+      description,
+      editable: store.isEnabled() && !store.isReadOnly(),
+      reviewOnly: false,
+      summary,
+      entries: filteredEntries,
+      wikiPages,
+      lintFindings,
+      renderedMarkdown: store.load(scopeId),
+    };
+  };
   const loadRawConfig = (): Record<string, unknown> => {
     if (!existsSync(configPath)) return {};
     const verification = controlPlaneIntegrity.verifyFileSync(configPath, {
@@ -1214,6 +1634,31 @@ function buildDashboardCallbacks(
     isRecord,
     sanitizeNormalizedUrlRecord,
   });
+  const resolveMemoryScopeTarget = (input: { scope: 'global' | 'code_session'; codeSessionId?: string }) => {
+    if (input.scope === 'code_session') {
+      const codeSessionId = input.codeSessionId?.trim();
+      if (!codeSessionId) {
+        return { error: 'codeSessionId is required for code-session memory curation.' } as const;
+      }
+      const session = codeSessionStore.getSession(codeSessionId);
+      if (!session) {
+        return { error: `Code session '${codeSessionId}' was not found.` } as const;
+      }
+      return {
+        scope: 'code_session' as const,
+        scopeId: session.id,
+        scopeTitle: session.title,
+        store: codeSessionMemoryStore,
+      };
+    }
+
+    return {
+      scope: 'global' as const,
+      scopeId: getPrincipalMemoryAgentId(),
+      scopeTitle: 'Global Memory',
+      store: agentMemoryStore,
+    };
+  };
   const setupConfigCallbacks = createSetupConfigDashboardCallbacks({
     configRef,
     toolExecutor,
@@ -1401,6 +1846,302 @@ function buildDashboardCallbacks(
         });
       },
     }),
+
+    onMemoryView: (args) => {
+      const includeInactive = args?.includeInactive === true;
+      const includeCodeSessions = args?.includeCodeSessions !== false;
+      const limit = Math.max(1, Math.min(args?.limit ?? 200, 500));
+      const principalAgentId = getPrincipalMemoryAgentId();
+      const global = buildMemoryScopeView(
+        'global',
+        principalAgentId,
+        'Global Memory',
+        'Guardian primary durable memory scope shared across normal chat and loaded first for Code turns.',
+        agentMemoryStore,
+        {
+          includeInactive,
+          query: args?.query,
+          sourceType: args?.sourceType,
+          trustLevel: args?.trustLevel,
+          status: args?.status,
+          limit,
+        },
+      );
+      const codeSessions = includeCodeSessions
+        ? codeSessionStore
+          .listAllSessions()
+          .filter((session) => !args?.codeSessionId || session.id === args.codeSessionId)
+          .map((session) => buildMemoryScopeView(
+            'code_session',
+            session.id,
+            session.title,
+            `Code-session durable memory for workspace ${session.workspaceRoot}. Surfaced with scope isolation preserved.`,
+            codeSessionMemoryStore,
+            {
+              includeInactive,
+              query: args?.query,
+              sourceType: args?.sourceType,
+              trustLevel: args?.trustLevel,
+              status: args?.status,
+              limit,
+            },
+          ))
+        : [];
+      const recentAudit = buildRecentMemoryAudit();
+      const recentJobs = buildRecentMemoryJobs();
+      const scopeViews = [global, ...codeSessions];
+      const wikiPageCount = scopeViews.reduce((sum, scope) => sum + scope.wikiPages.length, 0);
+      const lintFindingCount = scopeViews.reduce((sum, scope) => sum + scope.lintFindings.length, 0);
+      const reviewOnlyCount = scopeViews.reduce((sum, scope) => sum + scope.summary.inactiveEntries, 0);
+      const operatorPageCount = scopeViews.reduce(
+        (sum, scope) => sum + scope.wikiPages.filter((page) => page.sourceClass === 'operator_curated').length,
+        0,
+      );
+      return {
+        generatedAt: new Date().toISOString(),
+        principalAgentId,
+        canEdit: (agentMemoryStore.isEnabled() && !agentMemoryStore.isReadOnly())
+          || (codeSessionMemoryStore.isEnabled() && !codeSessionMemoryStore.isReadOnly()),
+        global,
+        codeSessions,
+        maintenance: {
+          readOnly: (!agentMemoryStore.isEnabled() || agentMemoryStore.isReadOnly())
+            && (!codeSessionMemoryStore.isEnabled() || codeSessionMemoryStore.isReadOnly()),
+          scopeCount: scopeViews.length,
+          wikiPageCount,
+          lintFindingCount,
+          reviewOnlyCount,
+          operatorPageCount,
+          recentAuditCount: recentAudit.length,
+          recentMaintenanceCount: recentJobs.length,
+        },
+        recentAudit,
+        recentJobs,
+      };
+    },
+
+    onMemoryCurate: (input) => {
+      const actor = input.actor?.trim() || 'web-user';
+      const target = resolveMemoryScopeTarget({
+        scope: input.scope,
+        codeSessionId: input.codeSessionId,
+      });
+      if ('error' in target) {
+        return {
+          success: false,
+          message: target.error ?? 'Invalid memory scope.',
+          statusCode: 400,
+          errorCode: 'memory_scope_invalid',
+        };
+      }
+      if (!target.store.isEnabled()) {
+        return {
+          success: false,
+          message: 'Persistent memory is disabled for this scope.',
+          statusCode: 409,
+          errorCode: 'memory_disabled',
+        };
+      }
+      if (target.store.isReadOnly()) {
+        return {
+          success: false,
+          message: 'Persistent memory is read-only for this scope.',
+          statusCode: 409,
+          errorCode: 'memory_read_only',
+        };
+      }
+
+      const timestamp = new Date().toISOString();
+      const createdAt = timestamp.slice(0, 10);
+      const tags = [...new Set((input.tags ?? []).map((value) => String(value ?? '').trim()).filter(Boolean))];
+      const title = input.title?.trim() || '';
+      const content = input.content?.trim() || '';
+      const reason = input.reason?.trim() || undefined;
+      const auditAgentId = target.scope === 'global' ? target.scopeId : getPrincipalMemoryAgentId();
+
+      try {
+        if (input.action === 'create') {
+          if (!title || !content) {
+            return {
+              success: false,
+              message: 'Title and content are required to create a curated memory page.',
+              statusCode: 400,
+              errorCode: 'memory_curate_invalid',
+            };
+          }
+          const stored = target.store.append(target.scopeId, {
+            content,
+            summary: input.summary?.trim() || undefined,
+            createdAt,
+            category: 'Operator Wiki',
+            sourceType: 'operator',
+            trustLevel: 'trusted',
+            status: 'active',
+            createdByPrincipal: actor,
+            tags,
+            artifact: {
+              sourceClass: 'operator_curated',
+              kind: 'wiki_page',
+              title,
+              slug: slugifyMemoryTitle(title),
+              retrievalHints: [title, ...tags],
+              updatedAt: timestamp,
+              updatedByPrincipal: actor,
+              changeReason: reason,
+            },
+          });
+          runtime.auditLog?.record?.({
+            type: 'memory_wiki.created',
+            severity: 'info',
+            agentId: auditAgentId,
+            controller: 'MemoryWiki',
+            details: {
+              actor,
+              scope: target.scope,
+              scopeId: target.scopeId,
+              entryId: stored.id,
+              title,
+              reason,
+              summary: `Created curated memory page '${title}'.`,
+            },
+          });
+          return {
+            success: true,
+            message: `Created curated memory page '${title}'.`,
+            details: {
+              action: 'create',
+              scope: target.scope,
+              scopeId: target.scopeId,
+              entryId: stored.id,
+              title,
+            },
+          };
+        }
+
+        const entryId = input.entryId?.trim();
+        if (!entryId) {
+          return {
+            success: false,
+            message: 'entryId is required for updating or archiving a curated memory page.',
+            statusCode: 400,
+            errorCode: 'memory_entry_required',
+          };
+        }
+        const existing = target.store.findEntry(target.scopeId, entryId);
+        if (!existing) {
+          return {
+            success: false,
+            message: `Memory entry '${entryId}' was not found.`,
+            statusCode: 404,
+            errorCode: 'memory_entry_not_found',
+          };
+        }
+        if (classifyMemoryEntrySource(existing) !== 'operator_curated') {
+          return {
+            success: false,
+            message: 'Only operator-curated wiki pages can be edited or archived from the Memory page.',
+            statusCode: 400,
+            errorCode: 'memory_entry_not_curated',
+          };
+        }
+
+        if (input.action === 'archive') {
+          const stored = target.store.archiveEntry(target.scopeId, entryId, {
+            archivedAt: timestamp,
+            archivedByPrincipal: actor,
+            reason,
+          });
+          const archivedTitle = inferMemoryEntryTitle(stored);
+          runtime.auditLog?.record?.({
+            type: 'memory_wiki.archived',
+            severity: 'info',
+            agentId: auditAgentId,
+            controller: 'MemoryWiki',
+            details: {
+              actor,
+              scope: target.scope,
+              scopeId: target.scopeId,
+              entryId: stored.id,
+              title: archivedTitle,
+              reason,
+              summary: `Archived curated memory page '${archivedTitle}'.`,
+            },
+          });
+          return {
+            success: true,
+            message: `Archived curated memory page '${archivedTitle}'.`,
+            details: {
+              action: 'archive',
+              scope: target.scope,
+              scopeId: target.scopeId,
+              entryId: stored.id,
+              title: archivedTitle,
+            },
+          };
+        }
+
+        if (!title || !content) {
+          return {
+            success: false,
+            message: 'Title and content are required to update a curated memory page.',
+            statusCode: 400,
+            errorCode: 'memory_curate_invalid',
+          };
+        }
+        const stored = target.store.updateEntry(target.scopeId, entryId, {
+          content,
+          summary: input.summary?.trim() || undefined,
+          category: 'Operator Wiki',
+          sourceType: 'operator',
+          trustLevel: 'trusted',
+          tags,
+          artifact: {
+            sourceClass: 'operator_curated',
+            kind: 'wiki_page',
+            title,
+            slug: slugifyMemoryTitle(title),
+            retrievalHints: [title, ...tags],
+            updatedAt: timestamp,
+            updatedByPrincipal: actor,
+            changeReason: reason,
+          },
+        });
+        runtime.auditLog?.record?.({
+          type: 'memory_wiki.updated',
+          severity: 'info',
+          agentId: auditAgentId,
+          controller: 'MemoryWiki',
+          details: {
+            actor,
+            scope: target.scope,
+            scopeId: target.scopeId,
+            entryId: stored.id,
+            title,
+            reason,
+            summary: `Updated curated memory page '${title}'.`,
+          },
+        });
+        return {
+          success: true,
+          message: `Updated curated memory page '${title}'.`,
+          details: {
+            action: 'update',
+            scope: target.scope,
+            scopeId: target.scopeId,
+            entryId: stored.id,
+            title,
+          },
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          success: false,
+          message,
+          statusCode: 400,
+          errorCode: 'memory_curate_failed',
+        };
+      }
+    },
 
     onReferenceGuide: () => getReferenceGuide(),
 

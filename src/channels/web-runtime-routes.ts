@@ -152,6 +152,57 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     return true;
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/memory') {
+    if (!dashboard.onMemoryView) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    const includeInactive = url.searchParams.get('includeInactive');
+    const includeCodeSessions = url.searchParams.get('includeCodeSessions');
+    const limit = url.searchParams.get('limit');
+    sendJSON(res, 200, dashboard.onMemoryView({
+      includeInactive: includeInactive == null ? undefined : includeInactive === 'true',
+      includeCodeSessions: includeCodeSessions == null ? undefined : includeCodeSessions === 'true',
+      codeSessionId: trimOptionalString(url.searchParams.get('codeSessionId')),
+      query: trimOptionalString(url.searchParams.get('query')),
+      sourceType: trimOptionalString(url.searchParams.get('sourceType')) as import('../runtime/agent-memory-store.js').MemorySourceType | undefined,
+      trustLevel: trimOptionalString(url.searchParams.get('trustLevel')) as import('../runtime/agent-memory-store.js').MemoryTrustLevel | undefined,
+      status: trimOptionalString(url.searchParams.get('status')) as import('../runtime/agent-memory-store.js').MemoryStatus | undefined,
+      limit: limit ? parseInt(limit, 10) : undefined,
+    }));
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/memory/curate') {
+    if (!dashboard.onMemoryCurate) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const result = await dashboard.onMemoryCurate({
+        action: trimOptionalString(parsed.action) as 'create' | 'update' | 'archive',
+        scope: trimOptionalString(parsed.scope) as 'global' | 'code_session',
+        codeSessionId: trimOptionalString(parsed.codeSessionId),
+        entryId: trimOptionalString(parsed.entryId),
+        title: trimOptionalString(parsed.title),
+        content: trimOptionalString(parsed.content),
+        summary: trimOptionalString(parsed.summary),
+        tags: Array.isArray(parsed.tags)
+          ? parsed.tags.map((value) => trimOptionalString(value)).filter((value): value is string => Boolean(value))
+          : undefined,
+        reason: trimOptionalString(parsed.reason),
+        actor: trimOptionalString(parsed.actor),
+      });
+      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+      context.maybeEmitUIInvalidation(result, ['memory'], 'memory.curated', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/setup/status') {
     if (!dashboard.onSetupStatus) {
       sendJSON(res, 404, { error: 'Not available' });

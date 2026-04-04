@@ -197,6 +197,11 @@ export const api = {
   verifyAuditChain: () => request('/api/audit/verify'),
   config:       () => request('/api/config'),
   reference:    () => request('/api/reference'),
+  memory:       (params = {}) => request(`/api/memory${buildQueryString(params)}`),
+  memoryCurate: (input) => request('/api/memory/curate', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }),
   setupStatus:  () => request('/api/setup/status'),
   applySetup:   (input) => request('/api/setup/apply', {
     method: 'POST',

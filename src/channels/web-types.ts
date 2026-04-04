@@ -9,6 +9,13 @@ import type { AuditEvent, AuditEventType, AuditFilter, AuditSeverity, AuditSumma
 import type { WatchdogResult } from '../runtime/watchdog.js';
 import type { BudgetRecord } from '../runtime/budget.js';
 import type { ReferenceGuide } from '../reference-guide.js';
+import type {
+  MemoryArtifactClass,
+  MemorySourceType,
+  MemoryStatus,
+  MemoryTrustLevel,
+  StoredMemoryEntry,
+} from '../runtime/agent-memory-store.js';
 import type { QuickActionDefinition } from '../quick-actions.js';
 import type { SetupStatus, SetupApplyInput, SearchConfigInput } from '../runtime/setup.js';
 import type { AnalyticsSummary, AnalyticsEventInput } from '../runtime/analytics.js';
@@ -116,6 +123,142 @@ export interface DashboardAgentDetail extends DashboardAgentInfo {
     maxConcurrentTools: number;
     maxQueueDepth: number;
   };
+}
+
+export interface DashboardMemoryArtifactSummary {
+  activeEntries: number;
+  inactiveEntries: number;
+  quarantinedEntries: number;
+  operatorEntries: number;
+  derivedEntries: number;
+  contextFlushEntries: number;
+  categories: string[];
+  lastCreatedAt?: string;
+}
+
+export interface DashboardMemoryScopeView {
+  scope: 'global' | 'code_session';
+  scopeId: string;
+  title: string;
+  description: string;
+  editable: boolean;
+  reviewOnly: boolean;
+  summary: DashboardMemoryArtifactSummary;
+  entries: DashboardMemoryEntryView[];
+  wikiPages: DashboardMemoryWikiPageView[];
+  lintFindings: DashboardMemoryLintFinding[];
+  renderedMarkdown: string;
+}
+
+export interface DashboardMemoryResponse {
+  generatedAt: string;
+  principalAgentId: string;
+  canEdit: boolean;
+  global: DashboardMemoryScopeView;
+  codeSessions: DashboardMemoryScopeView[];
+  maintenance: DashboardMemoryMaintenanceSummary;
+  recentAudit: DashboardMemoryAuditEventView[];
+  recentJobs: DashboardMemoryMaintenanceJobView[];
+}
+
+export interface DashboardMemoryEntryView extends StoredMemoryEntry {
+  sourceClass: MemoryArtifactClass;
+  displayTitle: string;
+  editable: boolean;
+  reviewOnly: boolean;
+}
+
+export interface DashboardMemoryWikiPageView {
+  id: string;
+  entryId?: string;
+  scope: 'global' | 'code_session';
+  scopeId: string;
+  title: string;
+  slug: string;
+  kind: 'curated_page' | 'topic_index' | 'decision_index' | 'automation_index' | 'review_queue' | 'context_flush_index';
+  sourceClass: MemoryArtifactClass;
+  editable: boolean;
+  reviewOnly: boolean;
+  status: MemoryStatus;
+  summary?: string;
+  body: string;
+  renderedMarkdown: string;
+  tags: string[];
+  createdAt?: string;
+  updatedAt?: string;
+  createdByPrincipal?: string;
+  reason?: string;
+  sourceEntryIds?: string[];
+}
+
+export interface DashboardMemoryLintFinding {
+  id: string;
+  scope: 'global' | 'code_session';
+  scopeId: string;
+  severity: AuditSeverity;
+  kind: 'duplicate' | 'stale' | 'oversized' | 'orphan_reference' | 'review_queue';
+  title: string;
+  detail: string;
+  entryIds?: string[];
+}
+
+export interface DashboardMemoryAuditEventView {
+  id: string;
+  timestamp: number;
+  severity: AuditSeverity;
+  type: string;
+  summary: string;
+  detail?: string;
+  actor?: string;
+  entryId?: string;
+  scope?: 'global' | 'code_session';
+  scopeId?: string;
+}
+
+export interface DashboardMemoryMaintenanceJobView {
+  id: string;
+  type: string;
+  status: 'running' | 'succeeded' | 'failed';
+  startedAt: number;
+  completedAt?: number;
+  detail?: string;
+  scope?: string;
+  artifact?: string;
+}
+
+export interface DashboardMemoryMaintenanceSummary {
+  readOnly: boolean;
+  scopeCount: number;
+  wikiPageCount: number;
+  lintFindingCount: number;
+  reviewOnlyCount: number;
+  operatorPageCount: number;
+  recentAuditCount: number;
+  recentMaintenanceCount: number;
+}
+
+export interface DashboardMemoryFilterInput {
+  includeInactive?: boolean;
+  includeCodeSessions?: boolean;
+  codeSessionId?: string;
+  query?: string;
+  sourceType?: MemorySourceType;
+  trustLevel?: MemoryTrustLevel;
+  status?: MemoryStatus;
+  limit?: number;
+}
+
+export interface DashboardMemoryMutationInput {
+  action: 'create' | 'update' | 'archive';
+  scope: 'global' | 'code_session';
+  codeSessionId?: string;
+  entryId?: string;
+  title?: string;
+  content?: string;
+  summary?: string;
+  tags?: string[];
+  reason?: string;
+  actor?: string;
 }
 
 export interface RedactedCloudCpanelProfile {
@@ -1008,6 +1151,8 @@ export interface DashboardCallbacks {
     channel: string;
     sessionId: string;
   }) => { success: boolean; message: string };
+  onMemoryView?: (args?: DashboardMemoryFilterInput) => DashboardMemoryResponse;
+  onMemoryCurate?: (input: DashboardMemoryMutationInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
   onReferenceGuide?: () => ReferenceGuide;
   onQuickActions?: () => QuickActionDefinition[];
   onQuickActionRun?: (args: {

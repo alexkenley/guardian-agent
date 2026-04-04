@@ -704,6 +704,9 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Memory Behavior',
                 items: [
                   'Conversation memory is persisted when available, with retention settings exposed through configuration.',
+                  'The web `Memory` page is the unified operator surface for durable memory: global memory, code-session memory, operator-curated pages, derived indexes, linked outputs, and review-only records.',
+                  'Operator-curated memory pages can be created, edited, and archived from the Memory page when durable memory is writable; the runtime keeps those edits in the structured memory store rather than loose files.',
+                  'Derived memory pages and hygiene findings are inspectable but remain read-only and refreshable by design.',
                   'Switching between `auto`, `local-only`, and `external-only` changes who answers, but it does not create a separate conversation by itself.',
                   'Reset conversation state when you want a clean run without changing the longer-term identity policy.',
                   'Assistant memory, analytics, and search-oriented history should be reviewed together when debugging stale context.',

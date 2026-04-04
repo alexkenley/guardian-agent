@@ -221,6 +221,40 @@ describe('AgentMemoryStore context packing', () => {
     expect(result.queryPreview).toContain('save the browser automation artifact');
   });
 
+  it('prefers operator-curated pages over equally matching derived artifacts', () => {
+    const store = makeStore(260);
+    store.append('agent1', {
+      content: 'Release notes preference: keep release notes terse and decision-focused.',
+      summary: 'Release notes preference.',
+      createdAt: '2026-04-03',
+      category: 'Operator Wiki',
+      sourceType: 'operator',
+      artifact: {
+        title: 'Release notes style',
+        sourceClass: 'operator_curated',
+        kind: 'wiki_page',
+      },
+    });
+    store.append('agent1', {
+      content: 'Release notes preference derived from earlier context flush.',
+      summary: 'Release notes preference.',
+      createdAt: '2026-04-04',
+      category: 'Context Flushes',
+      sourceType: 'system',
+      tags: ['context_flush'],
+    });
+
+    const result = store.loadForContextWithSelection('agent1', {
+      query: 'release notes preference',
+    });
+
+    expect(result.selectedEntries[0]).toMatchObject({
+      sourceClass: 'operator_curated',
+      isContextFlush: false,
+    });
+    expect(result.selectedEntries[0]?.preview).toContain('Release notes style');
+  });
+
   it('caps the winning set before prompt packing when many active entries exist', () => {
     const store = makeStore(2000);
     for (let index = 0; index < 40; index += 1) {

@@ -1349,17 +1349,17 @@ function createProviderStatusTable(config, providers, panel) {
       isExternalDefault ? ' <span class="badge badge-running">external default</span>' : '',
     ].join('');
     const globalActionBtn = isDefault
-      ? '<span class="text-muted" style="font-size:0.75rem" title="Global default provider used for the main default chat path and fallback ordering. This is separate from the preferred local or external routed provider.">Current default</span>'
-      : '<button class="btn btn-sm set-default-provider-btn" data-provider="' + esc(name) + '" title="Set the global default provider used for the main default chat path and fallback ordering. This does not change the preferred local or external routed provider.">Set as Default</button>';
+      ? '<span class="config-provider-current" title="Global default provider used for the main default chat path and fallback ordering. This is separate from the preferred local or external routed provider.">Current default</span>'
+      : '<button class="btn btn-primary btn-sm set-default-provider-btn" data-provider="' + esc(name) + '" title="Set the global default provider used for the main default chat path and fallback ordering. This does not change the preferred local or external routed provider.">Set Global Default</button>';
     const localityLabel = locality === 'local' ? 'Local' : 'External';
     const preferredActionBtn = (locality === 'local' ? isLocalDefault : isExternalDefault)
-      ? '<span class="text-muted" style="font-size:0.75rem" title="' + escAttr(locality === 'local'
+      ? '<span class="config-provider-current" title="' + escAttr(locality === 'local'
         ? 'Preferred provider when Guardian routes work to the local tier. This does not change the global default provider.'
         : 'Preferred provider when Guardian routes work to the external tier. This does not change the global default provider.') + '">Current ' + localityLabel.toLowerCase() + ' default</span>'
-      : '<button class="btn btn-sm set-preferred-provider-btn" data-provider="' + esc(name) + '" data-locality="' + esc(locality) + '" title="' + escAttr(locality === 'local'
+      : '<button class="btn btn-secondary btn-sm set-preferred-provider-btn" data-provider="' + esc(name) + '" data-locality="' + esc(locality) + '" title="' + escAttr(locality === 'local'
         ? 'Set the preferred provider used when Guardian routes work to the local tier. This does not change the global default provider.'
-        : 'Set the preferred provider used when Guardian routes work to the external tier. This does not change the global default provider.') + '">Set as ' + localityLabel + ' Default</button>';
-    return '<tr><td><strong>' + esc(name) + '</strong>' + defaultBadges + '</td><td>' + esc(cfg.provider) + '</td><td>' + esc(cfg.model) + '</td><td>' + esc(locality) + '</td><td>' + statusBadge + '</td><td>' + esc(modelList) + '</td><td style="display:flex;gap:0.5rem;flex-wrap:wrap;">' + globalActionBtn + preferredActionBtn + '</td></tr>';
+        : 'Set the preferred provider used when Guardian routes work to the external tier. This does not change the global default provider.') + '">Set ' + localityLabel + ' Default</button>';
+    return '<tr><td><strong>' + esc(name) + '</strong>' + defaultBadges + '</td><td>' + esc(cfg.provider) + '</td><td>' + esc(cfg.model) + '</td><td>' + esc(locality) + '</td><td>' + statusBadge + '</td><td>' + esc(modelList) + '</td><td class="config-provider-actions">' + globalActionBtn + preferredActionBtn + '</td></tr>';
   }).join('');
 
   section.innerHTML = `

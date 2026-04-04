@@ -11,6 +11,23 @@ This guide covers architecture, configuration, and usage.
 
 For tier-routed chat, the built-in `local` and `external` agents still share one logical Guardian memory/session identity. Switching between `auto`, `local-only`, and `external-only` changes the execution backend, not Guardian's conversation history or global memory.
 
+## Memory Surfacing Model
+
+Guardian now treats durable memory as something that should be **surfaced centrally**, not hidden behind raw files or narrow tool output.
+
+The current direction is:
+
+- all durable memory should be surfaced through a unified Memory/Wiki experience
+- this includes global memory, Code-session memory, operator-authored durable entries, system-extracted/flush material, and linked durable output references
+- surfaced does **not** mean uniformly editable
+- canonical sidecar/index-backed memory remains the source of truth
+- editable operator curation must still happen through guarded product/control-plane paths, not direct filesystem edits under `.guardianagent/`
+- quarantined, rejected, or otherwise inactive memory can be surfaced for review, but it must remain out of ordinary prompt context unless explicitly inspected through the appropriate path
+
+In other words: Guardian is moving toward a **unified memory surface** while preserving the existing trust, scope, and approval boundaries.
+
+The web UI `#/memory` page is the first operator-facing step in that direction. It surfaces global and Code-session durable memory in one place, while still distinguishing canonical entries, derived material, and review-only inactive records.
+
 ## Memory Scopes
 
 ### Global agent memory
@@ -22,6 +39,7 @@ Global agent memory is Guardian's long-term knowledge base outside attached codi
 - remains Guardian's primary persistent memory scope, including during attached coding sessions
 - loaded into Guardian prompt context outside Code, and also loaded first for Code-session turns
 - written by `memory_save` by default unless the caller explicitly targets Code-session memory
+- surfaced in the Memory/Wiki experience as the primary durable scope for the current logical assistant identity
 - receives automatic memory flush only from non-Code Guardian chat
 
 ### Code-session memory
@@ -32,6 +50,7 @@ Code-session memory is a separate long-term store for Guardian while it is opera
 - isolated from global memory by default
 - loaded only for turns running inside that Code session, as a bounded session-local augment to global memory rather than a replacement for it
 - written by `memory_save` only when the caller explicitly targets `scope=code_session`, or by automatic memory flush from that Code session's transcript
+- surfaced in the Memory/Wiki experience as separate durable session scopes rather than merged into global memory
 - not automatically preloaded into main chat, CLI, or Telegram unless they explicitly attach to that same backend Code session
 
 ### Conversation history
@@ -43,6 +62,7 @@ Conversation history is separate from long-term memory.
 - trimmed to fit prompt context
 - incrementally flushed into the matching long-term memory scope when new messages fall out of prompt context
 - flush records preserve objective/focus/blocker context in a structured summary rather than duplicating raw transcript prefixes on every prompt build
+- conversation history itself is not the canonical Memory/Wiki durable store, but it can produce durable memory artifacts through flush and related maintenance flows
 
 ### Automation output references
 
@@ -53,6 +73,7 @@ Saved automations can also write a historical analysis record when their output 
 - writes a compact memory reference entry plus a private full-output record
 - lets the assistant find a prior automation run quickly through memory and then dereference the full stored output later
 - keeps raw large payloads out of normal prompt memory
+- is intended to surface in the Memory/Wiki experience as a linked durable artifact rather than a raw prompt dump
 
 ### Explicit cross-memory bridge
 
@@ -61,6 +82,7 @@ Cross-scope lookup is explicit and read-only.
 - `memory_bridge_search` can search global memory from Code
 - `memory_bridge_search` can search a Code-session memory from outside that session when the caller can reach that session
 - bridge results are reference material only; they do not change the current scope, identity, or objective
+- surfacing multiple scopes in one UI does not relax these runtime isolation rules
 
 ## Architecture
 

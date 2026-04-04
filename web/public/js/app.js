@@ -7,6 +7,7 @@ import { renderDashboard, updateDashboard } from './pages/dashboard.js';
 import { renderSecurity, updateSecurity } from './pages/security.js';
 import { renderConfig, updateConfig } from './pages/config.js';
 import { renderReference } from './pages/reference.js';
+import { renderMemory, updateMemory } from './pages/memory.js';
 import { renderNetwork, updateNetwork } from './pages/network.js';
 import { renderAutomations, updateAutomations } from './pages/automations.js';
 import { renderCloud, updateCloud } from './pages/cloud.js';
@@ -262,7 +263,7 @@ const routes = {
     render: renderDashboard,
     update: updateDashboard,
     name: 'dashboard',
-    invalidateTags: ['dashboard', 'config', 'providers', 'security', 'network', 'automations', 'tools'],
+    invalidateTags: ['dashboard', 'config', 'providers', 'security', 'network', 'automations', 'tools', 'memory'],
   },
   '/security': {
     render: renderSecurity,
@@ -275,6 +276,12 @@ const routes = {
     update: updateNetwork,
     name: 'network',
     invalidateTags: ['network', 'automations', 'security'],
+  },
+  '/memory': {
+    render: renderMemory,
+    update: updateMemory,
+    name: 'memory',
+    invalidateTags: ['memory', 'config'],
   },
   '/cloud': {
     render: renderCloud,

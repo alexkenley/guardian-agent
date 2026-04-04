@@ -303,6 +303,79 @@ describe('AgentMemoryStore', () => {
     expect(agents).toContain('agent-b');
   });
 
+  it('returns stored entries for surfaced memory views including inactive records when requested', () => {
+    const store = makeStore();
+    const active = store.append('agent1', {
+      content: 'Operator curated standing note',
+      createdAt: '2026-04-04',
+      category: 'Operator Wiki',
+      sourceType: 'operator',
+      trustLevel: 'trusted',
+      status: 'active',
+      artifact: {
+        title: 'Standing note',
+        sourceClass: 'operator_curated',
+        kind: 'wiki_page',
+      },
+    });
+    const inactive = store.append('agent1', {
+      content: 'Quarantined remote note',
+      createdAt: '2026-04-04',
+      category: 'Imports',
+      sourceType: 'remote_tool',
+      trustLevel: 'untrusted',
+      status: 'quarantined',
+    });
+
+    expect(store.getEntries('agent1')).toEqual([active]);
+    expect(store.getEntries('agent1', true).map((entry) => entry.id)).toEqual([inactive.id, active.id]);
+  });
+
+  it('updates and archives curated wiki entries without deleting the durable record', () => {
+    const store = makeStore();
+    const created = store.append('agent1', {
+      content: 'Initial curated content',
+      summary: 'Initial summary',
+      createdAt: '2026-04-04',
+      category: 'Operator Wiki',
+      sourceType: 'operator',
+      trustLevel: 'trusted',
+      status: 'active',
+      artifact: {
+        title: 'Team preferences',
+        sourceClass: 'operator_curated',
+        kind: 'wiki_page',
+      },
+    });
+
+    const updated = store.updateEntry('agent1', created.id, {
+      content: 'Updated curated content',
+      summary: 'Updated summary',
+      artifact: {
+        title: 'Updated team preferences',
+        updatedAt: '2026-04-04T12:00:00.000Z',
+        updatedByPrincipal: 'slash-operator',
+      },
+    });
+
+    expect(updated.content).toBe('Updated curated content');
+    expect(updated.summary).toBe('Updated summary');
+    expect(updated.artifact?.title).toBe('Updated team preferences');
+    expect(store.load('agent1')).toContain('Updated team preferences: Updated curated content');
+
+    const archived = store.archiveEntry('agent1', created.id, {
+      archivedAt: '2026-04-04T12:05:00.000Z',
+      archivedByPrincipal: 'slash-operator',
+      reason: 'Superseded by a new page',
+    });
+
+    expect(archived.status).toBe('archived');
+    expect(archived.artifact?.archivedAt).toBe('2026-04-04T12:05:00.000Z');
+    expect(store.load('agent1')).not.toContain('Updated curated content');
+    expect(store.getEntries('agent1')).toHaveLength(0);
+    expect(store.getEntries('agent1', true)[0]?.status).toBe('archived');
+  });
+
   it('should clear cache and re-read from disk', () => {
     const store = makeStore();
     store.save('agent1', 'version 1');
