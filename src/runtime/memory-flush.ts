@@ -91,6 +91,17 @@ export function describeMemoryFlushMaintenanceDetail(input: {
   return `Context flush persisted to ${scopeLabel}: ${subject} (${input.newlyDroppedCount} captured line${input.newlyDroppedCount === 1 ? '' : 's'}).`;
 }
 
+export function describeMemoryFlushDeduplicatedDetail(input: {
+  scope: 'global' | 'code_session';
+  codeSessionId?: string;
+  newlyDroppedCount: number;
+}): string {
+  const scopeLabel = input.scope === 'code_session'
+    ? `code session${input.codeSessionId ? ` ${input.codeSessionId}` : ''}`
+    : 'global memory';
+  return `Context flush deduplicated for ${scopeLabel}: matching durable memory already existed (${input.newlyDroppedCount} dropped line${input.newlyDroppedCount === 1 ? '' : 's'}).`;
+}
+
 export function describeMemoryFlushSkipDetail(input: {
   scope: 'global' | 'code_session';
   reason: 'read_only' | 'empty_entry';

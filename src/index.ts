@@ -141,10 +141,12 @@ import {
   buildMemoryFlushEntry,
   buildMemoryFlushMaintenanceMetadata,
   describeMemoryFlushFailureDetail,
+  describeMemoryFlushDeduplicatedDetail,
   describeMemoryFlushMaintenanceDetail,
   describeMemoryFlushSkipDetail,
   inferMemoryFlushScope,
 } from './runtime/memory-flush.js';
+import { MemoryMutationService } from './runtime/memory-mutation-service.js';
 import {
   IntentGateway,
   type IntentGatewayRecord,
@@ -597,6 +599,19 @@ function buildDashboardCallbacks(
   agentMemoryStore: AgentMemoryStore,
   codeSessionMemoryStore: AgentMemoryStore,
   codeSessionStore: CodeSessionStore,
+  persistMemoryEntry: (input: {
+    target: {
+      scope: 'global' | 'code_session';
+      scopeId: string;
+      store: AgentMemoryStore;
+      auditAgentId: string;
+    };
+    intent: 'assistant_save' | 'operator_curate' | 'context_flush';
+    entry: import('./runtime/agent-memory-store.js').MemoryEntry;
+    actor?: string;
+    existingEntryId?: string;
+    runMaintenance?: boolean;
+  }) => import('./runtime/memory-mutation-service.js').PersistMemoryEntryResult,
   chatAgents: Map<string, ChatAgentInstance>,
   skillRegistry: SkillRegistry | undefined,
   enabledManagedProviders: Set<string>,
@@ -944,8 +959,14 @@ function buildDashboardCallbacks(
     }
     for (const entry of activeEntries) {
       const sourceClass = classifyMemoryEntrySource(entry);
-      const staleDays = sourceClass === 'derived' ? 30 : 180;
-      if (isOlderThanDays(entry.artifact?.updatedAt || entry.createdAt, staleDays)) {
+      const staleDays = typeof entry.artifact?.staleAfterDays === 'number'
+        ? entry.artifact.staleAfterDays
+        : (sourceClass === 'derived' ? 30 : 180);
+      const staleReference = entry.artifact?.nextReviewAt || entry.artifact?.updatedAt || entry.createdAt;
+      const stale = entry.artifact?.nextReviewAt
+        ? (parseIsoDateMs(entry.artifact.nextReviewAt) ?? Number.MAX_SAFE_INTEGER) <= Date.now()
+        : isOlderThanDays(staleReference, staleDays);
+      if (stale) {
         findings.push({
           id: `${scopeId}:stale:${entry.id}`,
           scope,
@@ -1920,7 +1941,7 @@ function buildDashboardCallbacks(
       };
     },
 
-    onMemoryCurate: (input) => {
+    onMemoryCurate: async (input) => {
       const actor = input.actor?.trim() || 'web-user';
       const target = resolveMemoryScopeTarget({
         scope: input.scope,
@@ -1958,18 +1979,18 @@ function buildDashboardCallbacks(
       const content = input.content?.trim() || '';
       const reason = input.reason?.trim() || undefined;
       const auditAgentId = target.scope === 'global' ? target.scopeId : getPrincipalMemoryAgentId();
-
-      try {
-        if (input.action === 'create') {
-          if (!title || !content) {
-            return {
-              success: false,
-              message: 'Title and content are required to create a curated memory page.',
-              statusCode: 400,
-              errorCode: 'memory_curate_invalid',
-            };
-          }
-          const stored = target.store.append(target.scopeId, {
+      const persistCuratedEntry = (entryId?: string) => (
+        persistMemoryEntry({
+          target: {
+            scope: target.scope,
+            scopeId: target.scopeId,
+            store: target.store,
+            auditAgentId,
+          },
+          intent: 'operator_curate',
+          actor,
+          ...(entryId ? { existingEntryId: entryId } : {}),
+          entry: {
             content,
             summary: input.summary?.trim() || undefined,
             createdAt,
@@ -1989,31 +2010,70 @@ function buildDashboardCallbacks(
               updatedByPrincipal: actor,
               changeReason: reason,
             },
-          });
-          runtime.auditLog?.record?.({
-            type: 'memory_wiki.created',
-            severity: 'info',
-            agentId: auditAgentId,
-            controller: 'MemoryWiki',
-            details: {
-              actor,
-              scope: target.scope,
-              scopeId: target.scopeId,
-              entryId: stored.id,
-              title,
-              reason,
-              summary: `Created curated memory page '${title}'.`,
-            },
-          });
+          },
+        })
+      );
+
+      try {
+        if (input.action === 'create') {
+          if (!title || !content) {
+            return {
+              success: false,
+              message: 'Title and content are required to create a curated memory page.',
+              statusCode: 400,
+              errorCode: 'memory_curate_invalid',
+            };
+          }
+          const stored = persistCuratedEntry();
+          const resolvedTitle = inferMemoryEntryTitle(stored.entry);
+          if (stored.action === 'created') {
+            runtime.auditLog?.record?.({
+              type: 'memory_wiki.created',
+              severity: 'info',
+              agentId: auditAgentId,
+              controller: 'MemoryWiki',
+              details: {
+                actor,
+                scope: target.scope,
+                scopeId: target.scopeId,
+                entryId: stored.entry.id,
+                title: resolvedTitle,
+                reason,
+                summary: `Created curated memory page '${resolvedTitle}'.`,
+              },
+            });
+          } else if (stored.action === 'updated') {
+            runtime.auditLog?.record?.({
+              type: 'memory_wiki.updated',
+              severity: 'info',
+              agentId: auditAgentId,
+              controller: 'MemoryWiki',
+              details: {
+                actor,
+                scope: target.scope,
+                scopeId: target.scopeId,
+                entryId: stored.entry.id,
+                title: resolvedTitle,
+                reason,
+                summary: `Updated curated memory page '${resolvedTitle}' via duplicate-safe create.`,
+              },
+            });
+          }
           return {
             success: true,
-            message: `Created curated memory page '${title}'.`,
+            message: stored.action === 'created'
+              ? `Created curated memory page '${resolvedTitle}'.`
+              : stored.action === 'updated'
+                ? `Updated existing curated memory page '${resolvedTitle}'.`
+                : `Curated memory page '${resolvedTitle}' is already up to date.`,
             details: {
-              action: 'create',
+              action: stored.action === 'created' ? 'create' : 'update',
               scope: target.scope,
               scopeId: target.scopeId,
-              entryId: stored.id,
-              title,
+              entryId: stored.entry.id,
+              title: resolvedTitle,
+              dedupeReason: stored.reason,
+              matchedEntryId: stored.matchedEntryId,
             },
           };
         }
@@ -2088,24 +2148,8 @@ function buildDashboardCallbacks(
             errorCode: 'memory_curate_invalid',
           };
         }
-        const stored = target.store.updateEntry(target.scopeId, entryId, {
-          content,
-          summary: input.summary?.trim() || undefined,
-          category: 'Operator Wiki',
-          sourceType: 'operator',
-          trustLevel: 'trusted',
-          tags,
-          artifact: {
-            sourceClass: 'operator_curated',
-            kind: 'wiki_page',
-            title,
-            slug: slugifyMemoryTitle(title),
-            retrievalHints: [title, ...tags],
-            updatedAt: timestamp,
-            updatedByPrincipal: actor,
-            changeReason: reason,
-          },
-        });
+        const stored = persistCuratedEntry(entryId);
+        const resolvedTitle = inferMemoryEntryTitle(stored.entry);
         runtime.auditLog?.record?.({
           type: 'memory_wiki.updated',
           severity: 'info',
@@ -2115,21 +2159,27 @@ function buildDashboardCallbacks(
             actor,
             scope: target.scope,
             scopeId: target.scopeId,
-            entryId: stored.id,
-            title,
+            entryId: stored.entry.id,
+            title: resolvedTitle,
             reason,
-            summary: `Updated curated memory page '${title}'.`,
+            summary: stored.action === 'noop'
+              ? `Reviewed curated memory page '${resolvedTitle}' without changes.`
+              : `Updated curated memory page '${resolvedTitle}'.`,
           },
         });
         return {
           success: true,
-          message: `Updated curated memory page '${title}'.`,
+          message: stored.action === 'noop'
+            ? `Curated memory page '${resolvedTitle}' is already up to date.`
+            : `Updated curated memory page '${resolvedTitle}'.`,
           details: {
             action: 'update',
             scope: target.scope,
             scopeId: target.scopeId,
-            entryId: stored.id,
-            title,
+            entryId: stored.entry.id,
+            title: resolvedTitle,
+            dedupeReason: stored.reason,
+            matchedEntryId: stored.matchedEntryId,
           },
         };
       } catch (err) {
@@ -2441,6 +2491,7 @@ async function main(): Promise<void> {
     integrity: controlPlaneIntegrity,
     onSecurityEvent: onMemorySecurityEvent,
   });
+  const memoryMutationServiceRef: { current: MemoryMutationService | null } = { current: null };
   const automationOutputStore = new AutomationOutputStore();
   const automationOutputPersistence = new AutomationOutputPersistenceService({
     outputStore: automationOutputStore,
@@ -2553,17 +2604,39 @@ async function main(): Promise<void> {
           return;
         }
         try {
-          codeSessionMemoryStore.append(codeSessionId!, memoryEntry);
+          const persisted = memoryMutationServiceRef.current
+            ? memoryMutationServiceRef.current.persist({
+              target: {
+                scope: 'code_session',
+                scopeId: codeSessionId!,
+                store: codeSessionMemoryStore,
+                auditAgentId: key.agentId,
+              },
+              intent: 'context_flush',
+              actor: 'memory-flush',
+              entry: memoryEntry,
+            })
+            : {
+              action: 'created' as const,
+              reason: 'new_entry' as const,
+              entry: codeSessionMemoryStore.append(codeSessionId!, memoryEntry),
+            };
           jobTracker.succeed(flushJob.id, {
-            detail: describeMemoryFlushMaintenanceDetail({
-              scope: flushScope,
-              newlyDroppedCount: flush.newlyDroppedCount,
-              summary: memoryEntry.summary,
-              codeSessionId,
-            }),
+            detail: persisted.action === 'noop'
+              ? describeMemoryFlushDeduplicatedDetail({
+                scope: flushScope,
+                codeSessionId,
+                newlyDroppedCount: flush.newlyDroppedCount,
+              })
+              : describeMemoryFlushMaintenanceDetail({
+                scope: flushScope,
+                newlyDroppedCount: flush.newlyDroppedCount,
+                summary: persisted.entry.summary,
+                codeSessionId,
+              }),
           });
           log.debug(
-            { codeSessionId, droppedCount: flush.newlyDroppedCount, summary: memoryEntry.summary },
+            { codeSessionId, droppedCount: flush.newlyDroppedCount, summary: persisted.entry.summary, action: persisted.action },
             'Memory flush: persisted structured context to code-session memory',
           );
         } catch (err) {
@@ -2597,16 +2670,37 @@ async function main(): Promise<void> {
         return;
       }
       try {
-        agentMemoryStore.append(key.agentId, memoryEntry);
+        const persisted = memoryMutationServiceRef.current
+          ? memoryMutationServiceRef.current.persist({
+            target: {
+              scope: 'global',
+              scopeId: key.agentId,
+              store: agentMemoryStore,
+              auditAgentId: key.agentId,
+            },
+            intent: 'context_flush',
+            actor: 'memory-flush',
+            entry: memoryEntry,
+          })
+          : {
+            action: 'created' as const,
+            reason: 'new_entry' as const,
+            entry: agentMemoryStore.append(key.agentId, memoryEntry),
+          };
         jobTracker.succeed(flushJob.id, {
-          detail: describeMemoryFlushMaintenanceDetail({
-            scope: flushScope,
-            newlyDroppedCount: flush.newlyDroppedCount,
-            summary: memoryEntry.summary,
-          }),
+          detail: persisted.action === 'noop'
+            ? describeMemoryFlushDeduplicatedDetail({
+              scope: flushScope,
+              newlyDroppedCount: flush.newlyDroppedCount,
+            })
+            : describeMemoryFlushMaintenanceDetail({
+              scope: flushScope,
+              newlyDroppedCount: flush.newlyDroppedCount,
+              summary: persisted.entry.summary,
+            }),
         });
         log.debug(
-          { agentId: key.agentId, droppedCount: flush.newlyDroppedCount, summary: memoryEntry.summary },
+          { agentId: key.agentId, droppedCount: flush.newlyDroppedCount, summary: persisted.entry.summary, action: persisted.action },
           'Memory flush: persisted structured context to knowledge base',
         );
       } catch (err) {
@@ -4051,6 +4145,14 @@ async function main(): Promise<void> {
     automationOutputStore,
     codeSessionMemoryStore,
     codeSessionStore,
+    persistMemoryEntry: (input) => (
+      memoryMutationServiceRef.current?.persist(input)
+        ?? {
+          action: 'created' as const,
+          reason: 'new_entry' as const,
+          entry: input.target.store.append(input.target.scopeId, input.entry),
+        }
+    ),
     resolveStateAgentId: resolveSharedStateAgentId,
     docSearch,
     googleService,
@@ -4634,6 +4736,10 @@ async function main(): Promise<void> {
     runTimeline.ingestAssistantTrace(trace);
   });
   const jobTracker = new AssistantJobTracker();
+  memoryMutationServiceRef.current = new MemoryMutationService({
+    auditLog: runtime.auditLog,
+    jobTracker,
+  });
 
   // ─── Model fallback chain ─────────────────────────────────
   // Build a fallback chain from config.fallbacks: [defaultProvider, ...fallbacks]
@@ -5245,6 +5351,14 @@ async function main(): Promise<void> {
     agentMemoryStore,
     codeSessionMemoryStore,
     codeSessionStore,
+    (input) => (
+      memoryMutationServiceRef.current?.persist(input)
+        ?? {
+          action: 'created' as const,
+          reason: 'new_entry' as const,
+          entry: input.target.store.append(input.target.scopeId, input.entry),
+        }
+    ),
     chatAgents,
     skillRegistry,
     enabledManagedProviders,

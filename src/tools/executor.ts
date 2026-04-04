@@ -85,6 +85,7 @@ import type { WindowsDefenderProvider } from '../runtime/windows-defender-provid
 import type { SavedAutomationCatalogEntry } from '../runtime/automation-catalog.js';
 import type { AutomationSaveInput } from '../runtime/automation-save.js';
 import type { AutomationOutputStore } from '../runtime/automation-output-store.js';
+import type { PersistMemoryEntryResult } from '../runtime/memory-mutation-service.js';
 import type { ScheduledTaskEventTrigger } from '../runtime/scheduled-tasks.js';
 import {
   getMemoryMutationIntentDeniedMessage,
@@ -421,6 +422,19 @@ export interface ToolExecutorOptions {
   codeSessionMemoryStore?: AgentMemoryStore;
   /** Backend-owned coding session store for multi-surface coding workflows. */
   codeSessionStore?: CodeSessionStore;
+  /** Shared runtime memory mutation path for dedupe/upsert-aware durable writes. */
+  persistMemoryEntry?: (input: {
+    target: {
+      scope: 'global' | 'code_session';
+      scopeId: string;
+      store: AgentMemoryStore;
+      auditAgentId: string;
+    };
+    intent: 'assistant_save' | 'context_flush';
+    entry: import('../runtime/agent-memory-store.js').MemoryEntry;
+    actor?: string;
+    runMaintenance?: boolean;
+  }) => PersistMemoryEntryResult;
   /** Resolve logical state identity for chat memory/session operations. */
   resolveStateAgentId?: (agentId?: string) => string | undefined;
   /** Document search service for indexed document collections (hybrid BM25 + vector). */
@@ -4725,6 +4739,7 @@ export class ToolExecutor {
       getGlobalMemoryContext: (request, explicitAgentId) => this.getGlobalMemoryContext(request, explicitAgentId),
       resolveCodeSessionMemoryContext: (sessionId, request) => this.resolveCodeSessionMemoryContext(sessionId, request),
       getMemoryMutationReadOnlyError: (args, request) => this.getMemoryMutationReadOnlyError(args, request),
+      persistMemoryEntry: this.options.persistMemoryEntry,
     });
 
     registerBuiltinSearchTools({

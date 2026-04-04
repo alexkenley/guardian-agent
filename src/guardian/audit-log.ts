@@ -40,6 +40,7 @@ export type AuditEventType =
   | 'security_baseline_enforced'
   | 'security_baseline_overridden'
   | 'memory_hygiene.context_flush'
+  | 'memory_hygiene.consolidation'
   | 'memory_wiki.created'
   | 'memory_wiki.updated'
   | 'memory_wiki.archived'

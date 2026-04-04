@@ -1,5 +1,6 @@
-import type { AgentMemoryStore } from '../../runtime/agent-memory-store.js';
+import type { AgentMemoryStore, MemoryEntry } from '../../runtime/agent-memory-store.js';
 import type { ConversationService } from '../../runtime/conversation.js';
+import type { PersistMemoryEntryResult } from '../../runtime/memory-mutation-service.js';
 import { ToolRegistry } from '../registry.js';
 import type { ToolExecutionRequest } from '../types.js';
 
@@ -95,6 +96,18 @@ interface MemoryToolRegistrarContext {
     args?: Record<string, unknown>,
     request?: Partial<ToolExecutionRequest>,
   ) => string | null;
+  persistMemoryEntry?: (input: {
+    target: {
+      scope: 'global' | 'code_session';
+      scopeId: string;
+      store: AgentMemoryStore;
+      auditAgentId: string;
+    };
+    intent: 'assistant_save' | 'context_flush';
+    entry: MemoryEntry;
+    actor?: string;
+    runMaintenance?: boolean;
+  }) => PersistMemoryEntryResult;
 }
 
 export function registerBuiltinMemoryTools(context: MemoryToolRegistrarContext): void {
@@ -420,7 +433,7 @@ export function registerBuiltinMemoryTools(context: MemoryToolRegistrarContext):
         if (!codeMemory.store) {
           return { success: false, error: 'Code-session memory is not enabled.' };
         }
-        const stored = codeMemory.store.append(codeMemory.sessionId, {
+        const writeInput: MemoryEntry = {
           content,
           summary,
           createdAt: new Date().toISOString().slice(0, 10),
@@ -433,25 +446,45 @@ export function registerBuiltinMemoryTools(context: MemoryToolRegistrarContext):
             sessionId: codeMemory.sessionId,
             taintReasons: request.taintReasons,
           },
-        });
+        };
+        const stored = context.persistMemoryEntry
+          ? context.persistMemoryEntry({
+            target: {
+              scope: 'code_session',
+              scopeId: codeMemory.sessionId,
+              store: codeMemory.store,
+              auditAgentId: asString(request.agentId) || 'default',
+            },
+            intent: 'assistant_save',
+            entry: writeInput,
+            actor: request.principalId ?? request.userId,
+          })
+          : {
+            action: 'created' as const,
+            reason: 'new_entry' as const,
+            entry: codeMemory.store.append(codeMemory.sessionId, writeInput),
+          };
 
         return {
           success: true,
           output: {
             scope: 'code_session',
             codeSessionId: codeMemory.sessionId,
-            entryId: stored.id,
+            entryId: stored.entry.id,
             saved: content,
-            summary: stored.summary,
+            summary: stored.entry.summary,
             category: category ?? '(uncategorized)',
-            status: stored.status,
-            trustLevel: stored.trustLevel,
+            status: stored.entry.status,
+            trustLevel: stored.entry.trustLevel,
+            action: stored.action,
+            dedupeReason: stored.reason,
+            matchedEntryId: stored.matchedEntryId,
             totalSizeChars: codeMemory.store.size(codeMemory.sessionId),
           },
-          verificationStatus: codeMemory.store.isEntryActive(codeMemory.sessionId, stored.id) ? 'verified' : 'unverified',
-          verificationEvidence: codeMemory.store.isEntryActive(codeMemory.sessionId, stored.id)
-            ? `Code-session memory entry ${stored.id} is active.`
-            : `Code-session memory entry ${stored.id} was persisted as ${stored.status}.`,
+          verificationStatus: codeMemory.store.isEntryActive(codeMemory.sessionId, stored.entry.id) ? 'verified' : 'unverified',
+          verificationEvidence: codeMemory.store.isEntryActive(codeMemory.sessionId, stored.entry.id)
+            ? `Code-session memory entry ${stored.entry.id} is active (${stored.action}).`
+            : `Code-session memory entry ${stored.entry.id} was persisted as ${stored.entry.status}.`,
         };
       }
 
@@ -462,7 +495,7 @@ export function registerBuiltinMemoryTools(context: MemoryToolRegistrarContext):
         return { success: false, error: 'Knowledge base is not enabled.' };
       }
 
-      const stored = globalMemory.store.append(globalMemory.agentId, {
+      const writeInput: MemoryEntry = {
         content,
         summary,
         createdAt: new Date().toISOString().slice(0, 10),
@@ -475,25 +508,45 @@ export function registerBuiltinMemoryTools(context: MemoryToolRegistrarContext):
           sessionId: request.scheduleId,
           taintReasons: request.taintReasons,
         },
-      });
+      };
+      const stored = context.persistMemoryEntry
+        ? context.persistMemoryEntry({
+          target: {
+            scope: 'global',
+            scopeId: globalMemory.agentId,
+            store: globalMemory.store,
+            auditAgentId: globalMemory.agentId,
+          },
+          intent: 'assistant_save',
+          entry: writeInput,
+          actor: request.principalId ?? request.userId,
+        })
+        : {
+          action: 'created' as const,
+          reason: 'new_entry' as const,
+          entry: globalMemory.store.append(globalMemory.agentId, writeInput),
+        };
 
       return {
         success: true,
         output: {
           scope: 'global',
           agentId: globalMemory.agentId,
-          entryId: stored.id,
+          entryId: stored.entry.id,
           saved: content,
-          summary: stored.summary,
+          summary: stored.entry.summary,
           category: category ?? '(uncategorized)',
-          status: stored.status,
-          trustLevel: stored.trustLevel,
+          status: stored.entry.status,
+          trustLevel: stored.entry.trustLevel,
+          action: stored.action,
+          dedupeReason: stored.reason,
+          matchedEntryId: stored.matchedEntryId,
           totalSizeChars: globalMemory.store.size(globalMemory.agentId),
         },
-        verificationStatus: globalMemory.store.isEntryActive(globalMemory.agentId, stored.id) ? 'verified' : 'unverified',
-        verificationEvidence: globalMemory.store.isEntryActive(globalMemory.agentId, stored.id)
-          ? `Memory entry ${stored.id} is active in the knowledge base.`
-          : `Memory entry ${stored.id} was persisted as ${stored.status}.`,
+        verificationStatus: globalMemory.store.isEntryActive(globalMemory.agentId, stored.entry.id) ? 'verified' : 'unverified',
+        verificationEvidence: globalMemory.store.isEntryActive(globalMemory.agentId, stored.entry.id)
+          ? `Memory entry ${stored.entry.id} is active in the knowledge base (${stored.action}).`
+          : `Memory entry ${stored.entry.id} was persisted as ${stored.entry.status}.`,
       };
     },
   );

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildMemoryFlushEntry,
   buildMemoryFlushMaintenanceMetadata,
+  describeMemoryFlushDeduplicatedDetail,
   describeMemoryFlushFailureDetail,
   describeMemoryFlushMaintenanceDetail,
   describeMemoryFlushSkipDetail,
@@ -78,6 +79,10 @@ describe('memory flush helpers', () => {
       newlyDroppedCount: 2,
       summary: 'Context flush for browser automation 2 captured lines',
     })).toContain('Context flush persisted to global memory');
+    expect(describeMemoryFlushDeduplicatedDetail({
+      scope: 'global',
+      newlyDroppedCount: 2,
+    })).toContain('Context flush deduplicated for global memory');
     expect(describeMemoryFlushSkipDetail({
       scope: 'code_session',
       reason: 'read_only',

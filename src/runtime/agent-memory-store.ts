@@ -17,6 +17,7 @@ export type MemorySourceType = 'user' | 'local_tool' | 'remote_tool' | 'system' 
 export type MemoryTrustLevel = 'trusted' | 'untrusted' | 'reviewed';
 export type MemoryStatus = 'active' | 'quarantined' | 'expired' | 'rejected' | 'archived';
 export type MemoryArtifactClass = 'canonical' | 'operator_curated' | 'derived' | 'linked_output';
+export type MemoryLifecycleClass = 'profile' | 'collection';
 export type MemoryArtifactKind =
   | 'memory_entry'
   | 'wiki_page'
@@ -31,12 +32,18 @@ export type MemoryArtifactKind =
 export interface MemoryArtifactMetadata {
   sourceClass?: MemoryArtifactClass;
   kind?: MemoryArtifactKind;
+  memoryClass?: MemoryLifecycleClass;
   title?: string;
   slug?: string;
+  canonicalKey?: string;
   retrievalHints?: string[];
   refreshable?: boolean;
+  staleAfterDays?: number;
   lastBuiltAt?: string;
   sourceEntryIds?: string[];
+  supersedesEntryIds?: string[];
+  lastReviewedAt?: string;
+  nextReviewAt?: string;
   updatedAt?: string;
   updatedByPrincipal?: string;
   changeReason?: string;
@@ -335,12 +342,19 @@ export class AgentMemoryStore {
     const normalized: MemoryArtifactMetadata = {};
     if (metadata.sourceClass) normalized.sourceClass = metadata.sourceClass;
     if (metadata.kind) normalized.kind = metadata.kind;
+    if (metadata.memoryClass) normalized.memoryClass = metadata.memoryClass;
 
     const title = this.normalizeInlineText(metadata.title ?? '');
     if (title) normalized.title = this.truncateInlineText(title, 120);
 
     const slug = stripInvisibleChars(metadata.slug?.trim() ?? '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
     if (slug) normalized.slug = slug;
+
+    const canonicalKey = stripInvisibleChars(metadata.canonicalKey?.trim() ?? '')
+      .toLowerCase()
+      .replace(/[^a-z0-9:_-]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    if (canonicalKey) normalized.canonicalKey = canonicalKey;
 
     const retrievalHints = this.normalizeSignalList(metadata.retrievalHints);
     if (retrievalHints.length > 0) normalized.retrievalHints = retrievalHints;
@@ -350,10 +364,26 @@ export class AgentMemoryStore {
       : [];
     if (sourceEntryIds.length > 0) normalized.sourceEntryIds = sourceEntryIds;
 
+    const supersedesEntryIds = Array.isArray(metadata.supersedesEntryIds)
+      ? [...new Set(metadata.supersedesEntryIds.map((value) => String(value ?? '').trim()).filter(Boolean))]
+      : [];
+    if (supersedesEntryIds.length > 0) normalized.supersedesEntryIds = supersedesEntryIds;
+
     if (typeof metadata.refreshable === 'boolean') normalized.refreshable = metadata.refreshable;
+    if (typeof metadata.staleAfterDays === 'number'
+      && Number.isFinite(metadata.staleAfterDays)
+      && metadata.staleAfterDays >= 1) {
+      normalized.staleAfterDays = Math.max(1, Math.round(metadata.staleAfterDays));
+    }
 
     const lastBuiltAt = metadata.lastBuiltAt?.trim();
     if (lastBuiltAt) normalized.lastBuiltAt = lastBuiltAt;
+
+    const lastReviewedAt = metadata.lastReviewedAt?.trim();
+    if (lastReviewedAt) normalized.lastReviewedAt = lastReviewedAt;
+
+    const nextReviewAt = metadata.nextReviewAt?.trim();
+    if (nextReviewAt) normalized.nextReviewAt = nextReviewAt;
 
     const updatedAt = metadata.updatedAt?.trim();
     if (updatedAt) normalized.updatedAt = updatedAt;

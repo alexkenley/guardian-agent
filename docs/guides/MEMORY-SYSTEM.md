@@ -99,6 +99,8 @@ Layer 1: Persistent Memory Stores (AgentMemoryStore)
   The `.index.json` file is the canonical state and is HMAC-verified through the control-plane integrity manifest
   The `.md` file is a derived readable view rebuilt from the index
   Only active/reviewed content from a verified index is loaded into prompt context
+  Durable writes now pass through a shared mutation path instead of blind append-only writes
+  Exact duplicate writes are suppressed, operator-curated wiki pages upsert by stable page key/slug, and profile-like memories can refresh an existing matching record
   Prompt-time packing is entry-aware and query-biased rather than blindly taking the newest entries
   Current request, continuity summary, blocker state, and Code-session focus/plan now feed a structured signal-aware query, not just one flat text string
   Prompt-time ranking can now match on text, focus phrases, tags, category hints, and identifiers such as continuity or execution refs
@@ -123,6 +125,7 @@ Layer 4: Memory Flush (automatic)
   Normal chat flushes to global memory
   Code-session chat flushes to that code session's memory
   Flush summaries preserve current objective/focus/blocker state when available
+  Flush writes are duplicate-aware and also trigger bounded hygiene that can archive stale or redundant system-managed artifacts
 
 Layer 5: Cross-Memory Bridge
   Explicit read-only bridge search across global/code-session boundaries
@@ -283,6 +286,7 @@ Scope rules:
 - if `knowledgeBase.readOnly` is enabled, `memory_save` fails before approval/execution instead of creating a pending write
 - trusted direct `memory_save` requests auto-run without approval; assistant-origin writes still require explicit remember intent
 - long entries get a deterministic derived summary when no summary is supplied
+- writes are search-first and duplicate-aware: exact active duplicates are skipped, matching curated/profile records may be updated instead of duplicated, and bounded hygiene can archive stale system-managed artifacts after writes
 
 Example usage by the agent:
 
