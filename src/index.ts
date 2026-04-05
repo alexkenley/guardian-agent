@@ -2212,6 +2212,40 @@ function buildDashboardCallbacks(
 
     onSecondBrainBriefs: (args) => secondBrainService.listBriefs(args ?? {}),
 
+    onSecondBrainBriefUpdate: async (input) => {
+      try {
+        const brief = secondBrainService.updateBrief(input);
+        return {
+          success: true,
+          message: `Updated brief '${brief.title}'.`,
+          details: { id: brief.id },
+        };
+      } catch (error) {
+        return {
+          success: false,
+          message: error instanceof Error ? error.message : String(error),
+          statusCode: 400,
+        };
+      }
+    },
+
+    onSecondBrainBriefDelete: async (id) => {
+      try {
+        const brief = secondBrainService.deleteBrief(id);
+        return {
+          success: true,
+          message: `Deleted brief '${brief.title}'.`,
+          details: { id: brief.id },
+        };
+      } catch (error) {
+        return {
+          success: false,
+          message: error instanceof Error ? error.message : String(error),
+          statusCode: 400,
+        };
+      }
+    },
+
     onSecondBrainCalendar: (args) => secondBrainService.listEvents(args ?? {}),
 
     onSecondBrainCalendarUpsert: async (input) => {
@@ -2220,6 +2254,23 @@ function buildDashboardCallbacks(
         return {
           success: true,
           message: `Saved event '${event.title}'.`,
+          details: { id: event.id },
+        };
+      } catch (error) {
+        return {
+          success: false,
+          message: error instanceof Error ? error.message : String(error),
+          statusCode: 400,
+        };
+      }
+    },
+
+    onSecondBrainCalendarDelete: async (id) => {
+      try {
+        const event = secondBrainService.deleteEvent(id);
+        return {
+          success: true,
+          message: `Deleted event '${event.title}'.`,
           details: { id: event.id },
         };
       } catch (error) {
@@ -2250,6 +2301,23 @@ function buildDashboardCallbacks(
       }
     },
 
+    onSecondBrainTaskDelete: async (id) => {
+      try {
+        const task = secondBrainService.deleteTask(id);
+        return {
+          success: true,
+          message: `Deleted task '${task.title}'.`,
+          details: { id: task.id },
+        };
+      } catch (error) {
+        return {
+          success: false,
+          message: error instanceof Error ? error.message : String(error),
+          statusCode: 400,
+        };
+      }
+    },
+
     onSecondBrainNotes: (args) => secondBrainService.listNotes(args ?? {}),
 
     onSecondBrainNoteUpsert: async (input) => {
@@ -2258,6 +2326,23 @@ function buildDashboardCallbacks(
         return {
           success: true,
           message: `Saved note '${note.title}'.`,
+          details: { id: note.id },
+        };
+      } catch (error) {
+        return {
+          success: false,
+          message: error instanceof Error ? error.message : String(error),
+          statusCode: 400,
+        };
+      }
+    },
+
+    onSecondBrainNoteDelete: async (id) => {
+      try {
+        const note = secondBrainService.deleteNote(id);
+        return {
+          success: true,
+          message: `Deleted note '${note.title}'.`,
           details: { id: note.id },
         };
       } catch (error) {
@@ -2288,6 +2373,23 @@ function buildDashboardCallbacks(
       }
     },
 
+    onSecondBrainPersonDelete: async (id) => {
+      try {
+        const person = secondBrainService.deletePerson(id);
+        return {
+          success: true,
+          message: `Deleted person '${person.name}'.`,
+          details: { id: person.id },
+        };
+      } catch (error) {
+        return {
+          success: false,
+          message: error instanceof Error ? error.message : String(error),
+          statusCode: 400,
+        };
+      }
+    },
+
     onSecondBrainLinks: (args) => secondBrainService.listLinks(args ?? {}),
 
     onSecondBrainLinkUpsert: async (input) => {
@@ -2307,7 +2409,43 @@ function buildDashboardCallbacks(
       }
     },
 
+    onSecondBrainLinkDelete: async (id) => {
+      try {
+        const link = secondBrainService.deleteLink(id);
+        return {
+          success: true,
+          message: `Deleted library item '${link.title}'.`,
+          details: { id: link.id },
+        };
+      } catch (error) {
+        return {
+          success: false,
+          message: error instanceof Error ? error.message : String(error),
+          statusCode: 400,
+        };
+      }
+    },
+
+    onSecondBrainRoutineCatalog: () => secondBrainService.listRoutineCatalog(),
+
     onSecondBrainRoutines: () => secondBrainService.listRoutines(),
+
+    onSecondBrainRoutineCreate: async (input) => {
+      try {
+        const routine = secondBrainService.createRoutine(input);
+        return {
+          success: true,
+          message: `Created routine '${routine.name}'.`,
+          details: { id: routine.id },
+        };
+      } catch (error) {
+        return {
+          success: false,
+          message: error instanceof Error ? error.message : String(error),
+          statusCode: 400,
+        };
+      }
+    },
 
     onSecondBrainRoutineUpdate: async (input) => {
       try {
@@ -2315,6 +2453,23 @@ function buildDashboardCallbacks(
         return {
           success: true,
           message: `Updated routine '${routine.name}'.`,
+          details: { id: routine.id },
+        };
+      } catch (error) {
+        return {
+          success: false,
+          message: error instanceof Error ? error.message : String(error),
+          statusCode: 400,
+        };
+      }
+    },
+
+    onSecondBrainRoutineDelete: async (id) => {
+      try {
+        const routine = secondBrainService.deleteRoutine(id);
+        return {
+          success: true,
+          message: `Deleted routine '${routine.name}'.`,
           details: { id: routine.id },
         };
       } catch (error) {

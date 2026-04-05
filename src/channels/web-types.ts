@@ -23,6 +23,7 @@ import type { ConversationSessionInfo } from '../runtime/conversation.js';
 import type {
   SecondBrainBriefRecord,
   SecondBrainBriefFilter,
+  SecondBrainBriefUpdateInput,
   SecondBrainGenerateBriefInput,
   SecondBrainEventFilter,
   SecondBrainEventRecord,
@@ -37,6 +38,8 @@ import type {
   SecondBrainPersonFilter,
   SecondBrainPersonRecord,
   SecondBrainPersonUpsertInput,
+  SecondBrainRoutineCatalogEntry,
+  SecondBrainRoutineCreateInput,
   SecondBrainRoutineRecord,
   SecondBrainRoutineUpdateInput,
   SecondBrainTaskFilter,
@@ -1013,6 +1016,7 @@ export type DashboardSecondBrainNote = SecondBrainNoteRecord;
 export type DashboardSecondBrainPerson = SecondBrainPersonRecord;
 export type DashboardSecondBrainLink = SecondBrainLinkRecord;
 export type DashboardSecondBrainRoutine = SecondBrainRoutineRecord;
+export type DashboardSecondBrainRoutineCatalogEntry = SecondBrainRoutineCatalogEntry;
 export type DashboardSecondBrainUsage = SecondBrainUsageSummary;
 
 export interface PerformanceActionPreviewTarget {
@@ -1294,17 +1298,27 @@ export interface DashboardCallbacks {
   onSecondBrainGenerateBrief?: (input: SecondBrainGenerateBriefInput) => DashboardSecondBrainBrief | Promise<DashboardSecondBrainBrief>;
   onSecondBrainCalendar?: (args?: SecondBrainEventFilter) => DashboardSecondBrainEvent[];
   onSecondBrainCalendarUpsert?: (input: SecondBrainEventUpsertInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
+  onSecondBrainCalendarDelete?: (id: string) => DashboardMutationResult | Promise<DashboardMutationResult>;
   onSecondBrainTasks?: (args?: SecondBrainTaskFilter) => DashboardSecondBrainTask[];
   onSecondBrainTaskUpsert?: (input: SecondBrainTaskUpsertInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
+  onSecondBrainTaskDelete?: (id: string) => DashboardMutationResult | Promise<DashboardMutationResult>;
   onSecondBrainNotes?: (args?: SecondBrainNoteFilter) => DashboardSecondBrainNote[];
   onSecondBrainNoteUpsert?: (input: SecondBrainNoteUpsertInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
+  onSecondBrainNoteDelete?: (id: string) => DashboardMutationResult | Promise<DashboardMutationResult>;
   onSecondBrainPeople?: (args?: SecondBrainPersonFilter) => DashboardSecondBrainPerson[];
   onSecondBrainPersonUpsert?: (input: SecondBrainPersonUpsertInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
+  onSecondBrainPersonDelete?: (id: string) => DashboardMutationResult | Promise<DashboardMutationResult>;
   onSecondBrainLinks?: (args?: SecondBrainLinkFilter) => DashboardSecondBrainLink[];
   onSecondBrainLinkUpsert?: (input: SecondBrainLinkUpsertInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
   onSecondBrainBriefs?: (args?: SecondBrainBriefFilter) => DashboardSecondBrainBrief[];
+  onSecondBrainBriefUpdate?: (input: SecondBrainBriefUpdateInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
+  onSecondBrainBriefDelete?: (id: string) => DashboardMutationResult | Promise<DashboardMutationResult>;
+  onSecondBrainLinkDelete?: (id: string) => DashboardMutationResult | Promise<DashboardMutationResult>;
+  onSecondBrainRoutineCatalog?: () => DashboardSecondBrainRoutineCatalogEntry[];
   onSecondBrainRoutines?: () => DashboardSecondBrainRoutine[];
+  onSecondBrainRoutineCreate?: (input: SecondBrainRoutineCreateInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
   onSecondBrainRoutineUpdate?: (input: SecondBrainRoutineUpdateInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
+  onSecondBrainRoutineDelete?: (id: string) => DashboardMutationResult | Promise<DashboardMutationResult>;
   onSecondBrainUsage?: () => DashboardSecondBrainUsage;
   onReferenceGuide?: () => ReferenceGuide;
   onQuickActions?: () => QuickActionDefinition[];

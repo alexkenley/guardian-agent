@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { GuardianAgentConfig } from '../config/types.js';
+import { stripLeadingContextPrefix } from '../chat-agent-helpers.js';
 import { SHARED_TIER_AGENT_STATE_ID } from './agent-state-context.js';
 import type { CodeSessionStore } from './code-sessions.js';
 import type { ConversationService } from './conversation.js';
@@ -99,6 +100,7 @@ export function createIncomingDispatchPreparer(args: {
     msg: IncomingDispatchMessage,
     stateAgentId: string,
   ): Promise<IntentGatewayRecord | null> => {
+    const normalizedContent = stripLeadingContextPrefix(msg.content);
     const channel = msg.channel?.trim() || 'web';
     const channelUserId = msg.userId?.trim() || `${channel}-user`;
     const canonicalUserId = args.identity.resolveCanonicalUserId(channel, channelUserId);
@@ -117,7 +119,7 @@ export function createIncomingDispatchPreparer(args: {
       userId: canonicalUserId,
       channel,
     }, {
-      query: msg.content,
+      query: normalizedContent,
     });
     const pendingAction = args.pendingActionStore.resolveActiveForSurface({
       agentId: stateAgentId,
@@ -135,7 +137,7 @@ export function createIncomingDispatchPreparer(args: {
       if (!provider) return null;
       return args.routingIntentGateway.classify(
         {
-          content: msg.content,
+          content: normalizedContent,
           channel,
           recentHistory,
           pendingAction: args.summarizePendingActionForGateway(pendingAction),
@@ -206,6 +208,7 @@ export function createIncomingDispatchPreparer(args: {
     const channelUserId = msg.userId?.trim() || `${channel}-user`;
     const canonicalUserId = args.identity.resolveCanonicalUserId(channel, channelUserId);
     const requestedCodeContext = args.readCodeRequestMetadata(msg.metadata);
+    const normalizedContent = stripLeadingContextPrefix(msg.content);
     const resolvedSurfaceId = args.getCodeSessionSurfaceId({
       surfaceId: msg.surfaceId ?? args.readMessageSurfaceId(msg.metadata),
       userId: canonicalUserId,
@@ -287,10 +290,10 @@ export function createIncomingDispatchPreparer(args: {
       const decision = channelDefault
         ? { agentId: channelDefault, confidence: 'high' as const, reason: 'channel default override' }
         : gateway?.available && hasRoles
-          ? args.router.routeWithTierFromIntent(gateway.decision, msg.content, tierMode, threshold)
+          ? args.router.routeWithTierFromIntent(gateway.decision, normalizedContent, tierMode, threshold)
           : hasRoles
-            ? args.router.routeWithTier(msg.content, tierMode, threshold)
-            : args.router.route(msg.content);
+            ? args.router.routeWithTier(normalizedContent, tierMode, threshold)
+            : args.router.route(normalizedContent);
       const resolvedDecision = {
         ...decision,
         reason: requestedCodeContext?.sessionId
@@ -334,10 +337,10 @@ export function createIncomingDispatchPreparer(args: {
     const stateAgentId = resolveRoutingStateAgentId(channelDefault);
     const gateway = await classifyIntentForRouting(msg, stateAgentId);
     const decision = gateway?.available && hasRoles
-      ? args.router.routeWithTierFromIntent(gateway.decision, msg.content, tierMode, threshold)
+      ? args.router.routeWithTierFromIntent(gateway.decision, normalizedContent, tierMode, threshold)
       : hasRoles
-        ? args.router.routeWithTier(msg.content, tierMode, threshold)
-        : args.router.route(msg.content);
+        ? args.router.routeWithTier(normalizedContent, tierMode, threshold)
+        : args.router.route(normalizedContent);
     recordResolvedRoute(decision, gateway);
     return { decision, gateway };
   };
@@ -354,6 +357,7 @@ export function createIncomingDispatchPreparer(args: {
         hasMetadata: !!msg.metadata,
         channelDefault,
       },
+      contentPreview: stripLeadingContextPrefix(msg.content),
     });
     const routed = await resolveAgentForIncomingMessage(channelDefault, msg, requestId);
     const sanitizedMetadata = isRecord(msg.metadata)

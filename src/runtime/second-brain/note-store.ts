@@ -85,6 +85,22 @@ export class NoteStore {
     return note;
   }
 
+  deleteNote(id: string): SecondBrainNoteRecord | null {
+    const existing = this.getNote(id);
+    if (!existing) return null;
+
+    if (this.ctx.mode === 'memory') {
+      this.ctx.memory.notes.delete(id);
+      return existing;
+    }
+
+    this.ctx.db!.prepare(`
+      DELETE FROM sb_notes
+      WHERE id = ?
+    `).run(id);
+    return existing;
+  }
+
   private getNote(id: string): SecondBrainNoteRecord | null {
     if (this.ctx.mode === 'memory') {
       const note = this.ctx.memory.notes.get(id);

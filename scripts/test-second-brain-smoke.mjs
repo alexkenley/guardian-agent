@@ -52,7 +52,12 @@ async function main() {
       company: 'Example Co',
       title: 'Director',
     });
-    const event = service.upsertEvent({
+    const localReference = service.upsertLink({
+      title: 'Launch runbook',
+      url: '/tmp/launch runbook.md',
+      kind: 'file',
+    });
+    const event = service.upsertSyncedEvent({
       id: 'launch-review',
       title: 'Launch Review',
       startsAt: Date.parse('2026-04-04T10:00:00Z'),
@@ -67,12 +72,18 @@ async function main() {
     assert.equal(overviewBefore.nextEvent?.id, event.id);
 
     const brief = await briefing.generatePreMeetingBrief(event.id);
+    const editedBrief = service.updateBrief({
+      id: brief.id,
+      content: `${brief.content}\n\nEdited note: confirm the final pricing call.`,
+    });
     const overviewAfter = service.getOverview();
 
     assert.equal(brief.kind, 'pre_meeting');
     assert.equal(brief.eventId, event.id);
     assert.match(brief.content, /Launch Review/);
     assert.match(brief.content, /Prepare launch review/);
+    assert.equal(localReference.url, 'file:///tmp/launch%20runbook.md');
+    assert.match(editedBrief.content, /Edited note/);
     assert.ok(overviewAfter.briefCount >= 1, 'expected generated brief to be counted in the overview');
 
     console.log(`PASS second brain smoke test (${overviewAfter.counts.tasks} tasks, ${overviewAfter.counts.notes} notes, ${overviewAfter.briefCount} briefs)`);

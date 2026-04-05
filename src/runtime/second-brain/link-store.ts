@@ -92,6 +92,22 @@ export class LinkStore {
     return link;
   }
 
+  deleteLink(id: string): SecondBrainLinkRecord | null {
+    const existing = this.getLink(id);
+    if (!existing) return null;
+
+    if (this.ctx.mode === 'memory') {
+      this.ctx.memory.links.delete(id);
+      return existing;
+    }
+
+    this.ctx.db!.prepare(`
+      DELETE FROM sb_links
+      WHERE id = ?
+    `).run(id);
+    return existing;
+  }
+
   private getLink(id: string): SecondBrainLinkRecord | null {
     if (this.ctx.mode === 'memory') {
       const link = this.ctx.memory.links.get(id);

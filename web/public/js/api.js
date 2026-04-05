@@ -208,35 +208,72 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(input),
   }),
+  secondBrainBriefUpdate: (input) => request('/api/second-brain/briefs/update', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }),
+  secondBrainBriefDelete: (id) => request('/api/second-brain/briefs/delete', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  }),
   secondBrainCalendar: (params = {}) => request(`/api/second-brain/calendar${buildQueryString(params)}`),
   secondBrainCalendarUpsert: (input) => request('/api/second-brain/calendar/upsert', {
     method: 'POST',
     body: JSON.stringify(input),
+  }),
+  secondBrainCalendarDelete: (id) => request('/api/second-brain/calendar/delete', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
   }),
   secondBrainTasks: (params = {}) => request(`/api/second-brain/tasks${buildQueryString(params)}`),
   secondBrainTaskUpsert: (input) => request('/api/second-brain/tasks/upsert', {
     method: 'POST',
     body: JSON.stringify(input),
   }),
+  secondBrainTaskDelete: (id) => request('/api/second-brain/tasks/delete', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  }),
   secondBrainNotes: (params = {}) => request(`/api/second-brain/notes${buildQueryString(params)}`),
   secondBrainNoteUpsert: (input) => request('/api/second-brain/notes/upsert', {
     method: 'POST',
     body: JSON.stringify(input),
+  }),
+  secondBrainNoteDelete: (id) => request('/api/second-brain/notes/delete', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
   }),
   secondBrainPeople: (params = {}) => request(`/api/second-brain/people${buildQueryString(params)}`),
   secondBrainPersonUpsert: (input) => request('/api/second-brain/people/upsert', {
     method: 'POST',
     body: JSON.stringify(input),
   }),
+  secondBrainPersonDelete: (id) => request('/api/second-brain/people/delete', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  }),
   secondBrainLinks: (params = {}) => request(`/api/second-brain/links${buildQueryString(params)}`),
   secondBrainLinkUpsert: (input) => request('/api/second-brain/links/upsert', {
     method: 'POST',
     body: JSON.stringify(input),
   }),
+  secondBrainLinkDelete: (id) => request('/api/second-brain/links/delete', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  }),
+  secondBrainRoutineCatalog: () => request('/api/second-brain/routines/catalog'),
   secondBrainRoutines: () => request('/api/second-brain/routines'),
+  secondBrainRoutineCreate: (input) => request('/api/second-brain/routines/create', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }),
   secondBrainRoutineUpdate: (input) => request('/api/second-brain/routines/update', {
     method: 'POST',
     body: JSON.stringify(input),
+  }),
+  secondBrainRoutineDelete: (id) => request('/api/second-brain/routines/delete', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
   }),
   secondBrainUsage: () => request('/api/second-brain/usage'),
   performanceStatus: () => request('/api/performance/status'),

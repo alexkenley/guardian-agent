@@ -5,6 +5,8 @@ import type {
   SecondBrainBriefKind,
   SecondBrainDeliveryChannel,
   SecondBrainLinkKind,
+  SecondBrainRoutineEventType,
+  SecondBrainRoutineTrigger,
   SecondBrainTaskStatus,
 } from '../../runtime/second-brain/types.js';
 import { ToolRegistry } from '../registry.js';
@@ -36,18 +38,6 @@ function normalizeTaskStatus(value: unknown): SecondBrainTaskStatus | 'open' | u
     case 'in_progress':
     case 'done':
     case 'open':
-      return normalized;
-    default:
-      return undefined;
-  }
-}
-
-function normalizeEventSource(value: unknown): 'local' | 'google' | 'microsoft' | undefined {
-  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  switch (normalized) {
-    case 'local':
-    case 'google':
-    case 'microsoft':
       return normalized;
     default:
       return undefined;
@@ -105,6 +95,32 @@ function normalizeDeliveryChannel(value: unknown): SecondBrainDeliveryChannel | 
     default:
       return undefined;
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function normalizeRoutineTrigger(value: unknown): SecondBrainRoutineTrigger | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const mode = typeof record.mode === 'string' ? record.mode.trim().toLowerCase() : '';
+  if (mode !== 'cron' && mode !== 'event' && mode !== 'horizon' && mode !== 'manual') {
+    return undefined;
+  }
+  const lookaheadMinutes = typeof record.lookaheadMinutes === 'number'
+    ? record.lookaheadMinutes
+    : undefined;
+  return {
+    mode,
+    ...(typeof record.cron === 'string' && record.cron.trim() ? { cron: record.cron.trim() } : {}),
+    ...(typeof record.eventType === 'string' && record.eventType.trim()
+      ? { eventType: record.eventType.trim().toLowerCase() as SecondBrainRoutineEventType }
+      : {}),
+    ...(Number.isFinite(lookaheadMinutes) ? { lookaheadMinutes } : {}),
+  };
 }
 
 export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistrarContext): void {
@@ -203,6 +219,73 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
           kind,
           eventId: asString(args.eventId).trim() || undefined,
         });
+        return { success: true, output: brief };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  );
+
+  context.registry.register(
+    {
+      name: 'second_brain_brief_update',
+      description: 'Update one stored Second Brain brief or follow-up draft.',
+      shortDescription: 'Update a Second Brain brief.',
+      risk: 'mutating',
+      category: 'memory',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string' },
+          title: { type: 'string' },
+          content: { type: 'string' },
+        },
+      },
+    },
+    async (args, request) => {
+      context.guardAction(request, 'write_file', { path: 'second-brain:briefs' });
+      const service = context.getService();
+      if (!service) return { success: false, error: 'Second Brain service is unavailable.' };
+      if (args.title == null && args.content == null) {
+        return { success: false, error: 'title or content is required.' };
+      }
+      try {
+        const brief = service.updateBrief({
+          id: asString(args.id).trim(),
+          ...(args.title == null ? {} : { title: asString(args.title) }),
+          ...(args.content == null ? {} : { content: asString(args.content) }),
+        });
+        return { success: true, output: brief };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  );
+
+  context.registry.register(
+    {
+      name: 'second_brain_brief_delete',
+      description: 'Delete one stored Second Brain brief or follow-up draft.',
+      shortDescription: 'Delete a Second Brain brief.',
+      risk: 'mutating',
+      category: 'memory',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string' },
+        },
+      },
+    },
+    async (args, request) => {
+      context.guardAction(request, 'write_file', { path: 'second-brain:briefs' });
+      const service = context.getService();
+      if (!service) return { success: false, error: 'Second Brain service is unavailable.' };
+      try {
+        const brief = service.deleteBrief(asString(args.id).trim());
         return { success: true, output: brief };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -314,6 +397,35 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
 
   context.registry.register(
     {
+      name: 'second_brain_note_delete',
+      description: 'Delete one Second Brain note.',
+      shortDescription: 'Delete a Second Brain note.',
+      risk: 'mutating',
+      category: 'memory',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string' },
+        },
+      },
+    },
+    async (args, request) => {
+      context.guardAction(request, 'write_file', { path: 'second-brain:notes' });
+      const service = context.getService();
+      if (!service) return { success: false, error: 'Second Brain service is unavailable.' };
+      try {
+        const note = service.deleteNote(asString(args.id).trim());
+        return { success: true, output: note };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  );
+
+  context.registry.register(
+    {
       name: 'second_brain_task_list',
       description: 'List Second Brain tasks ordered by due date, priority, and update time.',
       shortDescription: 'List Second Brain tasks.',
@@ -400,6 +512,35 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
 
   context.registry.register(
     {
+      name: 'second_brain_task_delete',
+      description: 'Delete one Second Brain task.',
+      shortDescription: 'Delete a Second Brain task.',
+      risk: 'mutating',
+      category: 'memory',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string' },
+        },
+      },
+    },
+    async (args, request) => {
+      context.guardAction(request, 'write_file', { path: 'second-brain:tasks' });
+      const service = context.getService();
+      if (!service) return { success: false, error: 'Second Brain service is unavailable.' };
+      try {
+        const task = service.deleteTask(asString(args.id).trim());
+        return { success: true, output: task };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  );
+
+  context.registry.register(
+    {
       name: 'second_brain_calendar_list',
       description: 'List Second Brain calendar events ordered by start time.',
       shortDescription: 'List Second Brain calendar events.',
@@ -435,8 +576,8 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
   context.registry.register(
     {
       name: 'second_brain_calendar_upsert',
-      description: 'Create or update a Second Brain calendar event.',
-      shortDescription: 'Create or update a calendar event.',
+      description: 'Create or update a local Second Brain calendar event. Provider-synced events remain read-only here.',
+      shortDescription: 'Create or update a local calendar event.',
       risk: 'mutating',
       category: 'memory',
       deferLoading: true,
@@ -449,7 +590,6 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
           description: { type: 'string' },
           startsAt: { type: 'number' },
           endsAt: { type: 'number' },
-          source: { type: 'string', enum: ['local', 'google', 'microsoft'] },
           location: { type: 'string' },
         },
       },
@@ -458,10 +598,6 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
       context.guardAction(request, 'write_file', { path: 'second-brain:calendar' });
       const service = context.getService();
       if (!service) return { success: false, error: 'Second Brain service is unavailable.' };
-      const source = args.source == null ? undefined : normalizeEventSource(args.source);
-      if (args.source != null && !source) {
-        return { success: false, error: 'source must be local, google, or microsoft.' };
-      }
       try {
         const event = service.upsertEvent({
           id: asString(args.id).trim() || undefined,
@@ -469,9 +605,37 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
           ...(Object.prototype.hasOwnProperty.call(args, 'description') ? { description: asString(args.description) } : {}),
           startsAt: typeof args.startsAt === 'number' ? args.startsAt : Number.NaN,
           endsAt: typeof args.endsAt === 'number' ? args.endsAt : undefined,
-          source,
           ...(Object.prototype.hasOwnProperty.call(args, 'location') ? { location: asString(args.location) } : {}),
         });
+        return { success: true, output: event };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  );
+
+  context.registry.register(
+    {
+      name: 'second_brain_calendar_delete',
+      description: 'Delete one local Second Brain calendar event. Provider-synced events must be deleted in their source provider.',
+      shortDescription: 'Delete a local calendar event.',
+      risk: 'mutating',
+      category: 'memory',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string' },
+        },
+      },
+    },
+    async (args, request) => {
+      context.guardAction(request, 'write_file', { path: 'second-brain:calendar' });
+      const service = context.getService();
+      if (!service) return { success: false, error: 'Second Brain service is unavailable.' };
+      try {
+        const event = service.deleteEvent(asString(args.id).trim());
         return { success: true, output: event };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -494,6 +658,95 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
       const service = context.getService();
       if (!service) return { success: false, error: 'Second Brain service is unavailable.' };
       return { success: true, output: service.listRoutines() };
+    },
+  );
+
+  context.registry.register(
+    {
+      name: 'second_brain_routine_catalog',
+      description: 'List the built-in Second Brain routine catalog, including which templates are already configured.',
+      shortDescription: 'List the Second Brain routine catalog.',
+      risk: 'read_only',
+      category: 'memory',
+      deferLoading: true,
+      parameters: { type: 'object', properties: {} },
+    },
+    async (_args, request) => {
+      context.guardAction(request, 'read_file', { path: 'second-brain:routines' });
+      const service = context.getService();
+      if (!service) return { success: false, error: 'Second Brain service is unavailable.' };
+      return { success: true, output: service.listRoutineCatalog() };
+    },
+  );
+
+  context.registry.register(
+    {
+      name: 'second_brain_routine_create',
+      description: 'Create a bounded Second Brain routine from the built-in routine catalog.',
+      shortDescription: 'Create a Second Brain routine.',
+      risk: 'mutating',
+      category: 'memory',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        required: ['templateId'],
+        properties: {
+          templateId: { type: 'string' },
+          name: { type: 'string' },
+          enabled: { type: 'boolean' },
+          trigger: {
+            type: 'object',
+            properties: {
+              mode: { type: 'string', enum: ['cron', 'event', 'horizon', 'manual'] },
+              cron: { type: 'string' },
+              eventType: { type: 'string', enum: ['upcoming_event', 'event_ended', 'task_due', 'task_overdue'] },
+              lookaheadMinutes: { type: 'number' },
+            },
+          },
+          defaultRoutingBias: {
+            type: 'string',
+            enum: ['local_first', 'balanced', 'quality_first'],
+          },
+          budgetProfileId: { type: 'string' },
+          deliveryDefaults: {
+            type: 'array',
+            items: { type: 'string', enum: ['web', 'cli', 'telegram'] },
+          },
+        },
+      },
+    },
+    async (args, request) => {
+      context.guardAction(request, 'write_file', { path: 'second-brain:routines' });
+      const service = context.getService();
+      if (!service) return { success: false, error: 'Second Brain service is unavailable.' };
+      const deliveryDefaults = Array.isArray(args.deliveryDefaults)
+        ? args.deliveryDefaults
+          .map(normalizeDeliveryChannel)
+          .filter((value): value is SecondBrainDeliveryChannel => Boolean(value))
+        : undefined;
+      if (Array.isArray(args.deliveryDefaults) && (deliveryDefaults?.length ?? 0) !== args.deliveryDefaults.length) {
+        return { success: false, error: 'deliveryDefaults must contain only web, cli, or telegram.' };
+      }
+      const trigger = normalizeRoutineTrigger(args.trigger);
+      if (args.trigger != null && !trigger) {
+        return { success: false, error: 'trigger must contain a supported Second Brain routine trigger.' };
+      }
+      try {
+        const routine = service.createRoutine({
+          templateId: asString(args.templateId).trim(),
+          name: asString(args.name).trim() || undefined,
+          enabled: parseBoolean(args.enabled),
+          trigger,
+          deliveryDefaults,
+          defaultRoutingBias: typeof args.defaultRoutingBias === 'string'
+            ? args.defaultRoutingBias as 'local_first' | 'balanced' | 'quality_first'
+            : undefined,
+          budgetProfileId: asString(args.budgetProfileId).trim() || undefined,
+        });
+        return { success: true, output: routine };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
     },
   );
 
@@ -568,6 +821,35 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
           relationship,
           lastContactAt: typeof args.lastContactAt === 'number' ? args.lastContactAt : undefined,
         });
+        return { success: true, output: person };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  );
+
+  context.registry.register(
+    {
+      name: 'second_brain_person_delete',
+      description: 'Delete one person record from Second Brain.',
+      shortDescription: 'Delete a person.',
+      risk: 'mutating',
+      category: 'memory',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string' },
+        },
+      },
+    },
+    async (args, request) => {
+      context.guardAction(request, 'write_file', { path: 'second-brain:people' });
+      const service = context.getService();
+      if (!service) return { success: false, error: 'Second Brain service is unavailable.' };
+      try {
+        const person = service.deletePerson(asString(args.id).trim());
         return { success: true, output: person };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -661,6 +943,35 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
 
   context.registry.register(
     {
+      name: 'second_brain_library_delete',
+      description: 'Delete one Second Brain library item or saved reference.',
+      shortDescription: 'Delete a library item.',
+      risk: 'mutating',
+      category: 'memory',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string' },
+        },
+      },
+    },
+    async (args, request) => {
+      context.guardAction(request, 'write_file', { path: 'second-brain:library' });
+      const service = context.getService();
+      if (!service) return { success: false, error: 'Second Brain service is unavailable.' };
+      try {
+        const link = service.deleteLink(asString(args.id).trim());
+        return { success: true, output: link };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  );
+
+  context.registry.register(
+    {
       name: 'second_brain_routine_update',
       description: 'Update the enabled state or policy settings for one Second Brain routine.',
       shortDescription: 'Update a Second Brain routine.',
@@ -672,7 +983,17 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
         required: ['id'],
         properties: {
           id: { type: 'string' },
+          name: { type: 'string' },
           enabled: { type: 'boolean' },
+          trigger: {
+            type: 'object',
+            properties: {
+              mode: { type: 'string', enum: ['cron', 'event', 'horizon', 'manual'] },
+              cron: { type: 'string' },
+              eventType: { type: 'string', enum: ['upcoming_event', 'event_ended', 'task_due', 'task_overdue'] },
+              lookaheadMinutes: { type: 'number' },
+            },
+          },
           defaultRoutingBias: {
             type: 'string',
             enum: ['local_first', 'balanced', 'quality_first'],
@@ -697,16 +1018,51 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
       if (Array.isArray(args.deliveryDefaults) && (deliveryDefaults?.length ?? 0) !== args.deliveryDefaults.length) {
         return { success: false, error: 'deliveryDefaults must contain only web, cli, or telegram.' };
       }
+      const trigger = normalizeRoutineTrigger(args.trigger);
+      if (args.trigger != null && !trigger) {
+        return { success: false, error: 'trigger must contain a supported Second Brain routine trigger.' };
+      }
       try {
         const routine = service.updateRoutine({
           id: asString(args.id).trim(),
+          name: asString(args.name).trim() || undefined,
           enabled: parseBoolean(args.enabled),
+          trigger,
           deliveryDefaults,
           defaultRoutingBias: typeof args.defaultRoutingBias === 'string'
             ? args.defaultRoutingBias as 'local_first' | 'balanced' | 'quality_first'
             : undefined,
           budgetProfileId: asString(args.budgetProfileId).trim() || undefined,
         });
+        return { success: true, output: routine };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  );
+
+  context.registry.register(
+    {
+      name: 'second_brain_routine_delete',
+      description: 'Delete one configured Second Brain routine. Seeded built-ins stay deleted until you explicitly re-create them.',
+      shortDescription: 'Delete a Second Brain routine.',
+      risk: 'mutating',
+      category: 'memory',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string' },
+        },
+      },
+    },
+    async (args, request) => {
+      context.guardAction(request, 'write_file', { path: 'second-brain:routines' });
+      const service = context.getService();
+      if (!service) return { success: false, error: 'Second Brain service is unavailable.' };
+      try {
+        const routine = service.deleteRoutine(asString(args.id).trim());
         return { success: true, output: routine };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };

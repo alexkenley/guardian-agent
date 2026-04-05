@@ -32,7 +32,7 @@ describe('BriefingService', () => {
       priority: 'high',
       dueAt: Date.parse('2026-04-04T13:00:00Z'),
     });
-    service.upsertEvent({
+    service.upsertSyncedEvent({
       id: 'meeting-1',
       title: 'Board prep',
       startsAt: Date.parse('2026-04-04T10:00:00Z'),
@@ -56,7 +56,7 @@ describe('BriefingService', () => {
   it('builds a pre-meeting brief from matching tasks, notes, and people', async () => {
     const { service, briefing } = createFixture();
 
-    const event = service.upsertEvent({
+    const event = service.upsertSyncedEvent({
       id: 'event-42',
       title: 'Launch Review',
       startsAt: Date.parse('2026-04-04T10:30:00Z'),

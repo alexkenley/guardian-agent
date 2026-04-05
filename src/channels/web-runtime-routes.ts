@@ -63,6 +63,26 @@ function sendBadRequestError(res: ServerResponse, err: unknown): void {
   sendJSON(res, 400, { error: err instanceof Error ? err.message : 'Bad request' });
 }
 
+function parseSecondBrainRoutineTrigger(value: unknown): import('../runtime/second-brain/types.js').SecondBrainRoutineTrigger | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const mode = trimOptionalString(record.mode) as import('../runtime/second-brain/types.js').SecondBrainRoutineTrigger['mode'] | undefined;
+  if (!mode) return undefined;
+  const lookaheadMinutes = typeof record.lookaheadMinutes === 'number'
+    ? record.lookaheadMinutes
+    : typeof record.lookaheadMinutes === 'string' && record.lookaheadMinutes.trim()
+      ? Number(record.lookaheadMinutes)
+      : undefined;
+  return {
+    mode,
+    ...(trimOptionalString(record.cron) ? { cron: trimOptionalString(record.cron) } : {}),
+    ...(trimOptionalString(record.eventType)
+      ? { eventType: trimOptionalString(record.eventType) as import('../runtime/second-brain/types.js').SecondBrainRoutineEventType }
+      : {}),
+    ...(Number.isFinite(lookaheadMinutes) ? { lookaheadMinutes } : {}),
+  };
+}
+
 export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): Promise<boolean> {
   const { req, res, url, dashboard } = context;
 
@@ -210,6 +230,58 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     }
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/second-brain/briefs/delete') {
+    if (!dashboard.onSecondBrainBriefDelete) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const id = trimOptionalString(parsed.id);
+      if (!id) {
+        sendJSON(res, 400, { error: 'id is required' });
+        return true;
+      }
+      const result = await dashboard.onSecondBrainBriefDelete(id);
+      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+      context.maybeEmitUIInvalidation(result, ['second-brain'], 'second-brain.brief.deleted', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/second-brain/briefs/update') {
+    if (!dashboard.onSecondBrainBriefUpdate) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const id = trimOptionalString(parsed.id);
+      if (!id) {
+        sendJSON(res, 400, { error: 'id is required' });
+        return true;
+      }
+      const result = await dashboard.onSecondBrainBriefUpdate({
+        id,
+        ...(hasOwn(parsed, 'title') && typeof parsed.title === 'string'
+          ? { title: parsed.title }
+          : {}),
+        ...(hasOwn(parsed, 'content') && typeof parsed.content === 'string'
+          ? { content: parsed.content }
+          : {}),
+      });
+      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+      context.maybeEmitUIInvalidation(result, ['second-brain'], 'second-brain.brief.updated', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/second-brain/briefs') {
     if (!dashboard.onSecondBrainBriefs) {
       sendJSON(res, 404, { error: 'Not available' });
@@ -259,13 +331,34 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
           : {}),
         startsAt: typeof parsed.startsAt === 'number' ? parsed.startsAt : Number.NaN,
         endsAt: typeof parsed.endsAt === 'number' ? parsed.endsAt : undefined,
-        source: trimOptionalString(parsed.source) as import('../runtime/second-brain/types.js').SecondBrainEventRecord['source'] | undefined,
         ...(hasOwn(parsed, 'location') && typeof parsed.location === 'string'
           ? { location: parsed.location }
           : {}),
       });
       sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
       context.maybeEmitUIInvalidation(result, ['second-brain'], 'second-brain.calendar.upserted', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/second-brain/calendar/delete') {
+    if (!dashboard.onSecondBrainCalendarDelete) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const id = trimOptionalString(parsed.id);
+      if (!id) {
+        sendJSON(res, 400, { error: 'id is required' });
+        return true;
+      }
+      const result = await dashboard.onSecondBrainCalendarDelete(id);
+      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+      context.maybeEmitUIInvalidation(result, ['second-brain'], 'second-brain.calendar.deleted', url.pathname);
       return true;
     } catch (err) {
       sendBadRequestError(res, err);
@@ -304,6 +397,28 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
       });
       sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
       context.maybeEmitUIInvalidation(result, ['second-brain'], 'second-brain.task.upserted', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/second-brain/tasks/delete') {
+    if (!dashboard.onSecondBrainTaskDelete) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const id = trimOptionalString(parsed.id);
+      if (!id) {
+        sendJSON(res, 400, { error: 'id is required' });
+        return true;
+      }
+      const result = await dashboard.onSecondBrainTaskDelete(id);
+      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+      context.maybeEmitUIInvalidation(result, ['second-brain'], 'second-brain.task.deleted', url.pathname);
       return true;
     } catch (err) {
       sendBadRequestError(res, err);
@@ -351,6 +466,28 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     }
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/second-brain/notes/delete') {
+    if (!dashboard.onSecondBrainNoteDelete) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const id = trimOptionalString(parsed.id);
+      if (!id) {
+        sendJSON(res, 400, { error: 'id is required' });
+        return true;
+      }
+      const result = await dashboard.onSecondBrainNoteDelete(id);
+      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+      context.maybeEmitUIInvalidation(result, ['second-brain'], 'second-brain.note.deleted', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/second-brain/people') {
     if (!dashboard.onSecondBrainPeople) {
       sendJSON(res, 404, { error: 'Not available' });
@@ -383,6 +520,28 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
       });
       sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
       context.maybeEmitUIInvalidation(result, ['second-brain'], 'second-brain.person.upserted', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/second-brain/people/delete') {
+    if (!dashboard.onSecondBrainPersonDelete) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const id = trimOptionalString(parsed.id);
+      if (!id) {
+        sendJSON(res, 400, { error: 'id is required' });
+        return true;
+      }
+      const result = await dashboard.onSecondBrainPersonDelete(id);
+      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+      context.maybeEmitUIInvalidation(result, ['second-brain'], 'second-brain.person.deleted', url.pathname);
       return true;
     } catch (err) {
       sendBadRequestError(res, err);
@@ -430,6 +589,28 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     }
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/second-brain/links/delete') {
+    if (!dashboard.onSecondBrainLinkDelete) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const id = trimOptionalString(parsed.id);
+      if (!id) {
+        sendJSON(res, 400, { error: 'id is required' });
+        return true;
+      }
+      const result = await dashboard.onSecondBrainLinkDelete(id);
+      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+      context.maybeEmitUIInvalidation(result, ['second-brain'], 'second-brain.link.deleted', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/second-brain/routines') {
     if (!dashboard.onSecondBrainRoutines) {
       sendJSON(res, 404, { error: 'Not available' });
@@ -437,6 +618,44 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     }
     sendJSON(res, 200, dashboard.onSecondBrainRoutines());
     return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/second-brain/routines/catalog') {
+    if (!dashboard.onSecondBrainRoutineCatalog) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    sendJSON(res, 200, dashboard.onSecondBrainRoutineCatalog());
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/second-brain/routines/create') {
+    if (!dashboard.onSecondBrainRoutineCreate) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const result = await dashboard.onSecondBrainRoutineCreate({
+        templateId: trimOptionalString(parsed.templateId) ?? '',
+        name: trimOptionalString(parsed.name),
+        enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : undefined,
+        trigger: parseSecondBrainRoutineTrigger(parsed.trigger),
+        deliveryDefaults: Array.isArray(parsed.deliveryDefaults)
+          ? parsed.deliveryDefaults
+            .map((value) => trimOptionalString(value))
+            .filter((value): value is import('../runtime/second-brain/types.js').SecondBrainDeliveryChannel => Boolean(value))
+          : undefined,
+        defaultRoutingBias: trimOptionalString(parsed.defaultRoutingBias) as import('../runtime/second-brain/types.js').SecondBrainRoutingBias | undefined,
+        budgetProfileId: trimOptionalString(parsed.budgetProfileId),
+      });
+      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+      context.maybeEmitUIInvalidation(result, ['second-brain'], 'second-brain.routine.created', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
   }
 
   if (req.method === 'POST' && url.pathname === '/api/second-brain/routines/update') {
@@ -448,7 +667,9 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
       const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
       const result = await dashboard.onSecondBrainRoutineUpdate({
         id: trimOptionalString(parsed.id) ?? '',
+        name: trimOptionalString(parsed.name),
         enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : undefined,
+        trigger: parseSecondBrainRoutineTrigger(parsed.trigger),
         deliveryDefaults: Array.isArray(parsed.deliveryDefaults)
           ? parsed.deliveryDefaults
             .map((value) => trimOptionalString(value))
@@ -459,6 +680,28 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
       });
       sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
       context.maybeEmitUIInvalidation(result, ['second-brain'], 'second-brain.routine.updated', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/second-brain/routines/delete') {
+    if (!dashboard.onSecondBrainRoutineDelete) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const id = trimOptionalString(parsed.id);
+      if (!id) {
+        sendJSON(res, 400, { error: 'id is required' });
+        return true;
+      }
+      const result = await dashboard.onSecondBrainRoutineDelete(id);
+      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+      context.maybeEmitUIInvalidation(result, ['second-brain'], 'second-brain.routine.deleted', url.pathname);
       return true;
     } catch (err) {
       sendBadRequestError(res, err);

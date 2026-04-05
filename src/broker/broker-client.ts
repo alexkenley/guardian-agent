@@ -150,6 +150,7 @@ export class BrokerClient {
     jobId?: string;
     toolName?: string;
     message?: string;
+    output?: unknown;
     success?: boolean;
   }> {
     return this.sendRequest('approval.result', { approvalId });

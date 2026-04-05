@@ -107,16 +107,24 @@ Current ownership includes:
 - overview reads
 - notes
 - tasks
-- calendar planning and event context
+- local calendar planning, local calendar CRUD, and provider-backed event context
 - people context
 - routines
 - briefs and follow-up drafts
 - personal retrieval across messages, docs, events, and notes
 
 Boundary rules:
+- use `automation_authoring` when the user explicitly asks to create an automation, workflow, or scheduled automation in the Automations system
 - prefer `personal_assistant_task` when the user is asking for personal productivity help, meeting prep, follow-up drafting, or cross-source personal retrieval
-- use `workspace_task` for explicit provider CRUD or administration in Google Workspace or Microsoft 365 surfaces
+- use `personal_assistant_task` with `personalItemType=routine` when the user explicitly asks for a `Second Brain` routine or names a built-in routine such as `Morning Brief`, `Pre-Meeting Brief`, or `Follow-Up Watch`
+- unqualified calendar create, update, or delete requests default to the local `Second Brain` calendar under `personal_assistant_task`
+- use `workspace_task` for explicit provider CRUD or administration in Google Workspace or Microsoft 365 surfaces such as `Google Calendar` or `Outlook calendar`
 - use `email_task` for direct mailbox reads, replies, sends, forwards, or draft management in Gmail or Outlook
+
+Calendar target metadata:
+- `entities.calendarTarget=local` means the user is targeting the local Guardian `Second Brain` calendar
+- `entities.calendarTarget=gws` means the user explicitly targeted Google Calendar
+- `entities.calendarTarget=m365` means the user explicitly targeted Outlook or Microsoft 365 calendar
 
 Direct-routing note:
 - `direct-intent-routing.ts` maps `personal_assistant_task` to the bounded `personal_assistant` candidate

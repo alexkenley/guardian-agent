@@ -38,15 +38,17 @@ async function main() {
   try {
     const service = new SecondBrainService(store, { now });
     const briefing = new BriefingService(service, { now });
+    service.createRoutine({ templateId: 'pre-meeting-brief' });
+    service.createRoutine({ templateId: 'follow-up-watch' });
     service.upsertTask({ title: 'Finalize board deck', priority: 'high' });
-    service.upsertEvent({
+    service.upsertSyncedEvent({
       id: 'board-sync',
       title: 'Board Sync',
       startsAt: Date.parse('2026-04-04T09:30:00Z'),
       endsAt: Date.parse('2026-04-04T10:00:00Z'),
       source: 'google',
     });
-    service.upsertEvent({
+    service.upsertSyncedEvent({
       id: 'client-checkin',
       title: 'Client Check-In',
       startsAt: Date.parse('2026-04-04T07:00:00Z'),

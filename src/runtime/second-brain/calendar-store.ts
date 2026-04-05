@@ -146,4 +146,20 @@ export class CalendarStore {
     if (!row) return null;
     return rowToEvent(row);
   }
+
+  deleteEvent(id: string): SecondBrainEventRecord | null {
+    const existing = this.getEvent(id);
+    if (!existing) return null;
+
+    if (this.ctx.mode === 'memory') {
+      this.ctx.memory.events.delete(id);
+      return existing;
+    }
+
+    this.ctx.db!.prepare(`
+      DELETE FROM sb_events
+      WHERE id = ?
+    `).run(id);
+    return existing;
+  }
 }

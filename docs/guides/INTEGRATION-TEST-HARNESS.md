@@ -32,6 +32,8 @@ Core harness scripts include:
 | **`scripts/test-automation-authoring-compiler.mjs`** | Conversational automation compiler harness: native task/workflow compilation, dedupe, and no-script drift (Node.js) | ~12 |
 | **`scripts/test-coding-assistant.mjs`** | Coding-session transport + repo-grounding harness using canonical chat dispatch plus session attachments/overrides, including approval scoping, memory-scope isolation, and optional real Ollama smoke lane (Node.js) | focused Code-session assertions |
 | **`scripts/test-code-ui-smoke.mjs`** | Browser smoke for the `#/code` workspace: explorer refresh, Guardian-chat session focus, activity/trust UX, and code-session persistence (Node.js + Playwright) | focused Code UI assertions |
+| **`scripts/test-second-brain-chat-crud.mjs`** | Chat-driven Second Brain CRUD harness: assistant create/update/delete coverage for notes, tasks, local calendar, contacts, library items, briefs, and routines through `POST /api/message`, plus an optional real Ollama smoke lane (Node.js). Known gap: this lane is still WIP and currently exposes approval/continuation issues on mutating `second_brain_*` chat flows. | focused Second Brain assistant CRUD assertions |
+| **`scripts/test-second-brain-ui-smoke.mjs`** | Browser smoke for the `#/` Second Brain workspace: local calendar/tasks/notes/contacts/library/briefs/routines CRUD through the web UI, plus an optional real Ollama retrieval smoke lane (Node.js + Playwright) | focused Second Brain UI assertions |
 | **`scripts/test-pdf-read.mjs`** | PDF filesystem-read harness against the real repo research PDFs through `POST /api/tools/run` (Node.js) | validates `fs_read` PDF extraction, MIME metadata, titles, and preview text |
 | **`scripts/test-llmmap-security.mjs`** | External `LLMMap` prompt-injection harness against `POST /api/message` using a real Ollama model (Node.js + Python) | preflight + LLMMap findings |
 
@@ -142,6 +144,25 @@ node scripts/test-code-ui-smoke.mjs
 HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=gemma4:26b node scripts/test-coding-assistant.mjs --use-ollama
 ```
 
+Recommended Second Brain regression loop:
+
+```bash
+node scripts/test-second-brain-smoke.mjs
+node scripts/test-second-brain-routines.mjs
+node scripts/test-second-brain-budgeting.mjs
+node scripts/test-second-brain-ui-smoke.mjs
+HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=gemma4:26b node scripts/test-second-brain-ui-smoke.mjs --use-ollama
+```
+
+Known gap to fix later: `scripts/test-second-brain-chat-crud.mjs` is not part of the required green loop yet. In the current harness path, chat-driven Second Brain mutations can still land in approval-gated pending actions instead of completing end to end, so the approval/continuation or live policy behavior needs follow-up work before this becomes a required passing lane.
+
+Investigative/WIP Second Brain chat CRUD lane:
+
+```bash
+node scripts/test-second-brain-chat-crud.mjs
+HARNESS_USE_REAL_OLLAMA=1 HARNESS_OLLAMA_MODEL=gemma4:26b node scripts/test-second-brain-chat-crud.mjs --use-ollama
+```
+
 For local debugging, you can preserve the coding-harness temp directory without shell env wrappers:
 
 ```bash
@@ -159,6 +180,18 @@ node scripts/inspect-latest-coding-harness.mjs --file guardian.log --lines 120
 If you are using the WSL-local real-Ollama lane and `ollama list` cannot reach a local server, start it first in WSL with `ollama serve` before running the smoke commands.
 
 For real-Ollama smoke runs, the harness sets `GUARDIAN_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD=1` by default so local-model tool-call formatting failures surface as the original Ollama error instead of the friendly “too complicated” shortcut. Set `HARNESS_BYPASS_LOCAL_MODEL_COMPLEXITY_GUARD=0` if you need to reproduce production-style guard behavior exactly.
+
+The Second Brain UI smoke harness follows the same pattern:
+
+- default lane: deterministic browser CRUD against the local Second Brain UI with an embedded fake provider
+- real-Ollama lane: the same UI CRUD plus a real `POST /api/message` Second Brain retrieval/planning smoke against a WSL-local or otherwise reachable Ollama endpoint
+- WSL-local Ollama support: when the chosen endpoint is loopback and Ollama is installed in WSL, the harness can autostart `ollama serve`; otherwise point `HARNESS_OLLAMA_BASE_URL` at a reachable Windows-hosted or remote endpoint
+
+The Second Brain chat CRUD harness complements the browser lane:
+
+- default lane: deterministic assistant CRUD across notes, tasks, the local Guardian calendar, contacts, library items, briefs, and routines using the real intent gateway plus the actual Second Brain tools
+- real-Ollama lane: the same chat prompts against a reachable Ollama model, with state assertions proving whether the local model can actually create, update, and delete the current Second Brain entities through chat
+- known gap: mutating `second_brain_*` chat flows can still fall into approval-gated pending actions in this harness path, so treat this as an investigative lane until the shared approval/continuation behavior is fixed
 
 For skill-routing or skill-trigger regressions, also run:
 

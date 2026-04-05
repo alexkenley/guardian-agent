@@ -40,6 +40,7 @@ export interface MemoryStore {
   people: Map<string, SecondBrainPersonRecord>;
   links: Map<string, SecondBrainLinkRecord>;
   routines: Map<string, SecondBrainRoutineRecord>;
+  deletedRoutineIds: Set<string>;
   briefs: Map<string, SecondBrainBriefRecord>;
   syncCursors: Map<string, SecondBrainSyncCursorRecord>;
   usage: SecondBrainUsageRecord[];
@@ -62,6 +63,7 @@ export class SecondBrainStore implements SecondBrainStoreContext {
     people: new Map(),
     links: new Map(),
     routines: new Map(),
+    deletedRoutineIds: new Set(),
     briefs: new Map(),
     syncCursors: new Map(),
     usage: [],
@@ -188,6 +190,11 @@ export class SecondBrainStore implements SecondBrainStoreContext {
         last_run_at INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS sb_routine_tombstones (
+        id TEXT PRIMARY KEY,
+        deleted_at INTEGER NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS sb_briefs (

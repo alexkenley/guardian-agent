@@ -60,6 +60,7 @@ export interface IntentGatewayEntities {
   path?: string;
   sessionTarget?: string;
   emailProvider?: 'gws' | 'm365';
+  calendarTarget?: 'local' | 'gws' | 'm365';
   personalItemType?: 'overview' | 'note' | 'task' | 'calendar' | 'person' | 'library' | 'routine' | 'brief' | 'unknown';
   codingBackend?: string;
   codingBackendRequested?: boolean;
@@ -216,6 +217,10 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
         type: 'string',
         enum: ['gws', 'm365'],
       },
+      calendarTarget: {
+        type: 'string',
+        enum: ['local', 'gws', 'm365'],
+      },
       personalItemType: {
         type: 'string',
         enum: ['overview', 'note', 'task', 'calendar', 'person', 'library', 'routine', 'brief', 'unknown'],
@@ -279,12 +284,15 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Set resolution to needs_clarification when the user\'s goal is clear but a targeted missing detail is required before execution.',
   'When resolution=needs_clarification, populate missingFields with the concrete missing detail names such as email_provider, coding_backend, session_target, path, recipient, or automation_name.',
   'When the current turn is a clarification answer or correction and the prior context makes the intended action clear, set resolvedContent to a single actionable restatement of the full corrected request.',
-  'Use only the exact enum values defined by the schema for route, confidence, operation, turnRelation, resolution, uiSurface, and emailProvider. Do not paraphrase enum names.',
+  'Use only the exact enum values defined by the schema for route, confidence, operation, turnRelation, resolution, uiSurface, emailProvider, and calendarTarget. Do not paraphrase enum names.',
   'Prefer ui_control over browser_task when the request refers to Guardian pages or internal catalog views.',
   'Prefer email_task over workspace_task for direct mailbox or email requests.',
   'Prefer personal_assistant_task over workspace_task or email_task when the user intent is personal productivity or Second Brain work rather than explicit provider CRUD.',
   'Prefer personal_assistant_task for meeting prep, follow-up drafting, calendar planning, personal search across email/docs/calendar/notes, outreach review, or "what do I owe this person?" even when the evidence comes from Google Workspace or Microsoft 365.',
-  'Prefer workspace_task for explicit provider CRUD or administration such as listing Drive files, creating a Google Sheet, editing a SharePoint document, browsing OneDrive, or mutating a calendar object directly in the provider surface.',
+  'Prefer automation_authoring when the user explicitly asks to create an automation, workflow, or scheduled automation for the Automations system.',
+  'Prefer personal_assistant_task with personalItemType=routine when the user explicitly asks for a Second Brain routine or names a built-in routine concept such as Morning Brief, Pre-Meeting Brief, Follow-Up Watch, Weekly Review, Manual Sync, or the Routines tab.',
+  'Unqualified calendar entry, calendar event, or calendar item create/update/delete requests default to the local Second Brain calendar with route=personal_assistant_task, personalItemType=calendar, and calendarTarget=local.',
+  'Prefer workspace_task for explicit provider CRUD or administration such as listing Drive files, creating a Google Sheet, editing a SharePoint document, browsing OneDrive, or mutating an event directly in Google Calendar or Outlook Calendar.',
   'Prefer email_task for direct inbox work in Gmail or Outlook, but not for meeting prep, follow-up drafting, or broader Second Brain synthesis.',
   'Prefer search_task over browser_task for generic web search.',
   'Prefer memory_task for explicit persistent-memory requests such as "remember this", "what do you remember about ...", or "search memory for ...".',
@@ -320,15 +328,22 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Example: "What do I have due today?" -> route=personal_assistant_task, operation=inspect, personalItemType=overview.',
   'Example: "Show my tasks." -> route=personal_assistant_task, operation=read, personalItemType=task.',
   'Example: "Save a note that the Q3 offsite venue is River House." -> route=personal_assistant_task, operation=save, personalItemType=note.',
+  'Example: "Create the Pre-Meeting Brief routine in Second Brain." -> route=personal_assistant_task, operation=create, personalItemType=routine.',
   'Example: "Create a task to send the follow-up deck tomorrow." -> route=personal_assistant_task, operation=create, personalItemType=task.',
+  'Example: "Create a calendar entry for tomorrow at 3 PM called Dentist." -> route=personal_assistant_task, operation=create, personalItemType=calendar, calendarTarget=local.',
+  'Example: "Move my Guardian calendar event with Alex to Friday." -> route=personal_assistant_task, operation=update, personalItemType=calendar, calendarTarget=local.',
   'Example: "Prepare me for my next Outlook meeting using the calendar event, recent email, and docs." -> route=personal_assistant_task, operation=inspect, personalItemType=brief, emailProvider=m365.',
   'Example: "Draft a follow-up email from my meeting notes and Gmail thread." -> route=personal_assistant_task, operation=draft, personalItemType=brief, emailProvider=gws.',
+  'Example: "Create an automation that checks WHM disk quota every day." -> route=automation_authoring, operation=create.',
   'Example: "List the files in my Drive." -> route=workspace_task, operation=read.',
   'Example: "Create a new Google Sheet for the Q3 budget." -> route=workspace_task, operation=create.',
+  'Example: "Add this meeting to my Google Calendar." -> route=workspace_task, operation=create, calendarTarget=gws.',
+  'Example: "Delete the event from my Outlook calendar." -> route=workspace_task, operation=delete, calendarTarget=m365.',
   'Example: "Update the SharePoint document for the launch checklist." -> route=workspace_task, operation=update.',
   'Example: "Check my unread Outlook mail." -> route=email_task, operation=read, emailProvider=m365.',
   'For enable/disable requests, set enabled=true or enabled=false when explicit.',
   'Set emailProvider=gws for Gmail or Google Workspace requests. Set emailProvider=m365 for Outlook or Microsoft 365 requests.',
+  'Set calendarTarget=local for unqualified Second Brain calendar requests. Set calendarTarget=gws for Google Calendar requests. Set calendarTarget=m365 for Outlook Calendar or Microsoft 365 calendar requests.',
   'Set codingBackend when the user explicitly names Codex, Claude Code, Gemini CLI, or Aider.',
   'Set codingBackendRequested=true only when the user is explicitly asking Guardian to use or launch that coding backend for work. If Codex, Claude Code, Gemini CLI, or Aider is only the subject of a question, codingBackendRequested must be false or unset.',
   'Set codingRunStatusCheck=true only when the user is explicitly asking whether the most recent coding backend run completed, failed, timed out, exited with a code, or otherwise asking for recent-run status.',
@@ -365,16 +380,19 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'coding_session_control means current session, list sessions, switch or attach to another session, detach, or create a coding session.',
   'coding_task means code work inside a workspace, including explicit backend delegation such as Codex, Claude Code, Gemini CLI, or Aider, plus file-grounded repo inspection, code review, and implementation planning.',
   'memory_task means explicit remember, save, recall, or search memory requests.',
-  'email_task means direct email inbox, read, send, reply, forward, or draft work in Gmail or Outlook. workspace_task means explicit provider CRUD or administration in Google Workspace or Microsoft 365 surfaces such as Drive, Docs, Sheets, Calendar object edits, OneDrive, SharePoint, or Teams. personal_assistant_task means Second Brain work such as notes, tasks, calendar planning, meeting prep, people context, briefs, and personal retrieval across messages, docs, events, and notes.',
+  'email_task means direct email inbox, read, send, reply, forward, or draft work in Gmail or Outlook. workspace_task means explicit provider CRUD or administration in Google Workspace or Microsoft 365 surfaces such as Drive, Docs, Sheets, direct Google Calendar or Outlook Calendar event edits, OneDrive, SharePoint, or Teams. personal_assistant_task means Second Brain work such as notes, tasks, calendar planning, meeting prep, people context, briefs, and personal retrieval across messages, docs, events, and notes.',
   'ui_control means Guardian pages or internal catalog surfaces. browser_task means external website navigation or interaction. search_task means generic web search.',
   'Prefer personal_assistant_task for meeting prep, follow-up drafting, calendar planning, outreach review, or personal search across email/docs/calendar/notes even when the data comes from Google Workspace or Microsoft 365.',
-  'Prefer workspace_task only when the user is explicitly targeting provider CRUD or provider administration such as Drive, Docs, Sheets, OneDrive, SharePoint, Teams, or direct calendar object edits.',
+  'Prefer automation_authoring when the user explicitly asks to create an automation or workflow in the Automations system. Prefer personal_assistant_task when they explicitly ask for a Second Brain routine or mention built-in routine concepts such as Morning Brief or Pre-Meeting Brief.',
+  'Unqualified calendar entry, calendar event, or calendar item create/update/delete requests default to the local Second Brain calendar with personalItemType="calendar" and calendarTarget="local".',
+  'Prefer workspace_task only when the user is explicitly targeting provider CRUD or provider administration such as Drive, Docs, Sheets, OneDrive, SharePoint, Teams, Google Calendar, Outlook Calendar, or other direct provider calendar event edits.',
   'Prefer email_task only for direct mailbox work, not for broader Second Brain synthesis.',
   'For rename requests on an existing automation, use route=automation_control, operation=update, and set newAutomationName to the requested new name.',
   'If the user explicitly asks to run a built-in tool by name, keep the request out of automation_control even if it uses verbs like run, check, inspect, or status.',
   'For edits to an existing automation such as changing its schedule or switching between scheduled and manual mode, use route=automation_control and operation=update.',
   'If the user names a coding session or workspace to switch to, set sessionTarget.',
   'If the user names Gmail or Google Workspace, set emailProvider to gws. If the user names Outlook or Microsoft 365, set emailProvider to m365.',
+  'If the user names Google Calendar, set calendarTarget to gws. If the user names Outlook Calendar or Microsoft 365 calendar, set calendarTarget to m365. If the user is just talking about their calendar inside Guardian without naming a provider, set calendarTarget to local.',
   'If the user clearly refers to notes, tasks, calendar planning, routines, briefs, people, or the overall Today view, set personalItemType when possible.',
   'If the user names a cloud-hosting profile id such as profileId social or refers to a known hosting profile by id, set profileId when possible.',
   'If the user explicitly asks Guardian to use Codex, Claude Code, Gemini CLI, or Aider, set codingBackend and codingBackendRequested=true.',
@@ -385,9 +403,14 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'Examples: "Run the cloud tool whm_status using profileId social." -> route="general_assistant", operation="run", toolName="whm_status", profileId="social".',
   'Examples: "Show my tasks." -> route="personal_assistant_task", operation="read", personalItemType="task".',
   'Examples: "What do I have due today?" -> route="personal_assistant_task", operation="inspect", personalItemType="overview".',
+  'Examples: "Create the Pre-Meeting Brief routine in Second Brain." -> route="personal_assistant_task", operation="create", personalItemType="routine".',
+  'Examples: "Create a calendar entry for tomorrow at 3 PM called Dentist." -> route="personal_assistant_task", operation="create", personalItemType="calendar", calendarTarget="local".',
   'Examples: "Prepare me for my next Outlook meeting using the calendar event, recent email, and docs." -> route="personal_assistant_task", operation="inspect", personalItemType="brief", emailProvider="m365".',
   'Examples: "Draft a follow-up email from my meeting notes and Gmail thread." -> route="personal_assistant_task", operation="draft", personalItemType="brief", emailProvider="gws".',
+  'Examples: "Create an automation that checks WHM disk quota every day." -> route="automation_authoring", operation="create".',
   'Examples: "List the files in my Drive." -> route="workspace_task", operation="read".',
+  'Examples: "Add this meeting to my Google Calendar." -> route="workspace_task", operation="create", calendarTarget="gws".',
+  'Examples: "Delete the event from my Outlook calendar." -> route="workspace_task", operation="delete", calendarTarget="m365".',
   'Examples: "Update the SharePoint document for the launch checklist." -> route="workspace_task", operation="update".',
   'Examples: "Check my unread Outlook mail." -> route="email_task", operation="read", emailProvider="m365".',
   'Examples: "Switch this chat to the coding workspace for Temp install test." -> route="coding_session_control", operation="update", sessionTarget="Temp install test".',
@@ -787,6 +810,8 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
     : undefined;
   const emailProvider = normalizeEmailProvider(parsed.emailProvider);
   const personalItemType = normalizePersonalItemType(parsed.personalItemType);
+  const calendarTarget = normalizeCalendarTarget(parsed.calendarTarget)
+    ?? (route === 'personal_assistant_task' && personalItemType === 'calendar' ? 'local' : undefined);
   const codingBackend = normalizeCodingBackend(parsed.codingBackend);
   const codingBackendRequested = typeof parsed.codingBackendRequested === 'boolean'
     ? parsed.codingBackendRequested
@@ -822,6 +847,7 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
       ...(path ? { path } : {}),
       ...(sessionTarget ? { sessionTarget } : {}),
       ...(emailProvider ? { emailProvider } : {}),
+      ...(calendarTarget ? { calendarTarget } : {}),
       ...(personalItemType ? { personalItemType } : {}),
       ...(codingBackend ? { codingBackend } : {}),
       ...(typeof codingBackendRequested === 'boolean' ? { codingBackendRequested } : {}),
@@ -1053,6 +1079,19 @@ function normalizeEmailProvider(
   value: unknown,
 ): IntentGatewayEntities['emailProvider'] | undefined {
   switch (value) {
+    case 'gws':
+    case 'm365':
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+function normalizeCalendarTarget(
+  value: unknown,
+): IntentGatewayEntities['calendarTarget'] | undefined {
+  switch (value) {
+    case 'local':
     case 'gws':
     case 'm365':
       return value;

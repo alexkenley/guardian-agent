@@ -2665,6 +2665,10 @@ tr:hover td {
   align-items: start;
 }
 
+.sb-routines-layout {
+  align-items: start;
+}
+
 .sb-card {
   display: grid;
   gap: 0.85rem;
@@ -2764,6 +2768,13 @@ tr:hover td {
   gap: 0.8rem;
 }
 
+.sb-form__actions {
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
 .sb-form input,
 .sb-form textarea,
 .sb-form select,
@@ -2850,6 +2861,33 @@ tr:hover td {
 .sb-stack {
   display: grid;
   gap: 0.7rem;
+}
+
+.sb-filter-divider {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  min-height: 1.8rem;
+}
+
+.sb-table-copy {
+  margin-top: 0.35rem;
+  color: #9fb2cf;
+  line-height: 1.45;
+  font-size: 0.76rem;
+}
+
+.sb-routine-row.is-selected td {
+  background: rgba(79, 172, 254, 0.08);
+}
+
+.sb-routine-row td {
+  cursor: pointer;
+}
+
+.sb-routine-row td:last-child,
+.sb-routine-row td:last-child * {
+  cursor: default;
 }
 
 .sb-list-card,

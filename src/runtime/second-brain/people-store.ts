@@ -108,7 +108,23 @@ export class PeopleStore {
     return person;
   }
 
-  private getPerson(id: string): SecondBrainPersonRecord | null {
+  deletePerson(id: string): SecondBrainPersonRecord | null {
+    const existing = this.getPerson(id);
+    if (!existing) return null;
+
+    if (this.ctx.mode === 'memory') {
+      this.ctx.memory.people.delete(id);
+      return existing;
+    }
+
+    this.ctx.db!.prepare(`
+      DELETE FROM sb_people
+      WHERE id = ?
+    `).run(id);
+    return existing;
+  }
+
+  getPerson(id: string): SecondBrainPersonRecord | null {
     if (this.ctx.mode === 'memory') {
       const person = this.ctx.memory.people.get(id);
       return person ? clone(person) : null;

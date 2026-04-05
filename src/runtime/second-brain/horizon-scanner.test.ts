@@ -67,54 +67,23 @@ describe('HorizonScanner', () => {
   });
 
   it('runs sync and triggers morning, pre-meeting, and follow-up routines deterministically', async () => {
-    const { store, service, briefing, scheduledTaskService, now } = createFixture();
-    
-    // Add routines since they are no longer built-in
-    store.routines.upsertRoutine({
-      id: 'pre-meeting-brief',
-      name: 'Pre-Meeting Brief',
-      category: 'scheduled',
-      enabledByDefault: true,
-      enabled: true,
-      trigger: { mode: 'cron', cron: '0 * * * *' },
-      workloadClass: 'B',
-      externalCommMode: 'none',
-      budgetProfileId: 'test',
-      deliveryDefaults: [],
-      defaultRoutingBias: 'balanced',
-      createdAt: now(),
-      updatedAt: now(),
-      lastRunAt: null,
-    });
-    store.routines.upsertRoutine({
-      id: 'follow-up-watch',
-      name: 'Follow-Up Watch',
-      category: 'scheduled',
-      enabledByDefault: true,
-      enabled: true,
-      trigger: { mode: 'cron', cron: '0 * * * *' },
-      workloadClass: 'B',
-      externalCommMode: 'none',
-      budgetProfileId: 'test',
-      deliveryDefaults: [],
-      defaultRoutingBias: 'balanced',
-      createdAt: now(),
-      updatedAt: now(),
-      lastRunAt: null,
-    });
+    const { service, briefing, scheduledTaskService, now } = createFixture();
+
+    service.createRoutine({ templateId: 'pre-meeting-brief' });
+    service.createRoutine({ templateId: 'follow-up-watch' });
 
     service.upsertTask({
       title: 'Finalize board deck',
       priority: 'high',
     });
-    service.upsertEvent({
+    service.upsertSyncedEvent({
       id: 'upcoming-1',
       title: 'Board Sync',
       startsAt: Date.parse('2026-04-04T09:30:00Z'),
       endsAt: Date.parse('2026-04-04T10:00:00Z'),
       source: 'google',
     });
-    service.upsertEvent({
+    service.upsertSyncedEvent({
       id: 'past-1',
       title: 'Client Check-In',
       startsAt: Date.parse('2026-04-04T07:00:00Z'),

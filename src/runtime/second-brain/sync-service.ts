@@ -141,7 +141,7 @@ export class SyncService {
           if (start == null) continue;
           const end = parseTimestamp((item.end as Record<string, unknown> | undefined)?.dateTime)
             ?? parseTimestamp((item.end as Record<string, unknown> | undefined)?.date);
-          this.secondBrainService.upsertEvent({
+          this.secondBrainService.upsertSyncedEvent({
             id: `google:event:${String(item.id ?? start)}`,
             title: textOrUndefined(item.summary) ?? 'Google Calendar Event',
             description: textOrUndefined(item.description),
@@ -286,7 +286,7 @@ export class SyncService {
           const location = item.location && typeof item.location === 'object'
             ? textOrUndefined((item.location as Record<string, unknown>).displayName)
             : undefined;
-          this.secondBrainService.upsertEvent({
+          this.secondBrainService.upsertSyncedEvent({
             id: `microsoft:event:${String(item.id ?? start)}`,
             title: textOrUndefined(item.subject) ?? 'Microsoft Calendar Event',
             description: textOrUndefined(item.bodyPreview)

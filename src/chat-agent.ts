@@ -113,6 +113,7 @@ import {
 } from './runtime/search-intent.js';
 import type { ToolExecutor } from './tools/executor.js';
 import type { ToolExecutionRequest } from './tools/types.js';
+import { buildToolResultPayloadFromJob } from './tools/job-results.js';
 import {
   PendingActionStore,
   defaultPendingActionTransferPolicy,
@@ -142,6 +143,7 @@ import {
   type PromptAssemblyDiagnostics,
   type PromptAssemblyKnowledgeBase,
 } from './runtime/context-assembly.js';
+import { normalizeSecondBrainMutationArgs } from './runtime/second-brain/chat-mutation-normalization.js';
 import {
   isGenericPendingActionContinuationRequest,
   isWorkspaceSwitchPendingActionSatisfied,
@@ -419,9 +421,32 @@ type DirectIntentShadowCandidate =
   /** Shadow-mode structured classifier for top-level request routing. */
   private readonly intentGateway: IntentGateway;
 
+  private normalizeToolArgsForExecution(
+    toolName: string,
+    args: Record<string, unknown>,
+    toolExecOrigin: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
+    referenceTime: number,
+  ): Record<string, unknown> {
+    const service = this.secondBrainService;
+    const userContent = toolExecOrigin.requestText?.trim();
+    if (!service || !userContent) {
+      return args;
+    }
+    return normalizeSecondBrainMutationArgs({
+      toolName,
+      args,
+      userContent,
+      referenceTime,
+      getEventById: (id) => service.getEventById(id),
+      getTaskById: (id) => service.getTaskById(id),
+      getPersonById: (id) => service.getPersonById(id),
+    });
+  }
+
   private executeToolsConflictAware(
     toolCalls: Array<{ id: string; name: string; arguments?: string }>,
     toolExecOrigin: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
+    referenceTime: number,
   ): Promise<{ toolCall: { id: string; name: string; arguments?: string }; result: Record<string, unknown> }>[] {
     const promises: Promise<{ toolCall: { id: string; name: string; arguments?: string }; result: Record<string, unknown> }>[] = [];
     const locks = new Map<string, Promise<void>>();
@@ -443,6 +468,8 @@ type DirectIntentShadowCandidate =
         }));
         continue;
       }
+
+      parsedArgs = this.normalizeToolArgsForExecution(tc.name, parsedArgs, toolExecOrigin, referenceTime);
 
       const def = this.tools?.getToolDefinition(tc.name);
       const isMutating = def ? def.risk !== 'read_only' : true;
@@ -1007,6 +1034,9 @@ type DirectIntentShadowCandidate =
         ...(options?.gateway?.decision.entities.emailProvider
           ? { emailProvider: options.gateway.decision.entities.emailProvider }
           : {}),
+        ...(options?.gateway?.decision.entities.calendarTarget
+          ? { calendarTarget: options.gateway.decision.entities.calendarTarget }
+          : {}),
         ...(options?.gateway?.decision.entities.codingBackend
           ? { codingBackend: options.gateway.decision.entities.codingBackend }
           : {}),
@@ -1428,11 +1458,7 @@ type DirectIntentShadowCandidate =
       const allJobs = this.tools?.listJobs(100) ?? [];
       for (const pending of suspended.pendingTools) {
         const job = allJobs.find(j => j.id === pending.jobId);
-        let resultObj: Record<string, unknown> = { success: false, message: 'Job not found' };
-        if (job) {
-          if (job.status === 'succeeded') resultObj = { success: true, message: job.resultPreview || 'Executed successfully.' };
-          else resultObj = { success: false, error: job.error || 'Failed or denied.' };
-        }
+        const resultObj = buildToolResultPayloadFromJob(job);
         llmMessages.push({
           role: 'tool',
           toolCallId: pending.toolCallId,
@@ -2294,10 +2320,11 @@ type DirectIntentShadowCandidate =
           agentContext: { checkAction: ctx.checkAction },
           codeContext: effectiveCodeContext,
           activeSkills: activeSkills.map((skill) => skill.id),
+          requestText: routedScopedMessage.content,
         };
 
         const toolResults = await Promise.allSettled(
-          this.executeToolsConflictAware(response.toolCalls, toolExecOrigin)
+          this.executeToolsConflictAware(response.toolCalls, toolExecOrigin, message.timestamp)
         );
         lastToolRoundResults = toolResults.reduce<Array<{ toolName: string; result: Record<string, unknown> }>>((acc, settled) => {
           if (settled.status !== 'fulfilled') return acc;
@@ -2526,9 +2553,10 @@ type DirectIntentShadowCandidate =
               agentContext: { checkAction: ctx.checkAction },
               codeContext: effectiveCodeContext,
               activeSkills: activeSkills.map((skill) => skill.id),
+              requestText: routedScopedMessage.content,
             };
             const fbToolResults = await Promise.allSettled(
-              this.executeToolsConflictAware(fallbackResult.response.toolCalls, fbToolOrigin)
+              this.executeToolsConflictAware(fallbackResult.response.toolCalls, fbToolOrigin, message.timestamp)
             );
             let fallbackHasPending = false;
             for (const settled of fbToolResults) {

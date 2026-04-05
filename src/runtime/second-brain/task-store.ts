@@ -120,7 +120,23 @@ export class TaskStore {
     return task;
   }
 
-  private getTask(id: string): SecondBrainTaskRecord | null {
+  deleteTask(id: string): SecondBrainTaskRecord | null {
+    const existing = this.getTask(id);
+    if (!existing) return null;
+
+    if (this.ctx.mode === 'memory') {
+      this.ctx.memory.tasks.delete(id);
+      return existing;
+    }
+
+    this.ctx.db!.prepare(`
+      DELETE FROM sb_tasks
+      WHERE id = ?
+    `).run(id);
+    return existing;
+  }
+
+  getTask(id: string): SecondBrainTaskRecord | null {
     if (this.ctx.mode === 'memory') {
       const task = this.ctx.memory.tasks.get(id);
       return task ? clone(task) : null;

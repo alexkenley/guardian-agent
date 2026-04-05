@@ -15,14 +15,24 @@ export type SecondBrainPersonRelationship = 'work' | 'personal' | 'family' | 've
 export type SecondBrainBriefKind = 'morning' | 'pre_meeting' | 'follow_up';
 export type SecondBrainLinkKind = 'document' | 'article' | 'reference' | 'repo' | 'file' | 'other';
 export type SecondBrainRoutineCategory = 'scheduled' | 'one_off';
+export type SecondBrainRoutineCatalogCategory = 'daily' | 'weekly' | 'meeting' | 'follow_up' | 'maintenance';
 export type SecondBrainDeliveryChannel = 'web' | 'cli' | 'telegram';
 export type SecondBrainRoutingBias = 'local_first' | 'balanced' | 'quality_first';
 export type SecondBrainWorkloadClass = 'A' | 'B' | 'C' | 'D';
+export type SecondBrainRoutineTriggerMode = 'cron' | 'event' | 'horizon' | 'manual';
+export type SecondBrainRoutineEventType = 'upcoming_event' | 'event_ended' | 'task_due' | 'task_overdue';
 export type SecondBrainExternalCommMode =
   | 'none'
   | 'draft_only'
   | 'send_with_approval'
   | 'post_with_approval';
+
+export interface SecondBrainRoutineTrigger {
+  mode: SecondBrainRoutineTriggerMode;
+  cron?: string;
+  eventType?: SecondBrainRoutineEventType;
+  lookaheadMinutes?: number;
+}
 
 export interface SecondBrainNoteRecord {
   id: string;
@@ -96,20 +106,34 @@ export interface SecondBrainBriefRecord {
   updatedAt: number;
 }
 
+export interface SecondBrainBriefUpdateInput {
+  id: string;
+  title?: string;
+  content?: string;
+}
+
 export interface SecondBrainRoutineManifest {
   id: string;
   name: string;
   category: SecondBrainRoutineCategory;
   enabledByDefault: boolean;
-  trigger: {
-    mode: 'cron' | 'manual';
-    cron?: string;
-  };
+  trigger: SecondBrainRoutineTrigger;
   workloadClass: SecondBrainWorkloadClass;
   externalCommMode: SecondBrainExternalCommMode;
   budgetProfileId: string;
   deliveryDefaults: SecondBrainDeliveryChannel[];
   defaultRoutingBias: SecondBrainRoutingBias;
+}
+
+export interface SecondBrainRoutineCatalogEntry {
+  templateId: string;
+  name: string;
+  description: string;
+  category: SecondBrainRoutineCatalogCategory;
+  seedByDefault: boolean;
+  manifest: SecondBrainRoutineManifest;
+  configured: boolean;
+  configuredRoutineId?: string;
 }
 
 export interface SecondBrainRoutineRecord extends SecondBrainRoutineManifest {
@@ -212,11 +236,19 @@ export interface SecondBrainPersonUpsertInput {
 
 export interface SecondBrainRoutineUpdateInput {
   id: string;
+  name?: string;
   enabled?: boolean;
-  trigger?: {
-    mode: 'cron' | 'manual';
-    cron?: string;
-  };
+  trigger?: SecondBrainRoutineTrigger;
+  deliveryDefaults?: SecondBrainDeliveryChannel[];
+  defaultRoutingBias?: SecondBrainRoutingBias;
+  budgetProfileId?: string;
+}
+
+export interface SecondBrainRoutineCreateInput {
+  templateId: string;
+  name?: string;
+  enabled?: boolean;
+  trigger?: SecondBrainRoutineTrigger;
   deliveryDefaults?: SecondBrainDeliveryChannel[];
   defaultRoutingBias?: SecondBrainRoutingBias;
   budgetProfileId?: string;

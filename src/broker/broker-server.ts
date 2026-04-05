@@ -6,6 +6,7 @@ import type { CapabilityTokenManager } from './capability-token.js';
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from './types.js';
 import { assignProvenance } from './provenance.js';
 import type { ToolExecutionRequest } from '../tools/types.js';
+import { parseToolJobOutputPreview } from '../tools/job-results.js';
 import type { ChatMessage, ChatOptions } from '../llm/types.js';
 import { getProviderLocalityFromName } from '../runtime/model-routing-ux.js';
 
@@ -245,6 +246,9 @@ export class BrokerServer {
             message: job?.status === 'succeeded'
               ? (job.resultPreview || 'Executed successfully.')
               : job?.error,
+            output: job?.status === 'succeeded'
+              ? parseToolJobOutputPreview(job.resultPreview)
+              : undefined,
             success: job?.status === 'succeeded',
           };
           break;

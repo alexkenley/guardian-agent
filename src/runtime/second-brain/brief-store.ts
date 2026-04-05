@@ -77,6 +77,22 @@ export class BriefStore {
     return brief;
   }
 
+  deleteBrief(id: string): SecondBrainBriefRecord | null {
+    const existing = this.getBrief(id);
+    if (!existing) return null;
+
+    if (this.ctx.mode === 'memory') {
+      this.ctx.memory.briefs.delete(id);
+      return existing;
+    }
+
+    this.ctx.db!.prepare(`
+      DELETE FROM sb_briefs
+      WHERE id = ?
+    `).run(id);
+    return existing;
+  }
+
   private mapRow(row: Record<string, unknown>): SecondBrainBriefRecord {
     const payload = JSON.parse(String(row.payload_json)) as Record<string, unknown>;
     return {

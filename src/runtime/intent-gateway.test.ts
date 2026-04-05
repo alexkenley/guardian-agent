@@ -238,6 +238,91 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.personalItemType).toBe('task');
   });
 
+  it('captures local Second Brain calendar targeting for unqualified calendar CRUD', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Create a calendar entry for tomorrow at 3 PM called Dentist.',
+        channel: 'web',
+      },
+      async () => ({
+        content: '',
+        toolCalls: [{
+          id: 'call-personal-calendar-1',
+          name: 'route_intent',
+          arguments: JSON.stringify({
+            route: 'personal_assistant_task',
+            confidence: 'high',
+            operation: 'create',
+            summary: 'Creates a local Second Brain calendar entry.',
+            personalItemType: 'calendar',
+            calendarTarget: 'local',
+          }),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.operation).toBe('create');
+    expect(result.decision.entities.personalItemType).toBe('calendar');
+    expect(result.decision.entities.calendarTarget).toBe('local');
+  });
+
+  it('parses explicit Second Brain routine creation requests as personal assistant work', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Create the Pre-Meeting Brief routine in Second Brain.',
+        channel: 'web',
+      },
+      async () => ({
+        content: '',
+        toolCalls: [{
+          id: 'call-personal-routine-1',
+          name: 'route_intent',
+          arguments: JSON.stringify({
+            route: 'personal_assistant_task',
+            confidence: 'high',
+            operation: 'create',
+            summary: 'Creates a built-in Second Brain routine.',
+            personalItemType: 'routine',
+          }),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.operation).toBe('create');
+    expect(result.decision.entities.personalItemType).toBe('routine');
+  });
+
+  it('preserves explicit automation creation requests as automation authoring', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Create an automation that checks WHM disk quota every day.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'automation_authoring',
+          confidence: 'high',
+          operation: 'create',
+          summary: 'Creates a new power-user automation.',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('automation_authoring');
+    expect(result.decision.operation).toBe('create');
+  });
+
   it('preserves provider metadata for provider-backed personal assistant work', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
@@ -267,6 +352,31 @@ describe('IntentGateway', () => {
     expect(result.decision.route).toBe('personal_assistant_task');
     expect(result.decision.entities.personalItemType).toBe('brief');
     expect(result.decision.entities.emailProvider).toBe('m365');
+  });
+
+  it('preserves explicit provider calendar targets for workspace calendar CRUD', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Delete the event from my Outlook calendar.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'workspace_task',
+          confidence: 'high',
+          operation: 'delete',
+          summary: 'Deletes an event from the Microsoft 365 calendar provider.',
+          calendarTarget: 'm365',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('workspace_task');
+    expect(result.decision.operation).toBe('delete');
+    expect(result.decision.entities.calendarTarget).toBe('m365');
   });
 
   it('preserves workspace_task for explicit provider CRUD', async () => {
@@ -363,9 +473,16 @@ describe('IntentGateway', () => {
 
     expect(result.decision.route).toBe('personal_assistant_task');
     expect(primaryPrompt).toContain('Prefer personal_assistant_task for meeting prep, follow-up drafting, calendar planning');
+    expect(primaryPrompt).toContain('Prefer automation_authoring when the user explicitly asks to create an automation');
+    expect(primaryPrompt).toContain('Create the Pre-Meeting Brief routine in Second Brain.');
+    expect(primaryPrompt).toContain('Create an automation that checks WHM disk quota every day.');
+    expect(primaryPrompt).toContain('Unqualified calendar entry, calendar event, or calendar item create/update/delete requests default to the local Second Brain calendar');
+    expect(primaryPrompt).toContain('Example: "Create a calendar entry for tomorrow at 3 PM called Dentist." -> route=personal_assistant_task');
     expect(primaryPrompt).toContain('Example: "Prepare me for my next Outlook meeting using the calendar event, recent email, and docs." -> route=personal_assistant_task');
     expect(primaryPrompt).toContain('SharePoint');
     expect(fallbackPrompt).toContain('workspace_task means explicit provider CRUD or administration in Google Workspace or Microsoft 365 surfaces');
+    expect(fallbackPrompt).toContain('Prefer automation_authoring when the user explicitly asks to create an automation or workflow in the Automations system.');
+    expect(fallbackPrompt).toContain('Examples: "Add this meeting to my Google Calendar." -> route="workspace_task", operation="create", calendarTarget="gws".');
     expect(fallbackPrompt).toContain('Examples: "Update the SharePoint document for the launch checklist." -> route="workspace_task", operation="update".');
     expect(fallbackPrompt).toContain('Examples: "Check my unread Outlook mail." -> route="email_task", operation="read", emailProvider="m365".');
   });

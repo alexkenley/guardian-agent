@@ -35,6 +35,7 @@ import {
 } from '../runtime/context-assembly.js';
 import { runLlmLoop } from './worker-llm-loop.js';
 import { BrokerClient } from '../broker/broker-client.js';
+import { buildToolResultPayloadFromJob } from '../tools/job-results.js';
 import { shouldAllowModelMemoryMutation } from '../util/memory-intent.js';
 import { isToolReportQuery, formatToolReport } from '../util/tool-report.js';
 import { formatToolResultForLLM, toLLMToolDef } from '../chat-agent-helpers.js';
@@ -396,8 +397,13 @@ export class BrokeredWorkerSession {
     const resumedMessages = [...suspended.llmMessages];
     for (const pending of suspended.pendingTools) {
       const result = await this.client.getApprovalResult(pending.approvalId);
-      const toolPayload = result.status === 'approved'
-        ? { success: true, message: result.message ?? 'Executed successfully.' }
+      const toolPayload = result.success === true
+        ? buildToolResultPayloadFromJob({
+          status: 'succeeded',
+          resultPreview: typeof result.message === 'string' && result.output === undefined
+            ? result.message
+            : JSON.stringify(result.output),
+        })
         : { success: false, error: result.message ?? 'Approval was denied.' };
       resumedMessages.push({
         role: 'tool',

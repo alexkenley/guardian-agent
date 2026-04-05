@@ -165,6 +165,7 @@ export interface SkillResolutionInput {
   intentResolution?: string;
   intentEntities?: {
     emailProvider?: string;
+    calendarTarget?: string;
     codingBackend?: string;
     toolName?: string;
     profileId?: string;

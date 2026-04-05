@@ -13,8 +13,13 @@ function createService() {
   const service = new SecondBrainService(store, { now });
   return {
     service,
+    store,
+    sqlitePath,
     tick(step = 1_000) {
       nowState.value += step;
+    },
+    close() {
+      store.close();
     },
   };
 }
@@ -79,6 +84,7 @@ describe('SecondBrainService', () => {
     const updated = service.updateRoutine({
       id: routine!.id,
       enabled: false,
+      trigger: { mode: 'cron', cron: '0 9 * * *' },
       defaultRoutingBias: 'balanced',
     });
     service.recordUsage({
@@ -93,9 +99,30 @@ describe('SecondBrainService', () => {
     const usage = service.getUsageSummary();
 
     expect(updated.enabled).toBe(false);
+    expect(updated.trigger).toEqual({ mode: 'cron', cron: '0 9 * * *' });
     expect(updated.defaultRoutingBias).toBe('balanced');
     expect(usage.externalTokens).toBe(150);
     expect(usage.totalConnectorCalls).toBe(2);
+  });
+
+  it('exposes the built-in routine catalog and creates non-seeded routines on demand', () => {
+    const { service } = createService();
+
+    const catalog = service.listRoutineCatalog();
+    const preMeetingEntry = catalog.find((entry) => entry.templateId === 'pre-meeting-brief');
+
+    expect(preMeetingEntry?.configured).toBe(false);
+
+    const created = service.createRoutine({
+      templateId: 'pre-meeting-brief',
+      defaultRoutingBias: 'quality_first',
+      deliveryDefaults: ['web', 'cli'],
+    });
+
+    expect(created.id).toBe('pre-meeting-brief');
+    expect(created.defaultRoutingBias).toBe('quality_first');
+    expect(created.deliveryDefaults).toEqual(['web', 'cli']);
+    expect(service.listRoutineCatalog().find((entry) => entry.templateId === 'pre-meeting-brief')?.configured).toBe(true);
   });
 
   it('stores upcoming events and people through the shared service', () => {
@@ -185,6 +212,39 @@ describe('SecondBrainService', () => {
     expect(service.getEventById(created.id)?.description).toBeUndefined();
   });
 
+  it('allows local calendar CRUD but keeps provider-synced events read-only in Second Brain', () => {
+    const { service } = createService();
+
+    const synced = service.upsertSyncedEvent({
+      id: 'google:event:test',
+      title: 'Provider sync',
+      startsAt: 1_710_172_800_000,
+      source: 'google',
+    });
+    const local = service.upsertEvent({
+      title: 'Local planning block',
+      startsAt: 1_710_176_400_000,
+      location: 'Desk',
+    });
+
+    const updatedLocal = service.upsertEvent({
+      id: local.id,
+      title: 'Local planning block',
+      startsAt: local.startsAt,
+      location: 'Meeting room',
+    });
+
+    expect(updatedLocal.location).toBe('Meeting room');
+    expect(service.deleteEvent(local.id).id).toBe(local.id);
+    expect(service.getEventById(local.id)).toBeNull();
+    expect(() => service.upsertEvent({
+      id: synced.id,
+      title: synced.title,
+      startsAt: synced.startsAt,
+    })).toThrow(/read-only/i);
+    expect(() => service.deleteEvent(synced.id)).toThrow(/read-only/i);
+  });
+
   it('stores and filters library links through the shared service', () => {
     const { service, tick } = createService();
 
@@ -207,5 +267,101 @@ describe('SecondBrainService', () => {
     expect(service.listLinks({ limit: 10 }).map((link) => link.id)).toEqual([runbook.id, architecture.id]);
     expect(service.listLinks({ query: 'architecture', limit: 10 })[0]?.id).toBe(architecture.id);
     expect(service.listLinks({ kind: 'document', limit: 10 })[0]?.id).toBe(runbook.id);
+  });
+
+  it('accepts absolute file paths for library items', () => {
+    const { service } = createService();
+
+    const posixPath = service.upsertLink({
+      title: 'Runbook',
+      url: '/tmp/ops runbook.md',
+      kind: 'file',
+    });
+    const windowsPath = service.upsertLink({
+      title: 'Windows Runbook',
+      url: 'C:\\Ops\\Daily Runbook.md',
+      kind: 'file',
+    });
+
+    expect(posixPath.url).toBe('file:///tmp/ops%20runbook.md');
+    expect(windowsPath.url).toBe('file:///C:/Ops/Daily%20Runbook.md');
+  });
+
+  it('updates saved briefs through the shared service', () => {
+    const { service, tick } = createService();
+    const timestamp = 1_710_000_000_000;
+
+    service.saveBrief({
+      id: 'brief-edit-test',
+      kind: 'morning',
+      title: 'Original brief',
+      content: 'Original content.',
+      generatedAt: timestamp,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    tick();
+
+    const updated = service.updateBrief({
+      id: 'brief-edit-test',
+      title: 'Edited brief',
+      content: 'Edited content.',
+    });
+
+    expect(updated.title).toBe('Edited brief');
+    expect(updated.content).toBe('Edited content.');
+    expect(updated.updatedAt).toBeGreaterThan(timestamp);
+    expect(service.getBriefById('brief-edit-test')?.title).toBe('Edited brief');
+  });
+
+  it('deletes notes, tasks, people, links, and briefs through the shared service', () => {
+    const { service } = createService();
+    const timestamp = 1_710_000_000_000;
+
+    const note = service.upsertNote({ content: 'Delete me.' });
+    const task = service.upsertTask({ title: 'Delete task' });
+    const person = service.upsertPerson({ name: 'Delete Person' });
+    const link = service.upsertLink({ url: 'https://example.test/delete-me', title: 'Delete link' });
+    service.saveBrief({
+      id: 'brief-delete-test',
+      kind: 'morning',
+      title: 'Delete brief',
+      content: 'Delete this brief record.',
+      generatedAt: timestamp,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+
+    expect(service.deleteNote(note.id).id).toBe(note.id);
+    expect(service.deleteTask(task.id).id).toBe(task.id);
+    expect(service.deletePerson(person.id).id).toBe(person.id);
+    expect(service.deleteLink(link.id).id).toBe(link.id);
+    expect(service.deleteBrief('brief-delete-test').id).toBe('brief-delete-test');
+    expect(service.listNotes()).toEqual([]);
+    expect(service.listTasks()).toEqual([]);
+    expect(service.listPeople()).toEqual([]);
+    expect(service.listLinks()).toEqual([]);
+    expect(service.listBriefs()).toEqual([]);
+  });
+
+  it('keeps deleted seeded routines removed across service restart until re-created', () => {
+    const sqlitePath = join(tmpdir(), `guardianagent-second-brain-${randomUUID()}.sqlite`);
+    const now = () => 1_710_000_000_000;
+
+    const firstStore = new SecondBrainStore({ sqlitePath, now });
+    const firstService = new SecondBrainService(firstStore, { now });
+    expect(firstService.getRoutineById('morning-brief')).toBeTruthy();
+
+    firstService.deleteRoutine('morning-brief');
+    expect(firstService.getRoutineById('morning-brief')).toBeNull();
+    firstStore.close();
+
+    const secondStore = new SecondBrainStore({ sqlitePath, now });
+    const secondService = new SecondBrainService(secondStore, { now });
+
+    expect(secondService.getRoutineById('morning-brief')).toBeNull();
+    expect(secondService.listRoutineCatalog().find((entry) => entry.templateId === 'morning-brief')?.configured).toBe(false);
+    expect(secondService.createRoutine({ templateId: 'morning-brief' }).id).toBe('morning-brief');
+    secondStore.close();
   });
 });

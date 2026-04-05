@@ -54,18 +54,18 @@ This spec does not claim that every item from the proposal or implementation pla
 ### Current tab behavior
 
 - `Today` is a dashboard-style daily home with agenda, quick capture, focus tasks, brief actions, relationship follow-up, recent notes, routine status, and a cloud-AI budget card.
-- `Calendar` exposes week, month, and year views, full-day tile selection, a selected-day agenda, and a local event editor with title, timing, location, and description fields. Provider-backed events are visible in the calendar and remain read-only in this surface.
-- `Tasks` exposes a status-board layout with inline status changes plus a dedicated task editor, with editing on the left and board content on the right.
-- `Notes` exposes search, pinned and archived note states, and a full editor with tag support, with editing on the left and list content on the right.
-- `Contacts` exposes relationship filters, last-contact tracking, and a dedicated person editor.
-- `Library` now exposes saved link and reference CRUD in the web UI, with editing on the left and filtered content on the right.
-- `Briefs` now exposes saved brief review plus visible brief generation actions in the web UI.
-- `Routines` exposes routine grouping plus editable enablement, routing bias, budget profile, and delivery defaults, with editing on the left and grouped routine cards on the right.
+- `Calendar` exposes week, month, and year views, full-day tile selection, a selected-day agenda, and a local event editor with title, timing, location, and description fields. Local events can be updated and deleted in-panel. Provider-backed events are visible in the calendar and remain read-only in this surface.
+- `Tasks` exposes a status-board layout with inline status changes plus a dedicated task editor, with editing and delete on the left and board content on the right.
+- `Notes` exposes search, pinned and archived note states, and a full editor with tag support, with editing and delete on the left and list content on the right.
+- `Contacts` exposes relationship filters, last-contact tracking, and a dedicated person editor with create, update, and delete actions.
+- `Library` now exposes saved link and reference CRUD in the web UI, with editing on the left and filtered content on the right. Absolute file paths are normalized into `file://` URLs for local document items.
+- `Briefs` now exposes saved brief review plus visible brief generation, edit, regenerate, and delete actions in the web UI.
+- `Routines` now exposes a catalog-style management surface with all built-in routine templates listed in one table, explicit create actions for unconfigured routines, and a dedicated create or edit pane on the left with delete support for configured routines.
 
 ### Briefs in the current UI
 
 - Briefs are part of the runtime model and can be generated through tools and the web API.
-- The web page now has a dedicated `Briefs` tab with saved-brief review and explicit generate actions.
+- The web page now has a dedicated `Briefs` tab with saved-brief review plus explicit generate, update, regenerate, and delete actions.
 - Overview counters reflect persisted brief records and follow-up draft records.
 
 ## Routing Contract
@@ -78,15 +78,15 @@ Current `personal_assistant_task` scope includes:
 - overview reads
 - notes
 - tasks
-- calendar planning and event context
+- local calendar planning, local calendar CRUD, and provider-backed event context
 - people context
 - routines
 - briefs and follow-up drafts
 - personal retrieval across notes, events, messages, and provider-backed context
 
 Current route boundaries are:
-- `personal_assistant_task`: Second Brain and personal productivity work
-- `workspace_task`: explicit Google Workspace or Microsoft 365 CRUD and admin operations
+- `personal_assistant_task`: Second Brain and personal productivity work, including local Guardian calendar entries when the user does not explicitly name a provider
+- `workspace_task`: explicit Google Workspace or Microsoft 365 CRUD and admin operations such as Google Calendar or Outlook calendar changes
 - `email_task`: direct mailbox work in Gmail or Outlook
 
 ### Direct deterministic handling
@@ -128,13 +128,13 @@ Implemented and actively used:
 - `sb_events`
 - `sb_links`
 - `sb_routines`
+- `sb_routine_tombstones`
 - `sb_briefs`
 - `sb_usage_records`
 - `sb_sync_cursors`
 
 Present in schema but not yet surfaced through the current runtime surface:
 - `sb_reminders`
-- `sb_links`
 
 ### Current entity coverage
 
@@ -151,7 +151,6 @@ Persisted and exposed:
 
 Not yet exposed as first-class runtime CRUD:
 - reminders
-- library/link records
 
 ## Core Service Behavior
 
@@ -159,13 +158,18 @@ Not yet exposed as first-class runtime CRUD:
 
 `SecondBrainService` is the shared runtime façade for:
 - overview generation
-- CRUD for notes, tasks, events, and people
-- routine listing and updates
-- brief persistence and lookup
+- create, update, and delete for notes, tasks, local calendar events, people, library items, briefs, and routines
+- provider-sync upsert for Google and Microsoft calendar events
+- routine catalog listing plus bounded routine creation, updates, and deletes
+- brief persistence, lookup, generation, update, and delete
 - sync cursor persistence and lookup
 - usage record aggregation
 
 It also seeds the built-in routine catalog at startup.
+
+Current mutation behavior note:
+- chat-driven local calendar, task, and people writes normalize relative dates and times such as `tomorrow at 12 pm`, `next Friday`, or `yesterday` against the runtime local timezone before saving the shared record
+- unqualified calendar CRUD still targets the local Guardian `Second Brain` calendar; explicit Google Calendar or Microsoft 365 calendar CRUD stays on the provider route
 
 ### Built-in routines
 
@@ -174,8 +178,14 @@ Current seeded routines are:
 - `weekly-review`
 - `one-off-sync`
 
+Current catalog-only routines that can be created from the web UI or tool surface are:
+- `next-24-hours-radar`
+- `pre-meeting-brief`
+- `follow-up-watch`
+
 Current behavior note:
-- `weekly-review` is seeded as a routine record but does not yet have a dedicated synthesis path in the current horizon scanner.
+- `weekly-review` is seeded as a routine record and now records its schedule runs, but it still does not yet generate a dedicated weekly review brief artifact.
+- deleting a seeded built-in routine now creates a persistent tombstone, so it stays removed across restart until an operator explicitly re-creates it from the routine catalog.
 
 ## Sync Model
 
@@ -272,20 +282,30 @@ Current trigger behavior:
 Current built-in `Second Brain` tools:
 - `second_brain_overview`
 - `second_brain_brief_list`
+- `second_brain_brief_update`
+- `second_brain_brief_delete`
 - `second_brain_generate_brief`
 - `second_brain_horizon_scan`
 - `second_brain_calendar_list`
 - `second_brain_calendar_upsert`
+- `second_brain_calendar_delete`
 - `second_brain_library_list`
 - `second_brain_library_upsert`
+- `second_brain_library_delete`
 - `second_brain_note_list`
 - `second_brain_note_upsert`
+- `second_brain_note_delete`
 - `second_brain_people_list`
 - `second_brain_person_upsert`
+- `second_brain_person_delete`
 - `second_brain_task_list`
 - `second_brain_task_upsert`
+- `second_brain_task_delete`
+- `second_brain_routine_catalog`
+- `second_brain_routine_create`
 - `second_brain_routine_list`
 - `second_brain_routine_update`
+- `second_brain_routine_delete`
 - `second_brain_usage`
 
 All of these are registered in the `memory` category and exposed through deferred loading.
@@ -296,18 +316,28 @@ Current `Second Brain` API routes:
 - `GET /api/second-brain/overview`
 - `GET /api/second-brain/briefs`
 - `POST /api/second-brain/briefs/generate`
+- `POST /api/second-brain/briefs/update`
+- `POST /api/second-brain/briefs/delete`
 - `GET /api/second-brain/calendar`
 - `POST /api/second-brain/calendar/upsert`
+- `POST /api/second-brain/calendar/delete`
 - `GET /api/second-brain/tasks`
 - `POST /api/second-brain/tasks/upsert`
+- `POST /api/second-brain/tasks/delete`
 - `GET /api/second-brain/notes`
 - `POST /api/second-brain/notes/upsert`
+- `POST /api/second-brain/notes/delete`
 - `GET /api/second-brain/people`
 - `POST /api/second-brain/people/upsert`
+- `POST /api/second-brain/people/delete`
 - `GET /api/second-brain/links`
 - `POST /api/second-brain/links/upsert`
+- `POST /api/second-brain/links/delete`
+- `GET /api/second-brain/routines/catalog`
 - `GET /api/second-brain/routines`
+- `POST /api/second-brain/routines/create`
 - `POST /api/second-brain/routines/update`
+- `POST /api/second-brain/routines/delete`
 - `GET /api/second-brain/usage`
 
 Not currently exposed:
