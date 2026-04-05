@@ -1068,7 +1068,7 @@ function createGoogleWorkspacePanel() {
   const section = document.createElement('div');
   section.className = 'table-container';
 
-  const inlineCode = 'background:var(--bg-tertiary);padding:0.1rem 0.3rem;border-radius:3px;';
+  const inlineCode = 'background:var(--bg-tertiary);padding:0.1rem 0.3rem;border-radius:0;';
 
   section.innerHTML = `
     <div class="table-header">
@@ -1082,7 +1082,7 @@ function createGoogleWorkspacePanel() {
       </div>
 
       <div id="gws-native-section">
-        <div style="padding:0.75rem;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);font-size:0.8rem;">
+        <div style="padding:0.75rem;background:var(--bg-secondary);border:1px solid var(--border);border-radius:0;font-size:0.8rem;">
           <strong style="color:var(--text-primary);">Native Google Setup (3 steps)</strong>
           <ol style="font-size:0.78rem;color:var(--text-secondary);margin:0.5rem 0 0.5rem 1.2rem;padding:0;">
             <li style="margin-bottom:0.4rem;">
@@ -1290,7 +1290,7 @@ function createMicrosoft365Panel() {
   const section = document.createElement('div');
   section.className = 'table-container';
 
-  const inlineCode = 'background:var(--bg-tertiary);padding:0.1rem 0.3rem;border-radius:3px;';
+  const inlineCode = 'background:var(--bg-tertiary);padding:0.1rem 0.3rem;border-radius:0;';
 
   section.innerHTML = `
     <div class="table-header">
@@ -1304,7 +1304,7 @@ function createMicrosoft365Panel() {
       </div>
 
       <div id="m365-native-section">
-        <div style="padding:0.75rem;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);font-size:0.8rem;">
+        <div style="padding:0.75rem;background:var(--bg-secondary);border:1px solid var(--border);border-radius:0;font-size:0.8rem;">
           <strong style="color:var(--text-primary);">Microsoft 365 Setup (3 steps)</strong>
           <ol style="font-size:0.78rem;color:var(--text-secondary);margin:0.5rem 0 0.5rem 1.2rem;padding:0;">
             <li style="margin-bottom:0.4rem;">

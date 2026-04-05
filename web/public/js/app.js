@@ -4,6 +4,7 @@
 
 import { api, setToken, clearToken, AUTH_FAILED_EVENT, AUTH_RECOVERED_EVENT } from './api.js';
 import { renderDashboard, updateDashboard } from './pages/dashboard.js';
+import { renderSecondBrain, updateSecondBrain } from './pages/second-brain.js';
 import { renderSecurity, updateSecurity } from './pages/security.js';
 import { renderConfig, updateConfig } from './pages/config.js';
 import { renderReference } from './pages/reference.js';
@@ -260,6 +261,12 @@ function pushAssistantNotice(payload) {
 
 const routes = {
   '/': {
+    render: renderSecondBrain,
+    update: updateSecondBrain,
+    name: 'second-brain',
+    invalidateTags: ['second-brain'],
+  },
+  '/dashboard': {
     render: renderDashboard,
     update: updateDashboard,
     name: 'dashboard',

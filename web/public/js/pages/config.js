@@ -614,7 +614,7 @@ function createProviderPanel(config, providers, panel) {
             <div>
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
                 <h4 style="margin: 0; font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Local</h4>
-                <button class="btn btn-secondary" id="cfg-local-new" type="button" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; border-radius: 4px;">+ Add</button>
+                <button class="btn btn-secondary" id="cfg-local-new" type="button" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; border-radius:0;">+ Add</button>
               </div>
               <div id="cfg-local-profiles" style="display:flex; flex-direction: column; gap: 0.35rem;"></div>
             </div>
@@ -623,7 +623,7 @@ function createProviderPanel(config, providers, panel) {
             <div>
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
                 <h4 style="margin: 0; font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">External</h4>
-                <button class="btn btn-secondary" id="cfg-ext-new" type="button" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; border-radius: 4px;">+ Add</button>
+                <button class="btn btn-secondary" id="cfg-ext-new" type="button" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; border-radius:0;">+ Add</button>
               </div>
               <div id="cfg-ext-profiles" style="display:flex; flex-direction: column; gap: 0.35rem;"></div>
             </div>
@@ -884,7 +884,7 @@ function createProviderPanel(config, providers, panel) {
         const badgeLabel = roleBadges.length > 0 ? ` ${roleBadges.join(' / ')}` : '';
         return `
           <div
-            style="display:flex; justify-content:space-between; align-items:center; padding: 0.5rem 0.6rem; border-radius: 6px; cursor:pointer; background: ${isActive ? 'var(--bg-hover)' : 'transparent'}; border: 1px solid ${isActive ? 'var(--border)' : 'transparent'}; transition: background 0.15s ease;"
+            style="display:flex; justify-content:space-between; align-items:center; padding: 0.5rem 0.6rem; border-radius:0; cursor:pointer; background: ${isActive ? 'var(--bg-hover)' : 'transparent'}; border: 1px solid ${isActive ? 'var(--border)' : 'transparent'}; transition: background 0.15s ease;"
             data-provider-profile="${escAttr(name)}"
             title="${escAttr(`${name} (${info.provider}${badgeLabel})`)}"
           >
@@ -2699,7 +2699,7 @@ function renderCloudTab(panel) {
       const statusLabel = tokenConfigured || hasCredRef ? 'Credential configured' : 'No credential';
       const statusColor = tokenConfigured || hasCredRef ? 'var(--success)' : 'var(--text-muted)';
       profileCards += `
-        <div style="border:1px solid var(--border);border-radius:var(--radius);padding:0.6rem 0.75rem;margin-bottom:0.5rem;">
+        <div style="border:1px solid var(--border);border-radius:0;padding:0.6rem 0.75rem;margin-bottom:0.5rem;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem;">
             <strong style="font-size:0.78rem;">${esc(pName)}</strong>
             <span style="font-size:0.68rem;color:${statusColor};">${statusLabel}</span>
@@ -2731,7 +2731,7 @@ function renderCloudTab(panel) {
           <textarea
             id="cfg-cloud-${provider.key}"
             spellcheck="false"
-            style="width:100%;min-height:180px;padding:0.85rem;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;font-size:0.74rem;border:1px solid var(--border);border-radius:10px;background:var(--bg-panel);color:var(--text-primary);resize:vertical;"
+            style="width:100%;min-height:180px;padding:0.85rem;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;font-size:0.74rem;border:1px solid var(--border);border-radius:0;background:var(--bg-panel);color:var(--text-primary);resize:vertical;"
           >${esc(JSON.stringify(profiles, null, 2))}</textarea>
         </details>
       </div>
@@ -3753,7 +3753,7 @@ function createBrowserPanel(config, panel) {
       <div style="margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);">
         Playwright provides both read and interactive browser automation. Browser tools stay inside the allowed-domain boundary but can still access authenticated web sessions, upload files, and drive outbound requests.
       </div>
-      <div style="margin-top:0.4rem;padding:0.55rem 0.7rem;border:1px solid rgba(255,196,0,0.28);border-radius:10px;background:rgba(255,196,0,0.08);font-size:0.72rem;color:var(--text-secondary);">
+      <div style="margin-top:0.4rem;padding:0.55rem 0.7rem;border:1px solid rgba(255,196,0,0.28);border-radius:0;background:rgba(255,196,0,0.08);font-size:0.72rem;color:var(--text-secondary);">
         <strong>Degraded backend warning:</strong> when native sandboxing falls back to a degraded backend, browser automation remains blocked by default until <code>Allow browser automation</code> is enabled in <strong>Configuration &gt; Security &gt; Sandbox &amp; Policy Access</strong>.
         ${degradedBrowserAllowed ? 'That degraded-backend override is currently enabled.' : 'That degraded-backend override is currently disabled.'}
       </div>
@@ -3830,7 +3830,7 @@ function createSandboxPanel(config) {
         <strong>Strict</strong> means Guardian fails closed for risky process-backed tools when native sandboxing is unavailable.
         <strong>Permissive</strong> means Guardian can keep running on the degraded fallback backend, but risky degraded-backend capabilities still start <strong>off</strong>.
       </div>
-      <div style="margin-top:0.75rem;padding:0.65rem 0.8rem;border:1px solid rgba(255,196,0,0.28);border-radius:10px;background:rgba(255,196,0,0.08);font-size:0.72rem;color:var(--text-secondary);">
+      <div style="margin-top:0.75rem;padding:0.65rem 0.8rem;border:1px solid rgba(255,196,0,0.28);border-radius:0;background:rgba(255,196,0,0.08);font-size:0.72rem;color:var(--text-secondary);">
         <strong>The switches below only do anything when all of these are true:</strong>
         <ol style="margin:0.45rem 0 0 1.1rem;padding:0;">
           <li><strong>Enforcement Mode</strong> is set to <strong>Permissive</strong>.</li>
@@ -3840,31 +3840,31 @@ function createSandboxPanel(config) {
         <div style="margin-top:0.45rem;">If strong sandboxing is available, these switches have no effect. They all default to <strong>off</strong>.</div>
       </div>
       <div style="display:grid;gap:0.75rem;margin-top:0.8rem;">
-        <div style="padding:0.7rem;border:1px solid var(--border);border-radius:12px;background:var(--bg-elevated);">
+        <div style="padding:0.7rem;border:1px solid var(--border);border-radius:0;background:var(--bg-elevated);">
           <label style="display:flex;align-items:flex-start;gap:0.55rem;font-size:0.82rem;cursor:pointer;">
             <input id="sandbox-allow-network-tools" type="checkbox" ${degradedFallback.allowNetworkTools ? 'checked' : ''}>
             <span><strong>Allow network and web search tools</strong><br><span style="font-size:0.72rem;color:var(--text-muted);">Risk: outbound requests can leave the host over the real network path instead of a strong sandbox boundary.</span></span>
           </label>
         </div>
-        <div style="padding:0.7rem;border:1px solid var(--border);border-radius:12px;background:var(--bg-elevated);">
+        <div style="padding:0.7rem;border:1px solid var(--border);border-radius:0;background:var(--bg-elevated);">
           <label style="display:flex;align-items:flex-start;gap:0.55rem;font-size:0.82rem;cursor:pointer;">
             <input id="sandbox-allow-browser-tools" type="checkbox" ${degradedFallback.allowBrowserTools ? 'checked' : ''}>
             <span><strong>Allow browser automation</strong><br><span style="font-size:0.72rem;color:var(--text-muted);">Risk: browser tools can drive authenticated sessions, upload files, and interact with rendered pages on the live host.</span></span>
           </label>
         </div>
-        <div style="padding:0.7rem;border:1px solid var(--border);border-radius:12px;background:var(--bg-elevated);">
+        <div style="padding:0.7rem;border:1px solid var(--border);border-radius:0;background:var(--bg-elevated);">
           <label style="display:flex;align-items:flex-start;gap:0.55rem;font-size:0.82rem;cursor:pointer;">
             <input id="sandbox-allow-mcp-servers" type="checkbox" ${degradedFallback.allowMcpServers ? 'checked' : ''}>
             <span><strong>Allow third-party MCP servers</strong><br><span style="font-size:0.72rem;color:var(--text-muted);">Risk: MCP servers are extra local processes with their own code and dependencies, so degraded fallback gives them more host reach.</span></span>
           </label>
         </div>
-        <div style="padding:0.7rem;border:1px solid var(--border);border-radius:12px;background:var(--bg-elevated);">
+        <div style="padding:0.7rem;border:1px solid var(--border);border-radius:0;background:var(--bg-elevated);">
           <label style="display:flex;align-items:flex-start;gap:0.55rem;font-size:0.82rem;cursor:pointer;">
             <input id="sandbox-allow-package-managers" type="checkbox" ${degradedFallback.allowPackageManagers ? 'checked' : ''}>
             <span><strong>Allow install-like package manager commands</strong><br><span style="font-size:0.72rem;color:var(--text-muted);">Risk: install and remote package-launch commands execute third-party code and can fetch new dependencies onto the real host.</span></span>
           </label>
         </div>
-        <div style="padding:0.7rem;border:1px solid var(--border);border-radius:12px;background:var(--bg-elevated);">
+        <div style="padding:0.7rem;border:1px solid var(--border);border-radius:0;background:var(--bg-elevated);">
           <label style="display:flex;align-items:flex-start;gap:0.55rem;font-size:0.82rem;cursor:pointer;">
             <input id="sandbox-allow-manual-terminals" type="checkbox" ${degradedFallback.allowManualCodeTerminals ? 'checked' : ''}>
             <span><strong>Allow manual code terminals</strong><br><span style="font-size:0.72rem;color:var(--text-muted);">Risk: PTY terminals are operator-controlled shells and sit outside the assistant&apos;s repo-bound command validator.</span></span>
@@ -4174,7 +4174,7 @@ function createAssistantSecurityAutoContainmentPanel(config) {
           <span>Workspace trust findings</span>
         </label>
       </div>
-      <div style="margin-top:0.65rem;padding:0.65rem 0.8rem;border:1px solid rgba(255,196,0,0.28);border-radius:10px;background:rgba(255,196,0,0.08);font-size:0.72rem;color:var(--text-secondary);">
+      <div style="margin-top:0.65rem;padding:0.65rem 0.8rem;border:1px solid rgba(255,196,0,0.28);border-radius:0;background:rgba(255,196,0,0.08);font-size:0.72rem;color:var(--text-secondary);">
         To reduce false positives, Assistant Security only auto-elevates from <strong>monitor</strong> to <strong>guarded</strong> when a matching <strong>critical</strong> finding is active, or when <strong>two or more</strong> matching findings meet your configured severity and confidence threshold.
       </div>
       <div style="margin-top:0.45rem;font-size:0.72rem;color:var(--text-muted);">
@@ -4312,7 +4312,7 @@ function createPolicyEnginePanel() {
       body.innerHTML = `
         <div style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:0.75rem;line-height:1.5;">
           The policy engine evaluates tool requests against declarative JSON rules. Rules are loaded from
-          <code style="font-size:0.72rem;background:var(--bg-secondary);padding:0.1rem 0.3rem;border-radius:3px;">${esc(status.rulesPath || 'policies/')}</code>
+          <code style="font-size:0.72rem;background:var(--bg-secondary);padding:0.1rem 0.3rem;border-radius:0;">${esc(status.rulesPath || 'policies/')}</code>
           and compiled into fast matchers at startup.
         </div>
         <div class="cfg-form-grid">

@@ -304,7 +304,7 @@ function renderCatalogTabContent({
       ` : ''}
 
       <div style="padding:0.5rem 1rem;">
-        <input type="text" id="auto-catalog-search" placeholder="Search automations..." style="width:100%;padding:0.4rem 0.6rem;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-primary);font-size:0.8rem;">
+        <input type="text" id="auto-catalog-search" placeholder="Search automations..." style="width:100%;padding:0.4rem 0.6rem;background:var(--bg-input);border:1px solid var(--border);border-radius:0;color:var(--text-primary);font-size:0.8rem;">
       </div>
 
       <div class="cfg-center-body" id="auto-create-form" style="display:none">
@@ -787,7 +787,7 @@ function renderHistoricalAnalysisStatus(entry) {
   }
 
   return `
-    <div style="margin-top:0.9rem;padding:0.8rem 0.9rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-primary)">
+    <div style="margin-top:0.9rem;padding:0.8rem 0.9rem;border:1px solid var(--border);border-radius:0;background:var(--bg-primary)">
       <div style="font-weight:600">Historical Analysis</div>
       <div style="margin-top:0.55rem;display:flex;flex-direction:column;gap:0.7rem">
         ${rows.join('')}
@@ -1189,7 +1189,7 @@ function renderExecutionTimelineItems(items, runId) {
           return `
           <div
             id="auto-execution-item-${escAttr(item.id || '')}"
-            style="padding:0.45rem 0.6rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-secondary);${highlighted ? 'outline:2px solid var(--accent);outline-offset:2px;' : ''}"
+            style="padding:0.45rem 0.6rem;border:1px solid var(--border);border-radius:0;background:var(--bg-secondary);${highlighted ? 'outline:2px solid var(--accent);outline-offset:2px;' : ''}"
           >
             <div style="display:flex;gap:0.5rem;align-items:center;justify-content:space-between">
               <strong>${esc(item.title || item.type || 'Event')}</strong>
@@ -1232,7 +1232,7 @@ function renderRunResultSummary(entry) {
   const topMessage = String(entry?.message || '').trim();
 
   return `
-    <div style="padding:0.8rem 0.9rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-primary)">
+    <div style="padding:0.8rem 0.9rem;border:1px solid var(--border);border-radius:0;background:var(--bg-primary)">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap">
         <div style="font-weight:600">Run Result</div>
         <div class="ops-task-sub">${esc(entry?.name || 'Automation run')} · ${esc(entry?.status || 'unknown')}</div>
@@ -1248,13 +1248,13 @@ function renderRunResultSummary(entry) {
 
 function renderRunResultBlock(block) {
   return `
-    <div style="padding:0.65rem 0.75rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-secondary)">
+    <div style="padding:0.65rem 0.75rem;border:1px solid var(--border);border-radius:0;background:var(--bg-secondary)">
       <div style="display:flex;justify-content:space-between;gap:0.75rem;align-items:center;flex-wrap:wrap">
         <strong>${esc(block.title)}</strong>
         ${block.meta ? `<span class="ops-task-sub">${esc(block.meta)}</span>` : ''}
       </div>
       ${block.detail ? `<div style="margin-top:0.25rem;color:var(--text-secondary)">${esc(block.detail)}</div>` : ''}
-      ${block.preview ? `<pre style="margin-top:0.45rem;font-size:0.8rem;background:var(--bg-primary);padding:0.5rem;border-radius:4px;white-space:pre-wrap;word-break:break-word">${esc(block.preview)}</pre>` : ''}
+      ${block.preview ? `<pre style="margin-top:0.45rem;font-size:0.8rem;background:var(--bg-primary);padding:0.5rem;border-radius:0;white-space:pre-wrap;word-break:break-word">${esc(block.preview)}</pre>` : ''}
       ${block.links && block.links.length > 0 ? `
         <div style="margin-top:0.45rem;display:flex;flex-direction:column;gap:0.25rem">
           ${block.links.map((link) => `<div style="font-size:0.83rem">${esc(link.text)}</div>`).join('')}
@@ -1407,7 +1407,7 @@ function renderStepResults(steps) {
         <span style="margin-left:auto;color:var(--text-muted)">${step.durationMs}ms</span>
         ${hasOutput ? `<button class="btn btn-secondary auto-step-output-toggle" data-output-id="${outputId}" style="font-size:0.75rem;padding:2px 6px">Raw Output</button>` : ''}
       </div>
-      ${hasOutput ? `<div id="${outputId}" style="display:none;padding:4px 0 4px 28px;max-height:300px;overflow:auto"><pre style="font-size:0.8rem;background:var(--bg-primary);padding:0.5rem;border-radius:4px;white-space:pre-wrap;word-break:break-word">${esc(typeof step.output === 'string' ? step.output : JSON.stringify(step.output, null, 2))}</pre></div>` : ''}
+      ${hasOutput ? `<div id="${outputId}" style="display:none;padding:4px 0 4px 28px;max-height:300px;overflow:auto"><pre style="font-size:0.8rem;background:var(--bg-primary);padding:0.5rem;border-radius:0;white-space:pre-wrap;word-break:break-word">${esc(typeof step.output === 'string' ? step.output : JSON.stringify(step.output, null, 2))}</pre></div>` : ''}
     `;
   }).join('')}</div>`;
 }
@@ -1692,7 +1692,7 @@ function bindEvents(container, ctx) {
           if (resultsDiv && result.run) {
             const runOutputHandling = normalizeOutputHandling(result.run.outputHandling);
             resultsDiv.innerHTML = `
-              <div style="margin-top:0.75rem;padding:1rem;background:var(--bg-secondary);border-radius:8px">
+              <div style="margin-top:0.75rem;padding:1rem;background:var(--bg-secondary);border-radius:0">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
                   <strong>${esc(result.run.automationName || result.run.playbookName || autoId)}</strong>
                   <span style="color:${result.success ? 'var(--success)' : 'var(--error)'}">${esc(result.status)} (${result.run.durationMs}ms)</span>
@@ -2332,7 +2332,7 @@ function bindCreateForm(container, { tools, packs, agents }) {
   function renderPreflightResults(issues, policyMode) {
     preflightPanel.style.display = '';
     preflightPanel.innerHTML = `
-      <div style="border:1px solid var(--warning);border-radius:var(--radius);padding:0.75rem;background:color-mix(in srgb, var(--warning) 6%, var(--bg-surface));">
+      <div style="border:1px solid var(--warning);border-radius:0;padding:0.75rem;background:color-mix(in srgb, var(--warning) 6%, var(--bg-surface));">
         <div style="font-weight:600;font-size:0.85rem;margin-bottom:0.5rem;color:var(--warning);">Approval Check</div>
         <div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:0.5rem;">
           These tools are blocked by current approval or sandbox policy.
@@ -3193,7 +3193,7 @@ function renderToolPicker(panelEl, tools, targetSelect, onSelect) {
 
   panelEl.innerHTML = `
     <div class="auto-tool-picker">
-      <input class="auto-tool-picker-search" type="text" placeholder="Search tools..." style="width:100%;margin-bottom:0.5rem;padding:0.35rem 0.5rem;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-primary);font-size:0.8rem;">
+      <input class="auto-tool-picker-search" type="text" placeholder="Search tools..." style="width:100%;margin-bottom:0.5rem;padding:0.35rem 0.5rem;background:var(--bg-input);border:1px solid var(--border);border-radius:0;color:var(--text-primary);font-size:0.8rem;">
       <div class="auto-tool-picker-list" style="max-height:260px;overflow-y:auto;">
         ${categories.map((cat) => {
           const catTools = sorted.filter((t) => (t.category || 'other') === cat);

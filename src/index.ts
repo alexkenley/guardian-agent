@@ -54,6 +54,11 @@ import { createLogger } from './util/logging.js';
 import { writeSecureFileSync } from './util/secure-fs.js';
 import { ConversationService, type ConversationKey } from './runtime/conversation.js';
 import { CodeSessionStore, type CodeSessionRecord } from './runtime/code-sessions.js';
+import { SecondBrainStore } from './runtime/second-brain/second-brain-store.js';
+import { SecondBrainService } from './runtime/second-brain/second-brain-service.js';
+import { BriefingService } from './runtime/second-brain/briefing-service.js';
+import { SyncService } from './runtime/second-brain/sync-service.js';
+import { HorizonScanner } from './runtime/second-brain/horizon-scanner.js';
 import { CodeWorkspaceNativeProtectionScanner } from './runtime/code-workspace-native-protection.js';
 import { inspectCodeWorkspaceSync } from './runtime/code-workspace-profile.js';
 import {
@@ -600,6 +605,8 @@ function buildDashboardCallbacks(
   agentMemoryStore: AgentMemoryStore,
   codeSessionMemoryStore: AgentMemoryStore,
   codeSessionStore: CodeSessionStore,
+  secondBrainService: SecondBrainService,
+  secondBrainBriefingService: BriefingService,
   persistMemoryEntry: (input: {
     target: {
       scope: 'global' | 'code_session';
@@ -2194,6 +2201,128 @@ function buildDashboardCallbacks(
       }
     },
 
+    onSecondBrainOverview: () => secondBrainService.getOverview(),
+
+    onSecondBrainGenerateBrief: (input) => secondBrainBriefingService.generateBrief(input),
+
+    onSecondBrainBriefs: (args) => secondBrainService.listBriefs(args ?? {}),
+
+    onSecondBrainCalendar: (args) => secondBrainService.listEvents(args ?? {}),
+
+    onSecondBrainCalendarUpsert: async (input) => {
+      try {
+        const event = secondBrainService.upsertEvent(input);
+        return {
+          success: true,
+          message: `Saved event '${event.title}'.`,
+          details: { id: event.id },
+        };
+      } catch (error) {
+        return {
+          success: false,
+          message: error instanceof Error ? error.message : String(error),
+          statusCode: 400,
+        };
+      }
+    },
+
+    onSecondBrainTasks: (args) => secondBrainService.listTasks(args ?? {}),
+
+    onSecondBrainTaskUpsert: async (input) => {
+      try {
+        const task = secondBrainService.upsertTask(input);
+        return {
+          success: true,
+          message: `Saved task '${task.title}'.`,
+          details: { id: task.id },
+        };
+      } catch (error) {
+        return {
+          success: false,
+          message: error instanceof Error ? error.message : String(error),
+          statusCode: 400,
+        };
+      }
+    },
+
+    onSecondBrainNotes: (args) => secondBrainService.listNotes(args ?? {}),
+
+    onSecondBrainNoteUpsert: async (input) => {
+      try {
+        const note = secondBrainService.upsertNote(input);
+        return {
+          success: true,
+          message: `Saved note '${note.title}'.`,
+          details: { id: note.id },
+        };
+      } catch (error) {
+        return {
+          success: false,
+          message: error instanceof Error ? error.message : String(error),
+          statusCode: 400,
+        };
+      }
+    },
+
+    onSecondBrainPeople: (args) => secondBrainService.listPeople(args ?? {}),
+
+    onSecondBrainPersonUpsert: async (input) => {
+      try {
+        const person = secondBrainService.upsertPerson(input);
+        return {
+          success: true,
+          message: `Saved person '${person.name}'.`,
+          details: { id: person.id },
+        };
+      } catch (error) {
+        return {
+          success: false,
+          message: error instanceof Error ? error.message : String(error),
+          statusCode: 400,
+        };
+      }
+    },
+
+    onSecondBrainLinks: (args) => secondBrainService.listLinks(args ?? {}),
+
+    onSecondBrainLinkUpsert: async (input) => {
+      try {
+        const link = secondBrainService.upsertLink(input);
+        return {
+          success: true,
+          message: `Saved library item '${link.title}'.`,
+          details: { id: link.id },
+        };
+      } catch (error) {
+        return {
+          success: false,
+          message: error instanceof Error ? error.message : String(error),
+          statusCode: 400,
+        };
+      }
+    },
+
+    onSecondBrainRoutines: () => secondBrainService.listRoutines(),
+
+    onSecondBrainRoutineUpdate: async (input) => {
+      try {
+        const routine = secondBrainService.updateRoutine(input);
+        return {
+          success: true,
+          message: `Updated routine '${routine.name}'.`,
+          details: { id: routine.id },
+        };
+      } catch (error) {
+        return {
+          success: false,
+          message: error instanceof Error ? error.message : String(error),
+          statusCode: 400,
+        };
+      }
+    },
+
+    onSecondBrainUsage: () => secondBrainService.getUsageSummary(),
+
     onReferenceGuide: () => getReferenceGuide(),
 
     onQuickActions: () => getQuickActions(configRef.current.assistant.quickActions),
@@ -2422,7 +2551,7 @@ async function main(): Promise<void> {
   const identity = new IdentityService(config.assistant.identity);
   let analytics: AnalyticsService | null = null;
   const onSQLiteSecurityEvent = (event: {
-    service: 'conversation' | 'analytics' | 'code_sessions' | 'pending_actions' | 'continuity_threads';
+    service: 'conversation' | 'analytics' | 'code_sessions' | 'pending_actions' | 'continuity_threads' | 'second_brain';
     severity: 'info' | 'warn';
     code: string;
     message: string;
@@ -2505,6 +2634,7 @@ async function main(): Promise<void> {
   const codeSessionDbPath = resolveAssistantDbPath(undefined, 'assistant-code-sessions.sqlite');
   const pendingActionDbPath = resolveAssistantDbPath(undefined, 'assistant-pending-actions.sqlite');
   const continuityThreadDbPath = resolveAssistantDbPath(undefined, 'assistant-continuity-threads.sqlite');
+  const secondBrainDbPath = resolveAssistantDbPath(undefined, 'assistant-second-brain.sqlite');
   const conversations = new ConversationService({
     enabled: config.assistant.memory.enabled,
     sqlitePath: conversationDbPath,
@@ -2734,6 +2864,13 @@ async function main(): Promise<void> {
     retentionDays: config.assistant.memory.retentionDays,
     onSecurityEvent: onSQLiteSecurityEvent,
   });
+  const secondBrainStore = new SecondBrainStore({
+    sqlitePath: secondBrainDbPath,
+    onSecurityEvent: onSQLiteSecurityEvent,
+  });
+  const secondBrainService = new SecondBrainService(secondBrainStore);
+  const secondBrainBriefingService = new BriefingService(secondBrainService);
+  secondBrainBriefingService.start();
   const runTimeline = new RunTimelineStore();
   let refreshRunTimelineSnapshots: () => void = () => {};
   codeSessionStore.subscribe((event) => {
@@ -3276,6 +3413,13 @@ async function main(): Promise<void> {
       console.log(`  Microsoft 365 (native): failed to initialize — ${err instanceof Error ? err.message : String(err)}`);
     }
   }
+
+  const secondBrainSyncService = new SyncService(secondBrainService, {
+    getGoogleService: () => googleServiceRef.current ?? undefined,
+    getMicrosoftService: () => microsoftServiceRef.current ?? undefined,
+  });
+  await secondBrainSyncService.start();
+  let secondBrainHorizonScanner: HorizonScanner | undefined;
 
   // Device inventory — tracks discovered network devices from playbook runs
   const deviceInventory = new DeviceInventoryService();
@@ -4163,6 +4307,9 @@ async function main(): Promise<void> {
     ),
     resolveStateAgentId: resolveSharedStateAgentId,
     docSearch,
+    secondBrainService,
+    secondBrainBriefingService,
+    secondBrainHorizonScanner,
     googleService,
     microsoftService,
     deviceInventory,
@@ -4588,6 +4735,14 @@ async function main(): Promise<void> {
     },
   });
   await scheduledTasks.load().catch(() => {});
+  secondBrainHorizonScanner = new HorizonScanner(
+    scheduledTasks,
+    secondBrainService,
+    secondBrainSyncService,
+    secondBrainBriefingService,
+  );
+  toolExecutorOptions.secondBrainHorizonScanner = secondBrainHorizonScanner;
+  secondBrainHorizonScanner.start();
 
   refreshRunTimelineSnapshots = (): void => {
     runTimeline.syncPlaybookRuns(connectors.getState(50).runs);
@@ -4918,6 +5073,7 @@ async function main(): Promise<void> {
         agentMemoryStore,
         codeSessionMemoryStore,
         codeSessionStore,
+        secondBrainService,
         sharedCodeWorkspaceTrustService,
         sharedStateAgentId,
         resolveGwsProvider,
@@ -4965,6 +5121,7 @@ async function main(): Promise<void> {
       agentMemoryStore,
       codeSessionMemoryStore,
       codeSessionStore,
+      secondBrainService,
       sharedCodeWorkspaceTrustService,
       SHARED_TIER_AGENT_STATE_ID,
       resolveGwsProvider,
@@ -4999,6 +5156,7 @@ async function main(): Promise<void> {
       agentMemoryStore,
       codeSessionMemoryStore,
       codeSessionStore,
+      secondBrainService,
       sharedCodeWorkspaceTrustService,
       SHARED_TIER_AGENT_STATE_ID,
       resolveGwsProvider,
@@ -5059,6 +5217,7 @@ async function main(): Promise<void> {
       agentMemoryStore,
       codeSessionMemoryStore,
       codeSessionStore,
+      secondBrainService,
       sharedCodeWorkspaceTrustService,
       'default',
       resolveGwsProvider,
@@ -5096,6 +5255,7 @@ async function main(): Promise<void> {
       agentMemoryStore,
       codeSessionMemoryStore,
       codeSessionStore,
+      secondBrainService,
       sharedCodeWorkspaceTrustService,
       SECURITY_TRIAGE_AGENT_ID,
       resolveGwsProvider,
@@ -5387,6 +5547,8 @@ async function main(): Promise<void> {
     agentMemoryStore,
     codeSessionMemoryStore,
     codeSessionStore,
+    secondBrainService,
+    secondBrainBriefingService,
     (input) => (
       memoryMutationServiceRef.current?.persist(input)
         ?? {
@@ -5563,16 +5725,19 @@ async function main(): Promise<void> {
     if (scope === 'data' || scope === 'all') {
       try { conversations.close(); } catch { /* already closed */ }
       try { codeSessionStore.close(); } catch { /* already closed */ }
+      try { secondBrainStore.close(); } catch { /* already closed */ }
       try { analytics.close(); } catch { /* already closed */ }
       toolExecutor.updatePolicy({ sandbox: { allowedPaths: [...configRef.current.assistant.tools.allowedPaths] } });
 
       tryDelete('assistant-memory.sqlite', resolveAssistantDbPath(config.assistant.memory.sqlitePath, 'assistant-memory.sqlite'));
       tryDelete('assistant-code-sessions.sqlite', resolveAssistantDbPath(undefined, 'assistant-code-sessions.sqlite'));
+      tryDelete('assistant-second-brain.sqlite', resolveAssistantDbPath(undefined, 'assistant-second-brain.sqlite'));
       tryDelete('assistant-analytics.sqlite', resolveAssistantDbPath(config.assistant.analytics.sqlitePath, 'assistant-analytics.sqlite'));
       // Also remove SQLite WAL/SHM files if present
       for (const suffix of ['-wal', '-shm']) {
         tryDelete(`assistant-memory.sqlite${suffix}`, resolveAssistantDbPath(config.assistant.memory.sqlitePath, 'assistant-memory.sqlite') + suffix);
         tryDelete(`assistant-code-sessions.sqlite${suffix}`, resolveAssistantDbPath(undefined, 'assistant-code-sessions.sqlite') + suffix);
+        tryDelete(`assistant-second-brain.sqlite${suffix}`, resolveAssistantDbPath(undefined, 'assistant-second-brain.sqlite') + suffix);
         tryDelete(`assistant-analytics.sqlite${suffix}`, resolveAssistantDbPath(config.assistant.analytics.sqlitePath, 'assistant-analytics.sqlite') + suffix);
       }
       tryDelete('memory/ (agent knowledge base)', join(baseDir, 'memory'), { recursive: true });

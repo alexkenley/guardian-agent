@@ -202,6 +202,43 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(input),
   }),
+  secondBrainOverview: () => request('/api/second-brain/overview'),
+  secondBrainBriefs: (params = {}) => request(`/api/second-brain/briefs${buildQueryString(params)}`),
+  secondBrainGenerateBrief: (input) => request('/api/second-brain/briefs/generate', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }),
+  secondBrainCalendar: (params = {}) => request(`/api/second-brain/calendar${buildQueryString(params)}`),
+  secondBrainCalendarUpsert: (input) => request('/api/second-brain/calendar/upsert', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }),
+  secondBrainTasks: (params = {}) => request(`/api/second-brain/tasks${buildQueryString(params)}`),
+  secondBrainTaskUpsert: (input) => request('/api/second-brain/tasks/upsert', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }),
+  secondBrainNotes: (params = {}) => request(`/api/second-brain/notes${buildQueryString(params)}`),
+  secondBrainNoteUpsert: (input) => request('/api/second-brain/notes/upsert', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }),
+  secondBrainPeople: (params = {}) => request(`/api/second-brain/people${buildQueryString(params)}`),
+  secondBrainPersonUpsert: (input) => request('/api/second-brain/people/upsert', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }),
+  secondBrainLinks: (params = {}) => request(`/api/second-brain/links${buildQueryString(params)}`),
+  secondBrainLinkUpsert: (input) => request('/api/second-brain/links/upsert', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }),
+  secondBrainRoutines: () => request('/api/second-brain/routines'),
+  secondBrainRoutineUpdate: (input) => request('/api/second-brain/routines/update', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }),
+  secondBrainUsage: () => request('/api/second-brain/usage'),
   setupStatus:  () => request('/api/setup/status'),
   applySetup:   (input) => request('/api/setup/apply', {
     method: 'POST',

@@ -1,7 +1,7 @@
 # WebUI Design Spec
 
 **Status:** Source of truth  
-**Date:** 2026-03-12  
+**Date:** 2026-04-05  
 **Owner:** WebUI uplift  
 **Supersedes:** [WEBUI-PANEL-CONSOLIDATION-PROPOSAL.md](/mnt/s/Development/GuardianAgent/docs/proposals/WEBUI-PANEL-CONSOLIDATION-PROPOSAL.md)
 
@@ -63,7 +63,29 @@ Users should not have to infer the difference between monitoring, audit, configu
 
 ### 8. Linked UI elements must communicate destination and intent
 
-If a card, button, badge, or summary tile navigates elsewhere, the user should be able to tell where it goes and why before clicking.
+If a card, button, badge, or summary tile navigates elsewhere, the user should be able to tell where it goes and why before clicking. Emphasize clear active states and subtle hover transforms.
+
+### 9. Precision & Sharpness
+
+No rounded corners. Strict use of 90-degree edges across all components to reflect a secure, professional, and "built-for-engineering" environment.
+
+## Visual Standards
+
+### Border Radius
+Strict `0` across all components (buttons, cards, panels, inputs, tooltips, code blocks).
+
+### Shadows
+Used sparingly to create subtle depth (e.g., on hover for cards), avoiding heavy or dated drop shadows.
+
+### Accents
+Use 2px-4px accent borders (typically left-border or bottom-border) to denote focus, activity, or status levels.
+
+### Typography
+- **Monospace (Cascadia Code / JetBrains Mono)**: For data, code, system logs, and system-level output.
+- **Display (Inter)**: For high-level UI labels, headers, brand elements, and navigation labels.
+
+### Spacing & Grid
+Maintain consistent, generous padding (typically 1.25rem - 1.5rem) to ensure information density remains high but readable.
 
 ## Navigation
 
@@ -82,6 +104,8 @@ Notes:
 - the persistent chat panel remains part of the shell, not a left-nav page
 - `Cloud` is a first-class operational area and must not live only inside Configuration
 - legacy `Workflows` and `Operations` routes remain redirected to `Automations`
+- the sidebar is a fixed 220px width for a stable operational feel
+- nav items use high-contrast text and explicit 4px accent-left markers for the active state
 
 ## Canonical Ownership
 
@@ -139,6 +163,8 @@ The guidance model applies at three levels:
 ### Required page and tab intro pattern
 
 Each major page and each major tab must include a short intro block near the top of the content area.
+
+Intro blocks are **collapsed by default** to reduce operational noise while keeping the guidance discoverable.
 
 That intro must answer:
 

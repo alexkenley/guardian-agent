@@ -35,6 +35,8 @@ Before making large structural changes, also read `docs/architecture/FORWARD-ARC
 
 Before adding any new capability, read `docs/guides/CAPABILITY-AUTHORING-GUIDE.md`. It is the single source of truth for adding tools, skills, integrations, routes, maintenance jobs, and control-plane surfaces.
 
+Before changing the web surface, read `docs/specs/WEBUI-DESIGN-SPEC.md`. It is the source of truth for left-nav structure, canonical page ownership, guidance/help patterns, and current visual/interaction standards. Do not add or reshuffle pages, tabs, or duplicate control planes without aligning the implementation to that spec or updating the spec in the same change.
+
 ### Runtime Bootstrap (`src/index.ts`)
 
 The entry point is a large (~107KB) bootstrap that wires everything together:
@@ -171,6 +173,8 @@ Vanilla JavaScript — no framework, no build step. Static HTML/CSS/JS served di
 - **Configuration** (`#/config`) — Providers tab, Tools tab, Policy tab (interactive allowlist editor), Search Sources tab, Settings tab
 - **Reference Guide** (`#/reference`) — wiki-style operator guide backed by `src/reference-guide.ts`; update it whenever user-facing capabilities, workflows, controls, output handling, or export behavior changes anywhere in the app
 - **Chat** — persistent right panel
+
+When this section drifts from `docs/specs/WEBUI-DESIGN-SPEC.md`, the spec wins. Treat the list above as descriptive of the codebase, not as permission to diverge from the spec.
 
 ### Memory System
 - **FTS5 Search**: Full-text search index on conversation_messages with BM25 ranking, porter stemming, content-sync triggers

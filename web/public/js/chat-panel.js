@@ -876,7 +876,7 @@ function buildSourceBadge(responseSource) {
  */
 function buildApprovalButtons(approvals, onApproval) {
   const container = document.createElement('div');
-  container.style.cssText = 'margin-top:0.5rem;padding:0.4rem;border:1px solid var(--border);border-radius:4px;background:var(--bg-secondary);';
+  container.style.cssText = 'margin-top:0.5rem;padding:0.4rem;border:1px solid var(--border);border-radius:0;background:var(--bg-secondary);';
   const approvalIds = approvals.map((approval) => approval.id);
   const uiState = getApprovalUiGroupState(approvalIds);
 

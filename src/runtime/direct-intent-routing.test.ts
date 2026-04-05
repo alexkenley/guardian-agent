@@ -31,6 +31,7 @@ function mockGateway(partial: {
 }
 
 const ALL_CANDIDATES = [
+  'personal_assistant',
   'coding_session_control',
   'coding_backend',
   'filesystem',
@@ -150,6 +151,15 @@ describe('resolveDirectIntentRoutingCandidates', () => {
       [...ALL_CANDIDATES],
     );
     expect(result.candidates).toEqual(['workspace_read', 'workspace_write']);
+    expect(result.gatewayDirected).toBe(true);
+  });
+
+  it('maps personal_assistant_task routes to the personal_assistant candidate', () => {
+    const result = resolveDirectIntentRoutingCandidates(
+      mockGateway({ route: 'personal_assistant_task', operation: 'read', entities: { personalItemType: 'task' } }),
+      [...ALL_CANDIDATES],
+    );
+    expect(result.candidates).toEqual(['personal_assistant']);
     expect(result.gatewayDirected).toBe(true);
   });
 

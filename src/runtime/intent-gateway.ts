@@ -7,6 +7,7 @@ export type IntentGatewayRoute =
   | 'automation_output_task'
   | 'ui_control'
   | 'browser_task'
+  | 'personal_assistant_task'
   | 'workspace_task'
   | 'email_task'
   | 'search_task'
@@ -59,6 +60,7 @@ export interface IntentGatewayEntities {
   path?: string;
   sessionTarget?: string;
   emailProvider?: 'gws' | 'm365';
+  personalItemType?: 'overview' | 'note' | 'task' | 'calendar' | 'person' | 'library' | 'routine' | 'brief' | 'unknown';
   codingBackend?: string;
   codingBackendRequested?: boolean;
   codingRunStatusCheck?: boolean;
@@ -136,6 +138,7 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
           'automation_output_task',
           'ui_control',
           'browser_task',
+          'personal_assistant_task',
           'workspace_task',
           'email_task',
           'search_task',
@@ -213,6 +216,10 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
         type: 'string',
         enum: ['gws', 'm365'],
       },
+      personalItemType: {
+        type: 'string',
+        enum: ['overview', 'note', 'task', 'calendar', 'person', 'library', 'routine', 'brief', 'unknown'],
+      },
       codingBackend: {
         type: 'string',
       },
@@ -255,8 +262,9 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   '- automation_output_task: searching, reading, or analyzing previously stored output from a saved automation run.',
   '- ui_control: requests about Guardian UI pages or catalog surfaces such as automations, dashboard, config, or Guardian chat.',
   '- browser_task: external website navigation, reading, extraction, or interaction.',
-  '- workspace_task: reading or mutating managed workspace tools such as Gmail, Calendar, Drive, Docs, Sheets, or Microsoft 365.',
-  '- email_task: direct mailbox work such as checking inbox contents, reading mail, composing, drafting, sending, replying, or forwarding email.',
+  '- personal_assistant_task: personal productivity work in Second Brain such as notes, tasks, reminders, calendar planning, meeting prep, people context, routines, briefs, and personal retrieval across messages, docs, events, and notes.',
+  '- workspace_task: explicit provider CRUD or administration in managed Google Workspace or Microsoft 365 surfaces such as Drive, Docs, Sheets, Calendar object edits, OneDrive, SharePoint, or Teams. Use this when the provider object or provider surface itself is the target, not Second Brain synthesis.',
+  '- email_task: direct mailbox work in Gmail or Outlook such as checking inbox contents, reading mail, composing, drafting, sending, replying, or forwarding email.',
   '- search_task: generic web or document search and result retrieval.',
   '- memory_task: durable memory operations such as remember/save, recall, or search memory.',
   '- filesystem_task: filesystem lookup or read/write operations such as file search.',
@@ -274,6 +282,10 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Use only the exact enum values defined by the schema for route, confidence, operation, turnRelation, resolution, uiSurface, and emailProvider. Do not paraphrase enum names.',
   'Prefer ui_control over browser_task when the request refers to Guardian pages or internal catalog views.',
   'Prefer email_task over workspace_task for direct mailbox or email requests.',
+  'Prefer personal_assistant_task over workspace_task or email_task when the user intent is personal productivity or Second Brain work rather than explicit provider CRUD.',
+  'Prefer personal_assistant_task for meeting prep, follow-up drafting, calendar planning, personal search across email/docs/calendar/notes, outreach review, or "what do I owe this person?" even when the evidence comes from Google Workspace or Microsoft 365.',
+  'Prefer workspace_task for explicit provider CRUD or administration such as listing Drive files, creating a Google Sheet, editing a SharePoint document, browsing OneDrive, or mutating a calendar object directly in the provider surface.',
+  'Prefer email_task for direct inbox work in Gmail or Outlook, but not for meeting prep, follow-up drafting, or broader Second Brain synthesis.',
   'Prefer search_task over browser_task for generic web search.',
   'Prefer memory_task for explicit persistent-memory requests such as "remember this", "what do you remember about ...", or "search memory for ...".',
   'Prefer automation_authoring for create/build/setup requests and automation_control for rename/delete/toggle/run/clone/inspect requests on an existing automation.',
@@ -305,6 +317,16 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'When a coding_task explicitly names a different coding workspace to operate in, keep route=coding_task and also set sessionTarget to that workspace name, id, or path.',
   'Example: "Inspect src/skills/prompt.ts and src/chat-agent.ts. Review the uplift for regressions and missing tests." -> route=coding_task, operation=inspect.',
   'Example: "Inspect docs/plans/... and src/skills/prompt.ts. Write an implementation plan for this change." -> route=coding_task, operation=inspect.',
+  'Example: "What do I have due today?" -> route=personal_assistant_task, operation=inspect, personalItemType=overview.',
+  'Example: "Show my tasks." -> route=personal_assistant_task, operation=read, personalItemType=task.',
+  'Example: "Save a note that the Q3 offsite venue is River House." -> route=personal_assistant_task, operation=save, personalItemType=note.',
+  'Example: "Create a task to send the follow-up deck tomorrow." -> route=personal_assistant_task, operation=create, personalItemType=task.',
+  'Example: "Prepare me for my next Outlook meeting using the calendar event, recent email, and docs." -> route=personal_assistant_task, operation=inspect, personalItemType=brief, emailProvider=m365.',
+  'Example: "Draft a follow-up email from my meeting notes and Gmail thread." -> route=personal_assistant_task, operation=draft, personalItemType=brief, emailProvider=gws.',
+  'Example: "List the files in my Drive." -> route=workspace_task, operation=read.',
+  'Example: "Create a new Google Sheet for the Q3 budget." -> route=workspace_task, operation=create.',
+  'Example: "Update the SharePoint document for the launch checklist." -> route=workspace_task, operation=update.',
+  'Example: "Check my unread Outlook mail." -> route=email_task, operation=read, emailProvider=m365.',
   'For enable/disable requests, set enabled=true or enabled=false when explicit.',
   'Set emailProvider=gws for Gmail or Google Workspace requests. Set emailProvider=m365 for Outlook or Microsoft 365 requests.',
   'Set codingBackend when the user explicitly names Codex, Claude Code, Gemini CLI, or Aider.',
@@ -336,20 +358,24 @@ const INTENT_GATEWAY_SYSTEM_PROMPT = [
 const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'You are Guardian\'s intent gateway.',
   'Classify the user request and return exactly one JSON object. Do not explain anything and do not call tools.',
-  'Use only these exact route values: automation_authoring, automation_control, automation_output_task, ui_control, browser_task, workspace_task, email_task, search_task, memory_task, filesystem_task, coding_task, coding_session_control, security_task, general_assistant, unknown.',
+  'Use only these exact route values: automation_authoring, automation_control, automation_output_task, ui_control, browser_task, personal_assistant_task, workspace_task, email_task, search_task, memory_task, filesystem_task, coding_task, coding_session_control, security_task, general_assistant, unknown.',
   'Use only these exact operation values: create, update, delete, run, toggle, clone, inspect, navigate, read, search, save, send, draft, schedule, unknown.',
   'Use only these exact turnRelation values: new_request, follow_up, clarification_answer, correction.',
   'Use only these exact resolution values: ready, needs_clarification.',
   'coding_session_control means current session, list sessions, switch or attach to another session, detach, or create a coding session.',
   'coding_task means code work inside a workspace, including explicit backend delegation such as Codex, Claude Code, Gemini CLI, or Aider, plus file-grounded repo inspection, code review, and implementation planning.',
   'memory_task means explicit remember, save, recall, or search memory requests.',
-  'email_task means direct email inbox, read, send, reply, forward, or draft work. workspace_task means managed workspace tools such as calendar, drive, docs, or sheets.',
+  'email_task means direct email inbox, read, send, reply, forward, or draft work in Gmail or Outlook. workspace_task means explicit provider CRUD or administration in Google Workspace or Microsoft 365 surfaces such as Drive, Docs, Sheets, Calendar object edits, OneDrive, SharePoint, or Teams. personal_assistant_task means Second Brain work such as notes, tasks, calendar planning, meeting prep, people context, briefs, and personal retrieval across messages, docs, events, and notes.',
   'ui_control means Guardian pages or internal catalog surfaces. browser_task means external website navigation or interaction. search_task means generic web search.',
+  'Prefer personal_assistant_task for meeting prep, follow-up drafting, calendar planning, outreach review, or personal search across email/docs/calendar/notes even when the data comes from Google Workspace or Microsoft 365.',
+  'Prefer workspace_task only when the user is explicitly targeting provider CRUD or provider administration such as Drive, Docs, Sheets, OneDrive, SharePoint, Teams, or direct calendar object edits.',
+  'Prefer email_task only for direct mailbox work, not for broader Second Brain synthesis.',
   'For rename requests on an existing automation, use route=automation_control, operation=update, and set newAutomationName to the requested new name.',
   'If the user explicitly asks to run a built-in tool by name, keep the request out of automation_control even if it uses verbs like run, check, inspect, or status.',
   'For edits to an existing automation such as changing its schedule or switching between scheduled and manual mode, use route=automation_control and operation=update.',
   'If the user names a coding session or workspace to switch to, set sessionTarget.',
   'If the user names Gmail or Google Workspace, set emailProvider to gws. If the user names Outlook or Microsoft 365, set emailProvider to m365.',
+  'If the user clearly refers to notes, tasks, calendar planning, routines, briefs, people, or the overall Today view, set personalItemType when possible.',
   'If the user names a cloud-hosting profile id such as profileId social or refers to a known hosting profile by id, set profileId when possible.',
   'If the user explicitly asks Guardian to use Codex, Claude Code, Gemini CLI, or Aider, set codingBackend and codingBackendRequested=true.',
   'If the request needs a missing detail before execution, set resolution=needs_clarification and include missingFields.',
@@ -357,6 +383,13 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'Examples: "Inspect src/skills/prompt.ts and review the uplift for regressions." -> route="coding_task", operation="inspect".',
   'Examples: "List the coding sessions." -> route="coding_session_control", operation="navigate".',
   'Examples: "Run the cloud tool whm_status using profileId social." -> route="general_assistant", operation="run", toolName="whm_status", profileId="social".',
+  'Examples: "Show my tasks." -> route="personal_assistant_task", operation="read", personalItemType="task".',
+  'Examples: "What do I have due today?" -> route="personal_assistant_task", operation="inspect", personalItemType="overview".',
+  'Examples: "Prepare me for my next Outlook meeting using the calendar event, recent email, and docs." -> route="personal_assistant_task", operation="inspect", personalItemType="brief", emailProvider="m365".',
+  'Examples: "Draft a follow-up email from my meeting notes and Gmail thread." -> route="personal_assistant_task", operation="draft", personalItemType="brief", emailProvider="gws".',
+  'Examples: "List the files in my Drive." -> route="workspace_task", operation="read".',
+  'Examples: "Update the SharePoint document for the launch checklist." -> route="workspace_task", operation="update".',
+  'Examples: "Check my unread Outlook mail." -> route="email_task", operation="read", emailProvider="m365".',
   'Examples: "Switch this chat to the coding workspace for Temp install test." -> route="coding_session_control", operation="update", sessionTarget="Temp install test".',
   'Return valid JSON with double-quoted keys and string values only.',
 ].join(' ');
@@ -753,6 +786,7 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
     ? parsed.sessionTarget.trim()
     : undefined;
   const emailProvider = normalizeEmailProvider(parsed.emailProvider);
+  const personalItemType = normalizePersonalItemType(parsed.personalItemType);
   const codingBackend = normalizeCodingBackend(parsed.codingBackend);
   const codingBackendRequested = typeof parsed.codingBackendRequested === 'boolean'
     ? parsed.codingBackendRequested
@@ -788,6 +822,7 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
       ...(path ? { path } : {}),
       ...(sessionTarget ? { sessionTarget } : {}),
       ...(emailProvider ? { emailProvider } : {}),
+      ...(personalItemType ? { personalItemType } : {}),
       ...(codingBackend ? { codingBackend } : {}),
       ...(typeof codingBackendRequested === 'boolean' ? { codingBackendRequested } : {}),
       ...(typeof codingRunStatusCheck === 'boolean' ? { codingRunStatusCheck } : {}),
@@ -833,6 +868,7 @@ function normalizeRoute(value: unknown): IntentGatewayRoute {
     case 'automation_output_task':
     case 'ui_control':
     case 'browser_task':
+    case 'personal_assistant_task':
     case 'workspace_task':
     case 'email_task':
     case 'search_task':
@@ -850,6 +886,11 @@ function normalizeRoute(value: unknown): IntentGatewayRoute {
       return 'ui_control';
     case 'browser':
       return 'browser_task';
+    case 'personal_assistant':
+    case 'personal_productivity':
+    case 'second_brain':
+    case 'assistant_productivity':
+      return 'personal_assistant_task';
     case 'workspace':
       return 'workspace_task';
     case 'email':
@@ -1016,6 +1057,29 @@ function normalizeEmailProvider(
       return value;
     default:
       return undefined;
+  }
+}
+
+function normalizePersonalItemType(
+  value: unknown,
+): IntentGatewayEntities['personalItemType'] | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  switch (normalized) {
+    case 'overview':
+    case 'note':
+    case 'task':
+    case 'calendar':
+    case 'person':
+    case 'library':
+    case 'routine':
+    case 'brief':
+      return normalized;
+    case 'today':
+    case 'dashboard':
+      return 'overview';
+    default:
+      return normalized === 'unknown' ? 'unknown' : undefined;
   }
 }
 

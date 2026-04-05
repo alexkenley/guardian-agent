@@ -338,7 +338,7 @@ async function renderDevicesTab(panel) {
               ? '<tr><td colspan="10" style="text-align:center;color:var(--text-muted)">No devices discovered. Click "Scan Now" to discover devices on your network.</td></tr>'
               : devices.map((device) => `
                 <tr>
-                  <td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${device.status === 'online' ? 'var(--success)' : 'var(--text-muted)'};margin-right:4px"></span>${esc(device.status)}</td>
+                  <td><span style="display:inline-block;width:10px;height:10px;border-radius:0;background:${device.status === 'online' ? 'var(--success)' : 'var(--text-muted)'};margin-right:4px"></span>${esc(device.status)}</td>
                   <td style="font-family:monospace">${esc(device.ip)}</td>
                   <td style="font-family:monospace">${esc(device.mac)}</td>
                   <td>${esc(device.hostname || '-')}</td>
@@ -1104,7 +1104,7 @@ function buildOutputHtml(title, content) {
   <style>
     body { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin: 24px; background: #0b1220; color: #e5edf7; }
     h1 { font-size: 18px; margin-bottom: 12px; }
-    pre { white-space: pre-wrap; word-break: break-word; background: #11192b; border: 1px solid #23314f; border-radius: 8px; padding: 16px; }
+    pre { white-space: pre-wrap; word-break: break-word; background: #11192b; border: 1px solid #23314f; border-radius:0; padding: 16px; }
   </style>
 </head>
 <body>

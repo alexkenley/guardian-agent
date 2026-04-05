@@ -54,6 +54,7 @@ import type { ConversationKey } from './runtime/conversation.js';
 import { ConversationService } from './runtime/conversation.js';
 import type { CodeSessionRecord, ResolvedCodeSessionContext } from './runtime/code-sessions.js';
 import { CodeSessionStore } from './runtime/code-sessions.js';
+import type { SecondBrainService } from './runtime/second-brain/second-brain-service.js';
 import { resolveCodingBackendSessionTarget } from './runtime/coding-backend-session-target.js';
 import { inspectCodeWorkspaceSync, type CodeWorkspaceProfile } from './runtime/code-workspace-profile.js';
 import {
@@ -310,6 +311,7 @@ export interface ChatAgentConstructor {
     memoryStore?: AgentMemoryStore,
     codeSessionMemoryStore?: AgentMemoryStore,
     codeSessionStore?: CodeSessionStore,
+    secondBrainService?: SecondBrainService,
     codeWorkspaceTrustService?: CodeWorkspaceTrustService,
     stateAgentId?: string,
     resolveGwsProvider?: () => LLMProvider | undefined,
@@ -353,6 +355,7 @@ interface AutomationApprovalContinuation {
 }
 
 type DirectIntentShadowCandidate =
+  | 'personal_assistant'
   | 'filesystem'
   | 'memory_write'
   | 'memory_read'
@@ -397,6 +400,8 @@ type DirectIntentShadowCandidate =
   private codeSessionMemoryStore?: AgentMemoryStore;
   /** Backend-owned coding session store for cross-surface coding workflows. */
   private codeSessionStore?: CodeSessionStore;
+  /** Shared Second Brain runtime for personal productivity objects. */
+  private secondBrainService?: SecondBrainService;
   /** Background workspace-trust enrichment for native AV scans. */
   private codeWorkspaceTrustService?: CodeWorkspaceTrustService;
   /** Logical state identity used for shared conversation/memory context. */
@@ -484,6 +489,7 @@ type DirectIntentShadowCandidate =
     memoryStore?: AgentMemoryStore,
     codeSessionMemoryStore?: AgentMemoryStore,
     codeSessionStore?: CodeSessionStore,
+    secondBrainService?: SecondBrainService,
     codeWorkspaceTrustService?: CodeWorkspaceTrustService,
     stateAgentId?: string,
     resolveGwsProvider?: () => LLMProvider | undefined,
@@ -519,6 +525,7 @@ type DirectIntentShadowCandidate =
     this.memoryStore = memoryStore;
     this.codeSessionMemoryStore = codeSessionMemoryStore;
     this.codeSessionStore = codeSessionStore;
+    this.secondBrainService = secondBrainService;
     this.codeWorkspaceTrustService = codeWorkspaceTrustService;
     this.stateAgentId = stateAgentId ?? id;
     this.resolveGwsProvider = resolveGwsProvider;
@@ -1507,6 +1514,7 @@ type DirectIntentShadowCandidate =
       ? resolveDirectIntentRoutingCandidates(
         directIntent,
         [
+          'personal_assistant',
           'coding_session_control',
           'coding_backend',
           'filesystem',
@@ -1556,6 +1564,23 @@ type DirectIntentShadowCandidate =
     if (!skipDirectTools) {
       for (const candidate of directIntentRouting.candidates) {
         switch (candidate) {
+          case 'personal_assistant': {
+            const directSecondBrain = await this.tryDirectSecondBrainRead(
+              routedScopedMessage,
+              directIntent?.decision,
+            );
+            if (!directSecondBrain) break;
+            return this.buildDirectIntentResponse({
+              candidate,
+              result: directSecondBrain,
+              message,
+              routingMessage: routedScopedMessage,
+              intentGateway: directIntent,
+              ctx,
+              activeSkills,
+              conversationKey,
+            });
+          }
           case 'coding_session_control': {
             const sessionControlResult = await this.tryDirectCodeSessionControlFromGateway(
               message, ctx, directIntent?.decision,
@@ -2764,6 +2789,120 @@ type DirectIntentShadowCandidate =
 
   private getCodeSessionSurfaceId(message: UserMessage): string {
     return message.surfaceId?.trim() || message.userId?.trim() || 'default-surface';
+  }
+
+  private async tryDirectSecondBrainRead(
+    _message: UserMessage,
+    decision?: IntentGatewayDecision,
+  ): Promise<string | null> {
+    if (!this.secondBrainService || decision?.route !== 'personal_assistant_task') {
+      return null;
+    }
+    if (!['inspect', 'read', 'search'].includes(decision.operation)) {
+      return null;
+    }
+
+    switch (decision.entities.personalItemType) {
+      case 'task': {
+        const tasks = this.secondBrainService.listTasks({ status: 'open', limit: 8 });
+        if (tasks.length === 0) {
+          return 'Second Brain has no open tasks right now.';
+        }
+        return [
+          'Open tasks:',
+          ...tasks.map((task) => {
+            const dueText = task.dueAt ? ` due ${new Date(task.dueAt).toLocaleString()}` : '';
+            const detail = task.details?.trim() ? ` - ${task.details.trim()}` : '';
+            return `- [${task.priority}] ${task.title}${dueText}${detail}`;
+          }),
+        ].join('\n');
+      }
+      case 'note': {
+        const notes = this.secondBrainService.listNotes({ limit: 6 });
+        if (notes.length === 0) {
+          return 'Second Brain has no saved notes yet.';
+        }
+        return [
+          'Recent notes:',
+          ...notes.map((note) => `- ${note.title}: ${note.content.replace(/\s+/g, ' ').trim().slice(0, 120)}${note.content.replace(/\s+/g, ' ').trim().length > 120 ? '...' : ''}`),
+        ].join('\n');
+      }
+      case 'routine': {
+        const routines = this.secondBrainService.listRoutines();
+        return [
+          'Second Brain routines:',
+          ...routines.map((routine) => `- ${routine.name} [${routine.enabled ? 'enabled' : 'paused'}] (${routine.category}, ${routine.defaultRoutingBias})`),
+        ].join('\n');
+      }
+      case 'calendar': {
+        const events = this.secondBrainService.listEvents({ limit: 6, includePast: false });
+        if (events.length === 0) {
+          return 'Second Brain has no upcoming calendar events right now.';
+        }
+        return [
+          'Upcoming events:',
+          ...events.map((event) => {
+            const location = event.location?.trim() ? ` - ${event.location.trim()}` : '';
+            const description = typeof event.description === 'string' && event.description.trim()
+              ? event.description.trim()
+              : '';
+            const descriptionSuffix = description
+              ? ` :: ${description.length > 140 ? `${description.slice(0, 137).trimEnd()}...` : description}`
+              : '';
+            return `- ${event.title} at ${new Date(event.startsAt).toLocaleString()}${location}${descriptionSuffix}`;
+          }),
+        ].join('\n');
+      }
+      case 'person': {
+        const people = this.secondBrainService.listPeople({ limit: 6 });
+        if (people.length === 0) {
+          return 'Second Brain has no saved people yet.';
+        }
+        return [
+          'People in Second Brain:',
+          ...people.map((person) => {
+            const parts = [
+              person.email?.trim(),
+              person.title?.trim(),
+              person.company?.trim(),
+            ].filter((value): value is string => Boolean(value));
+            return `- ${person.name}${parts.length > 0 ? ` - ${parts.join(' · ')}` : ''}`;
+          }),
+        ].join('\n');
+      }
+      case 'overview':
+      case 'brief':
+      case 'library':
+      case 'unknown':
+      default: {
+        const overview = this.secondBrainService.getOverview();
+        const nextEvent = overview.nextEvent
+          ? (() => {
+              const description = typeof overview.nextEvent?.description === 'string' && overview.nextEvent.description.trim()
+                ? overview.nextEvent.description.trim()
+                : '';
+              const descriptionSuffix = description
+                ? ` :: ${description.length > 120 ? `${description.slice(0, 117).trimEnd()}...` : description}`
+                : '';
+              return `${overview.nextEvent.title} at ${new Date(overview.nextEvent.startsAt).toLocaleString()}${descriptionSuffix}`;
+            })()
+          : 'No synced event yet';
+        const topTaskSummary = overview.topTasks.length > 0
+          ? overview.topTasks.map((task) => task.title).slice(0, 3).join(', ')
+          : 'No open tasks';
+        const recentNoteSummary = overview.recentNotes.length > 0
+          ? overview.recentNotes.map((note) => note.title).slice(0, 2).join(', ')
+          : 'No notes yet';
+        return [
+          'Second Brain overview:',
+          `- Next event: ${nextEvent}`,
+          `- Top tasks: ${topTaskSummary}`,
+          `- Recent notes: ${recentNoteSummary}`,
+          `- Enabled routines: ${overview.enabledRoutineCount}`,
+          `- Usage: ${overview.usage.externalTokens} external tokens this period (${overview.usage.monthlyBudget} monthly budget)`,
+        ].join('\n');
+      }
+    }
   }
 
   private resolveCodeSessionContext(message: UserMessage): ResolvedCodeSessionContext | null {

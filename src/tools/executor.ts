@@ -119,6 +119,7 @@ import { registerBuiltinPolicyTools } from './builtin/policy-tools.js';
 import { registerBuiltinProviderTools } from './builtin/provider-tools.js';
 import { registerBuiltinSecurityIntelTools } from './builtin/security-intel-tools.js';
 import { registerBuiltinSearchTools } from './builtin/search-tools.js';
+import { registerBuiltinSecondBrainTools } from './builtin/second-brain-tools.js';
 import { registerBuiltinWorkspaceTools } from './builtin/workspace-tools.js';
 import { registerBuiltinCloudTools } from './builtin/cloud-tools.js';
 import { syncBuiltinBrowserTools } from './builtin/browser-tools.js';
@@ -439,6 +440,12 @@ export interface ToolExecutorOptions {
   resolveStateAgentId?: (agentId?: string) => string | undefined;
   /** Document search service for indexed document collections (hybrid BM25 + vector). */
   docSearch?: import('../search/search-service.js').SearchService;
+  /** Shared Second Brain runtime service for notes, tasks, routines, and usage. */
+  secondBrainService?: import('../runtime/second-brain/second-brain-service.js').SecondBrainService;
+  /** Shared Second Brain briefing service for deterministic brief generation. */
+  secondBrainBriefingService?: import('../runtime/second-brain/briefing-service.js').BriefingService;
+  /** Shared Second Brain horizon scanner for deterministic maintenance runs. */
+  secondBrainHorizonScanner?: import('../runtime/second-brain/horizon-scanner.js').HorizonScanner;
   /** Native Google Workspace service (googleapis SDK, replaces gws CLI). */
   googleService?: import('../google/google-service.js').GoogleService;
   /** Native Microsoft 365 service (Graph REST API). */
@@ -4747,6 +4754,16 @@ export class ToolExecutor {
       getDocSearch: () => this.options.docSearch,
       asString,
       asNumber,
+    });
+
+    registerBuiltinSecondBrainTools({
+      registry: this.registry,
+      getService: () => this.options.secondBrainService,
+      getBriefingService: () => this.options.secondBrainBriefingService,
+      getHorizonScanner: () => this.options.secondBrainHorizonScanner,
+      asString,
+      asNumber,
+      guardAction: (request, action, details) => this.guardAction(request, action, details),
     });
 
     registerBuiltinWorkspaceTools({

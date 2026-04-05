@@ -525,6 +525,30 @@ describe('MessageRouter', () => {
       expect(result.fallbackAgentId).toBe('external');
     });
 
+    it('should route personal assistant intent to the local tier from the gateway decision', () => {
+      const result = router.routeWithTierFromIntent(
+        {
+          route: 'personal_assistant_task',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Show the Second Brain overview.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          entities: {
+            personalItemType: 'overview',
+          },
+        },
+        'What do I have due today?',
+        'auto',
+        0.5,
+      );
+      expect(result.agentId).toBe('local');
+      expect(result.tier).toBe('local');
+      expect(result.reason).toContain('intent route=personal_assistant_task');
+      expect(result.fallbackAgentId).toBe('external');
+    });
+
     it('should degrade cleanly when the preferred intent tier is unavailable', () => {
       const singleRouter = new MessageRouter({ strategy: 'keyword' });
       singleRouter.registerAgent('external', ['network_access'], {}, 'external');

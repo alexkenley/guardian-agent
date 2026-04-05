@@ -134,11 +134,11 @@ export function renderRunTimelineContextAssembly(contextAssembly, esc) {
   if (context.omittedMemoryEntryCount > 0) pills.push(`${context.omittedMemoryEntryCount} omitted`);
 
   return `
-    <div style="margin-top:0.45rem;padding:0.5rem 0.6rem;border:1px solid var(--border);border-radius:var(--radius);background:rgba(255,255,255,0.03)">
+    <div style="margin-top:0.45rem;padding:0.5rem 0.6rem;border:1px solid var(--border);border-radius:0;background:rgba(255,255,255,0.03)">
       <div class="ops-task-sub" style="margin-bottom:0.3rem">Context Assembly</div>
       ${pills.length > 0
         ? `<div style="display:flex;flex-wrap:wrap;gap:0.35rem;margin-bottom:${context.knowledgeBaseQueryPreview || context.selectedMemoryEntries.length > 0 ? '0.4rem' : '0'}">
-            ${pills.map((pill) => `<span style="display:inline-flex;align-items:center;padding:0.12rem 0.42rem;border:1px solid var(--border);border-radius:999px;font-size:0.75rem;color:var(--text-secondary)">${esc(pill)}</span>`).join('')}
+            ${pills.map((pill) => `<span style="display:inline-flex;align-items:center;padding:0.12rem 0.42rem;border:1px solid var(--border);border-radius:0;font-size:0.75rem;color:var(--text-secondary)">${esc(pill)}</span>`).join('')}
           </div>`
         : ''}
       ${context.knowledgeBaseQueryPreview
@@ -162,7 +162,7 @@ export function renderRunTimelineContextAssembly(contextAssembly, esc) {
       ${Array.isArray(context.selectedMemoryEntries) && context.selectedMemoryEntries.length > 0
         ? `<div style="margin-top:0.45rem;display:flex;flex-direction:column;gap:0.32rem">
             ${context.selectedMemoryEntries.map((entry) => `
-              <div style="padding:0.35rem 0.45rem;border:1px solid var(--border);border-radius:var(--radius-sm, 8px);background:var(--bg-secondary)">
+              <div style="padding:0.35rem 0.45rem;border:1px solid var(--border);border-radius:0;background:var(--bg-secondary)">
                 <div style="display:flex;gap:0.4rem;justify-content:space-between;align-items:center;flex-wrap:wrap">
                   <strong>${esc(entry.category)}</strong>
                   <span class="ops-task-sub">${esc(`${entry.scope === 'coding_session' ? 'coding' : 'global'} | ${entry.renderMode}${entry.isContextFlush ? ' | context flush' : ''}`)}</span>
@@ -178,7 +178,7 @@ export function renderRunTimelineContextAssembly(contextAssembly, esc) {
       ${Array.isArray(context.skillArtifactReferences) && context.skillArtifactReferences.length > 0
         ? `<div style="margin-top:0.45rem;display:flex;flex-direction:column;gap:0.32rem">
             ${context.skillArtifactReferences.map((entry) => `
-              <div style="padding:0.35rem 0.45rem;border:1px solid var(--border);border-radius:var(--radius-sm, 8px);background:var(--bg-secondary)">
+              <div style="padding:0.35rem 0.45rem;border:1px solid var(--border);border-radius:0;background:var(--bg-secondary)">
                 <div style="display:flex;gap:0.4rem;justify-content:space-between;align-items:center;flex-wrap:wrap">
                   <strong>${esc(entry.title)}</strong>
                   <span class="ops-task-sub">${esc(`${entry.skillId} | ${entry.scope === 'coding_session' ? 'coding' : 'global'} | ${entry.sourceClass}`)}</span>

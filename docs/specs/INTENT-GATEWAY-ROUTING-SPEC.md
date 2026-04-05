@@ -87,6 +87,7 @@ Current route values:
 - `automation_output_task`
 - `ui_control`
 - `browser_task`
+- `personal_assistant_task`
 - `workspace_task`
 - `email_task`
 - `search_task`
@@ -97,6 +98,29 @@ Current route values:
 - `security_task`
 - `general_assistant`
 - `unknown`
+
+### Personal Assistant Route Ownership
+
+`personal_assistant_task` is the current route for `Second Brain` and personal productivity work.
+
+Current ownership includes:
+- overview reads
+- notes
+- tasks
+- calendar planning and event context
+- people context
+- routines
+- briefs and follow-up drafts
+- personal retrieval across messages, docs, events, and notes
+
+Boundary rules:
+- prefer `personal_assistant_task` when the user is asking for personal productivity help, meeting prep, follow-up drafting, or cross-source personal retrieval
+- use `workspace_task` for explicit provider CRUD or administration in Google Workspace or Microsoft 365 surfaces
+- use `email_task` for direct mailbox reads, replies, sends, forwards, or draft management in Gmail or Outlook
+
+Direct-routing note:
+- `direct-intent-routing.ts` maps `personal_assistant_task` to the bounded `personal_assistant` candidate
+- `chat-agent.ts` may answer simple `Second Brain` reads directly from the shared store without a full tool loop
 
 ### Turn Relations
 

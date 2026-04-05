@@ -20,6 +20,30 @@ import type { QuickActionDefinition } from '../quick-actions.js';
 import type { SetupStatus, SetupApplyInput, SearchConfigInput } from '../runtime/setup.js';
 import type { AnalyticsSummary, AnalyticsEventInput } from '../runtime/analytics.js';
 import type { ConversationSessionInfo } from '../runtime/conversation.js';
+import type {
+  SecondBrainBriefRecord,
+  SecondBrainBriefFilter,
+  SecondBrainGenerateBriefInput,
+  SecondBrainEventFilter,
+  SecondBrainEventRecord,
+  SecondBrainEventUpsertInput,
+  SecondBrainLinkFilter,
+  SecondBrainLinkRecord,
+  SecondBrainLinkUpsertInput,
+  SecondBrainNoteFilter,
+  SecondBrainNoteRecord,
+  SecondBrainNoteUpsertInput,
+  SecondBrainOverview,
+  SecondBrainPersonFilter,
+  SecondBrainPersonRecord,
+  SecondBrainPersonUpsertInput,
+  SecondBrainRoutineRecord,
+  SecondBrainRoutineUpdateInput,
+  SecondBrainTaskFilter,
+  SecondBrainTaskRecord,
+  SecondBrainTaskUpsertInput,
+  SecondBrainUsageSummary,
+} from '../runtime/second-brain/types.js';
 import type { ResponseSourceMetadata } from '../runtime/model-routing-ux.js';
 import type { AssistantOrchestratorState } from '../runtime/orchestrator.js';
 import type { RouteDecision } from '../runtime/message-router.js';
@@ -981,6 +1005,16 @@ export interface DashboardMutationResult {
   details?: Record<string, unknown>;
 }
 
+export type DashboardSecondBrainOverview = SecondBrainOverview;
+export type DashboardSecondBrainBrief = SecondBrainBriefRecord;
+export type DashboardSecondBrainEvent = SecondBrainEventRecord;
+export type DashboardSecondBrainTask = SecondBrainTaskRecord;
+export type DashboardSecondBrainNote = SecondBrainNoteRecord;
+export type DashboardSecondBrainPerson = SecondBrainPersonRecord;
+export type DashboardSecondBrainLink = SecondBrainLinkRecord;
+export type DashboardSecondBrainRoutine = SecondBrainRoutineRecord;
+export type DashboardSecondBrainUsage = SecondBrainUsageSummary;
+
 /** Dashboard API callbacks supplied by index.ts to WebChannel. */
 export interface DashboardCallbacks {
   onAgents?: () => DashboardAgentInfo[];
@@ -1153,6 +1187,22 @@ export interface DashboardCallbacks {
   }) => { success: boolean; message: string };
   onMemoryView?: (args?: DashboardMemoryFilterInput) => DashboardMemoryResponse;
   onMemoryCurate?: (input: DashboardMemoryMutationInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
+  onSecondBrainOverview?: () => DashboardSecondBrainOverview;
+  onSecondBrainGenerateBrief?: (input: SecondBrainGenerateBriefInput) => DashboardSecondBrainBrief | Promise<DashboardSecondBrainBrief>;
+  onSecondBrainCalendar?: (args?: SecondBrainEventFilter) => DashboardSecondBrainEvent[];
+  onSecondBrainCalendarUpsert?: (input: SecondBrainEventUpsertInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
+  onSecondBrainTasks?: (args?: SecondBrainTaskFilter) => DashboardSecondBrainTask[];
+  onSecondBrainTaskUpsert?: (input: SecondBrainTaskUpsertInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
+  onSecondBrainNotes?: (args?: SecondBrainNoteFilter) => DashboardSecondBrainNote[];
+  onSecondBrainNoteUpsert?: (input: SecondBrainNoteUpsertInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
+  onSecondBrainPeople?: (args?: SecondBrainPersonFilter) => DashboardSecondBrainPerson[];
+  onSecondBrainPersonUpsert?: (input: SecondBrainPersonUpsertInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
+  onSecondBrainLinks?: (args?: SecondBrainLinkFilter) => DashboardSecondBrainLink[];
+  onSecondBrainLinkUpsert?: (input: SecondBrainLinkUpsertInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
+  onSecondBrainBriefs?: (args?: SecondBrainBriefFilter) => DashboardSecondBrainBrief[];
+  onSecondBrainRoutines?: () => DashboardSecondBrainRoutine[];
+  onSecondBrainRoutineUpdate?: (input: SecondBrainRoutineUpdateInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
+  onSecondBrainUsage?: () => DashboardSecondBrainUsage;
   onReferenceGuide?: () => ReferenceGuide;
   onQuickActions?: () => QuickActionDefinition[];
   onQuickActionRun?: (args: {

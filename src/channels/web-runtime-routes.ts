@@ -173,6 +173,300 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     return true;
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/second-brain/overview') {
+    if (!dashboard.onSecondBrainOverview) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    sendJSON(res, 200, dashboard.onSecondBrainOverview());
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/second-brain/briefs/generate') {
+    if (!dashboard.onSecondBrainGenerateBrief) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const brief = await dashboard.onSecondBrainGenerateBrief({
+        kind: trimOptionalString(parsed.kind) as import('../runtime/second-brain/types.js').SecondBrainGenerateBriefInput['kind'],
+        eventId: trimOptionalString(parsed.eventId),
+      });
+      sendJSON(res, 200, brief);
+      context.maybeEmitUIInvalidation(brief, ['second-brain'], 'second-brain.brief.generated', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/second-brain/briefs') {
+    if (!dashboard.onSecondBrainBriefs) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    const limit = url.searchParams.get('limit');
+    const kind = trimOptionalString(url.searchParams.get('kind'));
+    const eventId = trimOptionalString(url.searchParams.get('eventId'));
+    sendJSON(res, 200, dashboard.onSecondBrainBriefs({
+      ...(kind ? { kind: kind as import('../runtime/second-brain/types.js').SecondBrainBriefFilter['kind'] } : {}),
+      ...(eventId ? { eventId } : {}),
+      ...(limit ? { limit: parseInt(limit, 10) } : {}),
+    }));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/second-brain/calendar') {
+    if (!dashboard.onSecondBrainCalendar) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    const limit = url.searchParams.get('limit');
+    const fromTime = url.searchParams.get('fromTime');
+    const toTime = url.searchParams.get('toTime');
+    const includePast = url.searchParams.get('includePast');
+    sendJSON(res, 200, dashboard.onSecondBrainCalendar({
+      ...(limit ? { limit: parseInt(limit, 10) } : {}),
+      ...(fromTime ? { fromTime: parseInt(fromTime, 10) } : {}),
+      ...(toTime ? { toTime: parseInt(toTime, 10) } : {}),
+      ...(includePast == null ? {} : { includePast: includePast === 'true' }),
+    }));
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/second-brain/calendar/upsert') {
+    if (!dashboard.onSecondBrainCalendarUpsert) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const result = await dashboard.onSecondBrainCalendarUpsert({
+        id: trimOptionalString(parsed.id),
+        title: trimOptionalString(parsed.title) ?? '',
+        ...(hasOwn(parsed, 'description') && typeof parsed.description === 'string'
+          ? { description: parsed.description }
+          : {}),
+        startsAt: typeof parsed.startsAt === 'number' ? parsed.startsAt : Number.NaN,
+        endsAt: typeof parsed.endsAt === 'number' ? parsed.endsAt : undefined,
+        source: trimOptionalString(parsed.source) as import('../runtime/second-brain/types.js').SecondBrainEventRecord['source'] | undefined,
+        ...(hasOwn(parsed, 'location') && typeof parsed.location === 'string'
+          ? { location: parsed.location }
+          : {}),
+      });
+      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+      context.maybeEmitUIInvalidation(result, ['second-brain'], 'second-brain.calendar.upserted', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/second-brain/tasks') {
+    if (!dashboard.onSecondBrainTasks) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    const limit = url.searchParams.get('limit');
+    const status = trimOptionalString(url.searchParams.get('status'));
+    sendJSON(res, 200, dashboard.onSecondBrainTasks({
+      ...(status ? { status: status as import('../runtime/second-brain/types.js').SecondBrainTaskFilter['status'] } : {}),
+      ...(limit ? { limit: parseInt(limit, 10) } : {}),
+    }));
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/second-brain/tasks/upsert') {
+    if (!dashboard.onSecondBrainTaskUpsert) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const result = await dashboard.onSecondBrainTaskUpsert({
+        id: trimOptionalString(parsed.id),
+        title: trimOptionalString(parsed.title) ?? '',
+        details: trimOptionalString(parsed.details),
+        status: trimOptionalString(parsed.status) as import('../runtime/second-brain/types.js').SecondBrainTaskStatus | undefined,
+        priority: trimOptionalString(parsed.priority) as import('../runtime/second-brain/types.js').SecondBrainTaskPriority | undefined,
+        dueAt: typeof parsed.dueAt === 'number' ? parsed.dueAt : undefined,
+      });
+      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+      context.maybeEmitUIInvalidation(result, ['second-brain'], 'second-brain.task.upserted', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/second-brain/notes') {
+    if (!dashboard.onSecondBrainNotes) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    const limit = url.searchParams.get('limit');
+    const includeArchived = url.searchParams.get('includeArchived');
+    sendJSON(res, 200, dashboard.onSecondBrainNotes({
+      includeArchived: includeArchived == null ? undefined : includeArchived === 'true',
+      ...(limit ? { limit: parseInt(limit, 10) } : {}),
+    }));
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/second-brain/notes/upsert') {
+    if (!dashboard.onSecondBrainNoteUpsert) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const result = await dashboard.onSecondBrainNoteUpsert({
+        id: trimOptionalString(parsed.id),
+        title: trimOptionalString(parsed.title),
+        content: trimOptionalString(parsed.content) ?? '',
+        tags: Array.isArray(parsed.tags)
+          ? parsed.tags.map((value) => trimOptionalString(value)).filter((value): value is string => Boolean(value))
+          : undefined,
+        pinned: typeof parsed.pinned === 'boolean' ? parsed.pinned : undefined,
+        archived: typeof parsed.archived === 'boolean' ? parsed.archived : undefined,
+      });
+      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+      context.maybeEmitUIInvalidation(result, ['second-brain'], 'second-brain.note.upserted', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/second-brain/people') {
+    if (!dashboard.onSecondBrainPeople) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    const limit = url.searchParams.get('limit');
+    sendJSON(res, 200, dashboard.onSecondBrainPeople({
+      query: trimOptionalString(url.searchParams.get('query')),
+      ...(limit ? { limit: parseInt(limit, 10) } : {}),
+    }));
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/second-brain/people/upsert') {
+    if (!dashboard.onSecondBrainPersonUpsert) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const result = await dashboard.onSecondBrainPersonUpsert({
+        id: trimOptionalString(parsed.id),
+        name: trimOptionalString(parsed.name),
+        email: trimOptionalString(parsed.email),
+        title: trimOptionalString(parsed.title),
+        company: trimOptionalString(parsed.company),
+        notes: trimOptionalString(parsed.notes),
+        relationship: trimOptionalString(parsed.relationship) as import('../runtime/second-brain/types.js').SecondBrainPersonRelationship | undefined,
+        lastContactAt: typeof parsed.lastContactAt === 'number' ? parsed.lastContactAt : undefined,
+      });
+      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+      context.maybeEmitUIInvalidation(result, ['second-brain'], 'second-brain.person.upserted', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/second-brain/links') {
+    if (!dashboard.onSecondBrainLinks) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    const limit = url.searchParams.get('limit');
+    sendJSON(res, 200, dashboard.onSecondBrainLinks({
+      query: trimOptionalString(url.searchParams.get('query')),
+      kind: trimOptionalString(url.searchParams.get('kind')) as import('../runtime/second-brain/types.js').SecondBrainLinkFilter['kind'] | undefined,
+      ...(limit ? { limit: parseInt(limit, 10) } : {}),
+    }));
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/second-brain/links/upsert') {
+    if (!dashboard.onSecondBrainLinkUpsert) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const result = await dashboard.onSecondBrainLinkUpsert({
+        id: trimOptionalString(parsed.id),
+        title: trimOptionalString(parsed.title),
+        url: trimOptionalString(parsed.url) ?? '',
+        summary: trimOptionalString(parsed.summary),
+        tags: Array.isArray(parsed.tags)
+          ? parsed.tags.map((value) => trimOptionalString(value)).filter((value): value is string => Boolean(value))
+          : undefined,
+        kind: trimOptionalString(parsed.kind) as import('../runtime/second-brain/types.js').SecondBrainLinkKind | undefined,
+      });
+      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+      context.maybeEmitUIInvalidation(result, ['second-brain'], 'second-brain.link.upserted', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/second-brain/routines') {
+    if (!dashboard.onSecondBrainRoutines) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    sendJSON(res, 200, dashboard.onSecondBrainRoutines());
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/second-brain/routines/update') {
+    if (!dashboard.onSecondBrainRoutineUpdate) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const result = await dashboard.onSecondBrainRoutineUpdate({
+        id: trimOptionalString(parsed.id) ?? '',
+        enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : undefined,
+        deliveryDefaults: Array.isArray(parsed.deliveryDefaults)
+          ? parsed.deliveryDefaults
+            .map((value) => trimOptionalString(value))
+            .filter((value): value is import('../runtime/second-brain/types.js').SecondBrainDeliveryChannel => Boolean(value))
+          : undefined,
+        defaultRoutingBias: trimOptionalString(parsed.defaultRoutingBias) as import('../runtime/second-brain/types.js').SecondBrainRoutingBias | undefined,
+        budgetProfileId: trimOptionalString(parsed.budgetProfileId),
+      });
+      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+      context.maybeEmitUIInvalidation(result, ['second-brain'], 'second-brain.routine.updated', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/second-brain/usage') {
+    if (!dashboard.onSecondBrainUsage) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    sendJSON(res, 200, dashboard.onSecondBrainUsage());
+    return true;
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/memory/curate') {
     if (!dashboard.onMemoryCurate) {
       sendJSON(res, 404, { error: 'Not available' });

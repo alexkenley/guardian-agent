@@ -208,6 +208,90 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.query).toBe('latest Playwright MCP news');
   });
 
+  it('parses personal assistant routes and item types', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Show my tasks for today.',
+        channel: 'web',
+      },
+      async () => ({
+        content: '',
+        toolCalls: [{
+          id: 'call-personal-1',
+          name: 'route_intent',
+          arguments: JSON.stringify({
+            route: 'personal_assistant_task',
+            confidence: 'high',
+            operation: 'read',
+            summary: 'Reads the user task list from Second Brain.',
+            personalItemType: 'task',
+          }),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.operation).toBe('read');
+    expect(result.decision.entities.personalItemType).toBe('task');
+  });
+
+  it('preserves provider metadata for provider-backed personal assistant work', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Prepare me for my next Outlook meeting using the calendar event, recent email, and docs.',
+        channel: 'web',
+      },
+      async () => ({
+        content: '',
+        toolCalls: [{
+          id: 'call-personal-provider-1',
+          name: 'route_intent',
+          arguments: JSON.stringify({
+            route: 'personal_assistant_task',
+            confidence: 'high',
+            operation: 'inspect',
+            summary: 'Prepares a meeting brief using Microsoft 365 context.',
+            personalItemType: 'brief',
+            emailProvider: 'm365',
+          }),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.entities.personalItemType).toBe('brief');
+    expect(result.decision.entities.emailProvider).toBe('m365');
+  });
+
+  it('preserves workspace_task for explicit provider CRUD', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Update the SharePoint document for the launch checklist.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'workspace_task',
+          confidence: 'high',
+          operation: 'update',
+          summary: 'Updates an explicit Microsoft 365 provider document.',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('workspace_task');
+    expect(result.decision.operation).toBe('update');
+  });
+
   it('includes file-grounded coding review guidance in the gateway system prompt', async () => {
     const gateway = new IntentGateway();
     let inspectedSystemPrompt = '';
@@ -239,6 +323,51 @@ describe('IntentGateway', () => {
 
     expect(inspectedSystemPrompt).toContain('Requests to inspect, explain, review, or plan changes against specific repo files');
     expect(inspectedSystemPrompt).toContain('Inspect src/skills/prompt.ts and src/chat-agent.ts. Review the uplift for regressions and missing tests.');
+  });
+
+  it('includes explicit Google Workspace and Microsoft 365 split guidance in both gateway prompts', async () => {
+    const gateway = new IntentGateway();
+    let primaryPrompt = '';
+    let fallbackPrompt = '';
+    let callCount = 0;
+
+    const result = await gateway.classify(
+      {
+        content: 'Prepare me for my next Outlook meeting using the calendar event, recent email, and docs.',
+        channel: 'web',
+      },
+      async (messages, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          primaryPrompt = String(messages[0]?.content || '');
+          expect(options?.tools?.[0]?.name).toBe('route_intent');
+          throw new Error('force fallback');
+        }
+
+        fallbackPrompt = String(messages[0]?.content || '');
+        expect(options?.tools).toBeUndefined();
+        return {
+          content: JSON.stringify({
+            route: 'personal_assistant_task',
+            confidence: 'high',
+            operation: 'inspect',
+            summary: 'Prepares a meeting brief using Microsoft 365 context.',
+            personalItemType: 'brief',
+            emailProvider: 'm365',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(primaryPrompt).toContain('Prefer personal_assistant_task for meeting prep, follow-up drafting, calendar planning');
+    expect(primaryPrompt).toContain('Example: "Prepare me for my next Outlook meeting using the calendar event, recent email, and docs." -> route=personal_assistant_task');
+    expect(primaryPrompt).toContain('SharePoint');
+    expect(fallbackPrompt).toContain('workspace_task means explicit provider CRUD or administration in Google Workspace or Microsoft 365 surfaces');
+    expect(fallbackPrompt).toContain('Examples: "Update the SharePoint document for the launch checklist." -> route="workspace_task", operation="update".');
+    expect(fallbackPrompt).toContain('Examples: "Check my unread Outlook mail." -> route="email_task", operation="read", emailProvider="m365".');
   });
 
   it('preserves explicit cloud tool and profile entities without collapsing to automation control', async () => {

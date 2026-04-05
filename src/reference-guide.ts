@@ -41,21 +41,22 @@ export function getReferenceGuide(): ReferenceGuide {
           {
             id: 'quick-start',
             title: 'Quick Start',
-            summary: 'Bring the assistant online, open the dashboard, and confirm your provider and auth configuration.',
+            summary: 'Bring the assistant online, open Second Brain, and confirm your provider and auth configuration.',
             sections: [
               {
                 title: 'Start The System',
                 items: [
                   'Run Guardian Agent from the repo root with the platform startup script or `npx guardianagent`.',
-                  'Open the web dashboard at `http://localhost:3000` when the web channel is enabled.',
-                  'If web authentication is enabled, use the token shown at startup or your configured dashboard credentials to sign in.',
+                  'Open the web UI at `http://localhost:3000` when the web channel is enabled.',
+                  'If web authentication is enabled, use the token shown at startup or your configured web credentials to sign in.',
                   'Use the Configuration Center in the web UI or CLI `/config` to create or update settings instead of editing config files directly.',
                 ],
               },
               {
                 title: 'Verify Readiness',
                 items: [
-                  'Use the Dashboard page to confirm the assistant is running and ready.',
+                  'Use the Second Brain home at `#/` to confirm the assistant is running and ready for day-to-day work.',
+                  'Open `#/dashboard` when you want the older operator-focused runtime summary during the migration period.',
                   'Open `#/config` to verify your AI connection, web access settings, and enabled channels.',
                   'Open Configuration > Integrations > Coding Assistants when you want to confirm whether Guardian can delegate work to Claude Code, Codex, Gemini CLI, or Aider.',
                   'Open Configuration > Appearance when you want to raise the dashboard text size slightly, switch to a more readable font preset, or reduce interface motion.',
@@ -63,16 +64,136 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Use CLI `/providers` or Configuration > AI Providers to confirm the selected provider is reachable.',
                   'Use CLI `/guide` or Telegram `/guide` to pull the same reference content outside the web UI.',
                 ],
-                note: 'Most configuration changes now appear in the web UI without a manual browser refresh because the dashboard listens for server-sent invalidation events.',
+                note: 'Most configuration changes now appear in the web UI without a manual browser refresh because the web channel listens for server-sent invalidation events.',
               },
               {
                 title: 'Which Page To Use',
                 items: [
-                  'Use Dashboard for chat, recent runs, and general system status.',
+                  'Use Second Brain for tasks, notes, routines, and the personal-assistant home view.',
+                  'Use Dashboard at `#/dashboard` for the legacy operator summary, routing trace, and runtime health view.',
                   'Use Code for repo work, coding sessions, approvals, and workspace activity.',
                   'Use Automations for saved workflows, schedules, output, and run history.',
                   'Use Security for alerts, Assistant Security, threat intel, and security activity.',
                   'Use Configuration for setup, integrations, AI connections, tools, and appearance.',
+                ],
+              },
+            ],
+          },
+          {
+            id: 'second-brain',
+            title: 'Second Brain',
+            summary: 'Comprehensive operator and user guide to the daily-home, calendar, tasks, notes, contacts, library, briefs, routines, sync behavior, and usage signals.',
+            sections: [
+              {
+                title: 'What Second Brain Is',
+                items: [
+                  'Open Second Brain at `#/` for the main personal-assistant surface.',
+                  'The current tabs are `Today`, `Calendar`, `Tasks`, `Notes`, `People`, `Library`, `Briefs`, and `Routines`.',
+                  'Second Brain is the personal-assistant home, not the operator runtime page. Use it for your day, your commitments, your notes, and your planning context.',
+                  'The shared store behind Second Brain is also used by web chat, CLI, Telegram, and deterministic brief generation, so saved items are not trapped in one panel.',
+                  'Dashboard at `#/dashboard` remains the operator-focused page for runtime health, traces, jobs, and broader system status.',
+                  'Use explicit Gmail, Outlook, Drive, OneDrive, SharePoint, or Docs CRUD requests when you want direct provider operations rather than Second Brain retrieval or planning.',
+                ],
+              },
+              {
+                title: 'Today',
+                items: [
+                  'Today is the landing surface for the current day. It brings together your agenda, quick capture, priority tasks, follow-up people, recent notes, brief actions, and routine status.',
+                  'The quick-add control on Today lets you create a note, task, or local event without leaving the daily view.',
+                  'The summary cards on Today are there to help you triage quickly. They surface what matters now, but the dedicated tabs remain the deeper editing surfaces.',
+                  'The Cloud AI budget card in the header shows Second Brain cloud-model token usage for the current month. Local-only work does not count toward that number.',
+                  'Use Today when you want to decide what to do next fast instead of browsing every tab manually.',
+                ],
+              },
+              {
+                title: 'Calendar',
+                items: [
+                  'Calendar uses a real month grid. Choose a day to see its agenda, then select an event to review details in the side panel.',
+                  'Use `New event` to add a local event or time block that belongs only to your shared Second Brain store.',
+                  'Local events currently support title, start time, end time, location, and description. The description field is where meeting context, prep notes, or agenda detail should live.',
+                  'Google Calendar and Microsoft 365 events can appear in the grid when those providers are connected, but those synced events are read-only here. Edit them in the source calendar.',
+                  'If a synced event is selected, you can generate a pre-meeting brief from it directly from the Calendar view.',
+                ],
+              },
+              {
+                title: 'Tasks',
+                items: [
+                  'Tasks use a board layout with `Todo`, `In progress`, and `Done` columns.',
+                  'Use the lane buttons on each task card when you want to move work quickly without reopening the full editor.',
+                  'Selecting a task opens the editor for the full title, details, priority, status, and due date fields.',
+                  'Tasks created here feed the Today view and can also be pulled into meeting briefs and follow-up drafts when relevant.',
+                  'Use the top-right `New task` action when you want a clean editor instead of changing the currently selected task.',
+                ],
+              },
+              {
+                title: 'Notes And Ideas',
+                items: [
+                  'Notes is the general capture area for decisions, loose context, prep material, promises, and anything else you may need later.',
+                  'Search matches note title, body text, and tags, so the Notes tab is intended to work as a practical retrieval surface, not just a scratchpad.',
+                  'Notes can be pinned when they should stay prominent and archived when they should stay searchable but stop cluttering the active list.',
+                  'A title is optional when saving a note. If you leave it blank, Guardian infers one from the note content.',
+                  'Use Notes when something matters semantically but does not belong as a task, event, or contact record.',
+                ],
+              },
+              {
+                title: 'Contacts',
+                items: [
+                  'Contacts stores people with relationship type, company, title, email, notes, and last-contact date.',
+                  'Use the relationship filter when you want to narrow the list to work, personal, family, vendor, or all contacts.',
+                  'The `Mark contacted today` action is the fast path for keeping follow-up data accurate without manually editing the timestamp field.',
+                  'Contact records can surface in briefs when the event, notes, or tasks suggest those people are relevant.',
+                  'Use Contacts for real relationship context, not just an address book. The notes field is meant for promises, social detail, and follow-up cues.',
+                ],
+              },
+              {
+                title: 'Library',
+                items: [
+                  'Library is for saved links, repositories, documents, files, and references you may want later.',
+                  'Each library item stores a title, URL, kind, tags, and a short summary of why it matters.',
+                  'Use the kind filter when you want to narrow the list to references, documents, repositories, or files.',
+                  'Use the summary field to explain why the item is useful instead of forcing future-you to reopen it cold.',
+                  'The `Open link` action is available from the editor when a saved item is selected.',
+                ],
+              },
+              {
+                title: 'Briefs',
+                items: [
+                  'Briefs is where saved Morning Briefs, Pre-Meeting Briefs, and Follow-Up Drafts are reviewed after generation.',
+                  'Morning Brief gives you a deterministic summary of current calendar, tasks, notes, and routine state.',
+                  'Pre-Meeting Brief is anchored to a selected event and tries to gather the most relevant tasks, notes, and people around that meeting.',
+                  'Follow-Up Draft is anchored to a finished event and assembles a draftable follow-up packet from recent shared context.',
+                  'Use the Today page, Calendar, or Briefs tab to trigger brief generation manually when you want it on demand.',
+                ],
+              },
+              {
+                title: 'Routines',
+                items: [
+                  'Routines exposes the built-in deterministic routines that support Second Brain today. This is not yet an open-ended routine builder.',
+                  'Routine cards show whether a routine is enabled, what category it belongs to, and the trigger style it uses.',
+                  'Selecting a routine lets you change enabled state, routing bias, budget profile ID, and default delivery channels.',
+                  'Routine output can be delivered to web, CLI, or Telegram depending on the routine settings and the supported runtime path.',
+                  'Use Routines when you want predictable assistance on a schedule without turning Second Brain into an always-running autonomous agent.',
+                ],
+              },
+              {
+                title: 'Sync And Shared Data',
+                items: [
+                  'If Google Workspace or Microsoft 365 is connected, Second Brain can sync calendar events and contacts into the shared store.',
+                  'Guardian runs a startup sync and a deterministic Second Brain horizon scan every 15 minutes.',
+                  'Second Brain data is shared across the supported surfaces. A task, note, event, person, or library item created in the web UI is part of the same backend store used by other channels.',
+                  'Simple chat questions such as `What do I have today?` or `Show my tasks` can be answered directly from that shared store without a full open-ended tool loop.',
+                  'Event descriptions, task details, note content, people notes, and library summaries are part of the stored records, so they are available to the assistant logic that reads those records.',
+                ],
+                note: 'Provider-backed calendar events remain editable in the source provider, but their synced detail can still be used for read-only review and brief generation inside Second Brain.',
+              },
+              {
+                title: 'Operator Expectations And Limits',
+                items: [
+                  'Second Brain is meant to be understandable from the UI alone. Controls that only duplicate nearby actions should be removed rather than explained away.',
+                  'The current implementation exposes budget visibility and attribution, but it is not yet a separate policy engine that automatically pauses or downgrades work when you cross a threshold.',
+                  'Second Brain is intentionally bounded. Briefs are deterministic, routines are built-in, and provider sync is curated rather than free-form.',
+                  'Use Second Brain for planning, retrieval, and bounded capture. Use Dashboard, Configuration, Security, Automations, and Code for the heavier operator control surfaces.',
+                  'If you need direct provider changes, provider-specific messages, or broader workflow automation, move to the explicit feature surface instead of trying to force it through Second Brain.',
                 ],
               },
             ],
@@ -88,6 +209,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Repository: https://github.com/Threat-Vector-Security/guardian-agent',
                   'README: https://github.com/Threat-Vector-Security/guardian-agent/blob/main/README.md',
                   'Security policy: https://github.com/Threat-Vector-Security/guardian-agent/blob/main/SECURITY.md',
+                  'Second Brain as-built spec: https://github.com/Threat-Vector-Security/guardian-agent/blob/main/docs/specs/SECOND-BRAIN-AS-BUILT-SPEC.md',
                   'Docs and architecture notes: https://github.com/Threat-Vector-Security/guardian-agent/tree/main/docs',
                   'Issues and pull requests: https://github.com/Threat-Vector-Security/guardian-agent/issues',
                 ],

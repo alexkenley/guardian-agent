@@ -441,7 +441,7 @@ function renderAssistantJobFollowUpResult() {
   if (!result || typeof result !== 'object') return '';
   const tone = result.success ? 'var(--success)' : 'var(--warning)';
   const content = typeof result.content === 'string' && result.content.trim().length > 0
-    ? `<pre style="margin:0.65rem 0 0;white-space:pre-wrap;background:var(--bg-elevated);padding:0.75rem;border-radius:8px;border:1px solid var(--border-color)">${esc(result.content)}</pre>`
+    ? `<pre style="margin:0.65rem 0 0;white-space:pre-wrap;background:var(--bg-elevated);padding:0.75rem;border-radius:0;border:1px solid var(--border-color)">${esc(result.content)}</pre>`
     : '';
   return `
     <div style="padding:0.85rem 1rem 0;color:${tone}">

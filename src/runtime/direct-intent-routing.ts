@@ -1,6 +1,7 @@
 import type { IntentGatewayDecision, IntentGatewayRecord } from './intent-gateway.js';
 
 export type DirectIntentRoutingCandidate =
+  | 'personal_assistant'
   | 'filesystem'
   | 'memory_write'
   | 'memory_read'
@@ -77,6 +78,8 @@ function preferredCandidatesForDecision(
       return [];
     case 'browser_task':
       return ['browser'];
+    case 'personal_assistant_task':
+      return ['personal_assistant'];
     case 'workspace_task':
       return decision.operation === 'send' || decision.operation === 'draft'
         ? ['workspace_write', 'workspace_read']
