@@ -569,6 +569,49 @@ export interface AutomationOutputHandlingConfig {
   persistArtifacts: AutomationArtifactPersistenceMode;
 }
 
+export interface PerformanceLatencyTarget {
+  kind: 'internet' | 'api';
+  id: string;
+  target?: string;
+  targetRef?: string;
+}
+
+export interface PerformanceProfileConfig {
+  id: string;
+  name: string;
+  powerMode?: 'balanced' | 'high_performance' | 'power_saver';
+  autoActions?: {
+    enabled: boolean;
+    allowedActionIds: string[];
+  };
+  processRules?: {
+    terminate?: string[];
+    protect?: string[];
+  };
+  latencyTargets?: PerformanceLatencyTarget[];
+}
+
+export interface PerformanceAlarmsConfig {
+  cpuPercentWarn?: number;
+  memoryPercentWarn?: number;
+  apiLatencyWarnMs?: number;
+  internetPacketLossWarnPercent?: number;
+}
+
+export interface PerformanceProtectedProcessesConfig {
+  names: string[];
+  honorActiveCodeSessions: boolean;
+}
+
+export interface PerformanceConfig {
+  enabled: boolean;
+  sampleIntervalSec: number;
+  trendRetentionDays: number;
+  alarms?: PerformanceAlarmsConfig;
+  protectedProcesses?: PerformanceProtectedProcessesConfig;
+  profiles?: PerformanceProfileConfig[];
+}
+
 /** Quick action templates for structured assistant workflows. */
 export interface AssistantQuickActionsConfig {
   /** Enable quick actions. */
@@ -1373,6 +1416,7 @@ export interface AssistantConfig {
   analytics: AssistantAnalyticsConfig;
   notifications: AssistantNotificationsConfig;
   quickActions: AssistantQuickActionsConfig;
+  performance?: PerformanceConfig;
   security?: AssistantSecurityConfig;
   threatIntel: AssistantThreatIntelConfig;
   network: AssistantNetworkConfig;
@@ -1637,6 +1681,34 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         review: 'Adopt the Senior Staff Engineer persona to conduct a five-axis review of the following code. Focus on maintainability, architecture, and correctness using the receiving-code-review skill:\n{details}',
         'code-simplify': 'Reduce complexity while preserving exact behavior in the following code using the code-simplification skill:\n{details}',
       },
+    },
+    performance: {
+      enabled: true,
+      sampleIntervalSec: 5,
+      trendRetentionDays: 7,
+      alarms: {
+        cpuPercentWarn: 85,
+        memoryPercentWarn: 88,
+        apiLatencyWarnMs: 2500,
+        internetPacketLossWarnPercent: 10,
+      },
+      protectedProcesses: {
+        names: ['GuardianAgent', 'code', 'Code.exe', 'devenv', 'idea64', 'node', 'npm', 'git', 'docker', 'wsl'],
+        honorActiveCodeSessions: true,
+      },
+      profiles: [
+        {
+          id: 'coding-focus',
+          name: 'Coding Focus',
+          powerMode: 'high_performance',
+          autoActions: { enabled: false, allowedActionIds: ['clear-temp-user', 'flush-dns', 'terminate-allowed-background-app'] },
+          processRules: { terminate: ['Discord.exe', 'Spotify.exe'], protect: ['code', 'node', 'git'] },
+          latencyTargets: [
+            { kind: 'internet', id: 'cloudflare', target: 'https://1.1.1.1' },
+            { kind: 'api', id: 'default-llm', targetRef: 'defaultProvider' },
+          ],
+        },
+      ],
     },
     security: {
       deploymentProfile: 'personal',

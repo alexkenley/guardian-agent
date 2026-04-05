@@ -91,13 +91,15 @@ Maintain consistent, generous padding (typically 1.25rem - 1.5rem) to ensure inf
 
 Required left-nav order:
 
-1. `Dashboard`
-2. `Security`
-3. `Network`
-4. `Cloud`
+1. `Second Brain`
+2. `Reference`
+3. `Performance`
+4. `Configuration`
 5. `Automations`
-6. `Configuration`
-7. `Reference`
+6. `Security`
+7. `Cloud`
+8. `Network`
+9. `Memory`
 
 Notes:
 

@@ -518,7 +518,12 @@ function renderSystemTab(panel) {
     howLinks: 'These are system settings, not operational dashboards, and they influence behavior across the whole app.',
   }));
 
+  // Re-added the system overview cards from the old dashboard page
   panel.appendChild(createOverview(sharedConfig, sharedProviders, sharedSetupStatus));
+  const dashboardStrip = document.createElement('div');
+  dashboardStrip.id = 'system-dashboard-strip';
+  panel.appendChild(dashboardStrip);
+  
   panel.appendChild(createAuthPanel(sharedConfig, sharedAuthStatus, panel));
   panel.appendChild(createNotificationsPanel(sharedConfig, panel));
   panel.appendChild(createGuardianAgentPanel());

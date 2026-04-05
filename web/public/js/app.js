@@ -266,11 +266,11 @@ const routes = {
     name: 'second-brain',
     invalidateTags: ['second-brain'],
   },
-  '/dashboard': {
-    render: renderDashboard,
-    update: updateDashboard,
-    name: 'dashboard',
-    invalidateTags: ['dashboard', 'config', 'providers', 'security', 'network', 'automations', 'tools', 'memory'],
+  '/performance': {
+    render: renderPerformance,
+    update: updatePerformance,
+    name: 'performance',
+    invalidateTags: ['performance'],
   },
   '/security': {
     render: renderSecurity,
@@ -517,6 +517,10 @@ function esc(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+ce(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }

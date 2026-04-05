@@ -239,6 +239,19 @@ export const api = {
     body: JSON.stringify(input),
   }),
   secondBrainUsage: () => request('/api/second-brain/usage'),
+  performanceStatus: () => request('/api/performance/status'),
+  performanceApplyProfile: (profileId) => request('/api/performance/profile/apply', {
+    method: 'POST',
+    body: JSON.stringify({ profileId }),
+  }),
+  performancePreviewAction: (actionId) => request('/api/performance/action/preview', {
+    method: 'POST',
+    body: JSON.stringify({ actionId }),
+  }),
+  performanceRunAction: (action) => request('/api/performance/action/run', {
+    method: 'POST',
+    body: JSON.stringify(action),
+  }),
   setupStatus:  () => request('/api/setup/status'),
   applySetup:   (input) => request('/api/setup/apply', {
     method: 'POST',

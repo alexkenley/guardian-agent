@@ -170,6 +170,9 @@ import { createAuthControlCallbacks } from './runtime/control-plane/auth-control
 import { createDirectConfigUpdateHandler } from './runtime/control-plane/direct-config-update.js';
 import { createGovernanceDashboardCallbacks } from './runtime/control-plane/governance-dashboard-callbacks.js';
 import { createOperationsDashboardCallbacks } from './runtime/control-plane/operations-dashboard-callbacks.js';
+import { createPerformanceAdapter } from './runtime/performance-adapters/index.js';
+import { PerformanceService } from './runtime/performance-service.js';
+import { createPerformanceDashboardCallbacks } from './runtime/control-plane/performance-dashboard-callbacks.js';
 import { createProviderDashboardCallbacks } from './runtime/control-plane/provider-dashboard-callbacks.js';
 import { createProviderConfigHelpers } from './runtime/control-plane/provider-config-helpers.js';
 import { createProviderIntegrationCallbacks } from './runtime/control-plane/provider-integration-callbacks.js';
@@ -1840,6 +1843,7 @@ function buildDashboardCallbacks(
     }),
 
     ...operationsDashboard.callbacks,
+    ...createPerformanceDashboardCallbacks(new PerformanceService(createPerformanceAdapter())),
 
     connectorWorkflowOps: operationsDashboard.connectorWorkflowOps,
 

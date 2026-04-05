@@ -1015,8 +1015,52 @@ export type DashboardSecondBrainLink = SecondBrainLinkRecord;
 export type DashboardSecondBrainRoutine = SecondBrainRoutineRecord;
 export type DashboardSecondBrainUsage = SecondBrainUsageSummary;
 
+export interface PerformanceActionPreviewTarget {
+  targetId: string;
+  name?: string;
+  label?: string;
+  pid?: number;
+  cpuPercent?: number;
+  memoryMb?: number;
+  suggestedReason: string;
+  checkedByDefault: boolean;
+  selectable: boolean;
+  blockedReason?: string;
+  risk: 'low' | 'medium' | 'high';
+}
+
+export interface PerformanceActionPreview {
+  previewId: string;
+  profileId?: string;
+  processTargets: PerformanceActionPreviewTarget[];
+  cleanupTargets: PerformanceActionPreviewTarget[];
+}
+
+export interface ApprovedPerformanceAction {
+  previewId: string;
+  selectedProcessTargetIds: string[];
+  selectedCleanupTargetIds: string[];
+}
+
+export interface PerformanceSnapshot {
+  cpuPercent: number;
+  memoryMb: number;
+  diskFreeMb: number;
+  activeProfile: string;
+}
+
+export interface PerformanceStatus {
+  activeProfile: string;
+  os: string;
+  snapshot: PerformanceSnapshot;
+}
+
 /** Dashboard API callbacks supplied by index.ts to WebChannel. */
 export interface DashboardCallbacks {
+  onPerformanceStatus?: () => Promise<PerformanceStatus>;
+  onPerformanceApplyProfile?: (profileId: string) => Promise<{ success: boolean; message: string }>;
+  onPerformancePreviewAction?: (actionId: string) => Promise<PerformanceActionPreview>;
+  onPerformanceRunAction?: (action: ApprovedPerformanceAction) => Promise<{ success: boolean; message: string }>;
   onAgents?: () => DashboardAgentInfo[];
   onAgentDetail?: (id: string) => DashboardAgentDetail | null;
   onAuditQuery?: (filter: AuditFilter) => AuditEvent[];
