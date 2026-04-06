@@ -7831,6 +7831,7 @@ type DirectIntentShadowCandidate =
   }
 
   private buildDirectFilesystemToolRequest(input: {
+    targetPath?: string;
     userId: string;
     channel: string;
     surfaceId?: string;
@@ -7840,6 +7841,7 @@ type DirectIntentShadowCandidate =
     agentCheckAction?: AgentContext['checkAction'];
     codeContext?: { workspaceRoot: string; sessionId?: string };
   }): Omit<ToolExecutionRequest, 'toolName' | 'args'> {
+    const scopedCodeContext = this.resolveDirectFilesystemSaveCodeContext(input.codeContext, input.targetPath);
     return {
       origin: 'assistant',
       agentId: this.id,
@@ -7850,8 +7852,63 @@ type DirectIntentShadowCandidate =
       principalRole: input.principalRole,
       requestId: input.requestId,
       ...(input.agentCheckAction ? { agentContext: { checkAction: input.agentCheckAction } } : {}),
-      ...(input.codeContext ? { codeContext: input.codeContext } : {}),
+      ...(scopedCodeContext ? { codeContext: scopedCodeContext } : {}),
     };
+  }
+
+  private resolveDirectFilesystemSaveCodeContext(
+    codeContext?: { workspaceRoot: string; sessionId?: string },
+    targetPath?: string,
+  ): { workspaceRoot: string; sessionId?: string } | undefined {
+    const workspaceRoot = toString(codeContext?.workspaceRoot).trim();
+    if (!workspaceRoot) return undefined;
+    const requestedTarget = toString(targetPath).trim();
+    if (!requestedTarget) return codeContext;
+    return this.isFilesystemPathInsideWorkspace(requestedTarget, workspaceRoot)
+      ? codeContext
+      : undefined;
+  }
+
+  private isFilesystemPathInsideWorkspace(targetPath: string, workspaceRoot: string): boolean {
+    try {
+      const normalizedTarget = this.normalizeFilesystemPathForComparison(targetPath);
+      const normalizedWorkspaceRoot = this.normalizeFilesystemPathForComparison(workspaceRoot);
+      if (!normalizedTarget || !normalizedWorkspaceRoot) return true;
+      const usesWindowsPaths = /^[a-z]:\\/i.test(normalizedTarget) || /^[a-z]:\\/i.test(normalizedWorkspaceRoot);
+      const pathLib = usesWindowsPaths ? win32Path : posixPath;
+      const resolvedTarget = pathLib.resolve(normalizedTarget);
+      const resolvedRoot = pathLib.resolve(normalizedWorkspaceRoot);
+      const comparableTarget = usesWindowsPaths ? resolvedTarget.toLowerCase() : resolvedTarget;
+      const comparableRoot = usesWindowsPaths ? resolvedRoot.toLowerCase() : resolvedRoot;
+      if (comparableTarget === comparableRoot) return true;
+      const separator = usesWindowsPaths ? '\\' : '/';
+      return comparableTarget.startsWith(
+        comparableRoot.endsWith(separator) ? comparableRoot : `${comparableRoot}${separator}`,
+      );
+    } catch {
+      return true;
+    }
+  }
+
+  private normalizeFilesystemPathForComparison(inputPath: string): string {
+    const trimmed = inputPath.trim();
+    if (!trimmed) return trimmed;
+    if (process.platform === 'win32') {
+      const mntMatch = trimmed.match(/^\/mnt\/([a-zA-Z])\/(.*)$/);
+      if (mntMatch) {
+        const drive = mntMatch[1].toUpperCase();
+        const rest = mntMatch[2].replace(/\//g, '\\');
+        return `${drive}:\\${rest}`;
+      }
+      return trimmed.replace(/\//g, '\\');
+    }
+    const driveMatch = trimmed.match(/^([a-zA-Z]):[\\/](.*)$/);
+    if (driveMatch) {
+      const drive = driveMatch[1].toLowerCase();
+      const rest = driveMatch[2].replace(/\\/g, '/');
+      return `/mnt/${drive}/${rest}`;
+    }
+    return trimmed.replace(/\\/g, '/');
   }
 
   private buildPendingFilesystemWriteApprovalResponse(input: {

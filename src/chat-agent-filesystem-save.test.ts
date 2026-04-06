@@ -232,6 +232,10 @@ describe('LLMChatAgent direct filesystem save', () => {
           targetPath: 'S:\\Development\\test5',
           content: 'full assistant output snapshot',
           originalUserContent: 'Save that last output to test5',
+          codeContext: {
+            workspaceRoot: 'S:\\Development\\GuardianAgent',
+            sessionId: 'code-session-1',
+          },
           allowPathRemediation: false,
         },
       },
@@ -256,6 +260,79 @@ describe('LLMChatAgent direct filesystem save', () => {
         surfaceId: 'web-guardian-chat',
       }),
     );
+    expect(executeModelTool.mock.calls[0]?.[2]).not.toHaveProperty('codeContext');
+  });
+
+  it('keeps code workspace scoping when the direct save target stays inside the attached workspace', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const executeModelTool = vi.fn(async () => ({
+      success: true,
+      output: {
+        path: 'S:\\Development\\GuardianAgent\\artifacts\\review.txt',
+        append: false,
+        size: 27,
+      },
+    }));
+    const tools = {
+      isEnabled: () => true,
+      executeModelTool,
+    } as never;
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 'chat');
+    const pendingAction: PendingActionRecord = {
+      id: 'pending-2',
+      scope: {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      },
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve path change',
+        approvalIds: ['approval-write-1'],
+      },
+      intent: {
+        route: 'filesystem_task',
+        operation: 'save',
+        originalUserContent: 'Save that last output to review.txt',
+      },
+      resume: {
+        kind: 'direct_route',
+        payload: {
+          type: 'filesystem_save_output',
+          targetPath: 'S:\\Development\\GuardianAgent\\artifacts\\review.txt',
+          content: 'full assistant output snapshot',
+          originalUserContent: 'Save that last output to review.txt',
+          codeContext: {
+            workspaceRoot: 'S:\\Development\\GuardianAgent',
+            sessionId: 'code-session-1',
+          },
+          allowPathRemediation: false,
+        },
+      },
+      createdAt: 1,
+      updatedAt: 1,
+      expiresAt: 2,
+    };
+
+    const response = await agent.continueDirectRouteAfterApproval(pendingAction, 'approval-write-1', 'approved');
+
+    expect(response?.content).toBe('I saved the previous assistant output to `S:\\Development\\GuardianAgent\\artifacts\\review.txt`.');
+    expect(executeModelTool.mock.calls[0]?.[2]).toMatchObject({
+      codeContext: {
+        workspaceRoot: 'S:\\Development\\GuardianAgent',
+        sessionId: 'code-session-1',
+      },
+    });
   });
 
   it('uses stored clarification resolved content for generic yes continuations', () => {
