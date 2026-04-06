@@ -412,6 +412,34 @@ export class MessageRouter {
       };
     }
 
+    if (
+      decision.preferredTier === 'external'
+      || decision.preferredTier === 'local'
+    ) {
+      const tier = decision.preferredTier;
+      if (decision.executionClass === 'security_analysis') {
+        return {
+          tier,
+          confidence: 'high',
+          reason: `intent workload=${decision.executionClass} preferredTier=${tier} → tier ${tier}`,
+        };
+      }
+      if (decision.requiresRepoGrounding) {
+        return {
+          tier,
+          confidence: decision.expectedContextPressure === 'high' ? 'high' : 'medium',
+          reason: `intent workload=${decision.executionClass} repoGrounding=${decision.requiresRepoGrounding} answerPath=${decision.preferredAnswerPath} preferredTier=${tier} → tier ${tier}`,
+        };
+      }
+      if (decision.requiresToolSynthesis || decision.preferredAnswerPath !== 'direct') {
+        return {
+          tier,
+          confidence: decision.confidence === 'low' ? 'medium' : 'high',
+          reason: `intent workload=${decision.executionClass} preferredTier=${tier} answerPath=${decision.preferredAnswerPath} → tier ${tier}`,
+        };
+      }
+    }
+
     if (LOCAL_PREFERRED_INTENT_ROUTES.has(decision.route)) {
       return {
         tier: 'local',

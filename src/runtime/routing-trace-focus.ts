@@ -80,6 +80,8 @@ export function pickRoutingTraceFocusItem(
       return toFocusItem(preparedItem ?? startedItem ?? contextItem ?? latestItem);
     case 'gateway_classified':
     case 'tier_routing_decided':
+    case 'profile_selection_decided':
+    case 'context_budget_decided':
     case 'pre_routed_metadata_attached':
     case 'dispatch_response':
       return toFocusItem(contextItem ?? preparedItem ?? startedItem ?? latestItem);

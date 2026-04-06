@@ -15,6 +15,7 @@ import {
   compactMessagesIfOverBudget,
   compactQuarantinedToolResult,
   formatDirectCodeSessionLine,
+  formatDirectFilesystemSearchResponse,
   formatToolThreatWarnings,
   formatToolResultForLLM,
   getCodeSessionPromptRelativePath,
@@ -155,6 +156,10 @@ import {
   isWorkspaceSwitchPendingActionSatisfied,
 } from './runtime/pending-action-resume.js';
 import type { IntentRoutingTraceLog } from './runtime/intent-routing-trace.js';
+import {
+  readSelectedExecutionProfileMetadata,
+  type SelectedExecutionProfile,
+} from './runtime/execution-profiles.js';
 import type { ModelFallbackChain } from './llm/model-fallback.js';
 import { getProviderLocality, getProviderTier } from './llm/provider-metadata.js';
 import type { OutputGuardian } from './guardian/output-guardian.js';
@@ -431,13 +436,17 @@ type DirectIntentShadowCandidate =
   private buildPromptAdditionalSections(
     skillPromptMaterial: SkillPromptMaterialResult | undefined,
     intentDecision?: IntentGatewayDecision | null,
+    executionProfile?: SelectedExecutionProfile | null,
   ): PromptAssemblyAdditionalSection[] | undefined {
     const sections: PromptAssemblyAdditionalSection[] = [...(skillPromptMaterial?.additionalSections ?? [])];
     const routedIntentSection = buildRoutedIntentAdditionalSection(intentDecision);
     if (routedIntentSection && !sections.some((section) => section.section === routedIntentSection.section)) {
       sections.push(routedIntentSection);
     }
-    return sections.length > 0 ? sections : undefined;
+    const bounded = executionProfile
+      ? sections.slice(0, Math.max(0, executionProfile.maxAdditionalSections))
+      : sections;
+    return bounded.length > 0 ? bounded : undefined;
   }
 
   private executeToolsConflictAware(
@@ -851,10 +860,14 @@ type DirectIntentShadowCandidate =
     ctx: AgentContext,
     messages: ChatMessage[],
     options?: import('./llm/types.js').ChatOptions,
+    fallbackProviderOrder?: string[],
   ): Promise<import('./llm/types.js').ChatResponse> {
     if (!this.fallbackChain) {
       return ctx.llm!.chat(messages, options);
     }
+    const preferredOrder = Array.isArray(fallbackProviderOrder) && fallbackProviderOrder.length > 0
+      ? fallbackProviderOrder
+      : undefined;
     try {
       return await ctx.llm!.chat(messages, options);
     } catch (primaryError) {
@@ -862,7 +875,9 @@ type DirectIntentShadowCandidate =
         { agent: this.id, error: primaryError instanceof Error ? primaryError.message : String(primaryError) },
         'Primary LLM failed, trying fallback chain',
       );
-      const result = await this.fallbackChain.chatWithFallback(messages, options);
+      const result = preferredOrder
+        ? await this.fallbackChain.chatWithFallbackAfterProvider(ctx.llm?.name ?? 'unknown', preferredOrder, messages, options)
+        : await this.fallbackChain.chatWithFallback(messages, options);
       return result.response;
     }
   }
@@ -871,6 +886,7 @@ type DirectIntentShadowCandidate =
     ctx: AgentContext,
     messages: ChatMessage[],
     options?: import('./llm/types.js').ChatOptions,
+    fallbackProviderOrder?: string[],
   ): Promise<{
     response: import('./llm/types.js').ChatResponse;
     providerName: string;
@@ -881,6 +897,9 @@ type DirectIntentShadowCandidate =
   }> {
     const primaryProviderName = ctx.llm?.name ?? 'unknown';
     const primaryProviderLocality = getProviderLocalityFromName(primaryProviderName);
+    const preferredOrder = Array.isArray(fallbackProviderOrder) && fallbackProviderOrder.length > 0
+      ? fallbackProviderOrder
+      : undefined;
 
     if (!this.fallbackChain) {
       try {
@@ -926,7 +945,9 @@ type DirectIntentShadowCandidate =
         }
         try {
           const startedAt = Date.now();
-          const result = await this.fallbackChain.chatWithFallbackAfterPrimary(messages, options);
+          const result = preferredOrder
+            ? await this.fallbackChain.chatWithFallbackAfterProvider(primaryProviderName, preferredOrder, messages, options)
+            : await this.fallbackChain.chatWithFallbackAfterPrimary(messages, options);
           return {
             response: result.response,
             providerName: result.providerName,
@@ -945,7 +966,9 @@ type DirectIntentShadowCandidate =
       }
 
       const startedAt = Date.now();
-      const result = await this.fallbackChain.chatWithFallback(messages, options);
+      const result = preferredOrder
+        ? await this.fallbackChain.chatWithFallbackAfterProvider(primaryProviderName, preferredOrder, messages, options)
+        : await this.fallbackChain.chatWithFallback(messages, options);
       return {
         response: result.response,
         providerName: result.providerName,
@@ -971,6 +994,8 @@ type DirectIntentShadowCandidate =
     }
     const conversationUserId = resolvedCodeSession?.session.conversationUserId ?? message.userId;
     const conversationChannel = resolvedCodeSession?.session.conversationChannel ?? message.channel;
+    const selectedExecutionProfile = readSelectedExecutionProfileMetadata(message.metadata);
+    const fallbackProviderOrder = selectedExecutionProfile?.fallbackProviderOrder;
     const conversationKey = {
       agentId: stateAgentId,
       userId: conversationUserId,
@@ -1373,6 +1398,7 @@ type DirectIntentShadowCandidate =
       toolContext: string,
       runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>,
       additionalSections?: PromptAssemblyAdditionalSection[],
+      executionProfile?: SelectedExecutionProfile | null,
     ) => buildPromptAssemblySectionFootprints({
       baseSystemPrompt,
       knowledgeBases: promptKnowledge?.knowledgeBases ?? [],
@@ -1389,6 +1415,7 @@ type DirectIntentShadowCandidate =
       pendingAction: this.buildPendingActionPromptContext(pendingAction),
       pendingApprovalNotice,
       continuity: summarizeContinuityThreadForGateway(continuityThread),
+      ...(executionProfile ? { executionProfile } : {}),
       additionalSections,
     });
     const buildContextDiagnostics = (input: {
@@ -1401,6 +1428,7 @@ type DirectIntentShadowCandidate =
       codeSessionId?: string;
       additionalSections?: PromptAssemblyAdditionalSection[];
       compaction?: ContextCompactionResult;
+      executionProfile?: SelectedExecutionProfile | null;
     }): PromptAssemblyDiagnostics => this.buildContextAssemblyMetadata({
       memoryScope: 'global',
       knowledgeBase: input.promptKnowledge?.globalContent ?? '',
@@ -1413,6 +1441,7 @@ type DirectIntentShadowCandidate =
       pendingAction,
       continuityThread,
       codeSessionId: input.codeSessionId,
+      executionProfile: input.executionProfile ?? undefined,
       sectionFootprints: buildSectionFootprints(
         input.baseSystemPrompt,
         input.promptKnowledge,
@@ -1420,6 +1449,7 @@ type DirectIntentShadowCandidate =
         input.toolContext,
         input.runtimeNotices,
         input.additionalSections,
+        input.executionProfile,
       ),
       preservedExecutionState: buildPreservedExecutionState(),
       ...(input.compaction?.applied
@@ -1511,11 +1541,14 @@ type DirectIntentShadowCandidate =
         channel: conversationChannel,
         codeContext: effectiveCodeContext,
         requestText: routedScopedMessage.content,
+        ...(selectedExecutionProfile ? { toolContextMode: selectedExecutionProfile.toolContextMode } : {}),
       }) ?? '';
-      const runtimeNotices = this.tools?.getRuntimeNotices() ?? [];
+      const runtimeNotices = (this.tools?.getRuntimeNotices() ?? [])
+        .slice(0, Math.max(0, selectedExecutionProfile?.maxRuntimeNotices ?? Number.MAX_SAFE_INTEGER));
       const promptAdditionalSections = this.buildPromptAdditionalSections(
         skillPromptMaterial,
         earlyGateway?.decision,
+        selectedExecutionProfile,
       );
       const baseSystemPrompt = enrichedSystemPrompt;
       enrichedSystemPrompt = this.buildAssembledSystemPrompt({
@@ -1528,6 +1561,7 @@ type DirectIntentShadowCandidate =
         pendingApprovalNotice,
         continuityThread,
         additionalSections: promptAdditionalSections,
+        executionProfile: selectedExecutionProfile ?? undefined,
       });
       contextAssemblyMeta = buildContextDiagnostics({
         promptKnowledge,
@@ -1538,6 +1572,7 @@ type DirectIntentShadowCandidate =
         baseSystemPrompt,
         codeSessionId: resolvedCodeSession?.session.id,
         additionalSections: promptAdditionalSections,
+        executionProfile: selectedExecutionProfile,
       });
       llmMessages = buildChatMessagesFromHistory({
         systemPrompt: enrichedSystemPrompt,
@@ -1893,7 +1928,7 @@ type DirectIntentShadowCandidate =
                   ...llmMessages,
                   { role: 'user', content: `Here are web search results for the user's query. Summarize and present them clearly:\n\n${llmSearchPayload}` },
                 ];
-                const formatted = await this.chatWithFallback(ctx, llmFormat);
+                const formatted = await this.chatWithFallback(ctx, llmFormat, undefined, fallbackProviderOrder);
                 finalContent = formatted.content || llmSearchPayload;
               } catch {
                 finalContent = llmSearchPayload;
@@ -1967,11 +2002,14 @@ type DirectIntentShadowCandidate =
           channel: conversationChannel,
           codeContext: effectiveCodeContext,
           requestText: routedScopedMessage.content,
+          ...(selectedExecutionProfile ? { toolContextMode: selectedExecutionProfile.toolContextMode } : {}),
         }) ?? '';
-        const workerRuntimeNotices = this.tools?.getRuntimeNotices() ?? [];
+        const workerRuntimeNotices = (this.tools?.getRuntimeNotices() ?? [])
+          .slice(0, Math.max(0, selectedExecutionProfile?.maxRuntimeNotices ?? Number.MAX_SAFE_INTEGER));
         const workerAdditionalSections = this.buildPromptAdditionalSections(
           workerSkillPromptMaterial,
           earlyGateway?.decision,
+          selectedExecutionProfile,
         );
         const workerContextAssemblyMeta = buildContextDiagnostics({
           promptKnowledge,
@@ -1983,6 +2021,7 @@ type DirectIntentShadowCandidate =
           codeSessionId: resolvedCodeSession?.session.id,
           additionalSections: workerAdditionalSections,
           compaction: latestContextCompaction,
+          executionProfile: selectedExecutionProfile,
         });
         const continuitySummary = summarizeContinuityThreadForGateway(continuityThread);
         // Attach codeContext to the message metadata so the worker can forward it
@@ -2008,7 +2047,8 @@ type DirectIntentShadowCandidate =
           activeSkills: preResolvedSkills,
           additionalSections: workerAdditionalSections,
           toolContext: workerToolContext,
-          runtimeNotices: this.tools?.getRuntimeNotices() ?? [],
+          runtimeNotices: workerRuntimeNotices,
+          executionProfile: selectedExecutionProfile ?? undefined,
           continuity: continuitySummary,
           pendingAction: this.buildPendingActionPromptContext(pendingAction),
           pendingApprovalNotice,
@@ -2128,7 +2168,7 @@ type DirectIntentShadowCandidate =
         } catch (err) {
           log.warn({ agent: this.id, error: err instanceof Error ? err.message : String(err) },
             'GWS provider failed, falling back to default');
-          const fallback = await this.chatWithRoutingMetadata(ctx, msgs, opts);
+          const fallback = await this.chatWithRoutingMetadata(ctx, msgs, opts, fallbackProviderOrder);
           responseSource = buildResponseSourceMetadata({
             locality: fallback.providerLocality,
             providerName: fallback.providerName,
@@ -2140,7 +2180,7 @@ type DirectIntentShadowCandidate =
           return fallback.response;
         }
       }
-      const routed = await this.chatWithRoutingMetadata(ctx, msgs, opts);
+      const routed = await this.chatWithRoutingMetadata(ctx, msgs, opts, fallbackProviderOrder);
       responseSource = buildResponseSourceMetadata({
         locality: routed.providerLocality,
         providerName: routed.providerName,
@@ -2165,7 +2205,9 @@ type DirectIntentShadowCandidate =
         log.warn({ agent: this.id }, 'Local LLM produced degraded response (no-tools path), retrying with fallback');
         try {
           const fbStartedAt = Date.now();
-          const fb = await this.fallbackChain.chatWithFallbackAfterPrimary(llmMessages);
+          const fb = fallbackProviderOrder
+            ? await this.fallbackChain.chatWithFallbackAfterProvider(ctx.llm?.name ?? 'unknown', fallbackProviderOrder, llmMessages)
+            : await this.fallbackChain.chatWithFallbackAfterPrimary(llmMessages);
           if (fb.response.content?.trim()) {
             finalContent = fb.response.content;
             responseSource = buildResponseSourceMetadata({
@@ -2512,7 +2554,7 @@ type DirectIntentShadowCandidate =
               } catch (err) {
                 log.warn({ agent: this.id, routing: routedLocality, error: err instanceof Error ? err.message : String(err) },
                   'Routed provider failed, falling back to default');
-                const fallback = await this.chatWithRoutingMetadata(ctx, msgs, opts);
+                const fallback = await this.chatWithRoutingMetadata(ctx, msgs, opts, fallbackProviderOrder);
                 responseSource = buildResponseSourceMetadata({
                   locality: fallback.providerLocality,
                   providerName: fallback.providerName,
@@ -2562,7 +2604,9 @@ type DirectIntentShadowCandidate =
           let externalToolDefs = llmToolDefs.map((d) => toLLMToolDef(d, 'external'));
           const fbMessages = [...llmMessages];
           const fallbackStartedAt = Date.now();
-          const fallbackResult = await this.fallbackChain.chatWithFallbackAfterPrimary(fbMessages, { tools: externalToolDefs });
+          const fallbackResult = fallbackProviderOrder
+            ? await this.fallbackChain.chatWithFallbackAfterProvider(ctx.llm?.name ?? 'unknown', fallbackProviderOrder, fbMessages, { tools: externalToolDefs })
+            : await this.fallbackChain.chatWithFallbackAfterPrimary(fbMessages, { tools: externalToolDefs });
           const fbProvider = fallbackResult.providerName;
           responseSource = buildResponseSourceMetadata({
             locality: getProviderLocalityFromName(fbProvider),
@@ -2694,7 +2738,9 @@ type DirectIntentShadowCandidate =
                 });
               } else {
                 const finalFbStartedAt = Date.now();
-                const finalFb = await this.fallbackChain.chatWithFallbackAfterPrimary(fbMessages, { tools: externalToolDefs });
+                const finalFb = fallbackProviderOrder
+                  ? await this.fallbackChain.chatWithFallbackAfterProvider(fallbackResult.providerName, fallbackProviderOrder, fbMessages, { tools: externalToolDefs })
+                  : await this.fallbackChain.chatWithFallbackAfterPrimary(fbMessages, { tools: externalToolDefs });
                 if (finalFb.response.content?.trim()) {
                   finalContent = finalFb.response.content;
                   responseSource = buildResponseSourceMetadata({
@@ -2711,7 +2757,9 @@ type DirectIntentShadowCandidate =
             } else {
               // One more chat call to get the final text response from fallback
               const finalFbStartedAt = Date.now();
-              const finalFb = await this.fallbackChain.chatWithFallbackAfterPrimary(fbMessages, { tools: externalToolDefs });
+              const finalFb = fallbackProviderOrder
+                ? await this.fallbackChain.chatWithFallbackAfterProvider(fallbackResult.providerName, fallbackProviderOrder, fbMessages, { tools: externalToolDefs })
+                : await this.fallbackChain.chatWithFallbackAfterPrimary(fbMessages, { tools: externalToolDefs });
               if (finalFb.response.content?.trim()) {
                 finalContent = finalFb.response.content;
                 responseSource = buildResponseSourceMetadata({
@@ -3312,6 +3360,7 @@ type DirectIntentShadowCandidate =
     pendingAction?: PendingActionRecord | null;
     continuityThread?: ContinuityThreadRecord | null;
     codeSessionId?: string;
+    executionProfile?: SelectedExecutionProfile;
     sectionFootprints?: ReturnType<typeof buildPromptAssemblySectionFootprints>;
     preservedExecutionState?: ReturnType<typeof buildPromptAssemblyPreservedExecutionState>;
     contextCompaction?: ReturnType<typeof buildContextCompactionDiagnostics>;
@@ -3358,6 +3407,7 @@ type DirectIntentShadowCandidate =
       continuity: summarizeContinuityThreadForGateway(input.continuityThread),
       activeSkillCount: input.activeSkillCount,
       codeSessionId: input.codeSessionId,
+      ...(input.executionProfile ? { executionProfile: input.executionProfile } : {}),
       ...(input.sectionFootprints ? { sectionFootprints: input.sectionFootprints } : {}),
       ...(input.preservedExecutionState ? { preservedExecutionState: input.preservedExecutionState } : {}),
       ...(input.contextCompaction ? { contextCompaction: input.contextCompaction } : {}),
@@ -3419,6 +3469,7 @@ type DirectIntentShadowCandidate =
     pendingAction?: PendingActionRecord | null;
     pendingApprovalNotice?: string;
     continuityThread?: ContinuityThreadRecord | null;
+    executionProfile?: SelectedExecutionProfile;
     additionalSections?: Array<{
       section: string;
       content: string;
@@ -3442,6 +3493,7 @@ type DirectIntentShadowCandidate =
       pendingAction: this.buildPendingActionPromptContext(input.pendingAction),
       pendingApprovalNotice: input.pendingApprovalNotice,
       continuity: summarizeContinuityThreadForGateway(input.continuityThread),
+      ...(input.executionProfile ? { executionProfile: input.executionProfile } : {}),
       additionalSections: input.additionalSections,
     });
   }
@@ -4786,14 +4838,26 @@ type DirectIntentShadowCandidate =
       : {};
     const uiSurface = toString(entities.uiSurface);
     const emailProvider = toString(entities.emailProvider);
+    const operation = pendingAction.intent.operation === 'inspect' ? 'inspect' : 'run';
+    const preferredTier = typeof entities.codingBackend === 'string' && entities.codingBackend.trim()
+      ? 'local'
+      : operation === 'inspect'
+        ? 'external'
+        : 'local';
     return {
       route: 'coding_task',
       confidence: 'high',
-      operation: pendingAction.intent.operation === 'inspect' ? 'inspect' : 'run',
+      operation,
       summary: pendingAction.intent.summary?.trim() || 'Resume the pending coding task.',
       turnRelation: 'follow_up',
       resolution: 'ready',
       missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier,
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: operation === 'inspect' ? 'high' : 'medium',
+      preferredAnswerPath: operation === 'inspect' ? 'chat_synthesis' : 'tool_loop',
       resolvedContent: pendingAction.intent.originalUserContent?.trim() || undefined,
       entities: {
         ...(typeof entities.automationName === 'string' ? { automationName: entities.automationName } : {}),
@@ -6748,7 +6812,12 @@ type DirectIntentShadowCandidate =
         enabledManagedProviders: this.enabledManagedProviders ? [...this.enabledManagedProviders] : [],
         availableCodingBackends: ['codex', 'claude-code', 'gemini-cli', 'aider'],
       },
-      (messages, options) => this.chatWithFallback(ctx, messages, options),
+      (messages, options) => this.chatWithFallback(
+        ctx,
+        messages,
+        options,
+        readSelectedExecutionProfileMetadata(message.metadata)?.fallbackProviderOrder,
+      ),
     );
     this.recordIntentRoutingTrace('gateway_classified', {
       message,
@@ -7119,8 +7188,9 @@ type DirectIntentShadowCandidate =
       return 'I checked Gmail and found no unread messages.';
     }
 
+    const displayLimit = Math.min(messages.length, Math.max(intent.count, 1));
     const summaries: GmailMessageSummary[] = [];
-    for (const entry of messages.slice(0, 5)) {
+    for (const entry of messages.slice(0, displayLimit)) {
       const id = toString(entry.id);
       if (!id) continue;
 
@@ -7179,7 +7249,7 @@ type DirectIntentShadowCandidate =
     ];
 
     if (summaries.length === 0) {
-      for (const [index, entry] of messages.slice(0, 5).entries()) {
+      for (const [index, entry] of messages.slice(0, displayLimit).entries()) {
         const id = toString(entry.id);
         if (!id) continue;
         lines.push(`${index + 1}. Message ID: ${id}`);
@@ -7194,8 +7264,8 @@ type DirectIntentShadowCandidate =
       }
     }
 
-    if (unreadCount > 5) {
-      lines.push(`...and ${unreadCount - 5} more unread message${unreadCount - 5 === 1 ? '' : 's'}.`);
+    if (unreadCount > displayLimit) {
+      lines.push(`...and ${unreadCount - displayLimit} more unread message${unreadCount - displayLimit === 1 ? '' : 's'}.`);
     }
 
     if (intent.kind === 'gmail_unread') {
@@ -7372,9 +7442,6 @@ type DirectIntentShadowCandidate =
     const messages = Array.isArray(output?.value)
       ? output.value.filter((entry): entry is Record<string, unknown> => isRecord(entry))
       : [];
-    const unreadCount = intent.kind === 'gmail_unread'
-      ? messages.length
-      : messages.filter((entry) => entry.isRead === false).length;
 
     if (messages.length === 0) {
       if (intent.kind === 'gmail_recent_senders') {
@@ -7386,9 +7453,11 @@ type DirectIntentShadowCandidate =
       return 'I checked Outlook and found no unread messages.';
     }
 
+    const displayLimit = Math.min(messages.length, Math.max(intent.count, 1));
+
     if (intent.kind === 'gmail_recent_senders') {
-      const lines = [`The senders of the last ${messages.length} Outlook email${messages.length === 1 ? '' : 's'} are:`];
-      for (const [index, entry] of messages.entries()) {
+      const lines = [`The senders of the last ${displayLimit} Outlook email${displayLimit === 1 ? '' : 's'} are:`];
+      for (const [index, entry] of messages.slice(0, displayLimit).entries()) {
         const from = summarizeM365From(entry.from) || 'Unknown sender';
         const subject = toString(entry.subject) || '(no subject)';
         lines.push(`${index + 1}. ${from} — ${subject}`);
@@ -7397,8 +7466,8 @@ type DirectIntentShadowCandidate =
     }
 
     if (intent.kind === 'gmail_recent_summary') {
-      const lines = [`Here are the last ${messages.length} Outlook email${messages.length === 1 ? '' : 's'}:`];
-      for (const [index, entry] of messages.entries()) {
+      const lines = [`Here are the last ${displayLimit} Outlook email${displayLimit === 1 ? '' : 's'}:`];
+      for (const [index, entry] of messages.slice(0, displayLimit).entries()) {
         const subject = toString(entry.subject) || '(no subject)';
         const from = summarizeM365From(entry.from) || 'Unknown sender';
         lines.push(`${index + 1}. ${subject} — ${from}`);
@@ -7409,17 +7478,14 @@ type DirectIntentShadowCandidate =
     }
 
     const lines = [
-      `I checked Outlook and found ${unreadCount} unread message${unreadCount === 1 ? '' : 's'}.`,
+      `Here are the latest ${displayLimit} unread Outlook message${displayLimit === 1 ? '' : 's'}:`,
     ];
-    for (const [index, entry] of messages.slice(0, 5).entries()) {
+    for (const [index, entry] of messages.slice(0, displayLimit).entries()) {
       const subject = toString(entry.subject) || '(no subject)';
       const from = summarizeM365From(entry.from) || 'Unknown sender';
       lines.push(`${index + 1}. ${subject} — ${from}`);
       const received = toString(entry.receivedDateTime);
       if (received) lines.push(`   ${received}`);
-    }
-    if (messages.length > 5) {
-      lines.push(`...and ${messages.length - 5} more unread message${messages.length - 5 === 1 ? '' : 's'}.`);
     }
     lines.push('Ask me to read or summarize any of these if you want the full details.');
     return lines.join('\n');
@@ -7511,30 +7577,14 @@ type DirectIntentShadowCandidate =
       ? output.matches as Array<{ relativePath?: unknown; path?: unknown; matchType?: unknown; snippet?: unknown }>
       : [];
 
-    if (matches.length === 0) {
-      return `I searched "${root || intent.path}" for "${intent.query}" and found no matches${scannedFiles !== null ? ` (scanned ${scannedFiles} files)` : ''}.`;
-    }
-
-    const lines = [
-      `I searched "${root || intent.path}" for "${intent.query}"${scannedFiles !== null ? ` (scanned ${scannedFiles} files)` : ''}.`,
-      `Found ${matches.length} match${matches.length === 1 ? '' : 'es'}:`,
-    ];
-    for (const match of matches.slice(0, 20)) {
-      const relativePath = toString(match.relativePath) || toString(match.path) || '(unknown path)';
-      const matchType = toString(match.matchType) || 'name';
-      if (matchType === 'content' && toString(match.snippet)) {
-        lines.push(`- ${relativePath} [content]: ${toString(match.snippet)}`);
-      } else {
-        lines.push(`- ${relativePath} [${matchType}]`);
-      }
-    }
-    if (matches.length > 20) {
-      lines.push(`- ...and ${matches.length - 20} more`);
-    }
-    if (truncated) {
-      lines.push('Search stopped at configured limits; narrow query or increase maxResults/maxFiles if needed.');
-    }
-    return lines.join('\n');
+    return formatDirectFilesystemSearchResponse({
+      requestText: message.content,
+      root: root || intent.path,
+      query: intent.query,
+      scannedFiles,
+      truncated,
+      matches,
+    });
   }
 }
 

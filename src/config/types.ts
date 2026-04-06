@@ -105,6 +105,7 @@ export type CredentialRefConfig = EnvCredentialRefConfig | LocalCredentialRefCon
 export type OllamaThinkConfig = boolean | 'high' | 'medium' | 'low';
 export type RoutingTierMode = 'auto' | 'local-only' | 'managed-cloud-only' | 'frontier-only';
 export type PreferredProviderKey = 'local' | 'managedCloud' | 'frontier' | 'external';
+export type AutoModelSelectionPolicy = 'balanced' | 'quality_first';
 
 export interface OllamaOptionsConfig {
   numa?: boolean;
@@ -143,6 +144,32 @@ export interface OllamaOptionsConfig {
 export interface AssistantCredentialsConfig {
   /** Named credential references resolved at runtime. */
   refs: Record<string, CredentialRefConfig>;
+}
+
+/** High-level routing policy above concrete provider defaults. */
+export interface AssistantModelSelectionConfig {
+  /**
+   * Auto-routing posture when multiple suitable providers are configured.
+   *
+   * - `balanced`: prefer managed cloud for lighter external work, escalate to frontier for heavier repo/security synthesis.
+   * - `quality_first`: bias external auto-routing more aggressively toward frontier.
+   */
+  autoPolicy: AutoModelSelectionPolicy;
+  /**
+   * When true, lighter external work should prefer the managed-cloud tier when it is configured.
+   * Default: true.
+   */
+  preferManagedCloudForLowPressureExternal: boolean;
+  /**
+   * When true, heavier repo-grounded coding/search synthesis should prefer frontier when it is configured.
+   * Default: true.
+   */
+  preferFrontierForRepoGrounded: boolean;
+  /**
+   * When true, security analysis work should prefer frontier when it is configured.
+   * Default: true.
+   */
+  preferFrontierForSecurity: boolean;
 }
 
 /** Configuration for a single LLM provider. */
@@ -1411,6 +1438,8 @@ export interface AssistantToolsConfig {
     frontier?: string;
     external?: string;
   };
+  /** High-level deterministic policy for auto provider/model-profile selection. */
+  modelSelection?: AssistantModelSelectionConfig;
 }
 
 /** Personal assistant feature configuration. */
@@ -1947,6 +1976,12 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
       providerRoutingEnabled: true,
       preferredProviders: {
         local: 'ollama',
+      },
+      modelSelection: {
+        autoPolicy: 'balanced',
+        preferManagedCloudForLowPressureExternal: true,
+        preferFrontierForRepoGrounded: true,
+        preferFrontierForSecurity: true,
       },
       codingBackends: {
         enabled: false,

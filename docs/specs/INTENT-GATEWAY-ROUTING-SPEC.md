@@ -2,12 +2,14 @@
 
 **Status:** Implemented current architecture
 
-This spec defines how Guardian interprets each incoming user turn, resolves clarification and correction turns, and chooses the local or external chat tier in Auto mode.
+This spec defines how Guardian interprets each incoming user turn, resolves clarification and correction turns, chooses the local or external chat tier in Auto mode, and hands the result to the deterministic execution-profile selector.
 
 It is the authoritative spec for:
 - top-level turn interpretation
 - clarification and correction handling
 - Auto-mode local vs external chat routing
+- workload metadata emitted by the gateway for downstream deterministic selection
+- deterministic execution-profile selection after gateway routing
 - pre-routed intent metadata reuse across channel dispatch
 
 This spec does **not** define per-tool provider routing. Tool provider routing is a separate control-plane concern.
@@ -47,6 +49,7 @@ Incoming message
   -> IntentGateway classification
   -> Clarification or correction resolution
   -> Auto-mode tier selection from structured intent result
+  -> Deterministic execution-profile selection from configured providers and policy
   -> Dispatch to selected chat agent
   -> Direct deterministic route handling and/or normal tool loop
 ```
@@ -77,7 +80,21 @@ The `decision` is structured and includes:
 - `resolution`
 - `missingFields`
 - `resolvedContent`
+- `executionClass`
+- `preferredTier`
+- `requiresRepoGrounding`
+- `requiresToolSynthesis`
+- `expectedContextPressure`
+- `preferredAnswerPath`
 - `entities`
+
+Workload metadata meanings:
+- `executionClass`: coarse workload family such as direct assistant, repo-grounded work, provider CRUD, or security analysis
+- `preferredTier`: coarse local vs external hint only; the gateway does not choose concrete provider names
+- `requiresRepoGrounding`: whether the request should stay grounded in workspace evidence instead of generic synthesis
+- `requiresToolSynthesis`: whether the runtime should expect a real tool loop or multi-step synthesis burden
+- `expectedContextPressure`: low, medium, or high expected bounded context cost
+- `preferredAnswerPath`: whether the best path is direct answer, tool loop, or chat synthesis
 
 ### Routes
 
@@ -244,6 +261,38 @@ Gateway-specific application:
 - `enabledManagedProviders` stays a compact provider-identity list
 - `availableCodingBackends` stays a compact backend-identity list
 - pending actions and continuity remain explicit bounded state, not deferred detail
+
+## Deterministic Execution-Profile Selection
+
+The gateway no longer hands control directly from route classification to a single provider choice. The current implemented routing pipeline is:
+
+```text
+IntentGateway decision
+  -> local/external tier routing
+  -> deterministic execution-profile selection
+     using:
+       - forced chat mode, if any
+       - configured providers
+       - configured routed defaults
+       - operator auto-selection policy
+       - gateway workload metadata
+  -> request-scoped provider/model fallback order
+  -> dispatch
+```
+
+Rules:
+- the gateway must not emit raw provider names or model names
+- provider/model-profile choice is deterministic server-side policy, not an LLM self-selection task
+- forced chat modes remain hard overrides for `local`, `managed cloud`, and `frontier`
+- in `auto`, Guardian may choose `frontier` as the first execution profile for harder repo-grounded or security-heavy work instead of always trying managed cloud first
+- request-scoped execution-profile metadata is attached to the routed message and reused by runtime dispatch and brokered workers
+
+Current trace stages for this slice:
+- `gateway_classified`
+- `tier_routing_decided`
+- `profile_selection_decided`
+- `context_budget_decided`
+- `pre_routed_metadata_attached`
 
 ## Correction Handling
 

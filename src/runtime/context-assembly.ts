@@ -1,5 +1,6 @@
 import type { ChatMessage } from '../llm/types.js';
 import type { SkillPromptSelectionMetadata } from '../skills/types.js';
+import type { SelectedExecutionProfile } from './execution-profiles.js';
 
 export interface PromptAssemblyHistoryEntry {
   role: 'user' | 'assistant';
@@ -61,6 +62,7 @@ export interface PromptAssemblyInput {
   pendingAction?: PromptAssemblyPendingAction | null;
   pendingApprovalNotice?: string;
   continuity?: PromptAssemblyContinuity | null;
+  executionProfile?: SelectedExecutionProfile;
   additionalSections?: Array<string | PromptAssemblyAdditionalSection>;
 }
 
@@ -112,6 +114,13 @@ export interface PromptAssemblyDiagnostics {
   compactedSummaryPreview?: string;
   sectionFootprints?: PromptAssemblySectionFootprint[];
   preservedExecutionState?: PromptAssemblyPreservedExecutionState;
+  executionProfileId?: SelectedExecutionProfile['id'];
+  executionProviderName?: string;
+  executionProviderTier?: SelectedExecutionProfile['providerTier'];
+  executionRequestedTier?: SelectedExecutionProfile['requestedTier'];
+  executionPreferredAnswerPath?: SelectedExecutionProfile['preferredAnswerPath'];
+  executionExpectedContextPressure?: SelectedExecutionProfile['expectedContextPressure'];
+  executionContextBudget?: number;
 }
 
 export interface PromptAssemblyMemorySelectionEntry {
@@ -144,6 +153,7 @@ export interface PromptAssemblyDiagnosticsInput {
   skillPromptSelection?: SkillPromptSelectionMetadata;
   sectionFootprints?: PromptAssemblySectionFootprint[];
   preservedExecutionState?: PromptAssemblyPreservedExecutionState;
+  executionProfile?: SelectedExecutionProfile;
   contextCompaction?: {
     applied: boolean;
     beforeChars: number;
@@ -375,6 +385,30 @@ function formatContinuitySection(
   return lines.length > 0 ? wrapTaggedSection('continuity-context', lines.join('\n')) : '';
 }
 
+function formatExecutionProfileSection(
+  executionProfile: SelectedExecutionProfile | undefined,
+): string {
+  if (!executionProfile) return '';
+  return wrapTaggedSection(
+    'execution-profile',
+    [
+      'This request has a deterministic execution profile selected by Guardian routing. Follow it instead of choosing your own provider/model strategy.',
+      `profileId: ${executionProfile.id}`,
+      `providerName: ${executionProfile.providerName}`,
+      `providerTier: ${executionProfile.providerTier}`,
+      `requestedTier: ${executionProfile.requestedTier}`,
+      `preferredAnswerPath: ${executionProfile.preferredAnswerPath}`,
+      `expectedContextPressure: ${executionProfile.expectedContextPressure}`,
+      `contextBudget: ${executionProfile.contextBudget}`,
+      `toolContextMode: ${executionProfile.toolContextMode}`,
+      `maxAdditionalSections: ${executionProfile.maxAdditionalSections}`,
+      `maxRuntimeNotices: ${executionProfile.maxRuntimeNotices}`,
+      `fallbackProviderOrder: ${executionProfile.fallbackProviderOrder.join(', ')}`,
+      `selectionReason: ${executionProfile.reason}`,
+    ].join('\n'),
+  );
+}
+
 export function buildSystemPromptWithContext(input: PromptAssemblyInput): string {
   const canonicalSkills = canonicalizePromptAssemblySkills(input.activeSkills);
   const additionalSections = normalizeAdditionalSections(input.additionalSections);
@@ -384,6 +418,7 @@ export function buildSystemPromptWithContext(input: PromptAssemblyInput): string
     formatActiveSkillsSection(canonicalSkills),
     formatPendingActionSection(input.pendingAction),
     formatContinuitySection(input.continuity),
+    formatExecutionProfileSection(input.executionProfile),
     formatToolContextSection(input.toolContext),
     formatRuntimeNoticesSection(input.runtimeNotices),
     input.pendingApprovalNotice?.trim() ?? '',
@@ -398,6 +433,7 @@ export function buildPromptAssemblySectionFootprints(input: PromptAssemblyInput)
   const activeSkillsSection = formatActiveSkillsSection(canonicalSkills);
   const pendingActionSection = formatPendingActionSection(input.pendingAction);
   const continuitySection = formatContinuitySection(input.continuity);
+  const executionProfileSection = formatExecutionProfileSection(input.executionProfile);
   const toolContextSection = formatToolContextSection(input.toolContext);
   const runtimeNoticesSection = formatRuntimeNoticesSection(input.runtimeNotices);
   const pendingApprovalSection = input.pendingApprovalNotice?.trim() ?? '';
@@ -417,6 +453,7 @@ export function buildPromptAssemblySectionFootprints(input: PromptAssemblyInput)
     ),
     measureSection('pending_action', pendingActionSection, { mode: 'explicit' }),
     measureSection('continuity', continuitySection, { mode: 'explicit' }),
+    measureSection('execution_profile', executionProfileSection, { mode: 'explicit' }),
     measureSection('tool_context', toolContextSection, { mode: 'inventory' }),
     measureSection(
       'runtime_notices',
@@ -591,6 +628,19 @@ export function buildPromptAssemblyDiagnostics(
     ].filter(Boolean).join(' | '),
     84,
   );
+  const executionProfile = input.executionProfile;
+  const executionPreview = executionProfile
+    ? truncateInline(
+        [
+          executionProfile.id,
+          executionProfile.providerName,
+          executionProfile.providerTier,
+          executionProfile.preferredAnswerPath,
+          `${executionProfile.contextBudget}`,
+        ].join(' | '),
+        84,
+      )
+    : undefined;
 
   const summaryParts = [
     `${memoryLabel} ${knowledgeBaseLoaded ? 'loaded' : 'empty'}`,
@@ -613,6 +663,7 @@ export function buildPromptAssemblyDiagnostics(
       : []),
     ...(selectedMemoryEntries.length > 0 ? [`memory picks ${selectedMemoryEntries.length}`] : []),
     ...(selectedMemoryPreview ? [`top ${selectedMemoryPreview}`] : []),
+    ...(executionPreview ? [`profile ${executionPreview}`] : []),
     ...(sectionPreview ? [`sections ${sectionPreview}`] : []),
     ...(preservedStatePreview ? [`preserved ${preservedStatePreview}`] : []),
     ...(compactionSummaryPreview ? [`compacted ${compactionSummaryPreview}`] : []),
@@ -624,6 +675,17 @@ export function buildPromptAssemblyDiagnostics(
       ? [`codingMemory=${codingMemoryLoaded ? `${codingMemoryContent.length} chars` : 'empty'}`]
       : []),
     ...(queryPreview ? [`query="${queryPreview}"`] : []),
+    ...(executionProfile
+      ? [
+          `executionProfile=${executionProfile.id}`,
+          `executionProvider=${executionProfile.providerName}`,
+          `executionTier=${executionProfile.providerTier}`,
+          `requestedTier=${executionProfile.requestedTier}`,
+          `preferredAnswerPath=${executionProfile.preferredAnswerPath}`,
+          `expectedContextPressure=${executionProfile.expectedContextPressure}`,
+          `contextBudget=${executionProfile.contextBudget}`,
+        ]
+      : []),
     ...(input.continuity?.continuityKey ? [`continuityKey=${input.continuity.continuityKey}`] : []),
     ...(input.continuity?.activeExecutionRefs?.length
       ? [`activeExecutionRefs=${input.continuity.activeExecutionRefs.join(' | ')}`]
@@ -687,6 +749,17 @@ export function buildPromptAssemblyDiagnostics(
     ...(skillCacheHits.length > 0 ? { skillPromptCacheHitCount: skillCacheHits.length, skillPromptCacheHits: skillCacheHits } : {}),
     ...(skillLoadReasons.length > 0 ? { skillPromptLoadReasons: skillLoadReasons } : {}),
     ...(skillArtifactReferences.length > 0 ? { skillArtifactReferences } : {}),
+    ...(executionProfile
+      ? {
+          executionProfileId: executionProfile.id,
+          executionProviderName: executionProfile.providerName,
+          executionProviderTier: executionProfile.providerTier,
+          executionRequestedTier: executionProfile.requestedTier,
+          executionPreferredAnswerPath: executionProfile.preferredAnswerPath,
+          executionExpectedContextPressure: executionProfile.expectedContextPressure,
+          executionContextBudget: executionProfile.contextBudget,
+        }
+      : {}),
     ...(compactionApplied ? { contextCompactionApplied: true } : {}),
     ...(compactionApplied && typeof input.contextCompaction?.beforeChars === 'number'
       ? { contextCharsBeforeCompaction: input.contextCompaction.beforeChars }

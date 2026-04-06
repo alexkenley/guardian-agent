@@ -79,6 +79,20 @@ export class ModelFallbackChain {
   }
 
   /**
+   * Try chat with an explicit provider order.
+   *
+   * The order should include the preferred primary first, followed by deterministic
+   * alternates chosen by the caller for this request.
+   */
+  async chatWithProviderOrder(
+    order: string[],
+    messages: ChatMessage[],
+    options?: ChatOptions,
+  ): Promise<FallbackResult> {
+    return this.chatWithOrder(order, messages, options);
+  }
+
+  /**
    * Try chat with fallback providers after the primary provider.
    *
    * Used for degraded-response retries where the primary provider already
@@ -89,6 +103,22 @@ export class ModelFallbackChain {
     options?: ChatOptions,
   ): Promise<FallbackResult> {
     const alternates = this.order.slice(1);
+    if (alternates.length === 0) {
+      throw new Error('No alternate providers available in fallback chain');
+    }
+    return this.chatWithOrder(alternates, messages, options);
+  }
+
+  /**
+   * Try fallback with an explicit per-request order after removing the already-used primary provider.
+   */
+  async chatWithFallbackAfterProvider(
+    primaryProviderName: string,
+    order: string[],
+    messages: ChatMessage[],
+    options?: ChatOptions,
+  ): Promise<FallbackResult> {
+    const alternates = order.filter((name) => name !== primaryProviderName);
     if (alternates.length === 0) {
       throw new Error('No alternate providers available in fallback chain');
     }

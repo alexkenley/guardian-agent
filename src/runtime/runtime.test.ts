@@ -5,6 +5,7 @@ import type { AgentContext, AgentResponse, UserMessage, ScheduleContext } from '
 import { AgentState } from '../agent/types.js';
 import type { AgentEvent } from '../queue/event-bus.js';
 import { DEFAULT_CONFIG } from '../config/types.js';
+import { attachSelectedExecutionProfileMetadata } from './execution-profiles.js';
 
 class EchoAgent extends BaseAgent {
   receivedMessages: UserMessage[] = [];
@@ -60,6 +61,19 @@ class CaptureAgent extends BaseAgent {
   async onMessage(message: UserMessage): Promise<AgentResponse> {
     this.receivedMessages.push(message);
     return { content: `Captured: ${message.content}` };
+  }
+}
+
+class ProviderCaptureAgent extends BaseAgent {
+  providerNames: string[] = [];
+
+  constructor(id: string = 'provider-capture') {
+    super(id, 'Provider Capture Agent', { handleMessages: true });
+  }
+
+  async onMessage(_message: UserMessage, ctx: AgentContext): Promise<AgentResponse> {
+    this.providerNames.push(ctx.llm?.name ?? 'missing');
+    return { content: `Provider: ${ctx.llm?.name ?? 'missing'}` };
   }
 }
 
@@ -234,6 +248,52 @@ describe('Runtime', () => {
 
       const denied = runtime.auditLog.query({ type: 'action_denied', agentId: 'relay' });
       expect(denied.some((event) => event.controller === 'AgentHandoff')).toBe(true);
+    });
+
+    it('honors request-scoped execution-profile provider overrides when dispatching a message', async () => {
+      const configuredRuntime = new Runtime({
+        llm: {
+          openai: {
+            provider: 'openai',
+            apiKey: 'test-openai-key',
+            model: 'gpt-4o',
+          },
+          anthropic: {
+            provider: 'anthropic',
+            apiKey: 'test-anthropic-key',
+            model: 'claude-opus-4.6',
+          },
+        },
+        defaultProvider: 'openai',
+      });
+      const agent = new ProviderCaptureAgent();
+      configuredRuntime.registerAgent(createAgentDefinition({ agent, providerName: 'openai' }));
+
+      const response = await configuredRuntime.dispatchMessage('provider-capture', {
+        id: 'provider-override-1',
+        userId: 'user-1',
+        channel: 'web',
+        content: 'Use the request-scoped provider.',
+        metadata: attachSelectedExecutionProfileMetadata({}, {
+          id: 'frontier_deep',
+          providerName: 'anthropic',
+          providerLocality: 'external',
+          providerTier: 'frontier',
+          requestedTier: 'external',
+          preferredAnswerPath: 'chat_synthesis',
+          expectedContextPressure: 'high',
+          contextBudget: 64_000,
+          toolContextMode: 'standard',
+          maxAdditionalSections: 4,
+          maxRuntimeNotices: 4,
+          fallbackProviderOrder: ['anthropic', 'openai'],
+          reason: 'test override',
+        }),
+        timestamp: Date.now(),
+      });
+
+      expect(response.content).toBe('Provider: anthropic');
+      expect(agent.providerNames).toEqual(['anthropic']);
     });
   });
 

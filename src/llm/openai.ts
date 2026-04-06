@@ -36,29 +36,21 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   async chat(messages: ChatMessage[], options?: ChatOptions): Promise<ChatResponse> {
-    const params: OpenAI.ChatCompletionCreateParamsNonStreaming = {
-      model: options?.model ?? this.model,
-      max_tokens: options?.maxTokens ?? this.maxTokens,
-      temperature: options?.temperature ?? this.temperature,
-      messages: messages.map(toOpenAIMessage),
-    };
-
-    if (options?.tools?.length) {
-      params.tools = options.tools.map(t => ({
-        type: 'function' as const,
-        function: {
-          name: t.name,
-          description: t.description,
-          parameters: t.parameters,
-        },
-      }));
-    }
-
+    let params = this.buildChatParams(messages, options, false, false);
     let response: OpenAI.ChatCompletion;
     try {
       response = await this.client.chat.completions.create(params);
     } catch (err) {
-      throw wrapOpenAIError(err, params.model as string);
+      if (shouldRetryWithMaxCompletionTokens(err)) {
+        params = this.buildChatParams(messages, options, false, true);
+        try {
+          response = await this.client.chat.completions.create(params);
+        } catch (retryErr) {
+          throw wrapOpenAIError(retryErr, params.model as string);
+        }
+      } else {
+        throw wrapOpenAIError(err, params.model as string);
+      }
     }
     const choice = response.choices[0];
 
@@ -86,20 +78,21 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   async *stream(messages: ChatMessage[], options?: ChatOptions): AsyncGenerator<ChatChunk> {
-    const params: OpenAI.ChatCompletionCreateParamsStreaming = {
-      model: options?.model ?? this.model,
-      max_tokens: options?.maxTokens ?? this.maxTokens,
-      temperature: options?.temperature ?? this.temperature,
-      messages: messages.map(toOpenAIMessage),
-      stream: true,
-      stream_options: { include_usage: true },
-    };
-
+    let params = this.buildChatParams(messages, options, true, false);
     let stream: AsyncIterable<OpenAI.ChatCompletionChunk>;
     try {
       stream = await this.client.chat.completions.create(params);
     } catch (err) {
-      throw wrapOpenAIError(err, params.model as string);
+      if (shouldRetryWithMaxCompletionTokens(err)) {
+        params = this.buildChatParams(messages, options, true, true);
+        try {
+          stream = await this.client.chat.completions.create(params);
+        } catch (retryErr) {
+          throw wrapOpenAIError(retryErr, params.model as string);
+        }
+      } else {
+        throw wrapOpenAIError(err, params.model as string);
+      }
     }
 
     for await (const chunk of stream) {
@@ -138,6 +131,57 @@ export class OpenAIProvider implements LLMProvider {
       return [];
     }
   }
+
+  private buildChatParams(
+    messages: ChatMessage[],
+    options: ChatOptions | undefined,
+    stream: false,
+    useMaxCompletionTokens: boolean,
+  ): OpenAI.ChatCompletionCreateParamsNonStreaming;
+  private buildChatParams(
+    messages: ChatMessage[],
+    options: ChatOptions | undefined,
+    stream: true,
+    useMaxCompletionTokens: boolean,
+  ): OpenAI.ChatCompletionCreateParamsStreaming;
+  private buildChatParams(
+    messages: ChatMessage[],
+    options: ChatOptions | undefined,
+    stream: boolean,
+    useMaxCompletionTokens: boolean,
+  ): OpenAI.ChatCompletionCreateParamsNonStreaming | OpenAI.ChatCompletionCreateParamsStreaming {
+    const params = {
+      model: options?.model ?? this.model,
+      temperature: options?.temperature ?? this.temperature,
+      messages: messages.map(toOpenAIMessage),
+      ...(stream
+        ? {
+            stream: true as const,
+            stream_options: { include_usage: true },
+          }
+        : {}),
+      ...(useMaxCompletionTokens
+        ? { max_completion_tokens: options?.maxTokens ?? this.maxTokens }
+        : { max_tokens: options?.maxTokens ?? this.maxTokens }),
+    } satisfies Record<string, unknown>;
+
+    if (options?.tools?.length) {
+      Object.assign(params, {
+        tools: options.tools.map(t => ({
+          type: 'function' as const,
+          function: {
+            name: t.name,
+            description: t.description,
+            parameters: t.parameters,
+          },
+        })),
+      });
+    }
+
+    return stream
+      ? params as OpenAI.ChatCompletionCreateParamsStreaming
+      : params as OpenAI.ChatCompletionCreateParamsNonStreaming;
+  }
 }
 
 function toOpenAIMessage(msg: ChatMessage): OpenAI.ChatCompletionMessageParam {
@@ -169,6 +213,14 @@ function mapFinishReason(reason?: string | null): ChatResponse['finishReason'] {
     case 'length': return 'length';
     default: return 'stop';
   }
+}
+
+function shouldRetryWithMaxCompletionTokens(err: unknown): boolean {
+  const status = (err as { status?: number })?.status ?? 0;
+  const raw = err instanceof Error ? err.message : String(err);
+  return status === 400
+    && /max_tokens/i.test(raw)
+    && /max_completion_tokens/i.test(raw);
 }
 
 /** Wrap OpenAI SDK errors into user-friendly messages. */

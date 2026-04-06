@@ -22,10 +22,10 @@ export function parseDirectGmailWriteIntent(content: string): DirectGmailWriteIn
   const hasMessageSignal = MESSAGE_SIGNAL_PATTERN.test(text);
   const hasLabeledRecipient = LABELED_RECIPIENT_PATTERN.test(text);
   const hasAddress = EMAIL_ADDRESS_PATTERN.test(text);
-  const hasStructuredSignal = hasSubjectOrBodySignal
-    || hasLabeledRecipient
+  const hasStructuredSignal = hasLabeledRecipient
     || (hasMessageSignal && (hasWriteSignal || hasAddress || hasLabeledRecipient))
-    || (hasAddress && (hasSubjectOrBodySignal || hasMessageSignal));
+    || (hasAddress && (hasSubjectOrBodySignal || hasMessageSignal || hasWriteSignal))
+    || (hasSubjectOrBodySignal && (hasWriteSignal || hasAddress || hasLabeledRecipient));
 
   if (!hasStructuredSignal && !(hasWriteSignal && hasMailboxSignal)) {
     return null;

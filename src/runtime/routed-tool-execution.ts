@@ -10,6 +10,8 @@ import type {
 } from './second-brain/types.js';
 
 const PROVIDER_MUTATION_METHOD_PATTERN = /\b(create|insert|update|patch|delete|send|remove|modify|forward|reply)\b/i;
+const REPO_INSPECTION_SHELL_PATTERN = /\b(?:git\s+grep|grep|rg|findstr|sed|head|tail|cat|type|get-content)\b/i;
+const GIT_HISTORY_SHELL_PATTERN = /\b(?:git\s+diff|git\s+show|git\s+log|git\s+blame)\b/i;
 const SECOND_BRAIN_MUTATION_TOOLS = new Set([
   'second_brain_generate_brief',
   'second_brain_brief_update',
@@ -67,6 +69,7 @@ export function prepareToolExecutionForIntent(
   const immediateResult = buildIntentRoutedToolDenial({
     toolName: input.toolName,
     args,
+    requestText,
     intentDecision: input.intentDecision,
     toolDefinition: input.toolDefinition,
   });
@@ -101,6 +104,7 @@ export function buildRoutedIntentAdditionalSection(
 function buildIntentRoutedToolDenial(input: {
   toolName: string;
   args: Record<string, unknown>;
+  requestText?: string;
   intentDecision?: IntentGatewayDecision | null;
   toolDefinition?: Pick<ToolDefinition, 'category' | 'risk'>;
 }): Record<string, unknown> | undefined {
@@ -125,6 +129,14 @@ function buildIntentRoutedToolDenial(input: {
       message: decision.route === 'email_task'
         ? 'This turn explicitly targets provider-owned email work. Do not mutate local Second Brain records here unless the user explicitly asks for Guardian / Second Brain storage.'
         : 'This turn explicitly targets provider CRUD. Do not mutate local Second Brain records here unless the user explicitly asks for Guardian / Second Brain storage.',
+    };
+  }
+
+  if (shouldDenyRepoInspectionShell(input, decision)) {
+    return {
+      success: false,
+      status: 'denied',
+      message: 'This is a repo-grounded inspect/search turn. Use fs_search, code_symbol_search, and fs_read instead of shell_safe for grep/git/cat-style inspection unless the user explicitly asked for shell or git output.',
     };
   }
 
@@ -155,6 +167,17 @@ function isSecondBrainMutationTool(toolName: string): boolean {
 }
 
 function buildRoutedIntentRuleLines(decision: IntentGatewayDecision): string[] {
+  if (decision.route === 'coding_task' && decision.requiresRepoGrounding) {
+    const lines = [
+      'This turn is a repo-grounded coding request.',
+      'Prefer native repo tools first: fs_search, code_symbol_search, and fs_read for locating and reading code.',
+      'Do not use shell_safe for grep, git grep, cat, sed, or similar repo inspection when the built-in repo tools can answer the question.',
+    ];
+    if (decision.preferredAnswerPath === 'chat_synthesis') {
+      lines.push('Read the named files or search hits first, then synthesize the answer or review findings in the response.');
+    }
+    return lines;
+  }
   if (decision.route === 'personal_assistant_task') {
     const lines = [
       'This turn is already routed to Guardian Second Brain work.',
@@ -183,4 +206,35 @@ function buildRoutedIntentRuleLines(decision: IntentGatewayDecision): string[] {
 
 function wrapTaggedSection(tag: string, content: string): string {
   return `[${tag}]\n${content}\n[/${tag}]`;
+}
+
+function shouldDenyRepoInspectionShell(
+  input: {
+    toolName: string;
+    args: Record<string, unknown>;
+    requestText?: string;
+  },
+  decision: IntentGatewayDecision,
+): boolean {
+  if (input.toolName !== 'shell_safe') return false;
+  if (decision.route !== 'coding_task' || !decision.requiresRepoGrounding) return false;
+  if (!['inspect', 'search', 'read'].includes(decision.operation)) return false;
+
+  const command = typeof input.args.command === 'string' ? input.args.command : '';
+  if (!command.trim()) return false;
+
+  if (REPO_INSPECTION_SHELL_PATTERN.test(command)) return true;
+
+  const requestText = typeof input.requestText === 'string'
+    ? stripLeadingContextPrefix(input.requestText).trim()
+    : '';
+  if (!requestText) return false;
+
+  return GIT_HISTORY_SHELL_PATTERN.test(command)
+    && namesExplicitFilesInRequest(requestText)
+    && !/\b(?:diff|patch|commit|commits|pull request|pr|git)\b/i.test(requestText);
+}
+
+function namesExplicitFilesInRequest(requestText: string): boolean {
+  return /(?:^|\s)(?:[A-Za-z]:[\\/]|\/|\.\/|\.\.\/)?[A-Za-z0-9_.-]+(?:[\\/][A-Za-z0-9_.-]+)*\.[A-Za-z0-9]+(?:\s|$)/.test(requestText);
 }

@@ -208,6 +208,33 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.query).toBe('latest Playwright MCP news');
   });
 
+  it('derives workload metadata when the model omits the new execution fields', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Search the repo for "ollama_cloud" and tell me which files define its routing.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'search',
+          summary: 'Search the attached repo for routing references.',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.executionClass).toBe('repo_grounded');
+    expect(result.decision.preferredTier).toBe('local');
+    expect(result.decision.requiresRepoGrounding).toBe(true);
+    expect(result.decision.requiresToolSynthesis).toBe(false);
+    expect(result.decision.expectedContextPressure).toBe('medium');
+    expect(result.decision.preferredAnswerPath).toBe('direct');
+  });
+
   it('parses personal assistant routes and item types', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(

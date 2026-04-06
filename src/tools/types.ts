@@ -295,6 +295,8 @@ export interface ToolExecutionRequest {
     workspaceRoot: string;
     sessionId?: string;
   };
+  /** Runtime hint for how aggressively the tool context inventory should be compacted. */
+  toolContextMode?: 'tight' | 'standard';
 }
 
 export interface ToolResult {

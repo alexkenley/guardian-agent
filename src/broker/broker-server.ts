@@ -274,15 +274,25 @@ export class BrokerServer {
             ? request.params.options as unknown as ChatOptions
             : undefined;
           const useFallback = request.params.useFallback === true;
+          const requestedProviderName = typeof request.params.providerName === 'string' && request.params.providerName.trim()
+            ? request.params.providerName.trim()
+            : undefined;
+          const requestedFallbackOrder = Array.isArray(request.params.fallbackProviderOrder)
+            ? request.params.fallbackProviderOrder
+              .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+              .map((value) => value.trim())
+            : [];
 
           const instance = this.runtime.registry.get(token.agentId);
           const primaryName = instance?.definition.providerName ?? this.runtime.defaultProviderName;
-          let provider = this.runtime.getProvider(primaryName);
+          let provider = this.runtime.getProvider(requestedProviderName ?? primaryName);
 
           if (useFallback) {
-            // Find any provider different from the primary for quality-based retry
-            for (const name of this.runtime.getProviderNames()) {
-              if (name !== primaryName) {
+            const candidateOrder = requestedFallbackOrder.length > 0
+              ? requestedFallbackOrder
+              : this.runtime.getProviderNames();
+            for (const name of candidateOrder) {
+              if (name !== (requestedProviderName ?? primaryName)) {
                 const p = this.runtime.getProvider(name);
                 if (p) { provider = p; break; }
               }

@@ -43,6 +43,21 @@ describe('context assembly', () => {
         lastActionableRequest: 'Check my email and summarize the latest unread message.',
         activeExecutionRefs: ['code_session:Guardian Agent'],
       },
+      executionProfile: {
+        id: 'managed_cloud_tool',
+        providerName: 'ollama-cloud',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'tool_loop',
+        expectedContextPressure: 'medium',
+        contextBudget: 32000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 1,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['ollama-cloud', 'anthropic', 'ollama'],
+        reason: 'managed cloud preferred for lower-pressure external workload',
+      },
       toolContext: 'Allowed roots: /tmp',
       runtimeNotices: [{ level: 'info', message: 'Notice one' }],
       pendingApprovalNotice: 'One unrelated approval is still pending.',
@@ -60,6 +75,8 @@ describe('context assembly', () => {
     expect(prompt).toContain('<continuity-context>');
     expect(prompt).toContain('continuityKey: continuity-1');
     expect(prompt).toContain('linkedSurfaceCount: 2');
+    expect(prompt).toContain('<execution-profile>');
+    expect(prompt).toContain('providerName: ollama-cloud');
     expect(prompt).toContain('<tool-context>');
     expect(prompt).toContain('<tool-runtime-notices>');
     expect(prompt).toContain('<extra>');
@@ -168,6 +185,21 @@ describe('context assembly', () => {
         activeExecutionRefs: ['code_session:Repo Fix', 'pending_action:approval-1'],
         maintainedSummarySource: 'code_session_compacted_summary',
       },
+      executionProfile: {
+        id: 'frontier_deep',
+        providerName: 'anthropic',
+        providerLocality: 'external',
+        providerTier: 'frontier',
+        requestedTier: 'external',
+        preferredAnswerPath: 'chat_synthesis',
+        expectedContextPressure: 'high',
+        contextBudget: 64000,
+        toolContextMode: 'standard',
+        maxAdditionalSections: 4,
+        maxRuntimeNotices: 4,
+        fallbackProviderOrder: ['anthropic', 'ollama-cloud', 'ollama'],
+        reason: 'frontier preferred for heavier repo/synthesis workload',
+      },
       contextCompaction: {
         applied: true,
         beforeChars: 9800,
@@ -248,10 +280,14 @@ describe('context assembly', () => {
     expect(diagnostics.selectedMemoryEntries?.[1]?.scope).toBe('coding_session');
     expect(diagnostics.selectedMemoryEntries?.[1]?.category).toBe('Project Notes');
     expect(diagnostics.selectedMemoryEntries?.[1]?.matchReasons).toEqual(['query summary', 'summary terms 4']);
+    expect(diagnostics.executionProfileId).toBe('frontier_deep');
+    expect(diagnostics.executionProviderName).toBe('anthropic');
+    expect(diagnostics.executionProviderTier).toBe('frontier');
+    expect(diagnostics.executionContextBudget).toBe(64000);
     expect(diagnostics.detail).toContain('memoryScope=global');
     expect(diagnostics.detail).toContain('codingMemory=');
     expect(diagnostics.detail).toContain('query="importer overhaul verification checkpoints');
-    expect(diagnostics.detail).toContain('activeExecutionRefs=code_session:Repo Fix | pending_action:approval-1');
+    expect(diagnostics.detail).toContain('executionProfile=frontier_deep');
     expect(diagnostics.codeSessionId).toBe('code-1');
   });
 });

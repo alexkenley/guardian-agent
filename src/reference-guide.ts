@@ -431,6 +431,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'In the web UI, the Coding Workspace session cards control which coding session is current for Guardian chat. Click a session card to make it current. In CLI, use `/code attach <sessionId-or-match>` and `/code detach` for the same job.',
                   'Guardian chat can also switch, list, inspect, and detach Coding Workspace sessions directly from normal language requests such as "List the coding sessions", "What coding workspace is this chat attached to?", "Switch this chat to the coding workspace for TestApp", and "Detach this chat from the current coding workspace."',
                   'Repo-scoped search requests in an attached coding workspace, such as `Search the repo for "ollama_cloud"`, should route through guarded filesystem search inside that workspace rather than falling back to ad hoc shell search commands.',
+                  'Repo-grounded inspect/review requests should prefer native repo tools (`fs_search`, `code_symbol_search`, `fs_read`) before shell-based grep or git inspection, unless you explicitly ask for shell or git output.',
                 ],
               },
               {
@@ -592,8 +593,11 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Usage Notes',
                 items: [
                   'Guardian keeps one global default provider plus routed defaults for local, managed-cloud, and frontier tiers.',
-                  'You can choose whether Guardian should prefer local AI, managed-cloud Ollama, frontier providers, or auto-select between them.',
-                  'When Guardian auto-selects a non-local path, it prefers the managed-cloud tier before the frontier tier when both are configured.',
+                  'Use chat mode or `/mode` when you want to force `local`, `managed cloud`, or `frontier` directly.',
+                  'Auto mode now uses a deterministic selection policy after intent routing instead of treating every non-local request the same way.',
+                  'In Configuration > AI Providers > Auto Selection Policy choose whether Auto should stay balanced or bias more aggressively toward frontier quality.',
+                  'The managed-cloud and frontier routed defaults still decide which concrete provider Auto uses after it picks a tier.',
+                  'Balanced Auto can keep lighter external work on managed-cloud Ollama while escalating heavier repo-grounded or security-heavy work to the frontier default.',
                   'Provider changes propagate to the running web UI immediately.',
                 ],
               },

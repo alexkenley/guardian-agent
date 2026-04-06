@@ -13,6 +13,11 @@ import {
   type IntentGatewayInput,
   type IntentGatewayRecord,
 } from './intent-gateway.js';
+import {
+  attachSelectedExecutionProfileMetadata,
+  selectExecutionProfile,
+  type SelectedExecutionProfile,
+} from './execution-profiles.js';
 import type { IntentRoutingTraceLog, IntentRoutingTraceStage } from './intent-routing-trace.js';
 import type { MessageRouter, RouteDecision } from './message-router.js';
 import type { PendingActionStore } from './pending-actions.js';
@@ -223,7 +228,11 @@ export function createIncomingDispatchPreparer(args: {
       surfaceId: resolvedSurfaceId,
       touchAttachment: false,
     });
-    const recordResolvedRoute = (decision: RouteDecision, gateway: IntentGatewayRecord | null): void => {
+    const recordResolvedRoute = (
+      decision: RouteDecision,
+      gateway: IntentGatewayRecord | null,
+      profile: SelectedExecutionProfile | null,
+    ): void => {
       if (gateway) {
         recordIntentRoutingTrace('gateway_classified', {
           msg,
@@ -238,6 +247,12 @@ export function createIncomingDispatchPreparer(args: {
             turnRelation: gateway.decision.turnRelation,
             resolution: gateway.decision.resolution,
             missingFields: gateway.decision.missingFields,
+            executionClass: gateway.decision.executionClass,
+            preferredTier: gateway.decision.preferredTier,
+            requiresRepoGrounding: gateway.decision.requiresRepoGrounding,
+            requiresToolSynthesis: gateway.decision.requiresToolSynthesis,
+            expectedContextPressure: gateway.decision.expectedContextPressure,
+            preferredAnswerPath: gateway.decision.preferredAnswerPath,
             emailProvider: gateway.decision.entities.emailProvider,
             codingBackend: gateway.decision.entities.codingBackend,
             latencyMs: gateway.latencyMs,
@@ -259,6 +274,51 @@ export function createIncomingDispatchPreparer(args: {
           route: gateway?.decision.route,
         },
       });
+      if (profile) {
+        recordIntentRoutingTrace('profile_selection_decided', {
+          msg,
+          requestId,
+          agentId: decision.agentId,
+          details: {
+            route: gateway?.decision.route,
+            providerName: profile.providerName,
+            providerTier: profile.providerTier,
+            providerLocality: profile.providerLocality,
+            executionProfileId: profile.id,
+            requestedTier: profile.requestedTier,
+            reason: profile.reason,
+            fallbackProviderOrder: profile.fallbackProviderOrder,
+          },
+        });
+        recordIntentRoutingTrace('context_budget_decided', {
+          msg,
+          requestId,
+          agentId: decision.agentId,
+          details: {
+            route: gateway?.decision.route,
+            executionProfileId: profile.id,
+            contextBudget: profile.contextBudget,
+            toolContextMode: profile.toolContextMode,
+            maxAdditionalSections: profile.maxAdditionalSections,
+            maxRuntimeNotices: profile.maxRuntimeNotices,
+            expectedContextPressure: profile.expectedContextPressure,
+            preferredAnswerPath: profile.preferredAnswerPath,
+          },
+        });
+      }
+    };
+    const selectProfileForResolvedRoute = (
+      decision: RouteDecision,
+      gateway: IntentGatewayRecord | null,
+      tierMode: RoutingTierMode,
+    ): SelectedExecutionProfile | null => {
+      if (!gateway && !decision.tier) return null;
+      return selectExecutionProfile({
+        config: args.configRef.current,
+        routeDecision: decision,
+        gatewayDecision: gateway?.decision ?? null,
+        mode: tierMode,
+      });
     };
     if (resolvedCodeSession) {
       const pinnedAgentId = resolvedCodeSession.session.agentId?.trim();
@@ -274,7 +334,7 @@ export function createIncomingDispatchPreparer(args: {
             ? 'explicit coding session pinned to a specific agent'
             : 'attached coding session pinned to a specific agent',
         };
-        recordResolvedRoute(decision, null);
+        recordResolvedRoute(decision, null, null);
         return {
           decision,
           gateway: null,
@@ -295,13 +355,14 @@ export function createIncomingDispatchPreparer(args: {
           : hasRoles
             ? args.router.routeWithTier(normalizedContent, tierMode, threshold)
             : args.router.route(normalizedContent);
+      const profile = selectProfileForResolvedRoute(decision, gateway, tierMode);
       const resolvedDecision = {
         ...decision,
         reason: requestedCodeContext?.sessionId
           ? 'explicit attached coding session with gateway-first auto routing'
           : 'attached coding session with gateway-first auto routing',
       };
-      recordResolvedRoute(resolvedDecision, gateway);
+      recordResolvedRoute(resolvedDecision, gateway, profile);
       return {
         decision: resolvedDecision,
         gateway,
@@ -313,7 +374,7 @@ export function createIncomingDispatchPreparer(args: {
         confidence: 'high' as const,
         reason: 'code workspace context',
       };
-      recordResolvedRoute(decision, null);
+      recordResolvedRoute(decision, null, null);
       return {
         decision,
         gateway: null,
@@ -325,7 +386,7 @@ export function createIncomingDispatchPreparer(args: {
         confidence: 'high' as const,
         reason: 'channel default override',
       };
-      recordResolvedRoute(decision, null);
+      recordResolvedRoute(decision, null, null);
       return {
         decision,
         gateway: null,
@@ -342,7 +403,8 @@ export function createIncomingDispatchPreparer(args: {
       : hasRoles
         ? args.router.routeWithTier(normalizedContent, tierMode, threshold)
         : args.router.route(normalizedContent);
-    recordResolvedRoute(decision, gateway);
+    const profile = selectProfileForResolvedRoute(decision, gateway, tierMode);
+    recordResolvedRoute(decision, gateway, profile);
     return { decision, gateway };
   };
 
@@ -366,9 +428,20 @@ export function createIncomingDispatchPreparer(args: {
           Object.entries(msg.metadata).filter(([key]) => key !== PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY),
         )
       : msg.metadata;
-    const routedMetadata = routed.gateway
-      ? attachPreRoutedIntentGatewayMetadata(sanitizedMetadata, routed.gateway)
-      : sanitizedMetadata;
+    const selectedProfile = routed.gateway || routed.decision.tier
+      ? selectExecutionProfile({
+          config: args.configRef.current,
+          routeDecision: routed.decision,
+          gatewayDecision: routed.gateway?.decision ?? null,
+          mode: args.normalizeTierModeForRouter(args.router, args.configRef.current, args.configRef.current.routing?.tierMode),
+        })
+      : null;
+    const routedMetadata = attachSelectedExecutionProfileMetadata(
+      routed.gateway
+        ? attachPreRoutedIntentGatewayMetadata(sanitizedMetadata, routed.gateway)
+        : sanitizedMetadata,
+      selectedProfile,
+    );
     if (routed.gateway) {
       recordIntentRoutingTrace('pre_routed_metadata_attached', {
         msg,
@@ -377,6 +450,13 @@ export function createIncomingDispatchPreparer(args: {
         details: {
           route: routed.gateway.decision.route,
           selectedAgentId: routed.decision.agentId,
+          ...(selectedProfile
+            ? {
+                selectedProviderName: selectedProfile.providerName,
+                selectedProviderTier: selectedProfile.providerTier,
+                executionProfileId: selectedProfile.id,
+              }
+            : {}),
         },
       });
     }

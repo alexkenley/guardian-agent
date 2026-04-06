@@ -176,3 +176,62 @@ describe('AnthropicProvider', () => {
     expect(models[0].provider).toBe('anthropic');
   });
 });
+
+describe('OpenAIProvider compatibility', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('retries with max_completion_tokens when max_tokens is rejected by newer OpenAI models', async () => {
+    const provider = new OpenAIProvider({
+      provider: 'openai',
+      model: 'gpt-5.1',
+      apiKey: 'sk-test',
+    });
+
+    const create = vi.fn()
+      .mockRejectedValueOnce(Object.assign(
+        new Error("400 Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead."),
+        { status: 400 },
+      ))
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: { content: 'Hello from GPT-5.1' },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: {
+          prompt_tokens: 5,
+          completion_tokens: 4,
+          total_tokens: 9,
+        },
+        model: 'gpt-5.1',
+      });
+
+    (provider as any).client = {
+      chat: {
+        completions: {
+          create,
+        },
+      },
+      models: {
+        list: vi.fn(),
+      },
+    };
+
+    const response = await provider.chat([{ role: 'user', content: 'Hello?' }]);
+
+    expect(response.content).toBe('Hello from GPT-5.1');
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      model: 'gpt-5.1',
+      max_tokens: 4096,
+    });
+    expect(create.mock.calls[1]?.[0]).toMatchObject({
+      model: 'gpt-5.1',
+      max_completion_tokens: 4096,
+    });
+    expect(create.mock.calls[1]?.[0]).not.toHaveProperty('max_tokens');
+  });
+});

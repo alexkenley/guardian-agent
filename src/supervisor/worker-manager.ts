@@ -30,6 +30,7 @@ import type {
   PromptAssemblyKnowledgeBase,
   PromptAssemblyPendingAction,
 } from '../runtime/context-assembly.js';
+import type { SelectedExecutionProfile } from '../runtime/execution-profiles.js';
 import { readPreRoutedIntentGatewayMetadata, type IntentGatewayDecision } from '../runtime/intent-gateway.js';
 
 const log = createLogger('worker-manager');
@@ -60,6 +61,7 @@ export interface WorkerMessageRequest {
   additionalSections?: PromptAssemblyAdditionalSection[];
   toolContext?: string;
   runtimeNotices?: Array<{ level: 'info' | 'warn'; message: string }>;
+  executionProfile?: SelectedExecutionProfile;
   continuity?: PromptAssemblyContinuity | null;
   pendingAction?: PromptAssemblyPendingAction | null;
   pendingApprovalNotice?: string;
@@ -219,6 +221,7 @@ export class WorkerManager {
         additionalSections: input.additionalSections ?? [],
         toolContext: input.toolContext ?? '',
         runtimeNotices: input.runtimeNotices ?? [],
+        executionProfile: input.executionProfile,
         continuity: input.continuity,
         pendingAction: input.pendingAction,
         pendingApprovalNotice: input.pendingApprovalNotice,
@@ -898,6 +901,7 @@ export class WorkerManager {
       additionalSections: PromptAssemblyAdditionalSection[];
       toolContext: string;
       runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>;
+      executionProfile?: SelectedExecutionProfile;
       continuity?: PromptAssemblyContinuity | null;
       pendingAction?: PromptAssemblyPendingAction | null;
       pendingApprovalNotice?: string;
@@ -920,6 +924,7 @@ export class WorkerManager {
       additionalSections: PromptAssemblyAdditionalSection[];
       toolContext: string;
       runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>;
+      executionProfile?: SelectedExecutionProfile;
       continuity?: PromptAssemblyContinuity | null;
       pendingAction?: PromptAssemblyPendingAction | null;
       pendingApprovalNotice?: string;

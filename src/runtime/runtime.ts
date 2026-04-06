@@ -32,6 +32,7 @@ import { createLogger } from '../util/logging.js';
 import type { WorkerManager } from '../supervisor/worker-manager.js';
 import { applyHandoffContract } from './handoffs.js';
 import { validateHandoffContract } from './handoff-policy.js';
+import { readSelectedExecutionProfileMetadata } from './execution-profiles.js';
 
 const log = createLogger('runtime');
 const TRUSTED_SERVICE_EVENT_SOURCES = new Set([
@@ -284,7 +285,7 @@ export class Runtime {
       }
     }
 
-    const ctx = this.createAgentContext(agentId, { lineage: currentLineage });
+    const ctx = this.createAgentContext(agentId, { lineage: currentLineage, message });
     const limits = instance.definition.resourceLimits;
     const budgetMs = limits.maxInvocationBudgetMs;
 
@@ -675,9 +676,18 @@ export class Runtime {
 
   // ─── Internals ──────────────────────────────────────────────
 
-  private createAgentContext(agentId: string, options?: { enableDispatch?: boolean; lineage?: DispatchLineage }): AgentContext {
+  private createAgentContext(agentId: string, options?: {
+    enableDispatch?: boolean;
+    lineage?: DispatchLineage;
+    message?: UserMessage;
+  }): AgentContext {
     const instance = this.registry.get(agentId);
     const capabilities = Object.freeze([...(instance?.definition.grantedCapabilities ?? [])]);
+    const selectedExecutionProfile = readSelectedExecutionProfileMetadata(options?.message?.metadata);
+    const requestedProvider = selectedExecutionProfile?.providerName
+      ? this.providers.get(selectedExecutionProfile.providerName)
+      : undefined;
+    const effectiveProvider = requestedProvider ?? instance?.provider;
 
     const ctx: AgentContext = {
       agentId,
@@ -869,9 +879,9 @@ export class Runtime {
           details: { actionType: action.type },
         });
       },
-      llm: instance?.provider
+      llm: effectiveProvider
         ? new GuardedLLMProvider({
-            provider: instance.provider,
+            provider: effectiveProvider,
             agentId,
             outputGuardian: this.outputGuardian,
             budget: this.budget,

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG, type GuardianAgentConfig } from '../config/types.js';
+import { readSelectedExecutionProfileMetadata } from './execution-profiles.js';
 import { readPreRoutedIntentGatewayMetadata, type IntentGatewayRecord } from './intent-gateway.js';
 import { createIncomingDispatchPreparer } from './incoming-dispatch.js';
 import type { MessageRouter } from './message-router.js';
@@ -22,6 +23,12 @@ function createGatewayRecord(partial: Partial<IntentGatewayRecord['decision']> =
       turnRelation: 'new_request',
       resolution: 'ready',
       missingFields: [],
+      executionClass: 'repo_grounded',
+      preferredTier: 'external',
+      requiresRepoGrounding: true,
+      requiresToolSynthesis: true,
+      expectedContextPressure: 'high',
+      preferredAnswerPath: 'chat_synthesis',
       entities: {},
       ...partial,
     },
@@ -153,11 +160,17 @@ describe('createIncomingDispatchPreparer', () => {
         operation: 'inspect',
       },
     });
-    expect(intentRoutingTrace.record).toHaveBeenCalledTimes(4);
+    expect(readSelectedExecutionProfileMetadata(result.routedMessage.metadata)).toMatchObject({
+      providerName: 'ollama',
+      providerTier: 'local',
+    });
+    expect(intentRoutingTrace.record).toHaveBeenCalledTimes(6);
     expect(intentRoutingTrace.record).toHaveBeenNthCalledWith(1, expect.objectContaining({ stage: 'incoming_dispatch' }));
     expect(intentRoutingTrace.record).toHaveBeenNthCalledWith(2, expect.objectContaining({ stage: 'gateway_classified' }));
     expect(intentRoutingTrace.record).toHaveBeenNthCalledWith(3, expect.objectContaining({ stage: 'tier_routing_decided' }));
-    expect(intentRoutingTrace.record).toHaveBeenNthCalledWith(4, expect.objectContaining({ stage: 'pre_routed_metadata_attached' }));
+    expect(intentRoutingTrace.record).toHaveBeenNthCalledWith(4, expect.objectContaining({ stage: 'profile_selection_decided' }));
+    expect(intentRoutingTrace.record).toHaveBeenNthCalledWith(5, expect.objectContaining({ stage: 'context_budget_decided' }));
+    expect(intentRoutingTrace.record).toHaveBeenNthCalledWith(6, expect.objectContaining({ stage: 'pre_routed_metadata_attached' }));
   });
 
   it('strips the web context prefix before classifying and tier-routing the request', async () => {
@@ -199,5 +212,62 @@ describe('createIncomingDispatchPreparer', () => {
     expect(result.gateway).toEqual(gatewayRecord);
     expect(result.decision.agentId).toBe('local-agent');
     expect(routingIntentGateway.classify).toHaveBeenCalledTimes(1);
+  });
+
+  it('attaches a frontier execution profile for heavier repo-grounded external work', async () => {
+    const config = createConfig();
+    config.llm['ollama-cloud'] = {
+      provider: 'ollama_cloud',
+      model: 'qwen3-coder-next',
+      credentialRef: 'llm.ollama_cloud.primary',
+    };
+    config.llm.anthropic = {
+      provider: 'anthropic',
+      model: 'claude-opus-4.6',
+      apiKey: 'test-key',
+    };
+    config.assistant.tools.preferredProviders = {
+      local: 'ollama',
+      managedCloud: 'ollama-cloud',
+      frontier: 'anthropic',
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      configRef: { current: config },
+      routingIntentGateway: {
+        classify: vi.fn(async () => createGatewayRecord({
+          route: 'coding_task',
+          operation: 'inspect',
+          executionClass: 'repo_grounded',
+          preferredTier: 'external',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'high',
+          preferredAnswerPath: 'chat_synthesis',
+        })),
+      },
+      router: {
+        findAgentByRole: vi.fn((role: string) => {
+          if (role === 'local') return { id: 'local-agent' };
+          if (role === 'external') return { id: 'external-agent' };
+          return undefined;
+        }),
+        route: vi.fn(() => ({ agentId: 'fallback-agent', confidence: 'low', reason: 'fallback' })),
+        routeWithTier: vi.fn(() => ({ agentId: 'external-agent', confidence: 'medium', reason: 'tier route', tier: 'external' })),
+        routeWithTierFromIntent: vi.fn(() => ({ agentId: 'external-agent', confidence: 'high', reason: 'intent tier route', tier: 'external' })),
+      } as unknown as MessageRouter,
+    }));
+
+    const result = await prepareIncomingDispatch(undefined, {
+      content: 'Inspect src/runtime/intent-gateway.ts and review the routing uplift for regressions.',
+      userId: 'alex',
+      channel: 'web',
+    });
+
+    expect(readSelectedExecutionProfileMetadata(result.routedMessage.metadata)).toMatchObject({
+      providerName: 'anthropic',
+      providerTier: 'frontier',
+      id: 'frontier_deep',
+      preferredAnswerPath: 'chat_synthesis',
+    });
   });
 });

@@ -518,6 +518,7 @@ function renderProvidersTab(panel) {
 
   panel.appendChild(createProviderPanel(config, providers, panel));
   panel.appendChild(createProviderStatusTable(config, providers, panel));
+  panel.appendChild(createProviderSelectionPolicyPanel(config, panel));
   applyInputTooltips(panel);
 }
 
@@ -1720,6 +1721,120 @@ function createProviderStatusTable(config, providers, panel) {
       }
       btn.disabled = false;
     });
+  });
+
+  return section;
+}
+
+function createProviderSelectionPolicyPanel(config, panel) {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+  const selection = config?.assistant?.tools?.modelSelection || {};
+  const autoPolicy = selection.autoPolicy === 'quality_first' ? 'quality_first' : 'balanced';
+  const preferManagedCloud = selection.preferManagedCloudForLowPressureExternal !== false;
+  const preferFrontierForRepoGrounded = selection.preferFrontierForRepoGrounded !== false;
+  const preferFrontierForSecurity = selection.preferFrontierForSecurity !== false;
+
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Auto Selection Policy</h3>
+      <span class="cfg-header-note">Controls how Auto mode picks between the managed-cloud and frontier tiers after intent routing has already chosen the external lane.</span>
+    </div>
+    <div class="cfg-form-grid">
+      <div class="cfg-field">
+        <label>Auto Policy</label>
+        <select id="cfg-model-selection-policy">
+          <option value="balanced"${autoPolicy === 'balanced' ? ' selected' : ''}>Balanced</option>
+          <option value="quality_first"${autoPolicy === 'quality_first' ? ' selected' : ''}>Quality First</option>
+        </select>
+      </div>
+    </div>
+    <div class="cfg-field" style="margin-top:0.85rem;">
+      <label style="display:flex;align-items:flex-start;gap:0.5rem;justify-content:flex-start;cursor:pointer;">
+        <input id="cfg-model-selection-managed-cloud" type="checkbox"${preferManagedCloud ? ' checked' : ''}>
+        <span>
+          <strong>Prefer managed cloud for lower-pressure external work</strong><br>
+          <span style="font-size:0.72rem;color:var(--text-muted);">Use Ollama Cloud first for lighter external requests when it is configured.</span>
+        </span>
+      </label>
+    </div>
+    <div class="cfg-field" style="margin-top:0.65rem;">
+      <label style="display:flex;align-items:flex-start;gap:0.5rem;justify-content:flex-start;cursor:pointer;">
+        <input id="cfg-model-selection-repo" type="checkbox"${preferFrontierForRepoGrounded ? ' checked' : ''}>
+        <span>
+          <strong>Prefer frontier for heavier repo-grounded synthesis</strong><br>
+          <span style="font-size:0.72rem;color:var(--text-muted);">Escalate deeper repo review, regression analysis, and higher-pressure grounded coding requests to the frontier default when available.</span>
+        </span>
+      </label>
+    </div>
+    <div class="cfg-field" style="margin-top:0.65rem;">
+      <label style="display:flex;align-items:flex-start;gap:0.5rem;justify-content:flex-start;cursor:pointer;">
+        <input id="cfg-model-selection-security" type="checkbox"${preferFrontierForSecurity ? ' checked' : ''}>
+        <span>
+          <strong>Prefer frontier for security analysis</strong><br>
+          <span style="font-size:0.72rem;color:var(--text-muted);">Bias high-risk security reasoning toward the frontier default instead of managed cloud when both are configured.</span>
+        </span>
+      </label>
+    </div>
+    <div style="margin-top:0.85rem;font-size:0.72rem;color:var(--text-muted);">
+      Global default and routed defaults still decide which provider is used for each tier. This policy only shapes how Auto mode chooses the execution profile inside the routed lane.
+    </div>
+    <div class="cfg-actions" style="margin-top: 1rem;">
+      <button class="btn btn-primary" id="cfg-model-selection-save" type="button">Save Auto Policy</button>
+      <span id="cfg-model-selection-status" class="cfg-save-status"></span>
+    </div>
+  `;
+
+  section.querySelector('#cfg-model-selection-save')?.addEventListener('click', async () => {
+    const statusEl = section.querySelector('#cfg-model-selection-status');
+    const saveBtn = section.querySelector('#cfg-model-selection-save');
+    const nextPolicy = {
+      autoPolicy: section.querySelector('#cfg-model-selection-policy')?.value === 'quality_first'
+        ? 'quality_first'
+        : 'balanced',
+      preferManagedCloudForLowPressureExternal: section.querySelector('#cfg-model-selection-managed-cloud')?.checked === true,
+      preferFrontierForRepoGrounded: section.querySelector('#cfg-model-selection-repo')?.checked === true,
+      preferFrontierForSecurity: section.querySelector('#cfg-model-selection-security')?.checked === true,
+    };
+
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving...';
+    }
+    if (statusEl) {
+      statusEl.textContent = 'Saving...';
+      statusEl.style.color = 'var(--text-muted)';
+    }
+
+    try {
+      const result = await api.updateConfig({
+        assistant: {
+          tools: {
+            modelSelection: nextPolicy,
+          },
+        },
+      });
+      if (statusEl) {
+        statusEl.textContent = result.message;
+        statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
+      }
+      if (result.success) {
+        sharedConfig.assistant = sharedConfig.assistant || {};
+        sharedConfig.assistant.tools = sharedConfig.assistant.tools || {};
+        sharedConfig.assistant.tools.modelSelection = nextPolicy;
+        if (panel) renderProvidersTab(panel);
+      }
+    } catch (err) {
+      if (statusEl) {
+        statusEl.textContent = err instanceof Error ? err.message : String(err);
+        statusEl.style.color = 'var(--error)';
+      }
+    }
+
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save Auto Policy';
+    }
   });
 
   return section;

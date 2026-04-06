@@ -69,6 +69,12 @@ describe('gmail-compose helpers', () => {
     expect(parseDirectGmailWriteIntent('Who sent the latest Gmail email?')).toBeNull();
   });
 
+  it('does not treat Outlook inbox summaries with subject/date columns as compose requests', () => {
+    expect(parseDirectGmailWriteIntent(
+      'Check my unread Outlook mail and list the top 10 by sender, subject, and date.',
+    )).toBeNull();
+  });
+
   it('does not treat coding-backend confirmation prompts as compose requests', () => {
     expect(parseDirectGmailWriteIntent(
       'Use Codex to say hello and confirm you are working. Just respond with a brief confirmation message. Do not change any files.',

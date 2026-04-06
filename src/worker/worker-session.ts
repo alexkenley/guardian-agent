@@ -35,6 +35,10 @@ import {
   type PromptAssemblyPendingAction,
 } from '../runtime/context-assembly.js';
 import {
+  readSelectedExecutionProfileMetadata,
+  type SelectedExecutionProfile,
+} from '../runtime/execution-profiles.js';
+import {
   buildRoutedIntentAdditionalSection,
   prepareToolExecutionForIntent,
 } from '../runtime/routed-tool-execution.js';
@@ -70,6 +74,7 @@ interface SuspendedToolCall {
 interface SuspendedSession {
   llmMessages: ChatMessage[];
   pendingTools: SuspendedToolCall[];
+  executionProfile?: SelectedExecutionProfile;
 }
 
 interface PendingApprovalMetadata {
@@ -111,6 +116,7 @@ export interface WorkerMessageHandleParams {
   additionalSections?: PromptAssemblyAdditionalSection[];
   toolContext: string;
   runtimeNotices: Array<{ level: 'info' | 'warn'; message: string }>;
+  executionProfile?: SelectedExecutionProfile;
   continuity?: PromptAssemblyContinuity | null;
   pendingAction?: PromptAssemblyPendingAction | null;
   pendingApprovalNotice?: string;
@@ -248,18 +254,39 @@ export class BrokeredWorkerSession {
       await this.client.listLoadedTools({ codeContext });
     }
     const toolExecutor = new BrokeredToolExecutor(this.client);
+    const selectedExecutionProfile = params.executionProfile
+      ?? readSelectedExecutionProfileMetadata(params.message.metadata);
 
     // LLM calls are proxied through the broker — the worker has no network access.
-    const chatFn = (msgs: ChatMessage[], opts?: ChatOptions): Promise<ChatResponse> =>
-      this.client.llmChat(msgs, opts);
+    const buildChatFn = (
+      executionProfile: SelectedExecutionProfile | null | undefined,
+    ) => (msgs: ChatMessage[], opts?: ChatOptions): Promise<ChatResponse> => this.client.llmChat(
+      msgs,
+      opts,
+      executionProfile
+        ? {
+            providerName: executionProfile.providerName,
+            fallbackProviderOrder: executionProfile.fallbackProviderOrder,
+          }
+        : undefined,
+    );
+    const chatFn = buildChatFn(selectedExecutionProfile);
 
     if (this.isContinuationMessage(params.message.content) && this.suspendedSession) {
-      return this.resumeSuspendedSessionAfterApproval(chatFn, toolExecutor, params);
+      return this.resumeSuspendedSessionAfterApproval(
+        buildChatFn(this.suspendedSession.executionProfile ?? selectedExecutionProfile),
+        toolExecutor,
+        params,
+      );
     }
 
     const approvalContinuation = readApprovalOutcomeContinuationMetadata(params.message.metadata);
     if (approvalContinuation && this.suspendedSession) {
-      return this.resumeSuspendedSessionAfterApproval(chatFn, toolExecutor, params);
+      return this.resumeSuspendedSessionAfterApproval(
+        buildChatFn(this.suspendedSession.executionProfile ?? selectedExecutionProfile),
+        toolExecutor,
+        params,
+      );
     }
 
     const approvalResponse = await this.tryHandleApprovalMessage(params.message, chatFn, toolExecutor, params);
@@ -342,7 +369,10 @@ export class BrokeredWorkerSession {
       userContent: params.message.content,
     });
 
-    return this.executeLoop(params.message, llmMessages, chatFn, toolExecutor, params, directIntent?.decision);
+    return this.executeLoop(params.message, llmMessages, chatFn, toolExecutor, {
+      ...params,
+      executionProfile: selectedExecutionProfile ?? undefined,
+    }, directIntent?.decision);
   }
 
   private async tryHandleApprovalMessage(
@@ -646,17 +676,29 @@ export class BrokeredWorkerSession {
     const pendingTools: SuspendedToolCall[] = [];
     let responseSource: ResponseSourceMetadata | undefined;
     const codeContext = params.message.metadata?.codeContext as { workspaceRoot: string; sessionId?: string } | undefined;
+    const selectedExecutionProfile = params.executionProfile
+      ?? readSelectedExecutionProfileMetadata(params.message.metadata);
 
     // Fallback chat function: proxied through the broker with useFallback flag
     let fallbackChatFn: ((msgs: ChatMessage[], opts?: ChatOptions) => Promise<BrokeredChatResponse>) | undefined;
-    if (params.hasFallbackProvider) {
+    if (params.hasFallbackProvider || selectedExecutionProfile?.fallbackProviderOrder?.length) {
       fallbackChatFn = async (msgs, opts) => {
         responseSource = {
           locality: 'external',
           usedFallback: true,
           notice: 'Retried with an alternate model after the local model failed to format a tool call.',
         };
-        return this.client.llmChat(msgs, opts, { useFallback: true });
+        return this.client.llmChat(
+          msgs,
+          opts,
+          selectedExecutionProfile
+            ? {
+                providerName: selectedExecutionProfile.providerName,
+                fallbackProviderOrder: selectedExecutionProfile.fallbackProviderOrder,
+                useFallback: true,
+              }
+            : { useFallback: true },
+        );
       };
     }
 
@@ -714,7 +756,7 @@ export class BrokeredWorkerSession {
         },
       },
       6,
-      80_000,
+      selectedExecutionProfile?.contextBudget ?? 80_000,
       (toolCall, toolResult) => {
         if (toolResult.status === 'pending_approval' && typeof toolResult.approvalId === 'string' && typeof toolResult.jobId === 'string') {
           pendingTools.push({
@@ -740,6 +782,7 @@ export class BrokeredWorkerSession {
       this.suspendedSession = {
         llmMessages: result.messages,
         pendingTools,
+        ...(selectedExecutionProfile ? { executionProfile: selectedExecutionProfile } : {}),
       };
 
       const pendingApprovalMeta = toolExecutor.getApprovalMetadata(ids);
@@ -802,6 +845,7 @@ function buildWorkerSystemPrompt(params: WorkerMessageHandleParams): string {
     pendingAction: params.pendingAction,
     pendingApprovalNotice: params.pendingApprovalNotice,
     continuity: params.continuity,
+    ...(params.executionProfile ? { executionProfile: params.executionProfile } : {}),
   });
 }
 

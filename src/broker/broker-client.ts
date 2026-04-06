@@ -100,13 +100,17 @@ export class BrokerClient {
   async llmChat(
     messages: ChatMessage[],
     options?: ChatOptions,
-    opts?: { useFallback?: boolean },
+    opts?: { useFallback?: boolean; providerName?: string; fallbackProviderOrder?: string[] },
   ): Promise<ChatResponse & { providerName?: string; providerLocality?: 'local' | 'external' }> {
     // LLM calls can take up to 120s; use extended timeout
     return this.sendRequest<ChatResponse & { providerName?: string; providerLocality?: 'local' | 'external' }>('llm.chat', {
       messages,
       options: options ?? {},
       useFallback: opts?.useFallback ?? false,
+      ...(typeof opts?.providerName === 'string' && opts.providerName.trim() ? { providerName: opts.providerName.trim() } : {}),
+      ...(Array.isArray(opts?.fallbackProviderOrder) && opts.fallbackProviderOrder.length > 0
+        ? { fallbackProviderOrder: opts.fallbackProviderOrder }
+        : {}),
     }, 120_000);
   }
 

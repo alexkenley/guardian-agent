@@ -55,6 +55,7 @@ Guardian currently has two main context consumers:
 These consumers share the same philosophy but not the same payload:
 - the gateway gets only route-relevant bounded state
 - the execution path gets the shared system prompt plus bounded operational context
+- both paths now depend on a deterministic execution profile once routing leaves the raw gateway result
 
 ## Context Classes
 
@@ -68,6 +69,7 @@ Examples:
 - pending action blocker summary
 - continuity summary
 - approval notices
+- selected execution profile and context budget
 - coding-session identity
 - workspace trust state
 - focus summary
@@ -177,15 +179,17 @@ Execution-context prompt assembly currently follows this order:
 4. active skills summary (L1 compact catalog)
 5. pending action context
 6. continuity context
-7. tool context
-8. runtime notices
-9. pending approval notice
-10. additional targeted sections such as bounded skill drilldown, artifact-backed references, or other request-specific extensions
+7. execution profile context
+8. tool context
+9. runtime notices
+10. pending approval notice
+11. additional targeted sections such as bounded skill drilldown, artifact-backed references, or other request-specific extensions
 
 This order is intentional:
 - identity and safety instructions first
 - durable memory before ephemeral operational context
 - blocked-work and continuity before tool/action context
+- execution-profile policy before tool/action context so the selected model path sees its own bounded operating contract
 - targeted extensions last
 
 The shared builder for this is `buildSystemPromptWithContext(...)` in `src/runtime/context-assembly.ts`.
@@ -220,6 +224,21 @@ Code-session prompts already prefer workspace identity, trust, profile, repo map
 ### Prompt Compaction
 
 The current runtime already exposes compaction diagnostics and can persist a bounded Code-session compacted summary, but the summary artifact is still too incidental. The next uplift should turn compaction into a maintained, reusable summary path with stronger invariant preservation.
+
+### Profile-Aware Context Budgets
+
+The current foundation now includes request-scoped execution profiles that shape:
+- effective context budget
+- tool-context compaction mode
+- max additional prompt sections
+- max runtime notices
+- request-scoped fallback provider order
+
+Current implemented behavior:
+- smaller local and managed-cloud profiles receive tighter tool-context inventories and fewer optional sections
+- frontier profiles can keep a broader bounded context for higher-pressure synthesis
+- prompt assembly diagnostics expose the selected execution profile, provider tier, and effective context budget
+- brokered worker sessions reuse the same execution-profile metadata instead of inventing a separate worker-only prompt footprint
 
 ## Additional Target Patterns
 

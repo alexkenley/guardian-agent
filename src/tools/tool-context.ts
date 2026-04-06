@@ -54,6 +54,12 @@ function normalizeSignalText(value: string | undefined): string {
   return String(value ?? '').toLowerCase();
 }
 
+function readToolContextMode(
+  request: (Partial<ToolExecutionRequest> & ToolContextRequestSignals) | undefined,
+): 'tight' | 'standard' {
+  return request?.toolContextMode === 'standard' ? 'standard' : 'tight';
+}
+
 function pickRelevantValues(values: string[], signalText: string, limit: number): string[] {
   const unique = uniqueNonEmpty(values);
   if (!signalText.trim()) return unique;
@@ -148,11 +154,21 @@ function buildCloudContextLines(input: ToolContextInput, signalText: string): st
 
 export function buildToolContext(input: ToolContextInput): string {
   const signalText = normalizeSignalText(input.request?.requestText);
+  const toolContextMode = readToolContextMode(input.request);
+  const compactPathItems = toolContextMode === 'tight' ? 4 : 6;
+  const compactCommandItems = toolContextMode === 'tight' ? 6 : 10;
+  const compactDomainItems = toolContextMode === 'tight' ? 5 : 8;
+  const providerContextLines = toolContextMode === 'tight'
+    ? input.providerContextLines.slice(0, 1)
+    : input.providerContextLines;
+  const googleContextLines = toolContextMode === 'tight'
+    ? input.googleContextLines.slice(0, 3)
+    : input.googleContextLines;
   const lines: string[] = [
     `Workspace root (default for file operations): ${input.workspaceRoot}`,
     `Policy mode: ${input.policyMode}`,
-    buildRelevantInventoryLine('Allowed paths', input.allowedPaths, signalText, 6) || 'Allowed paths (0): (workspace root only)',
-    buildRelevantInventoryLine('Allowed commands', input.allowedCommands, signalText, 10) || 'Allowed commands (0): (none)',
+    buildRelevantInventoryLine('Allowed paths', input.allowedPaths, signalText, compactPathItems) || 'Allowed paths (0): (workspace root only)',
+    buildRelevantInventoryLine('Allowed commands', input.allowedCommands, signalText, compactCommandItems) || 'Allowed commands (0): (none)',
     'Execution identity policy: inline interpreter eval, shell-expression launchers, and package launchers such as npx/npm exec are blocked even when the base command prefix is allowlisted.',
     'Execution mode: simple direct-binary commands run without shell parsing when possible; shell fallback is reserved for shell-builtins, chained commands, redirects, and platform wrapper cases.',
     `Enabled tool categories: ${input.enabledCategories.join(', ') || '(none)'}`,
@@ -172,11 +188,11 @@ export function buildToolContext(input: ToolContextInput): string {
   lines.push(...input.dependencyLines);
   lines.push(...input.deferredInventoryLines);
   if (input.allowedDomains.length > 0) {
-    lines.push(buildRelevantInventoryLine('Allowed domains', input.allowedDomains, signalText, 8));
+    lines.push(buildRelevantInventoryLine('Allowed domains', input.allowedDomains, signalText, compactDomainItems));
   }
-  lines.push(...input.providerContextLines);
+  lines.push(...providerContextLines);
   lines.push(...buildBrowserContextLines(input, signalText));
-  lines.push(...input.googleContextLines);
+  lines.push(...googleContextLines);
   lines.push(...buildCloudContextLines(input, signalText));
   return lines.join('\n');
 }

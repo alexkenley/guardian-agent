@@ -38,6 +38,13 @@ const MAX_TOOL_RESULT_MESSAGE_CHARS = 8_000;
 const MAX_TOOL_RESULT_STRING_CHARS = 600;
 const MAX_TOOL_RESULT_ARRAY_ITEMS = 10;
 const MAX_TOOL_RESULT_OBJECT_KEYS = 20;
+const DIRECT_DEFINITION_SEARCH_PATH_LIMIT = 8;
+
+type DirectFilesystemSearchMatch = {
+  path: string;
+  matchType: string;
+  snippet?: string;
+};
 
 function isLocalProviderEndpoint(_baseUrl: string | undefined, providerType: string | undefined): boolean {
   return getProviderLocality(providerType) === 'local';
@@ -131,6 +138,10 @@ interface DirectGoogleWorkspaceIntent {
   count: number;
 }
 
+const MAILBOX_PROVIDER_PATTERN = /\b(?:gmail|google workspace|outlook|microsoft 365|office 365)\b/i;
+const MAILBOX_NOUN_PATTERN = /\b(?:gmail|inbox|emails?|email|mail)\b/i;
+const MAILBOX_READ_TARGET_PATTERN = /\b(?:gmail|google workspace|inbox|emails?|email|mail|outlook\s+(?:mail|email|emails?|inbox)|(?:microsoft|office)\s+365(?:\s+outlook)?\s+(?:mail|email|emails?|inbox))\b/i;
+
 interface GmailMessageSummary {
   from: string;
   subject: string;
@@ -211,6 +222,204 @@ function summarizeCodeSessionFocus(content: string, selectedFilePath?: string | 
     return `${truncated} Selected file: ${selectedFilePath}.`;
   }
   return truncated;
+}
+
+function normalizeDirectFilesystemSearchMatches(
+  matches: Array<{ relativePath?: unknown; path?: unknown; matchType?: unknown; snippet?: unknown }>,
+): DirectFilesystemSearchMatch[] {
+  return matches
+    .map((match) => {
+      const path = toString(match.relativePath) || toString(match.path);
+      if (!path) return null;
+      return {
+        path,
+        matchType: toString(match.matchType) || 'name',
+        ...(toString(match.snippet) ? { snippet: toString(match.snippet) } : {}),
+      };
+    })
+    .filter((match): match is DirectFilesystemSearchMatch => !!match);
+}
+
+function isDefinitionStyleFilesystemSearchRequest(content: string): boolean {
+  const text = stripLeadingContextPrefix(content).trim().toLowerCase();
+  if (!text) return false;
+  return /\b(?:which|what)\s+files?\s+(?:define|controls?|handles?|own)\b/.test(text)
+    || /\btell\s+me\s+which\s+files?\s+(?:define|controls?|handles?)\b/.test(text)
+    || /\bwhere\s+(?:is|are)\b.*\bdefined\b/.test(text)
+    || /\bwhat\s+defines\b/.test(text);
+}
+
+function classifyFilesystemSearchPath(path: string): 'source' | 'test' | 'doc' | 'script' | 'other' {
+  const normalized = path.replace(/\\/g, '/').toLowerCase();
+  if (normalized.endsWith('/reference-guide.ts')) return 'doc';
+  if (/^(src|web\/|native\/)/.test(normalized) && !/(\.test\.|\.spec\.|\/__tests__\/)/.test(normalized)) {
+    return 'source';
+  }
+  if (/(\.test\.|\.spec\.|\/__tests__\/)/.test(normalized)) return 'test';
+  if (/^(docs|doc\/|reference-guide)/.test(normalized) || normalized.includes('/docs/')) return 'doc';
+  if (/^(scripts|script\/)/.test(normalized) || normalized.includes('/scripts/')) return 'script';
+  return 'other';
+}
+
+function scoreDefinitionSearchMatch(
+  match: DirectFilesystemSearchMatch,
+  requestText: string,
+): number {
+  const pathClass = classifyFilesystemSearchPath(match.path);
+  const haystack = `${match.path}\n${match.snippet ?? ''}`.toLowerCase();
+  const request = stripLeadingContextPrefix(requestText).trim().toLowerCase();
+  const fileName = match.path.replace(/\\/g, '/').split('/').pop()?.toLowerCase() ?? '';
+  const routingFocused = /\b(route|routing|router|tier|provider)\b/.test(request);
+  let score = 0;
+
+  switch (pathClass) {
+    case 'source':
+      score += 80;
+      break;
+    case 'other':
+      score += 20;
+      break;
+    case 'script':
+      score -= 10;
+      break;
+    case 'doc':
+      score -= 50;
+      break;
+    case 'test':
+      score -= 70;
+      break;
+  }
+
+  if (match.matchType === 'content') score += 12;
+  if (match.matchType === 'name') score += 4;
+
+  if (routingFocused) {
+    if (/\b(route|routing|router|routed)\b/.test(haystack)) score += 24;
+    if (/\b(tier|locality|managed_cloud|frontier|provider)\b/.test(haystack)) score += 16;
+    if (/\b(register|registered|default|config)\b/.test(haystack)) score += 10;
+    if (/(provider|registry|metadata|router|routing|dispatch|profile|ollama)/.test(fileName)) score += 18;
+    if (/(types|reference-guide)\.ts$/.test(fileName)) score -= 18;
+  }
+
+  if (/\b(define|definition|configured|owned)\b/.test(haystack)) score += 6;
+  if (/\bexamples?:\b/.test(haystack)) score -= 28;
+  if (/\bsearch the repo for\b/.test(haystack) || /\btell me which files define\b/.test(haystack)) score -= 24;
+  if (/\brequesttext\b/.test(haystack) || /\bquery:\s*['"`]/.test(haystack)) score -= 20;
+
+  return score;
+}
+
+function formatDirectFilesystemSearchMatchLine(match: DirectFilesystemSearchMatch): string {
+  if (match.matchType === 'content' && match.snippet) {
+    return `- ${match.path} [content]: ${match.snippet}`;
+  }
+  return `- ${match.path} [${match.matchType}]`;
+}
+
+function summarizeOmittedFilesystemSearchClasses(
+  matches: DirectFilesystemSearchMatch[],
+  includedPaths: Set<string>,
+): string | null {
+  const counts = {
+    test: 0,
+    doc: 0,
+    script: 0,
+    other: 0,
+  };
+  for (const match of matches) {
+    if (includedPaths.has(match.path)) continue;
+    const pathClass = classifyFilesystemSearchPath(match.path);
+    if (pathClass === 'test' || pathClass === 'doc' || pathClass === 'script' || pathClass === 'other') {
+      counts[pathClass] += 1;
+    }
+  }
+  const parts = [
+    counts.test > 0 ? `${counts.test} test match${counts.test === 1 ? '' : 'es'}` : '',
+    counts.doc > 0 ? `${counts.doc} doc match${counts.doc === 1 ? '' : 'es'}` : '',
+    counts.script > 0 ? `${counts.script} script match${counts.script === 1 ? '' : 'es'}` : '',
+    counts.other > 0 ? `${counts.other} other low-signal match${counts.other === 1 ? '' : 'es'}` : '',
+  ].filter(Boolean);
+  return parts.length > 0
+    ? `I left out ${parts.join(', ')} to keep this focused on implementation files.`
+    : null;
+}
+
+function isLowSignalDefinitionMatch(
+  match: DirectFilesystemSearchMatch,
+  requestText: string,
+): boolean {
+  const haystack = `${match.path}\n${match.snippet ?? ''}`.toLowerCase();
+  const request = stripLeadingContextPrefix(requestText).trim().toLowerCase();
+  const quotedQuery = extractQuotedDefinitionQuery(request);
+  if (/\bexamples?:\b/.test(haystack) && /\bsearch the repo for\b/.test(haystack)) return true;
+  if (/\brequesttext\b/.test(haystack) || /\bquery:\s*['"`]/.test(haystack)) return true;
+  if (quotedQuery && haystack.includes(quotedQuery) && /\b(search the repo for|tell me which files define)\b/.test(haystack)) {
+    return true;
+  }
+  return false;
+}
+
+function extractQuotedDefinitionQuery(requestText: string): string | null {
+  const match = requestText.match(/["']([^"']{2,120})["']/);
+  return match?.[1]?.trim().toLowerCase() || null;
+}
+
+function formatDirectFilesystemSearchResponse(input: {
+  requestText: string;
+  root: string;
+  query: string;
+  scannedFiles: number | null;
+  truncated: boolean;
+  matches: Array<{ relativePath?: unknown; path?: unknown; matchType?: unknown; snippet?: unknown }>;
+}): string {
+  const normalizedMatches = normalizeDirectFilesystemSearchMatches(input.matches);
+  const scannedSuffix = input.scannedFiles !== null ? ` (scanned ${input.scannedFiles} files)` : '';
+  if (normalizedMatches.length === 0) {
+    return `I searched "${input.root}" for "${input.query}" and found no matches${scannedSuffix}.`;
+  }
+
+  if (!isDefinitionStyleFilesystemSearchRequest(input.requestText)) {
+    const lines = [
+      `I searched "${input.root}" for "${input.query}"${scannedSuffix}.`,
+      `Found ${normalizedMatches.length} match${normalizedMatches.length === 1 ? '' : 'es'}:`,
+      ...normalizedMatches.slice(0, 20).map((match) => formatDirectFilesystemSearchMatchLine(match)),
+    ];
+    if (normalizedMatches.length > 20) {
+      lines.push(`- ...and ${normalizedMatches.length - 20} more`);
+    }
+    if (input.truncated) {
+      lines.push('Search stopped at configured limits; narrow query or increase maxResults/maxFiles if needed.');
+    }
+    return lines.join('\n');
+  }
+
+  const ranked = [...normalizedMatches].sort((left, right) => {
+    const scoreDelta = scoreDefinitionSearchMatch(right, input.requestText) - scoreDefinitionSearchMatch(left, input.requestText);
+    if (scoreDelta !== 0) return scoreDelta;
+    return left.path.localeCompare(right.path);
+  });
+  const filtered = ranked.filter((match) => !isLowSignalDefinitionMatch(match, input.requestText));
+  const sourceOnly = filtered.filter((match) => classifyFilesystemSearchPath(match.path) === 'source');
+  const curatedBase = sourceOnly.length > 0
+    ? sourceOnly
+    : (filtered.length > 0 ? filtered : ranked);
+  const curated = curatedBase.slice(0, DIRECT_DEFINITION_SEARCH_PATH_LIMIT);
+  const includedPaths = new Set(curated.map((match) => match.path));
+  const omittedSummary = summarizeOmittedFilesystemSearchClasses(normalizedMatches, includedPaths);
+  const lines = [
+    `I searched "${input.root}" for "${input.query}"${scannedSuffix}.`,
+    `The implementation files most likely defining this are:`,
+    ...curated.map((match) => formatDirectFilesystemSearchMatchLine(match)),
+  ];
+  if (omittedSummary) {
+    lines.push(omittedSummary);
+  } else if (normalizedMatches.length > curated.length) {
+    lines.push(`I omitted ${normalizedMatches.length - curated.length} additional lower-priority match${normalizedMatches.length - curated.length === 1 ? '' : 'es'}.`);
+  }
+  if (input.truncated) {
+    lines.push('Search stopped at configured limits; narrow query or increase maxResults/maxFiles if needed.');
+  }
+  return lines.join('\n');
 }
 
 function normalizeCodeSessionPromptPath(value: string): string {
@@ -311,21 +520,20 @@ function parseDirectGoogleWorkspaceIntent(content: string): DirectGoogleWorkspac
   if (!text) return null;
 
   if (/\b(send|draft|compose|reply|forward)\b/i.test(text)) return null;
-  if (!/\b(gmail|inbox|email|emails|mail)\b/i.test(text)) return null;
+  if (!MAILBOX_READ_TARGET_PATTERN.test(text)
+    && !(MAILBOX_PROVIDER_PATTERN.test(text) && MAILBOX_NOUN_PATTERN.test(text))) {
+    return null;
+  }
   const count = parseRequestedEmailCount(text);
 
   const unreadInboxPatterns = [
-    /\bcheck\s+(?:my\s+)?(?:gmail|inbox|email|emails|mail)\b/i,
-    /\b(?:show|list)\s+(?:my\s+)?(?:gmail|inbox|emails?|mail)\b/i,
-    /\b(?:new|latest|recent|unread)\s+(?:gmail|emails?|mail)\b/i,
+    /\bcheck\b[\s\S]{0,80}\b(?:gmail|google workspace|inbox|emails?|email|mail|outlook\s+(?:mail|email|emails?|inbox)|(?:microsoft|office)\s+365(?:\s+outlook)?\s+(?:mail|email|emails?|inbox))\b/i,
+    /\b(?:show|list)\b[\s\S]{0,80}\b(?:gmail|google workspace|inbox|emails?|email|mail|outlook\s+(?:mail|email|emails?|inbox)|(?:microsoft|office)\s+365(?:\s+outlook)?\s+(?:mail|email|emails?|inbox))\b/i,
+    /\b(?:new|latest|recent|unread)\b[\s\S]{0,40}\b(?:gmail|google workspace|emails?|email|mail|inbox|outlook\s+(?:mail|email|emails?|inbox)|(?:microsoft|office)\s+365(?:\s+outlook)?\s+(?:mail|email|emails?|inbox))\b/i,
     /\bany\s+new\s+emails?\b/i,
     /\bwhat(?:'s|\s+is)?\s+(?:new\s+)?in\s+(?:my\s+)?(?:gmail|inbox)\b/i,
     /\bwhat\s+(?:new|recent|unread)\s+emails?\s+do\s+i\s+have\b/i,
   ];
-
-  if (unreadInboxPatterns.some((pattern) => pattern.test(text))) {
-    return { kind: 'gmail_unread', count: Math.max(count, 10) };
-  }
 
   if (/\b(?:sender|senders|from|who sent)\b/i.test(text)
     && /\b(?:last|latest|recent)\b/i.test(text)
@@ -339,11 +547,15 @@ function parseDirectGoogleWorkspaceIntent(content: string): DirectGoogleWorkspac
     return { kind: 'gmail_recent_summary', count };
   }
 
+  if (unreadInboxPatterns.some((pattern) => pattern.test(text))) {
+    return { kind: 'gmail_unread', count: Math.max(count, 10) };
+  }
+
   return null;
 }
 
 function parseRequestedEmailCount(text: string): number {
-  const digitMatch = text.match(/\b(?:last|latest|recent)\s+(\d+)\s+emails?\b/i)
+  const digitMatch = text.match(/\b(?:top|first|last|latest|recent)\s+(\d+)(?:\s+emails?)?\b/i)
     || text.match(/\b(\d+)\s+emails?\b/i);
   if (digitMatch) {
     const parsed = Number(digitMatch[1]);
@@ -362,7 +574,7 @@ function parseRequestedEmailCount(text: string): number {
     nine: 9,
     ten: 10,
   };
-  const wordMatch = text.match(/\b(?:last|latest|recent)\s+(one|two|three|four|five|six|seven|eight|nine|ten)\s+emails?\b/i)
+  const wordMatch = text.match(/\b(?:top|first|last|latest|recent)\s+(one|two|three|four|five|six|seven|eight|nine|ten)(?:\s+emails?)?\b/i)
     || text.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten)\s+emails?\b/i);
   if (wordMatch) {
     return wordMap[wordMatch[1].toLowerCase()] ?? 3;
@@ -1405,6 +1617,7 @@ export {
   compactMessagesIfOverBudget,
   compactQuarantinedToolResult,
   computeCategoryDefaults,
+  formatDirectFilesystemSearchResponse,
   formatDirectCodeSessionLine,
   formatToolThreatWarnings,
   formatToolResultForLLM,

@@ -223,6 +223,21 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
       errors.push(`assistant.tools.preferredProviders.external must reference an external provider, got '${providerName}'`);
     }
   }
+  const modelSelection = config.assistant.tools.modelSelection;
+  if (modelSelection) {
+    if (!['balanced', 'quality_first'].includes(modelSelection.autoPolicy)) {
+      errors.push("assistant.tools.modelSelection.autoPolicy must be 'balanced' or 'quality_first'");
+    }
+    if (typeof modelSelection.preferManagedCloudForLowPressureExternal !== 'boolean') {
+      errors.push('assistant.tools.modelSelection.preferManagedCloudForLowPressureExternal must be a boolean');
+    }
+    if (typeof modelSelection.preferFrontierForRepoGrounded !== 'boolean') {
+      errors.push('assistant.tools.modelSelection.preferFrontierForRepoGrounded must be a boolean');
+    }
+    if (typeof modelSelection.preferFrontierForSecurity !== 'boolean') {
+      errors.push('assistant.tools.modelSelection.preferFrontierForSecurity must be a boolean');
+    }
+  }
 
   if (config.channels.telegram?.botToken?.trim()) {
     errors.push('channels.telegram.botToken is not allowed in config. Use channels.telegram.botTokenCredentialRef with assistant.credentials.refs instead.');

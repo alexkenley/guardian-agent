@@ -48,6 +48,27 @@ export type IntentGatewayResolution =
   | 'ready'
   | 'needs_clarification';
 
+export type IntentGatewayExecutionClass =
+  | 'direct_assistant'
+  | 'tool_orchestration'
+  | 'repo_grounded'
+  | 'provider_crud'
+  | 'security_analysis';
+
+export type IntentGatewayPreferredAnswerPath =
+  | 'direct'
+  | 'tool_loop'
+  | 'chat_synthesis';
+
+export type IntentGatewayExpectedContextPressure =
+  | 'low'
+  | 'medium'
+  | 'high';
+
+export type IntentGatewayPreferredTier =
+  | 'local'
+  | 'external';
+
 export interface IntentGatewayEntities {
   automationName?: string;
   newAutomationName?: string;
@@ -78,6 +99,12 @@ export interface IntentGatewayDecision {
   resolution: IntentGatewayResolution;
   missingFields: string[];
   resolvedContent?: string;
+  executionClass: IntentGatewayExecutionClass;
+  preferredTier: IntentGatewayPreferredTier;
+  requiresRepoGrounding: boolean;
+  requiresToolSynthesis: boolean;
+  expectedContextPressure: IntentGatewayExpectedContextPressure;
+  preferredAnswerPath: IntentGatewayPreferredAnswerPath;
   entities: IntentGatewayEntities;
 }
 
@@ -178,6 +205,28 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
       },
       resolvedContent: {
         type: 'string',
+      },
+      executionClass: {
+        type: 'string',
+        enum: ['direct_assistant', 'tool_orchestration', 'repo_grounded', 'provider_crud', 'security_analysis'],
+      },
+      preferredTier: {
+        type: 'string',
+        enum: ['local', 'external'],
+      },
+      requiresRepoGrounding: {
+        type: 'boolean',
+      },
+      requiresToolSynthesis: {
+        type: 'boolean',
+      },
+      expectedContextPressure: {
+        type: 'string',
+        enum: ['low', 'medium', 'high'],
+      },
+      preferredAnswerPath: {
+        type: 'string',
+        enum: ['direct', 'tool_loop', 'chat_synthesis'],
       },
       automationName: {
         type: 'string',
@@ -284,6 +333,11 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Set resolution to needs_clarification when the user\'s goal is clear but a targeted missing detail is required before execution.',
   'When resolution=needs_clarification, populate missingFields with the concrete missing detail names such as email_provider, coding_backend, session_target, path, recipient, or automation_name.',
   'When the current turn is a clarification answer or correction and the prior context makes the intended action clear, set resolvedContent to a single actionable restatement of the full corrected request.',
+  'Also classify the workload metadata: executionClass, preferredTier, requiresRepoGrounding, requiresToolSynthesis, expectedContextPressure, and preferredAnswerPath.',
+  'preferredTier is a coarse local vs external hint only. Do not choose provider names or model names.',
+  'executionClass must be one of direct_assistant, tool_orchestration, repo_grounded, provider_crud, or security_analysis.',
+  'preferredAnswerPath must be direct, tool_loop, or chat_synthesis.',
+  'expectedContextPressure must be low, medium, or high based on how much bounded context the runtime will likely need to assemble.',
   'Use only the exact enum values defined by the schema for route, confidence, operation, turnRelation, resolution, uiSurface, emailProvider, and calendarTarget. Do not paraphrase enum names.',
   'Prefer ui_control over browser_task when the request refers to Guardian pages or internal catalog views.',
   'Prefer email_task over workspace_task for direct mailbox or email requests.',
@@ -414,6 +468,10 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'Examples: "Update the SharePoint document for the launch checklist." -> route="workspace_task", operation="update".',
   'Examples: "Check my unread Outlook mail." -> route="email_task", operation="read", emailProvider="m365".',
   'Examples: "Switch this chat to the coding workspace for Temp install test." -> route="coding_session_control", operation="update", sessionTarget="Temp install test".',
+  'Examples: "Search the repo for ollama_cloud and tell me which files define its routing." -> route="coding_task", operation="search", executionClass="repo_grounded", preferredTier="local", requiresRepoGrounding=true, requiresToolSynthesis=false, expectedContextPressure="medium", preferredAnswerPath="direct".',
+  'Examples: "Inspect src/runtime/intent-gateway.ts and review the uplift for regressions." -> route="coding_task", operation="inspect", executionClass="repo_grounded", preferredTier="external", requiresRepoGrounding=true, requiresToolSynthesis=true, expectedContextPressure="high", preferredAnswerPath="chat_synthesis".',
+  'Examples: "Check my unread Outlook mail." -> route="email_task", operation="read", executionClass="provider_crud", preferredTier="external", requiresRepoGrounding=false, requiresToolSynthesis=true, expectedContextPressure="medium", preferredAnswerPath="tool_loop".',
+  'Examples: "What do I have due today?" -> route="personal_assistant_task", operation="inspect", executionClass="direct_assistant", preferredTier="local", requiresRepoGrounding=false, requiresToolSynthesis=false, expectedContextPressure="low", preferredAnswerPath="direct".',
   'Return valid JSON with double-quoted keys and string values only.',
 ].join(' ');
 
@@ -491,6 +549,12 @@ export class IntentGateway {
           turnRelation: 'new_request',
           resolution: 'ready',
           missingFields: [],
+          executionClass: 'direct_assistant',
+          preferredTier: 'local',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          expectedContextPressure: 'low',
+          preferredAnswerPath: 'direct',
           entities: {},
         },
       };
@@ -538,6 +602,12 @@ export function toIntentGatewayClientMetadata(
     turnRelation: record.decision.turnRelation,
     resolution: record.decision.resolution,
     missingFields: record.decision.missingFields,
+    executionClass: record.decision.executionClass,
+    preferredTier: record.decision.preferredTier,
+    requiresRepoGrounding: record.decision.requiresRepoGrounding,
+    requiresToolSynthesis: record.decision.requiresToolSynthesis,
+    expectedContextPressure: record.decision.expectedContextPressure,
+    preferredAnswerPath: record.decision.preferredAnswerPath,
     ...(record.decision.resolvedContent ? { resolvedContent: record.decision.resolvedContent } : {}),
     entities: record.decision.entities,
   };
@@ -560,6 +630,12 @@ export function serializeIntentGatewayRecord(
       turnRelation: record.decision.turnRelation,
       resolution: record.decision.resolution,
       missingFields: [...record.decision.missingFields],
+      executionClass: record.decision.executionClass,
+      preferredTier: record.decision.preferredTier,
+      requiresRepoGrounding: record.decision.requiresRepoGrounding,
+      requiresToolSynthesis: record.decision.requiresToolSynthesis,
+      expectedContextPressure: record.decision.expectedContextPressure,
+      preferredAnswerPath: record.decision.preferredAnswerPath,
       ...(record.decision.resolvedContent ? { resolvedContent: record.decision.resolvedContent } : {}),
       ...record.decision.entities,
     },
@@ -730,6 +806,12 @@ function parseIntentGatewayDecision(response: ChatResponse): { decision: IntentG
         turnRelation: 'new_request',
         resolution: 'ready',
         missingFields: [],
+        executionClass: 'direct_assistant',
+        preferredTier: 'local',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        expectedContextPressure: 'low',
+        preferredAnswerPath: 'direct',
         entities: {},
       },
       available: false,
@@ -782,6 +864,19 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
   const resolvedContent = typeof parsed.resolvedContent === 'string' && parsed.resolvedContent.trim()
     ? parsed.resolvedContent.trim()
     : undefined;
+  const derivedWorkload = deriveWorkloadMetadata(route, operation, parsed);
+  const executionClass = normalizeExecutionClass(parsed.executionClass) ?? derivedWorkload.executionClass;
+  const preferredTier = normalizePreferredTier(parsed.preferredTier) ?? derivedWorkload.preferredTier;
+  const requiresRepoGrounding = typeof parsed.requiresRepoGrounding === 'boolean'
+    ? parsed.requiresRepoGrounding
+    : derivedWorkload.requiresRepoGrounding;
+  const requiresToolSynthesis = typeof parsed.requiresToolSynthesis === 'boolean'
+    ? parsed.requiresToolSynthesis
+    : derivedWorkload.requiresToolSynthesis;
+  const expectedContextPressure = normalizeExpectedContextPressure(parsed.expectedContextPressure)
+    ?? derivedWorkload.expectedContextPressure;
+  const preferredAnswerPath = normalizePreferredAnswerPath(parsed.preferredAnswerPath)
+    ?? derivedWorkload.preferredAnswerPath;
 
   const automationName = typeof parsed.automationName === 'string' && parsed.automationName.trim()
     ? parsed.automationName.trim()
@@ -834,6 +929,12 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
     turnRelation,
     resolution,
     missingFields,
+    executionClass,
+    preferredTier,
+    requiresRepoGrounding,
+    requiresToolSynthesis,
+    expectedContextPressure,
+    preferredAnswerPath,
     ...(resolvedContent ? { resolvedContent } : {}),
     entities: {
       ...(automationName ? { automationName } : {}),
@@ -883,6 +984,213 @@ function needsAutomationNameRepair(decision: IntentGatewayDecision): boolean {
   return decision.route === 'ui_control'
     && decision.entities.uiSurface === 'automations'
     && ['delete', 'toggle', 'run', 'inspect', 'clone', 'update'].includes(decision.operation);
+}
+
+function normalizeExecutionClass(
+  value: unknown,
+): IntentGatewayExecutionClass | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  switch (normalized) {
+    case 'direct_assistant':
+    case 'tool_orchestration':
+    case 'repo_grounded':
+    case 'provider_crud':
+    case 'security_analysis':
+      return normalized;
+    default:
+      return undefined;
+  }
+}
+
+function normalizePreferredTier(
+  value: unknown,
+): IntentGatewayPreferredTier | undefined {
+  switch (value) {
+    case 'local':
+    case 'external':
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+function normalizeExpectedContextPressure(
+  value: unknown,
+): IntentGatewayExpectedContextPressure | undefined {
+  switch (value) {
+    case 'low':
+    case 'medium':
+    case 'high':
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+function normalizePreferredAnswerPath(
+  value: unknown,
+): IntentGatewayPreferredAnswerPath | undefined {
+  switch (value) {
+    case 'direct':
+    case 'tool_loop':
+    case 'chat_synthesis':
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+function deriveWorkloadMetadata(
+  route: IntentGatewayRoute,
+  operation: IntentGatewayOperation,
+  parsed: Record<string, unknown>,
+): {
+  executionClass: IntentGatewayExecutionClass;
+  preferredTier: IntentGatewayPreferredTier;
+  requiresRepoGrounding: boolean;
+  requiresToolSynthesis: boolean;
+  expectedContextPressure: IntentGatewayExpectedContextPressure;
+  preferredAnswerPath: IntentGatewayPreferredAnswerPath;
+} {
+  const personalItemType = normalizePersonalItemType(parsed.personalItemType);
+  const codingBackendRequested = parsed.codingBackendRequested === true;
+
+  switch (route) {
+    case 'coding_task':
+      if (parsed.codingBackend || codingBackendRequested) {
+        return {
+          executionClass: 'repo_grounded',
+          preferredTier: 'local',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'high',
+          preferredAnswerPath: 'tool_loop',
+        };
+      }
+      if (operation === 'search' || operation === 'read') {
+        return {
+          executionClass: 'repo_grounded',
+          preferredTier: 'local',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: false,
+          expectedContextPressure: 'medium',
+          preferredAnswerPath: 'direct',
+        };
+      }
+      if (operation === 'inspect') {
+        return {
+          executionClass: 'repo_grounded',
+          preferredTier: 'external',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'high',
+          preferredAnswerPath: 'chat_synthesis',
+        };
+      }
+      return {
+        executionClass: 'repo_grounded',
+        preferredTier: 'local',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'high',
+        preferredAnswerPath: 'tool_loop',
+      };
+    case 'filesystem_task':
+      return {
+        executionClass: 'repo_grounded',
+        preferredTier: 'local',
+        requiresRepoGrounding: true,
+        requiresToolSynthesis: operation !== 'search' && operation !== 'read',
+        expectedContextPressure: operation === 'search' ? 'low' : 'medium',
+        preferredAnswerPath: operation === 'search' || operation === 'read' ? 'direct' : 'tool_loop',
+      };
+    case 'workspace_task':
+    case 'email_task':
+      return {
+        executionClass: 'provider_crud',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: operation === 'draft' ? 'high' : 'medium',
+        preferredAnswerPath: 'tool_loop',
+      };
+    case 'browser_task':
+    case 'search_task':
+      return {
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: route === 'search_task' && operation === 'search' ? 'medium' : 'medium',
+        preferredAnswerPath: 'tool_loop',
+      };
+    case 'security_task':
+      return {
+        executionClass: 'security_analysis',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'high',
+        preferredAnswerPath: 'chat_synthesis',
+      };
+    case 'automation_authoring':
+    case 'automation_output_task':
+      return {
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'high',
+        preferredAnswerPath: 'chat_synthesis',
+      };
+    case 'automation_control':
+      return {
+        executionClass: 'tool_orchestration',
+        preferredTier: 'local',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+      };
+    case 'personal_assistant_task':
+      return {
+        executionClass: 'direct_assistant',
+        preferredTier: 'local',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: ['create', 'update', 'delete', 'draft', 'send', 'schedule'].includes(operation),
+        expectedContextPressure: personalItemType === 'brief' || operation === 'draft'
+          ? 'high'
+          : operation === 'inspect'
+            ? 'low'
+            : 'medium',
+        preferredAnswerPath: ['read', 'inspect', 'search'].includes(operation) ? 'direct' : 'tool_loop',
+      };
+    case 'memory_task':
+    case 'ui_control':
+    case 'coding_session_control':
+      return {
+        executionClass: 'direct_assistant',
+        preferredTier: 'local',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: ['create', 'update', 'delete'].includes(operation),
+        expectedContextPressure: operation === 'inspect' || operation === 'read' || operation === 'navigate'
+          ? 'low'
+          : 'medium',
+        preferredAnswerPath: ['inspect', 'read', 'navigate', 'search'].includes(operation) ? 'direct' : 'tool_loop',
+      };
+    case 'general_assistant':
+    case 'unknown':
+    default:
+      return {
+        executionClass: 'direct_assistant',
+        preferredTier: 'local',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        expectedContextPressure: 'low',
+        preferredAnswerPath: 'direct',
+      };
+  }
 }
 
 function normalizeRoute(value: unknown): IntentGatewayRoute {

@@ -18,6 +18,8 @@ export type IntentRoutingTraceStage =
   | 'gateway_classified'
   | 'clarification_requested'
   | 'tier_routing_decided'
+  | 'profile_selection_decided'
+  | 'context_budget_decided'
   | 'pre_routed_metadata_attached'
   | 'direct_candidates_evaluated'
   | 'direct_tool_call_started'
