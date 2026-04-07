@@ -52,7 +52,9 @@ async function readWindowsProcesses(): Promise<PerformanceProcessSummary[]> {
       + 'Select-Object '
       + '@{Name="pid";Expression={$_.Id}},'
       + '@{Name="name";Expression={$_.ProcessName}},'
-      + '@{Name="memoryMb";Expression={[math]::Round($_.WorkingSet64 / 1MB, 2)}} '
+      + '@{Name="memoryMb";Expression={[math]::Round($_.WorkingSet64 / 1MB, 2)}},'
+      + '@{Name="cpuSec";Expression={if ($_.CPU -ne $null) {[math]::Round($_.CPU, 2)} else {$null}}},'
+      + '@{Name="path";Expression={$_.Path}} '
       + '| ConvertTo-Json -Compress',
     ], {
       windowsHide: true,
@@ -60,7 +62,7 @@ async function readWindowsProcesses(): Promise<PerformanceProcessSummary[]> {
     });
     const raw = stdout.trim();
     if (!raw) return [];
-    const parsed = JSON.parse(raw) as Array<{ pid?: number; name?: string; memoryMb?: number }> | { pid?: number; name?: string; memoryMb?: number };
+    const parsed = JSON.parse(raw) as Array<{ pid?: number; name?: string; memoryMb?: number; cpuSec?: number; path?: string }> | { pid?: number; name?: string; memoryMb?: number; cpuSec?: number; path?: string };
     const rows = Array.isArray(parsed) ? parsed : [parsed];
     return rows
       .filter((entry) => Number.isFinite(entry.pid) && typeof entry.name === 'string' && entry.name.trim())
@@ -68,7 +70,9 @@ async function readWindowsProcesses(): Promise<PerformanceProcessSummary[]> {
         targetId: toProcessTargetId(Number(entry.pid)),
         pid: Number(entry.pid),
         name: String(entry.name),
+        cpuTimeSec: Number.isFinite(entry.cpuSec) ? round(Number(entry.cpuSec)) : undefined,
         memoryMb: Number.isFinite(entry.memoryMb) ? round(Number(entry.memoryMb)) : undefined,
+        executablePath: typeof entry.path === 'string' && entry.path.trim() ? entry.path.trim() : undefined,
       }));
   } catch {
     return [];

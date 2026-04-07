@@ -318,7 +318,7 @@ function normalizeArtifactReferences(value: unknown): SkillArtifactReference[] {
 function parseFrontmatter(instructionRaw: string): { data: Record<string, unknown>; body: string } | null {
   const match = instructionRaw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
   if (!match) return null;
-  const data = yaml.load(match[1]);
+  const data = yaml.load(match[1], { schema: yaml.JSON_SCHEMA });
   if (!data || typeof data !== 'object') return null;
   return {
     data: data as Record<string, unknown>,

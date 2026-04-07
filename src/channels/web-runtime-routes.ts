@@ -733,6 +733,21 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     return true;
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/performance/processes') {
+    if (!dashboard.onPerformanceProcesses) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const processes = await dashboard.onPerformanceProcesses();
+      sendJSON(res, 200, { processes });
+    } catch (err) {
+      context.logInternalError('Performance process listing failed', err);
+      sendJSON(res, 500, { error: 'Performance process listing failed' });
+    }
+    return true;
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/performance/profile/apply') {
     if (!dashboard.onPerformanceApplyProfile) {
       sendJSON(res, 404, { error: 'Not available' });

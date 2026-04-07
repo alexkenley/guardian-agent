@@ -1,6 +1,13 @@
 import type { AgentContext, UserMessage } from '../agent/types.js';
 import type { ToolExecutionRequest } from '../tools/types.js';
+import type { ContinuityThreadRecord } from './continuity-threads.js';
 import type { IntentGatewayDecision } from './intent-gateway.js';
+import {
+  buildPagedListContinuationState,
+  hasPagedListFollowUpRequest,
+  readPagedListContinuationState,
+  resolvePagedListWindow,
+} from './list-continuation.js';
 
 export interface BrowserPendingApprovalMetadata {
   id: string;
@@ -13,6 +20,7 @@ export interface BrowserPreRouteResult {
   content: string;
   metadata?: {
     pendingAction?: Record<string, unknown>;
+    continuationState?: Record<string, unknown> | null;
   };
 }
 
@@ -28,6 +36,7 @@ type BrowserToolName =
 interface BrowserPreRouteParams {
   agentId: string;
   message: UserMessage;
+  continuityThread?: ContinuityThreadRecord | null;
   checkAction?: AgentContext['checkAction'];
   executeTool: (
     toolName: BrowserToolName,
@@ -56,6 +65,8 @@ type DirectBrowserIntent =
   | { kind: 'click'; url?: string; target: DirectBrowserTargetSelector }
   | { kind: 'type'; url?: string; value: string; target: DirectBrowserTargetSelector };
 
+const BROWSER_LINKS_CONTINUATION_KIND = 'browser_links_list';
+
 type DirectBrowserTargetSelector =
   | { kind: 'click_label'; value: string }
   | { kind: 'field_label'; value: string }
@@ -67,7 +78,12 @@ export async function tryBrowserPreRoute(
 ): Promise<BrowserPreRouteResult | null> {
   const gatewayBrowser = options?.intentDecision?.route === 'browser_task';
   if (!gatewayBrowser) return null;
-  const intent = parseDirectBrowserIntent(params.message.content);
+  const intent = parseDirectBrowserIntent(params.message.content)
+    ?? resolveBrowserListContinuationIntent(
+      params.continuityThread,
+      params.message.content,
+      options?.intentDecision,
+    );
   if (!intent) return null;
   if (isGoogleWorkspaceBrowserIntent(intent)) return null;
 
@@ -98,9 +114,11 @@ export async function tryBrowserPreRoute(
         formatReadContent,
       );
     case 'links':
-      return formatDirectBrowserToolResult(
+      return formatDirectBrowserLinksResult(
         await params.executeTool('browser_links', intent.url ? { url: intent.url } : {}, toolRequest),
-        formatLinksContent,
+        params.continuityThread,
+        params.message.content,
+        options?.intentDecision,
       );
     case 'extract':
       return formatDirectBrowserToolResult(
@@ -528,11 +546,43 @@ function formatReadContent(result: Record<string, unknown>): string | null {
   return [toString(result.message), excerpt].filter(Boolean).join('\n\n');
 }
 
-function formatLinksContent(result: Record<string, unknown>): string | null {
+function formatDirectBrowserLinksResult(
+  result: Record<string, unknown>,
+  continuityThread: ContinuityThreadRecord | null | undefined,
+  content: string,
+  intentDecision?: IntentGatewayDecision | null,
+): BrowserPreRouteResult | null {
+  if (!toBoolean(result.success)) {
+    return formatDirectBrowserToolResult(result);
+  }
+  return formatLinksContent(result, continuityThread, content, intentDecision);
+}
+
+function formatLinksContent(
+  result: Record<string, unknown>,
+  continuityThread?: ContinuityThreadRecord | null,
+  content: string = '',
+  intentDecision?: IntentGatewayDecision | null,
+): BrowserPreRouteResult | null {
   const rawLinks = extractBrowserLinks(result.output);
+  const total = rawLinks.length;
+  const priorWindow = readPagedListContinuationState(continuityThread, BROWSER_LINKS_CONTINUATION_KIND);
+  const window = resolvePagedListWindow({
+    continuityThread,
+    continuationKind: BROWSER_LINKS_CONTINUATION_KIND,
+    content,
+    total: priorWindow?.total ?? total,
+    turnRelation: intentDecision?.turnRelation,
+    defaultPageSize: 20,
+  });
+  const boundedWindow = {
+    ...window,
+    total,
+    limit: Math.min(window.limit, Math.max(0, total - window.offset)),
+  };
   const links = rawLinks
     .filter((entry): entry is Record<string, unknown> => isRecord(entry))
-    .slice(0, 20)
+    .slice(boundedWindow.offset, boundedWindow.offset + boundedWindow.limit)
     .map((entry) => {
       const text = toString(entry.text).trim();
       const href = toString(entry.href).trim();
@@ -540,9 +590,38 @@ function formatLinksContent(result: Record<string, unknown>): string | null {
       return text && text !== href ? `- ${text} → ${href}` : `- ${href}`;
     })
     .filter(Boolean);
-  const remaining = rawLinks.length - links.length;
-  const suffix = remaining > 0 ? `\n...and ${remaining} more` : '';
-  return [toString(result.message), links.join('\n') + suffix].filter(Boolean).join('\n\n');
+  const remaining = Math.max(0, total - (boundedWindow.offset + links.length));
+  const sections = [toString(result.message)];
+  if (links.length > 0) {
+    sections.push(links.join('\n') + (remaining > 0 ? `\n...and ${remaining} more` : ''));
+  } else if (boundedWindow.offset >= total) {
+    sections.push('No additional links remain.');
+  }
+  const continuationState = remaining > 0
+    ? buildPagedListContinuationState(BROWSER_LINKS_CONTINUATION_KIND, {
+        offset: boundedWindow.offset,
+        limit: Math.max(links.length, boundedWindow.limit),
+        total,
+      }) as unknown as Record<string, unknown>
+    : null;
+  return {
+    content: sections.filter(Boolean).join('\n\n'),
+    ...(continuationState ? { metadata: { continuationState } } : {}),
+  };
+}
+
+function resolveBrowserListContinuationIntent(
+  continuityThread: ContinuityThreadRecord | null | undefined,
+  content: string,
+  intentDecision?: IntentGatewayDecision | null,
+): DirectBrowserIntent | null {
+  if (!readPagedListContinuationState(continuityThread, BROWSER_LINKS_CONTINUATION_KIND)) {
+    return null;
+  }
+  if (!hasPagedListFollowUpRequest(content, intentDecision?.turnRelation)) {
+    return null;
+  }
+  return { kind: 'links' };
 }
 
 function formatExtractContent(result: Record<string, unknown>): string | null {

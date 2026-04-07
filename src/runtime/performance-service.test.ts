@@ -95,7 +95,7 @@ describe('PerformanceService', () => {
     const preview = await service.previewAction('cleanup');
 
     expect(preview.profileId).toBe('coding-focus');
-    expect(preview.processTargets).toHaveLength(2);
+    expect(preview.processTargets.length).toBeGreaterThanOrEqual(2);
     expect(preview.processTargets.find((target) => target.name === 'Discord.exe')).toMatchObject({
       selectable: true,
       checkedByDefault: true,
@@ -104,6 +104,34 @@ describe('PerformanceService', () => {
       selectable: false,
       blockedReason: expect.any(String),
     });
+  });
+
+  it('falls back to heuristic recommendations when terminate rules do not match the live process list', async () => {
+    const config = createConfig();
+    config.assistant.performance!.profiles = [{
+      id: 'coding-focus',
+      name: 'Coding Focus',
+      processRules: {
+        terminate: ['Teams.exe'],
+        protect: ['node'],
+      },
+      latencyTargets: [],
+    }];
+
+    const service = new PerformanceService({
+      adapter: createAdapter(),
+      getConfig: () => config,
+    });
+
+    const preview = await service.previewAction('cleanup');
+    const discordTarget = preview.processTargets.find((target) => target.name === 'Discord.exe');
+
+    expect(discordTarget).toMatchObject({
+      selectable: true,
+      checkedByDefault: true,
+      suggestedReason: expect.stringContaining('background app'),
+    });
+    expect(preview.processTargets.some((target) => target.name === 'node')).toBe(false);
   });
 
   it('runs only the selected preview targets and records history', async () => {

@@ -277,6 +277,7 @@ export const api = {
   }),
   secondBrainUsage: () => request('/api/second-brain/usage'),
   performanceStatus: () => request('/api/performance/status'),
+  performanceProcesses: () => request('/api/performance/processes'),
   performanceApplyProfile: (profileId) => requestPrivileged('/api/performance/profile/apply', 'performance.manage', { profileId }),
   performancePreviewAction: (actionId) => request('/api/performance/action/preview', {
     method: 'POST',

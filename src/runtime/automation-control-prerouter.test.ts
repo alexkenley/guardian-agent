@@ -76,6 +76,150 @@ describe('tryAutomationControlPreRoute', () => {
     expect(result?.content).toContain('Inbox Triage');
   });
 
+  it('lists the unified automation catalog for read/list requests without falling back to model summarization', async () => {
+    const executeTool = vi.fn(async (toolName: string) => {
+      if (toolName === 'automation_list') {
+        return {
+          success: true,
+          output: {
+            automations: [
+              {
+                id: 'weekday-outlook-inbox-summary',
+                name: 'Weekday Outlook Inbox Summary',
+                kind: 'assistant_task',
+                enabled: true,
+                task: {
+                  id: 'weekday-outlook-inbox-summary',
+                  name: 'Weekday Outlook Inbox Summary',
+                  type: 'agent',
+                  target: 'default',
+                  cron: '30 8 * * 1-5',
+                  enabled: true,
+                  createdAt: 20,
+                },
+              },
+              {
+                id: 'browser-read-smoke',
+                name: 'Browser Read Smoke',
+                kind: 'workflow',
+                enabled: true,
+                workflow: {
+                  id: 'browser-read-smoke',
+                  name: 'Browser Read Smoke',
+                  enabled: true,
+                  mode: 'sequential',
+                  description: 'Reads example.com.',
+                  steps: [{ id: 'step-1', toolName: 'browser_navigate' }],
+                },
+                task: {
+                  id: 'task-browser-read-smoke',
+                  name: 'Browser Read Smoke',
+                  type: 'playbook',
+                  target: 'browser-read-smoke',
+                  cron: '0 9 * * 1',
+                  enabled: true,
+                  createdAt: 10,
+                },
+              },
+            ],
+          },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryAutomationControlPreRoute({
+      agentId: 'default',
+      message: {
+        ...baseMessage,
+        content: 'List my automations.',
+      },
+      executeTool,
+    }, {
+      intentDecision: {
+        route: 'automation_control',
+        confidence: 'high',
+        operation: 'read',
+        summary: 'List the saved automations.',
+        entities: {},
+      },
+    });
+
+    expect(result?.content).toContain('Automation catalog (2)');
+    expect(result?.content).toContain('Weekday Outlook Inbox Summary');
+    expect(result?.content).toContain('Browser Read Smoke');
+    expect(executeTool).toHaveBeenCalledTimes(1);
+  });
+
+  it('lists the next page when a follow-up asks for additional automations', async () => {
+    const automations = Array.from({ length: 45 }, (_, index) => {
+      const ordinal = index + 1;
+      return {
+        id: `automation-${ordinal}`,
+        name: `Automation ${ordinal}`,
+        kind: 'assistant_task',
+        enabled: true,
+        task: {
+          id: `automation-${ordinal}`,
+          name: `Automation ${ordinal}`,
+          type: 'agent',
+          target: 'default',
+          cron: `${ordinal % 60} 8 * * 1-5`,
+          enabled: true,
+          createdAt: ordinal,
+        },
+      };
+    });
+    const executeTool = vi.fn(async (toolName: string) => {
+      if (toolName === 'automation_list') {
+        return {
+          success: true,
+          output: { automations },
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryAutomationControlPreRoute({
+      agentId: 'default',
+      message: {
+        ...baseMessage,
+        content: 'Can you list the additional 25 automations?',
+      },
+      continuityThread: {
+        continuityKey: 'default:owner',
+        scope: { assistantId: 'default', userId: 'owner' },
+        linkedSurfaces: [],
+        continuationState: {
+          kind: 'automation_catalog_list',
+          payload: { offset: 0, limit: 20, total: 45 },
+        },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+      executeTool,
+    }, {
+      intentDecision: {
+        route: 'automation_control',
+        confidence: 'high',
+        operation: 'read',
+        turnRelation: 'follow_up',
+        summary: 'List more automations.',
+        entities: {},
+      },
+    });
+
+    expect(result?.content).toContain('Automation catalog (45): showing 21-45');
+    expect(result?.content).toContain('Automation 25');
+    expect(result?.content).toContain('Automation 1');
+    expect(result?.content).not.toContain('Automation 45');
+    expect(result?.metadata?.continuationState).toMatchObject({
+      kind: 'automation_catalog_list',
+      payload: { offset: 20, limit: 25, total: 45 },
+    });
+  });
+
   it('runs task-only automations through automation_run', async () => {
     const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
       if (toolName === 'automation_list') {
@@ -500,6 +644,91 @@ describe('tryAutomationControlPreRoute', () => {
     });
 
     expect(result?.content).toContain("Disabled 'Browser Read Smoke'.");
+  });
+
+  it('uses the most recently created automation for follow-up disable requests when the gateway name is approximate', async () => {
+    const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+      if (toolName === 'automation_list') {
+        return {
+          success: true,
+          output: {
+            automations: [
+              {
+                id: 'older-browser-read',
+                name: 'Browser Read Smoke',
+                kind: 'workflow',
+                enabled: true,
+                workflow: {
+                  id: 'older-browser-read',
+                  name: 'Browser Read Smoke',
+                  enabled: true,
+                  mode: 'sequential',
+                  steps: [{ id: 'step-1', toolName: 'browser_navigate' }],
+                },
+                task: {
+                  id: 'older-browser-read-task',
+                  name: 'Browser Read Smoke',
+                  type: 'playbook',
+                  target: 'older-browser-read',
+                  cron: '0 9 * * 1',
+                  enabled: true,
+                  createdAt: 10,
+                },
+              },
+              {
+                id: 'weekday-outlook-inbox-summary',
+                name: 'Weekday Outlook Inbox Summary',
+                kind: 'assistant_task',
+                enabled: true,
+                task: {
+                  id: 'weekday-outlook-inbox-summary',
+                  name: 'Weekday Outlook Inbox Summary',
+                  type: 'agent',
+                  target: 'default',
+                  cron: '30 8 * * 1-5',
+                  enabled: true,
+                  createdAt: 20,
+                },
+              },
+            ],
+          },
+        };
+      }
+      if (toolName === 'automation_set_enabled') {
+        expect(args).toEqual({ automationId: 'weekday-outlook-inbox-summary', enabled: false });
+        return {
+          success: true,
+          message: "Disabled 'Weekday Outlook Inbox Summary'.",
+        };
+      }
+      throw new Error(`Unexpected tool ${toolName}`);
+    });
+
+    const result = await tryAutomationControlPreRoute({
+      agentId: 'default',
+      message: {
+        ...baseMessage,
+        content: 'Disable that weekday Outlook summary automation.',
+      },
+      executeTool,
+    }, {
+      intentDecision: {
+        route: 'automation_control',
+        confidence: 'high',
+        operation: 'update',
+        summary: 'Disable the automation that was just created.',
+        turnRelation: 'follow_up',
+        resolution: 'ready',
+        missingFields: [],
+        entities: {
+          automationName: 'weekday Outlook summary automation',
+        },
+      },
+    });
+
+    expect(result?.content).toContain("I couldn't find an exact automation named 'weekday Outlook summary automation'.");
+    expect(result?.content).toContain("I used the most recently created automation from this conversation: 'Weekday Outlook Inbox Summary'.");
+    expect(result?.content).toContain("Disabled 'Weekday Outlook Inbox Summary'.");
   });
 
   it('prepares deletion through automation_delete when approval is required', async () => {

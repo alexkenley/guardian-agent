@@ -32,6 +32,10 @@ describe('ContinuityThreadStore', () => {
       focusSummary: 'Follow-up on the current email task.',
       lastActionableRequest: 'Check my email and summarize the latest unread message.',
       activeExecutionRefs: [{ kind: 'code_session', id: 'session-1', label: 'Guardian Agent workspace' }],
+      continuationState: {
+        kind: 'paged_list',
+        payload: { offset: 0, limit: 20, total: 45 },
+      },
     });
 
     const record = store.get(scope);
@@ -49,6 +53,10 @@ describe('ContinuityThreadStore', () => {
     expect(record?.activeExecutionRefs).toEqual([
       { kind: 'code_session', id: 'session-1', label: 'Guardian Agent workspace' },
     ]);
+    expect(record?.continuationState).toEqual({
+      kind: 'paged_list',
+      payload: { offset: 0, limit: 20, total: 45 },
+    });
   });
 
   it('merges linked surfaces for the same continuity thread', () => {

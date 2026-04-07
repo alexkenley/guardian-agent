@@ -81,6 +81,7 @@ export interface IntentGatewayEntities {
   path?: string;
   sessionTarget?: string;
   emailProvider?: 'gws' | 'm365';
+  mailboxReadMode?: 'unread' | 'latest';
   calendarTarget?: 'local' | 'gws' | 'm365';
   personalItemType?: 'overview' | 'note' | 'task' | 'calendar' | 'person' | 'library' | 'routine' | 'brief' | 'unknown';
   codingBackend?: string;
@@ -266,6 +267,10 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
         type: 'string',
         enum: ['gws', 'm365'],
       },
+      mailboxReadMode: {
+        type: 'string',
+        enum: ['unread', 'latest'],
+      },
       calendarTarget: {
         type: 'string',
         enum: ['local', 'gws', 'm365'],
@@ -365,6 +370,8 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Example: "Rename Browser Read Smoke to Browser Read Smoke Daily." -> route=automation_control, operation=update, automationName="Browser Read Smoke", newAutomationName="Browser Read Smoke Daily".',
   'Example: prior assistant just created "It Should Check Account" and the user says "Rename that automation to WHM Social Check Disk Quota." -> route=automation_control, turnRelation=follow_up, operation=update, automationName="It Should Check Account", newAutomationName="WHM Social Check Disk Quota".',
   'Example: "Edit the WHM Social Check Disk Quota automation and make it run daily at 9:00 AM." -> route=automation_control, operation=update, automationName="WHM Social Check Disk Quota".',
+  'Example: "List my automations." -> route=automation_control, operation=read.',
+  'Example: prior assistant just created "Weekday Outlook Inbox Summary" and the user says "Disable that automation." -> route=automation_control, turnRelation=follow_up, operation=toggle, automationName="Weekday Outlook Inbox Summary", enabled=false.',
   'Example: "Analyze the output from the last HN Snapshot Smoke automation run" -> route = "automation_output_task", automationName = "HN Snapshot Smoke".',
   'Example: "What sort of automations can you create?" -> route = "general_assistant", operation = "inspect".',
   'Example: "Run the cloud tool whm_status using profileId social." -> route = "general_assistant", operation = "run", toolName = "whm_status", profileId = "social".',
@@ -394,9 +401,11 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Example: "Add this meeting to my Google Calendar." -> route=workspace_task, operation=create, calendarTarget=gws.',
   'Example: "Delete the event from my Outlook calendar." -> route=workspace_task, operation=delete, calendarTarget=m365.',
   'Example: "Update the SharePoint document for the launch checklist." -> route=workspace_task, operation=update.',
-  'Example: "Check my unread Outlook mail." -> route=email_task, operation=read, emailProvider=m365.',
+  'Example: "Check my unread Outlook mail." -> route=email_task, operation=read, emailProvider=m365, mailboxReadMode=unread.',
+  'Example: "Show me the newest five emails in Gmail." -> route=email_task, operation=read, emailProvider=gws, mailboxReadMode=latest.',
   'For enable/disable requests, set enabled=true or enabled=false when explicit.',
   'Set emailProvider=gws for Gmail or Google Workspace requests. Set emailProvider=m365 for Outlook or Microsoft 365 requests.',
+  'Set mailboxReadMode=unread when the user explicitly asks for unread or new mail. Set mailboxReadMode=latest when they ask for newest, latest, recent, or last inbox messages regardless of read status.',
   'Set calendarTarget=local for unqualified Second Brain calendar requests. Set calendarTarget=gws for Google Calendar requests. Set calendarTarget=m365 for Outlook Calendar or Microsoft 365 calendar requests.',
   'Set codingBackend when the user explicitly names Codex, Claude Code, Gemini CLI, or Aider.',
   'Set codingBackendRequested=true only when the user is explicitly asking Guardian to use or launch that coding backend for work. If Codex, Claude Code, Gemini CLI, or Aider is only the subject of a question, codingBackendRequested must be false or unset.',
@@ -409,6 +418,7 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Example: prior assistant said to switch workspaces first before running the deferred Codex request; after switching, the user says "Okay, now we\'re on the previous request that I asked." -> route=coding_task, turnRelation=follow_up, resolution=ready, resolvedContent should restate the original deferred coding request.',
   'Example: prior assistant asked which mail provider to use and the user replies "Use Outlook." -> route=email_task, turnRelation=clarification_answer, resolution=ready, emailProvider=m365, resolvedContent should restate the original mail request with Outlook / Microsoft 365 selected.',
   'Example: prior assistant asked which mail provider to use and the user replies "Google Workspace." or "Gmail." -> route=email_task, turnRelation=clarification_answer, resolution=ready, emailProvider=gws, resolvedContent should restate the original mail request with Gmail / Google Workspace selected.',
+  'Example: prior assistant listed unread Gmail mail, then the user says "No, not unread — just show me the latest five emails in Gmail." -> route=email_task, turnRelation=correction, resolution=ready, emailProvider=gws, mailboxReadMode=latest, resolvedContent should restate the corrected Gmail inbox-read request.',
   'Example: prior assistant asked which automation to edit and the user replies "WHM Social Check Disk Quota." -> route=automation_control, turnRelation=clarification_answer, operation=update, automationName="WHM Social Check Disk Quota", resolvedContent should restate the original automation-edit request when possible.',
   'Example: prior user request "Use Codex to update the proposal in the workspace." then user says "Did Codex complete that work? Can you check?" -> route=coding_task, turnRelation=follow_up, operation=inspect, resolution=ready, codingBackend=codex, codingRunStatusCheck=true, resolvedContent should restate that this is a status check for the most recent Codex run related to that request.',
   'Example: "Why did Codex make that text file executable?" -> this is about Codex as the subject of the question, not a request to launch Codex. codingBackend may be set to codex, but codingBackendRequested=false and codingRunStatusCheck=false.',
@@ -466,11 +476,12 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'Examples: "Add this meeting to my Google Calendar." -> route="workspace_task", operation="create", calendarTarget="gws".',
   'Examples: "Delete the event from my Outlook calendar." -> route="workspace_task", operation="delete", calendarTarget="m365".',
   'Examples: "Update the SharePoint document for the launch checklist." -> route="workspace_task", operation="update".',
-  'Examples: "Check my unread Outlook mail." -> route="email_task", operation="read", emailProvider="m365".',
+  'Examples: "Check my unread Outlook mail." -> route="email_task", operation="read", emailProvider="m365", mailboxReadMode="unread".',
+  'Examples: "Show me the newest five emails in Gmail." -> route="email_task", operation="read", emailProvider="gws", mailboxReadMode="latest".',
   'Examples: "Switch this chat to the coding workspace for Temp install test." -> route="coding_session_control", operation="update", sessionTarget="Temp install test".',
   'Examples: "Search the repo for ollama_cloud and tell me which files define its routing." -> route="coding_task", operation="search", executionClass="repo_grounded", preferredTier="local", requiresRepoGrounding=true, requiresToolSynthesis=false, expectedContextPressure="medium", preferredAnswerPath="direct".',
   'Examples: "Inspect src/runtime/intent-gateway.ts and review the uplift for regressions." -> route="coding_task", operation="inspect", executionClass="repo_grounded", preferredTier="external", requiresRepoGrounding=true, requiresToolSynthesis=true, expectedContextPressure="high", preferredAnswerPath="chat_synthesis".',
-  'Examples: "Check my unread Outlook mail." -> route="email_task", operation="read", executionClass="provider_crud", preferredTier="external", requiresRepoGrounding=false, requiresToolSynthesis=true, expectedContextPressure="medium", preferredAnswerPath="tool_loop".',
+  'Examples: "Check my unread Outlook mail." -> route="email_task", operation="read", executionClass="provider_crud", preferredTier="external", requiresRepoGrounding=false, requiresToolSynthesis=true, expectedContextPressure="medium", preferredAnswerPath="tool_loop", mailboxReadMode="unread".',
   'Examples: "What do I have due today?" -> route="personal_assistant_task", operation="inspect", executionClass="direct_assistant", preferredTier="local", requiresRepoGrounding=false, requiresToolSynthesis=false, expectedContextPressure="low", preferredAnswerPath="direct".',
   'Return valid JSON with double-quoted keys and string values only.',
 ].join(' ');
@@ -904,6 +915,7 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
     ? parsed.sessionTarget.trim()
     : undefined;
   const emailProvider = normalizeEmailProvider(parsed.emailProvider);
+  const mailboxReadMode = normalizeMailboxReadMode(parsed.mailboxReadMode);
   const personalItemType = normalizePersonalItemType(parsed.personalItemType);
   const calendarTarget = normalizeCalendarTarget(parsed.calendarTarget)
     ?? (route === 'personal_assistant_task' && personalItemType === 'calendar' ? 'local' : undefined);
@@ -948,6 +960,7 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
       ...(path ? { path } : {}),
       ...(sessionTarget ? { sessionTarget } : {}),
       ...(emailProvider ? { emailProvider } : {}),
+      ...(mailboxReadMode ? { mailboxReadMode } : {}),
       ...(calendarTarget ? { calendarTarget } : {}),
       ...(personalItemType ? { personalItemType } : {}),
       ...(codingBackend ? { codingBackend } : {}),
@@ -1389,6 +1402,18 @@ function normalizeEmailProvider(
   switch (value) {
     case 'gws':
     case 'm365':
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+function normalizeMailboxReadMode(
+  value: unknown,
+): IntentGatewayEntities['mailboxReadMode'] | undefined {
+  switch (value) {
+    case 'unread':
+    case 'latest':
       return value;
     default:
       return undefined;

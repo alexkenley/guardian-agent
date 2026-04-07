@@ -525,14 +525,20 @@ function parseDirectGoogleWorkspaceIntent(content: string): DirectGoogleWorkspac
     return null;
   }
   const count = parseRequestedEmailCount(text);
+  const wantsUnread = /\bunread\b/i.test(text)
+    || /\bany\s+new\s+emails?\b/i.test(text)
+    || /\bwhat(?:'s|\s+is)?\s+(?:new\s+)?in\s+(?:my\s+)?(?:gmail|inbox)\b/i.test(text)
+    || /\bwhat\s+(?:new|unread)\s+emails?\s+do\s+i\s+have\b/i.test(text);
+  const wantsLatest = /\b(?:last|latest|recent|newest)\b/i.test(text)
+    || /\bnot\s+unread\b/i.test(text);
 
   const unreadInboxPatterns = [
     /\bcheck\b[\s\S]{0,80}\b(?:gmail|google workspace|inbox|emails?|email|mail|outlook\s+(?:mail|email|emails?|inbox)|(?:microsoft|office)\s+365(?:\s+outlook)?\s+(?:mail|email|emails?|inbox))\b/i,
-    /\b(?:show|list)\b[\s\S]{0,80}\b(?:gmail|google workspace|inbox|emails?|email|mail|outlook\s+(?:mail|email|emails?|inbox)|(?:microsoft|office)\s+365(?:\s+outlook)?\s+(?:mail|email|emails?|inbox))\b/i,
-    /\b(?:new|latest|recent|unread)\b[\s\S]{0,40}\b(?:gmail|google workspace|emails?|email|mail|inbox|outlook\s+(?:mail|email|emails?|inbox)|(?:microsoft|office)\s+365(?:\s+outlook)?\s+(?:mail|email|emails?|inbox))\b/i,
+    /\b(?:show|list)\b[\s\S]{0,80}\bunread\b[\s\S]{0,40}\b(?:gmail|google workspace|inbox|emails?|email|mail|outlook\s+(?:mail|email|emails?|inbox)|(?:microsoft|office)\s+365(?:\s+outlook)?\s+(?:mail|email|emails?|inbox))\b/i,
+    /\bunread\b[\s\S]{0,40}\b(?:gmail|google workspace|emails?|email|mail|inbox|outlook\s+(?:mail|email|emails?|inbox)|(?:microsoft|office)\s+365(?:\s+outlook)?\s+(?:mail|email|emails?|inbox))\b/i,
     /\bany\s+new\s+emails?\b/i,
     /\bwhat(?:'s|\s+is)?\s+(?:new\s+)?in\s+(?:my\s+)?(?:gmail|inbox)\b/i,
-    /\bwhat\s+(?:new|recent|unread)\s+emails?\s+do\s+i\s+have\b/i,
+    /\bwhat\s+(?:new|unread)\s+emails?\s+do\s+i\s+have\b/i,
   ];
 
   if (/\b(?:sender|senders|from|who sent)\b/i.test(text)
@@ -544,6 +550,10 @@ function parseDirectGoogleWorkspaceIntent(content: string): DirectGoogleWorkspac
   if (/\b(?:last|latest|recent)\b/i.test(text)
     && /\bemails?|mail\b/i.test(text)
     && /\b(?:detail|details|summary|summarize|subject|snippet|snippets)\b/i.test(text)) {
+    return { kind: 'gmail_recent_summary', count };
+  }
+
+  if (wantsLatest && !wantsUnread) {
     return { kind: 'gmail_recent_summary', count };
   }
 
@@ -1627,6 +1637,7 @@ export {
   mergeCloudConfigForValidation,
   normalizeCodingBackendSelection,
   normalizeScheduledEmailBody,
+  parseRequestedEmailCount,
   parseDirectGoogleWorkspaceIntent,
   readCodeRequestMetadata,
   readMessageSurfaceId,

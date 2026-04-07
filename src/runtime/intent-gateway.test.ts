@@ -511,7 +511,8 @@ describe('IntentGateway', () => {
     expect(fallbackPrompt).toContain('Prefer automation_authoring when the user explicitly asks to create an automation or workflow in the Automations system.');
     expect(fallbackPrompt).toContain('Examples: "Add this meeting to my Google Calendar." -> route="workspace_task", operation="create", calendarTarget="gws".');
     expect(fallbackPrompt).toContain('Examples: "Update the SharePoint document for the launch checklist." -> route="workspace_task", operation="update".');
-    expect(fallbackPrompt).toContain('Examples: "Check my unread Outlook mail." -> route="email_task", operation="read", emailProvider="m365".');
+    expect(fallbackPrompt).toContain('Examples: "Check my unread Outlook mail." -> route="email_task", operation="read", emailProvider="m365", mailboxReadMode="unread".');
+    expect(fallbackPrompt).toContain('Examples: "Show me the newest five emails in Gmail." -> route="email_task", operation="read", emailProvider="gws", mailboxReadMode="latest".');
   });
 
   it('preserves explicit cloud tool and profile entities without collapsing to automation control', async () => {
@@ -1206,6 +1207,33 @@ describe('IntentGateway', () => {
     expect(result.decision.turnRelation).toBe('clarification_answer');
     expect(result.decision.entities.emailProvider).toBe('m365');
     expect(result.decision.resolvedContent).toContain('Outlook / Microsoft 365');
+  });
+
+  it('captures mailbox read mode for latest inbox requests', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Can you show me the newest five emails in Gmail?',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'email_task',
+          confidence: 'high',
+          operation: 'read',
+          summary: 'Lists the latest Gmail inbox messages.',
+          emailProvider: 'gws',
+          mailboxReadMode: 'latest',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('email_task');
+    expect(result.decision.operation).toBe('read');
+    expect(result.decision.entities.emailProvider).toBe('gws');
+    expect(result.decision.entities.mailboxReadMode).toBe('latest');
   });
 
   it('captures clarification answers for automation-selection follow-ups', async () => {

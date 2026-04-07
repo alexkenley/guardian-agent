@@ -123,7 +123,7 @@ Notes:
 | audit log and policy decisions | `Security` | system count only |
 | active alerts | `Security` | system attention queue, network/cloud counts |
 | threat intel | `Security` | none |
-| workstation performance, latency, profiles, and reviewed cleanup | `Performance` | compact counts or deep links only |
+| workstation performance, editable profiles, latency, and reviewed cleanup | `Performance` | compact counts or deep links only |
 | coding sessions, repo activity, and coding approvals | `Code` | compact links only |
 | network inventory and diagnostics | `Network` | system count only |
 | cloud connections and cloud posture | `Cloud` | system count only |
@@ -312,7 +312,9 @@ It must provide:
 
 ### Purpose
 
-Workstation operations page for host pressure, latency, profile switching, and reviewed cleanup actions.
+Workstation operations page for host pressure, editable workstation profiles, latency checks, and reviewed cleanup actions.
+
+Detailed runtime behavior, tool access, approval gating, and current implementation limits are defined in [PERFORMANCE-MANAGEMENT-SPEC.md](/mnt/s/Development/GuardianAgent/docs/specs/PERFORMANCE-MANAGEMENT-SPEC.md).
 
 ### Guidance standard
 
@@ -321,19 +323,33 @@ Performance must make clear that it is separate from `Second Brain` and focused 
 Each tab must explain:
 
 - what host state or action surface is being shown
-- whether the user is monitoring, selecting a profile, or preparing a guarded mutation
-- when the user should go to `Configuration`, `Automations`, or `Code` instead
+- whether the user is monitoring, editing a profile, or preparing a guarded mutation
+- when the user should go to `Automations` or `Code` instead
 
 ### Required tabs
 
 - `Overview`
 - `Profiles`
-- `Live`
-- `Latency`
-- `Actions`
+- `Cleanup`
 - `History`
 
-### `Actions`
+### `Profiles`
+
+Must support:
+
+- create, edit, apply, and delete for performance profiles
+- process protect and cleanup rule editing
+- a live running-process browser grouped by executable name for quick-add into protect and cleanup rules
+- latency target editing for the active profile library
+- clear guidance that these profiles affect both Overview and Cleanup
+
+Must not become:
+
+- a generic runtime configuration page
+- a second copy of unrelated Configuration sections
+- a place for cloud, auth, or provider administration
+
+### `Cleanup`
 
 Must support:
 
@@ -341,17 +357,17 @@ Must support:
 - selectable process rows checked by default
 - protected rows shown but disabled with a reason
 - explicit confirmation of the final selected subset before execution
+- a useful empty state when no candidates are recommended
+- advisory previews even when the current runtime is read-only for host process actions
+- a clear path from profile editing into cleanup preview without bypassing review
 
 Must not become:
 
-- a profile editor
-- a duplicate configuration surface
 - a generic automation history page
 
 ### Ownership boundary
 
-- `Performance` owns live workstation status, guarded cleanup previews, and operator-initiated performance actions
-- `Configuration` owns profile definitions and policy
+- `Performance` owns live workstation status, the running-process browser, performance profile definitions, guarded cleanup previews, and operator-initiated performance actions
 - `Automations` owns scheduled or saved automation definitions that happen to call performance tools
 
 ## Code

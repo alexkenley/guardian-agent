@@ -26,6 +26,11 @@ export interface ContinuityThreadExecutionRef {
   label?: string;
 }
 
+export interface ContinuityThreadContinuationState {
+  kind: string;
+  payload: Record<string, unknown>;
+}
+
 export interface ContinuityThreadRecord {
   continuityKey: string;
   scope: ContinuityThreadScope;
@@ -33,6 +38,7 @@ export interface ContinuityThreadRecord {
   focusSummary?: string;
   lastActionableRequest?: string;
   activeExecutionRefs?: ContinuityThreadExecutionRef[];
+  continuationState?: ContinuityThreadContinuationState;
   safeSummary?: string;
   createdAt: number;
   updatedAt: number;
@@ -55,6 +61,7 @@ export interface ContinuityThreadUpsertInput {
   focusSummary?: string | null;
   lastActionableRequest?: string | null;
   activeExecutionRefs?: ContinuityThreadExecutionRef[] | null;
+  continuationState?: ContinuityThreadContinuationState | null;
   safeSummary?: string | null;
 }
 
@@ -83,6 +90,15 @@ function cloneSurfaceLink(link: ContinuityThreadSurfaceLink): ContinuityThreadSu
   return { ...link };
 }
 
+function cloneContinuationState(
+  state: ContinuityThreadContinuationState,
+): ContinuityThreadContinuationState {
+  return {
+    kind: state.kind,
+    payload: { ...state.payload },
+  };
+}
+
 function cloneRecord(record: ContinuityThreadRecord): ContinuityThreadRecord {
   return {
     ...record,
@@ -90,6 +106,9 @@ function cloneRecord(record: ContinuityThreadRecord): ContinuityThreadRecord {
     linkedSurfaces: record.linkedSurfaces.map(cloneSurfaceLink),
     ...(record.activeExecutionRefs
       ? { activeExecutionRefs: record.activeExecutionRefs.map(cloneExecutionRef) }
+      : {}),
+    ...(record.continuationState
+      ? { continuationState: cloneContinuationState(record.continuationState) }
       : {}),
   };
 }
@@ -140,6 +159,18 @@ function normalizeExecutionRef(value: unknown): ContinuityThreadExecutionRef | n
   };
 }
 
+function normalizeContinuationState(
+  value: unknown,
+): ContinuityThreadContinuationState | null {
+  if (!isRecord(value) || !isRecord(value.payload)) return null;
+  const kind = typeof value.kind === 'string' ? value.kind.trim() : '';
+  if (!kind) return null;
+  return {
+    kind: kind.length > 80 ? kind.slice(0, 80).trim() : kind,
+    payload: { ...value.payload },
+  };
+}
+
 function normalizeRecord(value: unknown): ContinuityThreadRecord | null {
   if (!isRecord(value) || !isRecord(value.scope)) return null;
   const assistantId = typeof value.scope.assistantId === 'string' ? value.scope.assistantId.trim() : '';
@@ -156,6 +187,7 @@ function normalizeRecord(value: unknown): ContinuityThreadRecord | null {
       .map(normalizeExecutionRef)
       .filter((item): item is ContinuityThreadExecutionRef => !!item)
     : [];
+  const continuationState = normalizeContinuationState(value.continuationState);
   return {
     continuityKey,
     scope: { assistantId, userId },
@@ -163,6 +195,7 @@ function normalizeRecord(value: unknown): ContinuityThreadRecord | null {
     ...(normalizeText(value.focusSummary, 400) ? { focusSummary: normalizeText(value.focusSummary, 400) } : {}),
     ...(normalizeText(value.lastActionableRequest, 800) ? { lastActionableRequest: normalizeText(value.lastActionableRequest, 800) } : {}),
     ...(activeExecutionRefs.length > 0 ? { activeExecutionRefs } : {}),
+    ...(continuationState ? { continuationState } : {}),
     ...(normalizeText(value.safeSummary, 500) ? { safeSummary: normalizeText(value.safeSummary, 500) } : {}),
     createdAt: typeof value.createdAt === 'number' && Number.isFinite(value.createdAt) ? value.createdAt : Date.now(),
     updatedAt: typeof value.updatedAt === 'number' && Number.isFinite(value.updatedAt) ? value.updatedAt : Date.now(),
@@ -405,6 +438,13 @@ export class ContinuityThreadStore {
         : existing?.activeExecutionRefs
           ? existing.activeExecutionRefs.map(cloneExecutionRef)
           : undefined;
+    const continuationState = input.continuationState === null
+      ? undefined
+      : input.continuationState
+        ? normalizeContinuationState(input.continuationState)
+        : existing?.continuationState
+          ? cloneContinuationState(existing.continuationState)
+          : undefined;
     const focusSummary = input.focusSummary === null
       ? undefined
       : (input.focusSummary !== undefined
@@ -427,6 +467,7 @@ export class ContinuityThreadStore {
       ...(focusSummary ? { focusSummary } : {}),
       ...(lastActionableRequest ? { lastActionableRequest } : {}),
       ...(activeExecutionRefs?.length ? { activeExecutionRefs } : {}),
+      ...(continuationState ? { continuationState } : {}),
       ...(safeSummary ? { safeSummary } : {}),
       createdAt: existing?.createdAt ?? nowMs,
       updatedAt: nowMs,

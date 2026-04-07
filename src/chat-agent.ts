@@ -24,6 +24,7 @@ import {
   isRecord,
   normalizeCodingBackendSelection,
   normalizeScheduledEmailBody,
+  parseRequestedEmailCount,
   parseDirectGoogleWorkspaceIntent,
   readCodeRequestMetadata,
   sameCodeWorkspaceWorkingSet,
@@ -116,6 +117,12 @@ import {
   parseDirectFileSearchIntent,
   parseWebSearchIntent,
 } from './runtime/search-intent.js';
+import {
+  buildPagedListContinuationState,
+  hasPagedListFollowUpRequest,
+  readPagedListContinuationState,
+  resolvePagedListWindow,
+} from './runtime/list-continuation.js';
 import type { ToolExecutor } from './tools/executor.js';
 import type { PrincipalRole, ToolExecutionRequest } from './tools/types.js';
 import { buildToolResultPayloadFromJob } from './tools/job-results.js';
@@ -134,6 +141,7 @@ import {
   ContinuityThreadStore,
   summarizeContinuityThreadForGateway,
   toContinuityThreadClientMetadata,
+  type ContinuityThreadContinuationState,
   type ContinuityThreadRecord,
   type ContinuityThreadScope,
 } from './runtime/continuity-threads.js';
@@ -284,11 +292,44 @@ function stripDirectAutomationClarificationMetadata(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
+function readDirectContinuationStateMetadata(
+  metadata: Record<string, unknown> | undefined,
+): ContinuityThreadContinuationState | null | undefined {
+  if (!metadata || !Object.prototype.hasOwnProperty.call(metadata, 'continuationState')) {
+    return undefined;
+  }
+  const raw = metadata.continuationState;
+  if (raw === null) return null;
+  if (!isRecord(raw) || !isRecord(raw.payload)) return undefined;
+  const kind = toString(raw.kind).trim();
+  if (!kind) return undefined;
+  return {
+    kind,
+    payload: { ...raw.payload },
+  };
+}
+
+function stripDirectContinuationStateMetadata(
+  metadata: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!metadata) return undefined;
+  const next = { ...metadata };
+  delete next.continuationState;
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
 function isDirectMailboxReplyTarget(value: unknown): value is { to: string; subject: string } {
   return isRecord(value)
     && typeof value.to === 'string'
     && typeof value.subject === 'string';
 }
+
+const GMAIL_UNREAD_CONTINUATION_KIND = 'gmail_unread_list';
+const GMAIL_RECENT_SENDERS_CONTINUATION_KIND = 'gmail_recent_senders_list';
+const GMAIL_RECENT_SUMMARY_CONTINUATION_KIND = 'gmail_recent_summary_list';
+const M365_UNREAD_CONTINUATION_KIND = 'm365_unread_list';
+const M365_RECENT_SENDERS_CONTINUATION_KIND = 'm365_recent_senders_list';
+const M365_RECENT_SUMMARY_CONTINUATION_KIND = 'm365_recent_summary_list';
 
 const PENDING_ACTION_SWITCH_CANDIDATE_TYPE = 'pending_action_switch_candidate';
 
@@ -388,6 +429,33 @@ interface SuspendedSession {
 interface ApprovalFollowUpCopy {
   approved?: string;
   denied?: string;
+}
+
+interface DirectIntentResponseInput {
+  candidate: DirectIntentShadowCandidate;
+  result: string | { content: string; metadata?: Record<string, unknown> };
+  message: UserMessage;
+  routingMessage?: UserMessage;
+  intentGateway?: IntentGatewayRecord | null;
+  ctx: AgentContext;
+  activeSkills: ResolvedSkill[];
+  conversationKey: ConversationKey;
+  surfaceUserId?: string;
+  surfaceChannel?: string;
+  surfaceId?: string;
+}
+
+interface DegradedDirectIntentResponseInput {
+  candidate: DirectIntentShadowCandidate;
+  result: string | { content: string; metadata?: Record<string, unknown> };
+  message: UserMessage;
+  intentGateway?: IntentGatewayRecord | null;
+  activeSkills: ResolvedSkill[];
+  conversationKey: ConversationKey;
+  degradedReason: string;
+  surfaceUserId?: string;
+  surfaceChannel?: string;
+  surfaceId?: string;
 }
 
 interface AutomationApprovalContinuation {
@@ -1084,6 +1152,20 @@ type DirectIntentShadowCandidate =
       pendingActionSurfaceId,
       effectiveCodeContext?.sessionId,
     );
+    const buildScopedDirectIntentResponse = (input: Omit<DirectIntentResponseInput, 'surfaceUserId' | 'surfaceChannel' | 'surfaceId'>) => this.buildDirectIntentResponse({
+      ...input,
+      surfaceUserId: pendingActionUserId,
+      surfaceChannel: pendingActionChannel,
+      surfaceId: pendingActionSurfaceId,
+    });
+    const buildScopedDegradedDirectIntentResponse = (
+      input: Omit<DegradedDirectIntentResponseInput, 'surfaceUserId' | 'surfaceChannel' | 'surfaceId'>,
+    ) => this.buildDegradedDirectIntentResponse({
+      ...input,
+      surfaceUserId: pendingActionUserId,
+      surfaceChannel: pendingActionChannel,
+      surfaceId: pendingActionSurfaceId,
+    });
     const groundedScopedMessage = scopedMessage;
     let preResolvedSkills: ResolvedSkill[] = [];
     const resolveSkillsForCurrentContext = (options?: {
@@ -1353,7 +1435,7 @@ type DirectIntentShadowCandidate =
           message, ctx, earlyGateway.decision,
         );
         if (sessionControlResult) {
-          return this.buildDirectIntentResponse({
+          return buildScopedDirectIntentResponse({
             candidate: 'coding_session_control',
             result: sessionControlResult,
             message,
@@ -1686,7 +1768,7 @@ type DirectIntentShadowCandidate =
               directIntent?.decision,
             );
             if (!directSecondBrain) break;
-            return this.buildDirectIntentResponse({
+            return buildScopedDirectIntentResponse({
               candidate,
               result: directSecondBrain,
               message,
@@ -1702,7 +1784,7 @@ type DirectIntentShadowCandidate =
               message, ctx, directIntent?.decision,
             );
             if (!sessionControlResult) break;
-            return this.buildDirectIntentResponse({
+            return buildScopedDirectIntentResponse({
               candidate: 'coding_session_control',
               result: sessionControlResult,
               message,
@@ -1722,7 +1804,7 @@ type DirectIntentShadowCandidate =
               effectiveCodeContext,
             );
             if (!directCodingBackend) break;
-            return this.buildDirectIntentResponse({
+            return buildScopedDirectIntentResponse({
               candidate,
               result: directCodingBackend,
               message,
@@ -1744,7 +1826,7 @@ type DirectIntentShadowCandidate =
               directIntent?.decision,
             );
             if (!directFilesystem) break;
-            return this.buildDirectIntentResponse({
+            return buildScopedDirectIntentResponse({
               candidate,
               result: directFilesystem,
               message,
@@ -1764,7 +1846,7 @@ type DirectIntentShadowCandidate =
               message.content,
             );
             if (!directMemorySave) break;
-            return this.buildDirectIntentResponse({
+            return buildScopedDirectIntentResponse({
               candidate,
               result: directMemorySave,
               message,
@@ -1783,7 +1865,7 @@ type DirectIntentShadowCandidate =
               message.content,
             );
             if (!directMemoryRead) break;
-            return this.buildDirectIntentResponse({
+            return buildScopedDirectIntentResponse({
               candidate,
               result: directMemoryRead,
               message,
@@ -1802,7 +1884,7 @@ type DirectIntentShadowCandidate =
               stateAgentId,
             );
             if (!directScheduledEmailAutomation) break;
-            return this.buildDirectIntentResponse({
+            return buildScopedDirectIntentResponse({
               candidate,
               result: directScheduledEmailAutomation,
               message,
@@ -1825,7 +1907,7 @@ type DirectIntentShadowCandidate =
               },
             );
             if (!directAutomationAuthoring) break;
-            return this.buildDirectIntentResponse({
+            return buildScopedDirectIntentResponse({
               candidate,
               result: directAutomationAuthoring,
               message,
@@ -1842,9 +1924,10 @@ type DirectIntentShadowCandidate =
               ctx,
               pendingActionUserKey,
               directIntent?.decision,
+              continuityThread,
             );
             if (!directAutomationControl) break;
-            return this.buildDirectIntentResponse({
+            return buildScopedDirectIntentResponse({
               candidate,
               result: directAutomationControl,
               message,
@@ -1862,7 +1945,7 @@ type DirectIntentShadowCandidate =
               directIntent?.decision,
             );
             if (!directAutomationOutput) break;
-            return this.buildDirectIntentResponse({
+            return buildScopedDirectIntentResponse({
               candidate,
               result: directAutomationOutput,
               message,
@@ -1881,7 +1964,7 @@ type DirectIntentShadowCandidate =
               directIntent?.decision,
             );
             if (!directWorkspaceWrite) break;
-            return this.buildDirectIntentResponse({
+            return buildScopedDirectIntentResponse({
               candidate,
               result: directWorkspaceWrite,
               message,
@@ -1898,9 +1981,10 @@ type DirectIntentShadowCandidate =
               ctx,
               pendingActionUserKey,
               directIntent?.decision,
+              continuityThread,
             );
             if (!directWorkspaceRead) break;
-            return this.buildDirectIntentResponse({
+            return buildScopedDirectIntentResponse({
               candidate,
               result: directWorkspaceRead,
               message,
@@ -1918,9 +2002,10 @@ type DirectIntentShadowCandidate =
               pendingActionUserKey,
               effectiveCodeContext,
               directIntent?.decision,
+              continuityThread,
             );
             if (!directBrowserAutomation) break;
-            return this.buildDirectIntentResponse({
+            return buildScopedDirectIntentResponse({
               candidate,
               result: directBrowserAutomation,
               message,
@@ -1968,7 +2053,7 @@ type DirectIntentShadowCandidate =
             } else {
               finalContent = llmSearchPayload;
             }
-            return this.buildDirectIntentResponse({
+            return buildScopedDirectIntentResponse({
               candidate,
               result: finalContent,
               message,
@@ -1993,7 +2078,7 @@ type DirectIntentShadowCandidate =
           message.content,
         );
         if (degradedMemorySave) {
-          return this.buildDegradedDirectIntentResponse({
+          return buildScopedDegradedDirectIntentResponse({
             candidate: 'memory_write',
             result: degradedMemorySave,
             message,
@@ -4121,25 +4206,32 @@ type DirectIntentShadowCandidate =
     return null;
   }
 
-  private async buildDirectIntentResponse(input: {
-    candidate: DirectIntentShadowCandidate;
-    result: string | { content: string; metadata?: Record<string, unknown> };
-    message: UserMessage;
-    routingMessage?: UserMessage;
-    intentGateway?: IntentGatewayRecord | null;
-    ctx: AgentContext;
-    activeSkills: ResolvedSkill[];
-    conversationKey: ConversationKey;
-  }): Promise<AgentResponse> {
+  private async buildDirectIntentResponse(input: DirectIntentResponseInput): Promise<AgentResponse> {
     const normalizedBase = typeof input.result === 'string'
       ? { content: input.result }
       : input.result;
-    const normalized = readResponseSourceMetadata(normalizedBase.metadata) || !input.ctx.llm?.name?.trim()
-      ? normalizedBase
+    const surfaceUserId = input.surfaceUserId?.trim() || input.message.userId;
+    const surfaceChannel = input.surfaceChannel?.trim() || input.message.channel;
+    const surfaceId = input.surfaceId?.trim() || input.message.surfaceId;
+    const continuationState = readDirectContinuationStateMetadata(normalizedBase.metadata);
+    if (continuationState !== undefined) {
+      this.updateDirectContinuationState(
+        surfaceUserId,
+        surfaceChannel,
+        surfaceId,
+        continuationState,
+      );
+    }
+    const baseMetadata = stripDirectContinuationStateMetadata(normalizedBase.metadata);
+    const normalized = readResponseSourceMetadata(baseMetadata) || !input.ctx.llm?.name?.trim()
+      ? {
+          content: normalizedBase.content,
+          ...(baseMetadata ? { metadata: baseMetadata } : {}),
+        }
       : {
-          ...normalizedBase,
+          content: normalizedBase.content,
           metadata: {
-            ...(normalizedBase.metadata ?? {}),
+            ...(baseMetadata ?? {}),
             responseSource: {
               locality: getProviderLocalityFromName(input.ctx.llm.name),
               providerName: input.ctx.llm.name.trim(),
@@ -4162,9 +4254,9 @@ type DirectIntentShadowCandidate =
     const gatewayMeta = toIntentGatewayClientMetadata(intentGateway);
     const normalizedMetadata = this.withCurrentPendingActionMetadata(
       normalized.metadata,
-      input.message.userId,
-      input.message.channel,
-      input.message.surfaceId,
+      surfaceUserId,
+      surfaceChannel,
+      surfaceId,
     );
     this.recordIntentRoutingTrace('direct_intent_response', {
       message: input.message,
@@ -4180,9 +4272,9 @@ type DirectIntentShadowCandidate =
     const metadata = {
       ...(this.buildImmediateResponseMetadata(
         input.activeSkills,
-        input.message.userId,
-        input.message.channel,
-        input.message.surfaceId,
+        surfaceUserId,
+        surfaceChannel,
+        surfaceId,
       ) ?? {}),
       ...(normalizedMetadata ?? {}),
       ...(gatewayMeta ? { intentGateway: gatewayMeta } : {}),
@@ -4193,18 +4285,27 @@ type DirectIntentShadowCandidate =
     };
   }
 
-  private buildDegradedDirectIntentResponse(input: {
-    candidate: DirectIntentShadowCandidate;
-    result: string | { content: string; metadata?: Record<string, unknown> };
-    message: UserMessage;
-    intentGateway?: IntentGatewayRecord | null;
-    activeSkills: ResolvedSkill[];
-    conversationKey: ConversationKey;
-    degradedReason: string;
-  }): AgentResponse {
-    const normalized = typeof input.result === 'string'
+  private buildDegradedDirectIntentResponse(input: DegradedDirectIntentResponseInput): AgentResponse {
+    const normalizedBase = typeof input.result === 'string'
       ? { content: input.result }
       : input.result;
+    const surfaceUserId = input.surfaceUserId?.trim() || input.message.userId;
+    const surfaceChannel = input.surfaceChannel?.trim() || input.message.channel;
+    const surfaceId = input.surfaceId?.trim() || input.message.surfaceId;
+    const continuationState = readDirectContinuationStateMetadata(normalizedBase.metadata);
+    if (continuationState !== undefined) {
+      this.updateDirectContinuationState(
+        surfaceUserId,
+        surfaceChannel,
+        surfaceId,
+        continuationState,
+      );
+    }
+    const baseMetadata = stripDirectContinuationStateMetadata(normalizedBase.metadata);
+    const normalized = {
+      content: normalizedBase.content,
+      ...(baseMetadata ? { metadata: baseMetadata } : {}),
+    };
     if (this.conversationService) {
       this.conversationService.recordTurn(
         input.conversationKey,
@@ -4215,9 +4316,9 @@ type DirectIntentShadowCandidate =
     }
     const normalizedMetadata = this.withCurrentPendingActionMetadata(
       normalized.metadata,
-      input.message.userId,
-      input.message.channel,
-      input.message.surfaceId,
+      surfaceUserId,
+      surfaceChannel,
+      surfaceId,
     );
     this.recordIntentRoutingTrace('direct_intent_response', {
       message: input.message,
@@ -4236,9 +4337,9 @@ type DirectIntentShadowCandidate =
     const metadata = {
       ...(this.buildImmediateResponseMetadata(
         input.activeSkills,
-        input.message.userId,
-        input.message.channel,
-        input.message.surfaceId,
+        surfaceUserId,
+        surfaceChannel,
+        surfaceId,
       ) ?? {}),
       ...(normalizedMetadata ?? {}),
       ...(gatewayMeta ? { intentGateway: gatewayMeta } : {}),
@@ -5370,6 +5471,28 @@ type DirectIntentShadowCandidate =
               }],
             }
           : {}),
+      },
+    );
+  }
+
+  private updateDirectContinuationState(
+    userId: string,
+    channel: string,
+    surfaceId: string | undefined,
+    continuationState: ContinuityThreadContinuationState | null,
+  ): ContinuityThreadRecord | null {
+    if (!this.continuityThreadStore) return null;
+    const normalizedUserId = userId.trim();
+    const normalizedChannel = channel.trim();
+    if (!normalizedUserId || !normalizedChannel) return null;
+    return this.continuityThreadStore.upsert(
+      this.buildContinuityThreadScope(normalizedUserId),
+      {
+        touchSurface: {
+          channel: normalizedChannel,
+          surfaceId: surfaceId?.trim() || normalizedUserId || 'default-surface',
+        },
+        continuationState,
       },
     );
   }
@@ -6667,12 +6790,14 @@ type DirectIntentShadowCandidate =
     ctx: AgentContext,
     userKey: string,
     intentDecision?: IntentGatewayDecision | null,
+    continuityThread?: ContinuityThreadRecord | null,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
     const trackedPendingApprovalIds: string[] = [];
     const result = await tryAutomationControlPreRoute({
       agentId: this.id,
       message,
+      continuityThread,
       checkAction: ctx.checkAction,
       executeTool: (toolName, args, request) => this.tools!.executeModelTool(toolName, args, request),
       trackPendingApproval: (approvalId) => {
@@ -6698,6 +6823,7 @@ type DirectIntentShadowCandidate =
       },
     }, { intentDecision });
     if (!result) return null;
+    const resultMetadata = result.metadata;
     const clarification = readDirectAutomationClarificationMetadata(result.metadata);
     if (clarification) {
       const { userId, channel } = this.parsePendingActionUserKey(userKey);
@@ -6723,15 +6849,15 @@ type DirectIntentShadowCandidate =
       return {
         content: pendingActionResult.collisionPrompt ?? clarification.prompt,
         metadata: {
-          ...(stripDirectAutomationClarificationMetadata(result.metadata) ?? {}),
+          ...(stripDirectAutomationClarificationMetadata(resultMetadata) ?? {}),
           ...(pendingActionResult.action ? { pendingAction: toPendingActionClientMetadata(pendingActionResult.action) } : {}),
         },
       };
     }
     if (trackedPendingApprovalIds.length > 0) {
-      const prompt = isRecord(result.metadata?.pendingAction) && isRecord(result.metadata?.pendingAction.blocker)
-        && typeof result.metadata.pendingAction.blocker.prompt === 'string'
-        ? result.metadata.pendingAction.blocker.prompt
+      const prompt = isRecord(resultMetadata?.pendingAction) && isRecord(resultMetadata?.pendingAction.blocker)
+        && typeof resultMetadata.pendingAction.blocker.prompt === 'string'
+        ? resultMetadata.pendingAction.blocker.prompt
         : this.formatPendingApprovalPrompt(trackedPendingApprovalIds);
       const summaries = this.tools?.getApprovalSummaries(trackedPendingApprovalIds);
       const pendingActionResult = this.setPendingApprovalActionForRequest(
@@ -6754,12 +6880,19 @@ type DirectIntentShadowCandidate =
       return {
         content: mergedResult.content,
         metadata: {
-          ...(result.metadata ?? {}),
+          ...(resultMetadata ?? {}),
           ...(mergedResult.metadata ?? {}),
         },
       };
     }
-    return result;
+    return resultMetadata
+      ? {
+          ...result,
+          metadata: resultMetadata,
+        }
+      : {
+          content: result.content,
+        };
   }
 
   private async tryDirectAutomationOutput(
@@ -6784,6 +6917,7 @@ type DirectIntentShadowCandidate =
     userKey: string,
     codeContext?: { workspaceRoot?: string; sessionId?: string },
     intentDecision?: IntentGatewayDecision | null,
+    continuityThread?: ContinuityThreadRecord | null,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
     const scopedCodeContext = codeContext?.workspaceRoot
@@ -6794,6 +6928,7 @@ type DirectIntentShadowCandidate =
     const result = await tryBrowserPreRoute({
       agentId: this.id,
       message,
+      continuityThread,
       checkAction: ctx.checkAction,
       executeTool: (toolName, args, request) => this.tools!.executeModelTool(toolName, args, {
         ...request,
@@ -7183,15 +7318,30 @@ type DirectIntentShadowCandidate =
     ctx: AgentContext,
     userKey: string,
     decision?: IntentGatewayDecision,
+    continuityThread?: ContinuityThreadRecord | null,
   ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
 
     if (decision?.route === 'email_task' && decision.entities.emailProvider === 'm365') {
-      return this.tryDirectMicrosoft365Read(message, ctx, userKey);
+      return this.tryDirectMicrosoft365Read(message, ctx, userKey, decision, continuityThread);
     }
 
-    const intent = parseDirectGoogleWorkspaceIntent(message.content);
+    const intent = this.resolveDirectMailboxReadIntent('gmail', message.content, decision, continuityThread);
     if (!intent) return null;
+    const continuationKind = this.getDirectMailboxContinuationKind('gmail', intent.kind);
+    const priorWindow = continuationKind
+      ? readPagedListContinuationState(continuityThread, continuationKind)
+      : null;
+    const requestedWindow = continuationKind
+      ? resolvePagedListWindow({
+          continuityThread,
+          continuationKind,
+          content: message.content,
+          total: priorWindow?.total ?? Math.max(intent.count, 1),
+          turnRelation: decision?.turnRelation,
+          defaultPageSize: Math.max(intent.count, 1),
+        })
+      : null;
 
     const toolRequest = {
       origin: 'assistant' as const,
@@ -7204,7 +7354,11 @@ type DirectIntentShadowCandidate =
 
     const listParams: Record<string, unknown> = {
       userId: 'me',
-      maxResults: Math.max(intent.count, 1),
+      maxResults: Math.max(
+        intent.count,
+        1,
+        requestedWindow ? requestedWindow.offset + Math.max(requestedWindow.limit, 1) : 0,
+      ),
     };
     if (intent.kind === 'gmail_unread') {
       listParams.q = 'is:unread';
@@ -7266,7 +7420,29 @@ type DirectIntentShadowCandidate =
       ? output.messages as Array<{ id?: unknown }>
       : [];
     const resultSizeEstimate = output ? toNumber(output.resultSizeEstimate) : null;
-    const unreadCount = Math.max(resultSizeEstimate ?? 0, messages.length);
+    const totalMessages = Math.max(resultSizeEstimate ?? 0, messages.length, priorWindow?.total ?? 0);
+    const window = continuationKind
+      ? resolvePagedListWindow({
+          continuityThread,
+          continuationKind,
+          content: message.content,
+          total: totalMessages,
+          turnRelation: decision?.turnRelation,
+          defaultPageSize: Math.max(intent.count, 1),
+        })
+      : {
+          offset: 0,
+          limit: Math.min(messages.length, Math.max(intent.count, 1)),
+          total: totalMessages,
+        };
+    const pageMessages = messages.slice(window.offset, window.offset + window.limit);
+    const continuationState = continuationKind && (window.offset + pageMessages.length) < totalMessages
+      ? buildPagedListContinuationState(continuationKind, {
+          offset: window.offset,
+          limit: Math.max(pageMessages.length, window.limit),
+          total: totalMessages,
+        }) as unknown as Record<string, unknown>
+      : null;
 
     if (messages.length === 0) {
       if (intent.kind === 'gmail_recent_senders') {
@@ -7278,9 +7454,15 @@ type DirectIntentShadowCandidate =
       return 'I checked Gmail and found no unread messages.';
     }
 
-    const displayLimit = Math.min(messages.length, Math.max(intent.count, 1));
+    if (pageMessages.length === 0 && window.offset >= totalMessages) {
+      return continuationState
+        ? { content: 'No additional Gmail messages remain.', metadata: { continuationState } }
+        : 'No additional Gmail messages remain.';
+    }
+
+    const displayLimit = Math.min(pageMessages.length, Math.max(intent.count, 1));
     const summaries: GmailMessageSummary[] = [];
-    for (const entry of messages.slice(0, displayLimit)) {
+    for (const entry of pageMessages.slice(0, displayLimit)) {
       const id = toString(entry.id);
       if (!id) continue;
 
@@ -7308,7 +7490,7 @@ type DirectIntentShadowCandidate =
 
     if (intent.kind === 'gmail_recent_senders') {
       if (summaries.length === 0) {
-        return `I found ${messages.length} recent message${messages.length === 1 ? '' : 's'}, but I could not read their sender metadata.`;
+        return `I found ${pageMessages.length} recent message${pageMessages.length === 1 ? '' : 's'}, but I could not read their sender metadata.`;
       }
       const lines = [`The senders of the last ${summaries.length} email${summaries.length === 1 ? '' : 's'} are:`];
       for (const [index, summary] of summaries.entries()) {
@@ -7316,12 +7498,14 @@ type DirectIntentShadowCandidate =
         const subject = summary.subject || '(no subject)';
         lines.push(`${index + 1}. ${from} — ${subject}`);
       }
-      return lines.join('\n');
+      return continuationState
+        ? { content: lines.join('\n'), metadata: { continuationState } }
+        : lines.join('\n');
     }
 
     if (intent.kind === 'gmail_recent_summary') {
       if (summaries.length === 0) {
-        return `I found ${messages.length} recent message${messages.length === 1 ? '' : 's'}, but I could not read enough metadata to summarize them.`;
+        return `I found ${pageMessages.length} recent message${pageMessages.length === 1 ? '' : 's'}, but I could not read enough metadata to summarize them.`;
       }
       const lines = [`Here are the last ${summaries.length} email${summaries.length === 1 ? '' : 's'}:`];
       for (const [index, summary] of summaries.entries()) {
@@ -7331,15 +7515,17 @@ type DirectIntentShadowCandidate =
         if (summary.date) lines.push(`   ${summary.date}`);
         if (summary.snippet) lines.push(`   ${summary.snippet}`);
       }
-      return lines.join('\n');
+      return continuationState
+        ? { content: lines.join('\n'), metadata: { continuationState } }
+        : lines.join('\n');
     }
 
     const lines = [
-      `I checked Gmail and found ${unreadCount} unread message${unreadCount === 1 ? '' : 's'}.`,
+      `I checked Gmail and found ${totalMessages} unread message${totalMessages === 1 ? '' : 's'}.`,
     ];
 
     if (summaries.length === 0) {
-      for (const [index, entry] of messages.slice(0, displayLimit).entries()) {
+      for (const [index, entry] of pageMessages.slice(0, displayLimit).entries()) {
         const id = toString(entry.id);
         if (!id) continue;
         lines.push(`${index + 1}. Message ID: ${id}`);
@@ -7354,15 +7540,18 @@ type DirectIntentShadowCandidate =
       }
     }
 
-    if (unreadCount > displayLimit) {
-      lines.push(`...and ${unreadCount - displayLimit} more unread message${unreadCount - displayLimit === 1 ? '' : 's'}.`);
+    if (totalMessages > window.offset + displayLimit) {
+      const remaining = totalMessages - (window.offset + displayLimit);
+      lines.push(`...and ${remaining} more unread message${remaining === 1 ? '' : 's'}.`);
     }
 
     if (intent.kind === 'gmail_unread') {
       lines.push('Ask me to read or summarize any of these if you want the full details.');
     }
 
-    return lines.join('\n');
+    return continuationState
+      ? { content: lines.join('\n'), metadata: { continuationState } }
+      : lines.join('\n');
   }
 
   private async tryDirectMicrosoft365Write(
@@ -7472,11 +7661,27 @@ type DirectIntentShadowCandidate =
     message: UserMessage,
     ctx: AgentContext,
     userKey: string,
+    decision?: IntentGatewayDecision,
+    continuityThread?: ContinuityThreadRecord | null,
   ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.tools?.isEnabled()) return null;
 
-    const intent = parseDirectGoogleWorkspaceIntent(message.content);
+    const intent = this.resolveDirectMailboxReadIntent('m365', message.content, decision, continuityThread);
     if (!intent) return null;
+    const continuationKind = this.getDirectMailboxContinuationKind('m365', intent.kind);
+    const priorWindow = continuationKind
+      ? readPagedListContinuationState(continuityThread, continuationKind)
+      : null;
+    const requestedWindow = continuationKind
+      ? resolvePagedListWindow({
+          continuityThread,
+          continuationKind,
+          content: message.content,
+          total: priorWindow?.total ?? Math.max(intent.count, 1),
+          turnRelation: decision?.turnRelation,
+          defaultPageSize: Math.max(intent.count, 1),
+        })
+      : null;
 
     const toolRequest = {
       origin: 'assistant' as const,
@@ -7488,7 +7693,11 @@ type DirectIntentShadowCandidate =
     };
 
     const listParams: Record<string, unknown> = {
-      $top: Math.max(intent.count, 1),
+      $top: Math.max(
+        intent.count,
+        1,
+        requestedWindow ? requestedWindow.offset + Math.max(requestedWindow.limit, 1) : 0,
+      ),
       $select: 'id,subject,receivedDateTime,from,isRead',
       $orderby: 'receivedDateTime desc',
     };
@@ -7550,6 +7759,33 @@ type DirectIntentShadowCandidate =
     const messages = Array.isArray(output?.value)
       ? output.value.filter((entry): entry is Record<string, unknown> => isRecord(entry))
       : [];
+    const hasMore = Boolean(toString(output?.['@odata.nextLink']).trim());
+    const totalMessages = Math.max(
+      messages.length + (hasMore ? 1 : 0),
+      priorWindow?.total ?? 0,
+    );
+    const window = continuationKind
+      ? resolvePagedListWindow({
+          continuityThread,
+          continuationKind,
+          content: message.content,
+          total: totalMessages,
+          turnRelation: decision?.turnRelation,
+          defaultPageSize: Math.max(intent.count, 1),
+        })
+      : {
+          offset: 0,
+          limit: Math.min(messages.length, Math.max(intent.count, 1)),
+          total: totalMessages,
+        };
+    const pageMessages = messages.slice(window.offset, window.offset + window.limit);
+    const continuationState = continuationKind && ((window.offset + pageMessages.length) < totalMessages || hasMore)
+      ? buildPagedListContinuationState(continuationKind, {
+          offset: window.offset,
+          limit: Math.max(pageMessages.length, window.limit),
+          total: totalMessages,
+        }) as unknown as Record<string, unknown>
+      : null;
 
     if (messages.length === 0) {
       if (intent.kind === 'gmail_recent_senders') {
@@ -7561,42 +7797,140 @@ type DirectIntentShadowCandidate =
       return 'I checked Outlook and found no unread messages.';
     }
 
-    const displayLimit = Math.min(messages.length, Math.max(intent.count, 1));
+    if (pageMessages.length === 0 && window.offset >= totalMessages) {
+      return continuationState
+        ? { content: 'No additional Outlook messages remain.', metadata: { continuationState } }
+        : 'No additional Outlook messages remain.';
+    }
+
+    const displayLimit = Math.min(pageMessages.length, Math.max(intent.count, 1));
 
     if (intent.kind === 'gmail_recent_senders') {
       const lines = [`The senders of the last ${displayLimit} Outlook email${displayLimit === 1 ? '' : 's'} are:`];
-      for (const [index, entry] of messages.slice(0, displayLimit).entries()) {
+      for (const [index, entry] of pageMessages.slice(0, displayLimit).entries()) {
         const from = summarizeM365From(entry.from) || 'Unknown sender';
         const subject = toString(entry.subject) || '(no subject)';
         lines.push(`${index + 1}. ${from} — ${subject}`);
       }
-      return lines.join('\n');
+      return continuationState
+        ? { content: lines.join('\n'), metadata: { continuationState } }
+        : lines.join('\n');
     }
 
     if (intent.kind === 'gmail_recent_summary') {
       const lines = [`Here are the last ${displayLimit} Outlook email${displayLimit === 1 ? '' : 's'}:`];
-      for (const [index, entry] of messages.slice(0, displayLimit).entries()) {
+      for (const [index, entry] of pageMessages.slice(0, displayLimit).entries()) {
         const subject = toString(entry.subject) || '(no subject)';
         const from = summarizeM365From(entry.from) || 'Unknown sender';
         lines.push(`${index + 1}. ${subject} — ${from}`);
         const received = toString(entry.receivedDateTime);
         if (received) lines.push(`   ${received}`);
       }
-      return lines.join('\n');
+      return continuationState
+        ? { content: lines.join('\n'), metadata: { continuationState } }
+        : lines.join('\n');
     }
 
     const lines = [
       `Here are the latest ${displayLimit} unread Outlook message${displayLimit === 1 ? '' : 's'}:`,
     ];
-    for (const [index, entry] of messages.slice(0, displayLimit).entries()) {
+    for (const [index, entry] of pageMessages.slice(0, displayLimit).entries()) {
       const subject = toString(entry.subject) || '(no subject)';
       const from = summarizeM365From(entry.from) || 'Unknown sender';
       lines.push(`${index + 1}. ${subject} — ${from}`);
       const received = toString(entry.receivedDateTime);
       if (received) lines.push(`   ${received}`);
     }
+    if (totalMessages > window.offset + displayLimit) {
+      const remaining = totalMessages - (window.offset + displayLimit);
+      lines.push(`...and at least ${remaining} more unread Outlook message${remaining === 1 ? '' : 's'}.`);
+    }
     lines.push('Ask me to read or summarize any of these if you want the full details.');
-    return lines.join('\n');
+    return continuationState
+      ? { content: lines.join('\n'), metadata: { continuationState } }
+      : lines.join('\n');
+  }
+
+  private getDirectMailboxContinuationKind(
+    provider: 'gmail' | 'm365',
+    kind: NonNullable<ReturnType<typeof parseDirectGoogleWorkspaceIntent>>['kind'],
+  ): string {
+    if (provider === 'gmail') {
+      switch (kind) {
+        case 'gmail_recent_senders':
+          return GMAIL_RECENT_SENDERS_CONTINUATION_KIND;
+        case 'gmail_recent_summary':
+          return GMAIL_RECENT_SUMMARY_CONTINUATION_KIND;
+        case 'gmail_unread':
+        default:
+          return GMAIL_UNREAD_CONTINUATION_KIND;
+      }
+    }
+    switch (kind) {
+      case 'gmail_recent_senders':
+        return M365_RECENT_SENDERS_CONTINUATION_KIND;
+      case 'gmail_recent_summary':
+        return M365_RECENT_SUMMARY_CONTINUATION_KIND;
+      case 'gmail_unread':
+      default:
+        return M365_UNREAD_CONTINUATION_KIND;
+    }
+  }
+
+  private resolveDirectMailboxReadIntent(
+    provider: 'gmail' | 'm365',
+    content: string,
+    decision?: IntentGatewayDecision | null,
+    continuityThread?: ContinuityThreadRecord | null,
+  ): NonNullable<ReturnType<typeof parseDirectGoogleWorkspaceIntent>> | null {
+    const decisionDriven = this.resolveDecisionMailboxReadIntent(provider, content, decision);
+    if (decisionDriven) return decisionDriven;
+    const parsed = parseDirectGoogleWorkspaceIntent(content);
+    if (parsed) return parsed;
+    if (!hasPagedListFollowUpRequest(content, decision?.turnRelation)) {
+      return null;
+    }
+    const continuationKinds = provider === 'gmail'
+      ? [
+          [GMAIL_UNREAD_CONTINUATION_KIND, 'gmail_unread'],
+          [GMAIL_RECENT_SENDERS_CONTINUATION_KIND, 'gmail_recent_senders'],
+          [GMAIL_RECENT_SUMMARY_CONTINUATION_KIND, 'gmail_recent_summary'],
+        ] as const
+      : [
+          [M365_UNREAD_CONTINUATION_KIND, 'gmail_unread'],
+          [M365_RECENT_SENDERS_CONTINUATION_KIND, 'gmail_recent_senders'],
+          [M365_RECENT_SUMMARY_CONTINUATION_KIND, 'gmail_recent_summary'],
+        ] as const;
+    for (const [continuationKind, kind] of continuationKinds) {
+      const prior = readPagedListContinuationState(continuityThread, continuationKind);
+      if (!prior) continue;
+      return {
+        kind,
+        count: Math.max(1, prior.limit),
+      };
+    }
+    return null;
+  }
+
+  private resolveDecisionMailboxReadIntent(
+    provider: 'gmail' | 'm365',
+    content: string,
+    decision?: IntentGatewayDecision | null,
+  ): NonNullable<ReturnType<typeof parseDirectGoogleWorkspaceIntent>> | null {
+    if (!decision || decision.route !== 'email_task' || decision.operation !== 'read') {
+      return null;
+    }
+    const declaredProvider = decision.entities.emailProvider;
+    if (declaredProvider && ((provider === 'gmail' && declaredProvider !== 'gws')
+      || (provider === 'm365' && declaredProvider !== 'm365'))) {
+      return null;
+    }
+    const mailboxReadMode = decision.entities.mailboxReadMode;
+    if (!mailboxReadMode) return null;
+    return {
+      kind: mailboxReadMode === 'latest' ? 'gmail_recent_summary' : 'gmail_unread',
+      count: parseRequestedEmailCount(content),
+    };
   }
 
   private async resolveLatestUnreadGmailReplyTarget(

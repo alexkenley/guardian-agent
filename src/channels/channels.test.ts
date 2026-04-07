@@ -2889,6 +2889,36 @@ describe('WebChannel', () => {
     expect(body.capabilities.canManageProcesses).toBe(true);
   });
 
+  it('GET /api/performance/processes should return the live process list', async () => {
+    web = new WebChannel({
+      port: 18985,
+      authToken: TEST_TOKEN,
+      dashboard: {
+        onPerformanceProcesses: async () => ([
+          {
+            targetId: 'pid:200',
+            pid: 200,
+            name: 'Discord.exe',
+            memoryMb: 300,
+            protected: false,
+          },
+        ]),
+      },
+    });
+
+    await web.start(async () => ({ content: 'ok' }));
+
+    const res = await fetch('http://localhost:18985/api/performance/processes', { headers: authHeaders });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { processes: Array<{ name: string; pid: number }> };
+    expect(body.processes).toEqual([
+      expect.objectContaining({
+        name: 'Discord.exe',
+        pid: 200,
+      }),
+    ]);
+  });
+
   it('requires a privileged ticket for performance profile apply', async () => {
     const appliedProfiles: string[] = [];
     web = new WebChannel({

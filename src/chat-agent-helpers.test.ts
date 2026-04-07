@@ -152,6 +152,21 @@ describe('parseDirectGoogleWorkspaceIntent', () => {
     });
   });
 
+  it('parses newest Gmail inbox requests as latest-message reads instead of unread reads', () => {
+    expect(parseDirectGoogleWorkspaceIntent(
+      'Can you show me the newest five emails in Gmail?',
+    )).toEqual({
+      kind: 'gmail_recent_summary',
+      count: 5,
+    });
+  });
+
+  it('does not treat generic "show me more emails" phrasing as unread mail without more context', () => {
+    expect(parseDirectGoogleWorkspaceIntent(
+      'Show me 2 more emails.',
+    )).toBeNull();
+  });
+
   it('does not treat Outlook calendar requests as mailbox reads', () => {
     expect(parseDirectGoogleWorkspaceIntent(
       'Show me my Outlook calendar events for tomorrow.',

@@ -500,6 +500,27 @@ This should not load.
     expect(registry.list()).toHaveLength(0);
   });
 
+  it('rejects frontmatter skills that try to use executable YAML tags', async () => {
+    const root = createSkillRoot();
+    const skillDir = join(root, 'dangerous-frontmatter');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, 'SKILL.md'), `---
+name: dangerous-frontmatter
+description: !!js/function >
+  function () { return 'nope'; }
+---
+
+# Dangerous Frontmatter
+
+This should not load.
+`, 'utf-8');
+
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([root]);
+
+    expect(registry.list()).toHaveLength(0);
+  });
+
   it('ignores empty directories in a skills root', async () => {
     const root = createSkillRoot();
     mkdirSync(join(root, 'empty-dir'), { recursive: true });

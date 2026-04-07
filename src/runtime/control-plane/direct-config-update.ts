@@ -424,6 +424,118 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
           }
         }
 
+        const performanceUpdates = updates.assistant?.performance;
+        if (performanceUpdates && typeof performanceUpdates === 'object') {
+          rawConfig.assistant = rawConfig.assistant ?? {};
+          const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+          rawAssistant.performance = (rawAssistant.performance as Record<string, unknown> | undefined) ?? {};
+          const rawPerformance = rawAssistant.performance as Record<string, unknown>;
+
+          if (typeof performanceUpdates.enabled === 'boolean') {
+            rawPerformance.enabled = performanceUpdates.enabled;
+          }
+          if (typeof performanceUpdates.sampleIntervalSec === 'number' && Number.isFinite(performanceUpdates.sampleIntervalSec)) {
+            rawPerformance.sampleIntervalSec = performanceUpdates.sampleIntervalSec;
+          }
+          if (typeof performanceUpdates.trendRetentionDays === 'number' && Number.isFinite(performanceUpdates.trendRetentionDays)) {
+            rawPerformance.trendRetentionDays = performanceUpdates.trendRetentionDays;
+          }
+
+          const protectedProcessesUpdates = performanceUpdates.protectedProcesses;
+          if (protectedProcessesUpdates && typeof protectedProcessesUpdates === 'object') {
+            rawPerformance.protectedProcesses = (rawPerformance.protectedProcesses as Record<string, unknown> | undefined) ?? {};
+            const rawProtectedProcesses = rawPerformance.protectedProcesses as Record<string, unknown>;
+            if (Array.isArray(protectedProcessesUpdates.names)) {
+              rawProtectedProcesses.names = protectedProcessesUpdates.names
+                .map((name) => options.trimOrUndefined(name))
+                .filter((name): name is string => !!name);
+            }
+            if (typeof protectedProcessesUpdates.honorActiveCodeSessions === 'boolean') {
+              rawProtectedProcesses.honorActiveCodeSessions = protectedProcessesUpdates.honorActiveCodeSessions;
+            }
+          }
+
+          if (Array.isArray(performanceUpdates.profiles)) {
+            rawPerformance.profiles = performanceUpdates.profiles.map((profile) => {
+              const nextProfile: Record<string, unknown> = {
+                id: profile.id.trim(),
+                name: profile.name.trim(),
+              };
+
+              if (
+                profile.powerMode === 'balanced'
+                || profile.powerMode === 'high_performance'
+                || profile.powerMode === 'power_saver'
+              ) {
+                nextProfile.powerMode = profile.powerMode;
+              }
+
+              if (profile.autoActions && typeof profile.autoActions === 'object') {
+                const allowedActionIds = Array.isArray(profile.autoActions.allowedActionIds)
+                  ? profile.autoActions.allowedActionIds
+                    .map((actionId) => options.trimOrUndefined(actionId))
+                    .filter((actionId): actionId is string => !!actionId)
+                  : [];
+                if (typeof profile.autoActions.enabled === 'boolean' || allowedActionIds.length > 0) {
+                  nextProfile.autoActions = {
+                    enabled: profile.autoActions.enabled === true,
+                    allowedActionIds,
+                  };
+                }
+              }
+
+              if (profile.processRules && typeof profile.processRules === 'object') {
+                const terminate = Array.isArray(profile.processRules.terminate)
+                  ? profile.processRules.terminate
+                    .map((name) => options.trimOrUndefined(name))
+                    .filter((name): name is string => !!name)
+                  : [];
+                const protect = Array.isArray(profile.processRules.protect)
+                  ? profile.processRules.protect
+                    .map((name) => options.trimOrUndefined(name))
+                    .filter((name): name is string => !!name)
+                  : [];
+                if (terminate.length > 0 || protect.length > 0) {
+                  nextProfile.processRules = {};
+                  if (terminate.length > 0) {
+                    (nextProfile.processRules as Record<string, unknown>).terminate = terminate;
+                  }
+                  if (protect.length > 0) {
+                    (nextProfile.processRules as Record<string, unknown>).protect = protect;
+                  }
+                }
+              }
+
+              if (Array.isArray(profile.latencyTargets)) {
+                const latencyTargets = profile.latencyTargets
+                  .map((target) => {
+                    const id = options.trimOrUndefined(target.id);
+                    if (!id) return null;
+                    const normalizedTarget = options.trimOrUndefined(target.target);
+                    const normalizedTargetRef = options.trimOrUndefined(target.targetRef);
+                    const nextTarget: Record<string, unknown> = {
+                      kind: target.kind,
+                      id,
+                    };
+                    if (normalizedTarget) {
+                      nextTarget.target = normalizedTarget;
+                    }
+                    if (normalizedTargetRef) {
+                      nextTarget.targetRef = normalizedTargetRef;
+                    }
+                    return nextTarget;
+                  })
+                  .filter((target): target is Record<string, unknown> => target !== null);
+                if (latencyTargets.length > 0) {
+                  nextProfile.latencyTargets = latencyTargets;
+                }
+              }
+
+              return nextProfile;
+            });
+          }
+        }
+
         const notificationUpdates = updates.assistant?.notifications;
         if (notificationUpdates && typeof notificationUpdates === 'object') {
           rawConfig.assistant = rawConfig.assistant ?? {};

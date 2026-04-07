@@ -18,6 +18,12 @@ import {
   type SavedAutomationCatalogSelection,
 } from './automation-catalog.js';
 import { extractAutomationListEntries } from './automation-tool-results.js';
+import type { ContinuityThreadRecord } from './continuity-threads.js';
+import {
+  buildPagedListContinuationState,
+  resolvePagedListWindow,
+  type PagedListWindow,
+} from './list-continuation.js';
 
 export interface AutomationControlPendingApprovalMetadata {
   id: string;
@@ -31,6 +37,7 @@ export interface AutomationControlPreRouteResult {
   metadata?: {
     pendingAction?: Record<string, unknown>;
     clarification?: Record<string, unknown>;
+    continuationState?: Record<string, unknown> | null;
   };
 }
 
@@ -44,6 +51,7 @@ type AutomationControlToolName =
 interface AutomationControlPreRouteParams {
   agentId: string;
   message: UserMessage;
+  continuityThread?: ContinuityThreadRecord | null;
   checkAction?: AgentContext['checkAction'];
   executeTool: (
     toolName: AutomationControlToolName,
@@ -57,10 +65,11 @@ interface AutomationControlPreRouteParams {
 }
 
 interface AutomationControlIntent {
-  operation: 'delete' | 'toggle' | 'run' | 'inspect' | 'clone' | 'update' | 'unknown';
+  operation: 'delete' | 'toggle' | 'run' | 'inspect' | 'read' | 'clone' | 'update' | 'unknown';
   automationName?: string;
   newAutomationName?: string;
   enabled?: boolean;
+  turnRelation?: IntentGatewayDecision['turnRelation'];
 }
 
 interface AutomationCatalogLookupResult {
@@ -80,6 +89,9 @@ interface AutomationControlUpdateRequest {
   schedule?: AutomationScheduleChange;
   needsScheduleClarification?: boolean;
 }
+
+const AUTOMATION_CATALOG_CONTINUATION_KIND = 'automation_catalog_list';
+const DEFAULT_AUTOMATION_CATALOG_PAGE_SIZE = 20;
 
 export async function tryAutomationControlPreRoute(
   params: AutomationControlPreRouteParams,
@@ -102,15 +114,45 @@ export async function tryAutomationControlPreRoute(
     : null;
   const selection = resolvedSelection && (resolvedSelection.matchType !== 'closest'
     || intent.operation === 'inspect'
+    || intent.operation === 'read'
     || intent.operation === 'run')
     ? resolvedSelection
     : null;
-  const selected = selection?.entry ?? null;
+  const recentFollowUpSelection = !selection
+    ? resolveRecentFollowUpAutomationSelection(catalog, intent, params.message.content)
+    : null;
+  const selected = selection?.entry ?? recentFollowUpSelection?.entry ?? null;
+  const selectionLead = buildAutomationSelectionLead(
+    selection,
+    recentFollowUpSelection,
+    intent.automationName,
+  );
 
-  if (intent.operation === 'inspect') {
-    return {
-      content: renderAutomationInspectCopy(catalog, selected, catalogLookup.error, selection, intent.automationName),
-    };
+  if (intent.operation === 'inspect' || intent.operation === 'read') {
+    const listWindow = !selected
+      ? resolveAutomationCatalogListWindow(catalog, params.continuityThread, intent, params.message.content)
+      : null;
+    const result = withAutomationCatalogContinuation(
+      {
+        content: renderAutomationInspectCopy(
+          catalog,
+          selected,
+          catalogLookup.error,
+          selection,
+          intent.automationName,
+          listWindow ?? undefined,
+        ),
+      },
+      listWindow
+        ? buildAutomationCatalogContinuationState(listWindow)
+        : null,
+    );
+    return selectionLead
+      ? {
+          ...result,
+          content: `${selectionLead}\n\n${result.content}`,
+        }
+      : result;
   }
 
   if (!intent.automationName) {
@@ -135,13 +177,37 @@ export async function tryAutomationControlPreRoute(
 
   switch (intent.operation) {
     case 'run':
-      return runAutomationEntry(params, toolRequest, selected, selection, intent.automationName);
+      return withAutomationSelectionLead(
+        withAutomationCatalogContinuation(
+          await runAutomationEntry(params, toolRequest, selected, selection, intent.automationName),
+          null,
+        ),
+        selectionLead,
+      );
     case 'update':
-      return updateAutomationEntry(params, toolRequest, selected, catalog, intent);
+      return withAutomationSelectionLead(
+        withAutomationCatalogContinuation(
+          await updateAutomationEntry(params, toolRequest, selected, catalog, intent),
+          null,
+        ),
+        selectionLead,
+      );
     case 'toggle':
-      return toggleAutomationEntry(params, toolRequest, selected, intent.enabled);
+      return withAutomationSelectionLead(
+        withAutomationCatalogContinuation(
+          await toggleAutomationEntry(params, toolRequest, selected, intent.enabled),
+          null,
+        ),
+        selectionLead,
+      );
     case 'delete':
-      return deleteAutomationEntry(params, toolRequest, selected);
+      return withAutomationSelectionLead(
+        withAutomationCatalogContinuation(
+          await deleteAutomationEntry(params, toolRequest, selected),
+          null,
+        ),
+        selectionLead,
+      );
     default:
       return null;
   }
@@ -171,11 +237,11 @@ async function listAutomationCatalog(
 }
 
 function resolveAutomationControlIntent(
-  _content: string,
+  content: string,
   decision?: IntentGatewayDecision | null,
 ): AutomationControlIntent | null {
   if (decision) {
-    const routed = resolveDecisionBackedIntent(decision);
+    const routed = resolveDecisionBackedIntent(decision, content);
     if (routed) return routed;
   }
   return null;
@@ -183,6 +249,7 @@ function resolveAutomationControlIntent(
 
 function resolveDecisionBackedIntent(
   decision: IntentGatewayDecision,
+  content: string,
 ): AutomationControlIntent | null {
   const route = decision.route;
   const automationsSurface = decision.entities.uiSurface === 'automations';
@@ -190,18 +257,38 @@ function resolveDecisionBackedIntent(
     return null;
   }
 
-  if (!['delete', 'toggle', 'run', 'inspect', 'clone', 'update'].includes(decision.operation)) {
+  if (!['delete', 'toggle', 'run', 'inspect', 'read', 'clone', 'update'].includes(decision.operation)) {
     return null;
   }
 
+  const enabled = typeof decision.entities.enabled === 'boolean'
+    ? decision.entities.enabled
+    : inferExplicitAutomationToggle(content, decision.operation);
+  const operation = decision.operation === 'update' && typeof enabled === 'boolean'
+    ? 'toggle'
+    : decision.operation;
+
   return {
-    operation: decision.operation as AutomationControlIntent['operation'],
+    operation: operation as AutomationControlIntent['operation'],
     automationName: decision.entities.automationName,
     newAutomationName: decision.entities.newAutomationName,
-    ...(typeof decision.entities.enabled === 'boolean'
-      ? { enabled: decision.entities.enabled }
+    ...(typeof enabled === 'boolean'
+      ? { enabled }
       : {}),
+    turnRelation: decision.turnRelation,
   };
+}
+
+function inferExplicitAutomationToggle(
+  content: string,
+  operation: string,
+): boolean | undefined {
+  if (operation !== 'update') return undefined;
+  const text = content.trim().toLowerCase();
+  if (!text) return undefined;
+  if (/\bdisable\b/.test(text)) return false;
+  if (/\benable\b/.test(text)) return true;
+  return undefined;
 }
 
 function renderAutomationInspectCopy(
@@ -210,6 +297,7 @@ function renderAutomationInspectCopy(
   error?: string,
   selection?: SavedAutomationCatalogSelection | null,
   requestedName?: string,
+  listWindow?: PagedListWindow,
 ): string {
   const lines: string[] = [];
   if (selection && requestedName?.trim() && selection.matchType === 'closest') {
@@ -250,15 +338,71 @@ function renderAutomationInspectCopy(
       : 'There are no automations in the catalog.';
   }
 
-  const listLines = [`Automation catalog (${catalog.length}):`];
-  for (const entry of catalog.slice(0, 20)) {
+  const sortedCatalog = [...catalog].sort((left, right) => {
+    const createdDelta = getAutomationCatalogEntryCreatedAt(right) - getAutomationCatalogEntryCreatedAt(left);
+    if (createdDelta !== 0) return createdDelta;
+    return left.name.localeCompare(right.name);
+  });
+  const window = listWindow ?? {
+    offset: 0,
+    limit: Math.min(DEFAULT_AUTOMATION_CATALOG_PAGE_SIZE, sortedCatalog.length),
+    total: sortedCatalog.length,
+  };
+  const pageEntries = sortedCatalog.slice(window.offset, window.offset + window.limit);
+  const rangeStart = pageEntries.length > 0 ? window.offset + 1 : 0;
+  const rangeEnd = pageEntries.length > 0 ? window.offset + pageEntries.length : window.offset;
+  const listLines = [
+    pageEntries.length > 0
+      ? `Automation catalog (${catalog.length}): showing ${rangeStart}-${rangeEnd}`
+      : `Automation catalog (${catalog.length}):`,
+  ];
+  if (pageEntries.length === 0 && window.offset >= sortedCatalog.length) {
+    listLines.push('- No additional automations remain.');
+    return listLines.join('\n');
+  }
+  for (const entry of pageEntries) {
     const schedule = toString(entry.task?.cron) || readEventType(entry.task) || 'manual';
     listLines.push(`- ${entry.name} [${entry.kind === 'workflow' ? 'workflow' : entry.kind === 'assistant_task' ? 'assistant' : 'task'} · ${entry.builtin ? 'catalog' : (entry.enabled ? 'enabled' : 'disabled')} · ${schedule}]`);
   }
-  if (catalog.length > 20) {
-    listLines.push(`- ...and ${catalog.length - 20} more`);
+  if (window.offset + pageEntries.length < catalog.length) {
+    listLines.push(`- ...and ${catalog.length - (window.offset + pageEntries.length)} more`);
   }
   return listLines.join('\n');
+}
+
+function resolveAutomationCatalogListWindow(
+  catalog: SavedAutomationCatalogEntry[],
+  continuityThread: ContinuityThreadRecord | null | undefined,
+  intent: AutomationControlIntent,
+  content: string,
+): PagedListWindow {
+  return resolvePagedListWindow({
+    continuityThread,
+    continuationKind: AUTOMATION_CATALOG_CONTINUATION_KIND,
+    content,
+    total: catalog.length,
+    turnRelation: intent.turnRelation,
+    defaultPageSize: DEFAULT_AUTOMATION_CATALOG_PAGE_SIZE,
+  });
+}
+
+function buildAutomationCatalogContinuationState(
+  listWindow: PagedListWindow,
+): Record<string, unknown> {
+  return buildPagedListContinuationState(AUTOMATION_CATALOG_CONTINUATION_KIND, listWindow) as unknown as Record<string, unknown>;
+}
+
+function withAutomationCatalogContinuation(
+  result: AutomationControlPreRouteResult,
+  continuationState: Record<string, unknown> | null,
+): AutomationControlPreRouteResult {
+  return {
+    ...result,
+    metadata: {
+      ...(result.metadata ?? {}),
+      continuationState,
+    },
+  };
 }
 
 function looksLikeAutomationOutputAnalysisRequest(content: string): boolean {
@@ -977,6 +1121,62 @@ function buildAutomationControlIntentEntities(
     ...(intent.newAutomationName ? { newAutomationName: intent.newAutomationName } : {}),
     ...(typeof intent.enabled === 'boolean' ? { enabled: intent.enabled } : {}),
   };
+}
+
+function resolveRecentFollowUpAutomationSelection(
+  catalog: SavedAutomationCatalogEntry[],
+  intent: AutomationControlIntent,
+  content: string,
+): SavedAutomationCatalogSelection | null {
+  if (intent.turnRelation !== 'follow_up' && intent.turnRelation !== 'clarification_answer') {
+    return null;
+  }
+  if (!/\b(that|it|just created|new one|newly created|latest|most recent)\b/i.test(content)) {
+    return null;
+  }
+  const ranked = catalog
+    .filter((entry) => !entry.builtin && getAutomationCatalogEntryCreatedAt(entry) > 0)
+    .sort((left, right) => getAutomationCatalogEntryCreatedAt(right) - getAutomationCatalogEntryCreatedAt(left));
+  const newest = ranked[0];
+  const second = ranked[1];
+  if (!newest) return null;
+  if (second && getAutomationCatalogEntryCreatedAt(second) === getAutomationCatalogEntryCreatedAt(newest)) {
+    return null;
+  }
+  return {
+    entry: newest,
+    matchType: 'closest',
+  };
+}
+
+function buildAutomationSelectionLead(
+  _selection: SavedAutomationCatalogSelection | null,
+  recentFollowUpSelection: SavedAutomationCatalogSelection | null,
+  requestedName?: string,
+): string {
+  if (recentFollowUpSelection) {
+    return requestedName?.trim()
+      ? `I couldn't find an exact automation named '${requestedName}'. I used the most recently created automation from this conversation: '${recentFollowUpSelection.entry.name}'.`
+      : `I used the most recently created automation from this conversation: '${recentFollowUpSelection.entry.name}'.`;
+  }
+  return '';
+}
+
+function withAutomationSelectionLead(
+  result: AutomationControlPreRouteResult,
+  lead: string,
+): AutomationControlPreRouteResult {
+  if (!lead.trim()) return result;
+  return {
+    ...result,
+    content: `${lead}\n\n${result.content}`,
+  };
+}
+
+function getAutomationCatalogEntryCreatedAt(entry: SavedAutomationCatalogEntry): number {
+  return Number.isFinite(entry.task?.createdAt)
+    ? Number(entry.task?.createdAt)
+    : 0;
 }
 
 function normalizeAutomationName(value: string): string {

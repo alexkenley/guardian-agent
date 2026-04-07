@@ -1075,7 +1075,9 @@ export interface PerformanceProcessSummary {
   pid: number;
   name: string;
   cpuPercent?: number;
+  cpuTimeSec?: number;
   memoryMb?: number;
+  executablePath?: string;
   protected?: boolean;
   protectionReason?: string;
 }
@@ -1088,6 +1090,12 @@ export interface PerformanceProfileSummary {
   allowedActionIds: string[];
   terminateProcessNames: string[];
   protectProcessNames: string[];
+  latencyTargets?: Array<{
+    id: string;
+    kind: 'internet' | 'api';
+    target?: string;
+    targetRef?: string;
+  }>;
 }
 
 export interface PerformanceLatencyStatus {
@@ -1145,6 +1153,7 @@ export interface PerformanceStatus {
 /** Dashboard API callbacks supplied by index.ts to WebChannel. */
 export interface DashboardCallbacks {
   onPerformanceStatus?: () => Promise<PerformanceStatus>;
+  onPerformanceProcesses?: () => Promise<PerformanceProcessSummary[]>;
   onPerformanceApplyProfile?: (profileId: string) => Promise<{ success: boolean; message: string }>;
   onPerformancePreviewAction?: (actionId: string) => Promise<PerformanceActionPreview>;
   onPerformanceRunAction?: (action: ApprovedPerformanceAction) => Promise<{ success: boolean; message: string }>;
@@ -1848,6 +1857,34 @@ export interface ConfigUpdate {
         maxEmbeddingCacheBytes?: number;
         autoFlush?: boolean;
       };
+    };
+    performance?: {
+      enabled?: boolean;
+      sampleIntervalSec?: number;
+      trendRetentionDays?: number;
+      protectedProcesses?: {
+        names?: string[];
+        honorActiveCodeSessions?: boolean;
+      };
+      profiles?: Array<{
+        id: string;
+        name: string;
+        powerMode?: 'balanced' | 'high_performance' | 'power_saver';
+        autoActions?: {
+          enabled?: boolean;
+          allowedActionIds?: string[];
+        };
+        processRules?: {
+          terminate?: string[];
+          protect?: string[];
+        };
+        latencyTargets?: Array<{
+          kind: 'internet' | 'api';
+          id: string;
+          target?: string;
+          targetRef?: string;
+        }>;
+      }>;
     };
     tools?: {
       preferredProviders?: {

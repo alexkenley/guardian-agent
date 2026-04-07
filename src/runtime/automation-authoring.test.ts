@@ -45,6 +45,18 @@ describe('compileAutomationAuthoringRequest', () => {
     expect(compilation?.taskCreate?.maxRunsPerWindow).toBeGreaterThanOrEqual(5);
   });
 
+  it('assigns a semantic name to weekday Outlook inbox summary automations', () => {
+    const compilation = compileAutomationAuthoringRequest(
+      'Create an automation that every weekday at 8:30 AM checks my unread Outlook mail and writes a short summary to my notes.',
+      { channel: 'web', userId: 'owner' },
+    );
+
+    expect(compilation).not.toBeNull();
+    expect(compilation?.shape).toBe('scheduled_agent');
+    expect(compilation?.name).toBe('Weekday Outlook Inbox Summary');
+    expect(compilation?.taskCreate?.cron).toBe('30 8 * * 1-5');
+  });
+
   it('does not misname non-inbox automations as Gmail inbox review just because they draft an email', () => {
     const compilation = compileAutomationAuthoringRequest(
       'Create a daily 8:00 AM automation that reads ./companies.csv, fetches https://example.com, writes a summary report to C:\\Temp\\lead-summary.md, and drafts an email with the summary using built-in Guardian tools only.',

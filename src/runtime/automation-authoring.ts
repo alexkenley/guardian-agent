@@ -972,8 +972,20 @@ function inferAutomationName(text: string, schedule: AutomationScheduleSpec | nu
     return `${schedulePrefix}${deterministicWorkflow.name}`.trim();
   }
 
+  if (/\b(outlook|microsoft 365|office 365|m365)\b/.test(lower)
+    && /\b(unread|inbox|mail|email)\b/.test(lower)
+  ) {
+    const label = /\b(summary|summari[sz]e|notes?)\b/.test(lower)
+      ? 'Outlook Inbox Summary'
+      : 'Outlook Inbox Review';
+    return `${schedulePrefix}${label}`.trim();
+  }
+
   if (/\b(gmail|inbox)\b/.test(lower) || /\bhigh[- ]priority\s+email\b/.test(lower)) {
-    return `${schedulePrefix}Gmail Inbox Review`.trim();
+    const label = /\b(summary|summari[sz]e|notes?)\b/.test(lower)
+      ? 'Gmail Inbox Summary'
+      : 'Gmail Inbox Review';
+    return `${schedulePrefix}${label}`.trim();
   }
   if (/\blead research\b/.test(lower) || (/\bcompany\b/.test(lower) && /\bicp\b/.test(lower))) {
     return `${schedulePrefix}Lead Research`.trim();

@@ -254,6 +254,60 @@ describe('tryBrowserPreRoute', () => {
     });
   });
 
+  it('continues browser link lists from the prior window on follow-up requests', async () => {
+    const executeTool = vi.fn(async (toolName: string) => {
+      if (toolName !== 'browser_links') {
+        throw new Error(`Unexpected tool ${toolName}`);
+      }
+      return {
+        success: true,
+        status: 'succeeded',
+        message: 'Extracted 25 links from https://example.com.',
+        output: {
+          url: 'https://example.com',
+          links: Array.from({ length: 25 }, (_, index) => ({
+            text: `Link ${index + 1}`,
+            href: `https://example.com/${index + 1}`,
+          })),
+        },
+      };
+    });
+
+    const result = await tryBrowserPreRoute({
+      agentId: 'test-agent',
+      message: {
+        id: 'msg-links-follow-up',
+        userId: 'user-1',
+        channel: 'web',
+        content: 'Show me the additional 5 links.',
+        timestamp: Date.now(),
+      },
+      continuityThread: {
+        continuityKey: 'default:user-1',
+        scope: { assistantId: 'test-agent', userId: 'user-1' },
+        linkedSurfaces: [],
+        continuationState: {
+          kind: 'browser_links_list',
+          payload: { offset: 0, limit: 20, total: 25 },
+        },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+      executeTool,
+    }, {
+      intentDecision: {
+        ...browserIntentDecision,
+        turnRelation: 'follow_up',
+      },
+    });
+
+    expect(result?.content).toContain('Link 21 → https://example.com/21');
+    expect(result?.content).toContain('Link 25 → https://example.com/25');
+    expect(result?.content).not.toContain('Link 1 → https://example.com/1');
+    expect(result?.metadata?.continuationState).toBeUndefined();
+  });
+
   it('renders read and extract details from nested browser output payloads', async () => {
     const executeTool = vi.fn(async (toolName: string, args: Record<string, unknown>) => {
       if (toolName === 'browser_read') {

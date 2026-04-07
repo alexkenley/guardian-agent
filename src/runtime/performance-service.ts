@@ -26,16 +26,107 @@ const HISTORY_LIMIT = 20;
 const LATENCY_TIMEOUT_MS = 1_500;
 const PERFORMANCE_ACTION_RUN_AUDIT_TYPE = 'performance.action_run';
 const PERFORMANCE_PROFILE_APPLIED_AUDIT_TYPE = 'performance.profile_applied';
-const COMMON_BACKGROUND_PROCESSES = new Set([
+const BACKGROUND_APP_PROCESSES = new Set([
   'discord',
   'spotify',
   'slack',
   'teams',
+  'msteams',
+  'telegram',
+  'whatsapp',
+  'signal',
+  'zoom',
+  'webex',
   'steam',
+  'steamwebhelper',
   'epicgameslauncher',
+  'epicwebhelper',
+  'battlenet',
+  'battle.net',
+  'riotclientservices',
+  'riotclientux',
+  'ubisoftconnect',
   'onedrive',
   'googledrivefs',
   'dropbox',
+  'notion',
+  'obsidian',
+  'postman',
+  'music',
+  'applemusic',
+]);
+const DEVELOPMENT_PROCESSES = new Set([
+  'code',
+  'code-insiders',
+  'cursor',
+  'windsurf',
+  'devenv',
+  'idea64',
+  'studio64',
+  'rider64',
+  'webstorm64',
+  'phpstorm64',
+  'pycharm64',
+  'goland64',
+  'clion64',
+  'rubymine64',
+  'node',
+  'npm',
+  'npx',
+  'pnpm',
+  'yarn',
+  'git',
+  'bash',
+  'zsh',
+  'sh',
+  'pwsh',
+  'powershell',
+  'cmd',
+  'wsl',
+  'docker',
+  'dockerdesktop',
+  'com.docker.backend',
+  'com.docker.frontend',
+  'ollama',
+  'tmux',
+  'screen',
+]);
+const SYSTEM_PROCESSES = new Set([
+  'system',
+  'system idle process',
+  'svchost',
+  'services',
+  'lsass',
+  'wininit',
+  'winlogon',
+  'dwm',
+  'explorer',
+  'csrss',
+  'smss',
+  'registry',
+  'taskhostw',
+  'searchindexer',
+  'searchhost',
+  'securityhealthservice',
+  'fontdrvhost',
+  'spoolsv',
+  'memorycompression',
+  'init',
+  'systemd',
+  'launchd',
+  'kernel_task',
+  'windowserver',
+  'loginwindow',
+]);
+const BROWSER_PROCESSES = new Set([
+  'chrome',
+  'msedge',
+  'firefox',
+  'safari',
+  'arc',
+  'brave',
+  'opera',
+  'edgewebview2',
 ]);
 
 interface PerformanceServiceOptions {
@@ -89,6 +180,12 @@ function toProfileSummary(profile: PerformanceProfileConfig): PerformanceProfile
     allowedActionIds: dedupeStrings(profile.autoActions?.allowedActionIds),
     terminateProcessNames: dedupeStrings(profile.processRules?.terminate),
     protectProcessNames: dedupeStrings(profile.processRules?.protect),
+    latencyTargets: (profile.latencyTargets ?? []).map((target) => ({
+      id: target.id,
+      kind: target.kind,
+      target: target.target?.trim() || undefined,
+      targetRef: target.targetRef?.trim() || undefined,
+    })),
   };
 }
 
@@ -124,6 +221,75 @@ function toHistoryEntryFromAuditEvent(event: AuditEvent): PerformanceActionHisto
 function historySequence(entry: PerformanceActionHistoryEntry): number {
   const match = entry.id.match(/-(\d+)$/);
   return match ? Number(match[1]) : 0;
+}
+
+function previewRiskForProcess(processInfo: PerformanceProcessSummary): 'low' | 'medium' | 'high' {
+  const cpuPercent = processInfo.cpuPercent ?? 0;
+  const memoryMb = processInfo.memoryMb ?? 0;
+  if (cpuPercent >= 20 || memoryMb >= 900) return 'high';
+  if (cpuPercent >= 10 || memoryMb >= 500) return 'medium';
+  return 'low';
+}
+
+function previewScoreForProcess(processInfo: PerformanceProcessSummary): number {
+  const cpuPercent = processInfo.cpuPercent ?? 0;
+  const memoryMb = processInfo.memoryMb ?? 0;
+  return Math.min(cpuPercent * 2, 80) + Math.min(memoryMb / 32, 60);
+}
+
+function shouldSuppressHeuristicProcess(name: string): boolean {
+  return DEVELOPMENT_PROCESSES.has(name) || SYSTEM_PROCESSES.has(name) || BROWSER_PROCESSES.has(name);
+}
+
+function describeHeuristicProcessTarget(processInfo: PerformanceProcessSummary): {
+  suggestedReason: string;
+  score: number;
+  checkedByDefault: boolean;
+} | null {
+  const normalizedName = normalizeProcessName(processInfo.name);
+  if (shouldSuppressHeuristicProcess(normalizedName)) {
+    return null;
+  }
+
+  const cpuPercent = processInfo.cpuPercent ?? 0;
+  const memoryMb = processInfo.memoryMb ?? 0;
+  const isBackgroundApp = BACKGROUND_APP_PROCESSES.has(normalizedName);
+  const heavyCpu = cpuPercent >= 8;
+  const heavyMemory = memoryMb >= 500;
+
+  if (!isBackgroundApp && !heavyCpu && !heavyMemory) {
+    return null;
+  }
+
+  if (isBackgroundApp) {
+    return {
+      suggestedReason: 'Looks like a non-essential background app that is usually safe to close during focused work.',
+      score: 120 + previewScoreForProcess(processInfo),
+      checkedByDefault: previewRiskForProcess(processInfo) !== 'high',
+    };
+  }
+
+  if (heavyCpu && heavyMemory) {
+    return {
+      suggestedReason: 'Using notable CPU and memory without being protected by the active profile.',
+      score: 85 + previewScoreForProcess(processInfo),
+      checkedByDefault: false,
+    };
+  }
+
+  if (heavyCpu) {
+    return {
+      suggestedReason: 'Using notable CPU without being protected by the active profile.',
+      score: 70 + previewScoreForProcess(processInfo),
+      checkedByDefault: false,
+    };
+  }
+
+  return {
+    suggestedReason: 'Using notable memory without being protected by the active profile.',
+    score: 65 + previewScoreForProcess(processInfo),
+    checkedByDefault: false,
+  };
 }
 
 export class PerformanceService {
@@ -191,23 +357,69 @@ export class PerformanceService {
     const protectionReasons = this.getProtectionReasons(profile);
     const terminateNames = dedupeStrings(profile?.processRules?.terminate);
     const terminateSet = new Set(terminateNames.map((name) => normalizeProcessName(name)));
+    const explicitCandidates: Array<{
+      processInfo: PerformanceProcessSummary;
+      suggestedReason: string;
+      checkedByDefault: boolean;
+      risk: 'low' | 'medium' | 'high';
+      score: number;
+    }> = [];
+    const heuristicCandidates: Array<{
+      processInfo: PerformanceProcessSummary;
+      suggestedReason: string;
+      checkedByDefault: boolean;
+      risk: 'low' | 'medium' | 'high';
+      score: number;
+    }> = [];
 
-    let candidates = processes.filter((processInfo) => terminateSet.has(normalizeProcessName(processInfo.name)));
-    if (candidates.length === 0 && terminateSet.size === 0) {
-      candidates = processes.filter((processInfo) => COMMON_BACKGROUND_PROCESSES.has(normalizeProcessName(processInfo.name)));
+    for (const processInfo of processes) {
+      const decoratedProcess = this.decorateProcess(processInfo, protectionReasons);
+      const normalizedName = normalizeProcessName(processInfo.name);
+      const risk = previewRiskForProcess(decoratedProcess);
+      const blockedReason = decoratedProcess.protectionReason;
+
+      if (terminateSet.has(normalizedName)) {
+        explicitCandidates.push({
+          processInfo: decoratedProcess,
+          suggestedReason: 'Matched an active profile terminate rule.',
+          checkedByDefault: !blockedReason,
+          risk,
+          score: 1_000 + previewScoreForProcess(decoratedProcess),
+        });
+        continue;
+      }
+
+      const heuristic = describeHeuristicProcessTarget(decoratedProcess);
+      if (!heuristic) {
+        continue;
+      }
+
+      heuristicCandidates.push({
+        processInfo: decoratedProcess,
+        suggestedReason: heuristic.suggestedReason,
+        checkedByDefault: heuristic.checkedByDefault && !blockedReason,
+        risk,
+        score: heuristic.score,
+      });
     }
 
+    const rankedCandidates = [
+      ...explicitCandidates.sort((left, right) => right.score - left.score),
+      ...heuristicCandidates
+        .sort((left, right) => right.score - left.score)
+        .slice(0, explicitCandidates.length > 0 ? 4 : 6),
+    ];
+
     const seen = new Set<string>();
-    return candidates
-      .map((processInfo) => this.decorateProcess(processInfo, protectionReasons))
-      .filter((processInfo) => {
-        if (seen.has(processInfo.targetId)) return false;
-        seen.add(processInfo.targetId);
+    return rankedCandidates
+      .filter((candidate) => {
+        if (seen.has(candidate.processInfo.targetId)) return false;
+        seen.add(candidate.processInfo.targetId);
         return true;
       })
-      .map((processInfo) => {
-        const cpuPercent = processInfo.cpuPercent ?? 0;
-        const memoryMb = processInfo.memoryMb ?? 0;
+      .slice(0, 8)
+      .map((candidate) => {
+        const processInfo = candidate.processInfo;
         const blockedReason = processInfo.protectionReason;
         return {
           targetId: processInfo.targetId,
@@ -216,13 +428,11 @@ export class PerformanceService {
           pid: processInfo.pid,
           cpuPercent: processInfo.cpuPercent,
           memoryMb: processInfo.memoryMb,
-          suggestedReason: terminateSet.has(normalizeProcessName(processInfo.name))
-            ? 'Matched an active profile terminate rule.'
-            : 'Looks like a non-development background process.',
-          checkedByDefault: !blockedReason,
+          suggestedReason: candidate.suggestedReason,
+          checkedByDefault: candidate.checkedByDefault && !blockedReason,
           selectable: !blockedReason,
           blockedReason,
-          risk: cpuPercent >= 20 || memoryMb >= 800 ? 'medium' : 'low',
+          risk: candidate.risk,
         } satisfies PerformanceActionPreviewTarget;
       });
   }
@@ -348,6 +558,13 @@ export class PerformanceService {
       latencyTargets,
       history: this.getHistoryEntries(),
     };
+  }
+
+  async getProcesses(): Promise<PerformanceProcessSummary[]> {
+    const profile = this.getActiveProfile();
+    const protectionReasons = this.getProtectionReasons(profile);
+    const processes = await this.options.adapter.listProcesses();
+    return processes.map((processInfo) => this.decorateProcess(processInfo, protectionReasons));
   }
 
   private getHistoryEntries(): PerformanceActionHistoryEntry[] {

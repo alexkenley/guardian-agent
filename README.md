@@ -4,10 +4,10 @@
 
 <h1 align="center">GuardianAgent</h1>
 
-<h3 align="center">Security-first AI agent orchestration.</h3>
+<h3 align="center">Security-first AI assistant with a Second Brain and operator tooling.</h3>
 
 <p align="center">
-  An event-driven AI agent system with four-layer security, contextual trust enforcement, trust-aware memory, and bounded automation authority. Inputs, tool results, approvals, memory writes, and scheduled execution all pass through runtime chokepoints the agent cannot bypass.
+  GuardianAgent combines a daily-use Second Brain with guarded power-user surfaces for coding, workstation operations, automations, security, network, and cloud operations. The same assistant is available in web, CLI, and Telegram, with approvals and policy boundaries enforced by the runtime.
 </p>
 
 <p align="center">
@@ -19,6 +19,32 @@
   <img src="https://img.shields.io/badge/LLM-Ollama%20%7C%20Anthropic%20%7C%20OpenAI-blueviolet?style=for-the-badge&logo=openai&logoColor=white" alt="Multi-LLM"/>
   <img src="https://img.shields.io/badge/CHANNELS-CLI%20%7C%20Web%20%7C%20Telegram-2496ED?style=for-the-badge" alt="Multi-Channel"/>
 </p>
+
+## Product Overview
+
+### Second Brain
+
+Second Brain (`#/`) is the default web home.
+
+- Capture and organize tasks, notes, people, routines, and calendar context
+- Use the assistant for planning, retrieval, and deterministic brief generation
+- Keep daily context separate from the operator and workstation consoles
+- Further reading: [Second Brain As-Built Spec](docs/specs/SECOND-BRAIN-AS-BUILT-SPEC.md)
+
+### Power User Capabilities
+
+- `Performance` (`#/performance`) for workstation health, editable profiles, live processes, and reviewed cleanup. See [Performance Management Spec](docs/specs/PERFORMANCE-MANAGEMENT-SPEC.md).
+- `Code` (`#/code`) for repo-scoped coding sessions with chat, Monaco editor, diffing, approvals, and terminals. See [Coding Workspace Spec](docs/specs/CODING-WORKSPACE-SPEC.md).
+- `Automations` (`#/automations`) for saved and scheduled Guardian workflows and assistant tasks. See [Automation Framework Spec](docs/specs/AUTOMATION-FRAMEWORK-SPEC.md).
+- `Security`, `Network`, and `Cloud` for alerts, posture, diagnostics, and infrastructure oversight. Start with [WebUI Design Spec](docs/specs/WEBUI-DESIGN-SPEC.md) and [SECURITY.md](SECURITY.md).
+- `Configuration` and `Reference Guide` for setup, integrations, policy, and operator guidance.
+
+### Shared Assistant
+
+- Web, CLI, and Telegram all use the same guarded assistant model
+- Local and external LLM providers are supported, including Ollama, Anthropic, OpenAI, and others
+- Built-in tools, integrations, memory, and automations stay behind approval and policy controls
+- More detail: [WebUI Design Spec](docs/specs/WEBUI-DESIGN-SPEC.md), [Tools Control Plane Spec](docs/specs/TOOLS-CONTROL-PLANE-SPEC.md)
 
 ## Screenshots
 
@@ -101,63 +127,14 @@ Second Brain is the default web home at `#/`. The screenshot gallery below still
 
 ---
 
-## Features
+## Core Capabilities
 
-**AI & LLM**
-- Multi-provider support — Ollama (local), Anthropic, OpenAI, plus Groq, Mistral, DeepSeek, Together, xAI, and Google Gemini
-- Smart provider routing — chooses local or external models based on task type and availability
-- Circuit breaker, automatic failover, and fallback between providers
-- Anthropic prompt caching support
-
-**Agent Orchestration**
-- Sequential, parallel, loop, and conditional workflow patterns
-- Native automation authoring compiler — conversational automation requests compile into Guardian workflows or scheduled tasks
-- Checkpointed workflow runtime with approval-safe resume and run history
-- Runtime-enforced agent handoffs for bounded delegation and context filtering
-- Per-step retry, fail branches, and shared workflow state
-- Guardian SOUL operating constitution with configurable injection modes
-
-**Security**
-- Four-layer defense — admission controls, inline LLM action evaluation, output leak prevention, and retrospective audit
-- Brokered agent isolation — the chat/planner loop runs in a separate worker process by default
-- Guardian admission pipeline — capabilities, secret/PII scanning, path blocking, SSRF protection, prompt injection detection, rate limiting
-- Contextual policy enforcement — principal-bound approvals, taint-aware mutation gating, and fail-closed schedule authority
-- Managed package-install trust — staged review for public package installs before execution
-- Cryptographic audit trail — SHA-256 hash-chained, tamper-evident event log
-
-**Tools & Integrations**
-- Dozens of built-in tools with deferred loading and parallel execution
-- MCP tool server integration with namespaced tools and Guardian admission on every call
-- Native skills layer for reusable workflow guidance, templates, and helper scripts
-- Second Brain runtime with SQLite-backed notes, tasks, people, events, routines, briefs, usage, and provider sync cursors
-- Dedicated `package_install` path for managed public package installs to explicit targets
-- Connector and playbook framework with allowlists, bounded execution, and dry-run mode
-- Google Workspace integration (Gmail, Calendar, Drive, Docs, Sheets, Contacts) — native mode by default, CLI fallback available
-- Microsoft 365 integration (Outlook Mail, Calendar, OneDrive, Contacts) — native Graph REST API with OAuth 2.0 PKCE
-- Tool governance — approval workflows, per-tool policy overrides, risk-tiered tool classes
-
-**Channels & Product Surfaces**
-- CLI, Web UI, and Telegram bot with shared identity and continuity
-- Second Brain (`#/`) — default daily home for tasks, notes, calendar, people, routines, usage, and deterministic brief generation
-- Dashboard (`#/dashboard`) — operator-focused status, providers, agents, sessions, jobs, alerts, traces, and integrated chat
-- Coding Assistant (`#/code`) — repo-scoped coding workspace with editor, explorer, terminals, approvals, and session activity
-- SSE-driven live refresh when config, automation, or network state changes
-
-**Memory & Search**
-- SQLite-backed conversation memory with FTS5 full-text search
-- Trust-aware memory with quarantine states, structured flushes, and per-agent knowledge storage
-- Hybrid document search over directories, git repos, URLs, and files
-
-**Monitoring & Operations**
-- Host workstation monitoring — process, persistence, path, network, and firewall drift detection
-- Gateway firewall monitoring for edge devices (OPNsense, pfSense, UniFi)
-- Security alert routing — CLI, web, and Telegram delivery with severity and event-type filters
-- Scheduled task management with run history, approval expiry, budgets, and drift detection
-- Scheduled execution durability — per-task active-run locks prevent overlapping self-runs from duplicating side effects
-- Deterministic Second Brain horizon scanning every 15 minutes with startup sync, routine evaluation, and bounded brief generation
-- Automation readiness checks with save-time validation and guided approval/policy follow-up
-- Threat intelligence — watchlist scanning, findings triage, and approval-gated response actions
-- SQLite-backed analytics and usage tracking
+- A daily-use Second Brain for planning, capture, retrieval, and personal context
+- Power-user surfaces for performance management, coding, security, network, cloud, and automations
+- A shared assistant across Web, CLI, and Telegram
+- Multi-provider LLM support with guarded tools, approvals, and policy controls
+- Search, integrations, and workflow automation without collapsing everything into raw shell access
+- Specs and architecture docs for the deeper implementation detail when you need it
 
 ## Project Structure
 
@@ -177,18 +154,6 @@ Second Brain is the default web home at `#/`. The screenshot gallery below still
 - `npm test` — run the Vitest suite
 - `node scripts/test-code-ui-smoke.mjs` — run the web/code UI smoke harness
 - `node scripts/test-coding-assistant.mjs` — run the coding assistant smoke harness
-
-## Documentation
-
-- [README.md](README.md) — product overview, setup, and main features
-- [SECURITY.md](SECURITY.md) — security model, threat boundaries, and controls
-- [docs/architecture/OVERVIEW.md](docs/architecture/OVERVIEW.md) — architecture overview
-- [docs/specs/SECOND-BRAIN-AS-BUILT-SPEC.md](docs/specs/SECOND-BRAIN-AS-BUILT-SPEC.md) — current Second Brain architecture, routing, APIs, and known gaps
-- [docs/specs/CODING-WORKSPACE-SPEC.md](docs/specs/CODING-WORKSPACE-SPEC.md) — coding workspace details
-- [docs/guides/INTEGRATION-TEST-HARNESS.md](docs/guides/INTEGRATION-TEST-HARNESS.md) — test and harness guidance
-- [docs/](docs/) — full specs, guides, proposals, and research
-
----
 
 ## Security at a Glance
 
@@ -262,39 +227,16 @@ GuardianAgent is accessible through three channels:
 
 **What you can do:**
 - Chat with the built-in AI assistant
-- Use Second Brain as the default daily home for tasks, notes, people, calendar context, routines, and brief generation
-- Use the Coding Assistant for repository-scoped work with a separate Code-session chat history, repo explorer, diff view, and PTY-backed terminals
-- Each Code session now keeps a backend workspace profile and current focus summary so the Coding Assistant stays project-aware across resume/attach flows
-- Code-page chat turns go through a dedicated backend Code-session transport and fail closed if that session cannot be resolved, instead of silently degrading into normal web chat
-- Run guarded filesystem, web, network, and automation tasks
-- Create and schedule automations with native Guardian objects — open-ended recurring work defaults to scheduled agent tasks, fixed pipelines use workflows
-- Review audit logs, security alerts, and threat intelligence
-- Monitor host and gateway security posture
-- Search across documents, git repos, and web content
-- Manage connectors, playbooks, and scheduled jobs
+- Use Second Brain as the default daily home for tasks, notes, people, routines, and calendar-aware planning
+- Use Performance, Security, Network, Cloud, and Automations as dedicated operator surfaces instead of burying everything in chat
+- Use the Coding Assistant for repository-scoped work with editor, diffing, approvals, checks, and terminals
+- Run guarded tools, integrations, search, and automation workflows across the same assistant
 
-**Approvals and safety:** Depending on the tool policy, content trust level, and risk level, actions may run automatically, wait for your approval, or be denied before execution. Approvals are bound to the current principal, memory writes from low-trust context are quarantined by default, and scheduled automations run only while their approval window, scope hash, and budgets remain valid.
-
-For scheduled automations, the intended workflow is:
-- approve the automation when it is created or updated
-- if Guardian finds a fixable policy blocker first, approve the proposed policy change and let Guardian retry the automation setup automatically
-- let later runs execute under that saved bounded approval
-- stop again only if the automation goes out of scope, expires, exceeds budget, or attempts a higher-risk action that was not part of the approved definition
+**Approvals and safety:** Actions may run automatically, wait for approval, or be denied depending on policy, trust level, and tool risk. For the detailed behavior, see [SECURITY.md](SECURITY.md) and [Tools Control Plane Spec](docs/specs/TOOLS-CONTROL-PLANE-SPEC.md).
 
 ### Coding Assistant
 
-The web `Code` page is a dedicated coding workspace, not just the general chat panel pointed at a repo.
-
-- Each Code session keeps its own coding conversation history separate from the rest of the web chat
-- Each Code session keeps its own workspace focus, approvals, recent jobs, and memory
-- Repo answers are grounded in the active attached workspace instead of the host app repo
-- The Code page sends chat and approval actions through session-owned backend routes so coding work stays bound to the active session
-- The workspace combines a session rail, file explorer, Monaco Editor with side-by-side diff, themes, and PTY-backed `xterm.js` terminals
-- The assistant sidebar is split into `Chat`, `Tasks`, `Approvals`, and `Checks` so operational detail does not flood the transcript
-- Approval-heavy coding flows stay in the same workspace; pending approvals appear in their own tab and as a small non-blocking chat notice instead of hijacking the page
-- Assistant-driven file and shell tools are pinned to the active workspace root, so Code can use repo-local `git` and verification commands without broadening the main chat shell policy
-- Broader Guardian capabilities remain available from the Coding Assistant, including research, automation creation, and other assistant tasks, without replacing the session's repo anchor
-- Main chat, CLI, and Telegram can attach to the same backend code session and continue its transcript, but they remain normal chat surfaces rather than the full Code-page client
+The web `Code` page is a dedicated repo-scoped workspace with its own session context, editor, diffing, approvals, checks, and terminals.
 
 Implementation detail and current limitations are documented in [docs/specs/CODING-WORKSPACE-SPEC.md](docs/specs/CODING-WORKSPACE-SPEC.md).
 
@@ -370,51 +312,16 @@ For detailed configuration documentation:
 
 ---
 
-## Architecture & Documentation
+## Further Reading
 
-**Architecture:**
-- [Overview](docs/architecture/OVERVIEW.md) — system architecture and component map
-- [Security](SECURITY.md) — four-layer defense system, threat model, and security configuration
-- [Guardian API](docs/architecture/GUARDIAN-API.md) — complete API reference
-- [Decisions](docs/architecture/DECISIONS.md) — architecture decision records
-- [SOUL](SOUL.md) — operating intent and guardrail constitution
-
-**Specs:**
-- [Brokered Agent Isolation](docs/specs/BROKERED-AGENT-ISOLATION-SPEC.md)
-- [Orchestration Agents](docs/specs/ORCHESTRATION-AGENTS-SPEC.md)
-- [MCP Client](docs/specs/MCP-CLIENT-SPEC.md)
-- [Native Skills](docs/specs/SKILLS-SPEC.md)
-- [Google Workspace](docs/specs/GOOGLE-WORKSPACE-INTEGRATION-SPEC.md)
-- [Microsoft 365](docs/specs/MICROSOFT-365-INTEGRATION-SPEC.md)
-- [Evaluation Framework](docs/specs/EVAL-FRAMEWORK-SPEC.md)
-- [Policy-as-Code](docs/specs/POLICY-AS-CODE-SPEC.md)
-- [Tools Control Plane](docs/specs/TOOLS-CONTROL-PLANE-SPEC.md)
-- [Package Install Trust](docs/specs/PACKAGE-INSTALL-TRUST-SPEC.md)
-- [Identity & Memory](docs/specs/IDENTITY-MEMORY-SPEC.md)
-- [Automation Framework](docs/specs/AUTOMATION-FRAMEWORK-SPEC.md)
-
-<details>
-<summary>All specs</summary>
-
-- [Shared State](docs/specs/SHARED-STATE-SPEC.md)
-- [Setup And Config Flow](docs/specs/SETUP-WIZARD-SPEC.md)
-- [Config Center](docs/specs/CONFIG-CENTER-SPEC.md)
-- [Assistant Orchestrator](docs/specs/ASSISTANT-ORCHESTRATOR-SPEC.md)
-- [Web Auth Configuration](docs/specs/WEB-AUTH-CONFIG-SPEC.md)
-- [Marketing Campaign Automation](docs/specs/MARKETING-CAMPAIGN-SPEC.md)
-- [Analytics](docs/specs/ANALYTICS-SPEC.md)
-- [Quick Actions](docs/specs/QUICK-ACTIONS-SPEC.md)
-- [Threat Intel](docs/specs/THREAT-INTEL-SPEC.md)
-- [Threat Intel Research](docs/specs/THREAT-INTEL-RESEARCH.md)
-- [Hostile Forum Connectors](docs/specs/HOSTILE-FORUM-CONNECTORS-SPEC.md)
-- [Microsoft 365 Integration](docs/specs/MICROSOFT-365-INTEGRATION-SPEC.md)
-
-</details>
-
-**Proposals:**
-- [Windows App Options](docs/proposals/WINDOWS-APP-OPTIONS.md)
-- [Windows Portable Isolation](docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md)
-- [Sandbox Egress and Secret Brokering Roadmap](docs/proposals/SANDBOX-EGRESS-AND-SECRET-BROKERING-ROADMAP.md)
+- [SECURITY.md](SECURITY.md) for the security model and trust boundaries
+- [WebUI Design Spec](docs/specs/WEBUI-DESIGN-SPEC.md) for page ownership and product-surface design
+- [Second Brain As-Built Spec](docs/specs/SECOND-BRAIN-AS-BUILT-SPEC.md) for the daily-home experience
+- [Performance Management Spec](docs/specs/PERFORMANCE-MANAGEMENT-SPEC.md) for workstation operations
+- [Coding Workspace Spec](docs/specs/CODING-WORKSPACE-SPEC.md) for the repo-scoped IDE surface
+- [Automation Framework Spec](docs/specs/AUTOMATION-FRAMEWORK-SPEC.md) for saved and scheduled automation behavior
+- [Config Center Spec](docs/specs/CONFIG-CENTER-SPEC.md) for setup, integrations, and policy controls
+- [docs/](docs/) for the full architecture, specs, guides, proposals, and research set
 
 ---
 
