@@ -349,6 +349,7 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'expectedContextPressure must be low, medium, or high based on how much bounded context the runtime will likely need to assemble.',
   'Use only the exact enum values defined by the schema for route, confidence, operation, turnRelation, resolution, uiSurface, emailProvider, and calendarTarget. Do not paraphrase enum names.',
   'Prefer ui_control over browser_task when the request refers to Guardian pages or internal catalog views.',
+  'Guardian AI provider profile inventory, model catalog inspection, model routing policy, and AI provider configuration work are not Second Brain tasks. For those requests, prefer general_assistant with uiSurface=config and workload metadata that keeps the request in provider/tool orchestration rather than personal_assistant_task.',
   'Prefer email_task over workspace_task for direct mailbox or email requests.',
   'Prefer personal_assistant_task over workspace_task or email_task when the user intent is personal productivity or Second Brain work rather than explicit provider CRUD.',
   'Prefer personal_assistant_task for meeting prep, follow-up drafting, calendar planning, personal search across email/docs/calendar/notes, outreach review, or "what do I owe this person?" even when the evidence comes from Google Workspace or Microsoft 365.',
@@ -380,6 +381,9 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Example: "What sort of automations can you create?" -> route = "general_assistant", operation = "inspect".',
   'Example: "Run the cloud tool whm_status using profileId social." -> route = "general_assistant", operation = "run", toolName = "whm_status", profileId = "social".',
   'Example: "Check the social WHM account status." -> route = "general_assistant", operation = "inspect", toolName = "whm_status", profileId = "social".',
+  'Example: "List my configured AI providers." -> route=general_assistant, operation=read, uiSurface=config, executionClass=provider_crud, preferredTier=external, requiresRepoGrounding=false, requiresToolSynthesis=true, expectedContextPressure=medium, preferredAnswerPath=tool_loop.',
+  'Example: "Show the available models for my ollama-cloud-tools profile." -> route=general_assistant, operation=inspect, uiSurface=config, executionClass=provider_crud, preferredTier=external, requiresRepoGrounding=false, requiresToolSynthesis=true, expectedContextPressure=medium, preferredAnswerPath=tool_loop.',
+  'Generic planning or advice prompts such as "Give me a concise plan for organizing my week" are general_assistant, not personal_assistant_task, unless the user explicitly asks to inspect, summarize, or update their actual Second Brain tasks, notes, calendar, routines, or Today view.',
   'memory_task operation mapping: save = remember/store durable memory; read = recall or list remembered information; search = search conversation or persistent memory.',
   'Examples: "Remember globally that my test marker is cedar-47." -> route=memory_task, operation=save; "What do you remember about cedar-47?" -> route=memory_task, operation=read; "Search memory for cedar-47." -> route=memory_task, operation=search.',
   'Prefer coding_session_control over coding_task when the user asks about which session is active, lists sessions, switches workspaces, attaches, detaches, or creates a new coding session.',
@@ -391,10 +395,29 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Example: "Inspect src/skills/prompt.ts and src/chat-agent.ts. Review the uplift for regressions and missing tests." -> route=coding_task, operation=inspect.',
   'Example: "Inspect docs/plans/... and src/skills/prompt.ts. Write an implementation plan for this change." -> route=coding_task, operation=inspect.',
   'Example: "What do I have due today?" -> route=personal_assistant_task, operation=inspect, personalItemType=overview.',
+  'Example: "Give me a concise plan for organizing my week." -> route=general_assistant, operation=inspect, executionClass=direct_assistant, preferredTier=external, requiresRepoGrounding=false, requiresToolSynthesis=false, expectedContextPressure=low, preferredAnswerPath=direct.',
   'Example: "Show my tasks." -> route=personal_assistant_task, operation=read, personalItemType=task.',
   'Example: "Show my notes." -> route=personal_assistant_task, operation=read, personalItemType=note.',
   'Example: "Show my library items." -> route=personal_assistant_task, operation=read, personalItemType=library.',
+  'Example: "Show my briefs." -> route=personal_assistant_task, operation=read, personalItemType=brief.',
+  'Example: "Show the people in my Second Brain." -> route=personal_assistant_task, operation=read, personalItemType=person.',
+  'Example: "Show my routines." -> route=personal_assistant_task, operation=read, personalItemType=routine.',
+  'Example: "Show only my enabled routines." -> route=personal_assistant_task, operation=read, personalItemType=routine, enabled=true.',
+  'Example: "Show only my disabled routines." -> route=personal_assistant_task, operation=read, personalItemType=routine, enabled=false.',
+  'Example: "What routines are related to email or inbox processing?" -> route=personal_assistant_task, operation=read, personalItemType=routine, query="email or inbox processing".',
   'Example: "Show my calendar events for the next 7 days." -> route=personal_assistant_task, operation=read, personalItemType=calendar, calendarTarget=local, calendarWindowDays=7.',
+  'Example: follow-up "Show my tasks again." -> route=personal_assistant_task, operation=read, personalItemType=task.',
+  'Example: follow-up "Update that note to say: \\"Second Brain write smoke test note updated.\\"" -> route=personal_assistant_task, operation=update, personalItemType=note.',
+  'Example: follow-up "Delete that note." -> route=personal_assistant_task, operation=delete, personalItemType=note.',
+  'Example: "Create a brief called Second Brain brief smoke test that says This is a brief for smoke testing." -> route=personal_assistant_task, operation=create, personalItemType=brief.',
+  'Example: follow-up "Update that brief to say this is the updated brief." -> route=personal_assistant_task, operation=update, personalItemType=brief.',
+  'Example: follow-up "Delete that brief." -> route=personal_assistant_task, operation=delete, personalItemType=brief.',
+  'Example: "Create a person in my Second Brain named Smoke Test Person with email smoke@example.com." -> route=personal_assistant_task, operation=create, personalItemType=person.',
+  'Example: follow-up "Update that person to include email smoke@example.com." -> route=personal_assistant_task, operation=update, personalItemType=person.',
+  'Example: follow-up "Delete that person." -> route=personal_assistant_task, operation=delete, personalItemType=person.',
+  'Example: follow-up "Mark that task as done." -> route=personal_assistant_task, operation=update, personalItemType=task.',
+  'Example: follow-up "Move that event to tomorrow at 5 PM." -> route=personal_assistant_task, operation=update, personalItemType=calendar, calendarTarget=local.',
+  'Example: follow-up "Delete that calendar event." -> route=personal_assistant_task, operation=delete, personalItemType=calendar, calendarTarget=local.',
   'Example: "Save a note that the Q3 offsite venue is River House." -> route=personal_assistant_task, operation=save, personalItemType=note.',
   'Example: "Create the Pre-Meeting Brief routine in Second Brain." -> route=personal_assistant_task, operation=create, personalItemType=routine.',
   'Example: "Create a task to send the follow-up deck tomorrow." -> route=personal_assistant_task, operation=create, personalItemType=task.',
@@ -453,6 +476,8 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'memory_task means explicit remember, save, recall, or search memory requests.',
   'email_task means direct email inbox, read, send, reply, forward, or draft work in Gmail or Outlook. workspace_task means explicit provider CRUD or administration in Google Workspace or Microsoft 365 surfaces such as Drive, Docs, Sheets, direct Google Calendar or Outlook Calendar event edits, OneDrive, SharePoint, or Teams. personal_assistant_task means Second Brain work such as notes, tasks, calendar planning, meeting prep, people context, briefs, and personal retrieval across messages, docs, events, and notes.',
   'ui_control means Guardian pages or internal catalog surfaces. browser_task means external website navigation or interaction. search_task means generic web search.',
+  'Guardian AI provider profile inventory, model catalogs, model routing policy, and AI provider configuration work are not personal_assistant_task. Prefer general_assistant with uiSurface="config" and provider/tool orchestration workload metadata for those requests.',
+  'Generic planning or advice prompts such as "Give me a concise plan for organizing my week" are general_assistant, not personal_assistant_task, unless the user explicitly asks to inspect, summarize, or update their actual Second Brain tasks, notes, calendar, routines, or Today view.',
   'Prefer personal_assistant_task for meeting prep, follow-up drafting, calendar planning, outreach review, or personal search across email/docs/calendar/notes even when the data comes from Google Workspace or Microsoft 365.',
   'Prefer automation_authoring when the user explicitly asks to create an automation or workflow in the Automations system. Prefer personal_assistant_task when they explicitly ask for a Second Brain routine or mention built-in routine concepts such as Morning Brief or Pre-Meeting Brief.',
   'Unqualified calendar entry, calendar event, or calendar item create/update/delete requests default to the local Second Brain calendar with personalItemType="calendar" and calendarTarget="local".',
@@ -473,10 +498,31 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'Examples: "Inspect src/skills/prompt.ts and review the uplift for regressions." -> route="coding_task", operation="inspect".',
   'Examples: "List the coding sessions." -> route="coding_session_control", operation="navigate".',
   'Examples: "Run the cloud tool whm_status using profileId social." -> route="general_assistant", operation="run", toolName="whm_status", profileId="social".',
+  'Examples: "List my configured AI providers." -> route="general_assistant", operation="read", uiSurface="config", executionClass="provider_crud", preferredTier="external", requiresRepoGrounding=false, requiresToolSynthesis=true, expectedContextPressure="medium", preferredAnswerPath="tool_loop".',
+  'Examples: "Show the available models for my ollama-cloud-tools profile." -> route="general_assistant", operation="inspect", uiSurface="config", executionClass="provider_crud", preferredTier="external", requiresRepoGrounding=false, requiresToolSynthesis=true, expectedContextPressure="medium", preferredAnswerPath="tool_loop".',
+  'Examples: "Give me a concise plan for organizing my week." -> route="general_assistant", operation="inspect", executionClass="direct_assistant", preferredTier="external", requiresRepoGrounding=false, requiresToolSynthesis=false, expectedContextPressure="low", preferredAnswerPath="direct".',
   'Examples: "Show my tasks." -> route="personal_assistant_task", operation="read", personalItemType="task".',
   'Examples: "Show my notes." -> route="personal_assistant_task", operation="read", personalItemType="note".',
   'Examples: "Show my library items." -> route="personal_assistant_task", operation="read", personalItemType="library".',
+  'Examples: "Show my briefs." -> route="personal_assistant_task", operation="read", personalItemType="brief".',
+  'Examples: "Show the people in my Second Brain." -> route="personal_assistant_task", operation="read", personalItemType="person".',
+  'Examples: "Show my routines." -> route="personal_assistant_task", operation="read", personalItemType="routine".',
+  'Examples: "Show only my enabled routines." -> route="personal_assistant_task", operation="read", personalItemType="routine", enabled=true.',
+  'Examples: "Show only my disabled routines." -> route="personal_assistant_task", operation="read", personalItemType="routine", enabled=false.',
+  'Examples: "What routines are related to email or inbox processing?" -> route="personal_assistant_task", operation="read", personalItemType="routine", query="email or inbox processing".',
   'Examples: "Show my calendar events for the next 7 days." -> route="personal_assistant_task", operation="read", personalItemType="calendar", calendarTarget="local", calendarWindowDays=7.',
+  'Examples: follow-up "Show my tasks again." -> route="personal_assistant_task", operation="read", personalItemType="task".',
+  'Examples: follow-up "Update that note to say: \\"Second Brain write smoke test note updated.\\"" -> route="personal_assistant_task", operation="update", personalItemType="note".',
+  'Examples: follow-up "Delete that note." -> route="personal_assistant_task", operation="delete", personalItemType="note".',
+  'Examples: "Create a brief called Second Brain brief smoke test that says This is a brief for smoke testing." -> route="personal_assistant_task", operation="create", personalItemType="brief".',
+  'Examples: follow-up "Update that brief to say this is the updated brief." -> route="personal_assistant_task", operation="update", personalItemType="brief".',
+  'Examples: follow-up "Delete that brief." -> route="personal_assistant_task", operation="delete", personalItemType="brief".',
+  'Examples: "Create a person in my Second Brain named Smoke Test Person with email smoke@example.com." -> route="personal_assistant_task", operation="create", personalItemType="person".',
+  'Examples: follow-up "Update that person to include email smoke@example.com." -> route="personal_assistant_task", operation="update", personalItemType="person".',
+  'Examples: follow-up "Delete that person." -> route="personal_assistant_task", operation="delete", personalItemType="person".',
+  'Examples: follow-up "Mark that task as done." -> route="personal_assistant_task", operation="update", personalItemType="task".',
+  'Examples: follow-up "Move that event to tomorrow at 5 PM." -> route="personal_assistant_task", operation="update", personalItemType="calendar", calendarTarget="local".',
+  'Examples: follow-up "Delete that calendar event." -> route="personal_assistant_task", operation="delete", personalItemType="calendar", calendarTarget="local".',
   'Examples: "What do I have due today?" -> route="personal_assistant_task", operation="inspect", personalItemType="overview".',
   'Examples: "Create the Pre-Meeting Brief routine in Second Brain." -> route="personal_assistant_task", operation="create", personalItemType="routine".',
   'Examples: "Create a calendar entry for tomorrow at 3 PM called Dentist." -> route="personal_assistant_task", operation="create", personalItemType="calendar", calendarTarget="local".',
@@ -548,7 +594,7 @@ export class IntentGateway {
         temperature: 0,
         ...(options.useTools ? { tools: [INTENT_GATEWAY_TOOL] } : {}),
       });
-      const parsed = parseIntentGatewayDecision(response);
+      const parsed = parseIntentGatewayDecision(response, input.content);
       return {
         mode: options.mode,
         available: parsed.available,
@@ -815,7 +861,10 @@ function buildAutomationNameRepairMessages(
   ];
 }
 
-function parseIntentGatewayDecision(response: ChatResponse): { decision: IntentGatewayDecision; available: boolean } {
+function parseIntentGatewayDecision(
+  response: ChatResponse,
+  sourceContent?: string,
+): { decision: IntentGatewayDecision; available: boolean } {
   const parsed = parseStructuredToolArguments(response)
     ?? parseStructuredContent(response.content);
   if (!parsed) {
@@ -839,7 +888,7 @@ function parseIntentGatewayDecision(response: ChatResponse): { decision: IntentG
       available: false,
     };
   }
-  const decision = normalizeIntentGatewayDecision(parsed);
+  const decision = normalizeIntentGatewayDecision(parsed, sourceContent);
   return {
     decision,
     available: decision.route !== 'unknown',
@@ -868,7 +917,10 @@ function parseStructuredContent(content: string): Record<string, unknown> | null
   return parseStructuredJsonObject<Record<string, unknown>>(content);
 }
 
-function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): IntentGatewayDecision {
+function normalizeIntentGatewayDecision(
+  parsed: Record<string, unknown>,
+  sourceContent?: string,
+): IntentGatewayDecision {
   const route = normalizeRoute(parsed.route);
   const confidence = normalizeConfidence(parsed.confidence);
   const operation = normalizeOperation(parsed.operation);
@@ -908,7 +960,10 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
     : undefined;
   const manualOnly = typeof parsed.manualOnly === 'boolean' ? parsed.manualOnly : undefined;
   const scheduled = typeof parsed.scheduled === 'boolean' ? parsed.scheduled : undefined;
-  const enabled = typeof parsed.enabled === 'boolean' ? parsed.enabled : undefined;
+  const personalItemType = normalizePersonalItemType(parsed.personalItemType);
+  const enabled = typeof parsed.enabled === 'boolean'
+    ? parsed.enabled
+    : inferRoutineEnabledFilter(sourceContent, route, operation, personalItemType);
   const uiSurface = normalizeUiSurface(parsed.uiSurface);
   const urls = Array.isArray(parsed.urls)
     ? parsed.urls
@@ -927,7 +982,6 @@ function normalizeIntentGatewayDecision(parsed: Record<string, unknown>): Intent
     : undefined;
   const emailProvider = normalizeEmailProvider(parsed.emailProvider);
   const mailboxReadMode = normalizeMailboxReadMode(parsed.mailboxReadMode);
-  const personalItemType = normalizePersonalItemType(parsed.personalItemType);
   const calendarTarget = normalizeCalendarTarget(parsed.calendarTarget)
     ?? (route === 'personal_assistant_task' && personalItemType === 'calendar' ? 'local' : undefined);
   const calendarWindowDays = normalizeCalendarWindowDays((parsed as Record<string, unknown>).calendarWindowDays);
@@ -1451,6 +1505,26 @@ function normalizeCalendarWindowDays(value: unknown): number | undefined {
   const normalized = Math.trunc(value);
   if (normalized < 1 || normalized > 366) return undefined;
   return normalized;
+}
+
+function inferRoutineEnabledFilter(
+  content: string | undefined,
+  route: IntentGatewayRoute,
+  operation: IntentGatewayOperation,
+  personalItemType: IntentGatewayEntities['personalItemType'] | undefined,
+): boolean | undefined {
+  if (route !== 'personal_assistant_task' || operation !== 'read' || personalItemType !== 'routine') {
+    return undefined;
+  }
+  const normalized = content?.trim().toLowerCase() ?? '';
+  if (!normalized) return undefined;
+  if (/\bdisabled routines?\b/.test(normalized) || /\bpaused routines?\b/.test(normalized)) {
+    return false;
+  }
+  if (/\benabled routines?\b/.test(normalized) || /\bactive routines?\b/.test(normalized)) {
+    return true;
+  }
+  return undefined;
 }
 
 function normalizePersonalItemType(

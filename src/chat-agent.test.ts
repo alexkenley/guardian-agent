@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentContext, UserMessage } from './agent/types.js';
 import { createChatAgentClass } from './chat-agent.js';
 import { ContinuityThreadStore } from './runtime/continuity-threads.js';
+import { attachSelectedExecutionProfileMetadata } from './runtime/execution-profiles.js';
+import type { PendingActionRecord } from './runtime/pending-actions.js';
 
 describe('LLMChatAgent direct intent metadata', () => {
   it('backfills responseSource for direct intent responses so the UI does not show them as system output', async () => {
@@ -20,6 +22,22 @@ describe('LLMChatAgent direct intent metadata', () => {
       channel: 'web',
       content: 'Search the repo for "ollama_cloud" and tell me which files define its routing.',
       timestamp: Date.now(),
+      metadata: attachSelectedExecutionProfileMetadata(undefined, {
+        id: 'managed_cloud_direct',
+        providerName: 'ollama-cloud-general',
+        providerType: 'ollama_cloud',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'direct',
+        expectedContextPressure: 'low',
+        contextBudget: 80000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['ollama-cloud-general'],
+        reason: 'managed-cloud role binding',
+      }),
     };
     const ctx: AgentContext = {
       agentId: 'chat',
@@ -55,9 +73,169 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(response.metadata?.responseSource).toMatchObject({
       locality: 'external',
       providerName: 'ollama_cloud',
+      providerProfileName: 'ollama-cloud-general',
       providerTier: 'managed_cloud',
       usedFallback: false,
     });
+  });
+
+  it('tags direct Second Brain responses as Second Brain instead of the selected managed-cloud profile', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    const message: UserMessage = {
+      id: 'msg-2',
+      userId: 'owner',
+      channel: 'web',
+      content: 'Give me a concise plan for organizing my week.',
+      timestamp: Date.now(),
+      metadata: attachSelectedExecutionProfileMetadata(undefined, {
+        id: 'managed_cloud_direct',
+        providerName: 'ollama-cloud-direct',
+        providerType: 'ollama_cloud',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'direct',
+        expectedContextPressure: 'low',
+        contextBudget: 24000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 1,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['ollama-cloud-direct'],
+        reason: 'managed-cloud direct role binding',
+      }),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama_cloud' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const response = await (agent as any).buildDirectIntentResponse({
+      candidate: 'personal_assistant',
+      result: 'Second Brain overview:\n- Top tasks: Test',
+      message,
+      routingMessage: message,
+      intentGateway: {
+        available: true,
+        decision: {
+          route: 'personal_assistant_task',
+          operation: 'read',
+          summary: 'Reads the Second Brain overview.',
+          confidence: 'high',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          entities: { personalItemType: 'overview' },
+        },
+      },
+      ctx,
+      activeSkills: [],
+      conversationKey: { userId: 'owner', channel: 'web' },
+    });
+
+    expect(response.metadata?.responseSource).toMatchObject({
+      locality: 'local',
+      providerName: 'second_brain',
+      usedFallback: false,
+    });
+    expect(response.metadata?.responseSource).not.toMatchObject({
+      providerProfileName: 'ollama-cloud-direct',
+      providerTier: 'managed_cloud',
+    });
+  });
+
+  it('formats direct provider inventory reads through provider tools instead of falling through to the worker', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string) => {
+        expect(toolName).toBe('llm_provider_list');
+        return {
+          success: true,
+          output: {
+            providerCount: 2,
+            providers: [
+              {
+                name: 'ollama',
+                type: 'ollama',
+                model: 'gemma4:26b',
+                tier: 'local',
+                connected: true,
+                isPreferredLocal: true,
+              },
+              {
+                name: 'ollama-cloud-tools',
+                type: 'ollama_cloud',
+                model: 'glm-4.7',
+                tier: 'managed_cloud',
+                connected: true,
+                isPreferredManagedCloud: true,
+              },
+            ],
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      getPersonById: vi.fn(() => null),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama_cloud' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectProviderRead(
+      {
+        id: 'msg-provider-list',
+        userId: 'owner',
+        channel: 'web',
+        content: 'List my configured AI providers.',
+        timestamp: Date.now(),
+      },
+      ctx,
+      {
+        route: 'general_assistant',
+        operation: 'read',
+        confidence: 'high',
+        summary: 'Lists configured AI providers.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        executionClass: 'provider_crud',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+        entities: { uiSurface: 'config' },
+      },
+    );
+
+    const content = typeof result === 'string' ? result : result?.content ?? '';
+    expect(content).toContain('Configured AI providers:');
+    expect(content).toContain('ollama [local · ollama] model gemma4:26b');
+    expect(content).toContain('ollama-cloud-tools [managed cloud · ollama_cloud] model glm-4.7');
   });
 
   it('reuses persisted paged-list continuation state for follow-up automation catalog requests', async () => {
@@ -316,6 +494,9 @@ describe('LLMChatAgent direct intent metadata', () => {
       }),
     };
     const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      getPersonById: vi.fn(() => null),
+    };
     const ctx: AgentContext = {
       agentId: 'chat',
       emit: vi.fn(async () => {}),
@@ -412,6 +593,9 @@ describe('LLMChatAgent direct intent metadata', () => {
       }),
     };
     const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      getPersonById: vi.fn(() => null),
+    };
     const ctx: AgentContext = {
       agentId: 'chat',
       emit: vi.fn(async () => {}),
@@ -507,6 +691,9 @@ describe('LLMChatAgent direct intent metadata', () => {
       }),
     };
     const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      getPersonById: vi.fn(() => null),
+    };
     const ctx: AgentContext = {
       agentId: 'chat',
       emit: vi.fn(async () => {}),
@@ -609,6 +796,225 @@ describe('LLMChatAgent direct intent metadata', () => {
     const content = typeof result === 'string' ? result : result?.content ?? '';
     expect(content).toContain('Library items:');
     expect(content).toContain('Example Reference [reference] - https://example.com/');
+    expect(content).not.toContain('Second Brain overview:');
+  });
+
+  it('formats direct Second Brain brief reads as saved briefs instead of falling back to overview', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    (agent as any).secondBrainService = {
+      listBriefs: vi.fn(() => [{
+        id: 'brief-1',
+        kind: 'manual',
+        title: 'Second Brain brief smoke test',
+        content: 'This is a brief for smoke testing.',
+        generatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+        createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+        updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+      }]),
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainRead(
+      {
+        id: 'msg-briefs',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Show my briefs.',
+        timestamp: Date.now(),
+      },
+      {
+        route: 'personal_assistant_task',
+        operation: 'read',
+        confidence: 'high',
+        summary: 'Reads saved Second Brain briefs.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'brief' },
+      },
+    );
+
+    const content = typeof result === 'string' ? result : result?.content ?? '';
+    expect(content).toContain('Saved briefs:');
+    expect(content).toContain('Second Brain brief smoke test [manual]');
+    expect(content).not.toContain('Second Brain overview:');
+  });
+
+  it('returns an explicit empty state for disabled Second Brain routine reads', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    (agent as any).secondBrainService = {
+      listRoutines: vi.fn(() => [{
+        id: 'morning-brief',
+        name: 'Morning Brief',
+        category: 'scheduled',
+        enabledByDefault: true,
+        enabled: true,
+        trigger: { mode: 'cron', cron: '0 7 * * *' },
+        workloadClass: 'B',
+        externalCommMode: 'none',
+        budgetProfileId: 'daily-low',
+        deliveryDefaults: ['web'],
+        defaultRoutingBias: 'local_first',
+        createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+        updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+        lastRunAt: null,
+      }]),
+      listRoutineCatalog: vi.fn(() => []),
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainRead(
+      {
+        id: 'msg-routines-disabled',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Show only my disabled routines.',
+        timestamp: Date.now(),
+      },
+      {
+        route: 'personal_assistant_task',
+        operation: 'read',
+        confidence: 'high',
+        summary: 'Reads disabled routines.',
+        turnRelation: 'follow_up',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'routine', enabled: false },
+      },
+    );
+
+    expect(result).toBe('Second Brain has no disabled routines.');
+  });
+
+  it('filters direct Second Brain routines by topical query', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    (agent as any).secondBrainService = {
+      listRoutines: vi.fn(() => [
+        {
+          id: 'follow-up-watch',
+          name: 'Follow-Up Watch',
+          category: 'scheduled',
+          enabledByDefault: true,
+          enabled: true,
+          trigger: { mode: 'event', eventType: 'event_ended', lookaheadMinutes: 1440 },
+          workloadClass: 'B',
+          externalCommMode: 'draft_only',
+          budgetProfileId: 'daily-low',
+          deliveryDefaults: ['web'],
+          defaultRoutingBias: 'balanced',
+          createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+          updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+          lastRunAt: null,
+        },
+        {
+          id: 'morning-brief',
+          name: 'Morning Brief',
+          category: 'scheduled',
+          enabledByDefault: true,
+          enabled: true,
+          trigger: { mode: 'cron', cron: '0 7 * * *' },
+          workloadClass: 'B',
+          externalCommMode: 'none',
+          budgetProfileId: 'daily-low',
+          deliveryDefaults: ['web'],
+          defaultRoutingBias: 'local_first',
+          createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+          updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+          lastRunAt: null,
+        },
+      ]),
+      listRoutineCatalog: vi.fn(() => [
+        {
+          templateId: 'follow-up-watch',
+          name: 'Follow-Up Watch',
+          description: 'Drafts follow-up packets for recently ended meetings that do not already have one.',
+          category: 'follow_up',
+          seedByDefault: false,
+          manifest: {
+            id: 'follow-up-watch',
+            name: 'Follow-Up Watch',
+            category: 'scheduled',
+            enabledByDefault: true,
+            trigger: { mode: 'event', eventType: 'event_ended', lookaheadMinutes: 1440 },
+            workloadClass: 'B',
+            externalCommMode: 'draft_only',
+            budgetProfileId: 'daily-low',
+            deliveryDefaults: ['web'],
+            defaultRoutingBias: 'balanced',
+          },
+          configured: true,
+          configuredRoutineId: 'follow-up-watch',
+        },
+        {
+          templateId: 'morning-brief',
+          name: 'Morning Brief',
+          description: 'Creates the daily morning brief after the local workday starts.',
+          category: 'daily',
+          seedByDefault: true,
+          manifest: {
+            id: 'morning-brief',
+            name: 'Morning Brief',
+            category: 'scheduled',
+            enabledByDefault: true,
+            trigger: { mode: 'cron', cron: '0 7 * * *' },
+            workloadClass: 'B',
+            externalCommMode: 'none',
+            budgetProfileId: 'daily-low',
+            deliveryDefaults: ['web'],
+            defaultRoutingBias: 'local_first',
+          },
+          configured: true,
+          configuredRoutineId: 'morning-brief',
+        },
+      ]),
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainRead(
+      {
+        id: 'msg-routines-email',
+        userId: 'owner',
+        channel: 'web',
+        content: 'What routines are related to email or inbox processing?',
+        timestamp: Date.now(),
+      },
+      {
+        route: 'personal_assistant_task',
+        operation: 'read',
+        confidence: 'high',
+        summary: 'Reads routines related to email.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'routine', query: 'email or inbox processing' },
+      },
+    );
+
+    const content = typeof result === 'string' ? result : result?.content ?? '';
+    expect(content).toContain('Second Brain routines related to "email inbox":');
+    expect(content).toContain('Follow-Up Watch');
+    expect(content).not.toContain('Morning Brief');
     expect(content).not.toContain('Second Brain overview:');
   });
 
@@ -748,12 +1154,250 @@ describe('LLMChatAgent direct intent metadata', () => {
 
     expect(typeof result).toBe('object');
     expect((result as { content: string }).content).toBe('Note updated: Smoke Test Note');
-    expect((result as { metadata?: Record<string, unknown> }).metadata?.continuationState).toEqual({
+    expect((result as { metadata?: Record<string, unknown> }).metadata?.continuationState).toMatchObject({
       kind: 'second_brain_focus',
       payload: {
+        activeItemType: 'note',
         itemType: 'note',
         focusId: 'note-2',
         items: [{ id: 'note-2', label: 'Smoke Test Note' }],
+      },
+    });
+  });
+
+  it('creates a local Second Brain brief directly', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_brief_upsert');
+        expect(args).toMatchObject({
+          kind: 'manual',
+          title: 'Second Brain brief smoke test',
+          content: 'This is a brief for smoke testing.',
+        });
+        return {
+          success: true,
+          output: {
+            id: 'brief-1',
+            title: 'Second Brain brief smoke test',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-brief-create',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Create a brief called "Second Brain brief smoke test" that says "This is a brief for smoke testing."',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'create',
+        confidence: 'high',
+        summary: 'Creates a local brief.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'brief' },
+      },
+    );
+
+    expect(typeof result).toBe('object');
+    expect((result as { content: string }).content).toBe('Brief created: Second Brain brief smoke test');
+    expect((result as { metadata?: Record<string, unknown> }).metadata?.continuationState).toMatchObject({
+      kind: 'second_brain_focus',
+      payload: {
+        activeItemType: 'brief',
+        itemType: 'brief',
+        focusId: 'brief-1',
+      },
+    });
+  });
+
+  it('creates a local Second Brain person directly', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_person_upsert');
+        expect(args).toMatchObject({
+          name: 'Smoke Test Person',
+          email: 'smoke@example.com',
+        });
+        return {
+          success: true,
+          output: {
+            id: 'person-1',
+            name: 'Smoke Test Person',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      getPersonById: vi.fn(() => null),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-person-create',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Create a person in my Second Brain named "Smoke Test Person" with email "smoke@example.com".',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'create',
+        confidence: 'high',
+        summary: 'Creates a local person.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'person' },
+      },
+    );
+
+    expect(typeof result).toBe('object');
+    expect((result as { content: string }).content).toBe('Person created: Smoke Test Person');
+    expect((result as { metadata?: Record<string, unknown> }).metadata?.continuationState).toMatchObject({
+      kind: 'second_brain_focus',
+      payload: {
+        activeItemType: 'person',
+        itemType: 'person',
+        focusId: 'person-1',
+      },
+    });
+  });
+
+  it('updates the focused Second Brain person directly', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_person_upsert');
+        expect(args).toMatchObject({
+          id: 'person-1',
+          name: 'Smoke Test Person',
+          email: 'smoke@example.com',
+        });
+        return {
+          success: true,
+          output: {
+            id: 'person-1',
+            name: 'Smoke Test Person',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      getPersonById: vi.fn(() => ({
+        id: 'person-1',
+        name: 'Smoke Test Person',
+        relationship: 'other',
+        createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+        updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+      })),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-person-update',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Update that person to include email "smoke@example.com".',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'update',
+        confidence: 'high',
+        summary: 'Updates a local person.',
+        turnRelation: 'follow_up',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'person' },
+      },
+      {
+        continuityKey: 'chat:owner',
+        scope: { assistantId: 'chat', userId: 'owner' },
+        linkedSurfaces: [],
+        continuationState: {
+          kind: 'second_brain_focus',
+          payload: {
+            itemType: 'person',
+            focusId: 'person-1',
+            items: [{ id: 'person-1', label: 'Smoke Test Person' }],
+          },
+        },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+    );
+
+    expect(typeof result).toBe('object');
+    expect((result as { content: string }).content).toBe('Person updated: Smoke Test Person');
+    expect((result as { metadata?: Record<string, unknown> }).metadata?.continuationState).toMatchObject({
+      kind: 'second_brain_focus',
+      payload: {
+        activeItemType: 'person',
+        itemType: 'person',
+        focusId: 'person-1',
       },
     });
   });
@@ -821,9 +1465,10 @@ describe('LLMChatAgent direct intent metadata', () => {
 
     expect(typeof result).toBe('object');
     expect((result as { content: string }).content).toContain('Recent notes:');
-    expect((result as { metadata?: Record<string, unknown> }).metadata?.continuationState).toEqual({
+    expect((result as { metadata?: Record<string, unknown> }).metadata?.continuationState).toMatchObject({
       kind: 'second_brain_focus',
       payload: {
+        activeItemType: 'note',
         itemType: 'note',
         focusId: 'note-2',
         items: [
@@ -1008,5 +1653,300 @@ describe('LLMChatAgent direct intent metadata', () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it('infers the active Second Brain item type for follow-up task reads when the gateway omits it', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    (agent as any).secondBrainService = {
+      listTasks: vi.fn(() => [{
+        id: 'task-1',
+        title: 'Second Brain task smoke test',
+        details: undefined,
+        priority: 'medium',
+        dueAt: Date.UTC(2026, 3, 8, 15, 0, 0),
+        status: 'todo',
+      }]),
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainRead(
+      {
+        id: 'msg-task-read-follow-up',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Show my tasks again.',
+        timestamp: Date.now(),
+      },
+      {
+        route: 'personal_assistant_task',
+        operation: 'read',
+        confidence: 'high',
+        summary: 'Reads the same local task list again.',
+        turnRelation: 'follow_up',
+        resolution: 'ready',
+        missingFields: [],
+        entities: {},
+      },
+      {
+        continuityKey: 'chat:owner',
+        scope: { assistantId: 'chat', userId: 'owner' },
+        linkedSurfaces: [],
+        continuationState: {
+          kind: 'second_brain_focus',
+          payload: {
+            activeItemType: 'task',
+            itemType: 'task',
+            focusId: 'task-1',
+            items: [{ id: 'task-1', label: 'Second Brain task smoke test' }],
+            byType: {
+              task: {
+                focusId: 'task-1',
+                items: [{ id: 'task-1', label: 'Second Brain task smoke test' }],
+              },
+            },
+          },
+        },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+    );
+
+    expect((result as { content: string }).content).toContain('Open tasks:');
+    expect((result as { content: string }).content).toContain('Second Brain task smoke test');
+  });
+
+  it('keeps note focus available after later calendar activity for note deletion follow-ups', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_note_delete');
+        expect(args).toEqual({ id: 'note-2' });
+        return {
+          success: true,
+          output: {
+            id: 'note-2',
+            title: 'Smoke Test Note',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-note-delete',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Delete that note.',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'delete',
+        confidence: 'high',
+        summary: 'Deletes the previously focused note.',
+        turnRelation: 'follow_up',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'note' },
+      },
+      {
+        continuityKey: 'chat:owner',
+        scope: { assistantId: 'chat', userId: 'owner' },
+        linkedSurfaces: [],
+        continuationState: {
+          kind: 'second_brain_focus',
+          payload: {
+            activeItemType: 'calendar',
+            itemType: 'calendar',
+            focusId: 'event-1',
+            items: [{ id: 'event-1', label: 'Second Brain calendar smoke test' }],
+            byType: {
+              note: {
+                focusId: 'note-2',
+                items: [{ id: 'note-2', label: 'Smoke Test Note' }],
+              },
+              calendar: {
+                focusId: 'event-1',
+                items: [{ id: 'event-1', label: 'Second Brain calendar smoke test' }],
+              },
+            },
+          },
+        },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+    );
+
+    expect((result as { content: string }).content).toBe('Note deleted: Smoke Test Note');
+    expect((result as { metadata?: Record<string, unknown> }).metadata?.continuationState).toMatchObject({
+      kind: 'second_brain_focus',
+      payload: {
+        activeItemType: 'calendar',
+        itemType: 'calendar',
+        focusId: 'event-1',
+      },
+    });
+  });
+
+  it('resumes direct Second Brain mutations after approval and persists the focused item', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const continuityThreadStore = new ContinuityThreadStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-second-brain-focus.test.sqlite',
+      retentionDays: 30,
+      now: () => 1_710_000_000_000,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).continuityThreadStore = continuityThreadStore;
+    const updateDirectContinuationState = vi.spyOn(agent as any, 'updateDirectContinuationState');
+
+    const pendingAction: PendingActionRecord = {
+      id: 'pending-1',
+      scope: {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'owner',
+      },
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve note save',
+        approvalIds: ['approval-1'],
+      },
+      intent: {
+        route: 'personal_assistant_task',
+        operation: 'create',
+        originalUserContent: 'Create a note that says: "Second Brain write smoke test note."',
+      },
+      resume: {
+        kind: 'direct_route',
+        payload: {
+          type: 'second_brain_mutation',
+          toolName: 'second_brain_note_upsert',
+          args: { content: 'Second Brain write smoke test note.' },
+          originalUserContent: 'Create a note that says: "Second Brain write smoke test note."',
+          itemType: 'note',
+          action: 'create',
+        },
+      },
+      createdAt: 1,
+      updatedAt: 1,
+      expiresAt: 2,
+    };
+
+    const result = await (agent as any).continueDirectRouteAfterApproval(
+      pendingAction,
+      'approval-1',
+      'approved',
+      {
+        success: true,
+        message: "Tool 'second_brain_note_upsert' completed.",
+        result: {
+          success: true,
+          status: 'succeeded',
+          message: "Tool 'second_brain_note_upsert' completed.",
+          output: {
+            id: 'note-2',
+            title: 'Smoke Test Note',
+          },
+        },
+      },
+    );
+
+    expect(result?.content).toBe('Note created: Smoke Test Note');
+    expect(tools.executeModelTool).not.toHaveBeenCalled();
+    expect(updateDirectContinuationState).toHaveBeenCalledWith(
+      'owner',
+      'web',
+      'owner',
+      expect.objectContaining({
+        kind: 'second_brain_focus',
+        payload: expect.objectContaining({
+          activeItemType: 'note',
+          itemType: 'note',
+          focusId: 'note-2',
+        }),
+      }),
+    );
+  });
+
+  it('replays the last actionable request for retry-like follow-ups after a transient Ollama failure', () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    (agent as any).conversationService = {
+      getSessionHistory: vi.fn(() => [
+        {
+          role: 'assistant',
+          content: 'Could not reach Ollama at http://127.0.0.1:11434. Check that the local Ollama server is running. (fetch failed)',
+        },
+      ]),
+    };
+
+    const result = (agent as any).resolveRetryAfterFailureContinuationContent(
+      'Ollama was disabled. Try that again now',
+      {
+        continuityKey: 'chat:owner',
+        scope: { assistantId: 'chat', userId: 'owner' },
+        linkedSurfaces: [],
+        lastActionableRequest: 'Create a brief called "Second Brain brief smoke test" that says "This is a brief for smoke testing."',
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+      {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: 'web',
+      },
+    );
+
+    expect(result).toBe('Create a brief called "Second Brain brief smoke test" that says "This is a brief for smoke testing."');
   });
 });

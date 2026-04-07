@@ -1284,6 +1284,9 @@ export class ConversationService {
       ...(typeof value.providerName === 'string' && value.providerName.trim()
         ? { providerName: value.providerName.trim() }
         : {}),
+      ...(typeof value.providerProfileName === 'string' && value.providerProfileName.trim()
+        ? { providerProfileName: value.providerProfileName.trim() }
+        : {}),
       ...(typeof value.model === 'string' && value.model.trim()
         ? { model: value.model.trim() }
         : {}),

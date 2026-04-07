@@ -15,6 +15,7 @@ import {
 } from './intent-gateway.js';
 import {
   attachSelectedExecutionProfileMetadata,
+  findProviderByTier,
   selectExecutionProfile,
   type SelectedExecutionProfile,
 } from './execution-profiles.js';
@@ -95,6 +96,52 @@ export function createIncomingDispatchPreparer(args: {
   const now = args.now ?? Date.now;
   const availableCodingBackends = args.availableCodingBackends ?? ['codex', 'claude-code', 'gemini-cli', 'aider'];
 
+  const listClassifierProvidersForMode = (
+    config: GuardianAgentConfig,
+    mode: RoutingTierMode,
+  ): string[] => {
+    if (mode === 'local-only') {
+      const local = findProviderByTier(config, 'local');
+      return local
+        ? [local]
+        : [
+            findProviderByTier(config, 'managed_cloud'),
+            findProviderByTier(config, 'frontier'),
+          ].filter((value): value is string => Boolean(value));
+    }
+    if (mode === 'managed-cloud-only') {
+      const managedCloud = findProviderByTier(config, 'managed_cloud');
+      return managedCloud
+        ? ([
+            managedCloud,
+            findProviderByTier(config, 'frontier'),
+          ].filter((value): value is string => Boolean(value)))
+        : ([
+            findProviderByTier(config, 'frontier'),
+            findProviderByTier(config, 'local'),
+          ].filter((value): value is string => Boolean(value)));
+    }
+    if (mode === 'frontier-only') {
+      const frontier = findProviderByTier(config, 'frontier');
+      return frontier
+        ? ([
+            frontier,
+            findProviderByTier(config, 'managed_cloud'),
+          ].filter((value): value is string => Boolean(value)))
+        : ([
+            findProviderByTier(config, 'managed_cloud'),
+            findProviderByTier(config, 'local'),
+          ].filter((value): value is string => Boolean(value)));
+    }
+    return [
+      args.findProviderByLocality(config, 'local')
+        ?? config.defaultProvider
+        ?? args.findProviderByLocality(config, 'external')
+        ?? null,
+      args.findProviderByLocality(config, 'external'),
+    ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
+  };
+
   const resolveRoutingStateAgentId = (preferredAgentId?: string): string => (
     args.resolveSharedStateAgentId(preferredAgentId)
     ?? ((args.router.findAgentByRole('local') || args.router.findAgentByRole('external'))
@@ -115,11 +162,12 @@ export function createIncomingDispatchPreparer(args: {
       userId: canonicalUserId,
     });
     const currentConfig = args.configRef.current;
-    const primaryProviderName = args.findProviderByLocality(currentConfig, 'local')
-      ?? currentConfig.defaultProvider
-      ?? args.findProviderByLocality(currentConfig, 'external')
-      ?? null;
-    const fallbackProviderName = args.findProviderByLocality(currentConfig, 'external');
+    const routingMode = args.normalizeTierModeForRouter(
+      args.router,
+      currentConfig,
+      currentConfig.routing?.tierMode,
+    );
+    const classifierProviders = listClassifierProvidersForMode(currentConfig, routingMode);
     const recentHistory = args.conversations.getHistoryForContext({
       agentId: stateAgentId,
       userId: canonicalUserId,
@@ -155,15 +203,14 @@ export function createIncomingDispatchPreparer(args: {
       );
     };
 
-    const primary = await classifyWithProvider(primaryProviderName);
-    if (primary?.available) {
-      return primary;
+    let lastResult: IntentGatewayRecord | null = null;
+    for (const providerName of classifierProviders) {
+      lastResult = await classifyWithProvider(providerName);
+      if (lastResult?.available) {
+        return lastResult;
+      }
     }
-    if (!fallbackProviderName || fallbackProviderName === primaryProviderName) {
-      return primary;
-    }
-    const fallback = await classifyWithProvider(fallbackProviderName);
-    return fallback?.available ? fallback : (primary ?? fallback);
+    return lastResult;
   };
 
   const recordIntentRoutingTrace = (

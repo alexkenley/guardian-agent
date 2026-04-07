@@ -277,6 +277,7 @@ describe('Runtime', () => {
         metadata: attachSelectedExecutionProfileMetadata({}, {
           id: 'frontier_deep',
           providerName: 'anthropic',
+          providerType: 'anthropic',
           providerLocality: 'external',
           providerTier: 'frontier',
           requestedTier: 'external',

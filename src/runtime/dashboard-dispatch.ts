@@ -197,6 +197,7 @@ export function createDashboardMessageDispatcher(args: {
         : [];
       const detailParts = [
         source.providerName ? `provider=${source.providerName}` : undefined,
+        source.providerProfileName ? `profile=${source.providerProfileName}` : undefined,
         source.model ? `model=${source.model}` : undefined,
         source.locality ? `locality=${source.locality}` : undefined,
         typeof source.durationMs === 'number' ? `duration=${source.durationMs}ms` : undefined,
@@ -206,6 +207,7 @@ export function createDashboardMessageDispatcher(args: {
       ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
       const titleParts = [
         source.providerName?.trim() || 'model',
+        source.providerProfileName?.trim() || '',
         source.model?.trim() || '',
         source.usedFallback ? 'fallback' : '',
       ].filter(Boolean);

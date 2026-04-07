@@ -7,6 +7,8 @@
  * Do not turn this file into implementation documentation, code-path notes, architecture commentary,
  * test guidance, or internal troubleshooting details except where an operator directly needs them to use
  * or diagnose the product from the outside.
+ * Avoid backend terminology unless the operator sees it directly in the product. Prefer user-facing labels
+ * and workflows over internal names, config-file details, trace-file paths, route IDs, or runtime internals.
  */
 
 export interface ReferenceGuidePageSection {
@@ -238,6 +240,8 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Second Brain data is shared across the supported surfaces. A task, note, event, person, or library item created in the web UI is available from Guardian on other supported surfaces too.',
                   'Directionally, Guardian is the assistant-facing home for calendar and people context. Provider calendars and contacts sync into that shared context instead of replacing it.',
                   'Generic requests for Second Brain notes, tasks, people, library items, briefs, routines, or local calendar work stay on the local Second Brain path even when Google Workspace or Microsoft 365 is connected.',
+                  'Requests like `show my briefs` or `list my briefs` should return saved local briefs or a clear empty state instead of falling back to the generic Second Brain overview.',
+                  'Routine reads should also stay bounded and local: requests like `show only my disabled routines` or `what routines are related to email` should return filtered routine results or a clear empty state instead of drifting back to overview.',
                   'Unqualified requests such as `create a calendar entry for tomorrow` default to a local Guardian Second Brain event. Say `Google Calendar` or `Outlook calendar` only when you want provider-specific calendar CRUD.',
                   'That local-vs-provider calendar boundary is enforced all the way through execution. A generic local calendar request should not drift into Google Workspace or Microsoft 365 just because those providers are connected.',
                   'Local Second Brain writes such as calendar creation can still require approval. In that case the approval is for the local Guardian write, not for a provider calendar unless you explicitly named that provider.',
@@ -247,7 +251,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Chat-driven local calendar, task due-date, and contact last-contact updates resolve phrases like `tomorrow at 12 pm`, `move it to Friday`, or `I talked to her yesterday` in Guardian\'s local timezone before the change is saved.',
                   'Simple chat questions such as `What do I have today?` or `Show my tasks` can be answered directly from your saved Guardian data.',
                   'The assistant can create, update, and delete local Second Brain notes, tasks, calendar events, people, library items, briefs, and configured routines.',
-                  'Follow-up local Second Brain edits such as `update that note`, `mark that task as done`, or `move that event to tomorrow at 5 pm` should bind to the last focused local record in the current chat instead of drifting into unrelated brief or provider actions.',
+                  'Follow-up local Second Brain edits such as `update that note`, `mark that task as done`, `update that person`, or `move that event to tomorrow at 5 pm` should bind to the last focused local record in the current chat instead of drifting into unrelated brief or provider actions.',
                   'Saved briefs can be generated, reviewed, edited, regenerated, and deleted from the same saved data.',
                   'Event descriptions, task details, note content, people notes, and library summaries are part of the stored records, so they are available to the assistant logic that reads those records.',
                 ],
@@ -303,6 +307,8 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Choose an agent in the web chat panel or with CLI `/chat <agentId>` when you want to pin work to one agent.',
                   'Conversation memory is scoped per user, channel, and logical assistant. Switching chat mode does not start a separate conversation by itself.',
                   'Web chat now shows a source badge on every assistant reply so you can see whether the answer came from the local lane, external lane, fallback path, or a non-model system response.',
+                  'When a managed-cloud response used a named routed profile, the source badge now appends that profile suffix so you can tell `managed cloud · ollama cloud · general` apart from `... · tools` or `... · coding` at a glance.',
+                  'Second Brain replies identify themselves as `second brain`, so the badge reflects the actual source of the answer.',
                   'In plain terms: `local` means your local AI path answered, `external` means a hosted AI path answered, and `system` means the reply came from product logic rather than a normal model turn.',
                   'The web `Ask the agent...` field supports multiline drafting. Press `Enter` to send and `Shift+Enter` to add a new line.',
                   'Use the web New Conversation control, CLI `/reset [agentId]`, or Telegram `/reset [agentId]` to clear context.',
@@ -313,7 +319,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Session Management',
                 items: [
                   'Use CLI `/session list`, `/session use <sessionId>`, and `/session new` to revisit or branch prior work.',
-                  'Assistant state in the System page shows queued and running sessions, wait times, execution times, and recent traces.',
+                  'Assistant state in the System page shows queued and running sessions, wait times, execution times, and recent activity.',
                   'Quick actions are available through the web quick-action bar, CLI `/quick <action> <details>`, and Telegram `/quick ...`.',
                   'Built-in quick actions cover email, task planning, calendar planning, and a security review that runs the Assistant Security scan flow.',
                   'Chat can show whether a reply came from the local or hosted model path when that is useful for troubleshooting.',
@@ -327,7 +333,7 @@ export function getReferenceGuide(): ReferenceGuide {
           {
             id: 'assistant-control-plane',
             title: 'Assistant Control Plane',
-            summary: 'Inspect system state, approvals, jobs, traces, and policy decisions from the operator surfaces.',
+            summary: 'Inspect system state, approvals, jobs, and policy decisions from the operator surfaces.',
             sections: [
               {
                 title: 'Web Control Surfaces',
@@ -340,7 +346,6 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Automations now includes an `Execution Timeline` section that acts as the global operator view for recent assistant, code-session, workflow, and scheduled-task runs.',
                   'Use the execution timeline when you need to reconstruct what the agent did, why a run paused, which tool step failed, or how approvals and verification progressed.',
                   'Routing Trace gives you a quick explanation of how Guardian interpreted a request and where it sent the work.',
-                  'If you need the detailed routing trace file for troubleshooting, it is usually at `~/.guardianagent/routing/intent-routing.jsonl`. On Windows-hosted runs this is typically `C:\\Users\\<user>\\.guardianagent\\routing\\intent-routing.jsonl`.',
                   'Configuration > Tools is where you manage tools and approvals. Security is where you review alerts, posture, and security activity.',
                 ],
               },
@@ -409,7 +414,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Browser Automation',
                 items: [
                   'Browser automation is built into Guardian.',
-                  'Use the built-in browser actions exposed through chat and automations rather than raw backend integrations.',
+                  'Use the built-in browser actions exposed through chat and automations rather than trying to wire in separate browser tools yourself.',
                   'Guardian can inspect page state, extract content, follow links, and interact with supported web pages through the managed browser surface.',
                   'Browser navigation only supports HTTP and HTTPS targets, and private hosts are blocked for SSRF protection.',
                   'Use Configuration > Security > Browser Automation > Allowed Domains to add browser hosts manually. An entry such as `httpbin.org` also covers subdomains like `www.httpbin.org`.',
@@ -434,8 +439,8 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Guardian keeps one shared current coding session across web chat, CLI, and Telegram for the same user by default. Switching or attaching from one of those surfaces updates the default workspace the others see as current too.',
                   'In the web UI, the Coding Workspace session cards control which coding session is current for Guardian chat. Click a session card to make it current. In CLI, use `/code attach <sessionId-or-match>` and `/code detach` for the same job.',
                   'Guardian chat can also switch, list, inspect, and detach Coding Workspace sessions directly from normal language requests such as "List the coding sessions", "What coding workspace is this chat attached to?", "Switch this chat to the coding workspace for TestApp", and "Detach this chat from the current coding workspace."',
-                  'Repo-scoped search requests in an attached coding workspace, such as `Search the repo for "ollama_cloud"`, should route through guarded filesystem search inside that workspace rather than falling back to ad hoc shell search commands.',
-                  'Repo-grounded inspect/review requests should prefer native repo tools (`fs_search`, `code_symbol_search`, `fs_read`) before shell-based grep or git inspection, unless you explicitly ask for shell or git output.',
+                  'Repo-scoped search requests in an attached coding workspace stay inside that workspace and use Guardian’s guarded code search tools by default.',
+                  'Repo-grounded inspect and review requests prefer Guardian’s built-in file and code search tools before shell or git output, unless you explicitly ask for shell or git output.',
                 ],
               },
               {
@@ -444,10 +449,10 @@ export function getReferenceGuide(): ReferenceGuide {
                   'The Coding Workspace page (`#/code`) is a workbench: session rail, explorer, editor and diff view, manual terminal panes, activity, and a code inspector for guided investigation.',
                   'Session context survives refreshes and can be reused from other attached surfaces.',
                   'Guardian chat stays available while you are in the Coding Workspace and follows the currently focused code session.',
-                  'When the workbench is opened from a run or trace link, it can open a session for inspection without changing which session is currently attached to Guardian chat.',
+                  'When the workbench is opened from a run or history link, it can open a session for inspection without changing which session is currently attached to Guardian chat.',
                   'The workbench activity rail shows the session timeline for approvals, verification, and recent work.',
                   'Workspace Activity cards now show the same response-source badge treatment as the main chat rail, so delegated coding replies keep their provenance when you inspect them from the workbench.',
-                  'Recent session timeline events can also show bounded model-response provenance and context-compaction diagnostics, so you can tell when Guardian had to shrink prompt history or which model path produced the final coding reply.',
+                  'Recent session timeline events can also show which answer source produced the final coding reply, so you can tell whether the result came from the local, managed-cloud, or frontier path.',
                   'Use the Code activity timeline when you want the local story for one coding session. Use Automations > Execution Timeline when you want the global cross-session view.',
                   'Use the inline editor search beside `Inspect` to search within the current file, jump to each match in Monaco, and step forward or backward through repeated hits without opening the full Monaco find widget.',
                   'The editor theme selector can follow the current app bundle by default, or you can pin a different code theme when you want the IDE to diverge from the rest of the UI.',
@@ -458,11 +463,11 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'External Coding Backends',
                 items: [
-                  'Configuration > Integrations > Coding Assistants shows the built-in external coding backends Guardian knows how to launch: Claude Code, Codex, Gemini CLI, and Aider.',
-                  'That panel is intentionally simple: enable or disable the built-in backends you want available and choose a default when needed.',
-                  'Guardian only uses these backends when the user explicitly asks to delegate coding work to an external tool. Direct coding requests should still run through Guardian’s built-in coding tools by default.',
-                  'Mentioning Codex or another backend as the subject of a question is not enough to launch it. Questions such as "Why did Codex do this?" should stay in normal explanation or investigation flow unless you explicitly ask Guardian to use that backend.',
-                  'Approval copy for delegated coding backends now includes the active coding workspace so you can see which repo Guardian will launch the CLI in before you approve it.',
+                  'Configuration > Integrations > Coding Assistants shows the external coding assistants Guardian can launch: Claude Code, Codex, Gemini CLI, and Aider.',
+                  'That panel is intentionally simple: enable or disable the assistants you want available and choose a default when needed.',
+                  'Guardian only uses these assistants when you explicitly ask to delegate coding work to one of them. Direct coding requests still use Guardian’s built-in coding tools by default.',
+                  'Mentioning Codex or another assistant as the subject of a question is not enough to launch it. Questions such as "Why did Codex do this?" stay in normal explanation or investigation flow unless you explicitly ask Guardian to use that assistant.',
+                  'Approval copy for delegated coding assistants includes the active coding workspace so you can see which repo Guardian will launch the CLI in before you approve it.',
                   'If a delegated coding request explicitly mentions a different coding workspace than the current attachment, Guardian should stop and ask you to switch instead of silently running the CLI in the wrong repo.',
                 ],
               },
@@ -521,7 +526,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'In Configuration > AI Providers choose the local provider path, then set a profile name and model.',
                   'Set the local routed default if you want this profile to be the model Guardian uses whenever routing stays on the local tier.',
                   'CLI equivalent: `/config add ollama ollama llama3.2`.',
-                  'With approval, Guardian can also inspect configured provider profiles and switch between already-available models through the normal chat/tool path.',
+                  'With approval, Guardian can also inspect configured provider profiles and switch between already-available models for you.',
                 ],
               },
               {
@@ -554,11 +559,11 @@ export function getReferenceGuide(): ReferenceGuide {
                   'While creating a new Ollama Cloud profile, Guardian suggests a starting model from the profile name, but you can still change it before saving.',
                   'Guardian treats Ollama Cloud as a distinct managed-cloud tier between local Ollama and other frontier hosted providers.',
                   'Set the managed-cloud routed default if you want Guardian to prefer Ollama Cloud whenever routing leaves the local tier but should stay below frontier providers.',
-                  'You can save multiple named Ollama Cloud profiles, for example a general profile plus separate direct, tool-loop, and coding profiles.',
+                  'You can save multiple named Ollama Cloud profiles, for example a general profile plus separate direct, tools, and coding profiles.',
                   'In Configuration > AI Providers > Model Auto Selection Policy use Managed-Cloud Profile Routing to bind those named profiles to Guardian workload roles instead of treating managed cloud as a single undifferentiated slot.',
-                  'When a specific managed-cloud role is left unset, Guardian uses the explicit `general` managed-cloud profile first when one is set, otherwise it can infer a matching profile from the provider name before falling back to the managed-cloud routed default.',
-                  'If you leave managed-cloud role bindings unset entirely, Guardian can still infer a likely profile from the provider name, for example `general`, `direct`, `tool`, or `coding`, before falling back to the routed default.',
-                  'You can delete saved provider profiles from the AI Providers editor; Guardian automatically clears managed-cloud role bindings and routed defaults that pointed at the deleted profile.',
+                  'If you leave one of those role slots unset, Guardian prefers the `general` managed-cloud profile first when one is available.',
+                  'If you leave the managed-cloud routing slots blank entirely, Guardian can still make a sensible guess from profile names such as `general`, `direct`, `tool`, or `coding`.',
+                  'You can delete saved provider profiles from the AI Providers editor without manually cleaning up the related routing settings afterward.',
                 ],
               },
               {
@@ -571,9 +576,9 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Current Recommended Role Models',
                 items: [
-                  'Treat these as current operator recommendations, not hardcoded product rules: `general` -> `gpt-oss:120b`, `direct` -> `minimax-m2.1`, `toolLoop` -> `glm-4.7`, `coding` -> `qwen3-coder:480b`.',
-                  'If you only want three managed-cloud profiles, merge `direct` into `general` first and keep `toolLoop` plus `coding` separate.',
-                  'Use the direct Ollama Cloud API model names that appear in Ollama model discovery and `/api/tags`, not the `-cloud` local-launch suffix names shown in some Ollama examples.',
+                  'Treat these as current operator recommendations, not hardcoded product rules: `general` -> `gpt-oss:120b`, `direct` -> `minimax-m2.1`, `tools` -> `glm-4.7`, `coding` -> `qwen3-coder:480b`.',
+                  'If you only want three managed-cloud profiles, merge `direct` into `general` first and keep `tools` plus `coding` separate.',
+                  'Use the exact model names shown in Guardian model discovery, not alternate `-cloud` suffix examples you may see in some Ollama documentation.',
                 ],
               },
               {
@@ -611,11 +616,9 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Usage Notes',
                 items: [
-                  'Guardian derives one primary provider internally from the routed provider defaults, with managed cloud preferred as the default middle tier when it is configured.',
                   'Use chat mode or `/mode` when you want to force `local`, `managed cloud`, or `frontier` directly.',
-                  'Auto mode now uses a deterministic selection policy after intent routing instead of treating every non-local request the same way.',
+                  'Auto mode chooses between local, managed cloud, and frontier based on your saved provider policy and the kind of request you asked for.',
                   'In Configuration > AI Providers > Model Auto Selection Policy choose whether Auto should stay balanced or bias more aggressively toward frontier quality.',
-                  'The managed-cloud and frontier routed defaults still decide which concrete provider Auto uses after it picks a tier.',
                   'Balanced Auto can keep lighter external work on managed-cloud Ollama while escalating heavier repo-grounded or security-heavy work to the frontier default.',
                   'Provider changes propagate to the running web UI immediately.',
                 ],
@@ -1010,10 +1013,12 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Conversation memory is kept when available, with retention settings exposed through configuration.',
                   'The web `Memory` page is the unified operator surface for durable memory: global memory, code-session memory, operator-curated pages, derived indexes, linked outputs, and review-only records.',
                   'Operator-curated memory pages can be created, edited, and archived from the Memory page when durable memory is writable, and Guardian keeps those edits as durable memory entries.',
-                  'Duplicate-safe memory writes are built in: exact repeats are skipped, matching curated pages are updated instead of duplicated, and stale system-managed flush material can be consolidated automatically.',
-                  'Idle-time automated maintenance is configurable under `assistant.maintenance` and can sweep global memory plus idle code-session scopes without creating hidden assistant turns.',
+                  'Guardian avoids exact duplicate memory saves, updates matching curated pages instead of stacking obvious duplicates, and keeps system-managed memory tidy over time.',
+                  'Memory maintenance can be tuned from Configuration when you want Guardian to review older memory automatically.',
                   'Derived memory pages and hygiene findings are inspectable but remain read-only and refreshable by design.',
                   'Switching between `auto`, `local-only`, `managed-cloud-only`, and `frontier-only` changes who answers, but it does not create a separate conversation by itself.',
+                  'In the web chat, those routing modes still preserve normal tool use and answer-source labels.',
+                  'When you change the routing mode from the web chat toolbar, that choice now survives app restarts instead of resetting with the browser session.',
                   'Reset conversation state when you want a clean run without changing the longer-term identity policy.',
                   'If context looks stale, review memory, analytics, and search-oriented history together.',
                 ],

@@ -20,7 +20,8 @@ describe('model-routing-ux', () => {
     expect(readResponseSourceMetadata({
       responseSource: {
         locality: 'external',
-        providerName: 'openai',
+        providerName: 'ollama_cloud',
+        providerProfileName: 'ollama-cloud-general',
         model: 'gpt-5.4',
         tier: 'external',
         usedFallback: true,
@@ -34,8 +35,9 @@ describe('model-routing-ux', () => {
       },
     })).toEqual({
       locality: 'external',
-      providerName: 'openai',
-      providerTier: 'frontier',
+      providerName: 'ollama_cloud',
+      providerProfileName: 'ollama-cloud-general',
+      providerTier: 'managed_cloud',
       model: 'gpt-5.4',
       tier: 'external',
       usedFallback: true,
@@ -52,8 +54,14 @@ describe('model-routing-ux', () => {
 
   it('formats response source labels compactly', () => {
     expect(formatResponseSourceLabel({
-      responseSource: { locality: 'external', usedFallback: true },
-    })).toBe('[external · fallback]');
+      responseSource: {
+        locality: 'external',
+        providerName: 'ollama_cloud',
+        providerProfileName: 'ollama-cloud-general',
+        providerTier: 'managed_cloud',
+        usedFallback: true,
+      },
+    })).toBe('[managed cloud · ollama cloud · general · fallback]');
   });
 
   it('returns the friendly local-model complexity message', () => {

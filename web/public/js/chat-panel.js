@@ -15,6 +15,7 @@ import {
   markApprovalUiResolved,
 } from './approval-ui-state.js';
 import { decideChatApproval } from './chat-approval.js';
+import { resolveChatDispatchAgentId } from './chat-dispatch-routing.js';
 import { resolveChatHistoryKey } from './chat-history.js';
 import { matchesRunTimelineRequest } from './chat-run-tracking.js';
 import { createResponseSourceBadge } from './response-source.js';
@@ -326,11 +327,10 @@ export async function initChatPanel(container) {
 
   // ── Helpers ──────────────────────────────────────────────────
 
-  const getAgentId = () => (
-    hasInternalOnly
-      ? getRoutingModeAgentId(chatAgents, modeSelect?.value)
-      : (select?.value || undefined)
-  );
+  const getAgentId = () => resolveChatDispatchAgentId({
+    hasInternalOnly,
+    selectedAgentId: select?.value,
+  });
   const getContextPrefix = () => `[Context: User is currently viewing the ${currentChatContext} panel] `;
 
   const restoreInput = () => {

@@ -55,6 +55,9 @@ export class RateLimiter implements AdmissionController {
     const userId = typeof action.params['userId'] === 'string'
       ? action.params['userId'].trim()
       : '';
+    const channel = typeof action.params['channel'] === 'string'
+      ? action.params['channel'].trim()
+      : '';
     const now = Date.now();
     const scopes: Array<{
       key: string;
@@ -78,7 +81,7 @@ export class RateLimiter implements AdmissionController {
         includeBurst: false,
       },
     ];
-    if (userId) {
+    if (userId && channel !== 'scheduled') {
       scopes.push({
         key: `user:${userId}`,
         label: `user '${userId}'`,

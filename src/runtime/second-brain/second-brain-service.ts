@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import {
   type SecondBrainBriefUpdateInput,
+  type SecondBrainBriefUpsertInput,
   type SecondBrainBriefFilter,
   type SecondBrainBriefRecord,
   type SecondBrainEntityKind,
@@ -675,6 +677,33 @@ export class SecondBrainService {
 
   saveBrief(brief: SecondBrainBriefRecord): SecondBrainBriefRecord {
     return this.store.briefs.upsertBrief(brief);
+  }
+
+  upsertBrief(input: SecondBrainBriefUpsertInput): SecondBrainBriefRecord {
+    const title = input.title.trim();
+    const content = input.content.trim();
+    if (!title) {
+      throw new Error('Brief title is required.');
+    }
+    if (!content) {
+      throw new Error('Brief content is required.');
+    }
+
+    const now = this.now();
+    const id = input.id?.trim() || `brief:manual:${randomUUID()}`;
+    const existing = this.store.briefs.getBrief(id);
+    const kind = input.kind ?? existing?.kind ?? 'manual';
+    return this.store.briefs.upsertBrief({
+      id,
+      kind,
+      title,
+      content,
+      generatedAt: input.generatedAt ?? existing?.generatedAt ?? now,
+      routineId: input.routineId ?? existing?.routineId,
+      eventId: input.eventId ?? existing?.eventId,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    });
   }
 
   updateBrief(input: SecondBrainBriefUpdateInput): SecondBrainBriefRecord {

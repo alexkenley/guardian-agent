@@ -2,6 +2,7 @@ import type { IntentGatewayDecision, IntentGatewayRecord } from './intent-gatewa
 
 export type DirectIntentRoutingCandidate =
   | 'personal_assistant'
+  | 'provider_read'
   | 'filesystem'
   | 'memory_write'
   | 'memory_read'
@@ -80,6 +81,10 @@ function preferredCandidatesForDecision(
       return ['browser'];
     case 'personal_assistant_task':
       return ['personal_assistant'];
+    case 'general_assistant':
+      return decision.executionClass === 'provider_crud'
+        ? ['provider_read']
+        : [];
     case 'workspace_task':
       return decision.operation === 'send' || decision.operation === 'draft'
         ? ['workspace_write', 'workspace_read']
@@ -113,7 +118,6 @@ function preferredCandidatesForDecision(
     case 'coding_session_control':
       return ['coding_session_control'];
     case 'security_task':
-    case 'general_assistant':
     case 'unknown':
     default:
       return [];

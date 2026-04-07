@@ -3,6 +3,7 @@ import type { HorizonScanner } from '../../runtime/second-brain/horizon-scanner.
 import type { SecondBrainService } from '../../runtime/second-brain/second-brain-service.js';
 import type {
   SecondBrainBriefKind,
+  SecondBrainGeneratedBriefKind,
   SecondBrainDeliveryChannel,
   SecondBrainLinkKind,
   SecondBrainRoutineEventType,
@@ -61,6 +62,7 @@ function normalizePersonRelationship(value: unknown): 'work' | 'personal' | 'fam
 function normalizeBriefKind(value: unknown): SecondBrainBriefKind | undefined {
   const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
   switch (normalized) {
+    case 'manual':
     case 'morning':
     case 'pre_meeting':
     case 'follow_up':
@@ -68,6 +70,13 @@ function normalizeBriefKind(value: unknown): SecondBrainBriefKind | undefined {
     default:
       return undefined;
   }
+}
+
+function normalizeGeneratedBriefKind(value: unknown): SecondBrainGeneratedBriefKind | undefined {
+  const normalized = normalizeBriefKind(value);
+  return normalized === 'morning' || normalized === 'pre_meeting' || normalized === 'follow_up'
+    ? normalized
+    : undefined;
 }
 
 function normalizeLinkKind(value: unknown): SecondBrainLinkKind | undefined {
@@ -185,6 +194,56 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
 
   context.registry.register(
     {
+      name: 'second_brain_brief_upsert',
+      description: 'Create or update a stored Second Brain brief.',
+      shortDescription: 'Create or update a Second Brain brief.',
+      risk: 'mutating',
+      category: 'memory',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        required: ['title', 'content'],
+        properties: {
+          id: { type: 'string' },
+          kind: {
+            type: 'string',
+            enum: ['manual', 'morning', 'pre_meeting', 'follow_up'],
+          },
+          title: { type: 'string' },
+          content: { type: 'string' },
+          generatedAt: { type: 'number' },
+          routineId: { type: 'string' },
+          eventId: { type: 'string' },
+        },
+      },
+    },
+    async (args, request) => {
+      context.guardAction(request, 'write_file', { path: 'second-brain:briefs' });
+      const service = context.getService();
+      if (!service) return { success: false, error: 'Second Brain service is unavailable.' };
+      const kind = args.kind == null ? undefined : normalizeBriefKind(args.kind);
+      if (args.kind != null && !kind) {
+        return { success: false, error: 'kind must be manual, morning, pre_meeting, or follow_up.' };
+      }
+      try {
+        const brief = service.upsertBrief({
+          id: asString(args.id).trim() || undefined,
+          kind,
+          title: asString(args.title).trim(),
+          content: asString(args.content).trim(),
+          generatedAt: typeof args.generatedAt === 'number' ? args.generatedAt : undefined,
+          routineId: asString(args.routineId).trim() || undefined,
+          eventId: asString(args.eventId).trim() || undefined,
+        });
+        return { success: true, output: brief };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  );
+
+  context.registry.register(
+    {
       name: 'second_brain_generate_brief',
       description: 'Generate and store a deterministic Second Brain brief or follow-up draft.',
       shortDescription: 'Generate a Second Brain brief.',
@@ -207,7 +266,7 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
       context.guardAction(request, 'write_file', { path: 'second-brain:briefs' });
       const briefingService = context.getBriefingService();
       if (!briefingService) return { success: false, error: 'Second Brain briefing service is unavailable.' };
-      const kind = normalizeBriefKind(args.kind);
+      const kind = normalizeGeneratedBriefKind(args.kind);
       if (!kind) {
         return { success: false, error: 'kind must be morning, pre_meeting, or follow_up.' };
       }

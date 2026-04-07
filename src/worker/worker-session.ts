@@ -684,7 +684,12 @@ export class BrokeredWorkerSession {
     if (params.hasFallbackProvider || selectedExecutionProfile?.fallbackProviderOrder?.length) {
       fallbackChatFn = async (msgs, opts) => {
         responseSource = {
-          locality: 'external',
+          locality: selectedExecutionProfile?.providerLocality ?? 'external',
+          ...(selectedExecutionProfile?.providerType ? { providerName: selectedExecutionProfile.providerType } : {}),
+          ...(selectedExecutionProfile?.providerName && selectedExecutionProfile.providerName !== selectedExecutionProfile.providerType
+            ? { providerProfileName: selectedExecutionProfile.providerName }
+            : {}),
+          ...(selectedExecutionProfile?.providerTier ? { providerTier: selectedExecutionProfile.providerTier } : {}),
           usedFallback: true,
           notice: 'Retried with an alternate model after the local model failed to format a tool call.',
         };
@@ -711,10 +716,34 @@ export class BrokeredWorkerSession {
           const chatResponse = await chatFn(messages, options);
           responseSource = responseSource ?? (
             chatResponse.providerLocality === 'local' || chatResponse.providerLocality === 'external'
-              ? {
-                  locality: chatResponse.providerLocality,
-                  ...(typeof chatResponse.providerName === 'string' ? { providerName: chatResponse.providerName } : {}),
-                }
+              ? (() => {
+                  const actualProviderName = typeof chatResponse.providerName === 'string'
+                    ? chatResponse.providerName.trim()
+                    : '';
+                  const useSelectedExecutionProfile = !!selectedExecutionProfile
+                    && (
+                      !actualProviderName
+                      || actualProviderName === selectedExecutionProfile.providerName
+                      || actualProviderName === selectedExecutionProfile.providerType
+                    );
+                  const providerName = useSelectedExecutionProfile
+                    ? selectedExecutionProfile.providerType
+                    : actualProviderName;
+                  const selectedProviderTier = useSelectedExecutionProfile
+                    ? selectedExecutionProfile.providerTier
+                    : undefined;
+                  return {
+                    locality: chatResponse.providerLocality,
+                    ...(providerName ? { providerName } : {}),
+                    ...(useSelectedExecutionProfile
+                      && selectedExecutionProfile.providerName !== selectedExecutionProfile.providerType
+                      ? { providerProfileName: selectedExecutionProfile.providerName }
+                      : {}),
+                    ...(selectedProviderTier
+                      ? { providerTier: selectedProviderTier }
+                      : {}),
+                  } satisfies ResponseSourceMetadata;
+                })()
               : undefined
           );
           return chatResponse;

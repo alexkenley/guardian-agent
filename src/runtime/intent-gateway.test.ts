@@ -327,6 +327,37 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.personalItemType).toBe('routine');
   });
 
+  it('repairs missing enabled=false for disabled routine reads from the source request', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Show only my disabled routines.',
+        channel: 'web',
+      },
+      async () => ({
+        content: '',
+        toolCalls: [{
+          id: 'call-personal-routine-read-1',
+          name: 'route_intent',
+          arguments: JSON.stringify({
+            route: 'personal_assistant_task',
+            confidence: 'high',
+            operation: 'read',
+            summary: 'Reads disabled Second Brain routines.',
+            personalItemType: 'routine',
+          }),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.operation).toBe('read');
+    expect(result.decision.entities.personalItemType).toBe('routine');
+    expect(result.decision.entities.enabled).toBe(false);
+  });
+
   it('preserves explicit automation creation requests as automation authoring', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
@@ -429,6 +460,39 @@ describe('IntentGateway', () => {
     expect(result.decision.operation).toBe('update');
   });
 
+  it('preserves AI provider configuration requests as config-scoped provider orchestration', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'List my configured AI providers.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'general_assistant',
+          confidence: 'high',
+          operation: 'read',
+          summary: 'Lists the configured Guardian AI provider profiles.',
+          uiSurface: 'config',
+          executionClass: 'provider_crud',
+          preferredTier: 'external',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'medium',
+          preferredAnswerPath: 'tool_loop',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('general_assistant');
+    expect(result.decision.operation).toBe('read');
+    expect(result.decision.entities.uiSurface).toBe('config');
+    expect(result.decision.executionClass).toBe('provider_crud');
+    expect(result.decision.preferredAnswerPath).toBe('tool_loop');
+  });
+
   it('includes file-grounded coding review guidance in the gateway system prompt', async () => {
     const gateway = new IntentGateway();
     let inspectedSystemPrompt = '';
@@ -500,6 +564,7 @@ describe('IntentGateway', () => {
 
     expect(result.decision.route).toBe('personal_assistant_task');
     expect(primaryPrompt).toContain('Prefer personal_assistant_task for meeting prep, follow-up drafting, calendar planning');
+    expect(primaryPrompt).toContain('Guardian AI provider profile inventory, model catalog inspection, model routing policy, and AI provider configuration work are not Second Brain tasks.');
     expect(primaryPrompt).toContain('Prefer automation_authoring when the user explicitly asks to create an automation');
     expect(primaryPrompt).toContain('Create the Pre-Meeting Brief routine in Second Brain.');
     expect(primaryPrompt).toContain('Create an automation that checks WHM disk quota every day.');
@@ -507,18 +572,30 @@ describe('IntentGateway', () => {
     expect(primaryPrompt).toContain('Example: "Create a calendar entry for tomorrow at 3 PM called Dentist." -> route=personal_assistant_task');
     expect(primaryPrompt).toContain('Example: "Show my notes." -> route=personal_assistant_task, operation=read, personalItemType=note.');
     expect(primaryPrompt).toContain('Example: "Show my library items." -> route=personal_assistant_task, operation=read, personalItemType=library.');
+    expect(primaryPrompt).toContain('Example: "Show the people in my Second Brain." -> route=personal_assistant_task, operation=read, personalItemType=person.');
+    expect(primaryPrompt).toContain('Example: "Show only my disabled routines." -> route=personal_assistant_task, operation=read, personalItemType=routine, enabled=false.');
+    expect(primaryPrompt).toContain('Example: "What routines are related to email or inbox processing?" -> route=personal_assistant_task, operation=read, personalItemType=routine, query="email or inbox processing".');
     expect(primaryPrompt).toContain('Example: "Show my calendar events for the next 7 days." -> route=personal_assistant_task, operation=read, personalItemType=calendar, calendarTarget=local, calendarWindowDays=7.');
+    expect(primaryPrompt).toContain('Example: "Create a person in my Second Brain named Smoke Test Person with email smoke@example.com." -> route=personal_assistant_task, operation=create, personalItemType=person.');
     expect(primaryPrompt).toContain('Example: "Prepare me for my next Outlook meeting using the calendar event, recent email, and docs." -> route=personal_assistant_task');
+    expect(primaryPrompt).toContain('Example: "List my configured AI providers." -> route=general_assistant, operation=read, uiSurface=config');
     expect(primaryPrompt).toContain('SharePoint');
     expect(fallbackPrompt).toContain('workspace_task means explicit provider CRUD or administration in Google Workspace or Microsoft 365 surfaces');
+    expect(fallbackPrompt).toContain('Guardian AI provider profile inventory, model catalogs, model routing policy, and AI provider configuration work are not personal_assistant_task.');
     expect(fallbackPrompt).toContain('Prefer automation_authoring when the user explicitly asks to create an automation or workflow in the Automations system.');
     expect(fallbackPrompt).toContain('Examples: "Add this meeting to my Google Calendar." -> route="workspace_task", operation="create", calendarTarget="gws".');
     expect(fallbackPrompt).toContain('Examples: "Update the SharePoint document for the launch checklist." -> route="workspace_task", operation="update".');
     expect(fallbackPrompt).toContain('Examples: "Check my unread Outlook mail." -> route="email_task", operation="read", emailProvider="m365", mailboxReadMode="unread".');
     expect(fallbackPrompt).toContain('Examples: "Show me the newest five emails in Gmail." -> route="email_task", operation="read", emailProvider="gws", mailboxReadMode="latest".');
+    expect(fallbackPrompt).toContain('Examples: "List my configured AI providers." -> route="general_assistant", operation="read", uiSurface="config"');
+    expect(fallbackPrompt).toContain('Examples: "Give me a concise plan for organizing my week." -> route="general_assistant", operation="inspect"');
     expect(fallbackPrompt).toContain('Examples: "Show my notes." -> route="personal_assistant_task", operation="read", personalItemType="note".');
     expect(fallbackPrompt).toContain('Examples: "Show my library items." -> route="personal_assistant_task", operation="read", personalItemType="library".');
+    expect(fallbackPrompt).toContain('Examples: "Show the people in my Second Brain." -> route="personal_assistant_task", operation="read", personalItemType="person".');
+    expect(fallbackPrompt).toContain('Examples: "Show only my disabled routines." -> route="personal_assistant_task", operation="read", personalItemType="routine", enabled=false.');
+    expect(fallbackPrompt).toContain('Examples: "What routines are related to email or inbox processing?" -> route="personal_assistant_task", operation="read", personalItemType="routine", query="email or inbox processing".');
     expect(fallbackPrompt).toContain('Examples: "Show my calendar events for the next 7 days." -> route="personal_assistant_task", operation="read", personalItemType="calendar", calendarTarget="local", calendarWindowDays=7.');
+    expect(fallbackPrompt).toContain('Examples: "Create a person in my Second Brain named Smoke Test Person with email smoke@example.com." -> route="personal_assistant_task", operation="create", personalItemType="person".');
   });
 
   it('preserves explicit cloud tool and profile entities without collapsing to automation control', async () => {

@@ -205,6 +205,7 @@ export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
     'memory_save',
     'memory_bridge_search',
     'second_brain_brief_list',
+    'second_brain_brief_upsert',
     'second_brain_brief_update',
     'second_brain_brief_delete',
     'second_brain_generate_brief',

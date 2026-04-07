@@ -46,6 +46,7 @@ describe('context assembly', () => {
       executionProfile: {
         id: 'managed_cloud_tool',
         providerName: 'ollama-cloud',
+        providerType: 'ollama_cloud',
         providerLocality: 'external',
         providerTier: 'managed_cloud',
         requestedTier: 'external',
@@ -188,6 +189,7 @@ describe('context assembly', () => {
       executionProfile: {
         id: 'frontier_deep',
         providerName: 'anthropic',
+        providerType: 'anthropic',
         providerLocality: 'external',
         providerTier: 'frontier',
         requestedTier: 'external',

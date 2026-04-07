@@ -12,7 +12,8 @@ export type SecondBrainEntityKind =
 export type SecondBrainTaskStatus = 'todo' | 'in_progress' | 'done';
 export type SecondBrainTaskPriority = 'low' | 'medium' | 'high';
 export type SecondBrainPersonRelationship = 'work' | 'personal' | 'family' | 'vendor' | 'other';
-export type SecondBrainBriefKind = 'morning' | 'pre_meeting' | 'follow_up';
+export type SecondBrainBriefKind = 'manual' | 'morning' | 'pre_meeting' | 'follow_up';
+export type SecondBrainGeneratedBriefKind = 'morning' | 'pre_meeting' | 'follow_up';
 export type SecondBrainLinkKind = 'document' | 'article' | 'reference' | 'repo' | 'file' | 'other';
 export type SecondBrainRoutineCategory = 'scheduled' | 'one_off';
 export type SecondBrainRoutineCatalogCategory = 'daily' | 'weekly' | 'meeting' | 'follow_up' | 'maintenance';
@@ -110,6 +111,16 @@ export interface SecondBrainBriefUpdateInput {
   id: string;
   title?: string;
   content?: string;
+}
+
+export interface SecondBrainBriefUpsertInput {
+  id?: string;
+  kind?: SecondBrainBriefKind;
+  title: string;
+  content: string;
+  generatedAt?: number;
+  routineId?: string;
+  eventId?: string;
 }
 
 export interface SecondBrainRoutineManifest {
@@ -255,7 +266,7 @@ export interface SecondBrainRoutineCreateInput {
 }
 
 export interface SecondBrainGenerateBriefInput {
-  kind: SecondBrainBriefKind;
+  kind: SecondBrainGeneratedBriefKind;
   eventId?: string;
 }
 

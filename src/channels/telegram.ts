@@ -12,7 +12,7 @@ import { createLogger } from '../util/logging.js';
 import type { AnalyticsEventInput } from '../runtime/analytics.js';
 import type { ThreatIntelSummary, ThreatIntelScanInput, ThreatIntelFinding, IntelStatus } from '../runtime/threat-intel.js';
 import { describePendingApproval } from '../runtime/pending-approval-copy.js';
-import { formatResponseSourceLabel } from '../runtime/model-routing-ux.js';
+import { formatCompactResponseSourceLabel } from '../runtime/model-routing-ux.js';
 
 const log = createLogger('channel:telegram');
 const TELEGRAM_MAX_MESSAGE_CHARS = 4096;
@@ -512,7 +512,7 @@ export class TelegramChannel implements ChannelAdapter {
     const approvals = extractPendingActionApprovals(response);
     const approvalKey = this.buildApprovalKey(ctx);
 
-    const sourceLabel = formatResponseSourceLabel(response.metadata);
+    const sourceLabel = formatCompactResponseSourceLabel(response.metadata);
     const contentWithSource = sourceLabel ? `${sourceLabel} ${response.content}` : response.content;
 
     if (!approvals.length || !this.onToolsApprovalDecision) {

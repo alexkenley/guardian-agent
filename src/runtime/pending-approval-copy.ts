@@ -348,8 +348,12 @@ function describeSecondBrainLibraryAction(toolName: string, preview: string): st
 function describeSecondBrainBriefAction(toolName: string, preview: string): string | null {
   const parsed = tryParsePreview(preview);
   if (!parsed) return null;
-  const title = asString(parsed.title) || asString(parsed.id);
+  const title = asString(parsed.title);
   switch (toolName) {
+    case 'second_brain_brief_upsert':
+      return title
+        ? `${asString(parsed.id) ? 'update' : 'save'} brief ${quote(title)}`
+        : `${asString(parsed.id) ? 'update' : 'save'} brief`;
     case 'second_brain_generate_brief':
       return title ? `generate brief ${quote(title)}` : 'generate brief';
     case 'second_brain_brief_update':
@@ -674,7 +678,8 @@ export function describePendingApproval(summary: PendingApprovalSummary): string
   }
 
   if (
-    summary.toolName === 'second_brain_generate_brief'
+    summary.toolName === 'second_brain_brief_upsert'
+    || summary.toolName === 'second_brain_generate_brief'
     || summary.toolName === 'second_brain_brief_update'
     || summary.toolName === 'second_brain_brief_delete'
   ) {

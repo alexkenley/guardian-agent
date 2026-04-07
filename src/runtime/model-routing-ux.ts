@@ -11,6 +11,7 @@ export interface ResponseUsageMetadata {
 export interface ResponseSourceMetadata {
   locality: 'local' | 'external';
   providerName?: string;
+  providerProfileName?: string;
   providerTier?: 'local' | 'managed_cloud' | 'frontier';
   model?: string;
   tier?: 'local' | 'external';
@@ -46,6 +47,32 @@ export function getProviderLocalityFromName(providerName: string | undefined): '
   return getProviderLocality(providerName) ?? 'external';
 }
 
+function formatProviderName(providerName: string): string {
+  return providerName.replaceAll('_', ' ');
+}
+
+function simplifyProviderProfileName(providerName: string | undefined, providerProfileName: string | undefined): string {
+  const raw = providerProfileName?.trim() ?? '';
+  if (!raw) return '';
+  const normalizedProviderName = providerName?.trim() ?? '';
+  if (!normalizedProviderName) return raw.replaceAll('_', ' ');
+  const variants = [
+    normalizedProviderName,
+    normalizedProviderName.replaceAll('_', '-'),
+    normalizedProviderName.replaceAll('_', ' '),
+  ]
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  for (const variant of variants) {
+    const escaped = variant.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const simplified = raw.replace(new RegExp(`^${escaped}(?:[-_\\s]+)?`, 'i'), '').trim();
+    if (simplified && simplified.toLowerCase() !== raw.toLowerCase()) {
+      return simplified.replaceAll('_', ' ');
+    }
+  }
+  return raw.replaceAll('_', ' ');
+}
+
 export function readResponseSourceMetadata(metadata?: Record<string, unknown>): ResponseSourceMetadata | undefined {
   const value = metadata?.responseSource;
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
@@ -67,6 +94,7 @@ export function readResponseSourceMetadata(metadata?: Record<string, unknown>): 
   return {
     locality,
     providerName: typeof record.providerName === 'string' ? record.providerName : undefined,
+    providerProfileName: typeof record.providerProfileName === 'string' ? record.providerProfileName : undefined,
     providerTier: record.providerTier === 'local' || record.providerTier === 'managed_cloud' || record.providerTier === 'frontier'
       ? record.providerTier
       : (typeof record.providerName === 'string' ? getProviderTier(record.providerName) : undefined),
@@ -96,6 +124,20 @@ export function readResponseSourceMetadata(metadata?: Record<string, unknown>): 
 }
 
 export function formatResponseSourceLabel(metadata?: Record<string, unknown>): string {
+  const source = readResponseSourceMetadata(metadata);
+  if (!source) return '';
+  const parts: string[] = [source.providerTier ? formatProviderTierLabel(source.providerTier) : source.locality];
+  const providerLabel = source.providerName ? formatProviderName(source.providerName) : '';
+  if (providerLabel) parts.push(providerLabel);
+  const profileLabel = simplifyProviderProfileName(source.providerName, source.providerProfileName);
+  if (profileLabel && profileLabel.toLowerCase() !== providerLabel.toLowerCase()) {
+    parts.push(profileLabel);
+  }
+  if (source.usedFallback) parts.push('fallback');
+  return `[${parts.join(' · ')}]`;
+}
+
+export function formatCompactResponseSourceLabel(metadata?: Record<string, unknown>): string {
   const source = readResponseSourceMetadata(metadata);
   if (!source) return '';
   const parts: string[] = [source.providerTier ? formatProviderTierLabel(source.providerTier) : source.locality];

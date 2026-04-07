@@ -106,6 +106,7 @@ Required left-nav order:
 Notes:
 
 - the persistent chat panel remains part of the shell, not a left-nav page
+- the chat panel routing-mode selector persists to config, so `auto` / `local-only` / `managed-cloud-only` / `frontier-only` survive app restarts
 - `System` is the dedicated cross-product status and activity monitoring surface
 - `Performance` remains a first-class workstation-operations page and must not be folded back into `Second Brain`
 - `Cloud` is a first-class operational area and must not live only inside Configuration

@@ -21,6 +21,15 @@ describe('RateLimiter', () => {
     };
   }
 
+  function makeChannelAction(agentId: string, userId: string, channel: string): AgentAction {
+    return {
+      type: 'message_dispatch',
+      agentId,
+      capabilities: [],
+      params: { userId, channel },
+    };
+  }
+
   it('should pass through non-message actions', () => {
     const limiter = new RateLimiter();
     const action: AgentAction = {
@@ -173,5 +182,18 @@ describe('RateLimiter', () => {
     expect(result).not.toBeNull();
     expect(result!.allowed).toBe(false);
     expect(result!.reason).toContain('global');
+  });
+
+  it('does not let scheduled traffic consume the interactive per-user bucket', () => {
+    const limiter = new RateLimiter({
+      burstAllowed: 10,
+      maxPerMinute: 100,
+      maxPerHour: 1000,
+      maxPerMinutePerUser: 1,
+      maxPerHourPerUser: 10,
+    });
+
+    expect(limiter.check(makeChannelAction('security-triage', 'owner', 'scheduled'))).toBeNull();
+    expect(limiter.check(makeChannelAction('external', 'owner', 'web'))).toBeNull();
   });
 });

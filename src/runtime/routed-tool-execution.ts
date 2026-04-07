@@ -14,6 +14,7 @@ const REPO_INSPECTION_SHELL_PATTERN = /\b(?:git\s+grep|grep|rg|findstr|sed|head|
 const GIT_HISTORY_SHELL_PATTERN = /\b(?:git\s+diff|git\s+show|git\s+log|git\s+blame)\b/i;
 const SECOND_BRAIN_MUTATION_TOOLS = new Set([
   'second_brain_generate_brief',
+  'second_brain_brief_upsert',
   'second_brain_brief_update',
   'second_brain_brief_delete',
   'second_brain_horizon_scan',

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { SecondBrainService } from './second-brain-service.js';
 import type {
-  SecondBrainBriefKind,
+  SecondBrainGeneratedBriefKind,
   SecondBrainBriefRecord,
   SecondBrainEventRecord,
   SecondBrainGenerateBriefInput,
@@ -55,7 +55,7 @@ function formatDate(value: number): string {
   });
 }
 
-function buildBriefId(kind: SecondBrainBriefKind, now: number, eventId?: string): string {
+function buildBriefId(kind: SecondBrainGeneratedBriefKind, now: number, eventId?: string): string {
   if (kind === 'morning') {
     return `brief:morning:${new Date(now).toISOString().slice(0, 10)}`;
   }
@@ -65,7 +65,7 @@ function buildBriefId(kind: SecondBrainBriefKind, now: number, eventId?: string)
   return `brief:${kind}:${randomUUID()}`;
 }
 
-function titleForBrief(kind: SecondBrainBriefKind, event?: SecondBrainEventRecord, now?: number): string {
+function titleForBrief(kind: SecondBrainGeneratedBriefKind, event?: SecondBrainEventRecord, now?: number): string {
   switch (kind) {
     case 'morning':
       return `Morning Brief for ${formatDate(now ?? Date.now())}`;

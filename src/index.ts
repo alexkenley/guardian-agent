@@ -163,6 +163,7 @@ import {
 } from './runtime/incoming-dispatch.js';
 import { createDashboardMessageDispatcher } from './runtime/dashboard-dispatch.js';
 import { createConfigPersistenceService } from './runtime/control-plane/config-persistence-service.js';
+import { persistRoutingTierModeInRawConfig } from './config/routing-mode-persistence.js';
 import { createAgentDashboardCallbacks } from './runtime/control-plane/agent-dashboard-callbacks.js';
 import { createAssistantDashboardCallbacks } from './runtime/control-plane/assistant-dashboard-callbacks.js';
 import { createConfigStateHelpers } from './runtime/control-plane/config-state-helpers.js';
@@ -1619,6 +1620,7 @@ function buildDashboardCallbacks(
             pendingActionForApproval,
             input.approvalId,
             input.decision,
+            result,
           );
           if (followUp) {
             continuedResponse = followUp;
@@ -1774,6 +1776,56 @@ function buildDashboardCallbacks(
     onAuditVerifyChain: () => runtime.auditLog.verifyChain(),
 
     onConfig: () => redactConfig(configRef.current),
+
+    onRoutingMode: () => {
+      const r = configRef.current.routing;
+      const tierMode = normalizeTierModeForRouter(router, configRef.current, r?.tierMode);
+      const availableModes = buildAvailableRoutingModes(router, configRef.current);
+      if (tierMode !== (r?.tierMode ?? 'auto')) {
+        configRef.current.routing = {
+          strategy: r?.strategy ?? 'keyword',
+          ...r,
+          tierMode,
+        };
+        bindTierRoutingProviders(runtime, router, configRef.current);
+      }
+      return {
+        tierMode,
+        availableModes,
+        complexityThreshold: r?.complexityThreshold ?? 0.5,
+        fallbackOnFailure: r?.fallbackOnFailure !== false,
+      };
+    },
+
+    onRoutingModeUpdate: (mode) => {
+      if (!configRef.current.routing) {
+        configRef.current.routing = { strategy: 'keyword' };
+      }
+      const normalizedMode = normalizeTierModeForRouter(router, configRef.current, mode);
+      const rawConfig = persistRoutingTierModeInRawConfig(loadRawConfig(), normalizedMode);
+      const persistResult = persistAndApplyConfig(rawConfig, {
+        changedBy: 'routing_mode_update',
+        reason: 'routing mode update',
+      });
+      if (!persistResult.success) {
+        return {
+          success: false,
+          message: persistResult.message,
+          tierMode: normalizeTierModeForRouter(router, configRef.current, configRef.current.routing?.tierMode),
+          availableModes: buildAvailableRoutingModes(router, configRef.current),
+        };
+      }
+      const availableModes = buildAvailableRoutingModes(router, configRef.current);
+      log.info({ requestedTierMode: mode, tierMode: normalizedMode }, 'Tier routing mode updated');
+      return {
+        success: normalizedMode === mode,
+        message: normalizedMode === mode
+          ? `Routing mode set to: ${formatRoutingModeLabel(mode)}`
+          : `Routing mode ${formatRoutingModeLabel(mode)} is unavailable right now. Falling back to: ${formatRoutingModeLabel(normalizedMode)}`,
+        tierMode: normalizedMode,
+        availableModes,
+      };
+    },
 
     ...createAuthControlCallbacks({
       configRef,
@@ -4365,6 +4417,8 @@ async function main(): Promise<void> {
     switch (toolName) {
       case 'second_brain_generate_brief':
         return { topics: ['second-brain'], reason: 'second-brain.brief.generated', path: '/api/second-brain/briefs/generate' };
+      case 'second_brain_brief_upsert':
+        return { topics: ['second-brain'], reason: 'second-brain.brief.upserted', path: '/api/second-brain/briefs/upsert' };
       case 'second_brain_brief_update':
         return { topics: ['second-brain'], reason: 'second-brain.brief.updated', path: '/api/second-brain/briefs/update' };
       case 'second_brain_brief_delete':
@@ -6039,45 +6093,6 @@ async function main(): Promise<void> {
         : `Factory reset finished with ${errors.length} error(s).`,
       deletedFiles,
       errors,
-    };
-  };
-
-  // Routing mode: read/write tier mode at runtime
-  dashboardCallbacks.onRoutingMode = () => {
-    const r = configRef.current.routing;
-    const tierMode = normalizeTierModeForRouter(router, configRef.current, r?.tierMode);
-    const availableModes = buildAvailableRoutingModes(router, configRef.current);
-    if (tierMode !== (r?.tierMode ?? 'auto')) {
-      configRef.current.routing = {
-        strategy: r?.strategy ?? 'keyword',
-        ...r,
-        tierMode,
-      };
-      bindTierRoutingProviders(runtime, router, configRef.current);
-    }
-    return {
-      tierMode,
-      availableModes,
-      complexityThreshold: r?.complexityThreshold ?? 0.5,
-      fallbackOnFailure: r?.fallbackOnFailure !== false,
-    };
-  };
-  dashboardCallbacks.onRoutingModeUpdate = (mode) => {
-    if (!configRef.current.routing) {
-      configRef.current.routing = { strategy: 'keyword' };
-    }
-    const normalizedMode = normalizeTierModeForRouter(router, configRef.current, mode);
-    configRef.current.routing.tierMode = normalizedMode;
-    bindTierRoutingProviders(runtime, router, configRef.current);
-    const availableModes = buildAvailableRoutingModes(router, configRef.current);
-    log.info({ requestedTierMode: mode, tierMode: normalizedMode }, 'Tier routing mode updated');
-    return {
-      success: normalizedMode === mode,
-      message: normalizedMode === mode
-        ? `Routing mode set to: ${formatRoutingModeLabel(mode)}`
-        : `Routing mode ${formatRoutingModeLabel(mode)} is unavailable right now. Falling back to: ${formatRoutingModeLabel(normalizedMode)}`,
-      tierMode: normalizedMode,
-      availableModes,
     };
   };
 

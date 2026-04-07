@@ -32,6 +32,7 @@ function mockGateway(partial: {
 
 const ALL_CANDIDATES = [
   'personal_assistant',
+  'provider_read',
   'coding_session_control',
   'coding_backend',
   'filesystem',
@@ -207,6 +208,17 @@ describe('resolveDirectIntentRoutingCandidates', () => {
     expect(result.candidates).toEqual([]);
     expect(result.gatewayDirected).toBe(true);
     expect(result.gatewayUnavailable).toBe(false);
+  });
+
+  it('maps provider CRUD general-assistant reads to the provider_read candidate', () => {
+    const gateway = mockGateway({ route: 'general_assistant', operation: 'read' });
+    gateway.decision.executionClass = 'provider_crud';
+    const result = resolveDirectIntentRoutingCandidates(
+      gateway,
+      [...ALL_CANDIDATES],
+    );
+    expect(result.candidates).toEqual(['provider_read']);
+    expect(result.gatewayDirected).toBe(true);
   });
 
   it('returns no direct candidates when the gateway is unavailable', () => {

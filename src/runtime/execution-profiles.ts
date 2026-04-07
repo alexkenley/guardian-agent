@@ -30,6 +30,7 @@ export type ExecutionProfileToolContextMode = 'tight' | 'standard';
 export interface SelectedExecutionProfile {
   id: ExecutionProfileId;
   providerName: string;
+  providerType: string;
   providerLocality: ProviderLocality;
   providerTier: ProviderTier;
   requestedTier: 'local' | 'external';
@@ -538,6 +539,7 @@ export function selectExecutionProfile(input: {
     })
     : null;
   const effectiveProviderName = providerSelection?.providerName ?? providerName;
+  const effectiveProviderType = input.config.llm[effectiveProviderName]?.provider?.trim() || effectiveProviderName;
   const shape = buildProfileShape({
     tier: tierSelection.tier,
     expectedContextPressure,
@@ -552,8 +554,9 @@ export function selectExecutionProfile(input: {
   return {
     id: shape.id,
     providerName: effectiveProviderName,
+    providerType: effectiveProviderType,
     providerLocality: getProviderLocality(effectiveProviderName) ?? (tierSelection.tier === 'local' ? 'local' : 'external'),
-    providerTier: tierSelection.tier,
+    providerTier: getProviderTier(effectiveProviderType) ?? tierSelection.tier,
     requestedTier: tierSelection.requestedTier,
     preferredAnswerPath,
     expectedContextPressure,
@@ -579,6 +582,7 @@ export function serializeSelectedExecutionProfile(
   return {
     id: profile.id,
     providerName: profile.providerName,
+    providerType: profile.providerType,
     providerLocality: profile.providerLocality,
     providerTier: profile.providerTier,
     requestedTier: profile.requestedTier,
@@ -603,12 +607,15 @@ export function readSelectedExecutionProfileMetadata(
     ? record.providerName.trim()
     : '';
   if (!providerName) return null;
+  const providerType = typeof record.providerType === 'string' && record.providerType.trim()
+    ? record.providerType.trim()
+    : '';
   const providerLocality = record.providerLocality === 'local' || record.providerLocality === 'external'
     ? record.providerLocality
     : getProviderLocality(providerName);
   const providerTier = isProviderTier(record.providerTier)
     ? record.providerTier
-    : getProviderTier(providerName);
+    : getProviderTier(providerType || providerName);
   const preferredAnswerPath = isPreferredAnswerPath(record.preferredAnswerPath)
     ? record.preferredAnswerPath
     : 'tool_loop';
@@ -637,6 +644,7 @@ export function readSelectedExecutionProfileMetadata(
           ? preferredAnswerPath === 'direct' ? 'managed_cloud_direct' : 'managed_cloud_tool'
           : 'frontier_deep'),
     providerName,
+    providerType: providerType || providerName,
     providerLocality,
     providerTier,
     requestedTier: record.requestedTier === 'local' || record.requestedTier === 'external'
