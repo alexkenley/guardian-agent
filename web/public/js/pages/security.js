@@ -22,6 +22,12 @@ const SECURITY_HELP = {
       whatCanDo: 'Use it to judge whether Guardian is seeing real incident pressure, conservative posture debt, or only low-confidence noise.',
       howLinks: 'It condenses posture and containment into one decision surface before you jump into the deeper queues.',
     },
+    'Needs Attention': {
+      whatItIs: 'This section is the short actionable queue for security work that still deserves operator review right now.',
+      whatSeeing: 'You are seeing the highest-signal alert rows and any Assistant Security or threat-intel review queues that are still open.',
+      whatCanDo: 'Use it to decide whether you should stay in Security Overview for a quick read or jump directly into Security Log, Assistant Security, or Threat Intel.',
+      howLinks: 'This is the fast handoff into the owner queue. Security Log remains the canonical action-and-evidence surface for the shared alert queue.',
+    },
     'Top Active Signals': {
       whatItIs: 'This section highlights the strongest currently active signals across the main security surfaces.',
       whatSeeing: 'You are seeing the highest-priority active alerts plus any Assistant Security or threat-intel queues that still need review.',
@@ -182,10 +188,17 @@ async function renderOverviewTab(panel) {
         ${renderModeRecommendation(posture, containment)}
       </section>
       <section class="table-section">
-        <div class="table-header"><h3>Top Active Signals</h3></div>
-        ${renderTopActiveSignals(posture.topAlerts, assistantSummary, intelSummary)}
+        <div class="table-header">
+          <h3>Needs Attention</h3>
+          <a class="btn btn-secondary btn-sm" href="#/security?tab=security-log">Open Security Log</a>
+        </div>
+        ${renderNeedsAttention(alerts.alerts || [], assistantSummary, intelSummary)}
       </section>
     </div>
+    <section class="table-section">
+      <div class="table-header"><h3>Top Active Signals</h3></div>
+      ${renderTopActiveSignals(posture.topAlerts, assistantSummary, intelSummary)}
+    </section>
   `;
 
   enhanceSectionHelp(panel, SECURITY_HELP.overview);
@@ -681,6 +694,46 @@ function renderTopActiveSignals(topAlerts, assistantSummary, intelSummary) {
 
   if (items.length === 0) {
     return '<div class="empty-state">No high-priority signals currently need focused triage.</div>';
+  }
+
+  return `<div class="security-focus-list">${items.join('')}</div>`;
+}
+
+function renderNeedsAttention(alerts, assistantSummary, intelSummary) {
+  const items = [];
+
+  for (const alert of (alerts || []).slice(0, 5)) {
+    items.push(renderFocusItem({
+      badgeLabel: alert.severity || 'alert',
+      badgeClass: `status-${alert.severity || 'warning'}`,
+      title: alert.subject || alert.type || 'Security alert',
+      detail: alert.description || 'Open Security Log for the full alert detail and actions.',
+      meta: `${formatSecuritySource(alert.source)} · ${formatRelativeTime(alert.lastSeenAt || alert.timestamp)} · ${alert.status || 'active'}`,
+    }));
+  }
+
+  if ((assistantSummary.findings?.highOrCritical || 0) > 0) {
+    items.push(renderFocusItem({
+      badgeLabel: 'assistant',
+      badgeClass: 'status-warning',
+      title: 'Assistant Security findings are still open',
+      detail: `${assistantSummary.findings.highOrCritical} high or critical ${pluralize(assistantSummary.findings.highOrCritical, 'finding')} still need review.`,
+      meta: 'Open Assistant Security for source-specific posture triage.',
+    }));
+  }
+
+  if ((intelSummary.findings?.highOrCritical || 0) > 0) {
+    items.push(renderFocusItem({
+      badgeLabel: 'intel',
+      badgeClass: 'status-warning',
+      title: 'Threat-intel review is waiting',
+      detail: `${intelSummary.findings.highOrCritical} high-signal ${pluralize(intelSummary.findings.highOrCritical, 'finding')} still need a decision.`,
+      meta: 'Open Threat Intel for watchlist-driven review and drafted response actions.',
+    }));
+  }
+
+  if (items.length === 0) {
+    return '<div class="empty-state">Nothing in the current security queues needs immediate attention.</div>';
   }
 
   return `<div class="security-focus-list">${items.join('')}</div>`;

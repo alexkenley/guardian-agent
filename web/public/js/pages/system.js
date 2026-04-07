@@ -94,60 +94,243 @@ function resolvePerformanceSummary(status) {
   };
 }
 
+function resolveSecuritySummary(posture, alerts, assistantSummary, intelSummary) {
+  const alertCount = Number(alerts?.totalMatches || 0);
+  const criticalCount = Number(alerts?.bySeverity?.critical || 0);
+  const highCount = Number(alerts?.bySeverity?.high || 0);
+  const assistantFindings = Number(assistantSummary?.findings?.highOrCritical || 0);
+  const intelFindings = Number(intelSummary?.findings?.highOrCritical || 0);
+  const mode = formatSecurityMode(posture?.recommendedMode || posture?.currentMode || 'unknown');
+  const tone = criticalCount > 0
+    ? 'error'
+    : highCount > 0 || alertCount > 0 || posture?.shouldEscalate
+      ? 'warning'
+      : assistantFindings > 0 || intelFindings > 0
+        ? 'info'
+        : 'success';
+  return {
+    value: mode,
+    subtitle: `${alertCount} alerts • ${assistantFindings} assistant • ${intelFindings} intel`,
+    tone,
+    tooltip: 'Shared security posture summary from Security Overview, including active alert pressure and the current open review queues.',
+    alertCount,
+    assistantFindings,
+    intelFindings,
+  };
+}
+
+function resolveAutomationSummary(state) {
+  const summary = state?.summary || {};
+  const enabled = summary.enabled === true;
+  const playbookCount = Number(summary.playbookCount || 0);
+  const enabledPlaybookCount = Number(summary.enabledPlaybookCount || 0);
+  const runCount = Number(summary.runCount || 0);
+  return {
+    value: enabled ? 'Enabled' : 'Disabled',
+    subtitle: `${enabledPlaybookCount}/${playbookCount} playbooks • ${runCount} tracked runs`,
+    tone: enabled ? 'success' : 'warning',
+    tooltip: 'Automation engine status, enabled playbook count, and tracked execution history from the Automations page.',
+    playbookCount,
+    enabledPlaybookCount,
+    runCount,
+  };
+}
+
+function resolveCodeWorkspaceSummary(codeSessionsPayload) {
+  const sessions = Array.isArray(codeSessionsPayload?.sessions) ? codeSessionsPayload.sessions : [];
+  const currentSessionId = typeof codeSessionsPayload?.currentSessionId === 'string'
+    ? codeSessionsPayload.currentSessionId
+    : null;
+  const currentSession = currentSessionId
+    ? sessions.find((session) => session.id === currentSessionId) || null
+    : null;
+  const activeCount = sessions.filter((session) => session.status === 'running' || session.status === 'queued').length;
+  if (currentSession) {
+    const tone = currentSession.status === 'running'
+      ? 'accent'
+      : currentSession.status === 'queued'
+        ? 'warning'
+        : 'info';
+    return {
+      value: currentSession.status === 'running'
+        ? 'Running'
+        : currentSession.status === 'queued'
+          ? 'Queued'
+          : 'Attached',
+      subtitle: `${currentSession.title || 'Coding session'} • ${sessions.length} total`,
+      tone,
+      tooltip: 'The currently attached shared coding workspace plus the overall workspace count from the Code page.',
+      currentSession,
+      sessions,
+      activeCount,
+    };
+  }
+  if (sessions.length > 0) {
+    return {
+      value: `${sessions.length} Ready`,
+      subtitle: `${activeCount} active • attach one in Code`,
+      tone: activeCount > 0 ? 'accent' : 'info',
+      tooltip: 'Code workspaces are available, but no shared workspace is currently attached for the main Guardian chat surface.',
+      currentSession: null,
+      sessions,
+      activeCount,
+    };
+  }
+  return {
+    value: 'None',
+    subtitle: 'Create or attach a workspace in Code',
+    tone: 'warning',
+    tooltip: 'No coding workspaces are currently available for this operator.',
+    currentSession: null,
+    sessions,
+    activeCount: 0,
+  };
+}
+
+function resolveSearchSummary(searchStatus, config) {
+  const runtimeAvailable = searchStatus?.available === true;
+  const installed = searchStatus?.installed === true;
+  const collections = Array.isArray(searchStatus?.collections) ? searchStatus.collections : [];
+  const configuredSources = Array.isArray(searchStatus?.configuredSources)
+    ? searchStatus.configuredSources
+    : Array.isArray(config?.assistant?.tools?.search?.sources)
+      ? config.assistant.tools.search.sources
+      : [];
+  const sourceCount = configuredSources.length;
+  return {
+    value: runtimeAvailable ? 'Available' : installed ? 'Configured' : 'Unavailable',
+    subtitle: `${collections.length} collections • ${sourceCount} sources`,
+    tone: runtimeAvailable ? 'success' : sourceCount > 0 ? 'warning' : 'info',
+    tooltip: 'Document Search runtime availability plus indexed collection and configured source counts.',
+    collections,
+    configuredSources,
+  };
+}
+
+function getCloudConfig(config) {
+  return config?.assistant?.tools?.cloud || {
+    enabled: false,
+    profileCounts: { total: 0 },
+    security: {
+      inlineSecretProfileCount: 0,
+      credentialRefCount: 0,
+      selfSignedProfileCount: 0,
+      customEndpointProfileCount: 0,
+    },
+  };
+}
+
+function resolveCloudSummary(config) {
+  const cloud = getCloudConfig(config);
+  const profileTotal = Number(cloud?.profileCounts?.total || 0);
+  const inlineSecretCount = Number(cloud?.security?.inlineSecretProfileCount || 0);
+  const selfSignedCount = Number(cloud?.security?.selfSignedProfileCount || 0);
+  const riskCount = inlineSecretCount + selfSignedCount;
+  const tone = cloud.enabled
+    ? riskCount > 0
+      ? 'warning'
+      : 'success'
+    : profileTotal > 0
+      ? 'warning'
+      : 'info';
+  return {
+    value: cloud.enabled ? 'Enabled' : 'Disabled',
+    subtitle: `${profileTotal} profiles • ${Number(cloud?.security?.credentialRefCount || 0)} credential refs`,
+    tone,
+    tooltip: 'Cloud runtime status plus saved profile posture from the Cloud page.',
+    profileTotal,
+    riskCount,
+  };
+}
+
+function resolveNetworkSummary(deviceData, baseline, threatState) {
+  const devices = Array.isArray(deviceData?.devices) ? deviceData.devices : [];
+  const activeAlertCount = Number(threatState?.activeAlertCount || 0);
+  const baselineReady = baseline?.baselineReady === true;
+  const snapshotCount = Number(baseline?.snapshotCount || 0);
+  const minSnapshotsForBaseline = Number(baseline?.minSnapshotsForBaseline || 3);
+  return {
+    value: activeAlertCount > 0 ? `${activeAlertCount} Alerts` : baselineReady ? 'Ready' : 'Learning',
+    subtitle: `${devices.length} devices • ${baselineReady ? 'baseline ready' : `${snapshotCount}/${minSnapshotsForBaseline} snapshots`}`,
+    tone: activeAlertCount > 0 ? 'warning' : baselineReady ? 'success' : 'info',
+    tooltip: 'Network inventory size, baseline readiness, and active network-alert pressure from the Network page.',
+    devices,
+    activeAlertCount,
+    baselineReady,
+  };
+}
+
 export async function renderSystem(container) {
   currentContainer = container;
+  cards = {};
   container.innerHTML = '<h2 class="page-title">System</h2><div class="loading">Loading...</div>';
 
   try {
     const [
       agents,
-      summary,
       providers,
       readiness,
       assistantState,
-      recentWarn,
-      recentCritical,
-      routingTrace,
       performanceStatus,
+      securityPosture,
+      securityAlerts,
+      assistantSecurity,
+      threatIntel,
+      connectorsState,
+      codeSessions,
+      searchStatus,
+      networkDevices,
+      networkBaseline,
+      networkThreats,
+      config,
+      routingTrace,
     ] = await Promise.all([
       api.agents().catch(() => []),
-      api.auditSummary(300000).catch(() => null),
       api.providersStatus().catch(() => api.providers().catch(() => [])),
       api.setupStatus().catch(() => null),
       api.assistantState().catch(() => null),
-      api.audit({ severity: 'warn', limit: 6 }).catch(() => []),
-      api.audit({ severity: 'critical', limit: 6 }).catch(() => []),
-      api.routingTrace(buildRoutingTraceQueryParams(8)).catch(() => ({ entries: [] })),
       api.performanceStatus().catch(() => null),
+      api.securityPosture().catch(() => null),
+      api.securityAlerts({ limit: 12 }).catch(() => ({ totalMatches: 0, bySeverity: {}, alerts: [] })),
+      api.aiSecuritySummary().catch(() => ({ findings: { highOrCritical: 0, total: 0 }, posture: {} })),
+      api.threatIntelSummary().catch(() => ({ findings: { highOrCritical: 0, total: 0 }, watchlistCount: 0 })),
+      api.connectorsState(12).catch(() => ({ summary: {} })),
+      api.codeSessions().catch(() => ({ sessions: [], currentSessionId: null })),
+      api.searchStatus().catch(() => null),
+      api.networkDevices().catch(() => ({ devices: [] })),
+      api.networkBaseline().catch(() => null),
+      api.networkThreats({ limit: 20 }).catch(() => ({ activeAlertCount: 0 })),
+      api.config().catch(() => null),
+      api.routingTrace(buildRoutingTraceQueryParams(8)).catch(() => ({ entries: [] })),
     ]);
 
     const defaultProviderName = assistantState?.defaultProvider || null;
     const primaryProvider = defaultProviderName
       ? providers.find((provider) => provider.name === defaultProviderName) || providers[0]
       : providers[0];
-    const attentionItems = [...(recentCritical || []), ...(recentWarn || [])]
-      .sort((a, b) => b.timestamp - a.timestamp)
-      .slice(0, 8);
     const orchestratorSummary = assistantState?.orchestrator?.summary || {};
     const jobsSummary = assistantState?.jobs?.summary || {};
     const readinessLoaded = !!readiness;
-    const warnCount = summary?.bySeverity?.warn || 0;
-    const criticalCount = summary?.bySeverity?.critical || 0;
-    const totalActiveAlerts = warnCount + criticalCount;
     const runtimeLoaded = !!assistantState;
     const activeLLM = resolveActiveLLM(agents);
     const performanceSummary = resolvePerformanceSummary(performanceStatus);
+    const securitySummary = resolveSecuritySummary(securityPosture, securityAlerts, assistantSecurity, threatIntel);
+    const automationSummary = resolveAutomationSummary(connectorsState);
+    const codeSummary = resolveCodeWorkspaceSummary(codeSessions);
+    const searchSummary = resolveSearchSummary(searchStatus, config);
+    const networkSummary = resolveNetworkSummary(networkDevices, networkBaseline, networkThreats);
+    const cloudSummary = resolveCloudSummary(config);
 
     container.innerHTML = `
       <h2 class="page-title">System</h2>
       ${renderGuidancePanel({
         kicker: 'System',
-        title: 'Status and activity monitoring',
+        title: 'Operations overview',
         compact: true,
-        whatItIs: 'System is the cross-product status and activity page for Guardian. It is the place to confirm health, attention, runtime pressure, and recent operator-relevant activity without mixing in configuration editors.',
-        whatSeeing: 'You are seeing top-level system state, recent warning and critical activity, live assistant and job runtime visibility, routing-trace inspection, and direct links into the pages that own deeper work.',
-        whatCanDo: 'Use it to monitor the installation, spot degraded areas quickly, review recent delegated or background activity, and jump straight into the page that owns the next action.',
-        howLinks: 'System is a monitoring surface, not a configuration or workflow editor. Settings stay in Configuration, triage stays in Security, and workstation cleanup stays in Performance.',
+        whatItIs: 'System is the cross-product operations overview for Guardian. It brings together runtime health, owner-surface status, and recent assistant activity without turning into a duplicate workflow page.',
+        whatSeeing: 'You are seeing the shared control-plane summary, linked status cards for the main operational surfaces, current assistant runtime activity, and the routing-trace inspector.',
+        whatCanDo: 'Use it to confirm what is healthy, spot which owner surface needs attention next, and open the deeper page that actually owns the work.',
+        howLinks: 'System is not the alert queue, configuration editor, or workflow builder. Security owns incident attention, Configuration owns setup, and Automations owns repeatable workflows.',
       })}
     `;
 
@@ -177,23 +360,23 @@ export async function renderSystem(container) {
     );
     setCardTooltip(cards.readiness, 'Configuration readiness summary. Opens Configuration.');
 
-    cards.alerts = createStatusCard(
-      'Active Alerts',
-      totalActiveAlerts,
-      summary ? `${criticalCount} critical / ${warnCount} warn in last 5m` : 'No recent audit summary',
-      criticalCount > 0 ? 'error' : totalActiveAlerts > 0 ? 'warning' : 'success',
-    );
-    setCardTooltip(cards.alerts, 'Count of current warning and critical security events. Opens Security > Security Log.');
-
-    cards.llm = createStatusCard(
-      'Primary Provider',
-      primaryProvider ? (primaryProvider.connected !== false ? 'Connected' : 'Disconnected') : 'None',
+    cards.provider = createStatusCard(
+      'Default AI',
+      primaryProvider ? primaryProvider.name : 'None',
       primaryProvider
-        ? `${primaryProvider.name}: ${primaryProvider.model} (${primaryProvider.locality === 'local' ? 'Local' : 'External'})`
+        ? `${primaryProvider.connected !== false ? 'Connected' : 'Disconnected'} • ${primaryProvider.model || 'No model'} (${primaryProvider.locality === 'local' ? 'Local' : 'External'})`
         : 'Configure AI Providers',
       primaryProvider ? (primaryProvider.connected !== false ? 'success' : 'warning') : 'warning',
     );
-    setCardTooltip(cards.llm, 'Current global default AI provider status and model. Opens Configuration > AI Providers.');
+    setCardTooltip(cards.provider, 'Current global default AI provider and model. Opens Configuration > AI Providers.');
+
+    cards.security = createStatusCard(
+      'Security Posture',
+      securitySummary.value,
+      securitySummary.subtitle,
+      securitySummary.tone,
+    );
+    setCardTooltip(cards.security, securitySummary.tooltip);
 
     cards.liveLlm = createStatusCard(
       'Live LLM',
@@ -211,29 +394,39 @@ export async function renderSystem(container) {
     );
     setCardTooltip(cards.performance, performanceSummary.tooltip);
 
-    cards.agents = createStatusCard(
-      'Agents',
-      agents.length,
-      `${agents.filter((agent) => agent.state === 'running' || agent.state === 'idle').length} available`,
-      agents.length > 0 ? 'info' : 'warning',
+    cards.automations = createStatusCard(
+      'Automations',
+      automationSummary.value,
+      automationSummary.subtitle,
+      automationSummary.tone,
     );
-    setCardTooltip(cards.agents, 'High-level agent count and availability. Opens Automations.');
+    setCardTooltip(cards.automations, automationSummary.tooltip);
 
-    bindCard(cards.alerts, '#/security?tab=security-log');
-    bindCard(cards.llm, '#/config?tab=ai-providers');
+    cards.code = createStatusCard(
+      'Code Workspaces',
+      codeSummary.value,
+      codeSummary.subtitle,
+      codeSummary.tone,
+    );
+    setCardTooltip(cards.code, codeSummary.tooltip);
+
+    bindCard(cards.provider, '#/config?tab=ai-providers');
     bindCard(cards.readiness, '#/config?tab=integration-system');
+    bindCard(cards.security, '#/security');
     bindCard(cards.liveLlm, '#/system');
     bindCard(cards.performance, '#/performance');
-    bindCard(cards.agents, '#/automations');
+    bindCard(cards.automations, '#/automations');
+    bindCard(cards.code, '#/code');
 
     summaryGrid.append(
       cards.runtime,
       cards.readiness,
-      cards.alerts,
-      cards.llm,
+      cards.provider,
       cards.liveLlm,
+      cards.security,
       cards.performance,
-      cards.agents,
+      cards.automations,
+      cards.code,
     );
 
     const summarySection = document.createElement('div');
@@ -243,10 +436,10 @@ export async function renderSystem(container) {
         <div class="section-heading">
           <h3>System Summary</h3>
           ${renderInfoButton('System Summary', {
-            whatItIs: 'This strip is the top-level status board for the major Guardian control planes: core runtime, setup readiness, alert pressure, provider health, live LLM activity, workstation pressure, and agent availability.',
-            whatSeeing: 'You are seeing one compact card per high-signal domain, each showing the current state plus a short subtitle that tells you what is driving that status.',
-            whatCanDo: 'Use these cards to confirm whether the platform is healthy and jump straight into the owner page when one area needs attention.',
-            howLinks: 'Each card is a monitoring summary and navigation entry point. It does not replace the page that owns configuration or detailed investigation for that domain.',
+            whatItIs: 'This strip is the top-level status board for the major Guardian control planes: core runtime, setup readiness, provider health, live LLM activity, security posture, workstation pressure, automation state, and code workspace availability.',
+            whatSeeing: 'You are seeing one compact card per high-signal control-plane area, each showing the shared state and the short detail that currently explains it.',
+            whatCanDo: 'Use these cards to confirm platform health fast and jump straight into the owner page when one area looks degraded or busy.',
+            howLinks: 'These cards summarize the owner surfaces. Security still owns alert triage, Configuration still owns setup, and Code still owns workspace detail.',
           })}
         </div>
       </div>
@@ -254,26 +447,26 @@ export async function renderSystem(container) {
     summarySection.appendChild(summaryGrid);
     container.appendChild(summarySection);
 
-    container.appendChild(createAttentionSection(attentionItems));
-    container.appendChild(createRuntimeSection({ orchestratorSummary, jobsSummary, agents, summary, assistantState, performanceStatus }));
+    container.appendChild(createOperationalSurfacesSection({
+      securitySummary,
+      automationSummary,
+      codeSummary,
+      searchSummary,
+      networkSummary,
+      cloudSummary,
+    }));
+    container.appendChild(createRuntimeSection({ orchestratorSummary, jobsSummary, agents, assistantState }));
     container.appendChild(createRoutingTraceSection({
       traceStatus: assistantState?.intentRoutingTrace || null,
       entries: Array.isArray(routingTrace?.entries) ? routingTrace.entries : [],
     }));
-    container.appendChild(createOwnerPagesSection());
 
     enhanceSectionHelp(container, {
-      'Needs Attention': {
-        whatItIs: 'This section is the short-form attention queue for the most recent warning and critical events that may need operator review.',
-        whatSeeing: 'You are seeing a mixed feed of recent high-severity items pulled from audit, monitoring, and automation activity, including their source and short detail text.',
-        whatCanDo: 'Use it to spot what is hot right now, then open Security > Security Log when you need acknowledgement, triage, or a fuller incident view.',
-        howLinks: 'It is a monitoring preview of urgent activity. The actual incident queue and acknowledgement workflow remain in Security.',
-      },
       'Agent Runtime': {
-        whatItIs: 'This section summarizes whether the agent layer and job system are healthy enough to keep up with work.',
-        whatSeeing: 'You are seeing compact runtime metrics, recent active sessions, recent delegated or background jobs, and direct links into the owner pages that hold deeper detail.',
-        whatCanDo: 'Use it to determine whether Guardian is falling behind, stuck, or healthy, then jump into Automations, Security, Performance, or Configuration for the relevant fix.',
-        howLinks: 'It is a bounded monitoring surface and not a replacement for the deeper operational tables on the owner pages.',
+        whatItIs: 'This section is the assistant runtime monitor for current sessions, queue pressure, and recent delegated or background work.',
+        whatSeeing: 'You are seeing compact request and job metrics, the currently active or most recent assistant sessions, and the recent job queue with any held follow-up actions.',
+        whatCanDo: 'Use it to determine whether Guardian is busy, stuck, or waiting on operator input, then jump into the owner surface that owns the deeper workflow.',
+        howLinks: 'System keeps only the bounded operational summary here. Full workflow history still lives in Automations, Code, and Security.',
       },
       'Routing Trace': {
         whatItIs: 'This section is a compact inspector for the durable intent-routing trace log.',
@@ -281,11 +474,11 @@ export async function renderSystem(container) {
         whatCanDo: 'Use it to debug why a request was classified, routed, resumed, or answered the way it was without tailing the JSONL log by hand.',
         howLinks: 'It complements the execution timeline and owner pages: the routing trace explains classification and routing decisions, while the owner pages explain what the chosen path then did.',
       },
-      'Owner Pages': {
-        whatItIs: 'This section is a shortcut launcher for the pages operators most often need after checking current system state.',
-        whatSeeing: 'You are seeing direct-entry cards for the high-signal operational pages that own investigation, runtime actions, or configuration.',
-        whatCanDo: 'Use these when you already know the next task and want one click into the correct page without working through the left nav.',
-        howLinks: 'Each card opens the canonical owner page for that workflow rather than creating a duplicate mini-workflow inside System.',
+      'Operational Surfaces': {
+        whatItIs: 'This section is the linked status strip for the major owner surfaces that operators routinely need after checking the global summary.',
+        whatSeeing: 'You are seeing one compact linked card per surface, each carrying the most useful current signal from that page instead of just a generic shortcut.',
+        whatCanDo: 'Use these cards when you want to know which page is worth opening next without scanning every nav tab manually.',
+        howLinks: 'These cards intentionally stop at the highest-value summary. They hand you off into the page that actually owns edits, triage, or workflow actions.',
       },
     });
     activateContextHelp(container);
@@ -295,15 +488,11 @@ export async function renderSystem(container) {
     metricsHandler = (data) => {
       if (!data?.agents) return;
       const nextActiveLLM = resolveActiveLLM(data.agents);
-      updateStatusCard(
-        cards.agents,
-        data.agents.length,
-        `${data.agents.filter((agent) => agent.state === 'running' || agent.state === 'idle').length} available`,
-      );
-      cards.agents.className = `status-card ${data.agents.length > 0 ? 'info' : 'warning'} status-card-link`;
-      updateStatusCard(cards.liveLlm, nextActiveLLM.status, nextActiveLLM.subtitle);
-      cards.liveLlm.className = `status-card ${nextActiveLLM.tone} status-card-link`;
-      setCardTooltip(cards.liveLlm, nextActiveLLM.tooltip);
+      if (cards.liveLlm) {
+        updateStatusCard(cards.liveLlm, nextActiveLLM.status, nextActiveLLM.subtitle);
+        cards.liveLlm.className = `status-card ${nextActiveLLM.tone} status-card-link`;
+        setCardTooltip(cards.liveLlm, nextActiveLLM.tooltip);
+      }
     };
     onSSE('metrics', metricsHandler);
   } catch (err) {
@@ -317,35 +506,34 @@ export function updateSystem() {
   }
 }
 
-function createAttentionSection(items) {
+function createOperationalSurfacesSection({ securitySummary, automationSummary, codeSummary, searchSummary, networkSummary, cloudSummary }) {
   const section = document.createElement('div');
   section.className = 'table-container';
   section.innerHTML = `
     <div class="table-header">
-      <h3>Needs Attention</h3>
-      <a class="btn btn-secondary btn-sm" href="#/security?tab=security-log">Open Security Log</a>
+      <div class="section-heading">
+        <h3>Operational Surfaces</h3>
+        ${renderInfoButton('Operational Surfaces', {
+          whatItIs: 'This strip is the linked summary of the major operational pages that currently matter most after the shared System summary.',
+          whatSeeing: 'You are seeing one card per owner surface, each carrying the most useful current state pulled from that page or capability rather than a generic shortcut.',
+          whatCanDo: 'Use it to decide which owner page deserves attention next and jump directly there.',
+          howLinks: 'These cards do not duplicate the full owner pages. They are bounded previews that hand off into the real workspace for that task.',
+        })}
+      </div>
     </div>
-    <table>
-      <thead><tr><th>Time</th><th>Type</th><th>Severity</th><th>Source</th><th>Detail</th></tr></thead>
-      <tbody>
-        ${items.length === 0
-          ? '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">Nothing urgent right now.</td></tr>'
-          : items.map((item) => `
-            <tr>
-              <td>${formatTime(item.timestamp)}</td>
-              <td>${esc(item.type)}</td>
-              <td><span class="badge badge-${esc(item.severity)}">${esc(item.severity)}</span></td>
-              <td>${esc(item.details?.automationName || item.details?.source || item.agentId || '-')}</td>
-              <td title="${escAttr(item.details?.description || item.details?.reason || '')}">${esc(item.details?.description || item.details?.reason || '-')}</td>
-            </tr>
-          `).join('')}
-      </tbody>
-    </table>
+    <div class="cards-grid" style="padding:1rem 1rem 0;">
+      ${renderLinkedStatusCard('Security', `${securitySummary.alertCount} Alert${securitySummary.alertCount === 1 ? '' : 's'}`, `Mode ${securitySummary.value} • ${securitySummary.assistantFindings} assistant • ${securitySummary.intelFindings} intel`, '#/security', securitySummary.tone, 'Open Security for the actionable queue, posture review, and evidence.')}
+      ${renderLinkedStatusCard('Automations', `${automationSummary.playbookCount} Playbook${automationSummary.playbookCount === 1 ? '' : 's'}`, `${automationSummary.enabledPlaybookCount} enabled • ${automationSummary.runCount} tracked runs`, '#/automations', automationSummary.tone, 'Open Automations for workflow definitions, schedules, output, and execution history.')}
+      ${renderLinkedStatusCard('Code', `${codeSummary.sessions.length} Session${codeSummary.sessions.length === 1 ? '' : 's'}`, codeSummary.currentSession ? `${codeSummary.currentSession.title || 'Attached workspace'} • ${codeSummary.activeCount} active` : codeSummary.subtitle, '#/code', codeSummary.tone, 'Open Code for workspace attachment, repo work, approvals, and coding-session detail.')}
+      ${renderLinkedStatusCard('Network', `${networkSummary.devices.length} Device${networkSummary.devices.length === 1 ? '' : 's'}`, `${networkSummary.baselineReady ? 'baseline ready' : 'baseline learning'} • ${networkSummary.activeAlertCount} alerts`, '#/network', networkSummary.tone, 'Open Network for device inventory, diagnostics, and network-specific history.')}
+      ${renderLinkedStatusCard('Search', searchSummary.value, `${searchSummary.collections.length} collections • ${searchSummary.configuredSources.length} sources`, '#/config?tab=search', searchSummary.tone, 'Open Configuration > Search for document-search sources, indexing status, and reindex controls.')}
+      ${renderLinkedStatusCard('Cloud', cloudSummary.value, `${cloudSummary.profileTotal} profiles • ${cloudSummary.riskCount} risk flags`, '#/cloud', cloudSummary.tone, 'Open Cloud for connection posture, activity review, and cloud automation handoff.')}
+    </div>
   `;
   return section;
 }
 
-function createRuntimeSection({ orchestratorSummary, jobsSummary, agents, summary, assistantState, performanceStatus }) {
+function createRuntimeSection({ orchestratorSummary, jobsSummary, agents, assistantState }) {
   const sessions = Array.isArray(assistantState?.orchestrator?.sessions) ? assistantState.orchestrator.sessions : [];
   const jobs = Array.isArray(assistantState?.jobs?.jobs) ? assistantState.jobs.jobs.slice(0, 6) : [];
   const agentMap = new Map((agents || []).map((agent) => [agent.id, agent]));
@@ -363,7 +551,6 @@ function createRuntimeSection({ orchestratorSummary, jobsSummary, agents, summar
       .slice()
       .sort((a, b) => (b.lastCompletedAt || b.lastStartedAt || b.lastQueuedAt || 0) - (a.lastCompletedAt || a.lastStartedAt || a.lastQueuedAt || 0))
       .slice(0, 5);
-  const performanceSummary = resolvePerformanceSummary(performanceStatus);
 
   const section = document.createElement('div');
   section.className = 'table-container';
@@ -375,16 +562,6 @@ function createRuntimeSection({ orchestratorSummary, jobsSummary, agents, summar
       ${renderMiniCard('Latency', `${orchestratorSummary.avgEndToEndMs || 0}ms`, 'Average end-to-end', 'accent', 'Average end-to-end request time through routing, tool use, and response delivery.')}
       ${renderMiniCard('Jobs', jobsSummary.total || 0, `${jobsSummary.running || 0} running / ${jobsSummary.failed || 0} failed`, (jobsSummary.failed || 0) > 0 ? 'warning' : 'success', 'Background job summary for async and deferred work.')}
     </div>
-    <table>
-      <thead><tr><th>Area</th><th>Summary</th><th>Destination</th></tr></thead>
-      <tbody>
-        <tr><td>Agents</td><td>${agents.length} total • ${agents.filter((agent) => agent.state === 'running').length} running • ${agents.filter((agent) => agent.state === 'idle').length} idle</td><td><a href="#/automations">Open Automations</a></td></tr>
-        <tr><td>Security</td><td>${summary ? summary.totalEvents : 0} audit events in the last 5 minutes</td><td><a href="#/security?tab=security-log">Open Security Log</a></td></tr>
-        <tr><td>Performance</td><td>${esc(String(performanceSummary.value))} • ${esc(performanceSummary.subtitle)}</td><td><a href="#/performance">Open Performance</a></td></tr>
-        <tr><td>Cloud</td><td>Connections, activity, and cloud automations live in the dedicated Cloud hub</td><td><a href="#/cloud">Open Cloud</a></td></tr>
-        <tr><td>Configuration</td><td>Provider setup, integrations, access control, and policy live in Configuration</td><td><a href="#/config">Open Configuration</a></td></tr>
-      </tbody>
-    </table>
     <table style="margin-top:1rem;">
       <thead><tr><th>Session</th><th>Status</th><th>Agent</th><th>Provider</th><th>Model</th><th>Last Activity</th></tr></thead>
       <tbody>
@@ -511,23 +688,6 @@ function renderAssistantJobFollowUpResult() {
       ${content}
     </div>
   `;
-}
-
-function createOwnerPagesSection() {
-  const section = document.createElement('div');
-  section.className = 'table-container';
-  section.innerHTML = `
-    <div class="table-header"><h3>Owner Pages</h3></div>
-    <div class="cards-grid" style="padding:1rem;">
-      ${renderQuickLink('Performance', 'Workstation health, latency, profiles, and reviewed cleanup', '#/performance', 'info', 'Open Performance for live host pressure, profiles, reviewed cleanup actions, and latency monitoring.')}
-      ${renderQuickLink('Security', 'Unified alerts, triage, audit evidence, and posture', '#/security?tab=security-log', 'warning', 'Open Security > Security Log for triage, acknowledgement, source filtering, and audit review.')}
-      ${renderQuickLink('Cloud', 'Connections, activity, and cloud-focused automations', '#/cloud', 'accent', 'Open Cloud for provider connections, activity, and cloud automation entry points.')}
-      ${renderQuickLink('Automations', 'Workflows, schedules, runs, and output routing', '#/automations', 'success', 'Open Automations for workflow editing, scheduling, run history, and output routing.')}
-      ${renderQuickLink('Code', 'Coding sessions, approvals, repo activity, and execution detail', '#/code', 'info', 'Open Code for repo-scoped work, coding sessions, approvals, and live code activity.')}
-      ${renderQuickLink('Configuration', 'Provider setup, auth, integrations, and policy controls', '#/config', 'warning', 'Open Configuration for AI providers, auth, integrations, and runtime policy settings.')}
-    </div>
-  `;
-  return section;
 }
 
 function createRoutingTraceSection({ traceStatus, entries }) {
@@ -689,11 +849,11 @@ function renderMiniCard(title, value, subtitle, tone, tooltip) {
   `;
 }
 
-function renderQuickLink(title, subtitle, href, tone, tooltip) {
+function renderLinkedStatusCard(title, value, subtitle, href, tone, tooltip) {
   return `
     <a class="status-card ${tone} status-card-link" href="${escAttr(href)}" style="text-decoration:none" title="${escAttr(tooltip || subtitle)}" aria-label="${escAttr(tooltip || subtitle)}">
       <div class="card-title">${esc(title)}</div>
-      <div class="card-value">Open</div>
+      <div class="card-value">${esc(String(value))}</div>
       <div class="card-subtitle">${esc(subtitle)}</div>
     </a>
   `;
@@ -722,6 +882,11 @@ function bindCard(card, href) {
 function setCardTooltip(card, text) {
   card.setAttribute('title', text);
   card.setAttribute('aria-label', text);
+}
+
+function formatSecurityMode(mode) {
+  if (!mode) return 'Unknown';
+  return String(mode).replaceAll('_', ' ').replace(/\b\w/g, (value) => value.toUpperCase());
 }
 
 function formatTime(timestamp) {

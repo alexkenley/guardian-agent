@@ -98,7 +98,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Open `#/performance` when you want the operator-facing workstation health and reviewed cleanup surface.',
                   'Open `#/config` to verify your AI connection, web access settings, and enabled channels.',
                   'Open Configuration > Integrations > Coding Assistants when you want to confirm whether Guardian can delegate work to Claude Code, Codex, Gemini CLI, or Aider.',
-                  'Open Configuration > Appearance when you want to raise the web UI text size slightly, switch to a more readable font preset, or reduce interface motion.',
+                  'Open Configuration > Appearance when you want to switch between built-in and curated visual bundles, let typography follow the selected bundle, raise the web UI text size slightly, or reduce interface motion.',
                   'Open `#/code` when you want the repo-scoped coding surface, and `#/security` when you want alerts, findings, and security status.',
                   'Use CLI `/providers` or Configuration > AI Providers to confirm the selected provider is reachable.',
                   'Use CLI `/guide` or Telegram `/guide` to pull the same reference content outside the web UI.',
@@ -330,8 +330,9 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Web Control Surfaces',
                 items: [
-                  'System is the cross-product monitoring surface for status, attention, routing visibility, and recent assistant activity.',
+                  'System is the cross-product operations overview for runtime health, owner-surface status, routing visibility, and recent assistant activity.',
                   'Performance shows workstation pressure, reviewed cleanup previews, and profile-aware latency targets.',
+                  'Security Overview now owns the short `Needs Attention` queue, and Security Log remains the full action-and-evidence surface for alert triage.',
                   'Use `Agent Runtime` when you want the recent job view for assistant work, delegated work, and held results.',
                   'Held delegated results can be replayed, kept held, or dismissed directly from `Agent Runtime`.',
                   'Automations now includes an `Execution Timeline` section that acts as the global operator view for recent assistant, code-session, workflow, and scheduled-task runs.',
@@ -447,6 +448,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Recent session timeline events can also show bounded model-response provenance and context-compaction diagnostics, so you can tell when Guardian had to shrink prompt history or which model path produced the final coding reply.',
                   'Use the Code activity timeline when you want the local story for one coding session. Use Automations > Execution Timeline when you want the global cross-session view.',
                   'Use the inline editor search beside `Inspect` to search within the current file, jump to each match in Monaco, and step forward or backward through repeated hits without opening the full Monaco find widget.',
+                  'The editor theme selector can follow the current app bundle by default, or you can pin a different code theme when you want the IDE to diverge from the rest of the UI.',
                   'Manual terminals remain operator-controlled. Assistant actions still stay under approvals and policy rather than taking over a terminal directly.',
                   'Manual terminals are for operator use rather than a substitute for guarded assistant actions.',
                 ],
@@ -1003,7 +1005,7 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Operator Views',
                 items: [
-                  'Analytics summary is available in the System page and with CLI `/analytics [minutes]`.',
+                  'System gives the cross-surface runtime and owner-page status overview, while CLI `/analytics [minutes]` remains available for analytics summaries.',
                   'Assistant state shows recent jobs, failures, and what Guardian has been doing recently.',
                   'Security monitoring shows alerts, Assistant Security findings, and recent security activity.',
                 ],
@@ -1028,6 +1030,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Main Operator Surface',
                 items: [
                   'The Security page is the main operator surface for the local defensive suite. It combines posture, Assistant Security, threat intel, the Security Log, and native Windows Defender visibility in one place.',
+                  'Security Overview carries the short `Needs Attention` queue so alert triage does not have to live on the general System page.',
                   'Unified local security alerts currently aggregate host monitoring, network baseline and anomaly analysis, gateway firewall monitoring, native Windows Defender alerts, and package-install trust alerts.',
                   'Host persistence alerts are prioritised to reduce noise while keeping higher-risk autoruns prominent.',
                   'Use the Security page when you need posture and evidence. Use the Network page for device inventory and diagnostics, and the Code page when the issue is repo trust inside a coding session.',

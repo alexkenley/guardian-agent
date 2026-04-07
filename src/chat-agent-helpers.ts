@@ -548,7 +548,7 @@ function parseDirectGoogleWorkspaceIntent(content: string): DirectGoogleWorkspac
   }
 
   if (unreadInboxPatterns.some((pattern) => pattern.test(text))) {
-    return { kind: 'gmail_unread', count: Math.max(count, 10) };
+    return { kind: 'gmail_unread', count };
   }
 
   return null;

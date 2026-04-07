@@ -3,6 +3,7 @@ export interface DirectGmailWriteIntent {
   to?: string;
   subject?: string;
   body?: string;
+  replyTarget?: 'latest_unread';
 }
 
 const EMAIL_ADDRESS_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
@@ -11,6 +12,7 @@ const MAILBOX_SIGNAL_PATTERN = /\b(gmail|email|mail)\b/i;
 const SUBJECT_OR_BODY_SIGNAL_PATTERN = /\b(subject|body)\b/i;
 const MESSAGE_SIGNAL_PATTERN = /\bmessage\b/i;
 const LABELED_RECIPIENT_PATTERN = /\bto\s+<?[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}>?/i;
+const LATEST_UNREAD_REPLY_PATTERN = /\breply\b[\s\S]{0,80}\b(?:newest|latest|most\s+recent|recent)\b[\s\S]{0,30}\bunread\b[\s\S]{0,30}\b(?:message|email|mail)\b/i;
 
 export function parseDirectGmailWriteIntent(content: string): DirectGmailWriteIntent | null {
   const text = content.trim();
@@ -36,13 +38,18 @@ export function parseDirectGmailWriteIntent(content: string): DirectGmailWriteIn
   const to = extractRecipient(text);
   const subject = extractLabeledValue(text, 'subject', ['body', 'message']);
   const body = extractLabeledValue(text, 'body', [], { stripLeadIn: true })
-    || extractLabeledValue(text, 'message', [], { stripLeadIn: true });
+    || extractLabeledValue(text, 'message', [], { stripLeadIn: true })
+    || extractQuotedReplyBody(text);
+  const replyTarget = LATEST_UNREAD_REPLY_PATTERN.test(text)
+    ? 'latest_unread'
+    : undefined;
 
   return {
     mode,
     to: to || undefined,
     subject: subject || undefined,
     body: body || undefined,
+    replyTarget,
   };
 }
 
@@ -94,9 +101,17 @@ function normalizeExtractedValue(value: string, options?: { stripLeadIn?: boolea
   let trimmed = value.trim().replace(/^,\s*/, '').trim();
   trimmed = stripWrappingQuotes(trimmed);
   if (options?.stripLeadIn) {
-    trimmed = trimmed.replace(/^(?:put|say|write|as)\b[:\s-]*/i, '').trim();
+    trimmed = trimmed.replace(/^(?:put|say|saying|write|as)\b[:\s-]*/i, '').trim();
   }
   return stripWrappingQuotes(trimmed);
+}
+
+function extractQuotedReplyBody(text: string): string {
+  const sayingMatch = text.match(/\b(?:saying|say|write)\b\s*:?\s*(["'])([\s\S]+?)\1/i);
+  if (sayingMatch?.[2]) {
+    return sayingMatch[2].trim();
+  }
+  return '';
 }
 
 function stripWrappingQuotes(value: string): string {

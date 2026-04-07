@@ -67,12 +67,12 @@ If a card, button, badge, or summary tile navigates elsewhere, the user should b
 
 ### 9. Precision & Sharpness
 
-No rounded corners. Strict use of 90-degree edges across all components to reflect a secure, professional, and "built-for-engineering" environment.
+The default Guardian profile should stay sharp, dense, and engineering-oriented. Theme bundles may vary corner radius, border treatment, and typography as long as shell layout, navigation placement, and page ownership remain fixed.
 
 ## Visual Standards
 
 ### Border Radius
-Strict `0` across all components (buttons, cards, panels, inputs, tooltips, code blocks).
+Default Guardian profile uses strict `0`. Alternate appearance bundles may apply tokenized radius values to buttons, cards, panels, inputs, tooltips, and code blocks without changing page layout.
 
 ### Shadows
 Used sparingly to create subtle depth (e.g., on hover for cards), avoiding heavy or dated drop shadows.
@@ -81,8 +81,8 @@ Used sparingly to create subtle depth (e.g., on hover for cards), avoiding heavy
 Use 2px-4px accent borders (typically left-border or bottom-border) to denote focus, activity, or status levels.
 
 ### Typography
-- **Monospace (Cascadia Code / JetBrains Mono)**: For data, code, system logs, and system-level output.
-- **Display (Inter)**: For high-level UI labels, headers, brand elements, and navigation labels.
+- **Sans / Display bundles**: Theme-driven typography may swap the primary UI and display stacks.
+- **Monospace**: Code, logs, diff output, terminals, and other system-level surfaces remain monospaced even when the UI theme changes.
 
 ### Spacing & Grid
 Maintain consistent, generous padding (typically 1.25rem - 1.5rem) to ensure information density remains high but readable.
@@ -263,7 +263,7 @@ However:
 
 ### Purpose
 
-Cross-product status and activity monitoring page for high-level health, attention, runtime visibility, and operator navigation.
+Cross-product operations overview for high-level health, owner-surface status, runtime visibility, and routing/debug visibility.
 
 ### Guidance standard
 
@@ -278,17 +278,16 @@ It must provide:
 ### Required sections
 
 - `System Summary`
-- `Needs Attention`
+- `Operational Surfaces`
 - `Agent Runtime`
 - `Routing Trace`
-- `Owner Pages`
 
 ### Allowed content
 
 - readiness
 - current provider summary
-- active alert counts
-- agent counts
+- high-level security posture summary
+- high-level code/automation/network/search/cloud status
 - bounded routing visibility
 - bounded job and session visibility
 - top-level health indicators
@@ -297,6 +296,7 @@ It must provide:
 
 - full provider management tables
 - full audit/policy tables
+- actionable security attention queues
 - full owner-page history consoles
 - duplicate network/cloud posture tables
 
@@ -305,6 +305,7 @@ It must provide:
 - `LLM Providers` table -> `Configuration > AI Providers`
 - `Scheduled Cron Jobs` -> `Automations`
 - `Recent Policy Decisions` -> `Security > Security Log`
+- `Needs Attention` queue -> `Security > Overview` and `Security > Security Log`
 - `full session queue and deep background-job management` -> owner pages such as `Automations`, `Code`, or a future runtime-detail surface
 
 ## Performance
@@ -398,6 +399,7 @@ Security must include:
 Must contain:
 
 - overall security posture summary
+- a short `Needs Attention` queue that links into `Security Log`
 - effective containment state
 - native host-protection summary
 - host monitor posture summary
@@ -751,7 +753,10 @@ Overview cards in this tab should stay limited to operator-access and channel st
 
 Owns:
 
-- theme and display settings
+- theme bundles and display settings
+- typography presets and theme-following font behavior
+- motion-reduction preferences
+- IDE/editor theme alignment with the main app appearance
 
 ### Disallowed
 

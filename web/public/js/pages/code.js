@@ -7,9 +7,15 @@ import {
   markApprovalUiResolved,
 } from '../approval-ui-state.js';
 import { normalizeRunTimelineContextAssembly, renderRunTimelineContextAssembly } from '../components/run-timeline-context.js';
-import { registerAllThemes, THEME_REGISTRY } from '../monaco-themes.js';
+import {
+  EDITOR_THEME_OPTIONS,
+  FOLLOW_APP_EDITOR_THEME_ID,
+  normalizeEditorThemePreference,
+  registerAllThemes,
+  resolveEditorThemeId,
+} from '../monaco-themes.js';
 import { renderResponseSourceBadgeMarkup } from '../response-source.js';
-import { themes, getSavedTheme } from '../theme.js';
+import { getSavedTheme, getThemeDefinition } from '../theme.js';
 
 const STORAGE_KEY = 'guardianagent_code_sessions_v2';
 const DEFAULT_USER_CHANNEL = 'web';
@@ -28,6 +34,8 @@ const INSPECTOR_TABS = ['investigate', 'flow', 'impact'];
 const SESSION_REFRESH_INTERVAL_MS = 5000;
 const STRUCTURE_PREVIEW_DEBOUNCE_MS = 350;
 const MONACO_THEME_STORAGE_KEY = 'guardianagent_monaco_theme';
+const MONACO_THEME_VERSION_STORAGE_KEY = 'guardianagent_monaco_theme_version';
+const MONACO_THEME_VERSION = '2';
 const MONACO_STRUCTURE_INSPECT_COMMAND = 'guardian.code.inspectSymbol';
 const STRUCTURE_PREVIEWABLE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts']);
 const MAX_VISUAL_SYMBOLS_PER_SECTION = 6;
@@ -79,7 +87,7 @@ let monacoDiffInstance = null;
 /** @type {Map<string, {model: any, viewState: any}>} — keyed by filePath */
 let monacoModels = new Map();
 let monacoThemesRegistered = false;
-let currentMonacoTheme = localStorage.getItem(MONACO_THEME_STORAGE_KEY) || 'guardian-agent';
+let currentMonacoTheme = migrateMonacoThemePreference();
 let monacoStructureCommandRegistered = false;
 let monacoStructureProvidersRegistered = false;
 let monacoStructureRefreshEmitter = null;
@@ -91,6 +99,14 @@ let monacoProgrammaticSyncPaths = new Set();
 let structurePreviewStateBySessionId = new Map();
 let inspectorPopupWindow = null;
 let inspectorPopupSessionId = null;
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('guardian:appearance-theme-changed', () => {
+    if (currentMonacoTheme === FOLLOW_APP_EDITOR_THEME_ID && window.monaco) {
+      window.monaco.editor.setTheme(resolveEditorThemeId(currentMonacoTheme));
+    }
+  });
+}
 
 function codeSurfaceParams(params = {}) {
   return {
@@ -106,6 +122,27 @@ function codeSurfacePayload(payload = {}) {
     channel: DEFAULT_USER_CHANNEL,
     surfaceId: CODE_WORKBENCH_SURFACE_ID,
   };
+}
+
+function migrateMonacoThemePreference() {
+  const savedVersion = localStorage.getItem(MONACO_THEME_VERSION_STORAGE_KEY);
+  const savedTheme = localStorage.getItem(MONACO_THEME_STORAGE_KEY);
+  if (savedVersion !== MONACO_THEME_VERSION) {
+    if (!savedTheme || savedTheme === 'guardian-agent' || savedTheme === 'guardian-angel') {
+      localStorage.setItem(MONACO_THEME_STORAGE_KEY, FOLLOW_APP_EDITOR_THEME_ID);
+      localStorage.setItem(MONACO_THEME_VERSION_STORAGE_KEY, MONACO_THEME_VERSION);
+      return FOLLOW_APP_EDITOR_THEME_ID;
+    }
+    const normalized = normalizeEditorThemePreference(savedTheme);
+    localStorage.setItem(MONACO_THEME_STORAGE_KEY, normalized);
+    localStorage.setItem(MONACO_THEME_VERSION_STORAGE_KEY, MONACO_THEME_VERSION);
+    return normalized;
+  }
+  return normalizeEditorThemePreference(savedTheme || FOLLOW_APP_EDITOR_THEME_ID);
+}
+
+function getResolvedMonacoThemeId() {
+  return resolveEditorThemeId(currentMonacoTheme);
 }
 
 function normalizeCodeSessionId(value) {
@@ -1363,7 +1400,7 @@ function mountMonacoEditor(container, filePath, content, isDiff, diffContent) {
         enableSplitViewResizing: true,
         automaticLayout: true,
         readOnly: false,
-        theme: currentMonacoTheme,
+        theme: getResolvedMonacoThemeId(),
         fontSize: 13,
         fontFamily: "'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace",
         minimap: { enabled: false },
@@ -1405,7 +1442,7 @@ function mountMonacoEditor(container, filePath, content, isDiff, diffContent) {
   if (!monacoEditorInstance) {
     monacoEditorInstance = monaco.editor.create(container, {
       model,
-      theme: currentMonacoTheme,
+      theme: getResolvedMonacoThemeId(),
       fontSize: 13,
       fontFamily: "'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace",
       minimap: { enabled: true },
@@ -3674,7 +3711,7 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
                     <button class="btn btn-secondary btn-sm" type="button" data-code-refresh-file title="Reload file contents">&#x21BB;</button>
                     <button class="btn btn-secondary btn-sm" type="button" data-code-toggle-diff title="Toggle side-by-side source and diff view">${activeSession.showDiff ? 'Source Only' : 'Split Diff'}</button>
                     <select class="code-editor__theme-select" data-code-theme-select title="Editor theme">
-                      ${THEME_REGISTRY.map((t) => `<option value="${escAttr(t.id)}" ${t.id === currentMonacoTheme ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}
+                      ${EDITOR_THEME_OPTIONS.map((t) => `<option value="${escAttr(t.id)}" ${t.id === currentMonacoTheme ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}
                     </select>
                   </div>
                 ` : ''}
@@ -5042,8 +5079,7 @@ function renderCodeInspectorSurface(session, { detached = false } = {}) {
 }
 
 function getCurrentUiThemeDefinition() {
-  const themeId = document.documentElement?.dataset?.theme || getSavedTheme();
-  return themes.find((theme) => theme.id === themeId) || themes[0] || {
+  return getThemeDefinition(document.documentElement?.dataset?.theme || getSavedTheme()) || {
     id: 'guardian-angel',
     vars: {},
   };
@@ -6692,11 +6728,11 @@ function bindEvents(container) {
 
   // Theme selector
   container.querySelector('[data-code-theme-select]')?.addEventListener('change', (e) => {
-    const themeId = e.target.value;
+    const themeId = normalizeEditorThemePreference(e.target.value);
     currentMonacoTheme = themeId;
     localStorage.setItem(MONACO_THEME_STORAGE_KEY, themeId);
     if (window.monaco) {
-      window.monaco.editor.setTheme(themeId);
+      window.monaco.editor.setTheme(resolveEditorThemeId(themeId));
     }
   });
 

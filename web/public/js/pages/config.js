@@ -5192,19 +5192,21 @@ function statusClass(status) {
 
 function renderAppearanceTab(panel) {
   let activeFilter = 'all';
-  const currentTheme = getSavedTheme();
+  let activeCollection = 'all';
+  let searchQuery = '';
   const currentFontScale = getSavedFontScale();
   const currentFontPreset = getSavedFontPreset();
   const currentReduceMotion = getSavedReduceMotion();
+  const currentFontPresetEntry = fontPresets.find((preset) => preset.id === currentFontPreset) || fontPresets[0];
 
   panel.innerHTML = `
     ${renderGuidancePanel({
       kicker: 'Appearance',
       compact: true,
-      whatItIs: 'This tab controls the visual theme and lightweight accessibility settings of the Web UI.',
-      whatSeeing: 'You are seeing theme filters, preview cards, and app-wide typography and motion controls.',
-      whatCanDo: 'Pick a theme, increase font size, switch to a more readable font family, or reduce UI motion without changing runtime behavior.',
-      howLinks: 'Appearance only changes presentation. It does not affect monitoring, policy, or workflow behavior.',
+      whatItIs: 'This tab controls the visual theme bundles and lightweight accessibility settings of the Web UI and the embedded IDE.',
+      whatSeeing: 'You are seeing bundle filters, preview cards, search, and app-wide typography and motion controls.',
+      whatCanDo: 'Pick a built-in or curated bundle, search by visual family, let typography follow the selected theme, or reduce UI motion without changing runtime behavior.',
+      howLinks: 'Appearance only changes presentation. It does not affect monitoring, policy, workflow behavior, or page layout ownership.',
     })}
     <div class="cfg-center-body" style="margin-bottom:1rem">
       <div class="table-header"><h3>Accessibility</h3></div>
@@ -5215,14 +5217,14 @@ function renderAppearanceTab(panel) {
           <div class="ops-task-sub" id="appearance-font-scale-value">${Math.round(currentFontScale * 100)}%</div>
         </div>
         <div class="cfg-field">
-          <label>Font Family</label>
+          <label>Typography</label>
           <select id="appearance-font-family">
             ${fontPresets.map((preset) => `
               <option value="${escAttr(preset.id)}" ${preset.id === currentFontPreset ? 'selected' : ''}>${esc(preset.name)}</option>
             `).join('')}
           </select>
           <div class="ops-task-sub" id="appearance-font-family-desc">
-            ${esc(fontPresets.find((preset) => preset.id === currentFontPreset)?.description || '')}
+            ${esc(currentFontPresetEntry?.description || '')}
           </div>
         </div>
         <div class="cfg-field">
@@ -5237,16 +5239,32 @@ function renderAppearanceTab(panel) {
         <button class="btn btn-secondary" id="appearance-reset">Reset Appearance</button>
       </div>
     </div>
-    <div class="theme-filter-bar">
+    <div class="theme-toolbar">
+      <input
+        class="theme-search-input"
+        id="appearance-theme-search"
+        type="search"
+        placeholder="Search theme bundles, inspiration source, or style family"
+        value=""
+      >
+    </div>
+    <div class="theme-filter-bar" data-theme-category-bar>
       <button class="theme-filter-btn active" data-filter="all">All</button>
       <button class="theme-filter-btn" data-filter="dark">Dark</button>
       <button class="theme-filter-btn" data-filter="light">Light</button>
+    </div>
+    <div class="theme-filter-bar" data-theme-collection-bar>
+      <button class="theme-filter-btn active" data-collection="all">All Sources</button>
+      <button class="theme-filter-btn" data-collection="built-in">Built-In</button>
+      <button class="theme-filter-btn" data-collection="curated">Curated</button>
     </div>
     <div class="theme-grid"></div>
   `;
 
   const grid = panel.querySelector('.theme-grid');
-  const filterBar = panel.querySelector('.theme-filter-bar');
+  const categoryBar = panel.querySelector('[data-theme-category-bar]');
+  const collectionBar = panel.querySelector('[data-theme-collection-bar]');
+  const searchInput = panel.querySelector('#appearance-theme-search');
   const fontScaleInput = panel.querySelector('#appearance-font-scale');
   const fontScaleValue = panel.querySelector('#appearance-font-scale-value');
   const fontFamilySelect = panel.querySelector('#appearance-font-family');
@@ -5254,9 +5272,33 @@ function renderAppearanceTab(panel) {
   const reduceMotionCheck = panel.querySelector('#appearance-reduce-motion');
   const resetButton = panel.querySelector('#appearance-reset');
 
-  function renderCards(filter) {
+  function matchesSearch(theme, query) {
+    if (!query) return true;
+    const haystack = [
+      theme.name,
+      theme.description,
+      theme.sourceName,
+      theme.collection,
+      ...(theme.searchTerms || []),
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return haystack.includes(query);
+  }
+
+  function renderCards() {
     grid.innerHTML = '';
-    const visible = filter === 'all' ? themes : themes.filter(t => t.category === filter);
+    const visible = themes.filter((theme) => {
+      if (activeFilter !== 'all' && theme.category !== activeFilter) return false;
+      if (activeCollection !== 'all' && theme.collection !== activeCollection) return false;
+      if (!matchesSearch(theme, searchQuery)) return false;
+      return true;
+    });
+    if (!visible.length) {
+      grid.innerHTML = '<div class="theme-empty-state">No theme bundles match the current filters.</div>';
+      return;
+    }
     for (const theme of visible) {
       const card = document.createElement('div');
       card.className = 'theme-card' + (theme.id === getSavedTheme() ? ' active' : '');
@@ -5274,8 +5316,13 @@ function renderAppearanceTab(panel) {
           </div>
         </div>
         <div class="theme-card-info">
-          <div class="theme-card-name">${esc(theme.name)}<span class="theme-card-badge ${theme.category}">${theme.category}</span></div>
+          <div class="theme-card-name">${esc(theme.name)}</div>
           <div class="theme-card-desc">${esc(theme.description)}</div>
+          <div class="theme-card-meta">
+            <span class="theme-card-badge ${theme.category}">${theme.category}</span>
+            <span class="theme-card-badge collection">${theme.collection === 'curated' ? 'curated' : 'built-in'}</span>
+            ${theme.sourceName ? `<span class="theme-card-badge source">${esc(theme.sourceName)}</span>` : ''}
+          </div>
         </div>
       `;
 
@@ -5289,13 +5336,27 @@ function renderAppearanceTab(panel) {
     }
   }
 
-  filterBar.addEventListener('click', (e) => {
+  categoryBar?.addEventListener('click', (e) => {
     const btn = e.target.closest('.theme-filter-btn');
     if (!btn) return;
     activeFilter = btn.dataset.filter;
-    filterBar.querySelectorAll('.theme-filter-btn').forEach(b => b.classList.remove('active'));
+    categoryBar.querySelectorAll('.theme-filter-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    renderCards(activeFilter);
+    renderCards();
+  });
+
+  collectionBar?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.theme-filter-btn');
+    if (!btn) return;
+    activeCollection = btn.dataset.collection;
+    collectionBar.querySelectorAll('.theme-filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    renderCards();
+  });
+
+  searchInput?.addEventListener('input', () => {
+    searchQuery = String(searchInput.value || '').trim().toLowerCase();
+    renderCards();
   });
 
   fontScaleInput?.addEventListener('input', () => {
@@ -5322,15 +5383,15 @@ function renderAppearanceTab(panel) {
     resetAppearancePreferences();
     if (fontScaleInput) fontScaleInput.value = '1.05';
     if (fontScaleValue) fontScaleValue.textContent = '105%';
-    if (fontFamilySelect) fontFamilySelect.value = 'guardian-default';
+    if (fontFamilySelect) fontFamilySelect.value = 'theme-default';
     if (fontFamilyDesc) {
-      fontFamilyDesc.textContent = fontPresets.find((preset) => preset.id === 'guardian-default')?.description || '';
+      fontFamilyDesc.textContent = fontPresets.find((preset) => preset.id === 'theme-default')?.description || '';
     }
     if (reduceMotionCheck) reduceMotionCheck.checked = false;
-    renderCards(activeFilter);
+    renderCards();
   });
 
-  renderCards(activeFilter);
+  renderCards();
 }
 
 function createGenericHelpFactory(area) {

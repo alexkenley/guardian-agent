@@ -283,6 +283,13 @@ function stripDirectAutomationClarificationMetadata(
   delete next.clarification;
   return Object.keys(next).length > 0 ? next : undefined;
 }
+
+function isDirectMailboxReplyTarget(value: unknown): value is { to: string; subject: string } {
+  return isRecord(value)
+    && typeof value.to === 'string'
+    && typeof value.subject === 'string';
+}
+
 const PENDING_ACTION_SWITCH_CANDIDATE_TYPE = 'pending_action_switch_candidate';
 
 interface PendingApprovalState {
@@ -6455,16 +6462,35 @@ type DirectIntentShadowCandidate =
     const intent = parseDirectGmailWriteIntent(message.content);
     if (!intent) return null;
 
-    const missing: string[] = [];
-    if (!intent.to) missing.push('recipient email');
-    if (!intent.subject) missing.push('subject');
-    if (!intent.body) missing.push('body');
-    if (missing.length > 0) {
+    let to = intent.to?.trim();
+    let subject = intent.subject?.trim();
+    const body = intent.body?.trim();
+
+    if (intent.replyTarget === 'latest_unread') {
+      if (!body) {
+        return `To ${intent.mode} a reply to the newest unread Gmail message, I need the body.`;
+      }
+      const replyTarget = await this.resolveLatestUnreadGmailReplyTarget(message, ctx, userKey);
+      if (!replyTarget) {
+        return 'I checked Gmail and could not find an unread message to reply to.';
+      }
+      if (typeof replyTarget === 'string') {
+        return replyTarget;
+      }
+      if (!isDirectMailboxReplyTarget(replyTarget)) {
+        return replyTarget;
+      }
+      to = replyTarget.to;
+      subject = replyTarget.subject;
+    }
+
+    if (!to || !subject || !body) {
+      const missing: string[] = [];
+      if (!to) missing.push('recipient email');
+      if (!subject) missing.push('subject');
+      if (!body) missing.push('body');
       return `To ${intent.mode} a Gmail email, I need the ${missing.join(', ')}.`;
     }
-    const to = intent.to!;
-    const subject = intent.subject!;
-    const body = intent.body!;
 
     const toolRequest = {
       origin: 'assistant' as const,
@@ -7178,7 +7204,7 @@ type DirectIntentShadowCandidate =
 
     const listParams: Record<string, unknown> = {
       userId: 'me',
-      maxResults: intent.kind === 'gmail_unread' ? Math.max(intent.count, 10) : intent.count,
+      maxResults: Math.max(intent.count, 1),
     };
     if (intent.kind === 'gmail_unread') {
       listParams.q = 'is:unread';
@@ -7349,17 +7375,35 @@ type DirectIntentShadowCandidate =
     const intent = parseDirectGmailWriteIntent(message.content);
     if (!intent) return null;
 
-    const missing: string[] = [];
-    if (!intent.to) missing.push('recipient email');
-    if (!intent.subject) missing.push('subject');
-    if (!intent.body) missing.push('body');
-    if (missing.length > 0) {
-      return `To ${intent.mode} an Outlook email, I need the ${missing.join(', ')}.`;
+    let to = intent.to?.trim();
+    let subject = intent.subject?.trim();
+    const body = intent.body?.trim();
+
+    if (intent.replyTarget === 'latest_unread') {
+      if (!body) {
+        return `To ${intent.mode} a reply to the newest unread Outlook message, I need the body.`;
+      }
+      const replyTarget = await this.resolveLatestUnreadMicrosoft365ReplyTarget(message, ctx, userKey);
+      if (!replyTarget) {
+        return 'I checked Outlook and could not find an unread message to reply to.';
+      }
+      if (typeof replyTarget === 'string') {
+        return replyTarget;
+      }
+      if (!isDirectMailboxReplyTarget(replyTarget)) {
+        return replyTarget;
+      }
+      to = replyTarget.to;
+      subject = replyTarget.subject;
     }
 
-    const to = intent.to!;
-    const subject = intent.subject!;
-    const body = intent.body!;
+    if (!to || !subject || !body) {
+      const missing: string[] = [];
+      if (!to) missing.push('recipient email');
+      if (!subject) missing.push('subject');
+      if (!body) missing.push('body');
+      return `To ${intent.mode} an Outlook email, I need the ${missing.join(', ')}.`;
+    }
     const toolName = intent.mode === 'send' ? 'outlook_send' : 'outlook_draft';
     const toolRequest = {
       origin: 'assistant' as const,
@@ -7444,7 +7488,7 @@ type DirectIntentShadowCandidate =
     };
 
     const listParams: Record<string, unknown> = {
-      $top: intent.kind === 'gmail_unread' ? Math.max(intent.count, 10) : intent.count,
+      $top: Math.max(intent.count, 1),
       $select: 'id,subject,receivedDateTime,from,isRead',
       $orderby: 'receivedDateTime desc',
     };
@@ -7553,6 +7597,205 @@ type DirectIntentShadowCandidate =
     }
     lines.push('Ask me to read or summarize any of these if you want the full details.');
     return lines.join('\n');
+  }
+
+  private async resolveLatestUnreadGmailReplyTarget(
+    message: UserMessage,
+    ctx: AgentContext,
+    userKey: string,
+  ): Promise<{ to: string; subject: string } | string | { content: string; metadata?: Record<string, unknown> } | null> {
+    if (!this.tools?.isEnabled()) return null;
+    const toolRequest = {
+      origin: 'assistant' as const,
+      agentId: this.id,
+      userId: message.userId,
+      channel: message.channel,
+      requestId: message.id,
+      agentContext: { checkAction: ctx.checkAction },
+    };
+
+    const listResult = await this.tools.executeModelTool(
+      'gws',
+      {
+        service: 'gmail',
+        resource: 'users messages',
+        method: 'list',
+        params: {
+          userId: 'me',
+          maxResults: 1,
+          q: 'is:unread',
+        },
+      },
+      toolRequest,
+    );
+
+    if (!toBoolean(listResult.success)) {
+      const blocked = this.buildPendingMailboxReplyLookupApproval(
+        listResult,
+        userKey,
+        message,
+        'Gmail',
+      );
+      if (blocked) return blocked;
+      const msg = toString(listResult.message) || toString(listResult.error) || 'Gmail request failed.';
+      return `I tried to look up the newest unread Gmail message for the reply draft, but it failed: ${msg}`;
+    }
+
+    const output = isRecord(listResult.output) ? listResult.output : null;
+    const messages = Array.isArray(output?.messages)
+      ? output.messages.filter((entry): entry is Record<string, unknown> => isRecord(entry))
+      : [];
+    const newest = messages[0];
+    const id = toString(newest?.id);
+    if (!id) return null;
+
+    const detailResult = await this.tools.executeModelTool(
+      'gws',
+      {
+        service: 'gmail',
+        resource: 'users messages',
+        method: 'get',
+        params: {
+          userId: 'me',
+          id,
+          format: 'metadata',
+          metadataHeaders: ['From', 'Subject'],
+        },
+      },
+      toolRequest,
+    );
+    if (!toBoolean(detailResult.success)) {
+      const msg = toString(detailResult.message) || toString(detailResult.error) || 'Gmail request failed.';
+      return `I found the newest unread Gmail message, but I couldn't read enough metadata to draft the reply: ${msg}`;
+    }
+
+    const summary = summarizeGmailMessage(detailResult.output);
+    const to = this.extractEmailAddress(summary?.from);
+    if (!to) {
+      return 'I found the newest unread Gmail message, but I could not determine the sender email address.';
+    }
+    return {
+      to,
+      subject: this.buildReplySubject(toString(summary?.subject)),
+    };
+  }
+
+  private async resolveLatestUnreadMicrosoft365ReplyTarget(
+    message: UserMessage,
+    ctx: AgentContext,
+    userKey: string,
+  ): Promise<{ to: string; subject: string } | string | { content: string; metadata?: Record<string, unknown> } | null> {
+    if (!this.tools?.isEnabled()) return null;
+    const toolRequest = {
+      origin: 'assistant' as const,
+      agentId: this.id,
+      userId: message.userId,
+      channel: message.channel,
+      requestId: message.id,
+      agentContext: { checkAction: ctx.checkAction },
+    };
+
+    const listResult = await this.tools.executeModelTool(
+      'm365',
+      {
+        service: 'mail',
+        resource: 'me/messages',
+        method: 'list',
+        params: {
+          $top: 1,
+          $filter: 'isRead eq false',
+          $select: 'id,subject,receivedDateTime,from,isRead',
+          $orderby: 'receivedDateTime desc',
+        },
+      },
+      toolRequest,
+    );
+
+    if (!toBoolean(listResult.success)) {
+      const blocked = this.buildPendingMailboxReplyLookupApproval(
+        listResult,
+        userKey,
+        message,
+        'Outlook',
+      );
+      if (blocked) return blocked;
+      const msg = toString(listResult.message) || toString(listResult.error) || 'Microsoft 365 request failed.';
+      return `I tried to look up the newest unread Outlook message for the reply draft, but it failed: ${msg}`;
+    }
+
+    const output = isRecord(listResult.output) ? listResult.output : null;
+    const messages = Array.isArray(output?.value)
+      ? output.value.filter((entry): entry is Record<string, unknown> => isRecord(entry))
+      : [];
+    const newest = messages[0];
+    if (!newest) return null;
+    const to = this.extractMicrosoft365EmailAddress(newest.from);
+    if (!to) {
+      return 'I found the newest unread Outlook message, but I could not determine the sender email address.';
+    }
+    return {
+      to,
+      subject: this.buildReplySubject(toString(newest.subject)),
+    };
+  }
+
+  private buildPendingMailboxReplyLookupApproval(
+    toolResult: Record<string, unknown>,
+    userKey: string,
+    message: UserMessage,
+    providerLabel: 'Gmail' | 'Outlook',
+  ): string | { content: string; metadata?: Record<string, unknown> } | null {
+    const status = toString(toolResult.status);
+    if (status !== 'pending_approval') return null;
+    const approvalId = toString(toolResult.approvalId);
+    const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
+    const pendingIds = approvalId ? [...new Set([...existingIds, approvalId])] : existingIds;
+    if (approvalId) {
+      this.setApprovalFollowUp(approvalId, {
+        approved: `I looked up the newest unread ${providerLabel} message.`,
+        denied: `I did not check ${providerLabel}.`,
+      });
+    }
+    const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
+    const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
+    const pendingActionResult = this.setPendingApprovalActionForRequest(
+      userKey,
+      message.surfaceId,
+      {
+        prompt,
+        approvalIds: pendingIds,
+        approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
+        originalUserContent: message.content,
+        route: 'email_task',
+        operation: 'read',
+        summary: `Checks ${providerLabel} for the newest unread message before drafting a reply.`,
+        turnRelation: 'new_request',
+        resolution: 'ready',
+      },
+    );
+    return this.buildPendingApprovalBlockedResponse(pendingActionResult, [
+      `I prepared a ${providerLabel} inbox check to resolve the reply target, but it needs approval first.`,
+      prompt,
+    ].filter(Boolean).join('\n\n'));
+  }
+
+  private buildReplySubject(subject: string): string {
+    const trimmed = subject.trim() || '(no subject)';
+    return /^re:/i.test(trimmed) ? trimmed : `Re: ${trimmed}`;
+  }
+
+  private extractEmailAddress(value: string | undefined): string {
+    const text = toString(value).trim();
+    if (!text) return '';
+    const match = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+    return match?.[0]?.trim() ?? '';
+  }
+
+  private extractMicrosoft365EmailAddress(value: unknown): string {
+    if (!value || typeof value !== 'object') return '';
+    const record = value as Record<string, unknown>;
+    const emailAddress = isRecord(record.emailAddress) ? record.emailAddress : null;
+    return toString(emailAddress?.address).trim();
   }
 
   private async tryDirectFilesystemIntent(
