@@ -358,6 +358,66 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.enabled).toBe(false);
   });
 
+  it('repairs missing personalItemType for explicit routine reads from the source request', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Show my routines again.',
+        channel: 'web',
+      },
+      async () => ({
+        content: '',
+        toolCalls: [{
+          id: 'call-personal-routine-read-2',
+          name: 'route_intent',
+          arguments: JSON.stringify({
+            route: 'personal_assistant_task',
+            confidence: 'high',
+            operation: 'read',
+            summary: 'Reads the same Second Brain list again.',
+          }),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.operation).toBe('read');
+    expect(result.decision.entities.personalItemType).toBe('routine');
+  });
+
+  it('repairs missing routine query from topical routine reads in the source request', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Show only my disabled routines related to follow up.',
+        channel: 'web',
+      },
+      async () => ({
+        content: '',
+        toolCalls: [{
+          id: 'call-personal-routine-read-3',
+          name: 'route_intent',
+          arguments: JSON.stringify({
+            route: 'personal_assistant_task',
+            confidence: 'high',
+            operation: 'read',
+            summary: 'Reads disabled Second Brain routines.',
+          }),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.operation).toBe('read');
+    expect(result.decision.entities.personalItemType).toBe('routine');
+    expect(result.decision.entities.enabled).toBe(false);
+    expect(result.decision.entities.query).toBe('follow up');
+  });
+
   it('preserves explicit automation creation requests as automation authoring', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(

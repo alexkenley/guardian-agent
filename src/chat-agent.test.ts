@@ -843,7 +843,7 @@ describe('LLMChatAgent direct intent metadata', () => {
 
     const content = typeof result === 'string' ? result : result?.content ?? '';
     expect(content).toContain('Saved briefs:');
-    expect(content).toContain('Second Brain brief smoke test [manual]');
+    expect(content).toContain('Second Brain brief smoke test [Manual]');
     expect(content).not.toContain('Second Brain overview:');
   });
 

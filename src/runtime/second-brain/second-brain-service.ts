@@ -50,7 +50,7 @@ interface BuiltInRoutineDefinition {
 
 const BUILT_IN_ROUTINES: BuiltInRoutineDefinition[] = [
   {
-    description: 'Creates the daily morning brief after the local workday starts.',
+    description: 'Creates and stores the daily morning brief after the local workday starts.',
     catalogCategory: 'daily',
     seedByDefault: true,
     manifest: {
@@ -67,7 +67,7 @@ const BUILT_IN_ROUTINES: BuiltInRoutineDefinition[] = [
     },
   },
   {
-    description: 'Produces the weekly review summary on the default Monday schedule.',
+    description: 'Creates and stores the weekly review brief on the default Monday schedule.',
     catalogCategory: 'weekly',
     seedByDefault: true,
     manifest: {
@@ -103,7 +103,7 @@ const BUILT_IN_ROUTINES: BuiltInRoutineDefinition[] = [
   {
     description: 'Marks the horizon scan when upcoming events or open tasks make the next day worth reviewing.',
     catalogCategory: 'daily',
-    seedByDefault: false,
+    seedByDefault: true,
     manifest: {
       id: 'next-24-hours-radar',
       name: 'Next 24 Hours Radar',
@@ -120,7 +120,7 @@ const BUILT_IN_ROUTINES: BuiltInRoutineDefinition[] = [
   {
     description: 'Generates a pre-meeting brief for upcoming events inside the default lookahead window.',
     catalogCategory: 'meeting',
-    seedByDefault: false,
+    seedByDefault: true,
     manifest: {
       id: 'pre-meeting-brief',
       name: 'Pre-Meeting Brief',
@@ -137,7 +137,7 @@ const BUILT_IN_ROUTINES: BuiltInRoutineDefinition[] = [
   {
     description: 'Drafts follow-up packets for recently ended meetings that do not already have one.',
     catalogCategory: 'follow_up',
-    seedByDefault: false,
+    seedByDefault: true,
     manifest: {
       id: 'follow-up-watch',
       name: 'Follow-Up Watch',

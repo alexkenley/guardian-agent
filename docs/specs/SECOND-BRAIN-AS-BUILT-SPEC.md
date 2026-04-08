@@ -60,7 +60,7 @@ This spec does not claim that every item from the proposal or implementation pla
 - `Contacts` exposes relationship filters, last-contact tracking, and a dedicated person editor with create, update, and delete actions.
 - `Library` now exposes saved link and reference CRUD in the web UI, with editing on the left and filtered content on the right. Absolute file paths are normalized into `file://` URLs for local document items.
 - `Briefs` now exposes saved brief review plus visible brief generation, edit, regenerate, and delete actions in the web UI.
-- `Routines` now exposes a catalog-style management surface with all built-in routine templates listed in one table, explicit create actions for unconfigured routines, and a dedicated create or edit pane on the left with delete support for configured routines.
+- `Routines` now exposes a configured-routines management surface, with only configured routines listed in the main table and a dedicated create or edit pane on the left that uses starter presets when the operator explicitly opens `Create routine`.
 
 ### Briefs in the current UI
 
@@ -160,12 +160,12 @@ Not yet exposed as first-class runtime CRUD:
 - overview generation
 - create, update, and delete for notes, tasks, local calendar events, people, library items, briefs, and routines
 - provider-sync upsert for Google and Microsoft calendar events
-- routine catalog listing plus bounded routine creation, updates, and deletes
+- starter routine catalog listing plus bounded routine creation, updates, and deletes
 - brief persistence, lookup, generation, update, and delete
 - sync cursor persistence and lookup
 - usage record aggregation
 
-It also seeds the built-in routine catalog at startup.
+It also seeds the starter routine set at startup.
 
 Current mutation behavior note:
 - chat-driven local calendar, task, and people writes normalize relative dates and times such as `tomorrow at 12 pm`, `next Friday`, or `yesterday` against the runtime local timezone before saving the shared record
@@ -192,21 +192,20 @@ Planned ownership list:
 - Provider canonical with Guardian-derived context layered on top: email, Drive / Docs / Sheets, OneDrive / SharePoint, and other provider-native files
 - Explicit provider routes remain valid for provider administration, provider-only maintenance, and direct provider CRUD where the user intentionally targets that provider
 
-### Built-in routines
+### Starter routines
 
-Current seeded routines are:
+Current starter routines are all seeded on first run:
 - `morning-brief`
 - `weekly-review`
 - `one-off-sync`
-
-Current catalog-only routines that can be created from the web UI or tool surface are:
 - `next-24-hours-radar`
 - `pre-meeting-brief`
 - `follow-up-watch`
 
 Current behavior note:
-- `weekly-review` is seeded as a routine record and now records its schedule runs, but it still does not yet generate a dedicated weekly review brief artifact.
-- deleting a seeded built-in routine now creates a persistent tombstone, so it stays removed across restart until an operator explicitly re-creates it from the routine catalog.
+- `weekly-review` now generates and stores a dedicated weekly review brief artifact that pulls from events, tasks, notes, people, and library items.
+- the Routines table shows only configured routines; `Create routine` is the explicit path for re-adding any deleted starter routine from the starter set.
+- deleting a seeded starter routine keeps it out of the configured routines list across restart until an operator explicitly re-creates it from `Create routine`.
 
 ## Sync Model
 

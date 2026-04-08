@@ -414,6 +414,160 @@ function buildRoutineSemanticHints(
   return hints;
 }
 
+const ROUTINE_CRON_DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const;
+
+function parseRoutineCronNumber(field: string, min: number, max: number): number | null {
+  if (!/^\d+$/.test(field)) return null;
+  const value = Number(field);
+  return Number.isInteger(value) && value >= min && value <= max ? value : null;
+}
+
+function parseRoutineCronDays(field: string): number[] | null {
+  if (field === '*') return [];
+  const values = new Set<number>();
+  for (const part of field.split(',')) {
+    const trimmed = part.trim();
+    if (!trimmed) return null;
+    const rangeMatch = trimmed.match(/^(\d)-(\d)$/);
+    if (rangeMatch) {
+      const start = Number(rangeMatch[1]);
+      const end = Number(rangeMatch[2]);
+      if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end > 7 || start > end) {
+        return null;
+      }
+      for (let day = start; day <= end; day += 1) {
+        values.add(day === 7 ? 0 : day);
+      }
+      continue;
+    }
+    const value = parseRoutineCronNumber(trimmed, 0, 7);
+    if (value == null) return null;
+    values.add(value === 7 ? 0 : value);
+  }
+  return [...values].sort((left, right) => left - right);
+}
+
+function sameRoutineDayList(left: number[], right: number[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function joinRoutineWords(values: string[]): string {
+  if (values.length <= 1) return values[0] ?? '';
+  if (values.length === 2) return `${values[0]} and ${values[1]}`;
+  return `${values.slice(0, -1).join(', ')}, and ${values[values.length - 1]}`;
+}
+
+function formatRoutineMinute(minute: number): string {
+  return minute === 0 ? 'on the hour' : `:${String(minute).padStart(2, '0')}`;
+}
+
+function formatRoutineTime(hour: number, minute: number): string {
+  if (hour === 12 && minute === 0) return 'noon';
+  if (hour === 0 && minute === 0) return 'midnight';
+  const meridiem = hour >= 12 ? 'p.m.' : 'a.m.';
+  const normalizedHour = hour % 12 || 12;
+  return minute === 0
+    ? `${normalizedHour} ${meridiem}`
+    : `${normalizedHour}:${String(minute).padStart(2, '0')} ${meridiem}`;
+}
+
+function formatRoutineLookaheadMinutes(minutes: unknown): string {
+  if (!Number.isFinite(minutes)) return '';
+  const value = Number(minutes);
+  if (value % 1440 === 0) {
+    const days = value / 1440;
+    return `${days} day${days === 1 ? '' : 's'}`;
+  }
+  if (value % 60 === 0) {
+    const hours = value / 60;
+    return `${hours} hour${hours === 1 ? '' : 's'}`;
+  }
+  return `${value} minute${value === 1 ? '' : 's'}`;
+}
+
+function summarizeRoutineCronForUser(cron: string | undefined): string {
+  const parts = toString(cron).trim().split(/\s+/g);
+  if (parts.length !== 5) return 'Custom schedule';
+  const [minuteField, hourField, dayOfMonthField, monthField, dayOfWeekField] = parts;
+  if (/^\*\/\d+$/.test(minuteField) && hourField === '*' && dayOfMonthField === '*' && monthField === '*' && dayOfWeekField === '*') {
+    const interval = Number(minuteField.slice(2));
+    return interval === 1 ? 'Every minute' : `Every ${interval} minutes`;
+  }
+  const minute = parseRoutineCronNumber(minuteField, 0, 59);
+  if (minute == null) return 'Custom schedule';
+  if (hourField === '*' && dayOfMonthField === '*' && monthField === '*' && dayOfWeekField === '*') {
+    return minute === 0 ? 'Hourly' : `Hourly at ${formatRoutineMinute(minute)}`;
+  }
+  if (/^\*\/\d+$/.test(hourField) && dayOfMonthField === '*' && monthField === '*' && dayOfWeekField === '*') {
+    const interval = Number(hourField.slice(2));
+    if (interval === 1) {
+      return minute === 0 ? 'Hourly' : `Hourly at ${formatRoutineMinute(minute)}`;
+    }
+    return minute === 0
+      ? `Every ${interval} hours on the hour`
+      : `Every ${interval} hours at ${formatRoutineMinute(minute)}`;
+  }
+  const hour = parseRoutineCronNumber(hourField, 0, 23);
+  if (hour == null) return 'Custom schedule';
+  const time = formatRoutineTime(hour, minute);
+  if (dayOfMonthField === '*' && monthField === '*' && dayOfWeekField === '*') {
+    return `Daily at ${time}`;
+  }
+  if (dayOfMonthField === '*' && monthField === '*') {
+    const days = parseRoutineCronDays(dayOfWeekField);
+    if (days) {
+      if (sameRoutineDayList(days, [1, 2, 3, 4, 5])) {
+        return `Weekdays at ${time}`;
+      }
+      if (sameRoutineDayList(days, [0, 6])) {
+        return `Weekends at ${time}`;
+      }
+      if (days.length === 1) {
+        return `Every ${ROUTINE_CRON_DAY_NAMES[days[0]]} at ${time}`;
+      }
+      if (days.length > 1) {
+        return `Every ${joinRoutineWords(days.map((day) => ROUTINE_CRON_DAY_NAMES[day]))} at ${time}`;
+      }
+    }
+  }
+  const dayOfMonth = parseRoutineCronNumber(dayOfMonthField, 1, 31);
+  if (dayOfMonth != null && monthField === '*' && dayOfWeekField === '*') {
+    return `Monthly on day ${dayOfMonth} at ${time}`;
+  }
+  return 'Custom schedule';
+}
+
+function formatRoutineTriggerSummaryForUser(
+  trigger: { mode?: string; cron?: string; eventType?: string; lookaheadMinutes?: unknown } | undefined,
+): string {
+  if (!trigger || typeof trigger !== 'object') return 'Run on demand';
+  if (trigger.mode === 'cron') {
+    return summarizeRoutineCronForUser(trigger.cron);
+  }
+  if (trigger.mode === 'event') {
+    const label = trigger.eventType === 'upcoming_event'
+      ? 'Upcoming meetings'
+      : trigger.eventType === 'event_ended'
+        ? 'Recently ended meetings'
+        : typeof trigger.eventType === 'string' && trigger.eventType.trim()
+          ? trigger.eventType.replaceAll('_', ' ')
+          : 'Event-driven';
+    const lookahead = formatRoutineLookaheadMinutes(trigger.lookaheadMinutes);
+    return lookahead ? `${label} within ${lookahead}` : label;
+  }
+  if (trigger.mode === 'horizon') {
+    const lookahead = formatRoutineLookaheadMinutes(trigger.lookaheadMinutes);
+    return lookahead ? `Horizon scan for the next ${lookahead}` : 'Horizon scan';
+  }
+  return 'Run on demand';
+}
+
+function formatBriefKindLabelForUser(kind: string): string {
+  return kind
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
 function stripDirectAutomationClarificationMetadata(
   metadata: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
@@ -3846,7 +4000,7 @@ type DirectIntentShadowCandidate =
               const descriptionSuffix = description
                 ? `: ${description.length > 120 ? `${description.slice(0, 117).trimEnd()}...` : description}`
                 : '';
-              return `- ${routine.name} [${routine.enabled ? 'enabled' : 'paused'}] (${routine.category}, ${routine.defaultRoutingBias})${descriptionSuffix}`;
+              return `- ${routine.name} [${routine.enabled ? 'enabled' : 'paused'}] (${formatRoutineTriggerSummaryForUser(routine.trigger)} · ${routine.defaultRoutingBias.replaceAll('_', ' ')})${descriptionSuffix}`;
             }),
           ].join('\n'),
           metadata: buildSecondBrainFocusMetadata(priorFocus, 'routine', items, {
@@ -3948,7 +4102,7 @@ type DirectIntentShadowCandidate =
               const suffix = preview
                 ? `: ${preview.slice(0, 120)}${preview.length > 120 ? '...' : ''}`
                 : '';
-              return `- ${brief.title} [${brief.kind}]${suffix}`;
+              return `- ${brief.title} [${formatBriefKindLabelForUser(brief.kind)}]${suffix}`;
             }),
           ].join('\n'),
           metadata: buildSecondBrainFocusMetadata(priorFocus, 'brief', items, {
@@ -4862,7 +5016,7 @@ type DirectIntentShadowCandidate =
     switch (decision.operation) {
       case 'create': {
         if (!matchedCatalogEntry) {
-          return 'To create a Second Brain routine, tell me which built-in routine to create, such as Morning Brief or Pre-Meeting Brief.';
+          return 'To create a Second Brain routine, tell me which starter routine to create, such as Morning Brief or Pre-Meeting Brief.';
         }
         if (matchedCatalogEntry.configured && matchedCatalogEntry.configuredRoutineId?.trim()) {
           const routineId = matchedCatalogEntry.configuredRoutineId.trim();

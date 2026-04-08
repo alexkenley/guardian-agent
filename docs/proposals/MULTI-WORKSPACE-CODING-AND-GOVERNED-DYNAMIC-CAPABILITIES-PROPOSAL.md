@@ -1,8 +1,8 @@
 # Multi-Workspace Coding And Governed Dynamic Capabilities Proposal
 
 **Status:** Draft
-**Date:** 2026-04-06
-**Basis:** Comparative review of GuardianAgent against an inspected external reference runtime with stronger session-centric orchestration and workspace-local extension patterns
+**Date:** 2026-04-08
+**Basis:** Comparative review of GuardianAgent against inspected external reference runtimes with stronger session-centric orchestration, multi-session coordination, and provider-session transport patterns, including T3 Code as a useful lower-layer benchmark for delegated coding backend sessions
 **Primary Guardian files:**
 - `src/runtime/code-sessions.ts`
 - `src/tools/builtin/coding-tools.ts`
@@ -28,14 +28,16 @@ Guardian already has durable backend-owned coding sessions, shared same-principa
 The main gaps exposed by the reference comparison are different:
 
 - Guardian treats code sessions as durable work objects, but still mostly as one focused session per surface at a time rather than as a graph of addressable sessions a user or agent can inspect, compare, and coordinate explicitly.
+- Guardian treats external coding backends as bounded one-shot terminal jobs rather than as persistent delegated provider sessions attached to a `CodeSession`.
 - Guardian skills are intentionally prompt-only and reviewed. They cannot create new tools at runtime, which is the correct default. However, Guardian currently lacks a governed fallback lane for bespoke task-specific capability authoring when the existing intent route and curated tool catalog are insufficient.
 
 The right uplift is not to make skills more permissive or to auto-load workspace-local executable extensions. The right uplift is:
 
 1. add a session-portfolio model above the existing code-session store
-2. add a governed dynamic-capability pipeline beside the existing curated skills and tools model
+2. add a delegated backend session broker below the existing code-session model so Codex and Claude can run as structured provider sessions rather than one-off terminal invocations
+3. keep governed dynamic-capability authoring as a separate follow-on lane beside the existing curated skills and tools model
 
-Both uplifts should remain runtime-owned, control-plane-audited, approval-aware, and Intent-Gateway-routed.
+All three directions should remain runtime-owned, control-plane-audited, approval-aware, and Intent-Gateway-routed.
 
 ## Current Guardian Position
 
@@ -55,6 +57,7 @@ The gap is:
 
 - only one coding session is implicitly focused for repo-local work at a time
 - non-focused sessions are durable records, but not first-class runtime peers that the current session can inspect, message, compare, or spawn against without switching focus
+- external coding backends are launched as one-shot PTY commands instead of as durable provider sessions with structured events, approval handoff, and resume semantics
 - there is no governed runtime path for "invent a temporary capability because the catalog is insufficient"
 
 ### Architectural constraints from current specs
@@ -76,6 +79,7 @@ Any uplift that weakens those rules would be a regression.
 | Implicit coding focus | One focused session per surface/principal. | One current session, but other sessions remain directly addressable. | Add session portfolio and explicit multi-session operations without losing one primary focus. |
 | Cross-session inspection | Partial. List/current/switch exist. | Strong. Session list/history/status/send/spawn/yield are built-in. | Add explicit inspect, compare, and delegated child-session flows. |
 | Child coding lanes | Partial. External coding backends exist, but are modeled as backend runs inside one code session. | Strong. Background child sessions have lineage and lifecycle. | Add child session lineage and session graph state. |
+| External coding backend transport | Weak. Current model is mostly one-shot terminal delegation. | Strong. Provider sessions stay open and stream structured lifecycle events. | Add a delegated backend session broker with first-class adapters for Codex and Claude. |
 | Skills | Strong reviewed prompt guidance. | Broader. Workspace skills, slash-command dispatch, and plugin-shipped skills. | Keep Guardian prompt-skill discipline. Do not copy workspace-autoloaded executable power. |
 | Dynamic capability creation | Intentionally absent at runtime. | Looser. Workspace-local skills/plugins and install flows exist. | Add a governed candidate-capability pipeline instead of loosening skills. |
 | Safety scanning for extensions | Partial. Strong tool/runtime policy, but no author-and-admit lane for generated capabilities. | Stronger. Extension/skill install paths include dangerous-code scanning and constrained discovery roots. | Add static scanning, isolated testing, approval, provenance, and expiry for generated capability candidates. |
@@ -111,6 +115,8 @@ Today, users can create several coding sessions, but the active chat can only re
 
 - Keep one `primary` code session as the implicit mutation root.
 - Let additional code sessions be attached as `referenced` or `delegated` sessions.
+- Keep Guardian's `CodeSession` as the canonical owner of workspace identity, trust, memory, approvals, and transcript state.
+- Treat delegated coding backends as optional runtime adapters beneath a `CodeSession`, not as alternative owners of the workspace.
 - Never silently broaden repo-local write authority across all attached sessions.
 - Require explicit targeting for work against non-primary sessions.
 - Preserve the existing same-principal focus model for ordinary user-facing simplicity.
@@ -125,6 +131,24 @@ Suggested concepts:
 - `referencedSessionIds`: additional sessions visible for inspect, compare, and read-oriented coordination
 - `sessionLinks`: typed relationships such as `comparison`, `delegated_worker`, `verification_lane`, `review_source`
 - `lineage`: parent/child relationships for spawned coding lanes
+
+Introduce a delegated backend session broker below the current `CodeSession` model.
+
+Suggested concept:
+
+```ts
+interface DelegatedBackendSession {
+  id: string;
+  codeSessionId: string;
+  backendId: 'codex' | 'claude-code' | 'terminal-cli' | string;
+  adapterKind: 'codex_app_server' | 'claude_sdk' | 'terminal_cli';
+  status: 'connecting' | 'ready' | 'awaiting_approval' | 'running' | 'completed' | 'failed' | 'closed';
+  currentTaskSummary?: string;
+  providerSessionId?: string;
+  startedAt: number;
+  updatedAt: number;
+}
+```
 
 Suggested relationship model:
 
@@ -149,8 +173,9 @@ Primary session:
 
 Referenced sessions:
 
-- visible in prompt context only as bounded summaries and status objects
+- visible in prompt context only as bounded portfolio metadata, summaries, and status objects
 - available for inspect, compare, and explicit target selection
+- raw repo evidence from non-primary sessions requires explicit inspect or compare targeting rather than ambient injection
 - not implicitly writable
 
 Delegated child sessions:
@@ -158,6 +183,14 @@ Delegated child sessions:
 - have explicit lineage back to a parent code session or request
 - can run background coding or verification work in a different workspace
 - report status and completion through shared orchestration and timeline surfaces
+
+Delegated backend sessions:
+
+- are optional runtime bindings attached to one `CodeSession`
+- reuse Guardian-owned workspace/trust/memory state rather than replacing it
+- surface provider-side approvals and user-input requests through the shared pending-action model
+- emit structured lifecycle and artifact events into the run timeline and code-session work state
+- keep the existing `coding_backend_run` terminal path as the generic fallback for non-first-class backends
 
 ## New control surface expectations
 
@@ -168,6 +201,7 @@ Guardian should support explicit operations equivalent to:
 - add or remove a session as a reference to the current coding task
 - compare the current coding session with another one
 - spawn a child coding lane in another workspace
+- start, inspect, interrupt, or resume a delegated backend session attached to a coding lane
 - move primary focus without losing referenced sessions
 
 This should remain `IntentGateway`-routed rather than string-matched.
@@ -177,6 +211,7 @@ This should remain `IntentGateway`-routed rather than string-matched.
 - only one session is implicit for mutation per turn
 - non-primary session mutation requires an explicit session target
 - approvals and pending actions carry the targeted `codeSessionId`
+- provider-session approval and continuation flow must still resolve through the shared pending-action and orchestration model
 - tool context must label primary vs referenced sessions clearly
 - cross-session memory or summary access remains bounded and provenance-aware
 
@@ -185,6 +220,7 @@ This should remain `IntentGateway`-routed rather than string-matched.
 Primary files:
 
 - `src/runtime/code-sessions.ts`
+- `src/runtime/coding-backend-service.ts`
 - `src/tools/builtin/coding-tools.ts`
 - `src/runtime/intent-gateway.ts`
 - `src/runtime/context-assembly.ts`
@@ -194,9 +230,12 @@ Primary files:
 Recommended additions:
 
 - new `CodeSessionLinkStore` or link support inside `code-sessions.ts`
+- new `DelegatedBackendSessionBroker` runtime plus typed backend session records
+- first-class provider adapters such as `CodexAppServerAdapter`, `ClaudeSdkAdapter`, and a generic `TerminalCliAdapter` fallback
 - new session-summary and session-compare operations
 - child coding lane state attached to run timeline and assistant jobs
 - prompt-context section that distinguishes primary session, referenced sessions, and child lanes
+- typed backend bootstrap and availability descriptors so the runtime can report installed/authenticated/active state truthfully
 
 ## Expected outcome
 
@@ -207,7 +246,33 @@ That is the right compromise:
 - safety remains implicit
 - orchestration becomes explicit
 
+## T3-Inspired Uplift Fit
+
+T3 Code is not the model for Guardian's top-level coding workspace ownership.
+
+Guardian should keep:
+
+- `CodeSession` as the canonical workspace object
+- Guardian-owned routing, trust, memory, approvals, and verification
+- the shared run timeline and pending-action orchestration
+
+T3 Code is useful as a lower-layer benchmark for delegated backend transport:
+
+- Codex should move from one-shot `codex exec` style delegation toward a persistent adapter over `codex app-server`
+- Claude should move from one-shot terminal delegation toward a persistent adapter over the official local Claude SDK/binary session path
+- Guardian should reuse the operator's local authenticated Codex and Claude installations where available rather than inventing a parallel provider-auth model
+
+The architectural fit is therefore:
+
+- session portfolio above
+- Guardian-owned `CodeSession` in the middle
+- T3-inspired delegated backend session broker below
+
+That lets Guardian gain structured provider sessions and subscription-backed local auth reuse without giving up Guardian's stronger shared orchestration and security model.
+
 ## Proposal B: Governed Dynamic Capability Authoring
+
+This remains valuable, but it should not gate or be tightly coupled to the multi-workspace and delegated-backend-session rollout above. It is a separate follow-on control-plane and admission track.
 
 ## Goal
 
@@ -356,22 +421,42 @@ Guardian should borrow those ideas, but apply them under stricter admission rule
 
 ## Recommended rollout
 
-### Phase 1
+### Track A: Multi-workspace and delegated backend sessions
+
+#### Phase 1
+
+- add typed delegated backend descriptors and a `DelegatedBackendSessionBroker`
+- keep the existing `coding_backend_run` path as the generic fallback
+- ship a first-class Codex adapter first because it has the cleanest structured local runtime surface
+
+#### Phase 2
 
 - add session portfolio summaries and explicit referenced-session attachments
 - add session inspect/compare operations
+- add child coding lane lineage and explicit cross-session targeting
+- record delegated backend session state in the run timeline and code-session work state
+
+#### Phase 3
+
+- add first-class Claude adapter support
+- add explicit delegated-backend session lifecycle operations such as inspect, interrupt, resume, and status
+- add operator dashboards for session graphs and delegated backend sessions
+
+### Track B: Governed dynamic capability authoring
+
+#### Phase 1
+
 - add Tier 1 prompt/workflow capability candidates
 
-### Phase 2
+#### Phase 2
 
-- add child coding lane lineage and explicit cross-session targeting
 - add candidate capability scanning, testing, and approval state
 - add time-boxed Tier 2 tool-adapter admission
 
-### Phase 3
+#### Phase 3
 
 - add promotion flow from candidate capability to curated capability
-- add operator dashboards for session graphs and capability candidates
+- add operator dashboards for capability candidates
 - add comparative harnesses to measure under-routing and capability-gap frequency
 
 ## Success criteria
@@ -379,6 +464,7 @@ Guardian should borrow those ideas, but apply them under stricter admission rule
 Guardian should be able to do all of the following without weakening its current trust model:
 
 - keep one coding workspace as the primary implicit target while referencing several others
+- bind a persistent delegated Codex or Claude session to a coding lane without making that provider the owner of workspace state
 - spawn child coding lanes in other workspaces with lineage and operator-visible status
 - compare or inspect other coding sessions without full focus switching
 - generate a prompt or workflow artifact when the current route is insufficient
@@ -392,7 +478,8 @@ Guardian should not copy permissive workspace-local extension behavior.
 Guardian should instead implement:
 
 - a multi-workspace coding session portfolio layered on top of the existing backend-owned code-session model
-- a governed dynamic-capability authoring lane layered beside the current curated skills and tool control plane
+- a T3-inspired delegated backend session broker layered below the existing backend-owned code-session model
+- a governed dynamic-capability authoring lane layered beside the current curated skills and tool control plane as a separate follow-on track
 
 That gives Guardian the practical flexibility the reference runtime demonstrates while preserving the architectural strengths Guardian already has:
 

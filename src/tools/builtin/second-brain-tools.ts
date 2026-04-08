@@ -64,6 +64,7 @@ function normalizeBriefKind(value: unknown): SecondBrainBriefKind | undefined {
   switch (normalized) {
     case 'manual':
     case 'morning':
+    case 'weekly_review':
     case 'pre_meeting':
     case 'follow_up':
       return normalized;
@@ -74,7 +75,7 @@ function normalizeBriefKind(value: unknown): SecondBrainBriefKind | undefined {
 
 function normalizeGeneratedBriefKind(value: unknown): SecondBrainGeneratedBriefKind | undefined {
   const normalized = normalizeBriefKind(value);
-  return normalized === 'morning' || normalized === 'pre_meeting' || normalized === 'follow_up'
+  return normalized === 'morning' || normalized === 'weekly_review' || normalized === 'pre_meeting' || normalized === 'follow_up'
     ? normalized
     : undefined;
 }
@@ -166,7 +167,7 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
         properties: {
           kind: {
             type: 'string',
-            enum: ['morning', 'pre_meeting', 'follow_up'],
+            enum: ['morning', 'weekly_review', 'pre_meeting', 'follow_up'],
           },
           eventId: { type: 'string' },
           limit: { type: 'number' },
@@ -179,7 +180,7 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
       if (!service) return { success: false, error: 'Second Brain service is unavailable.' };
       const kind = args.kind == null ? undefined : normalizeBriefKind(args.kind);
       if (args.kind != null && !kind) {
-        return { success: false, error: 'kind must be morning, pre_meeting, or follow_up.' };
+        return { success: false, error: 'kind must be morning, weekly_review, pre_meeting, or follow_up.' };
       }
       return {
         success: true,
@@ -207,7 +208,7 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
           id: { type: 'string' },
           kind: {
             type: 'string',
-            enum: ['manual', 'morning', 'pre_meeting', 'follow_up'],
+            enum: ['manual', 'morning', 'weekly_review', 'pre_meeting', 'follow_up'],
           },
           title: { type: 'string' },
           content: { type: 'string' },
@@ -223,7 +224,7 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
       if (!service) return { success: false, error: 'Second Brain service is unavailable.' };
       const kind = args.kind == null ? undefined : normalizeBriefKind(args.kind);
       if (args.kind != null && !kind) {
-        return { success: false, error: 'kind must be manual, morning, pre_meeting, or follow_up.' };
+        return { success: false, error: 'kind must be manual, morning, weekly_review, pre_meeting, or follow_up.' };
       }
       try {
         const brief = service.upsertBrief({
@@ -256,7 +257,7 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
         properties: {
           kind: {
             type: 'string',
-            enum: ['morning', 'pre_meeting', 'follow_up'],
+            enum: ['morning', 'weekly_review', 'pre_meeting', 'follow_up'],
           },
           eventId: { type: 'string' },
         },
@@ -268,7 +269,7 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
       if (!briefingService) return { success: false, error: 'Second Brain briefing service is unavailable.' };
       const kind = normalizeGeneratedBriefKind(args.kind);
       if (!kind) {
-        return { success: false, error: 'kind must be morning, pre_meeting, or follow_up.' };
+        return { success: false, error: 'kind must be morning, weekly_review, pre_meeting, or follow_up.' };
       }
       if ((kind === 'pre_meeting' || kind === 'follow_up') && !asString(args.eventId).trim()) {
         return { success: false, error: 'eventId is required for pre_meeting and follow_up briefs.' };
@@ -723,7 +724,7 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
   context.registry.register(
     {
       name: 'second_brain_routine_catalog',
-      description: 'List the built-in Second Brain routine catalog, including which templates are already configured.',
+      description: 'List the Second Brain starter routine catalog, including which presets are already configured.',
       shortDescription: 'List the Second Brain routine catalog.',
       risk: 'read_only',
       category: 'memory',
@@ -741,7 +742,7 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
   context.registry.register(
     {
       name: 'second_brain_routine_create',
-      description: 'Create a bounded Second Brain routine from the built-in routine catalog.',
+      description: 'Create a bounded Second Brain routine from the starter routine catalog.',
       shortDescription: 'Create a Second Brain routine.',
       risk: 'mutating',
       category: 'memory',

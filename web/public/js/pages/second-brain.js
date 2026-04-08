@@ -379,7 +379,9 @@ function preserveSelection(currentId, records) {
 }
 
 function preserveRoutineTemplateSelection(currentId, data) {
-  const catalog = filteredRoutineCatalog(data);
+  const catalog = state.creatingRoutine
+    ? availableRoutineCatalog(data)
+    : filteredRoutineCatalog(data);
   if (!catalog.length) return null;
   if (currentId && catalog.some((entry) => entry.templateId === currentId)) {
     return currentId;
@@ -1268,12 +1270,13 @@ function renderBriefs(panel, data) {
       <div class="sb-section__header">
         <div>
           <div class="sb-card__eyebrow">Briefs</div>
-          <h3>Meeting and daily briefs</h3>
-          <p class="sb-section__copy">Create a morning summary, prepare for a meeting, or draft follow-up notes and review them here.</p>
+          <h3>Meeting, daily, and weekly briefs</h3>
+          <p class="sb-section__copy">Create a morning summary, a weekly review, a meeting brief, or a follow-up draft and review them here.</p>
         </div>
       </div>
       <div class="sb-card sb-card--action-strip">
         <button class="btn btn-primary" type="button" data-generate-brief="morning">Generate morning brief</button>
+        <button class="btn btn-secondary" type="button" data-generate-brief="weekly_review">Generate weekly review</button>
         ${nextEvent ? `<button class="btn btn-secondary" type="button" data-generate-brief="pre_meeting" data-event-id="${escAttr(nextEvent.id)}">Prepare for next meeting</button>` : ''}
         ${followUpCandidate ? `<button class="btn btn-secondary" type="button" data-generate-brief="follow_up" data-event-id="${escAttr(followUpCandidate.id)}">Draft follow-up</button>` : ''}
       </div>
@@ -1282,6 +1285,7 @@ function renderBriefs(panel, data) {
           <div class="sb-segmented">
             ${renderSegmentButton('all', 'All', state.briefKind === 'all', 'data-brief-kind')}
             ${renderSegmentButton('morning', 'Morning', state.briefKind === 'morning', 'data-brief-kind')}
+            ${renderSegmentButton('weekly_review', 'Weekly', state.briefKind === 'weekly_review', 'data-brief-kind')}
             ${renderSegmentButton('pre_meeting', 'Meeting', state.briefKind === 'pre_meeting', 'data-brief-kind')}
             ${renderSegmentButton('follow_up', 'Follow-up', state.briefKind === 'follow_up', 'data-brief-kind')}
           </div>
@@ -1316,8 +1320,8 @@ function renderBriefListItem(brief) {
 
 function renderBriefEditor(brief, data) {
   const sourceEvent = brief.eventId ? findRecord([...data.focusEvents, ...data.calendarEvents], brief.eventId) : null;
-  const regenerateButton = brief.kind === 'morning'
-    ? '<button class="btn btn-secondary" type="button" data-generate-brief="morning">Regenerate brief</button>'
+  const regenerateButton = brief.kind === 'morning' || brief.kind === 'weekly_review'
+    ? `<button class="btn btn-secondary" type="button" data-generate-brief="${escAttr(brief.kind)}">Regenerate brief</button>`
     : brief.eventId
       ? `<button class="btn btn-secondary" type="button" data-generate-brief="${escAttr(brief.kind)}" data-event-id="${escAttr(brief.eventId)}">Regenerate brief</button>`
       : '';
@@ -1351,6 +1355,8 @@ function renderBriefEditor(brief, data) {
 
 function renderRoutines(panel, data) {
   const catalog = filteredRoutineCatalog(data);
+  const configuredEntries = configuredRoutineCatalog(data);
+  const starterEntries = availableRoutineCatalog(data);
   const selectedEntry = findRoutineCatalogEntry(data, state.selectedRoutineTemplateId);
   const selectedCreateEntry = state.creatingRoutine
     ? resolveRoutineCreateEntry(selectedEntry, data)
@@ -1359,23 +1365,24 @@ function renderRoutines(panel, data) {
     ? null
     : (findRecord(data.routines, state.selectedRoutineId)
       ?? (selectedEntry?.configuredRoutineId ? findRecord(data.routines, selectedEntry.configuredRoutineId) : null));
-  const configuredCount = data.routineCatalog.filter((entry) => entry.configured).length;
+  const configuredCount = configuredEntries.length;
   const enabledCount = data.routines.filter((routine) => routine.enabled).length;
-  const availableCount = data.routineCatalog.filter((entry) => !entry.configured).length;
+  const pausedCount = Math.max(0, configuredCount - enabledCount);
+  const starterCount = starterEntries.length;
   const actionPanel = state.creatingRoutine
     ? renderRoutineCreateForm(selectedCreateEntry, data)
     : selectedRoutine
       ? renderRoutineEditor(selectedRoutine, selectedEntry)
-      : '<div class="sb-empty">Select a configured routine to edit it, or use Create routine to add another built-in routine from the catalog.</div>';
+      : '<div class="sb-empty">Select a routine to edit it, or open Create routine to add one from the starter set.</div>';
 
   panel.innerHTML = `
     <section class="sb-section">
       ${renderGuidancePanel({
         kicker: 'Routine Guide',
-        title: 'Routine catalog, scheduling, and bounded assistant upkeep',
-        whatItIs: 'Routines are Guardian’s built-in Second Brain jobs for briefs, horizon checks, sync, and follow-up upkeep.',
-        whatSeeing: 'You are seeing the full built-in routine catalog, including configured routines you can edit now and available templates you can add.',
-        whatCanDo: 'Create a routine from the catalog, edit its delivery and routing defaults, adjust supported trigger settings, and pause or resume it without leaving Second Brain.',
+        title: 'Routine scheduling and bounded assistant upkeep',
+        whatItIs: 'Routines are Guardian’s deterministic Second Brain jobs for briefs, horizon checks, sync, and follow-up upkeep.',
+        whatSeeing: 'You are seeing your configured routines here. Create routine opens the starter presets without keeping deleted routines in the main list.',
+        whatCanDo: 'Create a routine from the starter set, edit its delivery and routing defaults, adjust supported trigger settings, and pause, resume, or delete it without leaving Second Brain.',
         howLinks: 'Automations stays the home for general-purpose user-authored workflows. This tab owns the curated personal-assistant routine set.',
       })}
 
@@ -1386,9 +1393,9 @@ function renderRoutines(panel, data) {
           <div class="card-subtitle">${enabledCount} enabled right now</div>
         </div>
         <div class="status-card info">
-          <div class="card-title">Available</div>
-          <div class="card-value">${availableCount}</div>
-          <div class="card-subtitle">Built-in routines you can add</div>
+          <div class="card-title">Paused</div>
+          <div class="card-value">${pausedCount}</div>
+          <div class="card-subtitle">Configured routines currently paused</div>
         </div>
         <div class="status-card ${enabledCount > 0 ? 'success' : 'warning'}">
           <div class="card-title">Live Routines</div>
@@ -1396,9 +1403,9 @@ function renderRoutines(panel, data) {
           <div class="card-subtitle">Briefs and upkeep currently active</div>
         </div>
         <div class="status-card warning">
-          <div class="card-title">Catalog Rows</div>
-          <div class="card-value">${data.routineCatalog.length}</div>
-          <div class="card-subtitle">Bounded Second Brain routine templates</div>
+          <div class="card-title">Starter Presets</div>
+          <div class="card-value">${starterCount}</div>
+          <div class="card-subtitle">Preset routines available in Create routine</div>
         </div>
       </div>
 
@@ -1418,7 +1425,7 @@ function renderRoutines(panel, data) {
 
         <section class="table-container sb-routine-catalog">
           <div class="table-header">
-            <h3>Routine Catalog</h3>
+            <h3>Configured Routines</h3>
             <div style="display:flex;gap:0.5rem;align-items:center;">
               <button class="btn btn-primary" type="button" data-routine-create-toggle="true">${state.creatingRoutine ? 'Close Creator' : 'Create Routine'}</button>
               <button class="btn btn-secondary" type="button" data-routine-refresh="true">Refresh</button>
@@ -1426,12 +1433,12 @@ function renderRoutines(panel, data) {
           </div>
 
           <div class="wf-category-bar">
-            ${renderRoutineFilterChip('all', 'All', state.routineStatus === 'all', 'data-routine-status', data.routineCatalog.length)}
-            ${renderRoutineFilterChip('configured', 'Configured', state.routineStatus === 'configured', 'data-routine-status', configuredCount)}
-            ${renderRoutineFilterChip('available', 'Available', state.routineStatus === 'available', 'data-routine-status', availableCount)}
+            ${renderRoutineFilterChip('all', 'All', state.routineStatus === 'all', 'data-routine-status', configuredCount)}
+            ${renderRoutineFilterChip('enabled', 'Enabled', state.routineStatus === 'enabled', 'data-routine-status', enabledCount)}
+            ${renderRoutineFilterChip('paused', 'Paused', state.routineStatus === 'paused', 'data-routine-status', pausedCount)}
             <span class="sb-filter-divider" aria-hidden="true"></span>
             ${renderRoutineFilterChip('all', 'Any Category', state.routineCategory === 'all', 'data-routine-category')}
-            ${renderRoutineCategoryFilters(data.routineCatalog)}
+            ${renderRoutineCategoryFilters(configuredEntries)}
           </div>
 
           <div style="padding:0.5rem 1rem;">
@@ -1459,7 +1466,7 @@ function renderRoutines(panel, data) {
             <tbody>
               ${catalog.length
                 ? catalog.map((entry) => renderRoutineCatalogRow(entry, data)).join('')
-                : '<tr><td colspan="7"><div class="sb-empty">No routines match the current filters.</div></td></tr>'}
+                : '<tr><td colspan="7"><div class="sb-empty">No configured routines match the current filters.</div></td></tr>'}
             </tbody>
           </table>
         </section>
@@ -1491,6 +1498,8 @@ function renderRoutineCategoryFilters(catalog) {
 
 function renderRoutineCatalogRow(entry, data) {
   const routine = findConfiguredRoutine(entry, data);
+  const routineId = routine?.id || entry.templateId;
+  const routineLabel = routine?.name || entry.name;
   const effective = routine
     ? routine
     : {
@@ -1520,26 +1529,16 @@ function renderRoutineCatalogRow(entry, data) {
       </td>
       <td>${esc(effective.deliveryDefaults.join(', ') || 'None')}</td>
       <td>
-        ${entry.configured
-          ? `<span class="badge ${effective.enabled ? 'badge-ok' : 'badge-muted'}">${esc(effective.enabled ? 'Enabled' : 'Paused')}</span>`
-          : '<span class="badge badge-info">Available</span>'}
+        <span class="badge ${effective.enabled ? 'badge-ok' : 'badge-muted'}">${esc(effective.enabled ? 'Enabled' : 'Paused')}</span>
       </td>
       <td>
         <div class="sb-task-card__actions">
-          ${entry.configured
-            ? `<button class="btn btn-secondary btn-sm" type="button" data-routine-edit="${escAttr(entry.templateId)}">Edit</button>`
-            : `<button class="btn btn-primary btn-sm" type="button" data-routine-create-select="${escAttr(entry.templateId)}">Create</button>`}
-          ${entry.configured
-            ? `<button class="btn btn-danger btn-sm" type="button" data-routine-delete="${escAttr(routine.id)}" data-label="${escAttr(routine.name)}">Delete</button>`
-            : ''}
-          ${entry.configured
-            ? `
-              <label class="sb-toggle">
-                <input type="checkbox" data-routine-quick-toggle="${escAttr(routine.id)}" ${routine.enabled ? 'checked' : ''}>
-                <span>Live</span>
-              </label>
-            `
-            : ''}
+          <button class="btn btn-secondary btn-sm" type="button" data-routine-edit="${escAttr(entry.templateId)}">Edit</button>
+          <button class="btn btn-danger btn-sm" type="button" data-routine-delete="${escAttr(routineId)}" data-label="${escAttr(routineLabel)}">Delete</button>
+          <label class="sb-toggle">
+            <input type="checkbox" data-routine-quick-toggle="${escAttr(routineId)}" ${effective.enabled ? 'checked' : ''}>
+            <span>Live</span>
+          </label>
         </div>
       </td>
     </tr>
@@ -1549,7 +1548,7 @@ function renderRoutineCatalogRow(entry, data) {
 function renderRoutineCreateForm(entry, data) {
   const available = availableRoutineCatalog(data);
   if (!available.length) {
-    return '<div class="sb-empty">All built-in routines are already configured. Pick a routine from the catalog to edit its policy instead.</div>';
+    return '<div class="sb-empty">All starter routines are already configured. Pick one from the list to edit it instead.</div>';
   }
 
   const selectedEntry = entry && !entry.configured
@@ -1563,14 +1562,14 @@ function renderRoutineCreateForm(entry, data) {
 
   return `
     <div class="sb-stack">
-      <p class="sb-section__copy">Create a bounded routine from the built-in catalog. You can adjust supported scheduling, routing, budget, and delivery defaults before saving it.</p>
+      <p class="sb-section__copy">Create a routine from the starter set. Deleted starter routines stay out of the main list until you explicitly add them again here.</p>
       <form class="sb-form" data-routine-create-form>
-        <label class="sb-form__label" for="routine-template-id">Built-in routine</label>
+        <label class="sb-form__label" for="routine-template-id">Starter routine</label>
         <select id="routine-template-id" name="templateId">
           ${available.map((option) => `<option value="${escAttr(option.templateId)}" ${option.templateId === selectedEntry.templateId ? 'selected' : ''}>${esc(option.name)}</option>`).join('')}
         </select>
         <div class="sb-readout">
-          <strong>Template summary</strong>
+          <strong>Preset summary</strong>
           <span>${esc(selectedEntry.description)}</span>
         </div>
         ${renderRoutineFormFields(preview, { submitLabel: 'Create routine' })}
@@ -1599,6 +1598,9 @@ function renderRoutineFormFields(routine, options = {}) {
   const extraActions = options.extraActions || '';
   const editableCron = routine.category !== 'one_off' && (routine.trigger?.mode === 'cron' || routine.trigger?.mode === 'manual');
   const supportsLookahead = routine.trigger?.mode === 'event' || routine.trigger?.mode === 'horizon';
+  const cronPreview = routine.trigger?.cron?.trim()
+    ? cronSummary(routine.trigger.cron)
+    : 'Enter a five-field cron schedule to preview it in plain English.';
 
   return `
     <label class="sb-form__label" for="routine-name">${esc(options.submitLabel === 'Create routine' ? 'Routine name' : 'Routine name')}</label>
@@ -1612,14 +1614,18 @@ function renderRoutineFormFields(routine, options = {}) {
       <label class="sb-form__label" for="routine-trigger-mode">Trigger</label>
       <select id="routine-trigger-mode" name="triggerMode" data-routine-trigger-mode>
         ${renderSelectOptions([
-          { value: 'cron', label: 'Scheduled (cron)' },
+          { value: 'cron', label: 'Scheduled' },
           { value: 'manual', label: 'Manual only' },
         ], routine.trigger?.mode || 'manual')}
       </select>
       <div data-routine-cron-group style="display: ${routine.trigger?.mode === 'cron' ? 'block' : 'none'}">
-        <label class="sb-form__label" for="routine-cron">Cron schedule</label>
+        <label class="sb-form__label" for="routine-cron">Schedule</label>
         <input id="routine-cron" name="cron" type="text" placeholder="0 7 * * *" value="${escAttr(routine.trigger?.cron || '')}">
-        <div class="sb-table-copy">Examples: 0 7 * * * for daily at 7 a.m., or 0 9 * * 1 for Monday at 9 a.m.</div>
+        <div class="sb-readout">
+          <strong>Plain-English preview</strong>
+          <span data-routine-cron-preview>${esc(cronPreview)}</span>
+        </div>
+        <div class="sb-table-copy">Examples: 0 7 * * * runs daily at 7 a.m.; 0 18 * * * runs daily at 6 p.m.; 0 9 * * 1 runs every Monday at 9 a.m.</div>
       </div>
     ` : `
       <input type="hidden" name="triggerMode" value="${escAttr(routine.trigger?.mode || 'manual')}">
@@ -2042,8 +2048,8 @@ function bindInteractions(container) {
         runMutation: () => api.secondBrainRoutineDelete(routineDelete.dataset.routineDelete),
         onSuccess: () => {
           state.selectedRoutineId = null;
-          state.selectedRoutineTemplateId = routineDelete.dataset.routineDelete;
-          state.creatingRoutine = true;
+          state.selectedRoutineTemplateId = null;
+          state.creatingRoutine = false;
         },
       });
       return;
@@ -2100,6 +2106,16 @@ function bindInteractions(container) {
   container.addEventListener('input', (event) => {
     const target = event.target;
     if (!(target instanceof HTMLInputElement)) return;
+    if (target.name === 'cron') {
+      const form = target.closest('form');
+      const preview = form?.querySelector('[data-routine-cron-preview]');
+      if (preview instanceof HTMLElement) {
+        preview.textContent = target.value.trim()
+          ? cronSummary(target.value)
+          : 'Enter a five-field cron schedule to preview it in plain English.';
+      }
+      return;
+    }
     if (target.id === 'sb-routine-search') {
       state.routineQuery = target.value;
       state.selectedRoutineTemplateId = preserveRoutineTemplateSelection(state.selectedRoutineTemplateId, state.data ?? { routineCatalog: [] });
@@ -2581,15 +2597,15 @@ function renderFormActions(submitLabel, deleteButton = '', secondaryAction = '')
 }
 
 function filteredRoutineCatalog(data) {
-  const catalog = Array.isArray(data?.routineCatalog) ? data.routineCatalog : [];
+  const catalog = configuredRoutineCatalog(data);
   const query = state.routineQuery.trim().toLowerCase();
   return catalog
     .filter((entry) => {
-      if (state.routineStatus === 'configured' && !entry.configured) return false;
-      if (state.routineStatus === 'available' && entry.configured) return false;
+      const routine = findConfiguredRoutine(entry, data);
+      if (state.routineStatus === 'enabled' && !routine?.enabled) return false;
+      if (state.routineStatus === 'paused' && routine?.enabled) return false;
       if (state.routineCategory !== 'all' && entry.category !== state.routineCategory) return false;
       if (!query) return true;
-      const routine = findConfiguredRoutine(entry, data);
       const effective = routine ?? {
         ...entry.manifest,
         deliveryDefaults: entry.manifest.deliveryDefaults,
@@ -2608,6 +2624,11 @@ function filteredRoutineCatalog(data) {
       return haystack.includes(query);
     })
     .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function configuredRoutineCatalog(data) {
+  const catalog = Array.isArray(data?.routineCatalog) ? data.routineCatalog : [];
+  return catalog.filter((entry) => entry.configured);
 }
 
 function availableRoutineCatalog(data) {
@@ -2668,25 +2689,150 @@ function describeRoutineTrigger(trigger) {
     : String(trigger.mode || 'manual');
 }
 
+const CRON_DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
 function cronSummary(cron) {
-  switch (cron) {
-    case '0 7 * * *':
-      return 'Daily at 7 a.m.';
-    case '0 9 * * *':
-      return 'Daily at 9 a.m.';
-    case '0 12 * * *':
-      return 'Daily at noon';
-    case '0 17 * * *':
-      return 'Daily at 5 p.m.';
-    case '0 9 * * 1':
-      return 'Weekly on Monday at 9 a.m.';
-    case '0 17 * * 5':
-      return 'Weekly on Friday at 5 p.m.';
-    case '0 * * * *':
-      return 'Hourly';
-    default:
-      return `Cron ${cron}`;
+  const parsed = parseCronSummary(cron);
+  if (!parsed) {
+    return 'Custom schedule';
   }
+  const { minuteField, hourField, dayOfMonthField, monthField, dayOfWeekField } = parsed;
+  if (minuteField.match(/^\*\/\d+$/) && hourField === '*' && dayOfMonthField === '*' && monthField === '*' && dayOfWeekField === '*') {
+    const interval = Number(minuteField.slice(2));
+    return interval === 1 ? 'Every minute' : `Every ${interval} minutes`;
+  }
+
+  const minute = parseCronNumber(minuteField, 0, 59);
+  if (minute == null) return 'Custom schedule';
+
+  if (hourField === '*' && dayOfMonthField === '*' && monthField === '*' && dayOfWeekField === '*') {
+    return minute === 0 ? 'Hourly' : `Hourly at ${formatMinuteOnly(minute)}`;
+  }
+
+  if (hourField.match(/^\*\/\d+$/) && dayOfMonthField === '*' && monthField === '*' && dayOfWeekField === '*') {
+    const interval = Number(hourField.slice(2));
+    if (interval === 1) {
+      return minute === 0 ? 'Hourly' : `Hourly at ${formatMinuteOnly(minute)}`;
+    }
+    return minute === 0
+      ? `Every ${interval} hours on the hour`
+      : `Every ${interval} hours at ${formatMinuteOnly(minute)}`;
+  }
+
+  const hour = parseCronNumber(hourField, 0, 23);
+  if (hour == null) return 'Custom schedule';
+  const time = formatTimeOfDay(hour, minute);
+
+  if (dayOfMonthField === '*' && monthField === '*' && dayOfWeekField === '*') {
+    return `Daily at ${time}`;
+  }
+
+  if (dayOfMonthField === '*' && monthField === '*') {
+    const dayList = parseCronDayList(dayOfWeekField);
+    if (dayList) {
+      if (sameDayList(dayList, [1, 2, 3, 4, 5])) {
+        return `Weekdays at ${time}`;
+      }
+      if (sameDayList(dayList, [0, 6])) {
+        return `Weekends at ${time}`;
+      }
+      if (dayList.length === 1) {
+        return `Every ${CRON_DAY_NAMES[dayList[0]]} at ${time}`;
+      }
+      return `Every ${joinWithCommas(dayList.map((day) => CRON_DAY_NAMES[day]))} at ${time}`;
+    }
+  }
+
+  const dayOfMonth = parseCronNumber(dayOfMonthField, 1, 31);
+  if (dayOfMonth != null && monthField === '*' && dayOfWeekField === '*') {
+    return `Monthly on the ${ordinal(dayOfMonth)} at ${time}`;
+  }
+
+  return 'Custom schedule';
+}
+
+function parseCronSummary(cron) {
+  const parts = String(cron || '').trim().split(/\s+/g);
+  if (parts.length !== 5) return null;
+  return {
+    minuteField: parts[0],
+    hourField: parts[1],
+    dayOfMonthField: parts[2],
+    monthField: parts[3],
+    dayOfWeekField: parts[4],
+  };
+}
+
+function parseCronNumber(field, min, max) {
+  if (!/^\d+$/.test(field)) return null;
+  const value = Number(field);
+  return Number.isInteger(value) && value >= min && value <= max ? value : null;
+}
+
+function parseCronDayList(field) {
+  if (field === '*') return [];
+  const values = new Set();
+  for (const part of String(field || '').split(',')) {
+    const trimmed = part.trim();
+    if (!trimmed) return null;
+    const rangeMatch = trimmed.match(/^(\d)-(\d)$/);
+    if (rangeMatch) {
+      const start = Number(rangeMatch[1]);
+      const end = Number(rangeMatch[2]);
+      if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end > 7 || start > end) {
+        return null;
+      }
+      for (let day = start; day <= end; day += 1) {
+        values.add(day === 7 ? 0 : day);
+      }
+      continue;
+    }
+    const value = parseCronNumber(trimmed, 0, 7);
+    if (value == null) return null;
+    values.add(value === 7 ? 0 : value);
+  }
+  return [...values].sort((left, right) => left - right);
+}
+
+function sameDayList(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function formatMinuteOnly(minute) {
+  return minute === 0 ? 'on the hour' : `:${String(minute).padStart(2, '0')}`;
+}
+
+function formatTimeOfDay(hour, minute) {
+  if (hour === 12 && minute === 0) return 'noon';
+  if (hour === 0 && minute === 0) return 'midnight';
+  const meridiem = hour >= 12 ? 'p.m.' : 'a.m.';
+  const normalizedHour = hour % 12 || 12;
+  return minute === 0
+    ? `${normalizedHour} ${meridiem}`
+    : `${normalizedHour}:${String(minute).padStart(2, '0')} ${meridiem}`;
+}
+
+function ordinal(value) {
+  const modulo100 = value % 100;
+  if (modulo100 >= 11 && modulo100 <= 13) {
+    return `${value}th`;
+  }
+  switch (value % 10) {
+    case 1:
+      return `${value}st`;
+    case 2:
+      return `${value}nd`;
+    case 3:
+      return `${value}rd`;
+    default:
+      return `${value}th`;
+  }
+}
+
+function joinWithCommas(values) {
+  if (values.length <= 1) return values[0] || '';
+  if (values.length === 2) return `${values[0]} and ${values[1]}`;
+  return `${values.slice(0, -1).join(', ')}, and ${values[values.length - 1]}`;
 }
 
 function formatLookahead(minutes) {

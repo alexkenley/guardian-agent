@@ -354,7 +354,7 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Prefer personal_assistant_task over workspace_task or email_task when the user intent is personal productivity or Second Brain work rather than explicit provider CRUD.',
   'Prefer personal_assistant_task for meeting prep, follow-up drafting, calendar planning, personal search across email/docs/calendar/notes, outreach review, or "what do I owe this person?" even when the evidence comes from Google Workspace or Microsoft 365.',
   'Prefer automation_authoring when the user explicitly asks to create an automation, workflow, or scheduled automation for the Automations system.',
-  'Prefer personal_assistant_task with personalItemType=routine when the user explicitly asks for a Second Brain routine or names a built-in routine concept such as Morning Brief, Pre-Meeting Brief, Follow-Up Watch, Weekly Review, Manual Sync, or the Routines tab.',
+  'Prefer personal_assistant_task with personalItemType=routine when the user explicitly asks for a Second Brain routine or names a starter routine concept such as Morning Brief, Pre-Meeting Brief, Follow-Up Watch, Weekly Review, Manual Sync, or the Routines tab.',
   'Unqualified calendar entry, calendar event, or calendar item create/update/delete requests default to the local Second Brain calendar with route=personal_assistant_task, personalItemType=calendar, and calendarTarget=local.',
   'Prefer workspace_task for explicit provider CRUD or administration such as listing Drive files, creating a Google Sheet, editing a SharePoint document, browsing OneDrive, or mutating an event directly in Google Calendar or Outlook Calendar.',
   'Prefer email_task for direct inbox work in Gmail or Outlook, but not for meeting prep, follow-up drafting, or broader Second Brain synthesis.',
@@ -479,7 +479,7 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'Guardian AI provider profile inventory, model catalogs, model routing policy, and AI provider configuration work are not personal_assistant_task. Prefer general_assistant with uiSurface="config" and provider/tool orchestration workload metadata for those requests.',
   'Generic planning or advice prompts such as "Give me a concise plan for organizing my week" are general_assistant, not personal_assistant_task, unless the user explicitly asks to inspect, summarize, or update their actual Second Brain tasks, notes, calendar, routines, or Today view.',
   'Prefer personal_assistant_task for meeting prep, follow-up drafting, calendar planning, outreach review, or personal search across email/docs/calendar/notes even when the data comes from Google Workspace or Microsoft 365.',
-  'Prefer automation_authoring when the user explicitly asks to create an automation or workflow in the Automations system. Prefer personal_assistant_task when they explicitly ask for a Second Brain routine or mention built-in routine concepts such as Morning Brief or Pre-Meeting Brief.',
+  'Prefer automation_authoring when the user explicitly asks to create an automation or workflow in the Automations system. Prefer personal_assistant_task when they explicitly ask for a Second Brain routine or mention starter routine concepts such as Morning Brief or Pre-Meeting Brief.',
   'Unqualified calendar entry, calendar event, or calendar item create/update/delete requests default to the local Second Brain calendar with personalItemType="calendar" and calendarTarget="local".',
   'Prefer workspace_task only when the user is explicitly targeting provider CRUD or provider administration such as Drive, Docs, Sheets, OneDrive, SharePoint, Teams, Google Calendar, Outlook Calendar, or other direct provider calendar event edits.',
   'Prefer email_task only for direct mailbox work, not for broader Second Brain synthesis.',
@@ -960,7 +960,8 @@ function normalizeIntentGatewayDecision(
     : undefined;
   const manualOnly = typeof parsed.manualOnly === 'boolean' ? parsed.manualOnly : undefined;
   const scheduled = typeof parsed.scheduled === 'boolean' ? parsed.scheduled : undefined;
-  const personalItemType = normalizePersonalItemType(parsed.personalItemType);
+  const personalItemType = normalizePersonalItemType(parsed.personalItemType)
+    ?? inferRoutinePersonalItemType(sourceContent, route);
   const enabled = typeof parsed.enabled === 'boolean'
     ? parsed.enabled
     : inferRoutineEnabledFilter(sourceContent, route, operation, personalItemType);
@@ -973,7 +974,7 @@ function normalizeIntentGatewayDecision(
     : undefined;
   const query = typeof parsed.query === 'string' && parsed.query.trim()
     ? parsed.query.trim()
-    : undefined;
+    : inferRoutineQuery(sourceContent, route, operation, personalItemType);
   const path = typeof parsed.path === 'string' && parsed.path.trim()
     ? parsed.path.trim()
     : undefined;
@@ -1525,6 +1526,44 @@ function inferRoutineEnabledFilter(
     return true;
   }
   return undefined;
+}
+
+function inferRoutinePersonalItemType(
+  content: string | undefined,
+  route: IntentGatewayRoute,
+): IntentGatewayEntities['personalItemType'] | undefined {
+  if (route !== 'personal_assistant_task') {
+    return undefined;
+  }
+  const normalized = content?.trim().toLowerCase() ?? '';
+  if (!normalized) return undefined;
+  if (
+    /\broutines?\b/.test(normalized)
+    || /\bmorning brief\b/.test(normalized)
+    || /\bpre[- ]meeting brief\b/.test(normalized)
+    || /\bfollow[- ]up watch\b/.test(normalized)
+    || /\bweekly review\b/.test(normalized)
+    || /\bmanual sync\b/.test(normalized)
+    || /\bnext 24 hours radar\b/.test(normalized)
+  ) {
+    return 'routine';
+  }
+  return undefined;
+}
+
+function inferRoutineQuery(
+  content: string | undefined,
+  route: IntentGatewayRoute,
+  operation: IntentGatewayOperation,
+  personalItemType: IntentGatewayEntities['personalItemType'] | undefined,
+): string | undefined {
+  if (route !== 'personal_assistant_task' || operation !== 'read' || personalItemType !== 'routine') {
+    return undefined;
+  }
+  const normalized = content?.trim() ?? '';
+  if (!normalized) return undefined;
+  const relatedMatch = normalized.match(/\brelated\s+to\s+(.+?)(?:[.?!]|$)/i);
+  return relatedMatch?.[1]?.trim() || undefined;
 }
 
 function normalizePersonalItemType(

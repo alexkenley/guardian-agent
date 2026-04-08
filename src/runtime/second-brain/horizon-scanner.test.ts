@@ -69,9 +69,6 @@ describe('HorizonScanner', () => {
   it('runs sync and triggers morning, pre-meeting, and follow-up routines deterministically', async () => {
     const { service, briefing, scheduledTaskService, now } = createFixture();
 
-    service.createRoutine({ templateId: 'pre-meeting-brief' });
-    service.createRoutine({ templateId: 'follow-up-watch' });
-
     service.upsertTask({
       title: 'Finalize board deck',
       priority: 'high',
@@ -126,5 +123,56 @@ describe('HorizonScanner', () => {
       'brief:pre_meeting:upcoming-1',
       'brief:follow_up:past-1',
     ]));
+  });
+
+  it('generates a weekly review brief when the weekly starter routine is due', async () => {
+    const sqlitePath = join(tmpdir(), `guardianagent-second-brain-horizon-${randomUUID()}.sqlite`);
+    const nowState = { value: Date.parse('2026-04-06T09:30:00Z') };
+    const now = () => nowState.value;
+    const store = new SecondBrainStore({ sqlitePath, now });
+    const service = new SecondBrainService(store, { now });
+    const briefing = new BriefingService(service, { now });
+    const scheduledTaskService = {
+      list() {
+        return [];
+      },
+      create() {
+        return { success: true, message: 'created' };
+      },
+      update() {
+        return { success: true, message: 'updated' };
+      },
+    };
+
+    service.upsertTask({
+      title: 'Close weekly review actions',
+      priority: 'medium',
+    });
+
+    const syncService = {
+      async syncAll(reason: string) {
+        return {
+          startedAt: now(),
+          finishedAt: now(),
+          reason,
+          providers: [],
+        };
+      },
+    };
+
+    const scanner = new HorizonScanner(
+      scheduledTaskService as any,
+      service,
+      syncService as any,
+      briefing,
+      { now },
+    );
+
+    const summary = await scanner.runScan('test');
+
+    expect(summary.triggeredRoutines).toContain('weekly-review');
+    expect(summary.generatedBriefIds).toContain('brief:weekly_review:2026-04-06');
+    expect(service.getBriefById('brief:weekly_review:2026-04-06')?.kind).toBe('weekly_review');
+    store.close();
   });
 });

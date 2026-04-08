@@ -122,6 +122,54 @@ export function getReferenceGuide(): ReferenceGuide {
             ],
           },
           {
+            id: 'configuration-quick-start',
+            title: 'Configuration Quick Start',
+            summary: 'Set up AI providers, core access, and the first validation checks in one pass.',
+            sections: [
+              {
+                title: 'Minimum Working Setup',
+                items: [
+                  'Open `#/config` first. That is the main setup surface for AI providers, auth, integrations, search, and appearance.',
+                  'In Configuration > AI Providers add at least one usable AI profile before expecting normal chat to work well.',
+                  'If you want the simplest private setup, start with local Ollama. If you want a hosted fallback or higher-quality path, add Ollama Cloud or a frontier provider after that.',
+                  'Set the routed default for the provider tier you want Guardian to use automatically. If you leave every routed default blank, Auto mode has less to work with.',
+                  'Use the web configuration forms or CLI `/config` instead of editing config files by hand.',
+                ],
+              },
+              {
+                title: 'AI Provider Basics',
+                items: [
+                  'Local path: install Ollama, pull a model, then add that profile in Configuration > AI Providers.',
+                  'Managed-cloud path: add Ollama Cloud when you want remote Ollama-native access without jumping straight to a different provider family.',
+                  'Frontier path: add OpenAI, Anthropic, Google Gemini, Groq, Mistral, DeepSeek, Together, or xAI when you want a stronger hosted fallback or an explicit high-quality tier.',
+                  'Use Configuration > AI Providers or CLI `/providers` to confirm connectivity and model discovery after each provider change.',
+                  'Use Auto mode for normal operation once the provider tiers you care about are configured correctly.',
+                ],
+              },
+              {
+                title: 'Core Access And Integrations',
+                items: [
+                  'If web authentication is enabled, confirm you can still sign in after changing auth settings before moving on to other setup tasks.',
+                  'Open Configuration > Integrations > Coding Assistants when you want Guardian to be able to delegate to Claude Code, Codex, Gemini CLI, or Aider.',
+                  'Open Configuration > Integration System when you want to enable operator channels such as Telegram.',
+                  'Open Configuration > Search Providers when you want live web search or document-search collections available inside Guardian.',
+                  'Use paste-once secrets for the easiest local setup, or use credential refs when your environment already manages secrets outside the app.',
+                ],
+              },
+              {
+                title: 'First Validation Pass',
+                items: [
+                  'Run CLI `/providers` or use the AI Providers page to make sure the configured provider is reachable and shows the model you expect.',
+                  'Open Second Brain and confirm the page loads without missing-provider errors.',
+                  'Ask one simple chat question first, then one bounded Second Brain question such as `Show my tasks` to verify normal chat and personal-assistant routing both work.',
+                  'If you enabled Telegram, send the bot a test message and confirm it replies before treating the channel as live.',
+                  'If you connected Google Workspace or Microsoft 365, validate the connection from the connection page first, then test the specific Calendar, Contacts, or Mail flow you actually plan to use.',
+                ],
+                note: 'A good first-run goal is not full feature coverage. It is one working AI provider, one working operator surface, and one verified daily-use flow.',
+              },
+            ],
+          },
+          {
             id: 'second-brain',
             title: 'Second Brain',
             summary: 'Comprehensive operator and user guide to the daily-home, calendar, tasks, notes, contacts, library, briefs, routines, sync behavior, and usage signals.',
@@ -210,8 +258,9 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Briefs',
                 items: [
-                  'Briefs is where saved Morning Briefs, Pre-Meeting Briefs, and Follow-Up Drafts are reviewed after generation.',
+                  'Briefs is where saved Morning Briefs, Weekly Reviews, Pre-Meeting Briefs, and Follow-Up Drafts are reviewed after generation.',
                   'Morning Brief gives you a deterministic summary of current calendar, tasks, notes, and routine state.',
+                  'Weekly Review rolls up the next seven days of events plus current tasks, notes, people, and saved library references.',
                   'Pre-Meeting Brief is anchored to a selected event and tries to gather the most relevant tasks, notes, and people around that meeting.',
                   'Follow-Up Draft is anchored to a finished event and assembles a draftable follow-up packet from recent shared context.',
                   'Use the Today page, Calendar, or Briefs tab to trigger brief generation manually when you want it on demand.',
@@ -221,13 +270,15 @@ export function getReferenceGuide(): ReferenceGuide {
               {
                 title: 'Routines',
                 items: [
-                  'Routines exposes the built-in deterministic routines that support Second Brain today. This is not yet an open-ended routine builder.',
+                  'Routines exposes the deterministic Second Brain routines that support briefs, sync, horizon checks, and follow-up today. This is not yet an open-ended routine builder.',
                   'If you ask Guardian to `create an automation`, that means the power-user Automations system, not the Second Brain routine catalog.',
-                  'If you ask for a `routine` or name a built-in concept such as Morning Brief, Pre-Meeting Brief, or Follow-Up Watch, that stays in Second Brain.',
-                  'The routine catalog is the system of record for Second Brain routines. It lists configured routines and available built-in templates in one place.',
-                  'Use `Create routine` to add an unconfigured built-in routine such as Pre-Meeting Brief or Follow-Up Watch without leaving the tab.',
-                  'The create or edit pane is on the left, and the routine catalog table is on the right.',
-                  'Selecting a configured routine lets you change its enabled state, supported trigger settings, routing bias, budget profile ID, name, default delivery channels, or delete it from the catalog.',
+                  'If you ask for a `routine` or name a routine concept such as Morning Brief, Pre-Meeting Brief, or Follow-Up Watch, that stays in Second Brain.',
+                  'The main Routines list shows only configured routines. Deleting one removes it from that list until you explicitly add it back.',
+                  'Guardian now ships the full starter set configured: Morning Brief, Weekly Review, Manual Sync, Next 24 Hours Radar, Pre-Meeting Brief, and Follow-Up Watch.',
+                  'Use `Create routine` to re-add a starter routine such as Pre-Meeting Brief or Follow-Up Watch after deleting it, without leaving the tab.',
+                  'The create or edit pane is on the left, and the configured routines table is on the right.',
+                  'Selecting a configured routine lets you change its enabled state, supported trigger settings, routing bias, budget profile ID, name, default delivery channels, or delete it.',
+                  'Routine schedules are shown back in plain English across Second Brain, even when the saved trigger is a cron expression.',
                   'Routine output can be delivered to web, CLI, or Telegram depending on the routine settings and supported delivery path.',
                   'Use Routines when you want predictable assistance on a schedule without turning Second Brain into an always-running autonomous agent.',
                 ],

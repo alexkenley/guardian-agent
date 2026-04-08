@@ -25,13 +25,22 @@ function createService() {
 }
 
 describe('SecondBrainService', () => {
-  it('seeds built-in routines and exposes a stable overview shape', () => {
+  it('seeds the starter routine set and exposes a stable overview shape', () => {
     const { service } = createService();
 
     const overview = service.getOverview();
+    const routines = service.listRoutines();
 
     expect(overview.enabledRoutineCount).toBeGreaterThan(0);
-    expect(overview.counts.routines).toBeGreaterThan(0);
+    expect(overview.counts.routines).toBe(6);
+    expect(routines.map((routine) => routine.id)).toEqual([
+      'follow-up-watch',
+      'one-off-sync',
+      'morning-brief',
+      'next-24-hours-radar',
+      'pre-meeting-brief',
+      'weekly-review',
+    ]);
     expect(overview.topTasks).toEqual([]);
     expect(overview.recentNotes).toEqual([]);
     expect(overview.usage.monthlyBudget).toBeGreaterThan(0);
@@ -78,7 +87,7 @@ describe('SecondBrainService', () => {
   it('updates routines and aggregates usage', () => {
     const { service } = createService();
 
-    const routine = service.listRoutines()[0];
+    const routine = service.getRoutineById('morning-brief');
     expect(routine).toBeTruthy();
 
     const updated = service.updateRoutine({
@@ -105,13 +114,16 @@ describe('SecondBrainService', () => {
     expect(usage.totalConnectorCalls).toBe(2);
   });
 
-  it('exposes the built-in routine catalog and creates non-seeded routines on demand', () => {
+  it('recreates deleted starter routines from the starter catalog on demand', () => {
     const { service } = createService();
 
     const catalog = service.listRoutineCatalog();
     const preMeetingEntry = catalog.find((entry) => entry.templateId === 'pre-meeting-brief');
 
-    expect(preMeetingEntry?.configured).toBe(false);
+    expect(preMeetingEntry?.configured).toBe(true);
+
+    service.deleteRoutine('pre-meeting-brief');
+    expect(service.listRoutineCatalog().find((entry) => entry.templateId === 'pre-meeting-brief')?.configured).toBe(false);
 
     const created = service.createRoutine({
       templateId: 'pre-meeting-brief',

@@ -138,8 +138,10 @@ export class HorizonScanner {
 
     const weeklyReviewRoutine = routines.find((routine) => routine.id === 'weekly-review');
     if (weeklyReviewRoutine && this.shouldRunCronRoutine(scannedAt, weeklyReviewRoutine)) {
+      const brief = await this.briefingService.generateWeeklyReview();
       this.secondBrainService.markRoutineRun(weeklyReviewRoutine.id, scannedAt);
       triggeredRoutines.push(weeklyReviewRoutine.id);
+      generatedBriefIds.push(brief.id);
     }
 
     const radarRoutine = routines.find((routine) => routine.id === 'next-24-hours-radar');

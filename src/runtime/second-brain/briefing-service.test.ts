@@ -88,4 +88,46 @@ describe('BriefingService', () => {
     expect(brief.content).toContain('Launch review prep');
     expect(brief.content).toContain('Taylor Launch');
   });
+
+  it('builds a weekly review that covers events, tasks, notes, people, and library items', async () => {
+    const { service, briefing } = createFixture();
+
+    service.upsertTask({
+      title: 'Review launch blockers',
+      priority: 'high',
+    });
+    service.upsertSyncedEvent({
+      id: 'event-weekly',
+      title: 'Launch Steering',
+      startsAt: Date.parse('2026-04-06T10:00:00Z'),
+      source: 'google',
+      location: 'Zoom',
+    });
+    service.upsertNote({
+      title: 'Weekly planning note',
+      content: 'Need to tighten the launch handoff this week.',
+    });
+    service.upsertPerson({
+      name: 'Jordan Lee',
+      company: 'Harbor Labs',
+      title: 'Design Lead',
+      notes: 'Owner for launch review follow-up.',
+    });
+    service.upsertLink({
+      title: 'Launch checklist',
+      url: 'https://example.test/launch-checklist',
+      kind: 'reference',
+      summary: 'Reference checklist for the launch review.',
+    });
+
+    const brief = await briefing.generateWeeklyReview();
+
+    expect(brief.kind).toBe('weekly_review');
+    expect(brief.title).toContain('Weekly Review');
+    expect(brief.content).toContain('Launch Steering');
+    expect(brief.content).toContain('Review launch blockers');
+    expect(brief.content).toContain('Weekly planning note');
+    expect(brief.content).toContain('Jordan Lee');
+    expect(brief.content).toContain('Launch checklist');
+  });
 });

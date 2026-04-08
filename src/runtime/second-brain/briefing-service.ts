@@ -5,6 +5,7 @@ import type {
   SecondBrainBriefRecord,
   SecondBrainEventRecord,
   SecondBrainGenerateBriefInput,
+  SecondBrainLinkRecord,
   SecondBrainNoteRecord,
   SecondBrainPersonRecord,
   SecondBrainTaskRecord,
@@ -59,6 +60,9 @@ function buildBriefId(kind: SecondBrainGeneratedBriefKind, now: number, eventId?
   if (kind === 'morning') {
     return `brief:morning:${new Date(now).toISOString().slice(0, 10)}`;
   }
+  if (kind === 'weekly_review') {
+    return `brief:weekly_review:${new Date(now).toISOString().slice(0, 10)}`;
+  }
   if (eventId?.trim()) {
     return `brief:${kind}:${eventId.trim()}`;
   }
@@ -69,6 +73,8 @@ function titleForBrief(kind: SecondBrainGeneratedBriefKind, event?: SecondBrainE
   switch (kind) {
     case 'morning':
       return `Morning Brief for ${formatDate(now ?? Date.now())}`;
+    case 'weekly_review':
+      return `Weekly Review for ${formatDate(now ?? Date.now())}`;
     case 'pre_meeting':
       return `Pre-Meeting Brief: ${event?.title ?? 'Unknown event'}`;
     case 'follow_up':
@@ -118,6 +124,13 @@ function renderEventLine(event: SecondBrainEventRecord): string {
     : `- ${details}`;
 }
 
+function renderLinkLine(link: SecondBrainLinkRecord): string {
+  const details = [link.kind, summarizeText(link.summary, 100)].filter(Boolean).join(' · ');
+  return details
+    ? `- ${link.title}: ${details}`
+    : `- ${link.title}`;
+}
+
 export class BriefingService {
   private readonly now: () => number;
 
@@ -134,6 +147,8 @@ export class BriefingService {
     switch (input.kind) {
       case 'morning':
         return this.generateMorningBrief();
+      case 'weekly_review':
+        return this.generateWeeklyReview();
       case 'pre_meeting':
         if (!input.eventId?.trim()) {
           throw new Error('eventId is required for a pre_meeting brief.');
@@ -198,6 +213,88 @@ export class BriefingService {
       content: sections.join('\n'),
       generatedAt: now,
       routineId: 'morning-brief',
+    });
+
+    this.secondBrainService.recordUsage({
+      featureArea: 'brief',
+      featureId: brief.id,
+      provider: 'second_brain',
+      locality: 'local',
+      promptTokens: 0,
+      completionTokens: 0,
+    });
+
+    return brief;
+  }
+
+  async generateWeeklyReview(): Promise<SecondBrainBriefRecord> {
+    const now = this.now();
+    const weekAhead = now + (7 * 24 * 60 * 60 * 1000);
+    const upcomingEvents = this.secondBrainService.listEvents({
+      fromTime: now,
+      toTime: weekAhead,
+      includePast: false,
+      limit: 8,
+    });
+    const openTasks = this.secondBrainService.listTasks({ status: 'open', limit: 8 });
+    const recentNotes = this.secondBrainService.listNotes({ limit: 5 });
+    const people = this.secondBrainService.listPeople({ limit: 25 })
+      .sort((left, right) => {
+        const leftTimestamp = left.lastContactAt ?? left.updatedAt;
+        const rightTimestamp = right.lastContactAt ?? right.updatedAt;
+        return rightTimestamp - leftTimestamp;
+      })
+      .slice(0, 5);
+    const libraryItems = this.secondBrainService.listLinks({ limit: 5 });
+
+    const sections = [
+      'Weekly Review',
+      `- Generated ${formatDateTime(now)}`,
+      upcomingEvents.length > 0
+        ? `- Next 7 days: ${upcomingEvents.length} upcoming event${upcomingEvents.length === 1 ? '' : 's'} on the shared calendar.`
+        : '- No upcoming events in the next 7 days.',
+      openTasks.length > 0
+        ? `- Open tasks: ${openTasks.length}`
+        : '- No open tasks carried into the week.',
+      '',
+      'Upcoming Events',
+      ...(upcomingEvents.length > 0
+        ? upcomingEvents.map(renderEventLine)
+        : ['- No events on deck for the next 7 days.']),
+      '',
+      'Open Tasks',
+      ...(openTasks.length > 0
+        ? openTasks.map(renderTaskLine)
+        : ['- No open tasks.']),
+      '',
+      'Recent Notes',
+      ...(recentNotes.length > 0
+        ? recentNotes.map(renderNoteLine)
+        : ['- No recent notes.']),
+      '',
+      'People To Keep Warm',
+      ...(people.length > 0
+        ? people.map(renderPersonLine)
+        : ['- No people records need review right now.']),
+      '',
+      'Library Highlights',
+      ...(libraryItems.length > 0
+        ? libraryItems.map(renderLinkLine)
+        : ['- No saved library items yet.']),
+      '',
+      'Suggested Focus',
+      '- Close or reschedule tasks that are already stale before they spill into another week.',
+      '- Check that upcoming meetings have the right briefs, owners, and prep notes attached.',
+      '- Review saved reference material before the highest-leverage meeting or task block this week.',
+    ];
+
+    const brief = this.persistBrief({
+      id: buildBriefId('weekly_review', now),
+      kind: 'weekly_review',
+      title: titleForBrief('weekly_review', undefined, now),
+      content: sections.join('\n'),
+      generatedAt: now,
+      routineId: 'weekly-review',
     });
 
     this.secondBrainService.recordUsage({
