@@ -1009,6 +1009,102 @@ function extractQuotedPhrase(text: string): string | undefined {
   return value ? value : undefined;
 }
 
+const ROUTINE_SCHEDULE_WEEKDAY_MAP: Record<string, 'sunday' | 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday'> = {
+  sunday: 'sunday',
+  monday: 'monday',
+  tuesday: 'tuesday',
+  wednesday: 'wednesday',
+  thursday: 'thursday',
+  friday: 'friday',
+  saturday: 'saturday',
+};
+
+function parseRoutineClockTimePhrase(text: string): string | undefined {
+  const match = text.match(/\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)\b/i)
+    ?? text.match(/\b(?:at\s+)?([01]?\d|2[0-3]):(\d{2})\b/);
+  if (!match) return undefined;
+  const hourRaw = Number(match[1]);
+  const minute = Number(match[2] ?? '0');
+  if (!Number.isFinite(hourRaw) || !Number.isFinite(minute) || minute < 0 || minute > 59) {
+    return undefined;
+  }
+  const meridiem = match[3]?.toLowerCase().replace(/\./g, '');
+  let hour = hourRaw;
+  if (meridiem === 'am') {
+    hour = hourRaw === 12 ? 0 : hourRaw;
+  } else if (meridiem === 'pm') {
+    hour = hourRaw === 12 ? 12 : hourRaw + 12;
+  }
+  if (hour < 0 || hour > 23) return undefined;
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function extractRoutineScheduleTiming(text: string): Record<string, unknown> | undefined {
+  const normalized = text.trim();
+  if (!normalized) return undefined;
+  if (/\b(?:manual only|run on demand|manually)\b/i.test(normalized)) {
+    return { kind: 'manual' };
+  }
+  const time = parseRoutineClockTimePhrase(normalized);
+  if (!time) return undefined;
+  const weekdayMatch = normalized.match(/\b(?:every|weekly on|on)\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i);
+  if (weekdayMatch?.[1]) {
+    return {
+      kind: 'scheduled',
+      schedule: {
+        cadence: 'weekly',
+        dayOfWeek: ROUTINE_SCHEDULE_WEEKDAY_MAP[weekdayMatch[1].toLowerCase()],
+        time,
+      },
+    };
+  }
+  if (/\b(?:daily|every day|each day)\b/i.test(normalized)) {
+    return {
+      kind: 'scheduled',
+      schedule: {
+        cadence: 'daily',
+        time,
+      },
+    };
+  }
+  return undefined;
+}
+
+function extractRoutineTopicWatchQuery(text: string): string | undefined {
+  const normalized = text.trim();
+  if (!normalized) return undefined;
+  const quoted = extractQuotedPhrase(normalized);
+  if (quoted) return quoted;
+  const trailingMatch = normalized.match(/\b(?:mention|mentions|mentioned|about|related to|watch for|watch)\s+(.+?)(?:[.?!]|$)/i);
+  const topicQuery = trailingMatch?.[1]?.trim();
+  return topicQuery || undefined;
+}
+
+function extractRoutineDueWithinHours(text: string): number | undefined {
+  const normalized = text.trim();
+  if (!normalized) return undefined;
+  const hourMatch = normalized.match(/\b(\d{1,3})\s*(?:hour|hours)\b/i);
+  if (hourMatch?.[1]) {
+    const value = Number(hourMatch[1]);
+    return Number.isFinite(value) && value > 0 ? value : undefined;
+  }
+  if (/\btomorrow\b/i.test(normalized)) return 24;
+  if (/\bnext\s+week\b/i.test(normalized)) return 24 * 7;
+  return undefined;
+}
+
+function extractRoutineIncludeOverdue(text: string): boolean | undefined {
+  const normalized = text.trim();
+  if (!normalized) return undefined;
+  if (/\b(?:include|with)\s+overdue\b/i.test(normalized) || /\boverdue\b/i.test(normalized)) {
+    return true;
+  }
+  if (/\b(?:without|exclude|excluding|ignore)\s+overdue\b/i.test(normalized) || /\bupcoming tasks only\b/i.test(normalized)) {
+    return false;
+  }
+  return undefined;
+}
+
 function extractCustomSecondBrainRoutineCreate(
   text: string,
 ): {
@@ -1019,33 +1115,19 @@ function extractCustomSecondBrainRoutineCreate(
   if (!normalized) return null;
 
   if (/\b(?:due|deadline|overdue)\b/i.test(normalized)) {
-    const hourMatch = normalized.match(/\b(\d{1,3})\s*(?:hour|hours)\b/i);
-    const dueWithinHours = hourMatch
-      ? Number(hourMatch[1])
-      : /\btomorrow\b/i.test(normalized)
-        ? 24
-        : /\bnext\s+week\b/i.test(normalized)
-          ? 24 * 7
-          : undefined;
+    const dueWithinHours = extractRoutineDueWithinHours(normalized);
+    const includeOverdue = extractRoutineIncludeOverdue(normalized);
     return {
       templateId: 'deadline-watch',
       config: {
         ...(Number.isFinite(dueWithinHours) ? { dueWithinHours } : {}),
-        ...( /\boverdue\b/i.test(normalized) ? { includeOverdue: true } : {}),
+        ...(typeof includeOverdue === 'boolean' ? { includeOverdue } : {}),
       },
     };
   }
 
   if (/\b(?:mention|mentions|mentioned|about|related to|watch for|watch)\b/i.test(normalized)) {
-    const quoted = extractQuotedPhrase(normalized);
-    if (quoted) {
-      return {
-        templateId: 'topic-watch',
-        config: { topicQuery: quoted },
-      };
-    }
-    const trailingMatch = normalized.match(/\b(?:mention|mentions|mentioned|about|related to|watch for)\s+(.+?)(?:[.?!]|$)/i);
-    const topicQuery = trailingMatch?.[1]?.trim();
+    const topicQuery = extractRoutineTopicWatchQuery(normalized);
     if (topicQuery) {
       return {
         templateId: 'topic-watch',
@@ -5190,6 +5272,7 @@ type DirectIntentShadowCandidate =
     switch (decision.operation) {
       case 'create': {
         const explicitDelivery = extractRoutineDeliveryDefaults(message.content);
+        const explicitScheduleTiming = extractRoutineScheduleTiming(message.content);
         const inferredRoutineCreate = extractCustomSecondBrainRoutineCreate(message.content);
         const createCatalogEntry = matchedCatalogEntry
           ?? (inferredRoutineCreate
@@ -5213,6 +5296,7 @@ type DirectIntentShadowCandidate =
         const createArgs: Record<string, unknown> = {
           templateId: createCatalogEntry.templateId,
           ...(explicitDelivery?.length ? { delivery: explicitDelivery } : {}),
+          ...(explicitScheduleTiming ? { timing: explicitScheduleTiming } : {}),
         };
         if (matchedCatalogEntry?.templateId === 'topic-watch' || createCatalogEntry.templateId === 'topic-watch') {
           const topicQuery = routineTopicQuery({ topicQuery: toString(inferredRoutineCreate?.config?.topicQuery).trim() }) || extractQuotedPhrase(message.content);
@@ -5272,6 +5356,17 @@ type DirectIntentShadowCandidate =
         const explicitRoutingBias = extractSecondBrainRoutingBias(message.content);
         const explicitDeliveryDefaults = extractRoutineDeliveryDefaults(message.content);
         const explicitLookaheadMinutes = extractRoutineLookaheadMinutes(message.content);
+        const explicitScheduleTiming = extractRoutineScheduleTiming(message.content);
+        const templateId = existingRoutine.templateId ?? existingRoutine.id;
+        const explicitTopicQuery = templateId === 'topic-watch'
+          ? extractRoutineTopicWatchQuery(message.content)
+          : undefined;
+        const explicitDueWithinHours = templateId === 'deadline-watch'
+          ? extractRoutineDueWithinHours(message.content)
+          : undefined;
+        const explicitIncludeOverdue = templateId === 'deadline-watch'
+          ? extractRoutineIncludeOverdue(message.content)
+          : undefined;
         const existingDelivery = explicitDeliveryDefaults ?? routineDeliveryChannels(existingRoutine);
         const existingRoutingBias = typeof existingRoutineRecord?.defaultRoutingBias === 'string'
           ? existingRoutineRecord.defaultRoutingBias
@@ -5279,6 +5374,7 @@ type DirectIntentShadowCandidate =
         const existingBudgetProfileId = typeof existingRoutineRecord?.budgetProfileId === 'string'
           ? existingRoutineRecord.budgetProfileId
           : undefined;
+        const existingConfig = isRecord(existingRoutineRecord?.config) ? existingRoutineRecord.config : null;
         const nextArgs: Record<string, unknown> = {
           id: existingRoutine.id,
           name: existingRoutine.name,
@@ -5288,8 +5384,10 @@ type DirectIntentShadowCandidate =
           ...(existingDelivery.length > 0 ? { delivery: existingDelivery, deliveryDefaults: existingDelivery } : {}),
         };
 
-        if (explicitLookaheadMinutes != null) {
-          const timingKind = deriveRoutineTimingKind(existingRoutine) ?? deriveRoutineTimingKind(existingRoutineRecord ?? {});
+        const timingKind = deriveRoutineTimingKind(existingRoutine) ?? deriveRoutineTimingKind(existingRoutineRecord ?? {});
+        if (explicitScheduleTiming) {
+          nextArgs.timing = explicitScheduleTiming;
+        } else if (explicitLookaheadMinutes != null) {
           if (timingKind !== 'before_meetings' && timingKind !== 'after_meetings' && timingKind !== 'background') {
             return `${existingRoutine.name} does not use a lookahead window.`;
           }
@@ -5311,12 +5409,29 @@ type DirectIntentShadowCandidate =
           }
         }
 
+        if (templateId === 'topic-watch' && explicitTopicQuery) {
+          nextArgs.config = {
+            ...(existingConfig ?? {}),
+            topicQuery: explicitTopicQuery,
+          };
+        } else if (templateId === 'deadline-watch' && (explicitDueWithinHours !== undefined || explicitIncludeOverdue !== undefined)) {
+          nextArgs.config = {
+            ...(existingConfig ?? {}),
+            ...(Number.isFinite(explicitDueWithinHours) ? { dueWithinHours: explicitDueWithinHours } : {}),
+            ...(typeof explicitIncludeOverdue === 'boolean' ? { includeOverdue: explicitIncludeOverdue } : {}),
+          };
+        }
+
         const hasExplicitChange = explicitEnabled !== undefined
           || explicitRoutingBias !== undefined
           || explicitDeliveryDefaults !== undefined
-          || explicitLookaheadMinutes !== undefined;
+          || explicitLookaheadMinutes !== undefined
+          || explicitScheduleTiming !== undefined
+          || explicitTopicQuery !== undefined
+          || explicitDueWithinHours !== undefined
+          || explicitIncludeOverdue !== undefined;
         if (!hasExplicitChange) {
-          return 'To update that Second Brain routine, tell me what to change, such as enable or disable it, change the delivery channels, or adjust when it runs.';
+          return 'To update that Second Brain routine, tell me what to change, such as enable or disable it, change the delivery channels, adjust when it runs, or update what it watches.';
         }
 
         return this.executeDirectSecondBrainMutation({

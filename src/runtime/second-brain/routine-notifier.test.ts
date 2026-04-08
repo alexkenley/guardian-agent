@@ -57,4 +57,44 @@ describe('createSecondBrainRoutineNotifier', () => {
       'Next: Open Briefs to review it. Regenerate it from Briefs if the context changes.',
     ].join('\n\n'));
   });
+
+  it('falls back to web when telegram is requested but unavailable', async () => {
+    const cliChannel = { send: vi.fn(async () => undefined) };
+    const webChannel = { send: vi.fn(async () => undefined) };
+    const notifier = createSecondBrainRoutineNotifier({
+      configRef: {
+        current: {
+          assistant: {
+            identity: { primaryUserId: 'owner' },
+          },
+          channels: {
+            telegram: {
+              allowedChatIds: [],
+            },
+          },
+        } as any,
+      },
+      getCliChannel: () => cliChannel as any,
+      getTelegramChannel: () => null,
+      getWebChannel: () => webChannel as any,
+    });
+
+    await notifier({
+      routineId: 'topic-watch:harbor-launch',
+      channels: ['telegram'],
+      kind: 'brief',
+      title: 'Topic Watch: Harbor launch',
+      summary: 'Your topic watch found new matching context.',
+      importance: 'useful',
+      followUpActions: ['open_brief'],
+      text: 'Your topic watch found new matching context.',
+    });
+
+    expect(webChannel.send).toHaveBeenCalledWith('owner', [
+      'Topic Watch: Harbor launch',
+      'Your topic watch found new matching context.',
+      'Next: Open Briefs to review it.',
+    ].join('\n\n'));
+    expect(cliChannel.send).not.toHaveBeenCalled();
+  });
 });

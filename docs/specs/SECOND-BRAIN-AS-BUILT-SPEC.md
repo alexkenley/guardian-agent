@@ -214,6 +214,7 @@ Current behavior note:
 - deleting a seeded default routine keeps it out of the configured routines list across restart until an operator explicitly re-creates it from `Create routine`.
 - `topic-watch` supports multiple configured instances and stores a `topicQuery` routine config instead of behaving like a single fixed built-in.
 - `deadline-watch` supports multiple configured instances and stores bounded deadline settings (`dueWithinHours`, `includeOverdue`) for proactive task-pressure notifications.
+- chat routine authoring now supports bounded natural-language watch creation and updates such as `message me when anything mentions Harbor launch`, `message me when I have something due tomorrow`, `run daily at 6 pm`, and `include overdue tasks`.
 
 ## Sync Model
 
@@ -315,6 +316,7 @@ Each scan:
 Current proactive delivery note:
 - user-facing routine outcomes now flow through shared runtime channels
 - Telegram is the default delivery channel for user-facing routine notifications, with web and CLI available as additional operator-facing delivery channels
+- when Telegram delivery is requested but Telegram is unavailable, the notifier falls back to web before dropping the notice
 - proactive routine notices include a title, a short summary, and simple next-step hints when an artifact is ready for review
 
 Current trigger behavior:
@@ -326,6 +328,49 @@ Current trigger behavior:
 - `topic-watch`: generates a topic-watch brief when new matching context appears since the last run
 - `deadline-watch`: generates a deadline-watch brief when due-soon or overdue tasks become newly relevant for the configured watch window
 - provider sync: exposed as a direct `Sync now` maintenance action rather than a visible assistant routine
+
+## Documented Future Uplift Direction
+
+This section records the currently agreed next-step direction for routines. It is not fully shipped today and should not be read as an implementation claim. It exists so the current as-built spec also preserves the intended reuse path for the next routine uplift.
+
+### Routine authoring direction
+
+The next routine uplift should make routine creation feel closer to an executive-assistant setup flow and less like editing backend trigger fields.
+
+Planned authoring direction:
+- keep `Second Brain` routines bounded to assistant-safe capabilities rather than turning them into generic automations
+- allow both direct manual creation in the `Routines` tab and bounded routine creation from natural-language chat requests
+- continue using a simple public routine model centered on `capability`, `timing`, `delivery`, and `enabled`
+- extend that public model carefully toward bounded modular authoring such as `trigger -> scope -> condition -> action -> delivery` only where it remains clearly inside Second Brain semantics
+
+Examples of the intended bounded routine shape:
+- `Before meetings with Jordan Lee, prepare a brief and message me on Telegram.`
+- `After meetings about Harbor launch, draft a follow-up if one does not already exist.`
+- `Message me when I have something due tomorrow.`
+- `Tell me when anything in my Second Brain mentions budget review.`
+
+### Reuse plan from Automations
+
+The next uplift is expected to reuse selected structure from the Automations system without collapsing Second Brain into the generic automation runtime.
+
+Planned reuse:
+- reuse the schedule-builder interaction model from `web/public/js/pages/automations.js`, including schedule-kind selection, cron translation, and plain-English schedule preview
+- reuse the delivery and notification patterns already proven in Automations and the current routine notifier, especially Telegram-first delivery with operator-facing web or CLI fallback
+- continue using the existing shared scheduled-task substrate for execution
+
+Explicit non-goal:
+- do not replace bounded Second Brain routines with the generic automation IR or step-workflow compiler used by Automations
+
+### Product boundary: Second Brain vs Automations
+
+Planned boundary:
+- `Second Brain` remains the bounded assistant layer for routines that read personal context, create briefs, draft follow-ups, watch topics, monitor deadlines, and proactively message the user
+- `Automations` remains the power-user system for unrestricted tool workflows, multi-step pipelines, and non-Second-Brain operational jobs
+
+The intended result is:
+- assistant routines stay easy to understand and configure
+- schedule and delivery UX becomes more consistent with Automations
+- Second Brain keeps a stronger product identity than a generic workflow builder
 
 ## Tool Surface
 

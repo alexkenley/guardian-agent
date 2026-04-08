@@ -44,6 +44,48 @@ function formatOutcomeText(outcome: HorizonRoutineOutcome): string {
   return sections.join('\n\n').trim();
 }
 
+function resolveDeliveryChannels(
+  requestedChannels: readonly HorizonRoutineOutcome['channels'][number][],
+  args: {
+    configRef: { current: GuardianAgentConfig };
+    getCliChannel: () => Pick<CLIChannel, 'send'> | null;
+    getTelegramChannel: () => Pick<TelegramChannel, 'send'> | null;
+    getWebChannel: () => Pick<WebChannel, 'send'> | null;
+  },
+): Array<'web' | 'cli' | 'telegram'> {
+  const requested = [...new Set(requestedChannels)];
+  const resolved: Array<'web' | 'cli' | 'telegram'> = [];
+  const hasTelegramTarget = (args.configRef.current.channels.telegram?.allowedChatIds ?? []).length > 0 && Boolean(args.getTelegramChannel());
+  const hasWeb = Boolean(args.getWebChannel());
+  const hasCli = Boolean(args.getCliChannel());
+
+  for (const channel of requested) {
+    if (channel === 'telegram') {
+      if (hasTelegramTarget) {
+        resolved.push('telegram');
+        continue;
+      }
+      if (!requested.includes('web') && hasWeb) {
+        resolved.push('web');
+        continue;
+      }
+      if (!requested.includes('cli') && hasCli) {
+        resolved.push('cli');
+      }
+      continue;
+    }
+    if (channel === 'web' && hasWeb) {
+      resolved.push('web');
+      continue;
+    }
+    if (channel === 'cli' && hasCli) {
+      resolved.push('cli');
+    }
+  }
+
+  return [...new Set(resolved)];
+}
+
 export function createSecondBrainRoutineNotifier(args: {
   configRef: { current: GuardianAgentConfig };
   getCliChannel: () => Pick<CLIChannel, 'send'> | null;
@@ -55,7 +97,7 @@ export function createSecondBrainRoutineNotifier(args: {
     if (!text) {
       return;
     }
-    const channels = [...new Set(outcome.channels)];
+    const channels = resolveDeliveryChannels(outcome.channels, args);
     if (channels.length === 0) {
       return;
     }

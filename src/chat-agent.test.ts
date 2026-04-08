@@ -2103,6 +2103,265 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(content).toBe('Routine created: Deadline Watch: next 24 hours');
   });
 
+  it('updates a topic watch routine query directly from chat', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_routine_update');
+        expect(args).toMatchObject({
+          id: 'topic-watch:harbor-launch',
+          name: 'Topic Watch: Harbor launch',
+          config: { topicQuery: 'Board prep' },
+          delivery: ['telegram'],
+        });
+        return {
+          success: true,
+          output: {
+            id: 'topic-watch:harbor-launch',
+            name: 'Topic Watch: Board prep',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      listRoutineCatalog: vi.fn(() => [{
+        templateId: 'topic-watch',
+        name: 'Topic Watch',
+        description: 'Scans Second Brain records for a topic and alerts you when new matching context appears.',
+        category: 'watch',
+        seedByDefault: false,
+        allowMultiple: true,
+        configured: true,
+        defaultTiming: {
+          kind: 'scheduled',
+          label: 'Daily at 8 a.m.',
+          editable: true,
+          schedule: { cadence: 'daily', time: '08:00' },
+        },
+        supportedTiming: ['scheduled', 'manual'],
+        defaultDelivery: ['telegram', 'web'],
+        supportsTopicQuery: true,
+        supportsDeadlineWindow: false,
+      }]),
+      listRoutines: vi.fn(() => [{
+        id: 'topic-watch:harbor-launch',
+        templateId: 'topic-watch',
+        capability: 'topic_watch',
+        name: 'Topic Watch: Harbor launch',
+        description: 'Scans Second Brain records for a topic and alerts you when new matching context appears.',
+        category: 'watch',
+        enabled: true,
+        timing: {
+          kind: 'scheduled',
+          label: 'Daily at 8 a.m.',
+          editable: true,
+          schedule: { cadence: 'daily', time: '08:00' },
+        },
+        delivery: ['telegram'],
+        topicQuery: 'Harbor launch',
+        createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+        updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+        lastRunAt: null,
+      }]),
+      getRoutineById: vi.fn(() => null),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-routine-update-topic-watch',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Update that routine to watch "Board prep".',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'update',
+        confidence: 'high',
+        summary: 'Updates a topic watch routine.',
+        turnRelation: 'follow_up',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'routine' },
+      },
+      {
+        continuityKey: 'chat:owner',
+        scope: { assistantId: 'chat', userId: 'owner' },
+        linkedSurfaces: [],
+        continuationState: {
+          kind: 'second_brain_focus',
+          payload: {
+            activeItemType: 'routine',
+            itemType: 'routine',
+            focusId: 'topic-watch:harbor-launch',
+            items: [{ id: 'topic-watch:harbor-launch', label: 'Topic Watch: Harbor launch' }],
+            byType: {
+              routine: {
+                focusId: 'topic-watch:harbor-launch',
+                items: [{ id: 'topic-watch:harbor-launch', label: 'Topic Watch: Harbor launch' }],
+              },
+            },
+          },
+        },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+    );
+
+    const content = typeof result === 'string' ? result : result?.content ?? '';
+    expect(content).toBe('Routine updated: Topic Watch: Board prep');
+  });
+
+  it('updates a scheduled routine timing from plain-English chat', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_routine_update');
+        expect(args).toMatchObject({
+          id: 'morning-brief',
+          name: 'Morning Brief',
+          timing: {
+            kind: 'scheduled',
+            schedule: { cadence: 'daily', time: '18:00' },
+          },
+          delivery: ['telegram', 'web'],
+        });
+        return {
+          success: true,
+          output: {
+            id: 'morning-brief',
+            name: 'Morning Brief',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      listRoutineCatalog: vi.fn(() => [{
+        templateId: 'morning-brief',
+        name: 'Morning Brief',
+        description: 'Prepare a morning brief with today’s events, open tasks, and recent context.',
+        category: 'daily',
+        seedByDefault: true,
+        allowMultiple: false,
+        configured: true,
+        configuredRoutineId: 'morning-brief',
+        defaultTiming: {
+          kind: 'scheduled',
+          label: 'Daily at 7 a.m.',
+          editable: true,
+          schedule: { cadence: 'daily', time: '07:00' },
+        },
+        supportedTiming: ['scheduled', 'manual'],
+        defaultDelivery: ['telegram', 'web'],
+        supportsTopicQuery: false,
+        supportsDeadlineWindow: false,
+      }]),
+      listRoutines: vi.fn(() => [{
+        id: 'morning-brief',
+        templateId: 'morning-brief',
+        capability: 'morning_brief',
+        name: 'Morning Brief',
+        description: 'Prepare a morning brief with today’s events, open tasks, and recent context.',
+        category: 'daily',
+        enabled: true,
+        timing: {
+          kind: 'scheduled',
+          label: 'Daily at 7 a.m.',
+          editable: true,
+          schedule: { cadence: 'daily', time: '07:00' },
+        },
+        delivery: ['telegram', 'web'],
+        createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+        updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+        lastRunAt: null,
+      }]),
+      getRoutineById: vi.fn(() => null),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-routine-update-schedule',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Update that routine to run daily at 6 pm.',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'update',
+        confidence: 'high',
+        summary: 'Updates a routine schedule.',
+        turnRelation: 'follow_up',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'routine' },
+      },
+      {
+        continuityKey: 'chat:owner',
+        scope: { assistantId: 'chat', userId: 'owner' },
+        linkedSurfaces: [],
+        continuationState: {
+          kind: 'second_brain_focus',
+          payload: {
+            activeItemType: 'routine',
+            itemType: 'routine',
+            focusId: 'morning-brief',
+            items: [{ id: 'morning-brief', label: 'Morning Brief' }],
+            byType: {
+              routine: {
+                focusId: 'morning-brief',
+                items: [{ id: 'morning-brief', label: 'Morning Brief' }],
+              },
+            },
+          },
+        },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+    );
+
+    const content = typeof result === 'string' ? result : result?.content ?? '';
+    expect(content).toBe('Routine updated: Morning Brief');
+  });
+
   it('honors a gateway-provided calendar day window for direct Second Brain calendar reads', async () => {
     const ChatAgent = createChatAgentClass({
       log: {
