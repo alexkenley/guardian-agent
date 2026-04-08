@@ -230,6 +230,22 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     return true;
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/second-brain/sync') {
+    if (!dashboard.onSecondBrainSyncNow) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const result = await dashboard.onSecondBrainSyncNow();
+      sendJSON(res, result?.statusCode ?? (result?.success ? 200 : 400), result);
+      context.maybeEmitUIInvalidation(result, ['second-brain'], 'second-brain.sync.ran', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/second-brain/briefs/generate') {
     if (!dashboard.onSecondBrainGenerateBrief) {
       sendJSON(res, 404, { error: 'Not available' });

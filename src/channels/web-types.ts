@@ -1367,6 +1367,7 @@ export interface DashboardCallbacks {
   onSecondBrainRoutineCreate?: (input: SecondBrainRoutineCreateInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
   onSecondBrainRoutineUpdate?: (input: SecondBrainRoutineUpdateInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
   onSecondBrainRoutineDelete?: (id: string) => DashboardMutationResult | Promise<DashboardMutationResult>;
+  onSecondBrainSyncNow?: () => DashboardMutationResult | Promise<DashboardMutationResult>;
   onSecondBrainUsage?: () => DashboardSecondBrainUsage;
   onReferenceGuide?: () => ReferenceGuide;
   onQuickActions?: () => QuickActionDefinition[];

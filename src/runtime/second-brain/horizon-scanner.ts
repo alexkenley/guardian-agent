@@ -19,8 +19,13 @@ export interface HorizonScanSummary {
 export interface HorizonRoutineOutcome {
   routineId: string;
   channels: readonly SecondBrainDeliveryChannel[];
+  kind: 'brief' | 'draft' | 'signal' | 'sync_result' | 'none';
+  title?: string;
+  summary?: string;
   text: string;
   importance: 'silent' | 'useful' | 'urgent';
+  deliveryMode?: 'save_only' | 'web_notice' | 'telegram_notice' | 'multi_channel';
+  followUpActions?: Array<'open_brief' | 'dismiss' | 'snooze' | 'regenerate' | 'run_now'>;
   artifactIds?: string[];
 }
 
@@ -157,7 +162,12 @@ export class HorizonScanner {
       await this.emitOutcome({
         routineId: morningRoutine.id,
         channels: morningRoutine.deliveryDefaults,
+        kind: 'brief',
+        title: brief.title,
+        summary: 'Your morning brief is ready.',
         importance: 'useful',
+        deliveryMode: morningRoutine.deliveryDefaults.length > 1 ? 'multi_channel' : 'telegram_notice',
+        followUpActions: ['open_brief', 'regenerate'],
         artifactIds: [brief.id],
         text: `Your morning brief is ready.\n\n${brief.title}`,
       });
@@ -172,7 +182,12 @@ export class HorizonScanner {
       await this.emitOutcome({
         routineId: weeklyReviewRoutine.id,
         channels: weeklyReviewRoutine.deliveryDefaults,
+        kind: 'brief',
+        title: brief.title,
+        summary: 'Your weekly review is ready.',
         importance: 'useful',
+        deliveryMode: weeklyReviewRoutine.deliveryDefaults.length > 1 ? 'multi_channel' : 'telegram_notice',
+        followUpActions: ['open_brief', 'regenerate'],
         artifactIds: [brief.id],
         text: `Your weekly review is ready.\n\n${brief.title}`,
       });
@@ -198,7 +213,12 @@ export class HorizonScanner {
         await this.emitOutcome({
           routineId: radarRoutine.id,
           channels: radarRoutine.deliveryDefaults,
+          kind: 'signal',
+          title: radarRoutine.name,
+          summary: `Your daily agenda check found ${upcomingEvents.length} upcoming event${upcomingEvents.length === 1 ? '' : 's'} and ${openTasks.length} open task${openTasks.length === 1 ? '' : 's'} in the next 24 hours.`,
           importance: 'useful',
+          deliveryMode: radarRoutine.deliveryDefaults.length > 1 ? 'multi_channel' : 'telegram_notice',
+          followUpActions: ['dismiss'],
           text: `Your daily agenda check found ${upcomingEvents.length} upcoming event${upcomingEvents.length === 1 ? '' : 's'} and ${openTasks.length} open task${openTasks.length === 1 ? '' : 's'} in the next 24 hours.`,
         });
       }
@@ -224,7 +244,12 @@ export class HorizonScanner {
         await this.emitOutcome({
           routineId: preMeetingRoutine.id,
           channels: preMeetingRoutine.deliveryDefaults,
+          kind: 'brief',
+          title: generated.title,
+          summary: `I prepared a pre-meeting brief for "${event.title}".`,
           importance: 'useful',
+          deliveryMode: preMeetingRoutine.deliveryDefaults.length > 1 ? 'multi_channel' : 'telegram_notice',
+          followUpActions: ['open_brief'],
           artifactIds: [generated.id, event.id],
           text: `I prepared a pre-meeting brief for "${event.title}".`,
         });
@@ -258,7 +283,12 @@ export class HorizonScanner {
         await this.emitOutcome({
           routineId: followUpRoutine.id,
           channels: followUpRoutine.deliveryDefaults,
+          kind: 'draft',
+          title: generated.title,
+          summary: `I drafted a follow-up for "${event.title}".`,
           importance: 'useful',
+          deliveryMode: followUpRoutine.deliveryDefaults.length > 1 ? 'multi_channel' : 'telegram_notice',
+          followUpActions: ['open_brief'],
           artifactIds: [generated.id, event.id],
           text: `I drafted a follow-up for "${event.title}".`,
         });
@@ -286,7 +316,12 @@ export class HorizonScanner {
       await this.emitOutcome({
         routineId: routine.id,
         channels: routine.deliveryDefaults,
+        kind: 'brief',
+        title: generated.title,
+        summary: `Your topic watch for "${routine.config?.topicQuery ?? routine.name}" found new matching context.`,
         importance: 'useful',
+        deliveryMode: routine.deliveryDefaults.length > 1 ? 'multi_channel' : 'telegram_notice',
+        followUpActions: ['open_brief'],
         artifactIds: [generated.id],
         text: `Your topic watch for "${routine.config?.topicQuery ?? routine.name}" found new matching context.`,
       });
@@ -309,7 +344,12 @@ export class HorizonScanner {
       await this.emitOutcome({
         routineId: routine.id,
         channels: routine.deliveryDefaults,
+        kind: 'brief',
+        title: generated.title,
+        summary: `Your deadline watch found new task pressure in the next ${Number(routine.config?.dueWithinHours ?? 24)} hours${routine.config?.includeOverdue === false ? '.' : ' and overdue tasks.'}`,
         importance: 'useful',
+        deliveryMode: routine.deliveryDefaults.length > 1 ? 'multi_channel' : 'telegram_notice',
+        followUpActions: ['open_brief'],
         artifactIds: [generated.id],
         text: `Your deadline watch found new task pressure in the next ${Number(routine.config?.dueWithinHours ?? 24)} hours${routine.config?.includeOverdue === false ? '.' : ' and overdue tasks.'}`,
       });

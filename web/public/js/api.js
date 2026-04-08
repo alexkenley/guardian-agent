@@ -263,6 +263,9 @@ export const api = {
   }),
   secondBrainRoutineCatalog: () => request('/api/second-brain/routines/catalog'),
   secondBrainRoutines: () => request('/api/second-brain/routines'),
+  secondBrainSyncNow: () => request('/api/second-brain/sync', {
+    method: 'POST',
+  }),
   secondBrainRoutineCreate: (input) => request('/api/second-brain/routines/create', {
     method: 'POST',
     body: JSON.stringify(input),

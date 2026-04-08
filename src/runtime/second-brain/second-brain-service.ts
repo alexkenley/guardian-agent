@@ -48,6 +48,7 @@ interface BuiltInRoutineDefinition {
   description: string;
   catalogCategory: SecondBrainRoutineCatalogEntry['category'];
   seedByDefault: boolean;
+  visibleInAssistant?: boolean;
   allowMultiple?: boolean;
   manifest: SecondBrainRoutineManifest;
 }
@@ -93,7 +94,8 @@ const BUILT_IN_ROUTINES: BuiltInRoutineDefinition[] = [
     capability: 'manual_sync',
     description: 'Refresh synced calendar events and contacts on demand.',
     catalogCategory: 'maintenance',
-    seedByDefault: true,
+    seedByDefault: false,
+    visibleInAssistant: false,
     manifest: {
       id: 'one-off-sync',
       name: 'Sync Calendar and Contacts',
@@ -202,6 +204,10 @@ const BUILT_IN_ROUTINES: BuiltInRoutineDefinition[] = [
 ];
 
 const BUILT_IN_ROUTINES_BY_ID = new Map(BUILT_IN_ROUTINES.map((routine) => [routine.manifest.id, routine]));
+
+function isAssistantVisibleRoutineDefinition(definition: BuiltInRoutineDefinition | undefined): boolean {
+  return definition?.visibleInAssistant !== false;
+}
 
 function cloneRoutineTrigger(trigger: SecondBrainRoutineTrigger): SecondBrainRoutineTrigger {
   return {
@@ -515,7 +521,7 @@ export class SecondBrainService {
     const recentNotes = this.store.notes.listNotes({ limit: 4 });
     const usage = this.getUsageSummary();
     const nextEvent = this.listEvents({ limit: 1, includePast: false })[0] ?? null;
-    const routines = this.store.routines.listRoutines();
+    const routines = this.listRoutines();
     const briefs = this.store.briefs.listBriefs({ limit: 20 });
 
     return {
@@ -527,7 +533,10 @@ export class SecondBrainService {
       reminderCount: 0,
       followUpCount: briefs.filter((brief) => brief.kind === 'follow_up').length,
       briefCount: briefs.length,
-      counts,
+      counts: {
+        ...counts,
+        routines: routines.length,
+      },
       usage,
     };
   }
@@ -697,7 +706,10 @@ export class SecondBrainService {
   }
 
   listRoutines(): SecondBrainRoutineRecord[] {
-    return this.store.routines.listRoutines();
+    return this.store.routines.listRoutines().filter((routine) => {
+      const definition = BUILT_IN_ROUTINES_BY_ID.get(routine.templateId ?? routine.id);
+      return isAssistantVisibleRoutineDefinition(definition);
+    });
   }
 
   listRoutineCatalog(): SecondBrainRoutineCatalogEntry[] {
@@ -709,7 +721,9 @@ export class SecondBrainService {
       existing.push(routine);
       configuredByTemplate.set(templateId, existing);
     }
-    return BUILT_IN_ROUTINES.map((definition) => {
+    return BUILT_IN_ROUTINES
+      .filter((definition) => isAssistantVisibleRoutineDefinition(definition))
+      .map((definition) => {
       const configuredRoutines = configuredByTemplate.get(definition.manifest.id) ?? [];
       return {
         templateId: definition.manifest.id,
@@ -723,7 +737,7 @@ export class SecondBrainService {
         configured: configuredRoutines.length > 0,
         ...(configuredRoutines.length === 1 ? { configuredRoutineId: configuredRoutines[0]!.id } : {}),
       };
-    });
+      });
   }
 
   isSeededBuiltInRoutine(id: string): boolean {
@@ -737,6 +751,9 @@ export class SecondBrainService {
     const definition = BUILT_IN_ROUTINES_BY_ID.get(templateId);
     if (!definition) {
       throw new Error(`Routine template '${templateId}' not found.`);
+    }
+    if (!isAssistantVisibleRoutineDefinition(definition)) {
+      throw new Error(`Routine '${definition.manifest.name}' is now a direct action, not a configurable assistant routine.`);
     }
     const configuredRoutines = this.listRoutines().filter((routine) => (routine.templateId ?? routine.id) === templateId);
     if (!definition.allowMultiple && configuredRoutines.length > 0) {

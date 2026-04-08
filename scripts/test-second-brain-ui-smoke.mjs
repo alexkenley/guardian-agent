@@ -496,6 +496,11 @@ guardian:
     }, 12_000, 'Expected deleted brief to disappear from the briefs API.');
 
     await openSecondBrainTab(page, 'Routines', '#sb-routine-catalog-table');
+    await page.click('[data-second-brain-sync-now="true"]');
+    await page.waitForFunction(() => {
+      const flash = document.querySelector('[data-sb-flash-shell]');
+      return flash instanceof HTMLElement && /Synced calendar and contacts\./.test(flash.textContent || '');
+    });
     await page.click('[data-routine-create-toggle="true"]');
     await page.selectOption('#routine-template-id', 'topic-watch');
     await page.fill('#routine-name', 'Harness Topic Watch');

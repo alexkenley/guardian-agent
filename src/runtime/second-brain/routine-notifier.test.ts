@@ -27,14 +27,34 @@ describe('createSecondBrainRoutineNotifier', () => {
     await notifier({
       routineId: 'morning-brief',
       channels: ['telegram', 'web', 'cli', 'web'],
+      kind: 'brief',
+      title: 'Morning Brief for April 8, 2026',
+      summary: 'Your morning brief is ready.',
       importance: 'useful',
+      followUpActions: ['open_brief', 'regenerate'],
       text: 'Your morning brief is ready.',
     });
 
     expect(telegramChannel.send).toHaveBeenCalledTimes(2);
-    expect(telegramChannel.send).toHaveBeenNthCalledWith(1, '111', 'Your morning brief is ready.');
-    expect(telegramChannel.send).toHaveBeenNthCalledWith(2, '222', 'Your morning brief is ready.');
-    expect(webChannel.send).toHaveBeenCalledWith('owner', 'Your morning brief is ready.');
-    expect(cliChannel.send).toHaveBeenCalledWith('owner', 'Your morning brief is ready.');
+    expect(telegramChannel.send).toHaveBeenNthCalledWith(1, '111', [
+      'Morning Brief for April 8, 2026',
+      'Your morning brief is ready.',
+      'Next: Open Briefs to review it. Regenerate it from Briefs if the context changes.',
+    ].join('\n\n'));
+    expect(telegramChannel.send).toHaveBeenNthCalledWith(2, '222', [
+      'Morning Brief for April 8, 2026',
+      'Your morning brief is ready.',
+      'Next: Open Briefs to review it. Regenerate it from Briefs if the context changes.',
+    ].join('\n\n'));
+    expect(webChannel.send).toHaveBeenCalledWith('owner', [
+      'Morning Brief for April 8, 2026',
+      'Your morning brief is ready.',
+      'Next: Open Briefs to review it. Regenerate it from Briefs if the context changes.',
+    ].join('\n\n'));
+    expect(cliChannel.send).toHaveBeenCalledWith('owner', [
+      'Morning Brief for April 8, 2026',
+      'Your morning brief is ready.',
+      'Next: Open Briefs to review it. Regenerate it from Briefs if the context changes.',
+    ].join('\n\n'));
   });
 });

@@ -32,17 +32,18 @@ describe('SecondBrainService', () => {
     const routines = service.listRoutines();
     const topicWatchEntry = service.listRoutineCatalog().find((entry) => entry.templateId === 'topic-watch');
     const deadlineWatchEntry = service.listRoutineCatalog().find((entry) => entry.templateId === 'deadline-watch');
+    const syncEntry = service.listRoutineCatalog().find((entry) => entry.templateId === 'one-off-sync');
 
     expect(overview.enabledRoutineCount).toBeGreaterThan(0);
-    expect(overview.counts.routines).toBe(6);
+    expect(overview.counts.routines).toBe(5);
     expect(routines.map((routine) => routine.id)).toEqual([
       'next-24-hours-radar',
       'follow-up-watch',
       'morning-brief',
       'pre-meeting-brief',
-      'one-off-sync',
       'weekly-review',
     ]);
+    expect(syncEntry).toBeUndefined();
     expect(topicWatchEntry?.configured).toBe(false);
     expect(topicWatchEntry?.allowMultiple).toBe(true);
     expect(deadlineWatchEntry?.configured).toBe(false);
@@ -118,6 +119,14 @@ describe('SecondBrainService', () => {
     expect(updated.defaultRoutingBias).toBe('balanced');
     expect(usage.externalTokens).toBe(150);
     expect(usage.totalConnectorCalls).toBe(2);
+  });
+
+  it('does not allow the legacy sync helper to be created as a visible assistant routine', () => {
+    const { service } = createService();
+
+    expect(() => service.createRoutine({
+      templateId: 'one-off-sync',
+    })).toThrow("Routine 'Sync Calendar and Contacts' is now a direct action, not a configurable assistant routine.");
   });
 
   it('recreates deleted default routines from the routine type catalog on demand', () => {

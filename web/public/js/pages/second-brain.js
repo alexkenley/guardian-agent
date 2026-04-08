@@ -1385,6 +1385,7 @@ function renderRoutines(panel, data) {
             </div>
             <div style="display:flex;gap:0.5rem;align-items:center;">
               <button class="btn btn-primary" type="button" data-routine-create-toggle="true">${state.creatingRoutine ? 'Close creator' : 'Create routine'}</button>
+              <button class="btn btn-secondary" type="button" data-second-brain-sync-now="true">Sync now</button>
               <button class="btn btn-secondary" type="button" data-routine-refresh="true">Refresh</button>
             </div>
           </div>
@@ -2032,6 +2033,11 @@ function bindInteractions(container) {
           state.creatingRoutine = false;
         },
       });
+      return;
+    }
+
+    if (target.closest('[data-second-brain-sync-now]')) {
+      await saveMutation(() => api.secondBrainSyncNow());
       return;
     }
 

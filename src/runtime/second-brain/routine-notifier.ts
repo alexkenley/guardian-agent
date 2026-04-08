@@ -17,6 +17,33 @@ async function sendTelegramIfConfigured(
   }
 }
 
+function describeFollowUpAction(action: NonNullable<HorizonRoutineOutcome['followUpActions']>[number]): string {
+  switch (action) {
+    case 'open_brief':
+      return 'Open Briefs to review it.';
+    case 'regenerate':
+      return 'Regenerate it from Briefs if the context changes.';
+    case 'run_now':
+      return 'Run it again when you want a fresh pass.';
+    case 'snooze':
+      return 'Snooze it if you want to see it later.';
+    case 'dismiss':
+      return 'Dismiss it if no action is needed.';
+  }
+}
+
+function formatOutcomeText(outcome: HorizonRoutineOutcome): string {
+  const summary = outcome.summary?.trim() || outcome.text.trim();
+  const title = outcome.title?.trim();
+  const actions = [...new Set((outcome.followUpActions ?? []).map(describeFollowUpAction))];
+  const sections = [
+    title || null,
+    summary || null,
+    actions.length > 0 ? `Next: ${actions.join(' ')}` : null,
+  ].filter((value): value is string => Boolean(value));
+  return sections.join('\n\n').trim();
+}
+
 export function createSecondBrainRoutineNotifier(args: {
   configRef: { current: GuardianAgentConfig };
   getCliChannel: () => Pick<CLIChannel, 'send'> | null;
@@ -24,7 +51,7 @@ export function createSecondBrainRoutineNotifier(args: {
   getWebChannel: () => Pick<WebChannel, 'send'> | null;
 }): (outcome: HorizonRoutineOutcome) => Promise<void> {
   return async (outcome: HorizonRoutineOutcome): Promise<void> => {
-    const text = outcome.text.trim();
+    const text = formatOutcomeText(outcome);
     if (!text) {
       return;
     }

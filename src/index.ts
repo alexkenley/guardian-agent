@@ -607,6 +607,7 @@ function buildDashboardCallbacks(
   codeSessionMemoryStore: AgentMemoryStore,
   codeSessionStore: CodeSessionStore,
   secondBrainService: SecondBrainService,
+  secondBrainSyncService: SyncService,
   performanceService: PerformanceService,
   secondBrainBriefingService: BriefingService,
   persistMemoryEntry: (input: {
@@ -2561,6 +2562,40 @@ function buildDashboardCallbacks(
       }
     },
 
+    onSecondBrainSyncNow: async () => {
+      try {
+        if (!secondBrainSyncService) {
+          return {
+            success: false,
+            message: 'Second Brain sync is unavailable.',
+            statusCode: 503,
+          };
+        }
+        const summary = await secondBrainSyncService.syncAll('web_manual');
+        const providerMessage = summary.providers.length > 0
+          ? summary.providers.map((provider: typeof summary.providers[number]) => {
+              if (provider.skipped) {
+                return `${provider.provider}: ${provider.reason ?? 'skipped'}`;
+              }
+              const eventLabel = `${provider.eventsSynced} event${provider.eventsSynced === 1 ? '' : 's'}`;
+              const peopleLabel = `${provider.peopleSynced} contact${provider.peopleSynced === 1 ? '' : 's'}`;
+              return `${provider.provider}: ${eventLabel}, ${peopleLabel}`;
+            }).join('; ')
+          : 'No connected providers were available.';
+        return {
+          success: true,
+          message: `Synced calendar and contacts. ${providerMessage}`,
+          details: { summary },
+        };
+      } catch (error) {
+        return {
+          success: false,
+          message: error instanceof Error ? error.message : String(error),
+          statusCode: 400,
+        };
+      }
+    },
+
     onSecondBrainUsage: () => secondBrainService.getUsageSummary(),
 
     onReferenceGuide: () => getReferenceGuide(),
@@ -3110,6 +3145,7 @@ async function main(): Promise<void> {
   });
   const secondBrainService = new SecondBrainService(secondBrainStore);
   const secondBrainBriefingService = new BriefingService(secondBrainService);
+  let secondBrainSyncService: SyncService | undefined;
   secondBrainBriefingService.start();
   const runTimeline = new RunTimelineStore();
   let refreshRunTimelineSnapshots: () => void = () => {};
@@ -3654,7 +3690,7 @@ async function main(): Promise<void> {
     }
   }
 
-  const secondBrainSyncService = new SyncService(secondBrainService, {
+  secondBrainSyncService = new SyncService(secondBrainService, {
     getGoogleService: () => googleServiceRef.current ?? undefined,
     getMicrosoftService: () => microsoftServiceRef.current ?? undefined,
   });
@@ -5855,6 +5891,7 @@ async function main(): Promise<void> {
     codeSessionMemoryStore,
     codeSessionStore,
     secondBrainService,
+    secondBrainSyncService,
     performanceService,
     secondBrainBriefingService,
     (input) => (

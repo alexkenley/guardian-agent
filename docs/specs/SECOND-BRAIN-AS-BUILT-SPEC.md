@@ -197,7 +197,6 @@ Planned ownership list:
 Current default seeded routines on first run:
 - `morning-brief` (`Morning Brief`)
 - `weekly-review` (`Weekly Review`)
-- `one-off-sync` (`Sync Calendar and Contacts`)
 - `next-24-hours-radar` (`Daily Agenda Check`)
 - `pre-meeting-brief` (`Pre-Meeting Brief`)
 - `follow-up-watch` (`Follow-Up Draft`)
@@ -205,6 +204,9 @@ Current default seeded routines on first run:
 Current additional routine type available through `Create routine`:
 - `topic-watch` (`Topic Watch`)
 - `deadline-watch` (`Deadline Watch`)
+
+Current direct maintenance action on the Routines surface:
+- `Sync now` refreshes provider calendar and contact context without appearing as a visible assistant routine
 
 Current behavior note:
 - `weekly-review` now generates and stores a dedicated weekly review brief artifact that pulls from events, tasks, notes, people, and library items.
@@ -313,6 +315,7 @@ Each scan:
 Current proactive delivery note:
 - user-facing routine outcomes now flow through shared runtime channels
 - Telegram is the default delivery channel for user-facing routine notifications, with web and CLI available as additional operator-facing delivery channels
+- proactive routine notices include a title, a short summary, and simple next-step hints when an artifact is ready for review
 
 Current trigger behavior:
 - `morning-brief`: once per local day after 5:00
@@ -322,7 +325,7 @@ Current trigger behavior:
 - `follow-up-watch`: generates missing follow-up drafts for recently ended events
 - `topic-watch`: generates a topic-watch brief when new matching context appears since the last run
 - `deadline-watch`: generates a deadline-watch brief when due-soon or overdue tasks become newly relevant for the configured watch window
-- `one-off-sync`: executed manually to sync context from external providers
+- provider sync: exposed as a direct `Sync now` maintenance action rather than a visible assistant routine
 
 ## Tool Surface
 
