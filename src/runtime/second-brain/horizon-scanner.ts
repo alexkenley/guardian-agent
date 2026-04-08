@@ -29,6 +29,13 @@ export interface HorizonRoutineOutcome {
   artifactIds?: string[];
 }
 
+function matchesFocusQuery(value: string, focusQuery: string | undefined): boolean {
+  const normalizedHaystack = value.toLowerCase();
+  const normalizedQuery = focusQuery?.trim().toLowerCase() ?? '';
+  if (!normalizedQuery) return true;
+  return normalizedHaystack.includes(normalizedQuery);
+}
+
 function parseCronInteger(field: string, min: number, max: number): number | null {
   if (!/^\d+$/.test(field)) return null;
   const value = Number(field);
@@ -243,9 +250,13 @@ export class HorizonScanner {
     const triggeredRoutines: string[] = [];
     const generatedBriefIds: string[] = [];
 
-    const morningRoutine = routines.find((routine) => (routine.templateId ?? routine.id) === 'morning-brief');
-    if (morningRoutine && this.shouldRunCronRoutine(scannedAt, morningRoutine)) {
-      const brief = await this.briefingService.generateMorningBrief();
+    const morningRoutines = routines.filter((routine) => (routine.templateId ?? routine.id) === 'morning-brief');
+    for (const morningRoutine of morningRoutines) {
+      if (!this.shouldRunCronRoutine(scannedAt, morningRoutine)) {
+        continue;
+      }
+      const focusQuery = morningRoutine.config?.focusQuery?.trim() || undefined;
+      const brief = await this.briefingService.generateMorningBrief({ routineId: morningRoutine.id, focusQuery });
       this.secondBrainService.markRoutineRun(morningRoutine.id, scannedAt);
       triggeredRoutines.push(morningRoutine.id);
       generatedBriefIds.push(brief.id);
@@ -254,18 +265,22 @@ export class HorizonScanner {
         channels: morningRoutine.deliveryDefaults,
         kind: 'brief',
         title: brief.title,
-        summary: 'Your morning brief is ready.',
+        summary: focusQuery ? `Your morning brief for "${focusQuery}" is ready.` : 'Your morning brief is ready.',
         importance: 'useful',
         deliveryMode: morningRoutine.deliveryDefaults.length > 1 ? 'multi_channel' : 'telegram_notice',
         followUpActions: ['open_brief', 'regenerate'],
         artifactIds: [brief.id],
-        text: `Your morning brief is ready.\n\n${brief.title}`,
+        text: `${focusQuery ? `Your morning brief for "${focusQuery}" is ready.` : 'Your morning brief is ready.'}\n\n${brief.title}`,
       });
     }
 
-    const weeklyReviewRoutine = routines.find((routine) => (routine.templateId ?? routine.id) === 'weekly-review');
-    if (weeklyReviewRoutine && this.shouldRunCronRoutine(scannedAt, weeklyReviewRoutine)) {
-      const brief = await this.briefingService.generateWeeklyReview();
+    const weeklyReviewRoutines = routines.filter((routine) => (routine.templateId ?? routine.id) === 'weekly-review');
+    for (const weeklyReviewRoutine of weeklyReviewRoutines) {
+      if (!this.shouldRunCronRoutine(scannedAt, weeklyReviewRoutine)) {
+        continue;
+      }
+      const focusQuery = weeklyReviewRoutine.config?.focusQuery?.trim() || undefined;
+      const brief = await this.briefingService.generateWeeklyReview({ routineId: weeklyReviewRoutine.id, focusQuery });
       this.secondBrainService.markRoutineRun(weeklyReviewRoutine.id, scannedAt);
       triggeredRoutines.push(weeklyReviewRoutine.id);
       generatedBriefIds.push(brief.id);
@@ -274,26 +289,31 @@ export class HorizonScanner {
         channels: weeklyReviewRoutine.deliveryDefaults,
         kind: 'brief',
         title: brief.title,
-        summary: 'Your weekly review is ready.',
+        summary: focusQuery ? `Your weekly review for "${focusQuery}" is ready.` : 'Your weekly review is ready.',
         importance: 'useful',
         deliveryMode: weeklyReviewRoutine.deliveryDefaults.length > 1 ? 'multi_channel' : 'telegram_notice',
         followUpActions: ['open_brief', 'regenerate'],
         artifactIds: [brief.id],
-        text: `Your weekly review is ready.\n\n${brief.title}`,
+        text: `${focusQuery ? `Your weekly review for "${focusQuery}" is ready.` : 'Your weekly review is ready.'}\n\n${brief.title}`,
       });
     }
 
-    const radarRoutine = routines.find((routine) => (routine.templateId ?? routine.id) === 'next-24-hours-radar');
-    if (radarRoutine) {
+    const radarRoutines = routines.filter((routine) => (routine.templateId ?? routine.id) === 'next-24-hours-radar');
+    for (const radarRoutine of radarRoutines) {
       const horizonMinutes = radarRoutine.trigger.mode === 'horizon' && Number.isFinite(radarRoutine.trigger.lookaheadMinutes)
         ? Number(radarRoutine.trigger.lookaheadMinutes)
         : 1440;
+      const focusQuery = radarRoutine.config?.focusQuery?.trim() || undefined;
       const upcomingEvents = this.secondBrainService.listEvents({
         fromTime: scannedAt,
         includePast: false,
         limit: 10,
-      }).filter((event) => event.startsAt <= scannedAt + (horizonMinutes * 60 * 1000));
-      const openTasks = this.secondBrainService.listTasks({ status: 'open', limit: 10 });
+      }).filter((event) => (
+        event.startsAt <= scannedAt + (horizonMinutes * 60 * 1000)
+        && matchesFocusQuery([event.title, event.description, event.location].filter(Boolean).join(' '), focusQuery)
+      ));
+      const openTasks = this.secondBrainService.listTasks({ status: 'open', limit: 10 })
+        .filter((task) => matchesFocusQuery([task.title, task.details].filter(Boolean).join(' '), focusQuery));
       if (
         (upcomingEvents.length > 0 || openTasks.length > 0)
         && (radarRoutine.lastRunAt == null || (scannedAt - radarRoutine.lastRunAt) >= 6 * 60 * 60 * 1000)
@@ -305,30 +325,40 @@ export class HorizonScanner {
           channels: radarRoutine.deliveryDefaults,
           kind: 'signal',
           title: radarRoutine.name,
-          summary: `Your daily agenda check found ${upcomingEvents.length} upcoming event${upcomingEvents.length === 1 ? '' : 's'} and ${openTasks.length} open task${openTasks.length === 1 ? '' : 's'} in the next 24 hours.`,
+          summary: `${focusQuery ? `Your daily agenda check for "${focusQuery}" found` : 'Your daily agenda check found'} ${upcomingEvents.length} upcoming event${upcomingEvents.length === 1 ? '' : 's'} and ${openTasks.length} open task${openTasks.length === 1 ? '' : 's'} in the next 24 hours.`,
           importance: 'useful',
           deliveryMode: radarRoutine.deliveryDefaults.length > 1 ? 'multi_channel' : 'telegram_notice',
           followUpActions: ['dismiss'],
-          text: `Your daily agenda check found ${upcomingEvents.length} upcoming event${upcomingEvents.length === 1 ? '' : 's'} and ${openTasks.length} open task${openTasks.length === 1 ? '' : 's'} in the next 24 hours.`,
+          text: `${focusQuery ? `Your daily agenda check for "${focusQuery}" found` : 'Your daily agenda check found'} ${upcomingEvents.length} upcoming event${upcomingEvents.length === 1 ? '' : 's'} and ${openTasks.length} open task${openTasks.length === 1 ? '' : 's'} in the next 24 hours.`,
         });
       }
     }
 
-    const preMeetingRoutine = routines.find((routine) => (routine.templateId ?? routine.id) === 'pre-meeting-brief');
-    if (preMeetingRoutine) {
+    const preMeetingRoutines = routines.filter((routine) => (routine.templateId ?? routine.id) === 'pre-meeting-brief');
+    for (const preMeetingRoutine of preMeetingRoutines) {
       const lookaheadMinutes = preMeetingRoutine.trigger.mode === 'event' && Number.isFinite(preMeetingRoutine.trigger.lookaheadMinutes)
         ? Number(preMeetingRoutine.trigger.lookaheadMinutes)
         : 60;
+      const focusQuery = preMeetingRoutine.config?.focusQuery?.trim() || undefined;
       const upcomingEvents = this.secondBrainService.listEvents({
         fromTime: scannedAt,
         includePast: false,
         limit: 25,
-      }).filter((event) => event.startsAt <= scannedAt + (lookaheadMinutes * 60 * 1000));
+      }).filter((event) => (
+        event.startsAt <= scannedAt + (lookaheadMinutes * 60 * 1000)
+        && matchesFocusQuery([event.title, event.description, event.location].filter(Boolean).join(' '), focusQuery)
+      ));
       let triggered = false;
       for (const event of upcomingEvents) {
-        const brief = this.secondBrainService.getBriefById(`brief:pre_meeting:${event.id}`);
+        const briefId = preMeetingRoutine.id === 'pre-meeting-brief'
+          ? `brief:pre_meeting:${event.id}`
+          : `brief:pre_meeting:${preMeetingRoutine.id}:${event.id}`;
+        const brief = this.secondBrainService.getBriefById(briefId);
         if (brief && brief.updatedAt >= event.updatedAt) continue;
-        const generated = await this.briefingService.generatePreMeetingBrief(event.id);
+        const generated = await this.briefingService.generatePreMeetingBrief(event.id, {
+          routineId: preMeetingRoutine.id,
+          focusQuery,
+        });
         generatedBriefIds.push(generated.id);
         triggered = true;
         await this.emitOutcome({
@@ -336,12 +366,16 @@ export class HorizonScanner {
           channels: preMeetingRoutine.deliveryDefaults,
           kind: 'brief',
           title: generated.title,
-          summary: `I prepared a pre-meeting brief for "${event.title}".`,
+          summary: focusQuery
+            ? `I prepared a pre-meeting brief for "${event.title}" related to "${focusQuery}".`
+            : `I prepared a pre-meeting brief for "${event.title}".`,
           importance: 'useful',
           deliveryMode: preMeetingRoutine.deliveryDefaults.length > 1 ? 'multi_channel' : 'telegram_notice',
           followUpActions: ['open_brief'],
           artifactIds: [generated.id, event.id],
-          text: `I prepared a pre-meeting brief for "${event.title}".`,
+          text: focusQuery
+            ? `I prepared a pre-meeting brief for "${event.title}" related to "${focusQuery}".`
+            : `I prepared a pre-meeting brief for "${event.title}".`,
         });
       }
       if (triggered) {
@@ -350,24 +384,33 @@ export class HorizonScanner {
       }
     }
 
-    const followUpRoutine = routines.find((routine) => (routine.templateId ?? routine.id) === 'follow-up-watch');
-    if (followUpRoutine) {
+    const followUpRoutines = routines.filter((routine) => (routine.templateId ?? routine.id) === 'follow-up-watch');
+    for (const followUpRoutine of followUpRoutines) {
       const lookbackMinutes = followUpRoutine.trigger.mode === 'event' && Number.isFinite(followUpRoutine.trigger.lookaheadMinutes)
         ? Number(followUpRoutine.trigger.lookaheadMinutes)
         : 1440;
+      const focusQuery = followUpRoutine.config?.focusQuery?.trim() || undefined;
       const recentEvents = this.secondBrainService.listEvents({
         includePast: true,
         fromTime: 0,
         limit: 50,
       }).filter((event) => {
         const endedAt = event.endsAt ?? event.startsAt;
-        return endedAt < scannedAt && endedAt >= scannedAt - (lookbackMinutes * 60 * 1000);
+        return endedAt < scannedAt
+          && endedAt >= scannedAt - (lookbackMinutes * 60 * 1000)
+          && matchesFocusQuery([event.title, event.description, event.location].filter(Boolean).join(' '), focusQuery);
       });
       let triggered = false;
       for (const event of recentEvents) {
-        const brief = this.secondBrainService.getBriefById(`brief:follow_up:${event.id}`);
+        const briefId = followUpRoutine.id === 'follow-up-watch'
+          ? `brief:follow_up:${event.id}`
+          : `brief:follow_up:${followUpRoutine.id}:${event.id}`;
+        const brief = this.secondBrainService.getBriefById(briefId);
         if (brief) continue;
-        const generated = await this.briefingService.draftFollowUp(event.id);
+        const generated = await this.briefingService.draftFollowUp(event.id, {
+          routineId: followUpRoutine.id,
+          focusQuery,
+        });
         generatedBriefIds.push(generated.id);
         triggered = true;
         await this.emitOutcome({
@@ -375,12 +418,16 @@ export class HorizonScanner {
           channels: followUpRoutine.deliveryDefaults,
           kind: 'draft',
           title: generated.title,
-          summary: `I drafted a follow-up for "${event.title}".`,
+          summary: focusQuery
+            ? `I drafted a follow-up for "${event.title}" related to "${focusQuery}".`
+            : `I drafted a follow-up for "${event.title}".`,
           importance: 'useful',
           deliveryMode: followUpRoutine.deliveryDefaults.length > 1 ? 'multi_channel' : 'telegram_notice',
           followUpActions: ['open_brief'],
           artifactIds: [generated.id, event.id],
-          text: `I drafted a follow-up for "${event.title}".`,
+          text: focusQuery
+            ? `I drafted a follow-up for "${event.title}" related to "${focusQuery}".`
+            : `I drafted a follow-up for "${event.title}".`,
         });
       }
       if (triggered) {

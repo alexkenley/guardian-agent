@@ -1045,8 +1045,41 @@ function extractRoutineScheduleTiming(text: string): Record<string, unknown> | u
   if (/\b(?:manual only|run on demand|manually)\b/i.test(normalized)) {
     return { kind: 'manual' };
   }
+  const hourlyMatch = normalized.match(/\b(?:every|each)\s+hour\b(?:\s+at\s+(?:minute\s+)?)?[: ]?(\d{1,2})?\b/i);
+  if (hourlyMatch) {
+    const minute = Number(hourlyMatch[1] ?? '0');
+    if (Number.isFinite(minute) && minute >= 0 && minute <= 59) {
+      return {
+        kind: 'scheduled',
+        schedule: {
+          cadence: 'hourly',
+          minute,
+        },
+      };
+    }
+  }
   const time = parseRoutineClockTimePhrase(normalized);
   if (!time) return undefined;
+  if (/\b(?:weekdays|every weekday|each weekday)\b/i.test(normalized)) {
+    return {
+      kind: 'scheduled',
+      schedule: {
+        cadence: 'weekdays',
+        time,
+      },
+    };
+  }
+  const fortnightlyMatch = normalized.match(/\b(?:fortnightly|biweekly|bi-weekly|every 2 weeks|every other)\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i);
+  if (fortnightlyMatch?.[1]) {
+    return {
+      kind: 'scheduled',
+      schedule: {
+        cadence: 'fortnightly',
+        dayOfWeek: ROUTINE_SCHEDULE_WEEKDAY_MAP[fortnightlyMatch[1].toLowerCase()],
+        time,
+      },
+    };
+  }
   const weekdayMatch = normalized.match(/\b(?:every|weekly on|on)\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i);
   if (weekdayMatch?.[1]) {
     return {
@@ -1057,6 +1090,20 @@ function extractRoutineScheduleTiming(text: string): Record<string, unknown> | u
         time,
       },
     };
+  }
+  const monthlyMatch = normalized.match(/\b(?:monthly|every month|each month)\s+(?:on\s+)?(?:day\s+)?(\d{1,2})(?:st|nd|rd|th)?\b/i);
+  if (monthlyMatch?.[1]) {
+    const dayOfMonth = Number(monthlyMatch[1]);
+    if (Number.isFinite(dayOfMonth) && dayOfMonth >= 1 && dayOfMonth <= 31) {
+      return {
+        kind: 'scheduled',
+        schedule: {
+          cadence: 'monthly',
+          dayOfMonth,
+          time,
+        },
+      };
+    }
   }
   if (/\b(?:daily|every day|each day)\b/i.test(normalized)) {
     return {
@@ -1078,6 +1125,16 @@ function extractRoutineTopicWatchQuery(text: string): string | undefined {
   const trailingMatch = normalized.match(/\b(?:mention|mentions|mentioned|about|related to|watch for|watch)\s+(.+?)(?:[.?!]|$)/i);
   const topicQuery = trailingMatch?.[1]?.trim();
   return topicQuery || undefined;
+}
+
+function extractRoutineFocusQuery(text: string): string | undefined {
+  const normalized = text.trim();
+  if (!normalized) return undefined;
+  const quoted = extractQuotedPhrase(normalized);
+  if (quoted) return quoted;
+  const match = normalized.match(/\b(?:for|about|related to|focused on|focus on)\s+(.+?)(?=\s+\b(?:every|each|daily|weekdays|weekly|fortnightly|monthly|at|before|after|on)\b|[.?!]|$)/i);
+  const focusQuery = match?.[1]?.trim();
+  return focusQuery || undefined;
 }
 
 function extractRoutineDueWithinHours(text: string): number | undefined {
@@ -5273,6 +5330,7 @@ type DirectIntentShadowCandidate =
       case 'create': {
         const explicitDelivery = extractRoutineDeliveryDefaults(message.content);
         const explicitScheduleTiming = extractRoutineScheduleTiming(message.content);
+        const explicitFocusQuery = extractRoutineFocusQuery(message.content);
         const inferredRoutineCreate = extractCustomSecondBrainRoutineCreate(message.content);
         const createCatalogEntry = matchedCatalogEntry
           ?? (inferredRoutineCreate
@@ -5281,7 +5339,12 @@ type DirectIntentShadowCandidate =
         if (!createCatalogEntry) {
           return 'To create a Second Brain routine, tell me which routine type to create, or say something like "message me when anything mentions Harbor launch."';
         }
-        if (!createCatalogEntry.allowMultiple && createCatalogEntry.configured && createCatalogEntry.configuredRoutineId?.trim()) {
+        if (
+          !createCatalogEntry.allowMultiple
+          && createCatalogEntry.configured
+          && createCatalogEntry.configuredRoutineId?.trim()
+          && !(createCatalogEntry.supportsFocusQuery && explicitFocusQuery)
+        ) {
           const routineId = createCatalogEntry.configuredRoutineId.trim();
           return {
             content: `Routine already exists: ${createCatalogEntry.name}`,
@@ -5313,6 +5376,8 @@ type DirectIntentShadowCandidate =
               ...(typeof inferredConfig.includeOverdue === 'boolean' ? { includeOverdue: inferredConfig.includeOverdue } : {}),
             };
           }
+        } else if (createCatalogEntry.supportsFocusQuery && explicitFocusQuery) {
+          createArgs.config = { focusQuery: explicitFocusQuery };
         }
         return this.executeDirectSecondBrainMutation({
           message,
@@ -5343,6 +5408,7 @@ type DirectIntentShadowCandidate =
           const label = matchedCatalogEntry?.name ?? focusItem?.label ?? matchedRoutineId;
           return `Second Brain routine "${label}" is not configured yet.`;
         }
+        const existingCatalogEntry = routineCatalog.find((entry) => entry.templateId === (existingRoutine.templateId ?? existingRoutine.id)) ?? null;
         const existingRoutineRecord = configuredRoutineRecords.find((routine) => toString(routine.id).trim() === existingRoutine.id)
           ?? (typeof secondBrainService.getRoutineRecordById === 'function'
             ? secondBrainService.getRoutineRecordById(existingRoutine.id)
@@ -5357,6 +5423,9 @@ type DirectIntentShadowCandidate =
         const explicitDeliveryDefaults = extractRoutineDeliveryDefaults(message.content);
         const explicitLookaheadMinutes = extractRoutineLookaheadMinutes(message.content);
         const explicitScheduleTiming = extractRoutineScheduleTiming(message.content);
+        const explicitFocusQuery = existingRoutine.focusQuery != null || existingCatalogEntry?.supportsFocusQuery
+          ? extractRoutineFocusQuery(message.content)
+          : undefined;
         const templateId = existingRoutine.templateId ?? existingRoutine.id;
         const explicitTopicQuery = templateId === 'topic-watch'
           ? extractRoutineTopicWatchQuery(message.content)
@@ -5420,6 +5489,11 @@ type DirectIntentShadowCandidate =
             ...(Number.isFinite(explicitDueWithinHours) ? { dueWithinHours: explicitDueWithinHours } : {}),
             ...(typeof explicitIncludeOverdue === 'boolean' ? { includeOverdue: explicitIncludeOverdue } : {}),
           };
+        } else if (explicitFocusQuery !== undefined && existingCatalogEntry?.supportsFocusQuery) {
+          nextArgs.config = {
+            ...(existingConfig ?? {}),
+            focusQuery: explicitFocusQuery,
+          };
         }
 
         const hasExplicitChange = explicitEnabled !== undefined
@@ -5427,6 +5501,7 @@ type DirectIntentShadowCandidate =
           || explicitDeliveryDefaults !== undefined
           || explicitLookaheadMinutes !== undefined
           || explicitScheduleTiming !== undefined
+          || explicitFocusQuery !== undefined
           || explicitTopicQuery !== undefined
           || explicitDueWithinHours !== undefined
           || explicitIncludeOverdue !== undefined;

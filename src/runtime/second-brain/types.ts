@@ -57,6 +57,7 @@ export type SecondBrainExternalCommMode =
   | 'post_with_approval';
 
 export interface SecondBrainRoutineConfig {
+  focusQuery?: string;
   topicQuery?: string;
   dueWithinHours?: number;
   includeOverdue?: boolean;
@@ -226,6 +227,7 @@ export interface SecondBrainRoutineTypeView {
   defaultTiming: SecondBrainRoutineTimingView;
   supportedTiming: SecondBrainRoutineTimingKind[];
   defaultDelivery: SecondBrainDeliveryChannel[];
+  supportsFocusQuery: boolean;
   supportsTopicQuery: boolean;
   supportsDeadlineWindow: boolean;
 }
@@ -240,6 +242,7 @@ export interface SecondBrainRoutineView {
   enabled: boolean;
   timing: SecondBrainRoutineTimingView;
   delivery: SecondBrainDeliveryChannel[];
+  focusQuery?: string;
   topicQuery?: string;
   dueWithinHours?: number;
   includeOverdue?: boolean;

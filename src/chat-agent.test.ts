@@ -1981,6 +1981,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         },
         supportedTiming: ['background'],
         defaultDelivery: ['telegram', 'web'],
+        supportsFocusQuery: false,
         supportsTopicQuery: true,
         supportsDeadlineWindow: false,
       }]),
@@ -2064,6 +2065,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         },
         supportedTiming: ['background'],
         defaultDelivery: ['telegram', 'web'],
+        supportsFocusQuery: false,
         supportsTopicQuery: false,
         supportsDeadlineWindow: true,
       }]),
@@ -2149,6 +2151,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         },
         supportedTiming: ['scheduled', 'manual'],
         defaultDelivery: ['telegram', 'web'],
+        supportsFocusQuery: false,
         supportsTopicQuery: true,
         supportsDeadlineWindow: false,
       }]),
@@ -2281,6 +2284,7 @@ describe('LLMChatAgent direct intent metadata', () => {
         },
         supportedTiming: ['scheduled', 'manual'],
         defaultDelivery: ['telegram', 'web'],
+        supportsFocusQuery: true,
         supportsTopicQuery: false,
         supportsDeadlineWindow: false,
       }]),
@@ -2360,6 +2364,242 @@ describe('LLMChatAgent direct intent metadata', () => {
 
     const content = typeof result === 'string' ? result : result?.content ?? '';
     expect(content).toBe('Routine updated: Morning Brief');
+  });
+
+  it('creates a scoped weekly review routine from chat', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_routine_create');
+        expect(args).toMatchObject({
+          templateId: 'weekly-review',
+          timing: {
+            kind: 'scheduled',
+            schedule: { cadence: 'weekly', dayOfWeek: 'monday', time: '09:00' },
+          },
+          config: { focusQuery: 'Board prep' },
+        });
+        return {
+          success: true,
+          output: {
+            id: 'weekly-review:board-prep',
+            name: 'Weekly Review: Board prep',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      listRoutineCatalog: vi.fn(() => [{
+        templateId: 'weekly-review',
+        name: 'Weekly Review',
+        description: 'Prepare a weekly review with upcoming commitments, open work, and recent context.',
+        category: 'weekly',
+        seedByDefault: true,
+        allowMultiple: false,
+        configured: true,
+        configuredRoutineId: 'weekly-review',
+        defaultTiming: {
+          kind: 'scheduled',
+          label: 'Weekly on Monday at 9 a.m.',
+          editable: true,
+          schedule: { cadence: 'weekly', dayOfWeek: 'monday', time: '09:00' },
+        },
+        supportedTiming: ['scheduled', 'manual'],
+        defaultDelivery: ['telegram', 'web'],
+        supportsFocusQuery: true,
+        supportsTopicQuery: false,
+        supportsDeadlineWindow: false,
+      }]),
+      listRoutines: vi.fn(() => [{
+        id: 'weekly-review',
+        templateId: 'weekly-review',
+        capability: 'weekly_review',
+        name: 'Weekly Review',
+        description: 'Prepare a weekly review with upcoming commitments, open work, and recent context.',
+        category: 'weekly',
+        enabled: true,
+        timing: {
+          kind: 'scheduled',
+          label: 'Weekly on Monday at 9 a.m.',
+          editable: true,
+          schedule: { cadence: 'weekly', dayOfWeek: 'monday', time: '09:00' },
+        },
+        delivery: ['telegram', 'web'],
+        createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+        updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+        lastRunAt: null,
+      }]),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-routine-create-scoped-weekly-review',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Create a Weekly Review for Board prep every Monday at 9 am.',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'create',
+        confidence: 'high',
+        summary: 'Creates a scoped weekly review routine.',
+        turnRelation: 'current_turn',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'routine' },
+      },
+    );
+
+    const content = typeof result === 'string' ? result : result?.content ?? '';
+    expect(content).toBe('Routine created: Weekly Review: Board prep');
+  });
+
+  it('updates a scoped routine focus from plain-language chat', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_routine_update');
+        expect(args).toMatchObject({
+          id: 'weekly-review:board-prep',
+          name: 'Weekly Review: Board prep',
+          config: { focusQuery: 'Harbor launch' },
+          delivery: ['telegram', 'web'],
+        });
+        return {
+          success: true,
+          output: {
+            id: 'weekly-review:board-prep',
+            name: 'Weekly Review: Harbor launch',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      listRoutineCatalog: vi.fn(() => [{
+        templateId: 'weekly-review',
+        name: 'Weekly Review',
+        description: 'Prepare a weekly review with upcoming commitments, open work, and recent context.',
+        category: 'weekly',
+        seedByDefault: true,
+        allowMultiple: false,
+        configured: true,
+        defaultTiming: {
+          kind: 'scheduled',
+          label: 'Weekly on Monday at 9 a.m.',
+          editable: true,
+          schedule: { cadence: 'weekly', dayOfWeek: 'monday', time: '09:00' },
+        },
+        supportedTiming: ['scheduled', 'manual'],
+        defaultDelivery: ['telegram', 'web'],
+        supportsFocusQuery: true,
+        supportsTopicQuery: false,
+        supportsDeadlineWindow: false,
+      }]),
+      listRoutines: vi.fn(() => [{
+        id: 'weekly-review:board-prep',
+        templateId: 'weekly-review',
+        capability: 'weekly_review',
+        name: 'Weekly Review: Board prep',
+        description: 'Prepare a weekly review with upcoming commitments, open work, and recent context.',
+        category: 'weekly',
+        enabled: true,
+        timing: {
+          kind: 'scheduled',
+          label: 'Weekly on Monday at 9 a.m.',
+          editable: true,
+          schedule: { cadence: 'weekly', dayOfWeek: 'monday', time: '09:00' },
+        },
+        delivery: ['telegram', 'web'],
+        focusQuery: 'Board prep',
+        createdAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+        updatedAt: Date.UTC(2026, 3, 7, 0, 0, 0),
+        lastRunAt: null,
+      }]),
+      getRoutineById: vi.fn(() => null),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-routine-update-scoped-focus',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Update that routine to focus on Harbor launch.',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'update',
+        confidence: 'high',
+        summary: 'Updates a scoped routine focus.',
+        turnRelation: 'follow_up',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'routine' },
+      },
+      {
+        continuityKey: 'chat:owner',
+        scope: { assistantId: 'chat', userId: 'owner' },
+        linkedSurfaces: [],
+        continuationState: {
+          kind: 'second_brain_focus',
+          payload: {
+            activeItemType: 'routine',
+            itemType: 'routine',
+            focusId: 'weekly-review:board-prep',
+            items: [{ id: 'weekly-review:board-prep', label: 'Weekly Review: Board prep' }],
+            byType: {
+              routine: {
+                focusId: 'weekly-review:board-prep',
+                items: [{ id: 'weekly-review:board-prep', label: 'Weekly Review: Board prep' }],
+              },
+            },
+          },
+        },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+    );
+
+    const content = typeof result === 'string' ? result : result?.content ?? '';
+    expect(content).toBe('Routine updated: Weekly Review: Harbor launch');
   });
 
   it('honors a gateway-provided calendar day window for direct Second Brain calendar reads', async () => {

@@ -56,29 +56,49 @@ function formatDate(value: number): string {
   });
 }
 
-function buildBriefId(kind: SecondBrainGeneratedBriefKind, now: number, eventId?: string): string {
+function buildBriefId(
+  kind: SecondBrainGeneratedBriefKind,
+  now: number,
+  eventId?: string,
+  routineId?: string,
+): string {
+  const dateKey = new Date(now).toISOString().slice(0, 10);
+  const scopedRoutineId = routineId?.trim();
   if (kind === 'morning') {
-    return `brief:morning:${new Date(now).toISOString().slice(0, 10)}`;
+    return scopedRoutineId && scopedRoutineId !== 'morning-brief'
+      ? `brief:morning:${scopedRoutineId}:${dateKey}`
+      : `brief:morning:${dateKey}`;
   }
   if (kind === 'weekly_review') {
-    return `brief:weekly_review:${new Date(now).toISOString().slice(0, 10)}`;
+    return scopedRoutineId && scopedRoutineId !== 'weekly-review'
+      ? `brief:weekly_review:${scopedRoutineId}:${dateKey}`
+      : `brief:weekly_review:${dateKey}`;
   }
   if (eventId?.trim()) {
-    return `brief:${kind}:${eventId.trim()}`;
+    return scopedRoutineId
+      && ![kind === 'pre_meeting' ? 'pre-meeting-brief' : 'follow-up-watch'].includes(scopedRoutineId)
+      ? `brief:${kind}:${scopedRoutineId}:${eventId.trim()}`
+      : `brief:${kind}:${eventId.trim()}`;
   }
-  return `brief:${kind}:${randomUUID()}`;
+  return `brief:${kind}:${scopedRoutineId || randomUUID()}`;
 }
 
-function titleForBrief(kind: SecondBrainGeneratedBriefKind, event?: SecondBrainEventRecord, now?: number): string {
+function titleForBrief(
+  kind: SecondBrainGeneratedBriefKind,
+  event?: SecondBrainEventRecord,
+  now?: number,
+  focusQuery?: string,
+): string {
+  const focusSuffix = focusQuery?.trim() ? `: ${focusQuery.trim()}` : '';
   switch (kind) {
     case 'morning':
-      return `Morning Brief for ${formatDate(now ?? Date.now())}`;
+      return `Morning Brief${focusSuffix} for ${formatDate(now ?? Date.now())}`;
     case 'weekly_review':
-      return `Weekly Review for ${formatDate(now ?? Date.now())}`;
+      return `Weekly Review${focusSuffix} for ${formatDate(now ?? Date.now())}`;
     case 'pre_meeting':
-      return `Pre-Meeting Brief: ${event?.title ?? 'Unknown event'}`;
+      return `Pre-Meeting Brief${focusSuffix}: ${event?.title ?? 'Unknown event'}`;
     case 'follow_up':
-      return `Follow-Up Draft: ${event?.title ?? 'Unknown event'}`;
+      return `Follow-Up Draft${focusSuffix}: ${event?.title ?? 'Unknown event'}`;
   }
 }
 
@@ -145,6 +165,12 @@ function formatHoursWindow(hours: number): string {
   return `${hours} hour${hours === 1 ? '' : 's'}`;
 }
 
+function shouldIncludeByFocus(value: string, focusQuery: string | undefined): boolean {
+  const normalized = focusQuery?.trim() ?? '';
+  if (!normalized) return true;
+  return matchesTopic(value, normalized, extractKeywords(normalized));
+}
+
 function taskEnteredDeadlineWindowAt(task: SecondBrainTaskRecord, dueWithinMs: number): number | null {
   if (!Number.isFinite(task.dueAt)) {
     return null;
@@ -185,25 +211,30 @@ export class BriefingService {
     }
   }
 
-  async generateMorningBrief(): Promise<SecondBrainBriefRecord> {
+  async generateMorningBrief(options: { routineId?: string; focusQuery?: string } = {}): Promise<SecondBrainBriefRecord> {
     const now = this.now();
+    const focusQuery = options.focusQuery?.trim() || '';
     const upcomingEvents = this.secondBrainService.listEvents({
       fromTime: now,
       includePast: false,
       limit: 5,
-    });
+    }).filter((event) => shouldIncludeByFocus([event.title, event.description, event.location].filter(Boolean).join(' '), focusQuery));
     const openTasks = this.secondBrainService.listTasks({ status: 'open', limit: 5 });
-    const recentNotes = this.secondBrainService.listNotes({ limit: 3 });
+    const filteredTasks = openTasks.filter((task) => shouldIncludeByFocus([task.title, task.details].filter(Boolean).join(' '), focusQuery));
+    const recentNotes = this.secondBrainService.listNotes({ limit: 10 })
+      .filter((note) => shouldIncludeByFocus(`${note.title} ${note.content}`, focusQuery))
+      .slice(0, 3);
     const routines = this.secondBrainService.listRoutines().filter((routine) => routine.enabled);
 
     const sections = [
       'Overview',
       `- Generated ${formatDateTime(now)}`,
+      ...(focusQuery ? [`- Focus: ${focusQuery}`] : []),
       upcomingEvents.length > 0
         ? `- Next event: ${upcomingEvents[0]!.title} at ${formatDateTime(upcomingEvents[0]!.startsAt)}`
         : '- No upcoming events on the shared calendar.',
-      openTasks.length > 0
-        ? `- Priority task: ${openTasks[0]!.title}`
+      filteredTasks.length > 0
+        ? `- Priority task: ${filteredTasks[0]!.title}`
         : '- No open tasks captured right now.',
       '',
       'Upcoming Events',
@@ -212,8 +243,8 @@ export class BriefingService {
         : ['- No synced events in the current horizon.']),
       '',
       'Open Tasks',
-      ...(openTasks.length > 0
-        ? openTasks.map(renderTaskLine)
+      ...(filteredTasks.length > 0
+        ? filteredTasks.map(renderTaskLine)
         : ['- No open tasks.']),
       '',
       'Recent Notes',
@@ -228,12 +259,12 @@ export class BriefingService {
     ];
 
     const brief = this.persistBrief({
-      id: buildBriefId('morning', now),
+      id: buildBriefId('morning', now, undefined, options.routineId),
       kind: 'morning',
-      title: titleForBrief('morning', undefined, now),
+      title: titleForBrief('morning', undefined, now, focusQuery),
       content: sections.join('\n'),
       generatedAt: now,
-      routineId: 'morning-brief',
+      routineId: options.routineId ?? 'morning-brief',
     });
 
     this.secondBrainService.recordUsage({
@@ -248,29 +279,38 @@ export class BriefingService {
     return brief;
   }
 
-  async generateWeeklyReview(): Promise<SecondBrainBriefRecord> {
+  async generateWeeklyReview(options: { routineId?: string; focusQuery?: string } = {}): Promise<SecondBrainBriefRecord> {
     const now = this.now();
+    const focusQuery = options.focusQuery?.trim() || '';
     const weekAhead = now + (7 * 24 * 60 * 60 * 1000);
     const upcomingEvents = this.secondBrainService.listEvents({
       fromTime: now,
       toTime: weekAhead,
       includePast: false,
       limit: 8,
-    });
-    const openTasks = this.secondBrainService.listTasks({ status: 'open', limit: 8 });
-    const recentNotes = this.secondBrainService.listNotes({ limit: 5 });
+    }).filter((event) => shouldIncludeByFocus([event.title, event.description, event.location].filter(Boolean).join(' '), focusQuery));
+    const openTasks = this.secondBrainService.listTasks({ status: 'open', limit: 25 })
+      .filter((task) => shouldIncludeByFocus([task.title, task.details].filter(Boolean).join(' '), focusQuery))
+      .slice(0, 8);
+    const recentNotes = this.secondBrainService.listNotes({ limit: 25 })
+      .filter((note) => shouldIncludeByFocus(`${note.title} ${note.content}`, focusQuery))
+      .slice(0, 5);
     const people = this.secondBrainService.listPeople({ limit: 25 })
+      .filter((person) => shouldIncludeByFocus([person.name, person.company, person.title, person.notes, person.email].filter(Boolean).join(' '), focusQuery))
       .sort((left, right) => {
         const leftTimestamp = left.lastContactAt ?? left.updatedAt;
         const rightTimestamp = right.lastContactAt ?? right.updatedAt;
         return rightTimestamp - leftTimestamp;
       })
       .slice(0, 5);
-    const libraryItems = this.secondBrainService.listLinks({ limit: 5 });
+    const libraryItems = this.secondBrainService.listLinks({ limit: 25 })
+      .filter((link) => shouldIncludeByFocus([link.title, link.summary, link.url].filter(Boolean).join(' '), focusQuery))
+      .slice(0, 5);
 
     const sections = [
       'Weekly Review',
       `- Generated ${formatDateTime(now)}`,
+      ...(focusQuery ? [`- Focus: ${focusQuery}`] : []),
       upcomingEvents.length > 0
         ? `- Next 7 days: ${upcomingEvents.length} upcoming event${upcomingEvents.length === 1 ? '' : 's'} on the shared calendar.`
         : '- No upcoming events in the next 7 days.',
@@ -310,12 +350,12 @@ export class BriefingService {
     ];
 
     const brief = this.persistBrief({
-      id: buildBriefId('weekly_review', now),
+      id: buildBriefId('weekly_review', now, undefined, options.routineId),
       kind: 'weekly_review',
-      title: titleForBrief('weekly_review', undefined, now),
+      title: titleForBrief('weekly_review', undefined, now, focusQuery),
       content: sections.join('\n'),
       generatedAt: now,
-      routineId: 'weekly-review',
+      routineId: options.routineId ?? 'weekly-review',
     });
 
     this.secondBrainService.recordUsage({
@@ -330,11 +370,15 @@ export class BriefingService {
     return brief;
   }
 
-  async generatePreMeetingBrief(eventId: string): Promise<SecondBrainBriefRecord> {
+  async generatePreMeetingBrief(
+    eventId: string,
+    options: { routineId?: string; focusQuery?: string } = {},
+  ): Promise<SecondBrainBriefRecord> {
     const event = this.secondBrainService.getEventById(eventId);
     if (!event) {
       throw new Error(`Event '${eventId}' not found.`);
     }
+    const focusQuery = options.focusQuery?.trim() || '';
 
     const now = this.now();
     const keywords = extractKeywords([event.title, event.description].filter(Boolean).join(' '));
@@ -361,6 +405,7 @@ export class BriefingService {
     const sections = [
       'Meeting Snapshot',
       renderEventLine(event),
+      ...(focusQuery ? ['', `Focus`, `- ${focusQuery}`] : []),
       '',
       'Relevant People',
       ...(relatedPeople.length > 0
@@ -383,13 +428,13 @@ export class BriefingService {
     ];
 
     const brief = this.persistBrief({
-      id: buildBriefId('pre_meeting', now, event.id),
+      id: buildBriefId('pre_meeting', now, event.id, options.routineId),
       kind: 'pre_meeting',
-      title: titleForBrief('pre_meeting', event),
+      title: titleForBrief('pre_meeting', event, undefined, focusQuery),
       content: sections.join('\n'),
       generatedAt: now,
       eventId: event.id,
-      routineId: 'pre-meeting-brief',
+      routineId: options.routineId ?? 'pre-meeting-brief',
     });
 
     this.secondBrainService.recordUsage({
@@ -404,11 +449,15 @@ export class BriefingService {
     return brief;
   }
 
-  async draftFollowUp(eventId: string): Promise<SecondBrainBriefRecord> {
+  async draftFollowUp(
+    eventId: string,
+    options: { routineId?: string; focusQuery?: string } = {},
+  ): Promise<SecondBrainBriefRecord> {
     const event = this.secondBrainService.getEventById(eventId);
     if (!event) {
       throw new Error(`Event '${eventId}' not found.`);
     }
+    const focusQuery = options.focusQuery?.trim() || '';
 
     const relatedTasks = this.secondBrainService.listTasks({ status: 'open', limit: 25 })
       .filter((task) => !task.dueAt || task.dueAt >= event.startsAt - (24 * 60 * 60 * 1000))
@@ -422,6 +471,7 @@ export class BriefingService {
       `Hi team,`,
       '',
       `Thanks again for the time on ${formatDateTime(event.startsAt)}. Here is the current follow-up packet from the shared assistant context:`,
+      ...(focusQuery ? ['', `Focus`, `- ${focusQuery}`] : []),
       '',
       'Outstanding Tasks',
       ...(relatedTasks.length > 0
@@ -440,13 +490,13 @@ export class BriefingService {
 
     const now = this.now();
     const brief = this.persistBrief({
-      id: buildBriefId('follow_up', now, event.id),
+      id: buildBriefId('follow_up', now, event.id, options.routineId),
       kind: 'follow_up',
-      title: titleForBrief('follow_up', event),
+      title: titleForBrief('follow_up', event, undefined, focusQuery),
       content: sections.join('\n'),
       generatedAt: now,
       eventId: event.id,
-      routineId: 'follow-up-watch',
+      routineId: options.routineId ?? 'follow-up-watch',
     });
 
     this.secondBrainService.recordUsage({

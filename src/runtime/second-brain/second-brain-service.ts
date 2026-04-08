@@ -473,11 +473,22 @@ function cloneRoutineTrigger(trigger: SecondBrainRoutineTrigger): SecondBrainRou
 function cloneRoutineConfig(config: SecondBrainRoutineConfig | undefined): SecondBrainRoutineConfig | undefined {
   return config
     ? {
+        ...(config.focusQuery?.trim() ? { focusQuery: config.focusQuery.trim() } : {}),
         ...(config.topicQuery?.trim() ? { topicQuery: config.topicQuery.trim() } : {}),
         ...(Number.isFinite(config.dueWithinHours) ? { dueWithinHours: Number(config.dueWithinHours) } : {}),
         ...(typeof config.includeOverdue === 'boolean' ? { includeOverdue: config.includeOverdue } : {}),
       }
     : undefined;
+}
+
+function supportsFocusQuery(definition: BuiltInRoutineDefinition): boolean {
+  return [
+    'morning-brief',
+    'weekly-review',
+    'next-24-hours-radar',
+    'pre-meeting-brief',
+    'follow-up-watch',
+  ].includes(definition.manifest.id);
 }
 
 function cloneRoutineManifest(manifest: SecondBrainRoutineManifest): SecondBrainRoutineManifest {
@@ -577,6 +588,9 @@ function normalizeRoutineConfig(
   config: SecondBrainRoutineConfig | undefined,
   fallback?: SecondBrainRoutineConfig,
 ): SecondBrainRoutineConfig | undefined {
+  const focusQuery = supportsFocusQuery(definition)
+    ? (config?.focusQuery?.trim() || fallback?.focusQuery?.trim() || '')
+    : '';
   if (definition.manifest.id === 'topic-watch') {
     const topicQuery = config?.topicQuery?.trim() || fallback?.topicQuery?.trim() || '';
     if (!topicQuery) {
@@ -603,7 +617,7 @@ function normalizeRoutineConfig(
       includeOverdue,
     };
   }
-  return undefined;
+  return focusQuery ? { focusQuery } : undefined;
 }
 
 function slugifyRoutineIdSegment(value: string): string {
@@ -619,13 +633,15 @@ function resolveRoutineRecordId(
   name: string | undefined,
   config: SecondBrainRoutineConfig | undefined,
 ): string {
-  if (!definition.allowMultiple) {
+  if (!definition.allowMultiple && !(supportsFocusQuery(definition) && config?.focusQuery?.trim())) {
     return definition.manifest.id;
   }
   const preferredSegment = definition.manifest.id === 'topic-watch'
     ? config?.topicQuery?.trim()
     : definition.manifest.id === 'deadline-watch'
       ? `next-${Number(config?.dueWithinHours ?? 24)}-hours${config?.includeOverdue === false ? '-due' : '-with-overdue'}`
+      : supportsFocusQuery(definition)
+        ? config?.focusQuery?.trim()
       : undefined;
   const explicitSegment = name?.trim();
   const chosenSegment = preferredSegment || explicitSegment || definition.manifest.name;
@@ -649,6 +665,9 @@ function resolveRoutineName(
     const hours = Number(config?.dueWithinHours);
     const overdueSuffix = config?.includeOverdue === false ? '' : ' + overdue';
     return `Deadline Watch: next ${hours} hour${hours === 1 ? '' : 's'}${overdueSuffix}`;
+  }
+  if (supportsFocusQuery(definition) && config?.focusQuery?.trim()) {
+    return `${definition.manifest.name}: ${config.focusQuery.trim()}`;
   }
   return definition.manifest.name;
 }
@@ -723,6 +742,7 @@ function buildRoutineTypeView(
     defaultTiming: buildRoutineTimingView(definition, definition.manifest.trigger),
     supportedTiming: supportedTimingKindsForDefinition(definition),
     defaultDelivery: [...definition.manifest.deliveryDefaults],
+    supportsFocusQuery: supportsFocusQuery(definition),
     supportsTopicQuery: definition.manifest.id === 'topic-watch',
     supportsDeadlineWindow: definition.manifest.id === 'deadline-watch',
   };
@@ -742,6 +762,7 @@ function buildRoutineView(
     enabled: routine.enabled,
     timing: buildRoutineTimingView(definition, routine.trigger),
     delivery: [...routine.deliveryDefaults],
+    ...(routine.config?.focusQuery?.trim() ? { focusQuery: routine.config.focusQuery.trim() } : {}),
     ...(routine.config?.topicQuery?.trim() ? { topicQuery: routine.config.topicQuery.trim() } : {}),
     ...(Number.isFinite(routine.config?.dueWithinHours) ? { dueWithinHours: Number(routine.config?.dueWithinHours) } : {}),
     ...(typeof routine.config?.includeOverdue === 'boolean' ? { includeOverdue: routine.config.includeOverdue } : {}),
@@ -1201,13 +1222,15 @@ export class SecondBrainService {
     if (!isAssistantVisibleRoutineDefinition(definition)) {
       throw new Error(`Routine '${definition.manifest.name}' is now a direct action, not a configurable assistant routine.`);
     }
+    const inputConfig = normalizeRoutineConfig(definition, input.config);
+    const creatingScopedInstance = Boolean(supportsFocusQuery(definition) && inputConfig?.focusQuery?.trim());
     const configuredRoutines = this.listRoutineRecords().filter((routine) => (routine.templateId ?? routine.id) === templateId);
-    if (!definition.allowMultiple && configuredRoutines.length > 0) {
+    if (!definition.allowMultiple && !creatingScopedInstance && configuredRoutines.some((routine) => !routine.config?.focusQuery?.trim())) {
       throw new Error(`Routine '${definition.manifest.name}' already exists.`);
     }
 
     const timestamp = this.now();
-    const config = normalizeRoutineConfig(definition, input.config);
+    const config = inputConfig;
     let routineId = resolveRoutineRecordId(definition, input.name, config);
     while (this.getRoutineRecordById(routineId)) {
       routineId = `${definition.manifest.id}:${randomUUID().slice(0, 8)}`;
@@ -1228,7 +1251,7 @@ export class SecondBrainService {
       defaultRoutingBias: input.defaultRoutingBias,
       budgetProfileId: input.budgetProfileId,
     });
-    if (!definition.allowMultiple) {
+    if (!definition.allowMultiple && !creatingScopedInstance) {
       this.store.routines.clearRoutineDeletion(templateId);
     }
     this.store.routines.upsertRoutine(routine);
@@ -1259,6 +1282,8 @@ export class SecondBrainService {
       !input.name?.trim()
       && definition
       && (
+        (supportsFocusQuery(definition) && input.config?.focusQuery?.trim() && existing.name.startsWith(`${definition.manifest.name}: `))
+        ||
         (definition.manifest.id === 'topic-watch' && input.config?.topicQuery?.trim() && existing.name.startsWith('Topic Watch: '))
         || (definition.manifest.id === 'deadline-watch'
           && (Number.isFinite(input.config?.dueWithinHours) || typeof input.config?.includeOverdue === 'boolean')

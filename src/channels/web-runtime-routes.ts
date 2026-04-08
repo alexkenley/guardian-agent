@@ -127,6 +127,7 @@ function parseSecondBrainRoutineTiming(value: unknown): import('../runtime/secon
 function parseSecondBrainRoutineConfig(value: unknown): import('../runtime/second-brain/types.js').SecondBrainRoutineConfig | undefined {
   const record = asRecord(value);
   if (!record) return undefined;
+  const focusQuery = trimOptionalString(record.focusQuery);
   const topicQuery = trimOptionalString(record.topicQuery);
   const dueWithinHours = typeof record.dueWithinHours === 'number'
     ? record.dueWithinHours
@@ -136,8 +137,9 @@ function parseSecondBrainRoutineConfig(value: unknown): import('../runtime/secon
   const includeOverdue = typeof record.includeOverdue === 'boolean'
     ? record.includeOverdue
     : undefined;
-  if (!topicQuery && !Number.isFinite(dueWithinHours) && includeOverdue == null) return undefined;
+  if (!focusQuery && !topicQuery && !Number.isFinite(dueWithinHours) && includeOverdue == null) return undefined;
   return {
+    ...(focusQuery ? { focusQuery } : {}),
     ...(topicQuery ? { topicQuery } : {}),
     ...(Number.isFinite(dueWithinHours) ? { dueWithinHours } : {}),
     ...(includeOverdue != null ? { includeOverdue } : {}),

@@ -213,6 +213,7 @@ Current behavior note:
 - the Routines table shows only configured routines; `Create routine` is the explicit path for adding or reconfiguring bounded assistant capabilities.
 - the create flow now shows the full assistant capability list, not just the unconfigured extras. Capabilities that already have a singleton starter instance are marked as already configured and route the operator back to editing that existing instance rather than silently disappearing from the picker.
 - scheduled routines now support `hourly`, `daily`, `weekdays`, `weekly`, `fortnightly`, and `monthly` cadence options in the shared routine timing model.
+- selected assistant capabilities now support bounded scoped instances through routine config. This allows additional routines such as a focused `Weekly Review: Board prep` or `Morning Brief: Harbor launch` instead of only duplicating the unscoped starter routine.
 - deleting a seeded default routine keeps it out of the configured routines list across restart until an operator explicitly re-creates it from `Create routine`.
 - `topic-watch` supports multiple configured instances and stores a `topicQuery` routine config instead of behaving like a single fixed built-in.
 - `deadline-watch` supports multiple configured instances and stores bounded deadline settings (`dueWithinHours`, `includeOverdue`) for proactive task-pressure notifications.
@@ -327,6 +328,7 @@ Current trigger behavior:
 - `weekly-review`: generated weekly to summarize your state
 - `pre-meeting-brief`: generates missing pre-meeting briefs for events within the configured lookahead window
 - `follow-up-watch`: generates missing follow-up drafts for recently ended events
+- scoped routine instances produce distinct brief ids and notifications so a focused assistant routine does not overwrite the default starter artifact
 - `topic-watch`: generates a topic-watch brief when new matching context appears since the last run
 - `deadline-watch`: generates a deadline-watch brief when due-soon or overdue tasks become newly relevant for the configured watch window
 - provider sync: exposed as a direct `Sync now` maintenance action rather than a visible assistant routine

@@ -139,6 +139,7 @@ function normalizeRoutineTrigger(value: unknown): SecondBrainRoutineTrigger | un
 function normalizeRoutineConfig(value: unknown): import('../../runtime/second-brain/types.js').SecondBrainRoutineConfig | undefined {
   const record = asRecord(value);
   if (!record) return undefined;
+  const focusQuery = typeof record.focusQuery === 'string' ? record.focusQuery.trim() : '';
   const topicQuery = typeof record.topicQuery === 'string' ? record.topicQuery.trim() : '';
   const dueWithinHours = typeof record.dueWithinHours === 'number'
     ? record.dueWithinHours
@@ -146,10 +147,11 @@ function normalizeRoutineConfig(value: unknown): import('../../runtime/second-br
   const includeOverdue = typeof record.includeOverdue === 'boolean'
     ? record.includeOverdue
     : undefined;
-  if (!topicQuery && !Number.isFinite(dueWithinHours) && includeOverdue == null) {
+  if (!focusQuery && !topicQuery && !Number.isFinite(dueWithinHours) && includeOverdue == null) {
     return undefined;
   }
   return {
+    ...(focusQuery ? { focusQuery } : {}),
     ...(topicQuery ? { topicQuery } : {}),
     ...(Number.isFinite(dueWithinHours) ? { dueWithinHours } : {}),
     ...(includeOverdue != null ? { includeOverdue } : {}),
@@ -853,6 +855,7 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
           config: {
             type: 'object',
             properties: {
+              focusQuery: { type: 'string' },
               topicQuery: { type: 'string' },
               dueWithinHours: { type: 'number' },
               includeOverdue: { type: 'boolean' },
@@ -1191,6 +1194,7 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
           config: {
             type: 'object',
             properties: {
+              focusQuery: { type: 'string' },
               topicQuery: { type: 'string' },
               dueWithinHours: { type: 'number' },
               includeOverdue: { type: 'boolean' },

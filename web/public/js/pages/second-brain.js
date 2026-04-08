@@ -1470,6 +1470,8 @@ function renderRoutineListRow(routine, data) {
     ? `Watching "${routine.topicQuery}".`
     : routine.templateId === 'deadline-watch' && routine.dueWithinHours
       ? `Watching tasks due within ${routine.dueWithinHours} hour${routine.dueWithinHours === 1 ? '' : 's'}${routine.includeOverdue === false ? '' : ', including overdue work'}.`
+      : routine.focusQuery
+        ? `Focused on "${routine.focusQuery}".`
       : (entry?.description || '');
   const isSelected = state.selectedRoutineId === routine.id;
 
@@ -1520,6 +1522,7 @@ function renderRoutineCreateForm(entry, data) {
     enabled: true,
     timing: { ...selectedEntry.defaultTiming },
     delivery: [...selectedEntry.defaultDelivery],
+    ...(selectedEntry.supportsFocusQuery ? { focusQuery: '' } : {}),
     ...(selectedEntry.supportsTopicQuery ? { topicQuery: '' } : {}),
     ...(selectedEntry.supportsDeadlineWindow ? { dueWithinHours: 24, includeOverdue: true } : {}),
     lastRunAt: null,
@@ -1531,16 +1534,21 @@ function renderRoutineCreateForm(entry, data) {
       <form class="sb-form" data-routine-create-form>
         <label class="sb-form__label" for="routine-template-id">Capability</label>
         <select id="routine-template-id" name="templateId">
-          ${catalog.map((option) => `<option value="${escAttr(option.templateId)}" ${option.templateId === selectedEntry.templateId ? 'selected' : ''}>${esc(option.name)}${option.configured && !option.allowMultiple ? ' (already configured)' : ''}</option>`).join('')}
+          ${catalog.map((option) => `<option value="${escAttr(option.templateId)}" ${option.templateId === selectedEntry.templateId ? 'selected' : ''}>${esc(option.name)}${option.configured && !option.allowMultiple && !option.supportsFocusQuery ? ' (already configured)' : ''}</option>`).join('')}
         </select>
         <div class="sb-readout">
           <strong>What it does</strong>
           <span>${esc(selectedEntry.description)}</span>
         </div>
-        ${selectedEntry.configured && !selectedEntry.allowMultiple ? `
+        ${selectedEntry.configured && !selectedEntry.allowMultiple && !selectedEntry.supportsFocusQuery ? `
           <div class="sb-readout">
             <strong>Starter instance already exists</strong>
             <span>This capability already has a configured routine. Edit the existing instance from the list on the right, or delete it first if you want to replace it.</span>
+          </div>
+        ` : selectedEntry.configured && selectedEntry.supportsFocusQuery ? `
+          <div class="sb-readout">
+            <strong>Starter instance already exists</strong>
+            <span>You can still create another instance of this capability, but give it a scope so it does something distinct.</span>
           </div>
         ` : ''}
         ${renderRoutineFormFields(preview, { submitLabel: 'Create routine', entry: selectedEntry })}
@@ -1633,6 +1641,16 @@ function renderRoutineFormFields(routine, options = {}) {
         <span>Include overdue tasks too</span>
       </label>
       <div class="sb-table-copy">Guardian will watch open tasks entering the due-soon window and can also include newly overdue tasks in the alert.</div>
+    ` : entry?.supportsFocusQuery ? `
+      <label class="sb-form__label" for="routine-focus-query">Focus this on (optional)</label>
+      <input
+        id="routine-focus-query"
+        name="focusQuery"
+        type="text"
+        placeholder="Board prep, Jordan Lee, Harbor launch"
+        value="${escAttr(routine.focusQuery || '')}"
+      >
+      <div class="sb-table-copy">Use a focus to create a distinct scoped instance, such as a board-prep review or a meeting brief related to one project.</div>
     ` : ''}
 
     ${supportsTimingChoice ? `
@@ -1713,7 +1731,7 @@ function renderRoutineFormFields(routine, options = {}) {
     </div>
     <div class="sb-table-copy">Telegram is the default assistant channel. Add web or CLI when you also want operator visibility.</div>
 
-    ${options.submitLabel === 'Create routine' && entry?.configured && !entry.allowMultiple
+    ${options.submitLabel === 'Create routine' && entry?.configured && !entry.allowMultiple && !entry.supportsFocusQuery
       ? `
         <div class="sb-form__actions">
           <button class="btn btn-primary" type="button" data-open-configured-routine="${escAttr(entry.configuredRoutineId || '')}">Open existing routine</button>
@@ -2298,7 +2316,19 @@ function bindInteractions(container) {
     if (target.matches('[data-routine-create-form]')) {
       event.preventDefault();
       const entry = findRoutineCatalogEntry(state.data, readString(target, 'templateId'));
-      if (entry?.configured && !entry.allowMultiple && entry.configuredRoutineId) {
+      const config = readRoutineConfigForm(target);
+      const scopedCreate = !!config?.focusQuery;
+      if (entry?.configured && !entry.allowMultiple && !entry.supportsFocusQuery && entry.configuredRoutineId) {
+        const routine = findRecord(state.data?.routines || [], entry.configuredRoutineId);
+        if (routine) {
+          state.selectedRoutineId = routine.id;
+          state.selectedRoutineTemplateId = routine.templateId || routine.id || null;
+          state.creatingRoutine = false;
+          void rerenderLocal();
+        }
+        return;
+      }
+      if (entry?.configured && !entry.allowMultiple && entry.supportsFocusQuery && !scopedCreate && entry.configuredRoutineId) {
         const routine = findRecord(state.data?.routines || [], entry.configuredRoutineId);
         if (routine) {
           state.selectedRoutineId = routine.id;
@@ -2313,7 +2343,7 @@ function bindInteractions(container) {
         name: readString(target, 'name') || undefined,
         enabled: readCheckbox(target, 'enabled'),
         timing: readRoutineTimingForm(target),
-        config: readRoutineConfigForm(target),
+        config,
         delivery: readCheckboxValues(target, 'delivery'),
       }), (result) => {
         if (result?.details?.id) {
@@ -3126,16 +3156,18 @@ function readRoutineTimingForm(form) {
 }
 
 function readRoutineConfigForm(form) {
+  const focusQuery = readString(form, 'focusQuery');
   const topicQuery = readString(form, 'topicQuery');
   const dueWithinHours = Number(readString(form, 'dueWithinHours'));
   const includeOverdueField = form.querySelector('[name="includeOverdue"]');
   const includeOverdue = includeOverdueField instanceof HTMLInputElement
     ? includeOverdueField.checked
     : undefined;
-  if (!topicQuery && !Number.isFinite(dueWithinHours) && includeOverdue == null) {
+  if (!focusQuery && !topicQuery && !Number.isFinite(dueWithinHours) && includeOverdue == null) {
     return undefined;
   }
   return {
+    ...(focusQuery ? { focusQuery } : {}),
     ...(topicQuery ? { topicQuery } : {}),
     ...(Number.isFinite(dueWithinHours) && dueWithinHours > 0 ? { dueWithinHours } : {}),
     ...(includeOverdue != null ? { includeOverdue } : {}),

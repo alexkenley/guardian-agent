@@ -250,6 +250,28 @@ describe('SecondBrainService', () => {
     expect(service.listRoutineCatalog().find((entry) => entry.templateId === 'topic-watch')?.configured).toBe(true);
   });
 
+  it('allows additional scoped instances for singleton assistant capabilities', () => {
+    const { service } = createService();
+
+    const scoped = service.createRoutine({
+      templateId: 'weekly-review',
+      config: { focusQuery: 'Board prep' },
+      timing: {
+        kind: 'scheduled',
+        schedule: {
+          cadence: 'fortnightly',
+          dayOfWeek: 'monday',
+          time: '09:00',
+        },
+      },
+    });
+
+    expect(scoped.id).toBe('weekly-review:board-prep');
+    expect(scoped.name).toBe('Weekly Review: Board prep');
+    expect(scoped.focusQuery).toBe('Board prep');
+    expect(service.listRoutines().filter((routine) => routine.templateId === 'weekly-review')).toHaveLength(2);
+  });
+
   it('creates deadline watch routines with bounded deadline configuration', () => {
     const { service } = createService();
 

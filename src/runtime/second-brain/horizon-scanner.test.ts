@@ -239,6 +239,71 @@ describe('HorizonScanner', () => {
     }));
   });
 
+  it('triggers scoped weekly review routines as distinct artifacts', async () => {
+    const sqlitePath = join(tmpdir(), `guardianagent-second-brain-horizon-${randomUUID()}.sqlite`);
+    const nowState = { value: Date.parse('2026-04-06T09:30:00Z') };
+    const now = () => nowState.value;
+    const store = new SecondBrainStore({ sqlitePath, now });
+    const service = new SecondBrainService(store, { now });
+    const briefing = new BriefingService(service, { now });
+    const scheduledTaskService = {
+      list() {
+        return [];
+      },
+      create() {
+        return { success: true, message: 'created' };
+      },
+      update() {
+        return { success: true, message: 'updated' };
+      },
+    };
+
+    const scoped = service.createRoutine({
+      templateId: 'weekly-review',
+      config: { focusQuery: 'Board prep' },
+      timing: {
+        kind: 'scheduled',
+        schedule: {
+          cadence: 'weekly',
+          dayOfWeek: 'monday',
+          time: '09:00',
+        },
+      },
+      deliveryDefaults: ['telegram'],
+    });
+    service.upsertTask({
+      title: 'Board prep checklist',
+      priority: 'medium',
+    });
+
+    const syncService = {
+      async syncAll(reason: string) {
+        return {
+          startedAt: now(),
+          finishedAt: now(),
+          reason,
+          providers: [],
+        };
+      },
+    };
+
+    const scanner = new HorizonScanner(
+      scheduledTaskService as any,
+      service,
+      syncService as any,
+      briefing,
+      { now },
+    );
+
+    const summary = await scanner.runScan('test');
+
+    expect(summary.triggeredRoutines).toContain('weekly-review');
+    expect(summary.triggeredRoutines).toContain(scoped.id);
+    expect(summary.generatedBriefIds).toContain(`brief:weekly_review:${scoped.id}:2026-04-06`);
+    expect(service.getBriefById(`brief:weekly_review:${scoped.id}:2026-04-06`)?.title).toContain('Board prep');
+    store.close();
+  });
+
   it('runs deadline watch routines and emits a proactive outcome when tasks enter the watch window', async () => {
     const { service, briefing, scheduledTaskService, now } = createFixture();
     const outcomes: Array<{ text: string; channels: readonly string[] }> = [];
