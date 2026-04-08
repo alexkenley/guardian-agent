@@ -466,7 +466,7 @@ export class BriefingService {
     routineId: string,
     options: { onlySince?: number | null } = {},
   ): Promise<SecondBrainBriefRecord | null> {
-    const routine = this.secondBrainService.getRoutineById(routineId);
+    const routine = this.secondBrainService.getRoutineRecordById(routineId);
     if (!routine) {
       throw new Error(`Routine '${routineId}' not found.`);
     }
@@ -567,7 +567,7 @@ export class BriefingService {
     routineId: string,
     options: { onlySince?: number | null } = {},
   ): Promise<SecondBrainBriefRecord | null> {
-    const routine = this.secondBrainService.getRoutineById(routineId);
+    const routine = this.secondBrainService.getRoutineRecordById(routineId);
     if (!routine) {
       throw new Error(`Routine '${routineId}' not found.`);
     }

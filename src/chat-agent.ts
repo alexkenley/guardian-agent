@@ -382,6 +382,86 @@ function normalizeRoutineSearchTokens(value: string | undefined): string[] {
     .filter((token) => token.length >= 2);
 }
 
+function deriveRoutineTimingKind(
+  routine: {
+    timing?: { kind?: string };
+    trigger?: { mode?: string; eventType?: string };
+  },
+): string | undefined {
+  if (typeof routine.timing?.kind === 'string' && routine.timing.kind.trim()) {
+    return routine.timing.kind.trim();
+  }
+  const normalizedEventType = typeof routine.trigger?.eventType === 'string'
+    ? routine.trigger.eventType.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_')
+    : '';
+  if (routine.trigger?.mode === 'cron') return 'scheduled';
+  if (routine.trigger?.mode === 'event' && normalizedEventType === 'upcoming_event') return 'before_meetings';
+  if (routine.trigger?.mode === 'event' && normalizedEventType === 'event_ended') return 'after_meetings';
+  if (routine.trigger?.mode === 'horizon') return 'background';
+  if (routine.trigger?.mode === 'manual') return 'manual';
+  return undefined;
+}
+
+function routineTopicQuery(
+  routine: {
+    topicQuery?: string;
+    config?: { topicQuery?: string };
+  },
+): string {
+  return typeof routine.topicQuery === 'string' && routine.topicQuery.trim()
+    ? routine.topicQuery.trim()
+    : typeof routine.config?.topicQuery === 'string' && routine.config.topicQuery.trim()
+      ? routine.config.topicQuery.trim()
+      : '';
+}
+
+function routineDueWithinHours(
+  routine: {
+    dueWithinHours?: number;
+    config?: { dueWithinHours?: number };
+  },
+): number | undefined {
+  if (Number.isFinite(routine.dueWithinHours)) {
+    return Number(routine.dueWithinHours);
+  }
+  if (Number.isFinite(routine.config?.dueWithinHours)) {
+    return Number(routine.config?.dueWithinHours);
+  }
+  return undefined;
+}
+
+function routineIncludeOverdue(
+  routine: {
+    includeOverdue?: boolean;
+    config?: { includeOverdue?: boolean };
+  },
+): boolean | undefined {
+  if (typeof routine.includeOverdue === 'boolean') return routine.includeOverdue;
+  if (typeof routine.config?.includeOverdue === 'boolean') return routine.config.includeOverdue;
+  return undefined;
+}
+
+function routineDeliveryChannels(
+  routine: {
+    delivery?: string[];
+    deliveryDefaults?: string[];
+  },
+): string[] {
+  if (Array.isArray(routine.delivery)) return routine.delivery.filter((value) => typeof value === 'string' && value.trim().length > 0);
+  if (Array.isArray(routine.deliveryDefaults)) return routine.deliveryDefaults.filter((value) => typeof value === 'string' && value.trim().length > 0);
+  return [];
+}
+
+function summarizeRoutineTimingForUser(
+  routine: {
+    timing?: { label?: string };
+    trigger?: { mode?: string; cron?: string; eventType?: string; lookaheadMinutes?: unknown };
+  },
+): string {
+  const label = typeof routine.timing?.label === 'string' ? routine.timing.label.trim() : '';
+  return label || formatRoutineTriggerSummaryForUser(routine.trigger);
+}
+
 function buildRoutineSemanticHints(
   routine: {
     id?: string;
@@ -389,6 +469,11 @@ function buildRoutineSemanticHints(
     name?: string;
     category?: string;
     externalCommMode?: string;
+    topicQuery?: string;
+    dueWithinHours?: number;
+    includeOverdue?: boolean;
+    delivery?: string[];
+    timing?: { kind?: string };
     config?: { topicQuery?: string; dueWithinHours?: number; includeOverdue?: boolean };
     trigger?: { mode?: string; eventType?: string };
   },
@@ -400,10 +485,11 @@ function buildRoutineSemanticHints(
   if (routine.externalCommMode === 'draft_only') {
     hints.push('email inbox message draft reply follow up');
   }
-  if (routine.trigger?.mode === 'event' && routine.trigger.eventType === 'event_ended') {
+  const timingKind = deriveRoutineTimingKind(routine);
+  if (timingKind === 'after_meetings') {
     hints.push('post meeting follow up');
   }
-  if (routine.trigger?.mode === 'event' && routine.trigger.eventType === 'upcoming_event') {
+  if (timingKind === 'before_meetings') {
     hints.push('meeting prep preparation');
   }
   if ((routine.templateId ?? routine.id) === 'topic-watch') {
@@ -412,7 +498,7 @@ function buildRoutineSemanticHints(
   if ((routine.templateId ?? routine.id) === 'deadline-watch') {
     hints.push('deadline due soon overdue task pressure reminders');
   }
-  const normalizedIdentity = `${routine.id ?? ''} ${routine.templateId ?? ''} ${routine.name ?? ''} ${routine.config?.topicQuery ?? ''}`.toLowerCase();
+  const normalizedIdentity = `${routine.id ?? ''} ${routine.templateId ?? ''} ${routine.name ?? ''} ${routineTopicQuery(routine)}`.toLowerCase();
   if (normalizedIdentity.includes('pre-meeting') || normalizedIdentity.includes('pre meeting')) {
     hints.push('meeting prep');
   }
@@ -915,6 +1001,60 @@ function extractRoutineLookaheadMinutes(text: string): number | undefined {
   if (!match) return undefined;
   const value = Number(match[1]);
   return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function extractQuotedPhrase(text: string): string | undefined {
+  const match = text.match(/["“]([^"”]+)["”]/);
+  const value = match?.[1]?.trim();
+  return value ? value : undefined;
+}
+
+function extractCustomSecondBrainRoutineCreate(
+  text: string,
+): {
+  templateId: 'topic-watch' | 'deadline-watch';
+  config: Record<string, unknown>;
+} | null {
+  const normalized = text.trim();
+  if (!normalized) return null;
+
+  if (/\b(?:due|deadline|overdue)\b/i.test(normalized)) {
+    const hourMatch = normalized.match(/\b(\d{1,3})\s*(?:hour|hours)\b/i);
+    const dueWithinHours = hourMatch
+      ? Number(hourMatch[1])
+      : /\btomorrow\b/i.test(normalized)
+        ? 24
+        : /\bnext\s+week\b/i.test(normalized)
+          ? 24 * 7
+          : undefined;
+    return {
+      templateId: 'deadline-watch',
+      config: {
+        ...(Number.isFinite(dueWithinHours) ? { dueWithinHours } : {}),
+        ...( /\boverdue\b/i.test(normalized) ? { includeOverdue: true } : {}),
+      },
+    };
+  }
+
+  if (/\b(?:mention|mentions|mentioned|about|related to|watch for|watch)\b/i.test(normalized)) {
+    const quoted = extractQuotedPhrase(normalized);
+    if (quoted) {
+      return {
+        templateId: 'topic-watch',
+        config: { topicQuery: quoted },
+      };
+    }
+    const trailingMatch = normalized.match(/\b(?:mention|mentions|mentioned|about|related to|watch for)\s+(.+?)(?:[.?!]|$)/i);
+    const topicQuery = trailingMatch?.[1]?.trim();
+    if (topicQuery) {
+      return {
+        templateId: 'topic-watch',
+        config: { topicQuery },
+      };
+    }
+  }
+
+  return null;
 }
 
 function normalizeRoutineTriggerModeForTool(
@@ -3959,17 +4099,18 @@ type DirectIntentShadowCandidate =
           const description = routineCatalogById.get(routine.id)?.trim()
             ?? routineCatalogById.get(routine.templateId ?? '')?.trim()
             ?? '';
+          const dueWithinHours = routineDueWithinHours(routine);
+          const includeOverdue = routineIncludeOverdue(routine);
           const searchTokens = new Set(normalizeRoutineSearchTokens([
             routine.name,
             routine.id,
             routine.templateId,
             routine.category,
-            routine.externalCommMode,
-            routine.trigger.mode,
-            routine.trigger.eventType,
-            routine.config?.topicQuery,
-            Number.isFinite(routine.config?.dueWithinHours) ? `due within ${routine.config?.dueWithinHours} hours` : undefined,
-            routine.config?.includeOverdue === false ? 'upcoming only' : 'overdue due soon',
+            deriveRoutineTimingKind(routine),
+            summarizeRoutineTimingForUser(routine),
+            routineTopicQuery(routine),
+            Number.isFinite(dueWithinHours) ? `due within ${dueWithinHours} hours` : undefined,
+            includeOverdue === false ? 'upcoming only' : 'overdue due soon',
             description,
             ...buildRoutineSemanticHints(routine),
           ]
@@ -4014,15 +4155,19 @@ type DirectIntentShadowCandidate =
               const descriptionSuffix = description
                 ? `: ${description.length > 120 ? `${description.slice(0, 117).trimEnd()}...` : description}`
                 : '';
-              const deliverySummary = Array.isArray(routine.deliveryDefaults) && routine.deliveryDefaults.length > 0
-                ? ` · ${routine.deliveryDefaults.join(', ')}`
+              const delivery = routineDeliveryChannels(routine);
+              const deliverySummary = delivery.length > 0
+                ? ` · ${delivery.join(', ')}`
                 : '';
-              const topicSuffix = routine.config?.topicQuery?.trim()
-                ? ` · watching "${routine.config.topicQuery.trim()}"`
-                : Number.isFinite(routine.config?.dueWithinHours)
-                  ? ` · tasks due within ${Number(routine.config?.dueWithinHours)} hours${routine.config?.includeOverdue === false ? '' : ' plus overdue'}`
+              const topicQuery = routineTopicQuery(routine);
+              const dueWithinHours = routineDueWithinHours(routine);
+              const includeOverdue = routineIncludeOverdue(routine);
+              const topicSuffix = topicQuery
+                ? ` · watching "${topicQuery}"`
+                : Number.isFinite(dueWithinHours)
+                  ? ` · tasks due within ${Number(dueWithinHours)} hours${includeOverdue === false ? '' : ' plus overdue'}`
                   : '';
-              return `- ${routine.name} [${routine.enabled ? 'enabled' : 'paused'}] (${formatRoutineTriggerSummaryForUser(routine.trigger)}${deliverySummary})${topicSuffix}${descriptionSuffix}`;
+              return `- ${routine.name} [${routine.enabled ? 'enabled' : 'paused'}] (${summarizeRoutineTimingForUser(routine)}${deliverySummary})${topicSuffix}${descriptionSuffix}`;
             }),
           ].join('\n'),
           metadata: buildSecondBrainFocusMetadata(priorFocus, 'routine', items, {
@@ -5008,6 +5153,10 @@ type DirectIntentShadowCandidate =
     continuityThread?: ContinuityThreadRecord | null,
   ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
     if (!this.secondBrainService) return null;
+    const secondBrainService = this.secondBrainService as SecondBrainService & {
+      listRoutineRecords?: () => Array<Record<string, unknown>>;
+      getRoutineRecordById?: (id: string) => Record<string, unknown> | null;
+    };
     const focused = readSecondBrainFocusContinuationState(continuityThread);
     const routineFocus = getSecondBrainFocusEntry(focused, 'routine');
     const focusItem = routineFocus
@@ -5015,6 +5164,9 @@ type DirectIntentShadowCandidate =
       : null;
     const routineCatalog = this.secondBrainService.listRoutineCatalog();
     const configuredRoutines = this.secondBrainService.listRoutines();
+    const configuredRoutineRecords = typeof secondBrainService.listRoutineRecords === 'function'
+      ? secondBrainService.listRoutineRecords()
+      : [];
     const normalizedContent = normalizeRoutineNameForMatch(message.content);
     const explicitRoutineTitle = extractExplicitNamedSecondBrainTitle(message.content);
     const matchedCatalogEntry = routineCatalog
@@ -5037,20 +5189,46 @@ type DirectIntentShadowCandidate =
 
     switch (decision.operation) {
       case 'create': {
-        if (!matchedCatalogEntry) {
-          return 'To create a Second Brain routine, tell me which starter routine to create, such as Morning Brief or Pre-Meeting Brief.';
+        const explicitDelivery = extractRoutineDeliveryDefaults(message.content);
+        const inferredRoutineCreate = extractCustomSecondBrainRoutineCreate(message.content);
+        const createCatalogEntry = matchedCatalogEntry
+          ?? (inferredRoutineCreate
+            ? routineCatalog.find((entry) => entry.templateId === inferredRoutineCreate.templateId) ?? null
+            : null);
+        if (!createCatalogEntry) {
+          return 'To create a Second Brain routine, tell me which routine type to create, or say something like "message me when anything mentions Harbor launch."';
         }
-        if (matchedCatalogEntry.configured && matchedCatalogEntry.configuredRoutineId?.trim()) {
-          const routineId = matchedCatalogEntry.configuredRoutineId.trim();
+        if (!createCatalogEntry.allowMultiple && createCatalogEntry.configured && createCatalogEntry.configuredRoutineId?.trim()) {
+          const routineId = createCatalogEntry.configuredRoutineId.trim();
           return {
-            content: `Routine already exists: ${matchedCatalogEntry.name}`,
+            content: `Routine already exists: ${createCatalogEntry.name}`,
             metadata: buildSecondBrainFocusMetadata(
               focused,
               'routine',
-              [{ id: routineId, label: matchedCatalogEntry.name }],
+              [{ id: routineId, label: createCatalogEntry.name }],
               { preferredFocusId: routineId },
             ),
           };
+        }
+        const createArgs: Record<string, unknown> = {
+          templateId: createCatalogEntry.templateId,
+          ...(explicitDelivery?.length ? { delivery: explicitDelivery } : {}),
+        };
+        if (matchedCatalogEntry?.templateId === 'topic-watch' || createCatalogEntry.templateId === 'topic-watch') {
+          const topicQuery = routineTopicQuery({ topicQuery: toString(inferredRoutineCreate?.config?.topicQuery).trim() }) || extractQuotedPhrase(message.content);
+          if (topicQuery) {
+            createArgs.config = { topicQuery };
+          } else {
+            return 'Topic Watch routines need a topic to watch. Try "message me when anything mentions Harbor launch."';
+          }
+        } else if (matchedCatalogEntry?.templateId === 'deadline-watch' || createCatalogEntry.templateId === 'deadline-watch') {
+          const inferredConfig = isRecord(inferredRoutineCreate?.config) ? inferredRoutineCreate.config : null;
+          if (inferredConfig) {
+            createArgs.config = {
+              ...(Number.isFinite(inferredConfig.dueWithinHours) ? { dueWithinHours: Number(inferredConfig.dueWithinHours) } : {}),
+              ...(typeof inferredConfig.includeOverdue === 'boolean' ? { includeOverdue: inferredConfig.includeOverdue } : {}),
+            };
+          }
         }
         return this.executeDirectSecondBrainMutation({
           message,
@@ -5058,14 +5236,14 @@ type DirectIntentShadowCandidate =
           userKey,
           decision,
           toolName: 'second_brain_routine_create',
-          args: { templateId: matchedCatalogEntry.templateId },
+          args: createArgs,
           summary: 'Creates a Second Brain routine.',
           pendingIntro: 'I prepared a Second Brain routine create, but it needs approval first.',
           successDescriptor: {
             itemType: 'routine',
             action: 'create',
-            fallbackId: matchedCatalogEntry.templateId,
-            fallbackLabel: matchedCatalogEntry.name,
+            fallbackId: createCatalogEntry.templateId,
+            fallbackLabel: createCatalogEntry.name,
           },
           focusState: focused,
         });
@@ -5081,9 +5259,11 @@ type DirectIntentShadowCandidate =
           const label = matchedCatalogEntry?.name ?? focusItem?.label ?? matchedRoutineId;
           return `Second Brain routine "${label}" is not configured yet.`;
         }
-        const existingCatalogEntry = matchedCatalogEntry
-          ?? routineCatalog.find((entry) => entry.configuredRoutineId === existingRoutine.id || entry.templateId === existingRoutine.id)
-          ?? null;
+        const existingRoutineRecord = configuredRoutineRecords.find((routine) => toString(routine.id).trim() === existingRoutine.id)
+          ?? (typeof secondBrainService.getRoutineRecordById === 'function'
+            ? secondBrainService.getRoutineRecordById(existingRoutine.id)
+            : null)
+          ?? (isRecord(existingRoutine) ? existingRoutine as Record<string, unknown> : null);
 
         const enabledFromDecision = typeof decision.entities.enabled === 'boolean'
           ? decision.entities.enabled
@@ -5092,28 +5272,42 @@ type DirectIntentShadowCandidate =
         const explicitRoutingBias = extractSecondBrainRoutingBias(message.content);
         const explicitDeliveryDefaults = extractRoutineDeliveryDefaults(message.content);
         const explicitLookaheadMinutes = extractRoutineLookaheadMinutes(message.content);
+        const existingDelivery = explicitDeliveryDefaults ?? routineDeliveryChannels(existingRoutine);
+        const existingRoutingBias = typeof existingRoutineRecord?.defaultRoutingBias === 'string'
+          ? existingRoutineRecord.defaultRoutingBias
+          : undefined;
+        const existingBudgetProfileId = typeof existingRoutineRecord?.budgetProfileId === 'string'
+          ? existingRoutineRecord.budgetProfileId
+          : undefined;
         const nextArgs: Record<string, unknown> = {
           id: existingRoutine.id,
           name: existingRoutine.name,
           enabled: explicitEnabled ?? existingRoutine.enabled,
-          defaultRoutingBias: explicitRoutingBias ?? existingRoutine.defaultRoutingBias,
-          budgetProfileId: existingRoutine.budgetProfileId,
-          deliveryDefaults: explicitDeliveryDefaults ?? existingRoutine.deliveryDefaults,
+          ...(explicitRoutingBias ?? existingRoutingBias ? { defaultRoutingBias: explicitRoutingBias ?? existingRoutingBias } : {}),
+          ...(existingBudgetProfileId ? { budgetProfileId: existingBudgetProfileId } : {}),
+          ...(existingDelivery.length > 0 ? { delivery: existingDelivery, deliveryDefaults: existingDelivery } : {}),
         };
 
         if (explicitLookaheadMinutes != null) {
-          if (existingRoutine.trigger.mode !== 'event' && existingRoutine.trigger.mode !== 'horizon') {
+          const timingKind = deriveRoutineTimingKind(existingRoutine) ?? deriveRoutineTimingKind(existingRoutineRecord ?? {});
+          if (timingKind !== 'before_meetings' && timingKind !== 'after_meetings' && timingKind !== 'background') {
             return `${existingRoutine.name} does not use a lookahead window.`;
           }
-          nextArgs.trigger = buildToolSafeRoutineTrigger(
-            {
-              ...existingRoutine.trigger,
-              lookaheadMinutes: explicitLookaheadMinutes,
-            },
-            existingCatalogEntry?.manifest.trigger as unknown as Record<string, unknown> | null | undefined,
-          );
-          if (!nextArgs.trigger) {
-            return `I couldn't determine a valid trigger shape for ${existingRoutine.name}.`;
+          nextArgs.timing = {
+            kind: timingKind,
+            minutes: explicitLookaheadMinutes,
+          };
+          if (isRecord(existingRoutineRecord?.trigger)) {
+            nextArgs.trigger = buildToolSafeRoutineTrigger(
+              {
+                ...existingRoutineRecord.trigger,
+                lookaheadMinutes: explicitLookaheadMinutes,
+              },
+              existingRoutineRecord.trigger,
+            );
+            if (!nextArgs.trigger) {
+              return `I couldn't determine a valid trigger shape for ${existingRoutine.name}.`;
+            }
           }
         }
 
@@ -5122,7 +5316,7 @@ type DirectIntentShadowCandidate =
           || explicitDeliveryDefaults !== undefined
           || explicitLookaheadMinutes !== undefined;
         if (!hasExplicitChange) {
-          return 'To update that Second Brain routine, tell me what to change, such as enable or disable it, adjust the routing bias, delivery channels, or lookahead window.';
+          return 'To update that Second Brain routine, tell me what to change, such as enable or disable it, change the delivery channels, or adjust when it runs.';
         }
 
         return this.executeDirectSecondBrainMutation({

@@ -194,7 +194,7 @@ describe('HorizonScanner', () => {
       config: { topicQuery: 'Harbor launch' },
       deliveryDefaults: ['telegram'],
     });
-    const topicWatch = service.getRoutineById(created.id)!;
+    const topicWatch = service.getRoutineRecordById(created.id)!;
     store.routines.upsertRoutine({
       ...topicWatch,
       lastRunAt: Date.parse('2026-04-03T07:00:00Z'),

@@ -1722,7 +1722,8 @@ describe('LLMChatAgent direct intent metadata', () => {
       },
     );
 
-    expect((result as { content: string }).content).toBe('Routine updated: Pre-Meeting Brief');
+    const content = typeof result === 'string' ? result : result?.content ?? '';
+    expect(content).toBe('Routine updated: Pre-Meeting Brief');
   });
 
   it('canonicalizes legacy routine event trigger values before lookahead updates', async () => {
@@ -1850,7 +1851,8 @@ describe('LLMChatAgent direct intent metadata', () => {
       },
     );
 
-    expect((result as { content: string }).content).toBe('Routine updated: Pre-Meeting Brief');
+    const content = typeof result === 'string' ? result : result?.content ?? '';
+    expect(content).toBe('Routine updated: Pre-Meeting Brief');
   });
 
   it('focuses the existing routine when create targets a routine that is already configured', async () => {
@@ -1933,6 +1935,172 @@ describe('LLMChatAgent direct intent metadata', () => {
         items: [{ id: 'pre-meeting-brief', label: 'Pre-Meeting Brief' }],
       },
     });
+  });
+
+  it('creates a topic watch routine from a natural-language notify request', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_routine_create');
+        expect(args).toMatchObject({
+          templateId: 'topic-watch',
+          config: { topicQuery: 'Harbor launch' },
+        });
+        return {
+          success: true,
+          output: {
+            id: 'topic-watch:harbor-launch',
+            name: 'Topic Watch: Harbor launch',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      listRoutineCatalog: vi.fn(() => [{
+        templateId: 'topic-watch',
+        name: 'Topic Watch',
+        description: 'Scans Second Brain records for a topic and alerts you when new matching context appears.',
+        category: 'watch',
+        seedByDefault: false,
+        allowMultiple: true,
+        configured: false,
+        defaultTiming: {
+          kind: 'background',
+          label: 'Background check across the next 1440 minutes',
+          editable: false,
+          minutes: 1440,
+        },
+        supportedTiming: ['background'],
+        defaultDelivery: ['telegram', 'web'],
+        supportsTopicQuery: true,
+        supportsDeadlineWindow: false,
+      }]),
+      listRoutines: vi.fn(() => []),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-routine-create-topic-watch',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Create a Second Brain routine to message me when anything mentions "Harbor launch".',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'create',
+        confidence: 'high',
+        summary: 'Creates a topic watch routine.',
+        turnRelation: 'current_turn',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'routine' },
+      },
+    );
+
+    const content = typeof result === 'string' ? result : result?.content ?? '';
+    expect(content).toBe('Routine created: Topic Watch: Harbor launch');
+  });
+
+  it('creates a deadline watch routine from a natural-language notify request', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        expect(toolName).toBe('second_brain_routine_create');
+        expect(args).toMatchObject({
+          templateId: 'deadline-watch',
+          config: { dueWithinHours: 24 },
+        });
+        return {
+          success: true,
+          output: {
+            id: 'deadline-watch:next-24-hours',
+            name: 'Deadline Watch: next 24 hours',
+          },
+        };
+      }),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      listRoutineCatalog: vi.fn(() => [{
+        templateId: 'deadline-watch',
+        name: 'Deadline Watch',
+        description: 'Alerts you when open tasks enter a bounded due-soon window.',
+        category: 'watch',
+        seedByDefault: false,
+        allowMultiple: true,
+        configured: false,
+        defaultTiming: {
+          kind: 'background',
+          label: 'Background check across the next 1440 minutes',
+          editable: false,
+          minutes: 1440,
+        },
+        supportedTiming: ['background'],
+        defaultDelivery: ['telegram', 'web'],
+        supportsTopicQuery: false,
+        supportsDeadlineWindow: true,
+      }]),
+      listRoutines: vi.fn(() => []),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const result = await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-routine-create-deadline-watch',
+        userId: 'owner',
+        channel: 'web',
+        content: 'Create a Second Brain routine to message me when I have something due tomorrow.',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'create',
+        confidence: 'high',
+        summary: 'Creates a deadline watch routine.',
+        turnRelation: 'current_turn',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'routine' },
+      },
+    );
+
+    const content = typeof result === 'string' ? result : result?.content ?? '';
+    expect(content).toBe('Routine created: Deadline Watch: next 24 hours');
   });
 
   it('honors a gateway-provided calendar day window for direct Second Brain calendar reads', async () => {

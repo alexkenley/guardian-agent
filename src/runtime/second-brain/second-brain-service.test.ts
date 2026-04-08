@@ -115,8 +115,11 @@ describe('SecondBrainService', () => {
     const usage = service.getUsageSummary();
 
     expect(updated.enabled).toBe(false);
-    expect(updated.trigger).toEqual({ mode: 'cron', cron: '0 9 * * *' });
-    expect(updated.defaultRoutingBias).toBe('balanced');
+    expect(updated.timing).toMatchObject({
+      kind: 'scheduled',
+      schedule: { cadence: 'daily', time: '09:00' },
+      label: 'Daily at 9 a.m.',
+    });
     expect(usage.externalTokens).toBe(150);
     expect(usage.totalConnectorCalls).toBe(2);
   });
@@ -147,8 +150,11 @@ describe('SecondBrainService', () => {
     });
 
     expect(created.id).toBe('pre-meeting-brief');
-    expect(created.defaultRoutingBias).toBe('quality_first');
-    expect(created.deliveryDefaults).toEqual(['web', 'cli']);
+    expect(created.delivery).toEqual(['web', 'cli']);
+    expect(created.timing).toMatchObject({
+      kind: 'before_meetings',
+      minutes: 60,
+    });
     expect(service.listRoutineCatalog().find((entry) => entry.templateId === 'pre-meeting-brief')?.configured).toBe(true);
   });
 
@@ -169,9 +175,9 @@ describe('SecondBrainService', () => {
     expect(second.id).toContain('topic-watch:');
     expect(first.id).not.toBe(second.id);
     expect(first.templateId).toBe('topic-watch');
-    expect(first.config).toEqual({ topicQuery: 'Harbor launch' });
+    expect(first.topicQuery).toBe('Harbor launch');
     expect(first.name).toBe('Topic Watch: Harbor launch');
-    expect(second.deliveryDefaults).toEqual(['telegram']);
+    expect(second.delivery).toEqual(['telegram']);
     expect(service.listRoutineCatalog().find((entry) => entry.templateId === 'topic-watch')?.configured).toBe(true);
   });
 
@@ -185,7 +191,8 @@ describe('SecondBrainService', () => {
 
     expect(routine.id).toContain('deadline-watch:');
     expect(routine.templateId).toBe('deadline-watch');
-    expect(routine.config).toEqual({ dueWithinHours: 6, includeOverdue: false });
+    expect(routine.dueWithinHours).toBe(6);
+    expect(routine.includeOverdue).toBe(false);
     expect(routine.name).toBe('Deadline Watch: next 6 hours');
     expect(service.listRoutineCatalog().find((entry) => entry.templateId === 'deadline-watch')?.configured).toBe(true);
   });

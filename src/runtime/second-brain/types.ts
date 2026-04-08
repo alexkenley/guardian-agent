@@ -22,6 +22,16 @@ export type SecondBrainRoutingBias = 'local_first' | 'balanced' | 'quality_first
 export type SecondBrainWorkloadClass = 'A' | 'B' | 'C' | 'D';
 export type SecondBrainRoutineTriggerMode = 'cron' | 'event' | 'horizon' | 'manual';
 export type SecondBrainRoutineEventType = 'upcoming_event' | 'event_ended' | 'task_due' | 'task_overdue';
+export type SecondBrainRoutineTimingKind = 'manual' | 'scheduled' | 'before_meetings' | 'after_meetings' | 'background';
+export type SecondBrainRoutineScheduleCadence = 'daily' | 'weekly';
+export type SecondBrainRoutineWeekday =
+  | 'sunday'
+  | 'monday'
+  | 'tuesday'
+  | 'wednesday'
+  | 'thursday'
+  | 'friday'
+  | 'saturday';
 export type SecondBrainRoutineTemplateId =
   | 'morning-brief'
   | 'weekly-review'
@@ -57,6 +67,23 @@ export interface SecondBrainRoutineConfig {
   topicQuery?: string;
   dueWithinHours?: number;
   includeOverdue?: boolean;
+}
+
+export interface SecondBrainRoutineSchedule {
+  cadence: SecondBrainRoutineScheduleCadence;
+  time: string;
+  dayOfWeek?: SecondBrainRoutineWeekday;
+}
+
+export interface SecondBrainRoutineTimingInput {
+  kind: SecondBrainRoutineTimingKind;
+  schedule?: SecondBrainRoutineSchedule;
+  minutes?: number;
+}
+
+export interface SecondBrainRoutineTimingView extends SecondBrainRoutineTimingInput {
+  label: string;
+  editable: boolean;
 }
 
 export interface SecondBrainNoteRecord {
@@ -182,6 +209,41 @@ export interface SecondBrainRoutineRecord extends SecondBrainRoutineManifest {
   lastRunAt?: number | null;
 }
 
+export interface SecondBrainRoutineTypeView {
+  templateId: string;
+  capability: SecondBrainRoutineCapability;
+  name: string;
+  description: string;
+  category: SecondBrainRoutineCatalogCategory;
+  seedByDefault: boolean;
+  allowMultiple: boolean;
+  configured: boolean;
+  configuredRoutineId?: string;
+  defaultTiming: SecondBrainRoutineTimingView;
+  supportedTiming: SecondBrainRoutineTimingKind[];
+  defaultDelivery: SecondBrainDeliveryChannel[];
+  supportsTopicQuery: boolean;
+  supportsDeadlineWindow: boolean;
+}
+
+export interface SecondBrainRoutineView {
+  id: string;
+  templateId?: SecondBrainRoutineTemplateId;
+  capability: SecondBrainRoutineCapability;
+  name: string;
+  description: string;
+  category: SecondBrainRoutineCatalogCategory;
+  enabled: boolean;
+  timing: SecondBrainRoutineTimingView;
+  delivery: SecondBrainDeliveryChannel[];
+  topicQuery?: string;
+  dueWithinHours?: number;
+  includeOverdue?: boolean;
+  lastRunAt?: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface SecondBrainUsageRecord {
   timestamp: number;
   route: 'personal_assistant_task';
@@ -277,6 +339,8 @@ export interface SecondBrainRoutineUpdateInput {
   id: string;
   name?: string;
   enabled?: boolean;
+  timing?: SecondBrainRoutineTimingInput;
+  delivery?: SecondBrainDeliveryChannel[];
   trigger?: SecondBrainRoutineTrigger;
   config?: SecondBrainRoutineConfig;
   deliveryDefaults?: SecondBrainDeliveryChannel[];
@@ -288,6 +352,8 @@ export interface SecondBrainRoutineCreateInput {
   templateId: string;
   name?: string;
   enabled?: boolean;
+  timing?: SecondBrainRoutineTimingInput;
+  delivery?: SecondBrainDeliveryChannel[];
   trigger?: SecondBrainRoutineTrigger;
   config?: SecondBrainRoutineConfig;
   deliveryDefaults?: SecondBrainDeliveryChannel[];

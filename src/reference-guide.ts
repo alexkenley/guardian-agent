@@ -276,6 +276,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'The main Routines list shows only configured routines. Deleting one removes it from that list until you explicitly add it back.',
                   'Guardian now ships the default assistant set configured: Morning Brief, Weekly Review, Daily Agenda Check, Pre-Meeting Brief, and Follow-Up Draft.',
                   'Use `Create routine` to add another bounded routine type without leaving the tab. `Topic Watch` and `Deadline Watch` are the current modular custom routine types and both support more than one configured instance.',
+                  'In chat, you can also ask for bounded assistant watch routines directly with requests like `message me when anything mentions Harbor launch` or `message me when I have something due tomorrow`.',
                   'The create or edit pane is on the left, and the configured routines table is on the right.',
                   'Use `Sync now` when you want to refresh provider calendar and contact context immediately. Sync is a direct maintenance action now, not a user-visible routine.',
                   'Selecting a configured routine lets you change its name, enabled state, timing, supported context window, delivery channels, or delete it.',

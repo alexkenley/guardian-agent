@@ -149,7 +149,7 @@ export class HorizonScanner {
   async runScan(source = 'manual'): Promise<HorizonScanSummary> {
     const scannedAt = this.now();
     const sync = await this.syncService.syncAll(`horizon:${source}`);
-    const routines = this.secondBrainService.listRoutines().filter((routine) => routine.enabled);
+    const routines = this.secondBrainService.listRoutineRecords().filter((routine) => routine.enabled);
     const triggeredRoutines: string[] = [];
     const generatedBriefIds: string[] = [];
 

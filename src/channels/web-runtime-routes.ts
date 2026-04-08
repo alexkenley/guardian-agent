@@ -83,6 +83,35 @@ function parseSecondBrainRoutineTrigger(value: unknown): import('../runtime/seco
   };
 }
 
+function parseSecondBrainRoutineTiming(value: unknown): import('../runtime/second-brain/types.js').SecondBrainRoutineTimingInput | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const kind = trimOptionalString(record.kind) as import('../runtime/second-brain/types.js').SecondBrainRoutineTimingKind | undefined;
+  if (!kind) return undefined;
+  const scheduleRecord = asRecord(record.schedule);
+  const cadence = trimOptionalString(scheduleRecord?.cadence) as import('../runtime/second-brain/types.js').SecondBrainRoutineSchedule['cadence'] | undefined;
+  const time = trimOptionalString(scheduleRecord?.time);
+  const dayOfWeek = trimOptionalString(scheduleRecord?.dayOfWeek) as import('../runtime/second-brain/types.js').SecondBrainRoutineWeekday | undefined;
+  const minutes = typeof record.minutes === 'number'
+    ? record.minutes
+    : typeof record.minutes === 'string' && record.minutes.trim()
+      ? Number(record.minutes)
+      : undefined;
+  return {
+    kind,
+    ...(cadence && time
+      ? {
+          schedule: {
+            cadence,
+            time,
+            ...(dayOfWeek ? { dayOfWeek } : {}),
+          },
+        }
+      : {}),
+    ...(Number.isFinite(minutes) ? { minutes } : {}),
+  };
+}
+
 function parseSecondBrainRoutineConfig(value: unknown): import('../runtime/second-brain/types.js').SecondBrainRoutineConfig | undefined {
   const record = asRecord(value);
   if (!record) return undefined;
@@ -676,8 +705,14 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
         templateId: trimOptionalString(parsed.templateId) ?? '',
         name: trimOptionalString(parsed.name),
         enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : undefined,
+        timing: parseSecondBrainRoutineTiming(parsed.timing),
         trigger: parseSecondBrainRoutineTrigger(parsed.trigger),
         config: parseSecondBrainRoutineConfig(parsed.config),
+        delivery: Array.isArray(parsed.delivery)
+          ? parsed.delivery
+            .map((value) => trimOptionalString(value))
+            .filter((value): value is import('../runtime/second-brain/types.js').SecondBrainDeliveryChannel => Boolean(value))
+          : undefined,
         deliveryDefaults: Array.isArray(parsed.deliveryDefaults)
           ? parsed.deliveryDefaults
             .map((value) => trimOptionalString(value))
@@ -706,8 +741,14 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
         id: trimOptionalString(parsed.id) ?? '',
         name: trimOptionalString(parsed.name),
         enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : undefined,
+        timing: parseSecondBrainRoutineTiming(parsed.timing),
         trigger: parseSecondBrainRoutineTrigger(parsed.trigger),
         config: parseSecondBrainRoutineConfig(parsed.config),
+        delivery: Array.isArray(parsed.delivery)
+          ? parsed.delivery
+            .map((value) => trimOptionalString(value))
+            .filter((value): value is import('../runtime/second-brain/types.js').SecondBrainDeliveryChannel => Boolean(value))
+          : undefined,
         deliveryDefaults: Array.isArray(parsed.deliveryDefaults)
           ? parsed.deliveryDefaults
             .map((value) => trimOptionalString(value))

@@ -38,10 +38,10 @@ import type {
   SecondBrainPersonFilter,
   SecondBrainPersonRecord,
   SecondBrainPersonUpsertInput,
-  SecondBrainRoutineCatalogEntry,
   SecondBrainRoutineCreateInput,
-  SecondBrainRoutineRecord,
+  SecondBrainRoutineTypeView,
   SecondBrainRoutineUpdateInput,
+  SecondBrainRoutineView,
   SecondBrainTaskFilter,
   SecondBrainTaskRecord,
   SecondBrainTaskUpsertInput,
@@ -1054,8 +1054,8 @@ export type DashboardSecondBrainTask = SecondBrainTaskRecord;
 export type DashboardSecondBrainNote = SecondBrainNoteRecord;
 export type DashboardSecondBrainPerson = SecondBrainPersonRecord;
 export type DashboardSecondBrainLink = SecondBrainLinkRecord;
-export type DashboardSecondBrainRoutine = SecondBrainRoutineRecord;
-export type DashboardSecondBrainRoutineCatalogEntry = SecondBrainRoutineCatalogEntry;
+export type DashboardSecondBrainRoutine = SecondBrainRoutineView;
+export type DashboardSecondBrainRoutineCatalogEntry = SecondBrainRoutineTypeView;
 export type DashboardSecondBrainUsage = SecondBrainUsageSummary;
 
 export interface PerformanceActionPreviewTarget {

@@ -1466,11 +1466,11 @@ function renderRoutineCategoryFilters(data) {
 function renderRoutineListRow(routine, data) {
   const entry = findRoutineCatalogEntry(data, routine.templateId || routine.id);
   const typeLabel = entry?.name || routine.name;
-  const description = routine.templateId === 'topic-watch' && routine.config?.topicQuery
-    ? `Watching "${routine.config.topicQuery}".`
-    : routine.templateId === 'deadline-watch' && routine.config?.dueWithinHours
-      ? `Watching tasks due within ${routine.config.dueWithinHours} hour${routine.config.dueWithinHours === 1 ? '' : 's'}${routine.config?.includeOverdue === false ? '' : ', including overdue work'}.`
-    : (entry?.description || '');
+  const description = routine.templateId === 'topic-watch' && routine.topicQuery
+    ? `Watching "${routine.topicQuery}".`
+    : routine.templateId === 'deadline-watch' && routine.dueWithinHours
+      ? `Watching tasks due within ${routine.dueWithinHours} hour${routine.dueWithinHours === 1 ? '' : 's'}${routine.includeOverdue === false ? '' : ', including overdue work'}.`
+      : (entry?.description || '');
   const isSelected = state.selectedRoutineId === routine.id;
 
   return `
@@ -1482,8 +1482,8 @@ function renderRoutineListRow(routine, data) {
         </div>
         ${description ? `<div class="sb-table-copy">${esc(description)}</div>` : ''}
       </td>
-      <td>${esc(describeRoutineTrigger(routine.trigger))}</td>
-      <td>${esc(routine.deliveryDefaults.join(', ') || 'None')}</td>
+      <td>${esc(describeRoutineTiming(routine.timing))}</td>
+      <td>${esc(routine.delivery.join(', ') || 'None')}</td>
       <td>
         <span class="badge ${routine.enabled ? 'badge-ok' : 'badge-muted'}">${esc(routine.enabled ? 'Enabled' : 'Paused')}</span>
       </td>
@@ -1512,14 +1512,16 @@ function renderRoutineCreateForm(entry, data) {
     ? entry
     : available[0];
   const preview = {
-    ...selectedEntry.manifest,
     templateId: selectedEntry.templateId,
-    enabled: selectedEntry.manifest.enabledByDefault,
-    config: selectedEntry.templateId === 'topic-watch'
-      ? { topicQuery: '' }
-      : selectedEntry.templateId === 'deadline-watch'
-        ? { dueWithinHours: 24, includeOverdue: true }
-        : undefined,
+    capability: selectedEntry.capability,
+    name: selectedEntry.name,
+    description: selectedEntry.description,
+    category: selectedEntry.category,
+    enabled: true,
+    timing: { ...selectedEntry.defaultTiming },
+    delivery: [...selectedEntry.defaultDelivery],
+    ...(selectedEntry.supportsTopicQuery ? { topicQuery: '' } : {}),
+    ...(selectedEntry.supportsDeadlineWindow ? { dueWithinHours: 24, includeOverdue: true } : {}),
     lastRunAt: null,
   };
 
@@ -1563,16 +1565,30 @@ function renderRoutineFormFields(routine, options = {}) {
   const extraActions = options.extraActions || '';
   const entry = options.entry || null;
   const templateId = entry?.templateId || routine.templateId || routine.id;
-  const editableCron = routine.category !== 'one_off' && (routine.trigger?.mode === 'cron' || routine.trigger?.mode === 'manual');
-  const supportsLookahead = routine.trigger?.mode === 'event' || routine.trigger?.mode === 'horizon';
-  const lookaheadLabel = routine.trigger?.eventType === 'upcoming_event'
-    ? 'Generate this long before the meeting (minutes)'
-    : routine.trigger?.eventType === 'event_ended'
+  const timing = routine.timing || entry?.defaultTiming || { kind: 'manual', label: 'Run on demand', editable: true };
+  const supportedTiming = Array.isArray(entry?.supportedTiming) && entry.supportedTiming.length > 0
+    ? entry.supportedTiming
+    : [timing.kind || 'manual'];
+  const selectedTimingKind = timing.kind || supportedTiming[0] || 'manual';
+  const scheduleCadence = timing.schedule?.cadence || entry?.defaultTiming?.schedule?.cadence || 'daily';
+  const scheduleTime = timing.schedule?.time || entry?.defaultTiming?.schedule?.time || '07:00';
+  const scheduleDayOfWeek = timing.schedule?.dayOfWeek || entry?.defaultTiming?.schedule?.dayOfWeek || 'monday';
+  const schedulePreview = summarizeRoutineSchedule(scheduleCadence, scheduleTime, scheduleDayOfWeek);
+  const supportsTimingChoice = supportedTiming.length > 1;
+  const showsSchedule = selectedTimingKind === 'scheduled';
+  const showsMinutes = selectedTimingKind === 'before_meetings' || selectedTimingKind === 'after_meetings';
+  const isBackground = selectedTimingKind === 'background';
+  const minutesLabel = selectedTimingKind === 'before_meetings'
+    ? 'Generate this long before meetings (minutes)'
+    : selectedTimingKind === 'after_meetings'
       ? 'Include meetings that ended within the last (minutes)'
       : 'Look this far ahead (minutes)';
-  const cronPreview = routine.trigger?.cron?.trim()
-    ? cronSummary(routine.trigger.cron)
-    : 'Enter a five-field cron schedule to preview it in plain English.';
+  const minutesHelp = selectedTimingKind === 'before_meetings'
+    ? 'Guardian prepares the brief this long before matching meetings start.'
+    : selectedTimingKind === 'after_meetings'
+      ? 'Guardian watches for meetings that ended inside this window before drafting follow-up.'
+      : 'Guardian scans ahead using a built-in background window.';
+  const timingMinutes = Number.isFinite(timing.minutes) ? timing.minutes : '';
 
   return `
     <label class="sb-form__label" for="routine-name">Routine name</label>
@@ -1589,7 +1605,7 @@ function renderRoutineFormFields(routine, options = {}) {
         name="topicQuery"
         type="text"
         placeholder="Harbor launch review"
-        value="${escAttr(routine.config?.topicQuery || '')}"
+        value="${escAttr(routine.topicQuery || '')}"
       >
       <div class="sb-table-copy">Guardian will scan matching tasks, notes, people, library items, briefs, and events, then message you when new matching context appears.</div>
     ` : templateId === 'deadline-watch' ? `
@@ -1600,59 +1616,79 @@ function renderRoutineFormFields(routine, options = {}) {
         type="number"
         min="1"
         step="1"
-        value="${escAttr(String(routine.config?.dueWithinHours ?? 24))}"
+        value="${escAttr(String(routine.dueWithinHours ?? 24))}"
       >
       <label class="sb-check">
-        <input name="includeOverdue" type="checkbox" ${routine.config?.includeOverdue !== false ? 'checked' : ''}>
+        <input name="includeOverdue" type="checkbox" ${routine.includeOverdue !== false ? 'checked' : ''}>
         <span>Include overdue tasks too</span>
       </label>
       <div class="sb-table-copy">Guardian will watch open tasks entering the due-soon window and can also include newly overdue tasks in the alert.</div>
     ` : ''}
 
-    ${editableCron ? `
-      <label class="sb-form__label" for="routine-trigger-mode">When should Guardian run this?</label>
-      <select id="routine-trigger-mode" name="triggerMode" data-routine-trigger-mode>
-        ${renderSelectOptions([
-          { value: 'cron', label: 'Scheduled' },
-          { value: 'manual', label: 'Manual only' },
-        ], routine.trigger?.mode || 'manual')}
+    ${supportsTimingChoice ? `
+      <label class="sb-form__label" for="routine-timing-kind">When should Guardian run this?</label>
+      <select id="routine-timing-kind" name="timingKind" data-routine-timing-kind>
+        ${renderSelectOptions(supportedTiming.map((kind) => ({
+          value: kind,
+          label: routineTimingKindLabel(kind),
+        })), selectedTimingKind)}
       </select>
-      <div data-routine-cron-group style="display: ${routine.trigger?.mode === 'cron' ? 'block' : 'none'}">
-        <label class="sb-form__label" for="routine-cron">Schedule</label>
-        <input id="routine-cron" name="cron" type="text" placeholder="0 7 * * *" value="${escAttr(routine.trigger?.cron || '')}">
-        <div class="sb-readout">
-          <strong>Plain-English preview</strong>
-          <span data-routine-cron-preview>${esc(cronPreview)}</span>
-        </div>
-        <div class="sb-table-copy">Examples: 0 7 * * * runs daily at 7 a.m.; 0 18 * * * runs daily at 6 p.m.; 0 9 * * 1 runs every Monday at 9 a.m.</div>
-      </div>
     ` : `
-      <input type="hidden" name="triggerMode" value="${escAttr(routine.trigger?.mode || 'manual')}">
-      ${routine.trigger?.eventType ? `<input type="hidden" name="eventType" value="${escAttr(routine.trigger.eventType)}">` : ''}
+      <input type="hidden" name="timingKind" value="${escAttr(selectedTimingKind)}">
       <div class="sb-readout">
         <strong>When it runs</strong>
-        <span>${esc(routineTimingLabel(routine.trigger))}</span>
+        <span>${esc(describeRoutineTiming(timing))}</span>
       </div>
     `}
 
-    ${supportsLookahead ? `
-      <label class="sb-form__label" for="routine-lookahead-minutes">${esc(lookaheadLabel)}</label>
+    <div data-routine-schedule-group style="display: ${showsSchedule ? 'block' : 'none'}">
+      <label class="sb-form__label" for="routine-schedule-cadence">Schedule</label>
+      <select id="routine-schedule-cadence" name="scheduleCadence" data-routine-schedule-cadence>
+        ${renderSelectOptions([
+          { value: 'daily', label: 'Daily' },
+          { value: 'weekly', label: 'Weekly' },
+        ], scheduleCadence)}
+      </select>
+      <div data-routine-schedule-day-group style="display: ${scheduleCadence === 'weekly' ? 'block' : 'none'}">
+        <label class="sb-form__label" for="routine-schedule-day">Day of week</label>
+        <select id="routine-schedule-day" name="scheduleDayOfWeek">
+          ${renderSelectOptions(ROUTINE_WEEKDAY_OPTIONS, scheduleDayOfWeek)}
+        </select>
+      </div>
+      <label class="sb-form__label" for="routine-schedule-time">Time</label>
+      <input id="routine-schedule-time" name="scheduleTime" type="time" value="${escAttr(scheduleTime)}">
+      <div class="sb-readout">
+        <strong>Plain-English preview</strong>
+        <span data-routine-schedule-preview>${esc(schedulePreview)}</span>
+      </div>
+      <div class="sb-table-copy">Use a daily or weekly schedule for routines that should arrive on a predictable rhythm.</div>
+    </div>
+
+    ${showsMinutes ? `
+      <label class="sb-form__label" for="routine-timing-minutes">${esc(minutesLabel)}</label>
       <input
-        id="routine-lookahead-minutes"
-        name="lookaheadMinutes"
+        id="routine-timing-minutes"
+        name="timingMinutes"
         type="number"
         min="5"
         step="5"
-        value="${escAttr(String(routine.trigger?.lookaheadMinutes ?? ''))}"
+        value="${escAttr(String(timingMinutes || ''))}"
       >
-      <div class="sb-table-copy">${esc(describeRoutineTrigger(routine.trigger))}</div>
+      <div class="sb-table-copy">${esc(minutesHelp)}</div>
+    ` : isBackground ? `
+      ${Number.isFinite(timing.minutes) ? `<input type="hidden" name="timingMinutes" value="${escAttr(String(timing.minutes))}">` : ''}
+      <div class="sb-readout">
+        <strong>Background timing</strong>
+        <span>${esc(describeRoutineTiming(timing))}</span>
+      </div>
+      <div class="sb-table-copy">${esc(minutesHelp)}</div>
     ` : ''}
 
     <div class="sb-form__label">Send updates through</div>
     <div class="sb-check-grid">
       ${['web', 'cli', 'telegram'].map((channel) => `
         <label class="sb-check">
-          <input name="deliveryDefaults" type="checkbox" value="${escAttr(channel)}" ${routine.deliveryDefaults.includes(channel) ? 'checked' : ''}>
+          <input name="delivery" type="checkbox" value="${escAttr(channel)}" ${routine.delivery.includes(channel) ? 'checked' : ''}>
           <span>${esc(channel)}</span>
         </label>
       `).join('')}
@@ -2062,11 +2098,10 @@ function bindInteractions(container) {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
 
-    if (target instanceof HTMLSelectElement && target.matches('[data-routine-trigger-mode]')) {
+    if (target instanceof HTMLSelectElement && (target.matches('[data-routine-timing-kind]') || target.matches('[data-routine-schedule-cadence]'))) {
       const form = target.closest('form');
-      const group = form?.querySelector('[data-routine-cron-group]');
-      if (group instanceof HTMLElement) {
-        group.style.display = target.value === 'cron' ? 'block' : 'none';
+      if (form instanceof HTMLFormElement) {
+        syncRoutineTimingForm(form);
       }
       return;
     }
@@ -2091,18 +2126,16 @@ function bindInteractions(container) {
 
   container.addEventListener('input', (event) => {
     const target = event.target;
-    if (!(target instanceof HTMLInputElement)) return;
-    if (target.name === 'cron') {
+    if (!(target instanceof HTMLElement)) return;
+    if ((target instanceof HTMLInputElement || target instanceof HTMLSelectElement)
+      && (target.name === 'scheduleTime' || target.name === 'scheduleCadence' || target.name === 'scheduleDayOfWeek')) {
       const form = target.closest('form');
-      const preview = form?.querySelector('[data-routine-cron-preview]');
-      if (preview instanceof HTMLElement) {
-        preview.textContent = target.value.trim()
-          ? cronSummary(target.value)
-          : 'Enter a five-field cron schedule to preview it in plain English.';
+      if (form instanceof HTMLFormElement) {
+        syncRoutineTimingForm(form);
       }
       return;
     }
-    if (target.id === 'sb-routine-search') {
+    if (target instanceof HTMLInputElement && target.id === 'sb-routine-search') {
       state.routineQuery = target.value;
       state.selectedRoutineId = preserveSelection(state.selectedRoutineId, filteredRoutineList(state.data ?? { routines: [], routineCatalog: [] }));
       void rerenderLocal();
@@ -2231,9 +2264,9 @@ function bindInteractions(container) {
         templateId: readString(target, 'templateId'),
         name: readString(target, 'name') || undefined,
         enabled: readCheckbox(target, 'enabled'),
-        trigger: readRoutineTriggerForm(target),
+        timing: readRoutineTimingForm(target),
         config: readRoutineConfigForm(target),
-        deliveryDefaults: readCheckboxValues(target, 'deliveryDefaults'),
+        delivery: readCheckboxValues(target, 'delivery'),
       }), (result) => {
         if (result?.details?.id) {
           state.selectedRoutineId = String(result.details.id);
@@ -2251,9 +2284,9 @@ function bindInteractions(container) {
         id: readString(target, 'id'),
         name: readString(target, 'name') || undefined,
         enabled: readCheckbox(target, 'enabled'),
-        trigger: readRoutineTriggerForm(target),
+        timing: readRoutineTimingForm(target),
         config: readRoutineConfigForm(target),
-        deliveryDefaults: readCheckboxValues(target, 'deliveryDefaults'),
+        delivery: readCheckboxValues(target, 'delivery'),
       }), (result) => {
         if (result?.details?.id) {
           state.selectedRoutineId = String(result.details.id);
@@ -2509,7 +2542,7 @@ function renderRoutineCompactList(routines) {
         <div class="sb-compact-row">
           <div>
             <strong>${esc(routine.name)}</strong>
-            <span>${esc(describeRoutineTrigger(routine.trigger))}</span>
+            <span>${esc(describeRoutineTiming(routine.timing))}</span>
           </div>
           <span class="badge ${routine.enabled ? 'badge-ok' : 'badge-muted'}">${esc(routine.enabled ? 'Enabled' : 'Paused')}</span>
         </div>
@@ -2595,14 +2628,16 @@ function filteredRoutineList(data) {
       const haystack = [
         routine.name,
         entry?.name || '',
+        routine.description || '',
         entry?.description || '',
         category,
-        describeRoutineTrigger(routine.trigger),
-        routineTimingLabel(routine.trigger),
-        routine.config?.topicQuery || '',
-        Number.isFinite(routine.config?.dueWithinHours) ? `due within ${routine.config.dueWithinHours} hours` : '',
-        typeof routine.config?.includeOverdue === 'boolean' ? (routine.config.includeOverdue ? 'overdue tasks' : 'upcoming tasks only') : '',
-        routine.deliveryDefaults.join(' '),
+        describeRoutineTiming(routine.timing),
+        routineTimingLabel(routine.timing),
+        routine.timing?.kind || '',
+        routine.topicQuery || '',
+        Number.isFinite(routine.dueWithinHours) ? `due within ${routine.dueWithinHours} hours` : '',
+        typeof routine.includeOverdue === 'boolean' ? (routine.includeOverdue ? 'overdue tasks' : 'upcoming tasks only') : '',
+        routine.delivery.join(' '),
       ].join(' ').toLowerCase();
       return haystack.includes(query);
     })
@@ -2630,34 +2665,78 @@ function categoryLabel(category) {
     .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
-function describeRoutineTrigger(trigger) {
-  if (!trigger || typeof trigger !== 'object') return 'Manual trigger';
-  if (trigger.mode === 'cron' && trigger.cron) {
-    return cronSummary(trigger.cron);
+const ROUTINE_WEEKDAY_OPTIONS = [
+  { value: 'monday', label: 'Monday' },
+  { value: 'tuesday', label: 'Tuesday' },
+  { value: 'wednesday', label: 'Wednesday' },
+  { value: 'thursday', label: 'Thursday' },
+  { value: 'friday', label: 'Friday' },
+  { value: 'saturday', label: 'Saturday' },
+  { value: 'sunday', label: 'Sunday' },
+];
+
+function routineTimingKindLabel(kind) {
+  switch (kind) {
+    case 'scheduled':
+      return 'Scheduled';
+    case 'before_meetings':
+      return 'Before meetings';
+    case 'after_meetings':
+      return 'After meetings';
+    case 'background':
+      return 'Background';
+    default:
+      return 'Manual only';
   }
-  if (trigger.mode === 'event' && trigger.eventType) {
-    const eventLabel = trigger.eventType === 'upcoming_event'
-      ? 'Upcoming meetings'
-      : trigger.eventType === 'event_ended'
-        ? 'Recently ended meetings'
-        : categoryLabel(trigger.eventType);
-    return `${eventLabel}${trigger.lookaheadMinutes ? ` · ${formatLookahead(trigger.lookaheadMinutes)}` : ''}`;
-  }
-  if (trigger.mode === 'horizon' && trigger.lookaheadMinutes) {
-    return `${formatLookahead(trigger.lookaheadMinutes)} horizon scan`;
-  }
-  return trigger.mode === 'manual'
-    ? 'Run on demand'
-    : String(trigger.mode || 'manual');
 }
 
-function routineTimingLabel(trigger) {
-  if (!trigger || typeof trigger !== 'object') return 'Manual';
-  if (trigger.mode === 'cron') return 'Scheduled';
-  if (trigger.mode === 'event' && trigger.eventType === 'upcoming_event') return 'Before meetings';
-  if (trigger.mode === 'event' && trigger.eventType === 'event_ended') return 'After meetings';
-  if (trigger.mode === 'horizon') return 'Horizon check';
-  return 'Manual';
+function describeRoutineTiming(timing) {
+  return timing?.label || 'Run on demand';
+}
+
+function routineTimingLabel(timing) {
+  return routineTimingKindLabel(timing?.kind);
+}
+
+function formatRoutineClockTime(value) {
+  const match = String(value || '').match(/^(\d{2}):(\d{2})$/);
+  if (!match) return 'that time';
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const meridiem = hour >= 12 ? 'p.m.' : 'a.m.';
+  const normalizedHour = hour % 12 || 12;
+  return minute === 0
+    ? `${normalizedHour} ${meridiem}`
+    : `${normalizedHour}:${String(minute).padStart(2, '0')} ${meridiem}`;
+}
+
+function summarizeRoutineSchedule(cadence, time, dayOfWeek) {
+  if (cadence === 'weekly') {
+    const dayLabel = ROUTINE_WEEKDAY_OPTIONS.find((option) => option.value === dayOfWeek)?.label || 'Monday';
+    return `Every ${dayLabel} at ${formatRoutineClockTime(time)}`;
+  }
+  return `Daily at ${formatRoutineClockTime(time)}`;
+}
+
+function syncRoutineTimingForm(form) {
+  const timingKind = readString(form, 'timingKind') || 'manual';
+  const scheduleCadence = readString(form, 'scheduleCadence') || 'daily';
+  const scheduleGroup = form.querySelector('[data-routine-schedule-group]');
+  const scheduleDayGroup = form.querySelector('[data-routine-schedule-day-group]');
+  const schedulePreview = form.querySelector('[data-routine-schedule-preview]');
+  if (scheduleGroup instanceof HTMLElement) {
+    scheduleGroup.style.display = timingKind === 'scheduled' ? 'block' : 'none';
+  }
+  if (scheduleDayGroup instanceof HTMLElement) {
+    scheduleDayGroup.style.display = timingKind === 'scheduled' && scheduleCadence === 'weekly' ? 'block' : 'none';
+  }
+  if (schedulePreview instanceof HTMLElement) {
+    schedulePreview.textContent = summarizeRoutineSchedule(
+      scheduleCadence,
+      readString(form, 'scheduleTime') || '07:00',
+      readString(form, 'scheduleDayOfWeek') || 'monday',
+    );
+  }
 }
 
 const CRON_DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -2954,30 +3033,24 @@ function readCheckboxValues(form, name) {
     .map((field) => field.value);
 }
 
-function readRoutineTriggerForm(form) {
-  const mode = readString(form, 'triggerMode') || 'manual';
-  if (mode === 'cron') {
+function readRoutineTimingForm(form) {
+  const kind = readString(form, 'timingKind') || 'manual';
+  if (kind === 'scheduled') {
+    const cadence = readString(form, 'scheduleCadence') === 'weekly' ? 'weekly' : 'daily';
     return {
-      mode,
-      cron: readString(form, 'cron'),
+      kind,
+      schedule: {
+        cadence,
+        time: readString(form, 'scheduleTime') || '07:00',
+        ...(cadence === 'weekly' ? { dayOfWeek: readString(form, 'scheduleDayOfWeek') || 'monday' } : {}),
+      },
     };
   }
-  if (mode === 'event') {
-    const lookaheadMinutes = Number(readString(form, 'lookaheadMinutes'));
-    return {
-      mode,
-      eventType: readString(form, 'eventType') || undefined,
-      ...(Number.isFinite(lookaheadMinutes) && lookaheadMinutes > 0 ? { lookaheadMinutes } : {}),
-    };
-  }
-  if (mode === 'horizon') {
-    const lookaheadMinutes = Number(readString(form, 'lookaheadMinutes'));
-    return {
-      mode,
-      ...(Number.isFinite(lookaheadMinutes) && lookaheadMinutes > 0 ? { lookaheadMinutes } : {}),
-    };
-  }
-  return { mode: 'manual' };
+  const minutes = Number(readString(form, 'timingMinutes'));
+  return {
+    kind,
+    ...(Number.isFinite(minutes) && minutes > 0 ? { minutes } : {}),
+  };
 }
 
 function readRoutineConfigForm(form) {

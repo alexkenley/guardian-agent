@@ -21,11 +21,18 @@ import {
   type SecondBrainRoutineCatalogEntry,
   type SecondBrainRoutineConfig,
   type SecondBrainRoutineCreateInput,
+  type SecondBrainRoutineTimingInput,
+  type SecondBrainRoutineTimingKind,
+  type SecondBrainRoutineTimingView,
+  type SecondBrainRoutineSchedule,
+  type SecondBrainRoutineWeekday,
   type SecondBrainRoutineManifest,
   type SecondBrainRoutineRecord,
   type SecondBrainRoutineTemplateId,
   type SecondBrainRoutineTrigger,
+  type SecondBrainRoutineTypeView,
   type SecondBrainRoutineUpdateInput,
+  type SecondBrainRoutineView,
   type SecondBrainTaskFilter,
   type SecondBrainTaskRecord,
   type SecondBrainTaskUpsertInput,
@@ -209,6 +216,146 @@ function isAssistantVisibleRoutineDefinition(definition: BuiltInRoutineDefinitio
   return definition?.visibleInAssistant !== false;
 }
 
+const ROUTINE_WEEKDAYS: SecondBrainRoutineWeekday[] = [
+  'sunday',
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+];
+
+function padTimePart(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+function parseScheduleTime(value: string | undefined): { hour: number; minute: number } | null {
+  const trimmed = value?.trim() ?? '';
+  const match = trimmed.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return null;
+  }
+  return { hour, minute };
+}
+
+function formatScheduleTime(hour: number, minute: number): string {
+  return `${padTimePart(hour)}:${padTimePart(minute)}`;
+}
+
+function formatFriendlyTime(time: string): string {
+  const parsed = parseScheduleTime(time);
+  if (!parsed) return time;
+  const { hour, minute } = parsed;
+  if (hour === 0 && minute === 0) return '12 a.m.';
+  if (hour === 12 && minute === 0) return '12 p.m.';
+  const meridiem = hour >= 12 ? 'p.m.' : 'a.m.';
+  const normalizedHour = hour % 12 || 12;
+  return minute === 0
+    ? `${normalizedHour} ${meridiem}`
+    : `${normalizedHour}:${padTimePart(minute)} ${meridiem}`;
+}
+
+function capitalizeWords(value: string): string {
+  return value
+    .split(/[\s_-]+/g)
+    .filter(Boolean)
+    .map((part) => part[0] ? `${part[0].toUpperCase()}${part.slice(1)}` : part)
+    .join(' ');
+}
+
+function cronDayToWeekday(value: string): SecondBrainRoutineWeekday | null {
+  if (!/^\d+$/.test(value)) return null;
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric) || numeric < 0 || numeric > 7) return null;
+  return ROUTINE_WEEKDAYS[numeric === 7 ? 0 : numeric] ?? null;
+}
+
+function weekdayToCronDay(value: SecondBrainRoutineWeekday | undefined): number | null {
+  if (!value) return null;
+  const index = ROUTINE_WEEKDAYS.indexOf(value);
+  return index >= 0 ? index : null;
+}
+
+function summarizeRoutineSchedule(schedule: SecondBrainRoutineSchedule): string {
+  const time = formatFriendlyTime(schedule.time);
+  if (schedule.cadence === 'weekly') {
+    return `Weekly on ${capitalizeWords(schedule.dayOfWeek ?? 'monday')} at ${time}`;
+  }
+  return `Daily at ${time}`;
+}
+
+function parseScheduleFromCron(cron: string | undefined): SecondBrainRoutineSchedule | null {
+  const parts = String(cron ?? '').trim().split(/\s+/g);
+  if (parts.length !== 5) return null;
+  const [minuteField, hourField, dayOfMonthField, monthField, dayOfWeekField] = parts;
+  if (dayOfMonthField !== '*' || monthField !== '*') {
+    return null;
+  }
+  if (!/^\d+$/.test(minuteField) || !/^\d+$/.test(hourField)) {
+    return null;
+  }
+  const minute = Number(minuteField);
+  const hour = Number(hourField);
+  if (!Number.isInteger(minute) || !Number.isInteger(hour) || minute < 0 || minute > 59 || hour < 0 || hour > 23) {
+    return null;
+  }
+  const time = formatScheduleTime(hour, minute);
+  if (dayOfWeekField === '*') {
+    return { cadence: 'daily', time };
+  }
+  const dayOfWeek = cronDayToWeekday(dayOfWeekField);
+  if (!dayOfWeek) {
+    return null;
+  }
+  return {
+    cadence: 'weekly',
+    time,
+    dayOfWeek,
+  };
+}
+
+function buildCronFromSchedule(schedule: SecondBrainRoutineSchedule): string {
+  const parsedTime = parseScheduleTime(schedule.time);
+  if (!parsedTime) {
+    throw new Error('Scheduled routines require a valid time in HH:MM format.');
+  }
+  const { hour, minute } = parsedTime;
+  if (schedule.cadence === 'weekly') {
+    const day = weekdayToCronDay(schedule.dayOfWeek);
+    if (day == null) {
+      throw new Error('Weekly routines require a day of week.');
+    }
+    return `${minute} ${hour} * * ${day}`;
+  }
+  return `${minute} ${hour} * * *`;
+}
+
+function supportedTimingKindsForDefinition(definition: BuiltInRoutineDefinition): SecondBrainRoutineTimingKind[] {
+  if (definition.manifest.id === 'next-24-hours-radar') {
+    return ['background'];
+  }
+  if (definition.manifest.trigger.mode === 'event' && definition.manifest.trigger.eventType === 'upcoming_event') {
+    return ['before_meetings'];
+  }
+  if (definition.manifest.trigger.mode === 'event' && definition.manifest.trigger.eventType === 'event_ended') {
+    return ['after_meetings'];
+  }
+  if (definition.manifest.trigger.mode === 'cron') {
+    return ['scheduled', 'manual'];
+  }
+  if (definition.manifest.trigger.mode === 'manual') {
+    return ['manual'];
+  }
+  if (definition.manifest.trigger.mode === 'horizon') {
+    return ['background'];
+  }
+  return ['manual'];
+}
+
 function cloneRoutineTrigger(trigger: SecondBrainRoutineTrigger): SecondBrainRoutineTrigger {
   return {
     mode: trigger.mode,
@@ -384,6 +531,180 @@ function resolveRoutineName(
     return `Deadline Watch: next ${hours} hour${hours === 1 ? '' : 's'}${overdueSuffix}`;
   }
   return definition.manifest.name;
+}
+
+function formatRoutineMinutesLabel(minutes: number, suffix: string): string {
+  return `${minutes} minute${minutes === 1 ? '' : 's'} ${suffix}`;
+}
+
+function buildRoutineTimingView(
+  definition: BuiltInRoutineDefinition,
+  trigger: SecondBrainRoutineTrigger,
+): SecondBrainRoutineTimingView {
+  const editable = supportedTimingKindsForDefinition(definition)[0] !== 'background';
+  if (trigger.mode === 'manual') {
+    return {
+      kind: 'manual',
+      label: 'Manual only',
+      editable,
+    };
+  }
+  if (trigger.mode === 'cron') {
+    const schedule = parseScheduleFromCron(trigger.cron);
+    return {
+      kind: 'scheduled',
+      label: schedule ? summarizeRoutineSchedule(schedule) : 'Scheduled',
+      editable,
+      ...(schedule ? { schedule } : {}),
+    };
+  }
+  if (trigger.mode === 'event' && trigger.eventType === 'upcoming_event') {
+    const minutes = Number.isFinite(trigger.lookaheadMinutes) ? Number(trigger.lookaheadMinutes) : 60;
+    return {
+      kind: 'before_meetings',
+      label: formatRoutineMinutesLabel(minutes, 'before meetings'),
+      editable: true,
+      minutes,
+    };
+  }
+  if (trigger.mode === 'event' && trigger.eventType === 'event_ended') {
+    const minutes = Number.isFinite(trigger.lookaheadMinutes) ? Number(trigger.lookaheadMinutes) : 1440;
+    return {
+      kind: 'after_meetings',
+      label: formatRoutineMinutesLabel(minutes, 'after meetings end'),
+      editable: true,
+      minutes,
+    };
+  }
+  const minutes = Number.isFinite(trigger.lookaheadMinutes) ? Number(trigger.lookaheadMinutes) : 1440;
+  return {
+    kind: 'background',
+    label: `Background check across the next ${minutes} minute${minutes === 1 ? '' : 's'}`,
+    editable: false,
+    minutes,
+  };
+}
+
+function buildRoutineTypeView(
+  definition: BuiltInRoutineDefinition,
+  configured: boolean,
+  configuredRoutineId?: string,
+): SecondBrainRoutineTypeView {
+  return {
+    templateId: definition.manifest.id,
+    capability: definition.capability,
+    name: definition.manifest.name,
+    description: definition.description,
+    category: definition.catalogCategory,
+    seedByDefault: definition.seedByDefault,
+    allowMultiple: definition.allowMultiple ?? false,
+    configured,
+    ...(configuredRoutineId ? { configuredRoutineId } : {}),
+    defaultTiming: buildRoutineTimingView(definition, definition.manifest.trigger),
+    supportedTiming: supportedTimingKindsForDefinition(definition),
+    defaultDelivery: [...definition.manifest.deliveryDefaults],
+    supportsTopicQuery: definition.manifest.id === 'topic-watch',
+    supportsDeadlineWindow: definition.manifest.id === 'deadline-watch',
+  };
+}
+
+function buildRoutineView(
+  definition: BuiltInRoutineDefinition,
+  routine: SecondBrainRoutineRecord,
+): SecondBrainRoutineView {
+  return {
+    id: routine.id,
+    templateId: routine.templateId,
+    capability: definition.capability,
+    name: routine.name,
+    description: definition.description,
+    category: definition.catalogCategory,
+    enabled: routine.enabled,
+    timing: buildRoutineTimingView(definition, routine.trigger),
+    delivery: [...routine.deliveryDefaults],
+    ...(routine.config?.topicQuery?.trim() ? { topicQuery: routine.config.topicQuery.trim() } : {}),
+    ...(Number.isFinite(routine.config?.dueWithinHours) ? { dueWithinHours: Number(routine.config?.dueWithinHours) } : {}),
+    ...(typeof routine.config?.includeOverdue === 'boolean' ? { includeOverdue: routine.config.includeOverdue } : {}),
+    lastRunAt: routine.lastRunAt ?? null,
+    createdAt: routine.createdAt,
+    updatedAt: routine.updatedAt,
+  };
+}
+
+function normalizeRoutineTimingInput(
+  value: SecondBrainRoutineTimingInput | undefined,
+): SecondBrainRoutineTimingInput | undefined {
+  if (!value) return undefined;
+  const kind = value.kind;
+  if (!kind) return undefined;
+  const schedule = value.schedule
+    ? {
+        cadence: value.schedule.cadence,
+        time: value.schedule.time.trim(),
+        ...(value.schedule.dayOfWeek ? { dayOfWeek: value.schedule.dayOfWeek } : {}),
+      }
+    : undefined;
+  const minutes = Number.isFinite(value.minutes) ? Number(value.minutes) : undefined;
+  return {
+    kind,
+    ...(schedule ? { schedule } : {}),
+    ...(minutes != null ? { minutes } : {}),
+  };
+}
+
+function resolveTriggerFromRoutineTimingInput(
+  definition: BuiltInRoutineDefinition,
+  timing: SecondBrainRoutineTimingInput,
+  fallback: SecondBrainRoutineTrigger,
+  routineName: string,
+): SecondBrainRoutineTrigger {
+  const normalized = normalizeRoutineTimingInput(timing);
+  if (!normalized) {
+    return cloneRoutineTrigger(fallback);
+  }
+  if (!supportedTimingKindsForDefinition(definition).includes(normalized.kind)) {
+    throw new Error(`${routineName} does not support ${normalized.kind.replace(/_/g, ' ')} timing.`);
+  }
+  if (normalized.kind === 'manual') {
+    return { mode: 'manual' };
+  }
+  if (normalized.kind === 'scheduled') {
+    const fallbackSchedule = parseScheduleFromCron(fallback.cron);
+    const defaultSchedule = parseScheduleFromCron(definition.manifest.trigger.cron);
+    const schedule = normalized.schedule ?? fallbackSchedule ?? defaultSchedule;
+    if (!schedule) {
+      throw new Error(`${routineName} requires a supported daily or weekly schedule.`);
+    }
+    return {
+      mode: 'cron',
+      cron: buildCronFromSchedule(schedule),
+    };
+  }
+  if (normalized.kind === 'before_meetings') {
+    const minutes = Number.isFinite(normalized.minutes)
+      ? Number(normalized.minutes)
+      : Number.isFinite(fallback.lookaheadMinutes)
+        ? Number(fallback.lookaheadMinutes)
+        : 60;
+    return {
+      mode: 'event',
+      eventType: 'upcoming_event',
+      lookaheadMinutes: minutes,
+    };
+  }
+  if (normalized.kind === 'after_meetings') {
+    const minutes = Number.isFinite(normalized.minutes)
+      ? Number(normalized.minutes)
+      : Number.isFinite(fallback.lookaheadMinutes)
+        ? Number(fallback.lookaheadMinutes)
+        : 1440;
+    return {
+      mode: 'event',
+      eventType: 'event_ended',
+      lookaheadMinutes: minutes,
+    };
+  }
+  return cloneRoutineTrigger(fallback);
 }
 
 function materializeRoutineRecord(
@@ -705,15 +1026,22 @@ export class SecondBrainService {
     return link;
   }
 
-  listRoutines(): SecondBrainRoutineRecord[] {
+  listRoutineRecords(): SecondBrainRoutineRecord[] {
     return this.store.routines.listRoutines().filter((routine) => {
       const definition = BUILT_IN_ROUTINES_BY_ID.get(routine.templateId ?? routine.id);
       return isAssistantVisibleRoutineDefinition(definition);
     });
   }
 
-  listRoutineCatalog(): SecondBrainRoutineCatalogEntry[] {
-    const routines = this.listRoutines();
+  listRoutines(): SecondBrainRoutineView[] {
+    return this.listRoutineRecords().flatMap((routine) => {
+      const definition = BUILT_IN_ROUTINES_BY_ID.get(routine.templateId ?? routine.id);
+      return definition ? [buildRoutineView(definition, routine)] : [];
+    });
+  }
+
+  listRoutineCatalog(): SecondBrainRoutineTypeView[] {
+    const routines = this.listRoutineRecords();
     const configuredByTemplate = new Map<string, SecondBrainRoutineRecord[]>();
     for (const routine of routines) {
       const templateId = routine.templateId ?? routine.id;
@@ -725,28 +1053,21 @@ export class SecondBrainService {
       .filter((definition) => isAssistantVisibleRoutineDefinition(definition))
       .map((definition) => {
       const configuredRoutines = configuredByTemplate.get(definition.manifest.id) ?? [];
-      return {
-        templateId: definition.manifest.id,
-        capability: definition.capability,
-        name: definition.manifest.name,
-        description: definition.description,
-        category: definition.catalogCategory,
-        seedByDefault: definition.seedByDefault,
-        allowMultiple: definition.allowMultiple ?? false,
-        manifest: cloneRoutineManifest(definition.manifest),
-        configured: configuredRoutines.length > 0,
-        ...(configuredRoutines.length === 1 ? { configuredRoutineId: configuredRoutines[0]!.id } : {}),
-      };
+      return buildRoutineTypeView(
+        definition,
+        configuredRoutines.length > 0,
+        configuredRoutines.length === 1 ? configuredRoutines[0]!.id : undefined,
+      );
       });
   }
 
   isSeededBuiltInRoutine(id: string): boolean {
-    const existing = this.getRoutineById(id);
+    const existing = this.getRoutineRecordById(id);
     const definition = BUILT_IN_ROUTINES_BY_ID.get(existing?.templateId ?? id);
     return definition?.seedByDefault ?? false;
   }
 
-  createRoutine(input: SecondBrainRoutineCreateInput): SecondBrainRoutineRecord {
+  createRoutine(input: SecondBrainRoutineCreateInput): SecondBrainRoutineView {
     const templateId = input.templateId.trim();
     const definition = BUILT_IN_ROUTINES_BY_ID.get(templateId);
     if (!definition) {
@@ -755,7 +1076,7 @@ export class SecondBrainService {
     if (!isAssistantVisibleRoutineDefinition(definition)) {
       throw new Error(`Routine '${definition.manifest.name}' is now a direct action, not a configurable assistant routine.`);
     }
-    const configuredRoutines = this.listRoutines().filter((routine) => (routine.templateId ?? routine.id) === templateId);
+    const configuredRoutines = this.listRoutineRecords().filter((routine) => (routine.templateId ?? routine.id) === templateId);
     if (!definition.allowMultiple && configuredRoutines.length > 0) {
       throw new Error(`Routine '${definition.manifest.name}' already exists.`);
     }
@@ -763,12 +1084,14 @@ export class SecondBrainService {
     const timestamp = this.now();
     const config = normalizeRoutineConfig(definition, input.config);
     let routineId = resolveRoutineRecordId(definition, input.name, config);
-    while (this.getRoutineById(routineId)) {
+    while (this.getRoutineRecordById(routineId)) {
       routineId = `${definition.manifest.id}:${randomUUID().slice(0, 8)}`;
     }
-    const trigger = input.trigger
-      ? resolveRoutineTriggerOverride(input.trigger, definition.manifest.trigger, definition.manifest.name)
-      : cloneRoutineTrigger(definition.manifest.trigger);
+    const trigger = input.timing
+      ? resolveTriggerFromRoutineTimingInput(definition, input.timing, definition.manifest.trigger, definition.manifest.name)
+      : input.trigger
+        ? resolveRoutineTriggerOverride(input.trigger, definition.manifest.trigger, definition.manifest.name)
+        : cloneRoutineTrigger(definition.manifest.trigger);
     const routine = materializeRoutineRecord(definition, timestamp, {
       id: routineId,
       templateId: templateId as SecondBrainRoutineTemplateId,
@@ -776,7 +1099,7 @@ export class SecondBrainService {
       enabled: input.enabled,
       trigger,
       config,
-      deliveryDefaults: input.deliveryDefaults,
+      deliveryDefaults: input.delivery ?? input.deliveryDefaults,
       defaultRoutingBias: input.defaultRoutingBias,
       budgetProfileId: input.budgetProfileId,
     });
@@ -784,14 +1107,21 @@ export class SecondBrainService {
       this.store.routines.clearRoutineDeletion(templateId);
     }
     this.store.routines.upsertRoutine(routine);
-    return routine;
+    return buildRoutineView(definition, routine);
   }
 
-  getRoutineById(id: string): SecondBrainRoutineRecord | null {
+  getRoutineRecordById(id: string): SecondBrainRoutineRecord | null {
     return this.store.routines.getRoutine(id);
   }
 
-  updateRoutine(input: SecondBrainRoutineUpdateInput): SecondBrainRoutineRecord {
+  getRoutineById(id: string): SecondBrainRoutineView | null {
+    const record = this.getRoutineRecordById(id);
+    if (!record) return null;
+    const definition = BUILT_IN_ROUTINES_BY_ID.get(record.templateId ?? record.id);
+    return definition ? buildRoutineView(definition, record) : null;
+  }
+
+  updateRoutine(input: SecondBrainRoutineUpdateInput): SecondBrainRoutineView {
     const existing = this.store.routines.getRoutine(input.id);
     if (!existing) {
       throw new Error(`Routine '${input.id}' not found.`);
@@ -815,17 +1145,19 @@ export class SecondBrainService {
       name: input.name?.trim()
         || (shouldRefreshDerivedName && definition ? resolveRoutineName(definition, undefined, config) : existing.name),
       enabled: input.enabled ?? existing.enabled,
-      trigger: input.trigger
-        ? resolveRoutineTriggerOverride(input.trigger, existing.trigger, existing.name)
-        : cloneRoutineTrigger(existing.trigger),
+      trigger: input.timing && definition
+        ? resolveTriggerFromRoutineTimingInput(definition, input.timing, existing.trigger, existing.name)
+        : input.trigger
+          ? resolveRoutineTriggerOverride(input.trigger, existing.trigger, existing.name)
+          : cloneRoutineTrigger(existing.trigger),
       config,
-      deliveryDefaults: input.deliveryDefaults ?? existing.deliveryDefaults,
+      deliveryDefaults: input.delivery ?? input.deliveryDefaults ?? existing.deliveryDefaults,
       defaultRoutingBias: input.defaultRoutingBias ?? existing.defaultRoutingBias,
       budgetProfileId: input.budgetProfileId ?? existing.budgetProfileId,
       updatedAt: this.now(),
     };
     this.store.routines.upsertRoutine(updated);
-    return updated;
+    return definition ? buildRoutineView(definition, updated) : this.getRoutineById(updated.id)!;
   }
 
   deleteRoutine(id: string): SecondBrainRoutineRecord {
@@ -843,7 +1175,7 @@ export class SecondBrainService {
   }
 
   markRoutineRun(id: string, ranAt = this.now()): SecondBrainRoutineRecord {
-    const routine = this.getRoutineById(id);
+    const routine = this.getRoutineRecordById(id);
     if (!routine) {
       throw new Error(`Routine '${id}' not found.`);
     }

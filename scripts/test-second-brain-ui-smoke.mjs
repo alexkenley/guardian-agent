@@ -522,7 +522,7 @@ guardian:
         ? routines.find((entry) => (
           entry.id === routine.id
           && entry.name === 'Harness Topic Watch Updated'
-          && entry.config?.topicQuery === 'Harness launch updated'
+          && entry.topicQuery === 'Harness launch updated'
         ))
         : null;
     }, 12_000, 'Expected edited topic watch routine to persist through the routines API.');
@@ -545,8 +545,8 @@ guardian:
         ? routines.find((entry) => (
           entry.templateId === 'deadline-watch'
           && entry.name === 'Harness Deadline Watch'
-          && entry.config?.dueWithinHours === 8
-          && entry.config?.includeOverdue === false
+          && entry.dueWithinHours === 8
+          && entry.includeOverdue === false
         ))
         : null;
     }, 12_000, 'Expected created deadline watch routine to appear in the routines API.');
@@ -561,8 +561,8 @@ guardian:
         ? routines.find((entry) => (
           entry.id === routine.id
           && entry.name === 'Harness Deadline Watch Updated'
-          && entry.config?.dueWithinHours === 12
-          && entry.config?.includeOverdue === true
+          && entry.dueWithinHours === 12
+          && entry.includeOverdue === true
         ))
         : null;
     }, 12_000, 'Expected edited deadline watch routine to persist through the routines API.');

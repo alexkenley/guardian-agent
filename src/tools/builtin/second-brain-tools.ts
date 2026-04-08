@@ -7,6 +7,9 @@ import type {
   SecondBrainDeliveryChannel,
   SecondBrainLinkKind,
   SecondBrainRoutineEventType,
+  SecondBrainRoutineTimingInput,
+  SecondBrainRoutineTimingKind,
+  SecondBrainRoutineWeekday,
   SecondBrainRoutineTrigger,
   SecondBrainTaskStatus,
 } from '../../runtime/second-brain/types.js';
@@ -150,6 +153,41 @@ function normalizeRoutineConfig(value: unknown): import('../../runtime/second-br
     ...(topicQuery ? { topicQuery } : {}),
     ...(Number.isFinite(dueWithinHours) ? { dueWithinHours } : {}),
     ...(includeOverdue != null ? { includeOverdue } : {}),
+  };
+}
+
+function normalizeRoutineTiming(value: unknown): SecondBrainRoutineTimingInput | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const kind = typeof record.kind === 'string'
+    ? record.kind.trim().toLowerCase() as SecondBrainRoutineTimingKind
+    : undefined;
+  if (!kind || !['manual', 'scheduled', 'before_meetings', 'after_meetings', 'background'].includes(kind)) {
+    return undefined;
+  }
+  const scheduleRecord = asRecord(record.schedule);
+  const cadence = typeof scheduleRecord?.cadence === 'string'
+    ? scheduleRecord.cadence.trim().toLowerCase()
+    : '';
+  const time = typeof scheduleRecord?.time === 'string'
+    ? scheduleRecord.time.trim()
+    : '';
+  const dayOfWeek = typeof scheduleRecord?.dayOfWeek === 'string'
+    ? scheduleRecord.dayOfWeek.trim().toLowerCase() as SecondBrainRoutineWeekday
+    : undefined;
+  const minutes = typeof record.minutes === 'number' ? record.minutes : undefined;
+  return {
+    kind,
+    ...(time && (cadence === 'daily' || cadence === 'weekly')
+      ? {
+          schedule: {
+            cadence,
+            time,
+            ...(dayOfWeek ? { dayOfWeek } : {}),
+          },
+        }
+      : {}),
+    ...(Number.isFinite(minutes) ? { minutes } : {}),
   };
 }
 
@@ -774,6 +812,21 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
           templateId: { type: 'string' },
           name: { type: 'string' },
           enabled: { type: 'boolean' },
+          timing: {
+            type: 'object',
+            properties: {
+              kind: { type: 'string', enum: ['manual', 'scheduled', 'before_meetings', 'after_meetings', 'background'] },
+              minutes: { type: 'number' },
+              schedule: {
+                type: 'object',
+                properties: {
+                  cadence: { type: 'string', enum: ['daily', 'weekly'] },
+                  time: { type: 'string' },
+                  dayOfWeek: { type: 'string', enum: ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] },
+                },
+              },
+            },
+          },
           trigger: {
             type: 'object',
             properties: {
@@ -796,6 +849,10 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
             enum: ['local_first', 'balanced', 'quality_first'],
           },
           budgetProfileId: { type: 'string' },
+          delivery: {
+            type: 'array',
+            items: { type: 'string', enum: ['web', 'cli', 'telegram'] },
+          },
           deliveryDefaults: {
             type: 'array',
             items: { type: 'string', enum: ['web', 'cli', 'telegram'] },
@@ -811,9 +868,20 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
         ? args.deliveryDefaults
           .map(normalizeDeliveryChannel)
           .filter((value): value is SecondBrainDeliveryChannel => Boolean(value))
+        : Array.isArray(args.delivery)
+          ? args.delivery
+            .map(normalizeDeliveryChannel)
+            .filter((value): value is SecondBrainDeliveryChannel => Boolean(value))
         : undefined;
-      if (Array.isArray(args.deliveryDefaults) && (deliveryDefaults?.length ?? 0) !== args.deliveryDefaults.length) {
-        return { success: false, error: 'deliveryDefaults must contain only web, cli, or telegram.' };
+      if (
+        (Array.isArray(args.deliveryDefaults) && (deliveryDefaults?.length ?? 0) !== args.deliveryDefaults.length)
+        || (Array.isArray(args.delivery) && (deliveryDefaults?.length ?? 0) !== args.delivery.length)
+      ) {
+        return { success: false, error: 'delivery must contain only web, cli, or telegram.' };
+      }
+      const timing = normalizeRoutineTiming(args.timing);
+      if (args.timing != null && !timing) {
+        return { success: false, error: 'timing must contain a supported Second Brain routine timing.' };
       }
       const trigger = normalizeRoutineTrigger(args.trigger);
       if (args.trigger != null && !trigger) {
@@ -828,8 +896,10 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
           templateId: asString(args.templateId).trim(),
           name: asString(args.name).trim() || undefined,
           enabled: parseBoolean(args.enabled),
+          timing,
           trigger,
           config,
+          delivery: deliveryDefaults,
           deliveryDefaults,
           defaultRoutingBias: typeof args.defaultRoutingBias === 'string'
             ? args.defaultRoutingBias as 'local_first' | 'balanced' | 'quality_first'
@@ -1078,6 +1148,21 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
           id: { type: 'string' },
           name: { type: 'string' },
           enabled: { type: 'boolean' },
+          timing: {
+            type: 'object',
+            properties: {
+              kind: { type: 'string', enum: ['manual', 'scheduled', 'before_meetings', 'after_meetings', 'background'] },
+              minutes: { type: 'number' },
+              schedule: {
+                type: 'object',
+                properties: {
+                  cadence: { type: 'string', enum: ['daily', 'weekly'] },
+                  time: { type: 'string' },
+                  dayOfWeek: { type: 'string', enum: ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] },
+                },
+              },
+            },
+          },
           trigger: {
             type: 'object',
             properties: {
@@ -1100,6 +1185,10 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
             enum: ['local_first', 'balanced', 'quality_first'],
           },
           budgetProfileId: { type: 'string' },
+          delivery: {
+            type: 'array',
+            items: { type: 'string', enum: ['web', 'cli', 'telegram'] },
+          },
           deliveryDefaults: {
             type: 'array',
             items: { type: 'string', enum: ['web', 'cli', 'telegram'] },
@@ -1115,9 +1204,20 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
         ? args.deliveryDefaults
           .map(normalizeDeliveryChannel)
           .filter((value): value is SecondBrainDeliveryChannel => Boolean(value))
+        : Array.isArray(args.delivery)
+          ? args.delivery
+            .map(normalizeDeliveryChannel)
+            .filter((value): value is SecondBrainDeliveryChannel => Boolean(value))
         : undefined;
-      if (Array.isArray(args.deliveryDefaults) && (deliveryDefaults?.length ?? 0) !== args.deliveryDefaults.length) {
-        return { success: false, error: 'deliveryDefaults must contain only web, cli, or telegram.' };
+      if (
+        (Array.isArray(args.deliveryDefaults) && (deliveryDefaults?.length ?? 0) !== args.deliveryDefaults.length)
+        || (Array.isArray(args.delivery) && (deliveryDefaults?.length ?? 0) !== args.delivery.length)
+      ) {
+        return { success: false, error: 'delivery must contain only web, cli, or telegram.' };
+      }
+      const timing = normalizeRoutineTiming(args.timing);
+      if (args.timing != null && !timing) {
+        return { success: false, error: 'timing must contain a supported Second Brain routine timing.' };
       }
       const trigger = normalizeRoutineTrigger(args.trigger);
       if (args.trigger != null && !trigger) {
@@ -1132,8 +1232,10 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
           id: asString(args.id).trim(),
           name: asString(args.name).trim() || undefined,
           enabled: parseBoolean(args.enabled),
+          timing,
           trigger,
           config,
+          delivery: deliveryDefaults,
           deliveryDefaults,
           defaultRoutingBias: typeof args.defaultRoutingBias === 'string'
             ? args.defaultRoutingBias as 'local_first' | 'balanced' | 'quality_first'
