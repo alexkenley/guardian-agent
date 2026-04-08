@@ -294,4 +294,81 @@ describe('HorizonScanner', () => {
       text: expect.stringContaining('deadline watch'),
     }));
   });
+
+  it('respects fortnightly routine schedules', async () => {
+    const sqlitePath = join(tmpdir(), `guardianagent-second-brain-horizon-${randomUUID()}.sqlite`);
+    const nowState = { value: Date.parse('2026-04-12T23:00:00Z') };
+    const now = () => nowState.value;
+    const store = new SecondBrainStore({ sqlitePath, now });
+    const service = new SecondBrainService(store, { now });
+    const briefing = new BriefingService(service, { now });
+    const scheduledTaskService = {
+      list() {
+        return [];
+      },
+      create() {
+        return { success: true, message: 'created' };
+      },
+      update() {
+        return { success: true, message: 'updated' };
+      },
+    };
+
+    const created = service.createRoutine({
+      templateId: 'topic-watch',
+      config: { topicQuery: 'Fortnightly board prep' },
+      timing: {
+        kind: 'scheduled',
+        schedule: {
+          cadence: 'fortnightly',
+          dayOfWeek: 'monday',
+          time: '09:00',
+        },
+      },
+      deliveryDefaults: ['telegram'],
+    });
+    service.upsertNote({
+      title: 'Fortnightly board prep notes',
+      content: 'Initial pack for the board cadence.',
+    });
+
+    const syncService = {
+      async syncAll(reason: string) {
+        return {
+          startedAt: now(),
+          finishedAt: now(),
+          reason,
+          providers: [],
+        };
+      },
+    };
+
+    const scanner = new HorizonScanner(
+      scheduledTaskService as any,
+      service,
+      syncService as any,
+      briefing,
+      { now },
+    );
+
+    const first = await scanner.runScan('test');
+    expect(first.triggeredRoutines).toContain(created.id);
+
+    nowState.value = Date.parse('2026-04-19T23:00:00Z');
+    service.upsertNote({
+      title: 'Fortnightly board prep follow-up',
+      content: 'This should not trigger on the off week.',
+    });
+    const second = await scanner.runScan('test');
+    expect(second.triggeredRoutines).not.toContain(created.id);
+
+    nowState.value = Date.parse('2026-04-26T23:00:00Z');
+    service.upsertNote({
+      title: 'Fortnightly board prep next cycle',
+      content: 'This should trigger again on the next fortnight.',
+    });
+    const third = await scanner.runScan('test');
+    expect(third.triggeredRoutines).toContain(created.id);
+    store.close();
+  });
 });

@@ -71,7 +71,11 @@ const BUILT_IN_ROUTINES: BuiltInRoutineDefinition[] = [
       name: 'Morning Brief',
       category: 'scheduled',
       enabledByDefault: true,
-      trigger: { mode: 'cron', cron: '0 7 * * *' },
+      trigger: {
+        mode: 'cron',
+        cron: '0 7 * * *',
+        schedule: { cadence: 'daily', time: '07:00' },
+      },
       workloadClass: 'B',
       externalCommMode: 'none',
       budgetProfileId: 'daily-low',
@@ -89,7 +93,11 @@ const BUILT_IN_ROUTINES: BuiltInRoutineDefinition[] = [
       name: 'Weekly Review',
       category: 'scheduled',
       enabledByDefault: true,
-      trigger: { mode: 'cron', cron: '0 9 * * 1' },
+      trigger: {
+        mode: 'cron',
+        cron: '0 9 * * 1',
+        schedule: { cadence: 'weekly', time: '09:00', dayOfWeek: 'monday' },
+      },
       workloadClass: 'C',
       externalCommMode: 'none',
       budgetProfileId: 'weekly-medium',
@@ -181,7 +189,11 @@ const BUILT_IN_ROUTINES: BuiltInRoutineDefinition[] = [
       name: 'Topic Watch',
       category: 'scheduled',
       enabledByDefault: true,
-      trigger: { mode: 'cron', cron: '0 8 * * *' },
+      trigger: {
+        mode: 'cron',
+        cron: '0 8 * * *',
+        schedule: { cadence: 'daily', time: '08:00' },
+      },
       workloadClass: 'B',
       externalCommMode: 'none',
       budgetProfileId: 'daily-low',
@@ -200,7 +212,11 @@ const BUILT_IN_ROUTINES: BuiltInRoutineDefinition[] = [
       name: 'Deadline Watch',
       category: 'scheduled',
       enabledByDefault: true,
-      trigger: { mode: 'cron', cron: '0 8 * * *' },
+      trigger: {
+        mode: 'cron',
+        cron: '0 8 * * *',
+        schedule: { cadence: 'daily', time: '08:00' },
+      },
       workloadClass: 'B',
       externalCommMode: 'none',
       budgetProfileId: 'daily-low',
@@ -280,10 +296,50 @@ function weekdayToCronDay(value: SecondBrainRoutineWeekday | undefined): number 
   return index >= 0 ? index : null;
 }
 
+function normalizeRoutineSchedule(
+  schedule: SecondBrainRoutineSchedule,
+): SecondBrainRoutineSchedule {
+  const cadence = schedule.cadence;
+  const normalized: SecondBrainRoutineSchedule = { cadence };
+  if (typeof schedule.time === 'string' && schedule.time.trim()) {
+    normalized.time = schedule.time.trim();
+  }
+  if (schedule.dayOfWeek) {
+    normalized.dayOfWeek = schedule.dayOfWeek;
+  }
+  if (Number.isFinite(schedule.dayOfMonth)) {
+    normalized.dayOfMonth = Number(schedule.dayOfMonth);
+  }
+  if (Number.isFinite(schedule.minute)) {
+    normalized.minute = Number(schedule.minute);
+  }
+  return normalized;
+}
+
+function cloneRoutineSchedule(schedule: SecondBrainRoutineSchedule | undefined): SecondBrainRoutineSchedule | undefined {
+  return schedule ? normalizeRoutineSchedule(schedule) : undefined;
+}
+
 function summarizeRoutineSchedule(schedule: SecondBrainRoutineSchedule): string {
-  const time = formatFriendlyTime(schedule.time);
+  if (schedule.cadence === 'hourly') {
+    const minute = Number.isFinite(schedule.minute) ? Number(schedule.minute) : 0;
+    return minute === 0
+      ? 'Hourly'
+      : `Hourly at ${minute.toString().padStart(2, '0')} minutes past the hour`;
+  }
+
+  const time = formatFriendlyTime(schedule.time ?? '07:00');
+  if (schedule.cadence === 'weekdays') {
+    return `Weekdays at ${time}`;
+  }
   if (schedule.cadence === 'weekly') {
     return `Weekly on ${capitalizeWords(schedule.dayOfWeek ?? 'monday')} at ${time}`;
+  }
+  if (schedule.cadence === 'fortnightly') {
+    return `Every 2 weeks on ${capitalizeWords(schedule.dayOfWeek ?? 'monday')} at ${time}`;
+  }
+  if (schedule.cadence === 'monthly') {
+    return `Monthly on day ${Number.isFinite(schedule.dayOfMonth) ? Number(schedule.dayOfMonth) : 1} at ${time}`;
   }
   return `Daily at ${time}`;
 }
@@ -292,20 +348,42 @@ function parseScheduleFromCron(cron: string | undefined): SecondBrainRoutineSche
   const parts = String(cron ?? '').trim().split(/\s+/g);
   if (parts.length !== 5) return null;
   const [minuteField, hourField, dayOfMonthField, monthField, dayOfWeekField] = parts;
-  if (dayOfMonthField !== '*' || monthField !== '*') {
+  if (monthField !== '*') {
     return null;
   }
-  if (!/^\d+$/.test(minuteField) || !/^\d+$/.test(hourField)) {
+  if (!/^\d+$/.test(minuteField)) {
     return null;
   }
   const minute = Number(minuteField);
+  if (!Number.isInteger(minute) || minute < 0 || minute > 59) {
+    return null;
+  }
+  if (hourField === '*' && dayOfMonthField === '*' && dayOfWeekField === '*') {
+    return { cadence: 'hourly', minute };
+  }
+  if (!/^\d+$/.test(hourField)) {
+    return null;
+  }
   const hour = Number(hourField);
-  if (!Number.isInteger(minute) || !Number.isInteger(hour) || minute < 0 || minute > 59 || hour < 0 || hour > 23) {
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
     return null;
   }
   const time = formatScheduleTime(hour, minute);
+  if (/^\d+$/.test(dayOfMonthField) && dayOfWeekField === '*') {
+    const dayOfMonth = Number(dayOfMonthField);
+    if (!Number.isInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) {
+      return null;
+    }
+    return { cadence: 'monthly', dayOfMonth, time };
+  }
+  if (dayOfMonthField !== '*') {
+    return null;
+  }
   if (dayOfWeekField === '*') {
     return { cadence: 'daily', time };
+  }
+  if (dayOfWeekField === '1-5') {
+    return { cadence: 'weekdays', time };
   }
   const dayOfWeek = cronDayToWeekday(dayOfWeekField);
   if (!dayOfWeek) {
@@ -319,17 +397,42 @@ function parseScheduleFromCron(cron: string | undefined): SecondBrainRoutineSche
 }
 
 function buildCronFromSchedule(schedule: SecondBrainRoutineSchedule): string {
+  if (schedule.cadence === 'hourly') {
+    const minute = Number.isFinite(schedule.minute) ? Number(schedule.minute) : NaN;
+    if (!Number.isInteger(minute) || minute < 0 || minute > 59) {
+      throw new Error('Hourly routines require a valid minute past the hour.');
+    }
+    return `${minute} * * * *`;
+  }
+
   const parsedTime = parseScheduleTime(schedule.time);
   if (!parsedTime) {
     throw new Error('Scheduled routines require a valid time in HH:MM format.');
   }
   const { hour, minute } = parsedTime;
+  if (schedule.cadence === 'weekdays') {
+    return `${minute} ${hour} * * 1-5`;
+  }
   if (schedule.cadence === 'weekly') {
     const day = weekdayToCronDay(schedule.dayOfWeek);
     if (day == null) {
       throw new Error('Weekly routines require a day of week.');
     }
     return `${minute} ${hour} * * ${day}`;
+  }
+  if (schedule.cadence === 'fortnightly') {
+    const day = weekdayToCronDay(schedule.dayOfWeek);
+    if (day == null) {
+      throw new Error('Fortnightly routines require a day of week.');
+    }
+    return `${minute} ${hour} * * ${day}`;
+  }
+  if (schedule.cadence === 'monthly') {
+    const dayOfMonth = Number.isFinite(schedule.dayOfMonth) ? Number(schedule.dayOfMonth) : NaN;
+    if (!Number.isInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) {
+      throw new Error('Monthly routines require a day of month between 1 and 31.');
+    }
+    return `${minute} ${hour} ${dayOfMonth} * *`;
   }
   return `${minute} ${hour} * * *`;
 }
@@ -362,6 +465,8 @@ function cloneRoutineTrigger(trigger: SecondBrainRoutineTrigger): SecondBrainRou
     ...(trigger.cron ? { cron: trigger.cron } : {}),
     ...(trigger.eventType ? { eventType: trigger.eventType } : {}),
     ...(Number.isFinite(trigger.lookaheadMinutes) ? { lookaheadMinutes: trigger.lookaheadMinutes } : {}),
+    ...(trigger.schedule ? { schedule: cloneRoutineSchedule(trigger.schedule) } : {}),
+    ...(Number.isFinite(trigger.anchorAt) ? { anchorAt: Number(trigger.anchorAt) } : {}),
   };
 }
 
@@ -397,7 +502,22 @@ function normalizeRoutineTrigger(
     if (!cron) {
       throw new Error('Scheduled routines require a cron expression.');
     }
-    return { mode, cron };
+    const schedule = cloneRoutineSchedule(trigger.schedule)
+      ?? parseScheduleFromCron(cron)
+      ?? cloneRoutineSchedule(fallback?.schedule)
+      ?? parseScheduleFromCron(fallback?.cron)
+      ?? undefined;
+    const anchorAt = Number.isFinite(trigger.anchorAt)
+      ? Number(trigger.anchorAt)
+      : Number.isFinite(fallback?.anchorAt)
+        ? Number(fallback?.anchorAt)
+        : undefined;
+    return {
+      mode,
+      cron,
+      ...(schedule ? { schedule } : {}),
+      ...(schedule?.cadence === 'fortnightly' && Number.isFinite(anchorAt) ? { anchorAt } : {}),
+    };
   }
 
   if (mode === 'event') {
@@ -550,7 +670,7 @@ function buildRoutineTimingView(
     };
   }
   if (trigger.mode === 'cron') {
-    const schedule = parseScheduleFromCron(trigger.cron);
+    const schedule = cloneRoutineSchedule(trigger.schedule) ?? parseScheduleFromCron(trigger.cron);
     return {
       kind: 'scheduled',
       label: schedule ? summarizeRoutineSchedule(schedule) : 'Scheduled',
@@ -640,8 +760,10 @@ function normalizeRoutineTimingInput(
   const schedule = value.schedule
     ? {
         cadence: value.schedule.cadence,
-        time: value.schedule.time.trim(),
+        ...(value.schedule.time?.trim() ? { time: value.schedule.time.trim() } : {}),
         ...(value.schedule.dayOfWeek ? { dayOfWeek: value.schedule.dayOfWeek } : {}),
+        ...(Number.isFinite(value.schedule.dayOfMonth) ? { dayOfMonth: Number(value.schedule.dayOfMonth) } : {}),
+        ...(Number.isFinite(value.schedule.minute) ? { minute: Number(value.schedule.minute) } : {}),
       }
     : undefined;
   const minutes = Number.isFinite(value.minutes) ? Number(value.minutes) : undefined;
@@ -657,6 +779,7 @@ function resolveTriggerFromRoutineTimingInput(
   timing: SecondBrainRoutineTimingInput,
   fallback: SecondBrainRoutineTrigger,
   routineName: string,
+  anchorAt: number,
 ): SecondBrainRoutineTrigger {
   const normalized = normalizeRoutineTimingInput(timing);
   if (!normalized) {
@@ -669,15 +792,17 @@ function resolveTriggerFromRoutineTimingInput(
     return { mode: 'manual' };
   }
   if (normalized.kind === 'scheduled') {
-    const fallbackSchedule = parseScheduleFromCron(fallback.cron);
-    const defaultSchedule = parseScheduleFromCron(definition.manifest.trigger.cron);
+    const fallbackSchedule = cloneRoutineSchedule(fallback.schedule) ?? parseScheduleFromCron(fallback.cron);
+    const defaultSchedule = cloneRoutineSchedule(definition.manifest.trigger.schedule) ?? parseScheduleFromCron(definition.manifest.trigger.cron);
     const schedule = normalized.schedule ?? fallbackSchedule ?? defaultSchedule;
     if (!schedule) {
-      throw new Error(`${routineName} requires a supported daily or weekly schedule.`);
+      throw new Error(`${routineName} requires a supported schedule.`);
     }
     return {
       mode: 'cron',
       cron: buildCronFromSchedule(schedule),
+      schedule: cloneRoutineSchedule(schedule),
+      ...(schedule.cadence === 'fortnightly' ? { anchorAt } : {}),
     };
   }
   if (normalized.kind === 'before_meetings') {
@@ -1088,7 +1213,7 @@ export class SecondBrainService {
       routineId = `${definition.manifest.id}:${randomUUID().slice(0, 8)}`;
     }
     const trigger = input.timing
-      ? resolveTriggerFromRoutineTimingInput(definition, input.timing, definition.manifest.trigger, definition.manifest.name)
+      ? resolveTriggerFromRoutineTimingInput(definition, input.timing, definition.manifest.trigger, definition.manifest.name, timestamp)
       : input.trigger
         ? resolveRoutineTriggerOverride(input.trigger, definition.manifest.trigger, definition.manifest.name)
         : cloneRoutineTrigger(definition.manifest.trigger);
@@ -1146,7 +1271,7 @@ export class SecondBrainService {
         || (shouldRefreshDerivedName && definition ? resolveRoutineName(definition, undefined, config) : existing.name),
       enabled: input.enabled ?? existing.enabled,
       trigger: input.timing && definition
-        ? resolveTriggerFromRoutineTimingInput(definition, input.timing, existing.trigger, existing.name)
+        ? resolveTriggerFromRoutineTimingInput(definition, input.timing, existing.trigger, existing.name, this.now())
         : input.trigger
           ? resolveRoutineTriggerOverride(input.trigger, existing.trigger, existing.name)
           : cloneRoutineTrigger(existing.trigger),

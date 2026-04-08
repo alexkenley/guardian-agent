@@ -1381,7 +1381,7 @@ function renderRoutines(panel, data) {
           <div class="sb-card__header">
             <div>
               <div class="sb-card__eyebrow">${state.creatingRoutine ? 'Routine Builder' : 'Routine Editor'}</div>
-              <h3>${esc(state.creatingRoutine ? (selectedCreateEntry?.name ?? 'Choose a routine type') : (selectedRoutine?.name ?? 'Select a routine'))}</h3>
+              <h3>${esc(state.creatingRoutine ? (selectedCreateEntry?.name ?? 'Choose a capability') : (selectedRoutine?.name ?? 'Select a routine'))}</h3>
             </div>
             <div style="display:flex;gap:0.5rem;align-items:center;">
               <button class="btn btn-primary" type="button" data-routine-create-toggle="true">${state.creatingRoutine ? 'Close creator' : 'Create routine'}</button>
@@ -1503,14 +1503,14 @@ function renderRoutineListRow(routine, data) {
 }
 
 function renderRoutineCreateForm(entry, data) {
-  const available = availableRoutineCatalog(data);
-  if (!available.length) {
-    return '<div class="sb-empty">All routine types are already configured. Select a routine on the right to edit it.</div>';
+  const catalog = availableRoutineCatalog(data);
+  if (!catalog.length) {
+    return '<div class="sb-empty">No routine capabilities are available right now.</div>';
   }
 
-  const selectedEntry = entry && (entry.allowMultiple || !entry.configured)
+  const selectedEntry = entry && catalog.some((option) => option.templateId === entry.templateId)
     ? entry
-    : available[0];
+    : resolveRoutineCreateEntry(entry, data);
   const preview = {
     templateId: selectedEntry.templateId,
     capability: selectedEntry.capability,
@@ -1527,16 +1527,22 @@ function renderRoutineCreateForm(entry, data) {
 
   return `
     <div class="sb-stack">
-      <p class="sb-section__copy">Choose what Guardian should do, set the timing, and pick where updates should be delivered. Telegram is the default assistant channel.</p>
+      <p class="sb-section__copy">Choose the assistant capability, set when it should run, and pick where Guardian should deliver the result. Telegram is the default assistant channel.</p>
       <form class="sb-form" data-routine-create-form>
-        <label class="sb-form__label" for="routine-template-id">Routine type</label>
+        <label class="sb-form__label" for="routine-template-id">Capability</label>
         <select id="routine-template-id" name="templateId">
-          ${available.map((option) => `<option value="${escAttr(option.templateId)}" ${option.templateId === selectedEntry.templateId ? 'selected' : ''}>${esc(option.name)}</option>`).join('')}
+          ${catalog.map((option) => `<option value="${escAttr(option.templateId)}" ${option.templateId === selectedEntry.templateId ? 'selected' : ''}>${esc(option.name)}${option.configured && !option.allowMultiple ? ' (already configured)' : ''}</option>`).join('')}
         </select>
         <div class="sb-readout">
           <strong>What it does</strong>
           <span>${esc(selectedEntry.description)}</span>
         </div>
+        ${selectedEntry.configured && !selectedEntry.allowMultiple ? `
+          <div class="sb-readout">
+            <strong>Starter instance already exists</strong>
+            <span>This capability already has a configured routine. Edit the existing instance from the list on the right, or delete it first if you want to replace it.</span>
+          </div>
+        ` : ''}
         ${renderRoutineFormFields(preview, { submitLabel: 'Create routine', entry: selectedEntry })}
       </form>
     </div>
@@ -1573,9 +1579,13 @@ function renderRoutineFormFields(routine, options = {}) {
   const scheduleCadence = timing.schedule?.cadence || entry?.defaultTiming?.schedule?.cadence || 'daily';
   const scheduleTime = timing.schedule?.time || entry?.defaultTiming?.schedule?.time || '07:00';
   const scheduleDayOfWeek = timing.schedule?.dayOfWeek || entry?.defaultTiming?.schedule?.dayOfWeek || 'monday';
-  const schedulePreview = summarizeRoutineSchedule(scheduleCadence, scheduleTime, scheduleDayOfWeek);
+  const scheduleMinute = Number.isFinite(timing.schedule?.minute) ? timing.schedule.minute : (Number.isFinite(entry?.defaultTiming?.schedule?.minute) ? entry.defaultTiming.schedule.minute : 0);
+  const scheduleDayOfMonth = Number.isFinite(timing.schedule?.dayOfMonth) ? timing.schedule.dayOfMonth : (Number.isFinite(entry?.defaultTiming?.schedule?.dayOfMonth) ? entry.defaultTiming.schedule.dayOfMonth : 1);
   const supportsTimingChoice = supportedTiming.length > 1;
   const showsSchedule = selectedTimingKind === 'scheduled';
+  const showsScheduleDay = showsSchedule && (scheduleCadence === 'weekly' || scheduleCadence === 'fortnightly');
+  const showsScheduleMinute = showsSchedule && scheduleCadence === 'hourly';
+  const showsScheduleDayOfMonth = showsSchedule && scheduleCadence === 'monthly';
   const showsMinutes = selectedTimingKind === 'before_meetings' || selectedTimingKind === 'after_meetings';
   const isBackground = selectedTimingKind === 'background';
   const minutesLabel = selectedTimingKind === 'before_meetings'
@@ -1645,23 +1655,31 @@ function renderRoutineFormFields(routine, options = {}) {
       <label class="sb-form__label" for="routine-schedule-cadence">Schedule</label>
       <select id="routine-schedule-cadence" name="scheduleCadence" data-routine-schedule-cadence>
         ${renderSelectOptions([
+          { value: 'hourly', label: 'Hourly' },
           { value: 'daily', label: 'Daily' },
+          { value: 'weekdays', label: 'Weekdays' },
           { value: 'weekly', label: 'Weekly' },
+          { value: 'fortnightly', label: 'Every 2 weeks' },
+          { value: 'monthly', label: 'Monthly' },
         ], scheduleCadence)}
       </select>
-      <div data-routine-schedule-day-group style="display: ${scheduleCadence === 'weekly' ? 'block' : 'none'}">
+      <div data-routine-schedule-minute-group style="display: ${showsScheduleMinute ? 'block' : 'none'}">
+        <label class="sb-form__label" for="routine-schedule-minute">Minute past the hour</label>
+        <input id="routine-schedule-minute" name="scheduleMinute" type="number" min="0" max="59" step="1" value="${escAttr(String(scheduleMinute))}">
+      </div>
+      <div data-routine-schedule-day-group style="display: ${showsScheduleDay ? 'block' : 'none'}">
         <label class="sb-form__label" for="routine-schedule-day">Day of week</label>
         <select id="routine-schedule-day" name="scheduleDayOfWeek">
           ${renderSelectOptions(ROUTINE_WEEKDAY_OPTIONS, scheduleDayOfWeek)}
         </select>
       </div>
-      <label class="sb-form__label" for="routine-schedule-time">Time</label>
-      <input id="routine-schedule-time" name="scheduleTime" type="time" value="${escAttr(scheduleTime)}">
-      <div class="sb-readout">
-        <strong>Plain-English preview</strong>
-        <span data-routine-schedule-preview>${esc(schedulePreview)}</span>
+      <div data-routine-schedule-day-of-month-group style="display: ${showsScheduleDayOfMonth ? 'block' : 'none'}">
+        <label class="sb-form__label" for="routine-schedule-day-of-month">Day of month</label>
+        <input id="routine-schedule-day-of-month" name="scheduleDayOfMonth" type="number" min="1" max="31" step="1" value="${escAttr(String(scheduleDayOfMonth))}">
       </div>
-      <div class="sb-table-copy">Use a daily or weekly schedule for routines that should arrive on a predictable rhythm.</div>
+      <label class="sb-form__label" for="routine-schedule-time">Time</label>
+      <input id="routine-schedule-time" name="scheduleTime" type="time" value="${escAttr(scheduleTime)}" style="display:${showsScheduleMinute ? 'none' : 'block'}">
+      <div class="sb-table-copy">Use a predictable schedule for routines that should arrive on a regular rhythm.</div>
     </div>
 
     ${showsMinutes ? `
@@ -1695,7 +1713,14 @@ function renderRoutineFormFields(routine, options = {}) {
     </div>
     <div class="sb-table-copy">Telegram is the default assistant channel. Add web or CLI when you also want operator visibility.</div>
 
-    ${renderFormActions(esc(submitLabel), extraActions)}
+    ${options.submitLabel === 'Create routine' && entry?.configured && !entry.allowMultiple
+      ? `
+        <div class="sb-form__actions">
+          <button class="btn btn-primary" type="button" data-open-configured-routine="${escAttr(entry.configuredRoutineId || '')}">Open existing routine</button>
+          ${extraActions}
+        </div>
+      `
+      : renderFormActions(esc(submitLabel), extraActions)}
   `;
 }
 
@@ -2031,7 +2056,7 @@ function bindInteractions(container) {
     if (routineCreateToggle?.dataset.routineCreateToggle) {
       state.creatingRoutine = !state.creatingRoutine;
       if (state.creatingRoutine) {
-        const firstAvailable = availableRoutineCatalog(state.data ?? { routineCatalog: [] })[0];
+        const firstAvailable = resolveRoutineCreateEntry(null, state.data ?? { routineCatalog: [] });
         state.selectedRoutineTemplateId = firstAvailable?.templateId ?? null;
       }
       void rerenderLocal();
@@ -2045,6 +2070,18 @@ function bindInteractions(container) {
       state.selectedRoutineTemplateId = routine?.templateId || routine?.id || null;
       state.creatingRoutine = false;
       void rerenderLocal();
+      return;
+    }
+
+    const openConfiguredRoutine = target.closest('[data-open-configured-routine]');
+    if (openConfiguredRoutine?.dataset.openConfiguredRoutine) {
+      const routine = findRecord(state.data?.routines || [], openConfiguredRoutine.dataset.openConfiguredRoutine);
+      if (routine) {
+        state.selectedRoutineId = routine.id;
+        state.selectedRoutineTemplateId = routine.templateId || routine.id || null;
+        state.creatingRoutine = false;
+        void rerenderLocal();
+      }
       return;
     }
 
@@ -2128,7 +2165,7 @@ function bindInteractions(container) {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
     if ((target instanceof HTMLInputElement || target instanceof HTMLSelectElement)
-      && (target.name === 'scheduleTime' || target.name === 'scheduleCadence' || target.name === 'scheduleDayOfWeek')) {
+      && ['scheduleTime', 'scheduleCadence', 'scheduleDayOfWeek', 'scheduleMinute', 'scheduleDayOfMonth'].includes(target.name)) {
       const form = target.closest('form');
       if (form instanceof HTMLFormElement) {
         syncRoutineTimingForm(form);
@@ -2260,6 +2297,17 @@ function bindInteractions(container) {
 
     if (target.matches('[data-routine-create-form]')) {
       event.preventDefault();
+      const entry = findRoutineCatalogEntry(state.data, readString(target, 'templateId'));
+      if (entry?.configured && !entry.allowMultiple && entry.configuredRoutineId) {
+        const routine = findRecord(state.data?.routines || [], entry.configuredRoutineId);
+        if (routine) {
+          state.selectedRoutineId = routine.id;
+          state.selectedRoutineTemplateId = routine.templateId || routine.id || null;
+          state.creatingRoutine = false;
+          void rerenderLocal();
+        }
+        return;
+      }
       await saveMutation(() => api.secondBrainRoutineCreate({
         templateId: readString(target, 'templateId'),
         name: readString(target, 'name') || undefined,
@@ -2645,13 +2693,13 @@ function filteredRoutineList(data) {
 }
 
 function availableRoutineCatalog(data) {
-  const catalog = Array.isArray(data?.routineCatalog) ? data.routineCatalog : [];
-  return catalog.filter((entry) => entry.allowMultiple || !entry.configured);
+  return Array.isArray(data?.routineCatalog) ? data.routineCatalog : [];
 }
 
 function resolveRoutineCreateEntry(entry, data) {
-  if (entry && (entry.allowMultiple || !entry.configured)) return entry;
-  return availableRoutineCatalog(data)[0] ?? null;
+  const catalog = availableRoutineCatalog(data);
+  if (entry && catalog.some((option) => option.templateId === entry.templateId)) return entry;
+  return catalog.find((option) => option.allowMultiple || !option.configured) ?? catalog[0] ?? null;
 }
 
 function findRoutineCatalogEntry(data, templateId) {
@@ -2711,9 +2759,26 @@ function formatRoutineClockTime(value) {
 }
 
 function summarizeRoutineSchedule(cadence, time, dayOfWeek) {
+  if (cadence === 'hourly') {
+    const minute = Number.isFinite(Number(dayOfWeek)) ? Number(dayOfWeek) : 0;
+    return minute === 0
+      ? 'Hourly'
+      : `Hourly at :${String(minute).padStart(2, '0')}`;
+  }
+  if (cadence === 'weekdays') {
+    return `Weekdays at ${formatRoutineClockTime(time)}`;
+  }
   if (cadence === 'weekly') {
     const dayLabel = ROUTINE_WEEKDAY_OPTIONS.find((option) => option.value === dayOfWeek)?.label || 'Monday';
     return `Every ${dayLabel} at ${formatRoutineClockTime(time)}`;
+  }
+  if (cadence === 'fortnightly') {
+    const dayLabel = ROUTINE_WEEKDAY_OPTIONS.find((option) => option.value === dayOfWeek)?.label || 'Monday';
+    return `Every 2 weeks on ${dayLabel} at ${formatRoutineClockTime(time)}`;
+  }
+  if (cadence === 'monthly') {
+    const dayOfMonth = Number(dayOfWeek) || 1;
+    return `Monthly on day ${dayOfMonth} at ${formatRoutineClockTime(time)}`;
   }
   return `Daily at ${formatRoutineClockTime(time)}`;
 }
@@ -2723,19 +2788,23 @@ function syncRoutineTimingForm(form) {
   const scheduleCadence = readString(form, 'scheduleCadence') || 'daily';
   const scheduleGroup = form.querySelector('[data-routine-schedule-group]');
   const scheduleDayGroup = form.querySelector('[data-routine-schedule-day-group]');
-  const schedulePreview = form.querySelector('[data-routine-schedule-preview]');
+  const scheduleMinuteGroup = form.querySelector('[data-routine-schedule-minute-group]');
+  const scheduleDayOfMonthGroup = form.querySelector('[data-routine-schedule-day-of-month-group]');
+  const scheduleTimeField = form.querySelector('#routine-schedule-time');
   if (scheduleGroup instanceof HTMLElement) {
     scheduleGroup.style.display = timingKind === 'scheduled' ? 'block' : 'none';
   }
   if (scheduleDayGroup instanceof HTMLElement) {
-    scheduleDayGroup.style.display = timingKind === 'scheduled' && scheduleCadence === 'weekly' ? 'block' : 'none';
+    scheduleDayGroup.style.display = timingKind === 'scheduled' && (scheduleCadence === 'weekly' || scheduleCadence === 'fortnightly') ? 'block' : 'none';
   }
-  if (schedulePreview instanceof HTMLElement) {
-    schedulePreview.textContent = summarizeRoutineSchedule(
-      scheduleCadence,
-      readString(form, 'scheduleTime') || '07:00',
-      readString(form, 'scheduleDayOfWeek') || 'monday',
-    );
+  if (scheduleMinuteGroup instanceof HTMLElement) {
+    scheduleMinuteGroup.style.display = timingKind === 'scheduled' && scheduleCadence === 'hourly' ? 'block' : 'none';
+  }
+  if (scheduleDayOfMonthGroup instanceof HTMLElement) {
+    scheduleDayOfMonthGroup.style.display = timingKind === 'scheduled' && scheduleCadence === 'monthly' ? 'block' : 'none';
+  }
+  if (scheduleTimeField instanceof HTMLElement) {
+    scheduleTimeField.style.display = timingKind === 'scheduled' && scheduleCadence === 'hourly' ? 'none' : 'block';
   }
 }
 
@@ -3036,13 +3105,16 @@ function readCheckboxValues(form, name) {
 function readRoutineTimingForm(form) {
   const kind = readString(form, 'timingKind') || 'manual';
   if (kind === 'scheduled') {
-    const cadence = readString(form, 'scheduleCadence') === 'weekly' ? 'weekly' : 'daily';
+    const cadence = readString(form, 'scheduleCadence') || 'daily';
     return {
       kind,
       schedule: {
         cadence,
-        time: readString(form, 'scheduleTime') || '07:00',
-        ...(cadence === 'weekly' ? { dayOfWeek: readString(form, 'scheduleDayOfWeek') || 'monday' } : {}),
+        ...((cadence === 'hourly')
+          ? { minute: Number(readString(form, 'scheduleMinute')) || 0 }
+          : { time: readString(form, 'scheduleTime') || '07:00' }),
+        ...((cadence === 'weekly' || cadence === 'fortnightly') ? { dayOfWeek: readString(form, 'scheduleDayOfWeek') || 'monday' } : {}),
+        ...(cadence === 'monthly' ? { dayOfMonth: Number(readString(form, 'scheduleDayOfMonth')) || 1 } : {}),
       },
     };
   }

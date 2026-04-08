@@ -124,6 +124,75 @@ describe('SecondBrainService', () => {
     expect(usage.totalConnectorCalls).toBe(2);
   });
 
+  it('supports hourly, weekdays, fortnightly, and monthly routine schedules', () => {
+    const { service } = createService();
+
+    const created = service.createRoutine({
+      templateId: 'topic-watch',
+      config: { topicQuery: 'Board prep' },
+      timing: {
+        kind: 'scheduled',
+        schedule: {
+          cadence: 'hourly',
+          minute: 15,
+        },
+      },
+    });
+
+    expect(created.timing).toMatchObject({
+      kind: 'scheduled',
+      schedule: { cadence: 'hourly', minute: 15 },
+      label: 'Hourly at 15 minutes past the hour',
+    });
+
+    const weekdays = service.updateRoutine({
+      id: created.id,
+      timing: {
+        kind: 'scheduled',
+        schedule: {
+          cadence: 'weekdays',
+          time: '18:30',
+        },
+      },
+    });
+    expect(weekdays.timing).toMatchObject({
+      schedule: { cadence: 'weekdays', time: '18:30' },
+      label: 'Weekdays at 6:30 p.m.',
+    });
+
+    const fortnightly = service.updateRoutine({
+      id: created.id,
+      timing: {
+        kind: 'scheduled',
+        schedule: {
+          cadence: 'fortnightly',
+          dayOfWeek: 'monday',
+          time: '09:00',
+        },
+      },
+    });
+    expect(fortnightly.timing).toMatchObject({
+      schedule: { cadence: 'fortnightly', dayOfWeek: 'monday', time: '09:00' },
+      label: 'Every 2 weeks on Monday at 9 a.m.',
+    });
+
+    const monthly = service.updateRoutine({
+      id: created.id,
+      timing: {
+        kind: 'scheduled',
+        schedule: {
+          cadence: 'monthly',
+          dayOfMonth: 1,
+          time: '08:00',
+        },
+      },
+    });
+    expect(monthly.timing).toMatchObject({
+      schedule: { cadence: 'monthly', dayOfMonth: 1, time: '08:00' },
+      label: 'Monthly on day 1 at 8 a.m.',
+    });
+  });
+
   it('does not allow the legacy sync helper to be created as a visible assistant routine', () => {
     const { service } = createService();
 

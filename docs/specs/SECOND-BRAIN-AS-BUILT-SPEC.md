@@ -60,7 +60,7 @@ This spec does not claim that every item from the proposal or implementation pla
 - `Contacts` exposes relationship filters, last-contact tracking, and a dedicated person editor with create, update, and delete actions.
 - `Library` now exposes saved link and reference CRUD in the web UI, with editing on the left and filtered content on the right. Absolute file paths are normalized into `file://` URLs for local document items.
 - `Briefs` now exposes saved brief review plus visible brief generation, edit, regenerate, and delete actions in the web UI.
-- `Routines` now exposes a configured-routines management surface, with only configured routines listed in the main table and a dedicated create or edit pane on the left that uses bounded routine types when the operator explicitly opens `Create routine`.
+- `Routines` now exposes a configured-routines management surface, with only configured routines listed in the main table and a dedicated create or edit pane on the left that uses assistant capabilities as the creation model when the operator explicitly opens `Create routine`.
 
 ### Briefs in the current UI
 
@@ -192,7 +192,7 @@ Planned ownership list:
 - Provider canonical with Guardian-derived context layered on top: email, Drive / Docs / Sheets, OneDrive / SharePoint, and other provider-native files
 - Explicit provider routes remain valid for provider administration, provider-only maintenance, and direct provider CRUD where the user intentionally targets that provider
 
-### Default routines and routine types
+### Default routines and routine capabilities
 
 Current default seeded routines on first run:
 - `morning-brief` (`Morning Brief`)
@@ -201,7 +201,7 @@ Current default seeded routines on first run:
 - `pre-meeting-brief` (`Pre-Meeting Brief`)
 - `follow-up-watch` (`Follow-Up Draft`)
 
-Current additional routine type available through `Create routine`:
+Current additional multi-instance capabilities available through `Create routine`:
 - `topic-watch` (`Topic Watch`)
 - `deadline-watch` (`Deadline Watch`)
 
@@ -210,7 +210,9 @@ Current direct maintenance action on the Routines surface:
 
 Current behavior note:
 - `weekly-review` now generates and stores a dedicated weekly review brief artifact that pulls from events, tasks, notes, people, and library items.
-- the Routines table shows only configured routines; `Create routine` is the explicit path for adding another bounded routine type.
+- the Routines table shows only configured routines; `Create routine` is the explicit path for adding or reconfiguring bounded assistant capabilities.
+- the create flow now shows the full assistant capability list, not just the unconfigured extras. Capabilities that already have a singleton starter instance are marked as already configured and route the operator back to editing that existing instance rather than silently disappearing from the picker.
+- scheduled routines now support `hourly`, `daily`, `weekdays`, `weekly`, `fortnightly`, and `monthly` cadence options in the shared routine timing model.
 - deleting a seeded default routine keeps it out of the configured routines list across restart until an operator explicitly re-creates it from `Create routine`.
 - `topic-watch` supports multiple configured instances and stores a `topicQuery` routine config instead of behaving like a single fixed built-in.
 - `deadline-watch` supports multiple configured instances and stores bounded deadline settings (`dueWithinHours`, `includeOverdue`) for proactive task-pressure notifications.
@@ -354,7 +356,7 @@ Examples of the intended bounded routine shape:
 The next uplift is expected to reuse selected structure from the Automations system without collapsing Second Brain into the generic automation runtime.
 
 Planned reuse:
-- reuse the schedule-builder interaction model from `web/public/js/pages/automations.js`, including schedule-kind selection, cron translation, and plain-English schedule preview
+- reuse the schedule-builder interaction model from `web/public/js/pages/automations.js`, including schedule-kind selection, cron translation, and human-readable schedule rendering
 - reuse the delivery and notification patterns already proven in Automations and the current routine notifier, especially Telegram-first delivery with operator-facing web or CLI fallback
 - continue using the existing shared scheduled-task substrate for execution
 

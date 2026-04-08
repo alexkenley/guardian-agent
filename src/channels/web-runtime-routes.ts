@@ -92,6 +92,16 @@ function parseSecondBrainRoutineTiming(value: unknown): import('../runtime/secon
   const cadence = trimOptionalString(scheduleRecord?.cadence) as import('../runtime/second-brain/types.js').SecondBrainRoutineSchedule['cadence'] | undefined;
   const time = trimOptionalString(scheduleRecord?.time);
   const dayOfWeek = trimOptionalString(scheduleRecord?.dayOfWeek) as import('../runtime/second-brain/types.js').SecondBrainRoutineWeekday | undefined;
+  const dayOfMonth = typeof scheduleRecord?.dayOfMonth === 'number'
+    ? scheduleRecord.dayOfMonth
+    : typeof scheduleRecord?.dayOfMonth === 'string' && scheduleRecord.dayOfMonth.trim()
+      ? Number(scheduleRecord.dayOfMonth)
+      : undefined;
+  const minute = typeof scheduleRecord?.minute === 'number'
+    ? scheduleRecord.minute
+    : typeof scheduleRecord?.minute === 'string' && scheduleRecord.minute.trim()
+      ? Number(scheduleRecord.minute)
+      : undefined;
   const minutes = typeof record.minutes === 'number'
     ? record.minutes
     : typeof record.minutes === 'string' && record.minutes.trim()
@@ -99,12 +109,14 @@ function parseSecondBrainRoutineTiming(value: unknown): import('../runtime/secon
       : undefined;
   return {
     kind,
-    ...(cadence && time
+    ...(cadence && ((cadence === 'hourly' && Number.isFinite(minute)) || time)
       ? {
           schedule: {
             cadence,
-            time,
+            ...(time ? { time } : {}),
             ...(dayOfWeek ? { dayOfWeek } : {}),
+            ...(Number.isFinite(dayOfMonth) ? { dayOfMonth } : {}),
+            ...(Number.isFinite(minute) ? { minute } : {}),
           },
         }
       : {}),

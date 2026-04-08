@@ -2,7 +2,7 @@ import type { ScheduledTaskService } from '../scheduled-tasks.js';
 import type { SecondBrainService } from './second-brain-service.js';
 import type { BriefingService } from './briefing-service.js';
 import type { SyncService, SecondBrainSyncSummary } from './sync-service.js';
-import type { SecondBrainDeliveryChannel, SecondBrainRoutineRecord } from './types.js';
+import type { SecondBrainDeliveryChannel, SecondBrainRoutineRecord, SecondBrainRoutineSchedule, SecondBrainRoutineWeekday } from './types.js';
 
 interface HorizonScannerOptions {
   now?: () => number;
@@ -29,12 +29,6 @@ export interface HorizonRoutineOutcome {
   artifactIds?: string[];
 }
 
-interface SupportedRoutineCron {
-  minute: number;
-  hour: number;
-  daysOfWeek: number[] | null;
-}
-
 function parseCronInteger(field: string, min: number, max: number): number | null {
   if (!/^\d+$/.test(field)) return null;
   const value = Number(field);
@@ -42,57 +36,153 @@ function parseCronInteger(field: string, min: number, max: number): number | nul
   return value;
 }
 
-function parseCronDaysOfWeek(field: string): number[] | null {
-  if (field === '*') return null;
-  if (/^\d+$/.test(field)) {
-    const value = Number(field);
-    if (value < 0 || value > 7) return null;
-    return [value === 7 ? 0 : value];
-  }
-  const rangeMatch = field.match(/^(\d)-(\d)$/);
-  if (!rangeMatch) return null;
-  const start = Number(rangeMatch[1]);
-  const end = Number(rangeMatch[2]);
-  if (start < 0 || end > 7 || start > end) return null;
-  const days: number[] = [];
-  for (let day = start; day <= end; day += 1) {
-    days.push(day === 7 ? 0 : day);
-  }
-  return days;
+function cronDayToWeekday(field: string): SecondBrainRoutineWeekday | null {
+  if (!/^\d+$/.test(field)) return null;
+  const value = Number(field);
+  const weekdayMap: SecondBrainRoutineWeekday[] = [
+    'sunday',
+    'monday',
+    'tuesday',
+    'wednesday',
+    'thursday',
+    'friday',
+    'saturday',
+  ];
+  return weekdayMap[value === 7 ? 0 : value] ?? null;
 }
 
-function parseSupportedRoutineCron(cron: string): SupportedRoutineCron | null {
+function weekdayToDayNumber(weekday: SecondBrainRoutineWeekday | undefined): number | null {
+  const weekdayMap: SecondBrainRoutineWeekday[] = [
+    'sunday',
+    'monday',
+    'tuesday',
+    'wednesday',
+    'thursday',
+    'friday',
+    'saturday',
+  ];
+  return weekday ? weekdayMap.indexOf(weekday) : null;
+}
+
+function parseRoutineScheduleFromCron(cron: string): SecondBrainRoutineSchedule | null {
   const parts = cron.trim().split(/\s+/g);
   if (parts.length !== 5) return null;
-  if (parts[2] !== '*' || parts[3] !== '*') return null;
   const minute = parseCronInteger(parts[0], 0, 59);
-  const hour = parseCronInteger(parts[1], 0, 23);
-  const daysOfWeek = parseCronDaysOfWeek(parts[4]);
-  if (minute == null || hour == null || (parts[4] !== '*' && !daysOfWeek)) {
+  if (minute == null || parts[3] !== '*') {
     return null;
   }
-  return { minute, hour, daysOfWeek };
+  if (parts[1] === '*' && parts[2] === '*' && parts[4] === '*') {
+    return { cadence: 'hourly', minute };
+  }
+  const hour = parseCronInteger(parts[1], 0, 23);
+  if (hour == null) return null;
+  const time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  if (/^\d+$/.test(parts[2]) && parts[4] === '*') {
+    const dayOfMonth = Number(parts[2]);
+    if (dayOfMonth < 1 || dayOfMonth > 31) return null;
+    return { cadence: 'monthly', dayOfMonth, time };
+  }
+  if (parts[2] !== '*') return null;
+  if (parts[4] === '*') {
+    return { cadence: 'daily', time };
+  }
+  if (parts[4] === '1-5') {
+    return { cadence: 'weekdays', time };
+  }
+  const dayOfWeek = cronDayToWeekday(parts[4]);
+  if (!dayOfWeek) return null;
+  return { cadence: 'weekly', dayOfWeek, time };
 }
 
-function latestCronOccurrenceAtOrBefore(now: number, cron: string): number | null {
-  const parsed = parseSupportedRoutineCron(cron);
-  if (!parsed) return null;
+function latestScheduledOccurrenceAtOrBefore(
+  now: number,
+  schedule: SecondBrainRoutineSchedule,
+  anchorAt?: number,
+): number | null {
+  const candidate = new Date(now);
+  candidate.setSeconds(0, 0);
 
-  for (let offset = 0; offset <= 7; offset += 1) {
-    const candidate = new Date(now);
-    candidate.setSeconds(0, 0);
-    candidate.setDate(candidate.getDate() - offset);
-    candidate.setHours(parsed.hour, parsed.minute, 0, 0);
+  if (schedule.cadence === 'hourly') {
+    const minute = Number.isFinite(schedule.minute) ? Number(schedule.minute) : 0;
+    if (!Number.isInteger(minute) || minute < 0 || minute > 59) return null;
+    candidate.setMinutes(minute, 0, 0);
     if (candidate.getTime() > now) {
-      continue;
-    }
-    if (parsed.daysOfWeek && !parsed.daysOfWeek.includes(candidate.getDay())) {
-      continue;
+      candidate.setHours(candidate.getHours() - 1);
     }
     return candidate.getTime();
   }
 
+  const timeMatch = String(schedule.time ?? '').match(/^(\d{2}):(\d{2})$/);
+  if (!timeMatch) return null;
+  const hour = Number(timeMatch[1]);
+  const minute = Number(timeMatch[2]);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+
+  if (schedule.cadence === 'daily' || schedule.cadence === 'weekdays') {
+    for (let offset = 0; offset <= 7; offset += 1) {
+      const dayCandidate = new Date(now);
+      dayCandidate.setSeconds(0, 0);
+      dayCandidate.setDate(dayCandidate.getDate() - offset);
+      dayCandidate.setHours(hour, minute, 0, 0);
+      if (dayCandidate.getTime() > now) continue;
+      if (schedule.cadence === 'weekdays' && (dayCandidate.getDay() === 0 || dayCandidate.getDay() === 6)) {
+        continue;
+      }
+      return dayCandidate.getTime();
+    }
+    return null;
+  }
+
+  if (schedule.cadence === 'weekly' || schedule.cadence === 'fortnightly') {
+    const targetDay = weekdayToDayNumber(schedule.dayOfWeek);
+    if (targetDay == null) return null;
+    for (let offset = 0; offset <= 21; offset += 1) {
+      const dayCandidate = new Date(now);
+      dayCandidate.setSeconds(0, 0);
+      dayCandidate.setDate(dayCandidate.getDate() - offset);
+      dayCandidate.setHours(hour, minute, 0, 0);
+      if (dayCandidate.getTime() > now || dayCandidate.getDay() !== targetDay) {
+        continue;
+      }
+      if (schedule.cadence === 'fortnightly') {
+        const anchor = Number.isFinite(anchorAt) ? Number(anchorAt) : dayCandidate.getTime();
+        const elapsedDays = Math.floor((startOfLocalDay(dayCandidate.getTime()) - startOfLocalDay(anchor)) / (24 * 60 * 60 * 1000));
+        if (elapsedDays < 0 || (Math.floor(elapsedDays / 7) % 2) !== 0) {
+          continue;
+        }
+      }
+      return dayCandidate.getTime();
+    }
+    return null;
+  }
+
+  if (schedule.cadence === 'monthly') {
+    const targetDay = Number.isFinite(schedule.dayOfMonth) ? Number(schedule.dayOfMonth) : NaN;
+    if (!Number.isInteger(targetDay) || targetDay < 1 || targetDay > 31) return null;
+    for (let offset = 0; offset <= 12; offset += 1) {
+      const monthCandidate = new Date(now);
+      monthCandidate.setSeconds(0, 0);
+      monthCandidate.setDate(1);
+      monthCandidate.setMonth(monthCandidate.getMonth() - offset);
+      monthCandidate.setHours(hour, minute, 0, 0);
+      const daysInMonth = new Date(monthCandidate.getFullYear(), monthCandidate.getMonth() + 1, 0).getDate();
+      if (targetDay > daysInMonth) {
+        continue;
+      }
+      monthCandidate.setDate(targetDay);
+      if (monthCandidate.getTime() <= now) {
+        return monthCandidate.getTime();
+      }
+    }
+  }
+
   return null;
+}
+
+function startOfLocalDay(value: number): number {
+  const date = new Date(value);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
 }
 
 function occursInSameMinute(left: number, right: number): boolean {
@@ -372,7 +462,9 @@ export class HorizonScanner {
 
   private shouldRunCronRoutine(now: number, routine: SecondBrainRoutineRecord): boolean {
     if (routine.trigger.mode !== 'cron' || !routine.trigger.cron) return false;
-    const scheduledAt = latestCronOccurrenceAtOrBefore(now, routine.trigger.cron);
+    const schedule = routine.trigger.schedule ?? parseRoutineScheduleFromCron(routine.trigger.cron);
+    if (!schedule) return false;
+    const scheduledAt = latestScheduledOccurrenceAtOrBefore(now, schedule, routine.trigger.anchorAt ?? routine.createdAt);
     if (scheduledAt == null) return false;
     const baseline = routine.lastRunAt
       ?? (this.secondBrainService.isSeededBuiltInRoutine(routine.id) ? 0 : routine.createdAt);

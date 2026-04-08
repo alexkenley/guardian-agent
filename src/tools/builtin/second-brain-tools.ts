@@ -169,21 +169,33 @@ function normalizeRoutineTiming(value: unknown): SecondBrainRoutineTimingInput |
   const cadence = typeof scheduleRecord?.cadence === 'string'
     ? scheduleRecord.cadence.trim().toLowerCase()
     : '';
+  const normalizedCadence = ['hourly', 'daily', 'weekdays', 'weekly', 'fortnightly', 'monthly'].includes(cadence)
+    ? cadence as import('../../runtime/second-brain/types.js').SecondBrainRoutineSchedule['cadence']
+    : undefined;
   const time = typeof scheduleRecord?.time === 'string'
     ? scheduleRecord.time.trim()
     : '';
   const dayOfWeek = typeof scheduleRecord?.dayOfWeek === 'string'
     ? scheduleRecord.dayOfWeek.trim().toLowerCase() as SecondBrainRoutineWeekday
     : undefined;
+  const dayOfMonth = typeof scheduleRecord?.dayOfMonth === 'number'
+    ? scheduleRecord.dayOfMonth
+    : undefined;
+  const minute = typeof scheduleRecord?.minute === 'number'
+    ? scheduleRecord.minute
+    : undefined;
   const minutes = typeof record.minutes === 'number' ? record.minutes : undefined;
   return {
     kind,
-    ...(time && (cadence === 'daily' || cadence === 'weekly')
+    ...((normalizedCadence === 'hourly' && Number.isFinite(minute))
+      || (time && ['daily', 'weekdays', 'weekly', 'fortnightly', 'monthly'].includes(normalizedCadence ?? ''))
       ? {
           schedule: {
-            cadence,
-            time,
+            cadence: normalizedCadence!,
+            ...(time ? { time } : {}),
             ...(dayOfWeek ? { dayOfWeek } : {}),
+            ...(Number.isFinite(dayOfMonth) ? { dayOfMonth } : {}),
+            ...(Number.isFinite(minute) ? { minute } : {}),
           },
         }
       : {}),
@@ -815,17 +827,19 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
           timing: {
             type: 'object',
             properties: {
-              kind: { type: 'string', enum: ['manual', 'scheduled', 'before_meetings', 'after_meetings', 'background'] },
-              minutes: { type: 'number' },
-              schedule: {
-                type: 'object',
-                properties: {
-                  cadence: { type: 'string', enum: ['daily', 'weekly'] },
+                  kind: { type: 'string', enum: ['manual', 'scheduled', 'before_meetings', 'after_meetings', 'background'] },
+                  minutes: { type: 'number' },
+                  schedule: {
+                    type: 'object',
+                    properties: {
+                  cadence: { type: 'string', enum: ['hourly', 'daily', 'weekdays', 'weekly', 'fortnightly', 'monthly'] },
                   time: { type: 'string' },
                   dayOfWeek: { type: 'string', enum: ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] },
+                  dayOfMonth: { type: 'number' },
+                  minute: { type: 'number' },
+                    },
+                  },
                 },
-              },
-            },
           },
           trigger: {
             type: 'object',
@@ -1151,17 +1165,19 @@ export function registerBuiltinSecondBrainTools(context: SecondBrainToolRegistra
           timing: {
             type: 'object',
             properties: {
-              kind: { type: 'string', enum: ['manual', 'scheduled', 'before_meetings', 'after_meetings', 'background'] },
-              minutes: { type: 'number' },
-              schedule: {
-                type: 'object',
-                properties: {
-                  cadence: { type: 'string', enum: ['daily', 'weekly'] },
+                  kind: { type: 'string', enum: ['manual', 'scheduled', 'before_meetings', 'after_meetings', 'background'] },
+                  minutes: { type: 'number' },
+                  schedule: {
+                    type: 'object',
+                    properties: {
+                  cadence: { type: 'string', enum: ['hourly', 'daily', 'weekdays', 'weekly', 'fortnightly', 'monthly'] },
                   time: { type: 'string' },
                   dayOfWeek: { type: 'string', enum: ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] },
+                  dayOfMonth: { type: 'number' },
+                  minute: { type: 'number' },
+                    },
+                  },
                 },
-              },
-            },
           },
           trigger: {
             type: 'object',

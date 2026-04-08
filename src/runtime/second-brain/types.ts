@@ -23,7 +23,7 @@ export type SecondBrainWorkloadClass = 'A' | 'B' | 'C' | 'D';
 export type SecondBrainRoutineTriggerMode = 'cron' | 'event' | 'horizon' | 'manual';
 export type SecondBrainRoutineEventType = 'upcoming_event' | 'event_ended' | 'task_due' | 'task_overdue';
 export type SecondBrainRoutineTimingKind = 'manual' | 'scheduled' | 'before_meetings' | 'after_meetings' | 'background';
-export type SecondBrainRoutineScheduleCadence = 'daily' | 'weekly';
+export type SecondBrainRoutineScheduleCadence = 'hourly' | 'daily' | 'weekdays' | 'weekly' | 'fortnightly' | 'monthly';
 export type SecondBrainRoutineWeekday =
   | 'sunday'
   | 'monday'
@@ -56,13 +56,6 @@ export type SecondBrainExternalCommMode =
   | 'send_with_approval'
   | 'post_with_approval';
 
-export interface SecondBrainRoutineTrigger {
-  mode: SecondBrainRoutineTriggerMode;
-  cron?: string;
-  eventType?: SecondBrainRoutineEventType;
-  lookaheadMinutes?: number;
-}
-
 export interface SecondBrainRoutineConfig {
   topicQuery?: string;
   dueWithinHours?: number;
@@ -71,8 +64,19 @@ export interface SecondBrainRoutineConfig {
 
 export interface SecondBrainRoutineSchedule {
   cadence: SecondBrainRoutineScheduleCadence;
-  time: string;
+  time?: string;
   dayOfWeek?: SecondBrainRoutineWeekday;
+  dayOfMonth?: number;
+  minute?: number;
+}
+
+export interface SecondBrainRoutineTrigger {
+  mode: SecondBrainRoutineTriggerMode;
+  cron?: string;
+  eventType?: SecondBrainRoutineEventType;
+  lookaheadMinutes?: number;
+  schedule?: SecondBrainRoutineSchedule;
+  anchorAt?: number;
 }
 
 export interface SecondBrainRoutineTimingInput {
