@@ -578,6 +578,170 @@ describe('CodeSessionStore', () => {
     expect(store.getSession(firstSession.id, 'owner')?.id).toBe(firstSession.id);
   });
 
+  it('stores an explicit non-primary target per surface and auto-references it', () => {
+    const firstRoot = createWorkspace('portfolio-target-first', {
+      'package.json': JSON.stringify({ name: 'portfolio-target-first' }),
+    });
+    const secondRoot = createWorkspace('portfolio-target-second', {
+      'package.json': JSON.stringify({ name: 'portfolio-target-second' }),
+    });
+    const store = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(firstRoot, '.guardianagent', 'code-sessions.sqlite'),
+    });
+
+    const firstSession = store.createSession({
+      ownerUserId: 'owner',
+      ownerPrincipalId: 'owner-principal',
+      title: 'Primary Repo',
+      workspaceRoot: firstRoot,
+    });
+    const secondSession = store.createSession({
+      ownerUserId: 'owner',
+      ownerPrincipalId: 'owner-principal',
+      title: 'Target Repo',
+      workspaceRoot: secondRoot,
+    });
+
+    store.attachSession({
+      sessionId: firstSession.id,
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      mode: 'controller',
+    });
+
+    expect(store.setTargetSessionForSurface({
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      targetSessionId: secondSession.id,
+    })).toBe(secondSession.id);
+
+    expect(store.getTargetSessionIdForSurface({
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    })).toBe(secondSession.id);
+    expect(store.listReferencedSessionIdsForSurface({
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    })).toEqual([secondSession.id]);
+  });
+
+  it('clears the explicit target when the referenced portfolio drops it', () => {
+    const firstRoot = createWorkspace('portfolio-target-clear-first', {
+      'package.json': JSON.stringify({ name: 'portfolio-target-clear-first' }),
+    });
+    const secondRoot = createWorkspace('portfolio-target-clear-second', {
+      'package.json': JSON.stringify({ name: 'portfolio-target-clear-second' }),
+    });
+    const store = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(firstRoot, '.guardianagent', 'code-sessions.sqlite'),
+    });
+
+    const firstSession = store.createSession({
+      ownerUserId: 'owner',
+      title: 'Primary Repo',
+      workspaceRoot: firstRoot,
+    });
+    const secondSession = store.createSession({
+      ownerUserId: 'owner',
+      title: 'Target Repo',
+      workspaceRoot: secondRoot,
+    });
+
+    store.attachSession({
+      sessionId: firstSession.id,
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      mode: 'controller',
+    });
+    store.setTargetSessionForSurface({
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      targetSessionId: secondSession.id,
+    });
+
+    store.setReferencedSessionsForSurface({
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      referencedSessionIds: [],
+    });
+
+    expect(store.getTargetSessionIdForSurface({
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    })).toBeNull();
+  });
+
+  it('clears the explicit target once that workspace becomes current', () => {
+    const firstRoot = createWorkspace('portfolio-target-attach-first', {
+      'package.json': JSON.stringify({ name: 'portfolio-target-attach-first' }),
+    });
+    const secondRoot = createWorkspace('portfolio-target-attach-second', {
+      'package.json': JSON.stringify({ name: 'portfolio-target-attach-second' }),
+    });
+    const store = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(firstRoot, '.guardianagent', 'code-sessions.sqlite'),
+    });
+
+    const firstSession = store.createSession({
+      ownerUserId: 'owner',
+      title: 'Primary Repo',
+      workspaceRoot: firstRoot,
+    });
+    const secondSession = store.createSession({
+      ownerUserId: 'owner',
+      title: 'Target Repo',
+      workspaceRoot: secondRoot,
+    });
+
+    store.attachSession({
+      sessionId: firstSession.id,
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      mode: 'controller',
+    });
+    store.setTargetSessionForSurface({
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      targetSessionId: secondSession.id,
+    });
+
+    store.attachSession({
+      sessionId: secondSession.id,
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      mode: 'controller',
+    });
+
+    expect(store.getTargetSessionIdForSurface({
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    })).toBeNull();
+    expect(store.listReferencedSessionIdsForSurface({
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    })).toEqual([]);
+  });
+
   it('normalizes Windows and WSL-style workspace roots to the current host format', () => {
     const seedRoot = createWorkspace('normalize-host-path', {
       'package.json': JSON.stringify({ name: 'normalize-host-path' }),

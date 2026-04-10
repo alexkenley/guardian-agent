@@ -2,6 +2,28 @@ function normalizeCodeSessionId(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+export function normalizeTargetSessionId({
+  targetSessionId,
+  sessions,
+  currentSessionId,
+} = {}) {
+  const normalizedTargetId = normalizeCodeSessionId(targetSessionId);
+  if (!normalizedTargetId) return null;
+  const normalizedCurrentId = normalizeCodeSessionId(currentSessionId);
+  if (normalizedCurrentId && normalizedTargetId === normalizedCurrentId) {
+    return null;
+  }
+  const availableIds = new Set(
+    Array.isArray(sessions)
+      ? sessions.map((session) => normalizeCodeSessionId(session?.id)).filter(Boolean)
+      : [],
+  );
+  if (availableIds.size > 0 && !availableIds.has(normalizedTargetId)) {
+    return null;
+  }
+  return normalizedTargetId;
+}
+
 export function normalizeReferencedSessionIds({
   referencedSessionIds,
   sessions,

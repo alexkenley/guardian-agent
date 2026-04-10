@@ -803,6 +803,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
     const codeSessions = {
       currentSessionId: null,
       referencedSessionIds: [],
+      targetSessionId: null,
       sessions: [
         {
           id: 'code-1',
@@ -847,6 +848,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
     const codeSessions = {
       currentSessionId: null,
       referencedSessionIds: [],
+      targetSessionId: null,
       sessions: [
         {
           id: 'code-1',
@@ -891,6 +893,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
     const codeSessions = {
       currentSessionId: 'code-1',
       referencedSessionIds: [],
+      targetSessionId: null,
       sessions: [
         {
           id: 'code-1',
@@ -934,6 +937,7 @@ describe('CLIChannel with DashboardCallbacks', () => {
       onCodeSessionsList: () => ({
         currentSessionId: null,
         referencedSessionIds: [],
+        targetSessionId: null,
         sessions: [],
       }),
       onCodeSessionCreate: (args) => {
@@ -3814,7 +3818,7 @@ describe('WebChannel', () => {
             channel: args.channel,
             surfaceId: args.surfaceId,
           });
-          return { sessions: [], currentSessionId: null, referencedSessionIds: [] };
+          return { sessions: [], currentSessionId: null, referencedSessionIds: [], targetSessionId: null };
         },
       };
 
@@ -3848,6 +3852,7 @@ describe('WebChannel', () => {
             sessions: [],
             currentSessionId: 'code-1',
             referencedSessionIds: ['code-2'],
+            targetSessionId: null,
           };
         },
       };
@@ -3874,12 +3879,65 @@ describe('WebChannel', () => {
         sessions: [],
         currentSessionId: 'code-1',
         referencedSessionIds: ['code-2'],
+        targetSessionId: null,
       });
       expect(seen).toEqual([{
         userId: 'web-user',
         channel: 'web',
         surfaceId: 'web-guardian-chat',
         referencedSessionIds: ['code-2'],
+      }]);
+    });
+
+    it('POST /api/code/sessions/target should forward the explicit target with surface context', async () => {
+      const seen: Array<{ userId: string; channel: string; surfaceId: string; targetSessionId: string | null | undefined }> = [];
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+        onCodeSessionSetTarget: (args) => {
+          seen.push({
+            userId: args.userId,
+            channel: args.channel,
+            surfaceId: args.surfaceId,
+            targetSessionId: args.targetSessionId,
+          });
+          return {
+            sessions: [],
+            currentSessionId: 'code-1',
+            referencedSessionIds: ['code-2'],
+            targetSessionId: 'code-2',
+          };
+        },
+      };
+
+      web = new WebChannel({ port: 18979, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18979/api/code/sessions/target', {
+        method: 'POST',
+        headers: {
+          ...authHeaders,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId: 'web-user',
+          channel: 'web',
+          surfaceId: 'web-guardian-chat',
+          targetSessionId: 'code-2',
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        sessions: [],
+        currentSessionId: 'code-1',
+        referencedSessionIds: ['code-2'],
+        targetSessionId: 'code-2',
+      });
+      expect(seen).toEqual([{
+        userId: 'web-user',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+        targetSessionId: 'code-2',
       }]);
     });
 

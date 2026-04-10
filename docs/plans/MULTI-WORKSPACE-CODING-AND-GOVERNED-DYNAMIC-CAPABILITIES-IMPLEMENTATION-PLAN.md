@@ -524,6 +524,12 @@ The first bounded slice of this phase is now landed:
 - the web workbench can add and remove referenced workspaces without making them implicit mutation targets
 - Guardian chat and prompt assembly can see bounded referenced-session portfolio context for the active surface
 
+The next bounded slice is now partially landed:
+
+- the web workbench can pin an explicit non-primary `target` session without switching the current mutable workspace
+- explicit target requests flow through `metadata.codeContext.sessionId` instead of changing the shared attachment
+- normal Guardian chat should stay lightweight; any chat-side visibility for this state is informational only and should not duplicate the workbench session controls
+
 Remaining work in this phase still includes typed cross-session links, richer portfolio summary surfaces, and the later `child/delegated` lane model.
 
 ### Deliver

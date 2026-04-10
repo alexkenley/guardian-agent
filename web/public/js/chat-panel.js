@@ -27,10 +27,12 @@ import { matchesRunTimelineRequest } from './chat-run-tracking.js';
 import {
   formatChatCodeSessionOptionLabel,
   findReferencedCodeSessions,
+  findTargetCodeSession,
   normalizeCodeSessionId,
   shouldShowChatCodeSessionControls,
   summarizeReferencedChatCodeSessions,
   summarizeChatCodeSessionState,
+  summarizeTargetedChatCodeSession,
 } from './chat-code-sessions.js';
 import { createResponseSourceBadge } from './response-source.js';
 import { applyInputTooltips } from './tooltip.js';
@@ -147,7 +149,7 @@ export async function initChatPanel(container) {
 
   let agents = [];
   let routingState = null;
-  let codeSessionsState = { sessions: [], currentSessionId: null, referencedSessionIds: [] };
+  let codeSessionsState = { sessions: [], currentSessionId: null, referencedSessionIds: [], targetSessionId: null };
   const webUserId = resolveWebUserId();
   try {
     [agents, routingState, codeSessionsState] = await Promise.all([
@@ -157,7 +159,7 @@ export async function initChatPanel(container) {
         userId: webUserId,
         channel: 'web',
         surfaceId: GUARDIAN_CHAT_SURFACE_ID,
-      }).catch(() => ({ sessions: [], currentSessionId: null, referencedSessionIds: [] })),
+      }).catch(() => ({ sessions: [], currentSessionId: null, referencedSessionIds: [], targetSessionId: null })),
     ]);
   } catch {
     // Continue with empty
@@ -173,6 +175,7 @@ export async function initChatPanel(container) {
   let referencedCodeSessionIds = Array.isArray(codeSessionsState?.referencedSessionIds)
     ? codeSessionsState.referencedSessionIds.map((value) => normalizeCodeSessionId(value)).filter(Boolean)
     : [];
+  let targetCodeSessionId = normalizeCodeSessionId(codeSessionsState?.targetSessionId);
 
   container.innerHTML = '';
 
@@ -288,7 +291,7 @@ export async function initChatPanel(container) {
       userId: webUserId,
       channel: 'web',
       surfaceId: GUARDIAN_CHAT_SURFACE_ID,
-    }).catch(() => ({ sessions: [], currentSessionId: null, referencedSessionIds: [] }));
+    }).catch(() => ({ sessions: [], currentSessionId: null, referencedSessionIds: [], targetSessionId: null }));
     const result = await refreshCodeSessionsPromise;
     refreshCodeSessionsPromise = null;
     knownCodeSessions = Array.isArray(result?.sessions) ? result.sessions : [];
@@ -296,6 +299,7 @@ export async function initChatPanel(container) {
     referencedCodeSessionIds = Array.isArray(result?.referencedSessionIds)
       ? result.referencedSessionIds.map((value) => normalizeCodeSessionId(value)).filter(Boolean)
       : [];
+    targetCodeSessionId = normalizeCodeSessionId(result?.targetSessionId);
     renderCodeSessionStrip();
     if (history) {
       renderHistory(history, getHistoryKey(), approvalHandler);
@@ -335,7 +339,7 @@ export async function initChatPanel(container) {
 
   const codeSessionStrip = document.createElement('section');
   codeSessionStrip.id = 'chat-panel-code-session-strip';
-  codeSessionStrip.style.cssText = 'display:flex;flex-direction:column;gap:0.5rem;margin:0 0 0.8rem;padding:0.65rem;border:1px solid var(--border);background:var(--bg-secondary);';
+  codeSessionStrip.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:0.65rem;margin:0 0 0.65rem;padding:0.45rem 0.65rem;border:1px solid var(--border);background:var(--bg-secondary);';
 
   const codeSessionSummaryRow = document.createElement('div');
   codeSessionSummaryRow.style.cssText = 'display:flex;align-items:flex-start;justify-content:space-between;gap:0.6rem;';
@@ -376,6 +380,20 @@ export async function initChatPanel(container) {
 
   codeSessionReferences.append(codeSessionReferencesSummary, codeSessionReferencesDetail);
 
+  const codeSessionTarget = document.createElement('div');
+  codeSessionTarget.dataset.chatCodeSessionTarget = 'true';
+  codeSessionTarget.style.cssText = 'display:flex;flex-direction:column;gap:0.12rem;min-width:0;flex:1 1 auto;';
+
+  const codeSessionTargetSummary = document.createElement('strong');
+  codeSessionTargetSummary.dataset.chatCodeSessionTargetSummary = 'true';
+  codeSessionTargetSummary.style.cssText = 'font-size:0.68rem;color:var(--text-primary);';
+
+  const codeSessionTargetDetail = document.createElement('div');
+  codeSessionTargetDetail.dataset.chatCodeSessionTargetDetail = 'true';
+  codeSessionTargetDetail.style.cssText = 'font-size:0.63rem;color:var(--text-muted);word-break:break-word;';
+
+  codeSessionTarget.append(codeSessionTargetSummary, codeSessionTargetDetail);
+
   const codeSessionSelect = document.createElement('select');
   codeSessionSelect.id = 'chat-panel-code-session-select';
   codeSessionSelect.style.cssText = 'flex:1 1 14rem;min-width:11rem;font-size:0.7rem;';
@@ -394,67 +412,69 @@ export async function initChatPanel(container) {
 
   codeSessionControls.append(codeSessionSelect, codeSessionDetachBtn, codeSessionOpenBtn);
 
+  const codeSessionTargetControls = document.createElement('div');
+  codeSessionTargetControls.style.cssText = 'display:flex;align-items:center;gap:0.45rem;flex:0 0 auto;';
+
+  const codeSessionTargetSelect = document.createElement('select');
+  codeSessionTargetSelect.id = 'chat-panel-code-session-target-select';
+  codeSessionTargetSelect.style.cssText = 'flex:1 1 14rem;min-width:11rem;font-size:0.7rem;';
+
+  const codeSessionTargetClearBtn = document.createElement('button');
+  codeSessionTargetClearBtn.className = 'btn btn-secondary';
+  codeSessionTargetClearBtn.dataset.chatCodeSessionTargetClear = 'true';
+  codeSessionTargetClearBtn.textContent = 'Clear Target';
+  codeSessionTargetClearBtn.style.cssText = 'font-size:0.7rem;padding:0.35rem 0.55rem;white-space:nowrap;';
+
+  const codeSessionTargetOpenBtn = document.createElement('button');
+  codeSessionTargetOpenBtn.className = 'btn btn-secondary';
+  codeSessionTargetOpenBtn.dataset.chatCodeSessionTargetOpen = 'true';
+  codeSessionTargetOpenBtn.textContent = 'Open In Code';
+  codeSessionTargetOpenBtn.style.cssText = 'font-size:0.7rem;padding:0.35rem 0.55rem;white-space:nowrap;';
+
+  codeSessionTargetControls.append(codeSessionTargetSelect, codeSessionTargetOpenBtn, codeSessionTargetClearBtn);
+
   const codeSessionError = document.createElement('div');
   codeSessionError.dataset.chatCodeSessionError = 'true';
   codeSessionError.style.cssText = 'font-size:0.65rem;color:var(--error);';
   codeSessionError.hidden = true;
 
-  codeSessionStrip.append(codeSessionSummaryRow, codeSessionReferences, codeSessionControls, codeSessionError);
+  codeSessionStrip.append(
+    codeSessionSummaryRow,
+    codeSessionReferences,
+    codeSessionTarget,
+    codeSessionControls,
+    codeSessionTargetControls,
+    codeSessionError,
+  );
   wrapper.appendChild(codeSessionStrip);
+  codeSessionSummaryRow.hidden = true;
+  codeSessionReferences.hidden = true;
+  codeSessionControls.hidden = true;
+  codeSessionTargetSelect.hidden = true;
 
   renderCodeSessionStrip = () => {
     const visible = shouldShowChatCodeSessionControls(currentChatContext, window.location?.hash || '');
-    codeSessionStrip.hidden = !visible;
-    if (!visible) {
+    const targetSummary = summarizeTargetedChatCodeSession(
+      knownCodeSessions,
+      targetCodeSessionId,
+      currentCodeSessionId,
+    );
+    codeSessionStrip.hidden = !visible || !targetSummary.pinned;
+    if (!visible || !targetSummary.pinned) {
       return;
     }
 
-    const summary = summarizeChatCodeSessionState({
-      sessions: knownCodeSessions,
-      currentSessionId: currentCodeSessionId,
-    });
-    codeSessionBadge.className = summary.badgeClassName;
-    codeSessionBadge.textContent = summary.badgeLabel;
-    codeSessionSummary.textContent = summary.summary;
-    codeSessionDetail.textContent = summary.detail;
-    codeSessionDetail.title = summary.currentSession?.workspaceRoot || summary.detail;
-
-    const referencedSummary = summarizeReferencedChatCodeSessions(
-      knownCodeSessions,
-      referencedCodeSessionIds,
-      currentCodeSessionId,
-    );
-    const referencedSessions = findReferencedCodeSessions(
-      knownCodeSessions,
-      referencedCodeSessionIds,
-      currentCodeSessionId,
-    );
-    codeSessionReferences.hidden = referencedSummary.count === 0;
-    codeSessionReferencesSummary.textContent = referencedSummary.summary;
-    codeSessionReferencesDetail.textContent = referencedSummary.detail;
-    codeSessionReferencesDetail.title = referencedSessions.map((session) => session.workspaceRoot || session.title || '').join('\n');
-
-    codeSessionSelect.replaceChildren();
-    codeSessionSelect.appendChild(new Option(
-      knownCodeSessions.length > 0 ? 'No coding workspace attached' : 'No coding workspaces yet',
-      '',
-    ));
-    for (const session of knownCodeSessions) {
-      codeSessionSelect.appendChild(new Option(
-        formatChatCodeSessionOptionLabel(session),
-        session.id,
-      ));
-    }
-    codeSessionSelect.value = currentCodeSessionId || '';
-    codeSessionSelect.disabled = codeSessionUiBusy || knownCodeSessions.length === 0;
-
-    codeSessionDetachBtn.disabled = codeSessionUiBusy || !currentCodeSessionId;
-    codeSessionDetachBtn.hidden = !currentCodeSessionId && knownCodeSessions.length === 0;
-
-    codeSessionOpenBtn.disabled = false;
-    codeSessionOpenBtn.textContent = currentCodeSessionId
-      ? 'Open Code'
-      : (knownCodeSessions.length > 0 ? 'Browse In Code' : 'Create In Code');
+    codeSessionBadge.className = 'badge badge-warn';
+    codeSessionBadge.textContent = 'TARGETED';
+    codeSessionSummary.textContent = 'Explicit coding target active';
+    codeSessionDetail.textContent = 'Manage coding workspace focus and references from the Code Sessions panel.';
+    codeSessionTarget.hidden = false;
+    codeSessionTargetSummary.textContent = targetSummary.summary;
+    codeSessionTargetDetail.textContent = `${targetSummary.detail} Guardian chat will explicitly target this workspace until you clear the pin.`;
+    codeSessionTargetDetail.title = targetSummary.targetSession?.workspaceRoot || targetSummary.detail;
+    codeSessionTargetControls.hidden = false;
+    codeSessionTargetOpenBtn.disabled = false;
+    codeSessionTargetClearBtn.disabled = codeSessionUiBusy || !targetCodeSessionId;
 
     codeSessionError.hidden = !codeSessionUiError;
     codeSessionError.textContent = codeSessionUiError;
@@ -509,9 +529,26 @@ export async function initChatPanel(container) {
   });
 
   codeSessionOpenBtn.addEventListener('click', () => {
-    const requestedSessionId = currentCodeSessionId
+    const requestedSessionId = targetCodeSessionId
+      || currentCodeSessionId
       || normalizeCodeSessionId(codeSessionSelect.value)
       || normalizeCodeSessionId(referencedCodeSessionIds[0]);
+    window.location.hash = requestedSessionId
+      ? `#/code?sessionId=${encodeURIComponent(requestedSessionId)}`
+      : '#/code';
+  });
+
+  codeSessionTargetSelect.addEventListener('change', () => {
+    void changeChatCodeSessionTarget(codeSessionTargetSelect.value);
+  });
+
+  codeSessionTargetClearBtn.addEventListener('click', () => {
+    if (!targetCodeSessionId) return;
+    void changeChatCodeSessionTarget(null);
+  });
+
+  codeSessionTargetOpenBtn.addEventListener('click', () => {
+    const requestedSessionId = targetCodeSessionId || currentCodeSessionId;
     window.location.hash = requestedSessionId
       ? `#/code?sessionId=${encodeURIComponent(requestedSessionId)}`
       : '#/code';
@@ -525,12 +562,21 @@ export async function initChatPanel(container) {
   });
   const getMessageMetadata = () => {
     const providerName = normalizeChatProviderSelection(providerSelect?.value || 'auto', routingState);
-    if (providerName === 'auto') return undefined;
-    return {
-      [CHAT_PROVIDER_SELECTION_METADATA_KEY]: {
+    const metadata = {};
+    if (providerName !== 'auto') {
+      metadata[CHAT_PROVIDER_SELECTION_METADATA_KEY] = {
         providerName,
-      },
-    };
+      };
+    }
+    const targetSession = findTargetCodeSession(knownCodeSessions, targetCodeSessionId, currentCodeSessionId);
+    const workspaceRoot = targetSession?.resolvedRoot || targetSession?.workspaceRoot || '';
+    if (targetSession?.id && workspaceRoot) {
+      metadata.codeContext = {
+        sessionId: targetSession.id,
+        workspaceRoot,
+      };
+    }
+    return Object.keys(metadata).length > 0 ? metadata : undefined;
   };
   const getContextPrefix = () => `[Context: User is currently viewing the ${currentChatContext} panel] `;
 
@@ -577,6 +623,46 @@ export async function initChatPanel(container) {
         origin: GUARDIAN_CHAT_SURFACE_ID,
       });
       await refreshCodeSessions();
+    } catch (err) {
+      codeSessionUiError = err instanceof Error ? err.message : String(err);
+    } finally {
+      codeSessionUiBusy = false;
+      renderCodeSessionStrip();
+    }
+  };
+
+  const changeChatCodeSessionTarget = async (nextSessionId) => {
+    const normalizedNextSessionId = normalizeCodeSessionId(nextSessionId);
+    if (normalizedNextSessionId === targetCodeSessionId) {
+      codeSessionUiError = '';
+      renderCodeSessionStrip();
+      return;
+    }
+
+    codeSessionUiBusy = true;
+    codeSessionUiError = '';
+    renderCodeSessionStrip();
+
+    try {
+      const result = await api.codeSessionSetTarget({
+        userId: webUserId,
+        channel: 'web',
+        surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+        targetSessionId: normalizedNextSessionId,
+      });
+      knownCodeSessions = Array.isArray(result?.sessions) ? result.sessions : knownCodeSessions;
+      currentCodeSessionId = normalizeCodeSessionId(result?.currentSessionId);
+      referencedCodeSessionIds = Array.isArray(result?.referencedSessionIds)
+        ? result.referencedSessionIds.map((value) => normalizeCodeSessionId(value)).filter(Boolean)
+        : [];
+      targetCodeSessionId = normalizeCodeSessionId(result?.targetSessionId);
+      notifyCodeSessionsChanged({
+        sessionId: currentCodeSessionId,
+        targetSessionId: targetCodeSessionId,
+        surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+        origin: GUARDIAN_CHAT_SURFACE_ID,
+      });
+      renderCodeSessionStrip();
     } catch (err) {
       codeSessionUiError = err instanceof Error ? err.message : String(err);
     } finally {
@@ -908,7 +994,8 @@ export async function initChatPanel(container) {
       const contextPrefix = getContextPrefix();
       const agentId = getAgentId();
       const requestId = createClientRequestId();
-      const focusedSessionId = currentCodeSessionId;
+      const attachedSessionIdAtSend = currentCodeSessionId;
+      const requestedCodeSessionId = targetCodeSessionId || currentCodeSessionId;
       let cleanedUp = false;
       let finalised = false;
       const clearActiveRequestIfCurrent = () => {
@@ -926,6 +1013,36 @@ export async function initChatPanel(container) {
         offSSE('chat.error', onError);
       };
 
+      const notifyTouchedCodeSessions = (metadata = null) => {
+        const nextSessionId = normalizeCodeSessionId(metadata?.codeSessionId);
+        const focusChanged = metadata?.codeSessionFocusChanged === true
+          || metadata?.codeSessionDetached === true
+          || (!attachedSessionIdAtSend && !!nextSessionId);
+        if (focusChanged) {
+          notifyCodeSessionFocus(nextSessionId);
+        }
+        const touchedSessionIds = new Set(
+          [attachedSessionIdAtSend, requestedCodeSessionId, nextSessionId]
+            .map((value) => normalizeCodeSessionId(value))
+            .filter(Boolean),
+        );
+        if (focusChanged && touchedSessionIds.size === 0) {
+          notifyCodeSessionsChanged({
+            sessionId: nextSessionId,
+            targetSessionId: targetCodeSessionId,
+            surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+          });
+          return;
+        }
+        for (const sessionId of touchedSessionIds) {
+          notifyCodeSessionsChanged({
+            sessionId,
+            targetSessionId: targetCodeSessionId,
+            surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+          });
+        }
+      };
+
       const finalizeSuccess = (data) => {
         if (finalised) return;
         finalised = true;
@@ -936,23 +1053,7 @@ export async function initChatPanel(container) {
         Promise.resolve(resolvePendingActionForDisplay(data?.metadata))
           .then((pendingAction) => {
             addAgentMessage(data.content || '', pendingAction, data.metadata?.responseSource);
-            const focusChanged = data?.metadata?.codeSessionFocusChanged === true
-              || data?.metadata?.codeSessionDetached === true
-              || (!focusedSessionId && typeof data?.metadata?.codeSessionId === 'string');
-            if (focusChanged) {
-              const nextSessionId = normalizeCodeSessionId(data?.metadata?.codeSessionId);
-              notifyCodeSessionFocus(nextSessionId);
-              notifyCodeSessionsChanged({
-                sessionId: nextSessionId,
-                surfaceId: GUARDIAN_CHAT_SURFACE_ID,
-              });
-            }
-            if (focusedSessionId) {
-              notifyCodeSessionsChanged({
-                sessionId: focusedSessionId,
-                surfaceId: GUARDIAN_CHAT_SURFACE_ID,
-              });
-            }
+            notifyTouchedCodeSessions(data?.metadata);
             history.scrollTop = history.scrollHeight;
           })
           .catch(() => {
@@ -971,7 +1072,7 @@ export async function initChatPanel(container) {
       };
 
       const onRunTimeline = (data) => {
-        if (!matchesRunTimelineRequest(data, { requestId, codeSessionId: focusedSessionId })) {
+        if (!matchesRunTimelineRequest(data, { requestId, codeSessionId: requestedCodeSessionId })) {
           return;
         }
         updateActiveChatIndicatorTimeline(data);
@@ -1040,6 +1141,7 @@ export async function initChatPanel(container) {
         clearActiveRequestIfCurrent();
         clearActiveChatIndicator();
         addAgentMessage(response.content, response.metadata?.pendingAction, response.metadata?.responseSource);
+        notifyTouchedCodeSessions(response?.metadata);
       }
     } catch (err) {
       setActiveRequest(null);

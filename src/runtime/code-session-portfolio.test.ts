@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCodeSessionPortfolioAdditionalSection,
   normalizeReferencedCodeSessionIds,
+  normalizeTargetCodeSessionId,
 } from './code-session-portfolio.js';
 
 const CURRENT_SESSION = {
@@ -36,6 +37,19 @@ describe('code session portfolio helpers', () => {
       availableSessions: [CURRENT_SESSION, REFERENCED_SESSION],
       currentSessionId: 'current-session',
     })).toEqual(['referenced-session']);
+  });
+
+  it('normalizes explicit target session ids against the available registry and current session', () => {
+    expect(normalizeTargetCodeSessionId({
+      targetSessionId: 'referenced-session',
+      availableSessions: [CURRENT_SESSION, REFERENCED_SESSION],
+      currentSessionId: 'current-session',
+    })).toBe('referenced-session');
+    expect(normalizeTargetCodeSessionId({
+      targetSessionId: 'current-session',
+      availableSessions: [CURRENT_SESSION, REFERENCED_SESSION],
+      currentSessionId: 'current-session',
+    })).toBeNull();
   });
 
   it('builds a bounded prompt section for referenced workspaces', () => {

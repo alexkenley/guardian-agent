@@ -30,6 +30,15 @@ export function findReferencedCodeSessions(sessions, referencedSessionIds, curre
   return resolved;
 }
 
+export function findTargetCodeSession(sessions, targetSessionId, currentSessionId = null) {
+  const normalizedTargetId = normalizeCodeSessionId(targetSessionId);
+  const normalizedCurrentId = normalizeCodeSessionId(currentSessionId);
+  if (!normalizedTargetId || (normalizedCurrentId && normalizedTargetId === normalizedCurrentId)) {
+    return null;
+  }
+  return findCodeSessionById(sessions, normalizedTargetId);
+}
+
 export function formatChatCodeSessionOptionLabel(session) {
   const title = trimString(session?.title) || 'Untitled coding workspace';
   const workspaceRoot = trimString(session?.workspaceRoot);
@@ -54,6 +63,24 @@ export function summarizeReferencedChatCodeSessions(sessions, referencedSessionI
     count: referenced.length,
     summary: referenced.length === 1 ? '1 referenced workspace' : `${referenced.length} referenced workspaces`,
     detail: labels.join(' | '),
+  };
+}
+
+export function summarizeTargetedChatCodeSession(sessions, targetSessionId, currentSessionId = null) {
+  const targetSession = findTargetCodeSession(sessions, targetSessionId, currentSessionId);
+  if (!targetSession) {
+    return {
+      pinned: false,
+      summary: 'No explicit target pinned',
+      detail: 'Guardian chat will mutate the current workspace by default. Pin another workspace when you want deliberate non-primary work.',
+      targetSession: null,
+    };
+  }
+  return {
+    pinned: true,
+    summary: `Pinned target: ${trimString(targetSession.title) || 'Untitled workspace'}`,
+    detail: trimString(targetSession.workspaceRoot) || 'Guardian chat will explicitly target this workspace until you clear the pin.',
+    targetSession,
   };
 }
 

@@ -24,7 +24,10 @@ import {
   type CodeWorkspaceTrustReview,
 } from './code-workspace-trust.js';
 import { SQLiteSecurityMonitor, type SQLiteSecurityEvent } from './sqlite-security.js';
-import { normalizeReferencedCodeSessionIds } from './code-session-portfolio.js';
+import {
+  normalizeReferencedCodeSessionIds,
+  normalizeTargetCodeSessionId,
+} from './code-session-portfolio.js';
 
 export type CodeSessionStatus =
   | 'idle'
@@ -145,6 +148,7 @@ export interface CodeSessionSurfaceStateRecord {
   channel: string;
   surfaceId: string;
   referencedSessionIds: string[];
+  targetSessionId: string | null;
   updatedAt: number;
 }
 
@@ -164,6 +168,7 @@ export type CodeSessionStoreEvent =
       channel: string;
       surfaceId: string;
       referencedSessionIds: string[];
+      targetSessionId: string | null;
     }
   | {
       type: 'focus_changed';
@@ -241,6 +246,7 @@ interface StoredSurfaceStateRow {
   channel: string;
   surface_id: string;
   referenced_session_ids_json: string;
+  target_session_id: string | null;
   updated_at: number;
 }
 
@@ -844,6 +850,37 @@ export class CodeSessionStore {
       .filter((session): session is CodeSessionRecord => !!session);
   }
 
+  getTargetSessionIdForSurface(args: {
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+  }): string | null {
+    const state = this.getSurfaceState(args);
+    const current = this.resolveForRequest({
+      userId: args.userId,
+      principalId: args.principalId,
+      channel: args.channel,
+      surfaceId: args.surfaceId,
+      touchAttachment: false,
+    });
+    return normalizeTargetCodeSessionId({
+      targetSessionId: state?.targetSessionId,
+      availableSessions: this.listSessionsForUser(args.userId),
+      currentSessionId: current?.session.id ?? null,
+    });
+  }
+
+  getTargetSessionForSurface(args: {
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+  }): CodeSessionRecord | null {
+    const targetSessionId = this.getTargetSessionIdForSurface(args);
+    return targetSessionId ? this.getSession(targetSessionId, args.userId) : null;
+  }
+
   setReferencedSessionsForSurface(args: {
     userId: string;
     principalId?: string;
@@ -865,19 +902,24 @@ export class CodeSessionStore {
       availableSessions: this.listSessionsForUser(args.userId),
       currentSessionId: current?.session.id ?? null,
     });
+    const existingTargetSessionId = normalizeTargetCodeSessionId({
+      targetSessionId: this.getSurfaceState(args)?.targetSessionId,
+      availableSessions: this.listSessionsForUser(args.userId),
+      currentSessionId: current?.session.id ?? null,
+    });
+    const normalizedTargetSessionId = existingTargetSessionId && normalizedIds.includes(existingTargetSessionId)
+      ? existingTargetSessionId
+      : null;
 
-    if (normalizedIds.length === 0) {
-      this.deleteSurfaceState(args.userId, args.channel, args.surfaceId);
-    } else {
-      this.upsertSurfaceState({
-        userId: args.userId,
-        principalId: normalizedPrincipalId,
-        channel: args.channel,
-        surfaceId: args.surfaceId,
-        referencedSessionIds: normalizedIds,
-        updatedAt: now,
-      });
-    }
+    this.writeSurfaceState({
+      userId: args.userId,
+      principalId: normalizedPrincipalId,
+      channel: args.channel,
+      surfaceId: args.surfaceId,
+      referencedSessionIds: normalizedIds,
+      targetSessionId: normalizedTargetSessionId,
+      updatedAt: now,
+    });
 
     this.emit({
       type: 'portfolio_changed',
@@ -886,8 +928,63 @@ export class CodeSessionStore {
       channel: args.channel,
       surfaceId: args.surfaceId,
       referencedSessionIds: [...normalizedIds],
+      targetSessionId: normalizedTargetSessionId,
     });
     return normalizedIds;
+  }
+
+  setTargetSessionForSurface(args: {
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+    targetSessionId?: string | null;
+  }): string | null {
+    const now = this.now();
+    const normalizedPrincipalId = normalizePrincipalId(args.principalId);
+    const availableSessions = this.listSessionsForUser(args.userId);
+    const current = this.resolveForRequest({
+      userId: args.userId,
+      principalId: normalizedPrincipalId,
+      channel: args.channel,
+      surfaceId: args.surfaceId,
+      touchAttachment: false,
+    });
+    const state = this.getSurfaceState(args);
+    const normalizedTargetSessionId = normalizeTargetCodeSessionId({
+      targetSessionId: args.targetSessionId,
+      availableSessions,
+      currentSessionId: current?.session.id ?? null,
+    });
+    const normalizedReferencedIds = normalizeReferencedCodeSessionIds({
+      referencedSessionIds: state?.referencedSessionIds,
+      availableSessions,
+      currentSessionId: current?.session.id ?? null,
+    });
+    if (normalizedTargetSessionId && !normalizedReferencedIds.includes(normalizedTargetSessionId)) {
+      normalizedReferencedIds.push(normalizedTargetSessionId);
+    }
+
+    this.writeSurfaceState({
+      userId: args.userId,
+      principalId: normalizedPrincipalId,
+      channel: args.channel,
+      surfaceId: args.surfaceId,
+      referencedSessionIds: normalizedReferencedIds,
+      targetSessionId: normalizedTargetSessionId,
+      updatedAt: now,
+    });
+
+    this.emit({
+      type: 'portfolio_changed',
+      userId: args.userId,
+      principalId: normalizedPrincipalId,
+      channel: args.channel,
+      surfaceId: args.surfaceId,
+      referencedSessionIds: [...normalizedReferencedIds],
+      targetSessionId: normalizedTargetSessionId,
+    });
+    return normalizedTargetSessionId;
   }
 
   attachSession(args: {
@@ -951,6 +1048,31 @@ export class CodeSessionStore {
         toAttachmentKey(args.userId, args.channel, args.surfaceId),
         clone(record),
       );
+    }
+
+    const existingSurfaceState = this.getSurfaceState({
+      userId: args.userId,
+      channel: args.channel,
+      surfaceId: args.surfaceId,
+    });
+    if (existingSurfaceState) {
+      const nextReferencedSessionIds = normalizeReferencedCodeSessionIds({
+        referencedSessionIds: existingSurfaceState.referencedSessionIds,
+        availableSessions: this.listSessionsForUser(args.userId),
+        currentSessionId: session.id,
+      });
+      const nextTargetSessionId = normalizeTargetCodeSessionId({
+        targetSessionId: existingSurfaceState.targetSessionId,
+        availableSessions: this.listSessionsForUser(args.userId),
+        currentSessionId: session.id,
+      });
+      this.writeSurfaceState({
+        ...existingSurfaceState,
+        principalId: record.principalId,
+        referencedSessionIds: nextReferencedSessionIds,
+        targetSessionId: nextTargetSessionId,
+        updatedAt: now,
+      });
     }
 
     this.touchSession(session.id, session.ownerUserId, 'active');
@@ -1222,6 +1344,14 @@ export class CodeSessionStore {
     existing.lastSeenAt = now;
   }
 
+  private writeSurfaceState(record: CodeSessionSurfaceStateRecord): void {
+    if (record.referencedSessionIds.length === 0 && !record.targetSessionId) {
+      this.deleteSurfaceState(record.userId, record.channel, record.surfaceId);
+      return;
+    }
+    this.upsertSurfaceState(record);
+  }
+
   private upsertSurfaceState(record: CodeSessionSurfaceStateRecord): void {
     if (this.mode === 'sqlite' && this.db && this.upsertSurfaceStateStmt) {
       this.upsertSurfaceStateStmt.run(
@@ -1230,6 +1360,7 @@ export class CodeSessionStore {
         record.channel,
         record.surfaceId,
         JSON.stringify(record.referencedSessionIds),
+        record.targetSessionId ?? null,
         record.updatedAt,
       );
       this.securityMonitor?.maybeCheck();
@@ -1261,32 +1392,31 @@ export class CodeSessionStore {
       `).all(userId) as unknown as StoredSurfaceStateRow[];
       for (const row of rows) {
         const state = this.fromStoredSurfaceStateRow(row);
-        if (!state.referencedSessionIds.includes(sessionId)) continue;
+        if (!state.referencedSessionIds.includes(sessionId) && state.targetSessionId !== sessionId) continue;
         const nextIds = state.referencedSessionIds.filter((entry) => entry !== sessionId);
-        if (nextIds.length === 0) {
-          this.deleteSurfaceState(state.userId, state.channel, state.surfaceId);
-        } else {
-          this.upsertSurfaceState({
-            ...state,
-            referencedSessionIds: nextIds,
-            updatedAt: this.now(),
-          });
-        }
+        this.writeSurfaceState({
+          ...state,
+          referencedSessionIds: nextIds,
+          targetSessionId: state.targetSessionId === sessionId ? null : state.targetSessionId,
+          updatedAt: this.now(),
+        });
       }
       return;
     }
 
     for (const [key, state] of this.memory.surfaceStates.entries()) {
-      if (state.userId !== userId || !state.referencedSessionIds.includes(sessionId)) continue;
+      if (state.userId !== userId || (!state.referencedSessionIds.includes(sessionId) && state.targetSessionId !== sessionId)) continue;
       const nextIds = state.referencedSessionIds.filter((entry) => entry !== sessionId);
-      if (nextIds.length === 0) {
+      const nextState = {
+        ...state,
+        referencedSessionIds: nextIds,
+        targetSessionId: state.targetSessionId === sessionId ? null : state.targetSessionId,
+        updatedAt: this.now(),
+      };
+      if (nextState.referencedSessionIds.length === 0 && !nextState.targetSessionId) {
         this.memory.surfaceStates.delete(key);
       } else {
-        this.memory.surfaceStates.set(key, {
-          ...state,
-          referencedSessionIds: nextIds,
-          updatedAt: this.now(),
-        });
+        this.memory.surfaceStates.set(key, nextState);
       }
     }
   }
@@ -1359,6 +1489,9 @@ export class CodeSessionStore {
       surfaceId: row.surface_id,
       referencedSessionIds: normalizeReferencedCodeSessionIds({
         referencedSessionIds,
+      }),
+      targetSessionId: normalizeTargetCodeSessionId({
+        targetSessionId: row.target_session_id,
       }),
       updatedAt: row.updated_at,
     };
@@ -1457,6 +1590,7 @@ export class CodeSessionStore {
         channel TEXT NOT NULL,
         surface_id TEXT NOT NULL,
         referenced_session_ids_json TEXT NOT NULL,
+        target_session_id TEXT,
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (user_id, channel, surface_id)
       );
@@ -1464,6 +1598,7 @@ export class CodeSessionStore {
       CREATE INDEX IF NOT EXISTS idx_code_session_surface_state_scope
         ON code_session_surface_state(user_id, channel, surface_id);
     `);
+    this.ensureSurfaceStateTargetColumn();
 
     this.insertSessionStmt = this.db.prepare(`
       INSERT INTO code_sessions (
@@ -1538,17 +1673,35 @@ export class CodeSessionStore {
         channel,
         surface_id,
         referenced_session_ids_json,
+        target_session_id,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(user_id, channel, surface_id)
       DO UPDATE SET
         principal_id = excluded.principal_id,
         referenced_session_ids_json = excluded.referenced_session_ids_json,
+        target_session_id = excluded.target_session_id,
         updated_at = excluded.updated_at
     `);
     this.deleteSurfaceStateStmt = this.db.prepare(`
       DELETE FROM code_session_surface_state
       WHERE user_id = ? AND channel = ? AND surface_id = ?
+    `);
+  }
+
+  private ensureSurfaceStateTargetColumn(): void {
+    if (!this.db) return;
+    const columns = this.db.prepare(`
+      SELECT name
+      FROM pragma_table_info('code_session_surface_state')
+      WHERE name = 'target_session_id'
+    `).all() as Array<{ name?: string }>;
+    if (columns.length > 0) {
+      return;
+    }
+    this.db.exec(`
+      ALTER TABLE code_session_surface_state
+      ADD COLUMN target_session_id TEXT
     `);
   }
 

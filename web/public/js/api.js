@@ -695,6 +695,10 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(payload),
   }),
+  codeSessionSetTarget: (payload = {}) => request('/api/code/sessions/target', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
   codeSessionDecideApproval: (sessionId, approvalId, payload) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`, {
     method: 'POST',
     body: JSON.stringify(payload),

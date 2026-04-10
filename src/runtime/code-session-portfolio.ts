@@ -5,6 +5,30 @@ function normalizeCodeSessionId(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+export function normalizeTargetCodeSessionId(input: {
+  targetSessionId?: unknown;
+  availableSessions?: readonly Pick<CodeSessionRecord, 'id'>[];
+  currentSessionId?: string | null;
+} = {}): string | null {
+  const targetSessionId = normalizeCodeSessionId(input.targetSessionId);
+  if (!targetSessionId) return null;
+  const currentSessionId = normalizeCodeSessionId(input.currentSessionId);
+  if (currentSessionId && targetSessionId === currentSessionId) {
+    return null;
+  }
+  const availableIds = new Set(
+    Array.isArray(input.availableSessions)
+      ? input.availableSessions
+        .map((session) => normalizeCodeSessionId(session?.id))
+        .filter((sessionId): sessionId is string => !!sessionId)
+      : [],
+  );
+  if (availableIds.size > 0 && !availableIds.has(targetSessionId)) {
+    return null;
+  }
+  return targetSessionId;
+}
+
 export function normalizeReferencedCodeSessionIds(input: {
   referencedSessionIds?: unknown;
   availableSessions?: readonly Pick<CodeSessionRecord, 'id'>[];

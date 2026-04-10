@@ -501,6 +501,11 @@ guardian:
       await card.locator('[data-code-session-reference]').click();
     }
 
+    async function toggleWorkspaceTargetFromCodePanel(expectedWorkspaceRoot) {
+      const card = page.locator('.code-session').filter({ hasText: expectedWorkspaceRoot });
+      await card.locator('[data-code-session-target]').click();
+    }
+
     async function attachWorkspaceFromExternalSurface(expectedWorkspaceRoot, {
       channel = 'telegram',
       surfaceId = 'telegram-user',
@@ -551,8 +556,7 @@ guardian:
       return Array.from(document.querySelectorAll('.code-chat__notice')).some((node) => (node.textContent || '').includes('Native host malware scanning reported a workspace detection'));
     });
 
-    assert.equal(await page.locator('#chat-panel #chat-panel-code-session-select').isVisible().catch(() => false), false, 'Code route should hide the duplicate session selector in Guardian chat');
-    assert.equal(await page.locator('#chat-panel [data-chat-code-session-create="toggle"]').isVisible().catch(() => false), false, 'Code route should hide duplicate session creation controls in Guardian chat');
+    assert.equal(await page.locator('#chat-panel #chat-panel-code-session-strip').isVisible().catch(() => false), false, 'Code route should hide coding workspace context rows in Guardian chat');
     await waitForGuardianChatFocusByWorkspace(workspaceRoot);
 
     await openCodePanel('sessions');
@@ -682,6 +686,13 @@ guardian:
     await page.locator('.code-session').filter({ hasText: workspaceRoot }).click();
     await waitForCodePageFocusByWorkspace(workspaceRoot);
     await waitForGuardianChatFocusByWorkspace(workspaceRoot);
+    await toggleWorkspaceTargetFromCodePanel(reviewedWorkspaceRoot);
+    await page.waitForFunction((expectedRoot) => {
+      return Array.from(document.querySelectorAll('.code-session')).some((node) => {
+        const text = node.textContent || '';
+        return text.includes(expectedRoot) && text.includes('TARGETED');
+      });
+    }, reviewedWorkspaceRoot);
 
     await page.goto(`${baseUrl}/#/`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#chat-panel');
@@ -691,52 +702,24 @@ guardian:
       && dashboardFocus.sessions.some((session) => session.id === dashboardFocus.currentSessionId && String(session.workspaceRoot || '').includes(workspaceRoot)),
       `Expected Guardian chat focus to persist after leaving the coding workspace route: ${JSON.stringify(dashboardFocus)}`,
     );
-    await page.waitForSelector('#chat-panel-code-session-select');
-    await page.waitForFunction((expectedRoot) => {
-      const select = document.querySelector('#chat-panel-code-session-select');
-      const detail = document.querySelector('[data-chat-code-session-detail]');
-      const referenced = document.querySelector('[data-chat-code-session-references-detail]');
-      if (!(select instanceof HTMLSelectElement) || !(detail instanceof HTMLElement)) {
+    assert.ok(
+      Array.isArray(dashboardFocus?.sessions)
+      && dashboardFocus.sessions.some((session) => session.id === dashboardFocus.targetSessionId && String(session.workspaceRoot || '').includes(reviewedWorkspaceRoot)),
+      `Expected Guardian chat to retain the explicit target workspace: ${JSON.stringify(dashboardFocus)}`,
+    );
+    await page.waitForFunction(() => {
+      const strip = document.querySelector('#chat-panel-code-session-strip');
+      const clear = document.querySelector('#chat-panel [data-chat-code-session-target-clear]');
+      if (!(strip instanceof HTMLElement) || !(clear instanceof HTMLButtonElement)) {
         return false;
       }
-      return (select.selectedOptions?.[0]?.textContent || '').includes(expectedRoot)
-        && (detail.textContent || '').includes(expectedRoot);
-    }, workspaceRoot);
-    await page.waitForFunction((expectedRoot) => {
-      const referenced = document.querySelector('[data-chat-code-session-references-detail]');
-      return !!referenced && (referenced.textContent || '').includes(expectedRoot);
-    }, 'Workspace Review');
-    const switchedFromChatPanel = await page.evaluate((expectedRoot) => {
-      const select = document.querySelector('#chat-panel-code-session-select');
-      if (!(select instanceof HTMLSelectElement)) return false;
-      const option = Array.from(select.options).find((entry) => (entry.textContent || '').includes(expectedRoot));
-      if (!option) return false;
-      select.value = option.value;
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-      return true;
-    }, reviewedWorkspaceRoot);
-    assert.equal(switchedFromChatPanel, true, 'Expected Guardian chat workspace picker to expose the reviewed workspace');
-    await waitForGuardianChatFocusByWorkspace(reviewedWorkspaceRoot);
-    await page.waitForFunction((expectedRoot) => {
-      const detail = document.querySelector('[data-chat-code-session-detail]');
-      return !!detail && (detail.textContent || '').includes(expectedRoot);
-    }, reviewedWorkspaceRoot);
-    await page.click('#chat-panel [data-chat-code-session-detach]');
-    await waitForGuardianChatDetached();
-    await page.waitForFunction(() => {
-      const summary = document.querySelector('[data-chat-code-session-summary]');
-      return !!summary && (summary.textContent || '').includes('No coding workspace attached');
+      return !strip.hidden && !clear.disabled;
     });
-    const reattachedFromChatPanel = await page.evaluate((expectedRoot) => {
-      const select = document.querySelector('#chat-panel-code-session-select');
-      if (!(select instanceof HTMLSelectElement)) return false;
-      const option = Array.from(select.options).find((entry) => (entry.textContent || '').includes(expectedRoot));
-      if (!option) return false;
-      select.value = option.value;
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-      return true;
-    }, workspaceRoot);
-    assert.equal(reattachedFromChatPanel, true, 'Expected Guardian chat workspace picker to reattach the original workspace');
+    await page.click('#chat-panel [data-chat-code-session-target-clear]');
+    await page.waitForFunction(() => {
+      const strip = document.querySelector('#chat-panel-code-session-strip');
+      return !!strip && strip.hidden;
+    });
     await waitForGuardianChatFocusByWorkspace(workspaceRoot);
 
     await page.goto(`${baseUrl}/#/code`, { waitUntil: 'domcontentloaded' });
@@ -1030,9 +1013,7 @@ guardian:
     if (!/answerValue = 42/.test(editedFileContent)) {
       const editDiagnostics = await page.evaluate(() => ({
         chatHistory: document.querySelector('#chat-history')?.textContent || '',
-        focusedSession: (document.querySelector('#chat-panel-code-session-select') instanceof HTMLSelectElement)
-          ? document.querySelector('#chat-panel-code-session-select').selectedOptions?.[0]?.textContent || ''
-          : 'selector hidden on code route',
+        focusedSession: document.querySelector('[data-chat-code-session-target-summary]')?.textContent || 'no explicit target row',
         activitySummary: document.querySelector('[data-code-assistant-panel-host]')?.textContent || '',
       }));
       throw new assert.AssertionError({

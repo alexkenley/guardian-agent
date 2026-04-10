@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   findCodeSessionById,
   findReferencedCodeSessions,
+  findTargetCodeSession,
   formatChatCodeSessionOptionLabel,
   shouldShowChatCodeSessionControls,
   summarizeReferencedChatCodeSessions,
   summarizeChatCodeSessionState,
+  summarizeTargetedChatCodeSession,
 } from '../web/public/js/chat-code-sessions.js';
 
 describe('chat code session helpers', () => {
@@ -85,6 +87,25 @@ describe('chat code session helpers', () => {
       count: 1,
       summary: '1 referenced workspace',
       detail: 'Workspace B',
+    });
+  });
+
+  it('resolves and summarizes an explicit non-primary target workspace', () => {
+    expect(findTargetCodeSession(sessions, 'session-b', 'session-a')).toEqual(sessions[1]);
+    expect(summarizeTargetedChatCodeSession(sessions, 'session-b', 'session-a')).toEqual({
+      pinned: true,
+      summary: 'Pinned target: Workspace B',
+      detail: '/tmp/workspace-b',
+      targetSession: sessions[1],
+    });
+  });
+
+  it('falls back to the current workspace when no explicit target is pinned', () => {
+    expect(summarizeTargetedChatCodeSession(sessions, null, 'session-a')).toEqual({
+      pinned: false,
+      summary: 'No explicit target pinned',
+      detail: 'Guardian chat will mutate the current workspace by default. Pin another workspace when you want deliberate non-primary work.',
+      targetSession: null,
     });
   });
 
