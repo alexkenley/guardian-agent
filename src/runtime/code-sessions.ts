@@ -24,6 +24,7 @@ import {
   type CodeWorkspaceTrustReview,
 } from './code-workspace-trust.js';
 import { SQLiteSecurityMonitor, type SQLiteSecurityEvent } from './sqlite-security.js';
+import { normalizeReferencedCodeSessionIds } from './code-session-portfolio.js';
 
 export type CodeSessionStatus =
   | 'idle'
@@ -138,6 +139,15 @@ export interface CodeSessionAttachmentRecord {
   active: boolean;
 }
 
+export interface CodeSessionSurfaceStateRecord {
+  userId: string;
+  principalId?: string;
+  channel: string;
+  surfaceId: string;
+  referencedSessionIds: string[];
+  updatedAt: number;
+}
+
 export interface ResolvedCodeSessionContext {
   session: CodeSessionRecord;
   attachment?: CodeSessionAttachmentRecord;
@@ -147,6 +157,14 @@ export type CodeSessionStoreEvent =
   | { type: 'created'; session: CodeSessionRecord }
   | { type: 'updated'; session: CodeSessionRecord }
   | { type: 'deleted'; sessionId: string; ownerUserId: string }
+  | {
+      type: 'portfolio_changed';
+      userId: string;
+      principalId?: string;
+      channel: string;
+      surfaceId: string;
+      referencedSessionIds: string[];
+    }
   | {
       type: 'focus_changed';
       userId: string;
@@ -217,9 +235,19 @@ interface StoredAttachmentRow {
   active: number;
 }
 
+interface StoredSurfaceStateRow {
+  user_id: string;
+  principal_id: string | null;
+  channel: string;
+  surface_id: string;
+  referenced_session_ids_json: string;
+  updated_at: number;
+}
+
 interface MemoryStore {
   sessions: Map<string, CodeSessionRecord>;
   attachments: Map<string, CodeSessionAttachmentRecord>;
+  surfaceStates: Map<string, CodeSessionSurfaceStateRecord>;
 }
 
 function normalizePrincipalId(value: string | undefined): string | undefined {
@@ -401,6 +429,10 @@ function toAttachmentKey(userId: string, channel: string, surfaceId: string): st
   return `${userId}::${channel}::${surfaceId}`;
 }
 
+function toSurfaceStateKey(userId: string, channel: string, surfaceId: string): string {
+  return `${userId}::${channel}::${surfaceId}`;
+}
+
 export class CodeSessionStore {
   private readonly now: () => number;
   private readonly enabled: boolean;
@@ -413,6 +445,7 @@ export class CodeSessionStore {
   private memory: MemoryStore = {
     sessions: new Map(),
     attachments: new Map(),
+    surfaceStates: new Map(),
   };
   private insertSessionStmt: SQLiteStatement | null = null;
   private updateSessionStmt: SQLiteStatement | null = null;
@@ -420,6 +453,8 @@ export class CodeSessionStore {
   private insertAttachmentStmt: SQLiteStatement | null = null;
   private deactivateAttachmentStmt: SQLiteStatement | null = null;
   private updateAttachmentSeenStmt: SQLiteStatement | null = null;
+  private upsertSurfaceStateStmt: SQLiteStatement | null = null;
+  private deleteSurfaceStateStmt: SQLiteStatement | null = null;
 
   constructor(options: CodeSessionStoreOptions) {
     this.enabled = options.enabled ?? true;
@@ -732,6 +767,7 @@ export class CodeSessionStore {
 
     if (this.mode === 'sqlite' && this.db && this.deleteSessionStmt) {
       this.deleteSessionStmt.run(sessionId, ownerUserId);
+      this.pruneDeletedSessionFromSurfaceStates(ownerUserId, sessionId);
       this.securityMonitor?.maybeCheck();
       this.emit({ type: 'deleted', sessionId, ownerUserId });
       return true;
@@ -743,6 +779,7 @@ export class CodeSessionStore {
         this.memory.attachments.delete(key);
       }
     }
+    this.pruneDeletedSessionFromSurfaceStates(ownerUserId, sessionId);
     this.emit({ type: 'deleted', sessionId, ownerUserId });
     return true;
   }
@@ -755,6 +792,102 @@ export class CodeSessionStore {
       ownerUserId: existing.ownerUserId,
       ...(status ? { status } : {}),
     });
+  }
+
+  getSurfaceState(args: {
+    userId: string;
+    channel: string;
+    surfaceId: string;
+  }): CodeSessionSurfaceStateRecord | null {
+    if (this.mode === 'sqlite' && this.db) {
+      const row = this.db.prepare(`
+        SELECT *
+        FROM code_session_surface_state
+        WHERE user_id = ? AND channel = ? AND surface_id = ?
+      `).get(args.userId, args.channel, args.surfaceId) as StoredSurfaceStateRow | undefined;
+      return row ? this.fromStoredSurfaceStateRow(row) : null;
+    }
+
+    const state = this.memory.surfaceStates.get(toSurfaceStateKey(args.userId, args.channel, args.surfaceId));
+    return state ? clone(state) : null;
+  }
+
+  listReferencedSessionIdsForSurface(args: {
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+  }): string[] {
+    const state = this.getSurfaceState(args);
+    const current = this.resolveForRequest({
+      userId: args.userId,
+      principalId: args.principalId,
+      channel: args.channel,
+      surfaceId: args.surfaceId,
+      touchAttachment: false,
+    });
+    return normalizeReferencedCodeSessionIds({
+      referencedSessionIds: state?.referencedSessionIds,
+      availableSessions: this.listSessionsForUser(args.userId),
+      currentSessionId: current?.session.id ?? null,
+    });
+  }
+
+  listReferencedSessionsForSurface(args: {
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+  }): CodeSessionRecord[] {
+    return this.listReferencedSessionIdsForSurface(args)
+      .map((sessionId) => this.getSession(sessionId, args.userId))
+      .filter((session): session is CodeSessionRecord => !!session);
+  }
+
+  setReferencedSessionsForSurface(args: {
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+    referencedSessionIds: string[];
+  }): string[] {
+    const now = this.now();
+    const normalizedPrincipalId = normalizePrincipalId(args.principalId);
+    const current = this.resolveForRequest({
+      userId: args.userId,
+      principalId: normalizedPrincipalId,
+      channel: args.channel,
+      surfaceId: args.surfaceId,
+      touchAttachment: false,
+    });
+    const normalizedIds = normalizeReferencedCodeSessionIds({
+      referencedSessionIds: args.referencedSessionIds,
+      availableSessions: this.listSessionsForUser(args.userId),
+      currentSessionId: current?.session.id ?? null,
+    });
+
+    if (normalizedIds.length === 0) {
+      this.deleteSurfaceState(args.userId, args.channel, args.surfaceId);
+    } else {
+      this.upsertSurfaceState({
+        userId: args.userId,
+        principalId: normalizedPrincipalId,
+        channel: args.channel,
+        surfaceId: args.surfaceId,
+        referencedSessionIds: normalizedIds,
+        updatedAt: now,
+      });
+    }
+
+    this.emit({
+      type: 'portfolio_changed',
+      userId: args.userId,
+      principalId: normalizedPrincipalId,
+      channel: args.channel,
+      surfaceId: args.surfaceId,
+      referencedSessionIds: [...normalizedIds],
+    });
+    return normalizedIds;
   }
 
   attachSession(args: {
@@ -1089,6 +1222,75 @@ export class CodeSessionStore {
     existing.lastSeenAt = now;
   }
 
+  private upsertSurfaceState(record: CodeSessionSurfaceStateRecord): void {
+    if (this.mode === 'sqlite' && this.db && this.upsertSurfaceStateStmt) {
+      this.upsertSurfaceStateStmt.run(
+        record.userId,
+        record.principalId ?? null,
+        record.channel,
+        record.surfaceId,
+        JSON.stringify(record.referencedSessionIds),
+        record.updatedAt,
+      );
+      this.securityMonitor?.maybeCheck();
+      return;
+    }
+
+    this.memory.surfaceStates.set(
+      toSurfaceStateKey(record.userId, record.channel, record.surfaceId),
+      clone(record),
+    );
+  }
+
+  private deleteSurfaceState(userId: string, channel: string, surfaceId: string): void {
+    if (this.mode === 'sqlite' && this.db && this.deleteSurfaceStateStmt) {
+      this.deleteSurfaceStateStmt.run(userId, channel, surfaceId);
+      this.securityMonitor?.maybeCheck();
+      return;
+    }
+
+    this.memory.surfaceStates.delete(toSurfaceStateKey(userId, channel, surfaceId));
+  }
+
+  private pruneDeletedSessionFromSurfaceStates(userId: string, sessionId: string): void {
+    if (this.mode === 'sqlite' && this.db) {
+      const rows = this.db.prepare(`
+        SELECT *
+        FROM code_session_surface_state
+        WHERE user_id = ?
+      `).all(userId) as unknown as StoredSurfaceStateRow[];
+      for (const row of rows) {
+        const state = this.fromStoredSurfaceStateRow(row);
+        if (!state.referencedSessionIds.includes(sessionId)) continue;
+        const nextIds = state.referencedSessionIds.filter((entry) => entry !== sessionId);
+        if (nextIds.length === 0) {
+          this.deleteSurfaceState(state.userId, state.channel, state.surfaceId);
+        } else {
+          this.upsertSurfaceState({
+            ...state,
+            referencedSessionIds: nextIds,
+            updatedAt: this.now(),
+          });
+        }
+      }
+      return;
+    }
+
+    for (const [key, state] of this.memory.surfaceStates.entries()) {
+      if (state.userId !== userId || !state.referencedSessionIds.includes(sessionId)) continue;
+      const nextIds = state.referencedSessionIds.filter((entry) => entry !== sessionId);
+      if (nextIds.length === 0) {
+        this.memory.surfaceStates.delete(key);
+      } else {
+        this.memory.surfaceStates.set(key, {
+          ...state,
+          referencedSessionIds: nextIds,
+          updatedAt: this.now(),
+        });
+      }
+    }
+  }
+
   private fromStoredRow(row: StoredSessionRow): CodeSessionRecord {
     let payload: { uiState?: Partial<CodeSessionUiState>; workState?: Partial<CodeSessionWorkState> } = {};
     try {
@@ -1140,6 +1342,25 @@ export class CodeSessionStore {
       attachedAt: row.attached_at,
       lastSeenAt: row.last_seen_at,
       active: row.active === 1,
+    };
+  }
+
+  private fromStoredSurfaceStateRow(row: StoredSurfaceStateRow): CodeSessionSurfaceStateRecord {
+    let referencedSessionIds: string[] = [];
+    try {
+      referencedSessionIds = JSON.parse(row.referenced_session_ids_json) as string[];
+    } catch {
+      referencedSessionIds = [];
+    }
+    return {
+      userId: row.user_id,
+      principalId: row.principal_id ?? undefined,
+      channel: row.channel,
+      surfaceId: row.surface_id,
+      referencedSessionIds: normalizeReferencedCodeSessionIds({
+        referencedSessionIds,
+      }),
+      updatedAt: row.updated_at,
     };
   }
 
@@ -1229,6 +1450,19 @@ export class CodeSessionStore {
 
       CREATE INDEX IF NOT EXISTS idx_code_session_attachments_scope
         ON code_session_attachments(user_id, channel, surface_id, active, last_seen_at DESC);
+
+      CREATE TABLE IF NOT EXISTS code_session_surface_state (
+        user_id TEXT NOT NULL,
+        principal_id TEXT,
+        channel TEXT NOT NULL,
+        surface_id TEXT NOT NULL,
+        referenced_session_ids_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, channel, surface_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_code_session_surface_state_scope
+        ON code_session_surface_state(user_id, channel, surface_id);
     `);
 
     this.insertSessionStmt = this.db.prepare(`
@@ -1296,6 +1530,25 @@ export class CodeSessionStore {
       UPDATE code_session_attachments
       SET last_seen_at = ?
       WHERE id = ? AND user_id = ? AND channel = ? AND surface_id = ?
+    `);
+    this.upsertSurfaceStateStmt = this.db.prepare(`
+      INSERT INTO code_session_surface_state (
+        user_id,
+        principal_id,
+        channel,
+        surface_id,
+        referenced_session_ids_json,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(user_id, channel, surface_id)
+      DO UPDATE SET
+        principal_id = excluded.principal_id,
+        referenced_session_ids_json = excluded.referenced_session_ids_json,
+        updated_at = excluded.updated_at
+    `);
+    this.deleteSurfaceStateStmt = this.db.prepare(`
+      DELETE FROM code_session_surface_state
+      WHERE user_id = ? AND channel = ? AND surface_id = ?
     `);
   }
 

@@ -128,6 +128,32 @@ export async function handleWebCodeSessionRoutes(
     return true;
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/code/sessions/references') {
+    if (!dashboard.onCodeSessionSetReferences) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    const body = await readBody(req, context.maxBodyBytes);
+    const parsed = JSON.parse(body || '{}') as {
+      userId?: string;
+      channel?: string;
+      surfaceId?: string;
+      referencedSessionIds?: unknown;
+    };
+    const principal = context.resolveRequestPrincipal(req);
+    const result = dashboard.onCodeSessionSetReferences({
+      userId: parsed.userId || 'web-user',
+      principalId: principal.principalId,
+      channel: parsed.channel || 'web',
+      surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+      referencedSessionIds: Array.isArray(parsed.referencedSessionIds)
+        ? parsed.referencedSessionIds.filter((value): value is string => typeof value === 'string')
+        : [],
+    });
+    sendJSON(res, 200, result);
+    return true;
+  }
+
   const codeSessionAttachMatch = req.method === 'POST'
     ? url.pathname.match(/^\/api\/code\/sessions\/([^/]+)\/attach$/)
     : null;

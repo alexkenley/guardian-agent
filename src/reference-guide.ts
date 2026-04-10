@@ -396,7 +396,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Quick actions are available through the web quick-action bar, CLI `/quick <action> <details>`, and Telegram `/quick ...`.',
                   'Built-in quick actions cover email, task planning, calendar planning, and a security review that runs the Assistant Security scan flow.',
                   'Chat can show whether a reply came from the local or hosted model path when that is useful for troubleshooting.',
-                  'Guardian chat can work against one focused coding session at a time on each surface. In the web UI, use the coding workspace picker in the normal chat panel or the session cards in `#/code` to choose the current coding session. In CLI, use `/code current`, `/code attach <sessionId-or-match>`, `/code detach`, and `/code create <workspaceRoot> [| title]`.',
+                  'Guardian chat can work against one focused coding session at a time on each surface, while still carrying additional referenced workspaces for inspect-only context. In the web UI, use the coding workspace picker in the normal chat panel or the session cards in `#/code` to choose the current coding session. In CLI, use `/code current`, `/code attach <sessionId-or-match>`, `/code detach`, and `/code create <workspaceRoot> [| title]`.',
                   'You can also ask Guardian to switch, attach, or detach a coding session in normal chat. The explicit chat-panel controls are the operator fallback when you want to verify or override the current focus directly.',
                 ],
                 note: 'Web chat shows live progress while the assistant is working.',
@@ -510,7 +510,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Creating or attaching a code session authorizes repo-local work for that session. It does not widen general non-Code file access.',
                   'Guardian chat is the canonical coding chat in the web UI. CLI and Telegram can also attach to the same code session when you want to continue the work from another surface.',
                   'Guardian keeps one shared current coding session across web chat, CLI, and Telegram for the same user by default. Switching or attaching from one of those surfaces updates the default workspace the others see as current too.',
-                  'In the web UI, the normal Guardian chat panel shows the current coding workspace and lets you switch or detach it without leaving the page. The Coding Workspace session cards in `#/code` control the same shared focus from the workbench side. In CLI, use `/code attach <sessionId-or-match>` and `/code detach` for the same job.',
+                  'In the web UI, the normal Guardian chat panel shows the current coding workspace plus any referenced workspaces for that chat surface, and lets you switch or detach the current one without leaving the page. The Coding Workspace session cards in `#/code` control the same shared focus from the workbench side and can add or remove inspect-only references. In CLI, use `/code attach <sessionId-or-match>` and `/code detach` for the same job.',
                   'Guardian chat can also switch, list, inspect, and detach Coding Workspace sessions directly from normal language requests such as "List the coding sessions", "What coding workspace is this chat attached to?", "Switch this chat to the coding workspace for TestApp", and "Detach this chat from the current coding workspace."',
                   'Repo-scoped search requests in an attached coding workspace stay inside that workspace and use Guardian’s guarded code search tools by default.',
                   'Repo-grounded inspect and review requests prefer Guardian’s built-in file and code search tools before shell or git output, unless you explicitly ask for shell or git output.',
@@ -521,8 +521,9 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'The Coding Workspace page (`#/code`) is a workbench: session rail, explorer, editor and diff view, manual terminal panes, activity, and a code inspector for guided investigation.',
                   'Session context survives refreshes and can be reused from other attached surfaces.',
-                  'Guardian chat stays available while you are in the Coding Workspace and follows the currently focused code session.',
+                  'Guardian chat stays available while you are in the Coding Workspace and follows the currently attached code session.',
                   'When the workbench is opened from a run or history link, it can open a session for inspection without changing which session is currently attached to Guardian chat.',
+                  'Session cards now distinguish `CURRENT`, `VIEWING`, and `REFERENCED`: `CURRENT` is the mutable workspace for Guardian chat, `VIEWING` is the session the workbench is inspecting locally, and `REFERENCED` is an inspect-only workspace kept in the portfolio for comparison and reasoning.',
                   'The workbench activity rail shows the session timeline for approvals, verification, and recent work.',
                   'Workspace Activity cards now show the same response-source badge treatment as the main chat rail, so delegated coding replies keep their provenance when you inspect them from the workbench.',
                   'Recent session timeline events can also show which answer source produced the final coding reply, so you can tell whether the result came from the local, managed-cloud, or frontier path.',
@@ -806,7 +807,7 @@ export function getReferenceGuide(): ReferenceGuide {
           {
             id: 'telegram',
             title: 'Telegram Channel',
-            summary: 'Bring the assistant into Telegram with BotFather setup and allowed chat IDs.',
+            summary: 'Bring the assistant into Telegram with BotFather setup, chat access, and proactive delivery.',
             sections: [
               {
                 title: 'Bot Setup',
@@ -815,7 +816,8 @@ export function getReferenceGuide(): ReferenceGuide {
                   'Enable Telegram in Configuration > Integration System, then either paste the token once for secure local storage or leave the token field blank and provide an env-backed credential ref.',
                   'Integration System stays limited to operator access, channels, and maintenance. AI provider, search, and cloud connection details live on their own owner tabs.',
                   'Send at least one message to the bot, then fetch your `message.chat.id` from `https://api.telegram.org/bot<token>/getUpdates`.',
-                  'Paste allowed chat IDs into the configuration. Group IDs are commonly negative and often start with `-100`.',
+                  'Paste allowed chat IDs into the configuration when you want an explicit Telegram allowlist and proactive fanout target list. Group IDs are commonly negative and often start with `-100`.',
+                  'If you leave the allowlist empty, proactive Telegram delivery can still target chats that have already talked to the bot during the current runtime.',
                 ],
               },
               {

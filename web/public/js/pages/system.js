@@ -423,7 +423,7 @@ export async function renderSystem(container) {
       api.aiSecuritySummary().catch(() => ({ findings: { highOrCritical: 0, total: 0 }, posture: {} })),
       api.threatIntelSummary().catch(() => ({ findings: { highOrCritical: 0, total: 0 }, watchlistCount: 0 })),
       api.connectorsState(12).catch(() => ({ summary: {} })),
-      api.codeSessions().catch(() => ({ sessions: [], currentSessionId: null })),
+      api.codeSessions().catch(() => ({ sessions: [], currentSessionId: null, referencedSessionIds: [] })),
       api.searchStatus().catch(() => null),
       api.networkDevices().catch(() => ({ devices: [] })),
       api.networkBaseline().catch(() => null),

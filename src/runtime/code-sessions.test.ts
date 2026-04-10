@@ -489,6 +489,95 @@ describe('CodeSessionStore', () => {
     }]);
   });
 
+  it('stores referenced workspaces per surface without treating the current workspace as referenced', () => {
+    const firstRoot = createWorkspace('portfolio-first', {
+      'package.json': JSON.stringify({ name: 'portfolio-first' }),
+    });
+    const secondRoot = createWorkspace('portfolio-second', {
+      'package.json': JSON.stringify({ name: 'portfolio-second' }),
+    });
+    const store = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(firstRoot, '.guardianagent', 'code-sessions.sqlite'),
+    });
+
+    const firstSession = store.createSession({
+      ownerUserId: 'owner',
+      ownerPrincipalId: 'owner-principal',
+      title: 'Primary Repo',
+      workspaceRoot: firstRoot,
+    });
+    const secondSession = store.createSession({
+      ownerUserId: 'owner',
+      ownerPrincipalId: 'owner-principal',
+      title: 'Referenced Repo',
+      workspaceRoot: secondRoot,
+    });
+
+    store.attachSession({
+      sessionId: firstSession.id,
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      mode: 'controller',
+    });
+    const referencedIds = store.setReferencedSessionsForSurface({
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      referencedSessionIds: [secondSession.id, firstSession.id, secondSession.id],
+    });
+
+    expect(referencedIds).toEqual([secondSession.id]);
+    expect(store.listReferencedSessionIdsForSurface({
+      userId: 'owner',
+      principalId: 'owner-principal',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    })).toEqual([secondSession.id]);
+  });
+
+  it('prunes deleted sessions from referenced surface portfolios', () => {
+    const firstRoot = createWorkspace('portfolio-prune-first', {
+      'package.json': JSON.stringify({ name: 'portfolio-prune-first' }),
+    });
+    const secondRoot = createWorkspace('portfolio-prune-second', {
+      'package.json': JSON.stringify({ name: 'portfolio-prune-second' }),
+    });
+    const store = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(firstRoot, '.guardianagent', 'code-sessions.sqlite'),
+    });
+
+    const firstSession = store.createSession({
+      ownerUserId: 'owner',
+      title: 'Primary Repo',
+      workspaceRoot: firstRoot,
+    });
+    const secondSession = store.createSession({
+      ownerUserId: 'owner',
+      title: 'Referenced Repo',
+      workspaceRoot: secondRoot,
+    });
+
+    store.setReferencedSessionsForSurface({
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      referencedSessionIds: [secondSession.id],
+    });
+
+    expect(store.deleteSession(secondSession.id, 'owner')).toBe(true);
+    expect(store.listReferencedSessionIdsForSurface({
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    })).toEqual([]);
+    expect(store.getSession(firstSession.id, 'owner')?.id).toBe(firstSession.id);
+  });
+
   it('normalizes Windows and WSL-style workspace roots to the current host format', () => {
     const seedRoot = createWorkspace('normalize-host-path', {
       'package.json': JSON.stringify({ name: 'normalize-host-path' }),

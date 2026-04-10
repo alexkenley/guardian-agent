@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   findCodeSessionById,
+  findReferencedCodeSessions,
   formatChatCodeSessionOptionLabel,
   shouldShowChatCodeSessionControls,
+  summarizeReferencedChatCodeSessions,
   summarizeChatCodeSessionState,
 } from '../web/public/js/chat-code-sessions.js';
 
@@ -69,6 +71,20 @@ describe('chat code session helpers', () => {
       detail: 'Open Code to create the first coding workspace for Guardian chat.',
       currentSession: null,
       sessionCount: 0,
+    });
+  });
+
+  it('resolves referenced sessions without duplicating the current workspace', () => {
+    expect(findReferencedCodeSessions(sessions, ['session-b', 'session-a', 'session-b'], 'session-a')).toEqual([
+      sessions[1],
+    ]);
+  });
+
+  it('summarizes referenced workspaces for the chat panel', () => {
+    expect(summarizeReferencedChatCodeSessions(sessions, ['session-b'], 'session-a')).toEqual({
+      count: 1,
+      summary: '1 referenced workspace',
+      detail: 'Workspace B',
     });
   });
 

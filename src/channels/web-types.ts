@@ -1316,6 +1316,13 @@ export interface DashboardCallbacks {
     channel: string;
     surfaceId: string;
   }) => { success: boolean };
+  onCodeSessionSetReferences?: (args: {
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+    referencedSessionIds: string[];
+  }) => DashboardCodeSessionsList;
   onCodeSessionApprovalDecision?: (input: {
     sessionId: string;
     approvalId: string;
@@ -2125,6 +2132,7 @@ export interface DashboardCodeSessionSnapshot {
 export interface DashboardCodeSessionsList {
   sessions: CodeSessionRecord[];
   currentSessionId: string | null;
+  referencedSessionIds: string[];
 }
 
 /** Programmatic terminal control for the CodingBackendService.

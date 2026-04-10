@@ -315,11 +315,13 @@ Behavior:
 - the `#/code` workbench keeps the session-scoped `Activity` panel for approvals, trust state, recent work, and verification outcomes
 - `Activity` preserves its own scroll position across normal session rerenders so long review lists remain navigable
 - the UI does not auto-switch panels when approvals appear
-- session cards in the workbench decide which coding session is current for Guardian chat on the web surface
+- session cards in the workbench can inspect any portfolio session locally without silently retargeting Guardian chat
+- explicit `Attach Chat` promotes a workbench session to the current mutable workspace for Guardian chat on the web surface
+- session cards can also mark another workspace as `REFERENCED` so Guardian can keep bounded inspect-only context for that surface
 - the workbench may also open a session in a temporary `VIEWING` state from a trace/run deep link without reattaching Guardian chat to that session
 - trace/run deep links that include `assistantRunId` or `assistantRunItemId` should open the `Activity` panel automatically for that inspected session
 - when a deep link includes `assistantRunItemId`, the activity panel should render and highlight the exact matching event with a bounded nearby-context window instead of only showing the last few items
-- `CURRENT` means the session currently attached to Guardian chat on that web surface; `VIEWING` means the operator is inspecting a different session in the workbench only
+- `CURRENT` means the session currently attached to Guardian chat on that web surface; `VIEWING` means the operator is inspecting a different session in the workbench only; `REFERENCED` means the workspace is kept in the portfolio for inspect/compare context but is not the implicit mutation target
 
 ### Code Inspector
 

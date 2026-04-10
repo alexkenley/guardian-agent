@@ -10,6 +10,10 @@ import {
   isViewingSession,
   resolveWorkbenchActiveSessionId,
 } from '../code-session-workbench.js';
+import {
+  isReferencedSession,
+  normalizeReferencedSessionIds,
+} from '../code-session-portfolio.js';
 import { normalizeRunTimelineContextAssembly, renderRunTimelineContextAssembly } from '../components/run-timeline-context.js';
 import {
   EDITOR_THEME_OPTIONS,
@@ -3043,6 +3047,11 @@ function mergeSessionsFromServer(payload, options = {}) {
   const preferredCurrentSessionId = normalizeCodeSessionId(options.preferredCurrentSessionId);
   const serverCurrentSessionId = normalizeCodeSessionId(payload?.currentSessionId);
   codeState.attachedSessionId = serverCurrentSessionId;
+  codeState.referencedSessionIds = normalizeReferencedSessionIds({
+    referencedSessionIds: payload?.referencedSessionIds,
+    sessions,
+    currentSessionId: serverCurrentSessionId,
+  });
   const preferredActiveId = resolveWorkbenchActiveSessionId({
     sessionIds: sessions.map((session) => session.id),
     previousActiveSessionId,
@@ -3121,6 +3130,29 @@ async function openSessionInGuardianChat(sessionId) {
     await switchCodeSession(nextSessionId);
   }
   window.location.hash = '#/';
+}
+
+async function setReferencedSessionsForSurface(referencedSessionIds, { rerender = true } = {}) {
+  const normalizedSessionIds = normalizeReferencedSessionIds({
+    referencedSessionIds,
+    sessions: codeState.sessions,
+    currentSessionId: codeState.attachedSessionId,
+  });
+  const result = await api.codeSessionSetReferences({
+    referencedSessionIds: normalizedSessionIds,
+    ...currentCodeSessionPayload(),
+  });
+  mergeSessionsFromServer(result);
+  saveState(codeState);
+  notifyCodeSessionsChanged({
+    sessionId: codeState.attachedSessionId,
+    surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+    origin: CODE_WORKBENCH_SURFACE_ID,
+  });
+  if (rerender) {
+    rerenderFromState();
+  }
+  return normalizedSessionIds;
 }
 
 async function switchCodeSession(sessionId, { rerender = true } = {}) {
@@ -3653,6 +3685,9 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
 
   const isCollapsed = activeSession?.terminalCollapsed;
   const terminalPanes = activeSession ? getVisibleTerminalPanes(activeSession) : [];
+  const referencedSessionCount = Array.isArray(codeState.referencedSessionIds)
+    ? codeState.referencedSessionIds.length
+    : 0;
 
   container.innerHTML = `
     <div class="code-page">
@@ -3671,7 +3706,7 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
                 <h3><span class="code-panel-title__icon">&#128451;</span> Sessions</h3>
                 <button class="btn btn-primary btn-sm" type="button" data-code-new-session>+</button>
               </div>
-              <div class="code-rail__subcopy">Click a session card to inspect it in the workbench. Use Attach Chat when you want Guardian chat to mutate that workspace by default.</div>
+              <div class="code-rail__subcopy">Click a session card to inspect it in the workbench. Use Attach Chat when you want Guardian chat to mutate that workspace by default. Referenced workspaces stay inspect-only until you switch or explicitly target them.${referencedSessionCount > 0 ? ` ${referencedSessionCount} referenced workspace${referencedSessionCount === 1 ? '' : 's'} in this portfolio.` : ''}</div>
               ${renderSessionForm()}
               <div class="code-rail__list">
                 ${codeState.sessions.map((session) => renderSessionCard(session)).join('')}
@@ -5637,6 +5672,7 @@ function renderSessionForm() {
 function renderSessionCard(session) {
   const isActive = session.id === codeState.activeSessionId;
   const isAttached = session.id === normalizeCodeSessionId(codeState.attachedSessionId);
+  const isReferenced = isReferencedSession(session.id, codeState.referencedSessionIds, codeState.attachedSessionId);
   const isViewing = isViewingSession(codeState.activeSessionId, codeState.attachedSessionId) && isActive;
   const approvalCount = Array.isArray(session.pendingApprovals) ? session.pendingApprovals.length : 0;
   const checkCount = getCheckBadgeCount(session);
@@ -5654,6 +5690,7 @@ function renderSessionCard(session) {
         <span style="display:flex;align-items:center;gap:0.45rem;min-width:0">
           <strong>${esc(session.title)}</strong>
           ${isAttached ? '<span class="badge badge-info">CURRENT</span>' : ''}
+          ${isReferenced ? '<span class="badge badge-muted">REFERENCED</span>' : ''}
           ${isViewing ? '<span class="badge badge-idle">VIEWING</span>' : ''}
         </span>
         <span style="display:flex;gap:0.4rem;align-items:center">
@@ -5672,11 +5709,13 @@ function renderSessionCard(session) {
       <div class="code-session__badges">
         ${workspaceTrust ? `<span class="badge ${trustBadgeClass}">TRUST: ${esc(reviewActive ? 'ACCEPTED' : String(effectiveTrustState || '').toUpperCase())}</span>` : ''}
         ${reviewActive ? `<span class="badge ${rawTrustBadgeClass}">RAW: ${esc(String(workspaceTrust?.state || '').toUpperCase())}</span>` : ''}
+        ${isReferenced ? '<span class="badge badge-muted">inspect-only</span>' : ''}
         ${approvalCount > 0 ? `<span class="badge badge-warn">${approvalCount} ${approvalCount === 1 ? 'approval' : 'approvals'}</span>` : ''}
         ${taskCount > 0 ? `<span class="badge badge-idle">${taskCount} ${taskCount === 1 ? 'task' : 'tasks'}</span>` : ''}
         ${checkCount > 0 ? `<span class="badge badge-info">${checkCount} ${checkCount === 1 ? 'check' : 'checks'}</span>` : ''}
       </div>
       <div class="code-session__actions">
+        ${!isAttached ? `<button class="btn btn-secondary btn-sm" type="button" data-code-session-reference="${escAttr(session.id)}">${isReferenced ? 'Remove Reference' : 'Add Reference'}</button>` : ''}
         ${!isAttached ? `<button class="btn btn-secondary btn-sm" type="button" data-code-session-attach="${escAttr(session.id)}">Attach Chat</button>` : ''}
         <button class="btn btn-secondary btn-sm" type="button" data-code-session-open-chat="${escAttr(session.id)}">${isAttached ? 'Open In Chat' : 'Attach + Open Chat'}</button>
         ${isAttached && !isActive ? '<button class="btn btn-secondary btn-sm" type="button" data-code-show-current-chat-focus>Show Current Chat Focus</button>' : ''}
@@ -6602,6 +6641,19 @@ function bindEvents(container) {
     });
   });
 
+  container.querySelectorAll('[data-code-session-reference]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const nextSessionId = normalizeCodeSessionId(button.dataset.codeSessionReference);
+      if (!nextSessionId || nextSessionId === normalizeCodeSessionId(codeState.attachedSessionId)) return;
+      const currentIds = Array.isArray(codeState.referencedSessionIds) ? [...codeState.referencedSessionIds] : [];
+      const nextIds = currentIds.includes(nextSessionId)
+        ? currentIds.filter((sessionId) => sessionId !== nextSessionId)
+        : [...currentIds, nextSessionId];
+      void setReferencedSessionsForSurface(nextIds).catch(() => {});
+    });
+  });
+
   container.querySelectorAll('[data-code-session-open-chat]').forEach((button) => {
     button.addEventListener('click', (event) => {
       event.stopPropagation();
@@ -6632,6 +6684,9 @@ function bindEvents(container) {
         pendingSessionUiStateById.delete(deletedId);
         editorSearchStateBySessionId.delete(deletedId);
       }
+      codeState.referencedSessionIds = Array.isArray(codeState.referencedSessionIds)
+        ? codeState.referencedSessionIds.filter((sessionId) => sessionId !== deletedId)
+        : [];
       codeState.sessions = codeState.sessions.filter((session) => session.id !== deletedId);
       const wasActive = codeState.activeSessionId === deletedId;
       codeState.activeSessionId = codeState.sessions[0]?.id || null;
@@ -6932,6 +6987,7 @@ function loadState() {
       sessions: [],
       activeSessionId: null,
       attachedSessionId: null,
+      referencedSessionIds: [],
       showCreateForm: false,
       activePanel: 'sessions',
       createDraft: { title: '', workspaceRoot: '.', agentId: '' },
@@ -6941,6 +6997,7 @@ function loadState() {
       sessions: [],
       activeSessionId: null,
       attachedSessionId: null,
+      referencedSessionIds: [],
       showCreateForm: false,
       activePanel: 'sessions',
       createDraft: { title: '', workspaceRoot: '.', agentId: '' },
@@ -6999,6 +7056,11 @@ function normalizeState(raw, agents) {
     }) : [],
     activeSessionId: raw?.activeSessionId || null,
     attachedSessionId: normalizeCodeSessionId(raw?.attachedSessionId),
+    referencedSessionIds: normalizeReferencedSessionIds({
+      referencedSessionIds: raw?.referencedSessionIds,
+      sessions: Array.isArray(raw?.sessions) ? raw.sessions : [],
+      currentSessionId: raw?.attachedSessionId,
+    }),
     showCreateForm: !!raw?.showCreateForm,
     activePanel: raw?.activePanel || (raw?.railCollapsed ? null : 'sessions'),
     editingSessionId: raw?.editingSessionId || null,
@@ -7050,6 +7112,11 @@ function normalizeTerminalTabs(value, existing = []) {
 function saveState(state) {
   const persistable = {
     ...state,
+    referencedSessionIds: normalizeReferencedSessionIds({
+      referencedSessionIds: state.referencedSessionIds,
+      sessions: state.sessions,
+      currentSessionId: state.attachedSessionId,
+    }),
     sessions: Array.isArray(state.sessions)
       ? state.sessions.map((session) => {
         return {

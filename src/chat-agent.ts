@@ -60,6 +60,7 @@ import type { CodeSessionRecord, ResolvedCodeSessionContext } from './runtime/co
 import { CodeSessionStore } from './runtime/code-sessions.js';
 import type { SecondBrainService } from './runtime/second-brain/second-brain-service.js';
 import { resolveCodingBackendSessionTarget } from './runtime/coding-backend-session-target.js';
+import { buildCodeSessionPortfolioAdditionalSection } from './runtime/code-session-portfolio.js';
 import { inspectCodeWorkspaceSync, type CodeWorkspaceProfile } from './runtime/code-workspace-profile.js';
 import {
   buildCodeWorkspaceMapSync,
@@ -1974,8 +1975,12 @@ type DirectIntentShadowCandidate =
     skillPromptMaterial: SkillPromptMaterialResult | undefined,
     intentDecision?: IntentGatewayDecision | null,
     executionProfile?: SelectedExecutionProfile | null,
+    seedSections?: PromptAssemblyAdditionalSection[],
   ): PromptAssemblyAdditionalSection[] | undefined {
-    const sections: PromptAssemblyAdditionalSection[] = [...(skillPromptMaterial?.additionalSections ?? [])];
+    const sections: PromptAssemblyAdditionalSection[] = [
+      ...(seedSections ?? []),
+      ...(skillPromptMaterial?.additionalSections ?? []),
+    ];
     const routedIntentSection = buildRoutedIntentAdditionalSection(intentDecision);
     if (routedIntentSection && !sections.some((section) => section.section === routedIntentSection.section)) {
       sections.push(routedIntentSection);
@@ -1984,6 +1989,39 @@ type DirectIntentShadowCandidate =
       ? sections.slice(0, Math.max(0, executionProfile.maxAdditionalSections))
       : sections;
     return bounded.length > 0 ? bounded : undefined;
+  }
+
+  private resolveReferencedCodeSessionsForSurface(
+    message: UserMessage,
+    currentSession?: CodeSessionRecord | null,
+  ): CodeSessionRecord[] {
+    if (!this.codeSessionStore) return [];
+    const ownerUserId = currentSession?.ownerUserId ?? message.userId?.trim();
+    const channel = message.channel?.trim();
+    if (!ownerUserId || !channel) return [];
+    return this.codeSessionStore.listReferencedSessionsForSurface({
+      userId: ownerUserId,
+      principalId: message.principalId,
+      channel,
+      surfaceId: this.getCodeSessionSurfaceId(message),
+    });
+  }
+
+  private buildReferencedCodeSessionsSection(
+    currentSession?: CodeSessionRecord | null,
+    referencedSessions?: readonly CodeSessionRecord[],
+  ): PromptAssemblyAdditionalSection | undefined {
+    const content = buildCodeSessionPortfolioAdditionalSection({
+      currentSession,
+      referencedSessions,
+    });
+    if (!content) return undefined;
+    return {
+      section: 'code_session_portfolio',
+      content,
+      mode: 'inventory',
+      itemCount: Array.isArray(referencedSessions) ? referencedSessions.length : 0,
+    };
   }
 
   private executeToolsConflictAware(
@@ -2607,6 +2645,14 @@ type DirectIntentShadowCandidate =
       surfaceId: pendingActionSurfaceId,
     });
     const groundedScopedMessage = scopedMessage;
+    const referencedCodeSessions = this.resolveReferencedCodeSessionsForSurface(
+      message,
+      resolvedCodeSession?.session,
+    );
+    const referencedCodeSessionsSection = this.buildReferencedCodeSessionsSection(
+      resolvedCodeSession?.session,
+      referencedCodeSessions,
+    );
     let preResolvedSkills: ResolvedSkill[] = [];
     const resolveSkillsForCurrentContext = (options?: {
       gateway?: IntentGatewayRecord | null;
@@ -3131,6 +3177,7 @@ type DirectIntentShadowCandidate =
         skillPromptMaterial,
         earlyGateway?.decision,
         selectedExecutionProfile,
+        referencedCodeSessionsSection ? [referencedCodeSessionsSection] : undefined,
       );
       const baseSystemPrompt = enrichedSystemPrompt;
       enrichedSystemPrompt = this.buildAssembledSystemPrompt({
@@ -3637,6 +3684,7 @@ type DirectIntentShadowCandidate =
           workerSkillPromptMaterial,
           earlyGateway?.decision,
           selectedExecutionProfile,
+          referencedCodeSessionsSection ? [referencedCodeSessionsSection] : undefined,
         );
         const workerContextAssemblyMeta = buildContextDiagnostics({
           promptKnowledge,

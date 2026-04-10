@@ -26,8 +26,10 @@ import {
 import { matchesRunTimelineRequest } from './chat-run-tracking.js';
 import {
   formatChatCodeSessionOptionLabel,
+  findReferencedCodeSessions,
   normalizeCodeSessionId,
   shouldShowChatCodeSessionControls,
+  summarizeReferencedChatCodeSessions,
   summarizeChatCodeSessionState,
 } from './chat-code-sessions.js';
 import { createResponseSourceBadge } from './response-source.js';
@@ -145,7 +147,7 @@ export async function initChatPanel(container) {
 
   let agents = [];
   let routingState = null;
-  let codeSessionsState = { sessions: [], currentSessionId: null };
+  let codeSessionsState = { sessions: [], currentSessionId: null, referencedSessionIds: [] };
   const webUserId = resolveWebUserId();
   try {
     [agents, routingState, codeSessionsState] = await Promise.all([
@@ -155,7 +157,7 @@ export async function initChatPanel(container) {
         userId: webUserId,
         channel: 'web',
         surfaceId: GUARDIAN_CHAT_SURFACE_ID,
-      }).catch(() => ({ sessions: [], currentSessionId: null })),
+      }).catch(() => ({ sessions: [], currentSessionId: null, referencedSessionIds: [] })),
     ]);
   } catch {
     // Continue with empty
@@ -168,6 +170,9 @@ export async function initChatPanel(container) {
   let currentCodeSessionId = typeof codeSessionsState?.currentSessionId === 'string'
     ? codeSessionsState.currentSessionId
     : null;
+  let referencedCodeSessionIds = Array.isArray(codeSessionsState?.referencedSessionIds)
+    ? codeSessionsState.referencedSessionIds.map((value) => normalizeCodeSessionId(value)).filter(Boolean)
+    : [];
 
   container.innerHTML = '';
 
@@ -283,11 +288,14 @@ export async function initChatPanel(container) {
       userId: webUserId,
       channel: 'web',
       surfaceId: GUARDIAN_CHAT_SURFACE_ID,
-    }).catch(() => ({ sessions: [], currentSessionId: null }));
+    }).catch(() => ({ sessions: [], currentSessionId: null, referencedSessionIds: [] }));
     const result = await refreshCodeSessionsPromise;
     refreshCodeSessionsPromise = null;
     knownCodeSessions = Array.isArray(result?.sessions) ? result.sessions : [];
     currentCodeSessionId = normalizeCodeSessionId(result?.currentSessionId);
+    referencedCodeSessionIds = Array.isArray(result?.referencedSessionIds)
+      ? result.referencedSessionIds.map((value) => normalizeCodeSessionId(value)).filter(Boolean)
+      : [];
     renderCodeSessionStrip();
     if (history) {
       renderHistory(history, getHistoryKey(), approvalHandler);
@@ -354,6 +362,20 @@ export async function initChatPanel(container) {
   const codeSessionControls = document.createElement('div');
   codeSessionControls.style.cssText = 'display:flex;align-items:center;gap:0.45rem;flex-wrap:wrap;';
 
+  const codeSessionReferences = document.createElement('div');
+  codeSessionReferences.dataset.chatCodeSessionReferences = 'true';
+  codeSessionReferences.style.cssText = 'display:flex;flex-direction:column;gap:0.18rem;';
+
+  const codeSessionReferencesSummary = document.createElement('strong');
+  codeSessionReferencesSummary.dataset.chatCodeSessionReferencesSummary = 'true';
+  codeSessionReferencesSummary.style.cssText = 'font-size:0.68rem;color:var(--text-primary);';
+
+  const codeSessionReferencesDetail = document.createElement('div');
+  codeSessionReferencesDetail.dataset.chatCodeSessionReferencesDetail = 'true';
+  codeSessionReferencesDetail.style.cssText = 'font-size:0.63rem;color:var(--text-muted);word-break:break-word;';
+
+  codeSessionReferences.append(codeSessionReferencesSummary, codeSessionReferencesDetail);
+
   const codeSessionSelect = document.createElement('select');
   codeSessionSelect.id = 'chat-panel-code-session-select';
   codeSessionSelect.style.cssText = 'flex:1 1 14rem;min-width:11rem;font-size:0.7rem;';
@@ -377,7 +399,7 @@ export async function initChatPanel(container) {
   codeSessionError.style.cssText = 'font-size:0.65rem;color:var(--error);';
   codeSessionError.hidden = true;
 
-  codeSessionStrip.append(codeSessionSummaryRow, codeSessionControls, codeSessionError);
+  codeSessionStrip.append(codeSessionSummaryRow, codeSessionReferences, codeSessionControls, codeSessionError);
   wrapper.appendChild(codeSessionStrip);
 
   renderCodeSessionStrip = () => {
@@ -396,6 +418,21 @@ export async function initChatPanel(container) {
     codeSessionSummary.textContent = summary.summary;
     codeSessionDetail.textContent = summary.detail;
     codeSessionDetail.title = summary.currentSession?.workspaceRoot || summary.detail;
+
+    const referencedSummary = summarizeReferencedChatCodeSessions(
+      knownCodeSessions,
+      referencedCodeSessionIds,
+      currentCodeSessionId,
+    );
+    const referencedSessions = findReferencedCodeSessions(
+      knownCodeSessions,
+      referencedCodeSessionIds,
+      currentCodeSessionId,
+    );
+    codeSessionReferences.hidden = referencedSummary.count === 0;
+    codeSessionReferencesSummary.textContent = referencedSummary.summary;
+    codeSessionReferencesDetail.textContent = referencedSummary.detail;
+    codeSessionReferencesDetail.title = referencedSessions.map((session) => session.workspaceRoot || session.title || '').join('\n');
 
     codeSessionSelect.replaceChildren();
     codeSessionSelect.appendChild(new Option(
@@ -472,7 +509,9 @@ export async function initChatPanel(container) {
   });
 
   codeSessionOpenBtn.addEventListener('click', () => {
-    const requestedSessionId = currentCodeSessionId || normalizeCodeSessionId(codeSessionSelect.value);
+    const requestedSessionId = currentCodeSessionId
+      || normalizeCodeSessionId(codeSessionSelect.value)
+      || normalizeCodeSessionId(referencedCodeSessionIds[0]);
     window.location.hash = requestedSessionId
       ? `#/code?sessionId=${encodeURIComponent(requestedSessionId)}`
       : '#/code';

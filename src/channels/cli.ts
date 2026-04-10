@@ -828,9 +828,13 @@ export class CLIChannel implements ChannelAdapter {
   private formatCodeSessionSummary(
     session: DashboardCodeSessionsList['sessions'][number],
     currentSessionId: string | null,
+    referencedSessionIds: string[] = [],
   ): string {
     const markers: string[] = [];
     if (session.id === currentSessionId) markers.push(this.green('current'));
+    if (referencedSessionIds.includes(session.id) && session.id !== currentSessionId) {
+      markers.push(this.cyan('referenced'));
+    }
     if (session.workState.workspaceTrust?.state) markers.push(`trust=${session.workState.workspaceTrust.state}`);
     return `${session.title} — ${session.workspaceRoot}${markers.length > 0 ? ` [${markers.join(', ')}]` : ''}`;
   }
@@ -4029,7 +4033,7 @@ export class CLIChannel implements ChannelAdapter {
       }
       this.write('\nCoding sessions:\n');
       for (const session of sessionsState.sessions) {
-        this.write(`  ${session.id} — ${this.formatCodeSessionSummary(session, sessionsState.currentSessionId)}\n`);
+        this.write(`  ${session.id} — ${this.formatCodeSessionSummary(session, sessionsState.currentSessionId, sessionsState.referencedSessionIds || [])}\n`);
       }
       this.write('\n');
       return;

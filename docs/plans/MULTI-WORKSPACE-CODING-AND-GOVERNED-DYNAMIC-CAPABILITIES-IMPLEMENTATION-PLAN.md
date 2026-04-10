@@ -516,6 +516,16 @@ Tracks R, A, and B should not start landing new runtime behavior above the routi
 
 Add explicit portfolio state above the current one-primary-session model without breaking existing attachment semantics.
 
+### Current status
+
+The first bounded slice of this phase is now landed:
+
+- surface-level durable `referenced` session state exists above the current attachment model
+- the web workbench can add and remove referenced workspaces without making them implicit mutation targets
+- Guardian chat and prompt assembly can see bounded referenced-session portfolio context for the active surface
+
+Remaining work in this phase still includes typed cross-session links, richer portfolio summary surfaces, and the later `child/delegated` lane model.
+
 ### Deliver
 
 - extend the code-session runtime to support:

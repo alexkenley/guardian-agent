@@ -17,6 +17,7 @@ type WorkspaceDashboardCallbacks = Pick<
   | 'onCodeSessionDelete'
   | 'onCodeSessionAttach'
   | 'onCodeSessionDetach'
+  | 'onCodeSessionSetReferences'
   | 'onCodeSessionApprovalDecision'
   | 'onCodeSessionResetConversation'
   | 'onConversationReset'
@@ -82,25 +83,46 @@ interface WorkspaceDashboardCallbackOptions {
 export function createWorkspaceDashboardCallbacks(
   options: WorkspaceDashboardCallbackOptions,
 ): WorkspaceDashboardCallbacks {
+  const buildCodeSessionsList = (args: {
+    canonicalUserId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+  }) => {
+    const sessions = options.codeSessionStore
+      .listSessionsForUser(args.canonicalUserId)
+      .map((session) => options.hydrateCodeSessionRuntimeState(session));
+    const current = options.codeSessionStore.resolveForRequest({
+      userId: args.canonicalUserId,
+      principalId: args.principalId,
+      channel: args.channel,
+      surfaceId: args.surfaceId,
+      touchAttachment: false,
+    });
+    const referencedSessionIds = options.codeSessionStore.listReferencedSessionIdsForSurface({
+      userId: args.canonicalUserId,
+      principalId: args.principalId,
+      channel: args.channel,
+      surfaceId: args.surfaceId,
+    });
+    return {
+      sessions,
+      currentSessionId: current?.session.id ?? null,
+      referencedSessionIds,
+    };
+  };
+
   return {
     onCodeSessionsList: ({ userId, principalId, channel, surfaceId }) => {
       const resolvedChannel = channel?.trim() || 'web';
       const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
       const canonicalUserId = options.identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
-      const sessions = options.codeSessionStore
-        .listSessionsForUser(canonicalUserId)
-        .map((session) => options.hydrateCodeSessionRuntimeState(session));
-      const current = options.codeSessionStore.resolveForRequest({
-        userId: canonicalUserId,
+      return buildCodeSessionsList({
+        canonicalUserId,
         principalId,
         channel: resolvedChannel,
         surfaceId: surfaceId?.trim() || options.getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
-        touchAttachment: false,
       });
-      return {
-        sessions,
-        currentSessionId: current?.session.id ?? null,
-      };
     },
 
     onCodeSessionGet: ({ sessionId, userId, principalId, channel, surfaceId, historyLimit }) => {
@@ -250,6 +272,26 @@ export function createWorkspaceDashboardCallbacks(
       return {
         success,
       };
+    },
+
+    onCodeSessionSetReferences: ({ userId, principalId, channel, surfaceId, referencedSessionIds }) => {
+      const resolvedChannel = channel?.trim() || 'web';
+      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
+      const canonicalUserId = options.identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
+      const resolvedSurfaceId = surfaceId?.trim() || options.getCodeSessionSurfaceId({ userId: canonicalUserId, principalId });
+      options.codeSessionStore.setReferencedSessionsForSurface({
+        userId: canonicalUserId,
+        principalId,
+        channel: resolvedChannel,
+        surfaceId: resolvedSurfaceId,
+        referencedSessionIds,
+      });
+      return buildCodeSessionsList({
+        canonicalUserId,
+        principalId,
+        channel: resolvedChannel,
+        surfaceId: resolvedSurfaceId,
+      });
     },
 
     onCodeSessionApprovalDecision: async ({ sessionId, approvalId, decision, userId, principalId, principalRole, channel, surfaceId, reason }) => {

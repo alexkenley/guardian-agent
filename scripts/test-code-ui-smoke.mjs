@@ -496,6 +496,11 @@ guardian:
       await card.locator('[data-code-session-attach]').click();
     }
 
+    async function toggleWorkspaceReferenceFromCodePanel(expectedWorkspaceRoot) {
+      const card = page.locator('.code-session').filter({ hasText: expectedWorkspaceRoot });
+      await card.locator('[data-code-session-reference]').click();
+    }
+
     async function attachWorkspaceFromExternalSurface(expectedWorkspaceRoot, {
       channel = 'telegram',
       surfaceId = 'telegram-user',
@@ -663,6 +668,14 @@ guardian:
     await page.locator('.code-session').filter({ hasText: workspaceRoot }).click();
     await waitForCodePageFocusByWorkspace(workspaceRoot);
     await waitForGuardianChatFocusByWorkspace(workspaceRoot);
+    await toggleWorkspaceReferenceFromCodePanel(reviewedWorkspaceRoot);
+    await page.waitForFunction((expectedRoot) => {
+      return Array.from(document.querySelectorAll('.code-session')).some((node) => {
+        const text = node.textContent || '';
+        return text.includes(expectedRoot) && text.includes('REFERENCED');
+      });
+    }, reviewedWorkspaceRoot);
+    await waitForGuardianChatFocusByWorkspace(workspaceRoot);
     await page.locator('.code-session').filter({ hasText: reviewedWorkspaceRoot }).click();
     await waitForCodePageViewingWorkspace(reviewedWorkspaceRoot, workspaceRoot);
     await waitForGuardianChatFocusByWorkspace(workspaceRoot);
@@ -682,12 +695,17 @@ guardian:
     await page.waitForFunction((expectedRoot) => {
       const select = document.querySelector('#chat-panel-code-session-select');
       const detail = document.querySelector('[data-chat-code-session-detail]');
+      const referenced = document.querySelector('[data-chat-code-session-references-detail]');
       if (!(select instanceof HTMLSelectElement) || !(detail instanceof HTMLElement)) {
         return false;
       }
       return (select.selectedOptions?.[0]?.textContent || '').includes(expectedRoot)
         && (detail.textContent || '').includes(expectedRoot);
     }, workspaceRoot);
+    await page.waitForFunction((expectedRoot) => {
+      const referenced = document.querySelector('[data-chat-code-session-references-detail]');
+      return !!referenced && (referenced.textContent || '').includes(expectedRoot);
+    }, 'Workspace Review');
     const switchedFromChatPanel = await page.evaluate((expectedRoot) => {
       const select = document.querySelector('#chat-panel-code-session-select');
       if (!(select instanceof HTMLSelectElement)) return false;

@@ -3155,7 +3155,7 @@ async function main(): Promise<void> {
     if (event.type === 'created' || event.type === 'updated') {
       runTimeline.ingestCodeSession(event.session);
     }
-    if (event.type === 'focus_changed' && event.channel !== 'web') {
+    if ((event.type === 'focus_changed' || event.type === 'portfolio_changed') && event.channel !== 'web') {
       activeWebChannel?.emitDashboardInvalidation(
         ['code-sessions'],
         'code-sessions.focus-changed',

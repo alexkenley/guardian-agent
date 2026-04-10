@@ -15,6 +15,21 @@ export function findCodeSessionById(sessions, sessionId) {
   return sessions.find((session) => normalizeCodeSessionId(session?.id) === normalizedSessionId) || null;
 }
 
+export function findReferencedCodeSessions(sessions, referencedSessionIds, currentSessionId = null) {
+  const registry = Array.isArray(sessions) ? sessions : [];
+  const currentId = normalizeCodeSessionId(currentSessionId);
+  const referencedIds = Array.isArray(referencedSessionIds) ? referencedSessionIds : [];
+  const resolved = [];
+  for (const rawId of referencedIds) {
+    const sessionId = normalizeCodeSessionId(rawId);
+    if (!sessionId || (currentId && sessionId === currentId)) continue;
+    const session = findCodeSessionById(registry, sessionId);
+    if (!session || resolved.some((entry) => entry.id === session.id)) continue;
+    resolved.push(session);
+  }
+  return resolved;
+}
+
 export function formatChatCodeSessionOptionLabel(session) {
   const title = trimString(session?.title) || 'Untitled coding workspace';
   const workspaceRoot = trimString(session?.workspaceRoot);
@@ -23,6 +38,23 @@ export function formatChatCodeSessionOptionLabel(session) {
 
 export function shouldShowChatCodeSessionControls(context, locationHash = '') {
   return trimString(context) !== 'code' && !trimString(locationHash).startsWith('#/code');
+}
+
+export function summarizeReferencedChatCodeSessions(sessions, referencedSessionIds, currentSessionId = null) {
+  const referenced = findReferencedCodeSessions(sessions, referencedSessionIds, currentSessionId);
+  if (referenced.length === 0) {
+    return {
+      count: 0,
+      summary: 'No referenced workspaces',
+      detail: 'Add other repos as references in Code when you want inspect-only context without changing the mutable workspace.',
+    };
+  }
+  const labels = referenced.map((session) => trimString(session.title) || trimString(session.workspaceRoot) || 'Untitled workspace');
+  return {
+    count: referenced.length,
+    summary: referenced.length === 1 ? '1 referenced workspace' : `${referenced.length} referenced workspaces`,
+    detail: labels.join(' | '),
+  };
 }
 
 export function summarizeChatCodeSessionState({ sessions, currentSessionId } = {}) {
