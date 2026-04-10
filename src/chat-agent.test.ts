@@ -3980,6 +3980,113 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect((result as { content: string }).content).toBe('Task completed: Second Brain task smoke test');
   });
 
+  it('stores the renamed title in pending approval payloads for focused task updates', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      getApprovalSummaries: vi.fn(() => new Map()),
+      executeModelTool: vi.fn(async (_toolName: string, args: Record<string, unknown>) => {
+        expect(args).toMatchObject({
+          id: 'task-1',
+          title: 'Send Harbor launch review deck and notes',
+          status: 'todo',
+          priority: 'medium',
+          dueAt: Date.UTC(2026, 3, 9, 6, 0, 0),
+        });
+        return {
+          success: false,
+          status: 'pending_approval',
+          approvalId: 'approval-1',
+        };
+      }),
+    };
+    const pendingActionStore = new PendingActionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-task-rename-pending.test.sqlite',
+      now: () => 1_710_000_000_000,
+    });
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).secondBrainService = {
+      getTaskById: vi.fn(() => ({
+        id: 'task-1',
+        title: 'Send Harbor launch review deck',
+        details: undefined,
+        priority: 'medium',
+        dueAt: Date.UTC(2026, 3, 9, 6, 0, 0),
+        status: 'todo',
+      })),
+    };
+    (agent as any).pendingActionStore = pendingActionStore;
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    await (agent as any).tryDirectSecondBrainWrite(
+      {
+        id: 'msg-task-rename',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'owner',
+        content: 'Rename the task "Send Harbor launch review deck" to "Send   \n  Harbor launch review deck and notes".',
+        timestamp: Date.now(),
+      },
+      ctx,
+      'owner:web',
+      {
+        route: 'personal_assistant_task',
+        operation: 'update',
+        confidence: 'high',
+        summary: 'Updates a local task.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        missingFields: [],
+        entities: { personalItemType: 'task' },
+      },
+      {
+        continuityKey: 'chat:owner',
+        scope: { assistantId: 'chat', userId: 'owner' },
+        linkedSurfaces: [],
+        continuationState: {
+          kind: 'second_brain_focus',
+          payload: {
+            itemType: 'task',
+            focusId: 'task-1',
+            items: [{ id: 'task-1', label: 'Send Harbor launch review deck' }],
+          },
+        },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+    );
+
+    const pending = pendingActionStore.getActive({
+      agentId: 'chat',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'owner',
+    });
+    expect(pending?.resume?.payload).toMatchObject({
+      type: 'second_brain_mutation',
+      toolName: 'second_brain_task_upsert',
+      args: expect.objectContaining({
+        id: 'task-1',
+        title: 'Send Harbor launch review deck and notes',
+      }),
+    });
+  });
+
   it('moves the focused local calendar event directly', async () => {
     const ChatAgent = createChatAgentClass({
       log: {

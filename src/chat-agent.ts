@@ -1146,6 +1146,49 @@ function extractNamedSecondBrainTitle(text: string): string {
   return normalizeSecondBrainInlineFieldValue(extractQuotedText(text));
 }
 
+function extractRetitledSecondBrainTitle(text: string): string {
+  const patterns = [
+    /\brename\b[\s\S]*?\bto\b\s*(["'])([\s\S]+?)\1/i,
+    /\b(?:change|update)\b[\s\S]*?\btitle\b[\s\S]*?\bto\b\s*(["'])([\s\S]+?)\1/i,
+  ];
+  for (const pattern of patterns) {
+    const match = matchWithCollapsedWhitespaceFallback(text, pattern);
+    const candidate = normalizeSecondBrainInlineFieldValue(match?.[2]?.trim() ?? '');
+    if (candidate) {
+      return candidate;
+    }
+  }
+  return '';
+}
+
+function extractSecondBrainTaskStatus(text: string): 'todo' | 'in_progress' | 'done' | undefined {
+  if (/\b(done|complete|completed|finish|finished)\b/i.test(text)) {
+    return 'done';
+  }
+  if (/\b(in[\s-]?progress|started|working on)\b/i.test(text)) {
+    return 'in_progress';
+  }
+  if (/\b(to[\s-]?do|todo|not started)\b/i.test(text)) {
+    return 'todo';
+  }
+  return undefined;
+}
+
+function extractSecondBrainTaskPriority(text: string): 'low' | 'medium' | 'high' | undefined {
+  const labeled = matchWithCollapsedWhitespaceFallback(
+    text,
+    /\bpriority\b(?:\s+(?:is|to|as|for|with|include|including))?\s*:?\s*(high|medium|low)\b/i,
+  );
+  if (labeled?.[1]) {
+    return labeled[1].trim().toLowerCase() as 'low' | 'medium' | 'high';
+  }
+  const inline = matchWithCollapsedWhitespaceFallback(text, /\b(high|medium|low)\s+priority\b/i);
+  if (inline?.[1]) {
+    return inline[1].trim().toLowerCase() as 'low' | 'medium' | 'high';
+  }
+  return undefined;
+}
+
 function extractQuotedLabeledValue(text: string, labels: string[]): string {
   const escaped = labels
     .map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
@@ -5372,23 +5415,40 @@ type DirectIntentShadowCandidate =
         if (!existingTask) {
           return `Local task "${focusItem.label ?? focusItem.id}" was not found.`;
         }
-        const nextStatus = /\b(done|complete|completed|finish|finished)\b/i.test(message.content)
-          ? 'done'
-          : existingTask.status;
+        const explicitTitle = extractRetitledSecondBrainTitle(message.content)
+          || normalizeSecondBrainInlineFieldValue(extractQuotedLabeledValue(message.content, ['title', 'task title']));
+        const explicitDetails = collapseWhitespaceForSecondBrainParsing(
+          extractQuotedLabeledValue(message.content, ['details', 'detail', 'notes', 'note', 'description']),
+        );
+        const explicitPriority = extractSecondBrainTaskPriority(message.content);
+        const nextStatus = extractSecondBrainTaskStatus(message.content) ?? existingTask.status;
         const args = normalizeSecondBrainMutationArgs({
           toolName: 'second_brain_task_upsert',
           args: {
             id: existingTask.id,
-            title: existingTask.title,
-            ...(existingTask.details ? { details: existingTask.details } : {}),
+            title: explicitTitle || existingTask.title,
+            ...(explicitDetails || existingTask.details ? { details: explicitDetails || existingTask.details } : {}),
             status: nextStatus,
-            priority: existingTask.priority,
+            priority: explicitPriority || existingTask.priority,
             ...(existingTask.dueAt != null ? { dueAt: existingTask.dueAt } : {}),
           },
           userContent: message.content,
           referenceTime: Date.now(),
           getTaskById: (id) => this.secondBrainService?.getTaskById(id) ?? null,
         });
+        const existingDueAt = typeof existingTask.dueAt === 'number' ? existingTask.dueAt : undefined;
+        const nextDueAt = typeof args.dueAt === 'number' ? args.dueAt : undefined;
+        const isCompletion = nextStatus === 'done' && existingTask.status !== 'done';
+        const hasExplicitChange = Boolean(
+          explicitTitle
+          || explicitDetails
+          || explicitPriority
+          || nextStatus !== existingTask.status
+          || nextDueAt !== existingDueAt,
+        );
+        if (!hasExplicitChange) {
+          return 'To update that local task, tell me the new title, details, priority, status, or due date.';
+        }
         return this.executeDirectSecondBrainMutation({
           message,
           ctx,
@@ -5396,15 +5456,15 @@ type DirectIntentShadowCandidate =
           decision,
           toolName: 'second_brain_task_upsert',
           args,
-          summary: nextStatus === 'done'
+          summary: isCompletion
             ? 'Marks a local Second Brain task as done.'
             : 'Updates a local Second Brain task.',
-          pendingIntro: nextStatus === 'done'
+          pendingIntro: isCompletion
             ? 'I prepared a local task completion, but it needs approval first.'
             : 'I prepared a local task update, but it needs approval first.',
           successDescriptor: {
             itemType: 'task',
-            action: nextStatus === 'done' ? 'complete' : 'update',
+            action: isCompletion ? 'complete' : 'update',
             fallbackId: existingTask.id,
             fallbackLabel: existingTask.title,
           },

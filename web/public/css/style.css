@@ -3392,6 +3392,34 @@ tr:hover td {
   border: 1px solid var(--border);
 }
 
+.sb-agenda__item {
+  width: 100%;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+}
+
+.sb-agenda__item--interactive {
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+.sb-agenda__item--interactive:hover {
+  border-color: rgba(79, 172, 254, 0.2);
+  background: rgba(79, 172, 254, 0.04);
+}
+
+.sb-agenda__item--interactive:focus-visible {
+  outline: 1px solid rgba(125, 211, 252, 0.6);
+  outline-offset: 2px;
+}
+
+.sb-agenda__item.is-selected {
+  border-color: rgba(79, 172, 254, 0.28);
+  background: rgba(79, 172, 254, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(79, 172, 254, 0.14);
+}
+
 .sb-readout {
   display: grid;
 }
@@ -3471,6 +3499,14 @@ tr:hover td {
 
 .sb-check-grid--options {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.sb-check-grid--delivery {
+  align-items: stretch;
+}
+
+.sb-check-grid--delivery .sb-check--surface {
+  min-height: 100%;
 }
 
 .sb-divider {
@@ -3699,7 +3735,7 @@ tr:hover td {
 }
 
 .sb-event-chip--overflow {
-  cursor: default;
+  cursor: pointer;
   color: #9fb2cf;
   font-size: 0.72rem;
 }

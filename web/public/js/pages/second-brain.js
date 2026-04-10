@@ -602,7 +602,11 @@ function renderCalendar(panel, data) {
             </div>
           </div>
           <div class="sb-agenda-pane">
-            ${renderAgenda(dayEvents, 'No events on this day.')}
+            ${renderAgenda(dayEvents, 'No events on this day.', {
+              selectable: true,
+              selectedDateKey: state.selectedCalendarDate,
+              selectedEventId: state.creatingCalendarEvent ? null : state.selectedCalendarEventId,
+            })}
           </div>
           <div class="sb-divider"></div>
           ${renderCalendarEditor(selectedEvent, selectedDate)}
@@ -790,7 +794,16 @@ function renderCalendarEventChips(events, dateKey, day, limit) {
         <span class="sb-event-chip__title">${esc(event.title)}</span>
       </button>
     `).join('')}
-    ${events.length > limit ? `<div class="sb-event-chip sb-event-chip--overflow">+${esc(String(events.length - limit))} more</div>` : ''}
+    ${events.length > limit ? `
+      <button
+        class="sb-event-chip sb-event-chip--overflow"
+        type="button"
+        data-calendar-select-date="${escAttr(dateKey)}"
+        aria-label="${escAttr(`Show all events for ${formatLongDate(day.getTime())}`)}"
+      >
+        +${esc(String(events.length - limit))} more
+      </button>
+    ` : ''}
   `;
 }
 
@@ -1590,6 +1603,7 @@ function renderRoutineFormFields(routine, options = {}) {
   const extraActions = options.extraActions || '';
   const entry = options.entry || null;
   const templateId = entry?.templateId || routine.templateId || routine.id;
+  const routineEnabled = routine.enabled !== false;
   const timing = routine.timing || entry?.defaultTiming || { kind: 'manual', label: 'Run on demand', editable: true };
   const supportedTiming = Array.isArray(entry?.supportedTiming) && entry.supportedTiming.length > 0
     ? entry.supportedTiming
@@ -1618,14 +1632,27 @@ function renderRoutineFormFields(routine, options = {}) {
       ? 'Guardian watches for meetings that ended inside this window before drafting follow-up.'
       : 'Guardian scans ahead using a built-in background window.';
   const timingMinutes = Number.isFinite(timing.minutes) ? timing.minutes : '';
+  const deliveryOptions = [
+    {
+      value: 'telegram',
+      label: 'Telegram',
+      description: 'Send the routine through the default assistant channel.',
+    },
+    {
+      value: 'web',
+      label: 'Web',
+      description: 'Surface the same update in the web experience.',
+    },
+    {
+      value: 'cli',
+      label: 'CLI',
+      description: 'Deliver the update to CLI sessions as well.',
+    },
+  ];
 
   return `
     <label class="sb-form__label" for="routine-name">Routine name</label>
     <input id="routine-name" name="name" type="text" placeholder="Routine name" value="${escAttr(routine.name || '')}">
-    <label class="sb-check">
-      <input name="enabled" type="checkbox" ${routine.enabled ? 'checked' : ''}>
-      <span>Enabled</span>
-    </label>
 
     ${templateId === 'topic-watch' ? `
       <label class="sb-form__label" for="routine-topic-query">What should Guardian watch for?</label>
@@ -1732,15 +1759,26 @@ function renderRoutineFormFields(routine, options = {}) {
     ` : ''}
 
     <div class="sb-form__label">Send updates through</div>
-    <div class="sb-check-grid">
-      ${['web', 'cli', 'telegram'].map((channel) => `
-        <label class="sb-check">
-          <input name="delivery" type="checkbox" value="${escAttr(channel)}" ${routine.delivery.includes(channel) ? 'checked' : ''}>
-          <span>${esc(channel)}</span>
+    <div class="sb-check-grid sb-check-grid--options sb-check-grid--delivery">
+      ${deliveryOptions.map((channel) => `
+        <label class="sb-check sb-check--surface">
+          <input name="delivery" type="checkbox" value="${escAttr(channel.value)}" ${routine.delivery.includes(channel.value) ? 'checked' : ''}>
+          <span class="sb-check__copy">
+            <strong>${esc(channel.label)}</strong>
+            <small>${esc(channel.description)}</small>
+          </span>
         </label>
       `).join('')}
     </div>
     <div class="sb-table-copy">Telegram is the default assistant channel. Add web or CLI when you also want operator visibility.</div>
+    <div class="sb-form__label">Routine state</div>
+    <label class="sb-check sb-check--surface">
+      <input name="enabled" type="checkbox" ${routineEnabled ? 'checked' : ''}>
+      <span class="sb-check__copy">
+        <strong>Enabled</strong>
+        <small>Run this routine as soon as its timing and trigger conditions match.</small>
+      </span>
+    </label>
 
     ${options.submitLabel === 'Create routine' && entry?.configured && !entry.allowMultiple && !entry.supportsFocusQuery
       ? `
@@ -2556,24 +2594,56 @@ function setFlash(kind, message, sticky = false) {
   }, 4500);
 }
 
-function renderAgenda(events, emptyText) {
+function renderAgenda(events, emptyText, options = {}) {
   if (!events.length) {
     return `<div class="sb-empty">${esc(emptyText)}</div>`;
   }
+
+  const selectable = options.selectable === true;
+  const selectedDateKey = options.selectedDateKey || null;
+  const selectedEventId = options.selectedEventId || null;
   return `
     <div class="sb-agenda">
-      ${events.map((event) => `
-        <div class="sb-agenda__item">
-          <div class="sb-agenda__time">${esc(formatEventChipTime(event))}</div>
-          <div class="sb-agenda__content">
-            <strong>${esc(event.title)}</strong>
-            <span>${esc(`${formatTimeRange(event)}${event.location ? ` · ${event.location}` : ''}`)}</span>
-            ${event.description ? `<span>${esc(summarize(event.description, 140))}</span>` : ''}
-          </div>
-          <span class="badge badge-muted">${esc(event.source)}</span>
-        </div>
-      `).join('')}
+      ${events.map((event) => renderAgendaItem(event, {
+        selectable,
+        selected: selectedEventId === event.id,
+        dateKey: selectedDateKey,
+      })).join('')}
     </div>
+  `;
+}
+
+function renderAgendaItem(event, options = {}) {
+  const classes = [
+    'sb-agenda__item',
+    options.selectable ? 'sb-agenda__item--interactive' : '',
+    options.selected ? 'is-selected' : '',
+  ].filter(Boolean).join(' ');
+  const time = `<div class="sb-agenda__time">${esc(formatEventChipTime(event))}</div>`;
+  const content = `
+    <div class="sb-agenda__content">
+      <strong>${esc(event.title)}</strong>
+      <span>${esc(`${formatTimeRange(event)}${event.location ? ` · ${event.location}` : ''}`)}</span>
+      ${event.description ? `<span>${esc(summarize(event.description, 140))}</span>` : ''}
+    </div>
+  `;
+  const source = `<span class="badge badge-muted">${esc(event.source)}</span>`;
+  if (!options.selectable) {
+    return `<div class="${classes}">${time}${content}${source}</div>`;
+  }
+  const dateKey = options.dateKey || dayKey(new Date(event.startsAt));
+  return `
+    <button
+      class="${classes}"
+      type="button"
+      data-calendar-select-event="${escAttr(event.id)}"
+      data-calendar-select-date="${escAttr(dateKey)}"
+      aria-pressed="${options.selected ? 'true' : 'false'}"
+    >
+      ${time}
+      ${content}
+      ${source}
+    </button>
   `;
 }
 

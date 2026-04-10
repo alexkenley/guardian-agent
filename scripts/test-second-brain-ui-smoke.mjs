@@ -397,6 +397,54 @@ guardian:
         : null;
     }, 12_000, 'Expected edited local event to persist through the calendar API.');
 
+    const overflowEventSpecs = [
+      {
+        title: `${eventTitle} Overflow A`,
+        startAt: new Date(eventDay.getFullYear(), eventDay.getMonth(), eventDay.getDate(), 10, 30, 0, 0),
+        endAt: new Date(eventDay.getFullYear(), eventDay.getMonth(), eventDay.getDate(), 11, 0, 0, 0),
+      },
+      {
+        title: `${eventTitle} Overflow B`,
+        startAt: new Date(eventDay.getFullYear(), eventDay.getMonth(), eventDay.getDate(), 11, 30, 0, 0),
+        endAt: new Date(eventDay.getFullYear(), eventDay.getMonth(), eventDay.getDate(), 12, 0, 0, 0),
+      },
+      {
+        title: `${eventTitle} Overflow Hidden`,
+        startAt: new Date(eventDay.getFullYear(), eventDay.getMonth(), eventDay.getDate(), 12, 30, 0, 0),
+        endAt: new Date(eventDay.getFullYear(), eventDay.getMonth(), eventDay.getDate(), 13, 0, 0, 0),
+      },
+    ];
+    const overflowEvents = [];
+    for (const spec of overflowEventSpecs) {
+      await page.click('[data-calendar-new="true"]');
+      await page.fill('#calendar-title', spec.title);
+      await page.fill('#calendar-starts-at', formatDateTimeLocalInput(spec.startAt.getTime()));
+      await page.fill('#calendar-ends-at', formatDateTimeLocalInput(spec.endAt.getTime()));
+      await page.fill('#calendar-location', 'Overflow lane');
+      await page.fill('#calendar-description', `Created to verify overflow selection for ${spec.title}.`);
+      await page.locator('form[data-calendar-form] button[type="submit"]').click();
+      const createdEvent = await waitFor(async () => {
+        const events = await requestJson(baseUrl, authToken, 'GET', `/api/second-brain/calendar?fromTime=${eventFrom}&toTime=${eventTo}&limit=50`);
+        return Array.isArray(events) ? events.find((entry) => entry.title === spec.title) : null;
+      }, 12_000, `Expected overflow event ${spec.title} to appear in the calendar API.`);
+      overflowEvents.push(createdEvent);
+      await waitForFormRecordId(page, 'form[data-calendar-form]', createdEvent.id);
+    }
+
+    const overflowChip = page.locator('.sb-card--calendar-main .sb-event-chip--overflow', { hasText: '+1 more' }).first();
+    await overflowChip.waitFor({ state: 'visible' });
+    await overflowChip.click();
+    const hiddenOverflowEvent = overflowEvents[overflowEvents.length - 1];
+    const hiddenAgendaItem = page.locator('.sb-agenda-pane .sb-agenda__item', { hasText: hiddenOverflowEvent.title }).first();
+    await hiddenAgendaItem.waitFor({ state: 'visible' });
+    await hiddenAgendaItem.click();
+    await waitForFormRecordId(page, 'form[data-calendar-form]', hiddenOverflowEvent.id);
+    assert.equal(
+      await page.inputValue('#calendar-title'),
+      hiddenOverflowEvent.title,
+      'Expected selecting a hidden overflow event from the day agenda to switch the calendar editor to that event.',
+    );
+
     if (options.useRealOllama) {
       const planResponse = await requestJson(baseUrl, authToken, 'POST', '/api/message', {
         content: `Using my Second Brain, give me a concise morning plan that references ${taskUpdatedTitle}, ${noteUpdatedTitle}, and ${eventUpdatedTitle} if you can find them.`,
@@ -502,6 +550,11 @@ guardian:
       return flash instanceof HTMLElement && /Synced calendar and contacts\./.test(flash.textContent || '');
     });
     await page.click('[data-routine-create-toggle="true"]');
+    assert.equal(
+      await page.locator('form[data-routine-create-form] input[name="enabled"]').isChecked(),
+      true,
+      'Expected new routines to start enabled by default in the create form.',
+    );
     await page.selectOption('#routine-template-id', 'topic-watch');
     await page.fill('#routine-name', 'Harness Topic Watch');
     await page.fill('#routine-topic-query', 'Harness launch');
@@ -636,6 +689,17 @@ guardian:
     }, 12_000, 'Expected deleted contact to disappear from the contacts API.');
 
     await openSecondBrainTab(page, 'Calendar', 'form[data-calendar-form]');
+    await page.click('[data-calendar-nav="today"]');
+    for (const overflowEvent of overflowEvents) {
+      await requestJson(baseUrl, authToken, 'POST', '/api/second-brain/calendar/delete', { id: overflowEvent.id });
+    }
+    await waitFor(async () => {
+      const events = await requestJson(baseUrl, authToken, 'GET', `/api/second-brain/calendar?fromTime=${eventFrom}&toTime=${eventTo}&limit=50`);
+      return Array.isArray(events) ? overflowEvents.every((entry) => !events.some((eventEntry) => eventEntry.id === entry.id)) : false;
+    }, 12_000, 'Expected overflow verification events to be removed from the calendar API.');
+    const primaryAgendaItem = page.locator('.sb-agenda-pane .sb-agenda__item', { hasText: eventUpdatedTitle }).first();
+    await primaryAgendaItem.waitFor({ state: 'visible' });
+    await primaryAgendaItem.click();
     await waitForFormRecordId(page, 'form[data-calendar-form]', event.id);
     await acceptNextDialog(page);
     await page.click('[data-calendar-delete]');

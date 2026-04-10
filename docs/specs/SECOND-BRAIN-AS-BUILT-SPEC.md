@@ -54,7 +54,7 @@ This spec does not claim that every item from the proposal or implementation pla
 ### Current tab behavior
 
 - `Today` is a dashboard-style daily home with agenda, quick capture, focus tasks, brief actions, relationship follow-up, recent notes, routine status, and a cloud-AI budget card.
-- `Calendar` exposes week, month, and year views, full-day tile selection, a selected-day agenda, and a local event editor with title, timing, location, and description fields. Local events can be updated and deleted in-panel. Provider-backed events are visible in the calendar and remain read-only in this surface.
+- `Calendar` exposes week, month, and year views, full-day tile selection, a selected-day agenda, and a local event editor with title, timing, location, and description fields. Local events can be updated and deleted in-panel. Overflowed day tiles expose a `+N more` affordance that focuses the day, and entries in the selected-day agenda are directly selectable so the editor can switch to hidden events. Provider-backed events are visible in the calendar and remain read-only in this surface.
 - `Tasks` exposes a status-board layout with inline status changes plus a dedicated task editor, with editing and delete on the left and board content on the right.
 - `Notes` exposes search, pinned and archived note states, and a full editor with tag support, with editing and delete on the left and list content on the right.
 - `Contacts` exposes relationship filters, last-contact tracking, and a dedicated person editor with create, update, and delete actions.
