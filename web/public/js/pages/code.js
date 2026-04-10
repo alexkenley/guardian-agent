@@ -6,6 +6,10 @@ import {
   markApprovalUiProcessing,
   markApprovalUiResolved,
 } from '../approval-ui-state.js';
+import {
+  isViewingSession,
+  resolveWorkbenchActiveSessionId,
+} from '../code-session-workbench.js';
 import { normalizeRunTimelineContextAssembly, renderRunTimelineContextAssembly } from '../components/run-timeline-context.js';
 import {
   EDITOR_THEME_OPTIONS,
@@ -3038,21 +3042,14 @@ function mergeSessionsFromServer(payload, options = {}) {
   codeState.sessions = sessions;
   const preferredCurrentSessionId = normalizeCodeSessionId(options.preferredCurrentSessionId);
   const serverCurrentSessionId = normalizeCodeSessionId(payload?.currentSessionId);
-  const previouslyViewedSessionId = previousActiveSessionId
-    && previousActiveSessionId !== previousAttachedSessionId
-    && sessions.some((session) => session.id === previousActiveSessionId)
-      ? previousActiveSessionId
-      : null;
   codeState.attachedSessionId = serverCurrentSessionId;
-  const preferredActiveId = preferredCurrentSessionId && sessions.some((session) => session.id === preferredCurrentSessionId)
-    ? preferredCurrentSessionId
-    : serverCurrentSessionId && sessions.some((session) => session.id === serverCurrentSessionId)
-      ? serverCurrentSessionId
-    : previouslyViewedSessionId
-      ? previouslyViewedSessionId
-    : (codeState.activeSessionId && sessions.some((session) => session.id === codeState.activeSessionId)
-      ? codeState.activeSessionId
-      : sessions[0]?.id || null);
+  const preferredActiveId = resolveWorkbenchActiveSessionId({
+    sessionIds: sessions.map((session) => session.id),
+    previousActiveSessionId,
+    previousAttachedSessionId,
+    serverCurrentSessionId,
+    preferredCurrentSessionId,
+  });
   codeState.activeSessionId = preferredActiveId;
 }
 
@@ -3098,6 +3095,32 @@ async function ensureBackendSession(session) {
   if (!fresh) return null;
   await syncGuardianChatSessionFocus(fresh.id).catch(() => {});
   return fresh;
+}
+
+function viewCodeSession(sessionId, { rerender = true } = {}) {
+  const nextSessionId = normalizeCodeSessionId(sessionId);
+  if (!nextSessionId) return false;
+  const changed = setActiveSessionLocally(nextSessionId, { rerender });
+  const session = getSessionById(nextSessionId);
+  if (session) {
+    void refreshSessionData(session).catch(() => {});
+  }
+  return changed;
+}
+
+function revealCurrentChatFocusSession() {
+  const currentChatSessionId = normalizeCodeSessionId(codeState.attachedSessionId);
+  if (!currentChatSessionId) return false;
+  return viewCodeSession(currentChatSessionId);
+}
+
+async function openSessionInGuardianChat(sessionId) {
+  const nextSessionId = normalizeCodeSessionId(sessionId);
+  if (!nextSessionId) return;
+  if (nextSessionId !== normalizeCodeSessionId(codeState.attachedSessionId)) {
+    await switchCodeSession(nextSessionId);
+  }
+  window.location.hash = '#/';
 }
 
 async function switchCodeSession(sessionId, { rerender = true } = {}) {
@@ -3332,9 +3355,9 @@ function focusRequestedCodeContext(container) {
   }
 
   if (!requestedSessionId) return;
-  const sessionButton = container.querySelector(`[data-code-session-id="${CSS.escape(requestedSessionId)}"]`);
-  if (sessionButton instanceof HTMLElement) {
-    sessionButton.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  const sessionCard = container.querySelector(`[data-code-session-id="${CSS.escape(requestedSessionId)}"]`);
+  if (sessionCard instanceof HTMLElement) {
+    sessionCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 }
 
@@ -3648,7 +3671,7 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
                 <h3><span class="code-panel-title__icon">&#128451;</span> Sessions</h3>
                 <button class="btn btn-primary btn-sm" type="button" data-code-new-session>+</button>
               </div>
-              <div class="code-rail__subcopy">Click a session card to make it the current coding session for Guardian chat.</div>
+              <div class="code-rail__subcopy">Click a session card to inspect it in the workbench. Use Attach Chat when you want Guardian chat to mutate that workspace by default.</div>
               ${renderSessionForm()}
               <div class="code-rail__list">
                 ${codeState.sessions.map((session) => renderSessionCard(session)).join('')}
@@ -5614,6 +5637,7 @@ function renderSessionForm() {
 function renderSessionCard(session) {
   const isActive = session.id === codeState.activeSessionId;
   const isAttached = session.id === normalizeCodeSessionId(codeState.attachedSessionId);
+  const isViewing = isViewingSession(codeState.activeSessionId, codeState.attachedSessionId) && isActive;
   const approvalCount = Array.isArray(session.pendingApprovals) ? session.pendingApprovals.length : 0;
   const checkCount = getCheckBadgeCount(session);
   const taskCount = getTaskBadgeCount(session);
@@ -5625,12 +5649,12 @@ function renderSessionCard(session) {
     : getWorkspaceTrustBadgeClass(effectiveTrustState);
   const rawTrustBadgeClass = getWorkspaceTrustBadgeClass(workspaceTrust?.state || null);
   return `
-    <button class="code-session ${isActive ? 'is-active' : ''}" type="button" data-code-session-id="${escAttr(session.id)}">
+    <div class="code-session ${isActive ? 'is-active' : ''}" data-code-session-id="${escAttr(session.id)}">
       <div class="code-session__top">
         <span style="display:flex;align-items:center;gap:0.45rem;min-width:0">
           <strong>${esc(session.title)}</strong>
           ${isAttached ? '<span class="badge badge-info">CURRENT</span>' : ''}
-          ${isActive && !isAttached ? '<span class="badge badge-idle">VIEWING</span>' : ''}
+          ${isViewing ? '<span class="badge badge-idle">VIEWING</span>' : ''}
         </span>
         <span style="display:flex;gap:0.4rem;align-items:center">
           <span class="code-session__edit" data-code-edit-session="${escAttr(session.id)}" title="Edit session">&#9998;</span>
@@ -5641,9 +5665,9 @@ function renderSessionCard(session) {
       <div class="code-session__hint">${
         isAttached
           ? 'Current for Guardian chat'
-          : isActive
-            ? 'Viewing in code workbench. Click to make current for Guardian chat'
-            : 'Click to make current for Guardian chat'
+          : isViewing
+            ? 'Viewing in the workbench only. Attach chat to make this the mutable workspace.'
+            : 'Click to inspect in the workbench. Attach chat to make this the mutable workspace.'
       }</div>
       <div class="code-session__badges">
         ${workspaceTrust ? `<span class="badge ${trustBadgeClass}">TRUST: ${esc(reviewActive ? 'ACCEPTED' : String(effectiveTrustState || '').toUpperCase())}</span>` : ''}
@@ -5652,7 +5676,12 @@ function renderSessionCard(session) {
         ${taskCount > 0 ? `<span class="badge badge-idle">${taskCount} ${taskCount === 1 ? 'task' : 'tasks'}</span>` : ''}
         ${checkCount > 0 ? `<span class="badge badge-info">${checkCount} ${checkCount === 1 ? 'check' : 'checks'}</span>` : ''}
       </div>
-    </button>
+      <div class="code-session__actions">
+        ${!isAttached ? `<button class="btn btn-secondary btn-sm" type="button" data-code-session-attach="${escAttr(session.id)}">Attach Chat</button>` : ''}
+        <button class="btn btn-secondary btn-sm" type="button" data-code-session-open-chat="${escAttr(session.id)}">${isAttached ? 'Open In Chat' : 'Attach + Open Chat'}</button>
+        ${isAttached && !isActive ? '<button class="btn btn-secondary btn-sm" type="button" data-code-show-current-chat-focus>Show Current Chat Focus</button>' : ''}
+      </div>
+    </div>
   `;
 }
 
@@ -6555,13 +6584,37 @@ function bindEvents(container) {
   });
 
   // Switch session
-  container.querySelectorAll('[data-code-session-id]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const nextSessionId = normalizeCodeSessionId(button.dataset.codeSessionId);
+  container.querySelectorAll('[data-code-session-id]').forEach((card) => {
+    card.addEventListener('click', () => {
+      const nextSessionId = normalizeCodeSessionId(card.dataset.codeSessionId);
       const alreadyViewing = nextSessionId === normalizeCodeSessionId(codeState.activeSessionId);
-      const alreadyAttached = nextSessionId === normalizeCodeSessionId(codeState.attachedSessionId);
-      if (!nextSessionId || (alreadyViewing && alreadyAttached)) return;
+      if (!nextSessionId || alreadyViewing) return;
+      viewCodeSession(nextSessionId);
+    });
+  });
+
+  container.querySelectorAll('[data-code-session-attach]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const nextSessionId = normalizeCodeSessionId(button.dataset.codeSessionAttach);
+      if (!nextSessionId || nextSessionId === normalizeCodeSessionId(codeState.attachedSessionId)) return;
       void switchCodeSession(nextSessionId).catch(() => {});
+    });
+  });
+
+  container.querySelectorAll('[data-code-session-open-chat]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const nextSessionId = normalizeCodeSessionId(button.dataset.codeSessionOpenChat);
+      if (!nextSessionId) return;
+      void openSessionInGuardianChat(nextSessionId).catch(() => {});
+    });
+  });
+
+  container.querySelectorAll('[data-code-show-current-chat-focus]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      revealCurrentChatFocusSession();
     });
   });
 

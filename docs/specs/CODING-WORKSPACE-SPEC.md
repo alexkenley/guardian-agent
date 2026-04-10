@@ -198,6 +198,23 @@ Current behavior:
 - detaching clears that shared current workspace focus for the same principal unless another session is explicitly attached afterward
 - cross-surface reuse shares the backend session and transcript, not the full Code-page explorer/tasks/approvals/checks/terminal UI
 
+## Active Uplift: Multi-Workspace Portfolio Model
+
+The current shipped product still uses one attached coding session per surface as the only implicit mutable target. The active multi-workspace uplift extends that model into a session portfolio without changing the implicit-write safety rule.
+
+Target roles:
+
+- `primary`: the current mutable coding session for the surface; repo-local writes, git actions, tests, builds, and mutation-capable shell work default here
+- `referenced`: additional coding sessions that Guardian may inspect, compare, search, or summarize without treating them as implicit mutation targets
+- `child lane`: an explicit delegated or background execution lane against another session or workspace, with its own approvals, status, and timeline lineage back to the parent session/request
+
+Target orchestration rules:
+
+- Guardian may reason about many coding sessions in one conversation, but implicit mutation still lands in exactly one `primary` workspace per lane
+- switching the current workspace changes the `primary` session; it does not merge several mutable workspaces into one ambiguous context
+- concurrent work in another workspace should be modeled as a `child lane`, not as silent multi-repo mutation from the same foreground chat flow
+- referenced sessions are inspectable by default and writable only through explicit target pinning or an explicit child lane
+
 ## Routing Behavior
 
 Routing is code-session-aware.

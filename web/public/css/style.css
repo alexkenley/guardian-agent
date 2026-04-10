@@ -6544,6 +6544,10 @@ tr:hover td {
   --code-side-panel-width: var(--code-side-panel-width-wide);
 }
 
+.layout.layout-code-page #chat-panel-code-session-strip {
+  display: none !important;
+}
+
 .content.content-code-page {
   padding: 0;
   overflow: hidden;
@@ -6791,6 +6795,17 @@ tr:hover td {
   gap: 0.45rem;
   flex-wrap: wrap;
   margin-top: 0.6rem;
+}
+
+.code-session__actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.7rem;
+}
+
+.code-session__actions .btn {
+  flex: 0 0 auto;
 }
 
 .badge {

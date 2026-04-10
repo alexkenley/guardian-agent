@@ -456,6 +456,16 @@ guardian:
       }, expectedWorkspaceRoot);
     }
 
+    async function waitForGuardianChatDetached() {
+      await page.waitForFunction(async () => {
+        const response = await fetch('/api/code/sessions?userId=web-user&channel=web&surfaceId=web-guardian-chat', {
+          credentials: 'same-origin',
+        });
+        const payload = await response.json();
+        return !payload?.currentSessionId;
+      });
+    }
+
     async function waitForCodePageFocusByWorkspace(expectedWorkspaceRoot) {
       await page.waitForFunction((expectedRoot) => {
         const cards = Array.from(document.querySelectorAll('.code-session'));
@@ -464,6 +474,26 @@ guardian:
         return (currentCard?.textContent || '').includes(expectedRoot)
           && (activeCard?.textContent || '').includes(expectedRoot);
       }, expectedWorkspaceRoot);
+    }
+
+    async function waitForCodePageViewingWorkspace(expectedViewedWorkspaceRoot, expectedCurrentWorkspaceRoot) {
+      await page.waitForFunction(({ expectedViewedRoot, expectedCurrentRoot }) => {
+        const cards = Array.from(document.querySelectorAll('.code-session'));
+        const currentCard = cards.find((node) => (node.textContent || '').includes('CURRENT'));
+        const activeCard = document.querySelector('.code-session.is-active');
+        const activeText = activeCard?.textContent || '';
+        return (currentCard?.textContent || '').includes(expectedCurrentRoot)
+          && activeText.includes(expectedViewedRoot)
+          && activeText.includes('VIEWING');
+      }, {
+        expectedViewedRoot: expectedViewedWorkspaceRoot,
+        expectedCurrentRoot: expectedCurrentWorkspaceRoot,
+      });
+    }
+
+    async function attachWorkspaceFromCodePanel(expectedWorkspaceRoot) {
+      const card = page.locator('.code-session').filter({ hasText: expectedWorkspaceRoot });
+      await card.locator('[data-code-session-attach]').click();
     }
 
     async function attachWorkspaceFromExternalSurface(expectedWorkspaceRoot, {
@@ -611,11 +641,11 @@ guardian:
 
     await openCodePanel('sessions');
     await page.locator('.code-session').filter({ hasText: workspaceRoot }).click();
-    await page.waitForFunction((expected) => {
-      const activeMeta = document.querySelector('.code-session.is-active .code-session__meta');
-      return (activeMeta?.textContent || '').includes(expected);
-    }, workspaceRoot);
+    await waitForCodePageViewingWorkspace(workspaceRoot, reviewedWorkspaceRoot);
+    await waitForGuardianChatFocusByWorkspace(reviewedWorkspaceRoot);
+    await attachWorkspaceFromCodePanel(workspaceRoot);
     await waitForGuardianChatFocusByWorkspace(workspaceRoot);
+    await waitForCodePageFocusByWorkspace(workspaceRoot);
     await openCodePanel('activity');
     await page.waitForFunction(() => {
       return Array.from(document.querySelectorAll('.code-chat__notice')).some((node) => (node.textContent || '').includes('Native host malware scanning reported a workspace detection'));
@@ -629,15 +659,16 @@ guardian:
     await waitForGuardianChatFocusByWorkspace(workspaceRoot);
     await waitForCodePageFocusByWorkspace(workspaceRoot);
 
-    for (const expectedWorkspaceRoot of [workspaceRoot, reviewedWorkspaceRoot, workspaceRoot]) {
-      await openCodePanel('sessions');
-      await page.locator('.code-session').filter({ hasText: expectedWorkspaceRoot }).click();
-      await page.waitForFunction((expected) => {
-        const activeMeta = document.querySelector('.code-session.is-active .code-session__meta');
-        return (activeMeta?.textContent || '').includes(expected);
-      }, expectedWorkspaceRoot);
-      await waitForGuardianChatFocusByWorkspace(expectedWorkspaceRoot);
-    }
+    await openCodePanel('sessions');
+    await page.locator('.code-session').filter({ hasText: workspaceRoot }).click();
+    await waitForCodePageFocusByWorkspace(workspaceRoot);
+    await waitForGuardianChatFocusByWorkspace(workspaceRoot);
+    await page.locator('.code-session').filter({ hasText: reviewedWorkspaceRoot }).click();
+    await waitForCodePageViewingWorkspace(reviewedWorkspaceRoot, workspaceRoot);
+    await waitForGuardianChatFocusByWorkspace(workspaceRoot);
+    await page.locator('.code-session').filter({ hasText: workspaceRoot }).click();
+    await waitForCodePageFocusByWorkspace(workspaceRoot);
+    await waitForGuardianChatFocusByWorkspace(workspaceRoot);
 
     await page.goto(`${baseUrl}/#/`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#chat-panel');
@@ -647,6 +678,48 @@ guardian:
       && dashboardFocus.sessions.some((session) => session.id === dashboardFocus.currentSessionId && String(session.workspaceRoot || '').includes(workspaceRoot)),
       `Expected Guardian chat focus to persist after leaving the coding workspace route: ${JSON.stringify(dashboardFocus)}`,
     );
+    await page.waitForSelector('#chat-panel-code-session-select');
+    await page.waitForFunction((expectedRoot) => {
+      const select = document.querySelector('#chat-panel-code-session-select');
+      const detail = document.querySelector('[data-chat-code-session-detail]');
+      if (!(select instanceof HTMLSelectElement) || !(detail instanceof HTMLElement)) {
+        return false;
+      }
+      return (select.selectedOptions?.[0]?.textContent || '').includes(expectedRoot)
+        && (detail.textContent || '').includes(expectedRoot);
+    }, workspaceRoot);
+    const switchedFromChatPanel = await page.evaluate((expectedRoot) => {
+      const select = document.querySelector('#chat-panel-code-session-select');
+      if (!(select instanceof HTMLSelectElement)) return false;
+      const option = Array.from(select.options).find((entry) => (entry.textContent || '').includes(expectedRoot));
+      if (!option) return false;
+      select.value = option.value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }, reviewedWorkspaceRoot);
+    assert.equal(switchedFromChatPanel, true, 'Expected Guardian chat workspace picker to expose the reviewed workspace');
+    await waitForGuardianChatFocusByWorkspace(reviewedWorkspaceRoot);
+    await page.waitForFunction((expectedRoot) => {
+      const detail = document.querySelector('[data-chat-code-session-detail]');
+      return !!detail && (detail.textContent || '').includes(expectedRoot);
+    }, reviewedWorkspaceRoot);
+    await page.click('#chat-panel [data-chat-code-session-detach]');
+    await waitForGuardianChatDetached();
+    await page.waitForFunction(() => {
+      const summary = document.querySelector('[data-chat-code-session-summary]');
+      return !!summary && (summary.textContent || '').includes('No coding workspace attached');
+    });
+    const reattachedFromChatPanel = await page.evaluate((expectedRoot) => {
+      const select = document.querySelector('#chat-panel-code-session-select');
+      if (!(select instanceof HTMLSelectElement)) return false;
+      const option = Array.from(select.options).find((entry) => (entry.textContent || '').includes(expectedRoot));
+      if (!option) return false;
+      select.value = option.value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }, workspaceRoot);
+    assert.equal(reattachedFromChatPanel, true, 'Expected Guardian chat workspace picker to reattach the original workspace');
+    await waitForGuardianChatFocusByWorkspace(workspaceRoot);
 
     await page.goto(`${baseUrl}/#/code`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.code-page');

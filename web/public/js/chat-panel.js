@@ -24,6 +24,12 @@ import {
   shouldUseChatProviderSelector,
 } from './chat-mode-selector.js';
 import { matchesRunTimelineRequest } from './chat-run-tracking.js';
+import {
+  formatChatCodeSessionOptionLabel,
+  normalizeCodeSessionId,
+  shouldShowChatCodeSessionControls,
+  summarizeChatCodeSessionState,
+} from './chat-code-sessions.js';
 import { createResponseSourceBadge } from './response-source.js';
 import { applyInputTooltips } from './tooltip.js';
 
@@ -39,6 +45,7 @@ const CODE_SESSION_FOCUS_CHANGED_EVENT = 'guardian:code-session-focus-changed';
 let currentChatContext = 'second-brain';
 let refreshVisiblePendingAction = null;
 let refreshCodeSessionsPromise = null;
+let refreshChatPanelChrome = null;
 let activeChatIndicator = null;
 let activeRequestController = null;
 
@@ -190,6 +197,8 @@ export async function initChatPanel(container) {
   let providerSelect = null;
   let activeAgentId = null;
   let approvalHandler = null;
+  let codeSessionUiBusy = false;
+  let codeSessionUiError = '';
 
   if (useProviderSelector) {
     // Unified mode: show provider-profile selector instead of agent dropdown.
@@ -264,6 +273,8 @@ export async function initChatPanel(container) {
     return resolveChatHistoryKey(baseKey);
   };
 
+  let renderCodeSessionStrip = () => {};
+
   const refreshCodeSessions = async () => {
     if (refreshCodeSessionsPromise) {
       return refreshCodeSessionsPromise;
@@ -277,6 +288,7 @@ export async function initChatPanel(container) {
     refreshCodeSessionsPromise = null;
     knownCodeSessions = Array.isArray(result?.sessions) ? result.sessions : [];
     currentCodeSessionId = normalizeCodeSessionId(result?.currentSessionId);
+    renderCodeSessionStrip();
     if (history) {
       renderHistory(history, getHistoryKey(), approvalHandler);
       refreshVisiblePendingAction?.();
@@ -313,6 +325,105 @@ export async function initChatPanel(container) {
 
   wrapper.appendChild(toolbar);
 
+  const codeSessionStrip = document.createElement('section');
+  codeSessionStrip.id = 'chat-panel-code-session-strip';
+  codeSessionStrip.style.cssText = 'display:flex;flex-direction:column;gap:0.5rem;margin:0 0 0.8rem;padding:0.65rem;border:1px solid var(--border);background:var(--bg-secondary);';
+
+  const codeSessionSummaryRow = document.createElement('div');
+  codeSessionSummaryRow.style.cssText = 'display:flex;align-items:flex-start;justify-content:space-between;gap:0.6rem;';
+
+  const codeSessionSummaryCopy = document.createElement('div');
+  codeSessionSummaryCopy.style.cssText = 'display:flex;flex-direction:column;gap:0.2rem;min-width:0;';
+
+  const codeSessionSummary = document.createElement('strong');
+  codeSessionSummary.dataset.chatCodeSessionSummary = 'true';
+  codeSessionSummary.style.cssText = 'font-size:0.72rem;color:var(--text-primary);';
+
+  const codeSessionDetail = document.createElement('div');
+  codeSessionDetail.dataset.chatCodeSessionDetail = 'true';
+  codeSessionDetail.style.cssText = 'font-size:0.65rem;color:var(--text-muted);word-break:break-word;';
+
+  codeSessionSummaryCopy.append(codeSessionSummary, codeSessionDetail);
+
+  const codeSessionBadge = document.createElement('span');
+  codeSessionBadge.dataset.chatCodeSessionStatus = 'true';
+  codeSessionBadge.style.cssText = 'flex:0 0 auto;align-self:flex-start;';
+
+  codeSessionSummaryRow.append(codeSessionSummaryCopy, codeSessionBadge);
+
+  const codeSessionControls = document.createElement('div');
+  codeSessionControls.style.cssText = 'display:flex;align-items:center;gap:0.45rem;flex-wrap:wrap;';
+
+  const codeSessionSelect = document.createElement('select');
+  codeSessionSelect.id = 'chat-panel-code-session-select';
+  codeSessionSelect.style.cssText = 'flex:1 1 14rem;min-width:11rem;font-size:0.7rem;';
+
+  const codeSessionDetachBtn = document.createElement('button');
+  codeSessionDetachBtn.className = 'btn btn-secondary';
+  codeSessionDetachBtn.dataset.chatCodeSessionDetach = 'true';
+  codeSessionDetachBtn.textContent = 'Detach';
+  codeSessionDetachBtn.style.cssText = 'font-size:0.7rem;padding:0.35rem 0.55rem;white-space:nowrap;';
+
+  const codeSessionOpenBtn = document.createElement('button');
+  codeSessionOpenBtn.className = 'btn btn-secondary';
+  codeSessionOpenBtn.dataset.chatCodeSessionOpen = 'true';
+  codeSessionOpenBtn.textContent = 'Open Code';
+  codeSessionOpenBtn.style.cssText = 'font-size:0.7rem;padding:0.35rem 0.55rem;white-space:nowrap;';
+
+  codeSessionControls.append(codeSessionSelect, codeSessionDetachBtn, codeSessionOpenBtn);
+
+  const codeSessionError = document.createElement('div');
+  codeSessionError.dataset.chatCodeSessionError = 'true';
+  codeSessionError.style.cssText = 'font-size:0.65rem;color:var(--error);';
+  codeSessionError.hidden = true;
+
+  codeSessionStrip.append(codeSessionSummaryRow, codeSessionControls, codeSessionError);
+  wrapper.appendChild(codeSessionStrip);
+
+  renderCodeSessionStrip = () => {
+    const visible = shouldShowChatCodeSessionControls(currentChatContext, window.location?.hash || '');
+    codeSessionStrip.hidden = !visible;
+    if (!visible) {
+      return;
+    }
+
+    const summary = summarizeChatCodeSessionState({
+      sessions: knownCodeSessions,
+      currentSessionId: currentCodeSessionId,
+    });
+    codeSessionBadge.className = summary.badgeClassName;
+    codeSessionBadge.textContent = summary.badgeLabel;
+    codeSessionSummary.textContent = summary.summary;
+    codeSessionDetail.textContent = summary.detail;
+    codeSessionDetail.title = summary.currentSession?.workspaceRoot || summary.detail;
+
+    codeSessionSelect.replaceChildren();
+    codeSessionSelect.appendChild(new Option(
+      knownCodeSessions.length > 0 ? 'No coding workspace attached' : 'No coding workspaces yet',
+      '',
+    ));
+    for (const session of knownCodeSessions) {
+      codeSessionSelect.appendChild(new Option(
+        formatChatCodeSessionOptionLabel(session),
+        session.id,
+      ));
+    }
+    codeSessionSelect.value = currentCodeSessionId || '';
+    codeSessionSelect.disabled = codeSessionUiBusy || knownCodeSessions.length === 0;
+
+    codeSessionDetachBtn.disabled = codeSessionUiBusy || !currentCodeSessionId;
+    codeSessionDetachBtn.hidden = !currentCodeSessionId && knownCodeSessions.length === 0;
+
+    codeSessionOpenBtn.disabled = false;
+    codeSessionOpenBtn.textContent = currentCodeSessionId
+      ? 'Open Code'
+      : (knownCodeSessions.length > 0 ? 'Browse In Code' : 'Create In Code');
+
+    codeSessionError.hidden = !codeSessionUiError;
+    codeSessionError.textContent = codeSessionUiError;
+  };
+  refreshChatPanelChrome = renderCodeSessionStrip;
+
   // Chat history
   history = document.createElement('div');
   history.className = 'chat-history';
@@ -337,6 +448,7 @@ export async function initChatPanel(container) {
   sendBtn.style.padding = '0.5rem 0.8rem';
 
   renderHistory(history, getHistoryKey() || activeAgentId, approvalHandler);
+  renderCodeSessionStrip();
 
   if (select) {
     select.addEventListener('change', () => {
@@ -349,6 +461,22 @@ export async function initChatPanel(container) {
       refreshVisiblePendingAction?.();
     });
   }
+
+  codeSessionSelect.addEventListener('change', () => {
+    void changeChatCodeSessionFocus(codeSessionSelect.value);
+  });
+
+  codeSessionDetachBtn.addEventListener('click', () => {
+    if (!currentCodeSessionId) return;
+    void changeChatCodeSessionFocus(null);
+  });
+
+  codeSessionOpenBtn.addEventListener('click', () => {
+    const requestedSessionId = currentCodeSessionId || normalizeCodeSessionId(codeSessionSelect.value);
+    window.location.hash = requestedSessionId
+      ? `#/code?sessionId=${encodeURIComponent(requestedSessionId)}`
+      : '#/code';
+  });
 
   // ── Helpers ──────────────────────────────────────────────────
 
@@ -366,6 +494,57 @@ export async function initChatPanel(container) {
     };
   };
   const getContextPrefix = () => `[Context: User is currently viewing the ${currentChatContext} panel] `;
+
+  const changeChatCodeSessionFocus = async (nextSessionId) => {
+    const normalizedNextSessionId = normalizeCodeSessionId(nextSessionId);
+    if (normalizedNextSessionId === currentCodeSessionId) {
+      codeSessionUiError = '';
+      renderCodeSessionStrip();
+      return;
+    }
+
+    codeSessionUiBusy = true;
+    codeSessionUiError = '';
+    renderCodeSessionStrip();
+
+    try {
+      if (normalizedNextSessionId) {
+        const result = await api.codeSessionAttach(normalizedNextSessionId, {
+          userId: webUserId,
+          channel: 'web',
+          surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+          mode: 'controller',
+        });
+        const attachedSessionId = normalizeCodeSessionId(result?.snapshot?.session?.id);
+        if (!result?.success || !attachedSessionId) {
+          throw new Error('Failed to switch the coding workspace.');
+        }
+        currentCodeSessionId = attachedSessionId;
+      } else {
+        const result = await api.codeSessionDetach({
+          userId: webUserId,
+          channel: 'web',
+          surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+        });
+        if (!result?.success) {
+          throw new Error('Failed to detach the coding workspace.');
+        }
+        currentCodeSessionId = null;
+      }
+      notifyCodeSessionFocus(currentCodeSessionId);
+      notifyCodeSessionsChanged({
+        sessionId: currentCodeSessionId,
+        surfaceId: GUARDIAN_CHAT_SURFACE_ID,
+        origin: GUARDIAN_CHAT_SURFACE_ID,
+      });
+      await refreshCodeSessions();
+    } catch (err) {
+      codeSessionUiError = err instanceof Error ? err.message : String(err);
+    } finally {
+      codeSessionUiBusy = false;
+      renderCodeSessionStrip();
+    }
+  };
 
   const restoreInput = () => {
     input.disabled = false;
@@ -857,6 +1036,7 @@ export async function initChatPanel(container) {
 
 export function setChatContext(context) {
   currentChatContext = context;
+  refreshChatPanelChrome?.();
   refreshVisiblePendingAction?.();
 }
 
@@ -878,10 +1058,6 @@ function resolveWebUserId() {
   const resolved = (current || 'web-user').trim();
   sessionStorage.setItem(WEB_USER_KEY, resolved);
   return resolved;
-}
-
-function normalizeCodeSessionId(value) {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function getHistory(agentId) {

@@ -82,6 +82,24 @@ The target design is:
 - no workspace-local auto-loaded executable capabilities
 - candidate capabilities that are built, scanned, tested, approved, and only then activated
 
+## Session Portfolio Operating Model
+
+This uplift is intentionally not a move to "one chat mutates many repos at once."
+
+The target operating model is:
+
+- `primary`: the current mutable coding session for a surface or lane; repo-local writes, git actions, tests, builds, and shell mutations default here
+- `referenced`: additional coding sessions that are visible to the agent for inspect, compare, summarize, and read-oriented reasoning, but are not implicit mutation targets
+- `child lane`: an explicit delegated or background execution lane against another coding session or workspace, with its own status, approvals, and lineage back to the parent session/request
+
+In practice:
+
+- if the operator wants to compare repo A and repo B while still editing in repo A, repo A stays `primary` and repo B is `referenced`
+- if the operator wants repo B to become the default mutable target, Guardian switches `primary` focus from repo A to repo B
+- if the operator wants real concurrent work in repo B while keeping repo A as the foreground workspace, Guardian should start a `child lane` rather than turning one foreground chat lane into an ambiguous multi-repo mutation context
+
+This is how Guardian breaks out of the old "one meaningful coding workspace" limitation without weakening the safety invariant that implicit mutation lands in exactly one workspace per lane.
+
 ## Relationship To Existing Plans
 
 ### General chat canonical coding sessions
@@ -197,6 +215,7 @@ Run the work in three tracks plus one shared foundation track.
 
 - **Keep one implicit mutable target.** Multi-workspace awareness must not become multi-workspace ambiguity.
 - **Inspect first, mutate explicitly.** Other sessions are inspectable by default, not writable by default.
+- **Use child lanes for real parallel work.** Concurrent work in another workspace should become an explicit lane with lineage, not an implicit second mutable target inside the same foreground chat flow.
 - **Do not ask a chat model to pick its own provider.** The gateway may emit workload metadata, but provider/model-profile selection should be deterministic from configured state.
 - **Treat gateway and profile selection as one routing pipeline.** The gateway classifies intent and workload shape; the selector deterministically chooses the concrete execution profile from current configuration.
 - **Guard capability growth at runtime.** Build is separate from activate. Activate is separate from promote.
@@ -534,6 +553,7 @@ Suggested additions:
 
 - existing primary focus behavior still works
 - referenced sessions can be attached and removed without becoming implicit mutation roots
+- operators can tell whether another workspace is `referenced` or running as a `child/delegated` lane
 - portfolio state is durable and inspectable
 
 ## Phase 2: Intent Gateway And Tooling For Explicit Multi-Session Operations

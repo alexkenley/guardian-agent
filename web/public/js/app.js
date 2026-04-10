@@ -472,7 +472,10 @@ function startApp() {
     pushAssistantNotice(payload);
   });
   startClock();
-  initChatPanel(chatPanel);
+  void initChatPanel(chatPanel).then(() => {
+    const { route } = getRouteState();
+    setChatContext(currentPage || route?.name || 'second-brain');
+  });
 
   // ── Collapsible sidebar ──
   const sidebarToggle = document.getElementById('sidebar-toggle');
