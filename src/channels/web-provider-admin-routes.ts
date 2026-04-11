@@ -101,6 +101,15 @@ export async function handleWebProviderAdminRoutes(
     return true;
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/google/auth/cancel') {
+    if (!dashboard.onGoogleAuthCancel) {
+      sendJSON(res, 404, { error: 'Native Google integration not enabled' });
+      return true;
+    }
+    sendJSON(res, 200, await dashboard.onGoogleAuthCancel());
+    return true;
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/google/disconnect') {
     if (!dashboard.onGoogleDisconnect) {
       sendJSON(res, 404, { error: 'Native Google integration not enabled' });
@@ -145,6 +154,15 @@ export async function handleWebProviderAdminRoutes(
       clientId: parsed.clientId,
       tenantId: parsed.tenantId,
     }));
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/microsoft/auth/cancel') {
+    if (!dashboard.onMicrosoftAuthCancel) {
+      sendJSON(res, 404, { error: 'Native Microsoft integration not enabled' });
+      return true;
+    }
+    sendJSON(res, 200, await dashboard.onMicrosoftAuthCancel());
     return true;
   }
 

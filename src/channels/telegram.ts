@@ -167,7 +167,7 @@ export interface TelegramChannelOptions {
     continuedResponse?: { content: string; metadata?: Record<string, unknown> };
   };
   /** Dispatch a follow-up message to an agent (for auto-continuation after approval). */
-  onDispatch?: (agentId: string, message: { content: string; userId?: string; channel?: string }) => Promise<{ content: string; metadata?: Record<string, unknown> }>;
+  onDispatch?: (agentId: string, message: { content: string; userId?: string; surfaceId?: string; channel?: string }) => Promise<{ content: string; metadata?: Record<string, unknown> }>;
 }
 
 export class TelegramChannel implements ChannelAdapter {
@@ -490,6 +490,7 @@ export class TelegramChannel implements ChannelAdapter {
       const response = await this.onMessage({
         id: randomUUID(),
         userId: channelUserId,
+        surfaceId: this.buildSurfaceId(ctx),
         channel: 'telegram',
         content: text,
         timestamp: Date.now(),
@@ -577,6 +578,10 @@ export class TelegramChannel implements ChannelAdapter {
     const chatId = String(ctx.chat?.id ?? 'unknown-chat');
     const userId = String(ctx.from?.id ?? ctx.chat?.id ?? 'unknown-user');
     return `${chatId}:${userId}`;
+  }
+
+  private buildSurfaceId(ctx: Context): string {
+    return `telegram:${this.buildApprovalKey(ctx)}`;
   }
 
   private isApprovalInput(text: string): boolean {
@@ -763,6 +768,7 @@ export class TelegramChannel implements ChannelAdapter {
         const continuation = await this.onDispatchMsg(agentId, {
           content: `[User approved the pending tool action(s). Result: ${summary}] ${allSucceeded ? 'Please continue with the current request only. Do not resume older unrelated pending tasks.' : 'Some actions failed — adjust your approach accordingly. Focus only on the current request.'}`,
           userId: input.userId,
+          surfaceId: this.buildSurfaceId(ctx),
           channel: 'telegram',
         });
         await this.replyWithApprovalSupport(ctx, continuation, agentId);

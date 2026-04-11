@@ -119,7 +119,7 @@ describe('Telegram approval flow', () => {
 
   it('auto-continues plain-text approvals through add-path then write-file without generic completion chatter', async () => {
     const decisions: Array<{ approvalId: string; decision: string }> = [];
-    const dispatches: Array<{ agentId: string; content: string; userId?: string; channel?: string }> = [];
+    const dispatches: Array<{ agentId: string; content: string; userId?: string; surfaceId?: string; channel?: string }> = [];
     const channel = new TelegramChannel({
       botToken: '123:abc',
       onToolsApprovalDecision: async ({ approvalId, decision }) => {
@@ -181,8 +181,10 @@ describe('Telegram approval flow', () => {
     expect(dispatches).toHaveLength(2);
     expect(dispatches[0]?.content).toContain('[User approved the pending tool action(s). Result: update_tool_policy: Approved and executed]');
     expect(dispatches[0]?.content).toContain('Please continue with the current request only. Do not resume older unrelated pending tasks.');
+    expect(dispatches[0]?.surfaceId).toBe('telegram:1001:2002');
     expect(dispatches[1]?.content).toContain('[User approved the pending tool action(s). Result: fs_write: Approved and executed]');
     expect(dispatches[1]?.content).toContain('Please continue with the current request only. Do not resume older unrelated pending tasks.');
+    expect(dispatches[1]?.surfaceId).toBe('telegram:1001:2002');
 
     const output = replies.map((reply) => reply.text).join('\n');
     expect(output).toContain('Waiting for approval to add S:\\Development to allowed paths.');
@@ -343,5 +345,23 @@ describe('Telegram approval flow', () => {
     }, 'default');
 
     expect(replies[0]?.text).toBe('[external] Workflow created successfully.');
+  });
+
+  it('dispatches Telegram chat turns with a stable surface id', async () => {
+    const channel = new TelegramChannel({ botToken: '123:abc' });
+    const { ctx } = createFakeCtx();
+    const onMessage = vi.fn(async () => ({ content: 'ok' }));
+    (channel as unknown as { onMessage: typeof onMessage }).onMessage = onMessage;
+
+    await (channel as unknown as {
+      dispatchAssistantMessage: (ctx: unknown, text: string, canonicalUserId: string, channelUserId: string) => Promise<void>;
+    }).dispatchAssistantMessage(ctx, 'hello', 'owner', '2002');
+
+    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
+      userId: '2002',
+      surfaceId: 'telegram:1001:2002',
+      channel: 'telegram',
+      content: 'hello',
+    }));
   });
 });

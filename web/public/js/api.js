@@ -613,6 +613,7 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({ services }),
   }),
+  googleAuthCancel: () => request('/api/google/auth/cancel', { method: 'POST' }),
   googleCredentials: (credentials) => request('/api/google/credentials', {
     method: 'POST',
     body: JSON.stringify({ credentials }),
@@ -625,6 +626,7 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({ services }),
   }),
+  microsoftAuthCancel: () => request('/api/microsoft/auth/cancel', { method: 'POST' }),
   microsoftConfig: (clientId, tenantId) => request('/api/microsoft/config', {
     method: 'POST',
     body: JSON.stringify({ clientId, tenantId }),

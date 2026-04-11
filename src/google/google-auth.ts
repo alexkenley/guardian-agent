@@ -43,6 +43,7 @@ interface PendingAuth {
   server: Server;
   resolve: (code: string) => void;
   reject: (err: Error) => void;
+  timeoutHandle?: ReturnType<typeof setTimeout>;
 }
 
 export class GoogleAuth {
@@ -64,6 +65,9 @@ export class GoogleAuth {
    * Returns the authorization URL that should be opened in the user's browser.
    */
   async startAuth(): Promise<{ authUrl: string; state: string }> {
+    if (this.pending) {
+      this.cancelPendingAuth('Starting a new OAuth flow.');
+    }
     const creds = await this.loadClientCredentials();
     const codeVerifier = randomBytes(32).toString('base64url');
     const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url');
@@ -156,7 +160,19 @@ export class GoogleAuth {
 
     this.tokens = undefined;
     await this.clearStoredTokens();
+    this.cancelPendingAuth('Google OAuth flow was cancelled.');
+  }
+
+  hasPendingAuth(): boolean {
+    return !!this.pending;
+  }
+
+  cancelPendingAuth(reason: string = 'Google OAuth flow was cancelled.'): void {
+    if (!this.pending) return;
+    const pending = this.pending;
     this.stopCallbackServer();
+    pending.reject(new Error(reason));
+    log.info({ reason }, 'Cancelled pending Google OAuth flow');
   }
 
   /** Check if authenticated with valid (or refreshable) tokens. */
@@ -250,6 +266,7 @@ export class GoogleAuth {
             '<h2>Authorization failed</h2><p>You can close this window.</p>',
           );
           this.pending?.reject(new Error(`Google OAuth error: ${error}`));
+          this.stopCallbackServer();
           return;
         }
 
@@ -288,6 +305,9 @@ export class GoogleAuth {
           server,
           resolve: () => {},
           reject: () => {},
+          timeoutHandle: setTimeout(() => {
+            this.cancelPendingAuth('OAuth flow timed out.');
+          }, AUTH_TIMEOUT_MS),
         };
         resolve();
       });
@@ -299,10 +319,13 @@ export class GoogleAuth {
   }
 
   private stopCallbackServer(): void {
-    if (this.pending?.server) {
-      this.pending.server.close();
-      this.pending = undefined;
+    if (!this.pending) return;
+    const pending = this.pending;
+    this.pending = undefined;
+    if (pending.timeoutHandle) {
+      clearTimeout(pending.timeoutHandle);
     }
+    pending.server.close();
   }
 
   private async exchangeCode(code: string, codeVerifier: string): Promise<void> {

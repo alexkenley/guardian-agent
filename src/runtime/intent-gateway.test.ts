@@ -195,6 +195,29 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.sessionTarget).toBe('Test Tactical Game App');
   });
 
+  it('recovers local Second Brain calendar reads from an unstructured gateway response', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'List my calendar entries for the next seven days.',
+        channel: 'telegram',
+      },
+      async () => ({
+        content: 'This looks like a calendar request.',
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.available).toBe(true);
+    expect(result.decision.route).toBe('personal_assistant_task');
+    expect(result.decision.operation).toBe('read');
+    expect(result.decision.entities.personalItemType).toBe('calendar');
+    expect(result.decision.entities.calendarTarget).toBe('local');
+    expect(result.decision.entities.calendarWindowDays).toBe(7);
+  });
+
   it('converts shadow decisions into client-safe metadata', () => {
     const metadata = toIntentGatewayClientMetadata({
       mode: 'primary',
@@ -1199,6 +1222,53 @@ describe('IntentGateway', () => {
     expect(capturedSystem).toContain('active pending action is approval for a Codex run, then the user says "Check my email."');
     expect(capturedUser).toContain('Pending action context (only relevant if the current turn is actually continuing or resolving it):');
     expect(capturedUser).toContain('transfer policy: origin_surface_only');
+  });
+
+  it('includes structured pending-action intent context when available', async () => {
+    const gateway = new IntentGateway();
+    let capturedUser = '';
+
+    await gateway.classify(
+      {
+        content: 'It is connected now.',
+        channel: 'telegram',
+        pendingAction: {
+          id: 'pending-google-calendar-auth',
+          status: 'pending',
+          blockerKind: 'auth',
+          route: 'workspace_task',
+          operation: 'read',
+          summary: 'Lists Google Calendar events for the next 7 days.',
+          resolution: 'needs_clarification',
+          missingFields: ['provider_auth'],
+          entities: { calendarTarget: 'gws' },
+          prompt: 'Google Workspace is not connected yet. Connect it and then continue.',
+          originalRequest: 'List my Google Calendar entries for the next 7 days.',
+          transferPolicy: 'linked_surfaces_same_user',
+        },
+      },
+      async (messages) => {
+        capturedUser = messages[1]?.content ?? '';
+        return {
+          content: JSON.stringify({
+            route: 'workspace_task',
+            confidence: 'medium',
+            operation: 'read',
+            summary: 'Resumes the explicit Google Calendar read.',
+            turnRelation: 'follow_up',
+            resolution: 'ready',
+            calendarTarget: 'gws',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(capturedUser).toContain('summary: Lists Google Calendar events for the next 7 days.');
+    expect(capturedUser).toContain('resolution: needs_clarification');
+    expect(capturedUser).toContain('missing fields: provider_auth');
+    expect(capturedUser).toContain('entities: {"calendarTarget":"gws"}');
   });
 
   it('includes continuity thread context when available', async () => {

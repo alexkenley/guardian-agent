@@ -3,6 +3,7 @@
  */
 
 import { api } from '../api.js';
+import { startCloudAuthAttempt } from '../cloud-auth-attempt.js';
 import { activateContextHelp, enhanceSectionHelp, renderGuidancePanel } from '../components/context-help.js';
 import { createTabs } from '../components/tabs.js';
 import { applyInputTooltips } from '../tooltip.js';
@@ -1066,6 +1067,7 @@ function escAttr(input) {
 function createGoogleWorkspacePanel() {
   const section = document.createElement('div');
   section.className = 'table-container';
+  let googleAuthAttempt = null;
 
   const inlineCode = 'background:var(--bg-tertiary);padding:0.1rem 0.3rem;border-radius:0;';
 
@@ -1160,6 +1162,16 @@ function createGoogleWorkspacePanel() {
             <div style="color:var(--text-muted);font-size:0.72rem;">Token expiry: ${expiry}</div>
           `;
         }
+      } else if (status.authPending) {
+        if (badge) {
+          badge.textContent = 'Auth pending';
+          badge.className = 'badge badge-running';
+          badge.style.color = '';
+        }
+        if (disconnectBtn) disconnectBtn.style.display = 'none';
+        if (statusText) {
+          statusText.innerHTML = '<div style="color:var(--text-muted);">Google authentication is in progress in another window.</div>';
+        }
       } else {
         if (badge) {
           badge.textContent = 'Not connected';
@@ -1172,6 +1184,11 @@ function createGoogleWorkspacePanel() {
     } catch (err) {
       console.warn('Failed to refresh Google status:', err);
     }
+  }
+
+  function stopGoogleAuthAttempt() {
+    googleAuthAttempt?.stop?.();
+    googleAuthAttempt = null;
   }
 
   section.querySelector('#gws-native-upload')?.addEventListener('change', async (e) => {
@@ -1211,28 +1228,48 @@ function createGoogleWorkspacePanel() {
 
     btn.disabled = true;
     btn.textContent = 'Starting Auth...';
+    stopGoogleAuthAttempt();
 
     try {
       const { authUrl } = await api.googleAuthStart(services);
-      window.open(authUrl, '_blank', 'width=600,height=700');
+      const popup = window.open(authUrl, '_blank', 'width=600,height=700');
+      popup?.focus?.();
 
       if (statusText) statusText.innerHTML = '<div style="color:var(--text-muted);">Opening Google login in a new window. Please complete the flow there.</div>';
 
-      let attempts = 0;
-      const poll = setInterval(async () => {
-        attempts++;
-        const status = await api.googleStatus();
-        if (status.authenticated || attempts > 60) {
-          clearInterval(poll);
+      googleAuthAttempt = startCloudAuthAttempt({
+        popupWindow: popup,
+        pollStatus: () => api.googleStatus(),
+        cancelPendingAuth: () => api.googleAuthCancel(),
+        onAuthenticated: async () => {
+          googleAuthAttempt = null;
           btn.disabled = false;
           btn.textContent = 'Connect Google';
-          refreshNativeStatus();
-          if (status.authenticated) {
-            await api.updateConfig({ assistant: { tools: { google: { enabled: true, services } } } });
+          await refreshNativeStatus();
+          await api.updateConfig({ assistant: { tools: { google: { enabled: true, services } } } });
+        },
+        onAbandoned: async (reason) => {
+          googleAuthAttempt = null;
+          btn.disabled = false;
+          btn.textContent = 'Connect Google';
+          await refreshNativeStatus();
+          if (statusText) {
+            statusText.innerHTML = reason === 'timed_out'
+              ? '<div style="color:var(--warning);">Google authentication timed out. Click Connect Google to try again.</div>'
+              : reason === 'popup_blocked'
+                ? '<div style="color:var(--warning);">The Google authentication window was blocked. Allow popups and click Connect Google again.</div>'
+                : '<div style="color:var(--warning);">The Google authentication window was closed before completion. Click Connect Google to try again.</div>';
           }
-        }
-      }, 2000);
+        },
+        onError: async (err) => {
+          googleAuthAttempt = null;
+          btn.disabled = false;
+          btn.textContent = 'Connect Google';
+          if (statusText) statusText.innerHTML = `<div style="color:var(--error);">${err.message || 'Failed to monitor Google auth.'}</div>`;
+        },
+      });
     } catch (err) {
+      stopGoogleAuthAttempt();
       btn.disabled = false;
       btn.textContent = 'Connect Google';
       if (statusText) statusText.innerHTML = `<div style="color:var(--error);">${err.message || 'Failed to start Google auth.'}</div>`;
@@ -1243,6 +1280,7 @@ function createGoogleWorkspacePanel() {
     if (!confirm('Disconnect from Google Workspace? This will revoke the tokens.')) return;
 
     try {
+      stopGoogleAuthAttempt();
       await api.googleDisconnect();
       refreshNativeStatus();
     } catch (err) {
@@ -1288,6 +1326,7 @@ function createGoogleWorkspacePanel() {
 function createMicrosoft365Panel() {
   const section = document.createElement('div');
   section.className = 'table-container';
+  let microsoftAuthAttempt = null;
 
   const inlineCode = 'background:var(--bg-tertiary);padding:0.1rem 0.3rem;border-radius:0;';
 
@@ -1389,6 +1428,16 @@ function createMicrosoft365Panel() {
             <div style="color:var(--text-muted);font-size:0.72rem;">Token expiry: ${expiry}</div>
           `;
         }
+      } else if (status.authPending) {
+        if (badge) {
+          badge.textContent = 'Auth pending';
+          badge.className = 'badge badge-running';
+          badge.style.color = '';
+        }
+        if (disconnectBtn) disconnectBtn.style.display = 'none';
+        if (statusText) {
+          statusText.innerHTML = '<div style="color:var(--text-muted);">Microsoft authentication is in progress in another window.</div>';
+        }
       } else {
         if (badge) {
           badge.textContent = 'Not connected';
@@ -1401,6 +1450,11 @@ function createMicrosoft365Panel() {
     } catch (err) {
       console.warn('Failed to refresh Microsoft status:', err);
     }
+  }
+
+  function stopMicrosoftAuthAttempt() {
+    microsoftAuthAttempt?.stop?.();
+    microsoftAuthAttempt = null;
   }
 
   section.querySelector('#m365-connect')?.addEventListener('click', async () => {
@@ -1425,6 +1479,7 @@ function createMicrosoft365Panel() {
 
     btn.disabled = true;
     btn.textContent = 'Starting Auth...';
+    stopMicrosoftAuthAttempt();
 
     try {
       // Save client ID / tenant ID config first
@@ -1432,25 +1487,44 @@ function createMicrosoft365Panel() {
 
       // Start OAuth flow
       const { authUrl } = await api.microsoftAuthStart(services);
-      window.open(authUrl, '_blank', 'width=600,height=700');
+      const popup = window.open(authUrl, '_blank', 'width=600,height=700');
+      popup?.focus?.();
 
       if (statusText) statusText.innerHTML = '<div style="color:var(--text-muted);">Opening Microsoft login in a new window. Please complete the flow there.</div>';
 
-      let attempts = 0;
-      const poll = setInterval(async () => {
-        attempts++;
-        const status = await api.microsoftStatus();
-        if (status.authenticated || attempts > 60) {
-          clearInterval(poll);
+      microsoftAuthAttempt = startCloudAuthAttempt({
+        popupWindow: popup,
+        pollStatus: () => api.microsoftStatus(),
+        cancelPendingAuth: () => api.microsoftAuthCancel(),
+        onAuthenticated: async () => {
+          microsoftAuthAttempt = null;
           btn.disabled = false;
           btn.textContent = 'Connect Microsoft';
-          refreshMicrosoftStatus();
-          if (status.authenticated) {
-            await api.updateConfig({ assistant: { tools: { microsoft: { enabled: true, services, clientId, tenantId } } } });
+          await refreshMicrosoftStatus();
+          await api.updateConfig({ assistant: { tools: { microsoft: { enabled: true, services, clientId, tenantId } } } });
+        },
+        onAbandoned: async (reason) => {
+          microsoftAuthAttempt = null;
+          btn.disabled = false;
+          btn.textContent = 'Connect Microsoft';
+          await refreshMicrosoftStatus();
+          if (statusText) {
+            statusText.innerHTML = reason === 'timed_out'
+              ? '<div style="color:var(--warning);">Microsoft authentication timed out. Click Connect Microsoft to try again.</div>'
+              : reason === 'popup_blocked'
+                ? '<div style="color:var(--warning);">The Microsoft authentication window was blocked. Allow popups and click Connect Microsoft again.</div>'
+                : '<div style="color:var(--warning);">The Microsoft authentication window was closed before completion. Click Connect Microsoft to try again.</div>';
           }
-        }
-      }, 2000);
+        },
+        onError: async (err) => {
+          microsoftAuthAttempt = null;
+          btn.disabled = false;
+          btn.textContent = 'Connect Microsoft';
+          if (statusText) statusText.innerHTML = `<div style="color:var(--error);">${err.message || 'Failed to monitor Microsoft auth.'}</div>`;
+        },
+      });
     } catch (err) {
+      stopMicrosoftAuthAttempt();
       btn.disabled = false;
       btn.textContent = 'Connect Microsoft';
       if (statusText) statusText.innerHTML = `<div style="color:var(--error);">${err.message || 'Failed to start Microsoft auth.'}</div>`;
@@ -1461,6 +1535,7 @@ function createMicrosoft365Panel() {
     if (!confirm('Disconnect from Microsoft 365? This will clear the stored tokens.')) return;
 
     try {
+      stopMicrosoftAuthAttempt();
       await api.microsoftDisconnect();
       refreshMicrosoftStatus();
     } catch (err) {

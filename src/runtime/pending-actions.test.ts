@@ -305,6 +305,7 @@ describe('PendingActionStore', () => {
       blockerKind: 'approval',
       route: 'coding_task',
       operation: 'create',
+      summary: 'Runs Codex in the current coding workspace.',
       transferPolicy: 'origin_surface_only',
     });
     expect(clientMetadata).toMatchObject({
@@ -313,6 +314,41 @@ describe('PendingActionStore', () => {
       codeSessionId: 'session-1',
       blocker: {
         kind: 'approval',
+      },
+    });
+  });
+
+  it('preserves structured intent context in gateway summaries', () => {
+    const store = createStore();
+    const scope = createScope();
+    const created = store.replaceActive(scope, createRecord({
+      blocker: {
+        kind: 'auth',
+        prompt: 'Connect Google Workspace and then continue.',
+      },
+      intent: {
+        route: 'workspace_task',
+        operation: 'read',
+        summary: 'Lists Google Calendar events for the next 7 days.',
+        resolution: 'needs_clarification',
+        missingFields: ['provider_auth'],
+        originalUserContent: 'List my Google Calendar entries for the next 7 days.',
+        entities: {
+          calendarTarget: 'gws',
+        },
+      },
+    }));
+
+    const gatewaySummary = summarizePendingActionForGateway(created);
+
+    expect(gatewaySummary).toMatchObject({
+      route: 'workspace_task',
+      operation: 'read',
+      summary: 'Lists Google Calendar events for the next 7 days.',
+      resolution: 'needs_clarification',
+      missingFields: ['provider_auth'],
+      entities: {
+        calendarTarget: 'gws',
       },
     });
   });

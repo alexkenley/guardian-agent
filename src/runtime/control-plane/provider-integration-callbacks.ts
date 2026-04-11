@@ -24,10 +24,12 @@ type ProviderIntegrationCallbacks = Pick<
   | 'onGoogleStatus'
   | 'onGoogleAuthStart'
   | 'onGoogleCredentials'
+  | 'onGoogleAuthCancel'
   | 'onGoogleDisconnect'
   | 'onMicrosoftStatus'
   | 'onMicrosoftAuthStart'
   | 'onMicrosoftConfig'
+  | 'onMicrosoftAuthCancel'
   | 'onMicrosoftDisconnect'
   | 'onCloudTest'
 >;
@@ -87,6 +89,7 @@ export function createProviderIntegrationCallbacks(
       const expiry = auth.getTokenExpiry();
       return {
         authenticated: auth.isAuthenticated(),
+        authPending: auth.hasPendingAuth(),
         tokenExpiry: expiry,
         tokenExpired: expiry ? expiry < Date.now() : false,
         services: svc?.getEnabledServices() ?? [],
@@ -133,6 +136,13 @@ export function createProviderIntegrationCallbacks(
       }
     },
 
+    onGoogleAuthCancel: async () => {
+      const auth = options.googleAuthRef.current;
+      if (!auth) return { success: false, message: 'Google auth not initialized.' };
+      auth.cancelPendingAuth('Google OAuth flow was cancelled from the web UI.');
+      return { success: true, message: 'Cancelled pending Google auth flow.' };
+    },
+
     onGoogleDisconnect: async () => {
       const auth = options.googleAuthRef.current;
       if (!auth) return { success: false, message: 'Native Google integration is not enabled.' };
@@ -152,6 +162,7 @@ export function createProviderIntegrationCallbacks(
       const expiry = auth.getTokenExpiry();
       return {
         authenticated: auth.isAuthenticated(),
+        authPending: auth.hasPendingAuth(),
         tokenExpiry: expiry,
         tokenExpired: expiry ? expiry < Date.now() : false,
         services: svc?.getEnabledServices() ?? [],
@@ -228,6 +239,13 @@ export function createProviderIntegrationCallbacks(
       } catch (err) {
         return { success: false, message: err instanceof Error ? err.message : String(err) };
       }
+    },
+
+    onMicrosoftAuthCancel: async () => {
+      const auth = options.microsoftAuthRef.current;
+      if (!auth) return { success: false, message: 'Microsoft auth not initialized.' };
+      auth.cancelPendingAuth('Microsoft OAuth flow was cancelled from the web UI.');
+      return { success: true, message: 'Cancelled pending Microsoft auth flow.' };
     },
 
     onMicrosoftDisconnect: async () => {

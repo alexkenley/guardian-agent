@@ -42,6 +42,7 @@ interface PendingAuth {
   server: Server;
   resolve: (code: string) => void;
   reject: (err: Error) => void;
+  timeoutHandle?: ReturnType<typeof setTimeout>;
 }
 
 export class MicrosoftAuth {
@@ -64,6 +65,9 @@ export class MicrosoftAuth {
    * Returns the authorization URL that should be opened in the user's browser.
    */
   async startAuth(): Promise<{ authUrl: string; state: string }> {
+    if (this.pending) {
+      this.cancelPendingAuth('Starting a new OAuth flow.');
+    }
     const codeVerifier = randomBytes(32).toString('base64url');
     const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url');
     const state = randomBytes(16).toString('hex');
@@ -148,8 +152,20 @@ export class MicrosoftAuth {
     // Clear local storage. The user can optionally sign out via the logout URL.
     this.tokens = undefined;
     await this.clearStoredTokens();
-    this.stopCallbackServer();
+    this.cancelPendingAuth('Microsoft OAuth flow was cancelled.');
     log.info('Microsoft tokens cleared');
+  }
+
+  hasPendingAuth(): boolean {
+    return !!this.pending;
+  }
+
+  cancelPendingAuth(reason: string = 'Microsoft OAuth flow was cancelled.'): void {
+    if (!this.pending) return;
+    const pending = this.pending;
+    this.stopCallbackServer();
+    pending.reject(new Error(reason));
+    log.info({ reason }, 'Cancelled pending Microsoft OAuth flow');
   }
 
   /** Check if authenticated with valid (or refreshable) tokens. */
@@ -215,6 +231,7 @@ export class MicrosoftAuth {
             `<h2>Authorization failed</h2><p>${errorDesc || error}</p><p>You can close this window.</p>`,
           );
           this.pending?.reject(new Error(`Microsoft OAuth error: ${errorDesc || error}`));
+          this.stopCallbackServer();
           return;
         }
 
@@ -253,6 +270,9 @@ export class MicrosoftAuth {
           server,
           resolve: () => {},
           reject: () => {},
+          timeoutHandle: setTimeout(() => {
+            this.cancelPendingAuth('OAuth flow timed out.');
+          }, AUTH_TIMEOUT_MS),
         };
         resolve();
       });
@@ -264,10 +284,13 @@ export class MicrosoftAuth {
   }
 
   private stopCallbackServer(): void {
-    if (this.pending?.server) {
-      this.pending.server.close();
-      this.pending = undefined;
+    if (!this.pending) return;
+    const pending = this.pending;
+    this.pending = undefined;
+    if (pending.timeoutHandle) {
+      clearTimeout(pending.timeoutHandle);
     }
+    pending.server.close();
   }
 
   private async exchangeCode(code: string, codeVerifier: string): Promise<void> {

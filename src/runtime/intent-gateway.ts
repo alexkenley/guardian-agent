@@ -132,6 +132,10 @@ export interface IntentGatewayInput {
     field?: string;
     route?: string;
     operation?: string;
+    summary?: string;
+    resolution?: string;
+    missingFields?: string[];
+    entities?: Record<string, unknown>;
     prompt: string;
     originalRequest: string;
     transferPolicy: string;
@@ -794,6 +798,12 @@ function buildIntentGatewayMessages(input: IntentGatewayInput, systemPrompt: str
         ...(input.pendingAction.field ? [`field: ${input.pendingAction.field}`] : []),
         ...(input.pendingAction.route ? [`route: ${input.pendingAction.route}`] : []),
         ...(input.pendingAction.operation ? [`operation: ${input.pendingAction.operation}`] : []),
+        ...(input.pendingAction.summary ? [`summary: ${input.pendingAction.summary}`] : []),
+        ...(input.pendingAction.resolution ? [`resolution: ${input.pendingAction.resolution}`] : []),
+        ...(input.pendingAction.missingFields?.length ? [`missing fields: ${input.pendingAction.missingFields.join(', ')}`] : []),
+        ...(input.pendingAction.entities && Object.keys(input.pendingAction.entities).length > 0
+          ? [`entities: ${JSON.stringify(input.pendingAction.entities)}`]
+          : []),
         `prompt: ${input.pendingAction.prompt}`,
         `original request: ${input.pendingAction.originalRequest}`,
         '',
@@ -1032,7 +1042,8 @@ function normalizeIntentGatewayDecision(
   const mailboxReadMode = normalizeMailboxReadMode(parsed.mailboxReadMode);
   const calendarTarget = normalizeCalendarTarget(parsed.calendarTarget)
     ?? (route === 'personal_assistant_task' && personalItemType === 'calendar' ? 'local' : undefined);
-  const calendarWindowDays = normalizeCalendarWindowDays((parsed as Record<string, unknown>).calendarWindowDays);
+  const calendarWindowDays = normalizeCalendarWindowDays((parsed as Record<string, unknown>).calendarWindowDays)
+    ?? inferCalendarWindowDays(repairContext?.sourceContent, route, personalItemType);
   const codingBackend = normalizeCodingBackend(parsed.codingBackend);
   const codingBackendRequested = typeof parsed.codingBackendRequested === 'boolean'
     ? parsed.codingBackendRequested
@@ -1555,6 +1566,51 @@ function normalizeCalendarWindowDays(value: unknown): number | undefined {
   return normalized;
 }
 
+function inferCalendarWindowDays(
+  content: string | undefined,
+  route: IntentGatewayRoute,
+  personalItemType: IntentGatewayEntities['personalItemType'] | undefined,
+): number | undefined {
+  if (route !== 'personal_assistant_task' || personalItemType !== 'calendar') {
+    return undefined;
+  }
+  const normalized = normalizeIntentGatewayRepairText(content);
+  if (!normalized) return undefined;
+
+  const digitMatch = normalized.match(/\bnext\s+(\d{1,3})\s+days?\b/);
+  if (digitMatch) {
+    return normalizeCalendarWindowDays(Number(digitMatch[1]));
+  }
+
+  const wordMap: Record<string, number> = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+    eleven: 11,
+    twelve: 12,
+    thirteen: 13,
+    fourteen: 14,
+  };
+  const wordMatch = normalized.match(/\bnext\s+(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen)\s+days?\b/);
+  if (wordMatch) {
+    return wordMap[wordMatch[1]] ?? undefined;
+  }
+  if (/\btoday\b/.test(normalized)) {
+    return 1;
+  }
+  if (/\bthis week\b/.test(normalized)) {
+    return 7;
+  }
+  return undefined;
+}
+
 function shouldKeepAutomationEntities(
   route: IntentGatewayRoute,
   uiSurface: IntentGatewayEntities['uiSurface'] | undefined,
@@ -1644,6 +1700,10 @@ function repairUnavailableIntentGatewayDecision(
         ? { sessionTarget: inferredCodingBackendRequest.sessionTarget }
         : {}),
     }, repairContext);
+  }
+  const inferredSecondBrainDecision = inferExplicitSecondBrainDecision(repairContext, parsed);
+  if (inferredSecondBrainDecision) {
+    return inferredSecondBrainDecision;
   }
   const inferredCodingOperation = inferExplicitCodingTaskOperation(sourceContent, parsedOperation);
   if (!inferredCodingOperation) return null;
@@ -1801,6 +1861,40 @@ function inferExplicitCodingTaskOperation(
     return 'read';
   }
   return null;
+}
+
+function inferExplicitSecondBrainDecision(
+  repairContext: IntentGatewayRepairContext | undefined,
+  parsed?: Record<string, unknown>,
+): IntentGatewayDecision | null {
+  const operation = inferSecondBrainOperation(
+    repairContext?.sourceContent,
+    'personal_assistant_task',
+    normalizeOperation(parsed?.operation) ?? 'unknown',
+  );
+  if (!operation || operation === 'unknown') {
+    return null;
+  }
+  if (
+    !isExplicitSecondBrainEntityRequest(repairContext?.sourceContent, operation)
+    && !isExplicitSecondBrainRoutineRequest(repairContext?.sourceContent, operation)
+  ) {
+    return null;
+  }
+  const personalItemType = inferSecondBrainPersonalItemType(repairContext, 'personal_assistant_task', operation);
+  if (!personalItemType || personalItemType === 'unknown') {
+    return null;
+  }
+  return normalizeIntentGatewayDecision({
+    ...(parsed ?? {}),
+    route: 'personal_assistant_task',
+    operation,
+    personalItemType,
+    confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
+    summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
+      ? parsed.summary.trim()
+      : 'Recovered Second Brain intent from an unstructured gateway response.',
+  }, repairContext);
 }
 
 function hasExplicitRepoFileReference(normalized: string): boolean {

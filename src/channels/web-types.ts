@@ -1746,6 +1746,7 @@ export interface DashboardCallbacks {
   /** Native Google Workspace status. */
   onGoogleStatus?: () => Promise<{
     authenticated: boolean;
+    authPending?: boolean;
     tokenExpiry?: number;
     services: string[];
     mode: 'native';
@@ -1759,11 +1760,14 @@ export interface DashboardCallbacks {
   }>;
   /** Upload client_secret.json credentials. */
   onGoogleCredentials?: (credentials: string) => Promise<{ success: boolean; message: string }>;
+  /** Cancel an in-progress native Google OAuth flow. */
+  onGoogleAuthCancel?: () => Promise<{ success: boolean; message: string }>;
   /** Disconnect native Google integration. */
   onGoogleDisconnect?: () => Promise<{ success: boolean; message: string }>;
   /** Native Microsoft 365 status. */
   onMicrosoftStatus?: () => Promise<{
     authenticated: boolean;
+    authPending?: boolean;
     tokenExpiry?: number;
     services: string[];
     clientId?: string;
@@ -1778,6 +1782,8 @@ export interface DashboardCallbacks {
   }>;
   /** Save Microsoft client ID / tenant ID config. */
   onMicrosoftConfig?: (config: { clientId: string; tenantId?: string }) => Promise<{ success: boolean; message: string }>;
+  /** Cancel an in-progress native Microsoft OAuth flow. */
+  onMicrosoftAuthCancel?: () => Promise<{ success: boolean; message: string }>;
   /** Disconnect native Microsoft integration. */
   onMicrosoftDisconnect?: () => Promise<{ success: boolean; message: string }>;
   /** Guardian Agent inline evaluation config and status. */

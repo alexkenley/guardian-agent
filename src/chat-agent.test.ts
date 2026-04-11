@@ -4702,6 +4702,94 @@ describe('LLMChatAgent direct intent metadata', () => {
     expect(pendingActionStore.get(created.id)?.status).toBe('completed');
   });
 
+  it('answers approval-status queries from live approval state instead of stale pending-action text', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      listPendingApprovalIdsForUser: vi.fn(() => []),
+      getApprovalSummaries: vi.fn(() => new Map()),
+      executeModelTool: vi.fn(),
+    };
+    const futureBase = Date.now();
+    const pendingActionStore = new PendingActionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-approval-status.test.sqlite',
+      now: () => 1_710_000_000_000,
+    });
+    const created = pendingActionStore.replaceActive({
+      agentId: 'chat',
+      userId: 'owner',
+      channel: 'telegram',
+      surfaceId: 'telegram-chat',
+    }, {
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve the file write.',
+        approvalIds: ['approval-stale-1'],
+        approvalSummaries: [
+          { id: 'approval-stale-1', toolName: 'fs_write', argsPreview: '{"path":"S:\\\\Development\\\\test.txt"}' },
+        ],
+      },
+      intent: {
+        route: 'filesystem_task',
+        operation: 'create',
+        originalUserContent: 'Create a file in S:\\Development.',
+      },
+      expiresAt: futureBase + 30 * 60 * 1000,
+    });
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).pendingActionStore = pendingActionStore;
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const response = await agent.onMessage!({
+      id: 'msg-approval-status',
+      userId: 'owner',
+      channel: 'telegram',
+      surfaceId: 'telegram-chat',
+      content: 'What pending approvals do I have right now?',
+      timestamp: futureBase,
+      metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+        available: true,
+        mode: 'primary',
+        model: 'test-model',
+        latencyMs: 1,
+        decision: {
+          route: 'general_assistant',
+          operation: 'inspect',
+          summary: 'General status question.',
+          confidence: 'low',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'direct_assistant',
+          preferredTier: 'local',
+          requiresRepoGrounding: false,
+          requiresToolSynthesis: false,
+          expectedContextPressure: 'low',
+          preferredAnswerPath: 'direct',
+          entities: {},
+        },
+      }),
+    }, ctx);
+
+    expect(response.content).toBe('There are no pending approvals.');
+    expect(pendingActionStore.get(created.id)?.status).toBe('completed');
+  });
+
   it('moves the focused local calendar event directly', async () => {
     const ChatAgent = createChatAgentClass({
       log: {
@@ -5085,5 +5173,45 @@ describe('LLMChatAgent direct intent metadata', () => {
     );
 
     expect(result).toBe('Create a brief called "Second Brain brief smoke test" that says "This is a brief for smoke testing."');
+  });
+
+  it('replays the last actionable request for natural recovery follow-ups after provider connection failures', () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    (agent as any).conversationService = {
+      getSessionHistory: vi.fn(() => [
+        {
+          role: 'assistant',
+          content: 'I’m unable to fetch Google Calendar data because the Google Workspace integration isn’t currently connected in this environment.',
+        },
+      ]),
+    };
+
+    const result = (agent as any).resolveRetryAfterFailureContinuationContent(
+      'It is connected now.',
+      {
+        continuityKey: 'chat:owner',
+        scope: { assistantId: 'chat', userId: 'owner' },
+        linkedSurfaces: [],
+        lastActionableRequest: 'List my Google Calendar entries for the next 7 days.',
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: 2,
+      },
+      {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: 'telegram',
+      },
+    );
+
+    expect(result).toBe('List my Google Calendar entries for the next 7 days.');
   });
 });

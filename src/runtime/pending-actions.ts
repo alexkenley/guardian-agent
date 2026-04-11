@@ -374,6 +374,10 @@ export function summarizePendingActionForGateway(
   originalRequest: string;
   route?: string;
   operation?: string;
+  summary?: string;
+  resolution?: string;
+  missingFields?: string[];
+  entities?: Record<string, unknown>;
   field?: string;
 } | null {
   if (!record || !isPendingActionActive(record.status)) return null;
@@ -386,6 +390,10 @@ export function summarizePendingActionForGateway(
     originalRequest: record.intent.originalUserContent,
     ...(record.intent.route ? { route: record.intent.route } : {}),
     ...(record.intent.operation ? { operation: record.intent.operation } : {}),
+    ...(record.intent.summary ? { summary: record.intent.summary } : {}),
+    ...(record.intent.resolution ? { resolution: record.intent.resolution } : {}),
+    ...(record.intent.missingFields?.length ? { missingFields: [...record.intent.missingFields] } : {}),
+    ...(record.intent.entities ? { entities: { ...record.intent.entities } } : {}),
     ...(record.blocker.field ? { field: record.blocker.field } : {}),
   };
 }

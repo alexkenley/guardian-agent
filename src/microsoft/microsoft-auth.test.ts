@@ -117,6 +117,28 @@ describe('MicrosoftAuth', () => {
       // This test is mainly about compilation and basic setup.
       expect(typeof auth.startAuth).toBe('function');
     });
+
+    it('cancels an earlier pending flow before starting a new one', async () => {
+      const auth = new MicrosoftAuth(makeConfig());
+      const server = { close: vi.fn() };
+      const reject = vi.fn();
+      (auth as any).pending = {
+        codeVerifier: 'verifier',
+        state: 'state',
+        server,
+        resolve: vi.fn(),
+        reject,
+        timeoutHandle: setTimeout(() => {}, 10_000),
+      };
+      const startServerSpy = vi.spyOn(auth as any, 'startCallbackServer').mockResolvedValue(undefined);
+
+      const result = await auth.startAuth();
+
+      expect(server.close).toHaveBeenCalledOnce();
+      expect(reject).toHaveBeenCalledWith(expect.objectContaining({ message: 'Starting a new OAuth flow.' }));
+      expect(startServerSpy).toHaveBeenCalledOnce();
+      expect(result.authUrl).toContain('/oauth2/v2.0/authorize?');
+    });
   });
 
   describe('waitForCallback', () => {
@@ -130,6 +152,28 @@ describe('MicrosoftAuth', () => {
     it('throws when no pending auth flow', async () => {
       const auth = new MicrosoftAuth(makeConfig());
       await expect(auth.handleCallback('code', 'state')).rejects.toThrow('Invalid OAuth state');
+    });
+  });
+
+  describe('cancelPendingAuth', () => {
+    it('clears a pending callback server and marks the flow as no longer pending', () => {
+      const auth = new MicrosoftAuth(makeConfig());
+      const server = { close: vi.fn() };
+      const reject = vi.fn();
+      (auth as any).pending = {
+        codeVerifier: 'verifier',
+        state: 'state',
+        server,
+        resolve: vi.fn(),
+        reject,
+        timeoutHandle: setTimeout(() => {}, 10_000),
+      };
+
+      auth.cancelPendingAuth('User closed the popup.');
+
+      expect(server.close).toHaveBeenCalledOnce();
+      expect(reject).toHaveBeenCalledWith(expect.objectContaining({ message: 'User closed the popup.' }));
+      expect(auth.hasPendingAuth()).toBe(false);
     });
   });
 });

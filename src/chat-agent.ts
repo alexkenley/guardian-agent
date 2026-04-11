@@ -215,6 +215,7 @@ const DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT = 'filesystem_save_output'
 const DIRECT_ROUTE_RESUME_TYPE_SECOND_BRAIN_MUTATION = 'second_brain_mutation';
 const SECOND_BRAIN_FOCUS_CONTINUATION_KIND = 'second_brain_focus';
 const RETRY_AFTER_FAILURE_PATTERN = /\b(?:try|run|do)\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task)|the\s+same\s+thing)\s+again\b|\bretry\b/i;
+const PREREQUISITE_RECOVERY_PATTERN = /\b(?:it|that|this|they)(?:['’]s| are| is)?\s+(?:connected|linked|enabled|fixed|working|ready|configured|authenticated)\s+now\b|\bi(?:['’]ve| have)\s+(?:connected|linked|enabled|fixed|configured|authenticated)\b/i;
 const ROUTINE_QUERY_STOP_WORDS = new Set([
   'a',
   'about',
@@ -1754,14 +1755,25 @@ function buildToolSafeRoutineTrigger(
 }
 
 function isRetryAfterFailureRequest(content: string): boolean {
-  return RETRY_AFTER_FAILURE_PATTERN.test(content.trim());
+  const normalized = content.trim();
+  return RETRY_AFTER_FAILURE_PATTERN.test(normalized)
+    || PREREQUISITE_RECOVERY_PATTERN.test(normalized);
 }
 
 function isRetryableProviderFailureMessage(content: string): boolean {
   const normalized = content.trim();
   if (!normalized) return false;
   return /^Could not reach Ollama(?: Cloud)?\b/i.test(normalized)
-    || /\brate limit exceeded or quota depleted\. Please try again shortly\./i.test(normalized);
+    || /\brate limit exceeded or quota depleted\. Please try again shortly\./i.test(normalized)
+    || /\b(?:internal server error|service unavailable|gateway timeout|bad gateway)\b/i.test(normalized)
+    || /\bnot authenticated\b/i.test(normalized)
+    || /\bplease connect your\b/i.test(normalized)
+    || /\b(?:integration|provider).*\b(?:isn['’]?t|is not)\b.*\bconnected\b/i.test(normalized)
+    || /\b(?:isn['’]?t|is not)\s+currently connected\b/i.test(normalized)
+    || /\baccess denied\b/i.test(normalized)
+    || /\bdisconnected\b/i.test(normalized)
+    || /\bmodel not found\b/i.test(normalized)
+    || /\bmodel\b.+\bnot available\b/i.test(normalized);
 }
 
 const GMAIL_UNREAD_CONTINUATION_KIND = 'gmail_unread_list';
@@ -2247,6 +2259,41 @@ type DirectIntentShadowCandidate =
     }
     lines.push('If a coding session is attached, repo-local coding actions stay anchored to that workspace, but broader Guardian tools remain available from this chat surface.');
     return lines.join('\n');
+  }
+
+  private tryDirectPendingApprovalStatusResponse(
+    message: UserMessage,
+  ): { content: string; metadata?: Record<string, unknown> } | null {
+    if (!this.tools?.isEnabled()) return null;
+    const normalized = stripLeadingContextPrefix(message.content).replace(/\s+/g, ' ').trim();
+    if (!normalized) return null;
+    const asksForPendingApprovals = /^pending approvals?\??$/i.test(normalized)
+      || /(?:\bwhat\b|\bwhich\b|\bshow\b|\blist\b|\bare there\b|\bdo i have\b|\bany\b|\bcurrent\b).*(?:\bpending approvals?\b|\bapprovals?\b.*\bpending\b)/i.test(normalized)
+      || /(?:\bpending approvals?\b|\bapprovals?\b.*\bpending\b).*\b(?:right now|currently|today)\b/i.test(normalized);
+    if (!asksForPendingApprovals) return null;
+
+    const surfaceId = this.getCodeSessionSurfaceId(message);
+    let pendingAction = this.getPendingApprovalAction(message.userId, message.channel, surfaceId);
+    if (!pendingAction) {
+      const liveApprovalIds = this.tools.listPendingApprovalIdsForUser?.(message.userId, message.channel, {
+        includeUnscoped: message.channel === 'web',
+      }) ?? [];
+      if (liveApprovalIds.length > 0) {
+        this.setPendingApprovals(`${message.userId}:${message.channel}`, liveApprovalIds, surfaceId);
+        pendingAction = this.getPendingApprovalAction(message.userId, message.channel, surfaceId);
+      }
+    }
+
+    const approvalIds = pendingAction?.blocker.approvalIds ?? [];
+    const summaries = approvalIds.length > 0
+      ? this.tools.getApprovalSummaries?.(approvalIds)
+      : undefined;
+    const content = this.formatPendingApprovalPrompt(approvalIds, summaries);
+    const pendingActionMeta = toPendingActionClientMetadata(pendingAction);
+    return {
+      content,
+      metadata: pendingActionMeta ? { pendingAction: pendingActionMeta } : undefined,
+    };
   }
 
   private tryDirectAutomationCapabilitiesResponse(content: string): string | null {
@@ -2919,6 +2966,31 @@ type DirectIntentShadowCandidate =
 
       const allowGeneralShortcut = earlyGateway?.decision.route === 'general_assistant'
         || earlyGateway?.decision.route === 'unknown';
+      const directPendingApprovalStatus = allowGeneralShortcut
+        ? this.tryDirectPendingApprovalStatusResponse(message)
+        : null;
+      if (directPendingApprovalStatus) {
+        if (this.conversationService) {
+          this.conversationService.recordTurn(
+            conversationKey,
+            message.content,
+            directPendingApprovalStatus.content,
+          );
+        }
+        if (resolvedCodeSession) {
+          this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
+        }
+        return {
+          content: directPendingApprovalStatus.content,
+          metadata: {
+            ...(preResolvedSkills.length > 0
+              ? { activeSkills: preResolvedSkills.map((skill) => skill.id) }
+              : {}),
+            ...(directPendingApprovalStatus.metadata ?? {}),
+          },
+        };
+      }
+
       const directSkillInventory = allowGeneralShortcut
         ? this.tryDirectSkillInventoryResponse(routedScopedMessage.content)
         : null;

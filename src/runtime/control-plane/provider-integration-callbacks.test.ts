@@ -33,6 +33,58 @@ function createOptions(overrides: Partial<Parameters<typeof createProviderIntegr
 }
 
 describe('createProviderIntegrationCallbacks', () => {
+  it('reports pending native auth state for Google and Microsoft', async () => {
+    const googleAuth = {
+      isAuthenticated: vi.fn(() => false),
+      hasPendingAuth: vi.fn(() => true),
+      getTokenExpiry: vi.fn(() => undefined),
+    };
+    const microsoftAuth = {
+      isAuthenticated: vi.fn(() => false),
+      hasPendingAuth: vi.fn(() => true),
+      getTokenExpiry: vi.fn(() => undefined),
+    };
+
+    const callbacks = createProviderIntegrationCallbacks(createOptions({
+      googleAuthRef: { current: googleAuth as never },
+      microsoftAuthRef: { current: microsoftAuth as never },
+    }));
+
+    await expect(callbacks.onGoogleStatus?.()).resolves.toMatchObject({
+      authenticated: false,
+      authPending: true,
+    });
+    await expect(callbacks.onMicrosoftStatus?.()).resolves.toMatchObject({
+      authenticated: false,
+      authPending: true,
+    });
+  });
+
+  it('cancels pending native auth flows from the dashboard callbacks', async () => {
+    const googleAuth = {
+      cancelPendingAuth: vi.fn(),
+    };
+    const microsoftAuth = {
+      cancelPendingAuth: vi.fn(),
+    };
+
+    const callbacks = createProviderIntegrationCallbacks(createOptions({
+      googleAuthRef: { current: googleAuth as never },
+      microsoftAuthRef: { current: microsoftAuth as never },
+    }));
+
+    await expect(callbacks.onGoogleAuthCancel?.()).resolves.toEqual({
+      success: true,
+      message: 'Cancelled pending Google auth flow.',
+    });
+    await expect(callbacks.onMicrosoftAuthCancel?.()).resolves.toEqual({
+      success: true,
+      message: 'Cancelled pending Microsoft auth flow.',
+    });
+    expect(googleAuth.cancelPendingAuth).toHaveBeenCalledOnce();
+    expect(microsoftAuth.cancelPendingAuth).toHaveBeenCalledOnce();
+  });
+
   it('tests a configured cPanel profile through the injected cloud tester', async () => {
     const config = createConfig();
     config.assistant.tools.cloud = {
