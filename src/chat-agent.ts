@@ -131,6 +131,7 @@ import {
   PendingActionStore,
   defaultPendingActionTransferPolicy,
   isPendingActionActive,
+  reconcilePendingApprovalAction,
   summarizePendingActionForGateway,
   toPendingActionClientMetadata,
   type PendingActionApprovalSummary,
@@ -1999,12 +2000,16 @@ type DirectIntentShadowCandidate =
     const ownerUserId = currentSession?.ownerUserId ?? message.userId?.trim();
     const channel = message.channel?.trim();
     if (!ownerUserId || !channel) return [];
-    return this.codeSessionStore.listReferencedSessionsForSurface({
+    const referencedSessions = this.codeSessionStore.listReferencedSessionsForSurface({
       userId: ownerUserId,
       principalId: message.principalId,
       channel,
       surfaceId: this.getCodeSessionSurfaceId(message),
     });
+    if (!currentSession?.id) {
+      return referencedSessions;
+    }
+    return referencedSessions.filter((session) => session.id !== currentSession.id);
   }
 
   private buildReferencedCodeSessionsSection(
@@ -2749,6 +2754,24 @@ type DirectIntentShadowCandidate =
       ? preRoutedGateway
       : null;
     const pendingAction = this.getActivePendingAction(pendingActionUserId, pendingActionChannel, pendingActionSurfaceId);
+    const workspaceSwitchContinuation = await this.tryHandleWorkspaceSwitchContinuation({
+      message,
+      ctx,
+      pendingAction,
+    });
+    if (workspaceSwitchContinuation) {
+      if (this.conversationService) {
+        this.conversationService.recordTurn(
+          conversationKey,
+          message.content,
+          workspaceSwitchContinuation.content,
+        );
+      }
+      if (resolvedCodeSession) {
+        this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
+      }
+      return workspaceSwitchContinuation;
+    }
     const resolvedPendingActionContinuation = this.resolvePendingActionContinuationContent(
       groundedScopedMessage.content,
       pendingAction,
@@ -2827,6 +2850,47 @@ type DirectIntentShadowCandidate =
           this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
         }
         return clarificationResponse;
+      }
+      const explicitWorkspaceTarget = await this.ensureExplicitCodingTaskWorkspaceTarget({
+        message,
+        ctx,
+        decision: earlyGateway?.decision,
+        currentSession: resolvedCodeSession?.session ?? null,
+        codeContext: effectiveCodeContext,
+      });
+      if (explicitWorkspaceTarget.status === 'blocked') {
+        if (this.conversationService) {
+          this.conversationService.recordTurn(
+            conversationKey,
+            message.content,
+            explicitWorkspaceTarget.response.content,
+          );
+        }
+        if (resolvedCodeSession) {
+          this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
+        }
+        return explicitWorkspaceTarget.response;
+      }
+      if (explicitWorkspaceTarget.status === 'switched') {
+        const switchedMessage: UserMessage = {
+          ...message,
+          id: randomUUID(),
+          metadata: attachPreRoutedIntentGatewayMetadata(
+            {
+              ...(message.metadata ?? {}),
+              codeContext: explicitWorkspaceTarget.codeContext,
+            },
+            earlyGateway,
+          ),
+        };
+        const resumed = await this.onMessage(switchedMessage, ctx, workerManager);
+        return {
+          content: `${explicitWorkspaceTarget.switchResponse.content}\n\n${resumed.content}`,
+          metadata: {
+            ...(explicitWorkspaceTarget.switchResponse.metadata ?? {}),
+            ...(resumed.metadata ?? {}),
+          },
+        };
       }
       const resolvedGatewayContent = this.resolveIntentGatewayContent({
         gateway: earlyGateway,
@@ -2960,7 +3024,7 @@ type DirectIntentShadowCandidate =
       pendingActionSurfaceId,
     );
     const pendingApprovalNotice = existingPendingIds.length > 0
-      ? `Note: ${existingPendingIds.length} tool action(s) are awaiting user approval. The approval UI is presented to the user automatically — do NOT mention approval IDs or ask the user to approve manually. Process the current request normally and call tools as needed.`
+      ? `Note: ${existingPendingIds.length} earlier tool action(s) are still awaiting user approval in a separate UI flow. Treat them as background state only. Unless the user explicitly asks about approvals or this turn is resuming one of those actions, do NOT mention, summarize, or list them, and do not let them change your answer to the current request.`
       : undefined;
     const knowledgeBaseQuery = this.buildKnowledgeBaseContextQuery({
       messageContent: routedScopedMessage.content,
@@ -7416,6 +7480,30 @@ type DirectIntentShadowCandidate =
     return lastActionableRequest;
   }
 
+  private async tryHandleWorkspaceSwitchContinuation(input: {
+    message: UserMessage;
+    ctx: AgentContext;
+    pendingAction: PendingActionRecord | null;
+  }): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    const pendingAction = input.pendingAction;
+    if (!pendingAction || pendingAction.blocker.kind !== 'workspace_switch') {
+      return null;
+    }
+    const targetSessionId = pendingAction.blocker.targetSessionId?.trim();
+    if (!targetSessionId) {
+      return null;
+    }
+    const normalized = stripLeadingContextPrefix(input.message.content).trim();
+    if (!normalized) {
+      return null;
+    }
+    if (!isAffirmativeContinuation(normalized)
+      && !isGenericPendingActionContinuationRequest(normalized)) {
+      return null;
+    }
+    return this.handleCodeSessionAttach(input.message, input.ctx, targetSessionId);
+  }
+
   private async tryHandlePendingActionSwitchDecision(input: {
     message: UserMessage;
     pendingAction: PendingActionRecord | null;
@@ -7730,104 +7818,32 @@ type DirectIntentShadowCandidate =
     const { userId: pendingUserId, channel: pendingChannel } = this.parsePendingActionUserKey(userKey);
     const backendId = normalizeCodingBackendSelection(decision.entities.codingBackend);
     const isCodingRunStatusCheck = decision.entities.codingRunStatusCheck === true;
-    const currentSessionRecord = codeContext?.sessionId
-      ? this.codeSessionStore?.getSession(codeContext.sessionId, message.userId?.trim())
-        ?? this.codeSessionStore?.getSession(codeContext.sessionId)
+    let effectiveCodeContext = codeContext ? { ...codeContext } : undefined;
+    let currentSessionRecord = effectiveCodeContext?.sessionId
+      ? this.codeSessionStore?.getSession(effectiveCodeContext.sessionId, message.userId?.trim())
+        ?? this.codeSessionStore?.getSession(effectiveCodeContext.sessionId)
       : null;
-    const codeSessionOwnerUserId = currentSessionRecord?.ownerUserId ?? message.userId?.trim();
-    const mentionedSessionResolution = this.codeSessionStore && codeSessionOwnerUserId
-      ? resolveCodingBackendSessionTarget({
-          requestedSessionTarget: decision.entities.sessionTarget,
-          currentSessionId: currentSessionRecord?.id ?? codeContext?.sessionId,
-          sessions: this.codeSessionStore.listSessionsForUser(codeSessionOwnerUserId),
-        })
-      : null;
-    if (mentionedSessionResolution?.status === 'target_unresolved') {
-      const lines = currentSessionRecord
-        ? [
-            'This chat is currently attached to:',
-            formatDirectCodeSessionLine(currentSessionRecord, true),
-          ]
-        : ['This chat is not currently attached to a coding workspace.'];
-      lines.push(`I couldn't match the coding workspace you mentioned: "${mentionedSessionResolution.requestedSessionTarget}".`);
-      lines.push(mentionedSessionResolution.error);
-      lines.push(`Switch or attach to the intended coding workspace first, then ask me to run ${backendId || 'the coding backend'} there.`);
-      return {
-        content: lines.join('\n'),
-        metadata: currentSessionRecord
-          ? {
-              codeSessionResolved: true,
-              codeSessionId: currentSessionRecord.id,
-            }
-          : undefined,
-      };
+    let switchResponsePrefix = '';
+    let switchResponseMetadata: Record<string, unknown> | undefined;
+    const explicitWorkspaceTarget = await this.ensureExplicitCodingTaskWorkspaceTarget({
+      message,
+      ctx,
+      decision,
+      currentSession: currentSessionRecord,
+      codeContext: effectiveCodeContext,
+    });
+    if (explicitWorkspaceTarget.status === 'blocked') {
+      return explicitWorkspaceTarget.response;
     }
-    if (mentionedSessionResolution?.status === 'switch_required') {
-      const lines = currentSessionRecord
-        ? [
-            'This chat is currently attached to:',
-            formatDirectCodeSessionLine(currentSessionRecord, true),
-            'You mentioned a different coding workspace:',
-            formatDirectCodeSessionLine(mentionedSessionResolution.targetSession, false),
-          ]
-        : [
-            'This chat is not currently attached to a coding workspace.',
-            'You mentioned this coding workspace:',
-            formatDirectCodeSessionLine(mentionedSessionResolution.targetSession, false),
-          ];
-      lines.push(`I won't run ${backendId || 'the coding backend'} in the wrong workspace.`);
-      lines.push(`Switch this chat to ${mentionedSessionResolution.targetSession.title} first, then ask me to run it there.`);
-      const pendingActionResult = this.setClarificationPendingAction(
-        pendingUserId,
-        pendingChannel,
-        message.surfaceId,
-        {
-          blockerKind: 'workspace_switch',
-          prompt: lines.join('\n'),
-          originalUserContent: message.content,
-          route: decision.route,
-          operation: decision.operation,
-          summary: decision.summary,
-          turnRelation: decision.turnRelation,
-          resolution: decision.resolution,
-          missingFields: decision.missingFields,
-          entities: this.toPendingActionEntities(decision.entities),
-          codeSessionId: currentSessionRecord?.id ?? codeContext?.sessionId,
-          currentSessionId: currentSessionRecord?.id ?? codeContext?.sessionId,
-          currentSessionLabel: currentSessionRecord ? formatDirectCodeSessionLine(currentSessionRecord, true) : undefined,
-          targetSessionId: mentionedSessionResolution.targetSession.id,
-          targetSessionLabel: formatDirectCodeSessionLine(mentionedSessionResolution.targetSession, false),
-        },
-      );
-      const responseContent = pendingActionResult.collisionPrompt ?? lines.join('\n');
-      this.recordIntentRoutingTrace('clarification_requested', {
-        message,
-        details: {
-          kind: 'coding_workspace_switch',
-          route: decision.route,
-          backendId,
-          currentSessionId: currentSessionRecord?.id,
-          targetSessionId: mentionedSessionResolution.targetSession.id,
-          targetSessionTitle: mentionedSessionResolution.targetSession.title,
-          prompt: responseContent,
-        },
-      });
-      return {
-        content: responseContent,
-        metadata: {
-          ...(currentSessionRecord
-            ? {
-                codeSessionResolved: true,
-                codeSessionId: currentSessionRecord.id,
-              }
-            : {}),
-          ...(toPendingActionClientMetadata(pendingActionResult.action) ? { pendingAction: toPendingActionClientMetadata(pendingActionResult.action) } : {}),
-        },
-      };
+    if (explicitWorkspaceTarget.status === 'switched') {
+      currentSessionRecord = explicitWorkspaceTarget.currentSession;
+      effectiveCodeContext = explicitWorkspaceTarget.codeContext;
+      switchResponsePrefix = explicitWorkspaceTarget.switchResponse.content;
+      switchResponseMetadata = explicitWorkspaceTarget.switchResponse.metadata;
     }
     if (!backendId && !isCodingRunStatusCheck) return null;
     if (decision.operation === 'inspect' && isCodingRunStatusCheck) {
-      if (!codeContext?.sessionId) {
+      if (!effectiveCodeContext?.sessionId) {
         return { content: `I can only check recent ${backendId || 'coding backend'} runs from an active coding workspace.` };
       }
 
@@ -7836,8 +7852,8 @@ type DirectIntentShadowCandidate =
         details: {
           toolName: 'coding_backend_status',
           ...(backendId ? { backendId } : {}),
-          codeSessionId: codeContext.sessionId,
-          workspaceRoot: codeContext.workspaceRoot,
+          codeSessionId: effectiveCodeContext.sessionId,
+          workspaceRoot: effectiveCodeContext.workspaceRoot,
         },
       });
       const statusResult = await this.tools.executeModelTool(
@@ -7853,7 +7869,7 @@ type DirectIntentShadowCandidate =
           channel: message.channel,
           requestId: message.id,
           agentContext: { checkAction: ctx.checkAction },
-          codeContext,
+          codeContext: effectiveCodeContext,
         },
       );
       this.recordIntentRoutingTrace('direct_tool_call_completed', {
@@ -7868,7 +7884,10 @@ type DirectIntentShadowCandidate =
       });
       if (!toBoolean(statusResult.success)) {
         const failure = toString(statusResult.message) || toString(statusResult.error) || `I could not inspect recent ${backendId || 'coding backend'} runs.`;
-        return { content: failure };
+        return {
+          content: switchResponsePrefix ? `${switchResponsePrefix}\n\n${failure}` : failure,
+          metadata: switchResponseMetadata,
+        };
       }
 
       const sessions = (isRecord(statusResult.output) && Array.isArray(statusResult.output.sessions)
@@ -7882,7 +7901,11 @@ type DirectIntentShadowCandidate =
           return bTime - aTime;
         });
       if (matches.length === 0) {
-        return { content: `I couldn't find any recent ${backendId || 'coding backend'} runs for this coding workspace.` };
+        const content = `I couldn't find any recent ${backendId || 'coding backend'} runs for this coding workspace.`;
+        return {
+          content: switchResponsePrefix ? `${switchResponsePrefix}\n\n${content}` : content,
+          metadata: switchResponseMetadata,
+        };
       }
 
       const latest = matches[0];
@@ -7905,7 +7928,11 @@ type DirectIntentShadowCandidate =
       if (status === 'succeeded') {
         lines.push('If you want, I can also inspect the repo diff or recent changes from that run.');
       }
-      return { content: lines.join('\n') };
+      const content = lines.join('\n');
+      return {
+        content: switchResponsePrefix ? `${switchResponsePrefix}\n\n${content}` : content,
+        metadata: switchResponseMetadata,
+      };
     }
 
     const delegatedTask = stripLeadingContextPrefix(decision.resolvedContent?.trim() || message.content).trim();
@@ -7915,8 +7942,8 @@ type DirectIntentShadowCandidate =
       details: {
         toolName: 'coding_backend_run',
         backendId,
-        codeSessionId: codeContext?.sessionId,
-        workspaceRoot: codeContext?.workspaceRoot,
+        codeSessionId: effectiveCodeContext?.sessionId,
+        workspaceRoot: effectiveCodeContext?.workspaceRoot,
       },
     });
     const result = await this.tools.executeModelTool(
@@ -7935,7 +7962,7 @@ type DirectIntentShadowCandidate =
         channel: message.channel,
         requestId: message.id,
         agentContext: { checkAction: ctx.checkAction },
-        ...(codeContext ? { codeContext } : {}),
+        ...(effectiveCodeContext ? { codeContext: effectiveCodeContext } : {}),
       },
     );
 
@@ -7975,7 +8002,7 @@ type DirectIntentShadowCandidate =
         'Once approved, I\'ll launch it in:',
         currentSessionRecord
           ? formatDirectCodeSessionLine(currentSessionRecord, true)
-          : `- CURRENT: ${codeContext?.workspaceRoot ?? '(unknown workspace)'}`,
+          : `- CURRENT: ${effectiveCodeContext?.workspaceRoot ?? '(unknown workspace)'}`,
       ].join('\n');
       const pendingActionResult = this.setPendingApprovalAction(
         pendingUserId,
@@ -8001,13 +8028,15 @@ type DirectIntentShadowCandidate =
           resolution: decision.resolution,
           missingFields: decision.missingFields,
           entities: this.toPendingActionEntities(decision.entities),
-          codeSessionId: codeContext?.sessionId,
+          codeSessionId: effectiveCodeContext?.sessionId,
         },
       );
+      const content = pendingActionResult.collisionPrompt ?? prompt;
       return {
-        content: pendingActionResult.collisionPrompt ?? prompt,
+        content: switchResponsePrefix ? `${switchResponsePrefix}\n\n${content}` : content,
         metadata: {
-          ...(codeContext?.sessionId ? { codeSessionResolved: true, codeSessionId: codeContext.sessionId } : {}),
+          ...(switchResponseMetadata ?? {}),
+          ...(effectiveCodeContext?.sessionId ? { codeSessionResolved: true, codeSessionId: effectiveCodeContext.sessionId } : {}),
           ...(toPendingActionClientMetadata(pendingActionResult.action) ? { pendingAction: toPendingActionClientMetadata(pendingActionResult.action) } : {}),
         },
       };
@@ -8016,17 +8045,19 @@ type DirectIntentShadowCandidate =
     const runResult = isRecord(result.output) ? result.output : null;
     const backendName = toString(runResult?.backendName) || backendId;
     const backendOutput = toString(runResult?.output)?.trim();
-    const sessionId = codeContext?.sessionId || toString(runResult?.codeSessionId);
+    const sessionId = effectiveCodeContext?.sessionId || toString(runResult?.codeSessionId);
 
     const metadata: Record<string, unknown> = {
       codingBackendDelegated: true,
       codingBackendId: backendId,
+      ...(switchResponseMetadata ?? {}),
       ...(sessionId ? { codeSessionResolved: true, codeSessionId: sessionId } : {}),
     };
 
+    const content = backendOutput || `${backendName} completed successfully.`;
     if (toBoolean(result.success)) {
       return {
-        content: backendOutput || `${backendName} completed successfully.`,
+        content: switchResponsePrefix ? `${switchResponsePrefix}\n\n${content}` : content,
         metadata,
       };
     }
@@ -8035,8 +8066,119 @@ type DirectIntentShadowCandidate =
       || toString(result.message)
       || `${backendName} could not complete the requested task.`;
     return {
-      content: failureMessage,
+      content: switchResponsePrefix ? `${switchResponsePrefix}\n\n${failureMessage}` : failureMessage,
       metadata,
+    };
+  }
+
+  private async ensureExplicitCodingTaskWorkspaceTarget(input: {
+    message: UserMessage;
+    ctx: AgentContext;
+    decision?: IntentGatewayDecision;
+    currentSession?: CodeSessionRecord | null;
+    codeContext?: { workspaceRoot: string; sessionId?: string };
+  }): Promise<
+    | {
+        status: 'unchanged';
+      }
+    | {
+        status: 'switched';
+        currentSession: CodeSessionRecord | null;
+        codeContext: { workspaceRoot: string; sessionId: string };
+        switchResponse: { content: string; metadata: Record<string, unknown> };
+      }
+    | {
+        status: 'blocked';
+        response: { content: string; metadata?: Record<string, unknown> };
+      }
+  > {
+    const requestedSessionTarget = typeof input.decision?.entities.sessionTarget === 'string'
+      ? input.decision.entities.sessionTarget.trim()
+      : '';
+    if (!input.decision
+      || input.decision.route !== 'coding_task'
+      || input.decision.resolution !== 'ready'
+      || !requestedSessionTarget
+      || !this.codeSessionStore
+      || !this.tools?.isEnabled()) {
+      return { status: 'unchanged' };
+    }
+
+    const codeSessionOwnerUserId = input.currentSession?.ownerUserId ?? input.message.userId?.trim();
+    if (!codeSessionOwnerUserId) {
+      return { status: 'unchanged' };
+    }
+
+    const mentionedSessionResolution = resolveCodingBackendSessionTarget({
+      requestedSessionTarget,
+      currentSessionId: input.currentSession?.id ?? input.codeContext?.sessionId,
+      sessions: this.codeSessionStore.listSessionsForUser(codeSessionOwnerUserId),
+    });
+    if (mentionedSessionResolution.status === 'none' || mentionedSessionResolution.status === 'current') {
+      return { status: 'unchanged' };
+    }
+    if (mentionedSessionResolution.status === 'target_unresolved') {
+      const lines = input.currentSession
+        ? [
+            'This chat is currently attached to:',
+            formatDirectCodeSessionLine(input.currentSession, true),
+          ]
+        : ['This chat is not currently attached to a coding workspace.'];
+      lines.push(`I couldn't match the coding workspace you mentioned: "${mentionedSessionResolution.requestedSessionTarget}".`);
+      lines.push(mentionedSessionResolution.error);
+      lines.push('I did not run the task in the wrong workspace.');
+      return {
+        status: 'blocked',
+        response: {
+          content: lines.join('\n'),
+          metadata: input.currentSession
+            ? {
+                codeSessionResolved: true,
+                codeSessionId: input.currentSession.id,
+              }
+            : undefined,
+        },
+      };
+    }
+
+    const attachResult = await this.executeDirectCodeSessionTool(
+      'code_session_attach',
+      { sessionId: mentionedSessionResolution.targetSession.id },
+      input.message,
+      input.ctx,
+    );
+    if (!toBoolean(attachResult.success)) {
+      const failure = toString(attachResult.error)
+        || toString(attachResult.message)
+        || `I could not switch this chat to "${mentionedSessionResolution.targetSession.title}".`;
+      return { status: 'blocked', response: { content: failure } };
+    }
+
+    const attachedSession = isRecord(attachResult.output) && isRecord(attachResult.output.session)
+      ? attachResult.output.session
+      : mentionedSessionResolution.targetSession;
+    const sessionId = toString(attachedSession.id).trim() || mentionedSessionResolution.targetSession.id;
+    const workspaceRoot = toString(attachedSession.resolvedRoot).trim()
+      || toString(attachedSession.workspaceRoot).trim()
+      || toString(mentionedSessionResolution.targetSession.resolvedRoot).trim()
+      || mentionedSessionResolution.targetSession.workspaceRoot;
+    const currentSession = this.codeSessionStore.getSession(sessionId, codeSessionOwnerUserId)
+      ?? this.codeSessionStore.getSession(sessionId);
+    return {
+      status: 'switched',
+      currentSession,
+      codeContext: {
+        sessionId,
+        workspaceRoot,
+      },
+      switchResponse: {
+        content: `Switched this chat to:\n${formatDirectCodeSessionLine(attachedSession, true)}`,
+        metadata: {
+          codeSessionResolved: true,
+          codeSessionId: sessionId,
+          codeSessionFocusChanged: true,
+        },
+      },
     };
   }
 
@@ -8847,7 +8989,19 @@ type DirectIntentShadowCandidate =
     nowMs: number = Date.now(),
   ): PendingActionRecord | null {
     const primaryScope = this.buildPendingActionScope(userId, channel, surfaceId);
-    return this.pendingActionStore?.resolveActiveForSurface(primaryScope, nowMs) ?? null;
+    const pendingAction = this.pendingActionStore?.resolveActiveForSurface(primaryScope, nowMs) ?? null;
+    if (!pendingAction || pendingAction.blocker.kind !== 'approval' || !this.pendingActionStore) {
+      return pendingAction;
+    }
+    const liveApprovalIds = this.tools?.listPendingApprovalIdsForUser?.(userId, channel, {
+      includeUnscoped: channel === 'web',
+    }) ?? [];
+    const approvalSummaries = this.tools?.getApprovalSummaries?.(liveApprovalIds);
+    return reconcilePendingApprovalAction(this.pendingActionStore, pendingAction, {
+      liveApprovalIds,
+      liveApprovalSummaries: approvalSummaries,
+      nowMs,
+    });
   }
 
   private createPendingActionReplacementInput(

@@ -139,6 +139,25 @@ describe('execution profiles', () => {
     ]);
   });
 
+  it('still prefers frontier for low-confidence repo-grounded coding inspection in balanced auto mode', () => {
+    const profile = selectExecutionProfile({
+      config: createConfig(),
+      routeDecision: { tier: 'external' },
+      gatewayDecision: createGatewayDecision({
+        confidence: 'low',
+      }),
+      mode: 'auto',
+    });
+
+    expect(profile).toMatchObject({
+      providerName: 'anthropic',
+      providerTier: 'frontier',
+      id: 'frontier_deep',
+      preferredAnswerPath: 'chat_synthesis',
+      expectedContextPressure: 'high',
+    });
+  });
+
   it('uses the managed-cloud coding profile when managed-cloud-only mode forces coding through that tier', () => {
     const profile = selectExecutionProfile({
       config: createConfig(),

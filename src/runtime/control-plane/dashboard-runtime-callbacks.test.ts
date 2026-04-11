@@ -328,6 +328,47 @@ describe('createDashboardRuntimeCallbacks', () => {
     }));
   });
 
+  it('drops an unresolved reserved web default alias before stream dispatch fallback', async () => {
+    const dispatchDashboardMessage = vi.fn(async () => ({ content: 'stream reply', metadata: { step: 'stream' } }));
+    const prepareIncomingDispatch = vi.fn(async () => ({
+      requestId: 'prepared-3',
+      decision: { agentId: 'prepared-agent', confidence: 'high', reason: 'prepared' },
+      gateway: null,
+      routedMessage: {
+        content: 'prepared message',
+        userId: 'prepared-user',
+        channel: 'web',
+      },
+    }));
+    const options = createHarness({
+      dispatchDashboardMessage,
+      prepareIncomingDispatch,
+      resolveConfiguredAgentId: (agentId?: string) => agentId === 'external' ? undefined : agentId,
+    });
+    options.configRef.current.channels.web.defaultAgent = 'external';
+    const callbacks = createDashboardRuntimeCallbacks(options);
+
+    await expect(callbacks.onStreamDispatch?.(
+      undefined,
+      { content: 'hello', userId: 'web-user', channel: 'web' },
+      () => undefined,
+    )).resolves.toEqual({
+      requestId: 'req-1',
+      runId: 'req-1',
+      content: 'stream reply',
+      metadata: { step: 'stream' },
+    });
+
+    expect(prepareIncomingDispatch).toHaveBeenCalledWith(undefined, {
+      content: 'hello',
+      userId: 'web-user',
+      channel: 'web',
+    });
+    expect(dispatchDashboardMessage).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: 'prepared-agent',
+    }));
+  });
+
   it('supports canceling an active stream dispatch and suppresses late done events', async () => {
     let resolveDispatch: ((value: { content: string; metadata?: Record<string, unknown> }) => void) | null = null;
     const dispatchDashboardMessage = vi.fn(() => new Promise<{ content: string; metadata?: Record<string, unknown> }>((resolve) => {

@@ -109,7 +109,7 @@ describe('CLIChannel', () => {
     await new Promise(r => setTimeout(r, 50));
 
     const text = output.read()?.toString() ?? '';
-    expect(text).toContain('[external · fallback] Created the workflow.');
+    expect(text).toContain('[external] Created the workflow.');
 
     await cli.stop();
   });
@@ -3835,6 +3835,45 @@ describe('WebChannel', () => {
         channel: 'web',
         surfaceId: 'web-guardian-chat',
       }]);
+    });
+
+    it('POST /api/code/sessions should surface structured limit errors', async () => {
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+        onCodeSessionCreate: () => {
+          const error = new Error('Guardian keeps the coding workspace portfolio capped at 4 sessions. Remove a session before adding another.') as Error & {
+            statusCode?: number;
+            errorCode?: string;
+          };
+          error.statusCode = 409;
+          error.errorCode = 'CODE_SESSION_LIMIT_REACHED';
+          throw error;
+        },
+      };
+
+      web = new WebChannel({ port: 18980, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18980/api/code/sessions', {
+        method: 'POST',
+        headers: {
+          ...authHeaders,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId: 'web-user',
+          channel: 'web',
+          surfaceId: 'web-guardian-chat',
+          title: 'Overflow',
+          workspaceRoot: '/work/overflow',
+        }),
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: 'Guardian keeps the coding workspace portfolio capped at 4 sessions. Remove a session before adding another.',
+        errorCode: 'CODE_SESSION_LIMIT_REACHED',
+      });
     });
 
     it('POST /api/code/sessions/references should forward referenced session ids with surface context', async () => {

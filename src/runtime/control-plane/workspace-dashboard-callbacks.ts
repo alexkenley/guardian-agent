@@ -3,6 +3,7 @@ import type {
   DashboardCodeSessionSnapshot,
 } from '../../channels/web-types.js';
 import type { ConversationService } from '../conversation.js';
+import { MAX_CODE_SESSIONS_PER_USER } from '../code-sessions.js';
 import type { CodeSessionRecord, CodeSessionStore } from '../code-sessions.js';
 import type { IdentityService } from '../identity.js';
 import type { RunTimelineStore } from '../run-timeline.js';
@@ -167,13 +168,27 @@ export function createWorkspaceDashboardCallbacks(
       const resolvedChannel = channel?.trim() || 'web';
       const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
       const canonicalUserId = options.identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
-      const created = options.codeSessionStore.createSession({
-        ownerUserId: canonicalUserId,
-        ownerPrincipalId: principalId ?? canonicalUserId,
-        title,
-        workspaceRoot,
-        agentId: agentId?.trim() || null,
-      });
+      let created: CodeSessionRecord;
+      try {
+        created = options.codeSessionStore.createSession({
+          ownerUserId: canonicalUserId,
+          ownerPrincipalId: principalId ?? canonicalUserId,
+          title,
+          workspaceRoot,
+          agentId: agentId?.trim() || null,
+        });
+      } catch (err) {
+        if ((err as { code?: unknown })?.code === 'CODE_SESSION_LIMIT_REACHED') {
+          throw options.createStructuredRequestError(
+            err instanceof Error
+              ? err.message
+              : `Guardian keeps the coding workspace portfolio capped at ${MAX_CODE_SESSIONS_PER_USER} sessions. Remove a session before adding another.`,
+            409,
+            'CODE_SESSION_LIMIT_REACHED',
+          );
+        }
+        throw err;
+      }
       const session = options.maybeScheduleCodeSession(created);
       options.resetCodeSessionWorkspacePolicy();
       if (attach !== false) {

@@ -122,6 +122,67 @@ describe('service wiring helpers', () => {
     });
   });
 
+  it('uses the scheduled telegram user id when no telegram allowlist exists', async () => {
+    let executor: { runAgentTask: (input: Record<string, unknown>) => Promise<Record<string, unknown>> } | undefined;
+    const scheduledTasks = {
+      setAgentExecutor(value: unknown) {
+        executor = value as typeof executor;
+      },
+    };
+    const jobTracker = {
+      run: vi.fn(async (_input, handler: () => Promise<unknown>) => handler()),
+    };
+    const dashboardCallbacks = {
+      onDispatch: vi.fn(async () => ({ content: 'Scheduled task complete.', metadata: { ok: true } })),
+    };
+    const telegramChannel = {
+      send: vi.fn(async () => {}),
+      getKnownChatIds: vi.fn(() => []),
+    };
+    const configRef = {
+      current: structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig,
+    };
+    configRef.current.channels.telegram = {
+      ...(configRef.current.channels.telegram ?? {}),
+      allowedChatIds: [],
+    } as never;
+
+    wireScheduledAgentExecutor({
+      scheduledTasks,
+      jobTracker,
+      dashboardCallbacks,
+      configRef,
+      defaultAgentId: 'default-agent',
+      getCliChannel: () => null,
+      getTelegramChannel: () => telegramChannel,
+      getWebChannel: () => null,
+    });
+
+    const result = await executor!.runAgentTask({
+      agentId: 'default',
+      prompt: 'Run the report',
+      taskId: 'task-1',
+      taskName: 'Daily Report',
+      channel: 'telegram',
+      userId: '555',
+      deliver: true,
+    });
+
+    expect(telegramChannel.send).toHaveBeenCalledOnce();
+    expect(telegramChannel.send).toHaveBeenCalledWith('555', expect.stringContaining('Scheduled assistant report: Daily Report'));
+    expect(result).toMatchObject({
+      success: true,
+      status: 'succeeded',
+      output: {
+        delivery: {
+          attempted: true,
+          delivered: true,
+          channel: 'telegram',
+        },
+      },
+    });
+  });
+
   it('starts runtime support services and returns monitoring interval handles', async () => {
     const config = structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig;
     config.assistant.hostMonitoring.enabled = true;
@@ -208,5 +269,36 @@ describe('service wiring helpers', () => {
     ).senders.sendTelegram;
 
     await expect(sendTelegram?.('test message')).resolves.toBeUndefined();
+  });
+
+  it('falls back to known telegram chats for runtime notifications when no allowlist exists', async () => {
+    const configRef = {
+      current: structuredClone(DEFAULT_CONFIG) as GuardianAgentConfig,
+    };
+    configRef.current.channels.telegram = {
+      ...(configRef.current.channels.telegram ?? {}),
+      allowedChatIds: [],
+    } as never;
+    const telegramChannel = {
+      send: vi.fn(async () => {}),
+      getKnownChatIds: vi.fn(() => [777]),
+    };
+    const notificationService = createRuntimeNotificationService({
+      configRef,
+      runtime: {
+        auditLog: {} as never,
+        eventBus: {} as never,
+      },
+      getCliChannel: () => null,
+      getTelegramChannel: () => telegramChannel,
+    });
+
+    const sendTelegram = (
+      notificationService as unknown as { senders: { sendTelegram?: (text: string) => Promise<void> } }
+    ).senders.sendTelegram;
+
+    await sendTelegram?.('test message');
+
+    expect(telegramChannel.send).toHaveBeenCalledWith('777', 'test message');
   });
 });

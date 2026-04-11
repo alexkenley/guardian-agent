@@ -23,6 +23,7 @@ import {
   readChatProviderSelectionMetadata,
   type RequestedChatProviderSelection,
 } from './chat-provider-selection.js';
+import { resolveConfiguredAgentId as resolveConfiguredAgentIdAlias } from './agent-target-resolution.js';
 import type { IntentRoutingTraceLog, IntentRoutingTraceStage } from './intent-routing-trace.js';
 import type { MessageRouter, RouteDecision } from './message-router.js';
 import type { PendingActionStore } from './pending-actions.js';
@@ -76,6 +77,7 @@ export function createIncomingDispatchPreparer(args: {
   enabledManagedProviders?: Set<string>;
   availableCodingBackends?: string[];
   resolveSharedStateAgentId: (preferredAgentId?: string) => string | undefined;
+  resolveConfiguredAgentId?: (agentId?: string) => string | undefined;
   findProviderByLocality: (config: GuardianAgentConfig, locality: 'local' | 'external') => string | null | undefined;
   getCodeSessionSurfaceId: (args: {
     surfaceId?: string;
@@ -99,6 +101,12 @@ export function createIncomingDispatchPreparer(args: {
 }): PrepareIncomingDispatch {
   const now = args.now ?? Date.now;
   const availableCodingBackends = args.availableCodingBackends ?? ['codex', 'claude-code', 'gemini-cli', 'aider'];
+  const resolveConfiguredAgentId = args.resolveConfiguredAgentId ?? ((agentId?: string) => (
+    resolveConfiguredAgentIdAlias(agentId, {
+      defaultAgentId: args.defaultAgentId,
+      router: args.router,
+    })
+  ));
 
   const listClassifierProvidersForMode = (
     config: GuardianAgentConfig,
@@ -264,6 +272,7 @@ export function createIncomingDispatchPreparer(args: {
     msg: IncomingDispatchMessage,
     requestId?: string,
   ): Promise<{ decision: RouteDecision; gateway: IntentGatewayRecord | null }> => {
+    const resolvedChannelDefault = resolveConfiguredAgentId(channelDefault);
     const channel = msg.channel?.trim() || 'web';
     const channelUserId = msg.userId?.trim() || `${channel}-user`;
     const canonicalUserId = args.identity.resolveCanonicalUserId(channel, channelUserId);
@@ -437,38 +446,13 @@ export function createIncomingDispatchPreparer(args: {
       return null;
     };
     if (resolvedCodeSession) {
-      const pinnedAgentId = resolvedCodeSession.session.agentId?.trim();
-      const localTierAgentId = args.router.findAgentByRole('local')?.id;
-      const externalTierAgentId = args.router.findAgentByRole('external')?.id;
-      const pinnedTierAgent = pinnedAgentId
-        && (pinnedAgentId === localTierAgentId || pinnedAgentId === externalTierAgentId);
-      if (pinnedAgentId && !pinnedTierAgent) {
-        const decision = {
-          agentId: pinnedAgentId,
-          confidence: 'high' as const,
-          reason: requestedCodeContext?.sessionId
-            ? 'explicit coding session pinned to a specific agent'
-            : 'attached coding session pinned to a specific agent',
-        };
-        const profile = selectProfileForResolvedRoute(
-          decision,
-          null,
-          tierMode,
-          requestedChatProvider?.providerName,
-        );
-        recordResolvedRoute(decision, null, profile);
-        return {
-          decision,
-          gateway: null,
-        };
-      }
-      const stateAgentId = resolveRoutingStateAgentId(channelDefault);
-      const gateway = channelDefault
+      const stateAgentId = resolveRoutingStateAgentId(resolvedChannelDefault);
+      const gateway = resolvedChannelDefault
         ? null
         : await classifyIntentForRouting(msg, stateAgentId, requestedChatProvider?.providerName);
       const hasRoles = args.router.findAgentByRole('local') || args.router.findAgentByRole('external');
-      const decision = channelDefault
-        ? { agentId: channelDefault, confidence: 'high' as const, reason: 'channel default override' }
+      const decision = resolvedChannelDefault
+        ? { agentId: resolvedChannelDefault, confidence: 'high' as const, reason: 'channel default override' }
         : gateway?.available && hasRoles
           ? args.router.routeWithTierFromIntent(gateway.decision, normalizedContent, tierMode, threshold)
           : hasRoles
@@ -493,26 +477,37 @@ export function createIncomingDispatchPreparer(args: {
       };
     }
     if (requestedCodeContext?.workspaceRoot) {
-      const decision = {
-        agentId: args.router.findAgentByRole('local')?.id || channelDefault || args.defaultAgentId,
-        confidence: 'high' as const,
-        reason: 'code workspace context',
-      };
+      const stateAgentId = resolveRoutingStateAgentId(resolvedChannelDefault);
+      const gateway = resolvedChannelDefault
+        ? null
+        : await classifyIntentForRouting(msg, stateAgentId, requestedChatProvider?.providerName);
+      const hasRoles = args.router.findAgentByRole('local') || args.router.findAgentByRole('external');
+      const decision = resolvedChannelDefault
+        ? { agentId: resolvedChannelDefault, confidence: 'high' as const, reason: 'channel default override' }
+        : gateway?.available && hasRoles
+          ? args.router.routeWithTierFromIntent(gateway.decision, normalizedContent, tierMode, threshold)
+          : hasRoles
+            ? args.router.routeWithTier(normalizedContent, tierMode, threshold)
+            : args.router.route(normalizedContent);
       const profile = selectProfileForResolvedRoute(
         decision,
-        null,
+        gateway,
         tierMode,
         requestedChatProvider?.providerName,
       );
-      recordResolvedRoute(decision, null, profile);
+      const resolvedDecision = {
+        ...decision,
+        reason: 'code workspace context with gateway-first auto routing',
+      };
+      recordResolvedRoute(resolvedDecision, gateway, profile);
       return {
-        decision,
-        gateway: null,
+        decision: resolvedDecision,
+        gateway,
       };
     }
-    if (channelDefault) {
+    if (resolvedChannelDefault) {
       const decision = {
-        agentId: channelDefault,
+        agentId: resolvedChannelDefault,
         confidence: 'high' as const,
         reason: 'channel default override',
       };
@@ -529,7 +524,7 @@ export function createIncomingDispatchPreparer(args: {
       };
     }
     const hasRoles = args.router.findAgentByRole('local') || args.router.findAgentByRole('external');
-    const stateAgentId = resolveRoutingStateAgentId(channelDefault);
+    const stateAgentId = resolveRoutingStateAgentId(resolvedChannelDefault);
     const gateway = await classifyIntentForRouting(msg, stateAgentId, requestedChatProvider?.providerName);
     const forcedDecision = resolveForcedProviderDecision(requestedChatProvider);
     const decision = forcedDecision
@@ -554,17 +549,21 @@ export function createIncomingDispatchPreparer(args: {
   ): Promise<PreparedIncomingDispatch> => {
     const requestId = msg.requestId?.trim() || randomUUID();
     const requestedChatProvider = readChatProviderSelectionMetadata(msg.metadata, args.configRef.current);
+    const resolvedChannelDefault = resolveConfiguredAgentId(channelDefault);
     recordIntentRoutingTrace('incoming_dispatch', {
       msg,
       requestId,
       details: {
         hasMetadata: !!msg.metadata,
-        channelDefault,
+        ...(resolvedChannelDefault ? { channelDefault: resolvedChannelDefault } : {}),
+        ...(channelDefault && channelDefault !== resolvedChannelDefault
+          ? { configuredChannelDefault: channelDefault }
+          : {}),
         ...(requestedChatProvider?.providerName ? { requestedProviderName: requestedChatProvider.providerName } : {}),
       },
       contentPreview: stripLeadingContextPrefix(msg.content),
     });
-    const routed = await resolveAgentForIncomingMessage(channelDefault, msg, requestId);
+    const routed = await resolveAgentForIncomingMessage(resolvedChannelDefault, msg, requestId);
     const sanitizedMetadata = isRecord(msg.metadata)
       ? Object.fromEntries(
           Object.entries(msg.metadata).filter(([key]) => key !== PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY),

@@ -15,6 +15,7 @@ import type {
   ToolCall,
 } from './types.js';
 import type { LLMConfig } from '../config/types.js';
+import { getProviderTypeMetadata } from './provider-metadata.js';
 
 export class OpenAIProvider implements LLMProvider {
   readonly name: string;
@@ -22,12 +23,16 @@ export class OpenAIProvider implements LLMProvider {
   private model: string;
   private maxTokens: number;
   private temperature: number;
+  private providerLabel: string;
+  private baseUrl: string | undefined;
 
   constructor(config: LLMConfig, providerName?: string) {
     this.name = providerName ?? 'openai';
+    this.providerLabel = getProviderTypeMetadata(this.name)?.displayName ?? this.name;
+    this.baseUrl = config.baseUrl;
     this.client = new OpenAI({
       apiKey: config.apiKey,
-      baseURL: config.baseUrl,
+      baseURL: this.baseUrl,
       timeout: config.timeoutMs ?? 120_000,
     });
     this.model = config.model;
@@ -46,10 +51,18 @@ export class OpenAIProvider implements LLMProvider {
         try {
           response = await this.client.chat.completions.create(params, { signal: options?.signal });
         } catch (retryErr) {
-          throw wrapOpenAIError(retryErr, params.model as string);
+          throw wrapOpenAIError(retryErr, {
+            model: params.model as string,
+            providerLabel: this.providerLabel,
+            baseUrl: this.baseUrl,
+          });
         }
       } else {
-        throw wrapOpenAIError(err, params.model as string);
+        throw wrapOpenAIError(err, {
+          model: params.model as string,
+          providerLabel: this.providerLabel,
+          baseUrl: this.baseUrl,
+        });
       }
     }
     const choice = response.choices[0];
@@ -88,10 +101,18 @@ export class OpenAIProvider implements LLMProvider {
         try {
           stream = await this.client.chat.completions.create(params);
         } catch (retryErr) {
-          throw wrapOpenAIError(retryErr, params.model as string);
+          throw wrapOpenAIError(retryErr, {
+            model: params.model as string,
+            providerLabel: this.providerLabel,
+            baseUrl: this.baseUrl,
+          });
         }
       } else {
-        throw wrapOpenAIError(err, params.model as string);
+        throw wrapOpenAIError(err, {
+          model: params.model as string,
+          providerLabel: this.providerLabel,
+          baseUrl: this.baseUrl,
+        });
       }
     }
 
@@ -127,8 +148,12 @@ export class OpenAIProvider implements LLMProvider {
         });
       }
       return models;
-    } catch {
-      return [];
+    } catch (err) {
+      throw wrapOpenAIError(err, {
+        operation: 'models',
+        providerLabel: this.providerLabel,
+        baseUrl: this.baseUrl,
+      });
     }
   }
 
@@ -223,39 +248,66 @@ function shouldRetryWithMaxCompletionTokens(err: unknown): boolean {
     && /max_completion_tokens/i.test(raw);
 }
 
-/** Wrap OpenAI SDK errors into user-friendly messages. */
-function wrapOpenAIError(err: unknown, model: string): Error {
+/** Wrap OpenAI-compatible SDK errors into user-friendly messages. */
+function wrapOpenAIError(err: unknown, context: {
+  model?: string;
+  operation?: 'chat' | 'models';
+  providerLabel: string;
+  baseUrl?: string;
+}): Error {
   const status = (err as { status?: number })?.status ?? 0;
   const raw = err instanceof Error ? err.message : String(err);
+  const provider = context.providerLabel;
+  const operationLabel = context.operation === 'models' ? 'load models from' : 'reach';
+  const providerLocation = context.baseUrl ? ` at ${context.baseUrl}` : '';
 
-  if (status === 404 || raw.includes('model_not_found') || raw.includes('does not exist')) {
+  if (
+    status === 404
+    || raw.includes('model_not_found')
+    || raw.includes('does not exist')
+    || /model not found/i.test(raw)
+  ) {
     return Object.assign(
-      new Error(`Model "${model}" is not available on your OpenAI API key. Check your plan or choose a different model in /config.`),
+      new Error(
+        context.model
+          ? `Model "${context.model}" is not available on ${provider}. Choose a different model in Configuration > Providers.`
+          : `Could not load models from ${provider}. Check the configured model family and API access.`,
+      ),
       { status },
     );
   }
   if (status === 401) {
     return Object.assign(
-      new Error('OpenAI API key is invalid or expired. Update it in Configuration > Providers.'),
+      new Error(`${provider} API key is invalid or expired. Update it in Configuration > Providers.`),
       { status },
     );
   }
   if (status === 403) {
     return Object.assign(
-      new Error(`Access denied for model "${model}". Your OpenAI API plan may not include this model.`),
+      new Error(
+        context.model
+          ? `Access denied for model "${context.model}" on ${provider}. Your account may not include this model.`
+          : `Access denied while loading models from ${provider}. Check that the API key has access to this account.`,
+      ),
       { status },
     );
   }
   if (status === 429) {
     return Object.assign(
-      new Error('OpenAI rate limit exceeded or quota depleted. Check your usage at platform.openai.com.'),
+      new Error(`${provider} rate limit exceeded or quota depleted. Check the account limits for this provider.`),
       { status },
     );
   }
   if (status === 503 || raw.includes('overloaded')) {
     return Object.assign(
-      new Error('OpenAI API is currently overloaded. Please try again shortly.'),
+      new Error(`${provider} API is currently overloaded. Please try again shortly.`),
       { status },
+    );
+  }
+  if (/fetch failed|connection error|ECONNREFUSED|ENOTFOUND|network/i.test(raw)) {
+    return Object.assign(
+      new Error(`Could not ${operationLabel} ${provider}${providerLocation}. Check the base URL, network access, and API status.`),
+      { status: status || 0 },
     );
   }
   return err instanceof Error ? err : new Error(raw);

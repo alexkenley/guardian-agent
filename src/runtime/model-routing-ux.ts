@@ -123,7 +123,6 @@ export function formatResponseSourceLabel(metadata?: Record<string, unknown>): s
     parts.push(profileLabel);
   }
   if (source.model?.trim()) parts.push(source.model.trim());
-  if (source.usedFallback) parts.push('fallback');
   return `[${parts.join(' · ')}]`;
 }
 
@@ -131,6 +130,5 @@ export function formatCompactResponseSourceLabel(metadata?: Record<string, unkno
   const source = readResponseSourceMetadata(metadata);
   if (!source) return '';
   const parts: string[] = [source.providerTier ? formatProviderTierLabel(source.providerTier) : source.locality];
-  if (source.usedFallback) parts.push('fallback');
   return `[${parts.join(' · ')}]`;
 }

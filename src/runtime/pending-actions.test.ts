@@ -4,6 +4,7 @@ import {
   clearApprovalIdFromPendingAction,
   defaultPendingActionTransferPolicy,
   isPendingActionActive,
+  reconcilePendingApprovalAction,
   summarizePendingActionForGateway,
   toPendingActionClientMetadata,
   type PendingActionRecord,
@@ -182,6 +183,77 @@ describe('PendingActionStore', () => {
     expect(completed).not.toBeNull();
     expect(completed?.status).toBe('completed');
     expect(isPendingActionActive(completed?.status ?? 'expired')).toBe(false);
+    expect(store.get(created.id)?.status).toBe('completed');
+  });
+
+  it('reconciles stale approval blockers against the live approval queue', () => {
+    const store = createStore();
+    const scope = createScope();
+    const created = store.replaceActive(scope, createRecord({
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve the coding backend run.',
+        approvalIds: ['approval-1', 'approval-2'],
+        approvalSummaries: [
+          { id: 'approval-1', toolName: 'coding_backend_run', argsPreview: '{"backend":"codex"}', actionLabel: 'run Codex' },
+          { id: 'approval-2', toolName: 'fs_write', argsPreview: '{"path":"./tmp/test.txt"}', actionLabel: 'write ./tmp/test.txt' },
+        ],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'create',
+        originalUserContent: 'Use Codex to create a file.',
+      },
+    }));
+
+    const reconciled = reconcilePendingApprovalAction(store, created, {
+      liveApprovalIds: ['approval-2'],
+      liveApprovalSummaries: new Map([
+        ['approval-2', {
+          toolName: 'fs_write',
+          argsPreview: '{"path":"./tmp/test.txt","append":false}',
+          actionLabel: 'write ./tmp/test.txt',
+        }],
+      ]),
+      nowMs: created.updatedAt + 1,
+    });
+
+    expect(reconciled?.status).toBe('pending');
+    expect(reconciled?.blocker.approvalIds).toEqual(['approval-2']);
+    expect(reconciled?.blocker.approvalSummaries).toEqual([
+      {
+        id: 'approval-2',
+        toolName: 'fs_write',
+        argsPreview: '{"path":"./tmp/test.txt","append":false}',
+        actionLabel: 'write ./tmp/test.txt',
+      },
+    ]);
+  });
+
+  it('completes stale approval blockers when none of their approval ids are still live', () => {
+    const store = createStore();
+    const scope = createScope();
+    const created = store.replaceActive(scope, createRecord({
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve the coding backend run.',
+        approvalIds: ['approval-1'],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'create',
+        originalUserContent: 'Use Codex to create a file.',
+      },
+    }));
+
+    const reconciled = reconcilePendingApprovalAction(store, created, {
+      liveApprovalIds: [],
+      nowMs: created.updatedAt + 1,
+    });
+
+    expect(reconciled?.status).toBe('completed');
     expect(store.get(created.id)?.status).toBe('completed');
   });
 

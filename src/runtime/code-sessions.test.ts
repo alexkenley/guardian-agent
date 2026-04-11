@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
-import { CodeSessionStore } from './code-sessions.js';
+import { CodeSessionStore, MAX_CODE_SESSIONS_PER_USER } from './code-sessions.js';
 
 const testDirs: string[] = [];
 
@@ -55,6 +55,71 @@ describe('CodeSessionStore', () => {
     expect(session.workState.workspaceProfile?.summary).toContain('test-app');
     expect(session.workState.workspaceProfile?.inspectedFiles).toContain('README.md');
     expect(session.workState.workspaceTrust?.state).toBe('trusted');
+  });
+
+  it('normalizes routing lane agent pins out of stored sessions', () => {
+    const workspaceRoot = createWorkspace('agent-normalization', {
+      'package.json': JSON.stringify({ name: 'agent-normalization-app' }),
+    });
+    const store = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(workspaceRoot, '.guardianagent', 'code-sessions.sqlite'),
+      normalizeAgentId: (agentId?: string | null) => {
+        const trimmed = typeof agentId === 'string' && agentId.trim() ? agentId.trim() : '';
+        return trimmed === 'external' || trimmed === 'local-agent' ? null : (trimmed || null);
+      },
+    });
+
+    const created = store.createSession({
+      ownerUserId: 'owner',
+      title: 'Pinned Session',
+      workspaceRoot,
+      agentId: 'external',
+    });
+
+    expect(created.agentId).toBeNull();
+
+    const memoryStore = store as unknown as {
+      memory: {
+        sessions: Map<string, { agentId: string | null }>;
+      };
+    };
+    const persisted = memoryStore.memory.sessions.get(created.id);
+    if (persisted) {
+      persisted.agentId = 'local-agent';
+    }
+
+    const hydrated = store.getSession(created.id, 'owner');
+
+    expect(hydrated?.agentId).toBeNull();
+    expect(memoryStore.memory.sessions.get(created.id)?.agentId).toBeNull();
+  });
+
+  it('rejects creating more than the capped number of sessions for one user', () => {
+    const store = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(tmpdir(), `guardianagent-code-session-limit-${randomUUID()}.sqlite`),
+    });
+
+    for (let index = 0; index < MAX_CODE_SESSIONS_PER_USER; index += 1) {
+      const workspaceRoot = createWorkspace(`limit-${index}`, {
+        'package.json': JSON.stringify({ name: `limit-${index}` }),
+      });
+      store.createSession({
+        ownerUserId: 'owner',
+        title: `Workspace ${index + 1}`,
+        workspaceRoot,
+      });
+    }
+
+    const overflowRoot = createWorkspace('limit-overflow', {
+      'package.json': JSON.stringify({ name: 'limit-overflow' }),
+    });
+    expect(() => store.createSession({
+      ownerUserId: 'owner',
+      title: 'Workspace overflow',
+      workspaceRoot: overflowRoot,
+    })).toThrow(/capped at 4 sessions/i);
   });
 
   it('persists workspace trust assessment findings on session create', () => {
@@ -685,7 +750,7 @@ describe('CodeSessionStore', () => {
     })).toBeNull();
   });
 
-  it('clears the explicit target once that workspace becomes current', () => {
+  it('retains the remaining saved workspaces as referenced context once a targeted workspace becomes current', () => {
     const firstRoot = createWorkspace('portfolio-target-attach-first', {
       'package.json': JSON.stringify({ name: 'portfolio-target-attach-first' }),
     });
@@ -739,7 +804,7 @@ describe('CodeSessionStore', () => {
       userId: 'owner',
       channel: 'web',
       surfaceId: 'web-guardian-chat',
-    })).toEqual([]);
+    })).toEqual([firstSession.id]);
   });
 
   it('normalizes Windows and WSL-style workspace roots to the current host format', () => {

@@ -114,6 +114,28 @@ describe('IntentGateway', () => {
     expect(result.decision.confidence).toBe('low');
   });
 
+  it('recovers explicit repo file review requests when the model response is not structured', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Inspect src/runtime/intent-gateway.ts, src/runtime/execution-profiles.ts, src/runtime/pending-actions.ts, and src/runtime/dashboard-dispatch.ts for approval-bypass or privilege-escalation risks. Cite exact file paths and give the highest-risk issue first.',
+        channel: 'web',
+      },
+      async () => ({
+        content: 'This looks like a code review request over runtime files.',
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('inspect');
+    expect(result.decision.executionClass).toBe('repo_grounded');
+    expect(result.decision.requiresRepoGrounding).toBe(true);
+    expect(result.decision.expectedContextPressure).toBe('high');
+    expect(result.decision.preferredAnswerPath).toBe('chat_synthesis');
+  });
+
   it('retries with a JSON-only fallback when the tool-call gateway path throws', async () => {
     const gateway = new IntentGateway();
     let callCount = 0;
@@ -148,6 +170,29 @@ describe('IntentGateway', () => {
     expect(result.mode).toBe('json_fallback');
     expect(result.decision.route).toBe('coding_session_control');
     expect(result.decision.operation).toBe('inspect');
+  });
+
+  it('recovers explicit coding-backend workspace requests from an unstructured gateway response', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'Use Codex in the Test Tactical Game App coding workspace to create a smoke test file.',
+        channel: 'web',
+      },
+      async () => ({
+        content: 'I think this is a coding request.',
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.available).toBe(true);
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('create');
+    expect(result.decision.entities.codingBackend).toBe('codex');
+    expect(result.decision.entities.codingBackendRequested).toBe(true);
+    expect(result.decision.entities.sessionTarget).toBe('Test Tactical Game App');
   });
 
   it('converts shadow decisions into client-safe metadata', () => {

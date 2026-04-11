@@ -52,6 +52,17 @@ describe('TelegramChannel.send', () => {
     const sentChunks = sendMessage.mock.calls.map((call) => String(call[1]));
     expect(sentChunks.every((chunk) => chunk.length <= 4096)).toBe(true);
   });
+
+  it('tracks known chat ids for outbound telegram delivery', async () => {
+    const channel = new TelegramChannel({ botToken: '123:abc' });
+    const sendMessage = vi.spyOn((channel as unknown as { bot: { api: { sendMessage: (chatId: number, text: string) => Promise<unknown> } } }).bot.api, 'sendMessage')
+      .mockResolvedValue({} as unknown);
+
+    await channel.send('12345', 'hello');
+
+    expect(sendMessage).toHaveBeenCalledWith(12345, 'hello');
+    expect(channel.getKnownChatIds()).toEqual([12345]);
+  });
 });
 
 describe('TelegramChannel help text', () => {
@@ -207,6 +218,32 @@ describe('Telegram approval flow', () => {
     expect(replies[1]?.text).toContain('⚠️ add S:\\Development to allowed paths');
   });
 
+  it('supports legacy pendingApprovals metadata when rendering Telegram approval controls', async () => {
+    const channel = new TelegramChannel({
+      botToken: '123:abc',
+      onToolsApprovalDecision: async () => ({ success: true, message: 'Approved and executed' }),
+    });
+    const { ctx, replies } = createFakeCtx();
+
+    await (channel as unknown as {
+      replyWithApprovalSupport: (ctx: unknown, response: { content: string; metadata?: Record<string, unknown> }, agentId?: string) => Promise<void>;
+    }).replyWithApprovalSupport(ctx, {
+      content: 'Waiting for approval to write S:\\Development\\test26.txt.',
+      metadata: {
+        pendingApprovals: [
+          {
+            id: 'approval-write-1',
+            toolName: 'fs_write',
+            argsPreview: '{"path":"S:\\\\Development\\\\test26.txt","content":"This is a test file.","append":false}',
+          },
+        ],
+      },
+    }, 'default');
+
+    expect(replies[0]?.text).toBe('Waiting for approval to write S:\\Development\\test26.txt.');
+    expect(replies[1]?.text).toContain('⚠️ write S:\\Development\\test26.txt');
+  });
+
   it('acknowledges inline approval buttons immediately before slow continuation finishes', async () => {
     let resolveApproval!: (value: { success: boolean; message: string }) => void;
     const approvalGate = new Promise<{ success: boolean; message: string }>((resolve) => {
@@ -305,6 +342,6 @@ describe('Telegram approval flow', () => {
       },
     }, 'default');
 
-    expect(replies[0]?.text).toBe('[external · fallback] Workflow created successfully.');
+    expect(replies[0]?.text).toBe('[external] Workflow created successfully.');
   });
 });

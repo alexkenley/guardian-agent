@@ -186,6 +186,7 @@ export interface CodeSessionStoreOptions {
   sqlitePath: string;
   now?: () => number;
   onSecurityEvent?: (event: SQLiteSecurityEvent) => void;
+  normalizeAgentId?: (agentId?: string | null) => string | null;
 }
 
 export interface CreateCodeSessionInput {
@@ -196,6 +197,8 @@ export interface CreateCodeSessionInput {
   agentId?: string | null;
   attachmentPolicy?: CodeSessionAttachmentPolicy;
 }
+
+export const MAX_CODE_SESSIONS_PER_USER = 4;
 
 export interface UpdateCodeSessionInput {
   sessionId: string;
@@ -444,6 +447,7 @@ export class CodeSessionStore {
   private readonly enabled: boolean;
   private readonly sqlitePath: string;
   private readonly onSecurityEvent?: (event: SQLiteSecurityEvent) => void;
+  private readonly normalizeAgentIdValue: (agentId?: string | null) => string | null;
   private readonly listeners = new Set<CodeSessionStoreListener>();
   private readonly mode: 'sqlite' | 'memory';
   private db: SQLiteDatabase | null = null;
@@ -467,6 +471,10 @@ export class CodeSessionStore {
     this.sqlitePath = options.sqlitePath;
     this.now = options.now ?? Date.now;
     this.onSecurityEvent = options.onSecurityEvent;
+    this.normalizeAgentIdValue = options.normalizeAgentId ?? ((agentId?: string | null) => {
+      const trimmed = typeof agentId === 'string' && agentId.trim() ? agentId.trim() : '';
+      return trimmed || null;
+    });
 
     if (!this.enabled || !hasSQLiteDriver()) {
       this.mode = 'memory';
@@ -520,7 +528,9 @@ export class CodeSessionStore {
 
   private withDerivedWorkspaceProfile(record: CodeSessionRecord): CodeSessionRecord {
     const canonicalResolvedRoot = normalizePath(record.workspaceRoot);
+    const canonicalAgentId = this.normalizeAgentIdValue(record.agentId);
     const canonicalUiState = sanitizeUiState(record.uiState, canonicalResolvedRoot);
+    const agentIdChanged = canonicalAgentId !== record.agentId;
     const resolvedRootChanged = canonicalResolvedRoot !== record.resolvedRoot;
     const workspaceMap = cloneWorkspaceMap(record.workState.workspaceMap);
     const workspaceMapChanged = !!workspaceMap && workspaceMap.workspaceRoot !== canonicalResolvedRoot;
@@ -542,6 +552,7 @@ export class CodeSessionStore {
     const canonicalRecord: CodeSessionRecord = {
       ...record,
       resolvedRoot: canonicalResolvedRoot,
+      agentId: canonicalAgentId,
       uiState: canonicalUiState,
       workState: {
         ...record.workState,
@@ -557,7 +568,8 @@ export class CodeSessionStore {
       },
     };
     if (
-      resolvedRootChanged
+      agentIdChanged
+      || resolvedRootChanged
       || workspaceMapChanged
       || uiStateChanged
       || !record.workState.workspaceProfile
@@ -619,6 +631,15 @@ export class CodeSessionStore {
   }
 
   createSession(input: CreateCodeSessionInput): CodeSessionRecord {
+    if (this.listSessionsForUser(input.ownerUserId).length >= MAX_CODE_SESSIONS_PER_USER) {
+      const error = new Error(
+        `Guardian keeps the coding workspace portfolio capped at ${MAX_CODE_SESSIONS_PER_USER} sessions. Remove a session before adding another.`,
+      ) as Error & { code?: string };
+      error.name = 'CodeSessionLimitError';
+      error.code = 'CODE_SESSION_LIMIT_REACHED';
+      throw error;
+    }
+
     const now = this.now();
     const id = randomUUID();
     const workspaceRoot = input.workspaceRoot.trim() || '.';
@@ -632,7 +653,7 @@ export class CodeSessionStore {
       title: input.title.trim() || 'Coding Session',
       workspaceRoot,
       resolvedRoot,
-      agentId: input.agentId?.trim() || null,
+      agentId: this.normalizeAgentIdValue(input.agentId),
       status: 'idle',
       attachmentPolicy: input.attachmentPolicy ?? 'same_principal',
       createdAt: now,
@@ -714,7 +735,7 @@ export class CodeSessionStore {
       ...existing,
       title: input.title !== undefined ? (input.title.trim() || existing.title) : existing.title,
       workspaceRoot: input.workspaceRoot !== undefined ? (input.workspaceRoot.trim() || existing.workspaceRoot) : existing.workspaceRoot,
-      agentId: input.agentId !== undefined ? (input.agentId?.trim() || null) : existing.agentId,
+      agentId: input.agentId !== undefined ? this.normalizeAgentIdValue(input.agentId) : existing.agentId,
       attachmentPolicy: input.attachmentPolicy ?? existing.attachmentPolicy,
       status: input.status ?? existing.status,
       resolvedRoot: nextResolvedRoot,
@@ -824,7 +845,7 @@ export class CodeSessionStore {
     channel: string;
     surfaceId: string;
   }): string[] {
-    const state = this.getSurfaceState(args);
+    const availableSessions = this.listSessionsForUser(args.userId);
     const current = this.resolveForRequest({
       userId: args.userId,
       principalId: args.principalId,
@@ -832,10 +853,14 @@ export class CodeSessionStore {
       surfaceId: args.surfaceId,
       touchAttachment: false,
     });
+    if (!current?.session.id) {
+      return [];
+    }
     return normalizeReferencedCodeSessionIds({
-      referencedSessionIds: state?.referencedSessionIds,
-      availableSessions: this.listSessionsForUser(args.userId),
-      currentSessionId: current?.session.id ?? null,
+      referencedSessionIds: availableSessions.map((session) => session.id),
+      availableSessions,
+      currentSessionId: current.session.id,
+      maxCount: MAX_CODE_SESSIONS_PER_USER,
     });
   }
 

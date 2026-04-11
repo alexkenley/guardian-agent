@@ -10,6 +10,7 @@ import type { ConnectorPlaybookService } from '../runtime/connectors.js';
 import { NotificationService } from '../runtime/notifications.js';
 import type { Runtime } from '../runtime/runtime.js';
 import type { ScheduledTaskService } from '../runtime/scheduled-tasks.js';
+import { resolveTelegramDeliveryChatIds } from '../runtime/telegram-delivery.js';
 
 interface LoggerLike {
   info(data: unknown, message?: string): void;
@@ -17,10 +18,18 @@ interface LoggerLike {
 }
 
 async function sendToConfiguredTelegramChats(
-  telegramChannel: Pick<TelegramChannel, 'send'> | null,
-  chatIds: readonly number[],
+  telegramChannel: Pick<TelegramChannel, 'send' | 'getKnownChatIds'> | null,
+  args: {
+    configuredChatIds: readonly number[];
+    preferredUserIds?: readonly string[];
+  },
   text: string,
 ): Promise<void> {
+  const chatIds = resolveTelegramDeliveryChatIds({
+    configuredChatIds: args.configuredChatIds,
+    preferredUserIds: args.preferredUserIds,
+    telegramChannel,
+  });
   if (!telegramChannel || chatIds.length === 0) {
     throw new Error('Telegram delivery is not configured.');
   }
@@ -30,10 +39,18 @@ async function sendToConfiguredTelegramChats(
 }
 
 async function sendTelegramNotificationIfConfigured(
-  telegramChannel: Pick<TelegramChannel, 'send'> | null,
-  chatIds: readonly number[],
+  telegramChannel: Pick<TelegramChannel, 'send' | 'getKnownChatIds'> | null,
+  args: {
+    configuredChatIds: readonly number[];
+    preferredUserIds?: readonly string[];
+  },
   text: string,
 ): Promise<void> {
+  const chatIds = resolveTelegramDeliveryChatIds({
+    configuredChatIds: args.configuredChatIds,
+    preferredUserIds: args.preferredUserIds,
+    telegramChannel,
+  });
   if (!telegramChannel || chatIds.length === 0) {
     return;
   }
@@ -49,7 +66,7 @@ export function wireScheduledAgentExecutor(args: {
   configRef: { current: GuardianAgentConfig };
   defaultAgentId: string;
   getCliChannel: () => Pick<CLIChannel, 'send'> | null;
-  getTelegramChannel: () => Pick<TelegramChannel, 'send'> | null;
+  getTelegramChannel: () => Pick<TelegramChannel, 'send' | 'getKnownChatIds'> | null;
   getWebChannel: () => Pick<WebChannel, 'send'> | null;
 }): void {
   args.scheduledTasks.setAgentExecutor({
@@ -108,7 +125,10 @@ export function wireScheduledAgentExecutor(args: {
           } else if (channel === 'telegram') {
             await sendToConfiguredTelegramChats(
               args.getTelegramChannel(),
-              args.configRef.current.channels.telegram?.allowedChatIds ?? [],
+              {
+                configuredChatIds: args.configRef.current.channels.telegram?.allowedChatIds ?? [],
+                preferredUserIds: [userId],
+              },
               deliveryText,
             );
           } else if (channel === 'web') {
@@ -152,7 +172,7 @@ export function createRuntimeNotificationService(args: {
   configRef: { current: GuardianAgentConfig };
   runtime: Pick<Runtime, 'auditLog' | 'eventBus'>;
   getCliChannel: () => Pick<CLIChannel, 'send'> | null;
-  getTelegramChannel: () => Pick<TelegramChannel, 'send'> | null;
+  getTelegramChannel: () => Pick<TelegramChannel, 'send' | 'getKnownChatIds'> | null;
 }): NotificationService {
   return new NotificationService({
     getConfig: () => args.configRef.current.assistant.notifications,
@@ -167,7 +187,10 @@ export function createRuntimeNotificationService(args: {
       sendTelegram: async (text: string) => {
         await sendTelegramNotificationIfConfigured(
           args.getTelegramChannel(),
-          args.configRef.current.channels.telegram?.allowedChatIds ?? [],
+          {
+            configuredChatIds: args.configRef.current.channels.telegram?.allowedChatIds ?? [],
+            preferredUserIds: [args.configRef.current.assistant.identity.primaryUserId],
+          },
           text,
         );
       },

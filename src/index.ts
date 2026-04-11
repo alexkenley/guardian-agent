@@ -210,9 +210,11 @@ import { MCPClientManager, assessMcpStartupAdmission } from './tools/mcp-client.
 import type { MCPServerConfig } from './tools/mcp-client.js';
 import { MessageRouter, type RouteDecision } from './runtime/message-router.js';
 import { resolveAgentStateId, SHARED_TIER_AGENT_STATE_ID } from './runtime/agent-state-context.js';
+import { normalizeCodeSessionAgentId, resolveConfiguredAgentId } from './runtime/agent-target-resolution.js';
 import {
   clearApprovalIdFromPendingAction,
   PendingActionStore,
+  reconcilePendingApprovalAction,
   summarizePendingActionForGateway,
 } from './runtime/pending-actions.js';
 import {
@@ -1160,6 +1162,17 @@ function buildDashboardCallbacks(
     localAgentId: router.findAgentByRole('local')?.id,
     externalAgentId: router.findAgentByRole('external')?.id,
   });
+  const resolveCurrentDefaultAgentId = (): string => (
+    configRef.current.agents[0]?.id
+    ?? router.findAgentByRole('local')?.id
+    ?? router.findAgentByRole('external')?.id
+    ?? 'default'
+  );
+  const resolveConfiguredDispatchAgentId = (agentId?: string): string | undefined => resolveConfiguredAgentId(agentId, {
+    defaultAgentId: resolveCurrentDefaultAgentId(),
+    router,
+    hasAgent: (targetAgentId: string) => runtime.registry.has(targetAgentId),
+  });
   const hasOwn = (value: object, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
   const trimOrUndefined = (value: unknown): string | undefined => typeof value === 'string' && value.trim() ? value.trim() : undefined;
   const createStructuredRequestError = (message: string, statusCode: number, errorCode: string): Error & { statusCode: number; errorCode: string } => {
@@ -1207,10 +1220,10 @@ function buildDashboardCallbacks(
     };
   };
   const getCodeSessionConversationKey = (session: CodeSessionRecord): ConversationKey => {
-    const preferredAgentId = session.agentId
+    const preferredAgentId = resolveConfiguredDispatchAgentId(configRef.current.channels.web?.defaultAgent)
+      ?? resolveConfiguredDispatchAgentId(configRef.current.channels.cli?.defaultAgent)
       ?? router.findAgentByRole('local')?.id
-      ?? configRef.current.channels.web?.defaultAgent
-      ?? configRef.current.channels.cli?.defaultAgent
+      ?? router.findAgentByRole('external')?.id
       ?? 'default';
     return {
       agentId: resolveSharedStateAgentId(preferredAgentId) ?? preferredAgentId,
@@ -1581,6 +1594,18 @@ function buildDashboardCallbacks(
     );
     if (result.success || input.decision === 'denied') {
       clearApprovalIdFromPendingAction(pendingActionStore, input.approvalId);
+    } else if (pendingActionForApproval?.blocker.kind === 'approval' && /not found/i.test(result.message ?? '')) {
+      const liveApprovalIds = toolExecutor.listPendingApprovalIdsForUser(
+        pendingActionForApproval.scope.userId,
+        pendingActionForApproval.scope.channel,
+        {
+          includeUnscoped: pendingActionForApproval.scope.channel === 'web',
+        },
+      );
+      reconcilePendingApprovalAction(pendingActionStore, pendingActionForApproval, {
+        liveApprovalIds,
+        liveApprovalSummaries: toolExecutor.getApprovalSummaries(liveApprovalIds),
+      });
     }
     if (!result.success) {
       log.warn({
@@ -1753,6 +1778,7 @@ function buildDashboardCallbacks(
     agentDashboard,
     dispatchDashboardMessage,
     prepareIncomingDispatch,
+    resolveConfiguredAgentId: resolveConfiguredDispatchAgentId,
     identity,
     analytics,
     orchestrator,
@@ -3129,6 +3155,9 @@ async function main(): Promise<void> {
     enabled: true,
     sqlitePath: codeSessionDbPath,
     onSecurityEvent: onSQLiteSecurityEvent,
+    normalizeAgentId: (agentId?: string | null) => normalizeCodeSessionAgentId(agentId, {
+      router,
+    }),
   });
   const pendingActionStore = new PendingActionStore({
     enabled: true,
@@ -4444,6 +4473,17 @@ async function main(): Promise<void> {
     localAgentId: router.findAgentByRole('local')?.id,
     externalAgentId: router.findAgentByRole('external')?.id,
   });
+  const resolveCurrentDefaultAgentId = (): string => (
+    configRef.current.agents[0]?.id
+    ?? router.findAgentByRole('local')?.id
+    ?? router.findAgentByRole('external')?.id
+    ?? 'default'
+  );
+  const resolveConfiguredDispatchAgentId = (agentId?: string): string | undefined => resolveConfiguredAgentId(agentId, {
+    defaultAgentId: resolveCurrentDefaultAgentId(),
+    router,
+    hasAgent: (targetAgentId: string) => runtime.registry.has(targetAgentId),
+  });
   let connectors: ConnectorPlaybookService;
   let listConfiguredLlmProvidersForTools: ToolExecutorOptions['listLlmProviders'];
   let listModelsForConfiguredLlmProviderForTools: ToolExecutorOptions['listModelsForLlmProvider'];
@@ -5718,6 +5758,7 @@ async function main(): Promise<void> {
     intentRoutingTrace,
     enabledManagedProviders,
     resolveSharedStateAgentId,
+    resolveConfiguredAgentId: resolveConfiguredDispatchAgentId,
     findProviderByLocality,
     getCodeSessionSurfaceId,
     readMessageSurfaceId,
@@ -6298,6 +6339,7 @@ async function main(): Promise<void> {
     runtime,
     channels,
     prepareIncomingDispatch,
+    resolveConfiguredAgentId: resolveConfiguredDispatchAgentId,
     secretStore,
     resolveCanonicalTelegramUserId: (channelUserId) => identity.resolveCanonicalUserId('telegram', channelUserId),
     resolveTelegramBotToken,

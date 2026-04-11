@@ -14,7 +14,7 @@ import type { Runtime } from '../runtime/runtime.js';
 import type { BootstrapChannelStopEntry } from './shutdown.js';
 
 export type BootstrapCliChannel = Pick<CLIChannel, 'start' | 'stop' | 'send' | 'postStart'>;
-export type BootstrapTelegramChannel = Pick<TelegramChannel, 'start' | 'stop' | 'send'>;
+export type BootstrapTelegramChannel = Pick<TelegramChannel, 'start' | 'stop' | 'send' | 'getKnownChatIds'>;
 export type BootstrapWebChannel = Pick<
   WebChannel,
   'start' | 'stop' | 'send' | 'setAuthConfig' | 'getCodingBackendTerminalControl' | 'emitDashboardInvalidation'
@@ -86,6 +86,7 @@ export async function startBootstrapChannels(args: {
   runtime: DispatchRuntimeLike;
   channels: BootstrapChannelStopEntry[];
   prepareIncomingDispatch: PrepareIncomingDispatch;
+  resolveConfiguredAgentId?: (agentId?: string) => string | undefined;
   secretStore: LocalSecretStore;
   resolveCanonicalTelegramUserId: (channelUserId: string) => string;
   resolveTelegramBotToken: (config: GuardianAgentConfig, secretStore: LocalSecretStore) => string | undefined;
@@ -132,15 +133,18 @@ export async function startBootstrapChannels(args: {
   const createWebChannel = args.createWebChannel ?? ((options) => new WebChannel(options));
   const createCodingBackendService = args.createCodingBackendService
     ?? ((options) => new CodingBackendService(options));
+  const resolveConfiguredAgentId = args.resolveConfiguredAgentId
+    ?? ((agentId?: string) => (typeof agentId === 'string' && agentId.trim() ? agentId.trim() : undefined));
 
   const canStartInteractiveCli = !!args.stdinIsTTY && !!args.stdoutIsTTY;
   if (args.config.channels.cli?.enabled && canStartInteractiveCli) {
+    const cliDefaultAgent = resolveConfiguredAgentId(args.config.channels.cli.defaultAgent) ?? args.defaultAgentId;
     const enabledChannels: string[] = ['cli'];
     if (args.config.channels.web?.enabled) enabledChannels.push('web');
     if (args.config.channels.telegram?.enabled) enabledChannels.push('telegram');
 
     const cli = createCliChannel({
-      defaultAgent: args.config.channels.cli.defaultAgent ?? args.defaultAgentId,
+      defaultAgent: cliDefaultAgent,
       defaultUserId: 'cli',
       dashboard: args.dashboardCallbacks,
       version: '1.0.0',
@@ -159,7 +163,7 @@ export async function startBootstrapChannels(args: {
       onStatus: args.getRuntimeStatus,
     });
     await cli.start(createChannelDispatchHandler({
-      channelDefault: args.configRef.current.channels.cli?.defaultAgent,
+      channelDefault: cliDefaultAgent,
       prepareIncomingDispatch: args.prepareIncomingDispatch,
       dashboardCallbacks: args.dashboardCallbacks,
       runtime: args.runtime,
@@ -177,7 +181,7 @@ export async function startBootstrapChannels(args: {
     const tgConfig = args.configRef.current.channels.telegram;
     const botToken = args.resolveTelegramBotToken(args.configRef.current, args.secretStore);
     if (!tgConfig?.enabled || !botToken) return;
-    const telegramDefaultAgent = tgConfig.defaultAgent ?? args.defaultAgentId;
+    const telegramDefaultAgent = resolveConfiguredAgentId(tgConfig.defaultAgent) ?? args.defaultAgentId;
     const telegram = createTelegramChannel({
       botToken,
       allowedChatIds: tgConfig.allowedChatIds,
@@ -218,7 +222,7 @@ export async function startBootstrapChannels(args: {
       },
     });
     await telegram.start(createChannelDispatchHandler({
-      channelDefault: args.configRef.current.channels.telegram?.defaultAgent,
+      channelDefault: telegramDefaultAgent,
       prepareIncomingDispatch: args.prepareIncomingDispatch,
       dashboardCallbacks: args.dashboardCallbacks,
       runtime: args.runtime,
@@ -257,6 +261,7 @@ export async function startBootstrapChannels(args: {
   }
 
   if (args.config.channels.web?.enabled) {
+    const webDefaultAgent = resolveConfiguredAgentId(args.config.channels.web.defaultAgent) ?? args.defaultAgentId;
     if (args.webAuthStateRef.current.mode === 'bearer_required' && !args.webAuthStateRef.current.token) {
       args.webAuthStateRef.current = {
         ...args.webAuthStateRef.current,
@@ -309,7 +314,7 @@ export async function startBootstrapChannels(args: {
     const web = createWebChannel({
       port: args.config.channels.web.port,
       host: args.config.channels.web.host,
-      defaultAgent: args.config.channels.web.defaultAgent ?? args.defaultAgentId,
+      defaultAgent: webDefaultAgent,
       auth: args.webAuthStateRef.current,
       authToken: args.webAuthStateRef.current.token,
       allowedOrigins: args.config.channels.web.allowedOrigins,
@@ -324,7 +329,7 @@ export async function startBootstrapChannels(args: {
     args.toolExecutor.setCodingBackendService(args.codingBackendServiceRef.current);
     webChannel = web;
     await web.start(createChannelDispatchHandler({
-      channelDefault: args.configRef.current.channels.web?.defaultAgent,
+      channelDefault: webDefaultAgent,
       prepareIncomingDispatch: args.prepareIncomingDispatch,
       dashboardCallbacks: args.dashboardCallbacks,
       runtime: args.runtime,

@@ -62,10 +62,8 @@ export function describeResponseSource(value) {
   if (model) {
     labelParts.push(model);
   }
-  if (usedFallback) {
-    labelParts.push('fallback');
-  }
   const titleParts = [];
+  if (usedFallback) titleParts.push('Guardian retried with an alternate model.');
   if (notice) titleParts.push(notice);
   if (providerProfileName) titleParts.push(`Profile: ${providerProfileName}.`);
   if (model) titleParts.push(`Model: ${model}.`);

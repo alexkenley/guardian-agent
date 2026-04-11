@@ -4,7 +4,10 @@ import { createSecondBrainRoutineNotifier } from './routine-notifier.js';
 describe('createSecondBrainRoutineNotifier', () => {
   it('delivers routine outcomes to the requested channels', async () => {
     const cliChannel = { send: vi.fn(async () => undefined) };
-    const telegramChannel = { send: vi.fn(async () => undefined) };
+    const telegramChannel = {
+      send: vi.fn(async () => undefined),
+      getKnownChatIds: vi.fn(() => []),
+    };
     const webChannel = { send: vi.fn(async () => undefined) };
     const notifier = createSecondBrainRoutineNotifier({
       configRef: {
@@ -96,5 +99,46 @@ describe('createSecondBrainRoutineNotifier', () => {
       'Next: Open Briefs to review it.',
     ].join('\n\n'));
     expect(cliChannel.send).not.toHaveBeenCalled();
+  });
+
+  it('delivers telegram-only routine outcomes to known chats when no allowlist exists', async () => {
+    const telegramChannel = {
+      send: vi.fn(async () => undefined),
+      getKnownChatIds: vi.fn(() => [444]),
+    };
+    const notifier = createSecondBrainRoutineNotifier({
+      configRef: {
+        current: {
+          assistant: {
+            identity: { primaryUserId: 'owner' },
+          },
+          channels: {
+            telegram: {
+              allowedChatIds: [],
+            },
+          },
+        } as any,
+      },
+      getCliChannel: () => null,
+      getTelegramChannel: () => telegramChannel as any,
+      getWebChannel: () => null,
+    });
+
+    await notifier({
+      routineId: 'morning-brief',
+      channels: ['telegram'],
+      kind: 'brief',
+      title: 'Morning Brief',
+      summary: 'Your morning brief is ready.',
+      importance: 'useful',
+      followUpActions: ['open_brief'],
+      text: 'Your morning brief is ready.',
+    });
+
+    expect(telegramChannel.send).toHaveBeenCalledWith('444', [
+      'Morning Brief',
+      'Your morning brief is ready.',
+      'Next: Open Briefs to review it.',
+    ].join('\n\n'));
   });
 });

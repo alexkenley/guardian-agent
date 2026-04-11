@@ -1,4 +1,10 @@
 import { api } from '../api.js';
+import {
+  getApprovalUiState,
+  markApprovalUiError,
+  markApprovalUiProcessing,
+  markApprovalUiResolved,
+} from '../approval-ui-state.js';
 import { createStatusCard, updateStatusCard } from '../components/status-card.js';
 import { renderGuidancePanel, renderInfoButton, activateContextHelp, enhanceSectionHelp } from '../components/context-help.js';
 import { onSSE, offSSE } from '../app.js';
@@ -382,6 +388,45 @@ function resolveNetworkSummary(deviceData, baseline, threatState) {
   };
 }
 
+function createPendingApprovalsSection(approvalsPayload) {
+  const pendingApprovals = Array.isArray(approvalsPayload)
+    ? approvalsPayload.filter((approval) => approval?.status === 'pending')
+    : [];
+  const section = document.createElement('div');
+  section.className = 'table-container';
+  section.innerHTML = `
+    <div class="table-header">
+      <div class="section-heading">
+        <h3>Pending Approvals</h3>
+        ${renderInfoButton('Pending Approvals', {
+          whatItIs: 'This queue gathers the live tool approvals that are currently blocking work across Guardian surfaces.',
+          whatSeeing: 'You are seeing the pending request id, tool, risk, origin, creation time, and the decision controls that can clear each blocked action.',
+          whatCanDo: 'Approve or deny blocked tool actions here without digging through the Tools tab first.',
+          howLinks: 'System owns the active queue. Configuration > Tools still owns runtime routing, tool inventory, and recent tool jobs.',
+        })}
+      </div>
+    </div>
+    <table>
+      <thead><tr><th>Approval</th><th>Tool</th><th>Risk</th><th>Origin</th><th>Created</th><th>Decision</th></tr></thead>
+      <tbody>
+        ${pendingApprovals.length === 0
+          ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No pending tool approvals.</td></tr>'
+          : pendingApprovals.map((approval) => `
+              <tr>
+                <td title="${escAttr(approval.id || '')}">${esc(shortId(approval.id || ''))}</td>
+                <td>${esc(approval.toolName || 'unknown')}</td>
+                <td>${esc(approval.risk || 'unknown')}</td>
+                <td>${esc(approval.origin || '-')}</td>
+                <td>${esc(formatDateTime(approval.createdAt))}</td>
+                <td>${renderSystemApprovalActionsMarkup(approval)}</td>
+              </tr>
+            `).join('')}
+      </tbody>
+    </table>
+  `;
+  return section;
+}
+
 export async function renderSystem(container) {
   currentContainer = container;
   cards = {};
@@ -407,6 +452,7 @@ export async function renderSystem(container) {
       networkBaseline,
       networkThreats,
       config,
+      toolsState,
       routingTrace,
       assistantDispatchRunsPayload,
       scheduledTaskRunsPayload,
@@ -429,6 +475,7 @@ export async function renderSystem(container) {
       api.networkBaseline().catch(() => null),
       api.networkThreats({ limit: 20 }).catch(() => ({ activeAlertCount: 0 })),
       api.config().catch(() => null),
+      api.toolsState(80).catch(() => ({ approvals: [] })),
       api.routingTrace(buildRoutingTraceQueryParams(8)).catch(() => ({ entries: [] })),
       api.assistantRuns({ ...runtimeTimelineParams, kind: 'assistant_dispatch' }).catch(() => ({ runs: [] })),
       api.assistantRuns({ ...runtimeTimelineParams, kind: 'scheduled_task' }).catch(() => ({ runs: [] })),
@@ -475,9 +522,9 @@ export async function renderSystem(container) {
         title: 'Operations overview',
         compact: true,
         whatItIs: 'System is the cross-product operations overview for Guardian. It brings together runtime health, owner-surface status, and recent assistant activity without turning into a duplicate workflow page.',
-        whatSeeing: 'You are seeing the shared control-plane summary, linked status cards for the main operational surfaces, current assistant runtime activity, runtime execution detail for assistant and routine work, and the routing-trace inspector.',
+        whatSeeing: 'You are seeing the shared control-plane summary, the global pending-approval queue, linked status cards for the main operational surfaces, current assistant runtime activity, runtime execution detail for assistant and routine work, and the routing-trace inspector.',
         whatCanDo: 'Use it to confirm what is healthy, spot which owner surface needs attention next, and open the deeper page that actually owns the work.',
-        howLinks: 'System is not the alert queue, configuration editor, or workflow builder. Security owns incident attention, Configuration owns setup, Automations owns repeatable workflows and their run output, and System owns the broader assistant and routine execution view.',
+        howLinks: 'System is not the alert queue, configuration editor, or workflow builder. Security owns incident attention, Configuration owns setup and tool policy, Automations owns repeatable workflows and their run output, and System owns the broader assistant, approval, and routine execution view.',
       })}
     `;
 
@@ -593,6 +640,7 @@ export async function renderSystem(container) {
     `;
     summarySection.appendChild(summaryGrid);
     container.appendChild(summarySection);
+    container.appendChild(createPendingApprovalsSection(toolsState?.approvals));
 
     container.appendChild(createOperationalSurfacesSection({
       securitySummary,
@@ -625,6 +673,12 @@ export async function renderSystem(container) {
         whatSeeing: 'You are seeing separate recent run tables for normal assistant dispatches, scheduled tasks and Second Brain routine scans, and coding-session timeline entries.',
         whatCanDo: 'Use it to reconstruct non-automation execution, follow a routing-trace handoff into the matching run, and inspect the timeline events that explain pauses, approvals, and completions.',
         howLinks: 'Automations owns automation output and automation execution. System owns the broader assistant and routine runtime detail.',
+      },
+      'Pending Approvals': {
+        whatItIs: 'This section is the global queue of tool actions that are blocked on human approval across the supported operator surfaces.',
+        whatSeeing: 'You are seeing the live pending approval requests with their tool, risk, origin, creation time, and the decision controls that let you approve or deny them here.',
+        whatCanDo: 'Use it to clear blocked work quickly without drilling into Configuration first, then move to the owner surface if you need routing or job detail.',
+        howLinks: 'System owns the queue because it is an active cross-surface operational state. Configuration > Tools still owns routing, policy, and recent tool-job history.',
       },
       'Routing Trace': {
         whatItIs: 'This section is a compact inspector for the durable intent-routing trace log.',
@@ -741,7 +795,7 @@ function createRuntimeSection({ orchestratorSummary, jobsSummary, agents, assist
                 ? `${agent.provider}${agent.providerType ? ` (${agent.providerType})` : ''}`
                 : '-');
             const modelSummary = sessionResponseSource?.model
-              ? `${sessionResponseSource.model}${sessionResponseSource.usedFallback ? ' • fallback' : ''}`
+              ? `${sessionResponseSource.model}`
               : (agent?.providerModel
                 ? `${agent.providerModel}${agent.providerLocality ? ` • ${agent.providerLocality}` : ''}`
                 : '-');
@@ -1182,6 +1236,30 @@ function formatRoutingTraceDetail(entry) {
 }
 
 function bindSystemEvents(container) {
+  container.querySelectorAll('.system-tool-approve').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const approvalId = button.getAttribute('data-approval-id') || '';
+      const decision = button.getAttribute('data-decision') || '';
+      if (!approvalId || !decision) return;
+      try {
+        markApprovalUiProcessing(approvalId, decision);
+        await renderSystemPreserveScroll(container);
+        const result = await api.decideToolApproval({ approvalId, decision, actor: 'web-user' });
+        if (!result?.success) {
+          markApprovalUiError(approvalId, result?.message || 'Failed to update approval.');
+          alert(result?.message || 'Failed to update approval.');
+        } else {
+          markApprovalUiResolved(approvalId, decision, result?.displayMessage || result?.message || '');
+        }
+      } catch (err) {
+        markApprovalUiError(approvalId, err instanceof Error ? err.message : String(err));
+        alert(err instanceof Error ? err.message : String(err));
+      } finally {
+        void renderSystemPreserveScroll(container);
+      }
+    });
+  });
+
   container.querySelectorAll('[data-assistant-job-action]').forEach((button) => {
     button.addEventListener('click', async () => {
       const jobId = button.getAttribute('data-assistant-job-id') || '';
@@ -1346,6 +1424,36 @@ function formatDuration(durationMs) {
 function formatTime(timestamp) {
   if (!timestamp) return '-';
   return new Date(timestamp).toLocaleTimeString();
+}
+
+function formatDateTime(timestamp) {
+  if (!timestamp) return '-';
+  return new Date(timestamp).toLocaleString();
+}
+
+function shortId(id) {
+  return String(id || '').slice(0, 8);
+}
+
+function renderSystemApprovalActionsMarkup(approval) {
+  const uiState = getApprovalUiState(approval?.id);
+  if (uiState?.status === 'approved') {
+    return `<span class="badge badge-running">${esc(uiState.message || 'Approved')}</span>`;
+  }
+  if (uiState?.status === 'denied') {
+    return `<span class="badge badge-errored">${esc(uiState.message || 'Denied')}</span>`;
+  }
+  if (uiState?.status === 'processing') {
+    return `<span class="badge badge-warn">${esc(uiState.message || 'Processing...')}</span>`;
+  }
+  const errorMarkup = uiState?.status === 'error'
+    ? `<div class="code-approval-error">${esc(uiState.message || 'Approval update failed')}</div>`
+    : '';
+  return `
+    <button class="btn btn-secondary btn-sm system-tool-approve" type="button" data-approval-id="${escAttr(approval?.id || '')}" data-decision="approved">Approve</button>
+    <button class="btn btn-secondary btn-sm system-tool-approve" type="button" data-approval-id="${escAttr(approval?.id || '')}" data-decision="denied">Deny</button>
+    ${errorMarkup}
+  `;
 }
 
 function esc(str) {

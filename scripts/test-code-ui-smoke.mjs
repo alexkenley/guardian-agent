@@ -476,36 +476,6 @@ guardian:
       }, expectedWorkspaceRoot);
     }
 
-    async function waitForCodePageViewingWorkspace(expectedViewedWorkspaceRoot, expectedCurrentWorkspaceRoot) {
-      await page.waitForFunction(({ expectedViewedRoot, expectedCurrentRoot }) => {
-        const cards = Array.from(document.querySelectorAll('.code-session'));
-        const currentCard = cards.find((node) => (node.textContent || '').includes('CURRENT'));
-        const activeCard = document.querySelector('.code-session.is-active');
-        const activeText = activeCard?.textContent || '';
-        return (currentCard?.textContent || '').includes(expectedCurrentRoot)
-          && activeText.includes(expectedViewedRoot)
-          && activeText.includes('VIEWING');
-      }, {
-        expectedViewedRoot: expectedViewedWorkspaceRoot,
-        expectedCurrentRoot: expectedCurrentWorkspaceRoot,
-      });
-    }
-
-    async function attachWorkspaceFromCodePanel(expectedWorkspaceRoot) {
-      const card = page.locator('.code-session').filter({ hasText: expectedWorkspaceRoot });
-      await card.locator('[data-code-session-attach]').click();
-    }
-
-    async function toggleWorkspaceReferenceFromCodePanel(expectedWorkspaceRoot) {
-      const card = page.locator('.code-session').filter({ hasText: expectedWorkspaceRoot });
-      await card.locator('[data-code-session-reference]').click();
-    }
-
-    async function toggleWorkspaceTargetFromCodePanel(expectedWorkspaceRoot) {
-      const card = page.locator('.code-session').filter({ hasText: expectedWorkspaceRoot });
-      await card.locator('[data-code-session-target]').click();
-    }
-
     async function attachWorkspaceFromExternalSurface(expectedWorkspaceRoot, {
       channel = 'telegram',
       surfaceId = 'telegram-user',
@@ -650,11 +620,8 @@ guardian:
 
     await openCodePanel('sessions');
     await page.locator('.code-session').filter({ hasText: workspaceRoot }).click();
-    await waitForCodePageViewingWorkspace(workspaceRoot, reviewedWorkspaceRoot);
-    await waitForGuardianChatFocusByWorkspace(reviewedWorkspaceRoot);
-    await attachWorkspaceFromCodePanel(workspaceRoot);
-    await waitForGuardianChatFocusByWorkspace(workspaceRoot);
     await waitForCodePageFocusByWorkspace(workspaceRoot);
+    await waitForGuardianChatFocusByWorkspace(workspaceRoot);
     await openCodePanel('activity');
     await page.waitForFunction(() => {
       return Array.from(document.querySelectorAll('.code-chat__notice')).some((node) => (node.textContent || '').includes('Native host malware scanning reported a workspace detection'));
@@ -672,27 +639,25 @@ guardian:
     await page.locator('.code-session').filter({ hasText: workspaceRoot }).click();
     await waitForCodePageFocusByWorkspace(workspaceRoot);
     await waitForGuardianChatFocusByWorkspace(workspaceRoot);
-    await toggleWorkspaceReferenceFromCodePanel(reviewedWorkspaceRoot);
-    await page.waitForFunction((expectedRoot) => {
-      return Array.from(document.querySelectorAll('.code-session')).some((node) => {
-        const text = node.textContent || '';
-        return text.includes(expectedRoot) && text.includes('REFERENCED');
-      });
-    }, reviewedWorkspaceRoot);
-    await waitForGuardianChatFocusByWorkspace(workspaceRoot);
     await page.locator('.code-session').filter({ hasText: reviewedWorkspaceRoot }).click();
-    await waitForCodePageViewingWorkspace(reviewedWorkspaceRoot, workspaceRoot);
-    await waitForGuardianChatFocusByWorkspace(workspaceRoot);
+    await waitForCodePageFocusByWorkspace(reviewedWorkspaceRoot);
+    await waitForGuardianChatFocusByWorkspace(reviewedWorkspaceRoot);
     await page.locator('.code-session').filter({ hasText: workspaceRoot }).click();
     await waitForCodePageFocusByWorkspace(workspaceRoot);
     await waitForGuardianChatFocusByWorkspace(workspaceRoot);
-    await toggleWorkspaceTargetFromCodePanel(reviewedWorkspaceRoot);
-    await page.waitForFunction((expectedRoot) => {
-      return Array.from(document.querySelectorAll('.code-session')).some((node) => {
+    await page.waitForFunction(() => {
+      return Array.from(document.querySelectorAll('.code-session')).every((node) => {
         const text = node.textContent || '';
-        return text.includes(expectedRoot) && text.includes('TARGETED');
+        return !text.includes('Attach Chat')
+          && !text.includes('Add Reference')
+          && !text.includes('Remove Reference')
+          && !text.includes('Pin Target')
+          && !text.includes('Clear Target')
+          && !text.includes('Open In Chat')
+          && !text.includes('Attach + Open Chat')
+          && !text.includes('Show Current Chat Focus');
       });
-    }, reviewedWorkspaceRoot);
+    });
 
     await page.goto(`${baseUrl}/#/`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#chat-panel');
@@ -701,11 +666,6 @@ guardian:
       Array.isArray(dashboardFocus?.sessions)
       && dashboardFocus.sessions.some((session) => session.id === dashboardFocus.currentSessionId && String(session.workspaceRoot || '').includes(workspaceRoot)),
       `Expected Guardian chat focus to persist after leaving the coding workspace route: ${JSON.stringify(dashboardFocus)}`,
-    );
-    assert.ok(
-      Array.isArray(dashboardFocus?.sessions)
-      && dashboardFocus.sessions.some((session) => session.id === dashboardFocus.targetSessionId && String(session.workspaceRoot || '').includes(reviewedWorkspaceRoot)),
-      `Expected Guardian chat to retain the explicit target workspace: ${JSON.stringify(dashboardFocus)}`,
     );
     assert.equal(await page.locator('#chat-panel #chat-panel-code-session-strip').count(), 0, 'Guardian chat should not render a coding workspace row on normal routes');
     await waitForGuardianChatFocusByWorkspace(workspaceRoot);
@@ -718,13 +678,6 @@ guardian:
       return (activeMeta?.textContent || '').includes(expected);
     }, workspaceRoot);
     await waitForGuardianChatFocusByWorkspace(workspaceRoot);
-    await toggleWorkspaceTargetFromCodePanel(reviewedWorkspaceRoot);
-    await page.waitForFunction((expectedRoot) => {
-      return Array.from(document.querySelectorAll('.code-session')).every((node) => {
-        const text = node.textContent || '';
-        return !text.includes(expectedRoot) || !text.includes('TARGETED');
-      });
-    }, reviewedWorkspaceRoot);
 
     // Icon rail panel switching — switch to explorer
     await page.locator('[data-code-panel-switch="explorer"]').click();

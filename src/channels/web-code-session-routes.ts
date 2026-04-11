@@ -96,17 +96,31 @@ export async function handleWebCodeSessionRoutes(
       return true;
     }
     const principal = context.resolveRequestPrincipal(req);
-    const result = dashboard.onCodeSessionCreate({
-      userId: parsed.userId || 'web-user',
-      principalId: principal.principalId,
-      channel: parsed.channel || 'web',
-      surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
-      title: parsed.title!,
-      workspaceRoot: parsed.workspaceRoot!,
-      agentId: trimOptionalString(parsed.agentId) ?? null,
-      attach: parsed.attach !== false,
-    });
-    sendJSON(res, 200, result);
+    try {
+      const result = dashboard.onCodeSessionCreate({
+        userId: parsed.userId || 'web-user',
+        principalId: principal.principalId,
+        channel: parsed.channel || 'web',
+        surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+        title: parsed.title!,
+        workspaceRoot: parsed.workspaceRoot!,
+        agentId: trimOptionalString(parsed.agentId) ?? null,
+        attach: parsed.attach !== false,
+      });
+      sendJSON(res, 200, result);
+    } catch (err) {
+      const requestError = context.getRequestErrorDetails(err);
+      if (requestError) {
+        sendJSON(res, requestError.statusCode, {
+          error: requestError.error,
+          ...(requestError.errorCode ? { errorCode: requestError.errorCode } : {}),
+        });
+        return true;
+      }
+      context.logInternalError('Code session create failed', err);
+      const detail = err instanceof Error ? err.message : String(err);
+      sendJSON(res, 500, { error: `Dispatch error: ${detail}` });
+    }
     return true;
   }
 

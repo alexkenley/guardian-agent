@@ -110,6 +110,7 @@ describe('createProviderConfigHelpers', () => {
     expect(helpers.resolveCredentialForProviderInput('llm.primary.local', undefined)).toBe('resolved-secret');
     expect(helpers.resolveCredentialForProviderInput('llm.primary.local', '  direct-key  ')).toBe('direct-key');
     expect(helpers.getDefaultModelForProviderType('OpenAI')).toBe('gpt-4o');
+    expect(helpers.getDefaultModelForProviderType('xai')).toBe('grok-4-1-fast-reasoning');
     expect(helpers.existingProfilesById({
       awsProfiles: [
         { id: 'one', region: 'us-east-1' },

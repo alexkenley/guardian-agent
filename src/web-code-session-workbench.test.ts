@@ -12,13 +12,13 @@ describe('code session workbench helpers', () => {
     expect(isViewingSession(null, 'session-a')).toBe(false);
   });
 
-  it('preserves a viewed session across refresh when it still exists', () => {
+  it('follows the current attached session across refresh by default', () => {
     expect(resolveWorkbenchActiveSessionId({
       sessionIds: ['session-a', 'session-b'],
       previousActiveSessionId: 'session-b',
       previousAttachedSessionId: 'session-a',
       serverCurrentSessionId: 'session-a',
-    })).toBe('session-b');
+    })).toBe('session-a');
   });
 
   it('falls back to the server current session when not viewing another session', () => {

@@ -257,4 +257,56 @@ describe('OpenAIProvider compatibility', () => {
     });
     expect(create.mock.calls[1]?.[0]).not.toHaveProperty('max_tokens');
   });
+
+  it('surfaces provider-specific model-not-found guidance for xAI', async () => {
+    const provider = new OpenAIProvider({
+      provider: 'xai',
+      model: 'grok-2-latest',
+      apiKey: 'xai-test',
+      baseUrl: 'https://api.x.ai/v1',
+    }, 'xai');
+
+    const create = vi.fn().mockRejectedValue(
+      Object.assign(new Error('400 Model not found: grok-2-latest'), { status: 400 }),
+    );
+
+    (provider as any).client = {
+      chat: {
+        completions: {
+          create,
+        },
+      },
+      models: {
+        list: vi.fn(),
+      },
+    };
+
+    await expect(
+      provider.chat([{ role: 'user', content: 'Hello?' }]),
+    ).rejects.toThrow('Model "grok-2-latest" is not available on xAI (Grok)');
+  });
+
+  it('throws provider-specific model listing errors instead of silently returning an empty list', async () => {
+    const provider = new OpenAIProvider({
+      provider: 'xai',
+      model: 'grok-4',
+      apiKey: 'xai-test',
+      baseUrl: 'https://api.x.ai/v1',
+    }, 'xai');
+
+    (provider as any).client = {
+      chat: {
+        completions: {
+          create: vi.fn(),
+        },
+      },
+      models: {
+        list: vi.fn().mockRejectedValue(
+          Object.assign(new Error('Unauthorized'), { status: 401 }),
+        ),
+      },
+    };
+
+    await expect(provider.listModels()).rejects.toThrow('xAI (Grok) API key is invalid or expired');
+  });
 });

@@ -3,14 +3,10 @@
  */
 
 import { api } from '../api.js';
-import {
-  getApprovalUiState,
-  markApprovalUiError,
-  markApprovalUiProcessing,
-  markApprovalUiResolved,
-} from '../approval-ui-state.js';
 import { activateContextHelp, enhanceSectionHelp, renderGuidancePanel } from '../components/context-help.js';
 import { createTabs } from '../components/tabs.js';
+import { canTestProviderConnection } from '../provider-editor-state.js';
+import { sortConfiguredProviders } from '../provider-order.js';
 import { applyInputTooltips } from '../tooltip.js';
 import {
   themes,
@@ -33,6 +29,7 @@ let sharedProviders = null;
 let sharedSetupStatus = null;
 let sharedAuthStatus = null;
 let sharedProviderTypes = null;
+const PROVIDER_PROFILES_CHANGED_EVENT = 'guardian:providers-changed';
 const configUiState = {
   selectedProviderProfiles: {
     local: null,
@@ -126,12 +123,6 @@ const CONFIG_HELP = {
       whatSeeing: 'You are seeing individual tool names, categories, risk levels, enabled state, and any routing or execution overrides applied at the tool level.',
       whatCanDo: 'Inspect exactly what a tool can do and override category defaults when one tool needs tighter or looser handling than its peers.',
       howLinks: 'This is the last configuration layer before a tool is actually invoked by chat, automations, or manual runs.',
-    },
-    'Pending Approvals': {
-      whatItIs: 'This section is the live queue of tool actions that reached a human-approval checkpoint.',
-      whatSeeing: 'You are seeing approval requests with origin channel, requested action, risk context, and the decision controls to allow or deny them.',
-      whatCanDo: 'Act as the human control point for risky operations that the runtime refused to execute autonomously.',
-      howLinks: 'It is where policy, risk scoring, and operator judgment meet before a blocked action can continue.',
     },
     'Recent Tool Jobs': {
       whatItIs: 'This section is the recent execution log for tool runs that were attempted by users, agents, or automations.',
@@ -287,6 +278,13 @@ export async function updateConfig() {
   await renderConfig(currentContainer, activeTab ? { tab: activeTab } : {});
 }
 
+function notifyProviderProfilesChanged() {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') {
+    return;
+  }
+  window.dispatchEvent(new CustomEvent(PROVIDER_PROFILES_CHANGED_EVENT));
+}
+
 function normalizeConfigTab(tab) {
   if (!tab) return 'ai-providers';
   if (tab === 'providers' || tab === 'ai-search') return 'ai-providers';
@@ -368,8 +366,8 @@ function renderToolsOnlyTab(panel) {
   panel.insertAdjacentHTML('beforeend', renderGuidancePanel({
     kicker: 'Tools',
     compact: true,
-    whatItIs: 'This tab focuses on the live tool runtime, tool catalog, approvals, and recent execution activity.',
-    whatSeeing: 'You are seeing runtime health, tool categories, tool routing, pending approvals, and recent jobs.',
+    whatItIs: 'This tab focuses on the live tool runtime, tool catalog, routing, and recent execution activity.',
+    whatSeeing: 'You are seeing runtime health, tool categories, tool routing, approval counts, and recent jobs.',
     whatCanDo: 'Inspect what tools exist, how they are routed, and what tool actions are currently waiting or failing.',
     howLinks: 'This is the operational control plane for tools themselves, separate from the deeper policy configuration.',
   }));
@@ -480,9 +478,9 @@ function renderToolsPolicyTab(panel) {
   panel.insertAdjacentHTML('beforeend', renderGuidancePanel({
     kicker: 'Tools & Policy',
     compact: true,
-    whatItIs: 'This tab controls the tool runtime, approvals, sandbox policy, and allowlists.',
-    whatSeeing: 'You are seeing runtime state, routing controls, approval queues, and policy allowlists.',
-    whatCanDo: 'Tune tool behavior, approve actions, and manage the constraints that govern tool execution.',
+    whatItIs: 'This tab controls the tool runtime, routing, sandbox policy, and allowlists.',
+    whatSeeing: 'You are seeing runtime state, routing controls, approval counts, and policy allowlists.',
+    whatCanDo: 'Tune tool behavior and manage the constraints that govern tool execution.',
     howLinks: 'These settings shape what operational pages and automations are allowed to do when they invoke tools.',
   }));
 
@@ -849,7 +847,7 @@ function createProviderPanel(config, providers, panel) {
     if (normalizedType === 'mistral') return 'mistral-large-latest';
     if (normalizedType === 'deepseek') return 'deepseek-chat';
     if (normalizedType === 'together') return 'meta-llama/Llama-3.3-70B-Instruct-Turbo';
-    if (normalizedType === 'xai') return 'grok-2-latest';
+    if (normalizedType === 'xai') return 'grok-4-1-fast-reasoning';
     if (normalizedType === 'google') return 'gemini-2.0-flash';
     return side === 'local' ? 'local-model' : 'provider-model';
   }
@@ -882,6 +880,7 @@ function createProviderPanel(config, providers, panel) {
     const modelSelectEl = section.querySelector(`#${prefix}-model-select`);
     const urlEl = section.querySelector(`#${prefix}-url`);
     const statusEl = section.querySelector(`#${prefix}-status`);
+    const testBtnEl = section.querySelector(`#${prefix}-test`);
     const typeEl = section.querySelector(`#${prefix}-type`);
     const deleteBtnEl = section.querySelector(`#${prefix}-delete`);
     const keyEl = isLocal ? null : section.querySelector(`#${prefix}-key`);
@@ -905,6 +904,15 @@ function createProviderPanel(config, providers, panel) {
       : null;
     const shouldOpenNewDraft = activeProviderSelection?.side === side && activeProviderSelection.mode === 'new';
     let liveModelsRequestId = 0;
+
+    function syncTestButtonState() {
+      if (!testBtnEl) return;
+      const canTest = canTestProviderConnection(selectedProfile, nameEl?.value);
+      testBtnEl.disabled = !canTest;
+      testBtnEl.title = canTest
+        ? 'Checks whether the saved provider is reachable and refreshes live model data when supported.'
+        : 'Save this provider first so it exists in the runtime before testing the connection.';
+    }
 
     // Model accessor — reads from whichever element is visible
     const modelEl = {
@@ -1179,6 +1187,7 @@ function createProviderPanel(config, providers, panel) {
               return;
             }
             await updateConfig();
+            notifyProviderProfilesChanged();
           } catch (err) {
             input.checked = !nextEnabled;
             alert(err instanceof Error ? err.message : String(err));
@@ -1277,6 +1286,7 @@ function createProviderPanel(config, providers, panel) {
           : isCloud
             ? 'Creating a new Ollama Cloud provider. Set the provider name, model, and credential so Guardian can use the managed-cloud lane explicitly. Common patterns are one general profile plus optional direct, tool-loop, and coding profiles.'
             : 'Creating a new frontier provider. All supported frontier provider families are listed in the Provider Type dropdown.';
+        syncTestButtonState();
         refreshSecretNote(pt);
         void refreshLiveModels({ currentModel: defaultModel });
         return;
@@ -1312,6 +1322,7 @@ function createProviderPanel(config, providers, panel) {
       setAdvancedValues(entry, entry.provider || '');
       configUiState.selectedProviderProfiles[side] = name;
       activeNoteEl.textContent = `Editing ${name}. Provider type is shown explicitly in the dropdown; use New ${getSideLabel(side)} Provider to start a fresh one.`;
+      syncTestButtonState();
       refreshSecretNote(entry.provider || '');
       void refreshLiveModels({ currentModel: entry.model || '' });
     }
@@ -1360,6 +1371,7 @@ function createProviderPanel(config, providers, panel) {
           configUiState.selectedProviderProfiles[side] = null;
           configUiState.providerEditor = { side: null, mode: null, name: null };
           await updateConfig();
+          notifyProviderProfilesChanged();
         }
       } catch (err) {
         statusEl.textContent = err instanceof Error ? err.message : String(err);
@@ -1424,8 +1436,13 @@ function createProviderPanel(config, providers, panel) {
       void refreshLiveModels({ currentModel: modelEl.value.trim() });
     });
 
-    section.querySelector(`#${prefix}-test`).addEventListener('click', async () => {
+    testBtnEl.addEventListener('click', async () => {
       const providerName = nameEl.value.trim();
+      if (!canTestProviderConnection(selectedProfile, providerName)) {
+        statusEl.textContent = 'Save this provider first so it exists in the runtime before testing the connection.';
+        statusEl.style.color = 'var(--warning)';
+        return;
+      }
       if (!providerName) { statusEl.textContent = 'Set provider name first.'; statusEl.style.color = 'var(--warning)'; return; }
       statusEl.textContent = `Testing ${providerName}...`;
       statusEl.style.color = 'var(--text-muted)';
@@ -1523,8 +1540,9 @@ function createProviderPanel(config, providers, panel) {
             .filter((candidateSide) => candidateSide !== side)
             .forEach((candidateSide) => {
               configUiState.selectedProviderProfiles[candidateSide] = null;
-            });
+          });
           await updateConfig();
+          notifyProviderProfilesChanged();
         }
       } catch (err) { statusEl.textContent = err instanceof Error ? err.message : String(err); statusEl.style.color = 'var(--error)'; }
     });
@@ -1861,7 +1879,7 @@ function createProviderStatusTable(config, providers, panel) {
   const preferredLocal = getPreferredProviderNameForBucket(preferredProviders, 'local', providerMap);
   const preferredManagedCloud = getPreferredProviderNameForBucket(preferredProviders, 'managedCloud', providerMap);
   const preferredFrontier = getPreferredProviderNameForBucket(preferredProviders, 'frontier', providerMap);
-  const rows = providerEntries.map(([name, cfg]) => {
+  const rows = sortConfiguredProviders(providerEntries.map(([name, cfg]) => {
     const live = providers.find(p => p.name === name);
     const enabled = isProviderConfigEnabled(cfg);
     const connected = enabled ? (live ? (live.connected !== false) : false) : false;
@@ -1887,8 +1905,14 @@ function createProviderStatusTable(config, providers, panel) {
       : isPreferredBucket
       ? '<span class="config-provider-current" title="' + escAttr('Preferred provider when Guardian routes work to the ' + preferredBucketLabel.toLowerCase() + ' tier.') + '">Current ' + preferredBucketLabel.toLowerCase() + ' default</span>'
       : '<button class="btn btn-secondary btn-sm set-preferred-provider-btn" data-provider="' + esc(name) + '" data-bucket="' + esc(preferredBucket) + '" title="' + escAttr('Set the preferred provider used when Guardian routes work to the ' + preferredBucketLabel.toLowerCase() + ' tier.') + '">Set ' + preferredBucketLabel + ' Default</button>';
-    return '<tr><td><strong>' + esc(name) + '</strong>' + defaultBadges + '</td><td>' + esc(cfg.provider) + '</td><td>' + esc(getProviderTierLabel(tier)) + '</td><td>' + esc(cfg.model) + '</td><td>' + esc(locality) + '</td><td>' + statusBadge + '</td><td>' + esc(modelList) + '</td><td class="config-provider-actions-cell"><div class="config-provider-actions">' + preferredActionBtn + '</div></td></tr>';
-  }).join('');
+    return {
+      name,
+      provider: cfg.provider,
+      locality,
+      tier,
+      markup: '<tr><td><strong>' + esc(name) + '</strong>' + defaultBadges + '</td><td>' + esc(cfg.provider) + '</td><td>' + esc(getProviderTierLabel(tier)) + '</td><td>' + esc(cfg.model) + '</td><td>' + esc(locality) + '</td><td>' + statusBadge + '</td><td>' + esc(modelList) + '</td><td class="config-provider-actions-cell"><div class="config-provider-actions">' + preferredActionBtn + '</div></td></tr>',
+    };
+  })).map((entry) => entry.markup).join('');
 
   section.innerHTML = `
     <div class="table-header"><h3>Configured Providers</h3></div>
@@ -2165,7 +2189,7 @@ async function renderToolsTab(panel) {
         <div class="status-card warning">
           <div class="card-title">Pending Tool Approvals</div>
           <div class="card-value">${approvals.filter(a => a.status === 'pending').length}</div>
-          <div class="card-subtitle">Global queue across channels</div>
+          <div class="card-subtitle">Global queue in System</div>
         </div>
         <div class="status-card accent">
           <div class="card-title">Recent Jobs</div>
@@ -2251,29 +2275,6 @@ async function renderToolsTab(panel) {
             ${tools.length === 0
               ? '<tr><td colspan="4">No tools registered.</td></tr>'
               : tools.map(tool => { const tv = effectiveRoute(tool.name, tool.category); return '<tr><td>' + esc(tool.name) + '</td><td><span class="badge ' + riskClass(tool.risk) + '">' + esc(tool.risk) + '</span></td><td><select class="provider-route-select" data-route-key="' + escAttr(tool.name) + '" data-route-scope="tool" data-tool-category="' + escAttr(tool.category || '') + '"><option value="local"' + (tv === 'local' ? ' selected' : '') + '>Local</option><option value="external"' + (tv === 'external' ? ' selected' : '') + '>External</option></select></td><td>' + esc(tool.description) + '</td></tr>'; }).join('')}
-          </tbody>
-        </table>
-      </div>
-
-      <div class="table-container">
-        <div class="table-header"><h3>Pending Approvals</h3></div>
-        <table>
-          <thead><tr><th>Approval</th><th>Tool</th><th>Risk</th><th>Origin</th><th>Created</th><th>Decision</th></tr></thead>
-          <tbody>
-            ${approvals.length === 0
-              ? '<tr><td colspan="6">No approvals.</td></tr>'
-              : approvals.map(approval => `
-                <tr>
-                  <td title="${esc(approval.id)}">${esc(shortId(approval.id))}</td>
-                  <td>${esc(approval.toolName)}</td>
-                  <td>${esc(approval.risk)}</td>
-                  <td>${esc(approval.origin)}</td>
-                  <td>${esc(formatDate(approval.createdAt))}</td>
-                  <td>
-                    ${renderConfigApprovalActionsMarkup(approval)}
-                  </td>
-                </tr>
-              `).join('')}
           </tbody>
         </table>
       </div>
@@ -2388,60 +2389,12 @@ async function renderToolsTab(panel) {
       });
     });
 
-    panel.querySelectorAll('.tool-approve').forEach(button => {
-      button.addEventListener('click', async () => {
-        const approvalId = button.getAttribute('data-approval-id');
-        const decision = button.getAttribute('data-decision');
-        if (!approvalId || !decision) return;
-        try {
-          markApprovalUiProcessing(approvalId, decision);
-          await renderToolsTab(panel);
-          const result = await api.decideToolApproval({ approvalId, decision, actor: 'web-user' });
-          if (!result.success) {
-            markApprovalUiError(approvalId, result.message || 'Failed to update approval.');
-            alert(result.message || 'Failed to update approval.');
-          } else {
-            markApprovalUiResolved(approvalId, decision);
-          }
-          await renderToolsTab(panel);
-        } catch (err) {
-          markApprovalUiError(approvalId, err.message || 'Failed to update approval.');
-          alert(err.message || 'Failed to update approval.');
-          await renderToolsTab(panel);
-        }
-      });
-    });
-
     applyInputTooltips(panel);
     enhanceSectionHelp(panel, CONFIG_HELP.toolsPolicy, createGenericHelpFactory('Configuration Tools & Policy'));
     activateContextHelp(panel);
   } catch (err) {
     panel.innerHTML = `<div class="loading">Error: ${esc(err.message || String(err))}</div>`;
   }
-}
-
-function renderConfigApprovalActionsMarkup(approval) {
-  if (approval.status !== 'pending') {
-    return `<span class="badge ${approval.status === 'approved' ? 'badge-running' : 'badge-errored'}">${esc(approval.status)}</span>`;
-  }
-  const uiState = getApprovalUiState(approval.id);
-  if (uiState?.status === 'approved') {
-    return `<span class="badge badge-running">${esc(uiState.message || 'Approved')}</span>`;
-  }
-  if (uiState?.status === 'denied') {
-    return `<span class="badge badge-errored">${esc(uiState.message || 'Denied')}</span>`;
-  }
-  if (uiState?.status === 'processing') {
-    return `<span class="badge badge-warn">${esc(uiState.message || 'Processing…')}</span>`;
-  }
-  const errorMarkup = uiState?.status === 'error'
-    ? `<div class="code-approval-error">${esc(uiState.message || 'Approval update failed')}</div>`
-    : '';
-  return `
-    <button class="btn btn-secondary tool-approve" data-approval-id="${escAttr(approval.id)}" data-decision="approved">Approve</button>
-    <button class="btn btn-secondary tool-approve" data-approval-id="${escAttr(approval.id)}" data-decision="denied">Deny</button>
-    ${errorMarkup}
-  `;
 }
 
 // ─── Policy Tab (Interactive Allowlist Editor) ───────────

@@ -206,4 +206,54 @@ describe('startBootstrapChannels', () => {
     expect(result.webChannel).toBe(webChannel);
     expect(args.channels.at(-1)?.name).toBe('web');
   });
+
+  it('normalizes reserved channel default aliases before wiring the web channel', async () => {
+    const config = createConfig();
+    config.channels.cli = { enabled: false } as never;
+    config.channels.telegram = { enabled: false } as never;
+    config.channels.web = {
+      enabled: true,
+      host: '127.0.0.1',
+      port: 3000,
+      defaultAgent: 'external',
+    } as never;
+
+    let startHandler: ((msg: { content: string; channel: string }) => Promise<{ content: string; metadata?: Record<string, unknown> }>) | null = null;
+    const webChannel = {
+      start: vi.fn(async (handler) => {
+        startHandler = handler;
+      }),
+      stop: vi.fn(async () => {}),
+      send: vi.fn(async () => {}),
+      setAuthConfig: vi.fn(),
+      emitDashboardInvalidation: vi.fn(),
+      getCodingBackendTerminalControl: vi.fn(() => ({}) as never),
+    };
+    const createWebChannel = vi.fn(() => webChannel);
+    const prepareIncomingDispatch = vi.fn(async (_channelDefault, msg) => ({
+      requestId: 'req-2',
+      decision: { agentId: 'prepared-agent', confidence: 'high', reason: 'prepared' },
+      gateway: null,
+      routedMessage: msg,
+    }));
+
+    const args = createBaseArgs({
+      config,
+      configRef: { current: config },
+      createWebChannel,
+      prepareIncomingDispatch,
+      resolveConfiguredAgentId: (agentId?: string) => agentId === 'external' ? undefined : agentId,
+    });
+
+    await startBootstrapChannels(args);
+    await startHandler?.({ content: 'hello', channel: 'web' });
+
+    expect(createWebChannel).toHaveBeenCalledWith(expect.objectContaining({
+      defaultAgent: 'default-agent',
+    }));
+    expect(prepareIncomingDispatch).toHaveBeenCalledWith('default-agent', expect.objectContaining({
+      content: 'hello',
+      channel: 'web',
+    }));
+  });
 });

@@ -827,3 +827,107 @@ export function clearApprovalIdFromPendingAction(
     },
   }, nowMs);
 }
+
+function normalizeApprovalIds(ids: readonly string[] | undefined): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const rawId of ids ?? []) {
+    const approvalId = rawId.trim();
+    if (!approvalId || seen.has(approvalId)) continue;
+    seen.add(approvalId);
+    normalized.push(approvalId);
+  }
+  return normalized;
+}
+
+function buildApprovalSummaryMap(
+  summaries: readonly PendingActionApprovalSummary[] | undefined,
+): Map<string, PendingActionApprovalSummary> {
+  const map = new Map<string, PendingActionApprovalSummary>();
+  for (const summary of summaries ?? []) {
+    const approvalId = summary.id.trim();
+    if (!approvalId) continue;
+    map.set(approvalId, {
+      id: approvalId,
+      toolName: summary.toolName,
+      argsPreview: summary.argsPreview,
+      ...(summary.actionLabel ? { actionLabel: summary.actionLabel } : {}),
+    });
+  }
+  return map;
+}
+
+function approvalSummariesEqual(
+  left: readonly PendingActionApprovalSummary[] | undefined,
+  right: readonly PendingActionApprovalSummary[] | undefined,
+): boolean {
+  const normalizedLeft = left ?? [];
+  const normalizedRight = right ?? [];
+  if (normalizedLeft.length !== normalizedRight.length) return false;
+  return normalizedLeft.every((summary, index) => {
+    const other = normalizedRight[index];
+    return other
+      && summary.id === other.id
+      && summary.toolName === other.toolName
+      && summary.argsPreview === other.argsPreview
+      && (summary.actionLabel ?? '') === (other.actionLabel ?? '');
+  });
+}
+
+export function reconcilePendingApprovalAction(
+  store: PendingActionStore,
+  pendingAction: PendingActionRecord | null | undefined,
+  input: {
+    liveApprovalIds: readonly string[];
+    liveApprovalSummaries?: ReadonlyMap<string, PendingActionApprovalSummary | {
+      toolName: string;
+      argsPreview: string;
+      actionLabel?: string;
+    }>;
+    nowMs?: number;
+  },
+): PendingActionRecord | null {
+  if (!pendingAction || !isPendingActionActive(pendingAction.status) || pendingAction.blocker.kind !== 'approval') {
+    return pendingAction ?? null;
+  }
+
+  const nowMs = input.nowMs ?? Date.now();
+  const currentApprovalIds = normalizeApprovalIds(pendingAction.blocker.approvalIds);
+  if (currentApprovalIds.length === 0) {
+    return store.complete(pendingAction.id, nowMs);
+  }
+
+  const liveApprovalIds = normalizeApprovalIds(input.liveApprovalIds);
+  const liveApprovalSet = new Set(liveApprovalIds);
+  const remainingApprovalIds = currentApprovalIds.filter((approvalId) => liveApprovalSet.has(approvalId));
+  if (remainingApprovalIds.length === 0) {
+    return store.complete(pendingAction.id, nowMs);
+  }
+
+  const currentSummaries = buildApprovalSummaryMap(pendingAction.blocker.approvalSummaries);
+  const nextSummaries = remainingApprovalIds.map((approvalId) => {
+    const liveSummary = input.liveApprovalSummaries?.get(approvalId);
+    const currentSummary = currentSummaries.get(approvalId);
+    return {
+      id: approvalId,
+      toolName: liveSummary?.toolName ?? currentSummary?.toolName ?? 'unknown',
+      argsPreview: liveSummary?.argsPreview ?? currentSummary?.argsPreview ?? '',
+      actionLabel: liveSummary?.actionLabel ?? currentSummary?.actionLabel ?? '',
+    };
+  });
+  const approvalIdsChanged = remainingApprovalIds.length !== currentApprovalIds.length
+    || remainingApprovalIds.some((approvalId, index) => approvalId !== currentApprovalIds[index]);
+  const summariesChanged = approvalIdsChanged
+    || !approvalSummariesEqual(pendingAction.blocker.approvalSummaries, nextSummaries);
+  if (!approvalIdsChanged && !summariesChanged) {
+    return pendingAction;
+  }
+
+  return store.update(pendingAction.id, {
+    blocker: {
+      ...pendingAction.blocker,
+      approvalIds: remainingApprovalIds,
+      approvalSummaries: nextSummaries,
+    },
+  }, nowMs);
+}

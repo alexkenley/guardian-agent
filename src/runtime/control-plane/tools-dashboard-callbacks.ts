@@ -3,7 +3,7 @@ import type { BrowserConfig, GuardianAgentConfig } from '../../config/types.js';
 import type { CodeSessionStore } from '../code-sessions.js';
 import type { IdentityService } from '../identity.js';
 import type { PendingActionStore } from '../pending-actions.js';
-import { toPendingActionClientMetadata } from '../pending-actions.js';
+import { reconcilePendingApprovalAction, toPendingActionClientMetadata } from '../pending-actions.js';
 import type { SkillRegistry } from '../../skills/registry.js';
 import { getProviderLocality } from '../../llm/provider-metadata.js';
 import type { ToolExecutor } from '../../tools/executor.js';
@@ -110,8 +110,19 @@ export function createToolsDashboardCallbacks(
         channel,
         surfaceId,
       });
+      const liveApprovalIds = options.toolExecutor.listPendingApprovalIdsForUser(canonicalUserId, channel, {
+        includeUnscoped: channel === 'web',
+      });
+      const reconciledPendingAction = reconcilePendingApprovalAction(
+        options.pendingActionStore,
+        pendingAction,
+        {
+          liveApprovalIds,
+          liveApprovalSummaries: options.toolExecutor.getApprovalSummaries(liveApprovalIds),
+        },
+      );
       return {
-        pendingAction: toPendingActionClientMetadata(pendingAction) ?? null,
+        pendingAction: toPendingActionClientMetadata(reconciledPendingAction) ?? null,
       };
     },
 

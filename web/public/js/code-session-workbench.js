@@ -26,16 +26,16 @@ export function resolveWorkbenchActiveSessionId({
     return preferredSessionId;
   }
 
+  const normalizedServerCurrentSessionId = normalizeCodeSessionId(serverCurrentSessionId);
+  if (normalizedServerCurrentSessionId && hasSession(normalizedServerCurrentSessionId)) {
+    return normalizedServerCurrentSessionId;
+  }
+
   const normalizedPreviousActiveSessionId = normalizeCodeSessionId(previousActiveSessionId);
   const normalizedPreviousAttachedSessionId = normalizeCodeSessionId(previousAttachedSessionId);
   if (isViewingSession(normalizedPreviousActiveSessionId, normalizedPreviousAttachedSessionId)
     && hasSession(normalizedPreviousActiveSessionId)) {
     return normalizedPreviousActiveSessionId;
-  }
-
-  const normalizedServerCurrentSessionId = normalizeCodeSessionId(serverCurrentSessionId);
-  if (normalizedServerCurrentSessionId && hasSession(normalizedServerCurrentSessionId)) {
-    return normalizedServerCurrentSessionId;
   }
 
   if (normalizedPreviousActiveSessionId && hasSession(normalizedPreviousActiveSessionId)) {

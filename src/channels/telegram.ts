@@ -39,12 +39,17 @@ function extractPendingActionApprovals(
   response: { content: string; metadata?: Record<string, unknown> },
 ): PendingTelegramApproval[] {
   const pendingAction = response.metadata?.pendingAction;
-  if (!pendingAction || typeof pendingAction !== 'object') return [];
-  const blocker = (pendingAction as { blocker?: unknown }).blocker;
-  if (!blocker || typeof blocker !== 'object') return [];
-  if ((blocker as { kind?: unknown }).kind !== 'approval') return [];
-  const approvalSummaries = (blocker as { approvalSummaries?: unknown }).approvalSummaries;
-  if (!Array.isArray(approvalSummaries)) return [];
+  const blocker = pendingAction && typeof pendingAction === 'object'
+    ? (pendingAction as { blocker?: unknown }).blocker
+    : undefined;
+  const approvalSummaries = blocker
+    && typeof blocker === 'object'
+    && (blocker as { kind?: unknown }).kind === 'approval'
+    && Array.isArray((blocker as { approvalSummaries?: unknown }).approvalSummaries)
+    ? (blocker as { approvalSummaries: unknown[] }).approvalSummaries
+    : Array.isArray(response.metadata?.pendingApprovals)
+      ? response.metadata.pendingApprovals
+      : [];
   return approvalSummaries
     .filter((approval): approval is PendingTelegramApproval => {
       return !!approval
@@ -170,6 +175,7 @@ export class TelegramChannel implements ChannelAdapter {
   private bot: Bot;
   private onMessage: MessageCallback | null = null;
   private allowedChatIds: Set<number>;
+  private knownChatIds = new Set<number>();
   private defaultAgent: string;
   private guideText: string;
   private onResetConversation?: TelegramChannelOptions['onResetConversation'];
@@ -197,6 +203,16 @@ export class TelegramChannel implements ChannelAdapter {
     this.onAnalyticsTrack = options.onAnalyticsTrack;
     this.onToolsApprovalDecision = options.onToolsApprovalDecision;
     this.onDispatchMsg = options.onDispatch;
+  }
+
+  getKnownChatIds(): number[] {
+    return [...this.knownChatIds];
+  }
+
+  private rememberKnownChatId(chatId: number | undefined): void {
+    if (typeof chatId === 'number' && Number.isSafeInteger(chatId)) {
+      this.knownChatIds.add(chatId);
+    }
   }
 
   async start(onMessage: MessageCallback): Promise<void> {
@@ -230,6 +246,7 @@ export class TelegramChannel implements ChannelAdapter {
         await this.replyInChunks(ctx, 'Unauthorized chat.');
         return;
       }
+      this.rememberKnownChatId(ctx.chat.id);
 
       if (text.startsWith('/')) {
         const command = text.split(/\s+/)[0]?.slice(1).toLowerCase() ?? 'unknown';
@@ -353,6 +370,7 @@ export class TelegramChannel implements ChannelAdapter {
       log.error({ userId }, 'Invalid Telegram chat ID');
       return;
     }
+    this.rememberKnownChatId(chatId);
     for (const chunk of splitTelegramMessage(text, TELEGRAM_MAX_MESSAGE_CHARS)) {
       await this.bot.api.sendMessage(chatId, chunk);
     }

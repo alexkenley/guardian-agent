@@ -648,7 +648,6 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
         properties: {
           title: { type: 'string', description: 'Human-readable title for the coding session.' },
           workspaceRoot: { type: 'string', description: 'Workspace or repo root for the coding session.' },
-          agentId: { type: 'string', description: 'Optional bound agent id for the coding session.' },
           attach: { type: 'boolean', description: 'Attach the current chat surface to the new coding session.' },
         },
         required: ['title', 'workspaceRoot'],
@@ -668,7 +667,6 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
         ownerPrincipalId: request.principalId,
         title: requireString(args.title, 'title'),
         workspaceRoot: requireString(args.workspaceRoot, 'workspaceRoot'),
-        agentId: asString(args.agentId, '').trim() || null,
       });
       if (args.attach !== false) {
         context.codeSessionStore.attachSession({

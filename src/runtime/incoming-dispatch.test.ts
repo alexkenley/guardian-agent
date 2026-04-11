@@ -98,7 +98,7 @@ function createBaseArgs(overrides: Partial<Parameters<typeof createIncomingDispa
 }
 
 describe('createIncomingDispatchPreparer', () => {
-  it('keeps explicitly pinned code sessions on their pinned agent without classifying through the gateway', async () => {
+  it('routes explicit coding sessions through the gateway instead of honoring stored agent pins', async () => {
     const readCodeRequestMetadata = vi.fn(() => ({ sessionId: 'session-1' }));
     const codeSessionStore = {
       resolveForRequest: vi.fn(() => ({
@@ -122,15 +122,16 @@ describe('createIncomingDispatchPreparer', () => {
     });
 
     expect(result.decision).toEqual({
-      agentId: 'pinned-worker',
+      agentId: 'local-agent',
       confidence: 'high',
-      reason: 'explicit coding session pinned to a specific agent',
+      reason: 'explicit attached coding session with gateway-first auto routing',
+      tier: 'local',
     });
-    expect(result.gateway).toBeNull();
-    expect(routingIntentGateway.classify).not.toHaveBeenCalled();
+    expect(result.gateway).toEqual(createGatewayRecord());
+    expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
   });
 
-  it('still attaches a forced provider profile when a coding session is pinned to a specific agent', async () => {
+  it('still attaches a forced provider profile when a coding session is active', async () => {
     const config = createConfig();
     config.llm.anthropic = {
       provider: 'anthropic',
@@ -157,13 +158,106 @@ describe('createIncomingDispatchPreparer', () => {
     });
 
     expect(result.decision).toEqual({
-      agentId: 'pinned-worker',
+      agentId: 'local-agent',
       confidence: 'high',
-      reason: 'explicit coding session pinned to a specific agent',
+      reason: 'explicit attached coding session with gateway-first auto routing',
+      tier: 'local',
     });
     expect(readSelectedExecutionProfileMetadata(result.routedMessage.metadata)).toMatchObject({
       providerName: 'anthropic',
       providerTier: 'frontier',
+    });
+  });
+
+  it('ignores stored routing aliases on attached code sessions and falls back to routing', async () => {
+    const routingIntentGateway = {
+      classify: vi.fn(async () => createGatewayRecord()),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      codeSessionStore: {
+        resolveForRequest: vi.fn(() => ({
+          session: { agentId: 'external' },
+        })),
+      },
+      routingIntentGateway,
+      resolveConfiguredAgentId: vi.fn((agentId?: string) => agentId === 'external' ? undefined : agentId),
+    }));
+
+    const result = await prepareIncomingDispatch(undefined, {
+      content: 'hello',
+      userId: 'alex',
+      channel: 'web',
+    });
+
+    expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
+    expect(result.decision).toEqual({
+      agentId: 'local-agent',
+      confidence: 'high',
+      reason: 'attached coding session with gateway-first auto routing',
+      tier: 'local',
+    });
+  });
+
+  it('routes explicit code workspace context through the gateway and execution-profile selector', async () => {
+    const config = createConfig();
+    config.llm['ollama-cloud'] = {
+      provider: 'ollama_cloud',
+      model: 'qwen3-coder-next',
+      credentialRef: 'llm.ollama_cloud.primary',
+    };
+    config.llm.anthropic = {
+      provider: 'anthropic',
+      model: 'claude-opus-4.6',
+      apiKey: 'test-key',
+    };
+    config.assistant.tools.preferredProviders = {
+      local: 'ollama',
+      managedCloud: 'ollama-cloud',
+      frontier: 'anthropic',
+    };
+    const routingIntentGateway = {
+      classify: vi.fn(async () => createGatewayRecord({
+        route: 'coding_task',
+        executionClass: 'repo_grounded',
+        preferredTier: 'external',
+        requiresRepoGrounding: true,
+        expectedContextPressure: 'high',
+        preferredAnswerPath: 'chat_synthesis',
+      })),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      configRef: { current: config },
+      routingIntentGateway,
+      readCodeRequestMetadata: vi.fn(() => ({ workspaceRoot: '/tmp/repo' })),
+      router: {
+        findAgentByRole: vi.fn((role: string) => {
+          if (role === 'local') return { id: 'local-agent' };
+          if (role === 'external') return { id: 'external-agent' };
+          return undefined;
+        }),
+        route: vi.fn(() => ({ agentId: 'fallback-agent', confidence: 'low', reason: 'fallback' })),
+        routeWithTier: vi.fn(() => ({ agentId: 'external-agent', confidence: 'medium', reason: 'tier route', tier: 'external' })),
+        routeWithTierFromIntent: vi.fn(() => ({ agentId: 'external-agent', confidence: 'high', reason: 'intent tier route', tier: 'external' })),
+      } as unknown as MessageRouter,
+    }));
+
+    const result = await prepareIncomingDispatch(undefined, {
+      content: 'review the repo and suggest next steps',
+      userId: 'alex',
+      channel: 'web',
+      metadata: { codeContext: { workspaceRoot: '/tmp/repo' } },
+    });
+
+    expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
+    expect(result.decision).toEqual({
+      agentId: 'external-agent',
+      confidence: 'high',
+      reason: 'code workspace context with gateway-first auto routing',
+      tier: 'external',
+    });
+    expect(readSelectedExecutionProfileMetadata(result.routedMessage.metadata)).toMatchObject({
+      providerTier: 'frontier',
+      id: 'frontier_deep',
     });
   });
 
@@ -209,6 +303,26 @@ describe('createIncomingDispatchPreparer', () => {
     expect(intentRoutingTrace.record).toHaveBeenNthCalledWith(4, expect.objectContaining({ stage: 'profile_selection_decided' }));
     expect(intentRoutingTrace.record).toHaveBeenNthCalledWith(5, expect.objectContaining({ stage: 'context_budget_decided' }));
     expect(intentRoutingTrace.record).toHaveBeenNthCalledWith(6, expect.objectContaining({ stage: 'pre_routed_metadata_attached' }));
+  });
+
+  it('does not treat an unresolved reserved channel default alias as a concrete agent id', async () => {
+    const routingIntentGateway = {
+      classify: vi.fn(async () => createGatewayRecord()),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      routingIntentGateway,
+      resolveConfiguredAgentId: vi.fn((agentId?: string) => agentId === 'external' ? undefined : agentId),
+    }));
+
+    const result = await prepareIncomingDispatch('external', {
+      content: 'hello',
+      userId: 'alex',
+      channel: 'web',
+    });
+
+    expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
+    expect(result.decision.agentId).toBe('local-agent');
+    expect(result.decision.reason).toBe('intent tier route');
   });
 
   it('strips the web context prefix before classifying and tier-routing the request', async () => {

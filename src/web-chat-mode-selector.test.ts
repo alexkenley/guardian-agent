@@ -4,6 +4,7 @@ import {
   getChatProviderAgentId,
   getChatProviderOptions,
   normalizeChatProviderSelection,
+  shouldRefreshChatProviderOptions,
   shouldUseChatProviderSelector,
 } from '../web/public/js/chat-mode-selector.js';
 
@@ -62,5 +63,11 @@ describe('chat provider selector', () => {
 
     expect(shouldUseChatProviderSelector(agents, routingState)).toBe(true);
     expect(normalizeChatProviderSelection('missing-provider', routingState)).toBe('auto');
+  });
+
+  it('refreshes provider options when config or provider invalidations arrive', () => {
+    expect(shouldRefreshChatProviderOptions({ topics: ['providers'] })).toBe(true);
+    expect(shouldRefreshChatProviderOptions({ topics: ['config'] })).toBe(true);
+    expect(shouldRefreshChatProviderOptions({ topics: ['tools'] })).toBe(false);
   });
 });

@@ -133,7 +133,8 @@ Notes:
 | cloud connections and cloud posture | `Cloud` | system count only |
 | automations, schedules, run history | `Automations` | system count only |
 | AI provider config and search config | `Configuration` | compact system card only |
-| tools, approvals, runtime routing | `Configuration > Tools` | filtered links only |
+| live pending tool approvals | `System` | compact counts only |
+| tools, runtime routing, recent tool jobs | `Configuration > Tools` | filtered links only |
 | sandbox, allowlists, trust, browser risk controls, security-related configuration | `Configuration > Security` | filtered links only |
 | auth, integrations, system settings | `Configuration` | status only elsewhere |
 
@@ -744,9 +745,20 @@ Search-source runtime state should be shown as one compact actionable summary, n
 Owns:
 
 - tool runtime status
-- approvals
 - tool routing
 - recent tool jobs
+
+Must not own:
+
+- the primary global pending-approval queue
+
+### `System`
+
+Owns:
+
+- cross-product runtime summary
+- active assistant and routine execution overview
+- global pending tool approvals
 
 ### `Security`
 

@@ -14,6 +14,10 @@ import type { Runtime } from '../runtime.js';
 import type { SecurityActivityLogService } from '../security-activity-log.js';
 import type { PrepareIncomingDispatch } from '../incoming-dispatch.js';
 import type { DashboardMessageDispatcher } from '../dashboard-dispatch.js';
+import {
+  isReservedAgentAlias,
+  resolveConfiguredAgentId as resolveConfiguredAgentIdAlias,
+} from '../agent-target-resolution.js';
 
 type DashboardRuntimeCallbacks = Pick<
   DashboardCallbacks,
@@ -40,6 +44,7 @@ interface DashboardRuntimeCallbackOptions {
     channelDefault: string | undefined,
     msg: Parameters<NonNullable<DashboardCallbacks['onStreamDispatch']>>[1],
   ) => Promise<PreparedIncomingDispatchResult>;
+  resolveConfiguredAgentId?: (agentId?: string) => string | undefined;
   identity: Pick<IdentityService, 'resolveCanonicalUserId'>;
   analytics: Pick<AnalyticsService, 'track'>;
   orchestrator: Pick<AssistantOrchestrator, 'dispatch' | 'cancelSession'>;
@@ -83,10 +88,26 @@ export function createDashboardRuntimeCallbacks(
 ): DashboardRuntimeCallbacks {
   const now = options.now ?? Date.now;
   const createRequestId = options.createRequestId ?? randomUUID;
+  const resolveConfiguredAgentId = options.resolveConfiguredAgentId ?? ((agentId?: string) => (
+    resolveConfiguredAgentIdAlias(agentId, {
+      defaultAgentId: options.configRef.current.agents[0]?.id ?? 'default',
+      router: {
+        findAgentByRole: () => undefined,
+      },
+    })
+  ));
   const activeStreamDispatches = new Map<string, ActiveStreamDispatch>();
   const CANCELED_ERROR_CODE = 'REQUEST_CANCELED';
   const REQUEST_NOT_ACTIVE_ERROR_CODE = 'REQUEST_NOT_ACTIVE';
   const DEFAULT_CANCEL_MESSAGE = 'Request canceled by operator.';
+
+  const resolveDispatchTargetAgentId = (agentId: string | undefined): string | undefined => {
+    const trimmed = typeof agentId === 'string' && agentId.trim() ? agentId.trim() : undefined;
+    if (!trimmed) return undefined;
+    const resolved = resolveConfiguredAgentId(trimmed);
+    if (resolved) return resolved;
+    return isReservedAgentAlias(trimmed) ? undefined : trimmed;
+  };
 
   const buildCanceledResult = (
     requestId: string,
@@ -177,7 +198,10 @@ export function createDashboardRuntimeCallbacks(
 
     onDispatch: async (agentId, msg, routeDecision, dispatchOptions, precomputedIntentGateway) => (
       options.dispatchDashboardMessage({
-        agentId,
+        agentId: resolveDispatchTargetAgentId(agentId)
+          ?? resolveDispatchTargetAgentId(options.configRef.current.channels.web?.defaultAgent)
+          ?? options.configRef.current.agents[0]?.id
+          ?? 'default',
         msg,
         routeDecision,
         options: dispatchOptions,
@@ -186,6 +210,8 @@ export function createDashboardRuntimeCallbacks(
     ),
 
     onStreamDispatch: async (agentId, msg, emitSSE) => {
+      const explicitAgentId = resolveDispatchTargetAgentId(agentId);
+      const configuredWebDefaultAgentId = resolveDispatchTargetAgentId(options.configRef.current.channels.web?.defaultAgent);
       const requestId = msg.requestId?.trim() || createRequestId();
       const channel = msg.channel?.trim() || 'web';
       const channelUserId = msg.userId?.trim() || `${channel}-user`;
@@ -209,12 +235,12 @@ export function createDashboardRuntimeCallbacks(
       });
 
       try {
-        const prepared = agentId?.trim()
+        const prepared = explicitAgentId
           ? await prepareExplicitAgentDispatch(options.prepareIncomingDispatch, msg)
-          : await options.prepareIncomingDispatch(options.configRef.current.channels.web?.defaultAgent, msg);
-        const resolvedAgentId = agentId?.trim()
+          : await options.prepareIncomingDispatch(configuredWebDefaultAgentId, msg);
+        const resolvedAgentId = explicitAgentId
           || prepared.decision?.agentId
-          || options.configRef.current.channels.web?.defaultAgent
+          || configuredWebDefaultAgentId
           || options.configRef.current.agents[0]?.id
           || 'default';
         active.agentId = resolvedAgentId;

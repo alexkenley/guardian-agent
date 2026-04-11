@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildLocalModelTooComplicatedMessage,
+  formatCompactResponseSourceLabel,
   formatResponseSourceLabel,
   isLocalToolCallParseError,
   readResponseSourceMetadata,
@@ -62,7 +63,15 @@ describe('model-routing-ux', () => {
         model: 'gpt-oss:120b',
         usedFallback: true,
       },
-    })).toBe('[managed cloud · ollama cloud · ollama-cloud-general · gpt-oss:120b · fallback]');
+    })).toBe('[managed cloud · ollama cloud · ollama-cloud-general · gpt-oss:120b]');
+    expect(formatCompactResponseSourceLabel({
+      responseSource: {
+        locality: 'external',
+        providerName: 'ollama_cloud',
+        providerTier: 'managed_cloud',
+        usedFallback: true,
+      },
+    })).toBe('[managed cloud]');
   });
 
   it('returns the friendly local-model complexity message', () => {

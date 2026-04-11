@@ -891,6 +891,13 @@ function parseIntentGatewayDecision(
   const parsed = parseStructuredToolArguments(response)
     ?? parseStructuredContent(response.content);
   if (!parsed) {
+    const repaired = repairUnavailableIntentGatewayDecision(repairContext);
+    if (repaired) {
+      return {
+        decision: repaired,
+        available: true,
+      };
+    }
     return {
       decision: {
         route: 'unknown',
@@ -912,6 +919,15 @@ function parseIntentGatewayDecision(
     };
   }
   const decision = normalizeIntentGatewayDecision(parsed, repairContext);
+  if (decision.route === 'unknown') {
+    const repaired = repairUnavailableIntentGatewayDecision(repairContext, parsed);
+    if (repaired) {
+      return {
+        decision: repaired,
+        available: true,
+      };
+    }
+  }
   return {
     decision,
     available: decision.route !== 'unknown',
@@ -1598,6 +1614,197 @@ function repairIntentGatewayOperation(
     return inferSecondBrainOperation(repairContext?.sourceContent, route, operation) ?? operation;
   }
   return pendingOperation;
+}
+
+function repairUnavailableIntentGatewayDecision(
+  repairContext: IntentGatewayRepairContext | undefined,
+  parsed?: Record<string, unknown>,
+): IntentGatewayDecision | null {
+  const rawSourceContent = collapseIntentGatewayWhitespace(repairContext?.sourceContent ?? '');
+  const sourceContent = rawSourceContent.toLowerCase();
+  if (!sourceContent) return null;
+  const parsedOperation = normalizeOperation(parsed?.operation);
+  const inferredCodingBackendRequest = inferExplicitCodingBackendRequest(
+    rawSourceContent,
+    sourceContent,
+    parsedOperation,
+  );
+  if (inferredCodingBackendRequest) {
+    return normalizeIntentGatewayDecision({
+      ...(parsed ?? {}),
+      route: 'coding_task',
+      operation: inferredCodingBackendRequest.operation,
+      confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
+      summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
+        ? parsed.summary.trim()
+        : 'Recovered coding-backend intent from an explicit backend workspace request after an unstructured gateway response.',
+      codingBackend: inferredCodingBackendRequest.codingBackend,
+      codingBackendRequested: true,
+      ...(inferredCodingBackendRequest.sessionTarget
+        ? { sessionTarget: inferredCodingBackendRequest.sessionTarget }
+        : {}),
+    }, repairContext);
+  }
+  const inferredCodingOperation = inferExplicitCodingTaskOperation(sourceContent, parsedOperation);
+  if (!inferredCodingOperation) return null;
+  return normalizeIntentGatewayDecision({
+    ...(parsed ?? {}),
+    route: 'coding_task',
+    operation: inferredCodingOperation,
+    confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
+    summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
+      ? parsed.summary.trim()
+      : 'Recovered coding-task intent from explicit repo file references after an unstructured gateway response.',
+  }, repairContext);
+}
+
+const GENERIC_SESSION_TARGET_TOKENS = new Set([
+  'a',
+  'an',
+  'the',
+  'my',
+  'this',
+  'that',
+  'workspace',
+  'workspaces',
+  'session',
+  'sessions',
+  'coding',
+  'code',
+  'project',
+  'repo',
+  'repository',
+]);
+
+function inferExplicitCodingBackendRequest(
+  rawContent: string,
+  normalized: string,
+  parsedOperation: IntentGatewayOperation,
+): {
+  codingBackend: string;
+  operation: IntentGatewayOperation;
+  sessionTarget?: string;
+} | null {
+  const codingBackend = inferRequestedCodingBackend(normalized);
+  if (!codingBackend) return null;
+  const operation = parsedOperation !== 'unknown'
+    ? parsedOperation
+    : inferExplicitCodingBackendOperation(normalized);
+  if (!operation || operation === 'unknown') {
+    return null;
+  }
+  const sessionTarget = extractCodingWorkspaceTarget(rawContent);
+  return {
+    codingBackend,
+    operation,
+    ...(sessionTarget ? { sessionTarget } : {}),
+  };
+}
+
+function inferRequestedCodingBackend(normalized: string): string | undefined {
+  if (!normalized) return undefined;
+  if (/\b(?:use|using|with|via|run|launch|start)\s+(?:openai\s+)?codex(?:\s+cli)?\b/.test(normalized)) {
+    return 'codex';
+  }
+  if (/\b(?:use|using|with|via|run|launch|start)\s+claude(?:\s+code)?\b/.test(normalized)) {
+    return 'claude-code';
+  }
+  if (/\b(?:use|using|with|via|run|launch|start)\s+gemini(?:\s+cli)?\b/.test(normalized)) {
+    return 'gemini-cli';
+  }
+  if (/\b(?:use|using|with|via|run|launch|start)\s+aider\b/.test(normalized)) {
+    return 'aider';
+  }
+  return undefined;
+}
+
+function inferExplicitCodingBackendOperation(
+  normalized: string,
+): IntentGatewayOperation | null {
+  if (!normalized) return null;
+  if (/\b(?:create|add|make|write|implement|build|generate)\b/.test(normalized)) {
+    return 'create';
+  }
+  if (/\b(?:update|edit|change|modify|fix|refactor|rename|patch)\b/.test(normalized)) {
+    return 'update';
+  }
+  if (/\b(?:delete|remove)\b/.test(normalized)) {
+    return 'delete';
+  }
+  if (/\b(?:search|find|grep|rg)\b/.test(normalized)) {
+    return 'search';
+  }
+  if (
+    /\b(?:inspect|review|audit|analy[sz]e|check|evaluate|debug|investigate|explain|plan)\b/.test(normalized)
+    || /\blook\s+at\b/.test(normalized)
+  ) {
+    return 'inspect';
+  }
+  if (/\b(?:read|show|open)\b/.test(normalized)) {
+    return 'read';
+  }
+  return 'run';
+}
+
+function extractCodingWorkspaceTarget(rawContent: string): string | undefined {
+  if (!rawContent) return undefined;
+  const patterns = [
+    /\b(?:in|within)\s+(?:the\s+)?(.+?)\s+(?:coding workspace|coding session|workspace|session|repo(?:sitory)?|project)\b/i,
+    /\b(?:for|against)\s+(?:the\s+)?(.+?)\s+(?:coding workspace|coding session|workspace|session|repo(?:sitory)?|project)\b/i,
+  ];
+  for (const pattern of patterns) {
+    const match = rawContent.match(pattern);
+    const cleaned = cleanInferredSessionTarget(match?.[1]);
+    if (cleaned) {
+      return cleaned;
+    }
+  }
+  return undefined;
+}
+
+function cleanInferredSessionTarget(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const cleaned = collapseIntentGatewayWhitespace(value)
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .replace(/^[Tt]he\s+/, '')
+    .replace(/[.,!?;:]+$/g, '')
+    .trim();
+  if (!cleaned) return undefined;
+  const semanticTokens = cleaned
+    .toLowerCase()
+    .split(/[^a-z0-9]+/g)
+    .filter(Boolean)
+    .filter((token) => !GENERIC_SESSION_TARGET_TOKENS.has(token));
+  if (semanticTokens.length === 0) {
+    return undefined;
+  }
+  return cleaned;
+}
+
+function inferExplicitCodingTaskOperation(
+  normalized: string,
+  parsedOperation: IntentGatewayOperation,
+): IntentGatewayOperation | null {
+  if (!normalized || !hasExplicitRepoFileReference(normalized)) return null;
+  if (parsedOperation && parsedOperation !== 'unknown') return parsedOperation;
+  if (/\b(?:search|find|grep|rg)\b/.test(normalized)) {
+    return 'search';
+  }
+  if (
+    /\b(?:inspect|review|audit|analy[sz]e|check|evaluate)\b/.test(normalized)
+    || /\blook\s+at\b/.test(normalized)
+    || /\b(?:risk|risks|regression|regressions|security|approval-bypass|privilege-escalation)\b/.test(normalized)
+  ) {
+    return 'inspect';
+  }
+  if (/\b(?:read|show|open)\b/.test(normalized)) {
+    return 'read';
+  }
+  return null;
+}
+
+function hasExplicitRepoFileReference(normalized: string): boolean {
+  return /(?:\b[a-z]:\\(?:[^\\\s]+\\)*[^\\\s]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|py|rs|go|java|rb|php|sh|ya?ml)\b)|(?:\b(?:[a-z0-9_.-]+\/)+[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|py|rs|go|java|rb|php|sh|ya?ml)\b)/i.test(normalized);
 }
 
 function inferRoutineEnabledFilter(

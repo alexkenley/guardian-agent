@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentContext, UserMessage } from './agent/types.js';
 import { createChatAgentClass } from './chat-agent.js';
+import { CodeSessionStore } from './runtime/code-sessions.js';
 import { ContinuityThreadStore } from './runtime/continuity-threads.js';
 import { attachSelectedExecutionProfileMetadata } from './runtime/execution-profiles.js';
+import { attachPreRoutedIntentGatewayMetadata } from './runtime/intent-gateway.js';
 import { PendingActionStore, type PendingActionRecord } from './runtime/pending-actions.js';
 
 describe('LLMChatAgent direct intent metadata', () => {
@@ -79,6 +81,567 @@ describe('LLMChatAgent direct intent metadata', () => {
       providerTier: 'managed_cloud',
       usedFallback: false,
     });
+  });
+
+  it('auto-switches to an explicitly named coding workspace before delegated coding work runs', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-code-sessions.test.sqlite',
+    });
+    const guardianSession = codeSessionStore.createSession({
+      ownerUserId: 'owner',
+      title: 'Guardian Agent',
+      workspaceRoot: '/tmp/guardian-agent',
+    });
+    const targetSession = codeSessionStore.createSession({
+      ownerUserId: 'owner',
+      title: 'TempInstallTest',
+      workspaceRoot: '/tmp/guardian-ui-package-test',
+    });
+    codeSessionStore.attachSession({
+      sessionId: guardianSession.id,
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      mode: 'controller',
+    });
+
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        if (toolName === 'code_session_attach') {
+          const requestedSessionId = String(args.sessionId);
+          const attachment = codeSessionStore.attachSession({
+            sessionId: requestedSessionId,
+            userId: 'owner',
+            principalId: 'owner',
+            channel: 'web',
+            surfaceId: 'web-guardian-chat',
+            mode: 'controller',
+          });
+          const session = codeSessionStore.getSession(requestedSessionId, 'owner');
+          return {
+            success: !!attachment && !!session,
+            output: {
+              session: session
+                ? {
+                    id: session.id,
+                    title: session.title,
+                    workspaceRoot: session.workspaceRoot,
+                    resolvedRoot: session.resolvedRoot,
+                  }
+                : null,
+            },
+          };
+        }
+        if (toolName === 'coding_backend_run') {
+          return {
+            success: true,
+            output: {
+              backendName: 'Codex',
+              output: 'Created test1 in the requested workspace.',
+            },
+          };
+        }
+        throw new Error(`Unexpected tool ${toolName}`);
+      }),
+      listToolDefinitions: vi.fn(() => []),
+      getToolContext: vi.fn(() => ''),
+      getRuntimeNotices: vi.fn(() => []),
+      listPendingApprovalIdsForUser: vi.fn(() => []),
+      listPendingApprovalsForCodeSession: vi.fn(() => []),
+      listJobsForCodeSession: vi.fn(() => []),
+      listJobs: vi.fn(() => []),
+      getApprovalSummaries: vi.fn(() => new Map()),
+    };
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      undefined,
+      tools as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      codeSessionStore,
+    );
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+    const message: UserMessage = {
+      id: 'msg-code-target',
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: 'Use Codex in the TempInstallTest coding workspace to create test1 in the top-level directory.',
+      timestamp: Date.now(),
+      metadata: attachPreRoutedIntentGatewayMetadata(undefined, {
+        available: true,
+        decision: {
+          route: 'coding_task',
+          operation: 'run',
+          summary: 'Create a file in the explicitly named coding workspace.',
+          confidence: 'high',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          executionClass: 'repo_grounded',
+          preferredTier: 'local',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'medium',
+          preferredAnswerPath: 'tool_loop',
+          entities: {
+            codingBackend: 'codex',
+            codingBackendRequested: true,
+            sessionTarget: 'TempInstallTest coding workspace',
+          },
+        },
+      }),
+    };
+
+    const response = await agent.onMessage!(message, ctx);
+
+    expect(response.content).toContain('Switched this chat to:');
+    expect(response.content).toContain('TempInstallTest');
+    expect(response.content).toContain('Created test1 in the requested workspace.');
+    expect(response.metadata).toMatchObject({
+      codeSessionResolved: true,
+      codeSessionId: targetSession.id,
+      codeSessionFocusChanged: true,
+    });
+    expect(codeSessionStore.resolveForRequest({
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      touchAttachment: false,
+    })?.session.id).toBe(targetSession.id);
+    expect(tools.executeModelTool).toHaveBeenNthCalledWith(
+      1,
+      'code_session_attach',
+      { sessionId: targetSession.id },
+      expect.objectContaining({
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      }),
+    );
+    expect(tools.executeModelTool).toHaveBeenNthCalledWith(
+      2,
+      'coding_backend_run',
+      { task: 'Use Codex in the TempInstallTest coding workspace to create test1 in the top-level directory.', backend: 'codex' },
+      expect.objectContaining({
+        codeContext: {
+          sessionId: targetSession.id,
+          workspaceRoot: targetSession.resolvedRoot,
+        },
+      }),
+    );
+  });
+
+  it('auto-switches to an explicitly named coding workspace even when the gateway response is unstructured', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-unstructured-gateway-workspace-switch.test.sqlite',
+    });
+    const guardianSession = codeSessionStore.createSession({
+      ownerUserId: 'owner',
+      title: 'Guardian Agent',
+      workspaceRoot: '/tmp/guardian-agent',
+    });
+    const tacticalSession = codeSessionStore.createSession({
+      ownerUserId: 'owner',
+      title: 'Test Tactical Game App',
+      workspaceRoot: '/tmp/test-tactical-game-app',
+    });
+    codeSessionStore.attachSession({
+      sessionId: guardianSession.id,
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      mode: 'controller',
+    });
+
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        if (toolName === 'code_session_attach') {
+          const requestedSessionId = String(args.sessionId);
+          const attachment = codeSessionStore.attachSession({
+            sessionId: requestedSessionId,
+            userId: 'owner',
+            principalId: 'owner',
+            channel: 'web',
+            surfaceId: 'web-guardian-chat',
+            mode: 'controller',
+          });
+          const session = codeSessionStore.getSession(requestedSessionId, 'owner');
+          return {
+            success: !!attachment && !!session,
+            output: {
+              session: session
+                ? {
+                    id: session.id,
+                    title: session.title,
+                    workspaceRoot: session.workspaceRoot,
+                    resolvedRoot: session.resolvedRoot,
+                  }
+                : null,
+            },
+          };
+        }
+        if (toolName === 'coding_backend_run') {
+          return {
+            success: true,
+            output: {
+              backendName: 'Codex',
+              output: 'Created test-switch-a in the requested workspace.',
+            },
+          };
+        }
+        throw new Error(`Unexpected tool ${toolName}`);
+      }),
+      listToolDefinitions: vi.fn(() => []),
+      getToolContext: vi.fn(() => ''),
+      getRuntimeNotices: vi.fn(() => []),
+      listPendingApprovalIdsForUser: vi.fn(() => []),
+      listPendingApprovalsForCodeSession: vi.fn(() => []),
+      listJobsForCodeSession: vi.fn(() => []),
+      listJobs: vi.fn(() => []),
+      getApprovalSummaries: vi.fn(() => new Map()),
+    };
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      undefined,
+      tools as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      codeSessionStore,
+    );
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: {
+        name: 'ollama',
+        chat: vi.fn(async () => ({
+          content: 'This looks like a coding request.',
+          model: 'test-model',
+          finishReason: 'stop',
+        })),
+      } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+    const message: UserMessage = {
+      id: 'msg-unstructured-gateway-switch',
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: 'Use Codex in the Test Tactical Game App coding workspace to create test-switch-a in the top-level directory.',
+      timestamp: Date.now(),
+    };
+
+    const response = await agent.onMessage!(message, ctx);
+
+    expect(response.content).toContain('Switched this chat to:');
+    expect(response.content).toContain('Test Tactical Game App');
+    expect(response.content).toContain('Created test-switch-a in the requested workspace.');
+    expect(codeSessionStore.resolveForRequest({
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      touchAttachment: false,
+    })?.session.id).toBe(tacticalSession.id);
+    expect(tools.executeModelTool).toHaveBeenNthCalledWith(
+      1,
+      'code_session_attach',
+      { sessionId: tacticalSession.id },
+      expect.objectContaining({
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      }),
+    );
+    expect(tools.executeModelTool).toHaveBeenNthCalledWith(
+      2,
+      'coding_backend_run',
+      {
+        task: 'Use Codex in the Test Tactical Game App coding workspace to create test-switch-a in the top-level directory.',
+        backend: 'codex',
+      },
+      expect.objectContaining({
+        codeContext: {
+          sessionId: tacticalSession.id,
+          workspaceRoot: tacticalSession.resolvedRoot,
+        },
+      }),
+    );
+  });
+
+  it('accepts affirmative workspace-switch continuations by attaching the target session before resuming the blocked task', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-workspace-switch-continuation.test.sqlite',
+    });
+    const guardianSession = codeSessionStore.createSession({
+      ownerUserId: 'owner',
+      title: 'Guardian Agent',
+      workspaceRoot: '/tmp/guardian-agent',
+    });
+    const tacticalSession = codeSessionStore.createSession({
+      ownerUserId: 'owner',
+      title: 'Test Tactical Game App',
+      workspaceRoot: '/tmp/test-tactical-game-app',
+    });
+    codeSessionStore.attachSession({
+      sessionId: guardianSession.id,
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      mode: 'controller',
+    });
+
+    const pendingActionStore = new PendingActionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-workspace-switch-pending.test.sqlite',
+      now: () => 1_710_000_000_000,
+    });
+    pendingActionStore.replaceActive({
+      agentId: 'chat',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    }, {
+      status: 'pending',
+      transferPolicy: 'linked_surfaces_same_user',
+      blocker: {
+        kind: 'workspace_switch',
+        prompt: 'Switch this chat to Test Tactical Game App first, then ask me to run it there.',
+        currentSessionId: guardianSession.id,
+        currentSessionLabel: `Guardian Agent — ${guardianSession.workspaceRoot}`,
+        targetSessionId: tacticalSession.id,
+        targetSessionLabel: `Test Tactical Game App — ${tacticalSession.workspaceRoot}`,
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'create',
+        summary: 'Create a test file in the tactical game workspace.',
+        turnRelation: 'new_request',
+        resolution: 'ready',
+        originalUserContent: 'Use Codex in the Test Tactical Game App coding workspace to create test 51 in the top-level directory.',
+        entities: {
+          codingBackend: 'codex',
+          codingBackendRequested: true,
+          sessionTarget: 'Test Tactical Game App coding workspace',
+        },
+      },
+      codeSessionId: guardianSession.id,
+      expiresAt: Date.now() + 30 * 60 * 1000,
+    });
+
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      listPendingApprovalIdsForUser: vi.fn(() => []),
+      getApprovalSummaries: vi.fn(() => new Map()),
+      listToolDefinitions: vi.fn(() => []),
+      getToolContext: vi.fn(() => ''),
+      getRuntimeNotices: vi.fn(() => []),
+      listPendingApprovalsForCodeSession: vi.fn(() => []),
+      listJobsForCodeSession: vi.fn(() => []),
+      listJobs: vi.fn(() => []),
+      executeModelTool: vi.fn(async (toolName: string, args: Record<string, unknown>) => {
+        if (toolName === 'code_session_current') {
+          const current = codeSessionStore.resolveForRequest({
+            userId: 'owner',
+            principalId: 'owner',
+            channel: 'web',
+            surfaceId: 'web-guardian-chat',
+            touchAttachment: false,
+          })?.session ?? null;
+          return {
+            success: true,
+            output: {
+              session: current
+                ? {
+                    id: current.id,
+                    title: current.title,
+                    workspaceRoot: current.workspaceRoot,
+                    resolvedRoot: current.resolvedRoot,
+                  }
+                : null,
+            },
+          };
+        }
+        if (toolName === 'code_session_attach') {
+          const requestedSessionId = String(args.sessionId);
+          const attachment = codeSessionStore.attachSession({
+            sessionId: requestedSessionId,
+            userId: 'owner',
+            principalId: 'owner',
+            channel: 'web',
+            surfaceId: 'web-guardian-chat',
+            mode: 'controller',
+          });
+          const session = codeSessionStore.getSession(requestedSessionId, 'owner');
+          return {
+            success: !!attachment && !!session,
+            output: {
+              session: session
+                ? {
+                    id: session.id,
+                    title: session.title,
+                    workspaceRoot: session.workspaceRoot,
+                    resolvedRoot: session.resolvedRoot,
+                  }
+                : null,
+            },
+          };
+        }
+        if (toolName === 'coding_backend_run') {
+          return {
+            success: true,
+            output: {
+              backendName: 'Codex',
+              output: 'Created test 51 in the requested workspace.',
+            },
+          };
+        }
+        throw new Error(`Unexpected tool ${toolName}`);
+      }),
+    };
+    const agent = new ChatAgent(
+      'chat',
+      'Chat',
+      undefined,
+      undefined,
+      tools as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      codeSessionStore,
+    );
+    (agent as any).pendingActionStore = pendingActionStore;
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+    const message: UserMessage = {
+      id: 'msg-workspace-switch-continue',
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      content: 'Yes switch to coding session',
+      timestamp: Date.now(),
+    };
+
+    const response = await agent.onMessage!(message, ctx);
+
+    expect(response.content).toContain('Switched this chat to:');
+    expect(response.content).toContain('Test Tactical Game App');
+    expect(response.content).toContain('Created test 51 in the requested workspace.');
+    expect(codeSessionStore.resolveForRequest({
+      userId: 'owner',
+      principalId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+      touchAttachment: false,
+    })?.session.id).toBe(tacticalSession.id);
+    expect(pendingActionStore.getActive({
+      agentId: 'chat',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'web-guardian-chat',
+    })).toBeNull();
+    expect(tools.executeModelTool).toHaveBeenNthCalledWith(
+      1,
+      'code_session_current',
+      {},
+      expect.objectContaining({
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      }),
+    );
+    expect(tools.executeModelTool).toHaveBeenNthCalledWith(
+      2,
+      'code_session_attach',
+      { sessionId: tacticalSession.id },
+      expect.objectContaining({
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      }),
+    );
+    expect(tools.executeModelTool).toHaveBeenNthCalledWith(
+      3,
+      'coding_backend_run',
+      {
+        task: 'Use Codex in the Test Tactical Game App coding workspace to create test 51 in the top-level directory.',
+        backend: 'codex',
+      },
+      expect.objectContaining({
+        codeContext: {
+          sessionId: tacticalSession.id,
+          workspaceRoot: tacticalSession.resolvedRoot,
+        },
+      }),
+    );
   });
 
   it('keeps the selected execution profile on direct Second Brain responses', async () => {
@@ -4085,6 +4648,58 @@ describe('LLMChatAgent direct intent metadata', () => {
         title: 'Send Harbor launch review deck and notes',
       }),
     });
+  });
+
+  it('reconciles stale approval blockers before reusing them in later turns', () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      listPendingApprovalIdsForUser: vi.fn(() => []),
+      getApprovalSummaries: vi.fn(() => new Map()),
+      executeModelTool: vi.fn(),
+    };
+    const pendingActionStore = new PendingActionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-stale-approvals.test.sqlite',
+      now: () => 1_710_000_000_000,
+    });
+    const created = pendingActionStore.replaceActive({
+      agentId: 'chat',
+      userId: 'owner',
+      channel: 'telegram',
+      surfaceId: 'telegram-chat',
+    }, {
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve the calendar update.',
+        approvalIds: ['approval-stale-1'],
+        approvalSummaries: [
+          { id: 'approval-stale-1', toolName: 'second_brain_calendar_upsert', argsPreview: '{"title":"Harbor launch review"}' },
+        ],
+      },
+      intent: {
+        route: 'personal_assistant_task',
+        operation: 'update',
+        originalUserContent: 'Move that calendar event to tomorrow at 2 PM.',
+      },
+      expiresAt: 1_710_000_000_000 + 30 * 60 * 1000,
+    });
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).pendingActionStore = pendingActionStore;
+
+    const pendingIds = (agent as any).getPendingApprovalIds('owner', 'telegram', 'telegram-chat', 1_710_000_000_000);
+
+    expect(pendingIds).toEqual([]);
+    expect(pendingActionStore.get(created.id)?.status).toBe('completed');
   });
 
   it('moves the focused local calendar event directly', async () => {

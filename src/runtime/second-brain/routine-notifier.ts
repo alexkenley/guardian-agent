@@ -3,6 +3,7 @@ import type { CLIChannel } from '../../channels/cli.js';
 import type { TelegramChannel } from '../../channels/telegram.js';
 import type { WebChannel } from '../../channels/web.js';
 import type { HorizonRoutineOutcome } from './horizon-scanner.js';
+import { resolveTelegramDeliveryChatIds } from '../telegram-delivery.js';
 
 async function sendTelegramIfConfigured(
   telegramChannel: Pick<TelegramChannel, 'send'> | null,
@@ -49,13 +50,18 @@ function resolveDeliveryChannels(
   args: {
     configRef: { current: GuardianAgentConfig };
     getCliChannel: () => Pick<CLIChannel, 'send'> | null;
-    getTelegramChannel: () => Pick<TelegramChannel, 'send'> | null;
+    getTelegramChannel: () => Pick<TelegramChannel, 'send' | 'getKnownChatIds'> | null;
     getWebChannel: () => Pick<WebChannel, 'send'> | null;
+    preferredUserIds?: readonly string[];
   },
 ): Array<'web' | 'cli' | 'telegram'> {
   const requested = [...new Set(requestedChannels)];
   const resolved: Array<'web' | 'cli' | 'telegram'> = [];
-  const hasTelegramTarget = (args.configRef.current.channels.telegram?.allowedChatIds ?? []).length > 0 && Boolean(args.getTelegramChannel());
+  const hasTelegramTarget = resolveTelegramDeliveryChatIds({
+    configuredChatIds: args.configRef.current.channels.telegram?.allowedChatIds ?? [],
+    preferredUserIds: args.preferredUserIds,
+    telegramChannel: args.getTelegramChannel(),
+  }).length > 0;
   const hasWeb = Boolean(args.getWebChannel());
   const hasCli = Boolean(args.getCliChannel());
 
@@ -89,7 +95,7 @@ function resolveDeliveryChannels(
 export function createSecondBrainRoutineNotifier(args: {
   configRef: { current: GuardianAgentConfig };
   getCliChannel: () => Pick<CLIChannel, 'send'> | null;
-  getTelegramChannel: () => Pick<TelegramChannel, 'send'> | null;
+  getTelegramChannel: () => Pick<TelegramChannel, 'send' | 'getKnownChatIds'> | null;
   getWebChannel: () => Pick<WebChannel, 'send'> | null;
 }): (outcome: HorizonRoutineOutcome) => Promise<void> {
   return async (outcome: HorizonRoutineOutcome): Promise<void> => {
@@ -97,7 +103,16 @@ export function createSecondBrainRoutineNotifier(args: {
     if (!text) {
       return;
     }
-    const channels = resolveDeliveryChannels(outcome.channels, args);
+    const preferredUserIds = [args.configRef.current.assistant.identity.primaryUserId];
+    const telegramChatIds = resolveTelegramDeliveryChatIds({
+      configuredChatIds: args.configRef.current.channels.telegram?.allowedChatIds ?? [],
+      preferredUserIds,
+      telegramChannel: args.getTelegramChannel(),
+    });
+    const channels = resolveDeliveryChannels(outcome.channels, {
+      ...args,
+      preferredUserIds,
+    });
     if (channels.length === 0) {
       return;
     }
@@ -106,7 +121,7 @@ export function createSecondBrainRoutineNotifier(args: {
       if (channel === 'telegram') {
         await sendTelegramIfConfigured(
           args.getTelegramChannel(),
-          args.configRef.current.channels.telegram?.allowedChatIds ?? [],
+          telegramChatIds,
           text,
         );
         continue;

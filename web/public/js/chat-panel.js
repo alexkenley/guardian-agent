@@ -21,6 +21,7 @@ import {
   getChatProviderAgentId,
   getChatProviderOptions,
   normalizeChatProviderSelection,
+  shouldRefreshChatProviderOptions,
   shouldUseChatProviderSelector,
 } from './chat-mode-selector.js';
 import { matchesRunTimelineRequest } from './chat-run-tracking.js';
@@ -40,6 +41,7 @@ const WEB_USER_KEY = 'guardianagent_web_user';
 const GUARDIAN_CHAT_SURFACE_ID = 'web-guardian-chat';
 const CODE_SESSIONS_CHANGED_EVENT = 'guardian:code-sessions-changed';
 const CODE_SESSION_FOCUS_CHANGED_EVENT = 'guardian:code-session-focus-changed';
+const PROVIDER_PROFILES_CHANGED_EVENT = 'guardian:providers-changed';
 let currentChatContext = 'second-brain';
 let refreshVisiblePendingAction = null;
 let refreshCodeSessionsPromise = null;
@@ -159,9 +161,9 @@ export async function initChatPanel(container) {
     // Continue with empty
   }
 
-  const chatAgents = agents.filter((a) => a.canChat !== false);
-  const userAgents = chatAgents.filter((a) => !a.internal);
-  const useProviderSelector = shouldUseChatProviderSelector(chatAgents, routingState);
+  let chatAgents = agents.filter((a) => a.canChat !== false);
+  let userAgents = chatAgents.filter((a) => !a.internal);
+  let useProviderSelector = shouldUseChatProviderSelector(chatAgents, routingState);
   let knownCodeSessions = Array.isArray(codeSessionsState?.sessions) ? codeSessionsState.sessions : [];
   let currentCodeSessionId = typeof codeSessionsState?.currentSessionId === 'string'
     ? codeSessionsState.currentSessionId
@@ -191,63 +193,93 @@ export async function initChatPanel(container) {
   primaryControls.style.cssText = 'display:flex;align-items:center;gap:0.5rem;width:100%;min-width:0;';
   toolbar.appendChild(primaryControls);
 
+  const selectorSlot = document.createElement('div');
+  selectorSlot.style.cssText = 'display:flex;align-items:center;gap:0.5rem;flex:1 1 auto;min-width:0;';
+  primaryControls.appendChild(selectorSlot);
+
   // Agent selector OR provider selector
   let select = null;
   let providerSelect = null;
   let activeAgentId = null;
   let approvalHandler = null;
 
-  if (useProviderSelector) {
-    // Unified mode: show provider-profile selector instead of agent dropdown.
-    const providerRow = document.createElement('div');
-    providerRow.style.cssText = 'display:flex;align-items:center;gap:0.5rem;flex:1 1 auto;min-width:0;';
+  let history = null;
 
-    const providerLabel = document.createElement('span');
-    providerLabel.style.cssText = 'font-size:0.7rem;color:var(--text-muted);';
-    providerLabel.textContent = 'Provider:';
+  const getHistoryKey = () => {
+    const baseKey = useProviderSelector ? '__guardian__' : (select?.value || '');
+    return resolveChatHistoryKey(baseKey);
+  };
 
-    providerSelect = document.createElement('select');
-    providerSelect.id = 'chat-provider-select';
-    providerSelect.style.cssText = 'font-size:0.7rem;flex:1 1 auto;min-width:10rem;max-width:none;';
-    providerSelect.innerHTML = getChatProviderOptions(routingState).map((option) => (
-      `<option value="${esc(option.value)}">${esc(option.label)}</option>`
-    )).join('');
+  const renderSelectorControls = () => {
+    selectorSlot.innerHTML = '';
+    select = null;
+    providerSelect = null;
 
-    const currentSelection = normalizeChatProviderSelection(
-      sessionStorage.getItem(CHAT_PROVIDER_SELECTION_KEY) ?? 'auto',
-      routingState,
-    );
-    providerSelect.value = currentSelection;
-    sessionStorage.setItem(CHAT_PROVIDER_SELECTION_KEY, currentSelection);
+    if (useProviderSelector) {
+      const providerRow = document.createElement('div');
+      providerRow.style.cssText = 'display:flex;align-items:center;gap:0.5rem;flex:1 1 auto;min-width:0;';
 
-    providerSelect.addEventListener('change', () => {
-      const nextSelection = normalizeChatProviderSelection(providerSelect.value, routingState);
-      providerSelect.value = nextSelection;
-      sessionStorage.setItem(CHAT_PROVIDER_SELECTION_KEY, nextSelection);
-    });
+      const providerLabel = document.createElement('span');
+      providerLabel.style.cssText = 'font-size:0.7rem;color:var(--text-muted);';
+      providerLabel.textContent = 'Provider:';
 
-    providerRow.append(providerLabel, providerSelect);
-    primaryControls.appendChild(providerRow);
+      providerSelect = document.createElement('select');
+      providerSelect.id = 'chat-provider-select';
+      providerSelect.style.cssText = 'font-size:0.7rem;flex:1 1 auto;min-width:10rem;max-width:none;';
+      providerSelect.innerHTML = getChatProviderOptions(routingState).map((option) => (
+        `<option value="${esc(option.value)}">${esc(option.label)}</option>`
+      )).join('');
 
-    // Use a single unified history key
-    activeAgentId = '__guardian__';
-  } else if (userAgents.length > 0) {
-    // Classic mode: user-visible agent dropdown
-    select = document.createElement('select');
-    select.id = 'chat-agent-select';
-    select.style.cssText = 'min-width:10rem;flex:1 1 auto;';
-    select.innerHTML = userAgents.map(a =>
-      `<option value="${esc(a.id)}">${esc(a.name)}</option>`
-    ).join('');
-    primaryControls.appendChild(select);
-    activeAgentId = resolveInitialAgent(select, userAgents);
-  } else {
-    // No agents at all
+      const currentSelection = normalizeChatProviderSelection(
+        sessionStorage.getItem(CHAT_PROVIDER_SELECTION_KEY) ?? providerSelect.value ?? 'auto',
+        routingState,
+      );
+      providerSelect.value = currentSelection;
+      sessionStorage.setItem(CHAT_PROVIDER_SELECTION_KEY, currentSelection);
+
+      providerSelect.addEventListener('change', () => {
+        const nextSelection = normalizeChatProviderSelection(providerSelect.value, routingState);
+        providerSelect.value = nextSelection;
+        sessionStorage.setItem(CHAT_PROVIDER_SELECTION_KEY, nextSelection);
+      });
+
+      providerRow.append(providerLabel, providerSelect);
+      selectorSlot.appendChild(providerRow);
+      activeAgentId = '__guardian__';
+      return;
+    }
+
+    if (userAgents.length > 0) {
+      select = document.createElement('select');
+      select.id = 'chat-agent-select';
+      select.style.cssText = 'min-width:10rem;flex:1 1 auto;';
+      select.innerHTML = userAgents.map((agent) =>
+        `<option value="${esc(agent.id)}">${esc(agent.name)}</option>`
+      ).join('');
+      selectorSlot.appendChild(select);
+      activeAgentId = resolveInitialAgent(select, userAgents);
+      select.addEventListener('change', () => {
+        const selected = select.value;
+        if (selected) {
+          sessionStorage.setItem(ACTIVE_AGENT_KEY, selected);
+          activeAgentId = selected;
+        }
+        if (history) {
+          renderHistory(history, getHistoryKey() || selected, approvalHandler);
+          refreshVisiblePendingAction?.();
+        }
+      });
+      return;
+    }
+
     const noAgents = document.createElement('div');
     noAgents.style.cssText = 'font-size:0.7rem;color:var(--text-muted);flex:1 1 auto;';
     noAgents.textContent = 'No agents available';
-    primaryControls.appendChild(noAgents);
-  }
+    selectorSlot.appendChild(noAgents);
+    activeAgentId = null;
+  };
+
+  renderSelectorControls();
 
   const resetBtn = document.createElement('button');
   resetBtn.className = 'btn btn-secondary';
@@ -262,13 +294,6 @@ export async function initChatPanel(container) {
 
   primaryControls.appendChild(stopBtn);
   primaryControls.appendChild(resetBtn);
-
-  let history = null;
-
-  const getHistoryKey = () => {
-    const baseKey = useProviderSelector ? '__guardian__' : (select?.value || '');
-    return resolveChatHistoryKey(baseKey);
-  };
 
   const refreshCodeSessions = async () => {
     if (refreshCodeSessionsPromise) {
@@ -313,13 +338,48 @@ export async function initChatPanel(container) {
     void refreshCodeSessions();
   });
 
+  const refreshProviderSelectorChrome = async () => {
+    const previousHistoryKey = getHistoryKey() || activeAgentId;
+    try {
+      const [nextAgents, nextRoutingState] = await Promise.all([
+        api.agents().catch(() => agents),
+        api.routingMode().catch(() => routingState),
+      ]);
+      agents = Array.isArray(nextAgents) ? nextAgents : agents;
+      routingState = nextRoutingState || routingState;
+      chatAgents = agents.filter((agent) => agent?.canChat !== false);
+      userAgents = chatAgents.filter((agent) => !agent.internal);
+      useProviderSelector = shouldUseChatProviderSelector(chatAgents, routingState);
+      renderSelectorControls();
+      if (history) {
+        const nextHistoryKey = getHistoryKey() || activeAgentId;
+        if (nextHistoryKey !== previousHistoryKey) {
+          renderHistory(history, nextHistoryKey, approvalHandler);
+          refreshVisiblePendingAction?.();
+        }
+      }
+    } catch {
+      // Keep the current selector state when refresh fails.
+    }
+  };
+
+  window.addEventListener(PROVIDER_PROFILES_CHANGED_EVENT, () => {
+    void refreshProviderSelectorChrome();
+  });
+
   onSSE('ui.invalidate', (payload) => {
-    if (!isCodeSessionInvalidation(payload)) return;
-    void refreshCodeSessions();
+    if (isCodeSessionInvalidation(payload)) {
+      void refreshCodeSessions();
+    }
+    if (shouldRefreshChatProviderOptions(payload)) {
+      void refreshProviderSelectorChrome();
+    }
   });
 
   wrapper.appendChild(toolbar);
-  refreshChatPanelChrome = null;
+  refreshChatPanelChrome = () => {
+    void refreshProviderSelectorChrome();
+  };
 
   // Chat history
   history = document.createElement('div');
@@ -345,18 +405,6 @@ export async function initChatPanel(container) {
   sendBtn.style.padding = '0.5rem 0.8rem';
 
   renderHistory(history, getHistoryKey() || activeAgentId, approvalHandler);
-
-  if (select) {
-    select.addEventListener('change', () => {
-      const selected = select.value;
-      if (selected) {
-        sessionStorage.setItem(ACTIVE_AGENT_KEY, selected);
-        activeAgentId = selected;
-      }
-      renderHistory(history, getHistoryKey() || selected, approvalHandler);
-      refreshVisiblePendingAction?.();
-    });
-  }
 
   // ── Helpers ──────────────────────────────────────────────────
 

@@ -29,6 +29,11 @@ export function getChatProviderOptions(routingState) {
   return getAvailableChatProviderOptions(routingState);
 }
 
+export function shouldRefreshChatProviderOptions(payload) {
+  const topics = Array.isArray(payload?.topics) ? payload.topics : [];
+  return topics.includes('providers') || topics.includes('config');
+}
+
 export function normalizeChatProviderSelection(value, routingState) {
   const available = new Set(getAvailableChatProviderOptions(routingState).map((option) => option.value));
   return available.has(value) ? value : 'auto';

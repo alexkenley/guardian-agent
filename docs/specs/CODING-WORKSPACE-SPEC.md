@@ -60,7 +60,7 @@ Primary persisted shape:
   - `title`
   - `workspaceRoot`
   - `resolvedRoot`
-  - `agentId`
+  - `agentId` (legacy metadata only; automatic chat routing does not bind new turns to it)
   - `status`
   - `attachmentPolicy`
   - `createdAt`
@@ -213,7 +213,7 @@ Target orchestration rules:
 - Guardian may reason about many coding sessions in one conversation, but implicit mutation still lands in exactly one `primary` workspace per lane
 - switching the current workspace changes the `primary` session; it does not merge several mutable workspaces into one ambiguous context
 - concurrent work in another workspace should be modeled as a `child lane`, not as silent multi-repo mutation from the same foreground chat flow
-- referenced sessions are inspectable by default and writable only through explicit target pinning or an explicit child lane
+- referenced sessions are inspectable by default and writable only after an explicit workspace switch or through an explicit child lane
 
 ## Routing Behavior
 
@@ -222,11 +222,12 @@ Routing is code-session-aware.
 When an incoming message is tied to a coding session:
 
 - Guardian first checks for an explicit or attached backend coding session
-- if one exists, routing prefers that session’s bound `agentId`
-- if the session is not yet bound, routing prefers the local/coding-capable agent tier
-- only non-coding messages fall back to normal tier routing
+- the coding session stays attached for workspace context, approvals, and continuity
+- routing still goes through the shared Intent Gateway and execution-profile selector instead of dispatching directly to a stored session `agentId`
+- Auto mode can therefore keep lighter coding turns on managed cloud or escalate heavier repo-grounded/security-heavy turns to frontier when policy allows it
+- operator-forced chat mode or request-scoped provider overrides still apply normally for that turn
 
-This prevents “continue that coding session” style follow-ups from being routed as unrelated general chat.
+This prevents “continue that coding session” style follow-ups from losing workspace context without bypassing normal tier and provider selection.
 
 ## Capability Model
 
@@ -315,16 +316,16 @@ Behavior:
 - the `#/code` workbench keeps the session-scoped `Activity` panel for approvals, trust state, recent work, and verification outcomes
 - `Activity` preserves its own scroll position across normal session rerenders so long review lists remain navigable
 - the UI does not auto-switch panels when approvals appear
-- the web chat surface should not become a duplicate session manager; primary-session switching, references, and explicit targeting belong to the workbench session rail
+- the web chat surface should not become a duplicate session manager; primary-session switching belongs to the workbench session rail
 - normal web chat should not render separate coding-session controls or status rows; the Code Sessions panel owns that product surface
-- session cards in the workbench can inspect any portfolio session locally without silently retargeting Guardian chat
-- explicit `Attach Chat` promotes a workbench session to the current mutable workspace for Guardian chat on the web surface
-- session cards can also mark another workspace as `REFERENCED` so Guardian can keep bounded inspect-only context for that surface
-- session cards can pin another workspace as `TARGETED` so Guardian chat explicitly works there without changing the current mutable workspace
-- the workbench may also open a session in a temporary `VIEWING` state from a trace/run deep link without reattaching Guardian chat to that session
+- the Sessions rail keeps one current mutable workspace selected at a time on the web surface
+- clicking another session card promotes it to the current Guardian chat workspace instead of exposing separate per-card attach/reference/target controls
+- other saved sessions in the rail are treated as referenced context by default
+- the saved session portfolio is capped at four total sessions so the reference set stays bounded without additional per-session reference toggles
+- trace/run deep links may still focus the relevant session or activity context without duplicating a second session-management surface in chat
 - trace/run deep links that include `assistantRunId` or `assistantRunItemId` should open the `Activity` panel automatically for that inspected session
 - when a deep link includes `assistantRunItemId`, the activity panel should render and highlight the exact matching event with a bounded nearby-context window instead of only showing the last few items
-- `CURRENT` means the session currently attached to Guardian chat on that web surface; `VIEWING` means the operator is inspecting a different session in the workbench only; `REFERENCED` means the workspace is kept in the portfolio for inspect/compare context but is not the implicit mutation target; `TARGETED` means Guardian chat is explicitly pinned to that non-primary workspace until the operator clears the pin or makes it current
+- `CURRENT` means the session currently attached to Guardian chat on that web surface; all other saved sessions are referenced context by default unless a future delegated or explicit-target flow narrows scope more tightly
 
 ### Code Inspector
 
@@ -518,7 +519,8 @@ As built:
 - mentioning Codex or another backend as the subject of a question should not relaunch it by itself; explanation or investigation questions about backend-produced artifacts should stay on the normal Guardian chat path unless the user explicitly asks Guardian to use that backend
 - backend launches are tied to the current coding session and open a visible terminal tab so the operator can observe progress
 - approval copy for delegated backend runs names the active coding workspace before launch so the operator can verify the target repo
-- if a delegated coding request explicitly names a different coding workspace than the current attachment, Guardian should stop and require the operator to switch that chat surface first rather than silently writing into the wrong repo
+- if a delegated coding request explicitly names a different saved coding workspace than the current attachment, Guardian should auto-switch that chat surface to the requested workspace before running the task there
+- if the requested coding workspace is ambiguous or cannot be matched, Guardian should stop instead of silently writing into the wrong repo
 - once that required workspace switch is satisfied on the same chat surface, Guardian should resume the stored delegated coding request automatically instead of asking for the request again
 - UI-only chat context prefixes should not be forwarded into the external coding backend task payload or shown verbatim in operator-facing delegated-task previews
 - switching the focused coding workspace should not fork or clear the visible Guardian chat transcript on that surface; the transcript belongs to the chat surface and the coding workspace is attached execution context inside it

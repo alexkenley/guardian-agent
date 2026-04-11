@@ -77,7 +77,7 @@ export function createProviderConfigHelpers(options: ProviderConfigHelperOptions
       case 'mistral': return 'mistral-large-latest';
       case 'deepseek': return 'deepseek-chat';
       case 'together': return 'meta-llama/Llama-3.3-70B-Instruct-Turbo';
-      case 'xai': return 'grok-2-latest';
+      case 'xai': return 'grok-4-1-fast-reasoning';
       case 'google': return 'gemini-2.0-flash';
       default: return 'provider-model';
     }
