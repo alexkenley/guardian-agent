@@ -4,6 +4,11 @@ import { createTabs } from '../components/tabs.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TAB_IDS = ['today', 'calendar', 'tasks', 'notes', 'people', 'library', 'briefs', 'routines'];
+const SECOND_BRAIN_CHANNEL_LABELS = {
+  web: 'Web',
+  telegram: 'Telegram',
+  cli: 'CLI',
+};
 
 let currentContainer = null;
 let flashTimer = null;
@@ -147,7 +152,7 @@ async function loadSecondBrainData() {
   const { focusWindowStart, focusWindowEnd } = getSecondBrainFocusWindow(now);
   const calendarRange = getCalendarViewRange(state.calendarCursor, state.calendarView);
 
-  const [overview, focusEvents, calendarEvents, tasks, notes, people, links, routineCatalog, routines, briefs] = await Promise.all([
+  const [overview, focusEvents, calendarEvents, tasks, notes, people, links, routineCatalog, routines, briefs, config] = await Promise.all([
     api.secondBrainOverview(),
     api.secondBrainCalendar({
       fromTime: focusWindowStart.getTime(),
@@ -166,6 +171,7 @@ async function loadSecondBrainData() {
     api.secondBrainRoutineCatalog(),
     api.secondBrainRoutines(),
     api.secondBrainBriefs({ limit: 100 }),
+    api.config(),
   ]);
 
   return {
@@ -180,6 +186,7 @@ async function loadSecondBrainData() {
     routineCatalog,
     routines,
     briefs,
+    config,
     calendarRange,
   };
 }
@@ -189,6 +196,164 @@ function getSecondBrainFocusWindow(now = Date.now()) {
     focusWindowStart: startOfDay(new Date(now - (7 * DAY_MS))),
     focusWindowEnd: endOfDay(new Date(now + (7 * DAY_MS))),
   };
+}
+
+function getSecondBrainSettingsView(config) {
+  const secondBrain = config?.assistant?.secondBrain || {};
+  const defaultChannels = Array.isArray(secondBrain.delivery?.defaultChannels)
+    ? [...new Set(secondBrain.delivery.defaultChannels.filter((channel) => channel === 'web' || channel === 'cli' || channel === 'telegram'))]
+    : [];
+  return {
+    enabled: secondBrain.enabled !== false,
+    onboarding: {
+      completed: secondBrain.onboarding?.completed === true,
+      dismissed: secondBrain.onboarding?.dismissed === true,
+    },
+    profile: {
+      timezone: secondBrain.profile?.timezone || '',
+      workdayStart: secondBrain.profile?.workdayStart || '08:30',
+      workdayEnd: secondBrain.profile?.workdayEnd || '17:30',
+      proactivityLevel: secondBrain.profile?.proactivityLevel || 'balanced',
+    },
+    delivery: {
+      defaultChannels: defaultChannels.length ? defaultChannels : ['web'],
+    },
+    knowledge: {
+      prioritizeConnectedSources: secondBrain.knowledge?.prioritizeConnectedSources !== false,
+      defaultRetrievalMode: secondBrain.knowledge?.defaultRetrievalMode || 'hybrid',
+      rerankerEnabled: secondBrain.knowledge?.rerankerEnabled !== false,
+    },
+  };
+}
+
+function buildRecommendedSecondBrainPatch(config) {
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  const telegramEnabled = config?.channels?.telegram?.enabled === true;
+  return {
+    assistant: {
+      secondBrain: {
+        enabled: true,
+        onboarding: {
+          completed: true,
+          dismissed: false,
+        },
+        profile: {
+          timezone,
+          workdayStart: '08:30',
+          workdayEnd: '17:30',
+          proactivityLevel: 'balanced',
+        },
+        delivery: {
+          defaultChannels: telegramEnabled ? ['telegram', 'web'] : ['web'],
+        },
+        knowledge: {
+          prioritizeConnectedSources: true,
+          defaultRetrievalMode: 'hybrid',
+          rerankerEnabled: true,
+        },
+      },
+    },
+  };
+}
+
+function formatSecondBrainPreferencesSummary(secondBrain) {
+  const timezone = secondBrain.profile.timezone || 'browser-local time';
+  const workday = `${secondBrain.profile.workdayStart || '08:30'}-${secondBrain.profile.workdayEnd || '17:30'}`;
+  const delivery = formatSecondBrainChannelList(secondBrain.delivery.defaultChannels);
+  const retrievalMode = secondBrain.knowledge.defaultRetrievalMode.replace(/_/g, ' ');
+  return {
+    timezone,
+    workday,
+    delivery,
+    retrievalMode,
+  };
+}
+
+function formatSecondBrainChannelList(channels) {
+  if (!Array.isArray(channels) || channels.length === 0) {
+    return 'Web';
+  }
+  return channels
+    .map((channel) => SECOND_BRAIN_CHANNEL_LABELS[channel] || channel)
+    .join(', ');
+}
+
+function resolveSecondBrainOnboardingMode(secondBrain) {
+  if (secondBrain.onboarding.completed) return 'done';
+  if (secondBrain.onboarding.dismissed) return 'hidden';
+  return 'pending';
+}
+
+function renderSecondBrainSetupCard(data) {
+  const secondBrain = getSecondBrainSettingsView(data?.config);
+  const onboardingMode = resolveSecondBrainOnboardingMode(secondBrain);
+
+  if (!secondBrain.enabled) {
+    return `
+      <article class="sb-card">
+        <div class="sb-card__header">
+          <div>
+            <div class="sb-card__eyebrow">Second Brain Preferences</div>
+            <h3>Guided setup is currently turned off</h3>
+          </div>
+        </div>
+        <p>The daily workspace still works, but the editable setup card and default-delivery preferences are paused until you re-enable them in Configuration.</p>
+        <div class="sb-brief-actions">
+          <button class="btn btn-secondary btn-sm" type="button" data-second-brain-open-config="true">Open Configuration</button>
+        </div>
+      </article>
+    `;
+  }
+
+  if (onboardingMode === 'hidden') {
+    return '';
+  }
+
+  const summary = formatSecondBrainPreferencesSummary(secondBrain);
+  if (onboardingMode === 'pending') {
+    return `
+      <article class="sb-card">
+        <div class="sb-card__header">
+          <div>
+            <div class="sb-card__eyebrow">Second Brain Setup</div>
+            <h3>Tune how Guardian should help you</h3>
+          </div>
+        </div>
+        <p>Set a workday window, preferred delivery channels, and retrieval defaults once, then change them later in <strong>Configuration &gt; Second Brain</strong>. This stays as preferences only. It does not create a second memory authority beside Guardian memory.</p>
+        <div class="sb-readout-grid">
+          ${renderReadoutCard('Recommended timezone', Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC')}
+          ${renderReadoutCard('Recommended workday', '08:30-17:30')}
+          ${renderReadoutCard('Recommended delivery', formatSecondBrainChannelList(buildRecommendedSecondBrainPatch(data?.config).assistant.secondBrain.delivery.defaultChannels))}
+        </div>
+        <div class="sb-brief-actions">
+          <button class="btn btn-primary btn-sm" type="button" data-second-brain-setup-defaults="true">Use Recommended Defaults</button>
+          <button class="btn btn-secondary btn-sm" type="button" data-second-brain-open-config="true">Customize in Configuration</button>
+          <button class="btn btn-secondary btn-sm" type="button" data-second-brain-setup-skip="true">Skip for now</button>
+        </div>
+      </article>
+    `;
+  }
+
+  return `
+    <article class="sb-card">
+      <div class="sb-card__header">
+        <div>
+          <div class="sb-card__eyebrow">Second Brain Preferences</div>
+          <h3>Your current defaults</h3>
+        </div>
+      </div>
+      <p>These preferences stay editable. Use Configuration when you want to change the workday window, delivery defaults, or retrieval posture later.</p>
+      <div class="sb-readout-grid">
+        ${renderReadoutCard('Timezone', summary.timezone)}
+        ${renderReadoutCard('Workday', summary.workday)}
+        ${renderReadoutCard('Delivery', summary.delivery)}
+        ${renderReadoutCard('Retrieval', summary.retrievalMode)}
+      </div>
+      <div class="sb-brief-actions">
+        <button class="btn btn-secondary btn-sm" type="button" data-second-brain-open-config="true">Edit preferences</button>
+      </div>
+    </article>
+  `;
 }
 
 async function loadSecondBrainTabData(tabId) {
@@ -419,6 +584,8 @@ function renderToday(panel, data) {
           ${renderReadoutCard('Cloud AI budget', formatUsageSummary(data.overview.usage))}
         </div>
       </article>
+
+      ${renderSecondBrainSetupCard(data)}
 
       <article class="sb-card">
         <div class="sb-card__header">
@@ -1537,6 +1704,10 @@ function renderRoutineCreateForm(entry, data) {
   const selectedEntry = entry && catalog.some((option) => option.templateId === entry.templateId)
     ? entry
     : resolveRoutineCreateEntry(entry, data);
+  const secondBrain = getSecondBrainSettingsView(data?.config);
+  const defaultDelivery = secondBrain.delivery.defaultChannels.length
+    ? secondBrain.delivery.defaultChannels
+    : [...selectedEntry.defaultDelivery];
   const preview = {
     templateId: selectedEntry.templateId,
     capability: selectedEntry.capability,
@@ -1545,7 +1716,7 @@ function renderRoutineCreateForm(entry, data) {
     category: selectedEntry.category,
     enabled: true,
     timing: { ...selectedEntry.defaultTiming },
-    delivery: [...selectedEntry.defaultDelivery],
+    delivery: [...defaultDelivery],
     ...(selectedEntry.supportsFocusQuery ? { focusQuery: '' } : {}),
     ...(selectedEntry.supportsTopicQuery ? { topicQuery: '' } : {}),
     ...(selectedEntry.supportsDeadlineWindow ? { dueWithinHours: 24, includeOverdue: true } : {}),
@@ -1554,7 +1725,7 @@ function renderRoutineCreateForm(entry, data) {
 
   return `
     <div class="sb-stack">
-      <p class="sb-section__copy">Choose the assistant capability, set when it should run, and pick where Guardian should deliver the result. Telegram is the default assistant channel.</p>
+      <p class="sb-section__copy">Choose the assistant capability, set when it should run, and pick where Guardian should deliver the result. New routine drafts start with ${esc(formatSecondBrainChannelList(defaultDelivery))} delivery from your Second Brain preferences.</p>
       <form class="sb-form" data-routine-create-form>
         <label class="sb-form__label" for="routine-template-id">Capability</label>
         <select id="routine-template-id" name="templateId">
@@ -1798,6 +1969,33 @@ function bindInteractions(container) {
   container.addEventListener('click', async (event) => {
     const target = event.target instanceof Element ? event.target : null;
     if (!target) return;
+
+    const secondBrainDefaults = target.closest('[data-second-brain-setup-defaults]');
+    if (secondBrainDefaults) {
+      await saveSecondBrainPreferenceMutation(buildRecommendedSecondBrainPatch(state.data?.config));
+      return;
+    }
+
+    const secondBrainSkip = target.closest('[data-second-brain-setup-skip]');
+    if (secondBrainSkip) {
+      await saveSecondBrainPreferenceMutation({
+        assistant: {
+          secondBrain: {
+            onboarding: {
+              completed: false,
+              dismissed: true,
+            },
+          },
+        },
+      });
+      return;
+    }
+
+    const secondBrainOpenConfig = target.closest('[data-second-brain-open-config]');
+    if (secondBrainOpenConfig) {
+      window.location.hash = '#/config?tab=second-brain';
+      return;
+    }
 
     const captureKind = target.closest('[data-capture-kind]');
     if (captureKind?.dataset.captureKind) {
@@ -2545,6 +2743,22 @@ async function generateBriefAction(kind, eventId, routineId) {
   } catch (error) {
     setFlash('error', error instanceof Error ? error.message : String(error), true);
     await rerenderLocal();
+  }
+}
+
+async function saveSecondBrainPreferenceMutation(patch) {
+  try {
+    const result = await api.updateConfig(patch);
+    if (!result?.success) {
+      throw new Error(result?.message || 'The preference update did not complete.');
+    }
+    setFlash('success', result.message || 'Second Brain preferences updated.');
+    await renderSecondBrain(currentContainer, { tab: state.activeTab, refresh: true });
+    return result;
+  } catch (error) {
+    setFlash('error', error instanceof Error ? error.message : String(error), true);
+    await rerenderLocal();
+    return null;
   }
 }
 

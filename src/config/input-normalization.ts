@@ -83,6 +83,23 @@ export function normalizeConfigInputs(config: GuardianAgentConfig): GuardianAgen
     ),
     assistant: {
       ...config.assistant,
+      secondBrain: config.assistant.secondBrain
+        ? {
+          ...config.assistant.secondBrain,
+          profile: {
+            ...config.assistant.secondBrain.profile,
+            timezone: trimOptionalString(config.assistant.secondBrain.profile.timezone),
+            workdayStart: trimOptionalString(config.assistant.secondBrain.profile.workdayStart),
+            workdayEnd: trimOptionalString(config.assistant.secondBrain.profile.workdayEnd),
+          },
+          delivery: {
+            ...config.assistant.secondBrain.delivery,
+            defaultChannels: trimStringArray(config.assistant.secondBrain.delivery.defaultChannels)?.filter((channel): channel is 'web' | 'cli' | 'telegram' => (
+              channel === 'web' || channel === 'cli' || channel === 'telegram'
+            )) ?? [],
+          },
+        }
+        : config.assistant.secondBrain,
       threatIntel: {
         ...config.assistant.threatIntel,
         moltbook: config.assistant.threatIntel.moltbook

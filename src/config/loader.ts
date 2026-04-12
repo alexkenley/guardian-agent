@@ -40,6 +40,11 @@ function isLocalLLMConfig(provider: string | undefined): boolean {
   return getProviderLocality(provider) === 'local';
 }
 
+function isTimeOfDayInput(value: string | undefined): boolean {
+  if (!value?.trim()) return false;
+  return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value.trim());
+}
+
 /** Default config file path. */
 export const DEFAULT_CONFIG_PATH = join(homedir(), '.guardianagent', 'config.yaml');
 
@@ -345,6 +350,47 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
 
   if (!['single_user', 'channel_user'].includes(assistant.identity.mode)) {
     errors.push("assistant.identity.mode must be 'single_user' or 'channel_user'");
+  }
+
+  if (typeof assistant.secondBrain.enabled !== 'boolean') {
+    errors.push('assistant.secondBrain.enabled must be a boolean');
+  }
+  if (typeof assistant.secondBrain.onboarding?.completed !== 'boolean') {
+    errors.push('assistant.secondBrain.onboarding.completed must be a boolean');
+  }
+  if (typeof assistant.secondBrain.onboarding?.dismissed !== 'boolean') {
+    errors.push('assistant.secondBrain.onboarding.dismissed must be a boolean');
+  }
+  if (assistant.secondBrain.profile?.timezone !== undefined && !assistant.secondBrain.profile.timezone.trim()) {
+    errors.push('assistant.secondBrain.profile.timezone must be a non-empty string when set');
+  }
+  if (assistant.secondBrain.profile?.workdayStart !== undefined && !isTimeOfDayInput(assistant.secondBrain.profile.workdayStart)) {
+    errors.push('assistant.secondBrain.profile.workdayStart must be in HH:MM 24-hour format');
+  }
+  if (assistant.secondBrain.profile?.workdayEnd !== undefined && !isTimeOfDayInput(assistant.secondBrain.profile.workdayEnd)) {
+    errors.push('assistant.secondBrain.profile.workdayEnd must be in HH:MM 24-hour format');
+  }
+  if (!['minimal', 'balanced', 'proactive'].includes(assistant.secondBrain.profile?.proactivityLevel)) {
+    errors.push("assistant.secondBrain.profile.proactivityLevel must be 'minimal', 'balanced', or 'proactive'");
+  }
+  if (!Array.isArray(assistant.secondBrain.delivery?.defaultChannels) || assistant.secondBrain.delivery.defaultChannels.length === 0) {
+    errors.push('assistant.secondBrain.delivery.defaultChannels must contain at least one channel');
+  } else {
+    for (const channel of assistant.secondBrain.delivery.defaultChannels) {
+      if (!['web', 'cli', 'telegram'].includes(channel)) {
+        errors.push(`assistant.secondBrain.delivery.defaultChannels contains unknown channel '${channel}'`);
+        break;
+      }
+    }
+  }
+  if (typeof assistant.secondBrain.knowledge?.prioritizeConnectedSources !== 'boolean') {
+    errors.push('assistant.secondBrain.knowledge.prioritizeConnectedSources must be a boolean');
+  }
+  if (!['hybrid', 'library_first', 'search_first'].includes(assistant.secondBrain.knowledge?.defaultRetrievalMode)) {
+    errors.push("assistant.secondBrain.knowledge.defaultRetrievalMode must be 'hybrid', 'library_first', or 'search_first'");
+  }
+  if (typeof assistant.secondBrain.knowledge?.rerankerEnabled !== 'boolean') {
+    errors.push('assistant.secondBrain.knowledge.rerankerEnabled must be a boolean');
   }
 
   if (assistant.security?.deploymentProfile && !isDeploymentProfile(assistant.security.deploymentProfile)) {

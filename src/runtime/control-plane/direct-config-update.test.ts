@@ -183,4 +183,75 @@ describe('direct config update', () => {
     });
     expect(configRef.current.defaultProvider).toBe('ollama-cloud-general');
   });
+
+  it('persists second-brain preference updates into live and raw config state', async () => {
+    const { configRef, rawState, handler } = createHandlerHarness(createConfig());
+
+    const result = await handler({
+      assistant: {
+        secondBrain: {
+          onboarding: {
+            completed: true,
+            dismissed: false,
+          },
+          profile: {
+            timezone: 'Australia/Brisbane',
+            workdayStart: '09:00',
+            workdayEnd: '18:00',
+            proactivityLevel: 'proactive',
+          },
+          delivery: {
+            defaultChannels: ['telegram', 'web'],
+          },
+          knowledge: {
+            prioritizeConnectedSources: false,
+            defaultRetrievalMode: 'library_first',
+            rerankerEnabled: false,
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({ success: true, message: 'Saved' });
+    expect(configRef.current.assistant.secondBrain.onboarding).toEqual({
+      completed: true,
+      dismissed: false,
+    });
+    expect(configRef.current.assistant.secondBrain.profile).toEqual({
+      timezone: 'Australia/Brisbane',
+      workdayStart: '09:00',
+      workdayEnd: '18:00',
+      proactivityLevel: 'proactive',
+    });
+    expect(configRef.current.assistant.secondBrain.delivery.defaultChannels).toEqual(['telegram', 'web']);
+    expect(configRef.current.assistant.secondBrain.knowledge).toEqual({
+      prioritizeConnectedSources: false,
+      defaultRetrievalMode: 'library_first',
+      rerankerEnabled: false,
+    });
+
+    const rawConfig = rawState.current as Record<string, unknown>;
+    const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+    expect(rawAssistant.secondBrain).toEqual({
+      enabled: true,
+      onboarding: {
+        completed: true,
+        dismissed: false,
+      },
+      profile: {
+        workdayStart: '09:00',
+        workdayEnd: '18:00',
+        proactivityLevel: 'proactive',
+        timezone: 'Australia/Brisbane',
+      },
+      delivery: {
+        defaultChannels: ['telegram', 'web'],
+      },
+      knowledge: {
+        prioritizeConnectedSources: false,
+        defaultRetrievalMode: 'library_first',
+        rerankerEnabled: false,
+      },
+    });
+  });
 });

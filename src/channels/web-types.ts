@@ -1873,6 +1873,27 @@ export interface ConfigUpdate {
     };
   };
   assistant?: {
+    secondBrain?: {
+      enabled?: boolean;
+      onboarding?: {
+        completed?: boolean;
+        dismissed?: boolean;
+      };
+      profile?: {
+        timezone?: string;
+        workdayStart?: string;
+        workdayEnd?: string;
+        proactivityLevel?: 'minimal' | 'balanced' | 'proactive';
+      };
+      delivery?: {
+        defaultChannels?: Array<'web' | 'cli' | 'telegram'>;
+      };
+      knowledge?: {
+        prioritizeConnectedSources?: boolean;
+        defaultRetrievalMode?: 'hybrid' | 'library_first' | 'search_first';
+        rerankerEnabled?: boolean;
+      };
+    };
     security?: {
       deploymentProfile?: DeploymentProfile;
       operatingMode?: SecurityOperatingMode;

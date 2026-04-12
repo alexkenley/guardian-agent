@@ -700,6 +700,7 @@ Users should be able to tell immediately that this page is for product setup and
 
 - `AI Providers`
 - `Search Providers`
+- `Second Brain`
 - `Tools`
 - `Security`
 - `Integration System`
@@ -739,6 +740,23 @@ Must not own:
 - duplicate provider or cloud summary cards
 
 Search-source runtime state should be shown as one compact actionable summary, not a strip of vanity status cards.
+
+### `Second Brain`
+
+Owns:
+
+- editable Second Brain setup preferences
+- workday defaults
+- default delivery preferences for new Second Brain routines
+- bounded retrieval defaults for the Second Brain experience
+
+Must not own:
+
+- a second memory authority or duplicate memory store
+- direct provider administration
+- routine editing for already configured routines
+
+This tab should make clear that the settings remain editable later and that existing routines still belong to `Second Brain > Routines`.
 
 ### `Tools`
 

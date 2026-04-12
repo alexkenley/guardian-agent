@@ -631,6 +631,56 @@ describe('validateConfig', () => {
     expect(validateConfig(config)).toContain('llm.local.baseUrl must not include a query string or fragment');
   });
 
+  it('should validate second-brain preference config', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        secondBrain: {
+          enabled: true,
+          onboarding: {
+            completed: false,
+            dismissed: false,
+          },
+          profile: {
+            timezone: 'Australia/Brisbane',
+            workdayStart: '08:30',
+            workdayEnd: '17:30',
+            proactivityLevel: 'balanced',
+          },
+          delivery: {
+            defaultChannels: ['web', 'telegram'],
+          },
+          knowledge: {
+            prioritizeConnectedSources: true,
+            defaultRetrievalMode: 'hybrid',
+            rerankerEnabled: true,
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toEqual([]);
+  });
+
+  it('should reject invalid second-brain time inputs', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        secondBrain: {
+          ...DEFAULT_CONFIG.assistant.secondBrain,
+          profile: {
+            ...DEFAULT_CONFIG.assistant.secondBrain.profile,
+            workdayStart: '8:30am',
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toContain('assistant.secondBrain.profile.workdayStart must be in HH:MM 24-hour format');
+  });
+
   it('should validate cloud Vercel credential refs', () => {
     const config: GuardianAgentConfig = {
       ...DEFAULT_CONFIG,

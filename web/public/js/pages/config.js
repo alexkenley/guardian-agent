@@ -251,8 +251,8 @@ export async function renderConfig(container, options = {}) {
       ${renderGuidancePanel({
         kicker: 'Configuration Guide',
         title: 'Product setup and policy ownership',
-        whatItIs: 'Configuration is the home for product setup, tool policy, security controls, integrations, system controls, and appearance.',
-        whatSeeing: 'You are seeing tabs that separate AI provider setup, search setup, live tool operations, security boundaries, integration-system controls, and visual preferences.',
+        whatItIs: 'Configuration is the home for product setup, Second Brain preferences, tool policy, security controls, integrations, system controls, and appearance.',
+        whatSeeing: 'You are seeing tabs that separate AI provider setup, search setup, Second Brain preferences, live tool operations, security boundaries, integration-system controls, and visual preferences.',
         whatCanDo: 'Use this page to configure how GuardianAgent behaves, connects, authenticates, and notifies.',
         howLinks: 'This page defines setup and policy. Operational investigation, monitoring, and workflow execution stay on their owner pages.',
       })}
@@ -261,6 +261,7 @@ export async function renderConfig(container, options = {}) {
     createTabs(container, [
       { id: 'ai-providers', label: 'AI Providers', render: renderAiProvidersTab },
       { id: 'search-providers', label: 'Search Providers', render: renderSearchProvidersTab },
+      { id: 'second-brain', label: 'Second Brain', render: renderSecondBrainTab },
       { id: 'tools', label: 'Tools', render: renderToolsOnlyTab },
       { id: 'security', label: 'Security', render: renderSecurityTab },
       { id: 'integration-system', label: 'Integration System', render: renderIntegrationSystemTab },
@@ -289,6 +290,7 @@ function normalizeConfigTab(tab) {
   if (!tab) return 'ai-providers';
   if (tab === 'providers' || tab === 'ai-search') return 'ai-providers';
   if (tab === 'search-sources') return 'search-providers';
+  if (tab === 'secondbrain' || tab === 'second_brain' || tab === 'personal-assistant') return 'second-brain';
   if (tab === 'tools-policy') return 'tools';
   if (tab === 'policy' || tab === 'settings') return 'security';
   if (tab === 'integrations' || tab === 'system' || tab === 'cloud') return 'integration-system';
@@ -358,6 +360,24 @@ function renderSearchProvidersTab(panel) {
     ]),
     createGenericHelpFactory('Configuration Search Providers'),
   );
+  activateContextHelp(panel);
+}
+
+function renderSecondBrainTab(panel) {
+  panel.innerHTML = '';
+  panel.insertAdjacentHTML('beforeend', renderGuidancePanel({
+    kicker: 'Second Brain',
+    compact: true,
+    whatItIs: 'This tab configures Second Brain as an editable product surface rather than a one-shot setup flow.',
+    whatSeeing: 'You are seeing guided-setup state, personal workday defaults, routine delivery preferences, and knowledge-plane defaults for future retrieval-backed work.',
+    whatCanDo: 'Set or change your Second Brain preferences at any time without creating a separate memory system or a stale wizard.',
+    howLinks: 'These settings shape the personal-assistant experience. Memory, search infrastructure, and provider admin still stay on their own owner surfaces.',
+  }));
+
+  panel.appendChild(createSecondBrainPanel(sharedConfig, panel));
+
+  applyInputTooltips(panel);
+  enhanceSectionHelp(panel, {}, createGenericHelpFactory('Configuration Second Brain'));
   activateContextHelp(panel);
 }
 
@@ -3693,6 +3713,263 @@ function createIntegrationOverview(config, authStatus) {
   wrap.appendChild(cards);
 
   return wrap;
+}
+
+function getSecondBrainSettingsView(config = sharedConfig) {
+  const secondBrain = config?.assistant?.secondBrain || {};
+  const defaultChannels = Array.isArray(secondBrain.delivery?.defaultChannels)
+    ? [...new Set(secondBrain.delivery.defaultChannels.filter((channel) => channel === 'web' || channel === 'cli' || channel === 'telegram'))]
+    : [];
+  return {
+    enabled: secondBrain.enabled !== false,
+    onboarding: {
+      completed: secondBrain.onboarding?.completed === true,
+      dismissed: secondBrain.onboarding?.dismissed === true,
+    },
+    profile: {
+      timezone: secondBrain.profile?.timezone || '',
+      workdayStart: secondBrain.profile?.workdayStart || '08:30',
+      workdayEnd: secondBrain.profile?.workdayEnd || '17:30',
+      proactivityLevel: secondBrain.profile?.proactivityLevel || 'balanced',
+    },
+    delivery: {
+      defaultChannels: defaultChannels.length ? defaultChannels : ['web'],
+    },
+    knowledge: {
+      prioritizeConnectedSources: secondBrain.knowledge?.prioritizeConnectedSources !== false,
+      defaultRetrievalMode: secondBrain.knowledge?.defaultRetrievalMode || 'hybrid',
+      rerankerEnabled: secondBrain.knowledge?.rerankerEnabled !== false,
+    },
+  };
+}
+
+function resolveSecondBrainOnboardingMode(secondBrainView) {
+  if (secondBrainView.onboarding.completed) return 'done';
+  if (secondBrainView.onboarding.dismissed) return 'hidden';
+  return 'pending';
+}
+
+function buildRecommendedSecondBrainPatch(config = sharedConfig, options = {}) {
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  const telegramEnabled = config?.channels?.telegram?.enabled === true;
+  const markCompleted = options.markCompleted !== false;
+  return {
+    assistant: {
+      secondBrain: {
+        enabled: true,
+        onboarding: {
+          completed: markCompleted,
+          dismissed: false,
+        },
+        profile: {
+          timezone,
+          workdayStart: '08:30',
+          workdayEnd: '17:30',
+          proactivityLevel: 'balanced',
+        },
+        delivery: {
+          defaultChannels: telegramEnabled ? ['telegram', 'web'] : ['web'],
+        },
+        knowledge: {
+          prioritizeConnectedSources: true,
+          defaultRetrievalMode: 'hybrid',
+          rerankerEnabled: true,
+        },
+      },
+    },
+  };
+}
+
+function createSecondBrainPanel(config, panel) {
+  const section = document.createElement('div');
+  section.className = 'table-container';
+  const secondBrain = getSecondBrainSettingsView(config);
+  const onboardingMode = resolveSecondBrainOnboardingMode(secondBrain);
+
+  section.innerHTML = `
+    <div class="table-header">
+      <h3>Second Brain Preferences</h3>
+      <span class="cfg-header-note">Editable setup, not a one-time wizard</span>
+    </div>
+    <div class="cfg-center-body">
+      <div style="margin-bottom:0.65rem;font-size:0.72rem;color:var(--text-muted);">
+        These settings drive the <strong>Second Brain</strong> home experience and future knowledge-plane defaults.
+        They do <strong>not</strong> create a second memory authority beside Guardian memory, and they do <strong>not</strong> replace the normal Routines editor for existing routines.
+      </div>
+      <div class="cfg-form-grid">
+        <div class="cfg-field">
+          <label>Second Brain Preferences</label>
+          <select id="cfg-second-brain-enabled">
+            <option value="true" ${secondBrain.enabled ? 'selected' : ''}>Enabled</option>
+            <option value="false" ${!secondBrain.enabled ? 'selected' : ''}>Disabled</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Guided Home Card</label>
+          <select id="cfg-second-brain-onboarding">
+            <option value="pending" ${onboardingMode === 'pending' ? 'selected' : ''}>Show until I finish setup</option>
+            <option value="done" ${onboardingMode === 'done' ? 'selected' : ''}>Mark setup complete</option>
+            <option value="hidden" ${onboardingMode === 'hidden' ? 'selected' : ''}>Hide for now</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Timezone</label>
+          <input id="cfg-second-brain-timezone" type="text" value="${escAttr(secondBrain.profile.timezone)}" placeholder="Australia/Brisbane">
+        </div>
+        <div class="cfg-field">
+          <label>Workday Start</label>
+          <input id="cfg-second-brain-workday-start" type="time" value="${escAttr(secondBrain.profile.workdayStart)}">
+        </div>
+        <div class="cfg-field">
+          <label>Workday End</label>
+          <input id="cfg-second-brain-workday-end" type="time" value="${escAttr(secondBrain.profile.workdayEnd)}">
+        </div>
+        <div class="cfg-field">
+          <label>Proactivity</label>
+          <select id="cfg-second-brain-proactivity">
+            <option value="minimal" ${secondBrain.profile.proactivityLevel === 'minimal' ? 'selected' : ''}>Minimal</option>
+            <option value="balanced" ${secondBrain.profile.proactivityLevel === 'balanced' ? 'selected' : ''}>Balanced</option>
+            <option value="proactive" ${secondBrain.profile.proactivityLevel === 'proactive' ? 'selected' : ''}>Proactive</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="cfg-divider"></div>
+      <div class="table-header" style="padding:0 0 0.45rem;border:none;background:none;">
+        <h3 style="font-size:0.82rem;letter-spacing:0.03em;">Default Delivery</h3>
+        <span class="cfg-header-note">Used for new routine drafts and guided setup suggestions</span>
+      </div>
+      <div style="display:grid;gap:0.6rem;padding:0.25rem 0 0.25rem;">
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
+          <input type="checkbox" id="cfg-second-brain-delivery-web" ${secondBrain.delivery.defaultChannels.includes('web') ? 'checked' : ''}>
+          <span>Web</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
+          <input type="checkbox" id="cfg-second-brain-delivery-telegram" ${secondBrain.delivery.defaultChannels.includes('telegram') ? 'checked' : ''}>
+          <span>Telegram</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;cursor:pointer;">
+          <input type="checkbox" id="cfg-second-brain-delivery-cli" ${secondBrain.delivery.defaultChannels.includes('cli') ? 'checked' : ''}>
+          <span>CLI</span>
+        </label>
+      </div>
+
+      <div class="cfg-divider"></div>
+      <div class="table-header" style="padding:0 0 0.45rem;border:none;background:none;">
+        <h3 style="font-size:0.82rem;letter-spacing:0.03em;">Knowledge Plane Defaults</h3>
+        <span class="cfg-header-note">Retrieval preferences, not a second memory store</span>
+      </div>
+      <div class="cfg-form-grid">
+        <div class="cfg-field">
+          <label>Default Retrieval Mode</label>
+          <select id="cfg-second-brain-retrieval-mode">
+            <option value="hybrid" ${secondBrain.knowledge.defaultRetrievalMode === 'hybrid' ? 'selected' : ''}>Hybrid</option>
+            <option value="library_first" ${secondBrain.knowledge.defaultRetrievalMode === 'library_first' ? 'selected' : ''}>Library first</option>
+            <option value="search_first" ${secondBrain.knowledge.defaultRetrievalMode === 'search_first' ? 'selected' : ''}>Search first</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label><input id="cfg-second-brain-prioritize-connected" type="checkbox" ${secondBrain.knowledge.prioritizeConnectedSources ? 'checked' : ''}> Prioritize connected and synced sources</label>
+        </div>
+        <div class="cfg-field">
+          <label><input id="cfg-second-brain-reranker" type="checkbox" ${secondBrain.knowledge.rerankerEnabled ? 'checked' : ''}> Enable reranker-ready defaults</label>
+        </div>
+      </div>
+
+      <div style="margin-top:0.65rem;font-size:0.72rem;color:var(--text-muted);">
+        Existing routines stay editable from <strong>Second Brain &gt; Routines</strong>. Changing these defaults affects the guided setup, future routine drafts, and the summary shown on the Second Brain home surface.
+      </div>
+
+      <div class="cfg-actions">
+        <button class="btn btn-secondary" id="cfg-second-brain-defaults" type="button">Use Recommended Defaults</button>
+        <button class="btn btn-secondary" id="cfg-second-brain-open-home" type="button">Open Second Brain</button>
+        <button class="btn btn-primary" id="cfg-second-brain-save" type="button">Save Second Brain Settings</button>
+        <span id="cfg-second-brain-status" class="cfg-save-status"></span>
+      </div>
+    </div>
+  `;
+
+  const statusEl = section.querySelector('#cfg-second-brain-status');
+  const setStatus = (text, tone) => {
+    statusEl.textContent = text;
+    statusEl.style.color = tone;
+  };
+
+  section.querySelector('#cfg-second-brain-open-home')?.addEventListener('click', () => {
+    window.location.hash = '#/';
+  });
+
+  section.querySelector('#cfg-second-brain-defaults')?.addEventListener('click', async () => {
+    setStatus('Saving...', 'var(--text-muted)');
+    try {
+      const result = await api.updateConfig(buildRecommendedSecondBrainPatch(config));
+      setStatus(result.message || 'Saved', result.success ? 'var(--success)' : 'var(--warning)');
+      if (result.success) {
+        const nextConfig = await api.config().catch(() => null);
+        if (nextConfig) {
+          sharedConfig = nextConfig;
+          renderSecondBrainTab(panel);
+        }
+      }
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : String(err), 'var(--error)');
+    }
+  });
+
+  section.querySelector('#cfg-second-brain-save')?.addEventListener('click', async () => {
+    const onboardingSelection = section.querySelector('#cfg-second-brain-onboarding').value;
+    const defaultChannels = [
+      section.querySelector('#cfg-second-brain-delivery-web').checked ? 'web' : null,
+      section.querySelector('#cfg-second-brain-delivery-telegram').checked ? 'telegram' : null,
+      section.querySelector('#cfg-second-brain-delivery-cli').checked ? 'cli' : null,
+    ].filter(Boolean);
+
+    if (defaultChannels.length === 0) {
+      setStatus('Select at least one default delivery channel.', 'var(--warning)');
+      return;
+    }
+
+    setStatus('Saving...', 'var(--text-muted)');
+    try {
+      const result = await api.updateConfig({
+        assistant: {
+          secondBrain: {
+            enabled: section.querySelector('#cfg-second-brain-enabled').value === 'true',
+            onboarding: {
+              completed: onboardingSelection === 'done',
+              dismissed: onboardingSelection === 'hidden',
+            },
+            profile: {
+              timezone: section.querySelector('#cfg-second-brain-timezone').value.trim(),
+              workdayStart: section.querySelector('#cfg-second-brain-workday-start').value.trim(),
+              workdayEnd: section.querySelector('#cfg-second-brain-workday-end').value.trim(),
+              proactivityLevel: section.querySelector('#cfg-second-brain-proactivity').value,
+            },
+            delivery: {
+              defaultChannels,
+            },
+            knowledge: {
+              prioritizeConnectedSources: section.querySelector('#cfg-second-brain-prioritize-connected').checked,
+              defaultRetrievalMode: section.querySelector('#cfg-second-brain-retrieval-mode').value,
+              rerankerEnabled: section.querySelector('#cfg-second-brain-reranker').checked,
+            },
+          },
+        },
+      });
+      setStatus(result.message || 'Saved', result.success ? 'var(--success)' : 'var(--warning)');
+      if (result.success) {
+        const nextConfig = await api.config().catch(() => null);
+        if (nextConfig) {
+          sharedConfig = nextConfig;
+        }
+      }
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : String(err), 'var(--error)');
+    }
+  });
+
+  applyInputTooltips(section);
+  return section;
 }
 
 function createTelegramPanel(config, settingsPanel) {

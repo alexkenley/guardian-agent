@@ -7,6 +7,7 @@
 
 import { DEFAULT_PII_ENTITIES, type PiiEntityType, type PiiRedactionMode } from '../guardian/pii-scanner.js';
 import type { ToolCategory, ToolRisk } from '../tools/types.js';
+import type { SecondBrainDeliveryChannel } from '../runtime/second-brain/types.js';
 import type {
   AssistantSecurityAutoContainmentCategory,
   AssistantSecurityAutoContainmentSeverity,
@@ -520,6 +521,59 @@ export interface RuntimeConfig {
 export interface AssistantSetupConfig {
   /** Whether initial setup has been completed by the user. */
   completed: boolean;
+}
+
+export type AssistantSecondBrainProactivityLevel = 'minimal' | 'balanced' | 'proactive';
+export type AssistantSecondBrainRetrievalMode = 'hybrid' | 'library_first' | 'search_first';
+
+/** Guided-setup state for the Second Brain surface. */
+export interface AssistantSecondBrainOnboardingConfig {
+  /** Whether the guided setup has been completed. */
+  completed: boolean;
+  /** Whether the guided setup card should stay hidden until reopened manually. */
+  dismissed: boolean;
+}
+
+/** Personal preferences used by Second Brain setup and UI defaults. */
+export interface AssistantSecondBrainProfileConfig {
+  /** Optional IANA timezone such as Australia/Brisbane. */
+  timezone?: string;
+  /** Preferred workday start in HH:MM 24-hour format. */
+  workdayStart?: string;
+  /** Preferred workday end in HH:MM 24-hour format. */
+  workdayEnd?: string;
+  /** How proactive Second Brain should feel by default. */
+  proactivityLevel: AssistantSecondBrainProactivityLevel;
+}
+
+/** Default delivery preferences for newly created Second Brain work. */
+export interface AssistantSecondBrainDeliveryConfig {
+  /** Preferred default channels for new routines and guided setup. */
+  defaultChannels: SecondBrainDeliveryChannel[];
+}
+
+/** Retrieval-oriented knowledge preferences for the Second Brain surface. */
+export interface AssistantSecondBrainKnowledgeConfig {
+  /** Prefer synced and connected sources when building knowledge-backed context. */
+  prioritizeConnectedSources: boolean;
+  /** Default retrieval posture for future knowledge-backed answers. */
+  defaultRetrievalMode: AssistantSecondBrainRetrievalMode;
+  /** Whether reranking is enabled for the knowledge-plane direction. */
+  rerankerEnabled: boolean;
+}
+
+/** Bounded, editable preferences for the Second Brain product surface. */
+export interface AssistantSecondBrainConfig {
+  /** Enable Second Brain-specific preference management. */
+  enabled: boolean;
+  /** Guided onboarding state for the main Second Brain home surface. */
+  onboarding: AssistantSecondBrainOnboardingConfig;
+  /** Personal profile defaults used by Second Brain UX. */
+  profile: AssistantSecondBrainProfileConfig;
+  /** Default delivery destinations for newly created routines and setup suggestions. */
+  delivery: AssistantSecondBrainDeliveryConfig;
+  /** Retrieval-oriented knowledge preferences. */
+  knowledge: AssistantSecondBrainKnowledgeConfig;
 }
 
 /** User identity strategy across channels. */
@@ -1508,6 +1562,7 @@ export interface AssistantSecurityConfig {
 /** Personal assistant feature configuration. */
 export interface AssistantConfig {
   setup: AssistantSetupConfig;
+  secondBrain: AssistantSecondBrainConfig;
   identity: AssistantIdentityConfig;
   credentials: AssistantCredentialsConfig;
   soul: AssistantSoulConfig;
@@ -1669,6 +1724,26 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
   assistant: {
     setup: {
       completed: false,
+    },
+    secondBrain: {
+      enabled: true,
+      onboarding: {
+        completed: false,
+        dismissed: false,
+      },
+      profile: {
+        workdayStart: '08:30',
+        workdayEnd: '17:30',
+        proactivityLevel: 'balanced',
+      },
+      delivery: {
+        defaultChannels: ['web'],
+      },
+      knowledge: {
+        prioritizeConnectedSources: true,
+        defaultRetrievalMode: 'hybrid',
+        rerankerEnabled: true,
+      },
     },
     identity: {
       mode: 'single_user',

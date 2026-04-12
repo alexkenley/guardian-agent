@@ -455,6 +455,82 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
           rawCredentials.refs = { ...existingDiskRefs, ...nextCredentialRefs };
         }
 
+        const secondBrainUpdates = updates.assistant?.secondBrain;
+        if (secondBrainUpdates && typeof secondBrainUpdates === 'object') {
+          rawConfig.assistant = rawConfig.assistant ?? {};
+          const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+          rawAssistant.secondBrain = (rawAssistant.secondBrain as Record<string, unknown> | undefined) ?? {};
+          const rawSecondBrain = rawAssistant.secondBrain as Record<string, unknown>;
+
+          if (typeof secondBrainUpdates.enabled === 'boolean') {
+            rawSecondBrain.enabled = secondBrainUpdates.enabled;
+          }
+
+          const onboardingUpdates = secondBrainUpdates.onboarding;
+          if (onboardingUpdates && typeof onboardingUpdates === 'object') {
+            rawSecondBrain.onboarding = (rawSecondBrain.onboarding as Record<string, unknown> | undefined) ?? {};
+            const rawOnboarding = rawSecondBrain.onboarding as Record<string, unknown>;
+            if (typeof onboardingUpdates.completed === 'boolean') {
+              rawOnboarding.completed = onboardingUpdates.completed;
+            }
+            if (typeof onboardingUpdates.dismissed === 'boolean') {
+              rawOnboarding.dismissed = onboardingUpdates.dismissed;
+            }
+          }
+
+          const profileUpdates = secondBrainUpdates.profile;
+          if (profileUpdates && typeof profileUpdates === 'object') {
+            rawSecondBrain.profile = (rawSecondBrain.profile as Record<string, unknown> | undefined) ?? {};
+            const rawProfile = rawSecondBrain.profile as Record<string, unknown>;
+            if (options.hasOwn(profileUpdates, 'timezone')) {
+              const trimmed = options.trimOrUndefined(profileUpdates.timezone);
+              if (trimmed) rawProfile.timezone = trimmed;
+              else delete rawProfile.timezone;
+            }
+            if (options.hasOwn(profileUpdates, 'workdayStart')) {
+              const trimmed = options.trimOrUndefined(profileUpdates.workdayStart);
+              if (trimmed) rawProfile.workdayStart = trimmed;
+              else delete rawProfile.workdayStart;
+            }
+            if (options.hasOwn(profileUpdates, 'workdayEnd')) {
+              const trimmed = options.trimOrUndefined(profileUpdates.workdayEnd);
+              if (trimmed) rawProfile.workdayEnd = trimmed;
+              else delete rawProfile.workdayEnd;
+            }
+            if (profileUpdates.proactivityLevel !== undefined) {
+              const trimmed = options.trimOrUndefined(profileUpdates.proactivityLevel);
+              if (trimmed) rawProfile.proactivityLevel = trimmed;
+              else delete rawProfile.proactivityLevel;
+            }
+          }
+
+          const deliveryUpdates = secondBrainUpdates.delivery;
+          if (deliveryUpdates && typeof deliveryUpdates === 'object' && Array.isArray(deliveryUpdates.defaultChannels)) {
+            rawSecondBrain.delivery = (rawSecondBrain.delivery as Record<string, unknown> | undefined) ?? {};
+            const rawDelivery = rawSecondBrain.delivery as Record<string, unknown>;
+            rawDelivery.defaultChannels = deliveryUpdates.defaultChannels
+              .map((channel) => options.trimOrUndefined(channel))
+              .filter((channel): channel is string => channel === 'web' || channel === 'cli' || channel === 'telegram');
+          }
+
+          const knowledgeUpdates = secondBrainUpdates.knowledge;
+          if (knowledgeUpdates && typeof knowledgeUpdates === 'object') {
+            rawSecondBrain.knowledge = (rawSecondBrain.knowledge as Record<string, unknown> | undefined) ?? {};
+            const rawKnowledge = rawSecondBrain.knowledge as Record<string, unknown>;
+            if (typeof knowledgeUpdates.prioritizeConnectedSources === 'boolean') {
+              rawKnowledge.prioritizeConnectedSources = knowledgeUpdates.prioritizeConnectedSources;
+            }
+            if (knowledgeUpdates.defaultRetrievalMode !== undefined) {
+              const trimmed = options.trimOrUndefined(knowledgeUpdates.defaultRetrievalMode);
+              if (trimmed) rawKnowledge.defaultRetrievalMode = trimmed;
+              else delete rawKnowledge.defaultRetrievalMode;
+            }
+            if (typeof knowledgeUpdates.rerankerEnabled === 'boolean') {
+              rawKnowledge.rerankerEnabled = knowledgeUpdates.rerankerEnabled;
+            }
+          }
+        }
+
         const securityUpdates = updates.assistant?.security;
         if (securityUpdates && typeof securityUpdates === 'object') {
           rawConfig.assistant = rawConfig.assistant ?? {};

@@ -96,9 +96,11 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Verify Readiness',
                 items: [
                   'Use the Second Brain home at `#/` to confirm the assistant is running and ready for day-to-day work.',
+                  'If the guided setup card is still showing on Second Brain, you can accept the recommended defaults there or open Configuration > Second Brain to tune them manually.',
                   'Open `#/system` when you want the cross-product status and activity monitoring surface.',
                   'Open `#/performance` when you want the operator-facing workstation health and reviewed cleanup surface.',
                   'Open `#/config` to verify your AI connection, web access settings, and enabled channels.',
+                  'Open Configuration > Second Brain when you want to change workday hours, default delivery channels, or retrieval defaults later without rerunning a one-shot wizard.',
                   'Open Configuration > Integrations > Coding Assistants when you want to confirm whether Guardian can delegate work to Claude Code, Codex, Gemini CLI, or Aider.',
                   'Open Configuration > Appearance when you want to switch between built-in and curated visual bundles, let typography follow the selected bundle, raise the web UI text size slightly, or reduce interface motion.',
                   'Open `#/code` when you want the repo-scoped coding surface, and `#/security` when you want alerts, findings, and security status.',
@@ -180,6 +182,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 items: [
                   'Open Second Brain at `#/` for the main personal-assistant surface.',
                   'The current tabs are `Today`, `Calendar`, `Tasks`, `Notes`, `Contacts`, `Library`, `Briefs`, and `Routines`.',
+                  'Configuration > Second Brain owns the editable setup preferences for workday defaults, delivery defaults, and retrieval posture. It is not a separate memory system.',
                   'Second Brain is the personal-assistant home, not the main operator dashboard. Use it for your day, your commitments, your notes, and your planning context.',
                   'Items you save in Second Brain are available across the supported Guardian surfaces instead of being trapped in one panel.',
                   'Performance, Security, Automations, and Configuration are the main operator-facing control surfaces outside Second Brain.',
@@ -190,6 +193,7 @@ export function getReferenceGuide(): ReferenceGuide {
                 title: 'Today',
                 items: [
                   'Today is the landing surface for the current day. It brings together your agenda, quick capture, priority tasks, follow-up contacts, recent notes, brief actions, and routine status.',
+                  'When setup is still pending, Today shows a guided Second Brain preferences card so you can accept recommended defaults quickly or jump into Configuration for manual changes.',
                   'The quick-add control on Today lets you create a note, task, or local event without leaving the daily view.',
                   'The summary cards on Today are there to help you triage quickly. They surface what matters now, but the dedicated tabs remain the deeper editing surfaces.',
                   'The Today view includes a Cloud AI budget readout that shows Second Brain cloud-model token usage for the current month. Local-only work does not count toward that number.',

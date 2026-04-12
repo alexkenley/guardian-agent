@@ -266,7 +266,7 @@ const routes = {
     render: renderSecondBrain,
     update: updateSecondBrain,
     name: 'second-brain',
-    invalidateTags: ['second-brain'],
+    invalidateTags: ['second-brain', 'config'],
   },
   '/system': {
     render: renderSystem,
