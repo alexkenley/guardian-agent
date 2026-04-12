@@ -118,6 +118,7 @@ describe('ToolExecutor', () => {
     expect(names).toContain('code_create');
     expect(names).toContain('code_plan');
     expect(names).toContain('code_git_diff');
+    expect(names).toContain('code_remote_exec');
     expect(names).toContain('code_git_commit');
     expect(names).toContain('chrome_job');
     expect(names).toContain('campaign_create');
@@ -148,12 +149,103 @@ describe('ToolExecutor', () => {
 
     const eagerNames = executor.listCodeSessionEagerToolDefinitions().map((tool) => tool.name);
     expect(eagerNames).toContain('code_plan');
+    expect(eagerNames).toContain('code_remote_exec');
     expect(eagerNames).toContain('code_symbol_search');
     expect(eagerNames).toContain('code_git_diff');
     expect(eagerNames).toContain('code_test');
     expect(eagerNames).not.toContain('code_edit');
     expect(eagerNames).not.toContain('code_patch');
     expect(eagerNames).not.toContain('automation_save');
+  });
+
+  it('routes code verification commands through the remote sandbox when requested', async () => {
+    const root = createExecutorRoot();
+    writeFileSync(join(root, 'package.json'), '{"name":"remote-demo"}\n');
+    const remoteExecutionService = {
+      runBoundedJob: vi.fn(async (request) => ({
+        targetId: request.target.id,
+        backendKind: request.target.backendKind,
+        profileId: request.target.profileId,
+        profileName: request.target.profileName,
+        requestedCommand: request.command.requestedCommand,
+        status: 'succeeded' as const,
+        sandboxId: 'sandbox_123',
+        exitCode: 0,
+        stdout: 'tests passed',
+        stderr: '',
+        durationMs: 1200,
+        startedAt: 10,
+        completedAt: 1210,
+        networkMode: request.target.networkMode,
+        allowedDomains: [...request.target.allowedDomains],
+        stagedFiles: 1,
+        stagedBytes: 21,
+        workspaceRoot: request.workspace.workspaceRoot,
+        cwd: request.workspace.cwd,
+        artifactFiles: [],
+      })),
+    };
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['npm'],
+      allowedDomains: ['localhost', 'api.vercel.com'],
+      cloudConfig: {
+        enabled: true,
+        vercelProfiles: [{
+          id: 'vercel-main',
+          name: 'Main Vercel',
+          apiToken: 'vercel-secret',
+          teamId: 'team_123',
+          sandbox: {
+            enabled: true,
+            projectId: 'prj_123',
+            allowNetwork: false,
+          },
+        }],
+      },
+      remoteExecutionService,
+    });
+
+    const result = await executor.runTool({
+      toolName: 'code_test',
+      args: {
+        cwd: root,
+        command: 'npm test',
+        isolation: 'remote_required',
+      },
+      origin: 'web',
+      channel: 'web',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.verificationStatus).toBe('verified');
+    expect(result.output).toMatchObject({
+      backendKind: 'vercel_sandbox',
+      profileId: 'vercel-main',
+      sandboxId: 'sandbox_123',
+      stdout: 'tests passed',
+    });
+    expect(remoteExecutionService.runBoundedJob).toHaveBeenCalledWith(expect.objectContaining({
+      target: expect.objectContaining({
+        backendKind: 'vercel_sandbox',
+        profileId: 'vercel-main',
+        projectId: 'prj_123',
+      }),
+      command: expect.objectContaining({
+        requestedCommand: 'npm test',
+        entryCommand: 'npm',
+        args: ['test'],
+        execMode: 'direct_exec',
+      }),
+      workspace: {
+        workspaceRoot: root,
+        cwd: root,
+        includePaths: [],
+      },
+    }));
   });
 
   it('searches and reads stored automation output through dedicated tools', async () => {

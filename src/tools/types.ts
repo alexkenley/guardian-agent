@@ -70,6 +70,7 @@ export const BUILTIN_TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
     'code_create',
     'code_plan',
     'code_git_diff',
+    'code_remote_exec',
     'code_git_commit',
     'code_test',
     'code_build',

@@ -34,6 +34,14 @@ import {
   listRemoteExecutionTargets,
   type RemoteExecutionTargetDescriptor,
 } from '../runtime/remote-execution/policy.js';
+import { RemoteExecutionService } from '../runtime/remote-execution/remote-execution-service.js';
+import { VercelRemoteExecutionProvider } from '../runtime/remote-execution/providers/vercel-remote-execution.js';
+import type {
+  RemoteExecutionResolvedTarget,
+  RemoteExecutionRunRequest,
+  RemoteExecutionRunResult,
+  RemoteExecutionServiceLike,
+} from '../runtime/remote-execution/types.js';
 import { MarketingStore } from './marketing-store.js';
 import { ToolApprovalStore } from './approvals.js';
 import { ToolRegistry } from './registry.js';
@@ -418,6 +426,8 @@ export interface ToolExecutorOptions {
   enableDirectPlaywrightFallback?: boolean;
   /** Cloud and hosting provider integrations. */
   cloudConfig?: AssistantCloudConfig;
+  /** Remote execution orchestration for bounded isolated jobs. */
+  remoteExecutionService?: RemoteExecutionServiceLike;
   /** Tool categories to disable at startup. */
   disabledCategories?: ToolCategory[];
   /** Conversation service for memory_search tool. */
@@ -668,6 +678,7 @@ export class ToolExecutor {
   private cloudConfig: AssistantCloudConfig;
   private policy: ToolPolicySnapshot;
   private readonly runtimeNotices: ToolRuntimeNotice[] = [];
+  private remoteExecutionService?: RemoteExecutionServiceLike;
 
   constructor(options: ToolExecutorOptions) {
     this.options = options;
@@ -683,6 +694,7 @@ export class ToolExecutor {
     this.sandboxConfig = options.sandboxConfig ?? DEFAULT_SANDBOX_CONFIG;
     this.sandboxHealth = options.sandboxHealth;
     this.cloudConfig = options.cloudConfig ?? emptyCloudConfig();
+    this.remoteExecutionService = options.remoteExecutionService;
     this.networkConfig = options.networkConfig ?? {
       deviceIntelligence: { enabled: true, ouiDatabase: 'bundled', autoClassify: true },
       baseline: {
@@ -870,6 +882,49 @@ export class ToolExecutor {
     return listRemoteExecutionTargets(this.cloudConfig);
   }
 
+  resolveRemoteExecutionTarget(profileId?: string): RemoteExecutionResolvedTarget | null {
+    const targets = this.getRemoteExecutionTargets();
+    const descriptor = profileId?.trim()
+      ? targets.find((entry) => entry.profileId === profileId.trim())
+      : targets.find((entry) => entry.capabilityState === 'ready');
+    if (!descriptor || descriptor.capabilityState !== 'ready') {
+      return null;
+    }
+    if (descriptor.backendKind === 'vercel_sandbox') {
+      return this.getResolvedVercelSandboxTarget(descriptor.profileId);
+    }
+    return null;
+  }
+
+  async runRemoteExecutionJob(
+    input: Omit<RemoteExecutionRunRequest, 'target'> & { profileId?: string },
+  ): Promise<RemoteExecutionRunResult> {
+    const target = this.resolveRemoteExecutionTarget(input.profileId);
+    if (!target) {
+      const requestedProfile = input.profileId?.trim();
+      throw new Error(
+        requestedProfile
+          ? `Remote execution target '${requestedProfile}' is not ready.`
+          : 'No ready remote execution target is configured.',
+      );
+    }
+    return this.getOrCreateRemoteExecutionService().runBoundedJob({
+      ...input,
+      target,
+    });
+  }
+
+  private getOrCreateRemoteExecutionService(): RemoteExecutionServiceLike {
+    if (!this.remoteExecutionService) {
+      this.remoteExecutionService = new RemoteExecutionService({
+        providers: [
+          new VercelRemoteExecutionProvider(),
+        ],
+      });
+    }
+    return this.remoteExecutionService;
+  }
+
   setAutomationControlPlane(controlPlane: AutomationControlPlane | undefined): void {
     this.automationControlPlane = controlPlane;
   }
@@ -914,6 +969,7 @@ export class ToolExecutor {
   listCodingToolDefinitions(): ToolDefinition[] {
     const codingToolNames = [
       'code_edit', 'code_patch', 'code_create', 'code_plan', 'code_git_diff',
+      'code_remote_exec',
       'code_test', 'code_build', 'code_lint', 'code_symbol_search',
       'fs_write', 'fs_mkdir', 'fs_move', 'fs_copy', 'fs_delete',
       'doc_create',
@@ -934,6 +990,7 @@ export class ToolExecutor {
   listCodeSessionEagerToolDefinitions(): ToolDefinition[] {
     const eagerToolNames = [
       'code_plan',
+      'code_remote_exec',
       'code_symbol_search',
       'code_git_diff',
       'code_test',
@@ -4708,6 +4765,8 @@ export class ToolExecutor {
       resolveOwnedCodeSessionTarget: (target, request) => this.resolveOwnedCodeSessionTarget(target, request),
       getCurrentCodeSessionRecord: (request) => this.getCurrentCodeSessionRecord(request),
       getRemoteExecutionTargets: () => this.getRemoteExecutionTargets(),
+      resolveRemoteExecutionTarget: (profileId) => this.resolveRemoteExecutionTarget(profileId),
+      runRemoteExecutionJob: (input) => this.runRemoteExecutionJob(input),
     });
 
     registerBuiltinWebTools({
@@ -5268,6 +5327,44 @@ export class ToolExecutor {
       apiToken: profile.apiToken,
       teamId: profile.teamId,
       slug: profile.slug,
+    };
+  }
+
+  private getResolvedVercelSandboxTarget(profileId: string): RemoteExecutionResolvedTarget {
+    const profile = this.getCloudVercelProfile(profileId);
+    const rawProfile = (this.cloudConfig.vercelProfiles ?? []).find((entry) => entry.id === profileId.trim());
+    if (!rawProfile) {
+      throw new Error(`Unknown Vercel profile '${profileId}'.`);
+    }
+    if (rawProfile.sandbox?.enabled !== true) {
+      throw new Error(`Vercel profile '${profileId}' does not have sandbox execution enabled.`);
+    }
+    const projectId = rawProfile.sandbox.projectId?.trim();
+    if (!projectId) {
+      throw new Error(`Vercel profile '${profileId}' does not have a sandbox projectId.`);
+    }
+    const teamId = profile.teamId?.trim();
+    if (!teamId) {
+      throw new Error(`Vercel profile '${profileId}' requires a teamId for sandbox execution.`);
+    }
+    const descriptor = this.getRemoteExecutionTargets().find((entry) => entry.profileId === profile.id);
+    return {
+      id: descriptor?.id ?? `vercel:${profile.id}`,
+      profileId: profile.id,
+      profileName: profile.name,
+      backendKind: 'vercel_sandbox',
+      token: profile.apiToken,
+      teamId,
+      projectId,
+      apiBaseUrl: profile.apiBaseUrl,
+      defaultTimeoutMs: typeof rawProfile.sandbox.defaultTimeoutMs === 'number'
+        ? rawProfile.sandbox.defaultTimeoutMs
+        : undefined,
+      defaultVcpus: typeof rawProfile.sandbox.defaultVcpus === 'number'
+        ? rawProfile.sandbox.defaultVcpus
+        : undefined,
+      networkMode: descriptor?.networkMode ?? 'allow_all',
+      allowedDomains: descriptor ? [...descriptor.allowedDomains] : [],
     };
   }
 

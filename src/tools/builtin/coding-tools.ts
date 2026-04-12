@@ -8,11 +8,16 @@ import type { CodeSessionStore } from '../../runtime/code-sessions.js';
 import { buildCodingWorkflowPlan } from '../../runtime/coding-workflows.js';
 import type { PackageInstallTrustService } from '../../runtime/package-install-trust-service.js';
 import type { RemoteExecutionTargetDescriptor } from '../../runtime/remote-execution/policy.js';
+import type {
+  RemoteExecutionResolvedTarget,
+  RemoteExecutionRunResult,
+} from '../../runtime/remote-execution/types.js';
 import type { JsDependencyMutationIntent, JsDependencySnapshot } from '../../runtime/workspace-dependency-ledger.js';
 import { ToolRegistry } from '../registry.js';
 import type { ToolExecutionRequest } from '../types.js';
 
 type ShellExecMode = 'direct_exec' | 'shell_fallback';
+type RemoteIsolationMode = 'local' | 'remote_if_available' | 'remote_required';
 
 interface ShellCommandPlan {
   commands: ParsedCommand[];
@@ -115,6 +120,24 @@ interface CodingToolRegistrarContext {
   ) => { session?: CodeSessionRecord; error?: string };
   getCurrentCodeSessionRecord: (request?: Partial<ToolExecutionRequest>) => CodeSessionRecord | null;
   getRemoteExecutionTargets?: () => RemoteExecutionTargetDescriptor[];
+  resolveRemoteExecutionTarget?: (profileId?: string) => RemoteExecutionResolvedTarget | null;
+  runRemoteExecutionJob?: (input: {
+    profileId?: string;
+    command: {
+      requestedCommand: string;
+      entryCommand: string;
+      args: string[];
+      execMode: 'direct_exec' | 'shell_fallback';
+    };
+    workspace: {
+      workspaceRoot: string;
+      cwd: string;
+      includePaths?: string[];
+    };
+    artifactPaths?: string[];
+    timeoutMs?: number;
+    vcpus?: number;
+  }) => Promise<RemoteExecutionRunResult>;
 }
 
 function normalizeCodeText(value: string): string {
@@ -271,6 +294,68 @@ function truncateOutput(value: string): string {
   return value.length > 8000 ? `${value.slice(0, 8000)}\n...[truncated]` : value;
 }
 
+function normalizeRemoteIsolationMode(value: unknown): RemoteIsolationMode {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (normalized === 'remote_if_available' || normalized === 'remote_required') {
+    return normalized;
+  }
+  return 'local';
+}
+
+function stringArrayArg(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      .map((entry) => entry.trim())
+    : [];
+}
+
+function buildRemoteExecutionOutput(result: RemoteExecutionRunResult): Record<string, unknown> {
+  return {
+    backendKind: result.backendKind,
+    profileId: result.profileId,
+    profileName: result.profileName,
+    sandboxId: result.sandboxId,
+    command: result.requestedCommand,
+    cwd: result.cwd,
+    workspaceRoot: result.workspaceRoot,
+    exitCode: result.exitCode,
+    durationMs: result.durationMs,
+    networkMode: result.networkMode,
+    allowedDomains: [...result.allowedDomains],
+    stagedFiles: result.stagedFiles,
+    stagedBytes: result.stagedBytes,
+    stdout: truncateOutput(result.stdout),
+    stderr: truncateOutput(result.stderr),
+    artifactFiles: result.artifactFiles.map((artifact) => ({
+      path: artifact.path,
+      encoding: artifact.encoding,
+      sizeBytes: artifact.sizeBytes,
+      truncated: artifact.truncated,
+      content: truncateOutput(artifact.content),
+    })),
+  };
+}
+
+function formatRemoteExecutionFailure(result: RemoteExecutionRunResult): string {
+  const headline = result.status === 'timed_out'
+    ? `Remote sandbox command timed out on '${result.profileName}'.`
+    : `Remote sandbox command failed on '${result.profileName}'.`;
+  const lines = [
+    headline,
+    `Command: ${result.requestedCommand}`,
+  ];
+  if (typeof result.exitCode === 'number') {
+    lines.push(`Exit code: ${result.exitCode}`);
+  }
+  if (result.stderr.trim()) {
+    lines.push(`stderr:\n${truncateOutput(result.stderr)}`);
+  }
+  if (result.stdout.trim()) {
+    lines.push(`stdout:\n${truncateOutput(result.stdout)}`);
+  }
+  return lines.join('\n\n');
+}
+
 async function buildCodingQualityReportForFiles(
   context: Pick<CodingToolRegistrarContext, 'sandboxExec'>,
   paths: string[],
@@ -345,6 +430,77 @@ async function buildCodingQualityReportForFiles(
   return {
     passed: checks.every((check) => check.status !== 'fail'),
     checks,
+  };
+}
+
+async function runRemoteCodingCommand(
+  context: CodingToolRegistrarContext,
+  input: {
+    request: ToolExecutionRequest;
+    command: string;
+    cwd: string;
+    profileId?: string;
+    includePaths?: string[];
+    artifactPaths?: string[];
+    timeoutMs?: number;
+    vcpus?: number;
+  },
+): Promise<
+  | { success: false; error: string }
+  | { success: true; result: RemoteExecutionRunResult; target: RemoteExecutionResolvedTarget }
+> {
+  if (!context.resolveRemoteExecutionTarget || !context.runRemoteExecutionJob) {
+    return { success: false, error: 'Remote execution is not available in this Guardian runtime.' };
+  }
+  const shellCheck = context.validateShellCommandForRequest(input.command, input.request, input.cwd);
+  if (!shellCheck.safe) {
+    return { success: false, error: shellCheck.reason ?? `Command is not allowlisted: '${input.command}'.` };
+  }
+  if (!shellCheck.plan) {
+    return { success: false, error: 'Command failed execution planning.' };
+  }
+  const target = context.resolveRemoteExecutionTarget(input.profileId);
+  if (!target) {
+    return {
+      success: false,
+      error: input.profileId?.trim()
+        ? `Remote execution target '${input.profileId.trim()}' is not ready.`
+        : 'No ready remote execution target is configured.',
+    };
+  }
+
+  const workspaceRoot = context.getCodeWorkspaceRoot(input.request) ?? input.cwd;
+  context.guardAction(input.request, 'execute_command', {
+    command: input.command,
+    cwd: input.cwd,
+    remote: true,
+    backendKind: target.backendKind,
+    profileId: target.profileId,
+    networkMode: target.networkMode,
+  });
+
+  const result = await context.runRemoteExecutionJob({
+    profileId: target.profileId,
+    command: {
+      requestedCommand: input.command,
+      entryCommand: shellCheck.plan.entryCommand,
+      args: shellCheck.plan.argv,
+      execMode: shellCheck.plan.execMode,
+    },
+    workspace: {
+      workspaceRoot,
+      cwd: input.cwd,
+      includePaths: input.includePaths,
+    },
+    artifactPaths: input.artifactPaths,
+    timeoutMs: input.timeoutMs,
+    vcpus: input.vcpus,
+  });
+
+  return {
+    success: true,
+    result,
+    target,
   };
 }
 
@@ -971,6 +1127,73 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
 
   context.registry.register(
     {
+      name: 'code_remote_exec',
+      description: 'Run one bounded repo command inside the configured remote sandbox instead of on the host. This is the explicit isolated execution lane for setup, install, build, test, scan, or other higher-risk repo work.',
+      shortDescription: 'Run a bounded coding command in the configured remote sandbox.',
+      risk: 'mutating',
+      category: 'coding',
+      deferLoading: true,
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Allowlisted command to run in the remote sandbox.' },
+          cwd: { type: 'string', description: 'Project root or working directory to stage and run from. Defaults to the current workspace root.' },
+          profile: { type: 'string', description: 'Optional remote execution profile id. Defaults to the first ready configured target.' },
+          includePaths: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Optional relative paths from cwd to limit which files are staged into the sandbox.',
+          },
+          artifactPaths: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Optional file paths, relative to cwd, to read back from the remote sandbox after the command finishes.',
+          },
+          timeoutMs: { type: 'number', description: 'Remote execution timeout in milliseconds (max 900000).' },
+          vcpus: { type: 'number', description: 'Optional vCPU override for the remote sandbox.' },
+          verificationRun: { type: 'boolean', description: 'When true, treat a successful remote run as verification evidence for the workflow.' },
+        },
+        required: ['command'],
+      },
+    },
+    async (args, request) => {
+      const command = requireString(args.command, 'command').trim();
+      const cwd = args.cwd
+        ? await context.resolveAllowedPath(requireString(args.cwd, 'cwd'), request)
+        : context.getEffectiveWorkspaceRoot(request);
+      const remoteRun = await runRemoteCodingCommand(context, {
+        request,
+        command,
+        cwd,
+        profileId: asString(args.profile).trim() || undefined,
+        includePaths: stringArrayArg(args.includePaths),
+        artifactPaths: stringArrayArg(args.artifactPaths),
+        timeoutMs: Math.max(1_000, Math.min(900_000, asNumber(args.timeoutMs, 300_000))),
+        vcpus: args.vcpus === undefined ? undefined : Math.max(1, Math.min(8, asNumber(args.vcpus, 2))),
+      });
+      if (!remoteRun.success) {
+        return { success: false, error: remoteRun.error };
+      }
+      if (remoteRun.result.status !== 'succeeded') {
+        return { success: false, error: formatRemoteExecutionFailure(remoteRun.result) };
+      }
+      const verificationRun = args.verificationRun === true;
+      return {
+        success: true,
+        message: `Remote sandbox command completed on '${remoteRun.target.profileName}'.`,
+        output: buildRemoteExecutionOutput(remoteRun.result),
+        ...(verificationRun
+          ? {
+              verificationStatus: 'verified' as const,
+              verificationEvidence: `Remote sandbox run succeeded on '${remoteRun.target.profileName}'.`,
+            }
+          : {}),
+      };
+    },
+  );
+
+  context.registry.register(
+    {
       name: 'code_git_diff',
       description: 'Show git diff output for the current project or a specific file path. Executes from a validated working directory.',
       shortDescription: 'Show git diff for a project or file.',
@@ -1132,12 +1355,75 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
           properties: {
             cwd: { type: 'string', description: toolName === 'code_build' ? 'Project root to run the build from.' : toolName === 'code_lint' ? 'Project root to run the command from.' : 'Project root to run tests from.' },
             command: { type: 'string', description: toolName === 'code_lint' ? 'Allowlisted lint command to execute.' : toolName === 'code_build' ? 'Allowlisted build command to execute.' : 'Allowlisted test command to execute.' },
-            timeoutMs: { type: 'number', description: 'Timeout in milliseconds (max 60000).' },
+            timeoutMs: { type: 'number', description: 'Timeout in milliseconds. Local runs cap at 60000; remote runs cap at 900000.' },
+            isolation: {
+              type: 'string',
+              description: "Execution lane: 'local' (default), 'remote_if_available', or 'remote_required'.",
+            },
+            remoteProfile: {
+              type: 'string',
+              description: 'Optional remote execution profile id when isolation uses the remote sandbox.',
+            },
+            includePaths: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional relative paths from cwd to limit which files are staged for a remote run.',
+            },
+            artifactPaths: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional file paths, relative to cwd, to read back after a remote run.',
+            },
+            vcpus: {
+              type: 'number',
+              description: 'Optional remote sandbox vCPU override when isolation uses the remote lane.',
+            },
           },
           required: ['cwd', 'command'],
         },
       },
       async (args, request) => {
+        const isolation = normalizeRemoteIsolationMode(args.isolation);
+        const remoteProfile = asString(args.remoteProfile).trim() || undefined;
+        if (isolation !== 'local' && context.resolveRemoteExecutionTarget && context.runRemoteExecutionJob) {
+          const remoteTarget = context.resolveRemoteExecutionTarget(remoteProfile);
+          if (remoteTarget) {
+            const remoteRun = await runRemoteCodingCommand(context, {
+              request,
+              command: requireString(args.command, 'command'),
+              cwd: await context.resolveAllowedPath(requireString(args.cwd, 'cwd'), request),
+              profileId: remoteTarget.profileId,
+              includePaths: stringArrayArg(args.includePaths),
+              artifactPaths: stringArrayArg(args.artifactPaths),
+              timeoutMs: Math.max(1_000, Math.min(900_000, asNumber(args.timeoutMs, 300_000))),
+              vcpus: args.vcpus === undefined ? undefined : Math.max(1, Math.min(8, asNumber(args.vcpus, 2))),
+            });
+            if (!remoteRun.success) {
+              return { success: false, error: remoteRun.error };
+            }
+            if (remoteRun.result.status !== 'succeeded') {
+              return { success: false, error: formatRemoteExecutionFailure(remoteRun.result) };
+            }
+            return {
+              success: true,
+              message: `Remote sandbox ${toolName.slice(5)} run completed on '${remoteRun.target.profileName}'.`,
+              output: buildRemoteExecutionOutput(remoteRun.result),
+              verificationStatus: 'verified',
+              verificationEvidence: `Remote ${toolName.slice(5)} run passed on '${remoteRun.target.profileName}'.`,
+            };
+          }
+          if (isolation === 'remote_required' || remoteProfile) {
+            return {
+              success: false,
+              error: remoteProfile
+                ? `Remote execution target '${remoteProfile}' is not ready.`
+                : 'No ready remote execution target is configured.',
+            };
+          }
+        } else if (isolation === 'remote_required') {
+          return { success: false, error: 'Remote execution is not available in this Guardian runtime.' };
+        }
+
         const delegate = context.registry.get('shell_safe');
         if (!delegate) return { success: false, error: 'shell_safe is not available' };
         return delegate.handler({
