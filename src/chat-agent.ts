@@ -58,6 +58,11 @@ import type { ConversationKey } from './runtime/conversation.js';
 import { ConversationService } from './runtime/conversation.js';
 import type { CodeSessionRecord, ResolvedCodeSessionContext } from './runtime/code-sessions.js';
 import { CodeSessionStore } from './runtime/code-sessions.js';
+import {
+  deriveCodeSessionWorkflowState,
+  formatCodeSessionWorkflowForPrompt,
+  type CodeSessionWorkflowType,
+} from './runtime/coding-workflows.js';
 import type { SecondBrainService } from './runtime/second-brain/second-brain-service.js';
 import { resolveCodingBackendSessionTarget } from './runtime/coding-backend-session-target.js';
 import { buildCodeSessionPortfolioAdditionalSection } from './runtime/code-session-portfolio.js';
@@ -7211,6 +7216,7 @@ type DirectIntentShadowCandidate =
       session.workState.planSummary
         ? `planSummary:\n${session.workState.planSummary}`
         : 'planSummary: (none)',
+      formatCodeSessionWorkflowForPrompt(session.workState.workflow),
       session.workState.compactedSummary
         ? `compactedSummary:\n${session.workState.compactedSummary}`
         : 'compactedSummary: (none)',
@@ -7238,16 +7244,38 @@ type DirectIntentShadowCandidate =
     if (!planResult || !isRecord(planResult.result.output)) return '';
     const output = planResult.result.output as Record<string, unknown>;
     const goal = toString(output.goal);
+    const workflow = isRecord(output.workflow) ? output.workflow : null;
     const plan = Array.isArray(output.plan) ? output.plan.map((step) => `- ${String(step)}`) : [];
     const verification = Array.isArray(output.verification)
       ? output.verification.map((step) => `- ${String(step)}`)
       : [];
     const sections = [
       goal ? `Goal: ${goal}` : '',
+      workflow?.label ? `Workflow: ${toString(workflow.label)}` : '',
       plan.length > 0 ? `Plan:\n${plan.join('\n')}` : '',
       verification.length > 0 ? `Verification:\n${verification.join('\n')}` : '',
     ].filter((value) => value);
     return sections.join('\n\n');
+  }
+
+  private extractPlannedWorkflowType(
+    results: Array<{ toolName: string; result: Record<string, unknown> }>,
+  ): CodeSessionWorkflowType | null {
+    const planResult = results.find((entry) => entry.toolName === 'code_plan');
+    if (!planResult || !isRecord(planResult.result.output)) return null;
+    const output = planResult.result.output as Record<string, unknown>;
+    const workflow = isRecord(output.workflow) ? output.workflow : null;
+    const value = toString(workflow?.type).trim();
+    if (value === 'implementation'
+      || value === 'bug_fix'
+      || value === 'code_review'
+      || value === 'refactor'
+      || value === 'test_repair'
+      || value === 'dependency_review'
+      || value === 'spec_to_plan') {
+      return value;
+    }
+    return null;
   }
 
   private syncCodeSessionRuntimeState(
@@ -7306,6 +7334,20 @@ type DirectIntentShadowCandidate =
         requestId: job.requestId,
       }));
     const planSummary = this.formatCodePlanSummary(lastToolRoundResults) || session.workState.planSummary;
+    const workflow = deriveCodeSessionWorkflowState({
+      focusSummary: session.workState.focusSummary,
+      planSummary,
+      pendingApprovals,
+      recentJobs,
+      verification: session.workState.verification,
+      previous: session.workState.workflow,
+      plannedWorkflowType: this.extractPlannedWorkflowType(lastToolRoundResults),
+      hasRepoEvidence: Boolean(
+        session.workState.workspaceProfile?.summary
+          || session.workState.workspaceMap?.indexedFileCount
+          || session.workState.workingSet?.files?.length,
+      ),
+    });
     const nextCompactedSummary = runtimeState?.contextAssembly?.compactedSummaryPreview
       || (
         runtimeState?.contextAssembly?.contextCompactionApplied
@@ -7337,6 +7379,7 @@ type DirectIntentShadowCandidate =
         planSummary,
         compactedSummary,
         compactedSummaryUpdatedAt,
+        workflow,
         activeSkills: activeSkills.map((skill) => skill.id),
         pendingApprovals,
         recentJobs,

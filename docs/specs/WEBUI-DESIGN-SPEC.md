@@ -388,6 +388,7 @@ Code must stay distinct from both `Second Brain` and `Performance`.
 It is the place for:
 
 - coding session selection
+- workflow stage and verification state for the active coding session
 - repo-scoped editing and investigation
 - coding activity and approval follow-up
 

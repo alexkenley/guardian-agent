@@ -5,6 +5,7 @@ import { scanWriteContent } from '../../guardian/argument-sanitizer.js';
 import type { ParsedCommand, ShellExecutionClass } from '../../guardian/shell-validator.js';
 import type { CodingBackendService } from '../../runtime/coding-backend-service.js';
 import type { CodeSessionStore } from '../../runtime/code-sessions.js';
+import { buildCodingWorkflowPlan } from '../../runtime/coding-workflows.js';
 import type { PackageInstallTrustService } from '../../runtime/package-install-trust-service.js';
 import type { JsDependencyMutationIntent, JsDependencySnapshot } from '../../runtime/workspace-dependency-ledger.js';
 import { ToolRegistry } from '../registry.js';
@@ -342,56 +343,6 @@ async function buildCodingQualityReportForFiles(
   return {
     passed: checks.every((check) => check.status !== 'fail'),
     checks,
-  };
-}
-
-function buildCodingPlan(task: string, cwd: string, selectedFiles: string[]): Record<string, unknown> {
-  const normalizedTask = task.trim();
-  const lower = normalizedTask.toLowerCase();
-  const inspect = selectedFiles.length > 0 ? selectedFiles : ['relevant source files', 'tests', 'config'];
-  const changes: string[] = [];
-  const verification: string[] = [];
-  const risks: string[] = [];
-
-  if (/refactor|cleanup|restructure/.test(lower)) {
-    changes.push('Restructure implementation while preserving behavior.');
-    verification.push('Run targeted tests covering affected flows.');
-    risks.push('Behavior regressions caused by broad mechanical edits.');
-  }
-  if (/fix|bug|issue|error|fail/.test(lower)) {
-    changes.push('Patch the failing logic and add or update regression coverage.');
-    verification.push('Reproduce the original failure, then rerun the failing checks.');
-    risks.push('Fixing symptoms without addressing the root cause.');
-  }
-  if (/feature|implement|add support|introduce/.test(lower)) {
-    changes.push('Add the requested functionality and integrate it with existing patterns.');
-    verification.push('Run focused tests and a build/lint pass if available.');
-    risks.push('Scope creep into unrelated modules.');
-  }
-
-  if (changes.length === 0) {
-    changes.push('Inspect the relevant code paths and make the minimum safe change needed.');
-  }
-  if (verification.length === 0) {
-    verification.push('Run the narrowest available verification for the touched area.');
-  }
-  if (risks.length === 0) {
-    risks.push('Unknown constraints until the relevant files are inspected.');
-  }
-
-  return {
-    goal: normalizedTask,
-    cwd,
-    inspect,
-    changes,
-    verification,
-    risks,
-    plan: [
-      'Inspect the files and tests most likely to be affected.',
-      'Confirm the intended change boundary before editing.',
-      'Make the smallest coherent code change.',
-      'Review the diff and run targeted verification.',
-    ],
   };
 }
 
@@ -1011,7 +962,7 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
         : [];
       return {
         success: true,
-        output: buildCodingPlan(task, cwd, selectedFiles),
+        output: buildCodingWorkflowPlan(task, cwd, selectedFiles),
       };
     },
   );

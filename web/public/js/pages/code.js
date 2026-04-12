@@ -38,6 +38,10 @@ const MAX_TIMELINE_VISIBLE_ITEMS = 6;
 const TIMELINE_FOCUS_CONTEXT_RADIUS = 2;
 const INSPECTOR_TABS = ['investigate', 'flow', 'impact'];
 const SESSION_REFRESH_INTERVAL_MS = 5000;
+const CODE_WORKFLOW_TYPES = new Set(['implementation', 'bug_fix', 'code_review', 'refactor', 'test_repair', 'dependency_review', 'spec_to_plan']);
+const CODE_WORKFLOW_STAGES = new Set(['inspect', 'plan', 'implement', 'verify', 'summarize']);
+const CODE_WORKFLOW_STATUSES = new Set(['ready', 'in_progress', 'blocked', 'completed']);
+const CODE_WORKFLOW_VERIFICATION_STATES = new Set(['not_started', 'pending', 'running', 'passed', 'failed', 'not_required']);
 const STRUCTURE_PREVIEW_DEBOUNCE_MS = 350;
 const MONACO_THEME_STORAGE_KEY = 'guardianagent_monaco_theme';
 const MONACO_THEME_VERSION_STORAGE_KEY = 'guardianagent_monaco_theme_version';
@@ -2402,6 +2406,7 @@ function deriveTaskItems(session) {
   const workspaceTrust = session?.workspaceTrust || null;
   const workspaceMap = session?.workspaceMap || null;
   const workingSet = session?.workingSet || null;
+  const workflow = normalizeCodeSessionWorkflow(session?.workflow);
 
   if (backlog.count > 0) {
     items.push({
@@ -2462,6 +2467,18 @@ function deriveTaskItems(session) {
       meta: Array.isArray(workspaceMap.notableFiles) && workspaceMap.notableFiles.length > 0
         ? workspaceMap.notableFiles.slice(0, 4).join(', ')
         : '',
+    });
+  }
+
+  if (workflow) {
+    items.push({
+      id: 'workflow',
+      title: `Workflow: ${workflow.label}`,
+      status: mapCodeWorkflowTone(workflow),
+      detail: workflow.blockedReason
+        ? `${workflow.blockedReason} ${workflow.nextAction}`.trim()
+        : (workflow.nextAction || workflow.summary || 'Workflow guidance is ready for this session.'),
+      meta: formatCodeWorkflowMeta(workflow),
     });
   }
 
@@ -2920,6 +2937,7 @@ function normalizeServerSession(record, existing = {}) {
     recentJobs: Array.isArray(workState.recentJobs) ? workState.recentJobs.slice(0, MAX_SESSION_JOBS) : [],
     activityMessages: Array.isArray(existing.activityMessages) ? existing.activityMessages.slice(-20) : [],
     verification: normalizeVerificationEntries(workState.verification, existing.verification),
+    workflow: normalizeCodeSessionWorkflow(workState.workflow, existing.workflow),
     focusSummary: workState.focusSummary || '',
     planSummary: workState.planSummary || '',
     compactedSummary: workState.compactedSummary || '',
@@ -2935,6 +2953,68 @@ function normalizeServerSession(record, existing = {}) {
     inspectorTab: normalizeInspectorTabValue(existing.inspectorTab),
     lastExplorerPath: existing.lastExplorerPath || null,
   };
+}
+
+function normalizeCodeSessionWorkflow(value, fallback = null) {
+  if (!value || typeof value !== 'object') {
+    return fallback || null;
+  }
+  const type = typeof value.type === 'string' && CODE_WORKFLOW_TYPES.has(value.type)
+    ? value.type
+    : '';
+  if (!type) {
+    return fallback || null;
+  }
+  const label = typeof value.label === 'string' && value.label.trim()
+    ? value.label.trim()
+    : humanizeCodeWorkflowValue(type);
+  return {
+    type,
+    label,
+    recipeId: typeof value.recipeId === 'string' ? value.recipeId : '',
+    summary: typeof value.summary === 'string' ? value.summary : '',
+    verificationMode: typeof value.verificationMode === 'string' ? value.verificationMode : 'required',
+    currentStage: typeof value.currentStage === 'string' && CODE_WORKFLOW_STAGES.has(value.currentStage)
+      ? value.currentStage
+      : 'inspect',
+    status: typeof value.status === 'string' && CODE_WORKFLOW_STATUSES.has(value.status)
+      ? value.status
+      : 'ready',
+    verificationState: typeof value.verificationState === 'string' && CODE_WORKFLOW_VERIFICATION_STATES.has(value.verificationState)
+      ? value.verificationState
+      : 'not_started',
+    nextAction: typeof value.nextAction === 'string' ? value.nextAction : '',
+    blockedReason: typeof value.blockedReason === 'string' ? value.blockedReason : '',
+    updatedAt: Number(value.updatedAt) || 0,
+  };
+}
+
+function humanizeCodeWorkflowValue(value) {
+  return String(value || '')
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function formatCodeWorkflowMeta(workflow) {
+  if (!workflow) return '';
+  const parts = [`Stage ${humanizeCodeWorkflowValue(workflow.currentStage)}`];
+  if (workflow.verificationState && workflow.verificationState !== 'not_required') {
+    parts.push(`Verification ${humanizeCodeWorkflowValue(workflow.verificationState)}`);
+  }
+  if (workflow.updatedAt) {
+    parts.push(formatRelativeTime(workflow.updatedAt));
+  }
+  return parts.join(' • ');
+}
+
+function mapCodeWorkflowTone(workflow) {
+  if (!workflow) return 'info';
+  if (workflow.status === 'blocked') return 'blocked';
+  if (workflow.status === 'in_progress') return 'active';
+  if (workflow.status === 'completed') return 'completed';
+  return 'info';
 }
 
 function normalizeVerificationEntries(value, fallback = []) {
@@ -3606,6 +3686,16 @@ function getSessionRenderSignature(session) {
         timestamp: message.timestamp || 0,
       }))
       : [],
+    workflow: session.workflow
+      ? {
+          type: session.workflow.type || '',
+          currentStage: session.workflow.currentStage || '',
+          status: session.workflow.status || '',
+          verificationState: session.workflow.verificationState || '',
+          nextAction: session.workflow.nextAction || '',
+          blockedReason: session.workflow.blockedReason || '',
+        }
+      : null,
     focusSummary: session.focusSummary || '',
     planSummary: session.planSummary || '',
     compactedSummary: session.compactedSummary || '',
@@ -5702,6 +5792,7 @@ function renderSessionCard(session) {
   const checkCount = getCheckBadgeCount(session);
   const taskCount = getTaskBadgeCount(session);
   const workspaceTrust = session.workspaceTrust || null;
+  const workflow = normalizeCodeSessionWorkflow(session.workflow);
   const effectiveTrustState = getEffectiveWorkspaceTrustState(session) || workspaceTrust?.state || null;
   const reviewActive = isWorkspaceTrustReviewActive(session);
   const trustBadgeClass = reviewActive
@@ -5727,6 +5818,7 @@ function renderSessionCard(session) {
           : 'Referenced by default. Click to make this the current coding workspace.'
       }</div>
       <div class="code-session__badges">
+        ${workflow ? `<span class="badge badge-info">FLOW: ${esc(workflow.label)}</span>` : ''}
         ${workspaceTrust ? `<span class="badge ${trustBadgeClass}">TRUST: ${esc(reviewActive ? 'ACCEPTED' : String(effectiveTrustState || '').toUpperCase())}</span>` : ''}
         ${reviewActive ? `<span class="badge ${rawTrustBadgeClass}">RAW: ${esc(String(workspaceTrust?.state || '').toUpperCase())}</span>` : ''}
         ${approvalCount > 0 ? `<span class="badge badge-warn">${approvalCount} ${approvalCount === 1 ? 'approval' : 'approvals'}</span>` : ''}

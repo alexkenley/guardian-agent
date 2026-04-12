@@ -3618,6 +3618,10 @@ describe('ToolExecutor', () => {
     expect(result.success).toBe(true);
     expect(result.output).toMatchObject({
       goal: 'Refactor the auth middleware and add regression coverage for token parsing failures.',
+      workflow: {
+        type: 'refactor',
+        label: 'Refactor',
+      },
       inspect: ['src/auth/middleware.ts', 'src/auth/middleware.test.ts'],
     });
     expect(Array.isArray((result.output as any).plan)).toBe(true);

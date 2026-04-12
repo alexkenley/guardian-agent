@@ -28,6 +28,10 @@ import {
   normalizeReferencedCodeSessionIds,
   normalizeTargetCodeSessionId,
 } from './code-session-portfolio.js';
+import {
+  cloneCodeSessionWorkflowState,
+  type CodeSessionWorkflowState,
+} from './coding-workflows.js';
 
 export type CodeSessionStatus =
   | 'idle'
@@ -94,6 +98,7 @@ export interface CodeSessionWorkState {
   recentJobs: CodeSessionRecentJob[];
   changedFiles: string[];
   verification: CodeSessionVerificationEntry[];
+  workflow?: CodeSessionWorkflowState | null;
 }
 
 export interface CodeSessionUiState {
@@ -291,6 +296,7 @@ function defaultWorkState(): CodeSessionWorkState {
     recentJobs: [],
     changedFiles: [],
     verification: [],
+    workflow: null,
   };
 }
 
@@ -771,6 +777,9 @@ export class CodeSessionStore {
         verification: Array.isArray(input.workState?.verification)
           ? input.workState.verification.map((entry) => ({ ...entry }))
           : (workspaceRootChanged ? [] : existing.workState.verification.map((entry) => ({ ...entry }))),
+        workflow: input.workState?.workflow !== undefined
+          ? cloneCodeSessionWorkflowState(input.workState.workflow)
+          : (workspaceRootChanged ? null : cloneCodeSessionWorkflowState(existing.workState.workflow)),
       },
     };
 

@@ -53,6 +53,7 @@ import { createLogger } from './util/logging.js';
 import { writeSecureFileSync } from './util/secure-fs.js';
 import { ConversationService, type ConversationKey } from './runtime/conversation.js';
 import { CodeSessionStore, type CodeSessionRecord } from './runtime/code-sessions.js';
+import { deriveCodeSessionWorkflowState } from './runtime/coding-workflows.js';
 import { SecondBrainStore } from './runtime/second-brain/second-brain-store.js';
 import { SecondBrainService } from './runtime/second-brain/second-brain-service.js';
 import { BriefingService } from './runtime/second-brain/briefing-service.js';
@@ -1288,6 +1289,19 @@ function buildDashboardCallbacks(
         : recentJobs.some((job) => job.status === 'running')
           ? 'active'
           : session.status;
+    const workflow = deriveCodeSessionWorkflowState({
+      focusSummary: session.workState.focusSummary,
+      planSummary: session.workState.planSummary,
+      pendingApprovals,
+      recentJobs,
+      verification: session.workState.verification,
+      previous: session.workState.workflow,
+      hasRepoEvidence: Boolean(
+        session.workState.workspaceProfile?.summary
+          || session.workState.workspaceMap?.indexedFileCount
+          || session.workState.workingSet?.files?.length,
+      ),
+    });
     const updated = codeSessionStore.updateSession({
       sessionId: session.id,
       ownerUserId: session.ownerUserId,
@@ -1296,6 +1310,7 @@ function buildDashboardCallbacks(
         ...session.workState,
         pendingApprovals,
         recentJobs,
+        workflow,
       },
     });
     return updated ?? session;

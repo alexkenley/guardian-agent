@@ -81,6 +81,7 @@ Primary persisted shape:
   - `focusSummary`
   - `planSummary`
   - `compactedSummary`
+  - `workflow`
   - `workspaceProfile`
   - `workspaceTrust`
   - `workspaceTrustReview`
@@ -314,6 +315,7 @@ Behavior:
 
 - Guardian chat is the canonical conversation surface for coding work
 - the `#/code` workbench keeps the session-scoped `Activity` panel for approvals, trust state, recent work, and verification outcomes
+- the `Activity` panel also surfaces the active workflow recipe, current stage, and verification posture for the session so the operator can see whether the run is still inspecting, implementing, verifying, or ready to summarize
 - `Activity` preserves its own scroll position across normal session rerenders so long review lists remain navigable
 - the UI does not auto-switch panels when approvals appear
 - the web chat surface should not become a duplicate session manager; primary-session switching belongs to the workbench session rail
