@@ -7,6 +7,7 @@ import type { CodingBackendService } from '../../runtime/coding-backend-service.
 import type { CodeSessionStore } from '../../runtime/code-sessions.js';
 import { buildCodingWorkflowPlan } from '../../runtime/coding-workflows.js';
 import type { PackageInstallTrustService } from '../../runtime/package-install-trust-service.js';
+import type { RemoteExecutionTargetDescriptor } from '../../runtime/remote-execution/policy.js';
 import type { JsDependencyMutationIntent, JsDependencySnapshot } from '../../runtime/workspace-dependency-ledger.js';
 import { ToolRegistry } from '../registry.js';
 import type { ToolExecutionRequest } from '../types.js';
@@ -113,6 +114,7 @@ interface CodingToolRegistrarContext {
     request?: Partial<ToolExecutionRequest>,
   ) => { session?: CodeSessionRecord; error?: string };
   getCurrentCodeSessionRecord: (request?: Partial<ToolExecutionRequest>) => CodeSessionRecord | null;
+  getRemoteExecutionTargets?: () => RemoteExecutionTargetDescriptor[];
 }
 
 function normalizeCodeText(value: string): string {
@@ -962,7 +964,7 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
         : [];
       return {
         success: true,
-        output: buildCodingWorkflowPlan(task, cwd, selectedFiles),
+        output: buildCodingWorkflowPlan(task, cwd, selectedFiles, context.getRemoteExecutionTargets?.() ?? []),
       };
     },
   );

@@ -618,6 +618,11 @@ Every provider connection form must support:
 - `Test Connection`
 - `Save`
 
+Vercel-specific note:
+
+- the guided Vercel editor may expose the optional sandbox capability under the same saved Vercel profile rather than creating a second connector family
+- that sandbox subsection should explain that Guardian keeps local memory, approvals, and normal data-plane work local, and only uses the sandbox for bounded higher-risk execution lanes
+
 The preferred provider-editing pattern is:
 
 - saved profiles listed on the left

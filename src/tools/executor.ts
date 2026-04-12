@@ -30,6 +30,10 @@ import {
   isInstallLikePackageManagerCommand,
   parseManagedPackageInstallCommand,
 } from '../runtime/package-install-trust.js';
+import {
+  listRemoteExecutionTargets,
+  type RemoteExecutionTargetDescriptor,
+} from '../runtime/remote-execution/policy.js';
 import { MarketingStore } from './marketing-store.js';
 import { ToolApprovalStore } from './approvals.js';
 import { ToolRegistry } from './registry.js';
@@ -860,6 +864,10 @@ export class ToolExecutor {
       directBackend: !!capabilities?.backends.playwright.moduleName || !!capabilities?.backends.playwright.unavailableReason,
       mcpTools: this.mcpManager?.getAllToolDefinitions().filter(d => d.name.startsWith('mcp-playwright-')).length ?? 0,
     };
+  }
+
+  getRemoteExecutionTargets(): RemoteExecutionTargetDescriptor[] {
+    return listRemoteExecutionTargets(this.cloudConfig);
   }
 
   setAutomationControlPlane(controlPlane: AutomationControlPlane | undefined): void {
@@ -4699,6 +4707,7 @@ export class ToolExecutor {
       getCodeSessionSurfaceId: (request) => this.getCodeSessionSurfaceId(request),
       resolveOwnedCodeSessionTarget: (target, request) => this.resolveOwnedCodeSessionTarget(target, request),
       getCurrentCodeSessionRecord: (request) => this.getCurrentCodeSessionRecord(request),
+      getRemoteExecutionTargets: () => this.getRemoteExecutionTargets(),
     });
 
     registerBuiltinWebTools({

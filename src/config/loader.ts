@@ -724,6 +724,33 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
         profile.credentialRef,
         `assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.credentialRef`,
       );
+      if (profile.sandbox) {
+        if (profile.sandbox.enabled && !profile.teamId?.trim()) {
+          errors.push(`assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.teamId is required when sandbox is enabled`);
+        }
+        if (profile.sandbox.enabled && !profile.sandbox.projectId?.trim()) {
+          errors.push(`assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.sandbox.projectId is required when sandbox is enabled`);
+        }
+        if (profile.sandbox.defaultTimeoutMs !== undefined) {
+          if (!Number.isFinite(profile.sandbox.defaultTimeoutMs) || profile.sandbox.defaultTimeoutMs <= 0) {
+            errors.push(`assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.sandbox.defaultTimeoutMs must be greater than 0`);
+          } else if (profile.sandbox.defaultTimeoutMs > 18_000_000) {
+            errors.push(`assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.sandbox.defaultTimeoutMs must be 18,000,000 ms or less`);
+          }
+        }
+        if (profile.sandbox.defaultVcpus !== undefined) {
+          if (!Number.isInteger(profile.sandbox.defaultVcpus) || profile.sandbox.defaultVcpus < 1 || profile.sandbox.defaultVcpus > 8) {
+            errors.push(`assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.sandbox.defaultVcpus must be an integer between 1 and 8`);
+          }
+        }
+        if (profile.sandbox.allowedDomains !== undefined) {
+          if (!Array.isArray(profile.sandbox.allowedDomains)) {
+            errors.push(`assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.sandbox.allowedDomains must be an array`);
+          } else if (profile.sandbox.allowedDomains.some((domain) => typeof domain !== 'string' || !domain.trim())) {
+            errors.push(`assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.sandbox.allowedDomains must contain non-empty strings`);
+          }
+        }
+      }
     }
     const seenCloudflareProfileIds = new Set<string>();
     for (const profile of cloud.cloudflareProfiles ?? []) {

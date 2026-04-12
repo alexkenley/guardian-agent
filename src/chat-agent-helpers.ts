@@ -965,6 +965,15 @@ function trimOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+function trimStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const normalized = value
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 function readMessageSurfaceId(value: unknown): string | undefined {
   if (!isRecord(value)) return undefined;
   return trimOptionalString(value.surfaceId);
@@ -1041,6 +1050,11 @@ function redactCloudConfig(cloud: GuardianAgentConfig['assistant']['tools']['clo
     if (apiTokenConfigured) inlineSecretProfileCount += 1;
     if (profile.credentialRef?.trim()) credentialRefCount += 1;
     if (profile.apiBaseUrl?.trim()) customEndpointProfileCount += 1;
+    const sandboxEnabled = profile.sandbox?.enabled === true;
+    const sandboxReady = sandboxEnabled
+      && !!profile.teamId?.trim()
+      && !!profile.sandbox?.projectId?.trim()
+      && (apiTokenConfigured || !!profile.credentialRef?.trim());
     return {
       id: profile.id,
       name: profile.name,
@@ -1049,6 +1063,17 @@ function redactCloudConfig(cloud: GuardianAgentConfig['assistant']['tools']['clo
       apiTokenConfigured,
       teamId: profile.teamId,
       slug: profile.slug,
+      sandbox: profile.sandbox
+        ? {
+            enabled: sandboxEnabled,
+            ready: sandboxReady,
+            projectId: trimOptionalString(profile.sandbox.projectId),
+            defaultTimeoutMs: typeof profile.sandbox.defaultTimeoutMs === 'number' ? profile.sandbox.defaultTimeoutMs : undefined,
+            defaultVcpus: typeof profile.sandbox.defaultVcpus === 'number' ? profile.sandbox.defaultVcpus : undefined,
+            allowNetwork: profile.sandbox.allowNetwork !== false,
+            allowedDomains: trimStringArray(profile.sandbox.allowedDomains)?.map((domain) => domain.toLowerCase()),
+          }
+        : undefined,
     };
   });
 
@@ -1206,6 +1231,34 @@ function mergeCloudConfigForValidation(
           credentialRef: hasOwnProp(profile, 'credentialRef') ? trimOptionalString(profile.credentialRef) : existing?.credentialRef,
           teamId: hasOwnProp(profile, 'teamId') ? trimOptionalString(profile.teamId) : existing?.teamId,
           slug: hasOwnProp(profile, 'slug') ? trimOptionalString(profile.slug) : existing?.slug,
+          sandbox: hasOwnProp(profile, 'sandbox') && isRecord(profile.sandbox)
+            ? {
+                ...(isRecord(existing?.sandbox) ? existing.sandbox : {}),
+                ...(profile.sandbox as Record<string, unknown>),
+                enabled: hasOwnProp(profile.sandbox, 'enabled')
+                  ? profile.sandbox.enabled === true
+                  : (existing?.sandbox?.enabled === true),
+                projectId: hasOwnProp(profile.sandbox, 'projectId')
+                  ? trimOptionalString(profile.sandbox.projectId)
+                  : existing?.sandbox?.projectId,
+                defaultTimeoutMs: hasOwnProp(profile.sandbox, 'defaultTimeoutMs')
+                  ? (typeof profile.sandbox.defaultTimeoutMs === 'number' && Number.isFinite(profile.sandbox.defaultTimeoutMs)
+                      ? profile.sandbox.defaultTimeoutMs
+                      : undefined)
+                  : existing?.sandbox?.defaultTimeoutMs,
+                defaultVcpus: hasOwnProp(profile.sandbox, 'defaultVcpus')
+                  ? (typeof profile.sandbox.defaultVcpus === 'number' && Number.isFinite(profile.sandbox.defaultVcpus)
+                      ? profile.sandbox.defaultVcpus
+                      : undefined)
+                  : existing?.sandbox?.defaultVcpus,
+                allowNetwork: hasOwnProp(profile.sandbox, 'allowNetwork')
+                  ? profile.sandbox.allowNetwork === true
+                  : existing?.sandbox?.allowNetwork,
+                allowedDomains: hasOwnProp(profile.sandbox, 'allowedDomains')
+                  ? trimStringArray(profile.sandbox.allowedDomains)?.map((domain) => domain.toLowerCase())
+                  : existing?.sandbox?.allowedDomains,
+              }
+            : existing?.sandbox,
         };
       })
       : current.vercelProfiles,

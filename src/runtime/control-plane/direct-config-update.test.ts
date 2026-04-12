@@ -254,4 +254,70 @@ describe('direct config update', () => {
       },
     });
   });
+
+  it('persists Vercel sandbox capability updates on the existing Vercel cloud profile model', async () => {
+    const config = createConfig();
+    config.assistant.tools.cloud = {
+      enabled: true,
+      cpanelProfiles: [],
+      vercelProfiles: [{
+        id: 'vercel-main',
+        name: 'Main Vercel',
+        credentialRef: 'cloud.vercel.main',
+        teamId: 'team_123',
+      }],
+      cloudflareProfiles: [],
+      awsProfiles: [],
+      gcpProfiles: [],
+      azureProfiles: [],
+    };
+
+    const { configRef, rawState, handler } = createHandlerHarness(config);
+    const result = await handler({
+      assistant: {
+        tools: {
+          cloud: {
+            vercelProfiles: [{
+              id: 'vercel-main',
+              name: 'Main Vercel',
+              credentialRef: 'cloud.vercel.main',
+              teamId: 'team_123',
+              sandbox: {
+                enabled: true,
+                projectId: 'prj_123',
+                defaultTimeoutMs: 300_000,
+                defaultVcpus: 2,
+                allowNetwork: true,
+                allowedDomains: ['Registry.Npmjs.org', 'api.anthropic.com'],
+              },
+            }],
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({ success: true, message: 'Saved' });
+    expect(configRef.current.assistant.tools.cloud?.vercelProfiles?.[0]?.sandbox).toEqual({
+      enabled: true,
+      projectId: 'prj_123',
+      defaultTimeoutMs: 300_000,
+      defaultVcpus: 2,
+      allowNetwork: true,
+      allowedDomains: ['registry.npmjs.org', 'api.anthropic.com'],
+    });
+
+    const rawConfig = rawState.current as Record<string, unknown>;
+    const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+    const rawTools = rawAssistant.tools as Record<string, unknown>;
+    const rawCloud = rawTools.cloud as Record<string, unknown>;
+    const rawVercel = rawCloud.vercelProfiles as Array<Record<string, unknown>>;
+    expect(rawVercel[0]?.sandbox).toEqual({
+      enabled: true,
+      projectId: 'prj_123',
+      defaultTimeoutMs: 300_000,
+      defaultVcpus: 2,
+      allowNetwork: true,
+      allowedDomains: ['registry.npmjs.org', 'api.anthropic.com'],
+    });
+  });
 });

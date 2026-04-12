@@ -328,6 +328,15 @@ export interface RedactedCloudVercelProfile {
   apiTokenConfigured: boolean;
   teamId?: string;
   slug?: string;
+  sandbox?: {
+    enabled: boolean;
+    ready: boolean;
+    projectId?: string;
+    defaultTimeoutMs?: number;
+    defaultVcpus?: number;
+    allowNetwork: boolean;
+    allowedDomains?: string[];
+  };
 }
 
 export interface RedactedCloudCloudflareProfile {
@@ -2038,6 +2047,14 @@ export interface ConfigUpdate {
           credentialRef?: string;
           teamId?: string;
           slug?: string;
+          sandbox?: {
+            enabled?: boolean;
+            projectId?: string;
+            defaultTimeoutMs?: number;
+            defaultVcpus?: number;
+            allowNetwork?: boolean;
+            allowedDomains?: string[];
+          };
         }>;
         cloudflareProfiles?: Array<{
           id: string;

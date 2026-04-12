@@ -709,6 +709,44 @@ describe('validateConfig', () => {
     expect(validateConfig(config)).toEqual([]);
   });
 
+  it('should validate Vercel sandbox requirements and limits', () => {
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'cloud.vercel.primary': { source: 'env', env: 'VERCEL_TOKEN' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          cloud: {
+            enabled: true,
+            vercelProfiles: [{
+              id: 'vercel-main',
+              name: 'Vercel Main',
+              credentialRef: 'cloud.vercel.primary',
+              teamId: 'team_123',
+              sandbox: {
+                enabled: true,
+                projectId: 'prj_123',
+                defaultTimeoutMs: 300_000,
+                defaultVcpus: 2,
+                allowNetwork: true,
+                allowedDomains: ['registry.npmjs.org'],
+              },
+            }],
+          },
+        },
+      },
+    };
+
+    expect(validateConfig(config)).toEqual([]);
+    config.assistant.tools.cloud!.vercelProfiles![0]!.sandbox!.defaultVcpus = 9;
+    expect(validateConfig(config)).toContain("assistant.tools.cloud.vercelProfiles.vercel-main.sandbox.defaultVcpus must be an integer between 1 and 8");
+  });
+
   it('loadConfigFromFile should normalize cloud, llm, and Moltbook URL-like inputs', () => {
     const configPath = join(TEST_DIR, 'config.yaml');
     const rawConfig: GuardianAgentConfig = {
@@ -737,6 +775,12 @@ describe('validateConfig', () => {
               name: 'Vercel Main',
               credentialRef: 'cloud.vercel.primary',
               apiBaseUrl: 'https://api.vercel.com/',
+              teamId: 'team_123',
+              sandbox: {
+                enabled: true,
+                projectId: 'prj_123',
+                allowedDomains: ['Registry.Npmjs.org', 'api.anthropic.com '],
+              },
             }],
             awsProfiles: [{
               id: 'aws-main',
@@ -794,6 +838,8 @@ describe('validateConfig', () => {
     expect(loaded.assistant.tools.cloud?.cpanelProfiles?.[0]?.host).toBe('vmres13.web-servers.com.au');
     expect(loaded.assistant.tools.cloud?.cpanelProfiles?.[0]?.ssl).toBe(true);
     expect(loaded.assistant.tools.cloud?.vercelProfiles?.[0]?.apiBaseUrl).toBe('https://api.vercel.com');
+    expect(loaded.assistant.tools.cloud?.vercelProfiles?.[0]?.sandbox?.projectId).toBe('prj_123');
+    expect(loaded.assistant.tools.cloud?.vercelProfiles?.[0]?.sandbox?.allowedDomains).toEqual(['registry.npmjs.org', 'api.anthropic.com']);
     expect(loaded.assistant.tools.cloud?.awsProfiles?.[0]?.endpoints?.s3).toBe('http://localhost:4566');
     expect(loaded.assistant.tools.cloud?.gcpProfiles?.[0]?.endpoints?.storage).toBe('https://storage.googleapis.com');
     expect(loaded.assistant.tools.cloud?.azureProfiles?.[0]?.blobBaseUrl).toBe('https://account.blob.core.windows.net');

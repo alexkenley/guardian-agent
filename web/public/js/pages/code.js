@@ -2477,7 +2477,7 @@ function deriveTaskItems(session) {
       status: mapCodeWorkflowTone(workflow),
       detail: workflow.blockedReason
         ? `${workflow.blockedReason} ${workflow.nextAction}`.trim()
-        : (workflow.nextAction || workflow.summary || 'Workflow guidance is ready for this session.'),
+        : `${workflow.nextAction || workflow.summary || 'Workflow guidance is ready for this session.'}${workflow.isolation?.level === 'recommended' && workflow.isolation.reason ? ` ${workflow.isolation.reason}` : ''}`.trim(),
       meta: formatCodeWorkflowMeta(workflow),
     });
   }
@@ -2985,7 +2985,31 @@ function normalizeCodeSessionWorkflow(value, fallback = null) {
       : 'not_started',
     nextAction: typeof value.nextAction === 'string' ? value.nextAction : '',
     blockedReason: typeof value.blockedReason === 'string' ? value.blockedReason : '',
+    isolation: normalizeCodeWorkflowIsolation(value.isolation, fallback?.isolation || null),
     updatedAt: Number(value.updatedAt) || 0,
+  };
+}
+
+function normalizeCodeWorkflowIsolation(value, fallback = null) {
+  if (!value || typeof value !== 'object') {
+    return fallback || null;
+  }
+  const level = value.level === 'recommended' || value.level === 'available' || value.level === 'none'
+    ? value.level
+    : 'none';
+  return {
+    level,
+    backendKind: typeof value.backendKind === 'string' ? value.backendKind : '',
+    profileId: typeof value.profileId === 'string' ? value.profileId : '',
+    profileName: typeof value.profileName === 'string' ? value.profileName : '',
+    reason: typeof value.reason === 'string' ? value.reason : '',
+    candidateOperations: Array.isArray(value.candidateOperations)
+      ? value.candidateOperations.map((entry) => String(entry)).filter(Boolean)
+      : [],
+    networkMode: typeof value.networkMode === 'string' ? value.networkMode : '',
+    allowedDomains: Array.isArray(value.allowedDomains)
+      ? value.allowedDomains.map((entry) => String(entry)).filter(Boolean)
+      : [],
   };
 }
 
@@ -3002,6 +3026,9 @@ function formatCodeWorkflowMeta(workflow) {
   const parts = [`Stage ${humanizeCodeWorkflowValue(workflow.currentStage)}`];
   if (workflow.verificationState && workflow.verificationState !== 'not_required') {
     parts.push(`Verification ${humanizeCodeWorkflowValue(workflow.verificationState)}`);
+  }
+  if (workflow.isolation?.level === 'recommended' || workflow.isolation?.level === 'available') {
+    parts.push(`Isolation ${humanizeCodeWorkflowValue(workflow.isolation.level)}`);
   }
   if (workflow.updatedAt) {
     parts.push(formatRelativeTime(workflow.updatedAt));
@@ -3694,6 +3721,14 @@ function getSessionRenderSignature(session) {
           verificationState: session.workflow.verificationState || '',
           nextAction: session.workflow.nextAction || '',
           blockedReason: session.workflow.blockedReason || '',
+          isolation: session.workflow.isolation
+            ? {
+                level: session.workflow.isolation.level || '',
+                backendKind: session.workflow.isolation.backendKind || '',
+                profileId: session.workflow.isolation.profileId || '',
+                reason: session.workflow.isolation.reason || '',
+              }
+            : null,
         }
       : null,
     focusSummary: session.focusSummary || '',
@@ -5819,6 +5854,11 @@ function renderSessionCard(session) {
       }</div>
       <div class="code-session__badges">
         ${workflow ? `<span class="badge badge-info">FLOW: ${esc(workflow.label)}</span>` : ''}
+        ${workflow?.isolation?.level === 'recommended'
+          ? `<span class="badge badge-warn">SANDBOX: ${esc(humanizeCodeWorkflowValue(workflow.isolation.backendKind || 'recommended'))}</span>`
+          : workflow?.isolation?.level === 'available'
+            ? `<span class="badge badge-info">SANDBOX READY</span>`
+            : ''}
         ${workspaceTrust ? `<span class="badge ${trustBadgeClass}">TRUST: ${esc(reviewActive ? 'ACCEPTED' : String(effectiveTrustState || '').toUpperCase())}</span>` : ''}
         ${reviewActive ? `<span class="badge ${rawTrustBadgeClass}">RAW: ${esc(String(workspaceTrust?.state || '').toUpperCase())}</span>` : ''}
         ${approvalCount > 0 ? `<span class="badge badge-warn">${approvalCount} ${approvalCount === 1 ? 'approval' : 'approvals'}</span>` : ''}

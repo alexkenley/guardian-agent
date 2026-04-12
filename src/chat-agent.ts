@@ -7245,15 +7245,38 @@ type DirectIntentShadowCandidate =
     const output = planResult.result.output as Record<string, unknown>;
     const goal = toString(output.goal);
     const workflow = isRecord(output.workflow) ? output.workflow : null;
+    const execution = isRecord(output.execution) ? output.execution : null;
+    const isolation = execution && isRecord(execution.isolation) ? execution.isolation : null;
     const plan = Array.isArray(output.plan) ? output.plan.map((step) => `- ${String(step)}`) : [];
     const verification = Array.isArray(output.verification)
       ? output.verification.map((step) => `- ${String(step)}`)
+      : [];
+    const isolationLevel = toString(isolation?.level).trim();
+    const isolationLines = isolation && isolationLevel && isolationLevel !== 'none'
+      ? [
+          isolationLevel
+            ? `- Level: ${isolationLevel}`
+            : '',
+          toString(isolation.backendKind).trim()
+            ? `- Backend: ${toString(isolation.backendKind).trim()}`
+            : '',
+          toString(isolation.profileId).trim()
+            ? `- Profile: ${toString(isolation.profileId).trim()}`
+            : '',
+          Array.isArray(isolation.candidateOperations) && isolation.candidateOperations.length > 0
+            ? `- Candidate operations: ${isolation.candidateOperations.map((value) => String(value)).join(', ')}`
+            : '',
+          toString(isolation.reason).trim()
+            ? `- Reason: ${toString(isolation.reason).trim()}`
+            : '',
+        ].filter((value) => value)
       : [];
     const sections = [
       goal ? `Goal: ${goal}` : '',
       workflow?.label ? `Workflow: ${toString(workflow.label)}` : '',
       plan.length > 0 ? `Plan:\n${plan.join('\n')}` : '',
       verification.length > 0 ? `Verification:\n${verification.join('\n')}` : '',
+      isolationLines.length > 0 ? `Isolation:\n${isolationLines.join('\n')}` : '',
     ].filter((value) => value);
     return sections.join('\n\n');
   }
@@ -7347,6 +7370,11 @@ type DirectIntentShadowCandidate =
           || session.workState.workspaceMap?.indexedFileCount
           || session.workState.workingSet?.files?.length,
       ),
+      workspaceTrustState: getEffectiveCodeWorkspaceTrustState(
+        session.workState.workspaceTrust,
+        session.workState.workspaceTrustReview,
+      ) ?? session.workState.workspaceTrust?.state ?? null,
+      remoteExecutionTargets: this.tools?.getRemoteExecutionTargets(),
     });
     const nextCompactedSummary = runtimeState?.contextAssembly?.compactedSummaryPreview
       || (

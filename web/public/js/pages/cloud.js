@@ -125,6 +125,46 @@ const CLOUD_PROVIDER_DEFS = [
       { key: 'teamId', label: 'Team ID', type: 'text', placeholder: 'team_123' },
       { key: 'slug', label: 'Default Team/Project Slug', type: 'text', placeholder: 'my-team' },
       { key: 'apiBaseUrl', label: 'API Base URL', type: 'text', placeholder: 'https://api.vercel.com', help: 'Full root URL for the API. Trailing slash is fine; queries and fragments are not.' },
+      {
+        key: 'sandbox.enabled',
+        label: 'Allow Guardian To Use Vercel Sandbox',
+        type: 'checkbox',
+        help: 'Lets Guardian run bounded higher-risk repo jobs such as dependency install, build, and targeted verification inside a Vercel sandbox instead of on your host.',
+      },
+      {
+        key: 'sandbox.projectId',
+        label: 'Sandbox Project ID',
+        type: 'text',
+        placeholder: 'prj_123',
+        help: 'Required for access-token sandbox authentication when Guardian is running locally.',
+      },
+      {
+        key: 'sandbox.defaultTimeoutMs',
+        label: 'Sandbox Timeout (ms)',
+        type: 'number',
+        placeholder: '300000',
+        help: 'Default sandbox lifetime for one bounded job. Vercel Sandbox currently defaults to 5 minutes and supports up to 5 hours depending on plan.',
+      },
+      {
+        key: 'sandbox.defaultVcpus',
+        label: 'Sandbox vCPUs',
+        type: 'number',
+        placeholder: '2',
+        help: 'Optional default vCPU allocation for the sandbox. Vercel currently supports up to 8 vCPUs.',
+      },
+      {
+        key: 'sandbox.allowNetwork',
+        label: 'Allow Sandbox Network Egress',
+        type: 'checkbox',
+        help: 'Disable this for no-network verification runs. Leave it on for package install or remote dependency verification jobs.',
+      },
+      {
+        key: 'sandbox.allowedDomains',
+        label: 'Sandbox Allowed Domains (JSON)',
+        type: 'json',
+        placeholder: '[\n  "registry.npmjs.org",\n  "api.anthropic.com"\n]',
+        help: 'Optional outbound domain allowlist when sandbox network egress is enabled. Leave blank to let the sandbox use its normal network posture.',
+      },
     ],
   },
   {
@@ -760,13 +800,15 @@ function createCloudConnectionSection(def, cloud) {
 }
 
 function renderCloudField(def, field, profile) {
-  const value = profile[field.key];
+  const value = getCloudProfileFieldValue(profile, field.key);
   const configured = field.configuredKey ? profile[field.configuredKey] : false;
   const configuredNote = configured ? 'Configured - leave blank to keep existing value' : '';
   const placeholder = configuredNote || field.placeholder || '';
 
   if (field.type === 'checkbox') {
-    const checked = value === true || (value == null && field.key === 'ssl');
+    const checked = typeof value === 'boolean'
+      ? value
+      : field.defaultValue === true || field.key === 'ssl';
     return `
       <div class="cfg-field">
         <label>${esc(field.label)}</label>
@@ -824,28 +866,30 @@ function renderCloudField(def, field, profile) {
 
 function collectCloudProfile(section, def, existingProfile) {
   const existing = existingProfile || {};
-  const nextProfile = { ...(existing || {}) };
+  const nextProfile = typeof structuredClone === 'function'
+    ? structuredClone(existing || {})
+    : JSON.parse(JSON.stringify(existing || {}));
 
   for (const field of def.fields) {
     const input = section.querySelector(`[data-cloud-field="${cssEscape(field.key)}"]`);
     if (!input) continue;
     if (field.type === 'checkbox') {
-      nextProfile[field.key] = !!input.checked;
+      setCloudProfileFieldValue(nextProfile, field.key, !!input.checked);
       continue;
     }
 
     const raw = String(input.value || '');
     if (field.type === 'number') {
-      nextProfile[field.key] = raw.trim() ? Number(raw) : undefined;
+      setCloudProfileFieldValue(nextProfile, field.key, raw.trim() ? Number(raw) : undefined);
       continue;
     }
     if (field.type === 'json') {
       if (!raw.trim()) {
-        nextProfile[field.key] = undefined;
+        setCloudProfileFieldValue(nextProfile, field.key, undefined);
         continue;
       }
       try {
-        nextProfile[field.key] = JSON.parse(raw);
+        setCloudProfileFieldValue(nextProfile, field.key, JSON.parse(raw));
       } catch {
         throw new Error(`${field.label} must be valid JSON.`);
       }
@@ -853,11 +897,11 @@ function collectCloudProfile(section, def, existingProfile) {
     }
 
     if (field.type === 'password') {
-      if (raw.trim()) nextProfile[field.key] = raw.trim();
+      if (raw.trim()) setCloudProfileFieldValue(nextProfile, field.key, raw.trim());
       continue;
     }
 
-    nextProfile[field.key] = raw.trim() || undefined;
+    setCloudProfileFieldValue(nextProfile, field.key, raw.trim() || undefined);
   }
 
   if (!nextProfile.id) {
@@ -868,6 +912,47 @@ function collectCloudProfile(section, def, existingProfile) {
   }
 
   return nextProfile;
+}
+
+function getCloudProfileFieldValue(profile, key) {
+  const parts = String(key || '').split('.');
+  let current = profile;
+  for (const part of parts) {
+    if (!current || typeof current !== 'object') return undefined;
+    current = current[part];
+  }
+  return current;
+}
+
+function setCloudProfileFieldValue(profile, key, value) {
+  const parts = String(key || '').split('.');
+  if (parts.length === 0) return;
+  let current = profile;
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    const part = parts[index];
+    const next = current[part];
+    if (!next || typeof next !== 'object' || Array.isArray(next)) {
+      current[part] = {};
+    }
+    current = current[part];
+  }
+  const leaf = parts[parts.length - 1];
+  if (value === undefined || value === null || (Array.isArray(value) && value.length === 0)) {
+    delete current[leaf];
+  } else {
+    current[leaf] = value;
+  }
+  pruneEmptyCloudProfileObjects(profile);
+}
+
+function pruneEmptyCloudProfileObjects(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  Object.keys(value).forEach((key) => {
+    if (pruneEmptyCloudProfileObjects(value[key])) {
+      delete value[key];
+    }
+  });
+  return Object.keys(value).length === 0;
 }
 
 function createGenericHelpFactory(area) {
@@ -905,6 +990,7 @@ function createGenericHelpFactory(area) {
 function buildDefaultProfile(def) {
   const base = { id: '', name: '' };
   if (def.key === 'cpanelProfiles') return { ...base, type: 'whm', port: 2087, ssl: true, allowSelfSigned: false };
+  if (def.key === 'vercelProfiles') return { ...base, sandbox: { enabled: true, allowNetwork: true, defaultTimeoutMs: 300000, defaultVcpus: 2 } };
   if (def.key === 'awsProfiles') return { ...base, region: 'us-east-1' };
   if (def.key === 'gcpProfiles') return { ...base, location: 'us-central1' };
   return base;
@@ -921,6 +1007,7 @@ function summarizeCloudProfileBadges(def, profile) {
   if (configuredSecretCount > 0) badges.push(configuredSecretCount === 1 ? 'secret stored' : `${configuredSecretCount} secrets stored`);
   if (credentialRefCount > 0) badges.push(credentialRefCount === 1 ? '1 credential ref' : `${credentialRefCount} credential refs`);
   if (profile.allowSelfSigned) badges.push('self-signed TLS');
+  if (profile.sandbox?.enabled) badges.push(profile.sandbox?.ready ? 'sandbox ready' : 'sandbox enabled');
   if (profile.apiBaseUrl || (profile.endpoints && Object.keys(profile.endpoints).length > 0) || profile.blobBaseUrl) badges.push('custom endpoint');
 
   return badges;
@@ -963,7 +1050,9 @@ function buildProviderRows(cloud) {
       inline: cloud.vercelProfiles.filter((profile) => profile.apiTokenConfigured).length,
       refs: cloud.vercelProfiles.filter((profile) => !!profile.credentialRef).length,
       customEndpoints: cloud.vercelProfiles.filter((profile) => !!profile.apiBaseUrl).length,
-      notes: '-',
+      notes: cloud.vercelProfiles.filter((profile) => profile.sandbox?.enabled).length
+        ? `${cloud.vercelProfiles.filter((profile) => profile.sandbox?.enabled).length} sandbox-enabled`
+        : '-',
     },
     {
       provider: 'Cloudflare',

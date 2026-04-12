@@ -119,6 +119,13 @@ export function normalizeConfigInputs(config: GuardianAgentConfig): GuardianAgen
             vercelProfiles: (config.assistant.tools.cloud.vercelProfiles ?? []).map((profile) => ({
               ...profile,
               apiBaseUrl: normalizeOptionalHttpUrlInput(profile.apiBaseUrl),
+              sandbox: profile.sandbox
+                ? {
+                    ...profile.sandbox,
+                    projectId: trimOptionalString(profile.sandbox.projectId),
+                    allowedDomains: trimStringArray(profile.sandbox.allowedDomains)?.map((domain) => domain.toLowerCase()),
+                  }
+                : undefined,
             })),
             cloudflareProfiles: (config.assistant.tools.cloud.cloudflareProfiles ?? []).map((profile) => ({
               ...profile,

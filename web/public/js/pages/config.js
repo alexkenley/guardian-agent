@@ -3262,7 +3262,7 @@ function renderCloudTab(panel) {
     {
       key: 'vercelProfiles',
       label: 'Vercel',
-      note: 'Profile keys: id, name, apiBaseUrl, credentialRef, teamId, slug. Add apiToken only when setting or rotating an inline token.',
+      note: 'Profile keys: id, name, apiBaseUrl, credentialRef, teamId, slug, sandbox. Add apiToken only when setting or rotating an inline token. Sandbox may include enabled, projectId, defaultTimeoutMs, defaultVcpus, allowNetwork, and allowedDomains.',
     },
     {
       key: 'cloudflareProfiles',
@@ -5951,8 +5951,8 @@ function createGenericHelpFactory(area) {
     },
     Vercel: {
       whatItIs: 'This section contains the raw profile array for Vercel connections used by the cloud-tool layer.',
-      whatSeeing: 'You are seeing saved Vercel profiles as JSON together with the keys expected for token, team, slug, and API base URL.',
-      whatCanDo: 'Review or edit Vercel profiles directly when you need to inspect or change raw config.',
+      whatSeeing: 'You are seeing saved Vercel profiles as JSON together with the keys expected for token, team, slug, API base URL, and optional sandbox capability.',
+      whatCanDo: 'Review or edit Vercel profiles directly when you need to inspect or change raw config, including the optional remote sandbox settings.',
       howLinks: 'These profiles back Vercel tool calls and mirror the guided Vercel connection flow on the Cloud page.',
     },
     Cloudflare: {

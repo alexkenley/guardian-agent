@@ -1,4 +1,9 @@
 import type { CodeSessionRecentJob, CodeSessionVerificationEntry } from './code-sessions.js';
+import {
+  recommendWorkflowIsolation,
+  type RemoteExecutionTargetDescriptor,
+  type WorkflowIsolationRecommendation,
+} from './remote-execution/policy.js';
 
 export type CodeSessionWorkflowType =
   | 'implementation'
@@ -19,6 +24,17 @@ export type CodeSessionWorkflowStage =
 export type CodeSessionWorkflowVerificationMode = 'required' | 'recommended' | 'not_required';
 export type CodeSessionWorkflowStatus = 'ready' | 'in_progress' | 'blocked' | 'completed';
 export type CodeSessionWorkflowVerificationState = 'not_started' | 'pending' | 'running' | 'passed' | 'failed' | 'not_required';
+
+export interface CodeSessionWorkflowIsolationState {
+  level: WorkflowIsolationRecommendation['level'];
+  backendKind?: WorkflowIsolationRecommendation['backendKind'];
+  profileId?: string;
+  profileName?: string;
+  reason?: string;
+  candidateOperations: string[];
+  networkMode?: WorkflowIsolationRecommendation['networkMode'];
+  allowedDomains?: string[];
+}
 
 export interface CodeSessionWorkflowRecipeStage {
   id: CodeSessionWorkflowStage;
@@ -46,6 +62,7 @@ export interface CodeSessionWorkflowState {
   verificationState: CodeSessionWorkflowVerificationState;
   nextAction: string;
   blockedReason?: string;
+  isolation?: CodeSessionWorkflowIsolationState | null;
   updatedAt: number;
 }
 
@@ -58,6 +75,8 @@ interface DeriveCodeSessionWorkflowStateInput {
   previous?: CodeSessionWorkflowState | null;
   plannedWorkflowType?: CodeSessionWorkflowType | null;
   hasRepoEvidence?: boolean;
+  workspaceTrustState?: string | null;
+  remoteExecutionTargets?: RemoteExecutionTargetDescriptor[];
   now?: number;
 }
 
@@ -168,6 +187,13 @@ export function cloneCodeSessionWorkflowState(
   return workflow
     ? {
         ...workflow,
+        isolation: workflow.isolation
+          ? {
+              ...workflow.isolation,
+              candidateOperations: [...workflow.isolation.candidateOperations],
+              allowedDomains: workflow.isolation.allowedDomains ? [...workflow.isolation.allowedDomains] : undefined,
+            }
+          : null,
       }
     : null;
 }
@@ -256,11 +282,17 @@ function buildWorkflowSpecificRisks(type: CodeSessionWorkflowType): string[] {
   }
 }
 
-export function buildCodingWorkflowPlan(task: string, cwd: string, selectedFiles: string[]): Record<string, unknown> {
+export function buildCodingWorkflowPlan(
+  task: string,
+  cwd: string,
+  selectedFiles: string[],
+  remoteExecutionTargets: RemoteExecutionTargetDescriptor[] = [],
+): Record<string, unknown> {
   const normalizedTask = task.trim();
   const workflowType = inferCodingWorkflowType(normalizedTask);
   const recipe = getCodingWorkflowRecipe(workflowType);
   const inspect = selectedFiles.length > 0 ? selectedFiles : ['relevant source files', 'tests', 'config'];
+  const isolation = recommendWorkflowIsolation(workflowType, { targets: remoteExecutionTargets });
 
   return {
     goal: normalizedTask,
@@ -276,6 +308,9 @@ export function buildCodingWorkflowPlan(task: string, cwd: string, selectedFiles
         label: stage.label,
         detail: stage.detail,
       })),
+    },
+    execution: {
+      isolation,
     },
     inspect,
     changes: buildWorkflowSpecificChanges(workflowType),
@@ -354,6 +389,10 @@ export function deriveCodeSessionWorkflowState(input: DeriveCodeSessionWorkflowS
   const hasImplementationActivity = runningImplementation
     || recentJobs.some((job) => isImplementationJob(job) && (job.status === 'succeeded' || job.status === 'pending_approval'));
   const verificationState = resolveVerificationState(recipe.verificationMode, recentJobs, verification, hasImplementationActivity);
+  const isolation = recommendWorkflowIsolation(type, {
+    targets: input.remoteExecutionTargets,
+    workspaceTrustState: input.workspaceTrustState,
+  });
 
   let currentStage: CodeSessionWorkflowStage = 'inspect';
   let status: CodeSessionWorkflowStatus = 'ready';
@@ -421,6 +460,7 @@ export function deriveCodeSessionWorkflowState(input: DeriveCodeSessionWorkflowS
     verificationState,
     nextAction,
     ...(blockedReason ? { blockedReason } : {}),
+    isolation,
     updatedAt: now,
   };
 }
@@ -439,6 +479,24 @@ export function formatCodeSessionWorkflowForPrompt(workflow: CodeSessionWorkflow
   ];
   if (workflow.blockedReason) {
     lines.push(`workflowBlockedReason: ${workflow.blockedReason}`);
+  }
+  if (workflow.isolation && workflow.isolation.level !== 'none') {
+    lines.push(`workflowIsolation: ${workflow.isolation.level}`);
+    if (workflow.isolation.backendKind) {
+      lines.push(`workflowIsolationBackend: ${workflow.isolation.backendKind}`);
+    }
+    if (workflow.isolation.profileId) {
+      lines.push(`workflowIsolationProfile: ${workflow.isolation.profileId}`);
+    }
+    if (workflow.isolation.reason) {
+      lines.push(`workflowIsolationReason: ${workflow.isolation.reason}`);
+    }
+    if (workflow.isolation.candidateOperations.length > 0) {
+      lines.push(`workflowIsolationOperations: ${workflow.isolation.candidateOperations.join('; ')}`);
+    }
+    if (workflow.isolation.networkMode) {
+      lines.push(`workflowIsolationNetwork: ${workflow.isolation.networkMode}`);
+    }
   }
   return lines.join('\n');
 }

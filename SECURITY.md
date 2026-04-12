@@ -34,6 +34,7 @@ For the shipped local defensive overlay on top of the runtime security model, se
 
 - [Agentic Defensive Security Suite - As-Built Spec](docs/specs/AGENTIC-DEFENSIVE-SECURITY-SUITE-AS-BUILT-SPEC.md)
 - [Contextual Security Uplift Spec](docs/specs/CONTEXTUAL-SECURITY-UPLIFT-SPEC.md)
+- [Security Isolation Spec](docs/specs/SECURITY-ISOLATION-SPEC.md)
 
 The as-built spec is the canonical current-state document for the defensive suite. The earlier implementation plan has been retired.
 
@@ -185,27 +186,25 @@ GuardianAgent's security operates at every stage of the agent lifecycle through 
                         │
                         ▼
 ┌─────────────────────────────────────────────────────────┐
-│  LAYER 1.5: OS-Level Process Sandbox                    │
+│  LAYER 1.5: Execution Isolation Boundary                │
 │                                                         │
-│  Linux uses bwrap namespace isolation when available.    │
-│  Sandbox health states control strict-mode availability  │
-│  for risky subprocess-backed tools.                      │
-│  The default enforcement mode is permissive, but weak    │
-│  backends keep high-risk degraded-fallback surfaces      │
-│  disabled unless the operator explicitly enables them.   │
-│  Fallback behavior uses ulimit + env hardening.          │
-│  Windows and macOS support depend on platform helpers.   │
+│  Guardian selects the strongest available boundary that  │
+│  matches the workload while keeping approvals, audit,    │
+│  memory, policy, and secrets supervisor-owned.           │
+│  This layer can use brokered workers, local process      │
+│  sandboxes, or stronger virtualized backends. Weak       │
+│  hosts still keep degraded high-risk surfaces disabled   │
+│  unless the operator explicitly re-enables them.         │
 │                                                         │
 │  ┌──────────────┐  ┌─────────────┐  ┌───────────────┐  │
-│  │ Filesystem   │  │ Network     │  │ Resource      │  │
-│  │ Isolation    │  │ Namespace   │  │ Limits        │  │
-│  │ (ro-bind)    │  │ (unshare)   │  │ (ulimit)      │  │
+│  │ Brokered     │  │ Process     │  │ Virtualized   │  │
+│  │ Worker       │  │ Sandbox     │  │ Backends      │  │
+│  │ (no network) │  │ (local OS)  │  │ (local/remote)│  │
 │  └──────────────┘  └─────────────┘  └───────────────┘  │
 │                                                         │
-│  Child processes run with namespace/resource isolation.  │
-│  Write access is constrained by sandbox binds, network   │
-│  is isolated by default, and resource quotas are         │
-│  enforced when supported by platform capabilities.       │
+│  Execution receives a bounded run/session contract.      │
+│  Stronger backends add containment; they do not bypass   │
+│  the normal approval, policy, audit, or output layers.   │
 └───────────────────────┬─────────────────────────────────┘
                         │
                         ▼
@@ -472,11 +471,45 @@ The longer-term declarative rule-engine work remains documented in [`docs/specs/
 
 ---
 
-## Process Sandbox
+## Execution Isolation (Layer 1.5)
 
 Managed child processes spawned by tool execution are wrapped in OS-level isolation using [bubblewrap (bwrap)](https://github.com/containers/bubblewrap) on Linux, an optional native helper on Windows, and graceful fallback to `ulimit` + environment hardening when stronger backends are unavailable.
 
 The brokered chat worker is also launched through the managed sandbox layer with `networkAccess: false`. LLM API calls are proxied through the broker RPC (`llm.chat`), so the worker process never makes outbound network connections.
+
+### Unified Isolation Model
+
+Guardian treats Layer 1.5 as a capability-driven execution boundary, not as a single sandbox implementation.
+
+The same control-plane rules can be satisfied by different backends depending on host capabilities and workload:
+
+- brokered worker isolation for the built-in chat/planner loop
+- local process sandboxing for managed child processes
+- stronger local virtualized execution for hostile or semi-trusted jobs when available
+- remote virtualized execution for bounded jobs when an operator has configured a trusted provider-backed sandbox
+
+Regardless of backend, Guardian keeps ownership of:
+
+- intent routing
+- approvals and pending actions
+- audit logging
+- memory and tool policy
+- secret resolution and provider connectivity
+- output scanning and trust classification
+
+The execution backend receives only a bounded run contract and returns status, logs, and artifacts. Stronger backends add containment; they do not create a second authority plane.
+
+### Isolation Tier Selection
+
+Guardian should prefer the least-complex boundary that safely satisfies the workload and fail closed when a stronger boundary is required but unavailable.
+
+| Workload class | Preferred isolation posture | Notes |
+|---|---|---|
+| Built-in chat/planner loop | Brokered worker, `networkAccess: false` | Implemented today; the worker never makes direct LLM network calls |
+| Read-only or low-risk subprocess work | Local process sandbox | Current default for managed child processes |
+| Hostile or semi-trusted command execution | Strong local isolation when available | In `strict` mode, risky subprocess-backed tools stay blocked unless the host can provide a strong tier |
+| Remote bounded job execution | Remote virtualized backend | Intended for job-style execution, not for replacing Guardian's routing, memory, or approval layers |
+| Second Brain, memory, contacts, notes, provider mutations | Supervisor-owned runtime path by default | These are data-plane and control-plane operations, not phase-1 remote-sandbox targets |
 
 ### Sandbox Profiles
 
@@ -531,14 +564,28 @@ Important boundary:
 
 Install bwrap on Debian/Ubuntu: `sudo apt install bubblewrap`
 
-### Windows Sandbox Backend
+### Windows Local Isolation Tiers
 
-- AppContainer-backed process launch for sandboxed profiles (`read-only`, `workspace-write`)
-- Job Object `KILL_ON_JOB_CLOSE` enforcement for child process trees
-- Strict-mode fail-closed behavior when the helper is missing/unhealthy
-- Optional portable zip bundle ships the sandbox helper alongside the runtime
+- Current shipped Windows local isolation is the process-sandbox/helper tier:
+  - AppContainer-backed process launch for sandboxed profiles (`read-only`, `workspace-write`)
+  - Job Object `KILL_ON_JOB_CLOSE` enforcement for child process trees
+  - strict-mode fail-closed behavior when the helper is missing or unhealthy
+  - optional portable zip bundle ships the sandbox helper alongside the runtime
+- A Hyper-V-backed strong-isolation tier should be modeled as a distinct backend, not as a rename of the helper/AppContainer tier
+- Diagnostics, setup, policy, and UI copy should report the actual backend that ran rather than treating every Windows path as equivalent strength
 
 See `docs/proposals/WINDOWS-PORTABLE-ISOLATION-OPTION.md` for packaging details.
+
+### Virtualized Isolation Backends
+
+The same Layer 1.5 contract can host stronger virtualization-backed execution backends for bounded jobs.
+
+- Local examples include Windows Hyper-V and future Linux VM-backed execution
+- Remote examples include provider-attached sandbox or workspace-VM backends
+- These backends should expose honest backend identity, availability, and supported network modes rather than collapsing everything into one generic `strong` label
+- Provider choice is an adapter concern below this contract; Guardian should keep one shared routing, approval, audit, and memory model above it
+
+The canonical cross-backend contract is documented in [docs/specs/SECURITY-ISOLATION-SPEC.md](docs/specs/SECURITY-ISOLATION-SPEC.md).
 
 ### Configuration
 

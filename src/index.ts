@@ -68,8 +68,10 @@ import {
 } from './runtime/code-workspace-map.js';
 import { resolveManagedPlaywrightLaunch } from './runtime/playwright-launch.js';
 import { CodingBackendService } from './runtime/coding-backend-service.js';
+import { listRemoteExecutionTargets } from './runtime/remote-execution/policy.js';
 import {
   assessCodeWorkspaceTrustSync,
+  getEffectiveCodeWorkspaceTrustState,
   shouldRefreshCodeWorkspaceTrust,
 } from './runtime/code-workspace-trust.js';
 import { CodeWorkspaceTrustService } from './runtime/code-workspace-trust-service.js';
@@ -1301,6 +1303,11 @@ function buildDashboardCallbacks(
           || session.workState.workspaceMap?.indexedFileCount
           || session.workState.workingSet?.files?.length,
       ),
+      workspaceTrustState: getEffectiveCodeWorkspaceTrustState(
+        session.workState.workspaceTrust,
+        session.workState.workspaceTrustReview,
+      ) ?? session.workState.workspaceTrust?.state ?? null,
+      remoteExecutionTargets: listRemoteExecutionTargets(configRef.current.assistant.tools.cloud),
     });
     const updated = codeSessionStore.updateSession({
       sessionId: session.id,

@@ -531,6 +531,7 @@ export function getReferenceGuide(): ReferenceGuide {
                   'The Sessions rail keeps one current coding workspace selected at a time. Other saved sessions stay available as referenced context by default, and Guardian caps the saved portfolio at four sessions so that cross-workspace context stays bounded.',
                   'The workbench activity rail shows the session timeline for approvals, verification, and recent work.',
                   'The activity rail now also shows the active coding workflow recipe, current stage, and whether verification is still missing, running, failing, or complete.',
+                  'When a ready isolated execution target exists, the workflow card can also flag that bounded jobs such as dependency install, build, or targeted verification should run through the configured sandbox instead of on the host.',
                   'Workspace Activity cards now show the same response-source badge treatment as the main chat rail, so delegated coding replies keep their provenance when you inspect them from the workbench.',
                   'Recent session timeline events can also show which answer source produced the final coding reply, so you can tell whether the result came from the local, managed-cloud, or frontier path.',
                   'Use the Code activity timeline when you want the local story for one coding session. Use Automations > Execution Timeline when you want the global cross-session view.',

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCodingWorkflowPlan,
   deriveCodeSessionWorkflowState,
+  formatCodeSessionWorkflowForPrompt,
   inferCodingWorkflowType,
 } from './coding-workflows.js';
 
@@ -19,8 +20,22 @@ describe('coding workflow recipes', () => {
       'Refactor the auth middleware and add regression coverage for token parsing failures.',
       '/repo',
       ['src/auth/middleware.ts', 'src/auth/middleware.test.ts'],
+      [{
+        id: 'vercel:vercel-main',
+        profileId: 'vercel-main',
+        profileName: 'Main Vercel',
+        providerFamily: 'vercel',
+        backendKind: 'vercel_sandbox',
+        capabilityState: 'ready',
+        reason: 'Ready for bounded remote sandbox execution.',
+        projectId: 'prj_123',
+        teamId: 'team_123',
+        networkMode: 'allow_all',
+        allowedDomains: [],
+      }],
     ) as {
       workflow?: { type?: string; label?: string; stages?: Array<{ id: string }> };
+      execution?: { isolation?: { level?: string; backendKind?: string } };
       inspect?: string[];
       verification?: string[];
     };
@@ -30,6 +45,10 @@ describe('coding workflow recipes', () => {
     expect(plan.inspect).toEqual(['src/auth/middleware.ts', 'src/auth/middleware.test.ts']);
     expect(Array.isArray(plan.workflow?.stages)).toBe(true);
     expect(plan.verification?.[0]).toMatch(/targeted tests/i);
+    expect(plan.execution?.isolation).toMatchObject({
+      level: 'available',
+      backendKind: 'vercel_sandbox',
+    });
   });
 
   it('blocks the workflow until repo evidence exists', () => {
@@ -99,5 +118,69 @@ describe('coding workflow recipes', () => {
       verificationState: 'not_required',
       updatedAt: 789,
     });
+  });
+
+  it('recommends remote isolation when a ready sandbox target exists for higher-risk work', () => {
+    const workflow = deriveCodeSessionWorkflowState({
+      focusSummary: 'Review the dependency upgrade.',
+      planSummary: 'Goal: Upgrade the dependency and verify the app still works.',
+      pendingApprovals: [],
+      recentJobs: [],
+      verification: [],
+      plannedWorkflowType: 'dependency_review',
+      hasRepoEvidence: true,
+      workspaceTrustState: 'trusted',
+      remoteExecutionTargets: [{
+        id: 'vercel:vercel-main',
+        profileId: 'vercel-main',
+        profileName: 'Main Vercel',
+        providerFamily: 'vercel',
+        backendKind: 'vercel_sandbox',
+        capabilityState: 'ready',
+        reason: 'Ready for bounded remote sandbox execution.',
+        projectId: 'prj_123',
+        teamId: 'team_123',
+        networkMode: 'domain_allowlist',
+        allowedDomains: ['registry.npmjs.org'],
+      }],
+      now: 999,
+    });
+
+    expect(workflow?.isolation).toMatchObject({
+      level: 'recommended',
+      backendKind: 'vercel_sandbox',
+      profileId: 'vercel-main',
+      networkMode: 'domain_allowlist',
+    });
+    expect(workflow?.isolation?.candidateOperations).toContain('dependency install');
+  });
+
+  it('includes isolation guidance in the coding-session prompt block', () => {
+    const prompt = formatCodeSessionWorkflowForPrompt({
+      type: 'dependency_review',
+      recipeId: 'coding.inspect-compare-upgrade-verify',
+      label: 'Dependency Review',
+      summary: 'Inspect the version delta, compare impact, apply the upgrade carefully, then run the affected proof.',
+      verificationMode: 'required',
+      currentStage: 'verify',
+      status: 'blocked',
+      verificationState: 'pending',
+      nextAction: 'Run the targeted checks.',
+      isolation: {
+        level: 'recommended',
+        backendKind: 'vercel_sandbox',
+        profileId: 'vercel-main',
+        profileName: 'Main Vercel',
+        reason: 'Dependency installs and upgrade verification are the cleanest first use for remote isolation.',
+        candidateOperations: ['dependency install', 'build', 'test'],
+        networkMode: 'domain_allowlist',
+        allowedDomains: ['registry.npmjs.org'],
+      },
+      updatedAt: 1,
+    });
+
+    expect(prompt).toContain('workflowIsolation: recommended');
+    expect(prompt).toContain('workflowIsolationBackend: vercel_sandbox');
+    expect(prompt).toContain('workflowIsolationOperations: dependency install; build; test');
   });
 });

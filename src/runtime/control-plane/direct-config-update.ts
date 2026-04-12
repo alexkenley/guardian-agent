@@ -985,6 +985,61 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
               } else if (typeof current?.slug === 'string') {
                 next.slug = current.slug;
               }
+              if (options.hasOwn(profile, 'sandbox')) {
+                const rawSandbox = options.isRecord(profile.sandbox) ? profile.sandbox : {};
+                const currentSandbox = options.isRecord(current?.sandbox) ? current.sandbox : null;
+                const nextSandbox: Record<string, unknown> = {};
+                if (options.hasOwn(rawSandbox, 'enabled')) {
+                  if (typeof rawSandbox.enabled === 'boolean') nextSandbox.enabled = rawSandbox.enabled;
+                } else if (typeof currentSandbox?.enabled === 'boolean') {
+                  nextSandbox.enabled = currentSandbox.enabled;
+                }
+                if (options.hasOwn(rawSandbox, 'projectId')) {
+                  const trimmed = options.trimOrUndefined(rawSandbox.projectId);
+                  if (trimmed) nextSandbox.projectId = trimmed;
+                } else if (typeof currentSandbox?.projectId === 'string') {
+                  nextSandbox.projectId = currentSandbox.projectId;
+                }
+                if (options.hasOwn(rawSandbox, 'defaultTimeoutMs')) {
+                  if (typeof rawSandbox.defaultTimeoutMs === 'number' && Number.isFinite(rawSandbox.defaultTimeoutMs)) {
+                    nextSandbox.defaultTimeoutMs = rawSandbox.defaultTimeoutMs;
+                  }
+                } else if (typeof currentSandbox?.defaultTimeoutMs === 'number') {
+                  nextSandbox.defaultTimeoutMs = currentSandbox.defaultTimeoutMs;
+                }
+                if (options.hasOwn(rawSandbox, 'defaultVcpus')) {
+                  if (typeof rawSandbox.defaultVcpus === 'number' && Number.isFinite(rawSandbox.defaultVcpus)) {
+                    nextSandbox.defaultVcpus = rawSandbox.defaultVcpus;
+                  }
+                } else if (typeof currentSandbox?.defaultVcpus === 'number') {
+                  nextSandbox.defaultVcpus = currentSandbox.defaultVcpus;
+                }
+                if (options.hasOwn(rawSandbox, 'allowNetwork')) {
+                  if (typeof rawSandbox.allowNetwork === 'boolean') nextSandbox.allowNetwork = rawSandbox.allowNetwork;
+                } else if (typeof currentSandbox?.allowNetwork === 'boolean') {
+                  nextSandbox.allowNetwork = currentSandbox.allowNetwork;
+                }
+                if (options.hasOwn(rawSandbox, 'allowedDomains')) {
+                  if (Array.isArray(rawSandbox.allowedDomains)) {
+                    const allowedDomains = rawSandbox.allowedDomains
+                      .filter((domain): domain is string => typeof domain === 'string')
+                      .map((domain) => domain.trim().toLowerCase())
+                      .filter(Boolean);
+                    if (allowedDomains.length > 0) nextSandbox.allowedDomains = allowedDomains;
+                  }
+                } else if (Array.isArray(currentSandbox?.allowedDomains)) {
+                  const allowedDomains = currentSandbox.allowedDomains
+                    .filter((domain): domain is string => typeof domain === 'string')
+                    .map((domain) => domain.trim().toLowerCase())
+                    .filter(Boolean);
+                  if (allowedDomains.length > 0) nextSandbox.allowedDomains = allowedDomains;
+                }
+                if (Object.keys(nextSandbox).length > 0) {
+                  next.sandbox = nextSandbox;
+                }
+              } else if (options.isRecord(current?.sandbox)) {
+                next.sandbox = structuredClone(current.sandbox);
+              }
               return next;
             });
           }

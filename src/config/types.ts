@@ -1244,6 +1244,22 @@ export interface AssistantCloudCpanelProfileConfig {
 }
 
 /** A Vercel account or team profile for cloud operations. */
+export interface AssistantCloudVercelSandboxConfig {
+  /** Whether Guardian may use this profile for bounded remote sandbox execution. */
+  enabled?: boolean;
+  /** Vercel project id used for sandbox authentication from a local Guardian runtime. */
+  projectId?: string;
+  /** Optional default sandbox timeout in milliseconds. */
+  defaultTimeoutMs?: number;
+  /** Optional default vCPU allocation. Vercel currently supports up to 8. */
+  defaultVcpus?: number;
+  /** Allow outbound network access from the sandbox. Default true. */
+  allowNetwork?: boolean;
+  /** Optional outbound domain allowlist when network access is enabled. */
+  allowedDomains?: string[];
+}
+
+/** A Vercel account or team profile for cloud operations. */
 export interface AssistantCloudVercelProfileConfig {
   /** Unique profile id referenced by Vercel tools. */
   id: string;
@@ -1259,6 +1275,8 @@ export interface AssistantCloudVercelProfileConfig {
   teamId?: string;
   /** Optional team slug for scoped operations. */
   slug?: string;
+  /** Optional bounded remote-execution capability for Vercel Sandbox. */
+  sandbox?: AssistantCloudVercelSandboxConfig;
 }
 
 /** A Cloudflare account profile for cloud operations. */
