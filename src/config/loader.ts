@@ -651,6 +651,11 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   }
   const cloud = assistant.tools.cloud;
   if (cloud) {
+    if (cloud.defaultRemoteExecutionTargetId !== undefined) {
+      if (typeof cloud.defaultRemoteExecutionTargetId !== 'string' || !cloud.defaultRemoteExecutionTargetId.trim()) {
+        errors.push('assistant.tools.cloud.defaultRemoteExecutionTargetId must be a non-empty string');
+      }
+    }
     const seenProfileIds = new Set<string>();
     for (const profile of cloud.cpanelProfiles ?? []) {
       if (!profile.id?.trim()) {
@@ -750,6 +755,63 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
             errors.push(`assistant.tools.cloud.vercelProfiles.${profile.id || '(unnamed)'}.sandbox.allowedDomains must contain non-empty strings`);
           }
         }
+      }
+    }
+    const seenDaytonaProfileIds = new Set<string>();
+    for (const profile of cloud.daytonaProfiles ?? []) {
+      if (!profile.id?.trim()) {
+        errors.push('assistant.tools.cloud.daytonaProfiles.id is required');
+      } else if (seenDaytonaProfileIds.has(profile.id)) {
+        errors.push(`assistant.tools.cloud.daytonaProfiles id '${profile.id}' is duplicated`);
+      } else {
+        seenDaytonaProfileIds.add(profile.id);
+      }
+      if (!profile.name?.trim()) {
+        errors.push(`assistant.tools.cloud.daytonaProfiles.${profile.id || '(unnamed)'}.name is required`);
+      }
+      if (!profile.apiKey?.trim() && !profile.credentialRef?.trim()) {
+        errors.push(`assistant.tools.cloud.daytonaProfiles.${profile.id || '(unnamed)'}.apiKey or credentialRef is required`);
+      }
+      if (profile.apiUrl?.trim()) {
+        try {
+          normalizeHttpUrlInput(profile.apiUrl);
+        } catch (error) {
+          errors.push(`assistant.tools.cloud.daytonaProfiles.${profile.id || '(unnamed)'}.apiUrl ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      assertCredentialRef(
+        profile.credentialRef,
+        `assistant.tools.cloud.daytonaProfiles.${profile.id || '(unnamed)'}.credentialRef`,
+      );
+      if (profile.defaultTimeoutMs !== undefined) {
+        if (!Number.isFinite(profile.defaultTimeoutMs) || profile.defaultTimeoutMs <= 0) {
+          errors.push(`assistant.tools.cloud.daytonaProfiles.${profile.id || '(unnamed)'}.defaultTimeoutMs must be greater than 0`);
+        } else if (profile.defaultTimeoutMs > 18_000_000) {
+          errors.push(`assistant.tools.cloud.daytonaProfiles.${profile.id || '(unnamed)'}.defaultTimeoutMs must be 18,000,000 ms or less`);
+        }
+      }
+      if (profile.defaultVcpus !== undefined) {
+        if (!Number.isInteger(profile.defaultVcpus) || profile.defaultVcpus < 1) {
+          errors.push(`assistant.tools.cloud.daytonaProfiles.${profile.id || '(unnamed)'}.defaultVcpus must be an integer greater than 0`);
+        }
+      }
+      if (profile.allowedCidrs !== undefined) {
+        if (!Array.isArray(profile.allowedCidrs)) {
+          errors.push(`assistant.tools.cloud.daytonaProfiles.${profile.id || '(unnamed)'}.allowedCidrs must be an array`);
+        } else if (profile.allowedCidrs.some((cidr) => typeof cidr !== 'string' || !cidr.trim())) {
+          errors.push(`assistant.tools.cloud.daytonaProfiles.${profile.id || '(unnamed)'}.allowedCidrs must contain non-empty strings`);
+        }
+      }
+    }
+    if (cloud.defaultRemoteExecutionTargetId?.trim()) {
+      const targetId = cloud.defaultRemoteExecutionTargetId.trim();
+      const hasMatch = targetId.startsWith('vercel:')
+        ? (cloud.vercelProfiles ?? []).some((profile) => `vercel:${profile.id}` === targetId)
+        : targetId.startsWith('daytona:')
+          ? (cloud.daytonaProfiles ?? []).some((profile) => `daytona:${profile.id}` === targetId)
+          : false;
+      if (!hasMatch) {
+        errors.push(`assistant.tools.cloud.defaultRemoteExecutionTargetId '${targetId}' does not match a configured Vercel or Daytona remote execution target`);
       }
     }
     const seenCloudflareProfileIds = new Set<string>();

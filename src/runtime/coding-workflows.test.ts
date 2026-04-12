@@ -32,6 +32,7 @@ describe('coding workflow recipes', () => {
         teamId: 'team_123',
         networkMode: 'allow_all',
         allowedDomains: [],
+        allowedCidrs: [],
       }],
     ) as {
       workflow?: { type?: string; label?: string; stages?: Array<{ id: string }> };
@@ -142,6 +143,7 @@ describe('coding workflow recipes', () => {
         teamId: 'team_123',
         networkMode: 'domain_allowlist',
         allowedDomains: ['registry.npmjs.org'],
+        allowedCidrs: [],
       }],
       now: 999,
     });
@@ -175,6 +177,7 @@ describe('coding workflow recipes', () => {
         candidateOperations: ['dependency install', 'build', 'test'],
         networkMode: 'domain_allowlist',
         allowedDomains: ['registry.npmjs.org'],
+        allowedCidrs: [],
       },
       updatedAt: 1,
     });

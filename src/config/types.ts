@@ -1279,6 +1279,34 @@ export interface AssistantCloudVercelProfileConfig {
   sandbox?: AssistantCloudVercelSandboxConfig;
 }
 
+/** A Daytona sandbox profile for bounded remote execution. */
+export interface AssistantCloudDaytonaProfileConfig {
+  /** Unique profile id referenced by remote-execution tools. */
+  id: string;
+  /** Human-readable label for operator-facing output. */
+  name: string;
+  /** Daytona API URL override. Defaults to https://app.daytona.io/api. */
+  apiUrl?: string;
+  /** Inline API key (supports ${ENV_VAR}). Prefer credentialRef instead. */
+  apiKey?: string;
+  /** Credential reference for the Daytona API key. */
+  credentialRef?: string;
+  /** Optional Daytona target/region selector. */
+  target?: string;
+  /** Optional sandbox language. Defaults to typescript in Guardian. */
+  language?: string;
+  /** Whether Guardian may use this profile for bounded remote execution. */
+  enabled?: boolean;
+  /** Optional default sandbox timeout in milliseconds. */
+  defaultTimeoutMs?: number;
+  /** Optional default CPU allocation in cores. */
+  defaultVcpus?: number;
+  /** Allow outbound network access from the sandbox. Default true. */
+  allowNetwork?: boolean;
+  /** Optional outbound CIDR allowlist when network access is enabled. */
+  allowedCidrs?: string[];
+}
+
 /** A Cloudflare account profile for cloud operations. */
 export interface AssistantCloudCloudflareProfileConfig {
   /** Unique profile id referenced by Cloudflare tools. */
@@ -1400,10 +1428,14 @@ export interface AssistantCloudAzureProfileConfig {
 export interface AssistantCloudConfig {
   /** Enable built-in hosting/cloud tools. */
   enabled: boolean;
+  /** Preferred remote execution target id when more than one sandbox backend is configured. */
+  defaultRemoteExecutionTargetId?: string;
   /** Available cPanel/WHM profiles. */
   cpanelProfiles?: AssistantCloudCpanelProfileConfig[];
   /** Available Vercel profiles. */
   vercelProfiles?: AssistantCloudVercelProfileConfig[];
+  /** Available Daytona sandbox profiles. */
+  daytonaProfiles?: AssistantCloudDaytonaProfileConfig[];
   /** Available Cloudflare profiles. */
   cloudflareProfiles?: AssistantCloudCloudflareProfileConfig[];
   /** Available AWS profiles. */
@@ -2060,6 +2092,7 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         enabled: false,
         cpanelProfiles: [],
         vercelProfiles: [],
+        daytonaProfiles: [],
         cloudflareProfiles: [],
         awsProfiles: [],
         gcpProfiles: [],

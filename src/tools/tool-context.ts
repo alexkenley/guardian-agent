@@ -5,7 +5,7 @@ export interface ToolContextRequestSignals {
 }
 
 export interface ToolContextCloudProfileSummary {
-  family: 'cpanel' | 'vercel' | 'cloudflare' | 'aws' | 'gcp' | 'azure';
+  family: 'cpanel' | 'vercel' | 'daytona' | 'cloudflare' | 'aws' | 'gcp' | 'azure';
   id: string;
   label: string;
   line: string;
@@ -87,6 +87,8 @@ function familyKeywords(family: ToolContextCloudProfileSummary['family']): strin
       return ['cpanel', 'whm', 'hosting'];
     case 'vercel':
       return ['vercel'];
+    case 'daytona':
+      return ['daytona', 'sandbox'];
     case 'cloudflare':
       return ['cloudflare', 'cf'];
     case 'aws':

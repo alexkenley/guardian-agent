@@ -114,6 +114,7 @@ export function normalizeConfigInputs(config: GuardianAgentConfig): GuardianAgen
         cloud: config.assistant.tools.cloud
           ? {
             ...config.assistant.tools.cloud,
+            defaultRemoteExecutionTargetId: trimOptionalString(config.assistant.tools.cloud.defaultRemoteExecutionTargetId),
             cpanelProfiles: (config.assistant.tools.cloud.cpanelProfiles ?? []).map((profile) =>
               normalizeCpanelConnectionConfig(profile)),
             vercelProfiles: (config.assistant.tools.cloud.vercelProfiles ?? []).map((profile) => ({
@@ -126,6 +127,13 @@ export function normalizeConfigInputs(config: GuardianAgentConfig): GuardianAgen
                     allowedDomains: trimStringArray(profile.sandbox.allowedDomains)?.map((domain) => domain.toLowerCase()),
                   }
                 : undefined,
+            })),
+            daytonaProfiles: (config.assistant.tools.cloud.daytonaProfiles ?? []).map((profile) => ({
+              ...profile,
+              apiUrl: normalizeOptionalHttpUrlInput(profile.apiUrl),
+              target: trimOptionalString(profile.target),
+              language: trimOptionalString(profile.language)?.toLowerCase(),
+              allowedCidrs: trimStringArray(profile.allowedCidrs),
             })),
             cloudflareProfiles: (config.assistant.tools.cloud.cloudflareProfiles ?? []).map((profile) => ({
               ...profile,

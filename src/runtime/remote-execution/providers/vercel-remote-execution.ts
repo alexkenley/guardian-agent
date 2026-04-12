@@ -5,6 +5,7 @@ import type {
   RemoteExecutionArtifact,
   RemoteExecutionPreparedRequest,
   RemoteExecutionProvider,
+  VercelRemoteExecutionResolvedTarget,
   RemoteExecutionRunResult,
 } from '../types.js';
 
@@ -13,6 +14,13 @@ const DEFAULT_ARTIFACT_MAX_BYTES = 500_000;
 
 export interface VercelRemoteExecutionProviderOptions {
   client?: VercelSandboxClient;
+}
+
+function assertVercelTarget(target: RemoteExecutionPreparedRequest['target']): VercelRemoteExecutionResolvedTarget {
+  if (target.backendKind !== 'vercel_sandbox') {
+    throw new Error(`Vercel provider cannot execute backend '${target.backendKind}'.`);
+  }
+  return target;
 }
 
 function normalizeRemoteRelativePath(value: string): string {
@@ -61,6 +69,7 @@ export class VercelRemoteExecutionProvider implements RemoteExecutionProvider {
   }
 
   async run(request: RemoteExecutionPreparedRequest): Promise<RemoteExecutionRunResult> {
+    const target = assertVercelTarget(request.target);
     const startedAt = Date.now();
     const remoteCwd = toRemoteCwd(request.workspaceRoot, request.cwd);
     const stagedBytes = request.stagedFiles.reduce((sum, file) => sum + file.content.length, 0);
@@ -74,7 +83,7 @@ export class VercelRemoteExecutionProvider implements RemoteExecutionProvider {
 
     try {
       session = await this.client.createSandbox({
-        target: request.target,
+        target,
         timeoutMs: request.timeoutMs,
         vcpus: request.vcpus,
         runtime: request.runtime,
@@ -131,9 +140,9 @@ export class VercelRemoteExecutionProvider implements RemoteExecutionProvider {
     const completedAt = Date.now();
     return {
       targetId: request.target.id,
-      backendKind: request.target.backendKind,
-      profileId: request.target.profileId,
-      profileName: request.target.profileName,
+      backendKind: target.backendKind,
+      profileId: target.profileId,
+      profileName: target.profileName,
       requestedCommand: request.command.requestedCommand,
       status,
       sandboxId,
@@ -143,8 +152,9 @@ export class VercelRemoteExecutionProvider implements RemoteExecutionProvider {
       durationMs: completedAt - startedAt,
       startedAt,
       completedAt,
-      networkMode: request.target.networkMode,
-      allowedDomains: [...request.target.allowedDomains],
+      networkMode: target.networkMode,
+      allowedDomains: [...(target.allowedDomains ?? [])],
+      allowedCidrs: [...(target.allowedCidrs ?? [])],
       stagedFiles: request.stagedFiles.length,
       stagedBytes,
       workspaceRoot: request.workspaceRoot,

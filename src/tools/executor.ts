@@ -35,6 +35,7 @@ import {
   type RemoteExecutionTargetDescriptor,
 } from '../runtime/remote-execution/policy.js';
 import { RemoteExecutionService } from '../runtime/remote-execution/remote-execution-service.js';
+import { DaytonaRemoteExecutionProvider } from '../runtime/remote-execution/providers/daytona-remote-execution.js';
 import { VercelRemoteExecutionProvider } from '../runtime/remote-execution/providers/vercel-remote-execution.js';
 import type {
   RemoteExecutionResolvedTarget,
@@ -884,14 +885,24 @@ export class ToolExecutor {
 
   resolveRemoteExecutionTarget(profileId?: string): RemoteExecutionResolvedTarget | null {
     const targets = this.getRemoteExecutionTargets();
-    const descriptor = profileId?.trim()
-      ? targets.find((entry) => entry.profileId === profileId.trim())
-      : targets.find((entry) => entry.capabilityState === 'ready');
+    const requestedProfileId = profileId?.trim();
+    const preferredTargetId = !requestedProfileId
+      ? this.cloudConfig.defaultRemoteExecutionTargetId?.trim()
+      : '';
+    const descriptor = requestedProfileId
+      ? targets.find((entry) => entry.profileId === requestedProfileId)
+      : preferredTargetId
+        ? targets.find((entry) => entry.id === preferredTargetId && entry.capabilityState === 'ready')
+          ?? targets.find((entry) => entry.capabilityState === 'ready')
+        : targets.find((entry) => entry.capabilityState === 'ready');
     if (!descriptor || descriptor.capabilityState !== 'ready') {
       return null;
     }
     if (descriptor.backendKind === 'vercel_sandbox') {
       return this.getResolvedVercelSandboxTarget(descriptor.profileId);
+    }
+    if (descriptor.backendKind === 'daytona_sandbox') {
+      return this.getResolvedDaytonaSandboxTarget(descriptor.profileId);
     }
     return null;
   }
@@ -919,6 +930,7 @@ export class ToolExecutor {
       this.remoteExecutionService = new RemoteExecutionService({
         providers: [
           new VercelRemoteExecutionProvider(),
+          new DaytonaRemoteExecutionProvider(),
         ],
       });
     }
@@ -1139,6 +1151,17 @@ export class ToolExecutor {
           line: `- ${profile.id}: provider=vercel label="${profile.name}" endpoint=${endpoint} credential=${profile.apiToken?.trim() ? 'ready' : 'missing'} hostAllowlisted=${this.isHostAllowed(host) ? 'yes' : 'no'} suggestedReadOnlyTest=vercel_status`,
         };
       }),
+      ...(this.cloudConfig.daytonaProfiles ?? []).map((profile) => {
+        const endpoint = normalizeOptionalHttpUrlInput(profile.apiUrl) || 'https://app.daytona.io/api';
+        const host = new URL(endpoint).hostname;
+        return {
+          family: 'daytona' as const,
+          id: profile.id,
+          label: profile.name,
+          keywords: [profile.id, profile.name, profile.target, profile.language, 'daytona_status'].filter((value): value is string => Boolean(value)),
+          line: `- ${profile.id}: provider=daytona label="${profile.name}" endpoint=${endpoint} credential=${profile.apiKey?.trim() ? 'ready' : 'missing'} hostAllowlisted=${this.isHostAllowed(host) ? 'yes' : 'no'} target=${profile.target?.trim() || 'default'} language=${profile.language?.trim() || 'typescript'} isolation=${profile.enabled === true ? 'enabled' : 'disabled'} suggestedReadOnlyTest=daytona_status`,
+        };
+      }),
       ...(this.cloudConfig.cloudflareProfiles ?? []).map((profile) => {
         const endpoint = this.describeCloudflareEndpoint({
           id: profile.id,
@@ -1227,6 +1250,7 @@ export class ToolExecutor {
     const families = [
       ['cpanel/whm', this.cloudConfig.cpanelProfiles?.length ?? 0] as [string, number],
       ['vercel', this.cloudConfig.vercelProfiles?.length ?? 0] as [string, number],
+      ['daytona', this.cloudConfig.daytonaProfiles?.length ?? 0] as [string, number],
       ['cloudflare', this.cloudConfig.cloudflareProfiles?.length ?? 0] as [string, number],
       ['aws', this.cloudConfig.awsProfiles?.length ?? 0] as [string, number],
       ['gcp', this.cloudConfig.gcpProfiles?.length ?? 0] as [string, number],
@@ -5365,6 +5389,58 @@ export class ToolExecutor {
         : undefined,
       networkMode: descriptor?.networkMode ?? 'allow_all',
       allowedDomains: descriptor ? [...descriptor.allowedDomains] : [],
+      allowedCidrs: descriptor ? [...descriptor.allowedCidrs] : [],
+    };
+  }
+
+  private getResolvedDaytonaSandboxTarget(profileId: string): RemoteExecutionResolvedTarget {
+    if (!this.cloudConfig.enabled) {
+      throw new Error('Cloud tools are disabled in assistant.tools.cloud.enabled.');
+    }
+    const id = profileId.trim();
+    if (!id) {
+      throw new Error('profile is required');
+    }
+    const profile = (this.cloudConfig.daytonaProfiles ?? []).find((entry) => entry.id === id);
+    if (!profile) {
+      throw new Error(`Unknown Daytona profile '${id}'.`);
+    }
+    if (profile.enabled !== true) {
+      throw new Error(`Daytona profile '${id}' does not have sandbox execution enabled.`);
+    }
+    if (!profile.apiKey?.trim()) {
+      throw new Error(`Daytona profile '${id}' does not have a resolved API key.`);
+    }
+
+    let apiUrl: URL;
+    try {
+      apiUrl = new URL(normalizeOptionalHttpUrlInput(profile.apiUrl) || 'https://app.daytona.io/api');
+    } catch {
+      throw new Error(`Daytona profile '${id}' has an invalid apiUrl.`);
+    }
+    if (!this.isHostAllowed(apiUrl.hostname)) {
+      throw new Error(`Host '${apiUrl.hostname}' is not in allowedDomains.`);
+    }
+
+    const descriptor = this.getRemoteExecutionTargets().find((entry) => entry.profileId === profile.id);
+    return {
+      id: descriptor?.id ?? `daytona:${profile.id}`,
+      profileId: profile.id,
+      profileName: profile.name,
+      backendKind: 'daytona_sandbox',
+      apiKey: profile.apiKey,
+      apiUrl: normalizeHttpUrlInput(apiUrl.toString()),
+      target: profile.target?.trim() || undefined,
+      language: profile.language?.trim() || undefined,
+      defaultTimeoutMs: typeof profile.defaultTimeoutMs === 'number'
+        ? profile.defaultTimeoutMs
+        : undefined,
+      defaultVcpus: typeof profile.defaultVcpus === 'number'
+        ? profile.defaultVcpus
+        : undefined,
+      networkMode: descriptor?.networkMode ?? 'allow_all',
+      allowedDomains: descriptor ? [...descriptor.allowedDomains] : [],
+      allowedCidrs: descriptor ? [...descriptor.allowedCidrs] : [],
     };
   }
 

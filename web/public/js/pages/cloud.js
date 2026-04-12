@@ -186,6 +186,70 @@ const CLOUD_PROVIDER_DEFS = [
     ],
   },
   {
+    key: 'daytonaProfiles',
+    label: 'Daytona',
+    fields: [
+      { key: 'id', label: 'Profile ID', type: 'text', placeholder: 'daytona-main' },
+      { key: 'name', label: 'Name', type: 'text', placeholder: 'Primary Daytona' },
+      { key: 'credentialRef', label: 'Credential Ref', type: 'text', placeholder: 'cloud.daytona.main' },
+      { key: 'apiKey', label: 'API Key', type: 'password', configuredKey: 'apiKeyConfigured', placeholder: 'Leave blank to keep existing key' },
+      {
+        key: 'enabled',
+        label: 'Enable Daytona Sandbox',
+        type: 'checkbox',
+        help: 'Lets Guardian route bounded higher-risk repo jobs into Daytona when this profile is selected or set as the default remote sandbox.',
+      },
+      {
+        key: 'target',
+        label: 'Target (optional)',
+        type: 'text',
+        placeholder: 'us',
+        help: 'Optional Daytona target or region. Leave blank to use your Daytona default target.',
+      },
+      {
+        key: 'language',
+        label: 'Sandbox Language',
+        type: 'text',
+        placeholder: 'typescript',
+        help: 'Guardian defaults to typescript. Change this only if your Daytona workspace expects a different toolbox language.',
+      },
+      {
+        key: 'defaultTimeoutMs',
+        label: 'Default Sandbox Timeout (ms)',
+        type: 'number',
+        placeholder: '300000',
+        help: 'Default sandbox lifetime for one bounded job.',
+      },
+      {
+        key: 'defaultVcpus',
+        label: 'Default vCPUs',
+        type: 'number',
+        placeholder: '2',
+        help: 'Optional default CPU allocation in cores for the sandbox.',
+      },
+      {
+        key: 'allowNetwork',
+        label: 'Allow Outbound Network',
+        type: 'checkbox',
+        help: 'Disable this for no-network verification runs. Leave it on for installs or remote dependency verification jobs.',
+      },
+      {
+        key: 'allowedCidrs',
+        label: 'Outbound CIDR Allowlist (JSON)',
+        type: 'json',
+        placeholder: '[\n  "10.0.0.0/8"\n]',
+        help: 'Optional outbound CIDR allowlist when Daytona network egress is enabled. Daytona uses CIDR rules here, not domain rules.',
+      },
+      {
+        key: 'apiUrl',
+        label: 'API URL (optional, advanced)',
+        type: 'text',
+        placeholder: 'https://app.daytona.io/api',
+        help: 'Leave blank for the standard Daytona Cloud API URL.',
+      },
+    ],
+  },
+  {
     key: 'cloudflareProfiles',
     label: 'Cloudflare',
     fields: [
@@ -385,6 +449,7 @@ async function renderConnectionsTab(panel) {
 
     const globalSection = document.createElement('div');
     globalSection.className = 'table-container';
+    const remoteExecutionTargets = buildRemoteExecutionTargetOptions(cloud);
     globalSection.innerHTML = `
       <div class="table-header">
         <h3>Cloud Controls</h3>
@@ -397,6 +462,15 @@ async function renderConnectionsTab(panel) {
             <select id="cloud-enabled-toggle">
               <option value="true" ${cloud.enabled ? 'selected' : ''}>Enabled</option>
               <option value="false" ${!cloud.enabled ? 'selected' : ''}>Disabled</option>
+            </select>
+          </div>
+          <div class="cfg-field">
+            <label>Default Remote Sandbox</label>
+            <div class="cfg-help-text" style="font-size:0.72rem;color:var(--text-muted);margin-top:0.2rem;">
+              Used when both Vercel and Daytona are configured. Guardian falls back to the first ready target if this is unset or no longer ready.
+            </div>
+            <select id="cloud-default-remote-target">
+              ${remoteExecutionTargets.map((option) => `<option value="${escAttr(option.value)}"${option.value === (cloud.defaultRemoteExecutionTargetId || '') ? ' selected' : ''}>${esc(option.label)}</option>`).join('')}
             </select>
           </div>
         </div>
@@ -418,6 +492,7 @@ async function renderConnectionsTab(panel) {
             tools: {
               cloud: {
                 enabled: globalSection.querySelector('#cloud-enabled-toggle')?.value === 'true',
+                defaultRemoteExecutionTargetId: globalSection.querySelector('#cloud-default-remote-target')?.value || undefined,
               },
             },
           },
@@ -715,6 +790,8 @@ function createCloudConnectionSection(def, cloud) {
       : `Editing ${profileLabel}. Leaving secret fields blank preserves any stored values already attached to this profile.`;
     const providerNotice = def.key === 'vercelProfiles'
       ? 'For the normal Vercel sandbox setup, enter an Access Token, Team ID (`team_xxx`), enable Vercel Sandbox, and the sandbox Project ID (`prj_xxx`). Leave Team Slug blank unless you are intentionally using the advanced Vercel REST scope mode.'
+      : def.key === 'daytonaProfiles'
+        ? 'Daytona setup is simpler: enter an API Key, enable Daytona Sandbox, and optionally choose a target. Leave Allowed CIDRs blank unless you explicitly want to restrict sandbox egress by CIDR range.'
       : null;
 
     editorEl.innerHTML = `
@@ -949,8 +1026,34 @@ function collectCloudProfile(section, def, existingProfile) {
       throw new Error('Vercel sandbox requires the Vercel Project ID (`prj_xxx`).');
     }
   }
+  if (def.key === 'daytonaProfiles') {
+    const enabled = nextProfile.enabled === true;
+    const hasCredential = typeof nextProfile.apiKey === 'string' && nextProfile.apiKey.trim()
+      || typeof nextProfile.credentialRef === 'string' && nextProfile.credentialRef.trim();
+    if (enabled && !hasCredential && !existing.apiKeyConfigured) {
+      throw new Error('Daytona sandbox requires an API key or credential ref.');
+    }
+  }
 
   return nextProfile;
+}
+
+function buildRemoteExecutionTargetOptions(cloud) {
+  return [
+    { value: '', label: 'Automatic (first ready target)' },
+    ...(cloud.vercelProfiles || [])
+      .filter((profile) => profile.sandbox?.enabled)
+      .map((profile) => ({
+        value: `vercel:${profile.id}`,
+        label: `Vercel / ${profile.name || profile.id}${profile.sandbox?.ready ? '' : ' (not ready)'}`,
+      })),
+    ...(cloud.daytonaProfiles || [])
+      .filter((profile) => profile.enabled)
+      .map((profile) => ({
+        value: `daytona:${profile.id}`,
+        label: `Daytona / ${profile.name || profile.id}${profile.ready ? '' : ' (not ready)'}`,
+      })),
+  ];
 }
 
 function getCloudProfileFieldValue(profile, key) {
@@ -995,7 +1098,7 @@ function pruneEmptyCloudProfileObjects(value) {
 }
 
 function createGenericHelpFactory(area) {
-  const providerTitles = new Set(['cPanel / WHM', 'Vercel', 'Cloudflare', 'AWS', 'GCP', 'Azure']);
+  const providerTitles = new Set(['cPanel / WHM', 'Vercel', 'Daytona', 'Cloudflare', 'AWS', 'GCP', 'Azure']);
 
   return (title) => {
     if (providerTitles.has(title)) {
@@ -1030,6 +1133,7 @@ function buildDefaultProfile(def) {
   const base = { id: '', name: '' };
   if (def.key === 'cpanelProfiles') return { ...base, type: 'whm', port: 2087, ssl: true, allowSelfSigned: false };
   if (def.key === 'vercelProfiles') return { ...base, sandbox: { enabled: true, allowNetwork: true, defaultTimeoutMs: 300000, defaultVcpus: 2 } };
+  if (def.key === 'daytonaProfiles') return { ...base, enabled: true, allowNetwork: true, language: 'typescript', defaultTimeoutMs: 300000, defaultVcpus: 2 };
   if (def.key === 'awsProfiles') return { ...base, region: 'us-east-1' };
   if (def.key === 'gcpProfiles') return { ...base, location: 'us-central1' };
   return base;
@@ -1047,7 +1151,9 @@ function summarizeCloudProfileBadges(def, profile) {
   if (credentialRefCount > 0) badges.push(credentialRefCount === 1 ? '1 credential ref' : `${credentialRefCount} credential refs`);
   if (profile.allowSelfSigned) badges.push('self-signed TLS');
   if (profile.sandbox?.enabled) badges.push(profile.sandbox?.ready ? 'sandbox ready' : 'sandbox enabled');
+  if (def.key === 'daytonaProfiles' && profile.enabled) badges.push(profile.ready ? 'sandbox ready' : 'sandbox enabled');
   if (profile.apiBaseUrl || (profile.endpoints && Object.keys(profile.endpoints).length > 0) || profile.blobBaseUrl) badges.push('custom endpoint');
+  if (profile.apiUrl) badges.push('custom endpoint');
 
   return badges;
 }
@@ -1055,13 +1161,15 @@ function summarizeCloudProfileBadges(def, profile) {
 function getCloudConfig(config) {
   return config?.assistant?.tools?.cloud || {
     enabled: false,
+    defaultRemoteExecutionTargetId: undefined,
     cpanelProfiles: [],
     vercelProfiles: [],
+    daytonaProfiles: [],
     cloudflareProfiles: [],
     awsProfiles: [],
     gcpProfiles: [],
     azureProfiles: [],
-    profileCounts: { cpanel: 0, vercel: 0, cloudflare: 0, aws: 0, gcp: 0, azure: 0, total: 0 },
+    profileCounts: { cpanel: 0, vercel: 0, daytona: 0, cloudflare: 0, aws: 0, gcp: 0, azure: 0, total: 0 },
     security: {
       inlineSecretProfileCount: 0,
       credentialRefCount: 0,
@@ -1091,6 +1199,16 @@ function buildProviderRows(cloud) {
       customEndpoints: cloud.vercelProfiles.filter((profile) => !!profile.apiBaseUrl).length,
       notes: cloud.vercelProfiles.filter((profile) => profile.sandbox?.enabled).length
         ? `${cloud.vercelProfiles.filter((profile) => profile.sandbox?.enabled).length} sandbox-enabled`
+        : '-',
+    },
+    {
+      provider: 'Daytona',
+      count: cloud.daytonaProfiles.length,
+      inline: cloud.daytonaProfiles.filter((profile) => profile.apiKeyConfigured).length,
+      refs: cloud.daytonaProfiles.filter((profile) => !!profile.credentialRef).length,
+      customEndpoints: cloud.daytonaProfiles.filter((profile) => !!profile.apiUrl).length,
+      notes: cloud.daytonaProfiles.filter((profile) => profile.enabled).length
+        ? `${cloud.daytonaProfiles.filter((profile) => profile.enabled).length} sandbox-enabled`
         : '-',
     },
     {

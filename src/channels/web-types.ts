@@ -339,6 +339,22 @@ export interface RedactedCloudVercelProfile {
   };
 }
 
+export interface RedactedCloudDaytonaProfile {
+  id: string;
+  name: string;
+  apiUrl?: string;
+  credentialRef?: string;
+  apiKeyConfigured: boolean;
+  target?: string;
+  language?: string;
+  enabled: boolean;
+  ready: boolean;
+  defaultTimeoutMs?: number;
+  defaultVcpus?: number;
+  allowNetwork: boolean;
+  allowedCidrs?: string[];
+}
+
 export interface RedactedCloudCloudflareProfile {
   id: string;
   name: string;
@@ -415,8 +431,10 @@ export interface RedactedCloudAzureProfile {
 
 export interface RedactedCloudConfig {
   enabled: boolean;
+  defaultRemoteExecutionTargetId?: string;
   cpanelProfiles: RedactedCloudCpanelProfile[];
   vercelProfiles: RedactedCloudVercelProfile[];
+  daytonaProfiles: RedactedCloudDaytonaProfile[];
   cloudflareProfiles: RedactedCloudCloudflareProfile[];
   awsProfiles: RedactedCloudAwsProfile[];
   gcpProfiles: RedactedCloudGcpProfile[];
@@ -424,6 +442,7 @@ export interface RedactedCloudConfig {
   profileCounts: {
     cpanel: number;
     vercel: number;
+    daytona: number;
     cloudflare: number;
     aws: number;
     gcp: number;
@@ -2026,6 +2045,7 @@ export interface ConfigUpdate {
       };
       cloud?: {
         enabled?: boolean;
+        defaultRemoteExecutionTargetId?: string;
         cpanelProfiles?: Array<{
           id: string;
           name: string;
@@ -2055,6 +2075,20 @@ export interface ConfigUpdate {
             allowNetwork?: boolean;
             allowedDomains?: string[];
           };
+        }>;
+        daytonaProfiles?: Array<{
+          id: string;
+          name: string;
+          apiUrl?: string;
+          apiKey?: string;
+          credentialRef?: string;
+          target?: string;
+          language?: string;
+          enabled?: boolean;
+          defaultTimeoutMs?: number;
+          defaultVcpus?: number;
+          allowNetwork?: boolean;
+          allowedCidrs?: string[];
         }>;
         cloudflareProfiles?: Array<{
           id: string;

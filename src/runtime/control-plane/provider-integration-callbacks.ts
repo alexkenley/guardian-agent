@@ -6,6 +6,7 @@ import type {
   AssistantCloudAzureProfileConfig,
   AssistantCloudCloudflareProfileConfig,
   AssistantCloudCpanelProfileConfig,
+  AssistantCloudDaytonaProfileConfig,
   AssistantCloudGcpProfileConfig,
   AssistantCloudVercelProfileConfig,
   GuardianAgentConfig,
@@ -57,6 +58,7 @@ interface ProviderIntegrationCallbackOptions {
   testCloudConnections: {
     cpanel: (profile: AssistantCloudCpanelProfileConfig) => Promise<void>;
     vercel: (profile: AssistantCloudVercelProfileConfig) => Promise<void>;
+    daytona: (profile: AssistantCloudDaytonaProfileConfig) => Promise<void>;
     cloudflare: (profile: AssistantCloudCloudflareProfileConfig) => Promise<void>;
     aws: (profile: AssistantCloudAwsProfileConfig) => Promise<void>;
     gcp: (profile: AssistantCloudGcpProfileConfig) => Promise<void>;
@@ -279,6 +281,13 @@ export function createProviderIntegrationCallbacks(
             if (!profile.apiToken) return { success: false, message: `No credential resolved for Vercel profile '${profileId}'.` };
             await options.testCloudConnections.vercel(profile);
             return { success: true, message: `Vercel profile '${profile.name}': connected.` };
+          }
+          case 'daytonaProfiles': {
+            const profile = cloud.daytonaProfiles?.find((entry) => entry.id === profileId);
+            if (!profile) return { success: false, message: `Daytona profile '${profileId}' not found.` };
+            if (!profile.apiKey) return { success: false, message: `No credential resolved for Daytona profile '${profileId}'.` };
+            await options.testCloudConnections.daytona(profile);
+            return { success: true, message: `Daytona profile '${profile.name}': connected.` };
           }
           case 'cloudflareProfiles': {
             const profile = cloud.cloudflareProfiles?.find((entry) => entry.id === profileId);

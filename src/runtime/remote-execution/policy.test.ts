@@ -58,6 +58,33 @@ describe('remote execution policy', () => {
     expect(targets[0]?.reason).toMatch(/teamId|projectId/i);
   });
 
+  it('lists ready Daytona sandbox targets with CIDR-based network policy', () => {
+    const targets = listRemoteExecutionTargets(createCloudConfig({
+      enabled: true,
+      daytonaProfiles: [{
+        id: 'daytona-main',
+        name: 'Daytona Main',
+        apiKey: 'daytona-secret',
+        enabled: true,
+        target: 'us',
+        language: 'typescript',
+        allowNetwork: true,
+        allowedCidrs: ['10.0.0.0/8', '192.168.0.0/16'],
+      }],
+    }));
+
+    expect(targets).toHaveLength(1);
+    expect(targets[0]).toMatchObject({
+      id: 'daytona:daytona-main',
+      capabilityState: 'ready',
+      backendKind: 'daytona_sandbox',
+      networkMode: 'cidr_allowlist',
+      allowedCidrs: ['10.0.0.0/8', '192.168.0.0/16'],
+      target: 'us',
+      language: 'typescript',
+    });
+  });
+
   it('recommends remote isolation for dependency reviews and caution workspaces', () => {
     const targets = listRemoteExecutionTargets(createCloudConfig({
       enabled: true,

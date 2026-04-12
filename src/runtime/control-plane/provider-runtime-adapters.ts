@@ -1,6 +1,8 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 
+import { Daytona } from '@daytona/sdk';
+
 import type { GuardianAgentConfig } from '../../config/types.js';
 import { AwsClient } from '../../tools/cloud/aws-client.js';
 import { AzureClient } from '../../tools/cloud/azure-client.js';
@@ -68,6 +70,14 @@ export function createCloudConnectionTesters(): CloudConnectionTesters {
     vercel: async (profile) => {
       const client = new VercelClient(profile as unknown as ConstructorParameters<typeof VercelClient>[0]);
       await client.listProjects({ limit: 1 });
+    },
+    daytona: async (profile) => {
+      await using client = new Daytona({
+        apiKey: profile.apiKey,
+        apiUrl: profile.apiUrl,
+        target: profile.target,
+      });
+      await client.list(undefined, 1, 1);
     },
     cloudflare: async (profile) => {
       const client = new CloudflareClient(profile as unknown as ConstructorParameters<typeof CloudflareClient>[0]);

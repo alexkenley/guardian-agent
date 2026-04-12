@@ -23,6 +23,7 @@ function createOptions(overrides: Partial<Parameters<typeof createProviderIntegr
     testCloudConnections: {
       cpanel: vi.fn(async () => {}),
       vercel: vi.fn(async () => {}),
+      daytona: vi.fn(async () => {}),
       cloudflare: vi.fn(async () => {}),
       aws: vi.fn(async () => {}),
       gcp: vi.fn(async () => {}),
@@ -105,6 +106,7 @@ describe('createProviderIntegrationCallbacks', () => {
     const testCloudConnections = {
       cpanel: vi.fn(async () => {}),
       vercel: vi.fn(async () => {}),
+      daytona: vi.fn(async () => {}),
       cloudflare: vi.fn(async () => {}),
       aws: vi.fn(async () => {}),
       gcp: vi.fn(async () => {}),
@@ -120,6 +122,41 @@ describe('createProviderIntegrationCallbacks', () => {
 
     expect(testCloudConnections.cpanel).toHaveBeenCalledOnce();
     expect(result).toEqual({ success: true, message: "cPanel profile 'Primary': connected." });
+  });
+
+  it('tests a configured Daytona profile through the injected cloud tester', async () => {
+    const config = createConfig();
+    config.assistant.tools.cloud = {
+      enabled: true,
+      daytonaProfiles: [
+        {
+          id: 'daytona-1',
+          name: 'Primary Daytona',
+          apiKey: 'secret-token',
+          enabled: true,
+          language: 'typescript',
+        },
+      ],
+    };
+    const testCloudConnections = {
+      cpanel: vi.fn(async () => {}),
+      vercel: vi.fn(async () => {}),
+      daytona: vi.fn(async () => {}),
+      cloudflare: vi.fn(async () => {}),
+      aws: vi.fn(async () => {}),
+      gcp: vi.fn(async () => {}),
+      azure: vi.fn(async () => {}),
+    };
+
+    const callbacks = createProviderIntegrationCallbacks(createOptions({
+      configRef: { current: config },
+      testCloudConnections,
+    }));
+
+    const result = await callbacks.onCloudTest?.('daytonaProfiles', 'daytona-1');
+
+    expect(testCloudConnections.daytona).toHaveBeenCalledOnce();
+    expect(result).toEqual({ success: true, message: "Daytona profile 'Primary Daytona': connected." });
   });
 
   it('returns a configuration error when cloud tools are not enabled', async () => {

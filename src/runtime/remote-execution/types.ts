@@ -13,6 +13,7 @@ export interface RemoteExecutionResolvedTargetBase {
   backendKind: RemoteExecutionBackendKind;
   networkMode: RemoteExecutionNetworkMode;
   allowedDomains: string[];
+  allowedCidrs: string[];
   defaultTimeoutMs?: number;
   defaultVcpus?: number;
 }
@@ -25,7 +26,17 @@ export interface VercelRemoteExecutionResolvedTarget extends RemoteExecutionReso
   apiBaseUrl?: string;
 }
 
-export type RemoteExecutionResolvedTarget = VercelRemoteExecutionResolvedTarget;
+export interface DaytonaRemoteExecutionResolvedTarget extends RemoteExecutionResolvedTargetBase {
+  backendKind: 'daytona_sandbox';
+  apiKey: string;
+  apiUrl?: string;
+  target?: string;
+  language?: string;
+}
+
+export type RemoteExecutionResolvedTarget =
+  | VercelRemoteExecutionResolvedTarget
+  | DaytonaRemoteExecutionResolvedTarget;
 
 export interface RemoteExecutionCommandSpec {
   requestedCommand: string;
@@ -91,6 +102,7 @@ export interface RemoteExecutionRunResult {
   completedAt: number;
   networkMode: RemoteExecutionNetworkMode;
   allowedDomains: string[];
+  allowedCidrs: string[];
   stagedFiles: number;
   stagedBytes: number;
   workspaceRoot: string;

@@ -178,6 +178,7 @@ describe('ToolExecutor', () => {
         completedAt: 1210,
         networkMode: request.target.networkMode,
         allowedDomains: [...request.target.allowedDomains],
+        allowedCidrs: [...(request.target.allowedCidrs ?? [])],
         stagedFiles: 1,
         stagedBytes: 21,
         workspaceRoot: request.workspace.workspaceRoot,
@@ -245,6 +246,92 @@ describe('ToolExecutor', () => {
         cwd: root,
         includePaths: [],
       },
+    }));
+  });
+
+  it('prefers the configured default remote sandbox target when multiple providers are ready', async () => {
+    const root = createExecutorRoot();
+    writeFileSync(join(root, 'package.json'), '{"name":"remote-demo"}\n');
+    const remoteExecutionService = {
+      runBoundedJob: vi.fn(async (request) => ({
+        targetId: request.target.id,
+        backendKind: request.target.backendKind,
+        profileId: request.target.profileId,
+        profileName: request.target.profileName,
+        requestedCommand: request.command.requestedCommand,
+        status: 'succeeded' as const,
+        sandboxId: 'sandbox_daytona_123',
+        exitCode: 0,
+        stdout: 'tests passed',
+        stderr: '',
+        durationMs: 900,
+        startedAt: 10,
+        completedAt: 910,
+        networkMode: request.target.networkMode,
+        allowedDomains: [...request.target.allowedDomains],
+        allowedCidrs: [...(request.target.allowedCidrs ?? [])],
+        stagedFiles: 1,
+        stagedBytes: 21,
+        workspaceRoot: request.workspace.workspaceRoot,
+        cwd: request.workspace.cwd,
+        artifactFiles: [],
+      })),
+    };
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['npm'],
+      allowedDomains: ['localhost', 'api.vercel.com', 'daytona.io'],
+      cloudConfig: {
+        enabled: true,
+        defaultRemoteExecutionTargetId: 'daytona:daytona-main',
+        vercelProfiles: [{
+          id: 'vercel-main',
+          name: 'Main Vercel',
+          apiToken: 'vercel-secret',
+          teamId: 'team_123',
+          sandbox: {
+            enabled: true,
+            projectId: 'prj_123',
+            allowNetwork: false,
+          },
+        }],
+        daytonaProfiles: [{
+          id: 'daytona-main',
+          name: 'Daytona Main',
+          apiKey: 'daytona-secret',
+          enabled: true,
+          allowNetwork: false,
+          language: 'typescript',
+        }],
+      },
+      remoteExecutionService,
+    });
+
+    const result = await executor.runTool({
+      toolName: 'code_test',
+      args: {
+        cwd: root,
+        command: 'npm test',
+        isolation: 'remote_required',
+      },
+      origin: 'web',
+      channel: 'web',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({
+      backendKind: 'daytona_sandbox',
+      profileId: 'daytona-main',
+      sandboxId: 'sandbox_daytona_123',
+    });
+    expect(remoteExecutionService.runBoundedJob).toHaveBeenCalledWith(expect.objectContaining({
+      target: expect.objectContaining({
+        backendKind: 'daytona_sandbox',
+        profileId: 'daytona-main',
+      }),
     }));
   });
 

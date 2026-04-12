@@ -19,6 +19,7 @@ const TARGET: VercelRemoteExecutionResolvedTarget = {
   apiBaseUrl: 'https://api.vercel.com/',
   networkMode: 'domain_allowlist',
   allowedDomains: ['registry.npmjs.org'],
+  allowedCidrs: [],
 };
 
 function buildRequest(

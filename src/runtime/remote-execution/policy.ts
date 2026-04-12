@@ -1,24 +1,27 @@
 import type { AssistantCloudConfig } from '../../config/types.js';
 import type { CodeSessionWorkflowType } from '../coding-workflows.js';
 
-export type RemoteExecutionBackendKind = 'vercel_sandbox';
+export type RemoteExecutionBackendKind = 'vercel_sandbox' | 'daytona_sandbox';
 export type RemoteExecutionCapabilityState = 'disabled' | 'incomplete' | 'ready';
-export type RemoteExecutionNetworkMode = 'deny_all' | 'allow_all' | 'domain_allowlist';
+export type RemoteExecutionNetworkMode = 'deny_all' | 'allow_all' | 'domain_allowlist' | 'cidr_allowlist';
 
 export interface RemoteExecutionTargetDescriptor {
   id: string;
   profileId: string;
   profileName: string;
-  providerFamily: 'vercel';
+  providerFamily: 'vercel' | 'daytona';
   backendKind: RemoteExecutionBackendKind;
   capabilityState: RemoteExecutionCapabilityState;
   reason: string;
   projectId?: string;
   teamId?: string;
+  target?: string;
+  language?: string;
   defaultTimeoutMs?: number;
   defaultVcpus?: number;
   networkMode: RemoteExecutionNetworkMode;
   allowedDomains: string[];
+  allowedCidrs: string[];
 }
 
 export interface WorkflowIsolationRecommendation {
@@ -30,6 +33,7 @@ export interface WorkflowIsolationRecommendation {
   candidateOperations: string[];
   networkMode?: RemoteExecutionNetworkMode;
   allowedDomains?: string[];
+  allowedCidrs?: string[];
 }
 
 function normalizeAllowedDomains(input: string[] | undefined): string[] {
@@ -41,16 +45,18 @@ function normalizeAllowedDomains(input: string[] | undefined): string[] {
 function inferNetworkMode(input: {
   allowNetwork?: boolean;
   allowedDomains?: string[];
+  allowedCidrs?: string[];
 } | undefined): RemoteExecutionNetworkMode {
   if (input?.allowNetwork === false) return 'deny_all';
   if ((input?.allowedDomains?.length ?? 0) > 0) return 'domain_allowlist';
+  if ((input?.allowedCidrs?.length ?? 0) > 0) return 'cidr_allowlist';
   return 'allow_all';
 }
 
 export function listRemoteExecutionTargets(
   cloud: AssistantCloudConfig | null | undefined,
 ): RemoteExecutionTargetDescriptor[] {
-  return (cloud?.vercelProfiles ?? []).map((profile) => {
+  const vercelTargets = (cloud?.vercelProfiles ?? []).map((profile) => {
     const allowedDomains = normalizeAllowedDomains(profile.sandbox?.allowedDomains);
     const networkMode = inferNetworkMode({
       allowNetwork: profile.sandbox?.allowNetwork,
@@ -92,8 +98,47 @@ export function listRemoteExecutionTargets(
       defaultVcpus: typeof profile.sandbox?.defaultVcpus === 'number' ? profile.sandbox.defaultVcpus : undefined,
       networkMode,
       allowedDomains,
+      allowedCidrs: [],
     };
   });
+  const daytonaTargets = (cloud?.daytonaProfiles ?? []).map((profile) => {
+    const allowedCidrs = (profile.allowedCidrs ?? [])
+      .map((cidr) => cidr.trim())
+      .filter(Boolean);
+    const networkMode = inferNetworkMode({
+      allowNetwork: profile.allowNetwork,
+      allowedCidrs,
+    });
+    const sandboxEnabled = profile.enabled === true;
+    const hasToken = !!profile.apiKey?.trim() || !!profile.credentialRef?.trim();
+    const capabilityState: RemoteExecutionCapabilityState = !sandboxEnabled
+      ? 'disabled'
+      : !hasToken
+        ? 'incomplete'
+        : 'ready';
+    const reason = capabilityState === 'ready'
+      ? 'Ready for bounded remote sandbox execution.'
+      : !sandboxEnabled
+        ? 'Sandbox capability is disabled for this Daytona profile.'
+        : 'Sandbox capability needs a resolved Daytona API key or credential ref.';
+    return {
+      id: `daytona:${profile.id}`,
+      profileId: profile.id,
+      profileName: profile.name,
+      providerFamily: 'daytona' as const,
+      backendKind: 'daytona_sandbox' as const,
+      capabilityState,
+      reason,
+      target: profile.target?.trim() || undefined,
+      language: profile.language?.trim() || undefined,
+      defaultTimeoutMs: typeof profile.defaultTimeoutMs === 'number' ? profile.defaultTimeoutMs : undefined,
+      defaultVcpus: typeof profile.defaultVcpus === 'number' ? profile.defaultVcpus : undefined,
+      networkMode,
+      allowedDomains: [],
+      allowedCidrs,
+    };
+  });
+  return [...vercelTargets, ...daytonaTargets];
 }
 
 function workflowIsolationOperations(type: CodeSessionWorkflowType): string[] {
@@ -164,6 +209,7 @@ export function recommendWorkflowIsolation(
     reason,
     candidateOperations,
     networkMode: target.networkMode,
-    allowedDomains: target.allowedDomains.length > 0 ? [...target.allowedDomains] : undefined,
+    allowedDomains: (target.allowedDomains?.length ?? 0) > 0 ? [...target.allowedDomains] : undefined,
+    allowedCidrs: (target.allowedCidrs?.length ?? 0) > 0 ? [...target.allowedCidrs] : undefined,
   };
 }

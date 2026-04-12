@@ -1077,6 +1077,30 @@ function redactCloudConfig(cloud: GuardianAgentConfig['assistant']['tools']['clo
     };
   });
 
+  const daytonaProfiles = (cloud.daytonaProfiles ?? []).map((profile) => {
+    const apiKeyConfigured = !!profile.apiKey?.trim();
+    if (apiKeyConfigured) inlineSecretProfileCount += 1;
+    if (profile.credentialRef?.trim()) credentialRefCount += 1;
+    if (profile.apiUrl?.trim()) customEndpointProfileCount += 1;
+    const enabled = profile.enabled === true;
+    const ready = enabled && (apiKeyConfigured || !!profile.credentialRef?.trim());
+    return {
+      id: profile.id,
+      name: profile.name,
+      apiUrl: normalizeOptionalHttpUrlInput(profile.apiUrl),
+      credentialRef: profile.credentialRef,
+      apiKeyConfigured,
+      target: trimOptionalString(profile.target),
+      language: trimOptionalString(profile.language)?.toLowerCase(),
+      enabled,
+      ready,
+      defaultTimeoutMs: typeof profile.defaultTimeoutMs === 'number' ? profile.defaultTimeoutMs : undefined,
+      defaultVcpus: typeof profile.defaultVcpus === 'number' ? profile.defaultVcpus : undefined,
+      allowNetwork: profile.allowNetwork !== false,
+      allowedCidrs: trimStringArray(profile.allowedCidrs),
+    };
+  });
+
   const cloudflareProfiles = (cloud.cloudflareProfiles ?? []).map((profile) => {
     const apiTokenConfigured = !!profile.apiToken?.trim();
     if (apiTokenConfigured) inlineSecretProfileCount += 1;
@@ -1167,8 +1191,10 @@ function redactCloudConfig(cloud: GuardianAgentConfig['assistant']['tools']['clo
 
   return {
     enabled: cloud.enabled,
+    defaultRemoteExecutionTargetId: trimOptionalString(cloud.defaultRemoteExecutionTargetId),
     cpanelProfiles,
     vercelProfiles,
+    daytonaProfiles,
     cloudflareProfiles,
     awsProfiles,
     gcpProfiles,
@@ -1176,11 +1202,12 @@ function redactCloudConfig(cloud: GuardianAgentConfig['assistant']['tools']['clo
     profileCounts: {
       cpanel: cpanelProfiles.length,
       vercel: vercelProfiles.length,
+      daytona: daytonaProfiles.length,
       cloudflare: cloudflareProfiles.length,
       aws: awsProfiles.length,
       gcp: gcpProfiles.length,
       azure: azureProfiles.length,
-      total: cpanelProfiles.length + vercelProfiles.length + cloudflareProfiles.length + awsProfiles.length + gcpProfiles.length + azureProfiles.length,
+      total: cpanelProfiles.length + vercelProfiles.length + daytonaProfiles.length + cloudflareProfiles.length + awsProfiles.length + gcpProfiles.length + azureProfiles.length,
     },
     security: {
       inlineSecretProfileCount,
@@ -1197,8 +1224,10 @@ function mergeCloudConfigForValidation(
 ): GuardianAgentConfig['assistant']['tools']['cloud'] {
   const current = currentCloud ?? {
     enabled: false,
+    defaultRemoteExecutionTargetId: undefined,
     cpanelProfiles: [],
     vercelProfiles: [],
+    daytonaProfiles: [],
     cloudflareProfiles: [],
     awsProfiles: [],
     gcpProfiles: [],
@@ -1208,6 +1237,9 @@ function mergeCloudConfigForValidation(
   return {
     ...current,
     ...cloudUpdate,
+    defaultRemoteExecutionTargetId: hasOwnProp(cloudUpdate, 'defaultRemoteExecutionTargetId')
+      ? trimOptionalString(cloudUpdate.defaultRemoteExecutionTargetId)
+      : current.defaultRemoteExecutionTargetId,
     cpanelProfiles: Array.isArray(cloudUpdate.cpanelProfiles)
       ? cloudUpdate.cpanelProfiles.map((profile) => {
         const existing = current.cpanelProfiles?.find((entry) => entry.id === profile.id);
@@ -1262,6 +1294,33 @@ function mergeCloudConfigForValidation(
         };
       })
       : current.vercelProfiles,
+    daytonaProfiles: Array.isArray(cloudUpdate.daytonaProfiles)
+      ? cloudUpdate.daytonaProfiles.map((profile) => {
+        const existing = current.daytonaProfiles?.find((entry) => entry.id === profile.id);
+        return {
+          ...existing,
+          ...profile,
+          apiUrl: hasOwnProp(profile, 'apiUrl') ? normalizeOptionalHttpUrlInput(profile.apiUrl) : existing?.apiUrl,
+          apiKey: hasOwnProp(profile, 'apiKey') ? trimOptionalString(profile.apiKey) : existing?.apiKey,
+          credentialRef: hasOwnProp(profile, 'credentialRef') ? trimOptionalString(profile.credentialRef) : existing?.credentialRef,
+          target: hasOwnProp(profile, 'target') ? trimOptionalString(profile.target) : existing?.target,
+          language: hasOwnProp(profile, 'language') ? trimOptionalString(profile.language)?.toLowerCase() : existing?.language,
+          enabled: hasOwnProp(profile, 'enabled') ? profile.enabled === true : existing?.enabled,
+          defaultTimeoutMs: hasOwnProp(profile, 'defaultTimeoutMs')
+            ? (typeof profile.defaultTimeoutMs === 'number' && Number.isFinite(profile.defaultTimeoutMs)
+                ? profile.defaultTimeoutMs
+                : undefined)
+            : existing?.defaultTimeoutMs,
+          defaultVcpus: hasOwnProp(profile, 'defaultVcpus')
+            ? (typeof profile.defaultVcpus === 'number' && Number.isFinite(profile.defaultVcpus)
+                ? profile.defaultVcpus
+                : undefined)
+            : existing?.defaultVcpus,
+          allowNetwork: hasOwnProp(profile, 'allowNetwork') ? profile.allowNetwork === true : existing?.allowNetwork,
+          allowedCidrs: hasOwnProp(profile, 'allowedCidrs') ? trimStringArray(profile.allowedCidrs) : existing?.allowedCidrs,
+        };
+      })
+      : current.daytonaProfiles,
     cloudflareProfiles: Array.isArray(cloudUpdate.cloudflareProfiles)
       ? cloudUpdate.cloudflareProfiles.map((profile) => {
         const existing = current.cloudflareProfiles?.find((entry) => entry.id === profile.id);

@@ -3239,13 +3239,15 @@ function renderSearchSourcesTab(panel) {
 function renderCloudTab(panel) {
   const cloud = sharedConfig?.assistant?.tools?.cloud || {
     enabled: false,
+    defaultRemoteExecutionTargetId: undefined,
     cpanelProfiles: [],
     vercelProfiles: [],
+    daytonaProfiles: [],
     cloudflareProfiles: [],
     awsProfiles: [],
     gcpProfiles: [],
     azureProfiles: [],
-    profileCounts: { cpanel: 0, vercel: 0, cloudflare: 0, aws: 0, gcp: 0, azure: 0, total: 0 },
+    profileCounts: { cpanel: 0, vercel: 0, daytona: 0, cloudflare: 0, aws: 0, gcp: 0, azure: 0, total: 0 },
     security: {
       inlineSecretProfileCount: 0,
       credentialRefCount: 0,
@@ -3253,6 +3255,21 @@ function renderCloudTab(panel) {
       customEndpointProfileCount: 0,
     },
   };
+  const remoteExecutionTargets = [
+    { value: '', label: 'Automatic (first ready target)' },
+    ...(cloud.vercelProfiles || [])
+      .filter((profile) => profile.sandbox?.enabled)
+      .map((profile) => ({
+        value: `vercel:${profile.id}`,
+        label: `Vercel / ${profile.name || profile.id}${profile.sandbox?.ready ? '' : ' (not ready)'}`,
+      })),
+    ...(cloud.daytonaProfiles || [])
+      .filter((profile) => profile.enabled)
+      .map((profile) => ({
+        value: `daytona:${profile.id}`,
+        label: `Daytona / ${profile.name || profile.id}${profile.ready ? '' : ' (not ready)'}`,
+      })),
+  ];
   const providers = [
     {
       key: 'cpanelProfiles',
@@ -3263,6 +3280,11 @@ function renderCloudTab(panel) {
       key: 'vercelProfiles',
       label: 'Vercel',
       note: 'Profile keys: id, name, credentialRef, teamId, optional slug, apiBaseUrl, and sandbox. Add apiToken only when setting or rotating an inline token. Sandbox may include enabled, projectId, defaultTimeoutMs, defaultVcpus, allowNetwork, and allowedDomains.',
+    },
+    {
+      key: 'daytonaProfiles',
+      label: 'Daytona',
+      note: 'Profile keys: id, name, credentialRef, optional apiUrl, target, language, enabled, defaultTimeoutMs, defaultVcpus, allowNetwork, and allowedCidrs. Add apiKey only when setting or rotating an inline token.',
     },
     {
       key: 'cloudflareProfiles',
@@ -3329,6 +3351,12 @@ function renderCloudTab(panel) {
               <option value="false" ${!cloud.enabled ? 'selected' : ''}>Disabled</option>
             </select>
           </div>
+          <div class="cfg-field">
+            <label>Default Remote Sandbox</label>
+            <select id="cfg-cloud-default-remote-target">
+              ${remoteExecutionTargets.map((option) => `<option value="${escAttr(option.value)}"${option.value === (cloud.defaultRemoteExecutionTargetId || '') ? ' selected' : ''}>${esc(option.label)}</option>`).join('')}
+            </select>
+          </div>
           <div class="cfg-field" style="grid-column: 1 / -1;">
             <label>Security Notes</label>
             <div style="font-size:0.75rem;color:var(--text-muted);line-height:1.5;">
@@ -3357,7 +3385,7 @@ function renderCloudTab(panel) {
       const pName = profile.name || pid;
       const hasCredRef = !!(profile.credentialRef || profile.accessKeyIdCredentialRef || profile.accessTokenCredentialRef || profile.serviceAccountCredentialRef || profile.clientIdCredentialRef);
       const credRefValue = profile.credentialRef || profile.accessKeyIdCredentialRef || profile.accessTokenCredentialRef || profile.serviceAccountCredentialRef || profile.clientIdCredentialRef || '';
-      const tokenConfigured = !!(profile.apiTokenConfigured || profile.accessKeyIdConfigured || profile.accessTokenConfigured || profile.serviceAccountJsonConfigured || profile.clientIdConfigured);
+      const tokenConfigured = !!(profile.apiTokenConfigured || profile.apiKeyConfigured || profile.accessKeyIdConfigured || profile.accessTokenConfigured || profile.serviceAccountJsonConfigured || profile.clientIdConfigured);
       const statusLabel = tokenConfigured || hasCredRef ? 'Credential configured' : 'No credential';
       const statusColor = tokenConfigured || hasCredRef ? 'var(--success)' : 'var(--text-muted)';
       profileCards += `
@@ -3443,6 +3471,7 @@ function renderCloudTab(panel) {
     try {
       const payload = {
         enabled: panel.querySelector('#cfg-cloud-enabled')?.value === 'true',
+        defaultRemoteExecutionTargetId: panel.querySelector('#cfg-cloud-default-remote-target')?.value || undefined,
       };
       for (const provider of providers) {
         const text = panel.querySelector(`#cfg-cloud-${provider.key}`)?.value || '[]';

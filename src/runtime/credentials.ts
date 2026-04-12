@@ -168,6 +168,15 @@ export function resolveCloudCredentialConfig(
         `assistant.tools.cloud.vercelProfiles.${profile.id}`,
       ),
     })),
+    daytonaProfiles: (config.daytonaProfiles ?? []).map((profile) => ({
+      ...profile,
+      apiKey: resolveCredentialValue(
+        profile.apiKey,
+        profile.credentialRef,
+        provider,
+        `assistant.tools.cloud.daytonaProfiles.${profile.id}`,
+      ),
+    })),
     cloudflareProfiles: (config.cloudflareProfiles ?? []).map((profile) => ({
       ...profile,
       apiToken: resolveCredentialValue(

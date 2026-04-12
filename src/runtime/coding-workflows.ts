@@ -34,6 +34,7 @@ export interface CodeSessionWorkflowIsolationState {
   candidateOperations: string[];
   networkMode?: WorkflowIsolationRecommendation['networkMode'];
   allowedDomains?: string[];
+  allowedCidrs?: string[];
 }
 
 export interface CodeSessionWorkflowRecipeStage {
@@ -192,6 +193,7 @@ export function cloneCodeSessionWorkflowState(
               ...workflow.isolation,
               candidateOperations: [...workflow.isolation.candidateOperations],
               allowedDomains: workflow.isolation.allowedDomains ? [...workflow.isolation.allowedDomains] : undefined,
+              allowedCidrs: workflow.isolation.allowedCidrs ? [...workflow.isolation.allowedCidrs] : undefined,
             }
           : null,
       }
@@ -496,6 +498,12 @@ export function formatCodeSessionWorkflowForPrompt(workflow: CodeSessionWorkflow
     }
     if (workflow.isolation.networkMode) {
       lines.push(`workflowIsolationNetwork: ${workflow.isolation.networkMode}`);
+    }
+    if (workflow.isolation.allowedDomains?.length) {
+      lines.push(`workflowIsolationAllowedDomains: ${workflow.isolation.allowedDomains.join('; ')}`);
+    }
+    if (workflow.isolation.allowedCidrs?.length) {
+      lines.push(`workflowIsolationAllowedCidrs: ${workflow.isolation.allowedCidrs.join('; ')}`);
     }
   }
   return lines.join('\n');

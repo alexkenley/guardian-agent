@@ -289,6 +289,36 @@ describe('resolveRuntimeCredentialView', () => {
     expect(resolved.resolvedCloud?.vercelProfiles?.[0]?.apiToken).toBe('vercel-runtime-token');
   });
 
+  it('resolves Daytona profile API keys from credential refs', () => {
+    vi.stubEnv('DAYTONA_API_KEY', 'daytona-runtime-key');
+    const config: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        credentials: {
+          refs: {
+            'cloud.daytona.primary': { source: 'env', env: 'DAYTONA_API_KEY' },
+          },
+        },
+        tools: {
+          ...DEFAULT_CONFIG.assistant.tools,
+          cloud: {
+            enabled: true,
+            daytonaProfiles: [{
+              id: 'daytona-main',
+              name: 'Daytona Main',
+              credentialRef: 'cloud.daytona.primary',
+              enabled: true,
+            }],
+          },
+        },
+      },
+    };
+
+    const resolved = resolveRuntimeCredentialView(config);
+    expect(resolved.resolvedCloud?.daytonaProfiles?.[0]?.apiKey).toBe('daytona-runtime-key');
+  });
+
   it('resolves Cloudflare profile API tokens from credential refs', () => {
     vi.stubEnv('CLOUDFLARE_TOKEN', 'cloudflare-runtime-token');
     const config: GuardianAgentConfig = {

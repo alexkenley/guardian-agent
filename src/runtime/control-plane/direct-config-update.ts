@@ -894,6 +894,11 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
           rawTools.cloud = (rawTools.cloud as Record<string, unknown> | undefined) ?? {};
           const rawCloud = rawTools.cloud as Record<string, unknown>;
 
+          if (options.hasOwn(cloudUpdate, 'defaultRemoteExecutionTargetId')) {
+            const trimmed = options.trimOrUndefined(cloudUpdate.defaultRemoteExecutionTargetId);
+            if (trimmed) rawCloud.defaultRemoteExecutionTargetId = trimmed;
+            else delete rawCloud.defaultRemoteExecutionTargetId;
+          }
           if (typeof cloudUpdate.enabled === 'boolean') {
             rawCloud.enabled = cloudUpdate.enabled;
           }
@@ -1081,6 +1086,87 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
                 if (trimmed) next.defaultZoneId = trimmed;
               } else if (typeof current?.defaultZoneId === 'string') {
                 next.defaultZoneId = current.defaultZoneId;
+              }
+              return next;
+            });
+          }
+
+          if (Array.isArray(cloudUpdate.daytonaProfiles)) {
+            const previous = options.existingProfilesById(rawCloud, 'daytonaProfiles');
+            rawCloud.daytonaProfiles = cloudUpdate.daytonaProfiles.map((profile) => {
+              const current = previous.get(profile.id);
+              const next: Record<string, unknown> = {
+                id: profile.id.trim(),
+                name: profile.name.trim(),
+              };
+              if (options.hasOwn(profile, 'apiUrl')) {
+                const trimmed = normalizeOptionalHttpUrlInput(typeof profile.apiUrl === 'string' ? profile.apiUrl : undefined);
+                if (trimmed) next.apiUrl = trimmed;
+              } else if (typeof current?.apiUrl === 'string') {
+                next.apiUrl = current.apiUrl;
+              }
+              if (options.hasOwn(profile, 'credentialRef')) {
+                const trimmed = options.trimOrUndefined(profile.credentialRef);
+                if (trimmed) next.credentialRef = trimmed;
+              } else if (typeof current?.credentialRef === 'string') {
+                next.credentialRef = current.credentialRef;
+              }
+              if (options.hasOwn(profile, 'apiKey')) {
+                const trimmed = options.trimOrUndefined(profile.apiKey);
+                if (trimmed) next.apiKey = trimmed;
+              } else if (typeof current?.apiKey === 'string') {
+                next.apiKey = current.apiKey;
+              }
+              if (options.hasOwn(profile, 'target')) {
+                const trimmed = options.trimOrUndefined(profile.target);
+                if (trimmed) next.target = trimmed;
+              } else if (typeof current?.target === 'string') {
+                next.target = current.target;
+              }
+              if (options.hasOwn(profile, 'language')) {
+                const trimmed = options.trimOrUndefined(profile.language)?.toLowerCase();
+                if (trimmed) next.language = trimmed;
+              } else if (typeof current?.language === 'string') {
+                next.language = current.language;
+              }
+              if (options.hasOwn(profile, 'enabled')) {
+                if (typeof profile.enabled === 'boolean') next.enabled = profile.enabled;
+              } else if (typeof current?.enabled === 'boolean') {
+                next.enabled = current.enabled;
+              }
+              if (options.hasOwn(profile, 'defaultTimeoutMs')) {
+                if (typeof profile.defaultTimeoutMs === 'number' && Number.isFinite(profile.defaultTimeoutMs)) {
+                  next.defaultTimeoutMs = profile.defaultTimeoutMs;
+                }
+              } else if (typeof current?.defaultTimeoutMs === 'number') {
+                next.defaultTimeoutMs = current.defaultTimeoutMs;
+              }
+              if (options.hasOwn(profile, 'defaultVcpus')) {
+                if (typeof profile.defaultVcpus === 'number' && Number.isFinite(profile.defaultVcpus)) {
+                  next.defaultVcpus = profile.defaultVcpus;
+                }
+              } else if (typeof current?.defaultVcpus === 'number') {
+                next.defaultVcpus = current.defaultVcpus;
+              }
+              if (options.hasOwn(profile, 'allowNetwork')) {
+                if (typeof profile.allowNetwork === 'boolean') next.allowNetwork = profile.allowNetwork;
+              } else if (typeof current?.allowNetwork === 'boolean') {
+                next.allowNetwork = current.allowNetwork;
+              }
+              if (options.hasOwn(profile, 'allowedCidrs')) {
+                if (Array.isArray(profile.allowedCidrs)) {
+                  const allowedCidrs = profile.allowedCidrs
+                    .filter((cidr): cidr is string => typeof cidr === 'string')
+                    .map((cidr) => cidr.trim())
+                    .filter(Boolean);
+                  if (allowedCidrs.length > 0) next.allowedCidrs = allowedCidrs;
+                }
+              } else if (Array.isArray(current?.allowedCidrs)) {
+                const allowedCidrs = current.allowedCidrs
+                  .filter((cidr): cidr is string => typeof cidr === 'string')
+                  .map((cidr) => cidr.trim())
+                  .filter(Boolean);
+                if (allowedCidrs.length > 0) next.allowedCidrs = allowedCidrs;
               }
               return next;
             });
