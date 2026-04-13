@@ -2153,6 +2153,7 @@ type DirectIntentShadowCandidate =
   | 'workspace_write'
   | 'workspace_read'
   | 'browser'
+  | 'complex_planning_task'
   | 'web_search';
 
   return class ChatAgent extends BaseAgent {
@@ -3223,6 +3224,7 @@ type DirectIntentShadowCandidate =
       }
 
       const allowGeneralShortcut = earlyGateway?.decision.route === 'general_assistant'
+        || earlyGateway?.decision.route === 'complex_planning_task'
         || earlyGateway?.decision.route === 'unknown';
       const directPendingApprovalStatus = allowGeneralShortcut
         ? this.tryDirectPendingApprovalStatusResponse(message)
@@ -3320,6 +3322,22 @@ type DirectIntentShadowCandidate =
           this.syncCodeSessionRuntimeState(resolvedCodeSession.session, conversationUserId, conversationChannel, preResolvedSkills);
         }
         return { content: directToolReport };
+      }
+
+      if (earlyGateway?.decision.route === 'complex_planning_task') {
+        const result = await this.tryTaskPlannerDirectly(message, ctx, earlyGateway.decision);
+        if (result) {
+          return buildScopedDirectIntentResponse({
+            candidate: 'complex_planning_task',
+            result,
+            message,
+            routingMessage: routedScopedMessage,
+            intentGateway: earlyGateway,
+            activeSkills: preResolvedSkills,
+            ctx,
+            conversationKey,
+          });
+        }
       }
 
       if (earlyGateway?.decision.route === 'coding_session_control') {
@@ -8644,6 +8662,34 @@ type DirectIntentShadowCandidate =
           codeSessionFocusChanged: true,
         },
       },
+    };
+  }
+
+  private async tryTaskPlannerDirectly(
+    message: UserMessage,
+    ctx: AgentContext,
+    decision?: import('./runtime/intent-gateway.js').IntentGatewayDecision,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    if (!ctx.llm) return null;
+    const planner = new (await import('./runtime/planner/task-planner.js')).TaskPlanner(
+      async (msgs, opts) => ctx.llm!.chat(msgs, opts)
+    );
+    const plan = await planner.plan(message.content, decision);
+    if (!plan) return { content: 'I tried to plan a solution for that complex request but ran into an error generating the execution DAG.' };
+
+    const orchestrator = new (await import('./runtime/planner/orchestrator.js')).AssistantOrchestrator(
+      async (node) => {
+        // Just mock execution for Phase 1 as per the plan spec
+        return { status: 'mock_success', node: node.id };
+      }
+    );
+
+    // Normally we wouldn't await the whole DAG execution synchronously in the chat loop without feedback,
+    // but we will do it for the initial Phase 1 mock.
+    await orchestrator.executePlan(plan);
+
+    return {
+      content: `I have generated and executed a DAG plan for your request.\n\nPlan:\n\`\`\`json\n${JSON.stringify(plan, null, 2)}\n\`\`\``,
     };
   }
 

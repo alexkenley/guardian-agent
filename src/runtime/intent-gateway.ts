@@ -1,6 +1,5 @@
 import type { ChatMessage, ChatOptions, ChatResponse, ToolDefinition } from '../llm/types.js';
 import { parseStructuredJsonObject } from '../util/structured-json.js';
-
 export type IntentGatewayRoute =
   | 'automation_authoring'
   | 'automation_control'
@@ -17,6 +16,7 @@ export type IntentGatewayRoute =
   | 'coding_session_control'
   | 'security_task'
   | 'general_assistant'
+  | 'complex_planning_task'
   | 'unknown';
 
 export type IntentGatewayConfidence = 'high' | 'medium' | 'low';
@@ -190,6 +190,7 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
           'coding_session_control',
           'security_task',
           'general_assistant',
+          'complex_planning_task',
         ],
       },
       confidence: {

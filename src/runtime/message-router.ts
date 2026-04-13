@@ -467,6 +467,16 @@ export class MessageRouter {
     }
 
     const { score, tier } = scoreComplexity(content, threshold);
+
+    if (decision.route === 'complex_planning_task') {
+      return {
+        tier: 'external',
+        confidence: 'high',
+        reason: `intent route=${decision.route} requires frontier planning → tier external`,
+        complexityScore: score,
+      };
+    }
+
     return {
       tier,
       confidence: score >= 0.7 || score <= 0.2 ? 'high' : 'medium',
