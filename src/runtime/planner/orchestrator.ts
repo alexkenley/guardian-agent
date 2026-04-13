@@ -2,13 +2,15 @@ import type { ExecutionPlan, PlanNode } from './types.js';
 import type { SemanticReflector } from './reflection.js';
 import type { ReflectiveLearningQueue } from './learning-queue.js';
 import type { RecoveryPlanner } from './recovery.js';
+import type { ContextCompactor } from './compactor.js';
 
 export class AssistantOrchestrator {
   constructor(
     private readonly executeNode: (node: PlanNode) => Promise<unknown>,
     private readonly reflector?: SemanticReflector,
     private readonly learningQueue?: ReflectiveLearningQueue,
-    private readonly recoveryPlanner?: RecoveryPlanner
+    private readonly recoveryPlanner?: RecoveryPlanner,
+    private readonly compactor?: ContextCompactor
   ) {}
 
   async executePlan(plan: ExecutionPlan): Promise<void> {
@@ -57,6 +59,10 @@ export class AssistantOrchestrator {
 
             if (!nodeFailed) {
               node.status = 'success';
+              // Phase 4: In-Session Compaction
+              if (this.compactor) {
+                node.compactedResult = await this.compactor.compactNodeResult(node);
+              }
             }
           } catch (err) {
             node.status = 'failed';

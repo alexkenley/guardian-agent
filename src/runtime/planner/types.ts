@@ -7,6 +7,7 @@ export interface PlanNode {
   inputPrompt: string; // The specific instruction for this node
   status: 'pending' | 'running' | 'success' | 'failed';
   result?: unknown;
+  compactedResult?: string; // Phase 4: Dense insight summary of the raw result
 }
 
 export interface ExecutionPlan {
