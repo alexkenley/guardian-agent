@@ -88,4 +88,226 @@ describe('routed tool execution', () => {
       status: 'denied',
     });
   });
+
+  it('strips model-invented remote execution profiles when the user did not explicitly name one', () => {
+    const prepared = prepareToolExecutionForIntent({
+      toolName: 'code_remote_exec',
+      args: {
+        command: 'pwd',
+        profile: 'daytona-main',
+      },
+      requestText: 'Run pwd in the remote sandbox for this workspace. Do not make changes.',
+      referenceTime: Date.now(),
+      intentDecision: repoDecision({
+        operation: 'run',
+        preferredAnswerPath: 'tool_loop',
+        entities: {
+          codingRemoteExecRequested: true,
+        },
+      }),
+    });
+
+    expect(prepared.args).toEqual({
+      command: 'pwd',
+    });
+  });
+
+  it('pins code_remote_exec to the explicit intent profile when the user named one', () => {
+    const prepared = prepareToolExecutionForIntent({
+      toolName: 'code_remote_exec',
+      args: {
+        command: 'pwd',
+        profile: 'daytona-main',
+      },
+      requestText: 'Run pwd in the remote sandbox using profileId vercel-prod. Do not make changes.',
+      referenceTime: Date.now(),
+      intentDecision: repoDecision({
+        operation: 'run',
+        preferredAnswerPath: 'tool_loop',
+        entities: {
+          codingRemoteExecRequested: true,
+          profileId: 'vercel-prod',
+        },
+      }),
+    });
+
+    expect(prepared.args).toEqual({
+      command: 'pwd',
+      profile: 'vercel-prod',
+    });
+  });
+
+  it('adds sequential reuse guidance for explicit remote sandbox turns', () => {
+    const section = buildRoutedIntentAdditionalSection(repoDecision({
+      operation: 'run',
+      preferredAnswerPath: 'tool_loop',
+      entities: {
+        codingRemoteExecRequested: true,
+        profileId: 'Daytona',
+      },
+    }));
+
+    expect(section?.content).toContain('issue exactly one remote sandbox tool call at a time');
+    expect(section?.content).toContain('CRITICAL: The user explicitly named the remote execution profile "Daytona". You MUST include `profile: "Daytona"` in the arguments of EVERY remote sandbox tool call');
+  });
+
+  it('pins code_remote_exec to the explicit request profile even when gateway metadata is unavailable', () => {
+    const prepared = prepareToolExecutionForIntent({
+      toolName: 'code_remote_exec',
+      args: {
+        command: 'pwd',
+        profile: 'daytona-main',
+      },
+      requestText: 'Run pwd in the remote sandbox using profileId vercel-prod. Do not make changes.',
+      referenceTime: Date.now(),
+      intentDecision: null,
+    });
+
+    expect(prepared.args).toEqual({
+      command: 'pwd',
+      profile: 'vercel-prod',
+    });
+  });
+
+  it('pins code_remote_exec when the user names a remote provider profile naturally', () => {
+    const prepared = prepareToolExecutionForIntent({
+      toolName: 'code_remote_exec',
+      args: {
+        command: 'pwd',
+      },
+      requestText: 'Run pwd in the remote sandbox using the Daytona profile for this coding session.',
+      referenceTime: Date.now(),
+      intentDecision: null,
+    });
+
+    expect(prepared.args).toEqual({
+      command: 'pwd',
+      profile: 'Daytona',
+    });
+  });
+
+  it('strips model-invented remote verification profiles when the user did not explicitly name one', () => {
+    const prepared = prepareToolExecutionForIntent({
+      toolName: 'code_test',
+      args: {
+        cwd: '/repo',
+        command: 'npm test',
+        remoteProfile: 'daytona-main',
+      },
+      requestText: 'Run the project tests. Do not make changes.',
+      referenceTime: Date.now(),
+      intentDecision: repoDecision({
+        operation: 'run',
+        preferredAnswerPath: 'tool_loop',
+      }),
+    });
+
+    expect(prepared.args).toEqual({
+      cwd: '/repo',
+      command: 'npm test',
+    });
+  });
+
+  it('forces remote-required isolation for explicit remote sandbox verification turns', () => {
+    const prepared = prepareToolExecutionForIntent({
+      toolName: 'code_test',
+      args: {
+        cwd: '/repo',
+        command: 'npm test',
+      },
+      requestText: 'Run the project tests in the remote sandbox and report the exact stdout/stderr.',
+      referenceTime: Date.now(),
+      intentDecision: repoDecision({
+        operation: 'run',
+        preferredAnswerPath: 'tool_loop',
+        entities: {
+          codingRemoteExecRequested: true,
+        },
+      }),
+    });
+
+    expect(prepared.args).toEqual({
+      cwd: '/repo',
+      command: 'npm test',
+      isolation: 'remote_required',
+    });
+  });
+
+  it('pins remote verification to the explicit request profile', () => {
+    const prepared = prepareToolExecutionForIntent({
+      toolName: 'code_test',
+      args: {
+        cwd: '/repo',
+        command: 'npm test',
+        remoteProfile: 'daytona-main',
+      },
+      requestText: 'Run the project tests in the remote sandbox using profileId vercel-prod and report the exact stdout/stderr.',
+      referenceTime: Date.now(),
+      intentDecision: repoDecision({
+        operation: 'run',
+        preferredAnswerPath: 'tool_loop',
+        entities: {
+          codingRemoteExecRequested: true,
+          profileId: 'vercel-prod',
+        },
+      }),
+    });
+
+    expect(prepared.args).toEqual({
+      cwd: '/repo',
+      command: 'npm test',
+      isolation: 'remote_required',
+      remoteProfile: 'vercel-prod',
+    });
+  });
+
+  it('denies shell_safe during explicit remote sandbox turns', () => {
+    const prepared = prepareToolExecutionForIntent({
+      toolName: 'shell_safe',
+      args: {
+        command: 'pwd',
+      },
+      requestText: 'Run pwd in the remote sandbox for this workspace. Do not make changes.',
+      referenceTime: Date.now(),
+      intentDecision: repoDecision({
+        operation: 'run',
+        preferredAnswerPath: 'tool_loop',
+        entities: {
+          codingRemoteExecRequested: true,
+        },
+      }),
+      toolDefinition: { category: 'shell', risk: 'mutating' },
+    });
+
+    expect(prepared.immediateResult).toMatchObject({
+      success: false,
+      status: 'denied',
+    });
+    expect(prepared.immediateResult?.message).toContain('explicitly requested remote sandbox execution');
+  });
+
+  it('denies package_install during explicit remote sandbox turns', () => {
+    const prepared = prepareToolExecutionForIntent({
+      toolName: 'package_install',
+      args: {
+        command: 'npm install',
+      },
+      requestText: 'Run npm install in the remote sandbox for this workspace.',
+      referenceTime: Date.now(),
+      intentDecision: repoDecision({
+        operation: 'run',
+        preferredAnswerPath: 'tool_loop',
+        entities: {
+          codingRemoteExecRequested: true,
+        },
+      }),
+      toolDefinition: { category: 'shell', risk: 'mutating' },
+    });
+
+    expect(prepared.immediateResult).toMatchObject({
+      success: false,
+      status: 'denied',
+    });
+    expect(prepared.immediateResult?.message).toContain('Do not use package_install here');
+  });
 });

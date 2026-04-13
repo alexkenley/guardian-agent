@@ -7,9 +7,11 @@ const DEFAULT_RUNTIME = 'node24';
 const DEFAULT_TIMEOUT_MS = 300_000;
 const DEFAULT_VCPUS = 2;
 const SUPPORTED_API_BASE_URL = 'https://api.vercel.com/';
+const VERCEL_DIRECTORY_PREFIXES = new Set(['/vercel', '/vercel/sandbox']);
 
 export interface VercelSandboxSession {
   sandboxId: string;
+  status?: string;
   mkDir(path: string): Promise<void>;
   writeFiles(files: Array<{ path: string; content: string | Uint8Array; mode?: number }>): Promise<void>;
   runCommand(input: {
@@ -20,6 +22,7 @@ export interface VercelSandboxSession {
   }): Promise<{ exitCode: number; stdout: string; stderr: string }>;
   readFileToBuffer(input: { path: string; cwd?: string }): Promise<Buffer | null>;
   stop(blocking?: boolean): Promise<void>;
+  extendTimeout(durationMs: number): Promise<void>;
 }
 
 export interface VercelSandboxCreateInput {
@@ -29,8 +32,19 @@ export interface VercelSandboxCreateInput {
   runtime?: string;
 }
 
+export interface VercelSandboxGetInput {
+  target: VercelRemoteExecutionResolvedTarget;
+  sandboxId: string;
+}
+
 export interface VercelSandboxClientOptions {
   sandboxFactory?: (input: VercelSandboxCreateInput) => Promise<VercelSandboxSession>;
+  sandboxLookup?: (input: VercelSandboxGetInput) => Promise<VercelSandboxSession>;
+}
+
+function isAlreadyExistsError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(already exists|file exists|exist[s]?)\b/i.test(message);
 }
 
 function buildNetworkPolicy(target: VercelRemoteExecutionResolvedTarget): NetworkPolicy {
@@ -64,6 +78,7 @@ async function defaultSandboxFactory(input: VercelSandboxCreateInput): Promise<V
   });
   return {
     sandboxId: sandbox.sandboxId,
+    status: sandbox.status,
     mkDir: async (path) => {
       await sandbox.mkDir(path);
     },
@@ -87,18 +102,67 @@ async function defaultSandboxFactory(input: VercelSandboxCreateInput): Promise<V
     stop: async (blocking) => {
       await sandbox.stop({ blocking });
     },
+    extendTimeout: async (durationMs) => {
+      await sandbox.extendTimeout(durationMs);
+    },
+  };
+}
+
+async function defaultSandboxLookup(input: VercelSandboxGetInput): Promise<VercelSandboxSession> {
+  assertSupportedApiBaseUrl(input.target.apiBaseUrl);
+  const sandbox = await Sandbox.get({
+    sandboxId: input.sandboxId,
+    token: input.target.token,
+    teamId: input.target.teamId,
+    projectId: input.target.projectId,
+  });
+  return {
+    sandboxId: sandbox.sandboxId,
+    status: sandbox.status,
+    mkDir: async (path) => {
+      await sandbox.mkDir(path);
+    },
+    writeFiles: async (files) => {
+      await sandbox.writeFiles(files);
+    },
+    runCommand: async (command) => {
+      const result = await sandbox.runCommand({
+        cmd: command.cmd,
+        args: command.args,
+        cwd: command.cwd,
+        env: command.env,
+      });
+      return {
+        exitCode: result.exitCode,
+        stdout: await result.stdout(),
+        stderr: await result.stderr(),
+      };
+    },
+    readFileToBuffer: async (file) => sandbox.readFileToBuffer(file),
+    stop: async (blocking) => {
+      await sandbox.stop({ blocking });
+    },
+    extendTimeout: async (durationMs) => {
+      await sandbox.extendTimeout(durationMs);
+    },
   };
 }
 
 export class VercelSandboxClient {
   private readonly sandboxFactory: (input: VercelSandboxCreateInput) => Promise<VercelSandboxSession>;
+  private readonly sandboxLookup: (input: VercelSandboxGetInput) => Promise<VercelSandboxSession>;
 
   constructor(options: VercelSandboxClientOptions = {}) {
     this.sandboxFactory = options.sandboxFactory ?? defaultSandboxFactory;
+    this.sandboxLookup = options.sandboxLookup ?? defaultSandboxLookup;
   }
 
   async createSandbox(input: VercelSandboxCreateInput): Promise<VercelSandboxSession> {
     return this.sandboxFactory(input);
+  }
+
+  async getSandbox(input: VercelSandboxGetInput): Promise<VercelSandboxSession> {
+    return this.sandboxLookup(input);
   }
 
   async ensureDirectories(session: VercelSandboxSession, filePaths: string[]): Promise<void> {
@@ -108,12 +172,20 @@ export class VercelSandboxClient {
       let current = '';
       for (const segment of segments.slice(0, -1)) {
         current = `${current}/${segment}`;
-        directories.add(current);
+        if (!VERCEL_DIRECTORY_PREFIXES.has(current)) {
+          directories.add(current);
+        }
       }
     }
     const ordered = [...directories].sort((left, right) => left.split('/').length - right.split('/').length);
     for (const directory of ordered) {
-      await session.mkDir(directory);
+      try {
+        await session.mkDir(directory);
+      } catch (error) {
+        if (!isAlreadyExistsError(error)) {
+          throw error;
+        }
+      }
     }
   }
 }

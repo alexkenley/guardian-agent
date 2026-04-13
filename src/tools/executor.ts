@@ -31,13 +31,19 @@ import {
   parseManagedPackageInstallCommand,
 } from '../runtime/package-install-trust.js';
 import {
+  isRemoteExecutionTargetReady,
   listRemoteExecutionTargets,
+  prioritizeReadyRemoteExecutionTargets,
   type RemoteExecutionTargetDescriptor,
 } from '../runtime/remote-execution/policy.js';
-import { RemoteExecutionService } from '../runtime/remote-execution/remote-execution-service.js';
+import {
+  RemoteExecutionService,
+  RemoteExecutionTargetUnavailableError,
+} from '../runtime/remote-execution/remote-execution-service.js';
 import { DaytonaRemoteExecutionProvider } from '../runtime/remote-execution/providers/daytona-remote-execution.js';
 import { VercelRemoteExecutionProvider } from '../runtime/remote-execution/providers/vercel-remote-execution.js';
 import type {
+  RemoteExecutionLease,
   RemoteExecutionResolvedTarget,
   RemoteExecutionRunRequest,
   RemoteExecutionRunResult,
@@ -54,6 +60,7 @@ import type {
   ToolDefinition,
   ToolExecutionRequest,
   ToolJobRecord,
+  ToolJobRemoteExecutionInfo,
   ToolJobStatus,
   ToolPolicyMode,
   ToolPolicySetting,
@@ -74,7 +81,11 @@ import {
 } from '../config/types.js';
 import type { ConversationService } from '../runtime/conversation.js';
 import type { AgentMemoryStore } from '../runtime/agent-memory-store.js';
-import type { CodeSessionStore } from '../runtime/code-sessions.js';
+import type {
+  CodeSessionManagedSandbox,
+  CodeSessionRecord,
+  CodeSessionStore,
+} from '../runtime/code-sessions.js';
 import { resolveCodeSessionTarget } from '../runtime/code-session-targets.js';
 import { getEffectiveCodeWorkspaceTrustState } from '../runtime/code-workspace-trust.js';
 import { isPrivateAddress } from '../guardian/ssrf-protection.js';
@@ -159,6 +170,7 @@ const MAX_TOOL_CALLS_PER_CHAIN = 24;
 const MAX_NON_READ_ONLY_CALLS_PER_CHAIN = 8;
 const MAX_IDENTICAL_CALLS_PER_CHAIN = 3;
 const MAX_IDENTICAL_FAILURES_PER_CHAIN = 2;
+const MANAGED_SANDBOX_RECONCILE_INTERVAL_MS = 30_000;
 const DEGRADED_PACKAGE_MANAGER_HINT = 'assistant.tools.sandbox.degradedFallback.allowPackageManagers';
 const POSIX_SHELL_BUILTINS = new Set(['type']);
 const WINDOWS_SHELL_BUILTINS = new Set(['cd', 'dir', 'echo', 'type']);
@@ -880,24 +892,67 @@ export class ToolExecutor {
   }
 
   getRemoteExecutionTargets(): RemoteExecutionTargetDescriptor[] {
-    return listRemoteExecutionTargets(this.cloudConfig);
+    return listRemoteExecutionTargets(this.cloudConfig, {
+      healthByTargetId: this.remoteExecutionService?.getKnownTargetHealth?.(),
+    });
   }
 
-  resolveRemoteExecutionTarget(profileId?: string): RemoteExecutionResolvedTarget | null {
+  private resolveRemoteExecutionTargetDescriptorByProfileHint(
+    targets: RemoteExecutionTargetDescriptor[],
+    profileHint: string | undefined,
+  ): RemoteExecutionTargetDescriptor | null {
+    const trimmedHint = profileHint?.trim();
+    if (!trimmedHint) return null;
+    const exact = targets.find((entry) => entry.profileId === trimmedHint);
+    if (exact) return exact;
+    const normalize = (value: string | undefined): string => (
+      (value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, ' ')
+    );
+    const normalizedHint = normalize(trimmedHint);
+    if (!normalizedHint) return null;
+    const normalizedMatch = targets.find((entry) => (
+      normalize(entry.profileId) === normalizedHint
+      || normalize(entry.profileName) === normalizedHint
+    ));
+    if (normalizedMatch) return normalizedMatch;
+    const familyMatches = targets.filter((entry) => normalize(entry.providerFamily) === normalizedHint);
+    return familyMatches.length === 1 ? familyMatches[0] : null;
+  }
+
+  resolveRemoteExecutionTarget(profileId?: string, commandString?: string): RemoteExecutionResolvedTarget | null {
+    const descriptor = this.resolveRemoteExecutionTargetDescriptors(profileId, commandString)[0];
+    return descriptor ? this.getResolvedRemoteExecutionTargetFromDescriptor(descriptor) : null;
+  }
+
+  private resolveRemoteExecutionTargetDescriptors(
+    profileId?: string,
+    _commandString?: string,
+    preferredTargetIds: string[] = [],
+  ): RemoteExecutionTargetDescriptor[] {
     const targets = this.getRemoteExecutionTargets();
     const requestedProfileId = profileId?.trim();
-    const preferredTargetId = !requestedProfileId
-      ? this.cloudConfig.defaultRemoteExecutionTargetId?.trim()
-      : '';
-    const descriptor = requestedProfileId
-      ? targets.find((entry) => entry.profileId === requestedProfileId)
-      : preferredTargetId
-        ? targets.find((entry) => entry.id === preferredTargetId && entry.capabilityState === 'ready')
-          ?? targets.find((entry) => entry.capabilityState === 'ready')
-        : targets.find((entry) => entry.capabilityState === 'ready');
-    if (!descriptor || descriptor.capabilityState !== 'ready') {
-      return null;
+
+    if (requestedProfileId) {
+      const descriptor = this.resolveRemoteExecutionTargetDescriptorByProfileHint(targets, requestedProfileId);
+      if (!descriptor || !isRemoteExecutionTargetReady(descriptor)) {
+        return [];
+      }
+      const prioritized = prioritizeReadyRemoteExecutionTargets(targets, preferredTargetIds);
+      return [
+        descriptor,
+        ...prioritized.filter((entry) => entry.id !== descriptor.id),
+      ];
     }
+
+    return prioritizeReadyRemoteExecutionTargets(targets, [
+      ...preferredTargetIds,
+      this.cloudConfig.defaultRemoteExecutionTargetId?.trim(),
+    ]);
+  }
+
+  private getResolvedRemoteExecutionTargetFromDescriptor(
+    descriptor: RemoteExecutionTargetDescriptor,
+  ): RemoteExecutionResolvedTarget | null {
     if (descriptor.backendKind === 'vercel_sandbox') {
       return this.getResolvedVercelSandboxTarget(descriptor.profileId);
     }
@@ -907,11 +962,428 @@ export class ToolExecutor {
     return null;
   }
 
-  async runRemoteExecutionJob(
-    input: Omit<RemoteExecutionRunRequest, 'target'> & { profileId?: string },
-  ): Promise<RemoteExecutionRunResult> {
-    const target = this.resolveRemoteExecutionTarget(input.profileId);
+  private getCodeSessionRecord(
+    sessionId: string,
+    ownerUserId?: string,
+  ): CodeSessionRecord | null {
+    const normalizedSessionId = sessionId.trim();
+    if (!normalizedSessionId || !this.options.codeSessionStore) {
+      return null;
+    }
+    const trimmedOwnerUserId = ownerUserId?.trim();
+    return trimmedOwnerUserId
+      ? this.options.codeSessionStore.getSession(normalizedSessionId, trimmedOwnerUserId) ?? null
+      : this.options.codeSessionStore.getSession(normalizedSessionId) ?? null;
+  }
+
+  private toRemoteExecutionLease(record: CodeSessionManagedSandbox): RemoteExecutionLease {
+    return {
+      id: record.leaseId,
+      targetId: record.targetId,
+      backendKind: record.backendKind,
+      profileId: record.profileId,
+      profileName: record.profileName,
+      sandboxId: record.sandboxId,
+      localWorkspaceRoot: record.localWorkspaceRoot,
+      remoteWorkspaceRoot: record.remoteWorkspaceRoot,
+      codeSessionId: undefined,
+      acquiredAt: record.acquiredAt,
+      lastUsedAt: record.lastUsedAt,
+      expiresAt: record.expiresAt ?? Number.MAX_SAFE_INTEGER,
+      runtime: record.runtime,
+      vcpus: record.vcpus,
+      trackedRemotePaths: Array.isArray(record.trackedRemotePaths)
+        ? [...record.trackedRemotePaths]
+        : [],
+      leaseMode: 'managed',
+    };
+  }
+
+  private mergeCodeSessionManagedSandboxes(
+    session: CodeSessionRecord,
+    updates: CodeSessionManagedSandbox[],
+  ): CodeSessionManagedSandbox[] {
+    const existing = Array.isArray(session.workState.managedSandboxes)
+      ? session.workState.managedSandboxes
+      : [];
+    const next = new Map<string, CodeSessionManagedSandbox>();
+    for (const record of existing) {
+      next.set(record.leaseId, { ...record });
+    }
+    for (const record of updates) {
+      next.set(record.leaseId, { ...record });
+    }
+    return [...next.values()]
+      .filter((record) => record.status === 'active')
+      .sort((left, right) => (right.lastUsedAt || right.acquiredAt) - (left.lastUsedAt || left.acquiredAt));
+  }
+
+  private syncCodeSessionManagedSandboxRecord(input: {
+    sessionId: string;
+    ownerUserId?: string;
+    descriptor: RemoteExecutionTargetDescriptor;
+    result: Pick<RemoteExecutionRunResult, 'leaseId' | 'sandboxId' | 'leaseMode' | 'healthState' | 'healthReason'>;
+  }): void {
+    if (input.result.leaseMode !== 'managed' || !input.result.leaseId || !this.options.codeSessionStore) {
+      return;
+    }
+    const session = this.getCodeSessionRecord(input.sessionId, input.ownerUserId);
+    if (!session) return;
+    const existing = session.workState.managedSandboxes.find((record) =>
+      record.leaseId === input.result.leaseId
+      || record.targetId === input.descriptor.id
+      || record.sandboxId === input.result.sandboxId,
+    );
+    if (!existing) return;
+    const activeLease = (this.remoteExecutionService?.listActiveLeases?.() ?? [])
+      .find((lease) => lease.id === input.result.leaseId);
+    const nextRecords = session.workState.managedSandboxes.map((record) => {
+      if (record.leaseId !== existing.leaseId) return record;
+      const nextStatus: CodeSessionManagedSandbox['status'] = input.result.healthState === 'unreachable'
+        ? 'unreachable'
+        : 'active';
+      return {
+        ...record,
+        sandboxId: input.result.sandboxId || record.sandboxId,
+        status: nextStatus,
+        lastUsedAt: this.now(),
+        trackedRemotePaths: activeLease?.trackedRemotePaths
+          ? [...activeLease.trackedRemotePaths]
+          : (Array.isArray(record.trackedRemotePaths) ? [...record.trackedRemotePaths] : []),
+        healthState: input.result.healthState ?? record.healthState,
+        healthReason: input.result.healthReason ?? record.healthReason,
+        healthCheckedAt: this.now(),
+      };
+    });
+    this.options.codeSessionStore.updateSession({
+      sessionId: session.id,
+      ownerUserId: session.ownerUserId,
+      workState: {
+        managedSandboxes: nextRecords,
+      },
+    });
+  }
+
+  private buildCodeSessionManagedSandboxRecord(
+    descriptor: RemoteExecutionTargetDescriptor,
+    lease: RemoteExecutionLease,
+  ): CodeSessionManagedSandbox {
+    return {
+      leaseId: lease.id,
+      targetId: descriptor.id,
+      backendKind: descriptor.backendKind,
+      profileId: descriptor.profileId,
+      profileName: descriptor.profileName,
+      sandboxId: lease.sandboxId,
+      localWorkspaceRoot: lease.localWorkspaceRoot,
+      remoteWorkspaceRoot: lease.remoteWorkspaceRoot,
+      status: descriptor.healthState === 'unreachable' ? 'unreachable' : 'active',
+      acquiredAt: lease.acquiredAt,
+      lastUsedAt: lease.lastUsedAt,
+      expiresAt: lease.expiresAt,
+      runtime: lease.runtime,
+      vcpus: lease.vcpus,
+      trackedRemotePaths: [...lease.trackedRemotePaths],
+      healthState: descriptor.healthState,
+      healthReason: descriptor.healthReason,
+      healthCheckedAt: this.now(),
+      healthDurationMs: descriptor.healthDurationMs,
+    };
+  }
+
+  private mergeCodeSessionManagedSandboxRuntimeState(input: {
+    record: CodeSessionManagedSandbox;
+    target?: RemoteExecutionTargetDescriptor;
+    activeLease?: RemoteExecutionLease;
+  }): CodeSessionManagedSandbox {
+    const activeLeaseReason = input.activeLease
+      ? (input.activeLease.codeSessionId
+          ? `Active leased sandbox is attached to code session '${input.activeLease.codeSessionId}'.`
+          : 'Active leased sandbox is available.')
+      : undefined;
+    const targetUnavailable = input.target?.healthState === 'unreachable';
+    return {
+      ...input.record,
+      sandboxId: input.activeLease?.sandboxId ?? input.record.sandboxId,
+      remoteWorkspaceRoot: input.activeLease?.remoteWorkspaceRoot ?? input.record.remoteWorkspaceRoot,
+      lastUsedAt: input.activeLease?.lastUsedAt ?? input.record.lastUsedAt,
+      expiresAt: input.activeLease?.expiresAt ?? input.record.expiresAt,
+      runtime: input.activeLease?.runtime ?? input.record.runtime,
+      vcpus: input.activeLease?.vcpus ?? input.record.vcpus,
+      trackedRemotePaths: input.activeLease?.trackedRemotePaths
+        ? [...input.activeLease.trackedRemotePaths]
+        : (Array.isArray(input.record.trackedRemotePaths) ? [...input.record.trackedRemotePaths] : []),
+      status: input.record.status === 'released'
+        ? 'released'
+        : input.activeLease
+          ? 'active'
+          : (targetUnavailable ? 'unreachable' : input.record.status),
+      healthState: input.activeLease
+        ? 'healthy'
+        : (targetUnavailable ? 'unreachable' : input.record.healthState),
+      healthReason: input.activeLease
+        ? activeLeaseReason
+        : (targetUnavailable ? (input.target?.healthReason ?? input.record.healthReason) : input.record.healthReason),
+      healthCheckedAt: input.activeLease
+        ? input.activeLease.lastUsedAt
+        : (targetUnavailable ? (input.target?.healthCheckedAt ?? input.record.healthCheckedAt) : input.record.healthCheckedAt),
+      healthDurationMs: targetUnavailable
+        ? (input.target?.healthDurationMs ?? input.record.healthDurationMs)
+        : input.record.healthDurationMs,
+    };
+  }
+
+  private async reconcileCodeSessionManagedSandboxRecords(input: {
+    session: CodeSessionRecord;
+    targets: RemoteExecutionTargetDescriptor[];
+  }): Promise<CodeSessionManagedSandbox[]> {
+    const existing = Array.isArray(input.session.workState.managedSandboxes)
+      ? input.session.workState.managedSandboxes
+      : [];
+    if (existing.length === 0) return [];
+    const service = this.remoteExecutionService ?? (input.targets.length > 0 ? this.getOrCreateRemoteExecutionService() : undefined);
+    const targetById = new Map(input.targets.map((entry) => [entry.id, entry]));
+    const serviceLeases = new Map(
+      (service?.listActiveLeases?.() ?? []).map((lease) => [lease.id, lease]),
+    );
+    let changed = false;
+    const nextRecords: CodeSessionManagedSandbox[] = [];
+    for (const record of existing) {
+      const target = targetById.get(record.targetId);
+      const activeLease = serviceLeases.get(record.leaseId);
+      let nextRecord = this.mergeCodeSessionManagedSandboxRuntimeState({
+        record,
+        target,
+        activeLease,
+      });
+      const lastCheckedAt = typeof nextRecord.healthCheckedAt === 'number'
+        ? nextRecord.healthCheckedAt
+        : 0;
+      const shouldInspect = !activeLease
+        && nextRecord.status !== 'released'
+        && !!service?.inspectLease
+        && (!lastCheckedAt || (this.now() - lastCheckedAt) >= MANAGED_SANDBOX_RECONCILE_INTERVAL_MS);
+      if (shouldInspect && target) {
+        const resolvedTarget = this.getResolvedRemoteExecutionTargetFromDescriptor(target);
+        if (resolvedTarget) {
+          const inspection = await service.inspectLease!({
+            target: resolvedTarget,
+            lease: this.toRemoteExecutionLease(record),
+          });
+          nextRecord = {
+            ...nextRecord,
+            sandboxId: inspection.sandboxId ?? nextRecord.sandboxId,
+            remoteWorkspaceRoot: inspection.remoteWorkspaceRoot ?? nextRecord.remoteWorkspaceRoot,
+            status: inspection.healthState === 'unreachable' ? 'unreachable' : 'active',
+            healthState: inspection.healthState,
+            healthReason: inspection.reason,
+            healthCheckedAt: inspection.checkedAt,
+            healthDurationMs: inspection.durationMs,
+          };
+        }
+      }
+      if (JSON.stringify(nextRecord) !== JSON.stringify(record)) {
+        changed = true;
+      }
+      nextRecords.push(nextRecord);
+    }
+    if (changed && this.options.codeSessionStore) {
+      this.options.codeSessionStore.updateSession({
+        sessionId: input.session.id,
+        ownerUserId: input.session.ownerUserId,
+        workState: {
+          managedSandboxes: nextRecords,
+        },
+      });
+    }
+    return nextRecords;
+  }
+
+  async getCodeSessionManagedSandboxStatus(input: {
+    sessionId: string;
+    ownerUserId?: string;
+  }): Promise<{
+    codeSessionId: string;
+    defaultTargetId: string | null;
+    targets: RemoteExecutionTargetDescriptor[];
+    sandboxes: CodeSessionManagedSandbox[];
+  }> {
+    const session = this.getCodeSessionRecord(input.sessionId, input.ownerUserId);
+    if (!session) {
+      throw new Error(`Code session '${input.sessionId}' was not found.`);
+    }
+    const targets = this.getRemoteExecutionTargets();
+    const sandboxes = (await this.reconcileCodeSessionManagedSandboxRecords({
+      session,
+      targets,
+    }))
+      .filter((record) => record.status === 'active' || record.status === 'unreachable')
+      .sort((left, right) => (right.lastUsedAt || right.acquiredAt) - (left.lastUsedAt || left.acquiredAt));
+    return {
+      codeSessionId: session.id,
+      defaultTargetId: this.cloudConfig.defaultRemoteExecutionTargetId?.trim() || null,
+      targets,
+      sandboxes,
+    };
+  }
+
+  async createManagedSandboxForCodeSession(input: {
+    sessionId: string;
+    ownerUserId?: string;
+    profileId?: string;
+    targetId?: string;
+    runtime?: string;
+    vcpus?: number;
+  }): Promise<{
+    codeSessionId: string;
+    defaultTargetId: string | null;
+    targets: RemoteExecutionTargetDescriptor[];
+    sandboxes: CodeSessionManagedSandbox[];
+  }> {
+    if (!this.options.codeSessionStore) {
+      throw new Error('Code session store is not available.');
+    }
+    const session = this.getCodeSessionRecord(input.sessionId, input.ownerUserId);
+    if (!session) {
+      throw new Error(`Code session '${input.sessionId}' was not found.`);
+    }
+
+    const targets = this.getRemoteExecutionTargets();
+    const requestedTargetId = input.targetId?.trim();
+    const requestedProfileId = input.profileId?.trim();
+    const descriptor = requestedTargetId
+      ? targets.find((entry) => entry.id === requestedTargetId)
+      : requestedProfileId
+        ? this.resolveRemoteExecutionTargetDescriptorByProfileHint(targets, requestedProfileId)
+        : prioritizeReadyRemoteExecutionTargets(targets, [
+          ...session.workState.managedSandboxes.map((record) => record.targetId),
+          this.cloudConfig.defaultRemoteExecutionTargetId?.trim(),
+        ])[0];
+    if (!descriptor || !isRemoteExecutionTargetReady(descriptor)) {
+      throw new Error(requestedTargetId || requestedProfileId
+        ? 'The requested remote sandbox target is not ready.'
+        : 'No ready remote sandbox target is configured.');
+    }
+
+    const target = this.getResolvedRemoteExecutionTargetFromDescriptor(descriptor);
     if (!target) {
+      throw new Error(`Remote execution target '${descriptor.profileName}' could not be resolved.`);
+    }
+
+    const existingRecord = session.workState.managedSandboxes.find((record) => record.targetId === descriptor.id);
+    const lease = await this.getOrCreateRemoteExecutionService().acquireLease?.({
+      target,
+      localWorkspaceRoot: session.resolvedRoot,
+      codeSessionId: session.id,
+      runtime: input.runtime,
+      vcpus: input.vcpus,
+      leaseMode: 'managed',
+      existingLease: existingRecord ? this.toRemoteExecutionLease(existingRecord) : undefined,
+    });
+    if (!lease) {
+      throw new Error('Managed remote sandbox creation is not available.');
+    }
+
+    const nextRecord = this.buildCodeSessionManagedSandboxRecord(descriptor, lease);
+    const nextManagedSandboxes = this.mergeCodeSessionManagedSandboxes(session, [nextRecord])
+      .filter((record) => record.targetId !== descriptor.id || record.leaseId === nextRecord.leaseId);
+    this.options.codeSessionStore.updateSession({
+      sessionId: session.id,
+      ownerUserId: session.ownerUserId,
+      workState: {
+        managedSandboxes: nextManagedSandboxes,
+      },
+    });
+    return await this.getCodeSessionManagedSandboxStatus({
+      sessionId: session.id,
+      ownerUserId: session.ownerUserId,
+    });
+  }
+
+  async deleteManagedSandboxForCodeSession(input: {
+    sessionId: string;
+    ownerUserId?: string;
+    leaseId: string;
+  }): Promise<{
+    codeSessionId: string;
+    defaultTargetId: string | null;
+    targets: RemoteExecutionTargetDescriptor[];
+    sandboxes: CodeSessionManagedSandbox[];
+  }> {
+    if (!this.options.codeSessionStore) {
+      throw new Error('Code session store is not available.');
+    }
+    const session = this.getCodeSessionRecord(input.sessionId, input.ownerUserId);
+    if (!session) {
+      throw new Error(`Code session '${input.sessionId}' was not found.`);
+    }
+    const record = session.workState.managedSandboxes.find((entry) => entry.leaseId === input.leaseId.trim());
+    if (!record) {
+      throw new Error(`Managed sandbox '${input.leaseId}' was not found.`);
+    }
+    const descriptor = this.getRemoteExecutionTargets().find((entry) => entry.id === record.targetId);
+    if (!descriptor) {
+      throw new Error(
+        `Managed sandbox '${record.profileName}' can no longer be resolved. Re-enable or reconfigure that remote target before releasing it.`,
+      );
+    }
+    const target = this.getResolvedRemoteExecutionTargetFromDescriptor(descriptor);
+    if (!target) {
+      throw new Error(`Managed sandbox target '${record.profileName}' could not be resolved.`);
+    }
+    const service = this.getOrCreateRemoteExecutionService();
+    if (!service.disposeLease) {
+      throw new Error('Managed remote sandbox release is not available.');
+    }
+    await service.disposeLease({
+      target,
+      lease: this.toRemoteExecutionLease(record),
+    });
+    this.options.codeSessionStore.updateSession({
+      sessionId: session.id,
+      ownerUserId: session.ownerUserId,
+      workState: {
+        managedSandboxes: session.workState.managedSandboxes.filter((entry) => entry.leaseId !== record.leaseId),
+      },
+    });
+    return await this.getCodeSessionManagedSandboxStatus({
+      sessionId: session.id,
+      ownerUserId: session.ownerUserId,
+    });
+  }
+
+  async releaseManagedSandboxesForCodeSession(input: {
+    sessionId: string;
+    ownerUserId?: string;
+  }): Promise<void> {
+    const session = this.getCodeSessionRecord(input.sessionId, input.ownerUserId);
+    if (!session) {
+      throw new Error(`Code session '${input.sessionId}' was not found.`);
+    }
+    for (const record of session.workState.managedSandboxes) {
+      await this.deleteManagedSandboxForCodeSession({
+        sessionId: session.id,
+        ownerUserId: session.ownerUserId,
+        leaseId: record.leaseId,
+      });
+    }
+  }
+
+  async runRemoteExecutionJob(
+    input: Omit<RemoteExecutionRunRequest, 'target' | 'codeSessionId' | 'requestId'> & {
+      profileId?: string;
+      request?: Partial<ToolExecutionRequest>;
+    },
+  ): Promise<RemoteExecutionRunResult> {
+    const codeSessionId = input.request?.codeContext?.sessionId?.trim() || undefined;
+    const session = codeSessionId ? this.getCodeSessionRecord(codeSessionId) : null;
+    const managedSandboxes = session?.workState.managedSandboxes.filter((record) => record.status === 'active') ?? [];
+    const descriptors = this.resolveRemoteExecutionTargetDescriptors(
+      input.profileId,
+      input.command.requestedCommand,
+      managedSandboxes.map((record) => record.targetId),
+    );
+    if (descriptors.length === 0) {
       const requestedProfile = input.profileId?.trim();
       throw new Error(
         requestedProfile
@@ -919,10 +1391,49 @@ export class ToolExecutor {
           : 'No ready remote execution target is configured.',
       );
     }
-    return this.getOrCreateRemoteExecutionService().runBoundedJob({
-      ...input,
-      target,
-    });
+
+    const service = this.getOrCreateRemoteExecutionService();
+    const requestId = input.request?.requestId?.trim() || undefined;
+    let lastUnavailableMessage = '';
+
+    for (const descriptor of descriptors) {
+      const target = this.getResolvedRemoteExecutionTargetFromDescriptor(descriptor);
+      if (!target) {
+        continue;
+      }
+      const preferredManagedSandbox = managedSandboxes.find((record) => record.targetId === descriptor.id);
+      try {
+        const result = await service.runBoundedJob({
+          ...input,
+          target,
+          codeSessionId,
+          requestId,
+          preferredLease: preferredManagedSandbox ? this.toRemoteExecutionLease(preferredManagedSandbox) : undefined,
+          leaseMode: preferredManagedSandbox ? 'managed' : input.leaseMode,
+        });
+        if (codeSessionId) {
+          this.syncCodeSessionManagedSandboxRecord({
+            sessionId: codeSessionId,
+            descriptor,
+            result,
+          });
+        }
+        return result;
+      } catch (error) {
+        if (error instanceof RemoteExecutionTargetUnavailableError) {
+          lastUnavailableMessage = error.message;
+          if (input.profileId?.trim()) {
+            throw error;
+          }
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    throw new Error(
+      lastUnavailableMessage || 'No reachable remote execution target is configured.',
+    );
   }
 
   private getOrCreateRemoteExecutionService(): RemoteExecutionServiceLike {
@@ -2228,6 +2739,29 @@ export class ToolExecutor {
   }
 
   private preflightSandbox(toolName: string, args: Record<string, unknown>): { reason: string; fix?: ToolPreflightFix } | null {
+    if (toolName === 'code_remote_exec') {
+      try {
+        this.resolveRemoteExecutionTarget(asString(args.profile).trim() || undefined);
+        // We only care about domain resolution errors from getResolvedVercelSandboxTarget or getResolvedDaytonaSandboxTarget
+        // which throw Error(`Host '${apiUrl.hostname}' is not in allowedDomains.`)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const match = message.match(/Host '([^']+)' is not in allowedDomains\./);
+        if (match) {
+          return {
+            reason: message,
+            fix: {
+              type: 'domain',
+              value: match[1],
+              description: `Add '${match[1]}' to allowed domains`,
+            },
+          };
+        }
+        return { reason: message };
+      }
+      return null;
+    }
+
     if (toolName === 'package_install') {
       const command = asString(args.command).trim();
       if (!command) return null;
@@ -4277,6 +4811,10 @@ export class ToolExecutor {
         const fullError = result.error ?? 'Tool failed.';
         job.status = 'failed';
         job.error = sanitizePreview(fullError);
+        job.remoteExecution = extractRemoteExecutionInfo(result.output);
+        if (result.output !== undefined) {
+          job.resultPreview = sanitizePreview(JSON.stringify(result.output));
+        }
         job.completedAt = this.now();
         job.durationMs = job.completedAt - (job.startedAt ?? job.createdAt);
         const definition = this.registry.get(job.toolName)?.definition;
@@ -4295,6 +4833,7 @@ export class ToolExecutor {
       job.completedAt = this.now();
       job.durationMs = job.completedAt - (job.startedAt ?? job.createdAt);
       job.resultPreview = sanitizePreview(JSON.stringify(result.output ?? {}));
+      job.remoteExecution = extractRemoteExecutionInfo(result.output);
       const verification = await this.verifyExecution(job.toolName, args, result);
       job.verificationStatus = verification.status;
       job.verificationEvidence = verification.evidence;
@@ -4789,8 +5328,20 @@ export class ToolExecutor {
       resolveOwnedCodeSessionTarget: (target, request) => this.resolveOwnedCodeSessionTarget(target, request),
       getCurrentCodeSessionRecord: (request) => this.getCurrentCodeSessionRecord(request),
       getRemoteExecutionTargets: () => this.getRemoteExecutionTargets(),
+      cloudConfig: this.cloudConfig,
       resolveRemoteExecutionTarget: (profileId) => this.resolveRemoteExecutionTarget(profileId),
-      runRemoteExecutionJob: (input) => this.runRemoteExecutionJob(input),
+      runRemoteExecutionJob: async (input) => {
+        const req = input.request;
+        const requestId = req?.requestId ?? 'unknown';
+        const codeSessionId = req?.codeContext?.sessionId;
+        const cbService = this.options.codingBackendService;
+        return this.runRemoteExecutionJob({
+          ...input,
+          onProgress: cbService && codeSessionId ? (message) => {
+            cbService.recordExternalProgress(requestId, codeSessionId, 'Remote Sandbox', input.command.requestedCommand, message);
+          } : undefined,
+        });
+      },
     });
 
     registerBuiltinWebTools({
@@ -6423,6 +6974,33 @@ function hasValidBrowserMutationArgs(args: Record<string, unknown>): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function extractRemoteExecutionInfo(value: unknown): ToolJobRemoteExecutionInfo | undefined {
+  if (!isRecord(value)) return undefined;
+  const backendKind = asString(value.backendKind).trim();
+  const profileId = asString(value.profileId).trim();
+  const profileName = asString(value.profileName).trim();
+  const sandboxId = asString(value.sandboxId).trim();
+  const leaseId = asString(value.leaseId).trim();
+  const leaseScope = asString(value.leaseScope).trim();
+  const healthState = asString(value.healthState).trim();
+  const healthReason = asString(value.healthReason).trim();
+  const leaseReused = typeof value.leaseReused === 'boolean' ? value.leaseReused : undefined;
+  if (!backendKind && !profileId && !profileName && !sandboxId && !leaseId) {
+    return undefined;
+  }
+  return {
+    ...(backendKind ? { backendKind } : {}),
+    ...(profileId ? { profileId } : {}),
+    ...(profileName ? { profileName } : {}),
+    ...(sandboxId ? { sandboxId } : {}),
+    ...(leaseId ? { leaseId } : {}),
+    ...(leaseScope ? { leaseScope } : {}),
+    ...(typeof leaseReused === 'boolean' ? { leaseReused } : {}),
+    ...(healthState ? { healthState } : {}),
+    ...(healthReason ? { healthReason } : {}),
+  };
 }
 
 function requireString(value: unknown, field: string): string {

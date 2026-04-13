@@ -3236,6 +3236,12 @@ function renderSearchSourcesTab(panel) {
 
 // ─── Cloud Tab ───────────────────────────────────────────
 
+function normalizeDefaultRemoteTargetSelection(value) {
+  return typeof value === 'string' && value.trim()
+    ? value.trim()
+    : 'automatic';
+}
+
 function renderCloudTab(panel) {
   const cloud = sharedConfig?.assistant?.tools?.cloud || {
     enabled: false,
@@ -3256,7 +3262,7 @@ function renderCloudTab(panel) {
     },
   };
   const remoteExecutionTargets = [
-    { value: '', label: 'Automatic (first ready target)' },
+    { value: 'automatic', label: 'Automatic (first ready target)' },
     ...(cloud.vercelProfiles || [])
       .filter((profile) => profile.sandbox?.enabled)
       .map((profile) => ({
@@ -3354,7 +3360,7 @@ function renderCloudTab(panel) {
           <div class="cfg-field">
             <label>Default Remote Sandbox</label>
             <select id="cfg-cloud-default-remote-target">
-              ${remoteExecutionTargets.map((option) => `<option value="${escAttr(option.value)}"${option.value === (cloud.defaultRemoteExecutionTargetId || '') ? ' selected' : ''}>${esc(option.label)}</option>`).join('')}
+              ${remoteExecutionTargets.map((option) => `<option value="${escAttr(option.value)}"${option.value === normalizeDefaultRemoteTargetSelection(cloud.defaultRemoteExecutionTargetId) ? ' selected' : ''}>${esc(option.label)}</option>`).join('')}
             </select>
           </div>
           <div class="cfg-field" style="grid-column: 1 / -1;">
@@ -3471,7 +3477,9 @@ function renderCloudTab(panel) {
     try {
       const payload = {
         enabled: panel.querySelector('#cfg-cloud-enabled')?.value === 'true',
-        defaultRemoteExecutionTargetId: panel.querySelector('#cfg-cloud-default-remote-target')?.value || undefined,
+        defaultRemoteExecutionTargetId: normalizeDefaultRemoteTargetSelection(
+          panel.querySelector('#cfg-cloud-default-remote-target')?.value,
+        ),
       };
       for (const provider of providers) {
         const text = panel.querySelector(`#cfg-cloud-${provider.key}`)?.value || '[]';
@@ -3746,6 +3754,7 @@ function createIntegrationOverview(config, authStatus) {
 
 function getSecondBrainSettingsView(config = sharedConfig) {
   const secondBrain = config?.assistant?.secondBrain || {};
+  const responseStyle = config?.assistant?.responseStyle || {};
   const defaultChannels = Array.isArray(secondBrain.delivery?.defaultChannels)
     ? [...new Set(secondBrain.delivery.defaultChannels.filter((channel) => channel === 'web' || channel === 'cli' || channel === 'telegram'))]
     : [];
@@ -3769,6 +3778,10 @@ function getSecondBrainSettingsView(config = sharedConfig) {
       defaultRetrievalMode: secondBrain.knowledge?.defaultRetrievalMode || 'hybrid',
       rerankerEnabled: secondBrain.knowledge?.rerankerEnabled !== false,
     },
+    responseStyle: {
+      enabled: responseStyle.enabled !== false,
+      level: responseStyle.level || 'balanced',
+    },
   };
 }
 
@@ -3784,6 +3797,10 @@ function buildRecommendedSecondBrainPatch(config = sharedConfig, options = {}) {
   const markCompleted = options.markCompleted !== false;
   return {
     assistant: {
+      responseStyle: {
+        enabled: true,
+        level: 'balanced',
+      },
       secondBrain: {
         enabled: true,
         onboarding: {
@@ -3823,8 +3840,36 @@ function createSecondBrainPanel(config, panel) {
     <div class="cfg-center-body">
       <div style="margin-bottom:0.65rem;font-size:0.72rem;color:var(--text-muted);">
         These settings drive the <strong>Second Brain</strong> home experience and future knowledge-plane defaults.
+        They also own the assistant reply-style preference so it stays stable even when Guardian routes between different AI providers.
         They do <strong>not</strong> create a second memory authority beside Guardian memory, and they do <strong>not</strong> replace the normal Routines editor for existing routines.
       </div>
+      <div class="cfg-divider"></div>
+      <div class="table-header" style="padding:0 0 0.45rem;border:none;background:none;">
+        <h3 style="font-size:0.82rem;letter-spacing:0.03em;">Assistant Reply Style</h3>
+        <span class="cfg-header-note">Presentation preference, not provider routing</span>
+      </div>
+      <div class="cfg-form-grid">
+        <div class="cfg-field">
+          <label>Response Style</label>
+          <select id="cfg-response-style-enabled">
+            <option value="true" ${secondBrain.responseStyle.enabled ? 'selected' : ''}>Enabled</option>
+            <option value="false" ${!secondBrain.responseStyle.enabled ? 'selected' : ''}>Disabled</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label>Style Level</label>
+          <select id="cfg-response-style-level">
+            <option value="light" ${secondBrain.responseStyle.level === 'light' ? 'selected' : ''}>Light</option>
+            <option value="balanced" ${secondBrain.responseStyle.level === 'balanced' ? 'selected' : ''}>Balanced</option>
+            <option value="strong" ${secondBrain.responseStyle.level === 'strong' ? 'selected' : ''}>Strong</option>
+          </select>
+        </div>
+      </div>
+      <div style="margin-top:0.45rem;font-size:0.72rem;color:var(--text-muted);">
+        Disable this to remove extra reply-style steering entirely. When enabled, higher levels push for tighter, more token-efficient answers without changing routing or model selection.
+      </div>
+
+      <div class="cfg-divider"></div>
       <div class="cfg-form-grid">
         <div class="cfg-field">
           <label>Second Brain Preferences</label>
@@ -3919,10 +3964,19 @@ function createSecondBrainPanel(config, panel) {
   `;
 
   const statusEl = section.querySelector('#cfg-second-brain-status');
+  const responseStyleEnabledEl = section.querySelector('#cfg-response-style-enabled');
+  const responseStyleLevelEl = section.querySelector('#cfg-response-style-level');
   const setStatus = (text, tone) => {
     statusEl.textContent = text;
     statusEl.style.color = tone;
   };
+  const syncResponseStyleControls = () => {
+    if (!responseStyleLevelEl || !responseStyleEnabledEl) return;
+    responseStyleLevelEl.disabled = responseStyleEnabledEl.value !== 'true';
+  };
+
+  responseStyleEnabledEl?.addEventListener('change', syncResponseStyleControls);
+  syncResponseStyleControls();
 
   section.querySelector('#cfg-second-brain-open-home')?.addEventListener('click', () => {
     window.location.hash = '#/';
@@ -3962,6 +4016,10 @@ function createSecondBrainPanel(config, panel) {
     try {
       const result = await api.updateConfig({
         assistant: {
+          responseStyle: {
+            enabled: section.querySelector('#cfg-response-style-enabled').value === 'true',
+            level: section.querySelector('#cfg-response-style-level').value,
+          },
           secondBrain: {
             enabled: section.querySelector('#cfg-second-brain-enabled').value === 'true',
             onboarding: {

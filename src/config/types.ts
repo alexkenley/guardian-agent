@@ -525,6 +525,7 @@ export interface AssistantSetupConfig {
 
 export type AssistantSecondBrainProactivityLevel = 'minimal' | 'balanced' | 'proactive';
 export type AssistantSecondBrainRetrievalMode = 'hybrid' | 'library_first' | 'search_first';
+export type AssistantResponseStyleLevel = 'light' | 'balanced' | 'strong';
 
 /** Guided-setup state for the Second Brain surface. */
 export interface AssistantSecondBrainOnboardingConfig {
@@ -574,6 +575,14 @@ export interface AssistantSecondBrainConfig {
   delivery: AssistantSecondBrainDeliveryConfig;
   /** Retrieval-oriented knowledge preferences. */
   knowledge: AssistantSecondBrainKnowledgeConfig;
+}
+
+/** Operator-facing response-style preferences for assistant replies. */
+export interface AssistantResponseStyleConfig {
+  /** Whether extra response-style steering should be applied at all. */
+  enabled: boolean;
+  /** How strongly Guardian should bias toward high-signal, compressed replies. */
+  level: AssistantResponseStyleLevel;
 }
 
 /** User identity strategy across channels. */
@@ -1613,6 +1622,7 @@ export interface AssistantSecurityConfig {
 export interface AssistantConfig {
   setup: AssistantSetupConfig;
   secondBrain: AssistantSecondBrainConfig;
+  responseStyle?: AssistantResponseStyleConfig;
   identity: AssistantIdentityConfig;
   credentials: AssistantCredentialsConfig;
   soul: AssistantSoulConfig;
@@ -1794,6 +1804,10 @@ export const DEFAULT_CONFIG: GuardianAgentConfig = {
         defaultRetrievalMode: 'hybrid',
         rerankerEnabled: true,
       },
+    },
+    responseStyle: {
+      enabled: true,
+      level: 'balanced',
     },
     identity: {
       mode: 'single_user',

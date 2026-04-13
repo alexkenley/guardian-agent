@@ -15,6 +15,17 @@ describe('code-session-core prompt', () => {
     expect(prompt).not.toContain('host-application context');
   });
 
+  it('adds response-style guidance when enabled', () => {
+    const prompt = composeCodeSessionSystemPrompt({ enabled: true, level: 'light' });
+    expect(prompt).toContain('Configured response-style preference:');
+    expect(prompt).toContain('Keep replies a bit tighter and clearer than default.');
+  });
+
+  it('omits response-style guidance when disabled', () => {
+    const prompt = composeCodeSessionSystemPrompt({ enabled: false, level: 'strong' });
+    expect(prompt).not.toContain('Configured response-style preference:');
+  });
+
   it('treats ambiguous references as the attached workspace by default', () => {
     const prompt = composeCodeSessionSystemPrompt();
     expect(prompt).toContain('"this app"');

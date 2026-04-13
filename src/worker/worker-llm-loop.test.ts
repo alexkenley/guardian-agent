@@ -198,6 +198,79 @@ describe('runLlmLoop', () => {
     expect(result.finalContent).toContain('pending approval');
   });
 
+  it('recovers tool calls when the model emits JSON in content instead of native tool calls', async () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: 'Search the web for Guardian Agent.' }];
+    const responses: ChatResponse[] = [
+      {
+        content: JSON.stringify({
+          tool_calls: [
+            {
+              function: {
+                name: 'web_search',
+                arguments: { query: 'Guardian Agent', maxResults: 3 },
+              },
+            },
+          ],
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+      {
+        content: 'Guardian Agent is an orchestration-focused assistant runtime.',
+        model: 'test-model',
+        finishReason: 'stop',
+      },
+    ];
+    const calledTools: string[] = [];
+
+    const toolCaller: ToolCaller = {
+      listAlwaysLoaded() {
+        return [{
+          name: 'web_search',
+          description: 'Search the web.',
+          parameters: {
+            type: 'object',
+            properties: {
+              query: { type: 'string' },
+              maxResults: { type: 'number' },
+            },
+            required: ['query'],
+          },
+        }];
+      },
+      searchTools() {
+        return [];
+      },
+      async callTool(request): Promise<ToolResult> {
+        calledTools.push(request.toolName);
+        expect(request.args).toEqual({ query: 'Guardian Agent', maxResults: 3 });
+        return {
+          success: true,
+          output: {
+            answer: 'Guardian Agent is an orchestration-focused assistant runtime.',
+          },
+        };
+      },
+    };
+
+    const result = await runLlmLoop(
+      messages,
+      async () => {
+        const next = responses.shift();
+        if (!next) {
+          throw new Error('Unexpected extra chatFn call');
+        }
+        return next;
+      },
+      toolCaller,
+      3,
+      32_000,
+    );
+
+    expect(calledTools).toEqual(['web_search']);
+    expect(result.finalContent).toContain('orchestration-focused assistant runtime');
+  });
+
   it('denies memory mutations unless the user explicitly requested them', async () => {
     const messages: ChatMessage[] = [{ role: 'user', content: 'What did I ask you to remember last week?' }];
     const responses: ChatResponse[] = [

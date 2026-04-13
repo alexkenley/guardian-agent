@@ -13,6 +13,12 @@ const cloudUiState = {
   selectedProfiles: {},
 };
 
+function normalizeDefaultRemoteTargetSelection(value) {
+  return typeof value === 'string' && value.trim()
+    ? value.trim()
+    : 'automatic';
+}
+
 const CLOUD_HELP = {
   overview: {
     'Provider Posture': {
@@ -127,7 +133,7 @@ const CLOUD_PROVIDER_DEFS = [
         label: 'Team ID',
         type: 'text',
         placeholder: 'team_xxx',
-        help: 'Use the Vercel Team ID from the team Settings > General page. Do not enter the team name or slug here.',
+        help: 'Use the Vercel Team ID (`team_xxx`) from Team Settings > General. It is listed near the bottom of that page. Do not enter the Team Name or Team Slug here.',
       },
       {
         key: 'sandbox.enabled',
@@ -470,7 +476,7 @@ async function renderConnectionsTab(panel) {
               Used when both Vercel and Daytona are configured. Guardian falls back to the first ready target if this is unset or no longer ready.
             </div>
             <select id="cloud-default-remote-target">
-              ${remoteExecutionTargets.map((option) => `<option value="${escAttr(option.value)}"${option.value === (cloud.defaultRemoteExecutionTargetId || '') ? ' selected' : ''}>${esc(option.label)}</option>`).join('')}
+              ${remoteExecutionTargets.map((option) => `<option value="${escAttr(option.value)}"${option.value === normalizeDefaultRemoteTargetSelection(cloud.defaultRemoteExecutionTargetId) ? ' selected' : ''}>${esc(option.label)}</option>`).join('')}
             </select>
           </div>
         </div>
@@ -492,7 +498,9 @@ async function renderConnectionsTab(panel) {
             tools: {
               cloud: {
                 enabled: globalSection.querySelector('#cloud-enabled-toggle')?.value === 'true',
-                defaultRemoteExecutionTargetId: globalSection.querySelector('#cloud-default-remote-target')?.value || undefined,
+                defaultRemoteExecutionTargetId: normalizeDefaultRemoteTargetSelection(
+                  globalSection.querySelector('#cloud-default-remote-target')?.value,
+                ),
               },
             },
           },
@@ -792,7 +800,10 @@ function createCloudConnectionSection(def, cloud) {
       ? 'For the normal Vercel sandbox setup, enter an Access Token, Team ID (`team_xxx`), enable Vercel Sandbox, and the sandbox Project ID (`prj_xxx`). Leave Team Slug blank unless you are intentionally using the advanced Vercel REST scope mode.'
       : def.key === 'daytonaProfiles'
         ? 'Daytona setup is simpler: enter an API Key, enable Daytona Sandbox, and optionally choose a target. Leave Allowed CIDRs blank unless you explicitly want to restrict sandbox egress by CIDR range.'
-      : null;
+        : null;
+    const testHelpText = isCreateMode
+      ? `Save the ${def.label} profile first to use Test Connection.`
+      : 'Test Connection uses the currently saved profile. Save first if you changed any values in this form.';
 
     editorEl.innerHTML = `
       <div class="table-header" style="padding-left:0;padding-right:0;">
@@ -806,9 +817,11 @@ function createCloudConnectionSection(def, cloud) {
       </div>
       <div class="cfg-actions">
         <button class="btn btn-primary" type="button" data-save-profile>${isCreateMode ? 'Create Profile' : 'Save Profile'}</button>
+        <button class="btn btn-secondary" type="button" data-test-profile ${isCreateMode ? 'disabled' : ''}>Test Connection</button>
         <button class="btn btn-secondary" type="button" data-delete-profile ${isCreateMode ? 'style="display:none;"' : ''}>Delete Profile</button>
         <span class="cfg-save-status" data-profile-status></span>
       </div>
+      <div class="cfg-help-text" style="font-size:0.72rem;color:var(--text-muted);margin-top:0.35rem;">${esc(testHelpText)}</div>
     `;
 
     const statusEl = editorEl.querySelector('[data-profile-status]');
@@ -876,6 +889,20 @@ function createCloudConnectionSection(def, cloud) {
           cloudUiState.selectedProfiles[def.key] = remaining[0]?.id || null;
           setTimeout(() => updateCloud(), 250);
         }
+      } catch (err) {
+        statusEl.textContent = err instanceof Error ? err.message : String(err);
+        statusEl.style.color = 'var(--error)';
+      }
+    });
+
+    editorEl.querySelector('[data-test-profile]')?.addEventListener('click', async () => {
+      if (!selectedProfileId) return;
+      statusEl.textContent = 'Testing...';
+      statusEl.style.color = 'var(--text-muted)';
+      try {
+        const result = await api.cloudTest(def.key, selectedProfileId);
+        statusEl.textContent = result.message || (result.success ? 'Connected.' : 'Connection failed.');
+        statusEl.style.color = result.success ? 'var(--success)' : 'var(--warning)';
       } catch (err) {
         statusEl.textContent = err instanceof Error ? err.message : String(err);
         statusEl.style.color = 'var(--error)';
@@ -1040,7 +1067,7 @@ function collectCloudProfile(section, def, existingProfile) {
 
 function buildRemoteExecutionTargetOptions(cloud) {
   return [
-    { value: '', label: 'Automatic (first ready target)' },
+    { value: 'automatic', label: 'Automatic (first ready target)' },
     ...(cloud.vercelProfiles || [])
       .filter((profile) => profile.sandbox?.enabled)
       .map((profile) => ({
@@ -1105,7 +1132,7 @@ function createGenericHelpFactory(area) {
       return {
         whatItIs: `This section is the saved-profile browser and editor for the ${title} provider family.`,
         whatSeeing: `You are seeing the saved ${title} profiles on the left and the create or edit form for the currently active ${title} profile on the right.`,
-        whatCanDo: `Select an existing ${title} profile to edit it, start a new one, rotate credentials, and save or delete ${title} profiles.`,
+        whatCanDo: `Select an existing ${title} profile to edit it, start a new one, rotate credentials, save it, and run a connection test against the currently saved profile.`,
         howLinks: `The ${title} profiles managed here are later used by cloud tools, approvals, activity review, and cloud-focused automations.`,
       };
     }

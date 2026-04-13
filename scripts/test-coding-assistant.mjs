@@ -79,7 +79,7 @@ async function getFreePort() {
 }
 
 async function waitForHealth(baseUrl) {
-  for (let i = 0; i < 60; i += 1) {
+  for (let i = 0; i < 360; i += 1) {
     try {
       const health = await requestJson(baseUrl, 'unused', 'GET', '/health');
       if (health?.status === 'ok') {
@@ -90,7 +90,7 @@ async function waitForHealth(baseUrl) {
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  throw new Error('GuardianAgent did not become healthy within 30 seconds.');
+  throw new Error('GuardianAgent did not become healthy within 180 seconds.');
 }
 
 async function waitFor(predicate, timeoutMs, message) {

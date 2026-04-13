@@ -21,7 +21,7 @@
 import type { LLMProvider, ChatMessage } from '../llm/types.js';
 import type { AuditLog, AuditSummary } from '../guardian/audit-log.js';
 import { createLogger } from '../util/logging.js';
-import { parseStructuredJsonObject } from '../util/structured-json.js';
+import { recoverStructuredObjectWithRepair } from './structured-output-recovery.js';
 
 const log = createLogger('guardian-agent');
 
@@ -241,7 +241,12 @@ export class GuardianAgentService {
 
     try {
       const response = await Promise.race([
-        provider.chat(messages),
+        provider.chat(messages, {
+          maxTokens: 120,
+          temperature: 0,
+          responseFormat: { type: 'json_object' },
+          tools: [],
+        }),
         timeoutPromise(this.config.timeoutMs),
       ]);
 
@@ -252,7 +257,7 @@ export class GuardianAgentService {
           : { allowed: false, riskLevel: 'high', reason: 'Guardian Agent evaluation timed out (fail-closed)' };
       }
 
-      return this.parseEvaluation(response.content);
+      return await this.parseEvaluation(provider, messages, response);
     } catch (err) {
       log.warn({ error: err instanceof Error ? err.message : String(err) },
         'Guardian Agent inline evaluation failed');
@@ -262,25 +267,35 @@ export class GuardianAgentService {
     }
   }
 
-  private parseEvaluation(content: string): GuardianAgentEvaluation {
-    const parsed = parseStructuredJsonObject<{
+  private async parseEvaluation(
+    provider: LLMProvider,
+    messages: ChatMessage[],
+    response: { content: string; model: string; finishReason: 'stop' | 'tool_calls' | 'length' | 'error' },
+  ): Promise<GuardianAgentEvaluation> {
+    const parsed = await recoverStructuredObjectWithRepair<{
       allowed?: boolean;
       riskLevel?: string;
       reason?: string;
-    }>(content);
+    }>({
+      response,
+      repairChat: (repairMessages, options) => provider.chat(repairMessages, options),
+      repairMessages: messages,
+      repairSchemaDescription: '{ "allowed": true|false, "riskLevel": "safe"|"low"|"medium"|"high"|"critical", "reason": "brief explanation" }',
+      repairMaxTokens: 120,
+    });
     if (!parsed) {
       return { allowed: true, riskLevel: 'low', reason: 'Could not parse Guardian Agent response' };
     }
 
     const riskLevel = (['safe', 'low', 'medium', 'high', 'critical'] as const)
-      .find(r => r === parsed.riskLevel) ?? 'low';
+      .find(r => r === parsed.value.riskLevel) ?? 'low';
 
     // High/critical risk -> block regardless of what the LLM said for `allowed`
     const allowed = riskLevel === 'high' || riskLevel === 'critical'
       ? false
-      : parsed.allowed !== false;
+      : parsed.value.allowed !== false;
 
-    return { allowed, riskLevel, reason: parsed.reason };
+    return { allowed, riskLevel, reason: parsed.value.reason };
   }
 }
 
@@ -371,13 +386,25 @@ export class SentinelAuditService {
     anomalies: Anomaly[],
   ): Promise<AuditFinding[]> {
     try {
-      const response = await provider.chat([
+      const messages: ChatMessage[] = [
         { role: 'system', content: SENTINEL_AUDIT_SYSTEM_PROMPT },
         { role: 'user', content: JSON.stringify({ summary, anomalies }) },
-      ]);
-      const parsed = parseStructuredJsonObject<{ findings?: AuditFinding[] }>(response.content);
-      if (parsed?.findings && Array.isArray(parsed.findings)) {
-        return parsed.findings;
+      ];
+      const response = await provider.chat(messages, {
+        maxTokens: 220,
+        temperature: 0,
+        responseFormat: { type: 'json_object' },
+        tools: [],
+      });
+      const parsed = await recoverStructuredObjectWithRepair<{ findings?: AuditFinding[] }>({
+        response,
+        repairChat: (repairMessages, options) => provider.chat(repairMessages, options),
+        repairMessages: messages,
+        repairSchemaDescription: '{ "findings": [{ "severity": "warn"|"critical", "description": "...", "recommendation": "..." }] }',
+        repairMaxTokens: 220,
+      });
+      if (parsed?.value.findings && Array.isArray(parsed.value.findings)) {
+        return parsed.value.findings;
       }
     } catch {
       // LLM analysis failed — heuristic results still returned

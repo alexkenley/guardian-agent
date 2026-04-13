@@ -81,6 +81,7 @@ let terminalCssLoaded = false;
 let terminalInstances = new Map();
 let pendingSessionUiStateById = new Map();
 let editorSearchStateBySessionId = new Map();
+let sandboxStateBySessionId = new Map();
 let sessionRefreshInterval = null;
 let sessionPersistTimers = new Map();
 let sessionTimelineRefreshTimers = new Map();
@@ -1937,6 +1938,120 @@ function formatRelativeTime(timestamp) {
   return `${deltaDays}d ago`;
 }
 
+function normalizeSandboxPanelState(sessionId, value = {}, existing = {}) {
+  const targets = Array.isArray(value.targets)
+    ? value.targets
+      .filter((entry) => entry && typeof entry === 'object' && typeof entry.id === 'string')
+      .map((entry) => ({
+        ...entry,
+        id: String(entry.id),
+        profileId: typeof entry.profileId === 'string' ? entry.profileId : '',
+        profileName: typeof entry.profileName === 'string' ? entry.profileName : 'Remote Sandbox',
+        backendKind: typeof entry.backendKind === 'string' ? entry.backendKind : '',
+        providerFamily: typeof entry.providerFamily === 'string' ? entry.providerFamily : '',
+        capabilityState: typeof entry.capabilityState === 'string' ? entry.capabilityState : 'disabled',
+        reason: typeof entry.reason === 'string' ? entry.reason : '',
+        healthState: typeof entry.healthState === 'string' ? entry.healthState : '',
+        healthReason: typeof entry.healthReason === 'string' ? entry.healthReason : '',
+      }))
+    : (Array.isArray(existing.targets) ? existing.targets : []);
+  const sandboxes = Array.isArray(value.sandboxes)
+    ? value.sandboxes
+      .filter((entry) => entry && typeof entry === 'object' && typeof entry.leaseId === 'string')
+      .map((entry) => ({
+        ...entry,
+        leaseId: String(entry.leaseId),
+        targetId: typeof entry.targetId === 'string' ? entry.targetId : '',
+        backendKind: typeof entry.backendKind === 'string' ? entry.backendKind : '',
+        profileId: typeof entry.profileId === 'string' ? entry.profileId : '',
+        profileName: typeof entry.profileName === 'string' ? entry.profileName : '',
+        sandboxId: typeof entry.sandboxId === 'string' ? entry.sandboxId : '',
+        localWorkspaceRoot: typeof entry.localWorkspaceRoot === 'string' ? entry.localWorkspaceRoot : '',
+        remoteWorkspaceRoot: typeof entry.remoteWorkspaceRoot === 'string' ? entry.remoteWorkspaceRoot : '',
+        status: typeof entry.status === 'string' ? entry.status : 'active',
+        acquiredAt: Number(entry.acquiredAt) || 0,
+        lastUsedAt: Number(entry.lastUsedAt) || 0,
+        expiresAt: Number(entry.expiresAt) || 0,
+        runtime: typeof entry.runtime === 'string' ? entry.runtime : '',
+        vcpus: Number.isFinite(entry.vcpus) ? Number(entry.vcpus) : null,
+        healthState: typeof entry.healthState === 'string' ? entry.healthState : '',
+        healthReason: typeof entry.healthReason === 'string' ? entry.healthReason : '',
+      }))
+    : (Array.isArray(existing.sandboxes) ? existing.sandboxes : []);
+  const defaultTargetId = typeof value.defaultTargetId === 'string' && value.defaultTargetId.trim()
+    ? value.defaultTargetId.trim()
+    : (typeof existing.defaultTargetId === 'string' ? existing.defaultTargetId : null);
+  const preservedSelectedTargetId = typeof existing.selectedTargetId === 'string' ? existing.selectedTargetId : '';
+  const selectedTargetId = targets.some((entry) => entry.id === preservedSelectedTargetId)
+    ? preservedSelectedTargetId
+    : (targets.find((entry) => entry.id === defaultTargetId)?.id
+      || targets.find((entry) => entry.capabilityState === 'ready')?.id
+      || targets[0]?.id
+      || null);
+  return {
+    codeSessionId: sessionId,
+    defaultTargetId: defaultTargetId || null,
+    targets,
+    sandboxes,
+    loading: value.loading === true,
+    error: typeof value.error === 'string' ? value.error : '',
+    selectedTargetId,
+  };
+}
+
+function getSessionSandboxState(sessionId) {
+  if (!sessionId) {
+    return normalizeSandboxPanelState('', {});
+  }
+  return sandboxStateBySessionId.get(sessionId)
+    || normalizeSandboxPanelState(sessionId, {});
+}
+
+function applySessionSandboxesResponse(sessionId, payload, overrides = {}) {
+  const existing = getSessionSandboxState(sessionId);
+  const next = normalizeSandboxPanelState(sessionId, {
+    ...payload,
+    ...overrides,
+  }, existing);
+  sandboxStateBySessionId.set(sessionId, next);
+  return next;
+}
+
+async function refreshSessionSandboxes(session, { rerender = true } = {}) {
+  if (!session?.id) return null;
+  applySessionSandboxesResponse(session.id, {}, { loading: true, error: '' });
+  if (rerender) rerenderFromState();
+  try {
+    const result = await api.codeSessionSandboxes(session.id, currentCodeSessionParams());
+    const next = applySessionSandboxesResponse(session.id, result, { loading: false, error: '' });
+    if (rerender) rerenderFromState();
+    return next;
+  } catch (err) {
+    const next = applySessionSandboxesResponse(session.id, {}, {
+      loading: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    if (rerender) rerenderFromState();
+    return next;
+  }
+}
+
+function describeRemoteExecutionBackend(target) {
+  if (target?.backendKind === 'vercel_sandbox') return 'Vercel';
+  if (target?.backendKind === 'daytona_sandbox') return 'Daytona';
+  return 'Remote';
+}
+
+function getRemoteExecutionTargetTooltip(target) {
+  if (target?.backendKind === 'vercel_sandbox') {
+    return 'Vercel Sandbox: fast startup and strong bounded execution for short installs, builds, and tests. Weakness: it is more time-bound and less suited to long-lived stateful sessions.';
+  }
+  if (target?.backendKind === 'daytona_sandbox') {
+    return 'Daytona Sandbox: better for heavier and longer-running reusable workspaces. Weakness: startup and environment management can be a bit heavier than short-lived bounded sandboxes.';
+  }
+  return 'Remote sandbox target.';
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -3163,6 +3278,11 @@ function mergeSessionsFromServer(payload, options = {}) {
     return (serverOrder.get(left.id) ?? 0) - (serverOrder.get(right.id) ?? 0);
   });
   codeState.sessions = sessions;
+  for (const sessionId of [...sandboxStateBySessionId.keys()]) {
+    if (!sessions.some((session) => session.id === sessionId)) {
+      sandboxStateBySessionId.delete(sessionId);
+    }
+  }
   const preferredCurrentSessionId = normalizeCodeSessionId(options.preferredCurrentSessionId);
   const serverCurrentSessionId = normalizeCodeSessionId(payload?.currentSessionId);
   codeState.attachedSessionId = serverCurrentSessionId;
@@ -3405,6 +3525,9 @@ function ensureSessionRefreshLoop() {
         await refreshVisibleTreeDirs(session);
       }
       await refreshAssistantState(session, { rerender: false });
+      if (codeState.activePanel === 'sandboxes') {
+        await refreshSessionSandboxes(session, { rerender: false });
+      }
       if (getSessionRenderSignature(session) !== previousSignature || getVisibleTreeSignature(session) !== previousTreeSignature) {
         rerenderFromState();
       }
@@ -3821,7 +3944,7 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
   const focusState = captureFocusState(container);
   const activeSession = getActiveSession();
   const fileView = cachedFileView;
-  const activePanel = codeState.activePanel !== undefined ? codeState.activePanel : 'sessions'; // 'sessions' | 'explorer' | 'git' | 'activity' | null
+  const activePanel = codeState.activePanel !== undefined ? codeState.activePanel : 'sessions'; // 'sessions' | 'sandboxes' | 'explorer' | 'git' | 'activity' | null
   const panelCollapsed = !activePanel;
 
   const activeTab = activeSession ? getActiveTab(activeSession) : null;
@@ -3852,6 +3975,7 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
         <aside class="code-side-panel ${panelCollapsed ? 'is-collapsed' : ''}">
           <nav class="code-side-panel__nav">
             <button class="code-side-panel__nav-btn ${activePanel === 'sessions' ? 'is-active' : ''}" type="button" data-code-panel-switch="sessions" title="Sessions">&#128451;</button>
+            <button class="code-side-panel__nav-btn ${activePanel === 'sandboxes' ? 'is-active' : ''}" type="button" data-code-panel-switch="sandboxes" title="Sandboxes">&#128230;</button>
             <button class="code-side-panel__nav-btn ${activePanel === 'explorer' ? 'is-active' : ''}" type="button" data-code-panel-switch="explorer" title="Explorer">&#128193;</button>
             <button class="code-side-panel__nav-btn ${activePanel === 'git' ? 'is-active' : ''}" type="button" data-code-panel-switch="git" title="Source Control">&#9095;</button>
             <button class="code-side-panel__nav-btn ${activePanel === 'activity' ? 'is-active' : ''}" type="button" data-code-panel-switch="activity" title="Workspace Activity">&#128202;</button>
@@ -3869,6 +3993,9 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
                 ${codeState.sessions.map((session) => renderSessionCard(session)).join('')}
               </div>
             </div>
+          ` : ''}
+          ${activePanel === 'sandboxes' ? `
+            ${renderSandboxesPanel(activeSession)}
           ` : ''}
           ${activePanel === 'explorer' ? `
             <div class="code-side-panel__section">
@@ -3963,6 +4090,9 @@ function renderDOM(container, { focusTerminalTabId = null } = {}) {
   `;
 
   bindEvents(container);
+  if (activeSession && activePanel === 'sandboxes' && !sandboxStateBySessionId.has(activeSession.id)) {
+    void refreshSessionSandboxes(activeSession);
+  }
   restoreScrollPositions(container, saved);
   restoreFocusState(container, focusState);
   if (activeSession) {
@@ -5869,6 +5999,124 @@ function renderSessionCard(session) {
   `;
 }
 
+function renderSandboxTargetOption(target, sandboxState) {
+  const backend = describeRemoteExecutionBackend(target);
+  const isReady = target.capabilityState === 'ready' && target.healthState !== 'unreachable';
+  const selected = sandboxState?.selectedTargetId === target.id;
+  const statusBadge = isReady
+    ? '<span class="badge badge-info">READY</span>'
+    : `<span class="badge badge-warn">${esc(String(target.capabilityState || 'unavailable').toUpperCase())}</span>`;
+  const healthBadge = target.healthState === 'unreachable'
+    ? '<span class="badge badge-warn">UNREACHABLE</span>'
+    : '';
+  const networkSummary = target.networkMode === 'domain_allowlist'
+    ? `${target.allowedDomains?.length || 0} allowed domain${(target.allowedDomains?.length || 0) === 1 ? '' : 's'}`
+    : target.networkMode === 'cidr_allowlist'
+      ? `${target.allowedCidrs?.length || 0} allowed CIDR${(target.allowedCidrs?.length || 0) === 1 ? '' : 's'}`
+      : target.networkMode === 'deny_all'
+        ? 'network blocked'
+        : 'network allowed';
+  return `
+    <label class="code-session" style="gap:0.45rem;cursor:default">
+      <div class="code-session__top">
+        <span style="display:flex;align-items:center;gap:0.45rem;min-width:0">
+          <strong>${esc(target.profileName)}</strong>
+          <span class="code-tooltip-icon" title="${escAttr(getRemoteExecutionTargetTooltip(target))}">&#9432;</span>
+          ${selected ? '<span class="badge badge-info">SELECTED</span>' : ''}
+        </span>
+        <span style="display:flex;gap:0.35rem;align-items:center">
+          ${statusBadge}
+          ${healthBadge}
+        </span>
+      </div>
+      <div class="code-session__meta">${esc(backend)}${target.projectId ? ` • ${esc(target.projectId)}` : target.target ? ` • ${esc(target.target)}` : ''}</div>
+      <div class="code-session__hint">${esc(networkSummary)}${target.reason ? ` • ${target.reason}` : ''}${target.healthReason ? ` • ${target.healthReason}` : ''}</div>
+    </label>
+  `;
+}
+
+function renderManagedSandboxCard(sandbox) {
+  const backend = describeRemoteExecutionBackend(sandbox);
+  const statusBadge = sandbox.status === 'unreachable'
+    ? '<span class="badge badge-warn">UNREACHABLE</span>'
+    : '<span class="badge badge-info">MANAGED</span>';
+  const lastUsed = formatRelativeTime(sandbox.lastUsedAt || sandbox.acquiredAt);
+  const runtimeBits = [
+    sandbox.runtime ? `runtime ${sandbox.runtime}` : '',
+    Number.isFinite(sandbox.vcpus) ? `${sandbox.vcpus} vCPU` : '',
+  ].filter(Boolean).join(' • ');
+  return `
+    <div class="code-session" data-code-sandbox-lease-id="${escAttr(sandbox.leaseId)}">
+      <div class="code-session__top">
+        <span style="display:flex;align-items:center;gap:0.45rem;min-width:0">
+          <strong>${esc(sandbox.profileName || backend)}</strong>
+          ${statusBadge}
+        </span>
+        <button class="btn btn-secondary btn-sm" type="button" data-code-sandbox-delete="${escAttr(sandbox.leaseId)}">Release</button>
+      </div>
+      <div class="code-session__meta">${esc(backend)} • ${esc(sandbox.sandboxId)}</div>
+      <div class="code-session__hint">
+        ${lastUsed ? `Last used ${esc(lastUsed)}.` : 'Managed sandbox attached to this code session.'}
+        ${runtimeBits ? ` ${esc(runtimeBits)}.` : ''}
+        ${sandbox.healthReason ? ` ${esc(sandbox.healthReason)}` : ''}
+      </div>
+      <div class="code-session__meta">${esc(sandbox.remoteWorkspaceRoot || sandbox.localWorkspaceRoot || '')}</div>
+    </div>
+  `;
+}
+
+function renderSandboxesPanel(activeSession) {
+  if (!activeSession) {
+    return '<div class="empty-state">Create a session to manage reusable remote sandboxes.</div>';
+  }
+  const sandboxState = getSessionSandboxState(activeSession.id);
+  const selectedTarget = sandboxState.targets.find((entry) => entry.id === sandboxState.selectedTargetId) || null;
+  const canCreate = selectedTarget
+    ? selectedTarget.capabilityState === 'ready' && selectedTarget.healthState !== 'unreachable'
+    : sandboxState.targets.some((entry) => entry.capabilityState === 'ready' && entry.healthState !== 'unreachable');
+  return `
+    <div class="code-side-panel__section">
+      <div class="code-rail__header">
+        <h3><span class="code-panel-title__icon">&#128230;</span> Sandboxes <span class="code-tooltip-icon" title="Create longer-lived remote sandboxes for this coding session. Guardian can still use temporary bounded sandboxes, but managed sandboxes stay available for reuse while they are alive.">&#9432;</span></h3>
+        <div class="panel__actions">
+          <button class="btn btn-secondary btn-sm" type="button" data-code-sandbox-refresh title="Refresh managed sandboxes">&#x21BB;</button>
+        </div>
+      </div>
+      <div class="code-rail__subcopy">Managed sandboxes are optional. If both providers are configured, you can choose either one from here for heavier iterative work.</div>
+      ${sandboxState.error ? `<div class="code-error">${esc(sandboxState.error)}</div>` : ''}
+      ${sandboxState.loading ? '<div class="empty-inline">Loading sandboxes...</div>' : ''}
+      ${sandboxState.targets.length > 0 ? `
+        <div class="code-session-form is-visible" style="margin-bottom:0.8rem">
+          <label class="field" style="margin-bottom:0.6rem">
+            <span>Provider Target</span>
+            <select data-code-sandbox-target-select>
+              ${sandboxState.targets.map((target) => `
+                <option value="${escAttr(target.id)}" ${sandboxState.selectedTargetId === target.id ? 'selected' : ''}>
+                  ${esc(`${target.profileName} • ${describeRemoteExecutionBackend(target)}`)}
+                </option>
+              `).join('')}
+            </select>
+          </label>
+          <button class="btn btn-primary btn-sm" type="button" data-code-sandbox-create ${canCreate ? '' : 'disabled'}>Create Managed Sandbox</button>
+        </div>
+      ` : '<div class="empty-state">Configure a Daytona or Vercel remote sandbox target on the Cloud page first.</div>'}
+      ${sandboxState.targets.length > 0 ? `
+        <div class="code-rail__list" style="margin-bottom:0.9rem">
+          ${sandboxState.targets.map((target) => renderSandboxTargetOption(target, sandboxState)).join('')}
+        </div>
+      ` : ''}
+      <div class="code-rail__header" style="margin-top:0.2rem">
+        <h3><span class="code-panel-title__icon">&#128736;</span> Active Managed Sandboxes</h3>
+      </div>
+      <div class="code-rail__list">
+        ${sandboxState.sandboxes.length > 0
+          ? sandboxState.sandboxes.map((sandbox) => renderManagedSandboxCard(sandbox)).join('')
+          : '<div class="empty-state">No managed sandboxes are attached to this coding session yet.</div>'}
+      </div>
+    </div>
+  `;
+}
+
 // ─── Tab helpers ───────────────────────────────────────────
 
 function getActiveTab(session) {
@@ -6129,6 +6377,9 @@ async function refreshSessionData(session) {
   syncSelectedEditorTabFromFileView(currentSession, fileView);
   currentSession.structureView = structureView;
   await refreshAssistantState(currentSession, { rerender: false });
+  if (codeState.activePanel === 'sandboxes' || sandboxStateBySessionId.has(currentSession.id)) {
+    await refreshSessionSandboxes(currentSession, { rerender: false });
+  }
   saveState(codeState);
   rerenderFromState();
 }
@@ -6494,6 +6745,9 @@ function bindEvents(container) {
         if (panel === 'git') {
           const session = getActiveSession();
           if (session) void refreshGitStatus(session);
+        } else if (panel === 'sandboxes') {
+          const session = getActiveSession();
+          if (session) void refreshSessionSandboxes(session);
         }
       }
       saveState(codeState);
@@ -6575,6 +6829,66 @@ function bindEvents(container) {
   container.querySelector('[data-code-git-fetch]')?.addEventListener('click', async () => {
     const session = getActiveSession();
     if (session) await runGitAction(session, 'fetch');
+  });
+
+  container.querySelector('[data-code-sandbox-refresh]')?.addEventListener('click', async () => {
+    const session = getActiveSession();
+    if (session) await refreshSessionSandboxes(session);
+  });
+
+  container.querySelector('[data-code-sandbox-target-select]')?.addEventListener('change', (event) => {
+    const session = getActiveSession();
+    if (!session) return;
+    const current = getSessionSandboxState(session.id);
+    sandboxStateBySessionId.set(session.id, {
+      ...current,
+      selectedTargetId: event.currentTarget.value,
+    });
+  });
+
+  container.querySelector('[data-code-sandbox-create]')?.addEventListener('click', async () => {
+    const session = getActiveSession();
+    if (!session) return;
+    const sandboxState = getSessionSandboxState(session.id);
+    const targetId = typeof sandboxState.selectedTargetId === 'string' ? sandboxState.selectedTargetId : '';
+    applySessionSandboxesResponse(session.id, {}, { loading: true, error: '' });
+    rerenderFromState();
+    try {
+      const result = await api.codeSessionSandboxCreate(session.id, currentCodeSessionPayload({
+        targetId: targetId || undefined,
+      }));
+      applySessionSandboxesResponse(session.id, result, { loading: false, error: '' });
+      await refreshSessionSnapshot(session.id).catch(() => null);
+    } catch (err) {
+      applySessionSandboxesResponse(session.id, {}, {
+        loading: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    saveState(codeState);
+    rerenderFromState();
+  });
+
+  container.querySelectorAll('[data-code-sandbox-delete]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const session = getActiveSession();
+      const leaseId = button.dataset.codeSandboxDelete;
+      if (!session || !leaseId) return;
+      applySessionSandboxesResponse(session.id, {}, { loading: true, error: '' });
+      rerenderFromState();
+      try {
+        const result = await api.codeSessionSandboxDelete(session.id, leaseId, currentCodeSessionPayload());
+        applySessionSandboxesResponse(session.id, result, { loading: false, error: '' });
+        await refreshSessionSnapshot(session.id).catch(() => null);
+      } catch (err) {
+        applySessionSandboxesResponse(session.id, {}, {
+          loading: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      saveState(codeState);
+      rerenderFromState();
+    });
   });
 
   container.querySelectorAll('[data-code-git-stage]').forEach((btn) => {
@@ -6811,13 +7125,26 @@ function bindEvents(container) {
       event.stopPropagation();
       const deletedId = button.dataset.codeDeleteSession;
       const deletedSession = codeState.sessions.find((session) => session.id === deletedId);
-      if (deletedSession) {
-        await Promise.all((deletedSession.terminalTabs || []).map((tab) => closeTerminal(tab)));
+      let deletedResult = null;
+      if (!deletedId) {
+        return;
       }
-      if (deletedId) {
-        await api.codeSessionDelete(deletedId, currentCodeSessionPayload()).catch(() => null);
+      try {
+        deletedResult = await api.codeSessionDelete(deletedId, currentCodeSessionPayload());
+        if (!deletedResult?.success) {
+          throw new Error('Failed to delete the coding session.');
+        }
+        if (deletedSession) {
+          await Promise.all((deletedSession.terminalTabs || []).map((tab) => closeTerminal(tab)));
+        }
         pendingSessionUiStateById.delete(deletedId);
         editorSearchStateBySessionId.delete(deletedId);
+        sandboxStateBySessionId.delete(deletedId);
+      } catch (err) {
+        codeState.sessionRailError = err instanceof Error ? err.message : String(err);
+        saveState(codeState);
+        rerenderFromState();
+        return;
       }
       codeState.referencedSessionIds = Array.isArray(codeState.referencedSessionIds)
         ? codeState.referencedSessionIds.filter((sessionId) => sessionId !== deletedId)
@@ -6828,7 +7155,10 @@ function bindEvents(container) {
       codeState.sessionRailError = '';
       codeState.sessions = codeState.sessions.filter((session) => session.id !== deletedId);
       const wasActive = codeState.activeSessionId === deletedId;
-      codeState.activeSessionId = codeState.sessions[0]?.id || null;
+      const nextSessionId = normalizeCodeSessionId(deletedResult?.currentSessionId);
+      codeState.activeSessionId = codeState.sessions.some((session) => session.id === nextSessionId)
+        ? nextSessionId
+        : (codeState.sessions[0]?.id || null);
       if (wasActive && !codeState.activeSessionId) {
         codeState.attachedSessionId = null;
       }

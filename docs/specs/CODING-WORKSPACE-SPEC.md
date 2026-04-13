@@ -21,6 +21,7 @@ It provides:
 - explorer and source/diff inspection
 - approval-aware coding execution
 - PTY terminals for manual operator shell work
+- session-scoped managed remote sandboxes for longer-running isolated coding work
 - session resume across web, main chat, CLI, and Telegram
 - broader Guardian actions performed from the active workspace context
 
@@ -45,6 +46,8 @@ Core layers:
 - `ConversationService` stores the coding transcript for each session conversation identity
 - `ChatAgent` resolves attached or explicit coding sessions before prompt assembly and tool execution
 - `ToolExecutor` exposes coding-session tools and enforces repo-scoped coding sandbox rules
+- the shared remote-execution service can keep a session-scoped remote sandbox lease for repeated bounded verification/setup jobs so installs and caches can survive across multiple runs in the same coding session
+- the Code side rail exposes `Sessions` and `Sandboxes`, with `Sandboxes` owning reusable remote sandbox lifecycle for the active code session
 - the Code page renders and edits a server-owned session, but still keeps transient UI cache locally
 
 ## Backend-Owned Code Sessions
@@ -90,7 +93,9 @@ Primary persisted shape:
   - `workingSet`
   - `activeSkills`
   - `pendingApprovals`
-  - `recentJobs`
+  - `managedSandboxes`
+- `recentJobs`
+  - includes the actual remote backend/lease metadata when a bounded repo job used provider-backed isolation
   - `changedFiles`
   - `verification`
 - `CodeSessionAttachmentRecord`

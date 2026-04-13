@@ -237,6 +237,30 @@ export class CodingBackendService {
     };
   }
 
+  public recordExternalProgress(runId: string, codeSessionId: string, backendName: string, task: string, message: string): void {
+    const event: CodingBackendProgressEvent = {
+      id: `progress-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      kind: 'progress',
+      runId,
+      requestId: runId,
+      codeSessionId,
+      sessionId: `ext-${runId}`,
+      terminalId: 'none',
+      backendId: 'remote-sandbox',
+      backendName,
+      task,
+      timestamp: Date.now(),
+      detail: message,
+    };
+    for (const listener of this.progressListeners) {
+      try {
+        listener(event);
+      } catch {
+        // ignore listener errors
+      }
+    }
+  }
+
   private emitProgress(entry: ActiveCodingBackendSession, kind: CodingBackendProgressKind, timestamp: number, input: {
     detail?: string;
     exitCode?: number;

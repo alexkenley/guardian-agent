@@ -87,9 +87,11 @@ export interface IntentGatewayEntities {
   personalItemType?: 'overview' | 'note' | 'task' | 'calendar' | 'person' | 'library' | 'routine' | 'brief' | 'unknown';
   codingBackend?: string;
   codingBackendRequested?: boolean;
+  codingRemoteExecRequested?: boolean;
   codingRunStatusCheck?: boolean;
   toolName?: string;
   profileId?: string;
+  command?: string;
 }
 
 export interface IntentGatewayDecision {
@@ -111,7 +113,7 @@ export interface IntentGatewayDecision {
 }
 
 export interface IntentGatewayRecord {
-  mode: 'primary' | 'json_fallback';
+  mode: 'primary' | 'json_fallback' | 'route_only_fallback';
   available: boolean;
   model: string;
   latencyMs: number;
@@ -299,6 +301,9 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
       codingBackendRequested: {
         type: 'boolean',
       },
+      codingRemoteExecRequested: {
+        type: 'boolean',
+      },
       codingRunStatusCheck: {
         type: 'boolean',
       },
@@ -306,6 +311,9 @@ const INTENT_GATEWAY_TOOL: ToolDefinition = {
         type: 'string',
       },
       profileId: {
+        type: 'string',
+      },
+      command: {
         type: 'string',
       },
     },
@@ -453,11 +461,15 @@ const INTENT_GATEWAY_INSTRUCTION_LINES = [
   'Set calendarTarget=local for unqualified Second Brain calendar requests. Set calendarTarget=gws for Google Calendar requests. Set calendarTarget=m365 for Outlook Calendar or Microsoft 365 calendar requests.',
   'Set codingBackend when the user explicitly names Codex, Claude Code, Gemini CLI, or Aider.',
   'Set codingBackendRequested=true only when the user is explicitly asking Guardian to use or launch that coding backend for work. If Codex, Claude Code, Gemini CLI, or Aider is only the subject of a question, codingBackendRequested must be false or unset.',
+  'Set codingRemoteExecRequested=true only when the user is explicitly asking to run a command in the remote sandbox, isolated sandbox, or cloud sandbox for the current workspace.',
+  'When codingRemoteExecRequested=true, extract the exact shell command to run into entities.command.',
   'Set codingRunStatusCheck=true only when the user is explicitly asking whether the most recent coding backend run completed, failed, timed out, exited with a code, or otherwise asking for recent-run status.',
   'Do not set codingRunStatusCheck for questions asking why a coding backend produced a particular file, diff, permission, executable bit, mode bit, output, or artifact. Those are explanation or investigation requests, not recent-run status checks.',
   'If both Google Workspace and Microsoft 365 are available and the user asks for direct mailbox work without specifying one, keep route=email_task and set resolution=needs_clarification, missingFields=["email_provider"].',
   'Example: prior user request "Use Codex to say hello and confirm you are working." then user says "Codex, the CLI coding assistant." -> route=coding_task, turnRelation=correction, resolution=ready, codingBackend=codex, codingBackendRequested=true, resolvedContent="Use Codex to say hello and confirm you are working. Just respond with a brief confirmation message. Do not change any files."',
   'Example: "Use Codex in the Test Tactical Game App workspace to create a smoke test file." -> route=coding_task, operation=create, codingBackend=codex, codingBackendRequested=true, sessionTarget="Test Tactical Game App workspace".',
+  'Example: "Run pwd in the remote sandbox for this workspace." -> route=coding_task, operation=run, codingRemoteExecRequested=true, command="pwd".',
+  'Example: "Run npm test in the cloud sandbox." -> route=coding_task, operation=run, codingRemoteExecRequested=true, command="npm test".',
   'Example: prior assistant said a Codex request named a different coding workspace and asked the user to switch first; then the user says "Okay, switch to Test Tactical Game App." -> route=coding_session_control, turnRelation=clarification_answer, operation=update, sessionTarget="Test Tactical Game App".',
   'Example: prior assistant said to switch workspaces first before running the deferred Codex request; after switching, the user says "Okay, now we\'re on the previous request that I asked." -> route=coding_task, turnRelation=follow_up, resolution=ready, resolvedContent should restate the original deferred coding request.',
   'Example: prior assistant asked which mail provider to use and the user replies "Use Outlook." -> route=email_task, turnRelation=clarification_answer, resolution=ready, emailProvider=m365, resolvedContent should restate the original mail request with Outlook / Microsoft 365 selected.',
@@ -507,6 +519,7 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'If the user clearly refers to notes, tasks, calendar planning, routines, briefs, contacts, or the overall Today view, set personalItemType when possible.',
   'If the user names a cloud-hosting profile id such as profileId social or refers to a known hosting profile by id, set profileId when possible.',
   'If the user explicitly asks Guardian to use Codex, Claude Code, Gemini CLI, or Aider, set codingBackend and codingBackendRequested=true.',
+  'If the user explicitly asks to run a command in the remote sandbox, isolated sandbox, or cloud sandbox, set codingRemoteExecRequested=true and extract the command into "command".',
   'If the request needs a missing detail before execution, set resolution=needs_clarification and include missingFields.',
   'Examples: "What coding workspace is this chat currently attached to?" -> route="coding_session_control", operation="inspect".',
   'Examples: "Inspect src/skills/prompt.ts and review the uplift for regressions." -> route="coding_task", operation="inspect".',
@@ -554,11 +567,27 @@ const INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT = [
   'Examples: "Check my unread Outlook mail." -> route="email_task", operation="read", emailProvider="m365", mailboxReadMode="unread".',
   'Examples: "Show me the newest five emails in Gmail." -> route="email_task", operation="read", emailProvider="gws", mailboxReadMode="latest".',
   'Examples: "Switch this chat to the coding workspace for Temp install test." -> route="coding_session_control", operation="update", sessionTarget="Temp install test".',
-  'Examples: "Search the repo for ollama_cloud and tell me which files define its routing." -> route="coding_task", operation="search", executionClass="repo_grounded", preferredTier="local", requiresRepoGrounding=true, requiresToolSynthesis=false, expectedContextPressure="medium", preferredAnswerPath="direct".',
+  'Examples: "Search the repo for ollama_cloud and tell me which files define its routing." -> route="coding_task", operation="search", executionClass="repo_grounded", preferredTier="external", requiresRepoGrounding=true, requiresToolSynthesis=false, expectedContextPressure="medium", preferredAnswerPath="direct".',
   'Examples: "Inspect src/runtime/intent-gateway.ts and review the uplift for regressions." -> route="coding_task", operation="inspect", executionClass="repo_grounded", preferredTier="external", requiresRepoGrounding=true, requiresToolSynthesis=true, expectedContextPressure="high", preferredAnswerPath="chat_synthesis".',
   'Examples: "Check my unread Outlook mail." -> route="email_task", operation="read", executionClass="provider_crud", preferredTier="external", requiresRepoGrounding=false, requiresToolSynthesis=true, expectedContextPressure="medium", preferredAnswerPath="tool_loop", mailboxReadMode="unread".',
   'Examples: "What do I have due today?" -> route="personal_assistant_task", operation="inspect", executionClass="direct_assistant", preferredTier="local", requiresRepoGrounding=false, requiresToolSynthesis=false, expectedContextPressure="low", preferredAnswerPath="direct".',
   'Return valid JSON with double-quoted keys and string values only.',
+].join(' ');
+
+const INTENT_GATEWAY_ROUTE_ONLY_FALLBACK_SYSTEM_PROMPT = [
+  'You are Guardian\'s intent gateway.',
+  'Classify the user request using a minimal JSON object only. Do not explain anything and do not call tools.',
+  'Return exactly one JSON object with only these keys: route, operation, confidence, summary, turnRelation, resolution.',
+  'Use only these exact route values: automation_authoring, automation_control, automation_output_task, ui_control, browser_task, personal_assistant_task, workspace_task, email_task, search_task, memory_task, filesystem_task, coding_task, coding_session_control, security_task, general_assistant, unknown.',
+  'Use only these exact operation values: create, update, delete, run, toggle, clone, inspect, navigate, read, search, save, send, draft, schedule, unknown.',
+  'Use only these exact confidence values: high, medium, low.',
+  'Use only these exact turnRelation values: new_request, follow_up, clarification_answer, correction.',
+  'Use only these exact resolution values: ready, needs_clarification.',
+  'Prefer coding_session_control for switching, attaching, detaching, listing, or inspecting coding workspaces or sessions.',
+  'Prefer coding_task for code work inside a workspace, repo inspection, implementation, review, or explicit coding-backend delegation such as Codex, Claude Code, Gemini CLI, or Aider.',
+  'Prefer personal_assistant_task for Second Brain notes, tasks, calendar planning, briefs, contacts, routines, and personal retrieval.',
+  'Prefer email_task for direct Gmail or Outlook mailbox work. Prefer workspace_task for direct Drive, Docs, Sheets, OneDrive, SharePoint, Teams, Google Calendar, or Outlook Calendar CRUD.',
+  'Prefer general_assistant for direct advice, explanation, or provider/model configuration work.',
 ].join(' ');
 
 const AUTOMATION_NAME_REPAIR_SYSTEM_PROMPT = [
@@ -588,9 +617,24 @@ export class IntentGateway {
       mode: 'json_fallback',
       systemPrompt: INTENT_GATEWAY_JSON_FALLBACK_SYSTEM_PROMPT,
       useTools: false,
+      responseFormat: { type: 'json_object' },
       startedAt,
     });
-    if (fallback.available || fallback.rawResponsePreview || fallback.model !== 'unknown') {
+    if (fallback.available) {
+      return this.repairAutomationNameIfNeeded(input, fallback, chat);
+    }
+
+    const routeOnly = await this.classifyOnce(input, chat, {
+      mode: 'route_only_fallback',
+      systemPrompt: INTENT_GATEWAY_ROUTE_ONLY_FALLBACK_SYSTEM_PROMPT,
+      useTools: false,
+      responseFormat: { type: 'json_object' },
+      startedAt,
+    });
+    if (routeOnly.available || routeOnly.rawResponsePreview || routeOnly.model !== 'unknown') {
+      return this.repairAutomationNameIfNeeded(input, routeOnly, chat);
+    }
+    if (fallback.rawResponsePreview || fallback.model !== 'unknown') {
       return this.repairAutomationNameIfNeeded(input, fallback, chat);
     }
     return this.repairAutomationNameIfNeeded(input, primary, chat);
@@ -603,6 +647,7 @@ export class IntentGateway {
       mode: IntentGatewayRecord['mode'];
       systemPrompt: string;
       useTools: boolean;
+      responseFormat?: ChatOptions['responseFormat'];
       startedAt: number;
     },
   ): Promise<IntentGatewayRecord> {
@@ -610,6 +655,7 @@ export class IntentGateway {
       const response = await chat(buildIntentGatewayMessages(input, options.systemPrompt), {
         maxTokens: 220,
         temperature: 0,
+        ...(options.responseFormat ? { responseFormat: options.responseFormat } : {}),
         ...(options.useTools ? { tools: [INTENT_GATEWAY_TOOL] } : {}),
       });
       const parsed = parseIntentGatewayDecision(response, {
@@ -738,7 +784,9 @@ export function deserializeIntentGatewayRecord(
   if (!isRecord(value)) return null;
   if (!isRecord(value.decision)) return null;
   return {
-    mode: 'primary',
+    mode: value.mode === 'json_fallback' || value.mode === 'route_only_fallback'
+      ? value.mode
+      : 'primary',
     available: value.available !== false,
     model: typeof value.model === 'string' && value.model.trim()
       ? value.model
@@ -947,11 +995,7 @@ function parseIntentGatewayDecision(
 function parseStructuredToolArguments(response: ChatResponse): Record<string, unknown> | null {
   const firstToolCall = response.toolCalls?.[0];
   if (!firstToolCall?.arguments) return null;
-  try {
-    return JSON.parse(firstToolCall.arguments) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
+  return parseStructuredJsonObject<Record<string, unknown>>(firstToolCall.arguments);
 }
 
 function parseAutomationNameRepair(response: ChatResponse): string | undefined {
@@ -970,6 +1014,8 @@ function normalizeIntentGatewayDecision(
   parsed: Record<string, unknown>,
   repairContext?: IntentGatewayRepairContext,
 ): IntentGatewayDecision {
+  const rawSourceContent = collapseIntentGatewayWhitespace(repairContext?.sourceContent ?? '');
+  const normalizedSourceContent = rawSourceContent.toLowerCase();
   const parsedOperation = normalizeOperation(parsed.operation);
   const confidence = normalizeConfidence(parsed.confidence);
   const summary = typeof parsed.summary === 'string' && parsed.summary.trim()
@@ -1032,11 +1078,23 @@ function normalizeIntentGatewayDecision(
   const query = typeof parsed.query === 'string' && parsed.query.trim()
     ? parsed.query.trim()
     : inferSecondBrainQuery(repairContext?.sourceContent, route, operation, personalItemType);
+  const inferredCodingBackendRequest = rawSourceContent && route === 'coding_task'
+    ? inferExplicitCodingBackendRequest(rawSourceContent, normalizedSourceContent, operation)
+    : null;
   const path = typeof parsed.path === 'string' && parsed.path.trim()
     ? parsed.path.trim()
     : undefined;
   const sessionTarget = cleanInferredSessionTarget(
-    typeof parsed.sessionTarget === 'string' ? parsed.sessionTarget : undefined,
+    typeof parsed.sessionTarget === 'string'
+      ? parsed.sessionTarget
+      : (
+        inferredCodingBackendRequest?.sessionTarget
+        ?? (
+          rawSourceContent && (route === 'coding_task' || route === 'coding_session_control')
+            ? extractCodingWorkspaceTarget(rawSourceContent)
+            : undefined
+        )
+      ),
   );
   const emailProvider = normalizeEmailProvider(parsed.emailProvider);
   const mailboxReadMode = normalizeMailboxReadMode(parsed.mailboxReadMode);
@@ -1044,10 +1102,21 @@ function normalizeIntentGatewayDecision(
     ?? (route === 'personal_assistant_task' && personalItemType === 'calendar' ? 'local' : undefined);
   const calendarWindowDays = normalizeCalendarWindowDays((parsed as Record<string, unknown>).calendarWindowDays)
     ?? inferCalendarWindowDays(repairContext?.sourceContent, route, personalItemType);
-  const codingBackend = normalizeCodingBackend(parsed.codingBackend);
+  const codingBackend = normalizeCodingBackend(parsed.codingBackend)
+    ?? inferredCodingBackendRequest?.codingBackend;
   const codingBackendRequested = typeof parsed.codingBackendRequested === 'boolean'
     ? parsed.codingBackendRequested
+    : inferredCodingBackendRequest
+      ? true
+      : undefined;
+  const inferredRemoteExecCommand = rawSourceContent && route === 'coding_task'
+    ? extractExplicitRemoteExecCommand(rawSourceContent, normalizedSourceContent, operation)
     : undefined;
+  const codingRemoteExecRequested = typeof parsed.codingRemoteExecRequested === 'boolean'
+    ? parsed.codingRemoteExecRequested
+    : inferredRemoteExecCommand
+      ? true
+      : undefined;
   const codingRunStatusCheck = typeof parsed.codingRunStatusCheck === 'boolean'
     ? parsed.codingRunStatusCheck
     : undefined;
@@ -1057,6 +1126,9 @@ function normalizeIntentGatewayDecision(
   const profileId = typeof parsed.profileId === 'string' && parsed.profileId.trim()
     ? parsed.profileId.trim()
     : undefined;
+  const command = typeof parsed.command === 'string' && parsed.command.trim()
+    ? parsed.command.trim()
+    : inferredRemoteExecCommand;
 
   return {
     route,
@@ -1091,9 +1163,11 @@ function normalizeIntentGatewayDecision(
       ...(personalItemType ? { personalItemType } : {}),
       ...(codingBackend ? { codingBackend } : {}),
       ...(typeof codingBackendRequested === 'boolean' ? { codingBackendRequested } : {}),
+      ...(typeof codingRemoteExecRequested === 'boolean' ? { codingRemoteExecRequested } : {}),
       ...(typeof codingRunStatusCheck === 'boolean' ? { codingRunStatusCheck } : {}),
       ...(toolName ? { toolName } : {}),
       ...(profileId ? { profileId } : {}),
+      ...(command ? { command } : {}),
     },
   };
 }
@@ -1194,13 +1268,14 @@ function deriveWorkloadMetadata(
 } {
   const personalItemType = normalizePersonalItemType(parsed.personalItemType);
   const codingBackendRequested = parsed.codingBackendRequested === true;
+  const codingRemoteExecRequested = parsed.codingRemoteExecRequested === true;
 
   switch (route) {
     case 'coding_task':
-      if (parsed.codingBackend || codingBackendRequested) {
+      if (parsed.codingBackend || codingBackendRequested || codingRemoteExecRequested) {
         return {
           executionClass: 'repo_grounded',
-          preferredTier: 'local',
+          preferredTier: codingRemoteExecRequested ? 'external' : 'local',
           requiresRepoGrounding: true,
           requiresToolSynthesis: true,
           expectedContextPressure: 'high',
@@ -1210,7 +1285,7 @@ function deriveWorkloadMetadata(
       if (operation === 'search' || operation === 'read') {
         return {
           executionClass: 'repo_grounded',
-          preferredTier: 'local',
+          preferredTier: 'external',
           requiresRepoGrounding: true,
           requiresToolSynthesis: false,
           expectedContextPressure: 'medium',
@@ -1229,7 +1304,7 @@ function deriveWorkloadMetadata(
       }
       return {
         executionClass: 'repo_grounded',
-        preferredTier: 'local',
+        preferredTier: 'external',
         requiresRepoGrounding: true,
         requiresToolSynthesis: true,
         expectedContextPressure: 'high',
@@ -1630,6 +1705,14 @@ function repairIntentGatewayRoute(
   if (route === 'personal_assistant_task') {
     return route;
   }
+  const rawSourceContent = collapseIntentGatewayWhitespace(repairContext?.sourceContent ?? '');
+  const normalizedSourceContent = rawSourceContent.toLowerCase();
+  if (
+    route === 'coding_session_control'
+    && extractExplicitRemoteExecCommand(rawSourceContent, normalizedSourceContent, 'run')
+  ) {
+    return 'coding_task';
+  }
   const sourceContent = normalizeIntentGatewayRepairText(repairContext?.sourceContent);
   if (mentionsAutomationControlTerms(sourceContent)) {
     return route;
@@ -1657,6 +1740,14 @@ function repairIntentGatewayOperation(
   turnRelation: IntentGatewayTurnRelation,
   repairContext: IntentGatewayRepairContext | undefined,
 ): IntentGatewayOperation {
+  const rawSourceContent = collapseIntentGatewayWhitespace(repairContext?.sourceContent ?? '');
+  const normalizedSourceContent = rawSourceContent.toLowerCase();
+  if (
+    route === 'coding_task'
+    && extractExplicitRemoteExecCommand(rawSourceContent, normalizedSourceContent, 'run')
+  ) {
+    return 'run';
+  }
   if (turnRelation !== 'clarification_answer' && turnRelation !== 'correction') {
     return inferSecondBrainOperation(repairContext?.sourceContent, route, operation) ?? operation;
   }
@@ -1680,6 +1771,27 @@ function repairUnavailableIntentGatewayDecision(
   const sourceContent = rawSourceContent.toLowerCase();
   if (!sourceContent) return null;
   const parsedOperation = normalizeOperation(parsed?.operation);
+  const inferredRemoteExecCommand = extractExplicitRemoteExecCommand(
+    rawSourceContent,
+    sourceContent,
+    parsedOperation === 'unknown' ? 'run' : parsedOperation,
+  );
+  if (inferredRemoteExecCommand) {
+    return normalizeIntentGatewayDecision({
+      ...(parsed ?? {}),
+      route: 'coding_task',
+      operation: 'run',
+      confidence: normalizeConfidence(parsed?.confidence) ?? 'low',
+      summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
+        ? parsed.summary.trim()
+        : 'Recovered explicit remote-sandbox coding intent after an unstructured gateway response.',
+      command: inferredRemoteExecCommand,
+      codingRemoteExecRequested: true,
+      ...(extractCodingWorkspaceTarget(rawSourceContent)
+        ? { sessionTarget: extractCodingWorkspaceTarget(rawSourceContent) }
+        : {}),
+    }, repairContext);
+  }
   const inferredCodingBackendRequest = inferExplicitCodingBackendRequest(
     rawSourceContent,
     sourceContent,
@@ -1824,6 +1936,22 @@ function extractCodingWorkspaceTarget(rawContent: string): string | undefined {
     }
   }
   return undefined;
+}
+
+function extractExplicitRemoteExecCommand(
+  rawContent: string,
+  normalized: string,
+  operation: IntentGatewayOperation,
+): string | undefined {
+  if (!rawContent || !normalized) return undefined;
+  if (operation !== 'run') return undefined;
+  if (!/\b(?:remote|isolated|cloud)\s+sandbox\b/.test(normalized)) return undefined;
+
+  const runMatch = rawContent.match(/\b[Rr]un\s+(.+?)\s+in\s+(?:the\s+)?(?:remote|isolated|cloud)\s+sandbox\b/);
+  const command = collapseIntentGatewayWhitespace(runMatch?.[1] ?? '')
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .trim();
+  return command || undefined;
 }
 
 function cleanInferredSessionTarget(value: string | undefined): string | undefined {

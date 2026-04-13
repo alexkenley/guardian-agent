@@ -1553,6 +1553,38 @@ function redactConfig(config: GuardianAgentConfig): RedactedConfig {
     runtime: config.runtime,
     assistant: {
       setupCompleted: config.assistant.setup.completed,
+      secondBrain: {
+        enabled: config.assistant.secondBrain.enabled !== false,
+        onboarding: {
+          completed: config.assistant.secondBrain.onboarding?.completed === true,
+          dismissed: config.assistant.secondBrain.onboarding?.dismissed === true,
+        },
+        profile: {
+          timezone: config.assistant.secondBrain.profile?.timezone,
+          workdayStart: config.assistant.secondBrain.profile?.workdayStart ?? DEFAULT_CONFIG.assistant.secondBrain.profile?.workdayStart,
+          workdayEnd: config.assistant.secondBrain.profile?.workdayEnd ?? DEFAULT_CONFIG.assistant.secondBrain.profile?.workdayEnd,
+          proactivityLevel: config.assistant.secondBrain.profile?.proactivityLevel ?? DEFAULT_CONFIG.assistant.secondBrain.profile.proactivityLevel,
+        },
+        delivery: {
+          defaultChannels: [...(
+            config.assistant.secondBrain.delivery?.defaultChannels?.length
+              ? config.assistant.secondBrain.delivery.defaultChannels
+              : DEFAULT_CONFIG.assistant.secondBrain.delivery.defaultChannels
+          )],
+        },
+        knowledge: {
+          prioritizeConnectedSources: config.assistant.secondBrain.knowledge?.prioritizeConnectedSources
+            ?? DEFAULT_CONFIG.assistant.secondBrain.knowledge.prioritizeConnectedSources,
+          defaultRetrievalMode: config.assistant.secondBrain.knowledge?.defaultRetrievalMode
+            ?? DEFAULT_CONFIG.assistant.secondBrain.knowledge.defaultRetrievalMode,
+          rerankerEnabled: config.assistant.secondBrain.knowledge?.rerankerEnabled
+            ?? DEFAULT_CONFIG.assistant.secondBrain.knowledge.rerankerEnabled,
+        },
+      },
+      responseStyle: {
+        enabled: config.assistant.responseStyle?.enabled ?? DEFAULT_CONFIG.assistant.responseStyle?.enabled ?? true,
+        level: config.assistant.responseStyle?.level ?? DEFAULT_CONFIG.assistant.responseStyle?.level ?? 'balanced',
+      },
       identity: {
         mode: config.assistant.identity.mode,
         primaryUserId: config.assistant.identity.primaryUserId,

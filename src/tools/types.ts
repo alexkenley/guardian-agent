@@ -322,6 +322,18 @@ export type ToolJobStatus =
   | 'failed'
   | 'denied';
 
+export interface ToolJobRemoteExecutionInfo {
+  backendKind?: string;
+  profileId?: string;
+  profileName?: string;
+  sandboxId?: string;
+  leaseId?: string;
+  leaseScope?: string;
+  leaseReused?: boolean;
+  healthState?: string;
+  healthReason?: string;
+}
+
 export interface ToolJobRecord {
   id: string;
   toolName: string;
@@ -350,6 +362,7 @@ export interface ToolJobRecord {
   error?: string;
   verificationStatus?: VerificationStatus;
   verificationEvidence?: string;
+  remoteExecution?: ToolJobRemoteExecutionInfo;
 }
 
 export interface ToolApprovalRequest {

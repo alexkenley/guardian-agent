@@ -24,6 +24,8 @@ Shared prompt-footprint and compact-inventory rules live in:
 - `src/runtime/pending-actions.ts`
 - `src/index.ts`
 - `src/runtime/direct-intent-routing.ts`
+- `src/runtime/structured-output-recovery.ts`
+- `src/util/structured-json.ts`
 
 ## Goals
 
@@ -89,6 +91,20 @@ The `decision` is structured and includes:
 - `expectedContextPressure`
 - `preferredAnswerPath`
 - `entities`
+
+## Structured Output Recovery
+
+The gateway now treats structured intent as a bounded multi-stage contract instead of assuming the model will always return a valid native tool call on the first try.
+
+Current recovery order:
+1. primary native tool-call classification
+2. full JSON fallback using `response_format: { type: "json_object" }`
+3. route-only JSON fallback using the same strict JSON-object response format
+
+Shared recovery rules:
+- fenced JSON, malformed object text, and tool-call argument blobs flow through the shared structured JSON recovery helpers
+- the repair path is bounded and schema-shaped; it exists to recover a valid structured decision, not to reinterpret the user turn heuristically
+- recovered results keep their source mode visible in routing metadata and tests instead of pretending the primary path succeeded
 
 Workload metadata meanings:
 - `executionClass`: coarse workload family such as direct assistant, repo-grounded work, provider CRUD, or security analysis
@@ -352,17 +368,22 @@ Attached coding sessions:
 Local-preferred routes:
 - `memory_task`
 - `filesystem_task`
-- `coding_task`
 - `coding_session_control`
 - `ui_control`
 - `automation_control`
 
 External-preferred routes:
 - `browser_task`
+- `coding_task`
 - `workspace_task`
 - `email_task`
 - `search_task`
 - `security_task`
+
+Coding-task policy:
+- generic `coding_task` work should prefer the external tier in Auto mode so the managed-cloud coding profile can handle the first pass when it is configured
+- heavier repo-grounded synthesis can still escalate from managed cloud to frontier through deterministic execution-profile selection
+- explicit CLI backend delegation such as `Use Codex ...` or `Use Claude Code ...` remains local-preferred because Guardian is orchestrating a local backend rather than acting as the coding model itself
 
 Special case:
 - `automation_authoring` can still use automation-complexity scoring to choose external when the request is substantially orchestration-heavy

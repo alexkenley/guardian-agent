@@ -4185,6 +4185,191 @@ describe('WebChannel', () => {
       }]);
     });
 
+    it('GET /api/code/sessions/:id/sandboxes should forward surface context', async () => {
+      const seen: Array<{ sessionId: string; userId: string; channel: string; surfaceId: string }> = [];
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+        onCodeSessionSandboxes: (args) => {
+          seen.push({
+            sessionId: args.sessionId,
+            userId: args.userId,
+            channel: args.channel,
+            surfaceId: args.surfaceId,
+          });
+          return {
+            codeSessionId: args.sessionId,
+            defaultTargetId: 'daytona:daytona-main',
+            targets: [],
+            sandboxes: [],
+          };
+        },
+      };
+
+      web = new WebChannel({ port: 18981, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18981/api/code/sessions/code-1/sandboxes?userId=web-user&channel=web&surfaceId=web-guardian-chat', {
+        headers: authHeaders,
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        codeSessionId: 'code-1',
+        defaultTargetId: 'daytona:daytona-main',
+        targets: [],
+        sandboxes: [],
+      });
+      expect(seen).toEqual([{
+        sessionId: 'code-1',
+        userId: 'web-user',
+        channel: 'web',
+        surfaceId: 'web-guardian-chat',
+      }]);
+    });
+
+    it('POST and DELETE sandbox routes should forward create and release requests with surface context', async () => {
+      const createSeen: Array<{ sessionId: string; surfaceId: string; targetId?: string }> = [];
+      const deleteSeen: Array<{ sessionId: string; leaseId: string; surfaceId: string }> = [];
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+        onCodeSessionSandboxCreate: async (args) => {
+          createSeen.push({
+            sessionId: args.sessionId,
+            surfaceId: args.surfaceId,
+            targetId: args.targetId,
+          });
+          return {
+            codeSessionId: args.sessionId,
+            defaultTargetId: 'daytona:daytona-main',
+            targets: [],
+            sandboxes: [{
+              leaseId: 'lease-1',
+              targetId: 'daytona:daytona-main',
+              backendKind: 'daytona_sandbox',
+              profileId: 'daytona-main',
+              profileName: 'Daytona Main',
+              sandboxId: 'sandbox-1',
+              localWorkspaceRoot: '/repo',
+              remoteWorkspaceRoot: '/home/daytona/guardian-workspace',
+              status: 'active',
+              acquiredAt: 10,
+              lastUsedAt: 10,
+              trackedRemotePaths: [],
+            }],
+          };
+        },
+        onCodeSessionSandboxDelete: async (args) => {
+          deleteSeen.push({
+            sessionId: args.sessionId,
+            leaseId: args.leaseId,
+            surfaceId: args.surfaceId,
+          });
+          return {
+            codeSessionId: args.sessionId,
+            defaultTargetId: 'daytona:daytona-main',
+            targets: [],
+            sandboxes: [],
+          };
+        },
+      };
+
+      web = new WebChannel({ port: 18982, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const createRes = await fetch('http://localhost:18982/api/code/sessions/code-1/sandboxes', {
+        method: 'POST',
+        headers: {
+          ...authHeaders,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId: 'web-user',
+          channel: 'web',
+          surfaceId: 'web-guardian-chat',
+          targetId: 'daytona:daytona-main',
+        }),
+      });
+
+      expect(createRes.status).toBe(200);
+      expect((await createRes.json()).sandboxes).toHaveLength(1);
+      expect(createSeen).toEqual([{
+        sessionId: 'code-1',
+        surfaceId: 'web-guardian-chat',
+        targetId: 'daytona:daytona-main',
+      }]);
+
+      const deleteRes = await fetch('http://localhost:18982/api/code/sessions/code-1/sandboxes/lease-1', {
+        method: 'DELETE',
+        headers: {
+          ...authHeaders,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId: 'web-user',
+          channel: 'web',
+          surfaceId: 'web-guardian-chat',
+        }),
+      });
+
+      expect(deleteRes.status).toBe(200);
+      expect(await deleteRes.json()).toEqual({
+        codeSessionId: 'code-1',
+        defaultTargetId: 'daytona:daytona-main',
+        targets: [],
+        sandboxes: [],
+      });
+      expect(deleteSeen).toEqual([{
+        sessionId: 'code-1',
+        leaseId: 'lease-1',
+        surfaceId: 'web-guardian-chat',
+      }]);
+    });
+
+    it('DELETE /api/code/sessions/:id should await async session cleanup callbacks', async () => {
+      const seen: Array<{ sessionId: string; userId: string; surfaceId: string }> = [];
+      const dashboard: DashboardCallbacks = {
+        ...mockDashboard,
+        onCodeSessionDelete: async (args) => {
+          seen.push({
+            sessionId: args.sessionId,
+            userId: args.userId,
+            surfaceId: args.surfaceId,
+          });
+          return {
+            success: true,
+            currentSessionId: 'code-2',
+          };
+        },
+      };
+
+      web = new WebChannel({ port: 18983, authToken: TEST_TOKEN, dashboard });
+      await web.start(async () => ({ content: 'ok' }));
+
+      const res = await fetch('http://localhost:18983/api/code/sessions/code-1', {
+        method: 'DELETE',
+        headers: {
+          ...authHeaders,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId: 'web-user',
+          channel: 'web',
+          surfaceId: 'web-guardian-chat',
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        success: true,
+        currentSessionId: 'code-2',
+      });
+      expect(seen).toEqual([{
+        sessionId: 'code-1',
+        userId: 'web-user',
+        surfaceId: 'web-guardian-chat',
+      }]);
+    });
+
     it('GET /api/code/sessions/:id/structure should return deterministic structure data for the selected file', async () => {
       const workspaceRoot = join(process.cwd(), `__test_code_structure_${randomUUID()}`);
       const sourceDir = join(workspaceRoot, 'src');

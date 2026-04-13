@@ -258,6 +258,48 @@ describe('OpenAIProvider compatibility', () => {
     expect(create.mock.calls[1]?.[0]).not.toHaveProperty('max_tokens');
   });
 
+  it('passes JSON response format hints through to OpenAI-compatible providers', async () => {
+    const provider = new OpenAIProvider({
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      apiKey: 'sk-test',
+    });
+
+    const create = vi.fn().mockResolvedValue({
+      choices: [
+        {
+          message: { content: '{"ok":true}' },
+          finish_reason: 'stop',
+        },
+      ],
+      usage: {
+        prompt_tokens: 5,
+        completion_tokens: 3,
+        total_tokens: 8,
+      },
+      model: 'gpt-4.1-mini',
+    });
+
+    (provider as any).client = {
+      chat: {
+        completions: {
+          create,
+        },
+      },
+      models: {
+        list: vi.fn(),
+      },
+    };
+
+    await provider.chat([{ role: 'user', content: 'Return JSON.' }], {
+      responseFormat: { type: 'json_object' },
+    });
+
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      response_format: { type: 'json_object' },
+    });
+  });
+
   it('surfaces provider-specific model-not-found guidance for xAI', async () => {
     const provider = new OpenAIProvider({
       provider: 'xai',

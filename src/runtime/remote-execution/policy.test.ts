@@ -122,4 +122,80 @@ describe('remote execution policy', () => {
       candidateOperations: [],
     });
   });
+
+  it('excludes cached unreachable targets from readiness decisions', () => {
+    const targets = listRemoteExecutionTargets(createCloudConfig({
+      enabled: true,
+      vercelProfiles: [{
+        id: 'vercel-main',
+        name: 'Main Vercel',
+        apiToken: 'vercel-secret',
+        teamId: 'team_123',
+        sandbox: {
+          enabled: true,
+          projectId: 'prj_123',
+          allowNetwork: false,
+        },
+      }],
+      daytonaProfiles: [{
+        id: 'daytona-main',
+        name: 'Daytona Main',
+        apiKey: 'daytona-secret',
+        enabled: true,
+        allowNetwork: false,
+      }],
+    }), {
+      healthByTargetId: {
+        'vercel:vercel-main': {
+          state: 'unreachable',
+          reason: 'Vercel sandbox returned HTTP 502.',
+          checkedAt: 123,
+        },
+      },
+    });
+
+    const recommendation = recommendWorkflowIsolation('dependency_review', { targets, workspaceTrustState: 'trusted' });
+
+    expect(recommendation).toMatchObject({
+      level: 'recommended',
+      backendKind: 'daytona_sandbox',
+      profileId: 'daytona-main',
+    });
+  });
+
+  it('honors the configured default target without provider-specific workflow heuristics', () => {
+    const targets = listRemoteExecutionTargets(createCloudConfig({
+      enabled: true,
+      vercelProfiles: [{
+        id: 'vercel-main',
+        name: 'Main Vercel',
+        apiToken: 'vercel-secret',
+        teamId: 'team_123',
+        sandbox: {
+          enabled: true,
+          projectId: 'prj_123',
+          allowNetwork: false,
+        },
+      }],
+      daytonaProfiles: [{
+        id: 'daytona-main',
+        name: 'Daytona Main',
+        apiKey: 'daytona-secret',
+        enabled: true,
+        allowNetwork: false,
+      }],
+    }));
+
+    const recommendation = recommendWorkflowIsolation('bug_fix', {
+      targets,
+      workspaceTrustState: 'trusted',
+      defaultRemoteExecutionTargetId: 'daytona:daytona-main',
+    });
+
+    expect(recommendation).toMatchObject({
+      level: 'available',
+      backendKind: 'daytona_sandbox',
+      profileId: 'daytona-main',
+    });
+  });
 });

@@ -946,7 +946,7 @@ export class WorkerManager {
           worker.pendingMessageResolve = undefined;
           worker.pendingMessageReject = undefined;
         }
-      }, 120_000);
+      }, 1800_000);
 
       const wrappedResolve = (value: { content: string; metadata?: Record<string, unknown> }) => {
         clearTimeout(timeout);

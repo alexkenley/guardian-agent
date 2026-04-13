@@ -317,6 +317,125 @@ export async function handleWebCodeSessionRoutes(
     return true;
   }
 
+  const codeSessionSandboxesMatch = req.method === 'GET'
+    ? url.pathname.match(/^\/api\/code\/sessions\/([^/]+)\/sandboxes$/)
+    : null;
+  if (codeSessionSandboxesMatch) {
+    if (!dashboard.onCodeSessionSandboxes) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    const sessionId = decodeURIComponent(codeSessionSandboxesMatch[1]);
+    const principal = context.resolveRequestPrincipal(req);
+    const userId = url.searchParams.get('userId') || 'web-user';
+    const channel = url.searchParams.get('channel') || 'web';
+    const result = await dashboard.onCodeSessionSandboxes({
+      sessionId,
+      userId,
+      principalId: principal.principalId,
+      channel,
+      surfaceId: readSurfaceIdFromSearchParams(url) ?? userId,
+    });
+    if (!result) {
+      sendJSON(res, 404, { error: 'Code session not found' });
+      return true;
+    }
+    sendJSON(res, 200, result);
+    return true;
+  }
+
+  const codeSessionSandboxCreateMatch = req.method === 'POST'
+    ? url.pathname.match(/^\/api\/code\/sessions\/([^/]+)\/sandboxes$/)
+    : null;
+  if (codeSessionSandboxCreateMatch) {
+    if (!dashboard.onCodeSessionSandboxCreate) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    const sessionId = decodeURIComponent(codeSessionSandboxCreateMatch[1]);
+    const body = await readBody(req, context.maxBodyBytes);
+    const parsed = JSON.parse(body || '{}') as {
+      userId?: string;
+      channel?: string;
+      surfaceId?: string;
+      targetId?: string;
+      profileId?: string;
+      runtime?: string;
+      vcpus?: number;
+    };
+    const principal = context.resolveRequestPrincipal(req);
+    try {
+      const result = await dashboard.onCodeSessionSandboxCreate({
+        sessionId,
+        userId: parsed.userId || 'web-user',
+        principalId: principal.principalId,
+        channel: parsed.channel || 'web',
+        surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+        targetId: trimOptionalString(parsed.targetId),
+        profileId: trimOptionalString(parsed.profileId),
+        runtime: trimOptionalString(parsed.runtime),
+        vcpus: Number.isFinite(parsed.vcpus) ? Number(parsed.vcpus) : undefined,
+      });
+      sendJSON(res, 200, result);
+    } catch (err) {
+      const requestError = context.getRequestErrorDetails(err);
+      if (requestError) {
+        sendJSON(res, requestError.statusCode, {
+          error: requestError.error,
+          ...(requestError.errorCode ? { errorCode: requestError.errorCode } : {}),
+        });
+        return true;
+      }
+      context.logInternalError('Code session sandbox create failed', err);
+      const detail = err instanceof Error ? err.message : String(err);
+      sendJSON(res, 500, { error: `Dispatch error: ${detail}` });
+    }
+    return true;
+  }
+
+  const codeSessionSandboxDeleteMatch = req.method === 'DELETE'
+    ? url.pathname.match(/^\/api\/code\/sessions\/([^/]+)\/sandboxes\/([^/]+)$/)
+    : null;
+  if (codeSessionSandboxDeleteMatch) {
+    if (!dashboard.onCodeSessionSandboxDelete) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    const sessionId = decodeURIComponent(codeSessionSandboxDeleteMatch[1]);
+    const leaseId = decodeURIComponent(codeSessionSandboxDeleteMatch[2]);
+    const body = await readBody(req, context.maxBodyBytes);
+    const parsed = JSON.parse(body || '{}') as {
+      userId?: string;
+      channel?: string;
+      surfaceId?: string;
+    };
+    const principal = context.resolveRequestPrincipal(req);
+    try {
+      const result = await dashboard.onCodeSessionSandboxDelete({
+        sessionId,
+        leaseId,
+        userId: parsed.userId || 'web-user',
+        principalId: principal.principalId,
+        channel: parsed.channel || 'web',
+        surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+      });
+      sendJSON(res, 200, result);
+    } catch (err) {
+      const requestError = context.getRequestErrorDetails(err);
+      if (requestError) {
+        sendJSON(res, requestError.statusCode, {
+          error: requestError.error,
+          ...(requestError.errorCode ? { errorCode: requestError.errorCode } : {}),
+        });
+        return true;
+      }
+      context.logInternalError('Code session sandbox delete failed', err);
+      const detail = err instanceof Error ? err.message : String(err);
+      sendJSON(res, 500, { error: `Dispatch error: ${detail}` });
+    }
+    return true;
+  }
+
   const codeSessionMatch = url.pathname.match(/^\/api\/code\/sessions\/([^/]+)$/);
   if (codeSessionMatch) {
     const sessionId = decodeURIComponent(codeSessionMatch[1]);
@@ -391,14 +510,28 @@ export async function handleWebCodeSessionRoutes(
       }
       const body = await readBody(req, context.maxBodyBytes).catch(() => '');
       const parsed = JSON.parse(body || '{}') as { userId?: string; channel?: string; surfaceId?: string };
-      const result = dashboard.onCodeSessionDelete({
-        sessionId,
-        userId: parsed.userId || 'web-user',
-        principalId: principal.principalId,
-        channel: parsed.channel || 'web',
-        surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
-      });
-      sendJSON(res, result.success ? 200 : 404, result);
+      try {
+        const result = await dashboard.onCodeSessionDelete({
+          sessionId,
+          userId: parsed.userId || 'web-user',
+          principalId: principal.principalId,
+          channel: parsed.channel || 'web',
+          surfaceId: trimOptionalString(parsed.surfaceId) ?? parsed.userId ?? 'web-user',
+        });
+        sendJSON(res, result.success ? 200 : 404, result);
+      } catch (err) {
+        const requestError = context.getRequestErrorDetails(err);
+        if (requestError) {
+          sendJSON(res, requestError.statusCode, {
+            error: requestError.error,
+            ...(requestError.errorCode ? { errorCode: requestError.errorCode } : {}),
+          });
+          return true;
+        }
+        context.logInternalError('Code session delete failed', err);
+        const detail = err instanceof Error ? err.message : String(err);
+        sendJSON(res, 500, { error: `Dispatch error: ${detail}` });
+      }
       return true;
     }
   }

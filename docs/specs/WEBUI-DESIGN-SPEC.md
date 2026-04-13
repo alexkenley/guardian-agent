@@ -388,11 +388,17 @@ Code must stay distinct from both `Second Brain` and `Performance`.
 It is the place for:
 
 - coding session selection
+- managed sandbox lifecycle for the active coding session
 - workflow stage and verification state for the active coding session
 - repo-scoped editing and investigation
 - coding activity and approval follow-up
 
 It must not be treated as a generic system-operations or workstation-cleanup surface.
+
+The Code side rail must expose:
+
+- `Sessions` for saved coding workspaces and attachments
+- `Sandboxes` for managed reusable remote sandbox control tied to the active code session
 
 ## Security
 
@@ -752,6 +758,7 @@ Search-source runtime state should be shown as one compact actionable summary, n
 Owns:
 
 - editable Second Brain setup preferences
+- assistant response-style preferences that should stay stable across provider routing
 - workday defaults
 - default delivery preferences for new Second Brain routines
 - bounded retrieval defaults for the Second Brain experience
@@ -760,6 +767,7 @@ Must not own:
 
 - a second memory authority or duplicate memory store
 - direct provider administration
+- per-provider model or credential tuning
 - routine editing for already configured routines
 
 This tab should make clear that the settings remain editable later and that existing routines still belong to `Second Brain > Routines`.

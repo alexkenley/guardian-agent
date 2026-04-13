@@ -2,18 +2,21 @@ import { Daytona } from '@daytona/sdk';
 import path from 'node:path';
 
 import type { DaytonaRemoteExecutionResolvedTarget } from '../../runtime/remote-execution/types.js';
+import type { RemoteExecutionLeaseMode } from '../../runtime/remote-execution/types.js';
 
 const DEFAULT_API_URL = 'https://app.daytona.io/api';
 const DEFAULT_LANGUAGE = 'typescript';
 const DEFAULT_TIMEOUT_MS = 300_000;
-const DEFAULT_VCPUS = 2;
 
 export interface DaytonaSandboxSession {
   sandboxId: string;
   workspaceRoot: string;
+  state?: string;
   createFolder(path: string, mode?: string): Promise<void>;
   uploadFiles(files: Array<{ path: string; content: string | Uint8Array }>, timeoutSec?: number): Promise<void>;
   setFileMode(path: string, mode: number): Promise<void>;
+  start(timeoutSec?: number): Promise<void>;
+  refreshActivity(): Promise<void>;
   executeCommand(
     command: string,
     cwd?: string,
@@ -29,10 +32,18 @@ export interface DaytonaSandboxCreateInput {
   timeoutMs?: number;
   vcpus?: number;
   runtime?: string;
+  leaseMode?: RemoteExecutionLeaseMode;
+}
+
+export interface DaytonaSandboxGetInput {
+  target: DaytonaRemoteExecutionResolvedTarget;
+  sandboxId: string;
+  timeoutMs?: number;
 }
 
 export interface DaytonaSandboxClientOptions {
   sandboxFactory?: (input: DaytonaSandboxCreateInput) => Promise<DaytonaSandboxSession>;
+  sandboxLookup?: (input: DaytonaSandboxGetInput) => Promise<DaytonaSandboxSession>;
 }
 
 function toTimeoutSec(timeoutMs: number | undefined): number {
@@ -49,42 +60,42 @@ function isNotFoundError(error: unknown): boolean {
   return /\b(not found|no such file|404)\b/i.test(message);
 }
 
-async function defaultSandboxFactory(input: DaytonaSandboxCreateInput): Promise<DaytonaSandboxSession> {
-  const client = new Daytona({
-    apiKey: input.target.apiKey,
-    apiUrl: input.target.apiUrl ?? DEFAULT_API_URL,
-    target: input.target.target,
-  });
+function isForbiddenError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(forbidden|permission|403|unauthorized|401|scope|scoped)\b/i.test(message);
+}
 
-  const timeoutMs = Math.max(5_000, input.timeoutMs ?? input.target.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS);
-  const timeoutSec = toTimeoutSec(timeoutMs);
-  const cpu = Math.max(1, input.vcpus ?? input.target.defaultVcpus ?? DEFAULT_VCPUS);
-  const createParams = {
-    language: input.runtime ?? input.target.language ?? DEFAULT_LANGUAGE,
-    ephemeral: true,
-    networkBlockAll: input.target.networkMode === 'deny_all',
-    networkAllowList: input.target.networkMode === 'cidr_allowlist' && input.target.allowedCidrs.length > 0
-      ? input.target.allowedCidrs.join(',')
-      : undefined,
-    // The SDK runtime accepts `resources` here even though the snapshot overload omits it in the d.ts.
-    resources: { cpu },
-  };
+function isSnapshotResourcesConflictError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /cannot specify sandbox resources when using a snapshot/i.test(message);
+}
 
-  const sandbox = await client.create(createParams as never, { timeout: timeoutSec });
-  const baseWorkDir = await sandbox.getWorkDir() ?? await sandbox.getUserHomeDir() ?? '/tmp';
-  const workspaceRoot = path.posix.join(baseWorkDir.replace(/\\/g, '/'), 'guardian-workspace');
-
+async function createDaytonaSandbox(
+  client: Daytona,
+  params: Record<string, unknown>,
+  timeoutSec: number,
+) {
   try {
-    await sandbox.fs.createFolder(workspaceRoot, '755');
+    return await client.create(params as never, { timeout: timeoutSec });
   } catch (error) {
-    if (!isAlreadyExistsError(error)) {
-      throw error;
+    if (isForbiddenError(error)) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Daytona sandbox creation failed (permissions/auth). Ensure your API key is valid and has the necessary permissions. Details: ${message}`);
     }
+    throw error;
   }
+}
 
+function buildWrappedDaytonaSandbox(
+  sandbox: Awaited<ReturnType<Daytona['create']>>,
+  client: Daytona,
+  timeoutSec: number,
+  workspaceRoot: string,
+): DaytonaSandboxSession {
   return {
     sandboxId: sandbox.id,
     workspaceRoot,
+    state: sandbox.state,
     createFolder: async (folderPath, mode = '755') => {
       try {
         await sandbox.fs.createFolder(folderPath, mode);
@@ -105,6 +116,12 @@ async function defaultSandboxFactory(input: DaytonaSandboxCreateInput): Promise<
     },
     setFileMode: async (filePath, mode) => {
       await sandbox.fs.setFilePermissions(filePath, { mode: (mode & 0o777).toString(8) });
+    },
+    start: async (startTimeoutSec = timeoutSec) => {
+      await sandbox.start(startTimeoutSec);
+    },
+    refreshActivity: async () => {
+      await sandbox.refreshActivity();
     },
     executeCommand: async (command, cwd, env, commandTimeoutSec = timeoutSec) => {
       const result = await sandbox.process.executeCommand(command, cwd, env, commandTimeoutSec);
@@ -133,15 +150,88 @@ async function defaultSandboxFactory(input: DaytonaSandboxCreateInput): Promise<
   };
 }
 
+async function defaultSandboxFactory(input: DaytonaSandboxCreateInput): Promise<DaytonaSandboxSession> {
+  const client = new Daytona({
+    apiKey: input.target.apiKey,
+    apiUrl: input.target.apiUrl ?? DEFAULT_API_URL,
+    target: input.target.target,
+  });
+
+  const timeoutMs = Math.max(5_000, input.timeoutMs ?? input.target.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const timeoutSec = toTimeoutSec(timeoutMs);
+  const requestedCpu = input.vcpus ?? input.target.defaultVcpus;
+  const leaseMode = input.leaseMode ?? 'ephemeral';
+  const baseCreateParams = {
+    language: input.runtime ?? input.target.language ?? DEFAULT_LANGUAGE,
+    ephemeral: leaseMode !== 'managed',
+    autoStopInterval: leaseMode === 'managed' ? 0 : undefined,
+    autoDeleteInterval: leaseMode === 'managed' ? -1 : undefined,
+    networkBlockAll: input.target.networkMode === 'deny_all',
+    networkAllowList: input.target.networkMode === 'cidr_allowlist' && input.target.allowedCidrs.length > 0
+      ? input.target.allowedCidrs.join(',')
+      : undefined,
+  };
+  const createParamsWithResources = typeof requestedCpu === 'number' && Number.isFinite(requestedCpu)
+    ? {
+        ...baseCreateParams,
+        // The SDK runtime accepts `resources` here even though the snapshot overload omits it in the d.ts.
+        resources: { cpu: Math.max(1, requestedCpu) },
+      }
+    : baseCreateParams;
+
+  let sandbox;
+  try {
+    sandbox = await createDaytonaSandbox(client, createParamsWithResources, timeoutSec);
+  } catch (error) {
+    if (createParamsWithResources !== baseCreateParams && isSnapshotResourcesConflictError(error)) {
+      sandbox = await createDaytonaSandbox(client, baseCreateParams, timeoutSec);
+    } else {
+      throw error;
+    }
+  }
+  const baseWorkDir = await sandbox.getWorkDir() ?? await sandbox.getUserHomeDir() ?? '/tmp';
+  const workspaceRoot = path.posix.join(baseWorkDir.replace(/\\/g, '/'), 'guardian-workspace');
+
+  try {
+    await sandbox.fs.createFolder(workspaceRoot, '755');
+  } catch (error) {
+    if (!isAlreadyExistsError(error)) {
+      throw error;
+    }
+  }
+
+  return buildWrappedDaytonaSandbox(sandbox, client, timeoutSec, workspaceRoot);
+}
+
+async function defaultSandboxLookup(input: DaytonaSandboxGetInput): Promise<DaytonaSandboxSession> {
+  const client = new Daytona({
+    apiKey: input.target.apiKey,
+    apiUrl: input.target.apiUrl ?? DEFAULT_API_URL,
+    target: input.target.target,
+  });
+  const timeoutMs = Math.max(5_000, input.timeoutMs ?? input.target.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const timeoutSec = toTimeoutSec(timeoutMs);
+  const sandbox = await client.get(input.sandboxId);
+  const baseWorkDir = await sandbox.getWorkDir() ?? await sandbox.getUserHomeDir() ?? '/tmp';
+  const workspaceRoot = path.posix.join(baseWorkDir.replace(/\\/g, '/'), 'guardian-workspace');
+  return buildWrappedDaytonaSandbox(sandbox, client, timeoutSec, workspaceRoot);
+}
+
 export class DaytonaSandboxClient {
   private readonly sandboxFactory: (input: DaytonaSandboxCreateInput) => Promise<DaytonaSandboxSession>;
+  private readonly sandboxLookup: (input: DaytonaSandboxGetInput) => Promise<DaytonaSandboxSession>;
 
   constructor(options: DaytonaSandboxClientOptions = {}) {
     this.sandboxFactory = options.sandboxFactory ?? defaultSandboxFactory;
+    this.sandboxLookup = options.sandboxLookup ?? defaultSandboxLookup;
   }
 
   async createSandbox(input: DaytonaSandboxCreateInput): Promise<DaytonaSandboxSession> {
     return this.sandboxFactory(input);
+  }
+
+  async getSandbox(input: DaytonaSandboxGetInput): Promise<DaytonaSandboxSession> {
+    return this.sandboxLookup(input);
   }
 
   async ensureDirectories(session: DaytonaSandboxSession, filePaths: string[]): Promise<void> {

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RemoteExecutionService } from './remote-execution-service.js';
 import type {
   RemoteExecutionPreparedRequest,
+  RemoteExecutionProviderLease,
   VercelRemoteExecutionResolvedTarget,
 } from './types.js';
 
@@ -31,7 +32,27 @@ const TARGET: VercelRemoteExecutionResolvedTarget = {
   apiBaseUrl: 'https://api.vercel.com/',
   networkMode: 'deny_all',
   allowedDomains: [],
+  allowedCidrs: [],
 };
+
+function createLease(localWorkspaceRoot: string, overrides: Partial<RemoteExecutionProviderLease> = {}): RemoteExecutionProviderLease {
+  return {
+    id: randomUUID(),
+    targetId: TARGET.id,
+    backendKind: TARGET.backendKind,
+    profileId: TARGET.profileId,
+    profileName: TARGET.profileName,
+    sandboxId: 'sandbox_123',
+    localWorkspaceRoot,
+    remoteWorkspaceRoot: '/vercel/sandbox',
+    acquiredAt: 1,
+    lastUsedAt: 1,
+    expiresAt: 1,
+    trackedRemotePaths: [],
+    leaseMode: 'ephemeral',
+    ...overrides,
+  };
+}
 
 afterEach(() => {
   for (const dir of testDirs.splice(0)) {
@@ -57,7 +78,35 @@ describe('RemoteExecutionService', () => {
     const service = new RemoteExecutionService({
       providers: [{
         backendKind: 'vercel_sandbox',
-        run: vi.fn(async (request) => {
+        capabilities: {
+          reconnectExisting: true,
+          restartStoppedSandbox: false,
+        },
+        probe: vi.fn(async () => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy',
+          reason: 'ok',
+          checkedAt: 1,
+          durationMs: 1,
+        })),
+        inspectLease: vi.fn(async (_target, lease) => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy',
+          reason: 'ok',
+          checkedAt: 1,
+          durationMs: 1,
+          sandboxId: lease.sandboxId,
+          remoteWorkspaceRoot: lease.remoteWorkspaceRoot,
+        })),
+        createLease: vi.fn(async (request) => createLease(request.localWorkspaceRoot)),
+        resumeLease: vi.fn(async (_target, lease) => createLease(lease.localWorkspaceRoot, lease)),
+        runWithLease: vi.fn(async (_lease, request) => {
           captured = request;
           return {
             targetId: request.target.id,
@@ -73,6 +122,7 @@ describe('RemoteExecutionService', () => {
             completedAt: 11,
             networkMode: request.target.networkMode,
             allowedDomains: [...request.target.allowedDomains],
+            allowedCidrs: [...request.target.allowedCidrs],
             stagedFiles: request.stagedFiles.length,
             stagedBytes: request.stagedFiles.reduce((sum, file) => sum + file.content.length, 0),
             workspaceRoot: request.workspaceRoot,
@@ -80,6 +130,8 @@ describe('RemoteExecutionService', () => {
             artifactFiles: [],
           };
         }),
+        releaseLease: vi.fn(async () => undefined),
+        run: vi.fn(),
       }],
     });
 
@@ -102,8 +154,8 @@ describe('RemoteExecutionService', () => {
     expect(remotePaths).toContain('/workspace/package.json');
     expect(remotePaths).toContain('/workspace/src/index.ts');
     expect(remotePaths).toContain('/workspace/scripts/run.sh');
-    expect(remotePaths.some((path) => path.includes('node_modules'))).toBe(false);
-    expect(remotePaths.some((path) => path.includes('/.git/'))).toBe(false);
+    expect(remotePaths.some((filePath) => filePath.includes('node_modules'))).toBe(false);
+    expect(remotePaths.some((filePath) => filePath.includes('/.git/'))).toBe(false);
     const scriptEntry = captured!.stagedFiles.find((file) => file.remotePath === '/workspace/scripts/run.sh');
     expect(scriptEntry?.mode).toBe(0o755);
   });
@@ -119,7 +171,35 @@ describe('RemoteExecutionService', () => {
     const service = new RemoteExecutionService({
       providers: [{
         backendKind: 'vercel_sandbox',
-        run: vi.fn(async (request) => {
+        capabilities: {
+          reconnectExisting: true,
+          restartStoppedSandbox: false,
+        },
+        probe: vi.fn(async () => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy',
+          reason: 'ok',
+          checkedAt: 1,
+          durationMs: 1,
+        })),
+        inspectLease: vi.fn(async (_target, lease) => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy',
+          reason: 'ok',
+          checkedAt: 1,
+          durationMs: 1,
+          sandboxId: lease.sandboxId,
+          remoteWorkspaceRoot: lease.remoteWorkspaceRoot,
+        })),
+        createLease: vi.fn(async (request) => createLease(request.localWorkspaceRoot)),
+        resumeLease: vi.fn(async (_target, lease) => createLease(lease.localWorkspaceRoot, lease)),
+        runWithLease: vi.fn(async (_lease, request) => {
           captured = request;
           return {
             targetId: request.target.id,
@@ -135,6 +215,7 @@ describe('RemoteExecutionService', () => {
             completedAt: 6,
             networkMode: request.target.networkMode,
             allowedDomains: [...request.target.allowedDomains],
+            allowedCidrs: [...request.target.allowedCidrs],
             stagedFiles: request.stagedFiles.length,
             stagedBytes: request.stagedFiles.reduce((sum, file) => sum + file.content.length, 0),
             workspaceRoot: request.workspaceRoot,
@@ -142,6 +223,8 @@ describe('RemoteExecutionService', () => {
             artifactFiles: [],
           };
         }),
+        releaseLease: vi.fn(async () => undefined),
+        run: vi.fn(),
       }],
     });
 
@@ -176,5 +259,428 @@ describe('RemoteExecutionService', () => {
         includePaths: ['../outside'],
       },
     })).rejects.toThrow(/includePath/i);
+  });
+
+  it('supports remote commands that do not need a workspace snapshot', async () => {
+    const root = createRoot();
+    mkdirSync(join(root, 'node_modules', 'huge-package'), { recursive: true });
+    writeFileSync(join(root, 'node_modules', 'huge-package', 'index.js'), 'x'.repeat(26 * 1024 * 1024));
+
+    let captured: RemoteExecutionPreparedRequest | null = null;
+    const service = new RemoteExecutionService({
+      providers: [{
+        backendKind: 'vercel_sandbox',
+        capabilities: {
+          reconnectExisting: true,
+          restartStoppedSandbox: false,
+        },
+        probe: vi.fn(async () => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy',
+          reason: 'ok',
+          checkedAt: 1,
+          durationMs: 1,
+        })),
+        inspectLease: vi.fn(async (_target, lease) => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy',
+          reason: 'ok',
+          checkedAt: 1,
+          durationMs: 1,
+          sandboxId: lease.sandboxId,
+          remoteWorkspaceRoot: lease.remoteWorkspaceRoot,
+        })),
+        createLease: vi.fn(async (request) => createLease(request.localWorkspaceRoot)),
+        resumeLease: vi.fn(async (_target, lease) => createLease(lease.localWorkspaceRoot, lease)),
+        runWithLease: vi.fn(async (_lease, request) => {
+          captured = request;
+          return {
+            targetId: request.target.id,
+            backendKind: request.target.backendKind,
+            profileId: request.target.profileId,
+            profileName: request.target.profileName,
+            requestedCommand: request.command.requestedCommand,
+            status: 'succeeded',
+            stdout: '/workspace\n',
+            stderr: '',
+            durationMs: 5,
+            startedAt: 1,
+            completedAt: 6,
+            networkMode: request.target.networkMode,
+            allowedDomains: [...request.target.allowedDomains],
+            allowedCidrs: [...request.target.allowedCidrs],
+            stagedFiles: request.stagedFiles.length,
+            stagedBytes: request.stagedFiles.reduce((sum, file) => sum + file.content.length, 0),
+            workspaceRoot: request.workspaceRoot,
+            cwd: request.cwd,
+            artifactFiles: [],
+          };
+        }),
+        releaseLease: vi.fn(async () => undefined),
+        run: vi.fn(),
+      }],
+    });
+
+    await service.runBoundedJob({
+      target: TARGET,
+      command: {
+        requestedCommand: 'pwd',
+        entryCommand: 'pwd',
+        args: [],
+        execMode: 'direct_exec',
+      },
+      workspace: {
+        workspaceRoot: root,
+        cwd: root,
+        stageWorkspace: false,
+      },
+    });
+
+    expect(captured).not.toBeNull();
+    expect(captured?.stagedFiles).toEqual([]);
+    expect(captured?.cwd).toBe(root);
+    expect(captured?.workspaceRoot).toBe(root);
+  });
+
+  it('reuses the same sandbox lease for repeated jobs in one code session', async () => {
+    const root = createRoot();
+    writeFileSync(join(root, 'package.json'), '{"name":"demo"}');
+    let now = 1_000;
+    const probe = vi.fn(async () => ({
+      targetId: TARGET.id,
+      backendKind: TARGET.backendKind,
+      profileId: TARGET.profileId,
+      profileName: TARGET.profileName,
+      healthState: 'healthy' as const,
+      reason: 'ok',
+      checkedAt: now,
+      durationMs: 5,
+    }));
+    const createLeaseSpy = vi.fn(async (request) => createLease(request.localWorkspaceRoot));
+    const runWithLeaseSpy = vi.fn(async (lease: RemoteExecutionProviderLease, request: RemoteExecutionPreparedRequest) => ({
+      targetId: request.target.id,
+      backendKind: request.target.backendKind,
+      profileId: request.target.profileId,
+      profileName: request.target.profileName,
+      requestedCommand: request.command.requestedCommand,
+      status: 'succeeded' as const,
+      sandboxId: lease.sandboxId,
+      stdout: 'ok',
+      stderr: '',
+      durationMs: 5,
+      startedAt: now,
+      completedAt: now + 5,
+      networkMode: request.target.networkMode,
+      allowedDomains: [...request.target.allowedDomains],
+      allowedCidrs: [...request.target.allowedCidrs],
+      stagedFiles: request.stagedFiles.length,
+      stagedBytes: request.stagedFiles.reduce((sum, file) => sum + file.content.length, 0),
+      workspaceRoot: request.workspaceRoot,
+      cwd: request.cwd,
+      artifactFiles: [],
+    }));
+    const releaseLeaseSpy = vi.fn(async () => undefined);
+    const service = new RemoteExecutionService({
+      providers: [{
+        backendKind: 'vercel_sandbox',
+        capabilities: {
+          reconnectExisting: true,
+          restartStoppedSandbox: false,
+        },
+        probe,
+        inspectLease: vi.fn(async (_target, lease) => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy' as const,
+          reason: 'ok',
+          checkedAt: now,
+          durationMs: 5,
+          sandboxId: lease.sandboxId,
+          remoteWorkspaceRoot: lease.remoteWorkspaceRoot,
+        })),
+        createLease: createLeaseSpy,
+        resumeLease: vi.fn(async (_target, lease) => createLease(lease.localWorkspaceRoot, lease)),
+        runWithLease: runWithLeaseSpy,
+        releaseLease: releaseLeaseSpy,
+        run: vi.fn(),
+      }],
+      now: () => now,
+    });
+
+    const first = await service.runBoundedJob({
+      target: TARGET,
+      command: {
+        requestedCommand: 'npm test',
+        entryCommand: 'npm',
+        args: ['test'],
+        execMode: 'direct_exec',
+      },
+      workspace: {
+        workspaceRoot: root,
+        cwd: root,
+      },
+      codeSessionId: 'code-session-1',
+    });
+
+    now += 1_000;
+
+    const second = await service.runBoundedJob({
+      target: TARGET,
+      command: {
+        requestedCommand: 'npm run build',
+        entryCommand: 'npm',
+        args: ['run', 'build'],
+        execMode: 'direct_exec',
+      },
+      workspace: {
+        workspaceRoot: root,
+        cwd: root,
+      },
+      codeSessionId: 'code-session-1',
+    });
+
+    expect(first.leaseId).toBeTruthy();
+    expect(second.leaseId).toBe(first.leaseId);
+    expect(first.leaseReused).toBe(false);
+    expect(second.leaseReused).toBe(true);
+    expect(createLeaseSpy).toHaveBeenCalledTimes(1);
+    expect(runWithLeaseSpy).toHaveBeenCalledTimes(2);
+    expect(releaseLeaseSpy).not.toHaveBeenCalled();
+    expect(service.listActiveLeases()).toHaveLength(1);
+    expect(service.getKnownTargetHealth()[TARGET.id]).toMatchObject({
+      state: 'healthy',
+      leaseId: first.leaseId,
+      sandboxId: 'sandbox_123',
+    });
+  });
+
+  it('keeps managed leases active until explicitly disposed', async () => {
+    const root = createRoot();
+    writeFileSync(join(root, 'package.json'), '{"name":"demo"}');
+    let now = 10_000;
+    const createLeaseSpy = vi.fn(async (request) => createLease(request.localWorkspaceRoot, {
+      leaseMode: request.leaseMode ?? 'ephemeral',
+    }));
+    const releaseLeaseSpy = vi.fn(async () => undefined);
+    const service = new RemoteExecutionService({
+      providers: [{
+        backendKind: 'vercel_sandbox',
+        capabilities: {
+          reconnectExisting: true,
+          restartStoppedSandbox: false,
+        },
+        probe: vi.fn(async () => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy' as const,
+          reason: 'ok',
+          checkedAt: now,
+          durationMs: 5,
+        })),
+        inspectLease: vi.fn(async (_target, lease) => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy' as const,
+          reason: 'ok',
+          checkedAt: now,
+          durationMs: 5,
+          sandboxId: lease.sandboxId,
+          remoteWorkspaceRoot: lease.remoteWorkspaceRoot,
+        })),
+        createLease: createLeaseSpy,
+        resumeLease: vi.fn(async (_target, lease) => createLease(lease.localWorkspaceRoot, {
+          ...lease,
+          leaseMode: 'managed',
+        })),
+        runWithLease: vi.fn(async (lease: RemoteExecutionProviderLease, request: RemoteExecutionPreparedRequest) => ({
+          targetId: request.target.id,
+          backendKind: request.target.backendKind,
+          profileId: request.target.profileId,
+          profileName: request.target.profileName,
+          requestedCommand: request.command.requestedCommand,
+          status: 'succeeded' as const,
+          sandboxId: lease.sandboxId,
+          stdout: 'ok',
+          stderr: '',
+          durationMs: 5,
+          startedAt: now,
+          completedAt: now + 5,
+          networkMode: request.target.networkMode,
+          allowedDomains: [...request.target.allowedDomains],
+          allowedCidrs: [...request.target.allowedCidrs],
+          stagedFiles: request.stagedFiles.length,
+          stagedBytes: request.stagedFiles.reduce((sum, file) => sum + file.content.length, 0),
+          workspaceRoot: request.workspaceRoot,
+          cwd: request.cwd,
+          artifactFiles: [],
+        })),
+        releaseLease: releaseLeaseSpy,
+        run: vi.fn(),
+      }],
+      now: () => now,
+      leaseIdleTtlMs: 60_000,
+    });
+
+    const first = await service.runBoundedJob({
+      target: TARGET,
+      command: {
+        requestedCommand: 'npm test',
+        entryCommand: 'npm',
+        args: ['test'],
+        execMode: 'direct_exec',
+      },
+      workspace: {
+        workspaceRoot: root,
+        cwd: root,
+      },
+      codeSessionId: 'code-session-managed',
+      leaseMode: 'managed',
+    });
+
+    now += 5 * 60_000;
+
+    const second = await service.runBoundedJob({
+      target: TARGET,
+      command: {
+        requestedCommand: 'npm run build',
+        entryCommand: 'npm',
+        args: ['run', 'build'],
+        execMode: 'direct_exec',
+      },
+      workspace: {
+        workspaceRoot: root,
+        cwd: root,
+      },
+      codeSessionId: 'code-session-managed',
+      leaseMode: 'managed',
+    });
+
+    expect(first.leaseMode).toBe('managed');
+    expect(second.leaseId).toBe(first.leaseId);
+    expect(second.leaseReused).toBe(true);
+    expect(releaseLeaseSpy).not.toHaveBeenCalled();
+
+    await service.disposeLease?.({
+      target: TARGET,
+      lease: service.listActiveLeases()[0],
+    });
+
+    expect(releaseLeaseSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('caches successful probe results for repeated ephemeral jobs', async () => {
+    const root = createRoot();
+    writeFileSync(join(root, 'package.json'), '{"name":"demo"}');
+    let now = 2_000;
+    const probe = vi.fn(async () => ({
+      targetId: TARGET.id,
+      backendKind: TARGET.backendKind,
+      profileId: TARGET.profileId,
+      profileName: TARGET.profileName,
+      healthState: 'healthy' as const,
+      reason: 'ok',
+      checkedAt: now,
+      durationMs: 5,
+    }));
+    const createLeaseSpy = vi.fn(async (request) => createLease(request.localWorkspaceRoot));
+    const releaseLeaseSpy = vi.fn(async () => undefined);
+    const service = new RemoteExecutionService({
+      providers: [{
+        backendKind: 'vercel_sandbox',
+        capabilities: {
+          reconnectExisting: true,
+          restartStoppedSandbox: false,
+        },
+        probe,
+        inspectLease: vi.fn(async (_target, lease) => ({
+          targetId: TARGET.id,
+          backendKind: TARGET.backendKind,
+          profileId: TARGET.profileId,
+          profileName: TARGET.profileName,
+          healthState: 'healthy' as const,
+          reason: 'ok',
+          checkedAt: now,
+          durationMs: 5,
+          sandboxId: lease.sandboxId,
+          remoteWorkspaceRoot: lease.remoteWorkspaceRoot,
+        })),
+        createLease: createLeaseSpy,
+        resumeLease: vi.fn(async (_target, lease) => createLease(lease.localWorkspaceRoot, lease)),
+        runWithLease: vi.fn(async (lease: RemoteExecutionProviderLease, request: RemoteExecutionPreparedRequest) => ({
+          targetId: request.target.id,
+          backendKind: request.target.backendKind,
+          profileId: request.target.profileId,
+          profileName: request.target.profileName,
+          requestedCommand: request.command.requestedCommand,
+          status: 'succeeded' as const,
+          sandboxId: lease.sandboxId,
+          stdout: 'ok',
+          stderr: '',
+          durationMs: 5,
+          startedAt: now,
+          completedAt: now + 5,
+          networkMode: request.target.networkMode,
+          allowedDomains: [...request.target.allowedDomains],
+          allowedCidrs: [...request.target.allowedCidrs],
+          stagedFiles: request.stagedFiles.length,
+          stagedBytes: request.stagedFiles.reduce((sum, file) => sum + file.content.length, 0),
+          workspaceRoot: request.workspaceRoot,
+          cwd: request.cwd,
+          artifactFiles: [],
+        })),
+        releaseLease: releaseLeaseSpy,
+        run: vi.fn(),
+      }],
+      now: () => now,
+      probeTtlMs: 60_000,
+    });
+
+    await service.runBoundedJob({
+      target: TARGET,
+      command: {
+        requestedCommand: 'pwd',
+        entryCommand: 'pwd',
+        args: [],
+        execMode: 'direct_exec',
+      },
+      workspace: {
+        workspaceRoot: root,
+        cwd: root,
+        stageWorkspace: false,
+      },
+    });
+
+    now += 5_000;
+
+    await service.runBoundedJob({
+      target: TARGET,
+      command: {
+        requestedCommand: 'pwd',
+        entryCommand: 'pwd',
+        args: [],
+        execMode: 'direct_exec',
+      },
+      workspace: {
+        workspaceRoot: root,
+        cwd: root,
+        stageWorkspace: false,
+      },
+    });
+
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(createLeaseSpy).toHaveBeenCalledTimes(2);
+    expect(releaseLeaseSpy).toHaveBeenCalledTimes(2);
   });
 });

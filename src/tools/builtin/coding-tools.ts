@@ -53,6 +53,29 @@ interface CodingQualityReport {
   checks: CodingQualityCheck[];
 }
 
+const SNAPSHOT_FREE_REMOTE_EXEC_COMMANDS = new Set([
+  'pwd',
+  'whoami',
+  'id',
+  'uname',
+  'hostname',
+  'date',
+  'env',
+  'printenv',
+]);
+
+const SNAPSHOT_FREE_VERSION_COMMANDS = new Set([
+  'node',
+  'npm',
+  'pnpm',
+  'yarn',
+  'bun',
+  'python',
+  'python3',
+  'pip',
+  'pip3',
+]);
+
 type CodeSessionRecord = NonNullable<ReturnType<CodeSessionStore['getSession']>>;
 
 interface CodingToolRegistrarContext {
@@ -62,6 +85,7 @@ interface CodingToolRegistrarContext {
   asString: (value: unknown, fallback?: string) => string;
   asNumber: (value: unknown, fallback: number) => number;
   isRecord: (value: unknown) => value is Record<string, unknown>;
+  cloudConfig?: import('../../config/types.js').AssistantCloudConfig;
   guardAction: (request: ToolExecutionRequest, action: string, details: Record<string, unknown>) => void;
   resolveAllowedPath: (inputPath: string, request?: Partial<ToolExecutionRequest>) => Promise<string>;
   getEffectiveWorkspaceRoot: (request?: Partial<ToolExecutionRequest>) => string;
@@ -120,8 +144,9 @@ interface CodingToolRegistrarContext {
   ) => { session?: CodeSessionRecord; error?: string };
   getCurrentCodeSessionRecord: (request?: Partial<ToolExecutionRequest>) => CodeSessionRecord | null;
   getRemoteExecutionTargets?: () => RemoteExecutionTargetDescriptor[];
-  resolveRemoteExecutionTarget?: (profileId?: string) => RemoteExecutionResolvedTarget | null;
+  resolveRemoteExecutionTarget?: (profileId?: string, command?: string) => RemoteExecutionResolvedTarget | null;
   runRemoteExecutionJob?: (input: {
+    request?: Partial<ToolExecutionRequest>;
     profileId?: string;
     command: {
       requestedCommand: string;
@@ -132,6 +157,7 @@ interface CodingToolRegistrarContext {
     workspace: {
       workspaceRoot: string;
       cwd: string;
+      stageWorkspace?: boolean;
       includePaths?: string[];
     };
     artifactPaths?: string[];
@@ -315,14 +341,16 @@ function buildRemoteExecutionOutput(result: RemoteExecutionRunResult): Record<st
     profileId: result.profileId,
     profileName: result.profileName,
     sandboxId: result.sandboxId,
+    leaseId: result.leaseId,
+    leaseScope: result.leaseScope,
+    leaseReused: result.leaseReused,
+    leaseMode: result.leaseMode,
+    healthState: result.healthState,
+    healthReason: result.healthReason,
     command: result.requestedCommand,
-    cwd: result.cwd,
-    workspaceRoot: result.workspaceRoot,
     exitCode: result.exitCode,
     durationMs: result.durationMs,
     networkMode: result.networkMode,
-    allowedDomains: [...(result.allowedDomains ?? [])],
-    allowedCidrs: [...(result.allowedCidrs ?? [])],
     stagedFiles: result.stagedFiles,
     stagedBytes: result.stagedBytes,
     stdout: truncateOutput(result.stdout),
@@ -434,6 +462,36 @@ async function buildCodingQualityReportForFiles(
   };
 }
 
+function shouldStageWorkspaceForRemoteCommand(
+  plan: ShellCommandPlan,
+  input: {
+    includePaths?: string[];
+    artifactPaths?: string[];
+    stageWorkspace?: boolean;
+  },
+): boolean {
+  if (input.stageWorkspace === false) return false;
+  if (input.stageWorkspace === true) return true;
+  if ((input.includePaths?.length ?? 0) > 0) return true;
+  if ((input.artifactPaths?.length ?? 0) > 0) return true;
+
+  const normalizedEntry = plan.entryCommand.trim().toLowerCase();
+  if (SNAPSHOT_FREE_REMOTE_EXEC_COMMANDS.has(normalizedEntry)) {
+    return false;
+  }
+  if (
+    SNAPSHOT_FREE_VERSION_COMMANDS.has(normalizedEntry)
+    && plan.argv.length > 0
+    && plan.argv.every((arg) => {
+      const normalizedArg = arg.trim();
+      return normalizedArg === '-v' || normalizedArg === '--version';
+    })
+  ) {
+    return false;
+  }
+  return true;
+}
+
 async function runRemoteCodingCommand(
   context: CodingToolRegistrarContext,
   input: {
@@ -445,6 +503,8 @@ async function runRemoteCodingCommand(
     artifactPaths?: string[];
     timeoutMs?: number;
     vcpus?: number;
+    stageWorkspace?: boolean;
+    installDependencies?: boolean;
   },
 ): Promise<
   | { success: false; error: string }
@@ -460,7 +520,18 @@ async function runRemoteCodingCommand(
   if (!shellCheck.plan) {
     return { success: false, error: 'Command failed execution planning.' };
   }
-  const target = context.resolveRemoteExecutionTarget(input.profileId);
+  let target;
+  try {
+    target = context.resolveRemoteExecutionTarget(input.profileId, input.command);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const match = message.match(/Host '([^']+)' is not in allowedDomains\./);
+    const hint = match
+      ? `\nHint: Use update_tool_policy with action "add_domain" and value "${match[1]}" to allow this host, then retry.`
+      : '';
+    return { success: false, error: `${message}${hint}` };
+  }
+
   if (!target) {
     return {
       success: false,
@@ -479,18 +550,28 @@ async function runRemoteCodingCommand(
     profileId: target.profileId,
     networkMode: target.networkMode,
   });
+  const stageWorkspace = shouldStageWorkspaceForRemoteCommand(shellCheck.plan, input);
 
   const result = await context.runRemoteExecutionJob({
-    profileId: target.profileId,
-    command: {
-      requestedCommand: input.command,
-      entryCommand: shellCheck.plan.entryCommand,
-      args: shellCheck.plan.argv,
-      execMode: shellCheck.plan.execMode,
-    },
+    request: input.request,
+    profileId: input.profileId,
+    command: input.installDependencies
+      ? {
+          requestedCommand: `[Install Dependencies] && ${input.command}`,
+          entryCommand: 'bash',
+          args: ['-lc', `if [ -f package-lock.json ]; then npm ci; elif [ -f yarn.lock ]; then yarn install; elif [ -f pnpm-lock.yaml ]; then pnpm install; elif [ -f package.json ]; then npm install; fi; ${input.command}`],
+          execMode: 'shell_fallback',
+        }
+      : {
+          requestedCommand: input.command,
+          entryCommand: shellCheck.plan.entryCommand,
+          args: shellCheck.plan.argv,
+          execMode: shellCheck.plan.execMode,
+        },
     workspace: {
       workspaceRoot,
       cwd: input.cwd,
+      stageWorkspace,
       includePaths: input.includePaths,
     },
     artifactPaths: input.artifactPaths,
@@ -536,11 +617,56 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
       },
     },
     async (args, request) => {
+      const command = requireString(args.command, 'command').trim();
+      const cwd = asString(args.cwd).trim() || undefined;
+
+      // Automatic tier promotion if a remote execution target is available
+      if (context.resolveRemoteExecutionTarget && context.runRemoteExecutionJob) {
+        const remoteTarget = context.resolveRemoteExecutionTarget(undefined, command);
+        if (remoteTarget) {
+          const resolvedCwd = cwd ? await context.resolveAllowedPath(cwd, request) : context.getEffectiveWorkspaceRoot(request);
+          context.guardAction(request, 'execute_command', {
+            command,
+            cwd: resolvedCwd,
+            managed: true,
+            tool: 'package_install',
+            remoteProfile: remoteTarget.profileId,
+          });
+
+          const remoteRun = await runRemoteCodingCommand(context, {
+            request,
+            command,
+            cwd: resolvedCwd,
+            profileId: remoteTarget.profileId,
+            timeoutMs: 10 * 60_000,
+          });
+
+          if (!remoteRun.success) {
+            return { success: false, error: remoteRun.error };
+          }
+          if (remoteRun.result.status !== 'succeeded') {
+            return {
+              success: false,
+              error: formatRemoteExecutionFailure(remoteRun.result),
+              output: buildRemoteExecutionOutput(remoteRun.result),
+            };
+          }
+          
+          const stdoutText = truncateOutput(remoteRun.result.stdout).trim();
+          const stderrText = truncateOutput(remoteRun.result.stderr).trim();
+          const outputPreview = stdoutText ? `STDOUT:\n${stdoutText}` : stderrText ? `STDERR:\n${stderrText}` : 'No output.';
+          
+          return {
+            success: true,
+            message: `Remote managed install completed on '${remoteRun.target.profileName}'. ${outputPreview}`,
+            output: buildRemoteExecutionOutput(remoteRun.result),
+          };
+        }
+      }
+
       if (!context.packageInstallTrust) {
         return { success: false, error: 'Managed package install trust is not available in this Guardian runtime.' };
       }
-      const command = requireString(args.command, 'command').trim();
-      const cwd = asString(args.cwd).trim() || undefined;
       const allowCaution = !!args.allowCaution;
       context.guardAction(request, 'execute_command', {
         command,
@@ -1121,7 +1247,7 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
         : [];
       return {
         success: true,
-        output: buildCodingWorkflowPlan(task, cwd, selectedFiles, context.getRemoteExecutionTargets?.() ?? []),
+        output: buildCodingWorkflowPlan(task, cwd, selectedFiles, context.getRemoteExecutionTargets?.() ?? [], context.cloudConfig?.defaultRemoteExecutionTargetId),
       };
     },
   );
@@ -1129,7 +1255,7 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
   context.registry.register(
     {
       name: 'code_remote_exec',
-      description: 'Run one bounded repo command inside the configured remote sandbox instead of on the host. This is the explicit isolated execution lane for setup, install, build, test, scan, or other higher-risk repo work.',
+      description: 'Run one bounded repo command inside the configured remote sandbox instead of on the host. This is the explicit isolated execution lane for setup, install, build, test, scan, or other higher-risk repo work. IMPORTANT: Always report the exact stdout/stderr from the tool output to the user, do not infer the result from your arguments. IMPORTANT: If a command fails and requires an approval-gated follow-up (like fixing missing domains or installing packages), you MUST write a chat message explaining the failure and your plan BEFORE you attempt the fix.',
       shortDescription: 'Run a bounded coding command in the configured remote sandbox.',
       risk: 'mutating',
       category: 'coding',
@@ -1139,7 +1265,7 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
         properties: {
           command: { type: 'string', description: 'Allowlisted command to run in the remote sandbox.' },
           cwd: { type: 'string', description: 'Project root or working directory to stage and run from. Defaults to the current workspace root.' },
-          profile: { type: 'string', description: 'Optional remote execution profile id. Defaults to the first ready configured target.' },
+          profile: { type: 'string', description: 'Optional remote execution profile id. Omit it to use the configured default remote sandbox when one is set; otherwise the first ready target is used.' },
           includePaths: {
             type: 'array',
             items: { type: 'string' },
@@ -1172,16 +1298,24 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
         timeoutMs: Math.max(1_000, Math.min(900_000, asNumber(args.timeoutMs, 300_000))),
         vcpus: args.vcpus === undefined ? undefined : Math.max(1, Math.min(8, asNumber(args.vcpus, 2))),
       });
-      if (!remoteRun.success) {
-        return { success: false, error: remoteRun.error };
-      }
-      if (remoteRun.result.status !== 'succeeded') {
-        return { success: false, error: formatRemoteExecutionFailure(remoteRun.result) };
-      }
+        if (!remoteRun.success) {
+          return { success: false, error: remoteRun.error };
+        }
+        if (remoteRun.result.status !== 'succeeded') {
+          return {
+            success: false,
+            error: formatRemoteExecutionFailure(remoteRun.result),
+            output: buildRemoteExecutionOutput(remoteRun.result),
+          };
+        }
       const verificationRun = args.verificationRun === true;
+      const stdoutText = truncateOutput(remoteRun.result.stdout).trim();
+      const stderrText = truncateOutput(remoteRun.result.stderr).trim();
+      const outputPreview = stdoutText ? `STDOUT:\n${stdoutText}` : stderrText ? `STDERR:\n${stderrText}` : 'No output.';
+      
       return {
         success: true,
-        message: `Remote sandbox command completed on '${remoteRun.target.profileName}'.`,
+        message: `Remote sandbox command completed on '${remoteRun.target.profileName}'. ${outputPreview}`,
         output: buildRemoteExecutionOutput(remoteRun.result),
         ...(verificationRun
           ? {
@@ -1330,15 +1464,15 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
   for (const toolName of ['code_test', 'code_build', 'code_lint'] as const) {
     const descriptions: Record<typeof toolName, { description: string; shortDescription: string }> = {
       code_test: {
-        description: 'Run an allowlisted test command inside a validated project directory.',
+        description: 'Run an allowlisted test command inside a validated project directory. IMPORTANT: If tests fail because dependencies are missing, you MUST write a chat message explaining that dependencies are missing BEFORE you attempt to run package_install or npm ci.',
         shortDescription: 'Run tests from a project directory.',
       },
       code_build: {
-        description: 'Run an allowlisted build command inside a validated project directory.',
+        description: 'Run an allowlisted build command inside a validated project directory. IMPORTANT: If the build fails because dependencies are missing, you MUST write a chat message explaining that dependencies are missing BEFORE you attempt to run package_install or npm ci.',
         shortDescription: 'Run a build command from a project directory.',
       },
       code_lint: {
-        description: 'Run an allowlisted lint or static analysis command inside a validated project directory.',
+        description: 'Run an allowlisted lint or static analysis command inside a validated project directory. IMPORTANT: If linting fails because dependencies are missing, you MUST write a chat message explaining that dependencies are missing BEFORE you attempt to run package_install or npm ci.',
         shortDescription: 'Run lint or static analysis from a project directory.',
       },
     };
@@ -1384,30 +1518,48 @@ export function registerBuiltinCodingTools(context: CodingToolRegistrarContext):
         },
       },
       async (args, request) => {
-        const isolation = normalizeRemoteIsolationMode(args.isolation);
+        let isolation = normalizeRemoteIsolationMode(args.isolation);
         const remoteProfile = asString(args.remoteProfile).trim() || undefined;
+        const command = requireString(args.command, 'command');
+
+        // Automatic tier promotion if a remote execution target is available
+        const hasRemoteTarget = context.resolveRemoteExecutionTarget && context.resolveRemoteExecutionTarget(remoteProfile, command) != null;
+        if (isolation === 'local' && hasRemoteTarget && !args.isolation) {
+          isolation = 'remote_if_available';
+        }
+
         if (isolation !== 'local' && context.resolveRemoteExecutionTarget && context.runRemoteExecutionJob) {
-          const remoteTarget = context.resolveRemoteExecutionTarget(remoteProfile);
+          const remoteTarget = context.resolveRemoteExecutionTarget(remoteProfile, command);
           if (remoteTarget) {
             const remoteRun = await runRemoteCodingCommand(context, {
               request,
-              command: requireString(args.command, 'command'),
+              command,
               cwd: await context.resolveAllowedPath(requireString(args.cwd, 'cwd'), request),
               profileId: remoteTarget.profileId,
               includePaths: stringArrayArg(args.includePaths),
               artifactPaths: stringArrayArg(args.artifactPaths),
               timeoutMs: Math.max(1_000, Math.min(900_000, asNumber(args.timeoutMs, 300_000))),
               vcpus: args.vcpus === undefined ? undefined : Math.max(1, Math.min(8, asNumber(args.vcpus, 2))),
+              installDependencies: true,
             });
             if (!remoteRun.success) {
               return { success: false, error: remoteRun.error };
             }
             if (remoteRun.result.status !== 'succeeded') {
-              return { success: false, error: formatRemoteExecutionFailure(remoteRun.result) };
+              return {
+                success: false,
+                error: formatRemoteExecutionFailure(remoteRun.result),
+                output: buildRemoteExecutionOutput(remoteRun.result),
+              };
             }
+            
+            const stdoutText = truncateOutput(remoteRun.result.stdout).trim();
+            const stderrText = truncateOutput(remoteRun.result.stderr).trim();
+            const outputPreview = stdoutText ? `STDOUT:\n${stdoutText}` : stderrText ? `STDERR:\n${stderrText}` : 'No output.';
+
             return {
               success: true,
-              message: `Remote sandbox ${toolName.slice(5)} run completed on '${remoteRun.target.profileName}'.`,
+              message: `Remote sandbox ${toolName.slice(5)} run completed on '${remoteRun.target.profileName}'. ${outputPreview}`,
               output: buildRemoteExecutionOutput(remoteRun.result),
               verificationStatus: 'verified',
               verificationEvidence: `Remote ${toolName.slice(5)} run passed on '${remoteRun.target.profileName}'.`,

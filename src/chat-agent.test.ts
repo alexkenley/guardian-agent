@@ -83,6 +83,84 @@ describe('LLMChatAgent direct intent metadata', () => {
     });
   });
 
+  it('prefers routed execution-profile metadata for direct intent response source labels', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const agent = new ChatAgent('chat', 'Chat');
+    const message: UserMessage = {
+      id: 'msg-1',
+      userId: 'owner',
+      channel: 'web',
+      content: 'List my coding workspaces.',
+      timestamp: Date.now(),
+    };
+    const routingMessage: UserMessage = {
+      ...message,
+      metadata: attachSelectedExecutionProfileMetadata(undefined, {
+        id: 'managed_cloud_direct',
+        providerName: 'ollama-cloud-coding',
+        providerType: 'ollama_cloud',
+        providerModel: 'qwen3-coder-next',
+        providerLocality: 'external',
+        providerTier: 'managed_cloud',
+        requestedTier: 'external',
+        preferredAnswerPath: 'direct',
+        expectedContextPressure: 'low',
+        contextBudget: 80000,
+        toolContextMode: 'tight',
+        maxAdditionalSections: 2,
+        maxRuntimeNotices: 2,
+        fallbackProviderOrder: ['ollama-cloud-coding'],
+        reason: 'managed-cloud coding role binding',
+      }),
+    };
+    const ctx: AgentContext = {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: { name: 'ollama_cloud' } as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    };
+
+    const response = await (agent as any).buildDirectIntentResponse({
+      candidate: 'coding_session_control',
+      result: 'Available coding workspaces:\n- CURRENT: Guardian Agent',
+      message,
+      routingMessage,
+      intentGateway: {
+        available: true,
+        decision: {
+          route: 'coding_session_control',
+          operation: 'navigate',
+          summary: 'Lists coding workspaces.',
+          confidence: 'high',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          entities: {},
+        },
+      },
+      ctx,
+      activeSkills: [],
+      conversationKey: { userId: 'owner', channel: 'web' },
+    });
+
+    expect(response.metadata?.responseSource).toMatchObject({
+      locality: 'external',
+      providerName: 'ollama_cloud',
+      providerProfileName: 'ollama-cloud-coding',
+      model: 'qwen3-coder-next',
+      providerTier: 'managed_cloud',
+      usedFallback: false,
+    });
+  });
+
   it('auto-switches to an explicitly named coding workspace before delegated coding work runs', async () => {
     const ChatAgent = createChatAgentClass({
       log: {
@@ -4944,7 +5022,8 @@ describe('LLMChatAgent direct intent metadata', () => {
       executeModelTool: vi.fn(async (_toolName: string, args: Record<string, unknown>) => {
         expect(args.id).toBe('event-1');
         expect(args.title).toBe('Second Brain calendar smoke test');
-        expect(args.startsAt).toBe(Date.UTC(2026, 3, 8, 7, 0, 0));
+        expect(args.startsAt).toBe(1775631600000); // Or the correct expected value based on the test
+
         return {
           success: true,
           output: {
@@ -5272,6 +5351,783 @@ describe('LLMChatAgent direct intent metadata', () => {
         }),
       }),
     );
+  });
+
+  it('stores a structured tool-loop resume payload for approval-blocked remote sandbox runs', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const pendingActionStore = new PendingActionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-remote-tool-loop.test.sqlite',
+      now: () => 1_710_000_000_000,
+    });
+    const llm = {
+      name: 'ollama_cloud',
+      chat: vi.fn(async () => ({
+        content: '',
+        toolCalls: [
+          {
+            id: 'tool-call-1',
+            name: 'code_remote_exec',
+            arguments: JSON.stringify({ command: 'npm ci', profile: 'Daytona' }),
+          },
+        ],
+        model: 'gpt-oss:120b',
+        finishReason: 'tool_calls',
+      })),
+    };
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      getRuntimeNotices: vi.fn(() => []),
+      getToolContext: vi.fn(() => ''),
+      listAlwaysLoadedDefinitions: vi.fn(() => []),
+      listCodeSessionEagerToolDefinitions: vi.fn(() => [
+        {
+          name: 'code_remote_exec',
+          description: 'Run a command in the remote sandbox.',
+          shortDescription: 'Remote exec',
+          risk: 'mutating',
+          category: 'coding',
+          parameters: { type: 'object', properties: {} },
+        },
+      ]),
+      getToolDefinition: vi.fn(() => ({
+        name: 'code_remote_exec',
+        description: 'Run a command in the remote sandbox.',
+        shortDescription: 'Remote exec',
+        risk: 'mutating',
+        category: 'coding',
+        parameters: { type: 'object', properties: {} },
+      })),
+      executeModelTool: vi.fn(async () => ({
+        success: false,
+        status: 'pending_approval',
+        approvalId: 'approval-1',
+        jobId: 'job-1',
+        message: 'Approval required.',
+      })),
+      getApprovalSummaries: vi.fn(() => new Map([
+        ['approval-1', {
+          toolName: 'code_remote_exec',
+          argsPreview: '{"command":"npm ci","profile":"Daytona"}',
+          actionLabel: 'run npm ci remotely',
+        }],
+      ])),
+      listPendingApprovalIdsForUser: vi.fn(() => []),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).pendingActionStore = pendingActionStore;
+
+    const response = await agent.onMessage({
+      id: 'msg-remote-pending',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'owner',
+      content: 'In the Guardian workspace, run `npm ci` in the remote sandbox using the Daytona profile for this coding session, then run `npm test` in the same remote sandbox.',
+      timestamp: 1_710_000_000_000,
+      metadata: attachSelectedExecutionProfileMetadata(
+        attachPreRoutedIntentGatewayMetadata(
+          {
+            codeContext: {
+              workspaceRoot: '/repo',
+              sessionId: 'session-123',
+            },
+          },
+          {
+            available: true,
+            mode: 'primary',
+            model: 'test-model',
+            latencyMs: 1,
+            decision: {
+              route: 'coding_task',
+              operation: 'run',
+              summary: 'Run repo commands in the remote sandbox.',
+              confidence: 'high',
+              turnRelation: 'new_request',
+              resolution: 'ready',
+              missingFields: [],
+              executionClass: 'repo_grounded',
+              preferredTier: 'external',
+              requiresRepoGrounding: true,
+              requiresToolSynthesis: true,
+              expectedContextPressure: 'medium',
+              preferredAnswerPath: 'tool_loop',
+              entities: {
+                codingRemoteExecRequested: true,
+                profileId: 'Daytona',
+              },
+            },
+          },
+        ),
+        {
+          id: 'managed_cloud_tool',
+          providerName: 'ollama-cloud-coding',
+          providerType: 'ollama_cloud',
+          providerModel: 'gpt-oss:120b',
+          providerLocality: 'external',
+          providerTier: 'managed_cloud',
+          requestedTier: 'external',
+          preferredAnswerPath: 'tool_loop',
+          expectedContextPressure: 'medium',
+          contextBudget: 80000,
+          toolContextMode: 'tight',
+          maxAdditionalSections: 2,
+          maxRuntimeNotices: 2,
+          fallbackProviderOrder: ['ollama-cloud-coding'],
+          reason: 'coding profile',
+        },
+      ),
+    }, {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: llm as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    });
+
+    expect(response.metadata?.pendingAction).toBeTruthy();
+    const pending = pendingActionStore.getActive({
+      agentId: 'chat',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'owner',
+    });
+    expect(pending?.resume?.kind).toBe('tool_loop');
+    expect(pending?.resume?.payload).toMatchObject({
+      type: 'suspended_tool_loop',
+      codeContext: {
+        workspaceRoot: '/repo',
+        sessionId: 'session-123',
+      },
+      selectedExecutionProfile: {
+        providerName: 'ollama-cloud-coding',
+      },
+      pendingTools: [
+        {
+          approvalId: 'approval-1',
+          toolCallId: 'tool-call-1',
+          jobId: 'job-1',
+          name: 'code_remote_exec',
+        },
+      ],
+    });
+  });
+
+  it('resumes approval-blocked remote tool loops with the stored code session context', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      listJobs: vi.fn(() => []),
+      listAlwaysLoadedDefinitions: vi.fn(() => []),
+      listCodeSessionEagerToolDefinitions: vi.fn(() => [
+        {
+          name: 'code_remote_exec',
+          description: 'Run a command in the remote sandbox.',
+          shortDescription: 'Remote exec',
+          risk: 'mutating',
+          category: 'coding',
+          parameters: { type: 'object', properties: {} },
+        },
+      ]),
+      getToolDefinition: vi.fn(() => ({
+        name: 'code_remote_exec',
+        description: 'Run a command in the remote sandbox.',
+        shortDescription: 'Remote exec',
+        risk: 'mutating',
+        category: 'coding',
+        parameters: { type: 'object', properties: {} },
+      })),
+      executeModelTool: vi.fn(async (_toolName: string, args: Record<string, unknown>, request: Record<string, unknown>) => {
+        expect(args).toMatchObject({
+          command: 'npm test',
+          profile: 'Daytona',
+        });
+        expect(request.codeContext).toMatchObject({
+          workspaceRoot: '/repo',
+          sessionId: 'session-123',
+        });
+        return {
+          success: true,
+          output: {
+            stdout: 'tests ok',
+            stderr: '',
+          },
+        };
+      }),
+      getApprovalSummaries: vi.fn(() => new Map()),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).fallbackChain = {
+      chatWithProviderOrder: vi.fn()
+        .mockResolvedValueOnce({
+          providerName: 'ollama-cloud-coding',
+          usedFallback: false,
+          skipped: [],
+          response: {
+            content: '',
+            toolCalls: [
+              {
+                id: 'tool-call-2',
+                name: 'code_remote_exec',
+                arguments: JSON.stringify({ command: 'npm test' }),
+              },
+            ],
+            model: 'gpt-oss:120b',
+            finishReason: 'tool_calls',
+          },
+        })
+        .mockResolvedValueOnce({
+          providerName: 'ollama-cloud-coding',
+          usedFallback: false,
+          skipped: [],
+          response: {
+            content: 'Remote sandbox sequence completed.',
+            toolCalls: [],
+            model: 'gpt-oss:120b',
+            finishReason: 'stop',
+          },
+        }),
+    };
+
+    const selectedExecutionProfile = {
+      id: 'managed_cloud_tool' as const,
+      providerName: 'ollama-cloud-coding',
+      providerType: 'ollama_cloud',
+      providerModel: 'gpt-oss:120b',
+      providerLocality: 'external' as const,
+      providerTier: 'managed_cloud' as const,
+      requestedTier: 'external' as const,
+      preferredAnswerPath: 'tool_loop' as const,
+      expectedContextPressure: 'medium' as const,
+      contextBudget: 80000,
+      toolContextMode: 'tight' as const,
+      maxAdditionalSections: 2,
+      maxRuntimeNotices: 2,
+      fallbackProviderOrder: ['ollama-cloud-coding'],
+      reason: 'coding profile',
+    };
+    const originalMetadata = attachSelectedExecutionProfileMetadata({
+      codeContext: {
+        workspaceRoot: '/repo',
+        sessionId: 'session-123',
+      },
+    }, selectedExecutionProfile);
+    const pendingAction: PendingActionRecord = {
+      id: 'pending-remote-1',
+      scope: {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'owner',
+      },
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve remote execution.',
+        approvalIds: ['approval-1'],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'run',
+        originalUserContent: 'Run npm ci and then npm test in the same remote sandbox.',
+        entities: {
+          codingRemoteExecRequested: true,
+          profileId: 'Daytona',
+        },
+      },
+      resume: {
+        kind: 'tool_loop',
+        payload: (agent as any).buildToolLoopResumePayload({
+          llmMessages: [
+            { role: 'system', content: 'system prompt' },
+            { role: 'user', content: 'Run npm ci and then npm test in the same remote sandbox.' },
+            {
+              role: 'assistant',
+              content: '',
+              toolCalls: [
+                {
+                  id: 'tool-call-1',
+                  name: 'code_remote_exec',
+                  arguments: JSON.stringify({ command: 'npm ci', profile: 'Daytona' }),
+                },
+              ],
+            },
+          ],
+          pendingTools: [
+            {
+              approvalId: 'approval-1',
+              toolCallId: 'tool-call-1',
+              jobId: 'job-1',
+              name: 'code_remote_exec',
+            },
+          ],
+          originalMessage: {
+            id: 'msg-remote-1',
+            userId: 'owner',
+            channel: 'web',
+            surfaceId: 'owner',
+            principalId: 'owner',
+            principalRole: 'owner',
+            content: 'Run npm ci and then npm test in the same remote sandbox.',
+            timestamp: 1_710_000_000_000,
+            metadata: originalMetadata,
+          },
+          requestText: 'Run npm ci and then npm test in the same remote sandbox.',
+          referenceTime: 1_710_000_000_000,
+          allowModelMemoryMutation: false,
+          activeSkillIds: [],
+          contentTrustLevel: 'trusted',
+          taintReasons: [],
+          intentDecision: {
+            route: 'coding_task',
+            operation: 'run',
+            summary: 'Run remote sandbox commands.',
+            confidence: 'high',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'repo_grounded',
+            preferredTier: 'external',
+            requiresRepoGrounding: true,
+            requiresToolSynthesis: true,
+            expectedContextPressure: 'medium',
+            preferredAnswerPath: 'tool_loop',
+            entities: {
+              codingRemoteExecRequested: true,
+              profileId: 'Daytona',
+            },
+          },
+          codeContext: {
+            workspaceRoot: '/repo',
+            sessionId: 'session-123',
+          },
+          selectedExecutionProfile,
+        }),
+      },
+      codeSessionId: 'session-123',
+      createdAt: 1,
+      updatedAt: 1,
+      expiresAt: 2,
+    };
+
+    const result = await (agent as any).continueDirectRouteAfterApproval(
+      pendingAction,
+      'approval-1',
+      'approved',
+      {
+        success: true,
+        message: "Tool 'code_remote_exec' completed.",
+        result: {
+          success: true,
+          status: 'succeeded',
+          output: {
+            stdout: 'installed',
+            stderr: '',
+            leaseId: 'lease-1',
+            sandboxId: 'sandbox-1',
+          },
+        },
+      },
+    );
+
+    expect(result?.content).toBe('Remote sandbox sequence completed.');
+    expect(tools.executeModelTool).toHaveBeenCalledTimes(1);
+  });
+
+  it('suspends a multi-step remote sandbox turn with only the first remote step pending approval', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const pendingActionStore = new PendingActionStore({
+      enabled: false,
+      sqlitePath: '/tmp/guardianagent-chat-agent-remote-sequencing.test.sqlite',
+      now: () => 1_710_000_000_000,
+    });
+    const llm = {
+      name: 'ollama_cloud',
+      chat: vi.fn(async () => ({
+        content: '',
+        toolCalls: [
+          {
+            id: 'tool-call-1',
+            name: 'code_remote_exec',
+            arguments: JSON.stringify({ command: 'npm ci' }),
+          },
+          {
+            id: 'tool-call-2',
+            name: 'code_remote_exec',
+            arguments: JSON.stringify({ command: 'npm test' }),
+          },
+        ],
+        model: 'gpt-oss:120b',
+        finishReason: 'tool_calls',
+      })),
+    };
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      getRuntimeNotices: vi.fn(() => []),
+      getToolContext: vi.fn(() => ''),
+      listAlwaysLoadedDefinitions: vi.fn(() => []),
+      listCodeSessionEagerToolDefinitions: vi.fn(() => [
+        {
+          name: 'code_remote_exec',
+          description: 'Run a command in the remote sandbox.',
+          shortDescription: 'Remote exec',
+          risk: 'mutating',
+          category: 'coding',
+          parameters: { type: 'object', properties: {} },
+        },
+      ]),
+      getToolDefinition: vi.fn(() => ({
+        name: 'code_remote_exec',
+        description: 'Run a command in the remote sandbox.',
+        shortDescription: 'Remote exec',
+        risk: 'mutating',
+        category: 'coding',
+        parameters: { type: 'object', properties: {} },
+      })),
+      executeModelTool: vi.fn(async (_toolName: string, args: Record<string, unknown>) => {
+        expect(args).toMatchObject({
+          command: 'npm ci',
+          profile: 'Daytona',
+        });
+        return {
+          success: false,
+          status: 'pending_approval',
+          approvalId: 'approval-1',
+          jobId: 'job-1',
+          message: 'Approval required.',
+        };
+      }),
+      getApprovalSummaries: vi.fn(() => new Map([
+        ['approval-1', {
+          toolName: 'code_remote_exec',
+          argsPreview: '{"command":"npm ci","profile":"Daytona"}',
+          actionLabel: 'run npm ci remotely',
+        }],
+      ])),
+      listPendingApprovalIdsForUser: vi.fn(() => []),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    (agent as any).pendingActionStore = pendingActionStore;
+
+    const response = await agent.onMessage({
+      id: 'msg-remote-sequencing',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'owner',
+      content: 'In the current coding workspace, run `npm ci` in the remote sandbox using the Daytona profile for this coding session, then run `npm test` in the same remote sandbox.',
+      timestamp: 1_710_000_000_000,
+      metadata: attachSelectedExecutionProfileMetadata(
+        attachPreRoutedIntentGatewayMetadata(
+          {
+            codeContext: {
+              workspaceRoot: '/repo',
+              sessionId: 'session-123',
+            },
+          },
+          {
+            available: true,
+            mode: 'primary',
+            model: 'test-model',
+            latencyMs: 1,
+            decision: {
+              route: 'coding_task',
+              operation: 'run',
+              summary: 'Run repo commands in the remote sandbox.',
+              confidence: 'high',
+              turnRelation: 'new_request',
+              resolution: 'ready',
+              missingFields: [],
+              executionClass: 'repo_grounded',
+              preferredTier: 'external',
+              requiresRepoGrounding: true,
+              requiresToolSynthesis: true,
+              expectedContextPressure: 'medium',
+              preferredAnswerPath: 'tool_loop',
+              entities: {
+                codingRemoteExecRequested: true,
+                profileId: 'Daytona',
+              },
+            },
+          },
+        ),
+        {
+          id: 'managed_cloud_tool',
+          providerName: 'ollama-cloud-coding',
+          providerType: 'ollama_cloud',
+          providerModel: 'gpt-oss:120b',
+          providerLocality: 'external',
+          providerTier: 'managed_cloud',
+          requestedTier: 'external',
+          preferredAnswerPath: 'tool_loop',
+          expectedContextPressure: 'medium',
+          contextBudget: 80000,
+          toolContextMode: 'tight',
+          maxAdditionalSections: 2,
+          maxRuntimeNotices: 2,
+          fallbackProviderOrder: ['ollama-cloud-coding'],
+          reason: 'coding profile',
+        },
+      ),
+    }, {
+      agentId: 'chat',
+      emit: vi.fn(async () => {}),
+      llm: llm as never,
+      checkAction: vi.fn(),
+      capabilities: [],
+    });
+
+    expect(response.metadata?.pendingAction).toBeTruthy();
+    expect(tools.executeModelTool).toHaveBeenCalledTimes(1);
+    const pending = pendingActionStore.getActive({
+      agentId: 'chat',
+      userId: 'owner',
+      channel: 'web',
+      surfaceId: 'owner',
+    });
+    expect(pending?.resume?.kind).toBe('tool_loop');
+    expect(pending?.resume?.payload).toMatchObject({
+      pendingTools: [
+        {
+          approvalId: 'approval-1',
+          toolCallId: 'tool-call-1',
+          jobId: 'job-1',
+          name: 'code_remote_exec',
+        },
+      ],
+    });
+    expect(((pending?.resume?.payload as Record<string, unknown>).llmMessages as Array<Record<string, unknown>>)
+      .find((message) => message.role === 'assistant')?.toolCalls).toEqual([
+      {
+        id: 'tool-call-1',
+        name: 'code_remote_exec',
+        arguments: JSON.stringify({ command: 'npm ci' }),
+      },
+    ]);
+  });
+
+  it('replays failed approval-backed remote tool results into the resumed tool loop', async () => {
+    const ChatAgent = createChatAgentClass({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+    const tools = {
+      isEnabled: vi.fn(() => true),
+      listJobs: vi.fn(() => []),
+      listAlwaysLoadedDefinitions: vi.fn(() => []),
+      listCodeSessionEagerToolDefinitions: vi.fn(() => [
+        {
+          name: 'code_remote_exec',
+          description: 'Run a command in the remote sandbox.',
+          shortDescription: 'Remote exec',
+          risk: 'mutating',
+          category: 'coding',
+          parameters: { type: 'object', properties: {} },
+        },
+      ]),
+      getToolDefinition: vi.fn(() => ({
+        name: 'code_remote_exec',
+        description: 'Run a command in the remote sandbox.',
+        shortDescription: 'Remote exec',
+        risk: 'mutating',
+        category: 'coding',
+        parameters: { type: 'object', properties: {} },
+      })),
+      getApprovalSummaries: vi.fn(() => new Map()),
+    };
+    const agent = new ChatAgent('chat', 'Chat', undefined, undefined, tools as never);
+    const fallbackChain = {
+      chatWithProviderOrder: vi.fn(async (_providerOrder: string[], msgs: Array<{ role: string; content?: string }>) => {
+        const replayedFailure = msgs.find((message) =>
+          message.role === 'tool'
+          && typeof message.content === 'string'
+          && message.content.includes('"stderr":"OOM"'),
+        );
+        expect(replayedFailure).toBeTruthy();
+        return {
+          providerName: 'ollama-cloud-coding',
+          usedFallback: false,
+          skipped: [],
+          response: {
+            content: 'Observed the remote sandbox failure.',
+            toolCalls: [],
+            model: 'gpt-oss:120b',
+            finishReason: 'stop',
+          },
+        };
+      }),
+    };
+    (agent as any).fallbackChain = fallbackChain;
+
+    const selectedExecutionProfile = {
+      id: 'managed_cloud_tool' as const,
+      providerName: 'ollama-cloud-coding',
+      providerType: 'ollama_cloud',
+      providerModel: 'gpt-oss:120b',
+      providerLocality: 'external' as const,
+      providerTier: 'managed_cloud' as const,
+      requestedTier: 'external' as const,
+      preferredAnswerPath: 'tool_loop' as const,
+      expectedContextPressure: 'medium' as const,
+      contextBudget: 80000,
+      toolContextMode: 'tight' as const,
+      maxAdditionalSections: 2,
+      maxRuntimeNotices: 2,
+      fallbackProviderOrder: ['ollama-cloud-coding'],
+      reason: 'coding profile',
+    };
+    const originalMetadata = attachSelectedExecutionProfileMetadata({
+      codeContext: {
+        workspaceRoot: '/repo',
+        sessionId: 'session-123',
+      },
+    }, selectedExecutionProfile);
+    const pendingAction: PendingActionRecord = {
+      id: 'pending-remote-failure-1',
+      scope: {
+        agentId: 'chat',
+        userId: 'owner',
+        channel: 'web',
+        surfaceId: 'owner',
+      },
+      status: 'pending',
+      transferPolicy: 'origin_surface_only',
+      blocker: {
+        kind: 'approval',
+        prompt: 'Approve remote execution.',
+        approvalIds: ['approval-1'],
+      },
+      intent: {
+        route: 'coding_task',
+        operation: 'run',
+        originalUserContent: 'Run npm ci and then npm test in the same remote sandbox.',
+        entities: {
+          codingRemoteExecRequested: true,
+          profileId: 'Daytona',
+        },
+      },
+      resume: {
+        kind: 'tool_loop',
+        payload: (agent as any).buildToolLoopResumePayload({
+          llmMessages: [
+            { role: 'system', content: 'system prompt' },
+            { role: 'user', content: 'Run npm ci and then npm test in the same remote sandbox.' },
+            {
+              role: 'assistant',
+              content: '',
+              toolCalls: [
+                {
+                  id: 'tool-call-1',
+                  name: 'code_remote_exec',
+                  arguments: JSON.stringify({ command: 'npm ci', profile: 'Daytona' }),
+                },
+              ],
+            },
+          ],
+          pendingTools: [
+            {
+              approvalId: 'approval-1',
+              toolCallId: 'tool-call-1',
+              jobId: 'job-1',
+              name: 'code_remote_exec',
+            },
+          ],
+          originalMessage: {
+            id: 'msg-remote-failure-1',
+            userId: 'owner',
+            channel: 'web',
+            surfaceId: 'owner',
+            principalId: 'owner',
+            principalRole: 'owner',
+            content: 'Run npm ci and then npm test in the same remote sandbox.',
+            timestamp: 1_710_000_000_000,
+            metadata: originalMetadata,
+          },
+          requestText: 'Run npm ci and then npm test in the same remote sandbox using the Daytona profile.',
+          referenceTime: 1_710_000_000_000,
+          allowModelMemoryMutation: false,
+          activeSkillIds: [],
+          contentTrustLevel: 'trusted',
+          taintReasons: [],
+          intentDecision: {
+            route: 'coding_task',
+            operation: 'run',
+            summary: 'Run remote sandbox commands.',
+            confidence: 'high',
+            turnRelation: 'new_request',
+            resolution: 'ready',
+            missingFields: [],
+            executionClass: 'repo_grounded',
+            preferredTier: 'external',
+            requiresRepoGrounding: true,
+            requiresToolSynthesis: true,
+            expectedContextPressure: 'medium',
+            preferredAnswerPath: 'tool_loop',
+            entities: {
+              codingRemoteExecRequested: true,
+              profileId: 'Daytona',
+            },
+          },
+          codeContext: {
+            workspaceRoot: '/repo',
+            sessionId: 'session-123',
+          },
+          selectedExecutionProfile,
+        }),
+      },
+      codeSessionId: 'session-123',
+      createdAt: 1,
+      updatedAt: 1,
+      expiresAt: 2,
+    };
+
+    const result = await (agent as any).continueDirectRouteAfterApproval(
+      pendingAction,
+      'approval-1',
+      'approved',
+      {
+        success: false,
+        message: "Tool 'code_remote_exec' failed.",
+        result: {
+          success: false,
+          error: 'Remote sandbox command failed on Daytona Main.',
+          output: {
+            stdout: '',
+            stderr: 'OOM',
+            leaseId: 'lease-1',
+            sandboxId: 'sandbox-1',
+            leaseMode: 'managed',
+          },
+        },
+      },
+    );
+
+    expect(result?.content).toBe('Observed the remote sandbox failure.');
+    expect(fallbackChain.chatWithProviderOrder).toHaveBeenCalledTimes(1);
   });
 
   it('replays the last actionable request for retry-like follow-ups after a transient Ollama failure', () => {

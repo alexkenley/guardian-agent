@@ -91,6 +91,11 @@ export interface ChatOptions {
   maxTokens?: number;
   /** Override temperature. */
   temperature?: number;
+  /** Ask the provider to constrain the response shape when supported. */
+  responseFormat?: (
+    | { type: 'json_object' }
+    | { type: 'json_schema'; name: string; schema: Record<string, unknown> }
+  );
   /** Tools available for the LLM to call. */
   tools?: ToolDefinition[];
   /** Abort signal for cancellation. */

@@ -1,10 +1,14 @@
 import type {
   RemoteExecutionBackendKind,
+  RemoteExecutionHealthState,
   RemoteExecutionNetworkMode,
+  RemoteExecutionTargetHealthSummary,
 } from './policy.js';
 
 export type RemoteExecutionRunStatus = 'succeeded' | 'failed' | 'timed_out';
 export type RemoteExecutionCommandMode = 'direct_exec' | 'shell_fallback';
+export type RemoteExecutionLeaseScope = 'ephemeral' | 'code_session';
+export type RemoteExecutionLeaseMode = 'ephemeral' | 'managed';
 
 export interface RemoteExecutionResolvedTargetBase {
   id: string;
@@ -48,6 +52,7 @@ export interface RemoteExecutionCommandSpec {
 export interface RemoteExecutionWorkspaceSpec {
   workspaceRoot: string;
   cwd: string;
+  stageWorkspace?: boolean;
   includePaths?: string[];
   maxFiles?: number;
   maxBytes?: number;
@@ -62,6 +67,11 @@ export interface RemoteExecutionRunRequest {
   vcpus?: number;
   runtime?: string;
   env?: Record<string, string>;
+  onProgress?: (message: string) => void;
+  codeSessionId?: string;
+  requestId?: string;
+  preferredLease?: RemoteExecutionLease;
+  leaseMode?: RemoteExecutionLeaseMode;
 }
 
 export interface RemoteExecutionStagedFile {
@@ -86,6 +96,68 @@ export interface RemoteExecutionArtifact {
   truncated: boolean;
 }
 
+export interface RemoteExecutionProbeResult {
+  targetId: string;
+  backendKind: RemoteExecutionBackendKind;
+  profileId: string;
+  profileName: string;
+  healthState: RemoteExecutionHealthState;
+  reason: string;
+  checkedAt: number;
+  durationMs: number;
+  sandboxId?: string;
+}
+
+export interface RemoteExecutionLeaseInspectionResult {
+  targetId: string;
+  backendKind: RemoteExecutionBackendKind;
+  profileId: string;
+  profileName: string;
+  healthState: RemoteExecutionHealthState;
+  reason: string;
+  checkedAt: number;
+  durationMs: number;
+  sandboxId?: string;
+  remoteWorkspaceRoot?: string;
+}
+
+export interface RemoteExecutionLease {
+  id: string;
+  targetId: string;
+  backendKind: RemoteExecutionBackendKind;
+  profileId: string;
+  profileName: string;
+  sandboxId: string;
+  localWorkspaceRoot: string;
+  remoteWorkspaceRoot: string;
+  codeSessionId?: string;
+  acquiredAt: number;
+  lastUsedAt: number;
+  expiresAt: number;
+  runtime?: string;
+  vcpus?: number;
+  trackedRemotePaths: string[];
+  leaseMode: RemoteExecutionLeaseMode;
+}
+
+export interface RemoteExecutionProviderLease extends RemoteExecutionLease {
+  state?: unknown;
+}
+
+export interface RemoteExecutionLeaseCreateRequest {
+  target: RemoteExecutionResolvedTarget;
+  localWorkspaceRoot: string;
+  codeSessionId?: string;
+  timeoutMs?: number;
+  vcpus?: number;
+  runtime?: string;
+  leaseMode?: RemoteExecutionLeaseMode;
+}
+
+export interface RemoteExecutionLeaseAcquireRequest extends RemoteExecutionLeaseCreateRequest {
+  existingLease?: RemoteExecutionLease;
+}
+
 export interface RemoteExecutionRunResult {
   targetId: string;
   backendKind: RemoteExecutionBackendKind;
@@ -108,13 +180,43 @@ export interface RemoteExecutionRunResult {
   workspaceRoot: string;
   cwd: string;
   artifactFiles: RemoteExecutionArtifact[];
+  onProgress?: (message: string) => void;
+  healthState?: RemoteExecutionHealthState;
+  healthReason?: string;
+  leaseId?: string;
+  leaseScope?: RemoteExecutionLeaseScope;
+  leaseReused?: boolean;
+  leaseMode?: RemoteExecutionLeaseMode;
+}
+
+export interface RemoteExecutionProviderCapabilities {
+  reconnectExisting: boolean;
+  restartStoppedSandbox: boolean;
 }
 
 export interface RemoteExecutionProvider {
   readonly backendKind: RemoteExecutionBackendKind;
+  readonly capabilities: RemoteExecutionProviderCapabilities;
+  probe(target: RemoteExecutionResolvedTarget): Promise<RemoteExecutionProbeResult>;
+  inspectLease(
+    target: RemoteExecutionResolvedTarget,
+    lease: RemoteExecutionLease,
+  ): Promise<RemoteExecutionLeaseInspectionResult>;
+  createLease(request: RemoteExecutionLeaseCreateRequest): Promise<RemoteExecutionProviderLease>;
+  resumeLease(target: RemoteExecutionResolvedTarget, lease: RemoteExecutionLease): Promise<RemoteExecutionProviderLease>;
+  runWithLease(lease: RemoteExecutionProviderLease, request: RemoteExecutionPreparedRequest): Promise<RemoteExecutionRunResult>;
+  releaseLease(lease: RemoteExecutionProviderLease): Promise<void>;
   run(request: RemoteExecutionPreparedRequest): Promise<RemoteExecutionRunResult>;
 }
 
 export interface RemoteExecutionServiceLike {
   runBoundedJob(request: RemoteExecutionRunRequest): Promise<RemoteExecutionRunResult>;
+  acquireLease?(request: RemoteExecutionLeaseAcquireRequest): Promise<RemoteExecutionLease>;
+  disposeLease?(request: { target: RemoteExecutionResolvedTarget; lease: RemoteExecutionLease }): Promise<void>;
+  inspectLease?(request: {
+    target: RemoteExecutionResolvedTarget;
+    lease: RemoteExecutionLease;
+  }): Promise<RemoteExecutionLeaseInspectionResult>;
+  getKnownTargetHealth?(): Record<string, RemoteExecutionTargetHealthSummary>;
+  listActiveLeases?(): RemoteExecutionLease[];
 }

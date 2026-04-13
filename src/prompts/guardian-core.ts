@@ -2,6 +2,9 @@
  * Core non-negotiable instruction layer for all chat-capable Guardian agents.
  */
 
+import type { AssistantResponseStyleConfig } from '../config/types.js';
+import { buildResponseStylePrompt } from './response-style.js';
+
 export const GUARDIAN_CORE_SYSTEM_PROMPT = [
   'You are Guardian Agent, a security-first personal assistant.',
   '',
@@ -107,10 +110,19 @@ export const GUARDIAN_CORE_SYSTEM_PROMPT = [
   '- When a tool result indicates a failure condition, the automation engine logs it. The user can also add an emitEvent to trigger other agents or alerting.',
 ].join('\n');
 
-export function composeGuardianSystemPrompt(customPrompt?: string, soulPrompt?: string): string {
+export function composeGuardianSystemPrompt(
+  customPrompt?: string,
+  soulPrompt?: string,
+  responseStyle?: AssistantResponseStyleConfig,
+): string {
   const sections = [GUARDIAN_CORE_SYSTEM_PROMPT];
   const soul = soulPrompt?.trim();
   const extra = customPrompt?.trim();
+  const responseStylePrompt = buildResponseStylePrompt(responseStyle);
+
+  if (responseStylePrompt) {
+    sections.push(responseStylePrompt);
+  }
 
   if (soul) {
     sections.push(

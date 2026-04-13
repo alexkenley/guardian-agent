@@ -195,6 +195,16 @@ Semantics:
 - `unverified`: tool reported success but runtime could not confirm the final state
 - `failed`: verification failed or the tool returned failed state
 
+## Structured Security Verdicts
+
+Security verdict generation now uses the same bounded structured-output discipline as the intent gateway.
+
+Current behavior:
+- Guardian inline security verdicts request strict JSON-object output when the active provider supports response-format enforcement
+- Sentinel finding synthesis uses the same strict JSON path
+- malformed structured responses go through bounded shared repair before enforcement logic consumes them
+- if repair still fails, the runtime fails closed instead of accepting loose prose as if it were a valid verdict
+
 ## Affected Files
 
 Primary implementation:
@@ -208,6 +218,10 @@ Primary implementation:
 - `src/channels/web.ts`
 - `src/broker/broker-server.ts`
 - `src/worker/worker-llm-loop.ts`
+- `src/runtime/sentinel.ts`
+- `src/runtime/structured-output-recovery.ts`
+- `src/util/structured-json.ts`
+- `src/llm/openai.ts`
 
 ## Verification
 

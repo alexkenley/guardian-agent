@@ -1283,6 +1283,7 @@ function buildDashboardCallbacks(
         verificationEvidence: job.verificationEvidence,
         approvalId: job.approvalId,
         requestId: job.requestId,
+        remoteExecution: job.remoteExecution ? { ...job.remoteExecution } : undefined,
       }));
     const nextStatus = pendingApprovals.length > 0
       ? 'awaiting_approval'
@@ -1991,6 +1992,33 @@ function buildDashboardCallbacks(
       maybeScheduleCodeSession: (session) => sharedCodeWorkspaceTrustService?.maybeSchedule(session) ?? session,
       hydrateCodeSessionRuntimeState,
       buildCodeSessionSnapshot,
+      getCodeSessionSandboxes: ({ session, canonicalUserId }) => toolExecutor.getCodeSessionManagedSandboxStatus({
+        sessionId: session.id,
+        ownerUserId: canonicalUserId,
+      }),
+      createCodeSessionSandbox: ({ session, canonicalUserId, targetId, profileId, runtime, vcpus }) => (
+        toolExecutor.createManagedSandboxForCodeSession({
+          sessionId: session.id,
+          ownerUserId: canonicalUserId,
+          targetId,
+          profileId,
+          runtime,
+          vcpus,
+        })
+      ),
+      deleteCodeSessionSandbox: ({ session, canonicalUserId, leaseId }) => (
+        toolExecutor.deleteManagedSandboxForCodeSession({
+          sessionId: session.id,
+          ownerUserId: canonicalUserId,
+          leaseId,
+        })
+      ),
+      releaseCodeSessionSandboxes: ({ session, canonicalUserId }) => (
+        toolExecutor.releaseManagedSandboxesForCodeSession({
+          sessionId: session.id,
+          ownerUserId: canonicalUserId,
+        })
+      ),
       getCodeSessionSurfaceId,
       resetCodeSessionWorkspacePolicy: () => {
         toolExecutor.updatePolicy({ sandbox: { allowedPaths: [...configRef.current.assistant.tools.allowedPaths] } });
@@ -5493,6 +5521,7 @@ async function main(): Promise<void> {
         pendingActionStore,
         continuityThreadStore,
         routingIntentGateway,
+        () => configRef.current.assistant.responseStyle,
       );
       chatAgents.set(agentConfig.id, agent);
       runtime.registerAgent(createAgentDefinition({
@@ -5541,6 +5570,7 @@ async function main(): Promise<void> {
       pendingActionStore,
       continuityThreadStore,
       routingIntentGateway,
+      () => configRef.current.assistant.responseStyle,
     );
     chatAgents.set('local', localAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -5576,6 +5606,7 @@ async function main(): Promise<void> {
       pendingActionStore,
       continuityThreadStore,
       routingIntentGateway,
+      () => configRef.current.assistant.responseStyle,
     );
     chatAgents.set('external', externalAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -5637,6 +5668,7 @@ async function main(): Promise<void> {
       pendingActionStore,
       continuityThreadStore,
       routingIntentGateway,
+      () => configRef.current.assistant.responseStyle,
     );
     chatAgents.set('default', defaultAgent);
     runtime.registerAgent(createAgentDefinition({
@@ -5675,6 +5707,7 @@ async function main(): Promise<void> {
       pendingActionStore,
       continuityThreadStore,
       routingIntentGateway,
+      () => configRef.current.assistant.responseStyle,
     );
     chatAgents.set(SECURITY_TRIAGE_AGENT_ID, securityTriageAgent);
     runtime.registerAgent(createAgentDefinition({

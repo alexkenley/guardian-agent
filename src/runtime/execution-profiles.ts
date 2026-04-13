@@ -308,9 +308,13 @@ function shouldPreferFrontier(
   if (
     decision.requiresRepoGrounding
     && policy.preferFrontierForRepoGrounded
-    && (decision.expectedContextPressure === 'high' || decision.preferredAnswerPath === 'chat_synthesis')
   ) {
-    return true;
+    if (decision.preferredAnswerPath === 'chat_synthesis') {
+      return true;
+    }
+    if (policy.autoPolicy === 'quality_first' && decision.expectedContextPressure === 'high') {
+      return true;
+    }
   }
   if (
     policy.autoPolicy === 'quality_first'

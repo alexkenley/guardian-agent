@@ -32,6 +32,10 @@ import {
   cloneCodeSessionWorkflowState,
   type CodeSessionWorkflowState,
 } from './coding-workflows.js';
+import type {
+  RemoteExecutionBackendKind,
+  RemoteExecutionHealthState,
+} from './remote-execution/policy.js';
 
 export type CodeSessionStatus =
   | 'idle'
@@ -71,6 +75,39 @@ export interface CodeSessionRecentJob {
   verificationEvidence?: string;
   approvalId?: string;
   requestId?: string;
+  remoteExecution?: {
+    backendKind?: string;
+    profileId?: string;
+    profileName?: string;
+    sandboxId?: string;
+    leaseId?: string;
+    leaseScope?: string;
+    leaseReused?: boolean;
+    healthState?: string;
+    healthReason?: string;
+  };
+}
+
+export interface CodeSessionManagedSandbox {
+  leaseId: string;
+  targetId: string;
+  backendKind: RemoteExecutionBackendKind;
+  profileId: string;
+  profileName: string;
+  sandboxId: string;
+  localWorkspaceRoot: string;
+  remoteWorkspaceRoot: string;
+  status: 'active' | 'released' | 'unreachable';
+  acquiredAt: number;
+  lastUsedAt: number;
+  expiresAt?: number;
+  runtime?: string;
+  vcpus?: number;
+  trackedRemotePaths: string[];
+  healthState?: RemoteExecutionHealthState;
+  healthReason?: string;
+  healthCheckedAt?: number;
+  healthDurationMs?: number;
 }
 
 export interface CodeSessionVerificationEntry {
@@ -98,6 +135,7 @@ export interface CodeSessionWorkState {
   recentJobs: CodeSessionRecentJob[];
   changedFiles: string[];
   verification: CodeSessionVerificationEntry[];
+  managedSandboxes: CodeSessionManagedSandbox[];
   workflow?: CodeSessionWorkflowState | null;
 }
 
@@ -296,8 +334,26 @@ function defaultWorkState(): CodeSessionWorkState {
     recentJobs: [],
     changedFiles: [],
     verification: [],
+    managedSandboxes: [],
     workflow: null,
   };
+}
+
+function cloneManagedSandboxRecord(record: CodeSessionManagedSandbox): CodeSessionManagedSandbox {
+  return {
+    ...record,
+    trackedRemotePaths: Array.isArray(record.trackedRemotePaths)
+      ? [...record.trackedRemotePaths]
+      : [],
+  };
+}
+
+function cloneManagedSandboxRecords(
+  records: CodeSessionManagedSandbox[] | null | undefined,
+): CodeSessionManagedSandbox[] {
+  return Array.isArray(records)
+    ? records.map((record) => cloneManagedSandboxRecord(record))
+    : [];
 }
 
 function clone<T>(value: T): T {
@@ -777,6 +833,9 @@ export class CodeSessionStore {
         verification: Array.isArray(input.workState?.verification)
           ? input.workState.verification.map((entry) => ({ ...entry }))
           : (workspaceRootChanged ? [] : existing.workState.verification.map((entry) => ({ ...entry }))),
+        managedSandboxes: Array.isArray(input.workState?.managedSandboxes)
+          ? cloneManagedSandboxRecords(input.workState.managedSandboxes)
+          : (workspaceRootChanged ? [] : cloneManagedSandboxRecords(existing.workState.managedSandboxes)),
         workflow: input.workState?.workflow !== undefined
           ? cloneCodeSessionWorkflowState(input.workState.workflow)
           : (workspaceRootChanged ? null : cloneCodeSessionWorkflowState(existing.workState.workflow)),
@@ -1490,6 +1549,7 @@ export class CodeSessionStore {
         workspaceTrustReview: cloneWorkspaceTrustReview(payload.workState?.workspaceTrustReview as CodeWorkspaceTrustReview | null | undefined),
         workspaceMap: cloneWorkspaceMap(payload.workState?.workspaceMap as CodeWorkspaceMap | null | undefined),
         workingSet: cloneWorkspaceWorkingSet(payload.workState?.workingSet as CodeWorkspaceWorkingSet | null | undefined),
+        managedSandboxes: cloneManagedSandboxRecords(payload.workState?.managedSandboxes as CodeSessionManagedSandbox[] | null | undefined),
       },
     };
   }

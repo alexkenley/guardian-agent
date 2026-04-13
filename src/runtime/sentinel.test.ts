@@ -40,6 +40,57 @@ describe('GuardianAgentService', () => {
     expect(result.riskLevel).toBe('critical');
     expect(result.reason).toContain('Potential destructive write');
   });
+
+  it('re-prompts for strict JSON when the first verdict is malformed', async () => {
+    const service = new GuardianAgentService({
+      enabled: true,
+      llmProvider: 'local',
+      actionTypes: ['write_file'],
+      failOpen: false,
+    });
+    const replies = [
+      {
+        content: 'allowed: false, riskLevel: critical, reason: Potential destructive write.',
+        model: 'test-local-model',
+        finishReason: 'stop' as const,
+      },
+      {
+        content: JSON.stringify({
+          allowed: false,
+          riskLevel: 'critical',
+          reason: 'Potential destructive write.',
+        }),
+        model: 'test-local-model',
+        finishReason: 'stop' as const,
+      },
+    ];
+    let callCount = 0;
+
+    service.setProviders({
+      name: 'test-local',
+      chat: async () => {
+        callCount += 1;
+        const next = replies.shift();
+        if (!next) {
+          throw new Error('Unexpected extra GuardianAgentService repair call');
+        }
+        return next;
+      },
+      stream: async function* () {},
+      listModels: async () => [],
+    });
+
+    const result = await service.evaluateAction({
+      type: 'write_file',
+      toolName: 'fs_write',
+      params: { path: '/tmp/test.txt' },
+      agentId: 'agent-1',
+    });
+
+    expect(callCount).toBe(2);
+    expect(result.allowed).toBe(false);
+    expect(result.riskLevel).toBe('critical');
+  });
 });
 
 describe('SentinelAuditService', () => {

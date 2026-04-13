@@ -4,6 +4,7 @@ import type { ToolDefinition, ToolRunResponse } from '../tools/types.js';
 import { compactMessagesIfOverBudget } from '../util/context-budget.js';
 import { getMemoryMutationIntentDeniedMessage, isMemoryMutationToolName } from '../util/memory-intent.js';
 import { isResponseDegraded } from '../util/response-quality.js';
+import { recoverToolCallsFromStructuredText } from '../util/structured-json.js';
 import { withTaintedContentSystemPrompt } from '../util/tainted-content.js';
 import { formatToolResultForLLM, toLLMToolDef } from '../chat-agent-helpers.js';
 
@@ -131,6 +132,18 @@ export async function runLlmLoop(
         { tools: llmToolDefs },
       );
       finalContent = response.content ?? '';
+    }
+
+    if (!response.toolCalls || response.toolCalls.length === 0) {
+      const recoveredToolCalls = recoverToolCallsFromStructuredText(response.content ?? '', llmToolDefs);
+      if (recoveredToolCalls?.toolCalls.length) {
+        response = {
+          ...response,
+          toolCalls: recoveredToolCalls.toolCalls,
+          finishReason: 'tool_calls',
+        };
+        finalContent = '';
+      }
     }
 
     if (!response.toolCalls || response.toolCalls.length === 0) {

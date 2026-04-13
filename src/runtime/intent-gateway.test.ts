@@ -69,6 +69,38 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.uiSurface).toBe('automations');
   });
 
+  it('repairs malformed tool-call JSON arguments before normalizing the decision', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Create an automation called Browser Read Smoke. Do not schedule it yet.',
+        channel: 'web',
+      },
+      async () => ({
+        content: '',
+        toolCalls: [{
+          id: 'call-1',
+          name: 'route_intent',
+          arguments: [
+            '{',
+            '  "route": "automation_authoring",',
+            '  "confidence": "high",',
+            '  "operation": "create",',
+            '  "summary": "Creates a new automation definition.",',
+            '  "automationName": "Browser Read Smoke",',
+            '}',
+          ].join('\n'),
+        }],
+        model: 'test-model',
+        finishReason: 'tool_calls',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('automation_authoring');
+    expect(result.decision.operation).toBe('create');
+    expect(result.decision.entities.automationName).toBe('Browser Read Smoke');
+  });
+
   it('captures rename metadata for existing automation updates', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(
@@ -94,6 +126,34 @@ describe('IntentGateway', () => {
     expect(result.decision.operation).toBe('update');
     expect(result.decision.entities.automationName).toBe('Browser Read Smoke');
     expect(result.decision.entities.newAutomationName).toBe('Browser Read Smoke Daily');
+  });
+
+  it('detects explicit remote sandbox execution requests', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Run pwd in the remote sandbox for this workspace.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'coding_task',
+          confidence: 'high',
+          operation: 'run',
+          summary: 'Runs pwd in the remote sandbox.',
+          codingRemoteExecRequested: true,
+          command: 'pwd',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('run');
+    expect(result.decision.entities.codingRemoteExecRequested).toBe(true);
+    expect(result.decision.entities.command).toBe('pwd');
+    expect(result.decision.preferredTier).toBe('external');
   });
 
   it('returns an unknown decision when the model response is not structured', async () => {
@@ -170,6 +230,83 @@ describe('IntentGateway', () => {
     expect(result.mode).toBe('json_fallback');
     expect(result.decision.route).toBe('coding_session_control');
     expect(result.decision.operation).toBe('inspect');
+  });
+
+  it('uses the route-only fallback when the full JSON fallback still returns unstructured content', async () => {
+    const gateway = new IntentGateway();
+    let callCount = 0;
+
+    const result = await gateway.classify(
+      {
+        content: 'Open https://example.com and show me the links.',
+        channel: 'web',
+      },
+      async (_messages, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          expect(options?.tools?.[0]?.name).toBe('route_intent');
+          throw new Error('ollama api error: failed to format route_intent tool call');
+        }
+        if (callCount === 2) {
+          expect(options?.responseFormat).toEqual({ type: 'json_object' });
+          return {
+            content: 'I am not sure.',
+            model: 'test-model',
+            finishReason: 'stop',
+          } satisfies ChatResponse;
+        }
+
+        expect(options?.responseFormat).toEqual({ type: 'json_object' });
+        return {
+          content: JSON.stringify({
+            route: 'browser_task',
+            confidence: 'medium',
+            operation: 'navigate',
+            summary: 'Navigates to the requested URL and inspects links.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(callCount).toBe(3);
+    expect(result.mode).toBe('route_only_fallback');
+    expect(result.decision.route).toBe('browser_task');
+    expect(result.decision.operation).toBe('navigate');
+  });
+
+  it('infers coding backend metadata from a minimal structured fallback decision', async () => {
+    const gateway = new IntentGateway();
+
+    const result = await gateway.classify(
+      {
+        content: 'Use Codex in the Test Tactical Game App workspace to create a smoke test file.',
+        channel: 'web',
+      },
+      async (_messages, options) => {
+        if (options?.tools?.length) {
+          throw new Error('ollama api error: failed to format route_intent tool call');
+        }
+
+        return {
+          content: JSON.stringify({
+            route: 'coding_task',
+            confidence: 'medium',
+            operation: 'create',
+            summary: 'Creates a smoke test file in the requested workspace.',
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      },
+    );
+
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('create');
+    expect(result.decision.entities.codingBackend).toBe('codex');
+    expect(result.decision.entities.codingBackendRequested).toBe(true);
+    expect(result.decision.entities.sessionTarget).toBe('Test Tactical Game App');
   });
 
   it('recovers explicit coding-backend workspace requests from an unstructured gateway response', async () => {
@@ -373,7 +510,7 @@ describe('IntentGateway', () => {
     );
 
     expect(result.decision.executionClass).toBe('repo_grounded');
-    expect(result.decision.preferredTier).toBe('local');
+    expect(result.decision.preferredTier).toBe('external');
     expect(result.decision.requiresRepoGrounding).toBe(true);
     expect(result.decision.requiresToolSynthesis).toBe(false);
     expect(result.decision.expectedContextPressure).toBe('medium');
@@ -1783,6 +1920,57 @@ describe('IntentGateway', () => {
 
     expect(result.decision.route).toBe('coding_task');
     expect(result.decision.route).not.toBe('coding_session_control');
+  });
+
+  it('repairs explicit remote sandbox execution requests that were misclassified as coding_session_control', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'In the Guardian workspace, run `pwd` in the remote sandbox using the Daytona profile for this coding session.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'coding_session_control',
+          confidence: 'high',
+          operation: 'navigate',
+          summary: 'Lists available coding workspaces.',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('run');
+    expect(result.decision.entities.command).toBe('pwd');
+    expect(result.decision.entities.codingRemoteExecRequested).toBe(true);
+    expect(result.decision.entities.sessionTarget).toBe('Guardian');
+    expect(result.decision.preferredTier).toBe('external');
+  });
+
+  it('recovers explicit remote sandbox runs from unavailable gateway output', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'In the Guardian workspace, run `npm ci` in the remote sandbox using the Daytona profile for this coding session, then run `npm test` in the same remote sandbox.',
+        channel: 'web',
+      },
+      async () => ({
+        content: '{\n  "route": "coding_session_control",\n  "operation": "run",\n  "confidence": "high"',
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.available).toBe(true);
+    expect(result.decision.route).toBe('coding_task');
+    expect(result.decision.operation).toBe('run');
+    expect(result.decision.entities.command).toBe('npm ci');
+    expect(result.decision.entities.codingRemoteExecRequested).toBe(true);
+    expect(result.decision.entities.sessionTarget).toBe('Guardian');
+    expect(result.decision.preferredTier).toBe('external');
+    expect(result.decision.preferredAnswerPath).toBe('tool_loop');
   });
 
   it('captures correction metadata and resolved content for coding backend repairs', async () => {

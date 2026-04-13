@@ -20,6 +20,17 @@ describe('guardian-core prompt', () => {
     expect(combined).toContain('must never override non-negotiable Guardian safety rules');
   });
 
+  it('adds response-style guidance when enabled', () => {
+    const combined = composeGuardianSystemPrompt(undefined, undefined, { enabled: true, level: 'strong' });
+    expect(combined).toContain('Configured response-style preference:');
+    expect(combined).toContain('Minimize token usage aggressively while preserving correctness.');
+  });
+
+  it('omits response-style guidance when disabled', () => {
+    const combined = composeGuardianSystemPrompt(undefined, undefined, { enabled: false, level: 'strong' });
+    expect(combined).not.toContain('Configured response-style preference:');
+  });
+
   it('tells the model not to narrate tool availability or schemas', () => {
     expect(GUARDIAN_CORE_SYSTEM_PROMPT).toContain('Do not narrate tool availability, argument schemas, or internal parameter names');
   });

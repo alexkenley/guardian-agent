@@ -255,6 +255,32 @@ describe('direct config update', () => {
     });
   });
 
+  it('persists response-style settings into live and raw config state', async () => {
+    const { configRef, rawState, handler } = createHandlerHarness(createConfig());
+
+    const result = await handler({
+      assistant: {
+        responseStyle: {
+          enabled: false,
+          level: 'strong',
+        },
+      },
+    });
+
+    expect(result).toEqual({ success: true, message: 'Saved' });
+    expect(configRef.current.assistant.responseStyle).toEqual({
+      enabled: false,
+      level: 'strong',
+    });
+
+    const rawConfig = rawState.current as Record<string, unknown>;
+    const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+    expect(rawAssistant.responseStyle).toEqual({
+      enabled: false,
+      level: 'strong',
+    });
+  });
+
   it('persists Vercel sandbox capability updates on the existing Vercel cloud profile model', async () => {
     const config = createConfig();
     config.assistant.tools.cloud = {

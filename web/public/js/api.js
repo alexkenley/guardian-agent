@@ -673,12 +673,21 @@ export const api = {
     return request(`/api/code/sessions/${encodeURIComponent(sessionId)}${qs.toString() ? `?${qs.toString()}` : ''}`);
   },
   codeSessionTimeline: (sessionId, params = {}) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/timeline${buildQueryString(params)}`),
+  codeSessionSandboxes: (sessionId, params = {}) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/sandboxes${buildQueryString(params)}`),
   codeSessionCreate: (payload) => request('/api/code/sessions', {
     method: 'POST',
     body: JSON.stringify(payload),
   }),
   codeSessionUpdate: (sessionId, payload) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}`, {
     method: 'PATCH',
+    body: JSON.stringify(payload),
+  }),
+  codeSessionSandboxCreate: (sessionId, payload = {}) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/sandboxes`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  codeSessionSandboxDelete: (sessionId, leaseId, payload = {}) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}/sandboxes/${encodeURIComponent(leaseId)}`, {
+    method: 'DELETE',
     body: JSON.stringify(payload),
   }),
   codeSessionDelete: (sessionId, payload = {}) => request(`/api/code/sessions/${encodeURIComponent(sessionId)}`, {

@@ -531,6 +531,22 @@ export function createDirectConfigUpdateHandler(options: DirectConfigUpdateHandl
           }
         }
 
+        const responseStyleUpdates = updates.assistant?.responseStyle;
+        if (responseStyleUpdates && typeof responseStyleUpdates === 'object') {
+          rawConfig.assistant = rawConfig.assistant ?? {};
+          const rawAssistant = rawConfig.assistant as Record<string, unknown>;
+          rawAssistant.responseStyle = (rawAssistant.responseStyle as Record<string, unknown> | undefined) ?? {};
+          const rawResponseStyle = rawAssistant.responseStyle as Record<string, unknown>;
+          if (typeof responseStyleUpdates.enabled === 'boolean') {
+            rawResponseStyle.enabled = responseStyleUpdates.enabled;
+          }
+          if (responseStyleUpdates.level !== undefined) {
+            const trimmed = options.trimOrUndefined(responseStyleUpdates.level);
+            if (trimmed) rawResponseStyle.level = trimmed;
+            else delete rawResponseStyle.level;
+          }
+        }
+
         const securityUpdates = updates.assistant?.security;
         if (securityUpdates && typeof securityUpdates === 'object') {
           rawConfig.assistant = rawConfig.assistant ?? {};

@@ -236,16 +236,17 @@ describe('ToolExecutor', () => {
         projectId: 'prj_123',
       }),
       command: expect.objectContaining({
-        requestedCommand: 'npm test',
-        entryCommand: 'npm',
-        args: ['test'],
-        execMode: 'direct_exec',
+        requestedCommand: '[Install Dependencies] && npm test',
+        entryCommand: 'bash',
+        args: ['-lc', 'if [ -f package-lock.json ]; then npm ci; elif [ -f yarn.lock ]; then yarn install; elif [ -f pnpm-lock.yaml ]; then pnpm install; elif [ -f package.json ]; then npm install; fi; npm test'],
+        execMode: 'shell_fallback',
       }),
-      workspace: {
+      workspace: expect.objectContaining({
         workspaceRoot: root,
         cwd: root,
         includePaths: [],
-      },
+        stageWorkspace: true,
+      }),
     }));
   });
 
@@ -328,6 +329,888 @@ describe('ToolExecutor', () => {
       sandboxId: 'sandbox_daytona_123',
     });
     expect(remoteExecutionService.runBoundedJob).toHaveBeenCalledWith(expect.objectContaining({
+      target: expect.objectContaining({
+        backendKind: 'daytona_sandbox',
+        profileId: 'daytona-main',
+      }),
+    }));
+  });
+
+  it('avoids cached-unreachable remote providers when automatic selection has multiple targets', async () => {
+    const root = createExecutorRoot();
+    writeFileSync(join(root, 'package.json'), '{"name":"remote-demo"}\n');
+    const remoteExecutionService = {
+      getKnownTargetHealth: vi.fn(() => ({
+        'vercel:vercel-main': {
+          state: 'unreachable',
+          reason: 'HTTP 502',
+          checkedAt: 123,
+        },
+      })),
+      runBoundedJob: vi.fn(async (request) => ({
+        targetId: request.target.id,
+        backendKind: request.target.backendKind,
+        profileId: request.target.profileId,
+        profileName: request.target.profileName,
+        requestedCommand: request.command.requestedCommand,
+        status: 'succeeded' as const,
+        sandboxId: 'sandbox_daytona_healthy',
+        exitCode: 0,
+        stdout: 'tests passed',
+        stderr: '',
+        durationMs: 900,
+        startedAt: 10,
+        completedAt: 910,
+        networkMode: request.target.networkMode,
+        allowedDomains: [...request.target.allowedDomains],
+        allowedCidrs: [...(request.target.allowedCidrs ?? [])],
+        stagedFiles: 1,
+        stagedBytes: 21,
+        workspaceRoot: request.workspace.workspaceRoot,
+        cwd: request.workspace.cwd,
+        artifactFiles: [],
+      })),
+    };
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['npm'],
+      allowedDomains: ['localhost', 'api.vercel.com', 'daytona.io'],
+      cloudConfig: {
+        enabled: true,
+        defaultRemoteExecutionTargetId: 'automatic',
+        vercelProfiles: [{
+          id: 'vercel-main',
+          name: 'Main Vercel',
+          apiToken: 'vercel-secret',
+          teamId: 'team_123',
+          sandbox: {
+            enabled: true,
+            projectId: 'prj_123',
+            allowNetwork: false,
+          },
+        }],
+        daytonaProfiles: [{
+          id: 'daytona-main',
+          name: 'Daytona Main',
+          apiKey: 'daytona-secret',
+          enabled: true,
+          allowNetwork: false,
+        }],
+      },
+      remoteExecutionService,
+    });
+
+    const result = await executor.runTool({
+      toolName: 'code_test',
+      args: {
+        cwd: root,
+        command: 'npm test',
+        isolation: 'remote_required',
+      },
+      origin: 'web',
+      channel: 'web',
+    });
+
+    expect(result.success).toBe(true);
+    expect(remoteExecutionService.runBoundedJob).toHaveBeenCalledWith(expect.objectContaining({
+      target: expect.objectContaining({
+        backendKind: 'daytona_sandbox',
+        profileId: 'daytona-main',
+      }),
+    }));
+  });
+
+  it('resolves natural-language remote profile hints to the matching ready target', async () => {
+    const root = createExecutorRoot();
+    writeFileSync(join(root, 'package.json'), '{"name":"remote-demo"}\n');
+    const remoteExecutionService = {
+      runBoundedJob: vi.fn(async (request) => ({
+        targetId: request.target.id,
+        backendKind: request.target.backendKind,
+        profileId: request.target.profileId,
+        profileName: request.target.profileName,
+        requestedCommand: request.command.requestedCommand,
+        status: 'succeeded' as const,
+        sandboxId: 'sandbox_daytona_named',
+        exitCode: 0,
+        stdout: '/workspace\n',
+        stderr: '',
+        durationMs: 50,
+        startedAt: 10,
+        completedAt: 60,
+        networkMode: request.target.networkMode,
+        allowedDomains: [...request.target.allowedDomains],
+        allowedCidrs: [...(request.target.allowedCidrs ?? [])],
+        stagedFiles: 0,
+        stagedBytes: 0,
+        workspaceRoot: request.workspace.workspaceRoot,
+        cwd: request.workspace.cwd,
+        artifactFiles: [],
+      })),
+    };
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['pwd'],
+      allowedDomains: ['localhost', 'api.vercel.com', 'daytona.io'],
+      cloudConfig: {
+        enabled: true,
+        defaultRemoteExecutionTargetId: 'automatic',
+        vercelProfiles: [{
+          id: 'vercel-main',
+          name: 'Vercel Production',
+          apiToken: 'vercel-secret',
+          teamId: 'team_123',
+          sandbox: {
+            enabled: true,
+            projectId: 'prj_123',
+            allowNetwork: false,
+          },
+        }],
+        daytonaProfiles: [{
+          id: 'daytona-main',
+          name: 'Daytona Main',
+          apiKey: 'daytona-secret',
+          enabled: true,
+          allowNetwork: false,
+        }],
+      },
+      remoteExecutionService,
+    });
+
+    const result = await executor.runRemoteExecutionJob({
+      profileId: 'Daytona',
+      command: {
+        requestedCommand: 'pwd',
+        includePaths: [],
+        artifactPaths: [],
+      },
+      workspace: {
+        workspaceRoot: root,
+        cwd: root,
+      },
+      request: {
+        origin: 'web',
+        channel: 'web',
+      },
+      leaseMode: 'ephemeral',
+    });
+
+    expect(result.profileId).toBe('daytona-main');
+    expect(remoteExecutionService.runBoundedJob).toHaveBeenCalledWith(expect.objectContaining({
+      target: expect.objectContaining({
+        backendKind: 'daytona_sandbox',
+        profileId: 'daytona-main',
+      }),
+    }));
+  });
+
+  it('skips workspace staging for trivial remote sandbox environment checks', async () => {
+    const root = createExecutorRoot();
+    writeFileSync(join(root, 'package.json'), '{"name":"remote-demo"}\n');
+    const remoteExecutionService = {
+      runBoundedJob: vi.fn(async (request) => ({
+        targetId: request.target.id,
+        backendKind: request.target.backendKind,
+        profileId: request.target.profileId,
+        profileName: request.target.profileName,
+        requestedCommand: request.command.requestedCommand,
+        status: 'succeeded' as const,
+        sandboxId: 'sandbox_daytona_456',
+        leaseMode: 'ephemeral' as const,
+        exitCode: 0,
+        stdout: '/workspace\n',
+        stderr: '',
+        durationMs: 50,
+        startedAt: 10,
+        completedAt: 60,
+        networkMode: request.target.networkMode,
+        allowedDomains: [...request.target.allowedDomains],
+        allowedCidrs: [...(request.target.allowedCidrs ?? [])],
+        stagedFiles: 0,
+        stagedBytes: 0,
+        workspaceRoot: request.workspace.workspaceRoot,
+        cwd: request.workspace.cwd,
+        artifactFiles: [],
+      })),
+    };
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['pwd'],
+      allowedDomains: ['localhost', 'api.vercel.com'],
+      cloudConfig: {
+        enabled: true,
+        vercelProfiles: [{
+          id: 'vercel-main',
+          name: 'Main Vercel',
+          apiToken: 'vercel-secret',
+          teamId: 'team_123',
+          sandbox: {
+            enabled: true,
+            projectId: 'prj_123',
+            allowNetwork: false,
+          },
+        }],
+      },
+      remoteExecutionService,
+    });
+
+    const result = await executor.runTool({
+      toolName: 'code_remote_exec',
+      args: {
+        cwd: root,
+        command: 'pwd',
+      },
+      origin: 'web',
+      channel: 'web',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatchObject({
+      backendKind: 'vercel_sandbox',
+      sandboxId: 'sandbox_daytona_456',
+      leaseMode: 'ephemeral',
+      stdout: '/workspace\n',
+      stagedFiles: 0,
+    });
+    expect(remoteExecutionService.runBoundedJob).toHaveBeenCalledWith(expect.objectContaining({
+      command: expect.objectContaining({
+        requestedCommand: 'pwd',
+        entryCommand: 'pwd',
+        args: [],
+      }),
+      workspace: {
+        workspaceRoot: root,
+        cwd: root,
+        stageWorkspace: false,
+        includePaths: [],
+      },
+    }));
+  });
+
+  it('passes the code session id through to remote execution jobs for lease reuse', async () => {
+    const root = createExecutorRoot();
+    writeFileSync(join(root, 'package.json'), '{"name":"remote-demo"}\n');
+    const remoteExecutionService = {
+      runBoundedJob: vi.fn(async (request) => ({
+        targetId: request.target.id,
+        backendKind: request.target.backendKind,
+        profileId: request.target.profileId,
+        profileName: request.target.profileName,
+        requestedCommand: request.command.requestedCommand,
+        status: 'succeeded' as const,
+        sandboxId: 'sandbox_lease_123',
+        leaseId: 'lease_123',
+        leaseScope: 'code_session' as const,
+        leaseReused: false,
+        exitCode: 0,
+        stdout: 'tests passed',
+        stderr: '',
+        durationMs: 500,
+        startedAt: 10,
+        completedAt: 510,
+        networkMode: request.target.networkMode,
+        allowedDomains: [...request.target.allowedDomains],
+        allowedCidrs: [...(request.target.allowedCidrs ?? [])],
+        stagedFiles: 1,
+        stagedBytes: 21,
+        workspaceRoot: request.workspace.workspaceRoot,
+        cwd: request.workspace.cwd,
+        artifactFiles: [],
+      })),
+    };
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['npm'],
+      allowedDomains: ['localhost', 'api.vercel.com'],
+      cloudConfig: {
+        enabled: true,
+        vercelProfiles: [{
+          id: 'vercel-main',
+          name: 'Main Vercel',
+          apiToken: 'vercel-secret',
+          teamId: 'team_123',
+          sandbox: {
+            enabled: true,
+            projectId: 'prj_123',
+            allowNetwork: false,
+          },
+        }],
+      },
+      remoteExecutionService,
+    });
+
+    const result = await executor.runTool({
+      toolName: 'code_test',
+      args: {
+        cwd: root,
+        command: 'npm test',
+        isolation: 'remote_required',
+      },
+      origin: 'web',
+      channel: 'web',
+      codeContext: {
+        sessionId: 'code-session-123',
+      },
+      requestId: 'request-123',
+    });
+
+    expect(result.success).toBe(true);
+    expect(remoteExecutionService.runBoundedJob).toHaveBeenCalledWith(expect.objectContaining({
+      codeSessionId: 'code-session-123',
+      requestId: 'request-123',
+    }));
+  });
+
+  it('creates and releases managed sandboxes for a code session', async () => {
+    const root = createExecutorRoot();
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(root, '.guardianagent', 'code-sessions.sqlite'),
+    });
+    const session = codeSessionStore.createSession({
+      ownerUserId: 'tester',
+      title: 'Managed Sandbox Session',
+      workspaceRoot: root,
+    });
+    let activeLease = null as null | {
+      id: string;
+      targetId: string;
+      backendKind: 'daytona_sandbox';
+      profileId: string;
+      profileName: string;
+      sandboxId: string;
+      localWorkspaceRoot: string;
+      remoteWorkspaceRoot: string;
+      codeSessionId?: string;
+      acquiredAt: number;
+      lastUsedAt: number;
+      expiresAt: number;
+      runtime?: string;
+      vcpus?: number;
+      trackedRemotePaths: string[];
+      leaseMode: 'managed';
+    };
+    const remoteExecutionService = {
+      acquireLease: vi.fn(async (request) => {
+        activeLease = {
+          id: 'managed-lease-1',
+          targetId: request.target.id,
+          backendKind: 'daytona_sandbox',
+          profileId: request.target.profileId,
+          profileName: request.target.profileName,
+          sandboxId: 'sandbox-managed-1',
+          localWorkspaceRoot: request.localWorkspaceRoot,
+          remoteWorkspaceRoot: '/home/daytona/guardian-workspace',
+          codeSessionId: request.codeSessionId,
+          acquiredAt: 10,
+          lastUsedAt: 10,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+          runtime: request.runtime,
+          vcpus: request.vcpus,
+          trackedRemotePaths: ['/workspace/package.json'],
+          leaseMode: 'managed' as const,
+        };
+        return activeLease;
+      }),
+      disposeLease: vi.fn(async () => {
+        activeLease = null;
+      }),
+      listActiveLeases: vi.fn(() => activeLease ? [activeLease] : []),
+      getKnownTargetHealth: vi.fn(() => ({
+        'daytona:daytona-main': {
+          state: 'healthy' as const,
+          reason: 'ok',
+          checkedAt: 10,
+          leaseId: activeLease?.id,
+          sandboxId: activeLease?.sandboxId,
+        },
+      })),
+      runBoundedJob: vi.fn(),
+    };
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['npm'],
+      allowedDomains: ['localhost', 'daytona.io'],
+      codeSessionStore,
+      cloudConfig: {
+        enabled: true,
+        defaultRemoteExecutionTargetId: 'daytona:daytona-main',
+        daytonaProfiles: [{
+          id: 'daytona-main',
+          name: 'Daytona Main',
+          apiKey: 'daytona-secret',
+          enabled: true,
+          allowNetwork: false,
+        }],
+      },
+      remoteExecutionService,
+    });
+
+    const created = await executor.createManagedSandboxForCodeSession({
+      sessionId: session.id,
+      ownerUserId: 'tester',
+      targetId: 'daytona:daytona-main',
+    });
+
+    expect(remoteExecutionService.acquireLease).toHaveBeenCalledWith(expect.objectContaining({
+      codeSessionId: session.id,
+      leaseMode: 'managed',
+      localWorkspaceRoot: root,
+    }));
+    expect(created.sandboxes).toHaveLength(1);
+    expect(created.sandboxes[0]).toMatchObject({
+      leaseId: 'managed-lease-1',
+      backendKind: 'daytona_sandbox',
+      sandboxId: 'sandbox-managed-1',
+      trackedRemotePaths: ['/workspace/package.json'],
+    });
+
+    const deleted = await executor.deleteManagedSandboxForCodeSession({
+      sessionId: session.id,
+      ownerUserId: 'tester',
+      leaseId: 'managed-lease-1',
+    });
+
+    expect(remoteExecutionService.disposeLease).toHaveBeenCalledWith(expect.objectContaining({
+      lease: expect.objectContaining({
+        id: 'managed-lease-1',
+      }),
+    }));
+    expect(deleted.sandboxes).toEqual([]);
+  });
+
+  it('reconciles managed sandbox liveness at most every 30 seconds', async () => {
+    const root = createExecutorRoot();
+    writeFileSync(join(root, 'package.json'), '{"name":"remote-demo"}\n');
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(root, '.guardianagent', 'code-sessions.sqlite'),
+    });
+    const session = codeSessionStore.createSession({
+      ownerUserId: 'tester',
+      title: 'Managed Sandbox Reconcile Session',
+      workspaceRoot: root,
+    });
+    codeSessionStore.updateSession({
+      sessionId: session.id,
+      ownerUserId: 'tester',
+      workState: {
+        managedSandboxes: [{
+          leaseId: 'managed-lease-1',
+          targetId: 'vercel:vercel-main',
+          backendKind: 'vercel_sandbox',
+          profileId: 'vercel-main',
+          profileName: 'Vercel Main',
+          sandboxId: 'sandbox-managed-1',
+          localWorkspaceRoot: root,
+          remoteWorkspaceRoot: '/vercel/sandbox',
+          status: 'active',
+          acquiredAt: 10,
+          lastUsedAt: 10,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+          runtime: undefined,
+          vcpus: undefined,
+          trackedRemotePaths: ['/workspace/package.json'],
+          healthState: 'healthy',
+          healthReason: 'created',
+          healthCheckedAt: 10,
+        }],
+      },
+    });
+
+    let now = 40_000;
+    const inspectLease = vi.fn(async () => ({
+      targetId: 'vercel:vercel-main',
+      backendKind: 'vercel_sandbox' as const,
+      profileId: 'vercel-main',
+      profileName: 'Vercel Main',
+      healthState: 'unreachable' as const,
+      reason: 'Sandbox not found',
+      checkedAt: now,
+      durationMs: 25,
+      sandboxId: 'sandbox-managed-1',
+      remoteWorkspaceRoot: '/vercel/sandbox',
+    }));
+    const remoteExecutionService = {
+      inspectLease,
+      listActiveLeases: vi.fn(() => []),
+      getKnownTargetHealth: vi.fn(() => ({})),
+      runBoundedJob: vi.fn(),
+    };
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['npm'],
+      allowedDomains: ['localhost', 'vercel.com'],
+      codeSessionStore,
+      now: () => now,
+      cloudConfig: {
+        enabled: true,
+        defaultRemoteExecutionTargetId: 'vercel:vercel-main',
+        vercelProfiles: [{
+          id: 'vercel-main',
+          name: 'Vercel Main',
+          apiToken: 'vercel-secret',
+          teamId: 'team_123',
+          sandbox: {
+            enabled: true,
+            projectId: 'prj_123',
+            allowNetwork: false,
+          },
+        }],
+      },
+      remoteExecutionService,
+    });
+
+    const first = await executor.getCodeSessionManagedSandboxStatus({
+      sessionId: session.id,
+      ownerUserId: 'tester',
+    });
+
+    expect(inspectLease).toHaveBeenCalledTimes(1);
+    expect(first.sandboxes).toHaveLength(1);
+    expect(first.sandboxes[0]).toMatchObject({
+      status: 'unreachable',
+      healthState: 'unreachable',
+      healthReason: 'Sandbox not found',
+      healthCheckedAt: 40_000,
+    });
+
+    now += 10_000;
+    const second = await executor.getCodeSessionManagedSandboxStatus({
+      sessionId: session.id,
+      ownerUserId: 'tester',
+    });
+
+    expect(inspectLease).toHaveBeenCalledTimes(1);
+    expect(second.sandboxes[0]).toMatchObject({
+      status: 'unreachable',
+      healthState: 'unreachable',
+      healthReason: 'Sandbox not found',
+      healthCheckedAt: 40_000,
+    });
+
+    now += 30_000;
+    await executor.getCodeSessionManagedSandboxStatus({
+      sessionId: session.id,
+      ownerUserId: 'tester',
+    });
+
+    expect(inspectLease).toHaveBeenCalledTimes(2);
+  });
+
+  it('releases all managed sandboxes before a code session is deleted', async () => {
+    const root = createExecutorRoot();
+    writeFileSync(join(root, 'package.json'), '{"name":"remote-demo"}\n');
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(root, '.guardianagent', 'code-sessions.sqlite'),
+    });
+    const session = codeSessionStore.createSession({
+      ownerUserId: 'tester',
+      title: 'Managed Lease Cleanup Session',
+      workspaceRoot: root,
+    });
+    codeSessionStore.updateSession({
+      sessionId: session.id,
+      ownerUserId: 'tester',
+      workState: {
+        managedSandboxes: [{
+          leaseId: 'managed-lease-1',
+          targetId: 'daytona:daytona-main',
+          backendKind: 'daytona_sandbox',
+          profileId: 'daytona-main',
+          profileName: 'Daytona Main',
+          sandboxId: 'sandbox-managed-1',
+          localWorkspaceRoot: root,
+          remoteWorkspaceRoot: '/home/daytona/guardian-workspace',
+          status: 'active',
+          acquiredAt: 10,
+          lastUsedAt: 10,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+          runtime: undefined,
+          vcpus: undefined,
+          trackedRemotePaths: ['/workspace/package.json'],
+        }, {
+          leaseId: 'managed-lease-2',
+          targetId: 'daytona:daytona-main',
+          backendKind: 'daytona_sandbox',
+          profileId: 'daytona-main',
+          profileName: 'Daytona Main',
+          sandboxId: 'sandbox-managed-2',
+          localWorkspaceRoot: root,
+          remoteWorkspaceRoot: '/home/daytona/guardian-workspace',
+          status: 'active',
+          acquiredAt: 11,
+          lastUsedAt: 11,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+          runtime: undefined,
+          vcpus: undefined,
+          trackedRemotePaths: ['/workspace/node_modules'],
+        }],
+      },
+    });
+
+    const remoteExecutionService = {
+      disposeLease: vi.fn(async () => undefined),
+      listActiveLeases: vi.fn(() => []),
+      getKnownTargetHealth: vi.fn(() => ({
+        'daytona:daytona-main': {
+          state: 'healthy' as const,
+          reason: 'ok',
+          checkedAt: 10,
+        },
+      })),
+      runBoundedJob: vi.fn(),
+    };
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['npm'],
+      allowedDomains: ['localhost', 'daytona.io'],
+      codeSessionStore,
+      cloudConfig: {
+        enabled: true,
+        defaultRemoteExecutionTargetId: 'daytona:daytona-main',
+        daytonaProfiles: [{
+          id: 'daytona-main',
+          name: 'Daytona Main',
+          apiKey: 'daytona-secret',
+          enabled: true,
+          allowNetwork: false,
+        }],
+      },
+      remoteExecutionService,
+    });
+
+    await executor.releaseManagedSandboxesForCodeSession({
+      sessionId: session.id,
+      ownerUserId: 'tester',
+    });
+
+    expect(remoteExecutionService.disposeLease).toHaveBeenCalledTimes(2);
+    expect(codeSessionStore.getSession(session.id, 'tester')?.workState.managedSandboxes).toEqual([]);
+  });
+
+  it('does not forget a managed sandbox when its target is no longer configured', async () => {
+    const root = createExecutorRoot();
+    writeFileSync(join(root, 'package.json'), '{"name":"remote-demo"}\n');
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(root, '.guardianagent', 'code-sessions.sqlite'),
+    });
+    const session = codeSessionStore.createSession({
+      ownerUserId: 'tester',
+      title: 'Managed Lease Missing Target Session',
+      workspaceRoot: root,
+    });
+    codeSessionStore.updateSession({
+      sessionId: session.id,
+      ownerUserId: 'tester',
+      workState: {
+        managedSandboxes: [{
+          leaseId: 'managed-lease-1',
+          targetId: 'daytona:daytona-main',
+          backendKind: 'daytona_sandbox',
+          profileId: 'daytona-main',
+          profileName: 'Daytona Main',
+          sandboxId: 'sandbox-managed-1',
+          localWorkspaceRoot: root,
+          remoteWorkspaceRoot: '/home/daytona/guardian-workspace',
+          status: 'active',
+          acquiredAt: 10,
+          lastUsedAt: 10,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+          runtime: undefined,
+          vcpus: undefined,
+          trackedRemotePaths: ['/workspace/package.json'],
+        }],
+      },
+    });
+
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['npm'],
+      allowedDomains: ['localhost'],
+      codeSessionStore,
+      cloudConfig: {
+        enabled: true,
+        defaultRemoteExecutionTargetId: null,
+        daytonaProfiles: [],
+      },
+      remoteExecutionService: {
+        listActiveLeases: vi.fn(() => []),
+        getKnownTargetHealth: vi.fn(() => ({})),
+        runBoundedJob: vi.fn(),
+      },
+    });
+
+    await expect(executor.deleteManagedSandboxForCodeSession({
+      sessionId: session.id,
+      ownerUserId: 'tester',
+      leaseId: 'managed-lease-1',
+    })).rejects.toThrow(/can no longer be resolved/i);
+    expect(codeSessionStore.getSession(session.id, 'tester')?.workState.managedSandboxes).toHaveLength(1);
+  });
+
+  it('prefers a managed sandbox lease for later code-session remote runs', async () => {
+    const root = createExecutorRoot();
+    writeFileSync(join(root, 'package.json'), '{"name":"remote-demo"}\n');
+    const codeSessionStore = new CodeSessionStore({
+      enabled: false,
+      sqlitePath: join(root, '.guardianagent', 'code-sessions.sqlite'),
+    });
+    const session = codeSessionStore.createSession({
+      ownerUserId: 'tester',
+      title: 'Managed Lease Reuse Session',
+      workspaceRoot: root,
+    });
+    codeSessionStore.updateSession({
+      sessionId: session.id,
+      ownerUserId: 'tester',
+      workState: {
+        managedSandboxes: [{
+          leaseId: 'managed-lease-1',
+          targetId: 'daytona:daytona-main',
+          backendKind: 'daytona_sandbox',
+          profileId: 'daytona-main',
+          profileName: 'Daytona Main',
+          sandboxId: 'sandbox-managed-1',
+          localWorkspaceRoot: root,
+          remoteWorkspaceRoot: '/home/daytona/guardian-workspace',
+          status: 'active',
+          acquiredAt: 10,
+          lastUsedAt: 10,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+          runtime: undefined,
+          vcpus: undefined,
+          trackedRemotePaths: ['/workspace/package.json'],
+        }],
+      },
+    });
+
+    const remoteExecutionService = {
+      getKnownTargetHealth: vi.fn(() => ({
+        'daytona:daytona-main': {
+          state: 'healthy' as const,
+          reason: 'ok',
+          checkedAt: 10,
+          leaseId: 'managed-lease-1',
+          sandboxId: 'sandbox-managed-1',
+        },
+      })),
+      listActiveLeases: vi.fn(() => [{
+        id: 'managed-lease-1',
+        targetId: 'daytona:daytona-main',
+        backendKind: 'daytona_sandbox' as const,
+        profileId: 'daytona-main',
+        profileName: 'Daytona Main',
+        sandboxId: 'sandbox-managed-1',
+        localWorkspaceRoot: root,
+        remoteWorkspaceRoot: '/home/daytona/guardian-workspace',
+        acquiredAt: 10,
+        lastUsedAt: 20,
+        expiresAt: Number.MAX_SAFE_INTEGER,
+        trackedRemotePaths: ['/workspace/package.json'],
+        leaseMode: 'managed' as const,
+      }]),
+      runBoundedJob: vi.fn(async (request) => ({
+        targetId: request.target.id,
+        backendKind: request.target.backendKind,
+        profileId: request.target.profileId,
+        profileName: request.target.profileName,
+        requestedCommand: request.command.requestedCommand,
+        status: 'succeeded' as const,
+        sandboxId: 'sandbox-managed-1',
+        leaseId: 'managed-lease-1',
+        leaseScope: 'code_session' as const,
+        leaseMode: 'managed' as const,
+        leaseReused: true,
+        exitCode: 0,
+        stdout: 'tests passed',
+        stderr: '',
+        durationMs: 500,
+        startedAt: 10,
+        completedAt: 510,
+        networkMode: request.target.networkMode,
+        allowedDomains: [...request.target.allowedDomains],
+        allowedCidrs: [...(request.target.allowedCidrs ?? [])],
+        stagedFiles: 1,
+        stagedBytes: 21,
+        workspaceRoot: request.workspace.workspaceRoot,
+        cwd: request.workspace.cwd,
+        artifactFiles: [],
+      })),
+    };
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: root,
+      policyMode: 'autonomous',
+      allowedPaths: [root],
+      allowedCommands: ['npm'],
+      allowedDomains: ['localhost', 'daytona.io'],
+      codeSessionStore,
+      cloudConfig: {
+        enabled: true,
+        defaultRemoteExecutionTargetId: 'automatic',
+        daytonaProfiles: [{
+          id: 'daytona-main',
+          name: 'Daytona Main',
+          apiKey: 'daytona-secret',
+          enabled: true,
+          allowNetwork: false,
+        }],
+      },
+      remoteExecutionService,
+    });
+
+    await executor.runTool({
+      toolName: 'code_test',
+      args: {
+        cwd: root,
+        command: 'npm test',
+        isolation: 'remote_required',
+      },
+      origin: 'web',
+      userId: 'tester',
+      principalId: 'tester',
+      channel: 'web',
+      codeContext: {
+        sessionId: session.id,
+        workspaceRoot: root,
+      },
+    });
+
+    expect(remoteExecutionService.runBoundedJob).toHaveBeenCalledWith(expect.objectContaining({
+      codeSessionId: session.id,
+      leaseMode: 'managed',
+      preferredLease: expect.objectContaining({
+        id: 'managed-lease-1',
+        sandboxId: 'sandbox-managed-1',
+        trackedRemotePaths: ['/workspace/package.json'],
+      }),
       target: expect.objectContaining({
         backendKind: 'daytona_sandbox',
         profileId: 'daytona-main',

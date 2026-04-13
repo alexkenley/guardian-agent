@@ -3,11 +3,11 @@
 **Status:** Canonical architecture reference for current and planned isolation backends  
 **Date:** 2026-04-12  
 **Owner:** Runtime + Security  
-**Related:** [SECURITY.md](/mnt/s/Development/GuardianAgent/SECURITY.md), [Brokered Agent Isolation Spec](/mnt/s/Development/GuardianAgent/docs/specs/BROKERED-AGENT-ISOLATION-SPEC.md), [Coding Workspace Spec](/mnt/s/Development/GuardianAgent/docs/specs/CODING-WORKSPACE-SPEC.md), [Tools Control Plane Spec](/mnt/s/Development/GuardianAgent/docs/specs/TOOLS-CONTROL-PLANE-SPEC.md), [Sandbox Egress And Secret Brokering Uplift](/mnt/s/Development/GuardianAgent/docs/proposals/SANDBOX-EGRESS-AND-SECRET-BROKERING-ROADMAP.md)
+**Related:** [SECURITY.md](/mnt/s/Development/GuardianAgent/SECURITY.md), [Brokered Agent Isolation Spec](/mnt/s/Development/GuardianAgent/docs/specs/BROKERED-AGENT-ISOLATION-SPEC.md), [Coding Workspace Spec](/mnt/s/Development/GuardianAgent/docs/specs/CODING-WORKSPACE-SPEC.md), [Remote Sandboxing Spec](/mnt/s/Development/GuardianAgent/docs/specs/REMOTE-SANDBOXING-SPEC.md), [Tools Control Plane Spec](/mnt/s/Development/GuardianAgent/docs/specs/TOOLS-CONTROL-PLANE-SPEC.md), [Sandbox Egress And Secret Brokering Uplift](/mnt/s/Development/GuardianAgent/docs/proposals/SANDBOX-EGRESS-AND-SECRET-BROKERING-ROADMAP.md)
 
 This spec is the one-stop reference for how Guardian models execution isolation across brokered workers, local process sandboxes, local VM-backed isolation, and remote sandbox backends.
 
-Backend-specific docs remain the source of truth for implementation details. This document defines the shared contract and the security boundaries that must stay stable as new backends are added.
+Backend-specific docs remain the source of truth for implementation details. For provider-backed bounded coding execution, [Remote Sandboxing Spec](/mnt/s/Development/GuardianAgent/docs/specs/REMOTE-SANDBOXING-SPEC.md) is the concrete implementation reference. This document defines the shared contract and the security boundaries that must stay stable as new backends are added.
 
 ## Goal
 
@@ -100,7 +100,7 @@ The backend returns only:
 | `local_process_sandbox` | Implemented | managed subprocesses on Linux and current Windows helper path | current strong/degraded/unavailable posture mostly describes this class |
 | `windows_process_sandbox` | Implemented as the current Windows helper/AppContainer tier | lower-friction Windows hardening | useful, but not equivalent to a VM boundary |
 | `local_virtualized_strong_isolation` | Parallel/planned | hostile or semi-trusted bounded jobs on the same machine or host OS family | Hyper-V on Windows is the current concrete direction |
-| `remote_virtualized_execution` | Planned | bounded cloud-sandbox jobs | provider adapters such as Vercel or Daytona should plug in here rather than create a separate orchestration model |
+| `remote_virtualized_execution` | Implemented initial slice | bounded cloud-sandbox jobs | provider adapters such as Vercel or Daytona plug into the shared orchestration model rather than creating a separate runtime |
 
 ## Network Modes
 
@@ -146,13 +146,12 @@ Guardian should follow these rules when selecting an execution boundary:
 
 ## Coding Workflow Guidance
 
-For the coding workflow, the phase-1 posture should remain simple:
+For the coding workflow, the phase-1 posture relies on automatic tier promotion:
 
-- Good remote-sandbox candidates:
-  - dependency install
-  - build, test, and lint
-  - bootstrap or one-shot repo setup
-  - bounded review or scan jobs against semi-trusted repos
+- Automatically promoted to a remote sandbox (when configured):
+  - dependency install (`package_install`)
+  - build, test, and lint (`code_build`, `code_test`, `code_lint`)
+  - explicit remote execution requests (`code_remote_exec`)
 
 - Local-by-default operations:
   - normal code chat
@@ -161,7 +160,8 @@ For the coding workflow, the phase-1 posture should remain simple:
   - session memory, approvals, and transcript handling
   - non-coding product operations such as Second Brain data access
 
-This keeps remote isolation useful without turning it into a second coding product.
+If a remote sandbox is *not* configured, the runtime falls back to the `local_process_sandbox` and relies on the operator's `assistant.tools.sandbox.enforcementMode` to block or allow degraded execution (e.g., `allowPackageManagers`).
+
 
 ## Windows-Specific Contract
 
@@ -185,10 +185,21 @@ Requirements:
 
 - explicit connector configuration and capability enablement
 - backend availability and health reporting
+  - provider readiness must be based on a real probe, not configuration completeness alone
+  - the shared runtime may cache probe results briefly, but it must surface when a configured provider is currently unreachable
 - supported network modes declared by backend
 - staged input and bounded artifact return
 - Guardian-owned approvals, audit, secrets, and memory
 - no silent promotion of whole conversations into remote execution
+
+For coding workflows, remote sandbox backends may keep either an ephemeral lease for one-off runs or a managed session-scoped lease so repeated bounded jobs in the same coding session can reuse installed prerequisites and sandbox-local caches without promoting the whole conversation into a remote runtime. The lease is still Guardian-owned orchestration state:
+
+- keyed to the Guardian coding session and workspace root
+- subject to idle expiry when ephemeral, or explicit release when managed
+- provider-specific below the shared remote-execution contract
+- reported honestly in run metadata and operator surfaces
+
+Managed code-session sandboxes are operator-visible from the Code workspace and must be cleaned up through shared backend deletion/release paths rather than relying on browser-only best-effort cleanup.
 
 In other words: remote sandboxes are execution backends, not remote brains.
 
@@ -239,5 +250,6 @@ Today, the shipped system already provides:
 - brokered worker isolation for the built-in chat/planner loop
 - local process sandboxing with strong/degraded/unavailable posture
 - current Windows helper/AppContainer process isolation tier
+- provider-attached remote sandbox execution for bounded coding jobs with shared target selection plus managed code-session sandbox reuse
 
 This spec exists so upcoming backends such as Hyper-V and provider-attached remote sandboxes land under the same model instead of growing as parallel one-off security systems.

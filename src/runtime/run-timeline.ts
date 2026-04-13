@@ -645,6 +645,10 @@ function buildApprovalResolvedItem(
 }
 
 function buildJobItems(runId: string, job: CodeSessionRecentJob, fallbackTimestamp: number): DashboardRunTimelineItem[] {
+  const remoteDetail = job.remoteExecution?.profileName
+    ? `Remote sandbox: ${job.remoteExecution.profileName}${job.remoteExecution.leaseReused ? ' (lease reused)' : ''}.`
+    : null;
+  const argsDetail = nonEmptyText(job.argsPreview);
   const items: DashboardRunTimelineItem[] = [{
     id: `job:${job.id}:started`,
     runId,
@@ -653,7 +657,7 @@ function buildJobItems(runId: string, job: CodeSessionRecentJob, fallbackTimesta
     status: job.status === 'running' ? 'running' : 'info',
     source: 'code_session',
     title: `Tool started: ${humanizeToolName(job.toolName)}`,
-    detail: nonEmptyText(job.argsPreview),
+    detail: [argsDetail, remoteDetail].filter(Boolean).join('\n') || undefined,
     toolName: job.toolName,
   }];
 
@@ -681,7 +685,7 @@ function buildJobItems(runId: string, job: CodeSessionRecentJob, fallbackTimesta
       status: mapJobItemStatus(job.status),
       source: 'code_session',
       title: buildJobCompletionTitle(job),
-      detail: nonEmptyText(job.error) ?? nonEmptyText(job.resultPreview),
+      detail: [nonEmptyText(job.error) ?? nonEmptyText(job.resultPreview), remoteDetail].filter(Boolean).join('\n') || undefined,
       toolName: job.toolName,
     });
   }

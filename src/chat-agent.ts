@@ -67,6 +67,7 @@ import type { SecondBrainService } from './runtime/second-brain/second-brain-ser
 import { resolveCodingBackendSessionTarget } from './runtime/coding-backend-session-target.js';
 import { buildCodeSessionPortfolioAdditionalSection } from './runtime/code-session-portfolio.js';
 import { inspectCodeWorkspaceSync, type CodeWorkspaceProfile } from './runtime/code-workspace-profile.js';
+import type { AssistantResponseStyleConfig } from './config/types.js';
 import {
   buildCodeWorkspaceMapSync,
   buildCodeWorkspaceWorkingSetSync,
@@ -174,6 +175,7 @@ import {
 } from './runtime/pending-action-resume.js';
 import type { IntentRoutingTraceLog } from './runtime/intent-routing-trace.js';
 import {
+  EXECUTION_PROFILE_METADATA_KEY,
   readSelectedExecutionProfileMetadata,
   type SelectedExecutionProfile,
 } from './runtime/execution-profiles.js';
@@ -208,6 +210,7 @@ import {
   type ApprovalContinuationScope,
 } from './runtime/approval-continuations.js';
 import { normalizeSecondBrainMutationArgs } from './runtime/second-brain/chat-mutation-normalization.js';
+import { recoverToolCallsFromStructuredText } from './util/structured-json.js';
 
 const APPROVAL_CONFIRM_PATTERN = /^(?:\/)?(?:approve|approved|yes|yep|yeah|y|go ahead|do it|confirm|ok|okay|sure|proceed|accept)\b/i;
 const APPROVAL_DENY_PATTERN = /^(?:\/)?(?:deny|denied|reject|decline|cancel|no|nope|nah|n)\b/i;
@@ -218,6 +221,15 @@ const PENDING_ACTION_SWITCH_CONFIRM_PATTERN = /^(?:yes|yep|yeah|y|ok|okay|sure|s
 const PENDING_ACTION_SWITCH_DENY_PATTERN = /^(?:no|nope|nah|keep|keep current|keep the current one|keep the existing one|stay on current|don'?t switch)\b/i;
 const DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT = 'filesystem_save_output';
 const DIRECT_ROUTE_RESUME_TYPE_SECOND_BRAIN_MUTATION = 'second_brain_mutation';
+const TOOL_LOOP_RESUME_TYPE_SUSPENDED_APPROVAL = 'suspended_tool_loop';
+const DEFERRED_REMOTE_SANDBOX_STEP_STATUS = 'deferred_remote_sandbox_step';
+
+const REMOTE_SANDBOX_SERIAL_TOOL_NAMES = new Set([
+  'code_remote_exec',
+  'code_test',
+  'code_build',
+  'code_lint',
+]);
 const SECOND_BRAIN_FOCUS_CONTINUATION_KIND = 'second_brain_focus';
 const RETRY_AFTER_FAILURE_PATTERN = /\b(?:try|run|do)\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task)|the\s+same\s+thing)\s+again\b|\bretry\b/i;
 const PREREQUISITE_RECOVERY_PATTERN = /\b(?:it|that|this|they)(?:['’]s| are| is)?\s+(?:connected|linked|enabled|fixed|working|ready|configured|authenticated)\s+now\b|\bi(?:['’]ve| have)\s+(?:connected|linked|enabled|fixed|configured|authenticated)\b/i;
@@ -311,6 +323,93 @@ interface SecondBrainMutationResumePayload {
   action: DirectSecondBrainMutationAction;
   fallbackId?: string;
   fallbackLabel?: string;
+}
+
+interface StoredToolLoopMessageIdentity {
+  id: string;
+  userId: string;
+  channel: string;
+  surfaceId?: string;
+  principalId?: string;
+  principalRole?: PrincipalRole;
+  timestamp: number;
+  content: string;
+  metadata?: Record<string, unknown>;
+}
+
+interface StoredToolLoopPendingTool {
+  approvalId: string;
+  toolCallId: string;
+  jobId: string;
+  name: string;
+}
+
+interface ToolLoopResumePayload {
+  type: typeof TOOL_LOOP_RESUME_TYPE_SUSPENDED_APPROVAL;
+  llmMessages: ChatMessage[];
+  pendingTools: StoredToolLoopPendingTool[];
+  originalMessage: StoredToolLoopMessageIdentity;
+  requestText: string;
+  referenceTime: number;
+  allowModelMemoryMutation: boolean;
+  activeSkillIds: string[];
+  contentTrustLevel: import('./tools/types.js').ContentTrustLevel;
+  taintReasons: string[];
+  intentDecision?: IntentGatewayDecision;
+  codeContext?: {
+    workspaceRoot: string;
+    sessionId?: string;
+  };
+  selectedExecutionProfile?: SelectedExecutionProfile;
+}
+
+function isSerializedRemoteSandboxToolCall(toolName: string, args: Record<string, unknown>): boolean {
+  if (!REMOTE_SANDBOX_SERIAL_TOOL_NAMES.has(toolName)) {
+    return false;
+  }
+  if (toolName === 'code_remote_exec') {
+    return true;
+  }
+  const isolation = toString(args.isolation).trim().toLowerCase();
+  if (isolation === 'remote_required' || isolation === 'remote_if_available') {
+    return true;
+  }
+  return toString(args.remoteProfile).trim().length > 0;
+}
+
+function isDeferredRemoteSandboxToolResult(result: Record<string, unknown>): boolean {
+  return toString(result.status).trim() === DEFERRED_REMOTE_SANDBOX_STEP_STATUS;
+}
+
+function pruneDeferredRemoteSandboxToolCalls(
+  llmMessages: ChatMessage[],
+  deferredToolCallIds: Set<string>,
+): void {
+  if (deferredToolCallIds.size === 0) {
+    return;
+  }
+  for (let index = llmMessages.length - 1; index >= 0; index -= 1) {
+    const message = llmMessages[index];
+    if (message.role !== 'assistant' || !message.toolCalls?.length) {
+      continue;
+    }
+    const remainingToolCalls = message.toolCalls.filter((toolCall) => !deferredToolCallIds.has(toolCall.id));
+    if (remainingToolCalls.length === message.toolCalls.length) {
+      return;
+    }
+    if (remainingToolCalls.length === 0 && !toString(message.content).trim()) {
+      llmMessages.splice(index, 1);
+      return;
+    }
+    const { toolCalls: _removedToolCalls, ...rest } = message;
+    llmMessages[index] = remainingToolCalls.length > 0
+      ? {
+          ...rest,
+          toolCalls: remainingToolCalls,
+        }
+      : rest;
+    return;
+  }
 }
 
 interface DirectAutomationClarificationMetadata {
@@ -1980,6 +2079,7 @@ export interface ChatAgentConstructor {
     pendingActionStore?: PendingActionStore,
     continuityThreadStore?: ContinuityThreadStore,
     intentGateway?: IntentGateway,
+    resolveAssistantResponseStyle?: () => AssistantResponseStyleConfig | undefined,
   ): ChatAgentPublicApi;
 }
 
@@ -2058,6 +2158,9 @@ type DirectIntentShadowCandidate =
   return class ChatAgent extends BaseAgent {
   private systemPrompt: string;
   private codeSessionSystemPrompt: string;
+  private customSystemPrompt?: string;
+  private soulPromptText?: string;
+  private resolveAssistantResponseStyle?: () => AssistantResponseStyleConfig | undefined;
   private conversationService?: ConversationService;
   private tools?: ToolExecutor;
   private outputGuardian?: OutputGuardian;
@@ -2169,6 +2272,7 @@ type DirectIntentShadowCandidate =
   ): Promise<{ toolCall: { id: string; name: string; arguments?: string }; result: Record<string, unknown> }>[] {
     const promises: Promise<{ toolCall: { id: string; name: string; arguments?: string }; result: Record<string, unknown> }>[] = [];
     const locks = new Map<string, Promise<void>>();
+    let remoteSandboxStepQueued = false;
 
     for (const tc of toolCalls) {
       let parsedArgs: Record<string, unknown> = {};
@@ -2207,6 +2311,22 @@ type DirectIntentShadowCandidate =
           result: prepared.immediateResult,
         }));
         continue;
+      }
+
+      const isRemoteSandboxSerializedCall = isSerializedRemoteSandboxToolCall(tc.name, parsedArgs);
+      if (isRemoteSandboxSerializedCall && remoteSandboxStepQueued) {
+        promises.push(Promise.resolve({
+          toolCall: tc,
+          result: {
+            success: false,
+            status: DEFERRED_REMOTE_SANDBOX_STEP_STATUS,
+            message: 'Another remote sandbox command from this request must finish first. Wait for that result before issuing the next remote sandbox step so the same lease and sandbox state can be reused safely.',
+          },
+        }));
+        continue;
+      }
+      if (isRemoteSandboxSerializedCall) {
+        remoteSandboxStepQueued = true;
       }
 
       const isMutating = def ? def.risk !== 'read_only' : true;
@@ -2265,10 +2385,15 @@ type DirectIntentShadowCandidate =
     pendingActionStore?: PendingActionStore,
     continuityThreadStore?: ContinuityThreadStore,
     intentGateway?: IntentGateway,
+    resolveAssistantResponseStyle?: () => AssistantResponseStyleConfig | undefined,
   ) {
     super(id, name, { handleMessages: true });
-    this.systemPrompt = composeGuardianSystemPrompt(systemPrompt, soulPrompt);
-    this.codeSessionSystemPrompt = composeCodeSessionSystemPrompt();
+    this.customSystemPrompt = systemPrompt;
+    this.soulPromptText = soulPrompt;
+    this.resolveAssistantResponseStyle = resolveAssistantResponseStyle;
+    const initialResponseStyle = this.resolveAssistantResponseStyle?.();
+    this.systemPrompt = composeGuardianSystemPrompt(systemPrompt, soulPrompt, initialResponseStyle);
+    this.codeSessionSystemPrompt = composeCodeSessionSystemPrompt(initialResponseStyle);
     log.debug(
       {
         agentId: id,
@@ -2728,28 +2853,48 @@ type DirectIntentShadowCandidate =
 
   async onMessage(message: UserMessage, ctx: AgentContext, workerManager?: WorkerManager): Promise<AgentResponse> {
     const stateAgentId = this.stateAgentId;
-    const requestedCodeContext = readCodeRequestMetadata(message.metadata);
-    let resolvedCodeSession = this.resolveCodeSessionContext(message);
+    const pendingActionSurfaceId = this.getCodeSessionSurfaceId(message);
+    const suspendedScope = normalizeApprovalContinuationScope({
+      userId: message.userId,
+      channel: message.channel,
+      surfaceId: pendingActionSurfaceId,
+    });
+    const suspendedSessionKey = buildApprovalContinuationScopeKey(suspendedScope);
+    const isContinuation = message.content.includes('[User approved the pending tool action(s)')
+      || message.content.includes('Tool actions have been decided');
+    const suspended = isContinuation ? this.suspendedSessions.get(suspendedSessionKey) : undefined;
+    const continuationMetadata = suspended?.originalMessage.metadata;
+    const effectiveMessage: UserMessage = continuationMetadata
+      ? {
+          ...message,
+          metadata: {
+            ...continuationMetadata,
+            ...(message.metadata ?? {}),
+          },
+        }
+      : message;
+    const requestedCodeContext = readCodeRequestMetadata(effectiveMessage.metadata);
+    let resolvedCodeSession = this.resolveCodeSessionContext(effectiveMessage);
     if (resolvedCodeSession) {
       resolvedCodeSession = this.refreshCodeSessionWorkspaceAwareness(
         resolvedCodeSession,
         buildCodeSessionWorkspaceAwarenessQuery(
-          stripLeadingContextPrefix(message.content),
+          stripLeadingContextPrefix(effectiveMessage.content),
           requestedCodeContext?.fileReferences,
         ),
       );
     }
-    const conversationUserId = resolvedCodeSession?.session.conversationUserId ?? message.userId;
-    const conversationChannel = resolvedCodeSession?.session.conversationChannel ?? message.channel;
-    const selectedExecutionProfile = readSelectedExecutionProfileMetadata(message.metadata);
+    const conversationUserId = resolvedCodeSession?.session.conversationUserId ?? effectiveMessage.userId;
+    const conversationChannel = resolvedCodeSession?.session.conversationChannel ?? effectiveMessage.channel;
+    const selectedExecutionProfile = readSelectedExecutionProfileMetadata(effectiveMessage.metadata);
     const fallbackProviderOrder = selectedExecutionProfile?.fallbackProviderOrder;
     const conversationKey = {
       agentId: stateAgentId,
       userId: conversationUserId,
       channel: conversationChannel,
     };
-    const pendingActionUserId = message.userId;
-    const pendingActionChannel = message.channel;
+    const pendingActionUserId = effectiveMessage.userId;
+    const pendingActionChannel = effectiveMessage.channel;
     const pendingActionUserKey = `${pendingActionUserId}:${pendingActionChannel}`;
     const effectiveCodeContext = resolvedCodeSession
       ? {
@@ -2769,19 +2914,19 @@ type DirectIntentShadowCandidate =
         'active',
       );
     }
-    const scopedMessage: UserMessage = (conversationUserId !== message.userId
-      || conversationChannel !== message.channel
+    const scopedMessage: UserMessage = (conversationUserId !== effectiveMessage.userId
+      || conversationChannel !== effectiveMessage.channel
       || effectiveCodeContext)
       ? {
-          ...message,
+          ...effectiveMessage,
           userId: conversationUserId,
           channel: conversationChannel,
           metadata: {
-            ...(message.metadata ?? {}),
+            ...(effectiveMessage.metadata ?? {}),
             ...(effectiveCodeContext ? { codeContext: effectiveCodeContext } : {}),
           },
         }
-      : message;
+      : effectiveMessage;
     const priorHistory = this.conversationService?.getHistoryForContext({
       agentId: stateAgentId,
       userId: conversationUserId,
@@ -2789,13 +2934,6 @@ type DirectIntentShadowCandidate =
     }, {
       query: stripLeadingContextPrefix(scopedMessage.content),
     }) ?? [];
-    const pendingActionSurfaceId = this.getCodeSessionSurfaceId(message);
-    const suspendedScope = normalizeApprovalContinuationScope({
-      userId: pendingActionUserId,
-      channel: pendingActionChannel,
-      surfaceId: pendingActionSurfaceId,
-    });
-    const suspendedSessionKey = buildApprovalContinuationScopeKey(suspendedScope);
     let continuityThread = this.touchContinuityThread(
       pendingActionUserId,
       pendingActionChannel,
@@ -3203,9 +3341,6 @@ type DirectIntentShadowCandidate =
       }
     }
 
-    const isContinuation = message.content.includes('[User approved the pending tool action(s)') || 
-                           message.content.includes('Tool actions have been decided');
-    const suspended = this.suspendedSessions.get(suspendedSessionKey);
     const requestIntentContent = (isContinuation && suspended)
       ? suspended.originalMessage.content
       : routedScopedMessage.content;
@@ -3469,6 +3604,7 @@ type DirectIntentShadowCandidate =
     let finalContent = '';
     let pendingActionMeta: Record<string, unknown> | undefined;
     let lastToolRoundResults: Array<{ toolName: string; result: Record<string, unknown> }> = [];
+    let toolLoopPendingResume: PendingActionRecord['resume'] | undefined;
     const defaultToolResultProviderKind = this.resolveToolResultProviderKind(ctx);
     let responseSource: ResponseSourceMetadata | undefined;
     const directIntent = !skipDirectTools
@@ -4246,6 +4382,17 @@ type DirectIntentShadowCandidate =
           finalContent = response.content;
         }
         if (!response.toolCalls || response.toolCalls.length === 0) {
+          const recoveredToolCalls = recoverToolCallsFromStructuredText(response.content ?? '', llmToolDefs);
+          if (recoveredToolCalls?.toolCalls.length) {
+            response = {
+              ...response,
+              toolCalls: recoveredToolCalls.toolCalls,
+              finishReason: 'tool_calls',
+            };
+            finalContent = '';
+          }
+        }
+        if (!response.toolCalls || response.toolCalls.length === 0) {
           // Safety net for local models: if finishReason is 'stop' (no tool calls)
           // but the message clearly needed web search, pre-fetch results and re-prompt.
           // This catches cases where Ollama/local models fail to emit tool calls.
@@ -4353,6 +4500,7 @@ type DirectIntentShadowCandidate =
         }, []);
 
         let hasPending = false;
+        const deferredRemoteToolCallIds = new Set<string>();
         for (const settled of toolResults) {
           if (settled.status === 'fulfilled') {
             const { toolCall, result: toolResult } = settled.value;
@@ -4361,6 +4509,9 @@ type DirectIntentShadowCandidate =
             if (toolResult.status === 'pending_approval' && toolResult.approvalId) {
               pendingIds.push(String(toolResult.approvalId));
               hasPending = true;
+            }
+            if (isDeferredRemoteSandboxToolResult(toolResult)) {
+              deferredRemoteToolCallIds.add(toolCall.id);
             }
 
             // Strip approval IDs from pending_approval results so the LLM
@@ -4430,12 +4581,17 @@ type DirectIntentShadowCandidate =
         // results alongside the pending status, so it can compose a natural response
         // that acknowledges what's waiting and what it plans to do next.
         if (hasPending) {
-          const allPending = toolResults.every(
-            (s) => s.status === 'fulfilled' && (s.value.result as Record<string, unknown>).status === 'pending_approval',
+          const allBlocked = toolResults.every(
+            (s) => s.status === 'fulfilled'
+              && (
+                (s.value.result as Record<string, unknown>).status === 'pending_approval'
+                || isDeferredRemoteSandboxToolResult(s.value.result as Record<string, unknown>)
+              ),
           );
-          if (allPending) {
+          if (allBlocked) {
             // Remove the 'pending' tool result messages we just pushed, so we don't send duplicate toolCallIds when resuming
             llmMessages.splice(-toolResults.length, toolResults.length);
+            pruneDeferredRemoteSandboxToolCalls(llmMessages, deferredRemoteToolCallIds);
 
             // Suspended Execution: cache the loop state so we can resume directly
             // when the user approves via out-of-band UI.
@@ -4463,6 +4619,27 @@ type DirectIntentShadowCandidate =
               }),
               ctx,
             });
+            toolLoopPendingResume = {
+              kind: 'tool_loop',
+              payload: this.buildToolLoopResumePayload({
+                llmMessages,
+                pendingTools,
+                originalMessage: selectSuspendedOriginalMessage({
+                  isContinuation,
+                  existing: suspended?.originalMessage,
+                  current: routedScopedMessage,
+                }),
+                requestText: stripLeadingContextPrefix(routedScopedMessage.content),
+                referenceTime: message.timestamp,
+                allowModelMemoryMutation,
+                activeSkillIds: activeSkills.map((skill) => skill.id),
+                contentTrustLevel: currentContextTrustLevel,
+                taintReasons: [...currentTaintReasons],
+                intentDecision: directIntent?.decision ?? undefined,
+                codeContext: effectiveCodeContext,
+                selectedExecutionProfile,
+              }),
+            };
             break;
           }
         }
@@ -4675,6 +4852,27 @@ type DirectIntentShadowCandidate =
                   }),
                   ctx,
                 });
+                toolLoopPendingResume = {
+                  kind: 'tool_loop',
+                  payload: this.buildToolLoopResumePayload({
+                    llmMessages: fbMessages,
+                    pendingTools,
+                    originalMessage: selectSuspendedOriginalMessage({
+                      isContinuation,
+                      existing: suspended?.originalMessage,
+                      current: routedScopedMessage,
+                    }),
+                    requestText: stripLeadingContextPrefix(routedScopedMessage.content),
+                    referenceTime: message.timestamp,
+                    allowModelMemoryMutation,
+                    activeSkillIds: activeSkills.map((skill) => skill.id),
+                    contentTrustLevel: currentContextTrustLevel,
+                    taintReasons: [...currentTaintReasons],
+                    intentDecision: directIntent?.decision ?? undefined,
+                    codeContext: effectiveCodeContext,
+                    selectedExecutionProfile,
+                  }),
+                };
               } else {
                 const finalFbStartedAt = Date.now();
                 const finalFb = fallbackProviderOrder
@@ -4766,6 +4964,7 @@ type DirectIntentShadowCandidate =
             resolution: directIntent?.decision.resolution,
             missingFields: directIntent?.decision.missingFields,
             entities: directIntent?.decision.entities as Record<string, unknown> | undefined,
+            ...(toolLoopPendingResume ? { resume: toolLoopPendingResume } : {}),
             ...(resolvedCodeSession?.session.id ? { codeSessionId: resolvedCodeSession.session.id } : {}),
           },
         );
@@ -6860,6 +7059,9 @@ type DirectIntentShadowCandidate =
     resolvedCodeSession?: ResolvedCodeSessionContext | null,
     message?: UserMessage,
   ): string {
+    const responseStyle = this.resolveAssistantResponseStyle?.();
+    const systemPrompt = composeGuardianSystemPrompt(this.customSystemPrompt, this.soulPromptText, responseStyle);
+    const codeSessionSystemPrompt = composeCodeSessionSystemPrompt(responseStyle);
     const cliCommandGuide = this.shouldIncludeCliCommandGuide(message?.content)
       ? `<cli-command-guide>\n${formatCliCommandGuideForPrompt()}\n</cli-command-guide>`
       : '';
@@ -6868,7 +7070,7 @@ type DirectIntentShadowCandidate =
       : '';
     if (!resolvedCodeSession) {
       return [
-        this.systemPrompt,
+        systemPrompt,
         cliCommandGuide,
         referenceGuide,
       ].filter((section) => section && section.trim()).join('\n\n');
@@ -6879,7 +7081,7 @@ type DirectIntentShadowCandidate =
       requestedCodeContext?.fileReferences,
     );
     return [
-      this.codeSessionSystemPrompt,
+      codeSessionSystemPrompt,
       this.buildCodeSessionSystemContext(resolvedCodeSession.session),
       taggedFileContext,
       cliCommandGuide,
@@ -7355,6 +7557,9 @@ type DirectIntentShadowCandidate =
         verificationEvidence: job.verificationEvidence,
         approvalId: job.approvalId,
         requestId: job.requestId,
+        remoteExecution: job.remoteExecution
+          ? { ...job.remoteExecution }
+          : undefined,
       }));
     const planSummary = this.formatCodePlanSummary(lastToolRoundResults) || session.workState.planSummary;
     const workflow = deriveCodeSessionWorkflowState({
@@ -7877,7 +8082,9 @@ type DirectIntentShadowCandidate =
     const normalizedBase = typeof input.result === 'string'
       ? { content: input.result }
       : input.result;
-    const selectedExecutionProfile = readSelectedExecutionProfileMetadata(input.message.metadata);
+    const selectedExecutionProfile = readSelectedExecutionProfileMetadata(
+      input.routingMessage?.metadata ?? input.message.metadata,
+    );
     const surfaceUserId = input.surfaceUserId?.trim() || input.message.userId;
     const surfaceChannel = input.surfaceChannel?.trim() || input.message.channel;
     const surfaceId = input.surfaceId?.trim() || input.message.surfaceId;
@@ -9090,19 +9297,24 @@ type DirectIntentShadowCandidate =
         metadata: nextActionResult.action ? { pendingAction: toPendingActionClientMetadata(nextActionResult.action) } : undefined,
       };
     }
-    if (decision === 'approved' && pendingAction?.resume?.kind === 'direct_route') {
+    if (decision === 'approved' && (pendingAction?.resume?.kind === 'direct_route' || pendingAction?.resume?.kind === 'tool_loop')) {
       const approvalResult = targetIds.length === 1
         ? approvalDecisionResults.get(targetIds[0])
         : undefined;
-      const directRouteResponse = await this.resumeStoredDirectRoutePendingAction(
-        pendingAction,
-        { approvalResult },
-      );
-      if (directRouteResponse) {
+      const resumedResponse = pendingAction?.resume?.kind === 'tool_loop'
+        ? await this.resumeStoredToolLoopPendingAction(
+          pendingAction,
+          { approvalId: targetIds[0], approvalResult, ctx },
+        )
+        : await this.resumeStoredDirectRoutePendingAction(
+          pendingAction!,
+          { approvalResult },
+        );
+      if (resumedResponse) {
         results.push('');
-        results.push(directRouteResponse.content);
+        results.push(resumedResponse.content);
         const normalizedResponse = this.normalizeDirectRouteContinuationResponse(
-          directRouteResponse,
+          resumedResponse,
           message.userId,
           message.channel,
           message.surfaceId,
@@ -9860,13 +10072,22 @@ type DirectIntentShadowCandidate =
     if (pendingAction.scope.agentId !== this.stateAgentId) return null;
     const remainingApprovalIds = (pendingAction.blocker.approvalIds ?? []).filter((id) => id !== approvalId.trim());
     if (remainingApprovalIds.length > 0) return null;
-    const response = await this.resumeStoredDirectRoutePendingAction(
-      pendingAction,
-      {
-        pendingActionAlreadyCleared: true,
-        approvalResult,
-      },
-    );
+    const response = pendingAction.resume?.kind === 'tool_loop'
+      ? await this.resumeStoredToolLoopPendingAction(
+        pendingAction,
+        {
+          approvalId,
+          pendingActionAlreadyCleared: true,
+          approvalResult,
+        },
+      )
+      : await this.resumeStoredDirectRoutePendingAction(
+        pendingAction,
+        {
+          pendingActionAlreadyCleared: true,
+          approvalResult,
+        },
+      );
     if (!response) return null;
     return this.normalizeDirectRouteContinuationResponse(
       response,
@@ -12129,6 +12350,537 @@ type DirectIntentShadowCandidate =
       content: response.content,
       ...(metadata ? { metadata } : {}),
     };
+  }
+
+  private buildToolLoopResumePayload(input: {
+    llmMessages: ChatMessage[];
+    pendingTools: SuspendedToolCall[];
+    originalMessage: UserMessage;
+    requestText: string;
+    referenceTime: number;
+    allowModelMemoryMutation: boolean;
+    activeSkillIds: string[];
+    contentTrustLevel: import('./tools/types.js').ContentTrustLevel;
+    taintReasons: string[];
+    intentDecision?: IntentGatewayDecision;
+    codeContext?: { workspaceRoot: string; sessionId?: string };
+    selectedExecutionProfile?: SelectedExecutionProfile | null;
+  }): Record<string, unknown> {
+    return {
+      type: TOOL_LOOP_RESUME_TYPE_SUSPENDED_APPROVAL,
+      llmMessages: input.llmMessages.map((message) => ({
+        role: message.role,
+        content: message.content,
+        ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
+        ...(message.toolCalls?.length
+          ? {
+              toolCalls: message.toolCalls.map((toolCall) => ({
+                id: toolCall.id,
+                name: toolCall.name,
+                arguments: toolCall.arguments,
+              })),
+            }
+          : {}),
+      })),
+      pendingTools: input.pendingTools.map((tool) => ({
+        approvalId: tool.approvalId,
+        toolCallId: tool.toolCallId,
+        jobId: tool.jobId,
+        name: tool.name,
+      })),
+      originalMessage: {
+        id: input.originalMessage.id,
+        userId: input.originalMessage.userId,
+        channel: input.originalMessage.channel,
+        ...(input.originalMessage.surfaceId?.trim() ? { surfaceId: input.originalMessage.surfaceId.trim() } : {}),
+        ...(input.originalMessage.principalId?.trim() ? { principalId: input.originalMessage.principalId.trim() } : {}),
+        ...(input.originalMessage.principalRole ? { principalRole: input.originalMessage.principalRole } : {}),
+        timestamp: input.originalMessage.timestamp,
+        content: input.originalMessage.content,
+        ...(input.originalMessage.metadata ? { metadata: { ...input.originalMessage.metadata } } : {}),
+      },
+      requestText: input.requestText,
+      referenceTime: input.referenceTime,
+      allowModelMemoryMutation: input.allowModelMemoryMutation,
+      activeSkillIds: [...input.activeSkillIds],
+      contentTrustLevel: input.contentTrustLevel,
+      taintReasons: [...input.taintReasons],
+      ...(input.intentDecision ? { intentDecision: { ...input.intentDecision } } : {}),
+      ...(input.codeContext
+        ? {
+            codeContext: {
+              workspaceRoot: input.codeContext.workspaceRoot,
+              ...(input.codeContext.sessionId ? { sessionId: input.codeContext.sessionId } : {}),
+            },
+          }
+        : {}),
+      ...(input.selectedExecutionProfile
+        ? {
+            selectedExecutionProfile: {
+              ...input.selectedExecutionProfile,
+              fallbackProviderOrder: [...input.selectedExecutionProfile.fallbackProviderOrder],
+            },
+          }
+        : {}),
+    };
+  }
+
+  private readToolLoopResumePayload(
+    payload: Record<string, unknown> | undefined,
+  ): ToolLoopResumePayload | null {
+    if (!isRecord(payload) || payload.type !== TOOL_LOOP_RESUME_TYPE_SUSPENDED_APPROVAL) {
+      return null;
+    }
+    const llmMessages = Array.isArray(payload.llmMessages)
+      ? payload.llmMessages
+        .filter((value): value is Record<string, unknown> => isRecord(value))
+        .map((value) => {
+          const role = value.role === 'system' || value.role === 'user' || value.role === 'assistant' || value.role === 'tool'
+            ? value.role
+            : null;
+          if (!role) return null;
+          const content = toString(value.content);
+          const toolCalls = Array.isArray(value.toolCalls)
+            ? value.toolCalls
+              .filter((toolCall): toolCall is Record<string, unknown> => isRecord(toolCall))
+              .map((toolCall) => ({
+                id: toString(toolCall.id).trim(),
+                name: toString(toolCall.name).trim(),
+                arguments: toString(toolCall.arguments),
+              }))
+              .filter((toolCall) => toolCall.id && toolCall.name)
+            : undefined;
+          return {
+            role,
+            content,
+            ...(toString(value.toolCallId).trim() ? { toolCallId: toString(value.toolCallId).trim() } : {}),
+            ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
+          } satisfies ChatMessage;
+        })
+        .filter((value): value is ChatMessage => Boolean(value))
+      : [];
+    const pendingTools = Array.isArray(payload.pendingTools)
+      ? payload.pendingTools
+        .filter((value): value is Record<string, unknown> => isRecord(value))
+        .map((value) => ({
+          approvalId: toString(value.approvalId).trim(),
+          toolCallId: toString(value.toolCallId).trim(),
+          jobId: toString(value.jobId).trim(),
+          name: toString(value.name).trim(),
+        }))
+        .filter((value) => value.approvalId && value.toolCallId && value.jobId && value.name)
+      : [];
+    const originalMessageRecord = isRecord(payload.originalMessage) ? payload.originalMessage : null;
+    const originalMessage = originalMessageRecord
+      ? {
+          id: toString(originalMessageRecord.id).trim(),
+          userId: toString(originalMessageRecord.userId).trim(),
+          channel: toString(originalMessageRecord.channel).trim(),
+          ...(toString(originalMessageRecord.surfaceId).trim() ? { surfaceId: toString(originalMessageRecord.surfaceId).trim() } : {}),
+          ...(toString(originalMessageRecord.principalId).trim() ? { principalId: toString(originalMessageRecord.principalId).trim() } : {}),
+          ...(toString(originalMessageRecord.principalRole).trim() ? { principalRole: this.normalizeFilesystemResumePrincipalRole(toString(originalMessageRecord.principalRole).trim()) } : {}),
+          timestamp: toNumber(originalMessageRecord.timestamp) ?? Date.now(),
+          content: toString(originalMessageRecord.content),
+          ...(isRecord(originalMessageRecord.metadata) ? { metadata: { ...originalMessageRecord.metadata } } : {}),
+        } satisfies StoredToolLoopMessageIdentity
+      : null;
+    const requestText = toString(payload.requestText).trim();
+    if (llmMessages.length === 0 || pendingTools.length === 0 || !originalMessage || !originalMessage.id || !originalMessage.userId || !originalMessage.channel || !requestText) {
+      return null;
+    }
+    const contentTrustLevel = payload.contentTrustLevel === 'trusted'
+      || payload.contentTrustLevel === 'low_trust'
+      || payload.contentTrustLevel === 'quarantined'
+      ? payload.contentTrustLevel
+      : 'trusted';
+    const taintReasons = Array.isArray(payload.taintReasons)
+      ? payload.taintReasons.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      : [];
+    const activeSkillIds = Array.isArray(payload.activeSkillIds)
+      ? payload.activeSkillIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      : [];
+    const codeContext = isRecord(payload.codeContext) && toString(payload.codeContext.workspaceRoot).trim()
+      ? {
+          workspaceRoot: toString(payload.codeContext.workspaceRoot).trim(),
+          ...(toString(payload.codeContext.sessionId).trim() ? { sessionId: toString(payload.codeContext.sessionId).trim() } : {}),
+        }
+      : undefined;
+    const selectedExecutionProfile = isRecord(payload.selectedExecutionProfile)
+      ? readSelectedExecutionProfileMetadata({
+          [EXECUTION_PROFILE_METADATA_KEY]: payload.selectedExecutionProfile,
+        })
+      : null;
+    return {
+      type: TOOL_LOOP_RESUME_TYPE_SUSPENDED_APPROVAL,
+      llmMessages,
+      pendingTools,
+      originalMessage,
+      requestText,
+      referenceTime: toNumber(payload.referenceTime) ?? Date.now(),
+      allowModelMemoryMutation: payload.allowModelMemoryMutation === true,
+      activeSkillIds,
+      contentTrustLevel,
+      taintReasons,
+      ...(isRecord(payload.intentDecision) ? { intentDecision: payload.intentDecision as unknown as IntentGatewayDecision } : {}),
+      ...(codeContext ? { codeContext } : {}),
+      ...(selectedExecutionProfile ? { selectedExecutionProfile } : {}),
+    };
+  }
+
+  private buildStoredToolLoopChatFn(input: {
+    ctx?: AgentContext;
+    selectedExecutionProfile?: SelectedExecutionProfile;
+    abortSignal?: AbortSignal;
+  }): {
+    chatFn: (msgs: ChatMessage[], opts?: import('./llm/types.js').ChatOptions) => Promise<import('./llm/types.js').ChatResponse>;
+    providerLocality: 'local' | 'external';
+  } | null {
+    if (input.ctx?.llm) {
+      const fallbackProviderOrder = input.selectedExecutionProfile?.fallbackProviderOrder;
+      return {
+        providerLocality: input.selectedExecutionProfile?.providerLocality ?? this.resolveToolResultProviderKind(input.ctx),
+        chatFn: (msgs, opts) => this.chatWithFallback(
+          input.ctx!,
+          msgs,
+          { ...(opts ?? {}), ...(input.abortSignal ? { signal: input.abortSignal } : {}) },
+          fallbackProviderOrder,
+        ),
+      };
+    }
+
+    const primaryProviderName = input.selectedExecutionProfile?.providerName?.trim();
+    if (!primaryProviderName || !this.fallbackChain) {
+      return null;
+    }
+    const providerOrder = [...new Set([
+      primaryProviderName,
+      ...(input.selectedExecutionProfile?.fallbackProviderOrder ?? []),
+    ])];
+    return {
+      providerLocality: input.selectedExecutionProfile?.providerLocality ?? getProviderLocalityFromName(primaryProviderName),
+      chatFn: async (msgs, opts) => {
+        const result = await this.fallbackChain!.chatWithProviderOrder(
+          providerOrder,
+          msgs,
+          { ...(opts ?? {}), ...(input.abortSignal ? { signal: input.abortSignal } : {}) },
+        );
+        return result.response;
+      },
+    };
+  }
+
+  private async resumeStoredToolLoopPendingAction(
+    pendingAction: PendingActionRecord,
+    options?: {
+      approvalId?: string;
+      pendingActionAlreadyCleared?: boolean;
+      approvalResult?: ToolApprovalDecisionResult;
+      ctx?: AgentContext;
+    },
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    if (!this.tools?.isEnabled()) {
+      return { content: 'I could not resume the pending coding run because tool execution is unavailable.' };
+    }
+    const resume = this.readToolLoopResumePayload(pendingAction.resume?.payload);
+    if (!resume) {
+      return null;
+    }
+    if (!options?.pendingActionAlreadyCleared) {
+      this.completePendingAction(pendingAction.id);
+    }
+    const chatRunner = this.buildStoredToolLoopChatFn({
+      ctx: options?.ctx,
+      selectedExecutionProfile: resume.selectedExecutionProfile,
+    });
+    if (!chatRunner) {
+      return { content: 'I could not resume the pending coding run because the original model profile is no longer available.' };
+    }
+
+    const llmMessages = resume.llmMessages.map((message) => ({
+      ...message,
+      ...(message.toolCalls ? { toolCalls: message.toolCalls.map((toolCall) => ({ ...toolCall })) } : {}),
+    }));
+    const allJobs = this.tools.listJobs(200);
+    const resumedApprovalId = options?.approvalId?.trim();
+    for (const pendingTool of resume.pendingTools) {
+      let resultObj: Record<string, unknown> | undefined;
+      if (options?.approvalResult?.result && resumedApprovalId && pendingTool.approvalId === resumedApprovalId) {
+        resultObj = isRecord(options.approvalResult.result)
+          ? { ...options.approvalResult.result }
+          : undefined;
+      }
+      if (!resultObj) {
+        const job = allJobs.find((entry) => entry.id === pendingTool.jobId);
+        resultObj = buildToolResultPayloadFromJob(job);
+      }
+      llmMessages.push({
+        role: 'tool',
+        toolCallId: pendingTool.toolCallId,
+        content: JSON.stringify(resultObj),
+      });
+    }
+
+    const providerLocality = chatRunner.providerLocality;
+    const baseToolDefs = this.tools.listAlwaysLoadedDefinitions();
+    const codeSessionToolDefs = resume.codeContext?.sessionId
+      ? this.tools.listCodeSessionEagerToolDefinitions().filter((definition) => !baseToolDefs.some((base) => base.name === definition.name))
+      : [];
+    const allToolDefs = [...baseToolDefs, ...codeSessionToolDefs];
+    let llmToolDefs = allToolDefs.map((definition) => toLLMToolDef(definition, providerLocality));
+    let finalContent = '';
+    let rounds = 0;
+    let lastToolRoundResults: Array<{ toolName: string; result: Record<string, unknown> }> = [];
+    let currentContextTrustLevel = resume.contentTrustLevel;
+    const currentTaintReasons = new Set(resume.taintReasons);
+    let toolResultProviderKind: 'local' | 'external' = providerLocality;
+
+    while (rounds < this.maxToolRounds) {
+      compactMessagesIfOverBudget(llmMessages, this.contextBudget);
+      let response = await chatRunner.chatFn(
+        withTaintedContentSystemPrompt(llmMessages, currentContextTrustLevel, currentTaintReasons),
+        { tools: llmToolDefs },
+      );
+      finalContent = response.content ?? '';
+      if (!response.toolCalls || response.toolCalls.length === 0) {
+        const recoveredToolCalls = recoverToolCallsFromStructuredText(response.content ?? '', llmToolDefs);
+        if (recoveredToolCalls?.toolCalls.length) {
+          response = {
+            ...response,
+            toolCalls: recoveredToolCalls.toolCalls,
+            finishReason: 'tool_calls',
+          };
+          finalContent = '';
+        }
+      }
+      if (!response.toolCalls || response.toolCalls.length === 0) {
+        break;
+      }
+
+      llmMessages.push({
+        role: 'assistant',
+        content: response.content ?? '',
+        toolCalls: response.toolCalls,
+      });
+
+      const toolExecOrigin: Omit<ToolExecutionRequest, 'toolName' | 'args'> = {
+        origin: 'assistant',
+        agentId: this.id,
+        userId: resume.originalMessage.userId,
+        surfaceId: resume.originalMessage.surfaceId,
+        principalId: resume.originalMessage.principalId ?? resume.originalMessage.userId,
+        principalRole: resume.originalMessage.principalRole ?? 'owner',
+        channel: resume.originalMessage.channel,
+        requestId: resume.originalMessage.id,
+        contentTrustLevel: currentContextTrustLevel,
+        taintReasons: [...currentTaintReasons],
+        derivedFromTaintedContent: currentContextTrustLevel !== 'trusted',
+        allowModelMemoryMutation: resume.allowModelMemoryMutation,
+        ...(options?.ctx?.checkAction ? { agentContext: { checkAction: options.ctx.checkAction } } : {}),
+        ...(resume.codeContext ? { codeContext: resume.codeContext } : {}),
+        ...(resume.activeSkillIds.length > 0 ? { activeSkills: [...resume.activeSkillIds] } : {}),
+        requestText: resume.requestText,
+      };
+
+      const toolResults = await Promise.allSettled(
+        this.executeToolsConflictAware(response.toolCalls, toolExecOrigin, resume.referenceTime, resume.intentDecision),
+      );
+      lastToolRoundResults = toolResults.reduce<Array<{ toolName: string; result: Record<string, unknown> }>>((acc, settled) => {
+        if (settled.status !== 'fulfilled') return acc;
+        acc.push({
+          toolName: settled.value.toolCall.name,
+          result: settled.value.result,
+        });
+        return acc;
+      }, []);
+
+      const pendingIds: string[] = [];
+      let hasPending = false;
+      const deferredRemoteToolCallIds = new Set<string>();
+      for (const settled of toolResults) {
+        if (settled.status === 'fulfilled') {
+          const { toolCall, result: toolResult } = settled.value;
+          if (toolResult.status === 'pending_approval' && toolResult.approvalId) {
+            pendingIds.push(String(toolResult.approvalId));
+            hasPending = true;
+          }
+          if (isDeferredRemoteSandboxToolResult(toolResult)) {
+            deferredRemoteToolCallIds.add(toolCall.id);
+          }
+          let resultForLlm = toolResult;
+          if (toolResult.status === 'pending_approval') {
+            const { approvalId: _stripped, jobId: _stripJob, ...rest } = toolResult as Record<string, unknown>;
+            resultForLlm = { ...rest, message: 'This action needs your approval. The approval UI is shown to the user automatically.' };
+          }
+          const scannedToolResult = this.sanitizeToolResultForLlm(
+            toolCall.name,
+            resultForLlm,
+            toolResultProviderKind,
+          );
+          if (scannedToolResult.trustLevel === 'quarantined') {
+            currentContextTrustLevel = 'quarantined';
+          } else if (scannedToolResult.trustLevel === 'low_trust' && currentContextTrustLevel === 'trusted') {
+            currentContextTrustLevel = 'low_trust';
+          }
+          for (const reason of scannedToolResult.taintReasons) {
+            currentTaintReasons.add(reason);
+          }
+          llmMessages.push({
+            role: 'tool',
+            toolCallId: toolCall.id,
+            content: formatToolResultForLLM(
+              toolCall.name,
+              scannedToolResult.sanitized,
+              scannedToolResult.threats,
+            ),
+          });
+          if (toolCall.name === 'find_tools' && toolResult.success) {
+            const searchOutput = toolResult.output as {
+              tools?: Array<{
+                name: string;
+                description: string;
+                parameters: Record<string, unknown>;
+                risk: string;
+                category?: string;
+              }>;
+            } | undefined;
+            if (searchOutput?.tools) {
+              for (const discovered of searchOutput.tools) {
+                if (!llmToolDefs.some((definition) => definition.name === discovered.name)) {
+                  const toolDefinition = {
+                    name: discovered.name,
+                    description: discovered.description,
+                    risk: discovered.risk as import('./tools/types.js').ToolRisk,
+                    parameters: discovered.parameters,
+                    category: discovered.category as import('./tools/types.js').ToolCategory | undefined,
+                  };
+                  allToolDefs.push(toolDefinition);
+                  llmToolDefs.push(toLLMToolDef(toolDefinition, toolResultProviderKind));
+                }
+              }
+            }
+          }
+        } else {
+          const failedToolCall = response.toolCalls[toolResults.indexOf(settled)];
+          llmMessages.push({
+            role: 'tool',
+            toolCallId: failedToolCall?.id ?? '',
+            content: JSON.stringify({ success: false, error: settled.reason?.message ?? 'Tool execution failed' }),
+          });
+        }
+      }
+
+      if (hasPending) {
+        const allBlocked = toolResults.every(
+          (settled) => settled.status === 'fulfilled'
+            && (
+              (settled.value.result as Record<string, unknown>).status === 'pending_approval'
+              || isDeferredRemoteSandboxToolResult(settled.value.result as Record<string, unknown>)
+            ),
+        );
+        if (allBlocked) {
+          llmMessages.splice(-toolResults.length, toolResults.length);
+          pruneDeferredRemoteSandboxToolCalls(llmMessages, deferredRemoteToolCallIds);
+          const pendingTools: SuspendedToolCall[] = toolResults
+            .filter((settled): settled is PromiseFulfilledResult<{ toolCall: { id: string; name: string; arguments?: string }; result: Record<string, unknown> }> =>
+              settled.status === 'fulfilled' && (settled.value.result as Record<string, unknown>).status === 'pending_approval')
+            .map((settled) => ({
+              approvalId: String(settled.value.result.approvalId),
+              toolCallId: settled.value.toolCall.id,
+              jobId: String(settled.value.result.jobId),
+              name: settled.value.toolCall.name,
+            }));
+          const originalMessage: UserMessage = {
+            ...resume.originalMessage,
+            ...(resume.originalMessage.metadata ? { metadata: { ...resume.originalMessage.metadata } } : {}),
+          };
+          this.suspendedSessions.set(
+            buildApprovalContinuationScopeKey(normalizeApprovalContinuationScope({
+              userId: pendingAction.scope.userId,
+              channel: pendingAction.scope.channel,
+              surfaceId: pendingAction.scope.surfaceId,
+            })),
+            {
+              scope: normalizeApprovalContinuationScope({
+                userId: pendingAction.scope.userId,
+                channel: pendingAction.scope.channel,
+                surfaceId: pendingAction.scope.surfaceId,
+              }),
+              llmMessages: [...llmMessages],
+              pendingTools,
+              originalMessage,
+              ...(options?.ctx
+                ? { ctx: options.ctx }
+                : {
+                    ctx: {
+                      agentId: this.id,
+                      emit: async () => {},
+                      checkAction: () => {},
+                      capabilities: [],
+                    } as AgentContext,
+                  }),
+            },
+          );
+          const summaries = this.tools.getApprovalSummaries(pendingIds);
+          const pendingActionResult = this.setPendingApprovalAction(
+            pendingAction.scope.userId,
+            pendingAction.scope.channel,
+            pendingAction.scope.surfaceId,
+            {
+              prompt: pendingAction.blocker.prompt || 'Approval required for the pending action.',
+              approvalIds: pendingIds,
+              approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
+              originalUserContent: pendingAction.intent.originalUserContent,
+              route: pendingAction.intent.route,
+              operation: pendingAction.intent.operation,
+              summary: pendingAction.intent.summary,
+              turnRelation: pendingAction.intent.turnRelation,
+              resolution: pendingAction.intent.resolution,
+              missingFields: pendingAction.intent.missingFields,
+              entities: pendingAction.intent.entities,
+              resume: {
+                kind: 'tool_loop',
+                payload: this.buildToolLoopResumePayload({
+                  llmMessages,
+                  pendingTools,
+                  originalMessage,
+                  requestText: resume.requestText,
+                  referenceTime: resume.referenceTime,
+                  allowModelMemoryMutation: resume.allowModelMemoryMutation,
+                  activeSkillIds: resume.activeSkillIds,
+                  contentTrustLevel: currentContextTrustLevel,
+                  taintReasons: [...currentTaintReasons],
+                  intentDecision: resume.intentDecision,
+                  codeContext: resume.codeContext,
+                  selectedExecutionProfile: resume.selectedExecutionProfile,
+                }),
+              },
+              codeSessionId: pendingAction.codeSessionId ?? resume.codeContext?.sessionId,
+            },
+          );
+          return this.buildPendingApprovalBlockedResponse(
+            pendingActionResult,
+            formatPendingApprovalMessage(pendingActionResult.action?.blocker.approvalSummaries ?? []),
+          );
+        }
+      }
+      rounds += 1;
+    }
+
+    if (!finalContent && lastToolRoundResults.length > 0) {
+      finalContent = await this.tryRecoverDirectAnswerAfterTools(
+        llmMessages,
+        chatRunner.chatFn,
+        currentContextTrustLevel,
+        currentTaintReasons,
+      );
+    }
+    if (!finalContent && lastToolRoundResults.length > 0) {
+      finalContent = summarizeToolRoundFallback(lastToolRoundResults);
+    }
+    if (!finalContent) {
+      finalContent = 'I could not generate a final response for that request.';
+    }
+    return { content: finalContent };
   }
 
   private async executeStoredSecondBrainMutation(

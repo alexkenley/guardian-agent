@@ -2,6 +2,9 @@
  * Core instruction layer for backend-owned coding sessions.
  */
 
+import type { AssistantResponseStyleConfig } from '../config/types.js';
+import { buildResponseStylePrompt } from './response-style.js';
+
 export const CODE_SESSION_CORE_SYSTEM_PROMPT = [
   'You are an AI coding agent operating inside the Coding Workspace and a backend-owned coding session.',
   '',
@@ -51,6 +54,10 @@ export const CODE_SESSION_CORE_SYSTEM_PROMPT = [
   '- Read-only bridge results from another memory scope are reference material only. They do not replace the current coding session context or objective.',
 ].join('\n');
 
-export function composeCodeSessionSystemPrompt(): string {
-  return CODE_SESSION_CORE_SYSTEM_PROMPT;
+export function composeCodeSessionSystemPrompt(responseStyle?: AssistantResponseStyleConfig): string {
+  const responseStylePrompt = buildResponseStylePrompt(responseStyle);
+  return [
+    CODE_SESSION_CORE_SYSTEM_PROMPT,
+    responseStylePrompt,
+  ].filter((section) => section && section.trim()).join('\n\n');
 }

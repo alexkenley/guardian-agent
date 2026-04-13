@@ -231,6 +231,10 @@ function buildRecommendedSecondBrainPatch(config) {
   const telegramEnabled = config?.channels?.telegram?.enabled === true;
   return {
     assistant: {
+      responseStyle: {
+        enabled: true,
+        level: 'balanced',
+      },
       secondBrain: {
         enabled: true,
         onboarding: {

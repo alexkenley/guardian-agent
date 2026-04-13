@@ -39,6 +39,26 @@ describe('resolveCodingBackendSessionTarget', () => {
     });
   });
 
+  it('returns current when the mentioned workspace matches the current attachment even if there are multiple ambiguous sessions', () => {
+    expect(resolveCodingBackendSessionTarget({
+      sessions: [
+        ...SESSIONS,
+        {
+          id: 'guardian-old',
+          title: 'Guardian Agent Old',
+          workspaceRoot: 'S:\\Development\\GuardianAgent',
+          resolvedRoot: '/mnt/s/Development/GuardianAgent',
+        }
+      ],
+      currentSessionId: 'guardian',
+      requestedSessionTarget: 'Guardian Agent workspace',
+    })).toEqual({
+      status: 'current',
+      currentSession: SESSIONS[0],
+      targetSession: SESSIONS[0],
+    });
+  });
+
   it('treats generic "current attached" targets as referring to the current attachment', () => {
     expect(resolveCodingBackendSessionTarget({
       sessions: [...SESSIONS],

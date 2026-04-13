@@ -289,12 +289,13 @@ export function buildCodingWorkflowPlan(
   cwd: string,
   selectedFiles: string[],
   remoteExecutionTargets: RemoteExecutionTargetDescriptor[] = [],
+  defaultRemoteExecutionTargetId?: string,
 ): Record<string, unknown> {
   const normalizedTask = task.trim();
   const workflowType = inferCodingWorkflowType(normalizedTask);
   const recipe = getCodingWorkflowRecipe(workflowType);
   const inspect = selectedFiles.length > 0 ? selectedFiles : ['relevant source files', 'tests', 'config'];
-  const isolation = recommendWorkflowIsolation(workflowType, { targets: remoteExecutionTargets });
+  const isolation = recommendWorkflowIsolation(workflowType, { targets: remoteExecutionTargets, defaultRemoteExecutionTargetId });
 
   return {
     goal: normalizedTask,

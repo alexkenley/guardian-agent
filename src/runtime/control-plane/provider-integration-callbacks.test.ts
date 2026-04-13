@@ -159,6 +159,44 @@ describe('createProviderIntegrationCallbacks', () => {
     expect(result).toEqual({ success: true, message: "Daytona profile 'Primary Daytona': connected." });
   });
 
+  it('tests a configured Vercel profile through the injected cloud tester', async () => {
+    const config = createConfig();
+    config.assistant.tools.cloud = {
+      enabled: true,
+      vercelProfiles: [
+        {
+          id: 'vercel-prod',
+          name: 'Vercel Production',
+          apiToken: 'secret-token',
+          teamId: 'team_123',
+          sandbox: {
+            enabled: true,
+            projectId: 'prj_123',
+          },
+        },
+      ],
+    };
+    const testCloudConnections = {
+      cpanel: vi.fn(async () => {}),
+      vercel: vi.fn(async () => {}),
+      daytona: vi.fn(async () => {}),
+      cloudflare: vi.fn(async () => {}),
+      aws: vi.fn(async () => {}),
+      gcp: vi.fn(async () => {}),
+      azure: vi.fn(async () => {}),
+    };
+
+    const callbacks = createProviderIntegrationCallbacks(createOptions({
+      configRef: { current: config },
+      testCloudConnections,
+    }));
+
+    const result = await callbacks.onCloudTest?.('vercelProfiles', 'vercel-prod');
+
+    expect(testCloudConnections.vercel).toHaveBeenCalledOnce();
+    expect(result).toEqual({ success: true, message: "Vercel profile 'Vercel Production': connected." });
+  });
+
   it('returns a configuration error when cloud tools are not enabled', async () => {
     const config = createConfig();
     config.assistant.tools.cloud = undefined as never;

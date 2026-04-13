@@ -4,6 +4,16 @@ import type { CodeSessionWorkflowType } from '../coding-workflows.js';
 export type RemoteExecutionBackendKind = 'vercel_sandbox' | 'daytona_sandbox';
 export type RemoteExecutionCapabilityState = 'disabled' | 'incomplete' | 'ready';
 export type RemoteExecutionNetworkMode = 'deny_all' | 'allow_all' | 'domain_allowlist' | 'cidr_allowlist';
+export type RemoteExecutionHealthState = 'unknown' | 'healthy' | 'unreachable';
+
+export interface RemoteExecutionTargetHealthSummary {
+  state: RemoteExecutionHealthState;
+  reason: string;
+  checkedAt: number;
+  durationMs?: number;
+  leaseId?: string;
+  sandboxId?: string;
+}
 
 export interface RemoteExecutionTargetDescriptor {
   id: string;
@@ -22,6 +32,12 @@ export interface RemoteExecutionTargetDescriptor {
   networkMode: RemoteExecutionNetworkMode;
   allowedDomains: string[];
   allowedCidrs: string[];
+  healthState?: RemoteExecutionHealthState;
+  healthReason?: string;
+  healthCheckedAt?: number;
+  healthDurationMs?: number;
+  activeLeaseId?: string;
+  activeSandboxId?: string;
 }
 
 export interface WorkflowIsolationRecommendation {
@@ -34,6 +50,39 @@ export interface WorkflowIsolationRecommendation {
   networkMode?: RemoteExecutionNetworkMode;
   allowedDomains?: string[];
   allowedCidrs?: string[];
+}
+
+export function prioritizeReadyRemoteExecutionTargets(
+  targets: RemoteExecutionTargetDescriptor[],
+  preferredTargetIds: Array<string | null | undefined> = [],
+): RemoteExecutionTargetDescriptor[] {
+  const readyTargets = targets.filter((entry) => isRemoteExecutionTargetReady(entry));
+  if (readyTargets.length === 0) {
+    return [];
+  }
+
+  const orderedPreferredIds = preferredTargetIds
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value) && value !== 'automatic');
+  if (orderedPreferredIds.length === 0) {
+    return readyTargets;
+  }
+
+  const seen = new Set<string>();
+  const prioritized: RemoteExecutionTargetDescriptor[] = [];
+  for (const preferredId of orderedPreferredIds) {
+    const match = readyTargets.find((entry) => entry.id === preferredId);
+    if (!match || seen.has(match.id)) continue;
+    seen.add(match.id);
+    prioritized.push(match);
+  }
+
+  for (const entry of readyTargets) {
+    if (seen.has(entry.id)) continue;
+    prioritized.push(entry);
+  }
+
+  return prioritized;
 }
 
 function normalizeAllowedDomains(input: string[] | undefined): string[] {
@@ -55,6 +104,9 @@ function inferNetworkMode(input: {
 
 export function listRemoteExecutionTargets(
   cloud: AssistantCloudConfig | null | undefined,
+  options: {
+    healthByTargetId?: Record<string, RemoteExecutionTargetHealthSummary | undefined>;
+  } = {},
 ): RemoteExecutionTargetDescriptor[] {
   const vercelTargets = (cloud?.vercelProfiles ?? []).map((profile) => {
     const allowedDomains = normalizeAllowedDomains(profile.sandbox?.allowedDomains);
@@ -84,8 +136,10 @@ export function listRemoteExecutionTargets(
           : !hasTeamId
             ? 'Sandbox capability needs a Vercel teamId for access-token authentication.'
             : 'Sandbox capability needs a Vercel sandbox projectId.';
+    const id = `vercel:${profile.id}`;
+    const health = options.healthByTargetId?.[id];
     return {
-      id: `vercel:${profile.id}`,
+      id,
       profileId: profile.id,
       profileName: profile.name,
       providerFamily: 'vercel' as const,
@@ -99,6 +153,12 @@ export function listRemoteExecutionTargets(
       networkMode,
       allowedDomains,
       allowedCidrs: [],
+      healthState: health?.state,
+      healthReason: health?.reason,
+      healthCheckedAt: health?.checkedAt,
+      healthDurationMs: health?.durationMs,
+      activeLeaseId: health?.leaseId,
+      activeSandboxId: health?.sandboxId,
     };
   });
   const daytonaTargets = (cloud?.daytonaProfiles ?? []).map((profile) => {
@@ -121,8 +181,10 @@ export function listRemoteExecutionTargets(
       : !sandboxEnabled
         ? 'Sandbox capability is disabled for this Daytona profile.'
         : 'Sandbox capability needs a resolved Daytona API key or credential ref.';
+    const id = `daytona:${profile.id}`;
+    const health = options.healthByTargetId?.[id];
     return {
-      id: `daytona:${profile.id}`,
+      id,
       profileId: profile.id,
       profileName: profile.name,
       providerFamily: 'daytona' as const,
@@ -136,9 +198,19 @@ export function listRemoteExecutionTargets(
       networkMode,
       allowedDomains: [],
       allowedCidrs,
+      healthState: health?.state,
+      healthReason: health?.reason,
+      healthCheckedAt: health?.checkedAt,
+      healthDurationMs: health?.durationMs,
+      activeLeaseId: health?.leaseId,
+      activeSandboxId: health?.sandboxId,
     };
   });
   return [...vercelTargets, ...daytonaTargets];
+}
+
+export function isRemoteExecutionTargetReady(target: Pick<RemoteExecutionTargetDescriptor, 'capabilityState' | 'healthState'>): boolean {
+  return target.capabilityState === 'ready' && target.healthState !== 'unreachable';
 }
 
 function workflowIsolationOperations(type: CodeSessionWorkflowType): string[] {
@@ -167,6 +239,7 @@ export function recommendWorkflowIsolation(
   options: {
     targets?: RemoteExecutionTargetDescriptor[];
     workspaceTrustState?: string | null;
+    defaultRemoteExecutionTargetId?: string;
   } = {},
 ): WorkflowIsolationRecommendation {
   const candidateOperations = workflowIsolationOperations(workflowType);
@@ -178,7 +251,12 @@ export function recommendWorkflowIsolation(
     };
   }
 
-  const target = (options.targets ?? []).find((entry) => entry.capabilityState === 'ready');
+  const readyTargets = prioritizeReadyRemoteExecutionTargets(
+    options.targets ?? [],
+    [options.defaultRemoteExecutionTargetId],
+  );
+  const target = readyTargets[0];
+
   if (!target) {
     return {
       level: 'none',

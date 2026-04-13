@@ -180,24 +180,31 @@ export function createDashboardMessageDispatcher(args: {
       const existingResponseSource = metadata?.responseSource && typeof metadata.responseSource === 'object'
         ? metadata.responseSource as Record<string, unknown>
         : undefined;
-      const locality = existingResponseSource?.locality === 'local' || existingResponseSource?.locality === 'external'
+      const selectedSourceRecord = selectedResponseSource
+        ? selectedResponseSource as unknown as Record<string, unknown>
+        : undefined;
+      const resolvedLocality = existingResponseSource?.locality === 'local' || existingResponseSource?.locality === 'external'
         ? existingResponseSource.locality
-        : undefined;
-      const providerName = typeof existingResponseSource?.providerName === 'string'
+        : selectedResponseSource?.locality;
+      const resolvedProviderName = typeof existingResponseSource?.providerName === 'string' && existingResponseSource.providerName.trim()
         ? existingResponseSource.providerName
+        : selectedResponseSource?.providerName;
+      const mismatchNotice = requestedTier && resolvedLocality && requestedTier !== resolvedLocality
+        ? `Requested ${requestedTier} route, final response came from ${resolvedLocality}${resolvedProviderName ? ` (${resolvedProviderName})` : ''}.`
         : undefined;
-      const mismatchNotice = requestedTier && locality && requestedTier !== locality
-        ? `Requested ${requestedTier} route, final response came from ${locality}${providerName ? ` (${providerName})` : ''}.`
+      const mergedResponseSource = existingResponseSource || selectedSourceRecord || requestedTier || mismatchNotice
+        ? {
+            ...(selectedSourceRecord ?? {}),
+            ...(existingResponseSource ?? {}),
+            ...(requestedTier ? { tier: requestedTier } : {}),
+            ...(mismatchNotice && !existingResponseSource?.notice ? { notice: mismatchNotice } : {}),
+          }
         : undefined;
       const mergedMetadata: Record<string, unknown> = {
         ...(metadata ?? {}),
-        ...((requestedTier || mismatchNotice)
+        ...(mergedResponseSource
           ? {
-              responseSource: {
-                ...(existingResponseSource ?? {}),
-                ...(requestedTier ? { tier: requestedTier } : {}),
-                ...(mismatchNotice && !existingResponseSource?.notice ? { notice: mismatchNotice } : {}),
-              },
+              responseSource: mergedResponseSource,
             }
           : {}),
       };

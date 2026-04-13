@@ -12,6 +12,10 @@ import type {
 const PROVIDER_MUTATION_METHOD_PATTERN = /\b(create|insert|update|patch|delete|send|remove|modify|forward|reply)\b/i;
 const REPO_INSPECTION_SHELL_PATTERN = /\b(?:git\s+grep|grep|rg|findstr|sed|head|tail|cat|type|get-content)\b/i;
 const GIT_HISTORY_SHELL_PATTERN = /\b(?:git\s+diff|git\s+show|git\s+log|git\s+blame)\b/i;
+const REMOTE_SANDBOX_REQUEST_PATTERN = /\b(?:remote|cloud|isolated)\s+sandbox\b/i;
+const EXPLICIT_REMOTE_PROFILE_PATTERN = /\bprofileid\s+([a-z0-9._:-]+)/i;
+const NAMED_REMOTE_PROFILE_PATTERN = /\b(?:using|with|via)\s+(?:the\s+)?([a-z0-9][a-z0-9._ -]*?)\s+profile\b/i;
+const REMOTE_VERIFICATION_TOOL_NAMES = new Set(['code_test', 'code_build', 'code_lint']);
 const SECOND_BRAIN_MUTATION_TOOLS = new Set([
   'second_brain_generate_brief',
   'second_brain_brief_upsert',
@@ -56,7 +60,7 @@ export function prepareToolExecutionForIntent(
   const requestText = typeof input.requestText === 'string'
     ? stripLeadingContextPrefix(input.requestText).trim()
     : '';
-  const args = requestText
+  const normalizedArgs = requestText
     ? normalizeSecondBrainMutationArgs({
         toolName: input.toolName,
         args: input.args,
@@ -67,6 +71,12 @@ export function prepareToolExecutionForIntent(
         getPersonById: input.getPersonById,
       })
     : input.args;
+  const args = normalizeRoutedToolArgs({
+    toolName: input.toolName,
+    args: normalizedArgs,
+    requestText,
+    intentDecision: input.intentDecision,
+  });
   const immediateResult = buildIntentRoutedToolDenial({
     toolName: input.toolName,
     args,
@@ -78,6 +88,45 @@ export function prepareToolExecutionForIntent(
     args,
     ...(immediateResult ? { immediateResult } : {}),
   };
+}
+
+function normalizeRoutedToolArgs(input: {
+  toolName: string;
+  args: Record<string, unknown>;
+  requestText?: string;
+  intentDecision?: IntentGatewayDecision | null;
+}): Record<string, unknown> {
+  const explicitProfileId = resolveExplicitRemoteProfileId(input.intentDecision, input.requestText);
+  const explicitRemoteSandboxIntent = isExplicitRemoteSandboxIntent(input.intentDecision, input.requestText);
+  if (input.toolName === 'code_remote_exec') {
+    if (explicitProfileId) {
+      return {
+        ...input.args,
+        profile: explicitProfileId,
+      };
+    }
+    if (!Object.prototype.hasOwnProperty.call(input.args, 'profile')) {
+      return input.args;
+    }
+    const nextArgs = { ...input.args };
+    delete nextArgs.profile;
+    return nextArgs;
+  }
+
+  if (!REMOTE_VERIFICATION_TOOL_NAMES.has(input.toolName)) {
+    return input.args;
+  }
+
+  const nextArgs = { ...input.args };
+  if (explicitProfileId) {
+    nextArgs.remoteProfile = explicitProfileId;
+  } else if (Object.prototype.hasOwnProperty.call(nextArgs, 'remoteProfile')) {
+    delete nextArgs.remoteProfile;
+  }
+  if (explicitRemoteSandboxIntent) {
+    nextArgs.isolation = 'remote_required';
+  }
+  return nextArgs;
 }
 
 export function buildRoutedIntentAdditionalSection(
@@ -111,6 +160,23 @@ function buildIntentRoutedToolDenial(input: {
 }): Record<string, unknown> | undefined {
   const decision = input.intentDecision;
   if (!decision) return undefined;
+
+  if (isExplicitRemoteSandboxIntent(decision, input.requestText)) {
+    if (input.toolName === 'shell_safe') {
+      return {
+        success: false,
+        status: 'denied',
+        message: 'The user explicitly requested remote sandbox execution. Use code_remote_exec or code_test/code_build/code_lint with remote isolation instead of shell_safe.',
+      };
+    }
+    if (input.toolName === 'package_install') {
+      return {
+        success: false,
+        status: 'denied',
+        message: 'The user explicitly requested remote sandbox execution. Do not use package_install here because it can degrade back to host execution. Use code_remote_exec for the install command instead.',
+      };
+    }
+  }
 
   if (decision.route === 'personal_assistant_task' && isProviderMutationTool(input)) {
     const message = decision.entities.personalItemType === 'calendar' && decision.entities.calendarTarget === 'local'
@@ -183,6 +249,16 @@ function buildRoutedIntentRuleLines(decision: IntentGatewayDecision): string[] {
       'Prefer native repo tools first: fs_search, code_symbol_search, and fs_read for locating and reading code.',
       'Do not use shell_safe for grep, git grep, cat, sed, or similar repo inspection when the built-in repo tools can answer the question.',
     ];
+    if (decision.entities.codingRemoteExecRequested === true) {
+      lines.push('For explicit remote sandbox requests, use code_remote_exec for arbitrary commands or code_test/code_build/code_lint with remote-required isolation for structured verification.');
+      if (typeof decision.entities.profileId === 'string' && decision.entities.profileId.trim()) {
+        lines.push(`CRITICAL: The user explicitly named the remote execution profile "${decision.entities.profileId}". You MUST include \`profile: "${decision.entities.profileId}"\` in the arguments of EVERY remote sandbox tool call you make in this turn, including any retries or follow-up steps.`);
+      } else {
+        lines.push('Omit profile arguments unless the user explicitly named a remote execution profile. Generic remote-sandbox runs should use the configured default remote sandbox.');
+      }
+      lines.push('If the user asked for multiple remote sandbox steps, issue exactly one remote sandbox tool call at a time and wait for its result before the next remote sandbox step.');
+      lines.push('Do not fall back to shell_safe or package_install on the host during this turn if the remote lane fails or is unavailable.');
+    }
     if (decision.preferredAnswerPath === 'chat_synthesis') {
       lines.push('Read the named files or search hits first, then synthesize the answer or review findings in the response.');
     }
@@ -216,6 +292,39 @@ function buildRoutedIntentRuleLines(decision: IntentGatewayDecision): string[] {
 
 function wrapTaggedSection(tag: string, content: string): string {
   return `[${tag}]\n${content}\n[/${tag}]`;
+}
+
+function isExplicitRemoteSandboxIntent(
+  decision: IntentGatewayDecision | null | undefined,
+  requestText?: string,
+): boolean {
+  if (decision?.route === 'coding_task' && decision.entities.codingRemoteExecRequested === true) {
+    return true;
+  }
+  const normalizedRequest = typeof requestText === 'string'
+    ? stripLeadingContextPrefix(requestText).trim()
+    : '';
+  return normalizedRequest.length > 0 && REMOTE_SANDBOX_REQUEST_PATTERN.test(normalizedRequest);
+}
+
+function resolveExplicitRemoteProfileId(
+  decision: IntentGatewayDecision | null | undefined,
+  requestText?: string,
+): string {
+  const gatewayProfileId = typeof decision?.entities.profileId === 'string' && decision.entities.profileId.trim()
+    ? decision.entities.profileId.trim()
+    : '';
+  if (gatewayProfileId) return gatewayProfileId;
+  const normalizedRequest = typeof requestText === 'string'
+    ? stripLeadingContextPrefix(requestText).trim()
+    : '';
+  if (!normalizedRequest) return '';
+  const match = normalizedRequest.match(EXPLICIT_REMOTE_PROFILE_PATTERN);
+  if (match?.[1]?.trim()) {
+    return match[1].trim().replace(/[)"'\].,!?;]+$/g, '');
+  }
+  const namedMatch = normalizedRequest.match(NAMED_REMOTE_PROFILE_PATTERN);
+  return (namedMatch?.[1]?.trim() || '').replace(/[)"'\].,!?;]+$/g, '');
 }
 
 function shouldDenyRepoInspectionShell(

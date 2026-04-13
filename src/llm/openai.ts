@@ -203,6 +203,23 @@ export class OpenAIProvider implements LLMProvider {
       });
     }
 
+    if (options?.responseFormat?.type === 'json_object') {
+      Object.assign(params, {
+        response_format: { type: 'json_object' as const },
+      });
+    } else if (options?.responseFormat?.type === 'json_schema') {
+      Object.assign(params, {
+        response_format: {
+          type: 'json_schema' as const,
+          json_schema: {
+            name: options.responseFormat.name,
+            schema: options.responseFormat.schema,
+            strict: true,
+          },
+        },
+      });
+    }
+
     return stream
       ? params as OpenAI.ChatCompletionCreateParamsStreaming
       : params as OpenAI.ChatCompletionCreateParamsNonStreaming;

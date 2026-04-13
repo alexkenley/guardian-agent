@@ -392,6 +392,14 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
   if (typeof assistant.secondBrain.knowledge?.rerankerEnabled !== 'boolean') {
     errors.push('assistant.secondBrain.knowledge.rerankerEnabled must be a boolean');
   }
+  if (assistant.responseStyle !== undefined) {
+    if (typeof assistant.responseStyle.enabled !== 'boolean') {
+      errors.push('assistant.responseStyle.enabled must be a boolean');
+    }
+    if (!['light', 'balanced', 'strong'].includes(assistant.responseStyle.level)) {
+      errors.push("assistant.responseStyle.level must be 'light', 'balanced', or 'strong'");
+    }
+  }
 
   if (assistant.security?.deploymentProfile && !isDeploymentProfile(assistant.security.deploymentProfile)) {
     errors.push("assistant.security.deploymentProfile must be one of: personal, home, organization");
@@ -805,13 +813,15 @@ export function validateConfig(config: GuardianAgentConfig): string[] {
     }
     if (cloud.defaultRemoteExecutionTargetId?.trim()) {
       const targetId = cloud.defaultRemoteExecutionTargetId.trim();
-      const hasMatch = targetId.startsWith('vercel:')
-        ? (cloud.vercelProfiles ?? []).some((profile) => `vercel:${profile.id}` === targetId)
-        : targetId.startsWith('daytona:')
-          ? (cloud.daytonaProfiles ?? []).some((profile) => `daytona:${profile.id}` === targetId)
-          : false;
+      const hasMatch = targetId === 'automatic'
+        ? true
+        : targetId.startsWith('vercel:')
+          ? (cloud.vercelProfiles ?? []).some((profile) => `vercel:${profile.id}` === targetId)
+          : targetId.startsWith('daytona:')
+            ? (cloud.daytonaProfiles ?? []).some((profile) => `daytona:${profile.id}` === targetId)
+            : false;
       if (!hasMatch) {
-        errors.push(`assistant.tools.cloud.defaultRemoteExecutionTargetId '${targetId}' does not match a configured Vercel or Daytona remote execution target`);
+        errors.push(`assistant.tools.cloud.defaultRemoteExecutionTargetId '${targetId}' does not match 'automatic' or a configured Vercel or Daytona remote execution target`);
       }
     }
     const seenCloudflareProfileIds = new Set<string>();

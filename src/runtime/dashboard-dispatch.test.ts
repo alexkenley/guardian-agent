@@ -294,4 +294,52 @@ describe('createDashboardMessageDispatcher', () => {
       }),
     }), expect.any(Function));
   });
+
+  it('fills response-source details from the selected execution profile when the runtime only returns locality', async () => {
+    const config = createConfig();
+    config.llm['ollama-cloud-coding'] = {
+      provider: 'ollama_cloud',
+      model: 'qwen3-coder-next',
+      credentialRef: 'llm.ollama-cloud-coding',
+    };
+    const options = createOptions({
+      configRef: { current: config },
+      runtime: {
+        dispatchMessage: vi.fn(async () => ({
+          content: 'Cloud reply.',
+          metadata: {
+            responseSource: {
+              locality: 'external',
+            },
+          },
+        })),
+      },
+    });
+    const dispatchDashboardMessage = createDashboardMessageDispatcher(options);
+
+    const result = await dispatchDashboardMessage({
+      agentId: 'external-agent',
+      msg: {
+        content: 'check the managed cloud path',
+        userId: 'web-user',
+        channel: 'web',
+        metadata: attachSelectedExecutionProfileMetadata(undefined, createSelectedExecutionProfile()),
+      },
+      routeDecision: {
+        agentId: 'external-agent',
+        confidence: 'high',
+        reason: 'tier route',
+        tier: 'external',
+      },
+    });
+
+    expect(result.metadata?.responseSource).toMatchObject({
+      locality: 'external',
+      providerName: 'ollama_cloud',
+      providerProfileName: 'ollama-cloud-coding',
+      providerTier: 'managed_cloud',
+      model: 'qwen3-coder-next',
+      tier: 'external',
+    });
+  });
 });

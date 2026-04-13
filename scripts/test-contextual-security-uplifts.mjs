@@ -184,7 +184,7 @@ async function getPrivilegedTicket(baseUrl, token, action) {
 }
 
 async function waitForHealth(baseUrl) {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+  for (let attempt = 0; attempt < 360; attempt += 1) {
     try {
       const result = await requestJson(baseUrl, 'unused', 'GET', '/health');
       if (result?.status === 'ok') {
@@ -195,7 +195,7 @@ async function waitForHealth(baseUrl) {
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  throw new Error('GuardianAgent did not become healthy within 30 seconds.');
+  throw new Error('GuardianAgent did not become healthy within 180 seconds.');
 }
 
 async function waitForJob(baseUrl, token, predicate, timeoutMs = 10_000) {

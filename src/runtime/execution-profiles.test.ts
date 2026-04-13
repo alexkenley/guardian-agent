@@ -173,6 +173,30 @@ describe('execution profiles', () => {
     });
   });
 
+  it('uses the managed-cloud coding profile for explicit remote sandbox runs in balanced auto mode', () => {
+    const profile = selectExecutionProfile({
+      config: createConfig(),
+      routeDecision: { tier: 'external' },
+      gatewayDecision: createGatewayDecision({
+        operation: 'run',
+        preferredAnswerPath: 'tool_loop',
+        entities: {
+          codingRemoteExecRequested: true,
+          command: 'pwd',
+        },
+      }),
+      mode: 'auto',
+    });
+
+    expect(profile).toMatchObject({
+      providerName: 'ollama-cloud-coding',
+      providerModel: 'qwen3-coder-next',
+      providerTier: 'managed_cloud',
+      id: 'managed_cloud_tool',
+    });
+    expect(profile?.reason).toContain("managed-cloud role 'coding' selected provider 'ollama-cloud-coding'");
+  });
+
   it('uses the managed-cloud direct profile for direct-assistant personal work even when the gateway prefers tool_loop', () => {
     const config = createConfig();
     config.llm.ollama.enabled = false;

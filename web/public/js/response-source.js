@@ -10,6 +10,28 @@ function normalizeProviderTier(tier) {
     : null;
 }
 
+function inferProviderTier(providerName, providerProfileName) {
+  const normalized = normalizeProviderIdentity(providerName || providerProfileName);
+  if (!normalized) return null;
+  if (normalized.startsWith('ollamacloud')) return 'managed_cloud';
+  if (normalized.startsWith('ollama')) return 'local';
+  if (
+    normalized.startsWith('openai')
+    || normalized.startsWith('anthropic')
+    || normalized.startsWith('groq')
+    || normalized.startsWith('mistral')
+    || normalized.startsWith('deepseek')
+    || normalized.startsWith('together')
+    || normalized.startsWith('xai')
+    || normalized.startsWith('grok')
+    || normalized.startsWith('google')
+    || normalized.startsWith('gemini')
+  ) {
+    return 'frontier';
+  }
+  return null;
+}
+
 function formatTierLabel(tier, locality) {
   if (tier === 'managed_cloud') return 'managed cloud';
   if (tier === 'frontier') return 'frontier';
@@ -40,7 +62,8 @@ export function describeResponseSource(value) {
   const providerProfileName = typeof value?.providerProfileName === 'string' && value.providerProfileName.trim()
     ? value.providerProfileName.trim()
     : '';
-  const providerTier = normalizeProviderTier(value?.providerTier);
+  const providerTier = normalizeProviderTier(value?.providerTier)
+    || inferProviderTier(providerName, providerProfileName);
   const tier = value?.tier === 'local' || value?.tier === 'external'
     ? value.tier
     : '';

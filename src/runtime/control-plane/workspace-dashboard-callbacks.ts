@@ -13,8 +13,11 @@ type WorkspaceDashboardCallbacks = Pick<
   | 'onCodeSessionsList'
   | 'onCodeSessionGet'
   | 'onCodeSessionTimeline'
+  | 'onCodeSessionSandboxes'
   | 'onCodeSessionCreate'
   | 'onCodeSessionUpdate'
+  | 'onCodeSessionSandboxCreate'
+  | 'onCodeSessionSandboxDelete'
   | 'onCodeSessionDelete'
   | 'onCodeSessionAttach'
   | 'onCodeSessionDetach'
@@ -54,6 +57,27 @@ interface WorkspaceDashboardCallbackOptions {
       historyLimit?: number;
     },
   ) => DashboardCodeSessionSnapshot;
+  getCodeSessionSandboxes: (input: {
+    session: CodeSessionRecord;
+    canonicalUserId: string;
+  }) => ReturnType<NonNullable<DashboardCallbacks['onCodeSessionSandboxes']>>;
+  createCodeSessionSandbox: (input: {
+    session: CodeSessionRecord;
+    canonicalUserId: string;
+    targetId?: string;
+    profileId?: string;
+    runtime?: string;
+    vcpus?: number;
+  }) => ReturnType<NonNullable<DashboardCallbacks['onCodeSessionSandboxCreate']>>;
+  deleteCodeSessionSandbox: (input: {
+    session: CodeSessionRecord;
+    canonicalUserId: string;
+    leaseId: string;
+  }) => ReturnType<NonNullable<DashboardCallbacks['onCodeSessionSandboxDelete']>>;
+  releaseCodeSessionSandboxes: (input: {
+    session: CodeSessionRecord;
+    canonicalUserId: string;
+  }) => Promise<void>;
   getCodeSessionSurfaceId: (args: { surfaceId?: string; userId?: string; principalId?: string }) => string;
   resetCodeSessionWorkspacePolicy: () => void;
   reconcileConfiguredAllowedPaths: () => void;
@@ -164,6 +188,25 @@ export function createWorkspaceDashboardCallbacks(
       };
     },
 
+    onCodeSessionSandboxes: async ({ sessionId, userId, principalId, channel, surfaceId }) => {
+      const {
+        canonicalUserId,
+        resolvedSession,
+      } = options.resolveDashboardCodeSessionRequest({
+        sessionId,
+        userId,
+        principalId,
+        channel,
+        surfaceId,
+        touchAttachment: false,
+      });
+      if (!resolvedSession) return null;
+      return await options.getCodeSessionSandboxes({
+        session: resolvedSession.session,
+        canonicalUserId,
+      }) ?? null;
+    },
+
     onCodeSessionCreate: ({ userId, principalId, channel, surfaceId, title, workspaceRoot, agentId, attach }) => {
       const resolvedChannel = channel?.trim() || 'web';
       const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
@@ -233,17 +276,94 @@ export function createWorkspaceDashboardCallbacks(
       });
     },
 
-    onCodeSessionDelete: ({ sessionId, userId, principalId, channel, surfaceId }) => {
-      const resolvedChannel = channel?.trim() || 'web';
-      const channelUserId = userId?.trim() || `${resolvedChannel}-user`;
-      const canonicalUserId = options.identity.resolveCanonicalUserId(resolvedChannel, channelUserId);
+    onCodeSessionSandboxCreate: async ({ sessionId, userId, principalId, channel, surfaceId, targetId, profileId, runtime, vcpus }) => {
+      const {
+        canonicalUserId,
+        resolvedSession,
+      } = options.resolveDashboardCodeSessionRequest({
+        sessionId,
+        userId,
+        principalId,
+        channel,
+        surfaceId,
+        touchAttachment: false,
+      });
+      if (!resolvedSession) {
+        throw options.createStructuredRequestError('Code session not found.', 404, 'CODE_SESSION_NOT_FOUND');
+      }
+      return options.createCodeSessionSandbox({
+        session: resolvedSession.session,
+        canonicalUserId,
+        targetId,
+        profileId,
+        runtime,
+        vcpus,
+      });
+    },
+
+    onCodeSessionSandboxDelete: async ({ sessionId, leaseId, userId, principalId, channel, surfaceId }) => {
+      const {
+        canonicalUserId,
+        resolvedSession,
+      } = options.resolveDashboardCodeSessionRequest({
+        sessionId,
+        userId,
+        principalId,
+        channel,
+        surfaceId,
+        touchAttachment: false,
+      });
+      if (!resolvedSession) {
+        throw options.createStructuredRequestError('Code session not found.', 404, 'CODE_SESSION_NOT_FOUND');
+      }
+      return options.deleteCodeSessionSandbox({
+        session: resolvedSession.session,
+        canonicalUserId,
+        leaseId,
+      });
+    },
+
+    onCodeSessionDelete: async ({ sessionId, userId, principalId, channel, surfaceId }) => {
+      const {
+        canonicalUserId,
+        resolvedChannel,
+        resolvedSurfaceId,
+        resolvedSession,
+      } = options.resolveDashboardCodeSessionRequest({
+        sessionId,
+        userId,
+        principalId,
+        channel,
+        surfaceId,
+        touchAttachment: false,
+      });
+      if (!resolvedSession) {
+        return {
+          success: false,
+          currentSessionId: null,
+        };
+      }
+      try {
+        await options.releaseCodeSessionSandboxes({
+          session: resolvedSession.session,
+          canonicalUserId,
+        });
+      } catch (err) {
+        throw options.createStructuredRequestError(
+          err instanceof Error
+            ? err.message
+            : 'Managed sandboxes must be released before the code session can be deleted.',
+          409,
+          'CODE_SESSION_SANDBOX_RELEASE_FAILED',
+        );
+      }
       const deleted = options.codeSessionStore.deleteSession(sessionId, canonicalUserId);
       options.resetCodeSessionWorkspacePolicy();
       const current = options.codeSessionStore.resolveForRequest({
         userId: canonicalUserId,
         principalId,
         channel: resolvedChannel,
-        surfaceId: surfaceId?.trim() || options.getCodeSessionSurfaceId({ userId: canonicalUserId, principalId }),
+        surfaceId: resolvedSurfaceId,
         touchAttachment: false,
       });
       return {

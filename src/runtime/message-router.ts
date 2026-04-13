@@ -81,7 +81,6 @@ const LOCAL_PREFERRED_INTENT_ROUTES = new Set<IntentGatewayRoute>([
   'personal_assistant_task',
   'memory_task',
   'filesystem_task',
-  'coding_task',
   'coding_session_control',
   'ui_control',
   'automation_control',
@@ -92,6 +91,7 @@ const EXTERNAL_PREFERRED_INTENT_ROUTES = new Set<IntentGatewayRoute>([
   'workspace_task',
   'email_task',
   'search_task',
+  'coding_task',
   'security_task',
 ]);
 
@@ -404,7 +404,7 @@ export class MessageRouter {
     reason: string;
     complexityScore?: number;
   } {
-    if (decision.entities.codingBackend) {
+    if (decision.entities.codingBackend && decision.entities.codingBackendRequested === true) {
       return {
         tier: 'local',
         confidence: 'high',

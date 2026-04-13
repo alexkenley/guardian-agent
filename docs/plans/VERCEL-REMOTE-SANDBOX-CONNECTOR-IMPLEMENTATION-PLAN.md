@@ -1,340 +1,242 @@
-# Vercel Remote Sandbox Connector Implementation Plan
+# Remote Sandbox Orchestration Plan
 
-**Date:** 2026-04-12  
-**Status:** Draft  
-**Primary references:** [Vercel-First Hosted Agent Platform Proposal](../proposals/VERCEL-FIRST-HOSTED-AGENT-PLATFORM-PROPOSAL.md), [Cloud Hosting Integration Spec](../specs/CLOUD-HOSTING-INTEGRATION-SPEC.md), [Coding Workspace Spec](../specs/CODING-WORKSPACE-SPEC.md)  
-**External references:** [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox/), [Vercel Sandbox Managing / Authentication](https://vercel.com/docs/vercel-sandbox/managing), [Vercel Sandbox Pricing and Limits](https://vercel.com/docs/vercel-sandbox/pricing), [Daytona Documentation](https://www.daytona.io/docs/)
+**Date:** 2026-04-13  
+**Status:** Delivered initial slice. See [Remote Sandboxing Spec](../specs/REMOTE-SANDBOXING-SPEC.md) for the canonical as-built behavior.  
+**Primary references:** [Cloud Hosting Integration Spec](../specs/CLOUD-HOSTING-INTEGRATION-SPEC.md), [Coding Workspace Spec](../specs/CODING-WORKSPACE-SPEC.md), [WebUI Design Spec](../specs/WEBUI-DESIGN-SPEC.md)  
+**External references:** [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox/), [Vercel Sandbox Managing](https://vercel.com/docs/vercel-sandbox/managing), [Daytona Documentation](https://www.daytona.io/docs/)
 
 ---
 
 ## Goal
 
-Add a cloud connector capability for **explicit remote isolated execution** from Guardian running locally, while keeping:
+Provide one shared remote-sandbox model for Guardian that:
 
-- local execution as the default path
-- isolation as an explicit opt-in lane for higher-risk operations
-- one shared approval and orchestration model
-- low operational complexity
+- works with Vercel, Daytona, or either provider alone
+- keeps local execution as the default path
+- supports both ephemeral isolated runs and session-managed reusable sandboxes
+- avoids provider-specific orchestration forks
+- exposes longer-lived sandbox control directly in the Code workspace
 
-This plan is for **bounded remote operations**, not for moving Guardian’s whole runtime into a remote VM product.
-
----
-
-## Recommendation
-
-### Phase 1 provider choice: Vercel
-
-Use **Vercel first** for the initial remote sandbox connector.
-
-Why:
-
-- Guardian already has Vercel cloud profiles, tools, and config surfaces
-- you already have a Vercel account
-- Vercel Sandbox is a documented, supported primitive for isolated code execution
-- adding sandbox capability to the existing Vercel profile model is materially simpler than introducing a brand new provider family
-
-### Important caveat
-
-This is **not** because Vercel clearly wins on raw sandbox capability. Daytona is attractive and in some areas more naturally aligned with remote dev environments.
-
-The recommendation is mainly:
-
-- lower integration cost
-- lower config sprawl
-- lower support burden for a first implementation
-
-### Australia latency note
-
-For Australia specifically, neither shared offering currently gives a clean regional advantage:
-
-- Vercel Sandbox is currently only available in `iad1`
-- Daytona shared regions are currently `us` and `eu`
-
-That means Daytona does **not** currently beat Vercel on shared-region proximity for an Australia-based operator. Daytona becomes more compelling later if we want dedicated or custom runners.
+This is not a plan to move the full Guardian runtime into hosted infrastructure. It is a plan for bounded remote execution plus optional reusable coding-session sandboxes.
 
 ---
 
-## Daytona vs Vercel Comparison
+## Product Direction
 
-| Dimension | Vercel Sandbox | Daytona |
-|---|---|---|
-| Current Guardian fit | Strong, because Guardian already has Vercel profiles and cloud tooling | Moderate, because it would be a new provider family |
-| Core product shape | Ephemeral isolated compute primitive | Full composable sandbox computer for AI/dev work |
-| Auth from local Guardian | Access token path supported outside Vercel-hosted runtime | API key / SDK model |
-| Shared-region availability | `iad1` only today | `us` and `eu` shared regions |
-| Future regional flexibility | Limited by current Sandbox region availability | Stronger story through dedicated/custom runners |
-| Dev-environment richness | Good for bounded jobs, file operations, command execution, previews | Stronger native dev-computer posture: filesystem, git, process execution, interactive sessions, code execution, desktop automation |
-| Best first use in Guardian | Explicit isolated jobs with low integration overhead | Heavier future remote-dev or custom-runner lane |
-| Operational complexity for phase 1 | Lower | Higher |
+### Provider model
 
-### Where Vercel is better for Guardian right now
+Guardian must treat Vercel and Daytona as optional remote-execution backends under one shared orchestration layer.
 
-- fastest path to a working phase 1
-- easiest place to reuse existing config and cloud-provider UX
-- better fit if the main need is `run this in isolation, collect artifacts, destroy it`
+Rules:
 
-### Where Daytona is more attractive
+- users may configure only Vercel
+- users may configure only Daytona
+- users may configure both
+- target choice must not depend on hard-coded "Vercel for X, Daytona for Y" workflow heuristics
 
-- more natural remote development environment model
-- stronger long-term story if we want richer interactive sandboxes
-- custom runners make it more attractive if latency, residency, or dedicated capacity become important
+Selection order:
 
-### Decision rule
+1. explicit session-managed sandbox for the current code session
+2. explicitly configured default remote target
+3. first ready target in deterministic config order
 
-Phase 1 should optimize for **getting isolated execution into Guardian without creating a new support problem**.
+### Sandbox modes
 
-That favors Vercel first, while keeping the abstraction provider-neutral enough to add Daytona later.
+Guardian now needs two remote execution modes:
+
+- `ephemeral`: create, run, tear down
+- `managed`: created deliberately for a code session and reused across multiple runs
+
+Managed sandboxes are for longer-running tasks such as:
+
+- dependency install
+- repeated test/build loops
+- workflows that need retained prerequisites or warmed state
+
+Ephemeral sandboxes remain appropriate for:
+
+- one-shot bounded verification
+- higher-risk isolated commands
+- quick policy-driven remote execution
 
 ---
 
-## Scope
+## UX Direction
+
+Remote provider configuration stays under Cloud / configuration surfaces.
+
+Operational control for reusable coding sandboxes lives under the Code workspace.
+
+### Code page changes
+
+Add a `Sandboxes` tab beside the existing `Sessions` tab in the Code side rail.
+
+The panel must show:
+
+- configured remote targets that are ready or unavailable
+- provider tooltip guidance for each target
+- create managed sandbox action
+- active managed sandboxes for the current code session
+- release action for managed sandboxes
+
+Tooltip guidance should explain the practical tradeoff without hard-routing users:
+
+- Vercel: faster bounded sandbox startup, stronger fit for short isolated runs, weaker fit for long-lived stateful sessions
+- Daytona: stronger fit for reusable long-running workspaces, heavier lifecycle than short-lived bounded sandboxes
+
+---
+
+## Runtime Design
+
+### Shared orchestration
+
+The shared remote execution layer owns:
+
+- target discovery
+- health state
+- lease acquire / resume / release
+- artifact metadata
+- run lifecycle
+- code-session lease reuse
+
+Primary modules:
+
+- `src/runtime/remote-execution/types.ts`
+- `src/runtime/remote-execution/remote-execution-service.ts`
+- `src/runtime/remote-execution/policy.ts`
+- `src/runtime/remote-execution/providers/vercel-remote-execution.ts`
+- `src/runtime/remote-execution/providers/daytona-remote-execution.ts`
+
+### Lease behavior
+
+Managed leases must support:
+
+- persisted session attachment metadata
+- reconnect to an existing sandbox when the provider supports it
+- no idle auto-expiry inside Guardian while the lease remains managed
+- retained remote tracked-path metadata so resumed sandboxes can safely restage and remove stale files
+
+### Code-session integration
+
+Code sessions persist managed sandbox records in shared session state.
+
+That record must include:
+
+- target and provider identity
+- sandbox id and lease id
+- workspace roots
+- last-used timestamp
+- runtime / CPU hints
+- tracked remote paths
+- health state
+
+When a code-session remote run starts, Guardian should:
+
+1. inspect the session-managed sandboxes
+2. prefer a compatible managed lease when present
+3. otherwise fall back to the shared target-selection logic
+4. write the updated sandbox usage back into the code session
+
+---
+
+## Web / Control-Plane Design
+
+Required web contract additions:
+
+- `GET /api/code/sessions/:id/sandboxes`
+- `POST /api/code/sessions/:id/sandboxes`
+- `DELETE /api/code/sessions/:id/sandboxes/:leaseId`
+
+Shared dashboard callbacks must surface:
+
+- list session sandboxes
+- create managed sandbox
+- release managed sandbox
+
+The implementation must stay provider-neutral at the callback and route layer.
+
+---
+
+## Supported Behavior
 
 ### In scope
 
-- bounded remote isolated execution
-- provider-attached sandbox capability under the cloud connector model
-- remote job lifecycle: create, run, stream/read logs, fetch artifacts, destroy
-- coding workflow integration for explicit high-risk or isolation-required steps
+- explicit remote isolated execution
+- provider-neutral target selection
+- session-managed reusable sandboxes
+- persistent prerequisites across coding-session runs
+- code-session UI to create and release managed sandboxes
+- provider capability tooltips in the Code panel
 
 ### Out of scope
 
-- full remote-hosted Guardian runtime
-- interactive PTY parity with local Code terminals
-- silent migration of normal local coding work into the cloud
-- provider-specific duplication of approvals, routing, or pending-action behavior
-
----
-
-## Design Principles
-
-1. Isolation must be explicit. Guardian should not silently ship normal work into a remote sandbox.
-2. Reuse the existing cloud profile model where possible.
-3. Keep the runtime provider-neutral even if Vercel is the only initial implementation.
-4. Support only bounded job shapes first.
-5. Destroy remote sandboxes promptly when the job finishes.
-
----
-
-## Recommended Architecture
-
-### A. Provider-neutral runtime service
-
-Add a small provider-neutral remote execution layer:
-
-- `src/runtime/remote-execution/remote-execution-service.ts`
-- `src/runtime/remote-execution/types.ts`
-
-This layer owns:
-
-- job lifecycle
-- provider abstraction
-- artifact metadata
-- run status
-- approval and audit metadata
-
-### B. First provider adapter: Vercel
-
-Implement:
-
-- `src/tools/cloud/vercel-sandbox-client.ts`
-- `src/runtime/remote-execution/providers/vercel-remote-execution.ts`
-
-### C. Later provider adapter: Daytona
-
-Do **not** build Daytona in phase 1, but keep a clean adapter seam for:
-
-- `src/runtime/remote-execution/providers/daytona-remote-execution.ts`
-
----
-
-## Configuration Direction
-
-Do not add a new top-level provider family for phase 1. Extend the existing `vercelProfiles` model with optional sandbox capability.
-
-Recommended direction:
-
-```yaml
-assistant:
-  tools:
-    cloud:
-      vercelProfiles:
-        - id: vercel-main
-          name: Main Vercel
-          credentialRef: cloud.vercel.main
-          teamId: team_xxx
-          slug: guardian
-          sandbox:
-            enabled: true
-            projectId: prj_xxx
-            defaultTimeoutMs: 900000
-            defaultVcpu: 2
-            defaultMemoryGb: 4
-            allowNetwork: true
-            allowedDomains:
-              - registry.npmjs.org
-              - api.anthropic.com
-```
-
-This is illustrative only. The key rule is:
-
-- keep sandbox capability under the existing Vercel connection
-- do not force the user to configure the same account twice
-
----
-
-## Supported Phase 1 Job Shapes
-
-Only support bounded jobs with clear lifecycle and artifact expectations.
-
-Recommended initial shapes:
-
-- run tests in isolation
-- run dependency install plus build in isolation
-- execute untrusted or risky repo commands in isolation
-- run a review-only repo scan in isolation
-- run one-shot document or code conversion jobs that should not touch the host
-
-Not recommended in phase 1:
-
-- long-lived interactive development sessions
-- browser-fleet replacement
-- full remote coding workspace replacement
-
----
-
-## Coding Workflow Integration
-
-This connector should plug into the coding workflow plan as an explicit workflow step.
-
-Examples:
-
-- `Run this repo bootstrap in a remote isolated environment`
-- `Verify this untrusted setup script in isolation before we run anything locally`
-- `Use isolated execution for the dependency install and test run`
-
-This keeps the product model clear:
-
-- local coding session remains primary
-- remote sandbox is a bounded verification or execution lane
-
----
-
-## Vercel-Specific Integration Notes
-
-### Authentication
-
-For Guardian running locally, use the **access-token** authentication path rather than assuming a Vercel-hosted runtime.
-
-Expected profile material:
-
-- Vercel access token
-- team ID
-- project ID for sandbox auth context where needed
-
-### Lifecycle
-
-Guardian should be able to:
-
-1. create sandbox
-2. upload or sync bounded workspace input
-3. run command or job
-4. stream or poll logs
-5. collect outputs
-6. stop and destroy sandbox
-
-### Constraints to design around
-
-- current Vercel Sandbox region availability is `iad1` only
-- Vercel Sandbox is best for bounded jobs, not for turning Guardian into a full remote IDE
-
----
-
-## Daytona Follow-On Option
-
-If we later decide that Vercel’s region model or sandbox shape is too limiting, Daytona is the most natural phase 2 candidate.
-
-Daytona becomes the stronger choice if one or more of these become true:
-
-- we need dedicated or custom-runner regions
-- we need a richer remote dev-computer model
-- we need more persistent interactive sessions
-- we want remote git/filesystem/process operations as first-class primitives
-
-The phase 1 abstraction should preserve that option.
+- full remote IDE replacement
+- browser-terminal parity inside remote sandboxes
+- remote execution by hidden provider-specific heuristics
+- duplicating approvals or orchestration logic per provider
 
 ---
 
 ## Implementation Phases
 
-### Phase 1: Vercel Capability Foundation
+### Phase 1: Shared Target And Lease Foundation
 
 Deliver:
 
-- config extension on existing `vercelProfiles`
-- Vercel sandbox client
-- provider-neutral remote execution service
-- basic job lifecycle APIs
+- provider-neutral target model for Vercel and Daytona
+- remote health summaries
+- lease acquire / resume / release
+- managed vs ephemeral lease modes
 
 Exit criteria:
 
-- Guardian can launch one bounded remote job through a configured Vercel profile and return logs plus completion status
+- both providers can be resolved through one shared service
+- no Vercel-vs-Daytona workflow-specific routing heuristic remains in orchestration
 
-### Phase 2: Artifact And Approval Integration
+### Phase 2: Code-Session Managed Sandboxes
 
 Deliver:
 
-- artifact upload/download
-- approval-gated launch for mutating or risky remote jobs
-- timeline and audit visibility
+- persisted `managedSandboxes` state on code sessions
+- ToolExecutor helpers for create / list / release
+- managed lease preference during later remote runs
 
 Exit criteria:
 
-- remote jobs behave like first-class Guardian operations, not hidden background work
+- a code session can create a managed sandbox once and reuse it on later runs
 
-### Phase 3: Coding Workflow Integration
+### Phase 3: Code UI Control Surface
 
 Deliver:
 
-- coding workflow step for explicit isolated execution
-- clear UI/source badging for remote execution
-- verification results folded back into the active coding session
+- `Sandboxes` tab in the Code side rail
+- target chooser, provider tooltips, create / refresh / release actions
+- live view of active managed sandboxes
 
 Exit criteria:
 
-- remote isolated execution can be used from coding workflows without confusing the active local session model
+- operators can intentionally create and reuse session sandboxes from the Code page
 
-### Phase 4: Daytona Adapter Decision
+### Phase 4: Validation And Hardening
 
 Deliver:
 
-- explicit go / no-go review for Daytona adapter
-- only proceed if Vercel limitations are material in real use
+- type and unit coverage for provider, executor, and route behavior
+- deletion / release cleanup
+- docs/spec updates aligned with the actual provider-neutral design
 
 Exit criteria:
 
-- provider-neutral abstraction proves sufficient to add Daytona without reworking the control plane
-
----
-
-## File-Level Impact
-
-Primary areas:
-
-- `src/tools/cloud/*`
-- `src/runtime/remote-execution/*`
-- `src/channels/web-types.ts`
-- `src/channels/web-runtime-routes.ts`
-- `web/public/js/pages/cloud.js`
-- `web/public/js/pages/config.js`
-- `docs/specs/CLOUD-HOSTING-INTEGRATION-SPEC.md`
-- `docs/specs/CONFIG-CENTER-SPEC.md`
+- managed sandbox flow is validated from executor through web route through Code UI
 
 ---
 
 ## Acceptance Gates
 
-- Vercel is integrated through the existing cloud profile model, not a duplicate config family
-- remote isolation remains explicit and approval-aware
-- phase 1 supports bounded jobs only
-- local coding sessions remain the default and primary coding path
-- the provider abstraction remains clean enough to add Daytona later if needed
+- Guardian works with Vercel only, Daytona only, or both
+- code-session managed sandboxes are optional, not mandatory
+- the Code page exposes a `Sandboxes` tab beside `Sessions`
+- provider tradeoffs are explained in-panel with concise tooltips
+- longer-running sandbox reuse does not depend on provider-specific orchestration forks
+- managed sandbox runs reuse the same remote lease when compatible
+- session deletion or sandbox release does not silently leave stale local session metadata behind

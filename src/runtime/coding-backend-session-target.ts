@@ -65,6 +65,17 @@ export function resolveCodingBackendSessionTarget(input: {
     };
   }
 
+  if (currentSession) {
+    const currentResolved = resolveCodeSessionTarget(requestedSessionTarget, [currentSession]);
+    if (currentResolved.session) {
+      return {
+        status: 'current',
+        currentSession,
+        targetSession: currentSession,
+      };
+    }
+  }
+
   const resolved = resolveCodeSessionTarget(requestedSessionTarget, input.sessions);
   if (!resolved.session) {
     return {

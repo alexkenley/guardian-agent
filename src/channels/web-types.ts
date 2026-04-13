@@ -54,6 +54,7 @@ import type { ProviderLocality, ProviderTier } from '../llm/provider-metadata.js
 import type {
   AssistantConnectorPackConfig,
   AssistantConnectorPlaybookDefinition,
+  AssistantResponseStyleLevel,
   ConnectorExecutionMode,
   OllamaOptionsConfig,
   OllamaThinkConfig,
@@ -117,11 +118,13 @@ import type { SkillRisk } from '../skills/types.js';
 import type {
   CodeSessionAttachmentMode,
   CodeSessionAttachmentRecord,
+  CodeSessionManagedSandbox,
   CodeSessionRecord,
   CodeSessionStatus,
   CodeSessionUiState,
   CodeSessionWorkState,
 } from '../runtime/code-sessions.js';
+import type { RemoteExecutionTargetDescriptor } from '../runtime/remote-execution/policy.js';
 import type {
   DashboardCodeSessionTimelineResponse,
   DashboardRunDetail,
@@ -511,6 +514,31 @@ export interface RedactedConfig {
   };
   assistant: {
     setupCompleted: boolean;
+    secondBrain?: {
+      enabled: boolean;
+      onboarding: {
+        completed: boolean;
+        dismissed: boolean;
+      };
+      profile: {
+        timezone?: string;
+        workdayStart?: string;
+        workdayEnd?: string;
+        proactivityLevel: 'minimal' | 'balanced' | 'proactive';
+      };
+      delivery: {
+        defaultChannels: Array<'web' | 'cli' | 'telegram'>;
+      };
+      knowledge: {
+        prioritizeConnectedSources: boolean;
+        defaultRetrievalMode: 'hybrid' | 'library_first' | 'search_first';
+        rerankerEnabled: boolean;
+      };
+    };
+    responseStyle?: {
+      enabled: boolean;
+      level: AssistantResponseStyleLevel;
+    };
     identity: {
       mode: 'single_user' | 'channel_user';
       primaryUserId: string;
@@ -1295,6 +1323,13 @@ export interface DashboardCallbacks {
     surfaceId: string;
     limit?: number;
   }) => DashboardCodeSessionTimelineResponse | null;
+  onCodeSessionSandboxes?: (args: {
+    sessionId: string;
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+  }) => Promise<DashboardCodeSessionSandboxesResponse | null> | DashboardCodeSessionSandboxesResponse | null;
   onCodeTerminalAccessCheck?: () => {
     allowed: boolean;
     reason?: string;
@@ -1323,13 +1358,32 @@ export interface DashboardCallbacks {
     uiState?: Partial<CodeSessionUiState>;
     workState?: Partial<CodeSessionWorkState>;
   }) => DashboardCodeSessionSnapshot | null;
+  onCodeSessionSandboxCreate?: (args: {
+    sessionId: string;
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+    targetId?: string;
+    profileId?: string;
+    runtime?: string;
+    vcpus?: number;
+  }) => Promise<DashboardCodeSessionSandboxesResponse> | DashboardCodeSessionSandboxesResponse;
+  onCodeSessionSandboxDelete?: (args: {
+    sessionId: string;
+    leaseId: string;
+    userId: string;
+    principalId?: string;
+    channel: string;
+    surfaceId: string;
+  }) => Promise<DashboardCodeSessionSandboxesResponse> | DashboardCodeSessionSandboxesResponse;
   onCodeSessionDelete?: (args: {
     sessionId: string;
     userId: string;
     principalId?: string;
     channel: string;
     surfaceId: string;
-  }) => { success: boolean; currentSessionId: string | null };
+  }) => Promise<{ success: boolean; currentSessionId: string | null }> | { success: boolean; currentSessionId: string | null };
   onCodeSessionAttach?: (args: {
     sessionId: string;
     userId: string;
@@ -1922,6 +1976,10 @@ export interface ConfigUpdate {
         rerankerEnabled?: boolean;
       };
     };
+    responseStyle?: {
+      enabled?: boolean;
+      level?: AssistantResponseStyleLevel;
+    };
     security?: {
       deploymentProfile?: DeploymentProfile;
       operatingMode?: SecurityOperatingMode;
@@ -2214,6 +2272,13 @@ export interface DashboardCodeSessionSnapshot {
   }>;
   attached: boolean;
   attachment?: CodeSessionAttachmentRecord | null;
+}
+
+export interface DashboardCodeSessionSandboxesResponse {
+  codeSessionId: string;
+  defaultTargetId: string | null;
+  targets: RemoteExecutionTargetDescriptor[];
+  sandboxes: CodeSessionManagedSandbox[];
 }
 
 export interface DashboardCodeSessionsList {

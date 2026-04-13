@@ -487,6 +487,7 @@ describe('MessageRouter', () => {
           missingFields: [],
           entities: {
             codingBackend: 'codex',
+            codingBackendRequested: true,
           },
         },
         'Use Codex to say hello and confirm you are working.',
@@ -583,6 +584,7 @@ describe('MessageRouter', () => {
           missingFields: [],
           entities: {
             codingBackend: 'codex',
+            codingBackendRequested: true,
           },
         },
         'Use Codex to say hello and confirm you are working.',
