@@ -4,6 +4,29 @@ import type { ReflectiveLearningQueue } from './learning-queue.js';
 import type { RecoveryPlanner } from './recovery.js';
 import type { ContextCompactor } from './compactor.js';
 
+export interface PlanExecutionPauseControl {
+  kind: 'pause_execution';
+  reason: 'pending_approval';
+  result?: unknown;
+}
+
+export interface PlanExecutionOutcome {
+  status: 'completed' | 'failed' | 'paused';
+}
+
+function isPlanExecutionPauseControl(value: unknown): value is PlanExecutionPauseControl {
+  return !!value
+    && typeof value === 'object'
+    && (value as { kind?: unknown }).kind === 'pause_execution'
+    && (value as { reason?: unknown }).reason === 'pending_approval';
+}
+
+function isNonRecoverableNodeFailure(value: unknown): boolean {
+  return !!value
+    && typeof value === 'object'
+    && (value as { nonRecoverable?: unknown }).nonRecoverable === true;
+}
+
 export class AssistantOrchestrator {
   constructor(
     private readonly executeNode: (node: PlanNode) => Promise<unknown>,
@@ -13,7 +36,7 @@ export class AssistantOrchestrator {
     private readonly compactor?: ContextCompactor
   ) {}
 
-  async executePlan(plan: ExecutionPlan): Promise<void> {
+  async executePlan(plan: ExecutionPlan): Promise<PlanExecutionOutcome> {
     plan.status = 'executing';
 
     let allCompleted = false;
@@ -27,25 +50,41 @@ export class AssistantOrchestrator {
       const nodes = Object.values(plan.nodes);
 
       for (const node of nodes) {
-        if (node.status === 'success' || node.status === 'failed') {
+        if (node.status === 'success') {
           continue; // Already finished
+        }
+
+        if (node.status === 'failed') {
+          hasFailures = true;
+          continue;
         }
 
         allCompleted = false;
 
-        if (node.status === 'running') {
+        if (node.status === 'running' && node.result === undefined) {
           continue; // Currently running (if we were async parallel, but we are simulating sequential here for simplicity)
         }
 
         // Check if dependencies are met
-        const canRun = node.dependencies.every(depId => plan.nodes[depId]?.status === 'success');
+        const canRun = node.status === 'running'
+          || node.dependencies.every(depId => plan.nodes[depId]?.status === 'success');
 
         if (canRun) {
-          node.status = 'running';
+          const isResumingCompletedNode = node.status === 'running' && node.result !== undefined;
+          if (!isResumingCompletedNode) {
+            node.status = 'running';
+          }
           progressMade = true;
           let nodeFailed = false;
           try {
-            node.result = await this.executeNode(node);
+            if (!isResumingCompletedNode) {
+              const executionResult = await this.executeNode(node);
+              if (isPlanExecutionPauseControl(executionResult)) {
+                node.result = executionResult.result;
+                return { status: 'paused' };
+              }
+              node.result = executionResult;
+            }
 
             // Phase 2: Semantic Reflection
             if (this.reflector) {
@@ -71,7 +110,7 @@ export class AssistantOrchestrator {
           }
 
           if (nodeFailed) {
-            if (this.recoveryPlanner) {
+            if (!isNonRecoverableNodeFailure(node.result) && this.recoveryPlanner) {
               console.log(`AssistantOrchestrator: Node ${node.id} failed, attempting recovery...`);
               const recovery = await this.recoveryPlanner.attemptRecovery(plan.originalObjective, node, node.result);
               if (recovery.success && recovery.replacementNode) {
@@ -107,6 +146,7 @@ export class AssistantOrchestrator {
 
     if (hasFailures) {
       plan.status = 'failed';
+      return { status: 'failed' };
     } else if (allCompleted) {
       plan.status = 'completed';
     }
@@ -118,5 +158,7 @@ export class AssistantOrchestrator {
         console.error('ReflectiveLearningQueue: Failed to evaluate trajectory:', err);
       });
     }
+
+    return { status: 'completed' };
   }
 }

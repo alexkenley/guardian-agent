@@ -2768,7 +2768,13 @@ function resolveAssistantDbPath(configuredPath: string | undefined, fallbackFile
   return trimmed;
 }
 
+function emitStartupTrace(marker: string): void {
+  if (process.env.GUARDIAN_STARTUP_TRACE !== '1') return;
+  console.error(`[startup-trace] ${marker}`);
+}
+
 async function main(): Promise<void> {
+  emitStartupTrace('main:start');
   const configPath = process.argv[2] ?? DEFAULT_CONFIG_PATH;
   const {
     configRef,
@@ -2779,6 +2785,7 @@ async function main(): Promise<void> {
     secretStore,
     threatIntelWebSearchConfigRef,
   } = await createBootstrapRuntimeContext(configPath);
+  emitStartupTrace('main:bootstrap-context-ready');
   if (isSecurityBaselineDisabled()) {
     log.warn({ envVar: 'GUARDIAN_DISABLE_BASELINE' }, 'Security baseline override enabled via environment');
     runtime.auditLog?.record?.({
@@ -3463,6 +3470,7 @@ async function main(): Promise<void> {
           : 'Degraded backend safeguards are blocking third-party MCP server startup',
       );
     } else {
+      emitStartupTrace('main:mcp-startup:start');
       mcpManager = new MCPClientManager(sandboxConfig);
       for (const server of allMCPServers) {
         const serverSource = server.managedProviderId ? 'managed_provider' as const : 'third_party' as const;
@@ -3537,6 +3545,7 @@ async function main(): Promise<void> {
         console.log(`  MCP: ${toolCount} tools available across all servers`);
         log.info({ toolCount }, 'MCP tools discovered and available');
       }
+      emitStartupTrace('main:mcp-startup:done');
     }
   }
 
@@ -3546,6 +3555,7 @@ async function main(): Promise<void> {
   const browserConfig = config.assistant?.tools?.browser;
   const browserBlockedBySandbox = strictSandboxLockdown || (degradedFallbackActive && !degradedFallback.allowBrowserTools);
   if (browserConfig?.enabled !== false && !browserBlockedBySandbox) {
+    emitStartupTrace('main:browser-startup:start');
     if (!mcpManager) {
       mcpManager = new MCPClientManager(sandboxConfig);
     }
@@ -3580,6 +3590,7 @@ async function main(): Promise<void> {
         console.log('  Direct Playwright fallback is enabled and will handle browser actions.');
       }
     }
+    emitStartupTrace('main:browser-startup:done');
 
   } else if (browserConfig?.enabled !== false && browserBlockedBySandbox) {
     log.warn(
@@ -3603,6 +3614,7 @@ async function main(): Promise<void> {
   let skillRegistry: SkillRegistry | undefined;
   let skillResolver: SkillResolver | undefined;
   if (config.assistant.skills.enabled) {
+    emitStartupTrace('main:skills-load:start');
     skillRegistry = new SkillRegistry();
     await skillRegistry.loadFromRoots(
       config.assistant.skills.roots,
@@ -3613,6 +3625,7 @@ async function main(): Promise<void> {
       maxActivePerRequest: config.assistant.skills.maxActivePerRequest,
     });
     log.info({ count: skillRegistry.list().length }, 'Native skills loaded');
+    emitStartupTrace('main:skills-load:done');
   }
 
   // ─── Document Search Service ─────────────────────────
@@ -3778,7 +3791,9 @@ async function main(): Promise<void> {
     getGoogleService: () => googleServiceRef.current ?? undefined,
     getMicrosoftService: () => microsoftServiceRef.current ?? undefined,
   });
+  emitStartupTrace('main:second-brain-sync:start');
   await secondBrainSyncService.start();
+  emitStartupTrace('main:second-brain-sync:done');
   let secondBrainHorizonScanner: HorizonScanner | undefined;
 
   // Device inventory — tracks discovered network devices from playbook runs
@@ -5029,7 +5044,9 @@ async function main(): Promise<void> {
     runtime.workerManager = undefined;
   }
 
+  emitStartupTrace('main:search-reload:start');
   const initialSearchReload = await initialSearchReloadRef.current();
+  emitStartupTrace('main:search-reload:done');
   if (!initialSearchReload.success) {
     console.error(initialSearchReload.message);
   }
@@ -6384,6 +6401,7 @@ async function main(): Promise<void> {
     log.info({ intervalMinutes: autoScanMinutes }, 'Threat-intel auto-scan enabled');
   }
 
+  emitStartupTrace('main:channels:start');
   const startedChannels = await startBootstrapChannels({
     config,
     configRef,
@@ -6428,6 +6446,7 @@ async function main(): Promise<void> {
     stdinIsTTY: !!process.stdin.isTTY,
     stdoutIsTTY: !!process.stdout.isTTY,
   });
+  emitStartupTrace('main:channels:done');
   const cliChannel = startedChannels.cliChannel;
   activeWebChannel = startedChannels.webChannel;
   codingBackendServiceRef.current?.subscribeProgress((event) => {

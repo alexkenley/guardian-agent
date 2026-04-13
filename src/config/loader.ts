@@ -1428,6 +1428,8 @@ export function loadConfigFromFile(filePath: string, options?: ConfigLoadOptions
   }
 
   const interpolated = interpolateDeep(parsed) as Partial<GuardianAgentConfig>;
+  const hasExplicitDefaultProvider = typeof interpolated.defaultProvider === 'string'
+    && interpolated.defaultProvider.trim().length > 0;
   let merged = deepMerge(DEFAULT_CONFIG, interpolated);
 
   // Apply trust preset if configured (preset overrides defaults, user's explicit values override preset)
@@ -1469,7 +1471,11 @@ export function loadConfigFromFile(filePath: string, options?: ConfigLoadOptions
   merged = resolveUnifiedOperatorControls(merged);
 
   merged = normalizeConfigInputs(merged);
-  merged = applyDerivedDefaultProvider(merged);
+  if (hasExplicitDefaultProvider) {
+    merged.defaultProvider = interpolated.defaultProvider!.trim();
+  } else {
+    merged = applyDerivedDefaultProvider(merged);
+  }
   logSecurityBaselineEnforcement(enforceSecurityBaseline(merged, 'config_file'));
 
   const errors = validateConfig(merged);

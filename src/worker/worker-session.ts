@@ -1,6 +1,6 @@
 import type { UserMessage } from '../agent/types.js';
 import type { ChatMessage, ChatOptions, ChatResponse } from '../llm/types.js';
-import type { ToolDefinition, ToolExecutionRequest, ToolRunResponse } from '../tools/types.js';
+import type { ContentTrustLevel, ToolDefinition, ToolExecutionRequest, ToolRunResponse } from '../tools/types.js';
 import {
   formatPendingApprovalMessage,
   isPhantomPendingApprovalMessage,
@@ -53,6 +53,8 @@ import {
   stripLeadingContextPrefix,
   toLLMToolDef,
 } from '../chat-agent-helpers.js';
+import type { ExecutionPlan, PlanNode } from '../runtime/planner/types.js';
+import type { PlanExecutionOutcome, PlanExecutionPauseControl } from '../runtime/planner/orchestrator.js';
 
 const APPROVAL_CONFIRM_PATTERN = /^(?:\/)?(?:approve|approved|yes|yep|yeah|y|go ahead|do it|confirm|ok|okay|sure|proceed|accept)\b/i;
 const APPROVAL_DENY_PATTERN = /^(?:\/)?(?:deny|denied|reject|decline|cancel|no|nope|nah|n)\b/i;
@@ -71,11 +73,35 @@ interface SuspendedToolCall {
   name: string;
 }
 
-interface SuspendedSession {
+interface SuspendedToolLoopSession {
+  kind: 'tool_loop';
   llmMessages: ChatMessage[];
   pendingTools: SuspendedToolCall[];
   executionProfile?: SelectedExecutionProfile;
 }
+
+interface SuspendedPlannerNode {
+  nodeId: string;
+  approvalId: string;
+  jobId: string;
+  toolName: string;
+}
+
+interface PlannerTrustSnapshot {
+  contentTrustLevel: ContentTrustLevel;
+  taintReasons: string[];
+}
+
+interface SuspendedPlannerSession {
+  kind: 'planner';
+  plan: ExecutionPlan;
+  pendingNodes: SuspendedPlannerNode[];
+  originalMessage: UserMessage;
+  trustState: PlannerTrustSnapshot;
+  executionProfile?: SelectedExecutionProfile;
+}
+
+type SuspendedSession = SuspendedToolLoopSession | SuspendedPlannerSession;
 
 interface PendingApprovalMetadata {
   id: string;
@@ -139,6 +165,14 @@ function buildApprovalPendingActionMetadata(
     },
     continueConversationAfterApproval: true,
     ...(responseSource ? { responseSource } : {}),
+  };
+}
+
+function createPlannerPauseControl(result: unknown): PlanExecutionPauseControl {
+  return {
+    kind: 'pause_execution',
+    reason: 'pending_approval',
+    result,
   };
 }
 
@@ -299,6 +333,19 @@ export class BrokeredWorkerSession {
       directIntent,
       ['automation', 'automation_control', 'automation_output', 'browser'],
     );
+    if (directIntent?.decision.route === 'complex_planning_task') {
+      const plannerResult = await this.tryTaskPlannerDirectly(
+        params.message,
+        chatFn,
+        toolExecutor,
+        directIntent.decision,
+        selectedExecutionProfile,
+      );
+      if (plannerResult) {
+        return this.attachIntentGatewayMetadata(plannerResult, directIntent);
+      }
+    }
+
     if ((directIntent?.decision.route === 'general_assistant' || directIntent?.decision.route === 'unknown')
       && isToolReportQuery(params.message.content)) {
       try {
@@ -373,6 +420,255 @@ export class BrokeredWorkerSession {
       ...params,
       executionProfile: selectedExecutionProfile ?? undefined,
     }, directIntent?.decision);
+  }
+
+  private async tryTaskPlannerDirectly(
+    message: UserMessage,
+    chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>,
+    toolExecutor: BrokeredToolExecutor,
+    decision?: IntentGatewayDecision | null,
+    executionProfile?: SelectedExecutionProfile | null,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
+    const planner = new (await import('../runtime/planner/task-planner.js')).TaskPlanner(
+      async (msgs, opts) => chatFn(msgs, opts)
+    );
+    const plan = await planner.plan(message.content, decision || undefined);
+    if (!plan) return { content: 'I tried to plan a solution for that complex request but ran into an error generating the execution DAG.' };
+
+    const unsupportedActions = [...new Set(
+      Object.values(plan.nodes)
+        .map((node) => node.actionType)
+        .filter((actionType) => actionType !== 'tool_call' && actionType !== 'execute_code'),
+    )];
+    if (unsupportedActions.length > 0) {
+      plan.status = 'failed';
+      return {
+        content: [
+          'I generated a DAG plan, but I cannot safely execute it because it includes unsupported planner actions.',
+          `Unsupported actions: ${unsupportedActions.join(', ')}`,
+          '',
+          'Plan:',
+          '```json',
+          JSON.stringify(plan, null, 2),
+          '```',
+        ].join('\n'),
+      };
+    }
+
+    const execution = await this.executePlannerPlan({
+      plan,
+      message,
+      chatFn,
+      toolExecutor,
+      ...(executionProfile ? { executionProfile } : {}),
+    });
+
+    if (execution.outcome.status === 'paused') {
+      const ids = execution.pendingNodes.map((pending) => pending.approvalId);
+      this.pendingApprovals = {
+        ids,
+        expiresAt: Date.now() + PENDING_APPROVAL_TTL_MS,
+      };
+      this.suspendedSession = {
+        kind: 'planner',
+        plan,
+        pendingNodes: execution.pendingNodes,
+        originalMessage: {
+          ...message,
+          ...(message.metadata ? { metadata: { ...message.metadata } } : {}),
+        },
+        trustState: execution.trustState,
+        ...(executionProfile ? { executionProfile } : {}),
+      };
+
+      const pendingApprovalMeta = toolExecutor.getApprovalMetadata(ids);
+      return {
+        content: pendingApprovalMeta.length > 0
+          ? formatPendingApprovalMessage(pendingApprovalMeta)
+          : 'This action needs approval before I can continue.',
+        metadata: pendingApprovalMeta.length > 0
+          ? buildApprovalPendingActionMetadata(pendingApprovalMeta)
+          : undefined,
+      };
+    }
+
+    this.pendingApprovals = null;
+    this.suspendedSession = null;
+    return {
+      content: [
+        execution.outcome.status === 'failed'
+          ? 'I generated a DAG plan for your request, but execution failed.'
+          : 'I have generated and executed a DAG plan for your request.',
+        '',
+        'Plan:',
+        '```json',
+        JSON.stringify(plan, null, 2),
+        '```',
+      ].join('\n'),
+    };
+  }
+
+  private async executePlannerPlan(input: {
+    plan: ExecutionPlan;
+    message: UserMessage;
+    chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>;
+    toolExecutor: BrokeredToolExecutor;
+    executionProfile?: SelectedExecutionProfile;
+    trustState?: PlannerTrustSnapshot;
+  }): Promise<{
+    outcome: PlanExecutionOutcome;
+    pendingNodes: SuspendedPlannerNode[];
+    trustState: PlannerTrustSnapshot;
+  }> {
+    const reflector = new (await import('../runtime/planner/reflection.js')).SemanticReflector(
+      async (msgs, opts) => input.chatFn(msgs, opts)
+    );
+
+    const compactor = new (await import('../runtime/planner/compactor.js')).ContextCompactor(
+      async (msgs, opts) => input.chatFn(msgs, opts)
+    );
+
+    const recoveryPlanner = new (await import('../runtime/planner/recovery.js')).RecoveryPlanner(
+      async (msgs, opts) => input.chatFn(msgs, opts)
+    );
+
+    const learningQueue = new (await import('../runtime/planner/learning-queue.js')).ReflectiveLearningQueue(
+      async (type, details) => {
+        console.log(`Worker Learning Queue: ${type}`, details);
+      }
+    );
+
+    const mutableTrustState: { contentTrustLevel: ContentTrustLevel; taintReasons: Set<string> } = {
+      contentTrustLevel: input.trustState?.contentTrustLevel ?? 'trusted',
+      taintReasons: new Set(input.trustState?.taintReasons ?? []),
+    };
+    const pendingNodes: SuspendedPlannerNode[] = [];
+    const orchestrator = new (await import('../runtime/planner/orchestrator.js')).AssistantOrchestrator(
+      async (node) => this.executePlannerNode(node, input.message, input.toolExecutor, mutableTrustState, pendingNodes),
+      reflector,
+      learningQueue,
+      recoveryPlanner,
+      compactor
+    );
+
+    const outcome = await orchestrator.executePlan(input.plan);
+    return {
+      outcome,
+      pendingNodes,
+      trustState: {
+        contentTrustLevel: mutableTrustState.contentTrustLevel,
+        taintReasons: [...mutableTrustState.taintReasons],
+      },
+    };
+  }
+
+  private async executePlannerNode(
+    node: PlanNode,
+    message: UserMessage,
+    toolExecutor: BrokeredToolExecutor,
+    trustState: { contentTrustLevel: ContentTrustLevel; taintReasons: Set<string> },
+    pendingNodes: SuspendedPlannerNode[],
+  ): Promise<Record<string, unknown> | PlanExecutionPauseControl> {
+    if (node.actionType === 'tool_call') {
+      const args = this.parsePlannerToolArgs(node);
+      const result = await toolExecutor.executeModelTool(
+        node.target,
+        args,
+        this.buildPlannerToolRequest(message, trustState),
+      );
+      if (result.status === 'pending_approval' && typeof result.approvalId === 'string' && typeof result.jobId === 'string') {
+        pendingNodes.push({
+          nodeId: node.id,
+          approvalId: result.approvalId,
+          jobId: result.jobId,
+          toolName: node.target,
+        });
+        return createPlannerPauseControl(result);
+      }
+      this.updatePlannerTrustState(trustState, result);
+      return result;
+    }
+
+    if (node.actionType === 'execute_code') {
+      const result = await toolExecutor.executeModelTool(
+        'code_remote_exec',
+        { command: String(node.inputPrompt ?? '') },
+        this.buildPlannerToolRequest(message, trustState),
+      );
+      if (result.status === 'pending_approval' && typeof result.approvalId === 'string' && typeof result.jobId === 'string') {
+        pendingNodes.push({
+          nodeId: node.id,
+          approvalId: result.approvalId,
+          jobId: result.jobId,
+          toolName: 'code_remote_exec',
+        });
+        return createPlannerPauseControl(result);
+      }
+      this.updatePlannerTrustState(trustState, result);
+      return result;
+    }
+
+    throw Object.assign(
+      new Error(`Planner action '${node.actionType}' is not implemented in brokered execution.`),
+      { nonRecoverable: true },
+    );
+  }
+
+  private parsePlannerToolArgs(node: PlanNode): Record<string, unknown> {
+    if (isRecord(node.inputPrompt)) {
+      return node.inputPrompt;
+    }
+    if (typeof node.inputPrompt !== 'string') {
+      throw new Error(`Planner node '${node.id}' does not contain a valid JSON tool payload.`);
+    }
+    const parsed = JSON.parse(node.inputPrompt);
+    if (!isRecord(parsed)) {
+      throw new Error(`Planner node '${node.id}' did not produce an object-shaped tool payload.`);
+    }
+    return parsed;
+  }
+
+  private buildPlannerToolRequest(
+    message: UserMessage,
+    trustState: { contentTrustLevel: ContentTrustLevel; taintReasons: Set<string> },
+  ): Omit<ToolExecutionRequest, 'toolName' | 'args'> {
+    const codeContext = message.metadata?.codeContext as { workspaceRoot: string; sessionId?: string } | undefined;
+    return {
+      origin: 'assistant',
+      userId: message.userId,
+      surfaceId: message.surfaceId,
+      principalId: message.principalId ?? message.userId,
+      principalRole: message.principalRole ?? 'owner',
+      channel: message.channel,
+      requestId: message.id,
+      contentTrustLevel: trustState.contentTrustLevel,
+      taintReasons: [...trustState.taintReasons],
+      derivedFromTaintedContent: trustState.contentTrustLevel !== 'trusted',
+      ...(codeContext ? { codeContext } : {}),
+    };
+  }
+
+  private updatePlannerTrustState(
+    trustState: { contentTrustLevel: ContentTrustLevel; taintReasons: Set<string> },
+    result: unknown,
+  ): void {
+    if (!isRecord(result)) return;
+    const trustLevel = result.trustLevel === 'quarantined'
+      ? 'quarantined'
+      : result.trustLevel === 'low_trust'
+        ? 'low_trust'
+        : 'trusted';
+    if (trustLevel === 'quarantined') {
+      trustState.contentTrustLevel = 'quarantined';
+    } else if (trustLevel === 'low_trust' && trustState.contentTrustLevel === 'trusted') {
+      trustState.contentTrustLevel = 'low_trust';
+    }
+    const taintReasons = Array.isArray(result.taintReasons)
+      ? result.taintReasons.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      : [];
+    for (const reason of taintReasons) {
+      trustState.taintReasons.add(reason);
+    }
   }
 
   private async tryHandleApprovalMessage(
@@ -461,6 +757,10 @@ export class BrokeredWorkerSession {
       return { content: 'There is no suspended action to continue.' };
     }
 
+    if (suspended.kind === 'planner') {
+      return this.resumeSuspendedPlannerAfterApproval(suspended, chatFn, toolExecutor);
+    }
+
     const resumedMessages = [...suspended.llmMessages];
     for (const pending of suspended.pendingTools) {
       const result = await this.client.getApprovalResult(pending.approvalId);
@@ -482,6 +782,99 @@ export class BrokeredWorkerSession {
     this.pendingApprovals = null;
 
     return this.executeLoop(params.message, resumedMessages, chatFn, toolExecutor, params);
+  }
+
+  private async resumeSuspendedPlannerAfterApproval(
+    suspended: SuspendedPlannerSession,
+    chatFn: (messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResponse>,
+    toolExecutor: BrokeredToolExecutor,
+  ): Promise<{ content: string; metadata?: Record<string, unknown> }> {
+    const resumedTrustState = {
+      contentTrustLevel: suspended.trustState.contentTrustLevel,
+      taintReasons: new Set(suspended.trustState.taintReasons),
+    };
+
+    for (const pending of suspended.pendingNodes) {
+      const node = suspended.plan.nodes[pending.nodeId];
+      if (!node) continue;
+
+      const result = await this.client.getApprovalResult(pending.approvalId);
+      if (result.success === true) {
+        const approvedResult: Record<string, unknown> = {
+          success: true,
+          status: 'succeeded',
+          ...(typeof result.jobId === 'string' ? { jobId: result.jobId } : {}),
+          ...(typeof result.message === 'string' ? { message: result.message } : {}),
+          ...(result.output !== undefined ? { output: result.output } : {}),
+        };
+        node.status = 'running';
+        node.result = approvedResult;
+        this.updatePlannerTrustState(resumedTrustState, approvedResult);
+      } else {
+        node.status = 'failed';
+        node.result = {
+          success: false,
+          status: result.status === 'denied' ? 'denied' : 'failed',
+          ...(typeof result.jobId === 'string' ? { jobId: result.jobId } : {}),
+          error: typeof result.message === 'string' && result.message.trim()
+            ? result.message
+            : 'Approval was denied.',
+        };
+      }
+    }
+
+    this.pendingApprovals = null;
+    this.suspendedSession = null;
+
+    const execution = await this.executePlannerPlan({
+      plan: suspended.plan,
+      message: suspended.originalMessage,
+      chatFn,
+      toolExecutor,
+      trustState: {
+        contentTrustLevel: resumedTrustState.contentTrustLevel,
+        taintReasons: [...resumedTrustState.taintReasons],
+      },
+      ...(suspended.executionProfile ? { executionProfile: suspended.executionProfile } : {}),
+    });
+
+    if (execution.outcome.status === 'paused') {
+      const ids = execution.pendingNodes.map((pending) => pending.approvalId);
+      this.pendingApprovals = {
+        ids,
+        expiresAt: Date.now() + PENDING_APPROVAL_TTL_MS,
+      };
+      this.suspendedSession = {
+        kind: 'planner',
+        plan: suspended.plan,
+        pendingNodes: execution.pendingNodes,
+        originalMessage: suspended.originalMessage,
+        trustState: execution.trustState,
+        ...(suspended.executionProfile ? { executionProfile: suspended.executionProfile } : {}),
+      };
+      const pendingApprovalMeta = toolExecutor.getApprovalMetadata(ids);
+      return {
+        content: pendingApprovalMeta.length > 0
+          ? formatPendingApprovalMessage(pendingApprovalMeta)
+          : 'This action needs approval before I can continue.',
+        metadata: pendingApprovalMeta.length > 0
+          ? buildApprovalPendingActionMetadata(pendingApprovalMeta)
+          : undefined,
+      };
+    }
+
+    return {
+      content: [
+        execution.outcome.status === 'failed'
+          ? 'I generated a DAG plan for your request, but execution failed.'
+          : 'I have generated and executed a DAG plan for your request.',
+        '',
+        'Plan:',
+        '```json',
+        JSON.stringify(suspended.plan, null, 2),
+        '```',
+      ].join('\n'),
+    };
   }
 
   private async tryDirectAutomationAuthoring(
@@ -809,6 +1202,7 @@ export class BrokeredWorkerSession {
         expiresAt: Date.now() + PENDING_APPROVAL_TTL_MS,
       };
       this.suspendedSession = {
+        kind: 'tool_loop',
         llmMessages: result.messages,
         pendingTools,
         ...(selectedExecutionProfile ? { executionProfile: selectedExecutionProfile } : {}),

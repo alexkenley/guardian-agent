@@ -119,13 +119,13 @@ import {
   isMemoryMutationToolName,
 } from '../util/memory-intent.js';
 import { describePendingApproval, type PendingApprovalSummary } from '../runtime/pending-approval-copy.js';
-import { AwsClient, type AwsInstanceConfig } from './cloud/aws-client.js';
-import { AzureClient, type AzureInstanceConfig, type AzureServiceName } from './cloud/azure-client.js';
-import { CpanelClient, type CpanelInstanceConfig } from './cloud/cpanel-client.js';
+import type { AwsClient, AwsInstanceConfig } from './cloud/aws-client.js';
+import type { AzureClient, AzureInstanceConfig, AzureServiceName } from './cloud/azure-client.js';
+import type { CpanelClient, CpanelInstanceConfig } from './cloud/cpanel-client.js';
 import { normalizeCpanelConnectionConfig } from './cloud/cpanel-profile.js';
-import { CloudflareClient, type CloudflareInstanceConfig } from './cloud/cloudflare-client.js';
-import { GcpClient, type GcpInstanceConfig, type GcpServiceName } from './cloud/gcp-client.js';
-import { VercelClient, type VercelInstanceConfig } from './cloud/vercel-client.js';
+import type { CloudflareClient, CloudflareInstanceConfig } from './cloud/cloudflare-client.js';
+import type { GcpClient, GcpInstanceConfig, GcpServiceName } from './cloud/gcp-client.js';
+import type { VercelClient, VercelInstanceConfig } from './cloud/vercel-client.js';
 import {
   WorkspaceDependencyLedger,
   captureJsDependencySnapshot,
@@ -692,6 +692,12 @@ export class ToolExecutor {
   private policy: ToolPolicySnapshot;
   private readonly runtimeNotices: ToolRuntimeNotice[] = [];
   private remoteExecutionService?: RemoteExecutionServiceLike;
+  private cpanelClientModulePromise?: Promise<typeof import('./cloud/cpanel-client.js')>;
+  private vercelClientModulePromise?: Promise<typeof import('./cloud/vercel-client.js')>;
+  private cloudflareClientModulePromise?: Promise<typeof import('./cloud/cloudflare-client.js')>;
+  private awsClientModulePromise?: Promise<typeof import('./cloud/aws-client.js')>;
+  private gcpClientModulePromise?: Promise<typeof import('./cloud/gcp-client.js')>;
+  private azureClientModulePromise?: Promise<typeof import('./cloud/azure-client.js')>;
 
   constructor(options: ToolExecutorOptions) {
     this.options = options;
@@ -4104,7 +4110,7 @@ export class ToolExecutor {
 
     if (toolName === 'whm_accounts') {
       try {
-        this.createWhmClient(requireString(args.profile, 'profile'));
+        this.assertWhmProfileConfigured(requireString(args.profile, 'profile'));
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4120,7 +4126,7 @@ export class ToolExecutor {
 
     if (toolName === 'cpanel_domains') {
       try {
-        this.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account));
+        this.assertCpanelAccountContextConfigured(requireString(args.profile, 'profile'), asString(args.account));
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4142,7 +4148,7 @@ export class ToolExecutor {
 
     if (toolName === 'cpanel_dns') {
       try {
-        this.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account));
+        this.assertCpanelAccountContextConfigured(requireString(args.profile, 'profile'), asString(args.account));
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4158,7 +4164,7 @@ export class ToolExecutor {
 
     if (toolName === 'cpanel_backups') {
       try {
-        this.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account));
+        this.assertCpanelAccountContextConfigured(requireString(args.profile, 'profile'), asString(args.account));
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4167,7 +4173,7 @@ export class ToolExecutor {
 
     if (toolName === 'cpanel_ssl') {
       try {
-        this.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account));
+        this.assertCpanelAccountContextConfigured(requireString(args.profile, 'profile'), asString(args.account));
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4181,7 +4187,7 @@ export class ToolExecutor {
 
     if (toolName === 'vercel_status') {
       try {
-        this.createVercelClient(requireString(args.profile, 'profile'));
+        this.getCloudVercelProfile(requireString(args.profile, 'profile'));
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4189,7 +4195,7 @@ export class ToolExecutor {
 
     if (toolName === 'vercel_projects') {
       try {
-        this.createVercelClient(requireString(args.profile, 'profile'));
+        this.getCloudVercelProfile(requireString(args.profile, 'profile'));
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4207,7 +4213,7 @@ export class ToolExecutor {
 
     if (toolName === 'vercel_deployments') {
       try {
-        this.createVercelClient(requireString(args.profile, 'profile'));
+        this.getCloudVercelProfile(requireString(args.profile, 'profile'));
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4226,7 +4232,7 @@ export class ToolExecutor {
 
     if (toolName === 'vercel_domains') {
       try {
-        this.createVercelClient(requireString(args.profile, 'profile'));
+        this.getCloudVercelProfile(requireString(args.profile, 'profile'));
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4239,7 +4245,7 @@ export class ToolExecutor {
 
     if (toolName === 'vercel_env') {
       try {
-        this.createVercelClient(requireString(args.profile, 'profile'));
+        this.getCloudVercelProfile(requireString(args.profile, 'profile'));
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4258,7 +4264,7 @@ export class ToolExecutor {
 
     if (toolName === 'vercel_logs') {
       try {
-        this.createVercelClient(requireString(args.profile, 'profile'));
+        this.getCloudVercelProfile(requireString(args.profile, 'profile'));
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4273,7 +4279,7 @@ export class ToolExecutor {
 
     if (toolName === 'cf_status') {
       try {
-        this.createCloudflareClient(requireString(args.profile, 'profile'));
+        this.getCloudflareProfile(requireString(args.profile, 'profile'));
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4281,7 +4287,7 @@ export class ToolExecutor {
 
     if (toolName === 'cf_dns') {
       try {
-        this.createCloudflareClient(requireString(args.profile, 'profile'));
+        this.getCloudflareProfile(requireString(args.profile, 'profile'));
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4298,7 +4304,7 @@ export class ToolExecutor {
 
     if (toolName === 'cf_ssl') {
       try {
-        this.createCloudflareClient(requireString(args.profile, 'profile'));
+        this.getCloudflareProfile(requireString(args.profile, 'profile'));
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4313,7 +4319,7 @@ export class ToolExecutor {
 
     if (toolName === 'cf_cache') {
       try {
-        this.createCloudflareClient(requireString(args.profile, 'profile'));
+        this.getCloudflareProfile(requireString(args.profile, 'profile'));
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4326,7 +4332,7 @@ export class ToolExecutor {
 
     if (toolName === 'aws_status') {
       try {
-        this.createAwsClient(requireString(args.profile, 'profile'), 'sts');
+        this.getCloudAwsProfile(requireString(args.profile, 'profile'), 'sts');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4334,7 +4340,7 @@ export class ToolExecutor {
 
     if (toolName === 'aws_ec2_instances') {
       try {
-        this.createAwsClient(requireString(args.profile, 'profile'), 'ec2');
+        this.getCloudAwsProfile(requireString(args.profile, 'profile'), 'ec2');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4346,7 +4352,7 @@ export class ToolExecutor {
 
     if (toolName === 'aws_ec2_security_groups') {
       try {
-        this.createAwsClient(requireString(args.profile, 'profile'), 'ec2');
+        this.getCloudAwsProfile(requireString(args.profile, 'profile'), 'ec2');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4361,7 +4367,7 @@ export class ToolExecutor {
 
     if (toolName === 'aws_s3_buckets') {
       try {
-        this.createAwsClient(requireString(args.profile, 'profile'), 's3');
+        this.getCloudAwsProfile(requireString(args.profile, 'profile'), 's3');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4379,7 +4385,7 @@ export class ToolExecutor {
 
     if (toolName === 'aws_route53') {
       try {
-        this.createAwsClient(requireString(args.profile, 'profile'), 'route53');
+        this.getCloudAwsProfile(requireString(args.profile, 'profile'), 'route53');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4394,7 +4400,7 @@ export class ToolExecutor {
 
     if (toolName === 'aws_lambda') {
       try {
-        this.createAwsClient(requireString(args.profile, 'profile'), 'lambda');
+        this.getCloudAwsProfile(requireString(args.profile, 'profile'), 'lambda');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4406,7 +4412,7 @@ export class ToolExecutor {
 
     if (toolName === 'aws_cloudwatch') {
       try {
-        this.createAwsClient(requireString(args.profile, 'profile'), 'cloudwatch');
+        this.getCloudAwsProfile(requireString(args.profile, 'profile'), 'cloudwatch');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4418,7 +4424,7 @@ export class ToolExecutor {
 
     if (toolName === 'aws_rds') {
       try {
-        this.createAwsClient(requireString(args.profile, 'profile'), 'rds');
+        this.getCloudAwsProfile(requireString(args.profile, 'profile'), 'rds');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4430,7 +4436,7 @@ export class ToolExecutor {
 
     if (toolName === 'aws_iam') {
       try {
-        this.createAwsClient(requireString(args.profile, 'profile'), 'iam');
+        this.getCloudAwsProfile(requireString(args.profile, 'profile'), 'iam');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4438,7 +4444,7 @@ export class ToolExecutor {
 
     if (toolName === 'aws_costs') {
       try {
-        this.createAwsClient(requireString(args.profile, 'profile'), 'costExplorer');
+        this.getCloudAwsProfile(requireString(args.profile, 'profile'), 'costExplorer');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4447,7 +4453,7 @@ export class ToolExecutor {
 
     if (toolName === 'gcp_status') {
       try {
-        this.createGcpClient(requireString(args.profile, 'profile'), 'cloudResourceManager');
+        this.getCloudGcpProfile(requireString(args.profile, 'profile'), 'cloudResourceManager');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4455,7 +4461,7 @@ export class ToolExecutor {
 
     if (toolName === 'gcp_compute') {
       try {
-        this.createGcpClient(requireString(args.profile, 'profile'), 'compute');
+        this.getCloudGcpProfile(requireString(args.profile, 'profile'), 'compute');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4470,7 +4476,7 @@ export class ToolExecutor {
 
     if (toolName === 'gcp_cloud_run') {
       try {
-        this.createGcpClient(requireString(args.profile, 'profile'), 'run');
+        this.getCloudGcpProfile(requireString(args.profile, 'profile'), 'run');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4488,7 +4494,7 @@ export class ToolExecutor {
 
     if (toolName === 'gcp_storage') {
       try {
-        this.createGcpClient(requireString(args.profile, 'profile'), 'storage');
+        this.getCloudGcpProfile(requireString(args.profile, 'profile'), 'storage');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4506,7 +4512,7 @@ export class ToolExecutor {
 
     if (toolName === 'gcp_dns') {
       try {
-        this.createGcpClient(requireString(args.profile, 'profile'), 'dns');
+        this.getCloudGcpProfile(requireString(args.profile, 'profile'), 'dns');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4521,7 +4527,7 @@ export class ToolExecutor {
 
     if (toolName === 'gcp_logs') {
       try {
-        this.createGcpClient(requireString(args.profile, 'profile'), 'logging');
+        this.getCloudGcpProfile(requireString(args.profile, 'profile'), 'logging');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4529,7 +4535,7 @@ export class ToolExecutor {
 
     if (toolName === 'azure_status') {
       try {
-        this.createAzureClient(requireString(args.profile, 'profile'), 'management');
+        this.getCloudAzureProfile(requireString(args.profile, 'profile'), 'management');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4537,7 +4543,7 @@ export class ToolExecutor {
 
     if (toolName === 'azure_vms') {
       try {
-        this.createAzureClient(requireString(args.profile, 'profile'), 'management');
+        this.getCloudAzureProfile(requireString(args.profile, 'profile'), 'management');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4552,7 +4558,7 @@ export class ToolExecutor {
 
     if (toolName === 'azure_app_service') {
       try {
-        this.createAzureClient(requireString(args.profile, 'profile'), 'management');
+        this.getCloudAzureProfile(requireString(args.profile, 'profile'), 'management');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4567,7 +4573,10 @@ export class ToolExecutor {
 
     if (toolName === 'azure_storage') {
       try {
-        this.createAzureClient(requireString(args.profile, 'profile'), asString(args.action).trim().toLowerCase() === 'list_accounts' ? 'management' : 'blob');
+        this.getCloudAzureProfile(
+          requireString(args.profile, 'profile'),
+          asString(args.action).trim().toLowerCase() === 'list_accounts' ? 'management' : 'blob',
+        );
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4588,7 +4597,7 @@ export class ToolExecutor {
 
     if (toolName === 'azure_dns') {
       try {
-        this.createAzureClient(requireString(args.profile, 'profile'), 'management');
+        this.getCloudAzureProfile(requireString(args.profile, 'profile'), 'management');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4612,7 +4621,7 @@ export class ToolExecutor {
 
     if (toolName === 'azure_monitor') {
       try {
-        this.createAzureClient(requireString(args.profile, 'profile'), 'management');
+        this.getCloudAzureProfile(requireString(args.profile, 'profile'), 'management');
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4627,7 +4636,7 @@ export class ToolExecutor {
 
     if (toolName === 'whm_dns') {
       try {
-        this.createWhmClient(requireString(args.profile, 'profile'));
+        this.assertWhmProfileConfigured(requireString(args.profile, 'profile'));
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4641,7 +4650,7 @@ export class ToolExecutor {
 
     if (toolName === 'whm_ssl') {
       try {
-        this.createWhmClient(requireString(args.profile, 'profile'));
+        this.assertWhmProfileConfigured(requireString(args.profile, 'profile'));
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4654,7 +4663,7 @@ export class ToolExecutor {
 
     if (toolName === 'whm_backup') {
       try {
-        this.createWhmClient(requireString(args.profile, 'profile'));
+        this.assertWhmProfileConfigured(requireString(args.profile, 'profile'));
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -4665,7 +4674,7 @@ export class ToolExecutor {
 
     if (toolName === 'whm_services') {
       try {
-        this.createWhmClient(requireString(args.profile, 'profile'));
+        this.assertWhmProfileConfigured(requireString(args.profile, 'profile'));
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
@@ -5774,19 +5783,63 @@ export class ToolExecutor {
     }
   }
 
-  private createWhmClient(profileId: string): CpanelClient {
+  private loadCpanelClientModule(): Promise<typeof import('./cloud/cpanel-client.js')> {
+    this.cpanelClientModulePromise ??= import('./cloud/cpanel-client.js');
+    return this.cpanelClientModulePromise;
+  }
+
+  private loadVercelClientModule(): Promise<typeof import('./cloud/vercel-client.js')> {
+    this.vercelClientModulePromise ??= import('./cloud/vercel-client.js');
+    return this.vercelClientModulePromise;
+  }
+
+  private loadCloudflareClientModule(): Promise<typeof import('./cloud/cloudflare-client.js')> {
+    this.cloudflareClientModulePromise ??= import('./cloud/cloudflare-client.js');
+    return this.cloudflareClientModulePromise;
+  }
+
+  private loadAwsClientModule(): Promise<typeof import('./cloud/aws-client.js')> {
+    this.awsClientModulePromise ??= import('./cloud/aws-client.js');
+    return this.awsClientModulePromise;
+  }
+
+  private loadGcpClientModule(): Promise<typeof import('./cloud/gcp-client.js')> {
+    this.gcpClientModulePromise ??= import('./cloud/gcp-client.js');
+    return this.gcpClientModulePromise;
+  }
+
+  private loadAzureClientModule(): Promise<typeof import('./cloud/azure-client.js')> {
+    this.azureClientModulePromise ??= import('./cloud/azure-client.js');
+    return this.azureClientModulePromise;
+  }
+
+  private assertWhmProfileConfigured(profileId: string): void {
     const config = this.getCloudCpanelProfile(profileId);
     if (config.type !== 'whm') {
       throw new Error(`Profile '${profileId}' is not a WHM profile.`);
     }
+  }
+
+  private assertCpanelAccountContextConfigured(profileId: string, requestedAccount?: string): void {
+    const config = this.getCloudCpanelProfile(profileId);
+    if (config.type === 'whm' && !(requestedAccount?.trim() || config.defaultCpanelUser?.trim())) {
+      throw new Error(`WHM profile '${profileId}' requires an account argument or defaultCpanelUser.`);
+    }
+  }
+
+  private async createWhmClient(profileId: string): Promise<CpanelClient> {
+    this.assertWhmProfileConfigured(profileId);
+    const config = this.getCloudCpanelProfile(profileId);
+    const { CpanelClient } = await this.loadCpanelClientModule();
     return new CpanelClient(config);
   }
 
-  private resolveCpanelAccountContext(profileId: string, requestedAccount?: string): {
+  private async resolveCpanelAccountContext(profileId: string, requestedAccount?: string): Promise<{
     client: CpanelClient;
     account?: string;
-  } {
+  }> {
     const config = this.getCloudCpanelProfile(profileId);
+    const { CpanelClient } = await this.loadCpanelClientModule();
     const client = new CpanelClient(config);
     if (config.type === 'cpanel') {
       return {
@@ -5841,28 +5894,33 @@ export class ToolExecutor {
     return normalized;
   }
 
-  private createVercelClient(profileId: string): VercelClient {
+  private async createVercelClient(profileId: string): Promise<VercelClient> {
     const config = this.getCloudVercelProfile(profileId);
+    const { VercelClient } = await this.loadVercelClientModule();
     return new VercelClient(config);
   }
 
-  private createCloudflareClient(profileId: string): CloudflareClient {
+  private async createCloudflareClient(profileId: string): Promise<CloudflareClient> {
     const config = this.getCloudflareProfile(profileId);
+    const { CloudflareClient } = await this.loadCloudflareClientModule();
     return new CloudflareClient(config);
   }
 
-  private createAwsClient(profileId: string, service?: AwsServiceName): AwsClient {
+  private async createAwsClient(profileId: string, service?: AwsServiceName): Promise<AwsClient> {
     const config = this.getCloudAwsProfile(profileId, service);
+    const { AwsClient } = await this.loadAwsClientModule();
     return new AwsClient(config);
   }
 
-  private createGcpClient(profileId: string, service?: GcpServiceName): GcpClient {
+  private async createGcpClient(profileId: string, service?: GcpServiceName): Promise<GcpClient> {
     const config = this.getCloudGcpProfile(profileId, service);
+    const { GcpClient } = await this.loadGcpClientModule();
     return new GcpClient(config);
   }
 
-  private createAzureClient(profileId: string, service?: AzureServiceName): AzureClient {
+  private async createAzureClient(profileId: string, service?: AzureServiceName): Promise<AzureClient> {
     const config = this.getCloudAzureProfile(profileId, service);
+    const { AzureClient } = await this.loadAzureClientModule();
     return new AzureClient(config);
   }
 

@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { createOllamaHarnessChatResponse } from './ollama-harness-provider.mjs';
 
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -45,25 +46,46 @@ function createChatCompletionResponse({ model, content = '', finishReason = 'sto
 
 async function startFakeProvider(testDir, scenarioLog) {
   const server = http.createServer(async (req, res) => {
-    if (req.method === 'GET' && req.url === '/api/tags') {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    const isOllamaNativeChat = req.method === 'POST' && url.pathname === '/api/chat';
+    const isOpenAiCompatChat = req.method === 'POST' && url.pathname === '/v1/chat/completions';
+
+    if (req.method === 'GET' && url.pathname === '/api/tags') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ models: [{ name: 'brokered-harness-model', size: 1 }] }));
       return;
     }
 
-    if (req.method === 'POST' && req.url === '/v1/chat/completions') {
+    if (isOllamaNativeChat || isOpenAiCompatChat) {
       const parsed = await readJsonBody(req);
       const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
       const tools = Array.isArray(parsed.tools)
-        ? parsed.tools.map((t) => String(t?.function?.name ?? '')).filter(Boolean)
+        ? parsed.tools.map((tool) => String(tool?.function?.name ?? tool?.name ?? '')).filter(Boolean)
         : [];
       const latestUser = String([...messages].reverse().find((m) => m.role === 'user')?.content ?? '');
       scenarioLog.push({ latestUser, tools });
+      const sendResponse = ({ model, content = '', finishReason = 'stop', toolCalls }) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(
+          isOllamaNativeChat
+            ? createOllamaHarnessChatResponse({
+                model,
+                content,
+                doneReason: finishReason,
+                toolCalls,
+              })
+            : createChatCompletionResponse({
+                model,
+                content,
+                finishReason,
+                toolCalls,
+              }),
+        ));
+      };
 
       // Step 1: user asks to create a file → model calls update_tool_policy
       if (latestUser.includes('create an empty file called brokered-test.txt')) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(createChatCompletionResponse({
+        sendResponse({
           model: 'brokered-harness-model',
           finishReason: 'tool_calls',
           toolCalls: [{
@@ -71,14 +93,13 @@ async function startFakeProvider(testDir, scenarioLog) {
             name: 'update_tool_policy',
             arguments: JSON.stringify({ action: 'add_path', value: testDir }),
           }],
-        })));
+        });
         return;
       }
 
       // Step 2: after update_tool_policy approved → model calls fs_write
       if (latestUser.includes('Result: ✓ update_tool_policy: Approved and executed')) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(createChatCompletionResponse({
+        sendResponse({
           model: 'brokered-harness-model',
           finishReason: 'tool_calls',
           toolCalls: [{
@@ -90,26 +111,24 @@ async function startFakeProvider(testDir, scenarioLog) {
               append: false,
             }),
           }],
-        })));
+        });
         return;
       }
 
       // Step 3: after fs_write approved → model returns final text
       if (latestUser.includes('Result: ✓ fs_write: Approved and executed')) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(createChatCompletionResponse({
+        sendResponse({
           model: 'brokered-harness-model',
           content: `Done - created ${path.join(testDir, 'brokered-test.txt')} as an empty file.`,
-        })));
+        });
         return;
       }
 
       // Fallback
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(createChatCompletionResponse({
+      sendResponse({
         model: 'brokered-harness-model',
         content: 'Unexpected harness prompt.',
-      })));
+      });
       return;
     }
 
@@ -171,14 +190,16 @@ async function getFreePort() {
 }
 
 async function waitForHealth(baseUrl) {
-  for (let i = 0; i < 60; i += 1) {
+  // Brokered cold starts use a fresh temp HOME and bootstrap the browser stack,
+  // which can exceed 30s on WSL-mounted workspaces even when startup is healthy.
+  for (let i = 0; i < 180; i += 1) {
     try {
       const result = await requestJson(baseUrl, 'unused', 'GET', '/health');
       if (result?.status === 'ok') return;
     } catch { /* retry */ }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  throw new Error('GuardianAgent did not become healthy within 30 seconds.');
+  throw new Error('GuardianAgent did not become healthy within 90 seconds.');
 }
 
 async function runBrokeredApprovalHarness() {

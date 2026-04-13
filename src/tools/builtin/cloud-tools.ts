@@ -1,12 +1,12 @@
 import { normalizeSensitiveKeyName } from '../../util/crypto-guardrails.js';
 import { ToolRegistry } from '../registry.js';
 import type { ToolExecutionRequest } from '../types.js';
-import { AwsClient, type AwsInstanceConfig } from '../cloud/aws-client.js';
-import { AzureClient, type AzureInstanceConfig, type AzureServiceName } from '../cloud/azure-client.js';
-import { CpanelClient, type CpanelInstanceConfig, type NormalizedApiResponse } from '../cloud/cpanel-client.js';
-import { CloudflareClient, type CloudflareInstanceConfig } from '../cloud/cloudflare-client.js';
-import { GcpClient, type GcpInstanceConfig, type GcpServiceName } from '../cloud/gcp-client.js';
-import { VercelClient, type VercelInstanceConfig } from '../cloud/vercel-client.js';
+import type { AwsClient, AwsInstanceConfig } from '../cloud/aws-client.js';
+import type { AzureClient, AzureInstanceConfig, AzureServiceName } from '../cloud/azure-client.js';
+import type { CpanelClient, CpanelInstanceConfig, NormalizedApiResponse } from '../cloud/cpanel-client.js';
+import type { CloudflareClient, CloudflareInstanceConfig } from '../cloud/cloudflare-client.js';
+import type { GcpClient, GcpInstanceConfig, GcpServiceName } from '../cloud/gcp-client.js';
+import type { VercelClient, VercelInstanceConfig } from '../cloud/vercel-client.js';
 
 type AwsServiceName =
   | 'sts'
@@ -36,13 +36,13 @@ interface CloudToolRegistrarContext {
   asNumber: (value: unknown, fallback: number) => number;
   asStringArray: (value: unknown) => string[];
   guardAction: (request: ToolExecutionRequest, action: string, details: Record<string, unknown>) => void;
-  createWhmClient: (profileId: string) => CpanelClient;
-  resolveCpanelAccountContext: (profileId: string, requestedAccount?: string) => { client: CpanelClient; account?: string };
-  createVercelClient: (profileId: string) => VercelClient;
-  createCloudflareClient: (profileId: string) => CloudflareClient;
-  createAwsClient: (profileId: string, service?: AwsServiceName) => AwsClient;
-  createGcpClient: (profileId: string, service?: GcpServiceName) => GcpClient;
-  createAzureClient: (profileId: string, service?: AzureServiceName) => AzureClient;
+  createWhmClient: (profileId: string) => Promise<CpanelClient>;
+  resolveCpanelAccountContext: (profileId: string, requestedAccount?: string) => Promise<{ client: CpanelClient; account?: string }>;
+  createVercelClient: (profileId: string) => Promise<VercelClient>;
+  createCloudflareClient: (profileId: string) => Promise<CloudflareClient>;
+  createAwsClient: (profileId: string, service?: AwsServiceName) => Promise<AwsClient>;
+  createGcpClient: (profileId: string, service?: GcpServiceName) => Promise<GcpClient>;
+  createAzureClient: (profileId: string, service?: AzureServiceName) => Promise<AzureClient>;
   describeCloudEndpoint: (profile: CpanelInstanceConfig) => string;
   describeVercelEndpoint: (profile: VercelInstanceConfig) => string;
   describeCloudflareEndpoint: (profile: CloudflareInstanceConfig) => string;
@@ -85,7 +85,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       let account: string | undefined;
       let client: CpanelClient;
       try {
-        ({ client, account } = context.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account)));
+        ({ client, account } = await context.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account)));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -221,7 +221,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       let account: string | undefined;
       let client: CpanelClient;
       try {
-        ({ client, account } = context.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account)));
+        ({ client, account } = await context.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account)));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -413,7 +413,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       let account: string | undefined;
       let client: CpanelClient;
       try {
-        ({ client, account } = context.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account)));
+        ({ client, account } = await context.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account)));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -518,7 +518,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       let account: string | undefined;
       let client: CpanelClient;
       try {
-        ({ client, account } = context.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account)));
+        ({ client, account } = await context.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account)));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -615,7 +615,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       let account: string | undefined;
       let client: CpanelClient;
       try {
-        ({ client, account } = context.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account)));
+        ({ client, account } = await context.resolveCpanelAccountContext(requireString(args.profile, 'profile'), asString(args.account)));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -738,7 +738,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
     async (args, request) => {
       let client: VercelClient;
       try {
-        client = context.createVercelClient(requireString(args.profile, 'profile'));
+        client = await context.createVercelClient(requireString(args.profile, 'profile'));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -809,7 +809,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
 
       let client: VercelClient;
       try {
-        client = context.createVercelClient(requireString(args.profile, 'profile'));
+        client = await context.createVercelClient(requireString(args.profile, 'profile'));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -930,7 +930,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
 
       let client: VercelClient;
       try {
-        client = context.createVercelClient(requireString(args.profile, 'profile'));
+        client = await context.createVercelClient(requireString(args.profile, 'profile'));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -1064,7 +1064,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
 
       let client: VercelClient;
       try {
-        client = context.createVercelClient(requireString(args.profile, 'profile'));
+        client = await context.createVercelClient(requireString(args.profile, 'profile'));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -1213,7 +1213,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
 
       let client: VercelClient;
       try {
-        client = context.createVercelClient(requireString(args.profile, 'profile'));
+        client = await context.createVercelClient(requireString(args.profile, 'profile'));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -1318,7 +1318,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
 
       let client: VercelClient;
       try {
-        client = context.createVercelClient(requireString(args.profile, 'profile'));
+        client = await context.createVercelClient(requireString(args.profile, 'profile'));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -1401,7 +1401,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
     async (args, request) => {
       let client: CloudflareClient;
       try {
-        client = context.createCloudflareClient(requireString(args.profile, 'profile'));
+        client = await context.createCloudflareClient(requireString(args.profile, 'profile'));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -1475,7 +1475,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
 
       let client: CloudflareClient;
       try {
-        client = context.createCloudflareClient(requireString(args.profile, 'profile'));
+        client = await context.createCloudflareClient(requireString(args.profile, 'profile'));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -1596,7 +1596,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
 
       let client: CloudflareClient;
       try {
-        client = context.createCloudflareClient(requireString(args.profile, 'profile'));
+        client = await context.createCloudflareClient(requireString(args.profile, 'profile'));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -1692,7 +1692,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
 
       let client: CloudflareClient;
       try {
-        client = context.createCloudflareClient(requireString(args.profile, 'profile'));
+        client = await context.createCloudflareClient(requireString(args.profile, 'profile'));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -1752,7 +1752,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
     async (args, request) => {
       let client: AwsClient;
       try {
-        client = context.createAwsClient(requireString(args.profile, 'profile'), 'sts');
+        client = await context.createAwsClient(requireString(args.profile, 'profile'), 'sts');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -1814,7 +1814,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       }
       let client: AwsClient;
       try {
-        client = context.createAwsClient(requireString(args.profile, 'profile'), 'ec2');
+        client = await context.createAwsClient(requireString(args.profile, 'profile'), 'ec2');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -1901,7 +1901,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       }
       let client: AwsClient;
       try {
-        client = context.createAwsClient(requireString(args.profile, 'profile'), 'ec2');
+        client = await context.createAwsClient(requireString(args.profile, 'profile'), 'ec2');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -1984,7 +1984,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       }
       let client: AwsClient;
       try {
-        client = context.createAwsClient(requireString(args.profile, 'profile'), 's3');
+        client = await context.createAwsClient(requireString(args.profile, 'profile'), 's3');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -2121,7 +2121,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       }
       let client: AwsClient;
       try {
-        client = context.createAwsClient(requireString(args.profile, 'profile'), 'route53');
+        client = await context.createAwsClient(requireString(args.profile, 'profile'), 'route53');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -2209,7 +2209,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       }
       let client: AwsClient;
       try {
-        client = context.createAwsClient(requireString(args.profile, 'profile'), 'lambda');
+        client = await context.createAwsClient(requireString(args.profile, 'profile'), 'lambda');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -2292,7 +2292,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       }
       let client: AwsClient;
       try {
-        client = context.createAwsClient(requireString(args.profile, 'profile'), action === 'logs' ? 'cloudwatchLogs' : 'cloudwatch');
+        client = await context.createAwsClient(requireString(args.profile, 'profile'), action === 'logs' ? 'cloudwatchLogs' : 'cloudwatch');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -2362,7 +2362,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       }
       let client: AwsClient;
       try {
-        client = context.createAwsClient(requireString(args.profile, 'profile'), 'rds');
+        client = await context.createAwsClient(requireString(args.profile, 'profile'), 'rds');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -2425,7 +2425,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       }
       let client: AwsClient;
       try {
-        client = context.createAwsClient(requireString(args.profile, 'profile'), 'iam');
+        client = await context.createAwsClient(requireString(args.profile, 'profile'), 'iam');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -2480,7 +2480,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
     async (args, request) => {
       let client: AwsClient;
       try {
-        client = context.createAwsClient(requireString(args.profile, 'profile'), 'costExplorer');
+        client = await context.createAwsClient(requireString(args.profile, 'profile'), 'costExplorer');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -2532,7 +2532,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
     async (args, request) => {
       let client: GcpClient;
       try {
-        client = context.createGcpClient(requireString(args.profile, 'profile'), 'cloudResourceManager');
+        client = await context.createGcpClient(requireString(args.profile, 'profile'), 'cloudResourceManager');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -2595,7 +2595,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       }
       let client: GcpClient;
       try {
-        client = context.createGcpClient(requireString(args.profile, 'profile'), 'compute');
+        client = await context.createGcpClient(requireString(args.profile, 'profile'), 'compute');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -2671,7 +2671,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       }
       let client: GcpClient;
       try {
-        client = context.createGcpClient(requireString(args.profile, 'profile'), 'run');
+        client = await context.createGcpClient(requireString(args.profile, 'profile'), 'run');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -2754,7 +2754,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       }
       let client: GcpClient;
       try {
-        client = context.createGcpClient(requireString(args.profile, 'profile'), 'storage');
+        client = await context.createGcpClient(requireString(args.profile, 'profile'), 'storage');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -2843,7 +2843,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       }
       let client: GcpClient;
       try {
-        client = context.createGcpClient(requireString(args.profile, 'profile'), 'dns');
+        client = await context.createGcpClient(requireString(args.profile, 'profile'), 'dns');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -2911,7 +2911,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
     async (args, request) => {
       let client: GcpClient;
       try {
-        client = context.createGcpClient(requireString(args.profile, 'profile'), 'logging');
+        client = await context.createGcpClient(requireString(args.profile, 'profile'), 'logging');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -2968,7 +2968,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
     async (args, request) => {
       let client: AzureClient;
       try {
-        client = context.createAzureClient(requireString(args.profile, 'profile'), 'management');
+        client = await context.createAzureClient(requireString(args.profile, 'profile'), 'management');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -3030,7 +3030,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       }
       let client: AzureClient;
       try {
-        client = context.createAzureClient(requireString(args.profile, 'profile'), 'management');
+        client = await context.createAzureClient(requireString(args.profile, 'profile'), 'management');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -3102,7 +3102,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       }
       let client: AzureClient;
       try {
-        client = context.createAzureClient(requireString(args.profile, 'profile'), 'management');
+        client = await context.createAzureClient(requireString(args.profile, 'profile'), 'management');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -3176,7 +3176,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       }
       let client: AzureClient;
       try {
-        client = context.createAzureClient(requireString(args.profile, 'profile'), action === 'list_accounts' ? 'management' : 'blob');
+        client = await context.createAzureClient(requireString(args.profile, 'profile'), action === 'list_accounts' ? 'management' : 'blob');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -3276,7 +3276,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       }
       let client: AzureClient;
       try {
-        client = context.createAzureClient(requireString(args.profile, 'profile'), 'management');
+        client = await context.createAzureClient(requireString(args.profile, 'profile'), 'management');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -3360,7 +3360,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
       }
       let client: AzureClient;
       try {
-        client = context.createAzureClient(requireString(args.profile, 'profile'), 'management');
+        client = await context.createAzureClient(requireString(args.profile, 'profile'), 'management');
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -3421,7 +3421,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
     async (args, request) => {
       let client: CpanelClient;
       try {
-        client = context.createWhmClient(requireString(args.profile, 'profile'));
+        client = await context.createWhmClient(requireString(args.profile, 'profile'));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -3549,7 +3549,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
 
       let client: CpanelClient;
       try {
-        client = context.createWhmClient(requireString(args.profile, 'profile'));
+        client = await context.createWhmClient(requireString(args.profile, 'profile'));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -3785,7 +3785,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
 
       let client: CpanelClient;
       try {
-        client = context.createWhmClient(requireString(args.profile, 'profile'));
+        client = await context.createWhmClient(requireString(args.profile, 'profile'));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -3912,7 +3912,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
 
       let client: CpanelClient;
       try {
-        client = context.createWhmClient(requireString(args.profile, 'profile'));
+        client = await context.createWhmClient(requireString(args.profile, 'profile'));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -4054,7 +4054,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
 
       let client: CpanelClient;
       try {
-        client = context.createWhmClient(requireString(args.profile, 'profile'));
+        client = await context.createWhmClient(requireString(args.profile, 'profile'));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -4192,7 +4192,7 @@ export function registerBuiltinCloudTools(context: CloudToolRegistrarContext): v
 
       let client: CpanelClient;
       try {
-        client = context.createWhmClient(requireString(args.profile, 'profile'));
+        client = await context.createWhmClient(requireString(args.profile, 'profile'));
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }

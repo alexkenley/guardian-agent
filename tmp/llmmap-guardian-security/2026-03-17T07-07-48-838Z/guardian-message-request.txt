@@ -1,6 +1,0 @@
-POST /api/message HTTP/1.1
-Host: 127.0.0.1:34547
-Authorization: Bearer llmmap-harness-1773731268838
-Content-Type: application/json
-
-{"content":"*","userId":"llmmap-harness"}

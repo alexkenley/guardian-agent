@@ -1272,6 +1272,15 @@ function deriveWorkloadMetadata(
   const codingRemoteExecRequested = parsed.codingRemoteExecRequested === true;
 
   switch (route) {
+    case 'complex_planning_task':
+      return {
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: true,
+        expectedContextPressure: 'high',
+        preferredAnswerPath: 'chat_synthesis',
+      };
     case 'coding_task':
       if (parsed.codingBackend || codingBackendRequested || codingRemoteExecRequested) {
         return {
@@ -1412,6 +1421,7 @@ function normalizeRoute(value: unknown): IntentGatewayRoute {
   if (typeof value !== 'string') return 'unknown';
   const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
   switch (normalized) {
+    case 'complex_planning_task':
     case 'automation_authoring':
     case 'automation_control':
     case 'automation_output_task':
@@ -1475,6 +1485,11 @@ function normalizeRoute(value: unknown): IntentGatewayRoute {
     case 'general':
     case 'assistant':
       return 'general_assistant';
+    case 'complex_planning':
+    case 'planning':
+    case 'planning_task':
+    case 'complex_planner':
+      return 'complex_planning_task';
     default:
       return 'unknown';
   }

@@ -13,6 +13,25 @@ const baseParams = {
   runtimeNotices: [],
 };
 
+function buildComplexPlanningMetadata() {
+  return attachPreRoutedIntentGatewayMetadata(undefined, {
+    mode: 'primary',
+    available: true,
+    model: 'gateway-model',
+    latencyMs: 12,
+    decision: {
+      route: 'complex_planning_task',
+      confidence: 'high',
+      operation: 'execute',
+      summary: 'Plan and execute a multi-step task.',
+      turnRelation: 'new_request',
+      resolution: 'ready',
+      missingFields: [],
+      entities: {},
+    },
+  });
+}
+
 describe('BrokeredWorkerSession automation control', () => {
   it('refreshes loaded tools for code-session turns so coding helpers are visible to the worker', async () => {
     let loadedTools = [
@@ -237,6 +256,7 @@ describe('BrokeredWorkerSession automation control', () => {
           required: ['path', 'pattern'],
         },
       }],
+      listLoadedTools: vi.fn(async () => []),
       llmChat,
       callTool,
       listJobs: vi.fn(async () => []),
@@ -817,5 +837,353 @@ describe('BrokeredWorkerSession automation control', () => {
     expect(llmChat.mock.calls.some((call) => call[1]?.tools?.[0]?.name === 'route_intent')).toBe(false);
     expect(callTool).not.toHaveBeenCalled();
     expect(result.content).toBe('Stayed on the local calendar path.');
+  });
+
+  it('suspends and resumes complex planning tasks through brokered approval metadata', async () => {
+    const llmChat = vi.fn(async (messages) => {
+      const lastMessage = messages[messages.length - 1];
+      const lastContent = typeof lastMessage?.content === 'string' ? lastMessage.content : '';
+      if (lastContent.includes('Please provide a JSON representation of an execution DAG')) {
+        return {
+          content: JSON.stringify({
+            nodes: {
+              'search-repo': {
+                id: 'search-repo',
+                description: 'Search the repo for brokered worker references.',
+                dependencies: [],
+                actionType: 'tool_call',
+                target: 'fs_search',
+                inputPrompt: JSON.stringify({ path: '.', pattern: 'brokered worker' }),
+              },
+            },
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      if (lastContent.includes('Did the execution result semantically satisfy the sub-task instruction?')) {
+        return {
+          content: JSON.stringify({ success: true, reason: 'The repo search completed.' }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      throw new Error(`Unexpected llmChat prompt: ${lastContent.slice(0, 80)}`);
+    });
+
+    const callTool = vi.fn(async (request: Record<string, unknown>) => ({
+      success: false,
+      status: 'pending_approval',
+      jobId: 'job-plan-search-1',
+      approvalId: 'approval-plan-search-1',
+      message: 'fs_search is awaiting approval.',
+      approvalSummary: {
+        toolName: 'fs_search',
+        argsPreview: '{"path":".","pattern":"brokered worker"}',
+        actionLabel: 'Search the repo for brokered worker',
+      },
+    }));
+
+    const getApprovalResult = vi.fn(async (approvalId: string) => {
+      expect(approvalId).toBe('approval-plan-search-1');
+      return {
+        success: true,
+        status: 'approved',
+        message: 'Search completed.',
+        output: {
+          matches: [
+            { path: 'src/worker/worker-session.ts' },
+            { path: 'src/supervisor/worker-manager.ts' },
+          ],
+        },
+      };
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [{
+        name: 'fs_search',
+        description: 'Search files for a pattern.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            pattern: { type: 'string' },
+          },
+          required: ['path', 'pattern'],
+        },
+        risk: 'read_only',
+      }],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult,
+    } as never);
+
+    const initial = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-plan-start',
+        userId: 'owner',
+        surfaceId: 'surface-1',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Plan how to search the repo for brokered worker references.',
+        timestamp: Date.now(),
+        metadata: {
+          ...buildComplexPlanningMetadata(),
+          codeContext: {
+            workspaceRoot: '/repo',
+            sessionId: 'code-1',
+          },
+        },
+      },
+    });
+
+    expect(initial.metadata).toMatchObject({
+      pendingAction: {
+        blocker: {
+          approvalSummaries: [
+            {
+              id: 'approval-plan-search-1',
+              toolName: 'fs_search',
+            },
+          ],
+        },
+      },
+    });
+    expect(callTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'fs_search',
+      userId: 'owner',
+      surfaceId: 'surface-1',
+      principalId: 'owner',
+      principalRole: 'owner',
+      requestId: 'msg-plan-start',
+      contentTrustLevel: 'trusted',
+      derivedFromTaintedContent: false,
+      codeContext: {
+        workspaceRoot: '/repo',
+        sessionId: 'code-1',
+      },
+    }));
+
+    const resumed = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-plan-resume',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: '',
+        metadata: buildApprovalOutcomeContinuationMetadata({
+          approvalId: 'approval-plan-search-1',
+          decision: 'approved',
+          resultMessage: 'Search completed.',
+        }),
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(getApprovalResult).toHaveBeenCalledWith('approval-plan-search-1');
+    expect(resumed.content).toContain('I have generated and executed a DAG plan');
+    expect(resumed.content).toContain('"status": "completed"');
+    expect(resumed.content).toContain('"search-repo"');
+  });
+
+  it('propagates taint from earlier planner nodes into later node tool requests', async () => {
+    const llmChat = vi.fn(async (messages) => {
+      const lastMessage = messages[messages.length - 1];
+      const lastContent = typeof lastMessage?.content === 'string' ? lastMessage.content : '';
+      if (lastContent.includes('Please provide a JSON representation of an execution DAG')) {
+        return {
+          content: JSON.stringify({
+            nodes: {
+              fetch: {
+                id: 'fetch',
+                description: 'Fetch remote data.',
+                dependencies: [],
+                actionType: 'tool_call',
+                target: 'web_fetch',
+                inputPrompt: JSON.stringify({ url: 'https://example.com/report' }),
+              },
+              persist: {
+                id: 'persist',
+                description: 'Persist a summary.',
+                dependencies: ['fetch'],
+                actionType: 'tool_call',
+                target: 'fs_write',
+                inputPrompt: JSON.stringify({ path: 'summary.txt', content: 'done' }),
+              },
+            },
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      if (lastContent.includes('Did the execution result semantically satisfy the sub-task instruction?')) {
+        return {
+          content: JSON.stringify({ success: true, reason: 'The node completed.' }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      throw new Error(`Unexpected llmChat prompt: ${lastContent.slice(0, 80)}`);
+    });
+
+    const callRequests: Array<Record<string, unknown>> = [];
+    const callTool = vi.fn(async (request: Record<string, unknown>) => {
+      callRequests.push(request);
+      if (request.toolName === 'web_fetch') {
+        return {
+          success: true,
+          status: 'succeeded',
+          jobId: 'job-fetch-1',
+          message: 'Fetched remote data.',
+          output: { body: 'report' },
+          trustLevel: 'low_trust',
+          taintReasons: ['remote_content'],
+        };
+      }
+      if (request.toolName === 'fs_write') {
+        return {
+          success: true,
+          status: 'succeeded',
+          jobId: 'job-write-1',
+          message: 'Saved summary.',
+          output: { path: 'summary.txt' },
+        };
+      }
+      throw new Error(`Unexpected tool ${request.toolName}`);
+    });
+
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [
+        {
+          name: 'web_fetch',
+          description: 'Fetch a web page.',
+          parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] },
+          risk: 'read_only',
+        },
+        {
+          name: 'fs_write',
+          description: 'Write a file.',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+              content: { type: 'string' },
+            },
+            required: ['path', 'content'],
+          },
+          risk: 'mutating',
+        },
+      ],
+      listLoadedTools: vi.fn(async () => []),
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-plan-taint',
+        userId: 'owner',
+        surfaceId: 'surface-2',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Plan a remote fetch and then save the summary.',
+        timestamp: Date.now(),
+        metadata: {
+          ...buildComplexPlanningMetadata(),
+          codeContext: {
+            workspaceRoot: '/repo',
+            sessionId: 'code-2',
+          },
+        },
+      },
+    });
+
+    expect(callRequests).toHaveLength(2);
+    expect(callRequests[0]).toMatchObject({
+      toolName: 'web_fetch',
+      requestId: 'msg-plan-taint',
+      principalId: 'owner',
+      contentTrustLevel: 'trusted',
+      derivedFromTaintedContent: false,
+    });
+    expect(callRequests[1]).toMatchObject({
+      toolName: 'fs_write',
+      requestId: 'msg-plan-taint',
+      surfaceId: 'surface-2',
+      principalId: 'owner',
+      contentTrustLevel: 'low_trust',
+      derivedFromTaintedContent: true,
+      taintReasons: ['remote_content'],
+      codeContext: {
+        workspaceRoot: '/repo',
+        sessionId: 'code-2',
+      },
+    });
+  });
+
+  it('fails closed when a complex planner DAG asks for unsupported delegated actions', async () => {
+    const llmChat = vi.fn(async (messages) => {
+      const lastMessage = messages[messages.length - 1];
+      const lastContent = typeof lastMessage?.content === 'string' ? lastMessage.content : '';
+      if (lastContent.includes('Please provide a JSON representation of an execution DAG')) {
+        return {
+          content: JSON.stringify({
+            nodes: {
+              delegate: {
+                id: 'delegate',
+                description: 'Delegate the work to another agent.',
+                dependencies: [],
+                actionType: 'delegate_task',
+                target: 'brokered-worker',
+                inputPrompt: 'Handle the request in a new worker.',
+              },
+            },
+          }),
+          model: 'test-model',
+          finishReason: 'stop',
+        } satisfies ChatResponse;
+      }
+      throw new Error(`Unexpected llmChat prompt: ${lastContent.slice(0, 80)}`);
+    });
+
+    const callTool = vi.fn();
+    const session = new BrokeredWorkerSession({
+      getAlwaysLoadedTools: () => [],
+      llmChat,
+      callTool,
+      listJobs: vi.fn(async () => []),
+      decideApproval: vi.fn(),
+      getApprovalResult: vi.fn(),
+    } as never);
+
+    const result = await session.handleMessage({
+      ...baseParams,
+      message: {
+        id: 'msg-plan-unsupported',
+        userId: 'owner',
+        principalId: 'owner',
+        principalRole: 'owner',
+        channel: 'web',
+        content: 'Plan a delegated implementation approach.',
+        timestamp: Date.now(),
+        metadata: buildComplexPlanningMetadata(),
+      },
+    });
+
+    expect(callTool).not.toHaveBeenCalled();
+    expect(result.content).toContain('cannot safely execute');
+    expect(result.content).toContain('delegate_task');
   });
 });

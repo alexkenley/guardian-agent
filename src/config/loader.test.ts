@@ -847,6 +847,28 @@ describe('validateConfig', () => {
     expect(loaded.assistant.threatIntel.moltbook.baseUrl).toBe('https://moltbook.com');
   });
 
+  it('loadConfigFromFile preserves an explicit defaultProvider even when default preferredProviders point elsewhere', () => {
+    const configPath = join(TEST_DIR, 'explicit-default-provider.yaml');
+    const rawConfig: GuardianAgentConfig = {
+      ...DEFAULT_CONFIG,
+      defaultProvider: 'local',
+      llm: {
+        ...DEFAULT_CONFIG.llm,
+        local: {
+          provider: 'ollama',
+          model: 'brokered-harness-model',
+          baseUrl: 'http://127.0.0.1:44729',
+        },
+      },
+    };
+
+    writeFileSync(configPath, JSON.stringify(rawConfig, null, 2));
+    const loaded = loadConfigFromFile(configPath);
+
+    expect(loaded.defaultProvider).toBe('local');
+    expect(loaded.assistant.tools.preferredProviders?.local).toBe('ollama');
+  });
+
   it('should validate cloud Cloudflare credential refs', () => {
     const config: GuardianAgentConfig = {
       ...DEFAULT_CONFIG,

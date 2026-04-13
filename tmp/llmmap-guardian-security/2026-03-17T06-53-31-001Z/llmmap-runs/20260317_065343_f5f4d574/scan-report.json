@@ -1,9 +1,0 @@
-{
-  "status": "aborted",
-  "mode": "live",
-  "target_url": "http://127.0.0.1:40507/api/message",
-  "run_dir": "/mnt/s/Development/GuardianAgent/tmp/llmmap-guardian-security/2026-03-17T06-53-31-001Z/llmmap-runs/20260317_065343_f5f4d574",
-  "stage_results": [],
-  "evidence": [],
-  "findings": []
-}

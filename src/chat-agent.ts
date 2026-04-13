@@ -3324,22 +3324,6 @@ type DirectIntentShadowCandidate =
         return { content: directToolReport };
       }
 
-      if (earlyGateway?.decision.route === 'complex_planning_task') {
-        const result = await this.tryTaskPlannerDirectly(message, ctx, earlyGateway.decision);
-        if (result) {
-          return buildScopedDirectIntentResponse({
-            candidate: 'complex_planning_task',
-            result,
-            message,
-            routingMessage: routedScopedMessage,
-            intentGateway: earlyGateway,
-            activeSkills: preResolvedSkills,
-            ctx,
-            conversationKey,
-          });
-        }
-      }
-
       if (earlyGateway?.decision.route === 'coding_session_control') {
         const sessionControlResult = await this.tryDirectCodeSessionControlFromGateway(
           message, ctx, earlyGateway.decision,
@@ -8662,111 +8646,6 @@ type DirectIntentShadowCandidate =
           codeSessionFocusChanged: true,
         },
       },
-    };
-  }
-
-  private async tryTaskPlannerDirectly(
-    message: UserMessage,
-    ctx: AgentContext,
-    decision?: import('./runtime/intent-gateway.js').IntentGatewayDecision,
-  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    if (!ctx.llm) return null;
-    const planner = new (await import('./runtime/planner/task-planner.js')).TaskPlanner(
-      async (msgs, opts) => ctx.llm!.chat(msgs, opts)
-    );
-    const plan = await planner.plan(message.content, decision);
-    if (!plan) return { content: 'I tried to plan a solution for that complex request but ran into an error generating the execution DAG.' };
-
-    const reflector = new (await import('./runtime/planner/reflection.js')).SemanticReflector(
-      async (msgs, opts) => ctx.llm!.chat(msgs, opts)
-    );
-
-    const learningQueue = new (await import('./runtime/planner/learning-queue.js')).ReflectiveLearningQueue(
-      async (type, details) => {
-        await ctx.emit({
-          type: 'assistant_memory_write',
-          targetAgentId: '*', // Needs to go somewhere, let's say broadcast or memory agent
-          payload: {
-            userId: message.userId,
-            channel: message.channel,
-            surfaceId: message.surfaceId,
-            content: `Reflective Learning [${type}]: ${JSON.stringify(details)}`,
-            trustLevel: 'trusted',
-          }
-        });
-      }
-    );
-
-    const recoveryPlanner = new (await import('./runtime/planner/recovery.js')).RecoveryPlanner(
-      async (msgs, opts) => ctx.llm!.chat(msgs, opts)
-    );
-
-    const compactor = new (await import('./runtime/planner/compactor.js')).ContextCompactor(
-      async (msgs, opts) => ctx.llm!.chat(msgs, opts)
-    );
-
-    const orchestrator = new (await import('./runtime/planner/orchestrator.js')).AssistantOrchestrator(
-      async (node) => {
-        if (!this.tools) {
-          throw new Error('Tool executor is not available.');
-        }
-
-        if (node.actionType === 'tool_call') {
-          const args = typeof node.inputPrompt === 'string' ? JSON.parse(node.inputPrompt) : node.inputPrompt;
-          return this.tools.runTool({
-            toolName: node.target,
-            args,
-            origin: 'assistant',
-            agentId: this.id,
-            userId: message.userId,
-            surfaceId: message.surfaceId,
-            principalId: message.principalId ?? message.userId,
-            principalRole: message.principalRole ?? 'owner',
-            channel: message.channel,
-            requestId: message.id,
-            contentTrustLevel: 'trusted', // Inherit from origin
-            taintReasons: [],
-            derivedFromTaintedContent: false,
-            codeContext: message.metadata?.codeContext as { workspaceRoot: string; sessionId?: string } | undefined,
-          });
-        }
-        
-        if (node.actionType === 'execute_code') {
-          return this.tools.runTool({
-            toolName: 'code_remote_exec',
-            args: {
-              command: node.inputPrompt,
-            },
-            origin: 'assistant',
-            agentId: this.id,
-            userId: message.userId,
-            surfaceId: message.surfaceId,
-            principalId: message.principalId ?? message.userId,
-            principalRole: message.principalRole ?? 'owner',
-            channel: message.channel,
-            requestId: message.id,
-            contentTrustLevel: 'trusted', // Inherit from origin
-            taintReasons: [],
-            derivedFromTaintedContent: false,
-            codeContext: message.metadata?.codeContext as { workspaceRoot: string; sessionId?: string } | undefined,
-          });
-        }
-
-        // Just mock execution for Phase 1 as per the plan spec for other actionTypes
-        return { status: 'mock_success', node: node.id, notice: `Unsupported actionType: ${node.actionType}` };
-      },
-      reflector,
-      learningQueue,
-      recoveryPlanner,
-      compactor
-    );
-
-    // Normally we wouldn't await the whole DAG execution synchronously in the chat loop without feedback,
-    // but we will do it for the initial Phase 1 mock.
-    await orchestrator.executePlan(plan);
-
-    return {
-      content: `I have generated and executed a DAG plan for your request.\n\nPlan:\n\`\`\`json\n${JSON.stringify(plan, null, 2)}\n\`\`\``,
     };
   }
 

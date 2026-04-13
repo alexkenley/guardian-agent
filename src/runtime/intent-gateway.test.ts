@@ -2145,6 +2145,38 @@ describe('IntentGateway', () => {
     });
   });
 
+  it('round-trips complex planning preroutes without degrading them to unknown', () => {
+    const metadata = attachPreRoutedIntentGatewayMetadata(
+      undefined,
+      {
+        mode: 'primary',
+        available: true,
+        model: 'test-model',
+        latencyMs: 8,
+        decision: {
+          route: 'complex_planning_task',
+          confidence: 'high',
+          operation: 'run',
+          summary: 'Use the planner path for this request.',
+          turnRelation: 'new_request',
+          resolution: 'ready',
+          missingFields: [],
+          entities: {},
+        },
+      },
+    );
+
+    expect(readPreRoutedIntentGatewayMetadata(metadata)).toMatchObject({
+      available: true,
+      model: 'test-model',
+      decision: {
+        route: 'complex_planning_task',
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+      },
+    });
+  });
+
   it('does not reuse pre-routed gateway metadata when the preroute was unavailable', () => {
     const metadata = attachPreRoutedIntentGatewayMetadata(
       undefined,
