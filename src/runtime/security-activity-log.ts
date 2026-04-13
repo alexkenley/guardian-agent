@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import type { AuditSeverity } from '../guardian/audit-log.js';
 import { writeSecureFile } from '../util/secure-fs.js';
+
+import { getGuardianBaseDir } from '../util/env.js';
 
 export type SecurityActivityStatus = 'started' | 'skipped' | 'completed' | 'failed';
 
@@ -46,7 +47,7 @@ interface PersistedSecurityActivityLog {
   entries: SecurityActivityEntry[];
 }
 
-const DEFAULT_PERSIST_PATH = resolve(homedir(), '.guardianagent', 'security-activity-log.json');
+const DEFAULT_PERSIST_PATH = resolve(getGuardianBaseDir(), 'security-activity-log.json');
 const DEFAULT_MAX_ENTRIES = 1_000;
 
 export function isSecurityActivityStatus(value: string): value is SecurityActivityStatus {

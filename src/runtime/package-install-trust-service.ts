@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { access, mkdir, readFile, readdir } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { delimiter, dirname, join, resolve, win32 as winPath } from 'node:path';
 import { writeSecureFile } from '../util/secure-fs.js';
 import {
@@ -16,6 +15,7 @@ import {
   type SecurityAlertStateResult,
 } from './security-alert-lifecycle.js';
 import { PackageInstallNativeProtectionScanner } from './package-install-native-protection.js';
+import { getGuardianBaseDir } from '../util/env.js';
 import {
   buildManagedPackageInstallInvocation,
   buildManagedPackageStageInvocation,
@@ -132,8 +132,8 @@ export interface PackageInstallTrustServiceOptions {
   maxAlerts?: number;
 }
 
-const DEFAULT_PERSIST_PATH = resolve(homedir(), '.guardianagent', 'package-install-trust.json');
-const DEFAULT_QUARANTINE_ROOT = resolve(homedir(), '.guardianagent', 'package-quarantine');
+const DEFAULT_PERSIST_PATH = resolve(getGuardianBaseDir(), 'package-install-trust.json');
+const DEFAULT_QUARANTINE_ROOT = resolve(getGuardianBaseDir(), 'package-quarantine');
 const DEFAULT_MAX_EVENTS = 100;
 const DEFAULT_MAX_ALERTS = 100;
 

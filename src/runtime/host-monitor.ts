@@ -6,6 +6,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { AssistantHostMonitoringConfig, HostMonitorSeverity } from '../config/types.js';
 import { writeSecureFile } from '../util/secure-fs.js';
+import { getGuardianBaseDir } from '../util/env.js';
 import {
   acknowledgeSecurityAlert,
   ensureSecurityAlertLifecycle,
@@ -105,7 +106,7 @@ interface PersistedState {
 
 type CommandRunner = (command: string, args: string[], timeoutMs?: number) => Promise<string>;
 
-const DEFAULT_PERSIST_PATH = resolve(homedir(), '.guardianagent', 'host-monitor.json');
+const DEFAULT_PERSIST_PATH = resolve(getGuardianBaseDir(), 'host-monitor.json');
 const WINDOWS_RUN_KEYS = [
   'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run',
   'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce',

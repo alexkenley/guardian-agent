@@ -13,14 +13,16 @@ import { createServer, type Server } from 'node:http';
 import { randomBytes, createHash, createCipheriv, createDecipheriv } from 'node:crypto';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { homedir, hostname, userInfo } from 'node:os';
+import { hostname, userInfo } from 'node:os';
 import { createLogger } from '../util/logging.js';
 import { MICROSOFT_LOGIN_BASE } from './types.js';
 import type { MicrosoftTokens } from './types.js';
 
+import { getGuardianBaseDir } from '../util/env.js';
+
 const log = createLogger('microsoft-auth');
 
-const SECRETS_FILE = join(homedir(), '.guardianagent', 'secrets.enc.json');
+const SECRETS_FILE = join(getGuardianBaseDir(), 'secrets.enc.json');
 const SECRETS_KEY_LABEL = 'microsoft-tokens';
 const ALGORITHM = 'aes-256-gcm';
 const AUTH_TIMEOUT_MS = 120_000; // 2 minutes for user to complete consent

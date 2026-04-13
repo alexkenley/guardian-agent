@@ -12,7 +12,6 @@
 import { createInterface, type Interface } from 'node:readline';
 import { readFileSync, appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { ChannelAdapter, MessageCallback } from './types.js';
 import type { DashboardCallbacks, DashboardCodeSessionsList, DashboardCodingBackendInfo, SSEEvent } from './web-types.js';
@@ -33,9 +32,11 @@ import type { DashboardRunDetail, DashboardRunTimelineItem, DashboardRunStatus }
 import { assistantTraceMatchesContextFilters } from '../runtime/trace-context-filters.js';
 import { selectOperatorRelevantAssistantJobs } from '../runtime/assistant-jobs.js';
 
+import { getGuardianBaseDir } from '../util/env.js';
+
 const log = createLogger('channel:cli');
 
-const HISTORY_DIR = join(homedir(), '.guardianagent');
+const HISTORY_DIR = getGuardianBaseDir();
 const HISTORY_PATH = join(HISTORY_DIR, 'cli-history-v2');
 const MAX_HISTORY = 500;
 const CLI_GUARDIAN_CHAT_SURFACE_ID = 'cli-guardian-chat';

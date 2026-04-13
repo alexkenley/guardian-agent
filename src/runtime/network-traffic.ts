@@ -8,8 +8,9 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { homedir } from 'node:os';
 import { writeSecureFile } from '../util/secure-fs.js';
+
+import { getGuardianBaseDir } from '../util/env.js';
 
 export interface TrafficConnectionSample {
   protocol: string;
@@ -92,7 +93,7 @@ interface PersistedState {
   lastUpdatedAt: number;
 }
 
-const DEFAULT_PERSIST_PATH = resolve(homedir(), '.guardianagent', 'network-traffic.json');
+const DEFAULT_PERSIST_PATH = resolve(getGuardianBaseDir(), 'network-traffic.json');
 const DEFAULT_FLOW_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 export class NetworkTrafficService {

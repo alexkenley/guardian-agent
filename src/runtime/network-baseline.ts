@@ -8,10 +8,10 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { homedir } from 'node:os';
 import type { DiscoveredDevice } from './device-inventory.js';
 import type { DeviceType } from './network-intelligence.js';
 import { writeSecureFile } from '../util/secure-fs.js';
+import { getGuardianBaseDir } from '../util/env.js';
 import {
   acknowledgeSecurityAlert,
   ensureSecurityAlertLifecycle,
@@ -106,7 +106,7 @@ interface PersistedState {
   alerts: NetworkAlert[];
 }
 
-const DEFAULT_PERSIST_PATH = resolve(homedir(), '.guardianagent', 'network-baseline.json');
+const DEFAULT_PERSIST_PATH = resolve(getGuardianBaseDir(), 'network-baseline.json');
 const DEFAULT_DEDUPE_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
 const DEFAULT_MIN_SNAPSHOTS = 3;
 

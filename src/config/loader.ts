@@ -7,7 +7,6 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import yaml from 'js-yaml';
 import type { GuardianAgentConfig } from './types.js';
 import { DEFAULT_CONFIG } from './types.js';
@@ -24,6 +23,7 @@ import {
 } from '../llm/provider-metadata.js';
 import { normalizeCpanelConnectionConfig } from '../tools/cloud/cpanel-profile.js';
 import { normalizeConfigInputs, normalizeHttpUrlInput } from './input-normalization.js';
+import { getGuardianBaseDir } from '../util/env.js';
 import {
   isAssistantSecurityAutoContainmentCategory,
   isAssistantSecurityAutoContainmentSeverity,
@@ -46,7 +46,7 @@ function isTimeOfDayInput(value: string | undefined): boolean {
 }
 
 /** Default config file path. */
-export const DEFAULT_CONFIG_PATH = join(homedir(), '.guardianagent', 'config.yaml');
+export const DEFAULT_CONFIG_PATH = join(getGuardianBaseDir(), 'config.yaml');
 
 /** Interpolate ${ENV_VAR} references in a string. */
 export function interpolateEnvVars(value: string): string {

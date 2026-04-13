@@ -7,8 +7,10 @@ import { MicrosoftAuth } from './microsoft-auth.js';
 import type { MicrosoftAuthConfig } from './microsoft-auth.js';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { randomBytes, createHash } from 'node:crypto';
-import { homedir, hostname, userInfo } from 'node:os';
+import { hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
+
+import { getGuardianBaseDir } from '../util/env.js';
 
 // Mock fs/promises
 vi.mock('node:fs/promises', () => ({
@@ -17,7 +19,7 @@ vi.mock('node:fs/promises', () => ({
   mkdir: vi.fn(),
 }));
 
-const SECRETS_FILE = join(homedir(), '.guardianagent', 'secrets.enc.json');
+const SECRETS_FILE = join(getGuardianBaseDir(), 'secrets.enc.json');
 
 function makeConfig(overrides?: Partial<MicrosoftAuthConfig>): MicrosoftAuthConfig {
   return {

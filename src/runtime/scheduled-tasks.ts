@@ -8,7 +8,6 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { createLogger } from '../util/logging.js';
 import type { AutomationOutputHandlingConfig } from '../config/types.js';
@@ -24,6 +23,8 @@ import type {
 } from './automation-output-persistence.js';
 import { createRunEvent, type OrchestrationRunEvent } from './run-events.js';
 import { writeSecureFile } from '../util/secure-fs.js';
+import { getGuardianBaseDir } from '../util/env.js';
+
 const log = createLogger('scheduled-tasks');
 
 // ─── Types ────────────────────────────────────────────────
@@ -562,7 +563,7 @@ const BUILT_IN_PRESETS: ScheduledTaskPreset[] = [
 
 // ─── Service ──────────────────────────────────────────────
 
-const DEFAULT_PERSIST_PATH = resolve(homedir(), '.guardianagent', 'scheduled-tasks.json');
+const DEFAULT_PERSIST_PATH = resolve(getGuardianBaseDir(), 'scheduled-tasks.json');
 const DEFAULT_APPROVAL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_RUNS_PER_WINDOW = 288;
 const DEFAULT_WINDOW_MS = 24 * 60 * 60 * 1000;

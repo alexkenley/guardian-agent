@@ -8,10 +8,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import type { ControlPlaneIntegrity } from '../guardian/control-plane-integrity.js';
 import { detectInjection, stripInvisibleChars } from '../guardian/input-sanitizer.js';
 import { mkdirSecureSync, writeSecureFileSync } from '../util/secure-fs.js';
+
+import { getGuardianBaseDir } from '../util/env.js';
 
 export type MemorySourceType = 'user' | 'local_tool' | 'remote_tool' | 'system' | 'operator';
 export type MemoryTrustLevel = 'trusted' | 'untrusted' | 'reviewed';
@@ -198,7 +199,7 @@ export class AgentMemoryStore {
 
   constructor(config: Partial<AgentMemoryStoreConfig> = {}) {
     this.config = { ...DEFAULT_MEMORY_STORE_CONFIG, ...config };
-    this.basePath = this.config.basePath ?? join(homedir(), '.guardianagent', 'memory');
+    this.basePath = this.config.basePath ?? join(getGuardianBaseDir(), 'memory');
 
     if (this.config.enabled) {
       mkdirSecureSync(this.basePath);
@@ -940,7 +941,7 @@ export class AgentMemoryStore {
 
   updateConfig(next: Partial<AgentMemoryStoreConfig>): void {
     const merged = { ...this.config, ...next };
-    const nextBasePath = merged.basePath ?? join(homedir(), '.guardianagent', 'memory');
+    const nextBasePath = merged.basePath ?? join(getGuardianBaseDir(), 'memory');
     const basePathChanged = nextBasePath !== this.basePath;
     this.config = merged;
     this.basePath = nextBasePath;

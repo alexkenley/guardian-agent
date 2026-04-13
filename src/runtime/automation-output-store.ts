@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { ContentTrustLevel } from '../tools/types.js';
 import type { AutomationStepOutput } from './automation-output.js';
@@ -8,7 +7,9 @@ import type { AutomationMemoryPromotionStatus } from './automation-output-persis
 import { stripInvisibleChars } from '../guardian/input-sanitizer.js';
 import { mkdirSecureSync, writeSecureFileSync } from '../util/secure-fs.js';
 
-const DEFAULT_BASE_PATH = join(homedir(), '.guardianagent', 'automation-output');
+import { getGuardianBaseDir } from '../util/env.js';
+
+const DEFAULT_BASE_PATH = join(getGuardianBaseDir(), 'automation-output');
 const INDEX_FILE = 'index.json';
 const RUNS_DIR = 'runs';
 const MAX_SEARCH_TEXT_CHARS = 6000;

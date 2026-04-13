@@ -19,6 +19,8 @@ import { resolveRuntimeCredentialView } from '../../runtime/credentials.js';
 import type { LocalSecretStore } from '../../runtime/secret-store.js';
 import type { ToolExecutor } from '../../tools/executor.js';
 
+import { getGuardianBaseDir } from '../../util/env.js';
+
 type ProviderIntegrationCallbacks = Pick<
   DashboardCallbacks,
   | 'onGwsStatus'
@@ -126,7 +128,7 @@ export function createProviderIntegrationCallbacks(
 
     onGoogleCredentials: async (credentials: string) => {
       const googleCfg = options.configRef.current.assistant.tools.google;
-      const credPath = googleCfg?.credentialsPath?.replace(/^~/, homedir()) || `${homedir()}/.guardianagent/google-credentials.json`;
+      const credPath = googleCfg?.credentialsPath?.replace(/^~/, homedir()) || `${getGuardianBaseDir()}/google-credentials.json`;
       try {
         const { mkdir: mkdirAsync, writeFile: writeFileAsync } = await import('node:fs/promises');
         const { dirname } = await import('node:path');

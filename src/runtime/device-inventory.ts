@@ -7,7 +7,6 @@
  */
 
 import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { writeSecureFile } from '../util/secure-fs.js';
 import {
@@ -18,6 +17,8 @@ import {
   type ServiceInfo,
 } from './network-intelligence.js';
 import { mergeFingerprintsIntoServices, type BannerFingerprint } from './network-fingerprinting.js';
+
+import { getGuardianBaseDir } from '../util/env.js';
 
 export interface DiscoveredDevice {
   ip: string;
@@ -41,7 +42,7 @@ export interface DeviceEvent {
   timestamp: number;
 }
 
-const INVENTORY_FILE = resolve(homedir(), '.guardianagent', 'device-inventory.json');
+const INVENTORY_FILE = resolve(getGuardianBaseDir(), 'device-inventory.json');
 const OFFLINE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 
 export class DeviceInventoryService {

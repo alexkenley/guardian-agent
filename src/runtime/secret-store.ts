@@ -1,7 +1,8 @@
 import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { homedir } from 'node:os';
+
+import { getGuardianBaseDir } from '../util/env.js';
 
 type EncryptedSecretRecord = {
   iv: string;
@@ -26,7 +27,7 @@ export interface LocalSecretStoreOptions {
   now?: () => number;
 }
 
-const DEFAULT_BASE_DIR = join(homedir(), '.guardianagent');
+const DEFAULT_BASE_DIR = getGuardianBaseDir();
 export class LocalSecretStore implements SecretResolver {
   private readonly dataPath: string;
   private readonly keyPath: string;

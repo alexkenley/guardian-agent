@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import type {
   CodeSessionRecord,
@@ -15,6 +14,8 @@ import {
 } from './code-workspace-trust.js';
 import type { SandboxAvailability, SandboxEnforcementMode } from '../sandbox/types.js';
 import { writeSecureFile } from '../util/secure-fs.js';
+
+import { getGuardianBaseDir } from '../util/env.js';
 
 export type AiSecuritySeverity = 'low' | 'medium' | 'high' | 'critical';
 export type AiSecurityFindingStatus = 'new' | 'triaged' | 'resolved' | 'suppressed';
@@ -186,7 +187,7 @@ export interface AiSecurityServiceOptions {
 
 const DEFAULT_MAX_RUNS = 50;
 const DEFAULT_MAX_FINDINGS = 200;
-const DEFAULT_PERSIST_PATH = resolve(homedir(), '.guardianagent', 'assistant-security.json');
+const DEFAULT_PERSIST_PATH = resolve(getGuardianBaseDir(), 'assistant-security.json');
 
 interface PersistedAiSecurityState {
   lastRunAt?: number;

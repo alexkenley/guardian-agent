@@ -261,6 +261,8 @@ function getCodeSessionSurfaceId(args: { surfaceId?: string; userId?: string; pr
 import { isResponseDegraded as _isResponseDegraded } from './util/response-quality.js';
 import { isToolReportQuery as _isToolReportQuery, formatToolReport as _formatToolReport } from './util/tool-report.js';
 
+import { getGuardianBaseDir } from './util/env.js';
+
 const log = createLogger('main');
 let sharedCodeWorkspaceTrustService: CodeWorkspaceTrustService | undefined;
 
@@ -1152,7 +1154,7 @@ function buildDashboardCallbacks(
       enabled: kbConfig?.enabled ?? true,
       basePath: kbConfig?.basePath
         ? join(kbConfig.basePath, 'code-sessions')
-        : join(homedir(), '.guardianagent', 'code-session-memory'),
+        : join(getGuardianBaseDir(), 'code-session-memory'),
       readOnly: kbConfig?.readOnly ?? false,
       maxContextChars: kbConfig?.maxContextChars ?? 4000,
       maxFileChars: kbConfig?.maxFileChars ?? 20000,
@@ -2756,7 +2758,7 @@ function buildDashboardCallbacks(
 
 
 function resolveAssistantDbPath(configuredPath: string | undefined, fallbackFileName: string): string {
-  const fallback = join(homedir(), '.guardianagent', fallbackFileName);
+  const fallback = join(getGuardianBaseDir(), fallbackFileName);
   if (!configuredPath || !configuredPath.trim()) return fallback;
 
   const trimmed = configuredPath.trim();
@@ -2790,7 +2792,7 @@ async function main(): Promise<void> {
       },
     });
   }
-  const scheduledTasksPersistPath = join(homedir(), '.guardianagent', 'scheduled-tasks.json');
+  const scheduledTasksPersistPath = join(getGuardianBaseDir(), 'scheduled-tasks.json');
   const collectPolicyFilePaths = (rootPath: string): string[] => {
     if (!existsSync(rootPath)) return [];
     const paths: string[] = [];
@@ -2815,10 +2817,10 @@ async function main(): Promise<void> {
   );
   const resolveActiveControlPlanePaths = (): string[] => {
     const kbConfig = configRef.current.assistant.memory.knowledgeBase;
-    const globalMemoryBasePath = kbConfig?.basePath ?? join(homedir(), '.guardianagent', 'memory');
+    const globalMemoryBasePath = kbConfig?.basePath ?? join(getGuardianBaseDir(), 'memory');
     const codeMemoryBasePath = kbConfig?.basePath
       ? join(kbConfig.basePath, 'code-sessions')
-      : join(homedir(), '.guardianagent', 'code-session-memory');
+      : join(getGuardianBaseDir(), 'code-session-memory');
     return [
       configPath,
       scheduledTasksPersistPath,
@@ -2965,7 +2967,7 @@ async function main(): Promise<void> {
     enabled: kbConfig?.enabled ?? true,
     basePath: kbConfig?.basePath
       ? join(kbConfig.basePath, 'code-sessions')
-      : join(homedir(), '.guardianagent', 'code-session-memory'),
+      : join(getGuardianBaseDir(), 'code-session-memory'),
     readOnly: kbConfig?.readOnly ?? false,
     maxContextChars: kbConfig?.maxContextChars ?? 4000,
     maxFileChars: kbConfig?.maxFileChars ?? 20000,
@@ -3668,7 +3670,7 @@ async function main(): Promise<void> {
       const scopes = services
         .map((s: string) => GOOGLE_SERVICE_SCOPES[s.toLowerCase()])
         .filter(Boolean);
-      const credPath = (googleConfig?.credentialsPath ?? '').replace(/^~/, homedir()) || `${homedir()}/.guardianagent/google-credentials.json`;
+      const credPath = (googleConfig?.credentialsPath ?? '').replace(/^~/, homedir()) || `${getGuardianBaseDir()}/google-credentials.json`;
 
       googleAuth = new GoogleAuth({
         credentialsPath: credPath,
@@ -5033,7 +5035,7 @@ async function main(): Promise<void> {
   }
 
   const playbookRunStateStore = new JsonFileRunStateStore<PlaybookStepRunResult>({
-    persistPath: join(homedir(), '.guardianagent', 'playbook-run-state.json'),
+    persistPath: join(getGuardianBaseDir(), 'playbook-run-state.json'),
     maxEntries: 200,
   });
 
@@ -6151,7 +6153,7 @@ async function main(): Promise<void> {
 
   // Factory reset: bulk-clear data, config, or both
   dashboardCallbacks.onFactoryReset = async ({ scope }) => {
-    const baseDir = join(homedir(), '.guardianagent');
+    const baseDir = getGuardianBaseDir();
     const deletedFiles: string[] = [];
     const errors: string[] = [];
 

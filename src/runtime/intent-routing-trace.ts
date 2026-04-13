@@ -1,13 +1,14 @@
 import { stat, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { appendSecureFile, mkdirSecure } from '../util/secure-fs.js';
 import { createLogger } from '../util/logging.js';
 import { intentRoutingTraceEntryMatchesContextFilters } from './trace-context-filters.js';
 
+import { getGuardianBaseDir } from '../util/env.js';
+
 const log = createLogger('intent-routing-trace');
 
-const DEFAULT_TRACE_DIR = join(homedir(), '.guardianagent', 'routing');
+const DEFAULT_TRACE_DIR = join(getGuardianBaseDir(), 'routing');
 const DEFAULT_TRACE_FILE = 'intent-routing.jsonl';
 const DEFAULT_MAX_FILE_SIZE_BYTES = 5_000_000;
 const DEFAULT_MAX_FILES = 5;

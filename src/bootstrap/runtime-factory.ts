@@ -1,5 +1,4 @@
-import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
+import { dirname } from 'node:path';
 import { existsSync } from 'node:fs';
 import { loadConfig } from '../config/loader.js';
 import type { GuardianAgentConfig, WebSearchConfig } from '../config/types.js';
@@ -10,6 +9,8 @@ import { ControlPlaneIntegrity } from '../guardian/control-plane-integrity.js';
 import { buildPathBoundaryPattern } from '../util/regex.js';
 import { setLogLevel } from '../util/logging.js';
 import { mkdirSecureSync, tightenSecureTree, writeSecureFileSync } from '../util/secure-fs.js';
+
+import { getGuardianBaseDir } from '../util/env.js';
 
 export interface BootstrapRuntimeContext {
   configRef: { current: GuardianAgentConfig };
@@ -154,7 +155,7 @@ function applyRuntimeLogLevel(config: GuardianAgentConfig): void {
 }
 
 export async function createBootstrapRuntimeContext(configPath: string): Promise<BootstrapRuntimeContext> {
-  const guardianDataDir = join(homedir(), '.guardianagent');
+  const guardianDataDir = getGuardianBaseDir();
   const controlPlaneIntegrity = new ControlPlaneIntegrity({ baseDir: guardianDataDir });
   const configIntegrityState = controlPlaneIntegrity.verifyFileSync(configPath);
   if (!existsSync(configPath) && !configIntegrityState.ok) {

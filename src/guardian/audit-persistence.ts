@@ -10,10 +10,11 @@ import { readFile, stat } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import type { AuditEvent } from './audit-log.js';
 import { createLogger } from '../util/logging.js';
 import { appendSecureFile, mkdirSecure } from '../util/secure-fs.js';
+
+import { getGuardianBaseDir } from '../util/env.js';
 
 const log = createLogger('audit-persistence');
 
@@ -53,7 +54,7 @@ export class AuditPersistence {
   private initialized = false;
 
   constructor(auditDir?: string) {
-    this.auditDir = auditDir ?? join(homedir(), '.guardianagent', 'audit');
+    this.auditDir = auditDir ?? join(getGuardianBaseDir(), 'audit');
     this.filePath = join(this.auditDir, 'audit.jsonl');
   }
 
