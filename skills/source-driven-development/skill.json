@@ -1,0 +1,46 @@
+{
+  "id": "source-driven-development",
+  "name": "Source-Driven Development",
+  "version": "0.1.0",
+  "description": "Use when implementing or reviewing framework-specific code that should be verified against current official docs, versioned guidance, or source-cited examples rather than memory.",
+  "tags": [
+    "official docs",
+    "citations",
+    "framework",
+    "version",
+    "documentation"
+  ],
+  "enabled": true,
+  "appliesTo": {
+    "channels": [
+      "cli",
+      "web",
+      "telegram"
+    ],
+    "requestTypes": [
+      "chat"
+    ]
+  },
+  "triggers": {
+    "keywords": [
+      "official docs",
+      "current docs",
+      "verify against docs",
+      "documented pattern",
+      "cite source",
+      "cite sources",
+      "source cited",
+      "framework docs",
+      "authoritative source",
+      "latest framework guidance"
+    ]
+  },
+  "tools": [
+    "web_search",
+    "web_fetch",
+    "doc_search",
+    "fs_read",
+    "code_symbol_search"
+  ],
+  "risk": "informational"
+}

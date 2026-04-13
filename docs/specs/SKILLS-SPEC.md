@@ -251,8 +251,12 @@ The repository currently includes bundled local skills under `skills/`, includin
 
 - `automation-builder`
 - `cloud-operations`
+- `code-review`
+- `context-engineering`
+- `coding-workspace`
 - `file-workflows`
 - `google-workspace`
+- `incremental-implementation`
 - `knowledge-search`
 - `preferences-memory`
 - `receiving-code-review`
@@ -274,11 +278,13 @@ The repository currently includes bundled local skills under `skills/`, includin
 - `security-mode-escalation`
 - `security-alert-hygiene`
 - `security-response-automation`
+- `source-driven-development`
 - `browser-session-defense`
 
 This bundled suite is intentionally mixed:
 
 - personal assistant skills for email, calendar, files, web research, memory, and document search
+- coding discipline skills for repo grounding, context shaping, documentation-grounded implementation, review, debugging, and verification
 - IT operations skills for cloud, host, network, and automation work
 - security skills for triage, threat intel, monitoring interpretation, and disciplined investigation
 

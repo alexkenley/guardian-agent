@@ -338,6 +338,47 @@ Start with the API surface, design clear tool names, and prefer structured outpu
       .toBe('browser-session-defense');
   });
 
+  it('routes bundled documentation-grounded coding prompts to source-driven-development', async () => {
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([join(process.cwd(), 'skills')]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 5 });
+
+    const resolvedIds = resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content: 'Use the official docs, verify against docs, and cite sources for the current React pattern before changing this component.',
+      intentRoute: 'coding_task',
+    }).map((skill) => skill.id);
+
+    expect(resolvedIds).toContain('source-driven-development');
+  });
+
+  it('routes bundled context-shaping prompts to context-engineering without making it a generic coding default', async () => {
+    const registry = new SkillRegistry();
+    await registry.loadFromRoots([join(process.cwd(), 'skills')]);
+    const resolver = new SkillResolver(registry, { maxActivePerRequest: 5 });
+
+    const contextIds = resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content: 'I am switching subsystems and need the right project context, relevant files, one example pattern, and the current test error before editing.',
+      intentRoute: 'coding_task',
+    }).map((skill) => skill.id);
+    expect(contextIds).toContain('context-engineering');
+
+    const genericCodingIds = resolver.resolve({
+      agentId: 'default',
+      channel: 'cli',
+      requestType: 'chat',
+      content: 'Fix this bug in src/runtime/intent-gateway.ts.',
+      intentRoute: 'coding_task',
+    }).map((skill) => skill.id);
+    expect(genericCodingIds).not.toContain('context-engineering');
+    expect(genericCodingIds).not.toContain('source-driven-development');
+  });
+
   it('resolves frontmatter-only skills from explicit name mentions and description fallback', async () => {
     const root = createSkillRoot();
     const skillDir = join(root, 'skill-creator');

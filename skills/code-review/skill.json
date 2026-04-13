@@ -2,7 +2,7 @@
   "id": "code-review",
   "name": "Code Review",
   "version": "0.1.0",
-  "description": "Use when reviewing a diff, PR, or patch for bugs, regressions, missing tests, or operational risk.",
+  "description": "Use when reviewing a diff, PR, or patch for bugs, regressions, missing tests, architecture risk, security risk, or reviewability concerns before merge.",
   "role": "process",
   "tags": [
     "review",
@@ -29,7 +29,9 @@
       "regression",
       "inspect changes",
       "look for bugs",
-      "code review"
+      "code review",
+      "before merge",
+      "missing tests"
     ]
   },
   "tools": [

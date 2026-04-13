@@ -1,0 +1,47 @@
+{
+  "id": "context-engineering",
+  "name": "Context Engineering",
+  "version": "0.1.0",
+  "description": "Use when starting a repo-grounded task, switching subsystems, or when output quality drops and the agent needs tighter project context from rules, specs, relevant files, examples, and current errors.",
+  "tags": [
+    "context",
+    "session",
+    "spec",
+    "files",
+    "conventions"
+  ],
+  "enabled": true,
+  "appliesTo": {
+    "channels": [
+      "cli",
+      "web",
+      "telegram"
+    ],
+    "requestTypes": [
+      "chat"
+    ]
+  },
+  "triggers": {
+    "keywords": [
+      "project context",
+      "load the right context",
+      "start a new session",
+      "switch subsystems",
+      "switch tasks",
+      "relevant files",
+      "example pattern",
+      "follow project conventions",
+      "output quality drops",
+      "current test error"
+    ]
+  },
+  "tools": [
+    "code_session_current",
+    "code_session_list",
+    "code_symbol_search",
+    "fs_read",
+    "fs_list",
+    "code_plan"
+  ],
+  "risk": "informational"
+}
