@@ -1,4 +1,5 @@
 import type { PlanNode } from './types.js';
+import { parseStructuredJsonObject } from '../../util/structured-json.js';
 
 export interface RecoveryPlan {
   success: boolean;
@@ -58,17 +59,22 @@ PlanNode structure:
       const content = response?.content;
       if (!content) return { success: false, reason: 'No response from recovery model.' };
 
-      const parsed = JSON.parse(content);
-      if (parsed.success && parsed.replacementNode) {
+      const parsed = parseStructuredJsonObject(content);
+      if (!parsed) {
+        return { success: false, reason: 'Failed to parse recovery response.' };
+      }
+      
+      if (parsed.success === true && parsed.replacementNode && typeof parsed.replacementNode === 'object') {
+        const replacementNode = parsed.replacementNode as PlanNode;
         // Ensure status is pending
-        parsed.replacementNode.status = 'pending';
+        replacementNode.status = 'pending';
         return {
           success: true,
-          reason: parsed.reason,
-          replacementNode: parsed.replacementNode as PlanNode
+          reason: typeof parsed.reason === 'string' ? parsed.reason : 'Recovery plan generated.',
+          replacementNode
         };
       }
-      return { success: false, reason: parsed.reason || 'Failed to generate a valid replacement node.' };
+      return { success: false, reason: typeof parsed.reason === 'string' ? parsed.reason : 'Failed to generate a valid replacement node.' };
     } catch (err) {
       console.error('RecoveryPlanner: Failed to parse recovery plan:', err);
       return { success: false, reason: 'Recovery parsing error.' };

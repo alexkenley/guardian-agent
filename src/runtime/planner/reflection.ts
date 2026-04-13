@@ -1,4 +1,5 @@
 import type { PlanNode } from './types.js';
+import { parseStructuredJsonObject } from '../../util/structured-json.js';
 
 export interface ReflectionResult {
   success: boolean;
@@ -45,10 +46,14 @@ Provide your answer as a JSON object with two fields:
       const content = response?.content;
       if (!content) return { success: false, reason: 'No response from reflection model.' };
 
-      const parsed = JSON.parse(content);
+      const parsed = parseStructuredJsonObject(content);
+      if (!parsed) {
+        return { success: false, reason: 'Reflection produced unparseable output.' };
+      }
+      
       return {
         success: parsed.success === true,
-        reason: parsed.reason || 'No reason provided.'
+        reason: typeof parsed.reason === 'string' && parsed.reason.trim() ? parsed.reason : 'No reason provided.'
       };
     } catch (err) {
       console.error('SemanticReflector: Failed to parse reflection:', err);

@@ -1,5 +1,6 @@
 import type { IntentGatewayDecision } from '../intent-gateway.js';
-import type { ExecutionPlan } from './types.js';
+import type { ExecutionPlan, PlanNode } from './types.js';
+import { parseStructuredJsonObject } from '../../util/structured-json.js';
 
 export class TaskPlanner {
   constructor(
@@ -20,11 +21,12 @@ export class TaskPlanner {
     if (!content) return null;
 
     try {
-      const parsed = JSON.parse(content);
+      const parsed = parseStructuredJsonObject(content);
+      if (!parsed) return null;
       return {
         id: `plan-${Date.now()}`,
         originalObjective: objective,
-        nodes: parsed.nodes ?? {},
+        nodes: (parsed.nodes && typeof parsed.nodes === 'object') ? (parsed.nodes as Record<string, PlanNode>) : {},
         status: 'planning',
       };
     } catch (err) {

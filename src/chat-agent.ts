@@ -8683,7 +8683,17 @@ type DirectIntentShadowCandidate =
 
     const learningQueue = new (await import('./runtime/planner/learning-queue.js')).ReflectiveLearningQueue(
       async (type, details) => {
-        console.log(`Proposed ${type}: ${JSON.stringify(details)}`);
+        await ctx.emit({
+          type: 'assistant_memory_write',
+          targetAgentId: '*', // Needs to go somewhere, let's say broadcast or memory agent
+          payload: {
+            userId: message.userId,
+            channel: message.channel,
+            surfaceId: message.surfaceId,
+            content: `Reflective Learning [${type}]: ${JSON.stringify(details)}`,
+            trustLevel: 'trusted',
+          }
+        });
       }
     );
 
@@ -8697,8 +8707,53 @@ type DirectIntentShadowCandidate =
 
     const orchestrator = new (await import('./runtime/planner/orchestrator.js')).AssistantOrchestrator(
       async (node) => {
-        // Just mock execution for Phase 1 as per the plan spec
-        return { status: 'mock_success', node: node.id };
+        if (!this.tools) {
+          throw new Error('Tool executor is not available.');
+        }
+
+        if (node.actionType === 'tool_call') {
+          const args = typeof node.inputPrompt === 'string' ? JSON.parse(node.inputPrompt) : node.inputPrompt;
+          return this.tools.runTool({
+            toolName: node.target,
+            args,
+            origin: 'assistant',
+            agentId: this.id,
+            userId: message.userId,
+            surfaceId: message.surfaceId,
+            principalId: message.principalId ?? message.userId,
+            principalRole: message.principalRole ?? 'owner',
+            channel: message.channel,
+            requestId: message.id,
+            contentTrustLevel: 'trusted', // Inherit from origin
+            taintReasons: [],
+            derivedFromTaintedContent: false,
+            codeContext: message.metadata?.codeContext as { workspaceRoot: string; sessionId?: string } | undefined,
+          });
+        }
+        
+        if (node.actionType === 'execute_code') {
+          return this.tools.runTool({
+            toolName: 'code_remote_exec',
+            args: {
+              command: node.inputPrompt,
+            },
+            origin: 'assistant',
+            agentId: this.id,
+            userId: message.userId,
+            surfaceId: message.surfaceId,
+            principalId: message.principalId ?? message.userId,
+            principalRole: message.principalRole ?? 'owner',
+            channel: message.channel,
+            requestId: message.id,
+            contentTrustLevel: 'trusted', // Inherit from origin
+            taintReasons: [],
+            derivedFromTaintedContent: false,
+            codeContext: message.metadata?.codeContext as { workspaceRoot: string; sessionId?: string } | undefined,
+          });
+        }
+
+        // Just mock execution for Phase 1 as per the plan spec for other actionTypes
+        return { status: 'mock_success', node: node.id, notice: `Unsupported actionType: ${node.actionType}` };
       },
       reflector,
       learningQueue,
