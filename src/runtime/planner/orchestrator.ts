@@ -1,18 +1,19 @@
 import type { ExecutionPlan, PlanNode } from './types.js';
 import type { SemanticReflector } from './reflection.js';
 import type { ReflectiveLearningQueue } from './learning-queue.js';
+import type { RecoveryPlanner } from './recovery.js';
 
 export class AssistantOrchestrator {
   constructor(
     private readonly executeNode: (node: PlanNode) => Promise<unknown>,
     private readonly reflector?: SemanticReflector,
-    private readonly learningQueue?: ReflectiveLearningQueue
+    private readonly learningQueue?: ReflectiveLearningQueue,
+    private readonly recoveryPlanner?: RecoveryPlanner
   ) {}
 
   async executePlan(plan: ExecutionPlan): Promise<void> {
     plan.status = 'executing';
 
-    const nodes = Object.values(plan.nodes);
     let allCompleted = false;
     let hasFailures = false;
 
@@ -20,6 +21,8 @@ export class AssistantOrchestrator {
     while (!allCompleted && !hasFailures) {
       let progressMade = false;
       allCompleted = true;
+
+      const nodes = Object.values(plan.nodes);
 
       for (const node of nodes) {
         if (node.status === 'success' || node.status === 'failed') {
@@ -38,6 +41,7 @@ export class AssistantOrchestrator {
         if (canRun) {
           node.status = 'running';
           progressMade = true;
+          let nodeFailed = false;
           try {
             node.result = await this.executeNode(node);
 
@@ -47,17 +51,42 @@ export class AssistantOrchestrator {
               if (!reflection.success) {
                 node.status = 'failed';
                 node.result = { originalResult: node.result, reflectionReason: reflection.reason };
-                hasFailures = true;
-                break; // Stop on first semantic failure
+                nodeFailed = true;
               }
             }
 
-            node.status = 'success';
+            if (!nodeFailed) {
+              node.status = 'success';
+            }
           } catch (err) {
             node.status = 'failed';
             node.result = err;
+            nodeFailed = true;
+          }
+
+          if (nodeFailed) {
+            if (this.recoveryPlanner) {
+              console.log(`AssistantOrchestrator: Node ${node.id} failed, attempting recovery...`);
+              const recovery = await this.recoveryPlanner.attemptRecovery(plan.originalObjective, node, node.result);
+              if (recovery.success && recovery.replacementNode) {
+                console.log(`AssistantOrchestrator: Recovery successful, injecting replacement node ${recovery.replacementNode.id}`);
+                // Add the replacement node
+                plan.nodes[recovery.replacementNode.id] = recovery.replacementNode;
+                // Update downstream dependencies to point to the new node instead of the failed one
+                for (const otherNode of Object.values(plan.nodes)) {
+                  if (otherNode.dependencies.includes(node.id)) {
+                    otherNode.dependencies = otherNode.dependencies.map(d => d === node.id ? recovery.replacementNode!.id : d);
+                  }
+                }
+                // Don't set hasFailures = true, let the loop continue with the new node
+                nodeFailed = false;
+              }
+            }
+          }
+
+          if (nodeFailed) {
             hasFailures = true;
-            break; // Stop on first failure for now
+            break; // Stop on unrecoverable failure
           }
         }
       }

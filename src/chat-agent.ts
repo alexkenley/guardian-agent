@@ -8687,13 +8687,18 @@ type DirectIntentShadowCandidate =
       }
     );
 
+    const recoveryPlanner = new (await import('./runtime/planner/recovery.js')).RecoveryPlanner(
+      async (msgs, opts) => ctx.llm!.chat(msgs, opts)
+    );
+
     const orchestrator = new (await import('./runtime/planner/orchestrator.js')).AssistantOrchestrator(
       async (node) => {
         // Just mock execution for Phase 1 as per the plan spec
         return { status: 'mock_success', node: node.id };
       },
       reflector,
-      learningQueue
+      learningQueue,
+      recoveryPlanner
     );
 
     // Normally we wouldn't await the whole DAG execution synchronously in the chat loop without feedback,
