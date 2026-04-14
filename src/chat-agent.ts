@@ -154,10 +154,26 @@ import {
   stripDirectContinuationStateMetadata,
 } from './runtime/chat-agent/direct-continuation-state.js';
 import {
-  DIRECT_ROUTE_RESUME_TYPE_SECOND_BRAIN_MUTATION,
   normalizeFilesystemResumePrincipalRole,
   type SecondBrainMutationResumePayload,
 } from './runtime/chat-agent/direct-route-resume.js';
+import {
+  buildDirectSecondBrainClarificationResponse as buildDirectSecondBrainClarificationResponseHelper,
+  buildDirectSecondBrainMutationSuccessResponse as buildDirectSecondBrainMutationSuccessResponseHelper,
+  executeDirectSecondBrainMutation as executeDirectSecondBrainMutationHelper,
+  type DirectSecondBrainMutationAction,
+  type DirectSecondBrainMutationItemType,
+  type DirectSecondBrainMutationToolName,
+} from './runtime/chat-agent/direct-second-brain-mutation.js';
+import {
+  tryDirectSecondBrainRead as tryDirectSecondBrainReadHelper,
+} from './runtime/chat-agent/direct-second-brain-read.js';
+import {
+  tryDirectSecondBrainRoutineWrite as tryDirectSecondBrainRoutineWriteHelper,
+} from './runtime/chat-agent/direct-second-brain-routine-write.js';
+import {
+  tryDirectSecondBrainWrite as tryDirectSecondBrainWriteHelper,
+} from './runtime/chat-agent/direct-second-brain-write.js';
 import {
   readLatestAssistantOutput as readLatestAssistantOutputHelper,
   resumeStoredDirectRoutePendingAction as resumeStoredDirectRoutePendingActionHelper,
@@ -250,7 +266,6 @@ import {
   selectSuspendedOriginalMessage,
   type ApprovalContinuationScope,
 } from './runtime/approval-continuations.js';
-import { normalizeSecondBrainMutationArgs } from './runtime/second-brain/chat-mutation-normalization.js';
 import { recoverToolCallsFromStructuredText } from './util/structured-json.js';
 
 const SECOND_BRAIN_FOCUS_CONTINUATION_KIND = 'second_brain_focus';
@@ -289,24 +304,6 @@ const ROUTINE_QUERY_STOP_WORDS = new Set([
 ]);
 
 type SecondBrainFocusItemType = 'note' | 'task' | 'calendar' | 'person' | 'library' | 'brief' | 'routine';
-type DirectSecondBrainMutationItemType = 'note' | 'task' | 'calendar' | 'person' | 'library' | 'brief' | 'routine';
-type DirectSecondBrainMutationAction = 'create' | 'update' | 'delete' | 'complete';
-type DirectSecondBrainMutationToolName =
-  | 'second_brain_note_upsert'
-  | 'second_brain_note_delete'
-  | 'second_brain_task_upsert'
-  | 'second_brain_task_delete'
-  | 'second_brain_calendar_upsert'
-  | 'second_brain_calendar_delete'
-  | 'second_brain_person_upsert'
-  | 'second_brain_person_delete'
-  | 'second_brain_library_upsert'
-  | 'second_brain_library_delete'
-  | 'second_brain_brief_upsert'
-  | 'second_brain_brief_delete'
-  | 'second_brain_routine_create'
-  | 'second_brain_routine_update'
-  | 'second_brain_routine_delete';
 
 interface SecondBrainFocusContinuationItem {
   id: string;
@@ -1469,52 +1466,6 @@ function resolveDirectSecondBrainReadQuery(
     }
     default:
       return null;
-  }
-}
-
-function defaultSecondBrainItemLabel(itemType: DirectSecondBrainMutationItemType): string {
-  switch (itemType) {
-    case 'note':
-      return 'Untitled note';
-    case 'task':
-      return 'Untitled task';
-    case 'calendar':
-      return 'Untitled event';
-    case 'person':
-      return 'Untitled person';
-    case 'library':
-      return 'Untitled library item';
-    case 'brief':
-      return 'Untitled brief';
-    case 'routine':
-      return 'Untitled routine';
-    default:
-      return 'Untitled item';
-  }
-}
-
-function resolveDirectSecondBrainMutationLabel(
-  itemType: DirectSecondBrainMutationItemType,
-  record: Record<string, unknown> | null,
-  fallbackLabel?: string,
-): string {
-  const resolvedFallback = toString(fallbackLabel).trim();
-  switch (itemType) {
-    case 'person':
-      return toString(record?.name).trim()
-        || toString(record?.title).trim()
-        || resolvedFallback
-        || defaultSecondBrainItemLabel(itemType);
-    case 'library':
-      return toString(record?.title).trim()
-        || toString(record?.url).trim()
-        || resolvedFallback
-        || defaultSecondBrainItemLabel(itemType);
-    default:
-      return toString(record?.title).trim()
-        || toString(record?.name).trim()
-        || resolvedFallback
-        || defaultSecondBrainItemLabel(itemType);
   }
 }
 
@@ -4647,24 +4598,72 @@ type DirectIntentShadowCandidate =
       return null;
     }
 
-    switch (this.resolveDirectSecondBrainItemType(decision, continuityThread)) {
-      case 'note':
-        return this.tryDirectSecondBrainNoteWrite(message, ctx, userKey, decision, continuityThread);
-      case 'task':
-        return this.tryDirectSecondBrainTaskWrite(message, ctx, userKey, decision, continuityThread);
-      case 'calendar':
-        return this.tryDirectSecondBrainCalendarWrite(message, ctx, userKey, decision, continuityThread);
-      case 'person':
-        return this.tryDirectSecondBrainPersonWrite(message, ctx, userKey, decision, continuityThread);
-      case 'library':
-        return this.tryDirectSecondBrainLibraryWrite(message, ctx, userKey, decision, continuityThread);
-      case 'brief':
-        return this.tryDirectSecondBrainBriefWrite(message, ctx, userKey, decision, continuityThread);
-      case 'routine':
-        return this.tryDirectSecondBrainRoutineWrite(message, ctx, userKey, decision, continuityThread);
-      default:
-        return null;
+    const resolvedItemType = this.resolveDirectSecondBrainItemType(decision, continuityThread);
+    const focusState = readSecondBrainFocusContinuationState(continuityThread);
+
+    if (resolvedItemType === 'routine') {
+      if (!this.secondBrainService) return null;
+      return tryDirectSecondBrainRoutineWriteHelper({
+        secondBrainService: this.secondBrainService as SecondBrainService & {
+          listRoutineRecords?: () => Array<Record<string, unknown>>;
+          getRoutineRecordById?: (id: string) => Record<string, unknown> | null;
+        },
+        message,
+        ctx,
+        userKey,
+        decision,
+        focusState,
+        getFocusEntry: getSecondBrainFocusEntry,
+        buildFocusMetadata: buildSecondBrainFocusMetadata,
+        normalizeRoutineNameForMatch,
+        normalizeRoutineTemplateIdForMatch,
+        extractExplicitNamedTitle: extractExplicitNamedSecondBrainTitle,
+        extractRoutineDeliveryDefaults,
+        extractRoutineScheduleTiming,
+        extractRoutineFocusQuery,
+        extractCustomRoutineCreate: extractCustomSecondBrainRoutineCreate,
+        extractQuotedPhrase,
+        findMatchingRoutineForCreate,
+        routineTopicQuery,
+        extractRoutineEnabledState,
+        extractRoutingBias: extractSecondBrainRoutingBias,
+        extractRoutineLookaheadMinutes,
+        extractRoutineTopicWatchQuery,
+        extractRoutineDueWithinHours,
+        extractRoutineIncludeOverdue,
+        routineDeliveryChannels,
+        deriveRoutineTimingKind,
+        buildToolSafeRoutineTrigger,
+        executeMutation: (input) => this.executeDirectSecondBrainMutation(input),
+      });
     }
+
+    return tryDirectSecondBrainWriteHelper({
+      secondBrainService: this.secondBrainService,
+      message,
+      ctx,
+      userKey,
+      decision,
+      resolvedItemType,
+      focusState,
+      getFocusEntry: getSecondBrainFocusEntry,
+      normalizeInlineFieldValue: normalizeSecondBrainInlineFieldValue,
+      extractQuotedLabeledValue,
+      extractExplicitNamedTitle: extractExplicitNamedSecondBrainTitle,
+      extractNamedTitle: extractNamedSecondBrainTitle,
+      extractRetitledTitle: extractRetitledSecondBrainTitle,
+      extractTextBody: extractSecondBrainTextBody,
+      collapseWhitespace: collapseWhitespaceForSecondBrainParsing,
+      extractTaskPriority: extractSecondBrainTaskPriority,
+      extractTaskStatus: extractSecondBrainTaskStatus,
+      extractUrlFromText,
+      extractFallbackPersonName: extractSecondBrainFallbackPersonName,
+      extractEmailAddress: extractEmailAddressFromText,
+      extractPhoneNumber: extractPhoneNumberFromText,
+      extractPersonRelationship: extractSecondBrainPersonRelationship,
+      buildClarificationResponse: (input) => this.buildDirectSecondBrainClarificationResponse(input),
+      executeMutation: (input) => this.executeDirectSecondBrainMutation(input),
+    });
   }
 
   private async tryDirectSecondBrainRead(
@@ -4679,349 +4678,66 @@ type DirectIntentShadowCandidate =
       return null;
     }
 
-    const resolvedItemType = this.resolveDirectSecondBrainItemType(decision, continuityThread);
-    switch (resolvedItemType) {
-      case 'task': {
-        const tasks = this.secondBrainService.listTasks({ status: 'open', limit: 8 });
-        if (tasks.length === 0) {
-          return {
-            content: 'Second Brain has no open tasks right now.',
-            metadata: buildSecondBrainFocusRemovalMetadata(readSecondBrainFocusContinuationState(continuityThread), 'task'),
+    return tryDirectSecondBrainReadHelper({
+      secondBrainService: this.secondBrainService,
+      requestText: message.content,
+      decision,
+      continuityThread,
+      resolvedItemType: this.resolveDirectSecondBrainItemType(decision, continuityThread),
+      readFocusState: readSecondBrainFocusContinuationState,
+      getFocusEntry: getSecondBrainFocusEntry,
+      buildFocusMetadata: buildSecondBrainFocusMetadata,
+      buildFocusRemovalMetadata: buildSecondBrainFocusRemovalMetadata,
+      resolveReadQuery: resolveDirectSecondBrainReadQuery,
+      normalizeInlineFieldValue: normalizeSecondBrainInlineFieldValue,
+      formatBriefKindLabel: formatBriefKindLabelForUser,
+      normalizeRoutineQueryTokens,
+      normalizeRoutineSearchTokens,
+      deriveRoutineTimingKind: (routine) => deriveRoutineTimingKind(
+        routine as { timing?: { kind?: string }; trigger?: { mode?: string; eventType?: string } },
+      ),
+      summarizeRoutineTimingForUser: (routine) => summarizeRoutineTimingForUser(
+        routine as {
+          timing?: { label?: string };
+          trigger?: { mode?: string; cron?: string; eventType?: string; lookaheadMinutes?: unknown };
+        },
+      ),
+      routineTopicQuery: (routine) => routineTopicQuery(
+        routine as { topicQuery?: string; config?: { topicQuery?: string } },
+      ),
+      routineDueWithinHours: (routine) => routineDueWithinHours(
+        routine as { dueWithinHours?: number; config?: { dueWithinHours?: number } },
+      ),
+      routineIncludeOverdue: (routine) => routineIncludeOverdue(
+        routine as { includeOverdue?: boolean; config?: { includeOverdue?: boolean } },
+      ),
+      routineDeliveryChannels: (routine) => routineDeliveryChannels(
+        routine as { delivery?: string[]; deliveryDefaults?: string[] },
+      ),
+      buildRoutineSemanticHints: (routine) => buildRoutineSemanticHints(
+        routine as {
+          id?: string;
+          templateId?: string;
+          name?: string;
+          category?: string;
+          externalCommMode?: string;
+          topicQuery?: string;
+          dueWithinHours?: number;
+          includeOverdue?: boolean;
+          config?: {
+            topicQuery?: string;
+            dueWithinHours?: number;
+            includeOverdue?: boolean;
           };
-        }
-        const priorFocus = readSecondBrainFocusContinuationState(continuityThread);
-        const priorTaskFocus = getSecondBrainFocusEntry(priorFocus, 'task');
-        const items = tasks.map((task) => ({ id: task.id, label: task.title }));
-        return {
-          content: [
-          'Open tasks:',
-          ...tasks.map((task) => {
-            const dueText = task.dueAt ? ` due ${new Date(task.dueAt).toLocaleString()}` : '';
-            const detail = task.details?.trim() ? ` - ${task.details.trim()}` : '';
-            return `- [${task.priority}] ${task.title}${dueText}${detail}`;
-          }),
-          ].join('\n'),
-          metadata: buildSecondBrainFocusMetadata(priorFocus, 'task', items, {
-            preferredFocusId: priorTaskFocus?.focusId,
-          }),
-        };
-      }
-      case 'note': {
-        const notes = this.secondBrainService.listNotes({ limit: 6 });
-        if (notes.length === 0) {
-          return {
-            content: 'Second Brain has no saved notes yet.',
-            metadata: buildSecondBrainFocusRemovalMetadata(readSecondBrainFocusContinuationState(continuityThread), 'note'),
+          timing?: {
+            kind?: string;
+            label?: string;
+            schedule?: { cadence?: string; dayOfWeek?: string; dayOfMonth?: number; time?: string; minute?: number };
           };
-        }
-        const priorFocus = readSecondBrainFocusContinuationState(continuityThread);
-        const priorNoteFocus = getSecondBrainFocusEntry(priorFocus, 'note');
-        const items = notes.map((note) => ({ id: note.id, label: note.title }));
-        return {
-          content: [
-          'Recent notes:',
-          ...notes.map((note) => `- ${note.title}: ${note.content.replace(/\s+/g, ' ').trim().slice(0, 120)}${note.content.replace(/\s+/g, ' ').trim().length > 120 ? '...' : ''}`),
-          ].join('\n'),
-          metadata: buildSecondBrainFocusMetadata(priorFocus, 'note', items, {
-            preferredFocusId: priorNoteFocus?.focusId,
-          }),
-        };
-      }
-      case 'library': {
-        const querySpec = resolveDirectSecondBrainReadQuery(message.content, resolvedItemType, decision);
-        const links = this.secondBrainService.listLinks({
-          limit: 8,
-          ...(querySpec?.query ? { query: querySpec.query } : {}),
-        });
-        if (links.length === 0) {
-          return {
-            content: querySpec?.query
-              ? `Second Brain has no library items related to "${querySpec.query}".`
-              : 'Second Brain has no saved library items yet.',
-            metadata: buildSecondBrainFocusRemovalMetadata(readSecondBrainFocusContinuationState(continuityThread), 'library'),
-          };
-        }
-        const priorFocus = readSecondBrainFocusContinuationState(continuityThread);
-        const priorLibraryFocus = getSecondBrainFocusEntry(priorFocus, 'library');
-        const items = links.map((link) => ({ id: link.id, label: link.title }));
-        return {
-          content: [
-          querySpec?.query
-            ? `Library items related to "${querySpec.query}":`
-            : 'Library items:',
-          ...links.map((link) => {
-            const summary = link.summary?.trim()
-              ? `: ${link.summary.trim().slice(0, 120)}${link.summary.trim().length > 120 ? '...' : ''}`
-              : '';
-            return `- ${link.title} [${link.kind}] - ${link.url}${summary}`;
-          }),
-          ].join('\n'),
-          metadata: buildSecondBrainFocusMetadata(priorFocus, 'library', items, {
-            preferredFocusId: priorLibraryFocus?.focusId,
-          }),
-        };
-      }
-      case 'routine': {
-        const routines = this.secondBrainService.listRoutines();
-        if (routines.length === 0) {
-          return {
-            content: 'Second Brain has no configured routines yet.',
-            metadata: buildSecondBrainFocusRemovalMetadata(readSecondBrainFocusContinuationState(continuityThread), 'routine'),
-          };
-        }
-        const priorFocus = readSecondBrainFocusContinuationState(continuityThread);
-        const priorRoutineFocus = getSecondBrainFocusEntry(priorFocus, 'routine');
-        const routineCatalogById = new Map(
-          this.secondBrainService.listRoutineCatalog().flatMap((entry) => {
-            const entries: Array<[string, string]> = [];
-            if (entry.configuredRoutineId?.trim()) {
-              entries.push([entry.configuredRoutineId.trim(), entry.description]);
-            }
-            if (entry.templateId?.trim()) {
-              entries.push([entry.templateId.trim(), entry.description]);
-            }
-            return entries;
-          }),
-        );
-        const enabledFilter = typeof decision.entities.enabled === 'boolean'
-          ? decision.entities.enabled
-          : undefined;
-        const query = toString(decision.entities.query).trim();
-        const queryTokens = normalizeRoutineQueryTokens(query);
-        const filteredRoutines = routines.filter((routine) => {
-          if (typeof enabledFilter === 'boolean' && routine.enabled !== enabledFilter) {
-            return false;
-          }
-          if (queryTokens.length === 0) {
-            return true;
-          }
-          const description = routineCatalogById.get(routine.id)?.trim()
-            ?? routineCatalogById.get(routine.templateId ?? '')?.trim()
-            ?? '';
-          const dueWithinHours = routineDueWithinHours(routine);
-          const includeOverdue = routineIncludeOverdue(routine);
-          const searchTokens = new Set(normalizeRoutineSearchTokens([
-            routine.name,
-            routine.id,
-            routine.templateId,
-            routine.category,
-            deriveRoutineTimingKind(routine),
-            summarizeRoutineTimingForUser(routine),
-            routineTopicQuery(routine),
-            Number.isFinite(dueWithinHours) ? `due within ${dueWithinHours} hours` : undefined,
-            includeOverdue === false ? 'upcoming only' : 'overdue due soon',
-            description,
-            ...buildRoutineSemanticHints(routine),
-          ]
-            .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-            .join(' ')));
-          return queryTokens.every((token) => searchTokens.has(token));
-        });
-        if (filteredRoutines.length === 0) {
-          if (queryTokens.length > 0 && typeof enabledFilter === 'boolean') {
-            return `Second Brain has no ${enabledFilter ? 'enabled' : 'disabled'} routines related to "${queryTokens.join(' ')}".`;
-          }
-          if (queryTokens.length > 0) {
-            return `Second Brain has no routines related to "${queryTokens.join(' ')}".`;
-          }
-          if (enabledFilter === true) {
-            return 'Second Brain has no enabled routines.';
-          }
-          if (enabledFilter === false) {
-            return 'Second Brain has no disabled routines.';
-          }
-          return {
-            content: 'Second Brain has no configured routines yet.',
-            metadata: buildSecondBrainFocusRemovalMetadata(priorFocus, 'routine'),
-          };
-        }
-        const items = filteredRoutines.map((routine) => ({ id: routine.id, label: routine.name }));
-        return {
-          content: [
-            queryTokens.length > 0
-              ? typeof enabledFilter === 'boolean'
-                ? `${enabledFilter ? 'Enabled' : 'Disabled'} Second Brain routines related to "${queryTokens.join(' ')}":`
-                : `Second Brain routines related to "${queryTokens.join(' ')}":`
-              : enabledFilter === true
-                ? 'Enabled Second Brain routines:'
-                : enabledFilter === false
-                  ? 'Disabled Second Brain routines:'
-                  : 'Second Brain routines:',
-            ...filteredRoutines.map((routine) => {
-              const description = routineCatalogById.get(routine.id)?.trim()
-                ?? routineCatalogById.get(routine.templateId ?? '')?.trim()
-                ?? '';
-              const descriptionSuffix = description
-                ? `: ${description.length > 120 ? `${description.slice(0, 117).trimEnd()}...` : description}`
-                : '';
-              const delivery = routineDeliveryChannels(routine);
-              const deliverySummary = delivery.length > 0
-                ? ` · ${delivery.join(', ')}`
-                : '';
-              const topicQuery = routineTopicQuery(routine);
-              const dueWithinHours = routineDueWithinHours(routine);
-              const includeOverdue = routineIncludeOverdue(routine);
-              const topicSuffix = topicQuery
-                ? ` · watching "${topicQuery}"`
-                : Number.isFinite(dueWithinHours)
-                  ? ` · tasks due within ${Number(dueWithinHours)} hours${includeOverdue === false ? '' : ' plus overdue'}`
-                  : '';
-              return `- ${routine.name} [${routine.enabled ? 'enabled' : 'paused'}] (${summarizeRoutineTimingForUser(routine)}${deliverySummary})${topicSuffix}${descriptionSuffix}`;
-            }),
-          ].join('\n'),
-          metadata: buildSecondBrainFocusMetadata(priorFocus, 'routine', items, {
-            preferredFocusId: priorRoutineFocus?.focusId,
-          }),
-        };
-      }
-      case 'calendar': {
-        const calendarWindowDays = typeof decision.entities.calendarWindowDays === 'number'
-          ? decision.entities.calendarWindowDays
-          : undefined;
-        const now = Date.now();
-        const events = this.secondBrainService.listEvents({
-          limit: 6,
-          includePast: false,
-          ...(typeof calendarWindowDays === 'number'
-            ? {
-                fromTime: now,
-                toTime: now + (calendarWindowDays * 24 * 60 * 60 * 1000),
-              }
-            : {}),
-        });
-        if (events.length === 0) {
-          return {
-            content: typeof calendarWindowDays === 'number'
-              ? `Second Brain has no calendar events in the next ${calendarWindowDays} days.`
-              : 'Second Brain has no upcoming calendar events right now.',
-            metadata: buildSecondBrainFocusRemovalMetadata(readSecondBrainFocusContinuationState(continuityThread), 'calendar'),
-          };
-        }
-        const priorFocus = readSecondBrainFocusContinuationState(continuityThread);
-        const priorCalendarFocus = getSecondBrainFocusEntry(priorFocus, 'calendar');
-        const items = events.map((event) => ({ id: event.id, label: event.title }));
-        return {
-          content: [
-            typeof calendarWindowDays === 'number'
-              ? `Calendar events for the next ${calendarWindowDays} days:`
-              : 'Upcoming events:',
-            ...events.map((event) => {
-              const location = event.location?.trim() ? ` - ${event.location.trim()}` : '';
-              const description = typeof event.description === 'string' && event.description.trim()
-                ? event.description.trim()
-                : '';
-              const descriptionSuffix = description
-                ? ` :: ${description.length > 140 ? `${description.slice(0, 137).trimEnd()}...` : description}`
-                : '';
-              return `- ${event.title} at ${new Date(event.startsAt).toLocaleString()}${location}${descriptionSuffix}`;
-            }),
-          ].join('\n'),
-          metadata: buildSecondBrainFocusMetadata(priorFocus, 'calendar', items, {
-            preferredFocusId: priorCalendarFocus?.focusId,
-          }),
-        };
-      }
-      case 'person': {
-        const querySpec = resolveDirectSecondBrainReadQuery(message.content, resolvedItemType, decision);
-        let people = this.secondBrainService.listPeople({
-          limit: 6,
-          ...(querySpec?.query ? { query: querySpec.query } : {}),
-        });
-        if (querySpec?.exactMatch && querySpec.query) {
-          const normalizedExactName = normalizeSecondBrainInlineFieldValue(querySpec.query).toLowerCase();
-          const exactMatches = people.filter((person) => normalizeSecondBrainInlineFieldValue(person.name).toLowerCase() === normalizedExactName);
-          if (exactMatches.length > 0) {
-            people = exactMatches;
-          }
-        }
-        if (people.length === 0) {
-          return {
-            content: querySpec?.query
-              ? `Second Brain has no contacts matching "${querySpec.query}".`
-              : 'Second Brain has no saved contacts yet.',
-            metadata: buildSecondBrainFocusRemovalMetadata(readSecondBrainFocusContinuationState(continuityThread), 'person'),
-          };
-        }
-        const priorFocus = readSecondBrainFocusContinuationState(continuityThread);
-        const priorPersonFocus = getSecondBrainFocusEntry(priorFocus, 'person');
-        const items = people.map((person) => ({ id: person.id, label: person.name }));
-        return {
-          content: [
-          querySpec?.query
-            ? `${querySpec.exactMatch ? 'Contacts in Second Brain matching' : 'Contacts in Second Brain related to'} "${querySpec.query}":`
-            : 'Contacts in Second Brain:',
-          ...people.map((person) => {
-            const parts = [
-              person.email?.trim(),
-              person.title?.trim(),
-              person.company?.trim(),
-            ].filter((value): value is string => Boolean(value));
-            return `- ${person.name}${parts.length > 0 ? ` - ${parts.join(' · ')}` : ''}`;
-          }),
-          ].join('\n'),
-          metadata: buildSecondBrainFocusMetadata(priorFocus, 'person', items, {
-            preferredFocusId: priorPersonFocus?.focusId,
-          }),
-        };
-      }
-      case 'brief': {
-        const briefs = this.secondBrainService.listBriefs({ limit: 6 });
-        if (briefs.length === 0) {
-          return {
-            content: 'Second Brain has no saved briefs yet.',
-            metadata: buildSecondBrainFocusRemovalMetadata(readSecondBrainFocusContinuationState(continuityThread), 'brief'),
-          };
-        }
-        const priorFocus = readSecondBrainFocusContinuationState(continuityThread);
-        const priorBriefFocus = getSecondBrainFocusEntry(priorFocus, 'brief');
-        const items = briefs.map((brief) => ({ id: brief.id, label: brief.title }));
-        return {
-          content: [
-            'Saved briefs:',
-            ...briefs.map((brief) => {
-              const preview = brief.content.replace(/\s+/g, ' ').trim();
-              const suffix = preview
-                ? `: ${preview.slice(0, 120)}${preview.length > 120 ? '...' : ''}`
-                : '';
-              return `- ${brief.title} [${formatBriefKindLabelForUser(brief.kind)}]${suffix}`;
-            }),
-          ].join('\n'),
-          metadata: buildSecondBrainFocusMetadata(priorFocus, 'brief', items, {
-            preferredFocusId: priorBriefFocus?.focusId,
-          }),
-        };
-      }
-      case 'overview':
-      case 'unknown':
-      default: {
-        const overview = this.secondBrainService.getOverview();
-        const nextEvent = overview.nextEvent
-          ? (() => {
-              const description = typeof overview.nextEvent?.description === 'string' && overview.nextEvent.description.trim()
-                ? overview.nextEvent.description.trim()
-                : '';
-              const descriptionSuffix = description
-                ? ` :: ${description.length > 120 ? `${description.slice(0, 117).trimEnd()}...` : description}`
-                : '';
-              return `${overview.nextEvent.title} at ${new Date(overview.nextEvent.startsAt).toLocaleString()}${descriptionSuffix}`;
-            })()
-          : 'No synced event yet';
-        const topTaskSummary = overview.topTasks.length > 0
-          ? overview.topTasks.map((task) => task.title).slice(0, 3).join(', ')
-          : 'No open tasks';
-        const recentNoteSummary = overview.recentNotes.length > 0
-          ? overview.recentNotes.map((note) => note.title).slice(0, 2).join(', ')
-          : 'No notes yet';
-        return [
-          'Second Brain overview:',
-          `- Next event: ${nextEvent}`,
-          `- Top tasks: ${topTaskSummary}`,
-          `- Recent notes: ${recentNoteSummary}`,
-          `- Enabled routines: ${overview.enabledRoutineCount}`,
-          `- Usage: ${overview.usage.externalTokens} external tokens this period (${overview.usage.monthlyBudget} monthly budget)`,
-        ].join('\n');
-      }
-    }
+          trigger?: { mode?: string; eventType?: string; cron?: string; lookaheadMinutes?: unknown };
+        },
+      ),
+    });
   }
 
   private async tryDirectProviderRead(
@@ -5148,153 +4864,21 @@ type DirectIntentShadowCandidate =
     output: unknown,
     focusState: SecondBrainFocusContinuationPayload | null | undefined,
   ): { content: string; metadata?: Record<string, unknown> } {
-    const record = isRecord(output) ? output : null;
-    const id = toString(record?.id).trim() || toString(descriptor.fallbackId).trim();
-    const label = resolveDirectSecondBrainMutationLabel(descriptor.itemType, record, descriptor.fallbackLabel);
-    switch (`${descriptor.itemType}:${descriptor.action}`) {
-      case 'note:create':
-        return {
-          content: `Note created: ${label}`,
-          metadata: id
-            ? buildSecondBrainFocusMetadata(focusState, 'note', [{ id, label }], { preferredFocusId: id })
-            : undefined,
-        };
-      case 'note:update':
-        return {
-          content: `Note updated: ${label}`,
-          metadata: id
-            ? buildSecondBrainFocusMetadata(focusState, 'note', [{ id, label }], { preferredFocusId: id })
-            : undefined,
-        };
-      case 'note:delete':
-        return {
-          content: `Note deleted: ${label}`,
-          metadata: buildSecondBrainFocusRemovalMetadata(focusState, 'note'),
-        };
-      case 'task:create':
-        return {
-          content: `Task created: ${label}`,
-          metadata: id
-            ? buildSecondBrainFocusMetadata(focusState, 'task', [{ id, label }], { preferredFocusId: id })
-            : undefined,
-        };
-      case 'task:update':
-        return {
-          content: `Task updated: ${label}`,
-          metadata: id
-            ? buildSecondBrainFocusMetadata(focusState, 'task', [{ id, label }], { preferredFocusId: id })
-            : undefined,
-        };
-      case 'task:complete':
-        return {
-          content: `Task completed: ${label}`,
-          metadata: id
-            ? buildSecondBrainFocusMetadata(focusState, 'task', [{ id, label }], { preferredFocusId: id })
-            : undefined,
-        };
-      case 'task:delete':
-        return {
-          content: `Task deleted: ${label}`,
-          metadata: buildSecondBrainFocusRemovalMetadata(focusState, 'task'),
-        };
-      case 'calendar:create':
-        return {
-          content: `Calendar event created: ${label}`,
-          metadata: id
-            ? buildSecondBrainFocusMetadata(focusState, 'calendar', [{ id, label }], { preferredFocusId: id })
-            : undefined,
-        };
-      case 'calendar:update':
-        return {
-          content: `Calendar event updated: ${label}`,
-          metadata: id
-            ? buildSecondBrainFocusMetadata(focusState, 'calendar', [{ id, label }], { preferredFocusId: id })
-            : undefined,
-        };
-      case 'calendar:delete':
-        return {
-          content: `Calendar event deleted: ${label}`,
-          metadata: buildSecondBrainFocusRemovalMetadata(focusState, 'calendar'),
-        };
-      case 'person:create':
-        return {
-          content: `Contact created: ${label}`,
-          metadata: id
-            ? buildSecondBrainFocusMetadata(focusState, 'person', [{ id, label }], { preferredFocusId: id })
-            : undefined,
-        };
-      case 'person:update':
-        return {
-          content: `Contact updated: ${label}`,
-          metadata: id
-            ? buildSecondBrainFocusMetadata(focusState, 'person', [{ id, label }], { preferredFocusId: id })
-            : undefined,
-        };
-      case 'person:delete':
-        return {
-          content: `Contact deleted: ${label}`,
-          metadata: buildSecondBrainFocusRemovalMetadata(focusState, 'person'),
-        };
-      case 'library:create':
-        return {
-          content: `Library item created: ${label}`,
-          metadata: id
-            ? buildSecondBrainFocusMetadata(focusState, 'library', [{ id, label }], { preferredFocusId: id })
-            : undefined,
-        };
-      case 'library:update':
-        return {
-          content: `Library item updated: ${label}`,
-          metadata: id
-            ? buildSecondBrainFocusMetadata(focusState, 'library', [{ id, label }], { preferredFocusId: id })
-            : undefined,
-        };
-      case 'library:delete':
-        return {
-          content: `Library item deleted: ${label}`,
-          metadata: buildSecondBrainFocusRemovalMetadata(focusState, 'library'),
-        };
-      case 'brief:create':
-        return {
-          content: `Brief created: ${label}`,
-          metadata: id
-            ? buildSecondBrainFocusMetadata(focusState, 'brief', [{ id, label }], { preferredFocusId: id })
-            : undefined,
-        };
-      case 'brief:update':
-        return {
-          content: `Brief updated: ${label}`,
-          metadata: id
-            ? buildSecondBrainFocusMetadata(focusState, 'brief', [{ id, label }], { preferredFocusId: id })
-            : undefined,
-        };
-      case 'brief:delete':
-        return {
-          content: `Brief deleted: ${label}`,
-          metadata: buildSecondBrainFocusRemovalMetadata(focusState, 'brief'),
-        };
-      case 'routine:create':
-        return {
-          content: `Routine created: ${label}`,
-          metadata: id
-            ? buildSecondBrainFocusMetadata(focusState, 'routine', [{ id, label }], { preferredFocusId: id })
-            : undefined,
-        };
-      case 'routine:update':
-        return {
-          content: `Routine updated: ${label}`,
-          metadata: id
-            ? buildSecondBrainFocusMetadata(focusState, 'routine', [{ id, label }], { preferredFocusId: id })
-            : undefined,
-        };
-      case 'routine:delete':
-        return {
-          content: `Routine deleted: ${label}`,
-          metadata: buildSecondBrainFocusRemovalMetadata(focusState, 'routine'),
-        };
-      default:
-        return { content: `${label}` };
-    }
+    return buildDirectSecondBrainMutationSuccessResponseHelper({
+      descriptor,
+      output,
+      focusState,
+      buildFocusMetadata: (existingState, itemType, items, options) => buildSecondBrainFocusMetadata(
+        existingState,
+        itemType,
+        items,
+        options,
+      ),
+      buildFocusRemovalMetadata: (existingState, itemType) => buildSecondBrainFocusRemovalMetadata(
+        existingState,
+        itemType,
+      ),
+    });
   }
 
   private buildDirectSecondBrainClarificationResponse(input: {
@@ -5305,1066 +4889,26 @@ type DirectIntentShadowCandidate =
     missingFields?: string[];
     entities?: Record<string, unknown>;
   }): { content: string; metadata?: Record<string, unknown> } {
-    const pendingActionResult = this.setClarificationPendingAction(
-      input.message.userId,
-      input.message.channel,
-      input.message.surfaceId,
-      {
-        blockerKind: 'clarification',
-        ...(input.field ? { field: input.field } : {}),
-        prompt: input.prompt,
-        originalUserContent: input.message.content,
-        route: input.decision.route,
-        operation: input.decision.operation,
-        summary: input.decision.summary,
-        turnRelation: input.decision.turnRelation,
-        resolution: 'needs_clarification',
-        missingFields: input.missingFields ?? [],
-        entities: this.toPendingActionEntities({
-          ...input.decision.entities,
-          ...(input.entities ?? {}),
-        }),
-      },
-    );
-    return {
-      content: pendingActionResult.collisionPrompt ?? input.prompt,
-      metadata: this.buildImmediateResponseMetadata(
-        [],
-        input.message.userId,
-        input.message.channel,
-        input.message.surfaceId,
-        { includePendingAction: true },
+    return buildDirectSecondBrainClarificationResponseHelper({
+      ...input,
+      toPendingActionEntities: (entities) => this.toPendingActionEntities(
+        entities as Record<string, unknown> | IntentGatewayDecision['entities'] | undefined,
       ),
-    };
-  }
-
-  private async tryDirectSecondBrainNoteWrite(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-    decision: IntentGatewayDecision,
-    continuityThread?: ContinuityThreadRecord | null,
-  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    const explicitTitle = normalizeSecondBrainInlineFieldValue(
-      extractQuotedLabeledValue(message.content, ['title']) || extractExplicitNamedSecondBrainTitle(message.content),
-    );
-    const explicitContent = extractQuotedLabeledValue(message.content, ['content']);
-    const content = explicitContent || extractSecondBrainTextBody(message.content);
-    const focused = readSecondBrainFocusContinuationState(continuityThread);
-    const noteFocus = getSecondBrainFocusEntry(focused, 'note');
-    const focusItem = noteFocus
-      ? noteFocus.items.find((item) => item.id === noteFocus.focusId) ?? null
-      : null;
-
-    switch (decision.operation) {
-      case 'create':
-      case 'save': {
-        if (!content) {
-          return 'To save a local note, I need the note content.';
-        }
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_note_upsert',
-          args: {
-            ...(explicitTitle ? { title: explicitTitle } : {}),
-            content,
-          },
-          summary: 'Creates a local Second Brain note.',
-          pendingIntro: 'I prepared a local note save, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'note',
-            action: 'create',
-          },
-          focusState: focused,
-        });
-      }
-      case 'update': {
-        if (!focusItem) {
-          return 'I need to know which local note to update. Try "Show my notes." first.';
-        }
-        if (!content) {
-          return 'To update that local note, I need the new note content.';
-        }
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_note_upsert',
-          args: {
-            id: focusItem.id,
-            ...(explicitTitle || focusItem.label ? { title: explicitTitle || focusItem.label } : {}),
-            content,
-          },
-          summary: 'Updates a local Second Brain note.',
-          pendingIntro: 'I prepared a local note update, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'note',
-            action: 'update',
-            fallbackId: focusItem.id,
-            fallbackLabel: focusItem.label,
-          },
-          focusState: focused,
-        });
-      }
-      case 'delete': {
-        if (!focusItem) {
-          return 'I need to know which local note to delete. Try "Show my notes." first.';
-        }
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_note_delete',
-          args: { id: focusItem.id },
-          summary: 'Deletes a local Second Brain note.',
-          pendingIntro: 'I prepared a local note delete, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'note',
-            action: 'delete',
-            fallbackId: focusItem.id,
-            fallbackLabel: focusItem.label,
-          },
-          focusState: focused,
-        });
-      }
-      default:
-        return null;
-    }
-  }
-
-  private async tryDirectSecondBrainTaskWrite(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-    decision: IntentGatewayDecision,
-    continuityThread?: ContinuityThreadRecord | null,
-  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.secondBrainService) return null;
-    const focused = readSecondBrainFocusContinuationState(continuityThread);
-    const taskFocus = getSecondBrainFocusEntry(focused, 'task');
-    const focusItem = taskFocus
-      ? taskFocus.items.find((item) => item.id === taskFocus.focusId) ?? null
-      : null;
-
-    switch (decision.operation) {
-      case 'create': {
-        const title = extractNamedSecondBrainTitle(message.content);
-        if (!title) {
-          return 'To create a local task, I need the task title.';
-        }
-        const args = normalizeSecondBrainMutationArgs({
-          toolName: 'second_brain_task_upsert',
-          args: { title },
-          userContent: message.content,
-          referenceTime: Date.now(),
-          getTaskById: (id) => this.secondBrainService?.getTaskById(id) ?? null,
-        });
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_task_upsert',
-          args,
-          summary: 'Creates a local Second Brain task.',
-          pendingIntro: 'I prepared a local task create, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'task',
-            action: 'create',
-            fallbackLabel: title,
-          },
-          focusState: focused,
-        });
-      }
-      case 'update': {
-        if (!focusItem) {
-          return 'I need to know which local task to update. Try "Show my tasks." first.';
-        }
-        const existingTask = this.secondBrainService.getTaskById(focusItem.id);
-        if (!existingTask) {
-          return `Local task "${focusItem.label ?? focusItem.id}" was not found.`;
-        }
-        const explicitTitle = extractRetitledSecondBrainTitle(message.content)
-          || normalizeSecondBrainInlineFieldValue(extractQuotedLabeledValue(message.content, ['title', 'task title']));
-        const explicitDetails = collapseWhitespaceForSecondBrainParsing(
-          extractQuotedLabeledValue(message.content, ['details', 'detail', 'notes', 'note', 'description']),
-        );
-        const explicitPriority = extractSecondBrainTaskPriority(message.content);
-        const nextStatus = extractSecondBrainTaskStatus(message.content) ?? existingTask.status;
-        const args = normalizeSecondBrainMutationArgs({
-          toolName: 'second_brain_task_upsert',
-          args: {
-            id: existingTask.id,
-            title: explicitTitle || existingTask.title,
-            ...(explicitDetails || existingTask.details ? { details: explicitDetails || existingTask.details } : {}),
-            status: nextStatus,
-            priority: explicitPriority || existingTask.priority,
-            ...(existingTask.dueAt != null ? { dueAt: existingTask.dueAt } : {}),
-          },
-          userContent: message.content,
-          referenceTime: Date.now(),
-          getTaskById: (id) => this.secondBrainService?.getTaskById(id) ?? null,
-        });
-        const existingDueAt = typeof existingTask.dueAt === 'number' ? existingTask.dueAt : undefined;
-        const nextDueAt = typeof args.dueAt === 'number' ? args.dueAt : undefined;
-        const isCompletion = nextStatus === 'done' && existingTask.status !== 'done';
-        const hasExplicitChange = Boolean(
-          explicitTitle
-          || explicitDetails
-          || explicitPriority
-          || nextStatus !== existingTask.status
-          || nextDueAt !== existingDueAt,
-        );
-        if (!hasExplicitChange) {
-          return 'To update that local task, tell me the new title, details, priority, status, or due date.';
-        }
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_task_upsert',
-          args,
-          summary: isCompletion
-            ? 'Marks a local Second Brain task as done.'
-            : 'Updates a local Second Brain task.',
-          pendingIntro: isCompletion
-            ? 'I prepared a local task completion, but it needs approval first.'
-            : 'I prepared a local task update, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'task',
-            action: isCompletion ? 'complete' : 'update',
-            fallbackId: existingTask.id,
-            fallbackLabel: existingTask.title,
-          },
-          focusState: focused,
-        });
-      }
-      case 'delete': {
-        if (!focusItem) {
-          return 'I need to know which local task to delete. Try "Show my tasks." first.';
-        }
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_task_delete',
-          args: { id: focusItem.id },
-          summary: 'Deletes a local Second Brain task.',
-          pendingIntro: 'I prepared a local task delete, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'task',
-            action: 'delete',
-            fallbackId: focusItem.id,
-            fallbackLabel: focusItem.label,
-          },
-          focusState: focused,
-        });
-      }
-      default:
-        return null;
-    }
-  }
-
-  private async tryDirectSecondBrainCalendarWrite(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-    decision: IntentGatewayDecision,
-    continuityThread?: ContinuityThreadRecord | null,
-  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.secondBrainService) return null;
-    const focused = readSecondBrainFocusContinuationState(continuityThread);
-    const calendarFocus = getSecondBrainFocusEntry(focused, 'calendar');
-    const focusItem = calendarFocus
-      ? calendarFocus.items.find((item) => item.id === calendarFocus.focusId) ?? null
-      : null;
-
-    switch (decision.operation) {
-      case 'create': {
-        const title = extractNamedSecondBrainTitle(message.content);
-        if (!title) {
-          return 'To create a local calendar event, I need the event title.';
-        }
-        const args = normalizeSecondBrainMutationArgs({
-          toolName: 'second_brain_calendar_upsert',
-          args: {
-            title,
-            startsAt: Date.now(),
-          },
-          userContent: message.content,
-          referenceTime: Date.now(),
-          getEventById: (id) => this.secondBrainService?.getEventById(id) ?? null,
-        });
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_calendar_upsert',
-          args,
-          summary: 'Creates a local Second Brain calendar event.',
-          pendingIntro: 'I prepared a local calendar event create, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'calendar',
-            action: 'create',
-            fallbackLabel: title,
-          },
-          focusState: focused,
-        });
-      }
-      case 'update': {
-        if (!focusItem) {
-          return 'I need to know which local calendar event to update. Try "Show my calendar events." first.';
-        }
-        const existingEvent = this.secondBrainService.getEventById(focusItem.id);
-        if (!existingEvent) {
-          return `Local calendar event "${focusItem.label ?? focusItem.id}" was not found.`;
-        }
-        const args = normalizeSecondBrainMutationArgs({
-          toolName: 'second_brain_calendar_upsert',
-          args: {
-            id: existingEvent.id,
-            title: existingEvent.title,
-            startsAt: existingEvent.startsAt,
-            ...(existingEvent.endsAt != null ? { endsAt: existingEvent.endsAt } : {}),
-            ...(existingEvent.location ? { location: existingEvent.location } : {}),
-            ...(existingEvent.description ? { description: existingEvent.description } : {}),
-          },
-          userContent: message.content,
-          referenceTime: Date.now(),
-          getEventById: (id) => this.secondBrainService?.getEventById(id) ?? null,
-        });
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_calendar_upsert',
-          args,
-          summary: 'Updates a local Second Brain calendar event.',
-          pendingIntro: 'I prepared a local calendar event update, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'calendar',
-            action: 'update',
-            fallbackId: existingEvent.id,
-            fallbackLabel: existingEvent.title,
-          },
-          focusState: focused,
-        });
-      }
-      case 'delete': {
-        if (!focusItem) {
-          return 'I need to know which local calendar event to delete. Try "Show my calendar events." first.';
-        }
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_calendar_delete',
-          args: { id: focusItem.id },
-          summary: 'Deletes a local Second Brain calendar event.',
-          pendingIntro: 'I prepared a local calendar event delete, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'calendar',
-            action: 'delete',
-            fallbackId: focusItem.id,
-            fallbackLabel: focusItem.label,
-          },
-          focusState: focused,
-        });
-      }
-      default:
-        return null;
-    }
-  }
-
-  private async tryDirectSecondBrainLibraryWrite(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-    decision: IntentGatewayDecision,
-    continuityThread?: ContinuityThreadRecord | null,
-  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.secondBrainService) return null;
-    const focused = readSecondBrainFocusContinuationState(continuityThread);
-    const libraryFocus = getSecondBrainFocusEntry(focused, 'library');
-    const focusItem = libraryFocus
-      ? libraryFocus.items.find((item) => item.id === libraryFocus.focusId) ?? null
-      : null;
-    const explicitTitle = normalizeSecondBrainInlineFieldValue(extractQuotedLabeledValue(message.content, ['title']));
-    const explicitUrl = extractUrlFromText(message.content);
-    const explicitSummary = collapseWhitespaceForSecondBrainParsing(
-      extractQuotedLabeledValue(message.content, ['notes', 'note', 'summary', 'description']),
-    );
-
-    switch (decision.operation) {
-      case 'create':
-      case 'save': {
-        if (!explicitUrl) {
-          return 'To save a local library item, I need the URL.';
-        }
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_library_upsert',
-          args: {
-            url: explicitUrl,
-            ...(explicitTitle ? { title: explicitTitle } : {}),
-            ...(explicitSummary ? { summary: explicitSummary } : {}),
-          },
-          summary: 'Creates a local Second Brain library item.',
-          pendingIntro: 'I prepared a local library item save, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'library',
-            action: 'create',
-            fallbackLabel: explicitTitle || explicitUrl,
-          },
-          focusState: focused,
-        });
-      }
-      case 'update': {
-        if (!focusItem) {
-          return 'I need to know which local library item to update. Try "Show my library items." first.';
-        }
-        const existingLink = this.secondBrainService.getLinkById(focusItem.id);
-        if (!existingLink) {
-          return `Local library item "${focusItem.label ?? focusItem.id}" was not found.`;
-        }
-        if (!explicitTitle && !explicitUrl && !explicitSummary) {
-          return 'To update that local library item, tell me the new title, URL, or notes.';
-        }
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_library_upsert',
-          args: {
-            id: existingLink.id,
-            title: explicitTitle || existingLink.title,
-            url: explicitUrl || existingLink.url,
-            ...(explicitSummary || existingLink.summary ? { summary: explicitSummary || existingLink.summary } : {}),
-            ...(existingLink.kind ? { kind: existingLink.kind } : {}),
-          },
-          summary: 'Updates a local Second Brain library item.',
-          pendingIntro: 'I prepared a local library item update, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'library',
-            action: 'update',
-            fallbackId: existingLink.id,
-            fallbackLabel: existingLink.title || existingLink.url,
-          },
-          focusState: focused,
-        });
-      }
-      case 'delete': {
-        if (!focusItem) {
-          return 'I need to know which local library item to delete. Try "Show my library items." first.';
-        }
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_library_delete',
-          args: { id: focusItem.id },
-          summary: 'Deletes a local Second Brain library item.',
-          pendingIntro: 'I prepared a local library item delete, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'library',
-            action: 'delete',
-            fallbackId: focusItem.id,
-            fallbackLabel: focusItem.label,
-          },
-          focusState: focused,
-        });
-      }
-      default:
-        return null;
-    }
-  }
-
-  private async tryDirectSecondBrainBriefWrite(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-    decision: IntentGatewayDecision,
-    continuityThread?: ContinuityThreadRecord | null,
-  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    const content = extractSecondBrainTextBody(message.content);
-    const focused = readSecondBrainFocusContinuationState(continuityThread);
-    const briefFocus = getSecondBrainFocusEntry(focused, 'brief');
-    const focusItem = briefFocus
-      ? briefFocus.items.find((item) => item.id === briefFocus.focusId) ?? null
-      : null;
-
-    switch (decision.operation) {
-      case 'create':
-      case 'save': {
-        const title = extractNamedSecondBrainTitle(message.content);
-        if (!title) {
-          return 'To create a local brief, I need the brief title.';
-        }
-        if (!content) {
-          return 'To create a local brief, I need the brief content.';
-        }
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_brief_upsert',
-          args: {
-            kind: 'manual',
-            title,
-            content,
-          },
-          summary: 'Creates a local Second Brain brief.',
-          pendingIntro: 'I prepared a local brief save, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'brief',
-            action: 'create',
-            fallbackLabel: title,
-          },
-          focusState: focused,
-        });
-      }
-      case 'update': {
-        if (!focusItem) {
-          return 'I need to know which local brief to update. Try "Show my briefs." first.';
-        }
-        if (!content) {
-          return 'To update that local brief, I need the new brief content.';
-        }
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_brief_upsert',
-          args: {
-            id: focusItem.id,
-            ...(focusItem.label ? { title: focusItem.label } : {}),
-            content,
-          },
-          summary: 'Updates a local Second Brain brief.',
-          pendingIntro: 'I prepared a local brief update, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'brief',
-            action: 'update',
-            fallbackId: focusItem.id,
-            fallbackLabel: focusItem.label,
-          },
-          focusState: focused,
-        });
-      }
-      case 'delete': {
-        if (!focusItem) {
-          return 'I need to know which local brief to delete. Try "Show my briefs." first.';
-        }
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_brief_delete',
-          args: { id: focusItem.id },
-          summary: 'Deletes a local Second Brain brief.',
-          pendingIntro: 'I prepared a local brief delete, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'brief',
-            action: 'delete',
-            fallbackId: focusItem.id,
-            fallbackLabel: focusItem.label,
-          },
-          focusState: focused,
-        });
-      }
-      default:
-        return null;
-    }
-  }
-
-  private async tryDirectSecondBrainPersonWrite(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-    decision: IntentGatewayDecision,
-    continuityThread?: ContinuityThreadRecord | null,
-  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.secondBrainService) return null;
-    const focused = readSecondBrainFocusContinuationState(continuityThread);
-    const personFocus = getSecondBrainFocusEntry(focused, 'person');
-    const focusItem = personFocus
-      ? personFocus.items.find((item) => item.id === personFocus.focusId) ?? null
-      : null;
-    const explicitName = normalizeSecondBrainInlineFieldValue(
-      extractQuotedLabeledValue(message.content, ['name']) || extractExplicitNamedSecondBrainTitle(message.content),
-    );
-    const explicitEmail = extractEmailAddressFromText(message.content);
-    const explicitPhone = extractPhoneNumberFromText(message.content);
-    const explicitTitle = normalizeSecondBrainInlineFieldValue(extractQuotedLabeledValue(message.content, ['title']));
-    const explicitCompany = normalizeSecondBrainInlineFieldValue(extractQuotedLabeledValue(message.content, ['company']));
-    const explicitLocation = normalizeSecondBrainInlineFieldValue(extractQuotedLabeledValue(message.content, ['location']));
-    const explicitNotes = collapseWhitespaceForSecondBrainParsing(
-      extractQuotedLabeledValue(message.content, ['notes', 'note', 'summary', 'description'])
-      || (/\b(?:saying|say|says|write|content)\b/i.test(message.content)
-        ? extractSecondBrainTextBody(message.content)
-        : ''),
-    );
-    const explicitRelationship = extractSecondBrainPersonRelationship(message.content);
-
-    switch (decision.operation) {
-      case 'create':
-      case 'save': {
-        const createName = explicitName || extractSecondBrainFallbackPersonName(message.content);
-        if (!createName && !explicitEmail) {
-          return this.buildDirectSecondBrainClarificationResponse({
-            message,
-            decision,
-            prompt: 'To create a local contact, I need at least a name or email address.',
-            field: 'person_identity',
-            missingFields: ['person_name_or_email'],
-            entities: { personalItemType: 'person' },
-          });
-        }
-        const args = normalizeSecondBrainMutationArgs({
-          toolName: 'second_brain_person_upsert',
-          args: {
-            ...(createName ? { name: createName } : {}),
-            ...(explicitEmail ? { email: explicitEmail } : {}),
-            ...(explicitPhone ? { phone: explicitPhone } : {}),
-            ...(explicitTitle ? { title: explicitTitle } : {}),
-            ...(explicitCompany ? { company: explicitCompany } : {}),
-            ...(explicitLocation ? { location: explicitLocation } : {}),
-            ...(explicitNotes ? { notes: explicitNotes } : {}),
-            ...(explicitRelationship ? { relationship: explicitRelationship } : {}),
-          },
-          userContent: message.content,
-          referenceTime: Date.now(),
-          getPersonById: (id) => this.secondBrainService?.getPersonById(id) ?? null,
-        });
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_person_upsert',
-          args,
-          summary: 'Creates a local Second Brain contact.',
-          pendingIntro: 'I prepared a local contact save, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'person',
-            action: 'create',
-            fallbackLabel: createName || explicitEmail,
-          },
-          focusState: focused,
-        });
-      }
-      case 'update': {
-        if (!focusItem) {
-          return 'I need to know which local contact to update. Try "Show the contacts in my Second Brain." first.';
-        }
-        const existingPerson = this.secondBrainService.getPersonById(focusItem.id);
-        if (!existingPerson) {
-          return `Local contact "${focusItem.label ?? focusItem.id}" was not found.`;
-        }
-        const baseArgs: Record<string, unknown> = {
-          id: existingPerson.id,
-          name: existingPerson.name,
-          ...(existingPerson.email ? { email: existingPerson.email } : {}),
-          ...(existingPerson.phone ? { phone: existingPerson.phone } : {}),
-          ...(existingPerson.title ? { title: existingPerson.title } : {}),
-          ...(existingPerson.company ? { company: existingPerson.company } : {}),
-          ...(existingPerson.location ? { location: existingPerson.location } : {}),
-          ...(existingPerson.notes ? { notes: existingPerson.notes } : {}),
-          relationship: existingPerson.relationship,
-          ...(existingPerson.lastContactAt != null ? { lastContactAt: existingPerson.lastContactAt } : {}),
-        };
-        if (explicitName) baseArgs.name = explicitName;
-        if (explicitEmail) baseArgs.email = explicitEmail;
-        if (explicitPhone) baseArgs.phone = explicitPhone;
-        if (explicitTitle) baseArgs.title = explicitTitle;
-        if (explicitCompany) baseArgs.company = explicitCompany;
-        if (explicitLocation) baseArgs.location = explicitLocation;
-        if (explicitNotes) baseArgs.notes = explicitNotes;
-        if (explicitRelationship) baseArgs.relationship = explicitRelationship;
-        const args = normalizeSecondBrainMutationArgs({
-          toolName: 'second_brain_person_upsert',
-          args: baseArgs,
-          userContent: message.content,
-          referenceTime: Date.now(),
-          getPersonById: (id) => this.secondBrainService?.getPersonById(id) ?? null,
-        });
-        const existingLastContactAt = typeof existingPerson.lastContactAt === 'number'
-          ? existingPerson.lastContactAt
-          : undefined;
-        const nextLastContactAt = typeof args.lastContactAt === 'number'
-          ? args.lastContactAt
-          : undefined;
-        const hasExplicitChange = Boolean(
-          explicitName
-          || explicitEmail
-          || explicitPhone
-          || explicitTitle
-          || explicitCompany
-          || explicitLocation
-          || explicitNotes
-          || explicitRelationship
-          || nextLastContactAt !== existingLastContactAt,
-        );
-        if (!hasExplicitChange) {
-          return 'To update that local contact, tell me what to change, such as the name, email, phone, title, company, location, notes, relationship, or last-contact date.';
-        }
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_person_upsert',
-          args,
-          summary: 'Updates a local Second Brain contact.',
-          pendingIntro: 'I prepared a local contact update, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'person',
-            action: 'update',
-            fallbackId: existingPerson.id,
-            fallbackLabel: existingPerson.name,
-          },
-          focusState: focused,
-        });
-      }
-      case 'delete': {
-        if (!focusItem) {
-          return 'I need to know which local contact to delete. Try "Show the contacts in my Second Brain." first.';
-        }
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_person_delete',
-          args: { id: focusItem.id },
-          summary: 'Deletes a local Second Brain contact.',
-          pendingIntro: 'I prepared a local contact delete, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'person',
-            action: 'delete',
-            fallbackId: focusItem.id,
-            fallbackLabel: focusItem.label,
-          },
-          focusState: focused,
-        });
-      }
-      default:
-        return null;
-    }
-  }
-
-  private async tryDirectSecondBrainRoutineWrite(
-    message: UserMessage,
-    ctx: AgentContext,
-    userKey: string,
-    decision: IntentGatewayDecision,
-    continuityThread?: ContinuityThreadRecord | null,
-  ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.secondBrainService) return null;
-    const secondBrainService = this.secondBrainService as SecondBrainService & {
-      listRoutineRecords?: () => Array<Record<string, unknown>>;
-      getRoutineRecordById?: (id: string) => Record<string, unknown> | null;
-    };
-    const focused = readSecondBrainFocusContinuationState(continuityThread);
-    const routineFocus = getSecondBrainFocusEntry(focused, 'routine');
-    const focusItem = routineFocus
-      ? routineFocus.items.find((item) => item.id === routineFocus.focusId) ?? null
-      : null;
-    const routineCatalog = this.secondBrainService.listRoutineCatalog();
-    const configuredRoutines = this.secondBrainService.listRoutines();
-    const configuredRoutineRecords = typeof secondBrainService.listRoutineRecords === 'function'
-      ? secondBrainService.listRoutineRecords()
-      : [];
-    const normalizedContent = normalizeRoutineNameForMatch(message.content);
-    const explicitRoutineTitle = extractExplicitNamedSecondBrainTitle(message.content);
-    const matchedCatalogEntry = routineCatalog
-      .filter((entry) => {
-        const normalizedName = normalizeRoutineNameForMatch(entry.name);
-        const normalizedTemplateId = normalizeRoutineTemplateIdForMatch(entry.templateId);
-        if (!normalizedName && !normalizedTemplateId) {
-          return false;
-        }
-        if (explicitRoutineTitle) {
-          const normalizedExplicit = normalizeRoutineNameForMatch(explicitRoutineTitle);
-          return normalizedExplicit === normalizedName || normalizedExplicit === normalizedTemplateId;
-        }
-        return normalizedContent.includes(normalizedName) || normalizedContent.includes(normalizedTemplateId);
-      })
-      .sort((left, right) => right.name.length - left.name.length)[0] ?? null;
-    const matchedRoutineId = matchedCatalogEntry?.configuredRoutineId
-      ?? matchedCatalogEntry?.templateId
-      ?? focusItem?.id;
-
-    switch (decision.operation) {
-      case 'create': {
-        const explicitDelivery = extractRoutineDeliveryDefaults(message.content);
-        const explicitScheduleTiming = extractRoutineScheduleTiming(message.content);
-        const explicitFocusQuery = extractRoutineFocusQuery(message.content);
-        const inferredRoutineCreate = extractCustomSecondBrainRoutineCreate(message.content);
-        const createCatalogEntry = matchedCatalogEntry
-          ?? (inferredRoutineCreate
-            ? routineCatalog.find((entry) => entry.templateId === inferredRoutineCreate.templateId) ?? null
-            : null);
-        if (!createCatalogEntry) {
-          return 'To create a Second Brain routine, tell me which routine to create, or say something like "create a scheduled review every Friday at 4 pm" or "message me when anything mentions Harbor launch."';
-        }
-        if (
-          !createCatalogEntry.allowMultiple
-          && createCatalogEntry.configured
-          && createCatalogEntry.configuredRoutineId?.trim()
-          && !(createCatalogEntry.supportsFocusQuery && explicitFocusQuery)
-        ) {
-          const routineId = createCatalogEntry.configuredRoutineId.trim();
-          return {
-            content: `Routine already exists: ${createCatalogEntry.name}`,
-            metadata: buildSecondBrainFocusMetadata(
-              focused,
-              'routine',
-              [{ id: routineId, label: createCatalogEntry.name }],
-              { preferredFocusId: routineId },
-            ),
-          };
-        }
-        const createArgs: Record<string, unknown> = {
-          templateId: createCatalogEntry.templateId,
-          ...(explicitDelivery?.length ? { delivery: explicitDelivery } : {}),
-          ...(explicitScheduleTiming ? { timing: explicitScheduleTiming } : {}),
-        };
-        if (matchedCatalogEntry?.templateId === 'topic-watch' || createCatalogEntry.templateId === 'topic-watch') {
-          const topicQuery = routineTopicQuery({ topicQuery: toString(inferredRoutineCreate?.config?.topicQuery).trim() }) || extractQuotedPhrase(message.content);
-          if (topicQuery) {
-            createArgs.config = { topicQuery };
-          } else {
-            return 'Topic Watch routines need a topic to watch. Try "message me when anything mentions Harbor launch."';
-          }
-        } else if (matchedCatalogEntry?.templateId === 'deadline-watch' || createCatalogEntry.templateId === 'deadline-watch') {
-          const inferredConfig = isRecord(inferredRoutineCreate?.config) ? inferredRoutineCreate.config : null;
-          if (inferredConfig) {
-            createArgs.config = {
-              ...(Number.isFinite(inferredConfig.dueWithinHours) ? { dueWithinHours: Number(inferredConfig.dueWithinHours) } : {}),
-              ...(typeof inferredConfig.includeOverdue === 'boolean' ? { includeOverdue: inferredConfig.includeOverdue } : {}),
-            };
-          }
-        } else if (createCatalogEntry.supportsFocusQuery && explicitFocusQuery) {
-          createArgs.config = { focusQuery: explicitFocusQuery };
-        }
-        const matchingRoutine = findMatchingRoutineForCreate(configuredRoutines, {
-          templateId: createCatalogEntry.templateId,
-          timing: explicitScheduleTiming,
-          defaultTiming: createCatalogEntry.defaultTiming,
-          delivery: explicitDelivery,
-          defaultDelivery: createCatalogEntry.defaultDelivery,
-          config: createArgs.config,
-        });
-        if (matchingRoutine?.id) {
-          const label = toString(matchingRoutine.name).trim() || createCatalogEntry.name;
-          return {
-            content: `Routine already exists: ${label}`,
-            metadata: buildSecondBrainFocusMetadata(
-              focused,
-              'routine',
-              [{ id: matchingRoutine.id, label }],
-              { preferredFocusId: matchingRoutine.id },
-            ),
-          };
-        }
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_routine_create',
-          args: createArgs,
-          summary: 'Creates a Second Brain routine.',
-          pendingIntro: 'I prepared that Second Brain routine, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'routine',
-            action: 'create',
-            fallbackId: createCatalogEntry.templateId,
-            fallbackLabel: createCatalogEntry.name,
-          },
-          focusState: focused,
-        });
-      }
-      case 'update':
-      case 'toggle': {
-        if (!matchedRoutineId) {
-          return 'I need to know which Second Brain routine to update. Try "Show my routines." first.';
-        }
-        const existingRoutine = configuredRoutines.find((routine) => routine.id === matchedRoutineId)
-          ?? this.secondBrainService.getRoutineById(matchedRoutineId);
-        if (!existingRoutine) {
-          const label = matchedCatalogEntry?.name ?? focusItem?.label ?? matchedRoutineId;
-          return `Second Brain routine "${label}" is not configured yet.`;
-        }
-        const existingCatalogEntry = routineCatalog.find((entry) => entry.templateId === (existingRoutine.templateId ?? existingRoutine.id)) ?? null;
-        const existingRoutineRecord = configuredRoutineRecords.find((routine) => toString(routine.id).trim() === existingRoutine.id)
-          ?? (typeof secondBrainService.getRoutineRecordById === 'function'
-            ? secondBrainService.getRoutineRecordById(existingRoutine.id)
-            : null)
-          ?? (isRecord(existingRoutine) ? existingRoutine as Record<string, unknown> : null);
-
-        const enabledFromDecision = typeof decision.entities.enabled === 'boolean'
-          ? decision.entities.enabled
-          : undefined;
-        const explicitEnabled = enabledFromDecision ?? extractRoutineEnabledState(message.content);
-        const explicitRoutingBias = extractSecondBrainRoutingBias(message.content);
-        const explicitDeliveryDefaults = extractRoutineDeliveryDefaults(message.content);
-        const explicitLookaheadMinutes = extractRoutineLookaheadMinutes(message.content);
-        const explicitScheduleTiming = extractRoutineScheduleTiming(message.content);
-        const explicitFocusQuery = existingRoutine.focusQuery != null || existingCatalogEntry?.supportsFocusQuery
-          ? extractRoutineFocusQuery(message.content)
-          : undefined;
-        const templateId = existingRoutine.templateId ?? existingRoutine.id;
-        const explicitTopicQuery = templateId === 'topic-watch'
-          ? extractRoutineTopicWatchQuery(message.content)
-          : undefined;
-        const explicitDueWithinHours = templateId === 'deadline-watch'
-          ? extractRoutineDueWithinHours(message.content)
-          : undefined;
-        const explicitIncludeOverdue = templateId === 'deadline-watch'
-          ? extractRoutineIncludeOverdue(message.content)
-          : undefined;
-        const existingDelivery = explicitDeliveryDefaults ?? routineDeliveryChannels(existingRoutine);
-        const existingRoutingBias = typeof existingRoutineRecord?.defaultRoutingBias === 'string'
-          ? existingRoutineRecord.defaultRoutingBias
-          : undefined;
-        const existingBudgetProfileId = typeof existingRoutineRecord?.budgetProfileId === 'string'
-          ? existingRoutineRecord.budgetProfileId
-          : undefined;
-        const existingConfig = isRecord(existingRoutineRecord?.config) ? existingRoutineRecord.config : null;
-        const nextArgs: Record<string, unknown> = {
-          id: existingRoutine.id,
-          name: existingRoutine.name,
-          enabled: explicitEnabled ?? existingRoutine.enabled,
-          ...(explicitRoutingBias ?? existingRoutingBias ? { defaultRoutingBias: explicitRoutingBias ?? existingRoutingBias } : {}),
-          ...(existingBudgetProfileId ? { budgetProfileId: existingBudgetProfileId } : {}),
-          ...(existingDelivery.length > 0 ? { delivery: existingDelivery, deliveryDefaults: existingDelivery } : {}),
-        };
-
-        const timingKind = deriveRoutineTimingKind(existingRoutine) ?? deriveRoutineTimingKind(existingRoutineRecord ?? {});
-        if (explicitScheduleTiming) {
-          nextArgs.timing = explicitScheduleTiming;
-        } else if (explicitLookaheadMinutes != null) {
-          if (timingKind !== 'before_meetings' && timingKind !== 'after_meetings' && timingKind !== 'background') {
-            return `${existingRoutine.name} does not use a lookahead window.`;
-          }
-          nextArgs.timing = {
-            kind: timingKind,
-            minutes: explicitLookaheadMinutes,
-          };
-          if (isRecord(existingRoutineRecord?.trigger)) {
-            nextArgs.trigger = buildToolSafeRoutineTrigger(
-              {
-                ...existingRoutineRecord.trigger,
-                lookaheadMinutes: explicitLookaheadMinutes,
-              },
-              existingRoutineRecord.trigger,
-            );
-            if (!nextArgs.trigger) {
-              return `I couldn't determine a valid trigger shape for ${existingRoutine.name}.`;
-            }
-          }
-        }
-
-        if (templateId === 'topic-watch' && explicitTopicQuery) {
-          nextArgs.config = {
-            ...(existingConfig ?? {}),
-            topicQuery: explicitTopicQuery,
-          };
-        } else if (templateId === 'deadline-watch' && (explicitDueWithinHours !== undefined || explicitIncludeOverdue !== undefined)) {
-          nextArgs.config = {
-            ...(existingConfig ?? {}),
-            ...(Number.isFinite(explicitDueWithinHours) ? { dueWithinHours: explicitDueWithinHours } : {}),
-            ...(typeof explicitIncludeOverdue === 'boolean' ? { includeOverdue: explicitIncludeOverdue } : {}),
-          };
-        } else if (explicitFocusQuery !== undefined && existingCatalogEntry?.supportsFocusQuery) {
-          nextArgs.config = {
-            ...(existingConfig ?? {}),
-            focusQuery: explicitFocusQuery,
-          };
-        }
-
-        const hasExplicitChange = explicitEnabled !== undefined
-          || explicitRoutingBias !== undefined
-          || explicitDeliveryDefaults !== undefined
-          || explicitLookaheadMinutes !== undefined
-          || explicitScheduleTiming !== undefined
-          || explicitFocusQuery !== undefined
-          || explicitTopicQuery !== undefined
-          || explicitDueWithinHours !== undefined
-          || explicitIncludeOverdue !== undefined;
-        if (!hasExplicitChange) {
-          return 'To update that Second Brain routine, tell me what to change, such as enable or disable it, change the delivery channels, adjust when it runs, or update what it watches.';
-        }
-
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_routine_update',
-          args: nextArgs,
-          summary: 'Updates a Second Brain routine.',
-          pendingIntro: 'I prepared that Second Brain routine change, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'routine',
-            action: 'update',
-            fallbackId: existingRoutine.id,
-            fallbackLabel: existingRoutine.name,
-          },
-          focusState: focused,
-        });
-      }
-      case 'delete': {
-        if (!matchedRoutineId) {
-          return 'I need to know which Second Brain routine to delete. Try "Show my routines." first.';
-        }
-        const existingRoutine = configuredRoutines.find((routine) => routine.id === matchedRoutineId)
-          ?? this.secondBrainService.getRoutineById(matchedRoutineId);
-        if (!existingRoutine) {
-          const label = matchedCatalogEntry?.name ?? focusItem?.label ?? matchedRoutineId;
-          return `Second Brain routine "${label}" is not configured yet.`;
-        }
-        return this.executeDirectSecondBrainMutation({
-          message,
-          ctx,
-          userKey,
-          decision,
-          toolName: 'second_brain_routine_delete',
-          args: { id: existingRoutine.id },
-          summary: 'Deletes a Second Brain routine.',
-          pendingIntro: 'I prepared that Second Brain routine removal, but it needs approval first.',
-          successDescriptor: {
-            itemType: 'routine',
-            action: 'delete',
-            fallbackId: existingRoutine.id,
-            fallbackLabel: existingRoutine.name,
-          },
-          focusState: focused,
-        });
-      }
-      default:
-        return null;
-    }
+      setClarificationPendingAction: (userId, channel, surfaceId, action, nowMs) => this.setClarificationPendingAction(
+        userId,
+        channel,
+        surfaceId,
+        action,
+        nowMs,
+      ),
+      buildImmediateResponseMetadata: (_pendingApprovalIds, userId, channel, surfaceId, options) => this.buildImmediateResponseMetadata(
+        [] as ResolvedSkill[],
+        userId,
+        channel,
+        surfaceId,
+        options,
+      ),
+    });
   }
 
   private async executeDirectSecondBrainMutation(input: {
@@ -6384,83 +4928,32 @@ type DirectIntentShadowCandidate =
     };
     focusState: SecondBrainFocusContinuationPayload | null | undefined;
   }): Promise<string | { content: string; metadata?: Record<string, unknown> }> {
-    if (!this.tools?.isEnabled()) {
-      return 'Second Brain tools are unavailable right now.';
-    }
-    const toolResult = await this.tools.executeModelTool(
-      input.toolName,
-      input.args,
-      {
-        origin: 'assistant',
-        agentId: this.id,
-        userId: input.message.userId,
-        channel: input.message.channel,
-        requestId: input.message.id,
-        agentContext: { checkAction: input.ctx.checkAction },
-      },
-    );
-
-    if (toBoolean(toolResult.success)) {
-      return this.buildDirectSecondBrainMutationSuccessResponse(
-        input.successDescriptor,
-        toolResult.output,
-        input.focusState,
-      );
-    }
-
-    const status = toString(toolResult.status);
-    if (status === 'pending_approval') {
-      const approvalId = toString(toolResult.approvalId);
-      const existingIds = this.getPendingApprovals(input.userKey, input.message.surfaceId)?.ids ?? [];
-      const pendingIds = approvalId ? [...new Set([...existingIds, approvalId])] : existingIds;
-      if (approvalId) {
-        this.setApprovalFollowUp(approvalId, {
-          denied: 'I did not complete the local Second Brain update.',
-        });
-      }
-      const summaries = pendingIds.length > 0 ? this.tools?.getApprovalSummaries(pendingIds) : undefined;
-      const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
-      const pendingActionResult = this.setPendingApprovalActionForRequest(
-        input.userKey,
-        input.message.surfaceId,
-        {
-          prompt,
-          approvalIds: pendingIds,
-          approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
-          originalUserContent: input.message.content,
-          route: 'personal_assistant_task',
-          operation: input.decision.operation,
-          summary: input.summary,
-          turnRelation: input.decision.turnRelation,
-          resolution: input.decision.resolution,
-          entities: this.toPendingActionEntities(input.decision.entities),
-          resume: {
-            kind: 'direct_route',
-            payload: {
-              type: DIRECT_ROUTE_RESUME_TYPE_SECOND_BRAIN_MUTATION,
-              toolName: input.toolName,
-              args: { ...input.args },
-              originalUserContent: input.message.content,
-              itemType: input.successDescriptor.itemType,
-              action: input.successDescriptor.action,
-              ...(toString(input.successDescriptor.fallbackId).trim()
-                ? { fallbackId: toString(input.successDescriptor.fallbackId).trim() }
-                : {}),
-              ...(toString(input.successDescriptor.fallbackLabel).trim()
-                ? { fallbackLabel: toString(input.successDescriptor.fallbackLabel).trim() }
-                : {}),
-            },
-          },
-        },
-      );
-      return this.buildPendingApprovalBlockedResponse(pendingActionResult, [
-        input.pendingIntro,
-        prompt,
-      ].filter(Boolean).join('\n\n'));
-    }
-
-    const errorMessage = toString(toolResult.message) || toString(toolResult.error) || 'Second Brain update failed.';
-    return `I couldn't complete the local Second Brain update: ${errorMessage}`;
+    return executeDirectSecondBrainMutationHelper({
+      ...input,
+      agentId: this.id,
+      tools: this.tools,
+      getPendingApprovals: (userKey, surfaceId, nowMs) => this.getPendingApprovals(userKey, surfaceId, nowMs),
+      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
+      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
+      setPendingApprovalActionForRequest: (userKey, surfaceId, action, nowMs) => this.setPendingApprovalActionForRequest(
+        userKey,
+        surfaceId,
+        action,
+        nowMs,
+      ),
+      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
+        result,
+        fallbackContent,
+      ),
+      toPendingActionEntities: (entities) => this.toPendingActionEntities(
+        entities as Record<string, unknown> | IntentGatewayDecision['entities'] | undefined,
+      ),
+      buildDirectSecondBrainMutationSuccessResponse: (descriptor, output, focusState) => this.buildDirectSecondBrainMutationSuccessResponse(
+        descriptor,
+        output,
+        focusState,
+      ),
+    });
   }
 
   private resolveCodeSessionContext(message: UserMessage): ResolvedCodeSessionContext | null {
