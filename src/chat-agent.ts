@@ -42,8 +42,6 @@ import { isResponseDegraded as _isResponseDegraded } from './util/response-quali
 import { isToolReportQuery as _isToolReportQuery, formatToolReport as _formatToolReport } from './util/tool-report.js';
 import {
   isDirectMemorySaveRequest,
-  parseDirectMemoryReadRequest,
-  parseDirectMemorySaveRequest,
   resolveAffirmativeMemoryContinuationFromHistory,
   shouldAllowModelMemoryMutation,
 } from './util/memory-intent.js';
@@ -181,6 +179,10 @@ import {
   buildScopedSystemPrompt as buildScopedSystemPromptHelper,
   loadPromptKnowledgeBases as loadPromptKnowledgeBasesHelper,
 } from './runtime/chat-agent/prompt-context.js';
+import {
+  tryDirectMemoryRead as tryDirectMemoryReadHelper,
+  tryDirectMemorySave as tryDirectMemorySaveHelper,
+} from './runtime/chat-agent/direct-memory.js';
 import {
   readLatestAssistantOutput as readLatestAssistantOutputHelper,
   resumeStoredDirectRoutePendingAction as resumeStoredDirectRoutePendingActionHelper,
@@ -6979,90 +6981,28 @@ type DirectIntentShadowCandidate =
     codeContext?: { workspaceRoot?: string; sessionId?: string },
     originalUserContent?: string,
   ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.tools?.isEnabled()) return null;
-
-    const intent = parseDirectMemorySaveRequest(stripLeadingContextPrefix(message.content))
-      ?? parseDirectMemorySaveRequest(stripLeadingContextPrefix(originalUserContent ?? ''));
-    if (!intent) return null;
-
-    const toolResult = await this.tools.executeModelTool(
-      'memory_save',
-      {
-        content: intent.content,
-        scope: intent.scope,
-        ...(intent.scope === 'code_session' && codeContext?.sessionId ? { sessionId: codeContext.sessionId } : {}),
-      },
-      {
-        origin: 'assistant',
-        agentId: this.id,
-        userId: message.userId,
-        surfaceId: message.surfaceId,
-        principalId: message.principalId ?? message.userId,
-        principalRole: message.principalRole ?? 'owner',
-        channel: message.channel,
-        requestId: message.id,
-        allowModelMemoryMutation: true,
-        bypassApprovals: true,
-        agentContext: { checkAction: ctx.checkAction },
-        ...(codeContext?.workspaceRoot ? {
-          codeContext: {
-            workspaceRoot: codeContext.workspaceRoot,
-            ...(codeContext.sessionId ? { sessionId: codeContext.sessionId } : {}),
-          },
-        } : {}),
-      },
-    );
-
-    if (!toBoolean(toolResult.success)) {
-      const status = toString(toolResult.status);
-      if (status === 'pending_approval') {
-        const approvalId = toString(toolResult.approvalId);
-        const existingIds = this.getPendingApprovals(userKey)?.ids ?? [];
-        const pendingIds = approvalId ? [...new Set([...existingIds, approvalId])] : existingIds;
-        if (approvalId) {
-          const scopeLabel = intent.scope === 'code_session' ? 'code-session memory' : 'global memory';
-          this.setApprovalFollowUp(approvalId, {
-            approved: `I saved that to ${scopeLabel}.`,
-            denied: `I did not save that to ${scopeLabel}.`,
-          });
-        }
-        const summaries = pendingIds.length > 0 ? this.tools.getApprovalSummaries(pendingIds) : undefined;
-        const prompt = this.formatPendingApprovalPrompt(pendingIds, summaries);
-        const pendingActionResult = this.setPendingApprovalActionForRequest(
-          userKey,
-          message.surfaceId,
-          {
-            prompt,
-            approvalIds: pendingIds,
-            approvalSummaries: buildPendingApprovalMetadata(pendingIds, summaries),
-            originalUserContent: message.content,
-            route: 'memory_task',
-            operation: 'save',
-            summary: intent.scope === 'code_session'
-              ? 'Saves a fact to code-session memory.'
-              : 'Saves a fact to global memory.',
-            turnRelation: 'new_request',
-            resolution: 'ready',
-            ...(codeContext?.sessionId ? { codeSessionId: codeContext.sessionId } : {}),
-          },
-        );
-        return this.buildPendingApprovalBlockedResponse(
-          pendingActionResult,
-          [
-            `I prepared a memory save for ${intent.scope === 'code_session' ? 'code-session memory' : 'global memory'}, but it needs approval first.`,
-            prompt,
-          ].filter(Boolean).join('\n\n'),
-        );
-      }
-      const errorMessage = toString(toolResult.message) || toString(toolResult.error) || 'Memory save failed.';
-      return intent.scope === 'code_session'
-        ? `I couldn't save that to code-session memory: ${errorMessage}`
-        : `I couldn't save that to global memory: ${errorMessage}`;
-    }
-
-    const output = isRecord(toolResult.output) ? toolResult.output : {};
-    const savedScope = toString(output.scope) === 'code_session' ? 'code-session memory' : 'global memory';
-    return `I saved that to ${savedScope}.`;
+    return tryDirectMemorySaveHelper({
+      tools: this.tools,
+      agentId: this.id,
+      message,
+      ctx,
+      userKey,
+      codeContext,
+      originalUserContent,
+      getPendingApprovals: (userKey, surfaceId) => this.getPendingApprovals(userKey, surfaceId),
+      setApprovalFollowUp: (approvalId, copy) => this.setApprovalFollowUp(approvalId, copy),
+      formatPendingApprovalPrompt: (ids, summaries) => this.formatPendingApprovalPrompt(ids, summaries),
+      setPendingApprovalActionForRequest: (userKey, surfaceId, action, nowMs) => this.setPendingApprovalActionForRequest(
+        userKey,
+        surfaceId,
+        action,
+        nowMs,
+      ),
+      buildPendingApprovalBlockedResponse: (result, fallbackContent) => this.buildPendingApprovalBlockedResponse(
+        result,
+        fallbackContent,
+      ),
+    });
   }
 
   private async tryDirectMemoryRead(
@@ -7071,187 +7011,14 @@ type DirectIntentShadowCandidate =
     codeContext?: { workspaceRoot?: string; sessionId?: string },
     originalUserContent?: string,
   ): Promise<string | { content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.tools?.isEnabled()) return null;
-
-    const intent = parseDirectMemoryReadRequest(stripLeadingContextPrefix(message.content))
-      ?? parseDirectMemoryReadRequest(stripLeadingContextPrefix(originalUserContent ?? ''));
-    if (!intent) return null;
-
-    const scope = intent.scope ?? (codeContext?.sessionId ? 'both' : 'global');
-    const toolRequest = {
-      origin: 'assistant' as const,
+    return tryDirectMemoryReadHelper({
+      tools: this.tools,
       agentId: this.id,
-      userId: message.userId,
-      surfaceId: message.surfaceId,
-      principalId: message.principalId ?? message.userId,
-      principalRole: message.principalRole ?? 'owner',
-      channel: message.channel,
-      requestId: message.id,
-      agentContext: { checkAction: ctx.checkAction },
-      ...(codeContext?.workspaceRoot ? {
-        codeContext: {
-          workspaceRoot: codeContext.workspaceRoot,
-          ...(codeContext.sessionId ? { sessionId: codeContext.sessionId } : {}),
-        },
-      } : {}),
-    };
-
-    if (intent.mode === 'search' && intent.query) {
-      const toolResult = await this.tools.executeModelTool(
-        'memory_search',
-        {
-          query: intent.query,
-          scope: 'persistent',
-          persistentScope: scope,
-          ...((scope === 'code_session' || scope === 'both') && codeContext?.sessionId
-            ? { sessionId: codeContext.sessionId }
-            : {}),
-        },
-        toolRequest,
-      );
-      if (!toBoolean(toolResult.success)) {
-        const errorMessage = toString(toolResult.message) || toString(toolResult.error) || 'Memory search failed.';
-        return `I couldn't search persistent memory: ${errorMessage}`;
-      }
-      return this.formatDirectMemorySearchResponse(toolResult.output, {
-        query: intent.query,
-        scope,
-        separateScopes: intent.separateScopes,
-        labelSources: intent.labelSources,
-      });
-    }
-
-    const toolResult = await this.tools.executeModelTool(
-      'memory_recall',
-      {
-        scope,
-        ...((scope === 'code_session' || scope === 'both') && codeContext?.sessionId
-          ? { sessionId: codeContext.sessionId }
-          : {}),
-      },
-      toolRequest,
-    );
-    if (!toBoolean(toolResult.success)) {
-      const errorMessage = toString(toolResult.message) || toString(toolResult.error) || 'Memory recall failed.';
-      return `I couldn't recall persistent memory: ${errorMessage}`;
-    }
-    return this.formatDirectMemoryRecallResponse(toolResult.output, scope);
-  }
-
-  private formatDirectMemorySearchResponse(
-    output: unknown,
-    options: {
-      query: string;
-      scope: 'global' | 'code_session' | 'both';
-      separateScopes: boolean;
-      labelSources: boolean;
-    },
-  ): string {
-    const record = isRecord(output) ? output : {};
-    const results = Array.isArray(record.results)
-      ? record.results.filter((entry): entry is Record<string, unknown> => isRecord(entry))
-      : [];
-    const searchedScopes: Array<'global' | 'code_session'> = Array.isArray(record.persistentScopesSearched)
-      ? record.persistentScopesSearched
-        .map((value) => toString(value))
-        .filter((value): value is 'global' | 'code_session' => value === 'global' || value === 'code_session')
-      : [];
-    const effectiveScopes: Array<'global' | 'code_session'> = searchedScopes.length > 0
-      ? searchedScopes
-      : (options.scope === 'both' ? ['global', 'code_session'] : [options.scope]);
-    const grouped = new Map<'global' | 'code_session', Record<string, unknown>[]>(
-      effectiveScopes.map((scope) => [scope, []]),
-    );
-    for (const row of results) {
-      const source = toString(row.source);
-      if (source === 'global' || source === 'code_session') {
-        const existing = grouped.get(source) ?? [];
-        existing.push(row);
-        grouped.set(source, existing);
-      }
-    }
-
-    if (results.length === 0) {
-      if (effectiveScopes.length === 2 || options.separateScopes || options.labelSources) {
-        return `I didn't find any matching persistent memory in global or code-session memory for "${options.query}".`;
-      }
-      return `I didn't find any matching ${effectiveScopes[0] === 'code_session' ? 'code-session memory' : 'global memory'} for "${options.query}".`;
-    }
-
-    const formatRow = (row: Record<string, unknown>): string => {
-      const summary = toString(row.summary).trim();
-      const content = toString(row.content).trim();
-      const category = toString(row.category).trim();
-      const combined = summary && content && !content.toLowerCase().includes(summary.toLowerCase())
-        ? `${summary} — ${content}`
-        : (content || summary || '(empty memory entry)');
-      return category ? `${category}: ${combined}` : combined;
-    };
-    const sourceLabel = (scope: 'global' | 'code_session') => scope === 'code_session' ? 'Code-session memory' : 'Global memory';
-
-    if (effectiveScopes.length === 2 || options.separateScopes || options.labelSources) {
-      const lines = [`I found ${results.length} matching persistent memory ${results.length === 1 ? 'entry' : 'entries'} for "${options.query}".`];
-      for (const scope of effectiveScopes) {
-        lines.push(`${sourceLabel(scope)}:`);
-        const rows = grouped.get(scope) ?? [];
-        if (rows.length === 0) {
-          lines.push('- no matching entries');
-          continue;
-        }
-        rows.forEach((row) => lines.push(`- ${formatRow(row)}`));
-      }
-      return lines.join('\n');
-    }
-
-    if (results.length === 1) {
-      const scope = effectiveScopes[0] ?? 'global';
-      return `I found this in ${sourceLabel(scope).toLowerCase()}: ${formatRow(results[0])}`;
-    }
-    return [
-      `I found ${results.length} matching persistent memory entries for "${options.query}":`,
-      ...results.map((row) => `- ${formatRow(row)}`),
-    ].join('\n');
-  }
-
-  private formatDirectMemoryRecallResponse(
-    output: unknown,
-    scope: 'global' | 'code_session' | 'both',
-  ): string {
-    const sourceLabel = (value: 'global' | 'code_session') => value === 'code_session' ? 'Code-session memory' : 'Global memory';
-    const formatEntries = (entries: unknown): string[] => (
-      Array.isArray(entries)
-        ? entries
-          .filter((entry): entry is Record<string, unknown> => isRecord(entry))
-          .map((entry) => {
-            const summary = toString(entry.summary).trim();
-            const content = toString(entry.content).trim();
-            const category = toString(entry.category).trim();
-            const combined = summary && content && !content.toLowerCase().includes(summary.toLowerCase())
-              ? `${summary} — ${content}`
-              : (content || summary || '(empty memory entry)');
-            return category ? `${category}: ${combined}` : combined;
-          })
-        : []
-    );
-    if (scope === 'both' && isRecord(output)) {
-      const globalEntries = formatEntries(isRecord(output.global) ? output.global.entries : []);
-      const codeEntries = formatEntries(isRecord(output.codeSession) ? output.codeSession.entries : []);
-      const lines = ['Here is the current persistent memory state:'];
-      lines.push(`${sourceLabel('global')}:`);
-      lines.push(...(globalEntries.length > 0 ? globalEntries.map((entry) => `- ${entry}`) : ['- no stored entries']));
-      lines.push(`${sourceLabel('code_session')}:`);
-      lines.push(...(codeEntries.length > 0 ? codeEntries.map((entry) => `- ${entry}`) : ['- no stored entries']));
-      return lines.join('\n');
-    }
-    const entries = formatEntries(isRecord(output) ? output.entries : []);
-    const label = sourceLabel(scope === 'both' ? 'global' : scope);
-    if (entries.length === 0) {
-      return `${label} is currently empty.`;
-    }
-    return [
-      `Here is the current ${label.toLowerCase()} state:`,
-      ...entries.map((entry) => `- ${entry}`),
-    ].join('\n');
+      message,
+      ctx,
+      codeContext,
+      originalUserContent,
+    });
   }
 
   private async tryDirectGoogleWorkspaceWrite(
