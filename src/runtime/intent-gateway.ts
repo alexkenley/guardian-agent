@@ -1,173 +1,66 @@
 import type { ChatMessage, ChatOptions, ChatResponse, ToolDefinition } from '../llm/types.js';
-import { scoreAutomationOrchestration, scoreComplexity } from './complexity-scorer.js';
 import { parseStructuredJsonObject } from '../util/structured-json.js';
-export type IntentGatewayRoute =
-  | 'automation_authoring'
-  | 'automation_control'
-  | 'automation_output_task'
-  | 'ui_control'
-  | 'browser_task'
-  | 'personal_assistant_task'
-  | 'workspace_task'
-  | 'email_task'
-  | 'search_task'
-  | 'memory_task'
-  | 'filesystem_task'
-  | 'coding_task'
-  | 'coding_session_control'
-  | 'security_task'
-  | 'general_assistant'
-  | 'complex_planning_task'
-  | 'unknown';
+import {
+  cleanInferredSessionTarget,
+  extractCodingWorkspaceTarget,
+  extractExplicitRemoteExecCommand,
+  inferExplicitCodingBackendRequest,
+  inferExplicitCodingTaskOperation,
+} from './intent/entity-resolvers/coding.js';
+import {
+  inferEmailProviderFromSource,
+  inferMailboxReadModeFromSource,
+} from './intent/entity-resolvers/email.js';
+import {
+  inferProviderConfigOperation,
+  isExplicitProviderConfigRequest,
+} from './intent/entity-resolvers/provider-config.js';
+import { selectIntentGatewayPromptProfile } from './intent/prompt-profiles.js';
+import { isExplicitComplexPlanningRequest } from './intent/request-patterns.js';
+import {
+  collapseIntentGatewayWhitespace,
+  normalizeIntentGatewayRepairText,
+} from './intent/text.js';
+import {
+  PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY,
+} from './intent/types.js';
+import type {
+  IntentGatewayChatFn,
+  IntentGatewayConfidence,
+  IntentGatewayDecision,
+  IntentGatewayEntities,
+  IntentGatewayExecutionClass,
+  IntentGatewayExpectedContextPressure,
+  IntentGatewayInput,
+  IntentGatewayOperation,
+  IntentGatewayPreferredAnswerPath,
+  IntentGatewayPreferredTier,
+  IntentGatewayPromptProfile,
+  IntentGatewayRecord,
+  IntentGatewayRepairContext,
+  IntentGatewayResolution,
+  IntentGatewayRoute,
+  IntentGatewayTurnRelation,
+} from './intent/types.js';
 
-export type IntentGatewayConfidence = 'high' | 'medium' | 'low';
-
-export type IntentGatewayOperation =
-  | 'create'
-  | 'update'
-  | 'delete'
-  | 'run'
-  | 'toggle'
-  | 'clone'
-  | 'inspect'
-  | 'navigate'
-  | 'read'
-  | 'search'
-  | 'save'
-  | 'send'
-  | 'draft'
-  | 'schedule'
-  | 'unknown';
-
-export type IntentGatewayTurnRelation =
-  | 'new_request'
-  | 'follow_up'
-  | 'clarification_answer'
-  | 'correction';
-
-export type IntentGatewayResolution =
-  | 'ready'
-  | 'needs_clarification';
-
-export type IntentGatewayExecutionClass =
-  | 'direct_assistant'
-  | 'tool_orchestration'
-  | 'repo_grounded'
-  | 'provider_crud'
-  | 'security_analysis';
-
-export type IntentGatewayPreferredAnswerPath =
-  | 'direct'
-  | 'tool_loop'
-  | 'chat_synthesis';
-
-export type IntentGatewayExpectedContextPressure =
-  | 'low'
-  | 'medium'
-  | 'high';
-
-export type IntentGatewayPreferredTier =
-  | 'local'
-  | 'external';
-
-export interface IntentGatewayEntities {
-  automationName?: string;
-  newAutomationName?: string;
-  manualOnly?: boolean;
-  scheduled?: boolean;
-  enabled?: boolean;
-  uiSurface?: 'automations' | 'system' | 'dashboard' | 'config' | 'chat' | 'unknown';
-  urls?: string[];
-  query?: string;
-  path?: string;
-  sessionTarget?: string;
-  emailProvider?: 'gws' | 'm365';
-  mailboxReadMode?: 'unread' | 'latest';
-  calendarTarget?: 'local' | 'gws' | 'm365';
-  calendarWindowDays?: number;
-  personalItemType?: 'overview' | 'note' | 'task' | 'calendar' | 'person' | 'library' | 'routine' | 'brief' | 'unknown';
-  codingBackend?: string;
-  codingBackendRequested?: boolean;
-  codingRemoteExecRequested?: boolean;
-  codingRunStatusCheck?: boolean;
-  toolName?: string;
-  profileId?: string;
-  command?: string;
-}
-
-export interface IntentGatewayDecision {
-  route: IntentGatewayRoute;
-  confidence: IntentGatewayConfidence;
-  operation: IntentGatewayOperation;
-  summary: string;
-  turnRelation: IntentGatewayTurnRelation;
-  resolution: IntentGatewayResolution;
-  missingFields: string[];
-  resolvedContent?: string;
-  executionClass: IntentGatewayExecutionClass;
-  preferredTier: IntentGatewayPreferredTier;
-  requiresRepoGrounding: boolean;
-  requiresToolSynthesis: boolean;
-  expectedContextPressure: IntentGatewayExpectedContextPressure;
-  preferredAnswerPath: IntentGatewayPreferredAnswerPath;
-  entities: IntentGatewayEntities;
-}
-
-export interface IntentGatewayRecord {
-  mode: 'primary' | 'json_fallback' | 'route_only_fallback';
-  available: boolean;
-  model: string;
-  latencyMs: number;
-  promptProfile?: IntentGatewayPromptProfile;
-  decision: IntentGatewayDecision;
-  rawResponsePreview?: string;
-}
-
-export const PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY = '__guardian_pre_routed_intent_gateway';
-
-export interface IntentGatewayInput {
-  content: string;
-  channel?: string;
-  recentHistory?: Array<{ role: 'user' | 'assistant'; content: string }>;
-  pendingAction?: {
-    id: string;
-    status: string;
-    blockerKind: string;
-    field?: string;
-    route?: string;
-    operation?: string;
-    summary?: string;
-    resolution?: string;
-    missingFields?: string[];
-    entities?: Record<string, unknown>;
-    prompt: string;
-    originalRequest: string;
-    transferPolicy: string;
-  } | null;
-  continuity?: {
-    continuityKey: string;
-    linkedSurfaceCount: number;
-    linkedSurfaces?: string[];
-    focusSummary?: string;
-    lastActionableRequest?: string;
-    activeExecutionRefs?: string[];
-  } | null;
-  enabledManagedProviders?: string[];
-  availableCodingBackends?: string[];
-}
-
-interface IntentGatewayRepairContext {
-  sourceContent?: string;
-  pendingAction?: IntentGatewayInput['pendingAction'] | null;
-  continuity?: IntentGatewayInput['continuity'] | null;
-}
-
-type IntentGatewayPromptProfile = 'compact' | 'full';
-
-export type IntentGatewayChatFn = (
-  messages: ChatMessage[],
-  options?: ChatOptions,
-) => Promise<ChatResponse>;
+export { PRE_ROUTED_INTENT_GATEWAY_METADATA_KEY } from './intent/types.js';
+export type {
+  IntentGatewayChatFn,
+  IntentGatewayConfidence,
+  IntentGatewayDecision,
+  IntentGatewayEntities,
+  IntentGatewayExecutionClass,
+  IntentGatewayExpectedContextPressure,
+  IntentGatewayInput,
+  IntentGatewayOperation,
+  IntentGatewayPreferredAnswerPath,
+  IntentGatewayPreferredTier,
+  IntentGatewayPromptProfile,
+  IntentGatewayRecord,
+  IntentGatewayResolution,
+  IntentGatewayRoute,
+  IntentGatewayTurnRelation,
+} from './intent/types.js';
 
 const INTENT_GATEWAY_TOOL: ToolDefinition = {
   name: 'route_intent',
@@ -986,44 +879,6 @@ function selectIntentGatewayPrimarySystemPrompt(profile: IntentGatewayPromptProf
   return profile === 'compact'
     ? INTENT_GATEWAY_COMPACT_SYSTEM_PROMPT
     : INTENT_GATEWAY_SYSTEM_PROMPT;
-}
-
-function selectIntentGatewayPromptProfile(input: IntentGatewayInput): IntentGatewayPromptProfile {
-  const request = collapseIntentGatewayWhitespace(input.content ?? '');
-  if (!request) return 'full';
-  if (input.pendingAction) return 'full';
-  if ((input.continuity || (input.recentHistory?.length ?? 0) > 0)
-    && looksLikeContextDependentPromptSelectionTurn(request)) {
-    return 'full';
-  }
-  if (isExplicitComplexPlanningRequest(request)) return 'full';
-  if (/[\n`]/.test(request)) return 'full';
-  if (/[,:;]/.test(request)) return 'full';
-  if (request.includes('/') || request.includes('\\')) return 'full';
-  if (/(?:^|[\s(])(?:\.{1,2}\/|\/[A-Za-z0-9._-]|[A-Za-z0-9._-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|txt|yaml|yml|py|rs|go|java|kt|c|cpp|h|hpp|sh))(?:$|[\s),.])/i.test(request)) {
-    return 'full';
-  }
-
-  const words = request.split(/\s+/).filter(Boolean);
-  if (words.length > 10 || request.length > 80) return 'full';
-
-  const complexity = scoreComplexity(request);
-  if (complexity.score >= 0.18) return 'full';
-  if (complexity.signals.questionDepth >= 0.45) return 'full';
-  if (complexity.signals.abstractionMarkers >= 0.5) return 'full';
-  if (complexity.signals.multiStepMarkers >= 0.4) return 'full';
-  if (complexity.signals.constraintComplexity >= 0.4) return 'full';
-
-  if (scoreAutomationOrchestration(request) >= 0.55) return 'full';
-
-  return 'compact';
-}
-
-function looksLikeContextDependentPromptSelectionTurn(request: string): boolean {
-  const normalized = request.trim().toLowerCase();
-  if (!normalized || normalized.length > 64) return false;
-  return /^(?:yes|yeah|yep|no|nope|ok|okay|sure|actually|instead|use\b|switch\b|continue\b|resume\b|retry\b|again\b|same\b|that\b|those\b|it\b|them\b|this\b)/.test(normalized)
-    || /\b(?:that|those|it|them|same\s+(?:one|workspace|session)|again)\b/.test(normalized);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -2036,194 +1891,6 @@ function repairUnavailableIntentGatewayDecision(
   }, repairContext);
 }
 
-const GENERIC_SESSION_TARGET_TOKENS = new Set([
-  'a',
-  'active',
-  'an',
-  'attached',
-  'cloud',
-  'current',
-  'currently',
-  'for',
-  'from',
-  'in',
-  'isolated',
-  'the',
-  'my',
-  'of',
-  'on',
-  'remote',
-  'sandbox',
-  'this',
-  'that',
-  'using',
-  'via',
-  'workspace',
-  'workspaces',
-  'session',
-  'sessions',
-  'coding',
-  'code',
-  'project',
-  'repo',
-  'repository',
-]);
-
-function inferExplicitCodingBackendRequest(
-  rawContent: string,
-  normalized: string,
-  parsedOperation: IntentGatewayOperation,
-): {
-  codingBackend: string;
-  operation: IntentGatewayOperation;
-  sessionTarget?: string;
-} | null {
-  const codingBackend = inferRequestedCodingBackend(normalized);
-  if (!codingBackend) return null;
-  const operation = parsedOperation !== 'unknown'
-    ? parsedOperation
-    : inferExplicitCodingBackendOperation(normalized);
-  if (!operation || operation === 'unknown') {
-    return null;
-  }
-  const sessionTarget = extractCodingWorkspaceTarget(rawContent);
-  return {
-    codingBackend,
-    operation,
-    ...(sessionTarget ? { sessionTarget } : {}),
-  };
-}
-
-function inferRequestedCodingBackend(normalized: string): string | undefined {
-  if (!normalized) return undefined;
-  if (/\b(?:use|using|with|via|run|launch|start|ask|delegate\s+to)\s+(?:the\s+)?(?:openai\s+)?codex(?:\s+(?:cli|coding assistant|assistant))?\b/.test(normalized)) {
-    return 'codex';
-  }
-  if (/\b(?:use|using|with|via|run|launch|start|ask|delegate\s+to)\s+(?:the\s+)?claude(?:\s+code)?(?:\s+(?:cli|coding assistant|assistant))?\b/.test(normalized)) {
-    return 'claude-code';
-  }
-  if (/\b(?:use|using|with|via|run|launch|start|ask|delegate\s+to)\s+(?:the\s+)?gemini(?:\s+cli)?(?:\s+(?:coding assistant|assistant))?\b/.test(normalized)) {
-    return 'gemini-cli';
-  }
-  if (/\b(?:use|using|with|via|run|launch|start|ask|delegate\s+to)\s+(?:the\s+)?aider(?:\s+(?:coding assistant|assistant))?\b/.test(normalized)) {
-    return 'aider';
-  }
-  return undefined;
-}
-
-function inferExplicitCodingBackendOperation(
-  normalized: string,
-): IntentGatewayOperation | null {
-  if (!normalized) return null;
-  if (/\b(?:create|add|make|write|implement|build|generate)\b/.test(normalized)) {
-    return 'create';
-  }
-  if (/\b(?:update|edit|change|modify|fix|refactor|rename|patch)\b/.test(normalized)) {
-    return 'update';
-  }
-  if (/\b(?:delete|remove)\b/.test(normalized)) {
-    return 'delete';
-  }
-  if (/\b(?:search|find|grep|rg)\b/.test(normalized)) {
-    return 'search';
-  }
-  if (
-    /\b(?:inspect|review|audit|analy[sz]e|check|evaluate|debug|investigate|explain|plan)\b/.test(normalized)
-    || /\blook\s+at\b/.test(normalized)
-  ) {
-    return 'inspect';
-  }
-  if (/\b(?:read|show|open)\b/.test(normalized)) {
-    return 'read';
-  }
-  return 'run';
-}
-
-function extractCodingWorkspaceTarget(rawContent: string): string | undefined {
-  if (!rawContent) return undefined;
-  const patterns = [
-    /\b(?:in|within)\s+(?:the\s+)?(.+?)\s+(?:coding workspace|coding session|workspace|session|repo(?:sitory)?|project)\b/i,
-    /\b(?:for|against)\s+(?:the\s+)?(.+?)\s+(?:coding workspace|coding session|workspace|session|repo(?:sitory)?|project)\b/i,
-  ];
-  for (const pattern of patterns) {
-    const match = rawContent.match(pattern);
-    const cleaned = cleanInferredSessionTarget(match?.[1]);
-    if (cleaned) {
-      return cleaned;
-    }
-  }
-  return undefined;
-}
-
-function extractExplicitRemoteExecCommand(
-  rawContent: string,
-  normalized: string,
-  operation: IntentGatewayOperation,
-): string | undefined {
-  if (!rawContent || !normalized) return undefined;
-  if (operation !== 'run') return undefined;
-  if (!/\b(?:remote|isolated|cloud)\s+sandbox\b/.test(normalized)) return undefined;
-
-  const runMatch = rawContent.match(/\b[Rr]un\s+(.+?)\s+in\s+(?:the\s+)?(?:remote|isolated|cloud)\s+sandbox\b/);
-  const command = collapseIntentGatewayWhitespace(runMatch?.[1] ?? '')
-    .replace(/^["'`]+|["'`]+$/g, '')
-    .trim();
-  return command || undefined;
-}
-
-function cleanInferredSessionTarget(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const cleaned = collapseIntentGatewayWhitespace(value)
-    .replace(/^["'`]+|["'`]+$/g, '')
-    .replace(/^[Tt]he\s+/, '')
-    .replace(/[.,!?;:]+$/g, '')
-    .trim();
-  if (!cleaned) return undefined;
-  const semanticTokens = cleaned
-    .toLowerCase()
-    .split(/[^a-z0-9]+/g)
-    .filter(Boolean)
-    .filter((token) => !GENERIC_SESSION_TARGET_TOKENS.has(token));
-  if (semanticTokens.length === 0) {
-    return undefined;
-  }
-  return cleaned;
-}
-
-function inferExplicitCodingTaskOperation(
-  normalized: string,
-  parsedOperation: IntentGatewayOperation,
-): IntentGatewayOperation | null {
-  if (!normalized || !hasExplicitRepoFileReference(normalized)) return null;
-  if (parsedOperation && parsedOperation !== 'unknown') return parsedOperation;
-  if (
-    /\b(?:run|execute|start|watch)\b/.test(normalized)
-    && /\b(?:tests?|test suite|unit tests?|build|compile|lint|check)\b/.test(normalized)
-  ) {
-    return 'run';
-  }
-  if (
-    /\b(?:npm|pnpm|yarn|bun|npx|vitest|jest|pytest|cargo|go|dotnet|mvn|gradle)\b/.test(normalized)
-    && /\b(?:test|build|lint|check|run)\b/.test(normalized)
-  ) {
-    return 'run';
-  }
-  if (/\b(?:search|find|grep|rg)\b/.test(normalized)) {
-    return 'search';
-  }
-  if (
-    /\b(?:inspect|review|audit|analy[sz]e|check|evaluate)\b/.test(normalized)
-    || /\blook\s+at\b/.test(normalized)
-    || /\b(?:risk|risks|regression|regressions|security|approval-bypass|privilege-escalation)\b/.test(normalized)
-  ) {
-    return 'inspect';
-  }
-  if (/\b(?:read|show|open)\b/.test(normalized)) {
-    return 'read';
-  }
-  return null;
-}
-
 function inferExplicitSecondBrainDecision(
   repairContext: IntentGatewayRepairContext | undefined,
   parsed?: Record<string, unknown>,
@@ -2255,11 +1922,7 @@ function inferExplicitSecondBrainDecision(
     summary: typeof parsed?.summary === 'string' && parsed.summary.trim()
       ? parsed.summary.trim()
       : 'Recovered Second Brain intent from an unstructured gateway response.',
-  }, repairContext);
-}
-
-function hasExplicitRepoFileReference(normalized: string): boolean {
-  return /(?:\b[a-z]:\\(?:[^\\\s]+\\)*[^\\\s]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|py|rs|go|java|rb|php|sh|ya?ml)\b)|(?:\b(?:[a-z0-9_.-]+\/)+[a-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|py|rs|go|java|rb|php|sh|ya?ml)\b)/i.test(normalized);
+    }, repairContext);
 }
 
 function inferRoutineEnabledFilter(
@@ -2380,14 +2043,6 @@ function inferRoutinePersonalItemType(
     return 'routine';
   }
   return undefined;
-}
-
-function isExplicitComplexPlanningRequest(content: string | undefined): boolean {
-  const normalized = normalizeIntentGatewayRepairText(content);
-  if (!normalized) return false;
-  return /\buse (?:your|the) complex[- ]planning path\b/.test(normalized)
-    || /\b(?:route|send) (?:this|it|the request)?\s*(?:through|to) (?:your |the )?complex[- ]planning path\b/.test(normalized)
-    || /\b(?:use|run|route|handle|take)\b[^.!?\n]{0,80}\b(?:dag planner|dag path|planner path)\b/.test(normalized);
 }
 
 function inferSecondBrainQuery(
@@ -2608,77 +2263,6 @@ function isExplicitSecondBrainEntityRequest(
   return /\b(?:second brain|my tasks?|my notes?|my library|my briefs?|my calendar|my events?|my people|my contacts?|people in my second brain|contacts? in my second brain)\b/.test(normalized);
 }
 
-function normalizeIntentGatewayRepairText(content: string | undefined): string {
-  return collapseIntentGatewayWhitespace(content ?? '').toLowerCase();
-}
-
-function inferEmailProviderFromSource(
-  content: string,
-  route: IntentGatewayRoute,
-  personalItemType: IntentGatewayEntities['personalItemType'] | undefined,
-): IntentGatewayEntities['emailProvider'] | undefined {
-  if (!content) return undefined;
-  const canCarryEmailProvider = route === 'email_task'
-    || (route === 'personal_assistant_task' && personalItemType === 'brief');
-  if (!canCarryEmailProvider) return undefined;
-  const normalized = content.toLowerCase();
-  if (/\b(?:outlook|microsoft 365|office 365|m365)\b/.test(normalized)) {
-    return 'm365';
-  }
-  if (/\b(?:gmail|google workspace|google mail|gws)\b/.test(normalized)) {
-    return 'gws';
-  }
-  return undefined;
-}
-
-function inferMailboxReadModeFromSource(
-  content: string,
-  route: IntentGatewayRoute,
-  operation: IntentGatewayOperation,
-): IntentGatewayEntities['mailboxReadMode'] | undefined {
-  if (!content || route !== 'email_task' || operation !== 'read') return undefined;
-  const normalized = content.toLowerCase();
-  if (/\b(?:unread|new)\b/.test(normalized)) {
-    return 'unread';
-  }
-  if (/\b(?:newest|latest|recent|last)\b/.test(normalized)) {
-    return 'latest';
-  }
-  return undefined;
-}
-
-function isExplicitProviderConfigRequest(content: string | undefined): boolean {
-  const normalized = normalizeIntentGatewayRepairText(content);
-  if (!normalized) return false;
-  return /\bconfigured\s+(?:ai\s+|llm\s+)?providers?\b/.test(normalized)
-    || /\b(?:ai\s+|llm\s+)?provider\s+profiles?\b/.test(normalized)
-    || (/\b(?:providers?|profiles?|models?|catalog|routing policy)\b/.test(normalized)
-      && /\b(?:ai|llm|model|provider|ollama|anthropic|openai|xai|gemini|claude)\b/.test(normalized));
-}
-
-function inferProviderConfigOperation(
-  content: string,
-  fallback: IntentGatewayOperation,
-): IntentGatewayOperation {
-  if (['read', 'inspect', 'create', 'update', 'delete'].includes(fallback)) {
-    return fallback;
-  }
-  const normalized = content.toLowerCase();
-  if (/\b(?:update|edit|change|modify|set|switch)\b/.test(normalized)) {
-    return 'update';
-  }
-  if (/\b(?:delete|remove)\b/.test(normalized)) {
-    return 'delete';
-  }
-  if (/\b(?:create|add)\b/.test(normalized)) {
-    return 'create';
-  }
-  if (/\b(?:inspect|explain|details?|catalog|models?)\b/.test(normalized)) {
-    return 'inspect';
-  }
-  return 'read';
-}
-
 function inferExplicitProviderConfigDecision(
   repairContext: IntentGatewayRepairContext | undefined,
   parsed?: Record<string, unknown>,
@@ -2702,10 +2286,6 @@ function inferExplicitProviderConfigDecision(
     expectedContextPressure: 'medium',
     preferredAnswerPath: 'tool_loop',
   }, repairContext);
-}
-
-function collapseIntentGatewayWhitespace(content: string): string {
-  return content.replace(/\s+/g, ' ').trim();
 }
 
 function pendingActionSuggestsRoutine(

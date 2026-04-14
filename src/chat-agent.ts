@@ -46,9 +46,7 @@ import type { ContextCompactionResult } from './util/context-budget.js';
 import { isResponseDegraded as _isResponseDegraded } from './util/response-quality.js';
 import { isToolReportQuery as _isToolReportQuery, formatToolReport as _formatToolReport } from './util/tool-report.js';
 import {
-  getMemoryMutationIntentDeniedMessage,
   isDirectMemorySaveRequest,
-  isMemoryMutationToolName,
   parseDirectMemoryReadRequest,
   parseDirectMemorySaveRequest,
   resolveAffirmativeMemoryContinuationFromHistory,
@@ -63,6 +61,18 @@ import {
   formatCodeSessionWorkflowForPrompt,
   type CodeSessionWorkflowType,
 } from './runtime/coding-workflows.js';
+import {
+  buildToolLoopResumePayload,
+  readToolLoopResumePayload,
+} from './runtime/chat-agent/tool-loop-resume.js';
+import {
+  dispatchDirectIntentCandidates,
+} from './runtime/chat-agent/direct-intent-dispatch.js';
+import {
+  executeToolsConflictAware,
+  isDeferredRemoteSandboxToolResult,
+  pruneDeferredRemoteSandboxToolCalls,
+} from './runtime/chat-agent/tool-execution.js';
 import type { SecondBrainService } from './runtime/second-brain/second-brain-service.js';
 import { resolveCodingBackendSessionTarget } from './runtime/coding-backend-session-target.js';
 import { buildCodeSessionPortfolioAdditionalSection } from './runtime/code-session-portfolio.js';
@@ -167,7 +177,6 @@ import {
 } from './runtime/context-assembly.js';
 import {
   buildRoutedIntentAdditionalSection,
-  prepareToolExecutionForIntent,
 } from './runtime/routed-tool-execution.js';
 import {
   isGenericPendingActionContinuationRequest,
@@ -175,7 +184,6 @@ import {
 } from './runtime/pending-action-resume.js';
 import type { IntentRoutingTraceLog } from './runtime/intent-routing-trace.js';
 import {
-  EXECUTION_PROFILE_METADATA_KEY,
   readSelectedExecutionProfileMetadata,
   type SelectedExecutionProfile,
 } from './runtime/execution-profiles.js';
@@ -221,15 +229,6 @@ const PENDING_ACTION_SWITCH_CONFIRM_PATTERN = /^(?:yes|yep|yeah|y|ok|okay|sure|s
 const PENDING_ACTION_SWITCH_DENY_PATTERN = /^(?:no|nope|nah|keep|keep current|keep the current one|keep the existing one|stay on current|don'?t switch)\b/i;
 const DIRECT_ROUTE_RESUME_TYPE_FILESYSTEM_SAVE_OUTPUT = 'filesystem_save_output';
 const DIRECT_ROUTE_RESUME_TYPE_SECOND_BRAIN_MUTATION = 'second_brain_mutation';
-const TOOL_LOOP_RESUME_TYPE_SUSPENDED_APPROVAL = 'suspended_tool_loop';
-const DEFERRED_REMOTE_SANDBOX_STEP_STATUS = 'deferred_remote_sandbox_step';
-
-const REMOTE_SANDBOX_SERIAL_TOOL_NAMES = new Set([
-  'code_remote_exec',
-  'code_test',
-  'code_build',
-  'code_lint',
-]);
 const SECOND_BRAIN_FOCUS_CONTINUATION_KIND = 'second_brain_focus';
 const RETRY_AFTER_FAILURE_PATTERN = /\b(?:try|run|do)\s+(?:that|it|the\s+(?:last|previous)\s+(?:request|task)|the\s+same\s+thing)\s+again\b|\bretry\b/i;
 const PREREQUISITE_RECOVERY_PATTERN = /\b(?:it|that|this|they)(?:['’]s| are| is)?\s+(?:connected|linked|enabled|fixed|working|ready|configured|authenticated)\s+now\b|\bi(?:['’]ve| have)\s+(?:connected|linked|enabled|fixed|configured|authenticated)\b/i;
@@ -323,93 +322,6 @@ interface SecondBrainMutationResumePayload {
   action: DirectSecondBrainMutationAction;
   fallbackId?: string;
   fallbackLabel?: string;
-}
-
-interface StoredToolLoopMessageIdentity {
-  id: string;
-  userId: string;
-  channel: string;
-  surfaceId?: string;
-  principalId?: string;
-  principalRole?: PrincipalRole;
-  timestamp: number;
-  content: string;
-  metadata?: Record<string, unknown>;
-}
-
-interface StoredToolLoopPendingTool {
-  approvalId: string;
-  toolCallId: string;
-  jobId: string;
-  name: string;
-}
-
-interface ToolLoopResumePayload {
-  type: typeof TOOL_LOOP_RESUME_TYPE_SUSPENDED_APPROVAL;
-  llmMessages: ChatMessage[];
-  pendingTools: StoredToolLoopPendingTool[];
-  originalMessage: StoredToolLoopMessageIdentity;
-  requestText: string;
-  referenceTime: number;
-  allowModelMemoryMutation: boolean;
-  activeSkillIds: string[];
-  contentTrustLevel: import('./tools/types.js').ContentTrustLevel;
-  taintReasons: string[];
-  intentDecision?: IntentGatewayDecision;
-  codeContext?: {
-    workspaceRoot: string;
-    sessionId?: string;
-  };
-  selectedExecutionProfile?: SelectedExecutionProfile;
-}
-
-function isSerializedRemoteSandboxToolCall(toolName: string, args: Record<string, unknown>): boolean {
-  if (!REMOTE_SANDBOX_SERIAL_TOOL_NAMES.has(toolName)) {
-    return false;
-  }
-  if (toolName === 'code_remote_exec') {
-    return true;
-  }
-  const isolation = toString(args.isolation).trim().toLowerCase();
-  if (isolation === 'remote_required' || isolation === 'remote_if_available') {
-    return true;
-  }
-  return toString(args.remoteProfile).trim().length > 0;
-}
-
-function isDeferredRemoteSandboxToolResult(result: Record<string, unknown>): boolean {
-  return toString(result.status).trim() === DEFERRED_REMOTE_SANDBOX_STEP_STATUS;
-}
-
-function pruneDeferredRemoteSandboxToolCalls(
-  llmMessages: ChatMessage[],
-  deferredToolCallIds: Set<string>,
-): void {
-  if (deferredToolCallIds.size === 0) {
-    return;
-  }
-  for (let index = llmMessages.length - 1; index >= 0; index -= 1) {
-    const message = llmMessages[index];
-    if (message.role !== 'assistant' || !message.toolCalls?.length) {
-      continue;
-    }
-    const remainingToolCalls = message.toolCalls.filter((toolCall) => !deferredToolCallIds.has(toolCall.id));
-    if (remainingToolCalls.length === message.toolCalls.length) {
-      return;
-    }
-    if (remainingToolCalls.length === 0 && !toString(message.content).trim()) {
-      llmMessages.splice(index, 1);
-      return;
-    }
-    const { toolCalls: _removedToolCalls, ...rest } = message;
-    llmMessages[index] = remainingToolCalls.length > 0
-      ? {
-          ...rest,
-          toolCalls: remainingToolCalls,
-        }
-      : rest;
-    return;
-  }
 }
 
 interface DirectAutomationClarificationMetadata {
@@ -2265,100 +2177,6 @@ type DirectIntentShadowCandidate =
     };
   }
 
-  private executeToolsConflictAware(
-    toolCalls: Array<{ id: string; name: string; arguments?: string }>,
-    toolExecOrigin: Omit<ToolExecutionRequest, 'toolName' | 'args'>,
-    referenceTime: number,
-    intentDecision?: IntentGatewayDecision,
-  ): Promise<{ toolCall: { id: string; name: string; arguments?: string }; result: Record<string, unknown> }>[] {
-    const promises: Promise<{ toolCall: { id: string; name: string; arguments?: string }; result: Record<string, unknown> }>[] = [];
-    const locks = new Map<string, Promise<void>>();
-    let remoteSandboxStepQueued = false;
-
-    for (const tc of toolCalls) {
-      let parsedArgs: Record<string, unknown> = {};
-      if (tc.arguments?.trim()) {
-        try { parsedArgs = JSON.parse(tc.arguments) as Record<string, unknown>; } catch { /* empty */ }
-      }
-
-      if (isMemoryMutationToolName(tc.name) && toolExecOrigin.allowModelMemoryMutation !== true) {
-        promises.push(Promise.resolve({
-          toolCall: tc,
-          result: {
-            success: false,
-            status: 'denied',
-            message: getMemoryMutationIntentDeniedMessage(tc.name),
-          },
-        }));
-        continue;
-      }
-
-      const def = this.tools?.getToolDefinition(tc.name);
-      const prepared = prepareToolExecutionForIntent({
-        toolName: tc.name,
-        args: parsedArgs,
-        requestText: toolExecOrigin.requestText,
-        referenceTime,
-        intentDecision,
-        toolDefinition: def,
-        getEventById: (id) => this.secondBrainService?.getEventById(id) ?? null,
-        getTaskById: (id) => this.secondBrainService?.getTaskById(id) ?? null,
-        getPersonById: (id) => this.secondBrainService?.getPersonById(id) ?? null,
-      });
-      parsedArgs = prepared.args;
-      if (prepared.immediateResult) {
-        promises.push(Promise.resolve({
-          toolCall: tc,
-          result: prepared.immediateResult,
-        }));
-        continue;
-      }
-
-      const isRemoteSandboxSerializedCall = isSerializedRemoteSandboxToolCall(tc.name, parsedArgs);
-      if (isRemoteSandboxSerializedCall && remoteSandboxStepQueued) {
-        promises.push(Promise.resolve({
-          toolCall: tc,
-          result: {
-            success: false,
-            status: DEFERRED_REMOTE_SANDBOX_STEP_STATUS,
-            message: 'Another remote sandbox command from this request must finish first. Wait for that result before issuing the next remote sandbox step so the same lease and sandbox state can be reused safely.',
-          },
-        }));
-        continue;
-      }
-      if (isRemoteSandboxSerializedCall) {
-        remoteSandboxStepQueued = true;
-      }
-
-      const isMutating = def ? def.risk !== 'read_only' : true;
-      let conflictKey: string | null = null;
-
-      if (isMutating) {
-        if (tc.name === 'fs_write' || tc.name === 'fs_delete' || tc.name === 'fs_move' || tc.name === 'fs_copy' || tc.name === 'doc_create') {
-          conflictKey = `fs:${parsedArgs.path || parsedArgs.filename || parsedArgs.source}`;
-        } else if (tc.name.startsWith('browser_')) {
-          conflictKey = `browser:${parsedArgs.ref || parsedArgs.url}`;
-        } else {
-          conflictKey = `global:${tc.name}`;
-        }
-      }
-
-      const executeFn = () => this.tools!.executeModelTool(tc.name, parsedArgs, toolExecOrigin)
-        .then((result) => ({ toolCall: tc, result }));
-
-      if (conflictKey) {
-        const prev = locks.get(conflictKey) ?? Promise.resolve();
-        const current = prev.then(executeFn);
-        locks.set(conflictKey, current.then(() => {}).catch(() => {}));
-        promises.push(current);
-      } else {
-        promises.push(executeFn());
-      }
-    }
-
-    return promises;
-  }
-
   constructor(
     id: string,
     name: string,
@@ -3673,309 +3491,119 @@ type DirectIntentShadowCandidate =
     }
     
     if (!skipDirectTools) {
-      for (const candidate of directIntentRouting.candidates) {
-        switch (candidate) {
-          case 'personal_assistant': {
-            const directSecondBrainWrite = await this.tryDirectSecondBrainWrite(
+      const directIntentResponse = await dispatchDirectIntentCandidates({
+        candidates: directIntentRouting.candidates,
+        handlers: {
+          personal_assistant: async () => (
+            await this.tryDirectSecondBrainWrite(
               routedScopedMessage,
               ctx,
               pendingActionUserKey,
               directIntent?.decision,
               continuityThread,
-            );
-            if (directSecondBrainWrite) {
-              return buildScopedDirectIntentResponse({
-                candidate,
-                result: directSecondBrainWrite,
-                message,
-                routingMessage: routedScopedMessage,
-                intentGateway: directIntent,
-                ctx,
-                activeSkills,
-                conversationKey,
-              });
-            }
-            const directSecondBrain = await this.tryDirectSecondBrainRead(
-              routedScopedMessage,
-              directIntent?.decision,
-              continuityThread,
-            );
-            if (!directSecondBrain) break;
-            return buildScopedDirectIntentResponse({
-              candidate,
-              result: directSecondBrain,
-              message,
-              routingMessage: routedScopedMessage,
-              intentGateway: directIntent,
-              ctx,
-              activeSkills,
-              conversationKey,
-            });
-          }
-          case 'provider_read': {
-            const directProviderRead = await this.tryDirectProviderRead(
-              routedScopedMessage,
-              ctx,
-              directIntent?.decision,
-            );
-            if (!directProviderRead) break;
-            return buildScopedDirectIntentResponse({
-              candidate,
-              result: directProviderRead,
-              message,
-              routingMessage: routedScopedMessage,
-              intentGateway: directIntent,
-              ctx,
-              activeSkills,
-              conversationKey,
-            });
-          }
-          case 'coding_session_control': {
-            const sessionControlResult = await this.tryDirectCodeSessionControlFromGateway(
-              message, ctx, directIntent?.decision,
-            );
-            if (!sessionControlResult) break;
-            return buildScopedDirectIntentResponse({
-              candidate: 'coding_session_control',
-              result: sessionControlResult,
-              message,
-              routingMessage: routedScopedMessage,
-              intentGateway: directIntent,
-              ctx,
-              activeSkills,
-              conversationKey,
-            });
-          }
-          case 'coding_backend': {
-            const directCodingBackend = await this.tryDirectCodingBackendDelegation(
-              routedScopedMessage,
-              ctx,
-              pendingActionUserKey,
-              directIntent?.decision,
-              effectiveCodeContext,
-            );
-            if (!directCodingBackend) break;
-            return buildScopedDirectIntentResponse({
-              candidate,
-              result: directCodingBackend,
-              message,
-              routingMessage: routedScopedMessage,
-              intentGateway: directIntent,
-              ctx,
-              activeSkills,
-              conversationKey,
-            });
-          }
-          case 'filesystem': {
-            const directFilesystem = await this.tryDirectFilesystemIntent(
-              routedScopedMessage,
-              ctx,
-              pendingActionUserKey,
-              conversationKey,
-              effectiveCodeContext,
-              message.content,
-              directIntent?.decision,
-            );
-            if (!directFilesystem) break;
-            return buildScopedDirectIntentResponse({
-              candidate,
-              result: directFilesystem,
-              message,
-              routingMessage: routedScopedMessage,
-              intentGateway: directIntent,
-              ctx,
-              activeSkills,
-              conversationKey,
-            });
-          }
-          case 'memory_write': {
-            const directMemorySave = await this.tryDirectMemorySave(
-              routedScopedMessage,
-              ctx,
-              pendingActionUserKey,
-              effectiveCodeContext,
-              message.content,
-            );
-            if (!directMemorySave) break;
-            return buildScopedDirectIntentResponse({
-              candidate,
-              result: directMemorySave,
-              message,
-              routingMessage: routedScopedMessage,
-              intentGateway: directIntent,
-              ctx,
-              activeSkills,
-              conversationKey,
-            });
-          }
-          case 'memory_read': {
-            const directMemoryRead = await this.tryDirectMemoryRead(
-              routedScopedMessage,
-              ctx,
-              effectiveCodeContext,
-              message.content,
-            );
-            if (!directMemoryRead) break;
-            return buildScopedDirectIntentResponse({
-              candidate,
-              result: directMemoryRead,
-              message,
-              routingMessage: routedScopedMessage,
-              intentGateway: directIntent,
-              ctx,
-              activeSkills,
-              conversationKey,
-            });
-          }
-          case 'scheduled_email_automation': {
-            const directScheduledEmailAutomation = await this.tryDirectScheduledEmailAutomation(
-              routedScopedMessage,
-              ctx,
-              pendingActionUserKey,
-              stateAgentId,
-            );
-            if (!directScheduledEmailAutomation) break;
-            return buildScopedDirectIntentResponse({
-              candidate,
-              result: directScheduledEmailAutomation,
-              message,
-              routingMessage: routedScopedMessage,
-              intentGateway: directIntent,
-              ctx,
-              activeSkills,
-              conversationKey,
-            });
-          }
-          case 'automation': {
-            const directAutomationAuthoring = await this.tryDirectAutomationAuthoring(
-              routedScopedMessage,
-              ctx,
-              pendingActionUserKey,
-              effectiveCodeContext,
-              {
-                intentDecision: directIntent?.decision,
-                assumeAuthoring: directIntentRouting.gatewayDirected,
-              },
-            );
-            if (!directAutomationAuthoring) break;
-            return buildScopedDirectIntentResponse({
-              candidate,
-              result: directAutomationAuthoring,
-              message,
-              routingMessage: routedScopedMessage,
-              intentGateway: directIntent,
-              ctx,
-              activeSkills,
-              conversationKey,
-            });
-          }
-          case 'automation_control': {
-            const directAutomationControl = await this.tryDirectAutomationControl(
-              routedScopedMessage,
-              ctx,
-              pendingActionUserKey,
-              directIntent?.decision,
-              continuityThread,
-            );
-            if (!directAutomationControl) break;
-            return buildScopedDirectIntentResponse({
-              candidate,
-              result: directAutomationControl,
-              message,
-              routingMessage: routedScopedMessage,
-              intentGateway: directIntent,
-              ctx,
-              activeSkills,
-              conversationKey,
-            });
-          }
-          case 'automation_output': {
-            const directAutomationOutput = await this.tryDirectAutomationOutput(
-              routedScopedMessage,
-              ctx,
-              directIntent?.decision,
-            );
-            if (!directAutomationOutput) break;
-            return buildScopedDirectIntentResponse({
-              candidate,
-              result: directAutomationOutput,
-              message,
-              routingMessage: routedScopedMessage,
-              intentGateway: directIntent,
-              ctx,
-              activeSkills,
-              conversationKey,
-            });
-          }
-          case 'workspace_write': {
-            const directWorkspaceWrite = await this.tryDirectGoogleWorkspaceWrite(
-              routedScopedMessage,
-              ctx,
-              pendingActionUserKey,
-              directIntent?.decision,
-            );
-            if (!directWorkspaceWrite) break;
-            return buildScopedDirectIntentResponse({
-              candidate,
-              result: directWorkspaceWrite,
-              message,
-              routingMessage: routedScopedMessage,
-              intentGateway: directIntent,
-              ctx,
-              activeSkills,
-              conversationKey,
-            });
-          }
-          case 'workspace_read': {
-            const directWorkspaceRead = await this.tryDirectGoogleWorkspaceRead(
-              routedScopedMessage,
-              ctx,
-              pendingActionUserKey,
-              directIntent?.decision,
-              continuityThread,
-            );
-            if (!directWorkspaceRead) break;
-            return buildScopedDirectIntentResponse({
-              candidate,
-              result: directWorkspaceRead,
-              message,
-              routingMessage: routedScopedMessage,
-              intentGateway: directIntent,
-              ctx,
-              activeSkills,
-              conversationKey,
-            });
-          }
-          case 'browser': {
-            const directBrowserAutomation = await this.tryDirectBrowserAutomation(
-              routedScopedMessage,
-              ctx,
-              pendingActionUserKey,
-              effectiveCodeContext,
-              directIntent?.decision,
-              continuityThread,
-            );
-            if (!directBrowserAutomation) break;
-            return buildScopedDirectIntentResponse({
-              candidate,
-              result: directBrowserAutomation,
-              message,
-              routingMessage: routedScopedMessage,
-              intentGateway: directIntent,
-              ctx,
-              activeSkills,
-              conversationKey,
-            });
-          }
-          case 'web_search': {
-            if (skipDirectWebSearch) break;
+            )
+          ) ?? this.tryDirectSecondBrainRead(
+            routedScopedMessage,
+            directIntent?.decision,
+            continuityThread,
+          ),
+          provider_read: () => this.tryDirectProviderRead(
+            routedScopedMessage,
+            ctx,
+            directIntent?.decision,
+          ),
+          coding_session_control: () => this.tryDirectCodeSessionControlFromGateway(
+            message,
+            ctx,
+            directIntent?.decision,
+          ),
+          coding_backend: () => this.tryDirectCodingBackendDelegation(
+            routedScopedMessage,
+            ctx,
+            pendingActionUserKey,
+            directIntent?.decision,
+            effectiveCodeContext,
+          ),
+          filesystem: () => this.tryDirectFilesystemIntent(
+            routedScopedMessage,
+            ctx,
+            pendingActionUserKey,
+            conversationKey,
+            effectiveCodeContext,
+            message.content,
+            directIntent?.decision,
+          ),
+          memory_write: () => this.tryDirectMemorySave(
+            routedScopedMessage,
+            ctx,
+            pendingActionUserKey,
+            effectiveCodeContext,
+            message.content,
+          ),
+          memory_read: () => this.tryDirectMemoryRead(
+            routedScopedMessage,
+            ctx,
+            effectiveCodeContext,
+            message.content,
+          ),
+          scheduled_email_automation: () => this.tryDirectScheduledEmailAutomation(
+            routedScopedMessage,
+            ctx,
+            pendingActionUserKey,
+            stateAgentId,
+          ),
+          automation: () => this.tryDirectAutomationAuthoring(
+            routedScopedMessage,
+            ctx,
+            pendingActionUserKey,
+            effectiveCodeContext,
+            {
+              intentDecision: directIntent?.decision,
+              assumeAuthoring: directIntentRouting.gatewayDirected,
+            },
+          ),
+          automation_control: () => this.tryDirectAutomationControl(
+            routedScopedMessage,
+            ctx,
+            pendingActionUserKey,
+            directIntent?.decision,
+            continuityThread,
+          ),
+          automation_output: () => this.tryDirectAutomationOutput(
+            routedScopedMessage,
+            ctx,
+            directIntent?.decision,
+          ),
+          workspace_write: () => this.tryDirectGoogleWorkspaceWrite(
+            routedScopedMessage,
+            ctx,
+            pendingActionUserKey,
+            directIntent?.decision,
+          ),
+          workspace_read: () => this.tryDirectGoogleWorkspaceRead(
+            routedScopedMessage,
+            ctx,
+            pendingActionUserKey,
+            directIntent?.decision,
+            continuityThread,
+          ),
+          browser: () => this.tryDirectBrowserAutomation(
+            routedScopedMessage,
+            ctx,
+            pendingActionUserKey,
+            effectiveCodeContext,
+            directIntent?.decision,
+            continuityThread,
+          ),
+          web_search: async () => {
+            if (skipDirectWebSearch) return null;
             let webSearchResult: string | null = null;
             try {
               webSearchResult = await this.tryDirectWebSearch(routedScopedMessage, ctx);
             } catch {
               webSearchResult = null;
             }
-            if (!webSearchResult) break;
+            if (!webSearchResult) return null;
 
             const sanitizedWebSearch = this.sanitizeToolResultForLlm(
               'web_search',
@@ -4004,31 +3632,32 @@ type DirectIntentShadowCandidate =
             } else {
               finalContent = llmSearchPayload;
             }
-            return buildScopedDirectIntentResponse({
-              candidate,
-              result: finalContent,
-              message,
-              routingMessage: routedScopedMessage,
-              intentGateway: directIntent,
-              ctx,
-              activeSkills,
-              conversationKey,
-            });
-          }
-          default:
-            break;
-        }
-      }
-
-      if (!directIntentRouting.gatewayDirected && shouldAllowBoundedDegradedMemorySaveFallback(directIntent)) {
-        const degradedMemorySave = await this.tryDirectMemorySave(
-          routedScopedMessage,
+            return finalContent;
+          },
+        },
+        onHandled: (candidate, result) => buildScopedDirectIntentResponse({
+          candidate,
+          result,
+          message,
+          routingMessage: routedScopedMessage,
+          intentGateway: directIntent,
           ctx,
-          pendingActionUserKey,
-          effectiveCodeContext,
-          message.content,
-        );
-        if (degradedMemorySave) {
+          activeSkills,
+          conversationKey,
+        }),
+        gatewayDirected: directIntentRouting.gatewayDirected,
+        allowDegradedMemoryFallback: shouldAllowBoundedDegradedMemorySaveFallback(directIntent),
+        onDegradedMemoryFallback: async () => {
+          const degradedMemorySave = await this.tryDirectMemorySave(
+            routedScopedMessage,
+            ctx,
+            pendingActionUserKey,
+            effectiveCodeContext,
+            message.content,
+          );
+          if (!degradedMemorySave) {
+            return null;
+          }
           return buildScopedDegradedDirectIntentResponse({
             candidate: 'memory_write',
             result: degradedMemorySave,
@@ -4038,7 +3667,10 @@ type DirectIntentShadowCandidate =
             conversationKey,
             degradedReason: 'gateway_unavailable_or_unstructured',
           });
-        }
+        },
+      });
+      if (directIntentResponse) {
+        return directIntentResponse;
       }
     }
 
@@ -4490,7 +4122,14 @@ type DirectIntentShadowCandidate =
         };
 
         const toolResults = await Promise.allSettled(
-          this.executeToolsConflictAware(response.toolCalls, toolExecOrigin, message.timestamp, directIntent?.decision)
+          executeToolsConflictAware({
+            toolCalls: response.toolCalls,
+            toolExecOrigin,
+            referenceTime: message.timestamp,
+            intentDecision: directIntent?.decision,
+            tools: this.tools!,
+            secondBrainService: this.secondBrainService,
+          })
         );
         lastToolRoundResults = toolResults.reduce<Array<{ toolName: string; result: Record<string, unknown> }>>((acc, settled) => {
           if (settled.status !== 'fulfilled') return acc;
@@ -4755,7 +4394,14 @@ type DirectIntentShadowCandidate =
               requestText: stripLeadingContextPrefix(routedScopedMessage.content),
             };
             const fbToolResults = await Promise.allSettled(
-              this.executeToolsConflictAware(fallbackResult.response.toolCalls, fbToolOrigin, message.timestamp, directIntent?.decision)
+              executeToolsConflictAware({
+                toolCalls: fallbackResult.response.toolCalls,
+                toolExecOrigin: fbToolOrigin,
+                referenceTime: message.timestamp,
+                intentDecision: directIntent?.decision,
+                tools: this.tools!,
+                secondBrainService: this.secondBrainService,
+              })
             );
             let fallbackHasPending = false;
             for (const settled of fbToolResults) {
@@ -12356,179 +12002,19 @@ type DirectIntentShadowCandidate =
     };
   }
 
-  private buildToolLoopResumePayload(input: {
-    llmMessages: ChatMessage[];
-    pendingTools: SuspendedToolCall[];
-    originalMessage: UserMessage;
-    requestText: string;
-    referenceTime: number;
-    allowModelMemoryMutation: boolean;
-    activeSkillIds: string[];
-    contentTrustLevel: import('./tools/types.js').ContentTrustLevel;
-    taintReasons: string[];
-    intentDecision?: IntentGatewayDecision;
-    codeContext?: { workspaceRoot: string; sessionId?: string };
-    selectedExecutionProfile?: SelectedExecutionProfile | null;
-  }): Record<string, unknown> {
-    return {
-      type: TOOL_LOOP_RESUME_TYPE_SUSPENDED_APPROVAL,
-      llmMessages: input.llmMessages.map((message) => ({
-        role: message.role,
-        content: message.content,
-        ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
-        ...(message.toolCalls?.length
-          ? {
-              toolCalls: message.toolCalls.map((toolCall) => ({
-                id: toolCall.id,
-                name: toolCall.name,
-                arguments: toolCall.arguments,
-              })),
-            }
-          : {}),
-      })),
-      pendingTools: input.pendingTools.map((tool) => ({
-        approvalId: tool.approvalId,
-        toolCallId: tool.toolCallId,
-        jobId: tool.jobId,
-        name: tool.name,
-      })),
-      originalMessage: {
-        id: input.originalMessage.id,
-        userId: input.originalMessage.userId,
-        channel: input.originalMessage.channel,
-        ...(input.originalMessage.surfaceId?.trim() ? { surfaceId: input.originalMessage.surfaceId.trim() } : {}),
-        ...(input.originalMessage.principalId?.trim() ? { principalId: input.originalMessage.principalId.trim() } : {}),
-        ...(input.originalMessage.principalRole ? { principalRole: input.originalMessage.principalRole } : {}),
-        timestamp: input.originalMessage.timestamp,
-        content: input.originalMessage.content,
-        ...(input.originalMessage.metadata ? { metadata: { ...input.originalMessage.metadata } } : {}),
-      },
-      requestText: input.requestText,
-      referenceTime: input.referenceTime,
-      allowModelMemoryMutation: input.allowModelMemoryMutation,
-      activeSkillIds: [...input.activeSkillIds],
-      contentTrustLevel: input.contentTrustLevel,
-      taintReasons: [...input.taintReasons],
-      ...(input.intentDecision ? { intentDecision: { ...input.intentDecision } } : {}),
-      ...(input.codeContext
-        ? {
-            codeContext: {
-              workspaceRoot: input.codeContext.workspaceRoot,
-              ...(input.codeContext.sessionId ? { sessionId: input.codeContext.sessionId } : {}),
-            },
-          }
-        : {}),
-      ...(input.selectedExecutionProfile
-        ? {
-            selectedExecutionProfile: {
-              ...input.selectedExecutionProfile,
-              fallbackProviderOrder: [...input.selectedExecutionProfile.fallbackProviderOrder],
-            },
-          }
-        : {}),
-    };
+  private buildToolLoopResumePayload(
+    input: Parameters<typeof buildToolLoopResumePayload>[0],
+  ): Record<string, unknown> {
+    return buildToolLoopResumePayload(input);
   }
 
   private readToolLoopResumePayload(
     payload: Record<string, unknown> | undefined,
-  ): ToolLoopResumePayload | null {
-    if (!isRecord(payload) || payload.type !== TOOL_LOOP_RESUME_TYPE_SUSPENDED_APPROVAL) {
-      return null;
-    }
-    const llmMessages = Array.isArray(payload.llmMessages)
-      ? payload.llmMessages
-        .filter((value): value is Record<string, unknown> => isRecord(value))
-        .map((value) => {
-          const role = value.role === 'system' || value.role === 'user' || value.role === 'assistant' || value.role === 'tool'
-            ? value.role
-            : null;
-          if (!role) return null;
-          const content = toString(value.content);
-          const toolCalls = Array.isArray(value.toolCalls)
-            ? value.toolCalls
-              .filter((toolCall): toolCall is Record<string, unknown> => isRecord(toolCall))
-              .map((toolCall) => ({
-                id: toString(toolCall.id).trim(),
-                name: toString(toolCall.name).trim(),
-                arguments: toString(toolCall.arguments),
-              }))
-              .filter((toolCall) => toolCall.id && toolCall.name)
-            : undefined;
-          return {
-            role,
-            content,
-            ...(toString(value.toolCallId).trim() ? { toolCallId: toString(value.toolCallId).trim() } : {}),
-            ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
-          } satisfies ChatMessage;
-        })
-        .filter((value): value is ChatMessage => Boolean(value))
-      : [];
-    const pendingTools = Array.isArray(payload.pendingTools)
-      ? payload.pendingTools
-        .filter((value): value is Record<string, unknown> => isRecord(value))
-        .map((value) => ({
-          approvalId: toString(value.approvalId).trim(),
-          toolCallId: toString(value.toolCallId).trim(),
-          jobId: toString(value.jobId).trim(),
-          name: toString(value.name).trim(),
-        }))
-        .filter((value) => value.approvalId && value.toolCallId && value.jobId && value.name)
-      : [];
-    const originalMessageRecord = isRecord(payload.originalMessage) ? payload.originalMessage : null;
-    const originalMessage = originalMessageRecord
-      ? {
-          id: toString(originalMessageRecord.id).trim(),
-          userId: toString(originalMessageRecord.userId).trim(),
-          channel: toString(originalMessageRecord.channel).trim(),
-          ...(toString(originalMessageRecord.surfaceId).trim() ? { surfaceId: toString(originalMessageRecord.surfaceId).trim() } : {}),
-          ...(toString(originalMessageRecord.principalId).trim() ? { principalId: toString(originalMessageRecord.principalId).trim() } : {}),
-          ...(toString(originalMessageRecord.principalRole).trim() ? { principalRole: this.normalizeFilesystemResumePrincipalRole(toString(originalMessageRecord.principalRole).trim()) } : {}),
-          timestamp: toNumber(originalMessageRecord.timestamp) ?? Date.now(),
-          content: toString(originalMessageRecord.content),
-          ...(isRecord(originalMessageRecord.metadata) ? { metadata: { ...originalMessageRecord.metadata } } : {}),
-        } satisfies StoredToolLoopMessageIdentity
-      : null;
-    const requestText = toString(payload.requestText).trim();
-    if (llmMessages.length === 0 || pendingTools.length === 0 || !originalMessage || !originalMessage.id || !originalMessage.userId || !originalMessage.channel || !requestText) {
-      return null;
-    }
-    const contentTrustLevel = payload.contentTrustLevel === 'trusted'
-      || payload.contentTrustLevel === 'low_trust'
-      || payload.contentTrustLevel === 'quarantined'
-      ? payload.contentTrustLevel
-      : 'trusted';
-    const taintReasons = Array.isArray(payload.taintReasons)
-      ? payload.taintReasons.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-      : [];
-    const activeSkillIds = Array.isArray(payload.activeSkillIds)
-      ? payload.activeSkillIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-      : [];
-    const codeContext = isRecord(payload.codeContext) && toString(payload.codeContext.workspaceRoot).trim()
-      ? {
-          workspaceRoot: toString(payload.codeContext.workspaceRoot).trim(),
-          ...(toString(payload.codeContext.sessionId).trim() ? { sessionId: toString(payload.codeContext.sessionId).trim() } : {}),
-        }
-      : undefined;
-    const selectedExecutionProfile = isRecord(payload.selectedExecutionProfile)
-      ? readSelectedExecutionProfileMetadata({
-          [EXECUTION_PROFILE_METADATA_KEY]: payload.selectedExecutionProfile,
-        })
-      : null;
-    return {
-      type: TOOL_LOOP_RESUME_TYPE_SUSPENDED_APPROVAL,
-      llmMessages,
-      pendingTools,
-      originalMessage,
-      requestText,
-      referenceTime: toNumber(payload.referenceTime) ?? Date.now(),
-      allowModelMemoryMutation: payload.allowModelMemoryMutation === true,
-      activeSkillIds,
-      contentTrustLevel,
-      taintReasons,
-      ...(isRecord(payload.intentDecision) ? { intentDecision: payload.intentDecision as unknown as IntentGatewayDecision } : {}),
-      ...(codeContext ? { codeContext } : {}),
-      ...(selectedExecutionProfile ? { selectedExecutionProfile } : {}),
-    };
+  ) {
+    return readToolLoopResumePayload(
+      payload,
+      (value) => this.normalizeFilesystemResumePrincipalRole(value),
+    );
   }
 
   private buildStoredToolLoopChatFn(input: {
@@ -12686,7 +12172,14 @@ type DirectIntentShadowCandidate =
       };
 
       const toolResults = await Promise.allSettled(
-        this.executeToolsConflictAware(response.toolCalls, toolExecOrigin, resume.referenceTime, resume.intentDecision),
+        executeToolsConflictAware({
+          toolCalls: response.toolCalls,
+          toolExecOrigin,
+          referenceTime: resume.referenceTime,
+          intentDecision: resume.intentDecision,
+          tools: this.tools!,
+          secondBrainService: this.secondBrainService,
+        }),
       );
       lastToolRoundResults = toolResults.reduce<Array<{ toolName: string; result: Record<string, unknown> }>>((acc, settled) => {
         if (settled.status !== 'fulfilled') return acc;
