@@ -5,6 +5,10 @@ Expose a safe, auditable tool-execution plane so the assistant can perform works
 
 The control plane assumes top-level user-turn interpretation is already complete before tool execution starts. Provider disambiguation, correction handling, and ordinary clarification turns stay in the `IntentGateway` path; only real approval/continuation resumes bypass that interpreter as control-plane events.
 
+Current boundary:
+- `src/runtime/intent/capability-resolver.ts` resolves direct capability-lane candidates from routed intent after the gateway finishes classification and repair
+- `src/runtime/direct-intent-routing.ts` applies gateway availability/confidence gating and filters those candidates against the handlers available in the current runtime
+
 ## Scope
 - Runtime modules:
   - `src/tools/registry.ts`

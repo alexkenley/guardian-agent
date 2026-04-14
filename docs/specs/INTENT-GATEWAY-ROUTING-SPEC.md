@@ -20,6 +20,15 @@ Shared prompt-footprint and compact-inventory rules live in:
 ## Primary Files
 
 - `src/runtime/intent-gateway.ts`
+- `src/runtime/intent/normalization.ts`
+- `src/runtime/intent/structured-recovery.ts`
+- `src/runtime/intent/workload-derivation.ts`
+- `src/runtime/intent/route-classifier.ts`
+- `src/runtime/intent/capability-resolver.ts`
+- `src/runtime/intent/entity-resolvers/coding.ts`
+- `src/runtime/intent/entity-resolvers/email.ts`
+- `src/runtime/intent/entity-resolvers/personal-assistant.ts`
+- `src/runtime/intent/entity-resolvers/provider-config.ts`
 - `src/runtime/message-router.ts`
 - `src/runtime/pending-actions.ts`
 - `src/index.ts`
@@ -91,6 +100,15 @@ The `decision` is structured and includes:
 - `expectedContextPressure`
 - `preferredAnswerPath`
 - `entities`
+
+Current internal ownership:
+- `src/runtime/intent-gateway.ts` remains the compatibility facade and owns the classifier call sequence, fallback ordering, and automation-name repair pass
+- `src/runtime/intent/route-classifier.ts` owns classifier prompt assets, request-message shaping, and single-pass classifier execution
+- `src/runtime/intent/normalization.ts` owns shared enum/value normalization for routed intent state
+- `src/runtime/intent/structured-recovery.ts` owns structured parsing, bounded repair, and route-scoped recovery after malformed or missing classifier output
+- `src/runtime/intent/workload-derivation.ts` owns deterministic workload metadata derivation
+- `src/runtime/intent/capability-resolver.ts` owns direct capability-lane candidate mapping after routing
+- `src/runtime/intent/entity-resolvers/*.ts` own route-scoped entity inference and repair
 
 ## Structured Output Recovery
 
