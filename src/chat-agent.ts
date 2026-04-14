@@ -72,7 +72,6 @@ import {
   pruneDeferredRemoteSandboxToolCalls,
 } from './runtime/chat-agent/tool-execution.js';
 import type { SecondBrainService } from './runtime/second-brain/second-brain-service.js';
-import { resolveCodingBackendSessionTarget } from './runtime/coding-backend-session-target.js';
 import { buildCodeSessionPortfolioAdditionalSection } from './runtime/code-session-portfolio.js';
 import { inspectCodeWorkspaceSync, type CodeWorkspaceProfile } from './runtime/code-workspace-profile.js';
 import type { AssistantResponseStyleConfig } from './config/types.js';
@@ -153,6 +152,11 @@ import {
   readDirectContinuationStateMetadata,
   stripDirectContinuationStateMetadata,
 } from './runtime/chat-agent/direct-continuation-state.js';
+import {
+  ensureExplicitCodingTaskWorkspaceTarget as ensureExplicitCodingTaskWorkspaceTargetHelper,
+  handleCodeSessionAttach as handleCodeSessionAttachHelper,
+  tryDirectCodeSessionControlFromGateway as tryDirectCodeSessionControlFromGatewayHelper,
+} from './runtime/chat-agent/code-session-control.js';
 import {
   normalizeFilesystemResumePrincipalRole,
   type SecondBrainMutationResumePayload,
@@ -6621,94 +6625,17 @@ type DirectIntentShadowCandidate =
         response: { content: string; metadata?: Record<string, unknown> };
       }
   > {
-    const requestedSessionTarget = typeof input.decision?.entities.sessionTarget === 'string'
-      ? input.decision.entities.sessionTarget.trim()
-      : '';
-    if (!input.decision
-      || input.decision.route !== 'coding_task'
-      || input.decision.resolution !== 'ready'
-      || !requestedSessionTarget
-      || !this.codeSessionStore
-      || !this.tools?.isEnabled()) {
-      return { status: 'unchanged' };
-    }
-
-    const codeSessionOwnerUserId = input.currentSession?.ownerUserId ?? input.message.userId?.trim();
-    if (!codeSessionOwnerUserId) {
-      return { status: 'unchanged' };
-    }
-
-    const mentionedSessionResolution = resolveCodingBackendSessionTarget({
-      requestedSessionTarget,
-      currentSessionId: input.currentSession?.id ?? input.codeContext?.sessionId,
-      sessions: this.codeSessionStore.listSessionsForUser(codeSessionOwnerUserId),
+    return ensureExplicitCodingTaskWorkspaceTargetHelper({
+      toolsEnabled: this.tools?.isEnabled() === true,
+      codeSessionStore: this.codeSessionStore,
+      executeDirectCodeSessionTool: (toolName, args, message, ctx) => this.executeDirectCodeSessionTool(
+        toolName,
+        args,
+        message,
+        ctx,
+      ),
+      ...input,
     });
-    if (mentionedSessionResolution.status === 'none' || mentionedSessionResolution.status === 'current') {
-      return { status: 'unchanged' };
-    }
-    if (mentionedSessionResolution.status === 'target_unresolved') {
-      const lines = input.currentSession
-        ? [
-            'This chat is currently attached to:',
-            formatDirectCodeSessionLine(input.currentSession, true),
-          ]
-        : ['This chat is not currently attached to a coding workspace.'];
-      lines.push(`I couldn't match the coding workspace you mentioned: "${mentionedSessionResolution.requestedSessionTarget}".`);
-      lines.push(mentionedSessionResolution.error);
-      lines.push('I did not run the task in the wrong workspace.');
-      return {
-        status: 'blocked',
-        response: {
-          content: lines.join('\n'),
-          metadata: input.currentSession
-            ? {
-                codeSessionResolved: true,
-                codeSessionId: input.currentSession.id,
-              }
-            : undefined,
-        },
-      };
-    }
-
-    const attachResult = await this.executeDirectCodeSessionTool(
-      'code_session_attach',
-      { sessionId: mentionedSessionResolution.targetSession.id },
-      input.message,
-      input.ctx,
-    );
-    if (!toBoolean(attachResult.success)) {
-      const failure = toString(attachResult.error)
-        || toString(attachResult.message)
-        || `I could not switch this chat to "${mentionedSessionResolution.targetSession.title}".`;
-      return { status: 'blocked', response: { content: failure } };
-    }
-
-    const attachedSession = isRecord(attachResult.output) && isRecord(attachResult.output.session)
-      ? attachResult.output.session
-      : mentionedSessionResolution.targetSession;
-    const sessionId = toString(attachedSession.id).trim() || mentionedSessionResolution.targetSession.id;
-    const workspaceRoot = toString(attachedSession.resolvedRoot).trim()
-      || toString(attachedSession.workspaceRoot).trim()
-      || toString(mentionedSessionResolution.targetSession.resolvedRoot).trim()
-      || mentionedSessionResolution.targetSession.workspaceRoot;
-    const currentSession = this.codeSessionStore.getSession(sessionId, codeSessionOwnerUserId)
-      ?? this.codeSessionStore.getSession(sessionId);
-    return {
-      status: 'switched',
-      currentSession,
-      codeContext: {
-        sessionId,
-        workspaceRoot,
-      },
-      switchResponse: {
-        content: `Switched this chat to:\n${formatDirectCodeSessionLine(attachedSession, true)}`,
-        metadata: {
-          codeSessionResolved: true,
-          codeSessionId: sessionId,
-          codeSessionFocusChanged: true,
-        },
-      },
-    };
   }
 
   private async tryDirectCodeSessionControlFromGateway(
@@ -6716,135 +6643,28 @@ type DirectIntentShadowCandidate =
     ctx: AgentContext,
     decision?: import('./runtime/intent-gateway.js').IntentGatewayDecision,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    if (!this.tools?.isEnabled()) return null;
-    if (!decision || decision.route !== 'coding_session_control') return null;
-
-    const operation = decision.operation;
-
-    if (operation === 'navigate' || operation === 'search' || operation === 'read') {
-      // navigate/search/read without a target → list all sessions
-      return this.handleCodeSessionList(message, ctx);
-    }
-    if (operation === 'inspect') {
-      return this.handleCodeSessionCurrent(message, ctx);
-    }
-    if (operation === 'delete') {
-      return this.handleCodeSessionDetach(message, ctx);
-    }
-    if (operation === 'update') {
-      const target = decision.entities.sessionTarget || decision.entities.query || '';
-      if (!target.trim()) {
-        return { content: 'Please specify which coding session or workspace to switch to.' };
-      }
-      return this.handleCodeSessionAttach(message, ctx, target);
-    }
-    if (operation === 'create') {
-      const target = decision.entities.sessionTarget || decision.entities.path || decision.entities.query || '';
-      if (!target.trim()) {
-        return { content: 'Please specify the workspace path or name for the new coding session.' };
-      }
-      return this.handleCodeSessionCreate(message, ctx, target);
-    }
-
-    // Unknown operation — list is the safest default for session control
-    return this.handleCodeSessionList(message, ctx);
-  }
-
-  private async handleCodeSessionCurrent(
-    message: UserMessage,
-    ctx: AgentContext,
-  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    const result = await this.executeDirectCodeSessionTool('code_session_current', {}, message, ctx);
-    if (!toBoolean(result.success)) {
-      const failure = toString(result.message) || 'I could not inspect the current coding workspace.';
-      return { content: failure };
-    }
-    const session = isRecord(result.output) && isRecord(result.output.session) ? result.output.session : null;
-    if (!session) {
-      return { content: 'This chat is not currently attached to any coding workspace.' };
-    }
-    return {
-      content: [
-        'This chat is currently attached to:',
-        formatDirectCodeSessionLine(session, true),
-      ].join('\n'),
-      metadata: {
-        codeSessionResolved: true,
-        codeSessionId: toString(session.id),
-      },
-    };
-  }
-
-  private async handleCodeSessionList(
-    message: UserMessage,
-    ctx: AgentContext,
-  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    const [listResult, currentResult] = await Promise.all([
-      this.executeDirectCodeSessionTool('code_session_list', { limit: 20 }, message, ctx),
-      this.executeDirectCodeSessionTool('code_session_current', {}, message, ctx),
-    ]);
-    if (!toBoolean(listResult.success)) {
-      const failure = toString(listResult.message) || 'I could not list coding workspaces.';
-      return { content: failure };
-    }
-    const sessions = isRecord(listResult.output) && Array.isArray(listResult.output.sessions)
-      ? listResult.output.sessions.filter((session) => isRecord(session))
-      : [];
-    const currentSession = isRecord(currentResult.output) && isRecord(currentResult.output.session)
-      ? currentResult.output.session
-      : null;
-    const currentSessionId = currentSession ? toString(currentSession.id) : '';
-
-    if (sessions.length === 0) {
-      if (currentSession) {
-        return {
-          content: [
-            'No owned coding workspaces were listed for this chat, but the surface is currently attached to:',
-            formatDirectCodeSessionLine(currentSession, true),
-          ].join('\n'),
-          metadata: {
-            codeSessionResolved: true,
-            codeSessionId: currentSessionId,
-          },
-        };
-      }
-      return { content: 'No coding workspaces are currently available for this chat.' };
-    }
-
-    const lines = ['Available coding workspaces:'];
-    for (const session of sessions) {
-      lines.push(formatDirectCodeSessionLine(session, toString(session.id) === currentSessionId));
-    }
-    return {
-      content: lines.join('\n'),
-      metadata: currentSessionId
-        ? {
-            codeSessionResolved: true,
-            codeSessionId: currentSessionId,
-          }
-        : undefined,
-    };
-  }
-
-  private async handleCodeSessionDetach(
-    message: UserMessage,
-    ctx: AgentContext,
-  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    const result = await this.executeDirectCodeSessionTool('code_session_detach', {}, message, ctx);
-    if (!toBoolean(result.success)) {
-      const failure = toString(result.message) || 'I could not detach this chat from the current coding workspace.';
-      return { content: failure };
-    }
-    const detached = isRecord(result.output) ? toBoolean(result.output.detached) : false;
-    return {
-      content: detached
-        ? 'Detached this chat from the current coding workspace.'
-        : 'This chat was not attached to a coding workspace.',
-      metadata: {
-        codeSessionFocusChanged: true,
-        codeSessionDetached: true,
-      },
-    };
+    return tryDirectCodeSessionControlFromGatewayHelper({
+      toolsEnabled: this.tools?.isEnabled() === true,
+      executeDirectCodeSessionTool: (toolName, args, message, ctx) => this.executeDirectCodeSessionTool(
+        toolName,
+        args,
+        message,
+        ctx,
+      ),
+      getActivePendingAction: (userId, channel, surfaceId) => this.getActivePendingAction(userId, channel, surfaceId),
+      completePendingAction: (actionId) => this.completePendingAction(actionId),
+      resumeCodingTask: (message, ctx, userKey, decision, codeContext) => this.tryDirectCodingBackendDelegation(
+        message,
+        ctx,
+        userKey,
+        decision,
+        codeContext,
+      ),
+      onMessage: (message, ctx) => this.onMessage(message, ctx),
+      message,
+      ctx,
+      decision,
+    });
   }
 
   private async handleCodeSessionAttach(
@@ -6852,215 +6672,27 @@ type DirectIntentShadowCandidate =
     ctx: AgentContext,
     target: string,
   ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    if (!target.trim()) {
-      return { content: 'Please specify which coding session or workspace to switch to.' };
-    }
-    const currentResult = await this.executeDirectCodeSessionTool('code_session_current', {}, message, ctx);
-    const currentSession = isRecord(currentResult.output) && isRecord(currentResult.output.session)
-      ? currentResult.output.session
-      : null;
-    const pendingActionBeforeAttach = this.getActivePendingAction(message.userId, message.channel, message.surfaceId);
-    const attachResult = await this.executeDirectCodeSessionTool(
-      'code_session_attach',
-      { sessionId: target },
+    return handleCodeSessionAttachHelper({
+      executeDirectCodeSessionTool: (toolName, args, message, ctx) => this.executeDirectCodeSessionTool(
+        toolName,
+        args,
+        message,
+        ctx,
+      ),
+      getActivePendingAction: (userId, channel, surfaceId) => this.getActivePendingAction(userId, channel, surfaceId),
+      completePendingAction: (actionId) => this.completePendingAction(actionId),
+      resumeCodingTask: (message, ctx, userKey, decision, codeContext) => this.tryDirectCodingBackendDelegation(
+        message,
+        ctx,
+        userKey,
+        decision,
+        codeContext,
+      ),
+      onMessage: (message, ctx) => this.onMessage(message, ctx),
       message,
       ctx,
-    );
-    if (!toBoolean(attachResult.success)) {
-      const failure = toString(attachResult.error) || toString(attachResult.message) || `No coding workspace matched "${target}".`;
-      return { content: failure };
-    }
-
-    const session = isRecord(attachResult.output) && isRecord(attachResult.output.session)
-      ? attachResult.output.session
-      : null;
-    if (!session) {
-      return {
-        content: 'Attached this chat to the requested coding workspace.',
-        metadata: { codeSessionFocusChanged: true },
-      };
-    }
-
-    const sessionId = toString(session.id);
-    const alreadyAttached = currentSession && toString(currentSession.id) === sessionId;
-    const resumePendingWorkspaceSwitch = isWorkspaceSwitchPendingActionSatisfied(pendingActionBeforeAttach, sessionId);
-    const response = {
-      content: alreadyAttached && !resumePendingWorkspaceSwitch
-        ? `This chat is already attached to:\n${formatDirectCodeSessionLine(session, true)}`
-        : `Switched this chat to:\n${formatDirectCodeSessionLine(session, true)}`,
-      metadata: {
-        codeSessionResolved: true,
-        codeSessionId: sessionId,
-        codeSessionFocusChanged: true,
-      },
-    };
-    const resumed = await this.tryResumePendingActionAfterWorkspaceSwitch(
-      message,
-      ctx,
-      sessionId,
-      {
-        sessionId,
-        workspaceRoot: toString(session.resolvedRoot) || toString(session.workspaceRoot),
-      },
-      response,
-      pendingActionBeforeAttach,
-    );
-    return resumed ?? response;
-  }
-
-  private async tryResumePendingActionAfterWorkspaceSwitch(
-    message: UserMessage,
-    ctx: AgentContext,
-    sessionId: string,
-    codeContext: { sessionId: string; workspaceRoot?: string },
-    switchResponse: { content: string; metadata?: Record<string, unknown> },
-    pendingActionOverride?: PendingActionRecord | null,
-  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    const pendingAction = pendingActionOverride
-      ?? this.getActivePendingAction(message.userId, message.channel, message.surfaceId);
-    if (!isWorkspaceSwitchPendingActionSatisfied(pendingAction, sessionId)) {
-      return null;
-    }
-    const originalUserContent = pendingAction?.intent.originalUserContent?.trim();
-    if (!originalUserContent) {
-      if (pendingAction) this.completePendingAction(pendingAction.id);
-      return null;
-    }
-    if (pendingAction) {
-      this.completePendingAction(pendingAction.id);
-    }
-    const resumedDecision = this.buildPendingActionResumeDecision(pendingAction);
-    const resumed = resumedDecision
-      ? await this.tryDirectCodingBackendDelegation(
-          {
-            ...message,
-            id: randomUUID(),
-            content: originalUserContent,
-          },
-          ctx,
-          `${message.userId}:${message.channel}`,
-          resumedDecision,
-          codeContext.workspaceRoot
-            ? {
-                sessionId: codeContext.sessionId,
-                workspaceRoot: codeContext.workspaceRoot,
-              }
-            : undefined,
-        ) ?? await this.onMessage(
-          {
-            ...message,
-            id: randomUUID(),
-            content: originalUserContent,
-          },
-          ctx,
-        )
-      : await this.onMessage(
-          {
-            ...message,
-            id: randomUUID(),
-            content: originalUserContent,
-          },
-          ctx,
-        );
-    return {
-      content: `${switchResponse.content}\n\n${resumed.content}`,
-      metadata: {
-        ...(switchResponse.metadata ?? {}),
-        ...(resumed.metadata ?? {}),
-      },
-    };
-  }
-
-  private buildPendingActionResumeDecision(
-    pendingAction: PendingActionRecord | null | undefined,
-  ): import('./runtime/intent-gateway.js').IntentGatewayDecision | undefined {
-    if (!pendingAction || pendingAction.intent.route !== 'coding_task') {
-      return undefined;
-    }
-    const entities = isRecord(pendingAction.intent.entities)
-      ? pendingAction.intent.entities
-      : {};
-    const uiSurface = toString(entities.uiSurface);
-    const emailProvider = toString(entities.emailProvider);
-    const operation = pendingAction.intent.operation === 'inspect' ? 'inspect' : 'run';
-    const preferredTier = typeof entities.codingBackend === 'string' && entities.codingBackend.trim()
-      ? 'local'
-      : operation === 'inspect'
-        ? 'external'
-        : 'local';
-    return {
-      route: 'coding_task',
-      confidence: 'high',
-      operation,
-      summary: pendingAction.intent.summary?.trim() || 'Resume the pending coding task.',
-      turnRelation: 'follow_up',
-      resolution: 'ready',
-      missingFields: [],
-      executionClass: 'repo_grounded',
-      preferredTier,
-      requiresRepoGrounding: true,
-      requiresToolSynthesis: true,
-      expectedContextPressure: operation === 'inspect' ? 'high' : 'medium',
-      preferredAnswerPath: operation === 'inspect' ? 'chat_synthesis' : 'tool_loop',
-      resolvedContent: pendingAction.intent.originalUserContent?.trim() || undefined,
-      entities: {
-        ...(typeof entities.automationName === 'string' ? { automationName: entities.automationName } : {}),
-        ...(typeof entities.manualOnly === 'boolean' ? { manualOnly: entities.manualOnly } : {}),
-        ...(typeof entities.scheduled === 'boolean' ? { scheduled: entities.scheduled } : {}),
-        ...(typeof entities.enabled === 'boolean' ? { enabled: entities.enabled } : {}),
-        ...((uiSurface === 'automations' || uiSurface === 'system' || uiSurface === 'dashboard' || uiSurface === 'config' || uiSurface === 'chat' || uiSurface === 'unknown')
-          ? { uiSurface }
-          : {}),
-        ...(Array.isArray(entities.urls) ? { urls: entities.urls.filter((value): value is string => typeof value === 'string') } : {}),
-        ...(typeof entities.query === 'string' ? { query: entities.query } : {}),
-        ...(typeof entities.path === 'string' ? { path: entities.path } : {}),
-        ...(typeof entities.sessionTarget === 'string' ? { sessionTarget: entities.sessionTarget } : {}),
-        ...((emailProvider === 'gws' || emailProvider === 'm365') ? { emailProvider } : {}),
-        ...(typeof entities.codingBackend === 'string' ? { codingBackend: entities.codingBackend } : {}),
-        ...(typeof entities.codingBackendRequested === 'boolean' ? { codingBackendRequested: entities.codingBackendRequested } : {}),
-        ...(typeof entities.codingRunStatusCheck === 'boolean' ? { codingRunStatusCheck: entities.codingRunStatusCheck } : {}),
-      },
-    };
-  }
-
-  private async handleCodeSessionCreate(
-    message: UserMessage,
-    ctx: AgentContext,
-    target: string,
-  ): Promise<{ content: string; metadata?: Record<string, unknown> } | null> {
-    if (!target.trim()) {
-      return { content: 'Please specify the workspace path or name for the new coding session.' };
-    }
-    const parts = target.split('|').map((part) => part.trim());
-    const workspaceRoot = parts[0];
-    const title = parts[1] || undefined;
-    const result = await this.executeDirectCodeSessionTool(
-      'code_session_create',
-      { workspaceRoot, ...(title ? { title } : {}), attach: true },
-      message,
-      ctx,
-    );
-    if (!toBoolean(result.success)) {
-      const failure = toString(result.error) || toString(result.message) || `Could not create coding session for "${target}".`;
-      return { content: failure };
-    }
-    const session = isRecord(result.output) && isRecord(result.output.session)
-      ? result.output.session
-      : null;
-    if (!session) {
-      return {
-        content: `Created and attached to a new coding session for ${workspaceRoot}.`,
-        metadata: { codeSessionFocusChanged: true },
-      };
-    }
-    return {
-      content: `Created and attached to:\n${formatDirectCodeSessionLine(session, true)}`,
-      metadata: {
-        codeSessionResolved: true,
-        codeSessionId: toString(session.id),
-        codeSessionFocusChanged: true,
-      },
-    };
+      target,
+    });
   }
 
   private isResponseDegraded(content: string | undefined): boolean {
