@@ -9,6 +9,7 @@ import type {
   IntentGatewayPromptProfile,
   IntentGatewayResolution,
   IntentGatewayRoute,
+  IntentGatewaySimpleVsComplex,
   IntentGatewayTurnRelation,
 } from './types.js';
 
@@ -331,6 +332,18 @@ export function normalizeExpectedContextPressure(
     case 'low':
     case 'medium':
     case 'high':
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+export function normalizeSimpleVsComplex(
+  value: unknown,
+): IntentGatewaySimpleVsComplex | undefined {
+  switch (value) {
+    case 'simple':
+    case 'complex':
       return value;
     default:
       return undefined;

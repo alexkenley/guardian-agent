@@ -42,6 +42,7 @@ import {
   normalizePreferredTier,
   normalizeResolution,
   normalizeRoute,
+  normalizeSimpleVsComplex,
   normalizeTurnRelation,
   normalizeUiSurface,
 } from './normalization.js';
@@ -83,6 +84,7 @@ export function parseIntentGatewayDecision(
         requiresToolSynthesis: false,
         expectedContextPressure: 'low',
         preferredAnswerPath: 'direct',
+        simpleVsComplex: 'simple',
         entities: {},
       },
       available: false,
@@ -162,6 +164,8 @@ export function normalizeIntentGatewayDecision(
     ?? derivedWorkload.expectedContextPressure;
   const preferredAnswerPath = normalizePreferredAnswerPath(parsed.preferredAnswerPath)
     ?? derivedWorkload.preferredAnswerPath;
+  const simpleVsComplex = normalizeSimpleVsComplex(parsed.simpleVsComplex)
+    ?? derivedWorkload.simpleVsComplex;
 
   const automationName = shouldKeepAutomationEntities(route, uiSurface)
     && typeof parsed.automationName === 'string' && parsed.automationName.trim()
@@ -255,6 +259,7 @@ export function normalizeIntentGatewayDecision(
     requiresToolSynthesis,
     expectedContextPressure,
     preferredAnswerPath,
+    simpleVsComplex,
     ...(resolvedContent ? { resolvedContent } : {}),
     entities: {
       ...(automationName ? { automationName } : {}),
@@ -517,6 +522,7 @@ function inferExplicitProviderConfigDecision(
     requiresToolSynthesis: true,
     expectedContextPressure: 'medium',
     preferredAnswerPath: 'tool_loop',
+    simpleVsComplex: 'complex',
   }, repairContext);
 }
 

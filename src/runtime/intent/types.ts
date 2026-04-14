@@ -65,6 +65,10 @@ export type IntentGatewayExpectedContextPressure =
   | 'medium'
   | 'high';
 
+export type IntentGatewaySimpleVsComplex =
+  | 'simple'
+  | 'complex';
+
 export type IntentGatewayPreferredTier =
   | 'local'
   | 'external';
@@ -109,6 +113,7 @@ export interface IntentGatewayDecision {
   requiresToolSynthesis: boolean;
   expectedContextPressure: IntentGatewayExpectedContextPressure;
   preferredAnswerPath: IntentGatewayPreferredAnswerPath;
+  simpleVsComplex?: IntentGatewaySimpleVsComplex;
   entities: IntentGatewayEntities;
 }
 

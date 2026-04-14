@@ -38,6 +38,7 @@ describe('IntentGateway', () => {
 
     expect(result.decision.route).toBe('automation_authoring');
     expect(result.decision.operation).toBe('create');
+    expect(result.decision.simpleVsComplex).toBe('complex');
     expect(result.decision.entities.automationName).toBe('Browser Read Smoke');
     expect(result.decision.entities.manualOnly).toBe(true);
     expect(result.model).toBe('test-model');
@@ -319,6 +320,7 @@ describe('IntentGateway', () => {
     expect(result.decision.preferredTier).toBe('external');
     expect(result.decision.requiresToolSynthesis).toBe(true);
     expect(result.decision.expectedContextPressure).toBe('high');
+    expect(result.decision.simpleVsComplex).toBe('complex');
     expect(result.decision.preferredAnswerPath).toBe('chat_synthesis');
   });
 
@@ -683,6 +685,30 @@ describe('IntentGateway', () => {
     expect(result.decision.route).toBe('personal_assistant_task');
     expect(result.decision.operation).toBe('read');
     expect(result.decision.entities.personalItemType).toBe('task');
+    expect(result.decision.simpleVsComplex).toBe('complex');
+  });
+
+  it('derives a simpleVsComplex signal for simple direct-assistant turns when the model omits it', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Give me a concise plan for organizing my week.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'general_assistant',
+          confidence: 'high',
+          operation: 'inspect',
+          summary: 'Provides a concise planning answer.',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).toBe('general_assistant');
+    expect(result.decision.simpleVsComplex).toBe('simple');
   });
 
   it('repairs a misrouted multiline task create into personal assistant work', async () => {

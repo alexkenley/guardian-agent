@@ -98,6 +98,7 @@ The `decision` is structured and includes:
 - `requiresRepoGrounding`
 - `requiresToolSynthesis`
 - `expectedContextPressure`
+- `simpleVsComplex`
 - `preferredAnswerPath`
 - `entities`
 
@@ -137,6 +138,7 @@ Workload metadata meanings:
 - `requiresRepoGrounding`: whether the request should stay grounded in workspace evidence instead of generic synthesis
 - `requiresToolSynthesis`: whether the runtime should expect a real tool loop or multi-step synthesis burden
 - `expectedContextPressure`: low, medium, or high expected bounded context cost
+- `simpleVsComplex`: coarse classifier signal for whether the turn is a short direct ask or a higher-complexity routed task
 - `preferredAnswerPath`: whether the best path is direct answer, tool loop, or chat synthesis
 
 ### Routes
