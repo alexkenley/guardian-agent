@@ -202,6 +202,10 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(input),
   }),
+  memoryMaintenance: (input) => request('/api/memory/maintenance', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }),
   secondBrainOverview: () => request('/api/second-brain/overview'),
   secondBrainBriefs: (params = {}) => request(`/api/second-brain/briefs${buildQueryString(params)}`),
   secondBrainGenerateBrief: (input) => request('/api/second-brain/briefs/generate', {

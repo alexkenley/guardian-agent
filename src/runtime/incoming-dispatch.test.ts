@@ -198,6 +198,46 @@ describe('createIncomingDispatchPreparer', () => {
     });
   });
 
+  it('does not treat a shared code-session attachment as active for external-path filesystem work', async () => {
+    const routingIntentGateway = {
+      classify: vi.fn(async () => createGatewayRecord({
+        route: 'filesystem_task',
+        operation: 'create',
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+      })),
+    };
+    const prepareIncomingDispatch = createIncomingDispatchPreparer(createBaseArgs({
+      codeSessionStore: {
+        resolveForRequest: vi.fn(() => ({
+          session: { agentId: 'external', resolvedRoot: 'S:\\Development\\GuardianAgent' },
+          attachment: { channel: 'web', surfaceId: 'code-panel' },
+        })),
+      },
+      routingIntentGateway,
+      resolveConfiguredAgentId: vi.fn((agentId?: string) => agentId === 'external' ? undefined : agentId),
+    }));
+
+    const result = await prepareIncomingDispatch(undefined, {
+      content: 'Create the directory D:\\Temp\\guardian-phase1-test\\phase1-fresh-a.',
+      userId: 'alex',
+      channel: 'web',
+      surfaceId: 'second-brain',
+    });
+
+    expect(routingIntentGateway.classify).toHaveBeenCalledOnce();
+    expect(result.decision).toEqual({
+      agentId: 'local-agent',
+      confidence: 'high',
+      reason: 'intent tier route',
+      tier: 'local',
+    });
+  });
+
   it('routes explicit code workspace context through the gateway and execution-profile selector', async () => {
     const config = createConfig();
     config.llm['ollama-cloud'] = {

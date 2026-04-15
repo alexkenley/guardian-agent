@@ -65,6 +65,7 @@ export interface RunMemoryScopeMaintenanceInput {
   maintenanceType?: 'consolidation' | 'idle_sweep';
   triggerEntryId?: string;
   detail?: string;
+  actor?: string;
 }
 
 const PROFILE_CATEGORY_RE = /^(preferences?|decisions?|facts?|instructions?|project notes?|runbooks?)$/i;
@@ -531,6 +532,7 @@ export class MemoryMutationService {
   runMaintenanceForScope(input: RunMemoryScopeMaintenanceInput): MemoryScopeHygieneResult {
     const maintenanceType = input.maintenanceType ?? 'idle_sweep';
     const detail = input.detail?.trim();
+    const actor = input.actor?.trim();
     const started = this.jobTracker?.start({
       type: `memory_hygiene.${maintenanceType}`,
       source: 'system',
@@ -560,6 +562,7 @@ export class MemoryMutationService {
         details: {
           scope: input.target.scope,
           scopeId: input.target.scopeId,
+          ...(actor ? { actor } : {}),
           ...(input.triggerEntryId ? { entryId: input.triggerEntryId } : {}),
           reviewedEntries: result.reviewedEntries,
           archivedExactDuplicates: result.archivedExactDuplicates,

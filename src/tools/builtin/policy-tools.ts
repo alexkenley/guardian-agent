@@ -27,6 +27,16 @@ interface PolicyToolRegistrarContext {
     value: string,
     request?: Partial<ToolExecutionRequest>,
   ) => boolean;
+  isPathAlreadyAllowedForPolicy: (
+    value: string,
+    request?: Partial<ToolExecutionRequest>,
+  ) => boolean;
+  isCommandAlreadyAllowedForPolicy: (value: string) => boolean;
+  isDomainAllowedByList: (value: string, allowedDomains: string[]) => boolean;
+  canonicalizePolicyPathValue: (
+    value: string,
+    request?: Partial<ToolExecutionRequest>,
+  ) => string;
   getEffectiveAllowedPaths: (request?: Partial<ToolExecutionRequest>) => string[];
   getExplicitBrowserAllowedDomains: () => string[] | null;
   setExplicitBrowserAllowedDomains: (domains: string[]) => void;
@@ -93,10 +103,23 @@ export function registerBuiltinPolicyTools(context: PolicyToolRegistrarContext):
 
       switch (action) {
         case 'add_path': {
-          if (current.sandbox.allowedPaths.includes(value)) {
-            return { success: true, output: { message: `Path '${value}' is already in the allowlist.`, allowedPaths: current.sandbox.allowedPaths } };
+          if (context.isPathAlreadyAllowedForPolicy(value, request)) {
+            return {
+              success: true,
+              output: {
+                message: `Path '${value}' is already allowed by the current path allowlist.`,
+                allowedPaths: context.getEffectiveAllowedPaths(request),
+              },
+            };
           }
-          updated = { sandbox: { allowedPaths: [...current.sandbox.allowedPaths, value] } };
+          updated = {
+            sandbox: {
+              allowedPaths: [
+                ...current.sandbox.allowedPaths,
+                context.canonicalizePolicyPathValue(value, request),
+              ],
+            },
+          };
           break;
         }
         case 'remove_path': {
@@ -111,8 +134,14 @@ export function registerBuiltinPolicyTools(context: PolicyToolRegistrarContext):
           break;
         }
         case 'add_command': {
-          if (current.sandbox.allowedCommands.includes(value)) {
-            return { success: true, output: { message: `Command '${value}' is already in the allowlist.`, allowedCommands: current.sandbox.allowedCommands } };
+          if (context.isCommandAlreadyAllowedForPolicy(value)) {
+            return {
+              success: true,
+              output: {
+                message: `Command prefix '${value}' is already allowed by the current command allowlist.`,
+                allowedCommands: current.sandbox.allowedCommands,
+              },
+            };
           }
           updated = { sandbox: { allowedCommands: [...current.sandbox.allowedCommands, value] } };
           break;
@@ -128,11 +157,18 @@ export function registerBuiltinPolicyTools(context: PolicyToolRegistrarContext):
         case 'add_domain': {
           const normalizedValue = value.toLowerCase();
           const currentBrowserDomains = context.getExplicitBrowserAllowedDomains();
-          const browserNeedsUpdate = !!currentBrowserDomains && !currentBrowserDomains.includes(normalizedValue);
-          if (current.sandbox.allowedDomains.includes(normalizedValue) && !browserNeedsUpdate) {
-            return { success: true, output: { message: `Domain '${normalizedValue}' is already in the allowlist.`, allowedDomains: current.sandbox.allowedDomains } };
+          const domainAllowedByPolicy = context.isDomainAllowedByList(normalizedValue, current.sandbox.allowedDomains);
+          const browserNeedsUpdate = !!currentBrowserDomains && !context.isDomainAllowedByList(normalizedValue, currentBrowserDomains);
+          if (domainAllowedByPolicy && !browserNeedsUpdate) {
+            return {
+              success: true,
+              output: {
+                message: `Domain '${normalizedValue}' is already allowed by the current domain allowlist.`,
+                allowedDomains: current.sandbox.allowedDomains,
+              },
+            };
           }
-          updated = current.sandbox.allowedDomains.includes(normalizedValue)
+          updated = domainAllowedByPolicy
             ? {}
             : { sandbox: { allowedDomains: [...current.sandbox.allowedDomains, normalizedValue] } };
           if (browserNeedsUpdate) {

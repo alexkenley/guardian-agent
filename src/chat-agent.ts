@@ -113,6 +113,7 @@ import {
   type IntentGatewayRoute,
   type IntentGatewayRecord,
 } from './runtime/intent-gateway.js';
+import { shouldAttachCodeSessionForRequest } from './runtime/code-session-request-scope.js';
 import {
   parseWebSearchIntent,
 } from './runtime/search-intent.js';
@@ -4122,7 +4123,11 @@ type DirectIntentShadowCandidate =
                 taintReasons: [...currentTaintReasons],
                 intentDecision: directIntent?.decision ?? undefined,
                 codeContext: effectiveCodeContext,
-                selectedExecutionProfile,
+                selectedExecutionProfile: this.resolveStoredToolLoopExecutionProfile(
+                  ctx,
+                  selectedExecutionProfile,
+                  directIntent?.decision,
+                ),
               }),
             };
             break;
@@ -4362,7 +4367,11 @@ type DirectIntentShadowCandidate =
                     taintReasons: [...currentTaintReasons],
                     intentDecision: directIntent?.decision ?? undefined,
                     codeContext: effectiveCodeContext,
-                    selectedExecutionProfile,
+                    selectedExecutionProfile: this.resolveStoredToolLoopExecutionProfile(
+                      ctx,
+                      selectedExecutionProfile,
+                      directIntent?.decision,
+                    ),
                   }),
                 };
               } else {
@@ -4952,6 +4961,21 @@ type DirectIntentShadowCandidate =
         },
         'Code session resolution failed — message will fall back to web chat context',
       );
+    }
+    if (!resolved) {
+      return null;
+    }
+    const surfaceId = this.getCodeSessionSurfaceId(message);
+    const preRoutedGateway = readPreRoutedIntentGatewayMetadata(message.metadata);
+    if (!shouldAttachCodeSessionForRequest({
+      content: stripLeadingContextPrefix(message.content),
+      channel,
+      surfaceId,
+      requestedCodeContext: requested,
+      resolvedCodeSession: resolved,
+      gatewayDecision: preRoutedGateway?.decision ?? null,
+    })) {
+      return null;
     }
     return resolved;
   }
@@ -8264,6 +8288,47 @@ type DirectIntentShadowCandidate =
     input: Parameters<typeof buildToolLoopResumePayload>[0],
   ): Record<string, unknown> {
     return buildToolLoopResumePayload(input);
+  }
+
+  private resolveStoredToolLoopExecutionProfile(
+    ctx: AgentContext,
+    selectedExecutionProfile: SelectedExecutionProfile | null | undefined,
+    decision?: IntentGatewayDecision | null,
+  ): SelectedExecutionProfile | undefined {
+    if (selectedExecutionProfile) {
+      return selectedExecutionProfile;
+    }
+    const providerName = ctx.llm?.name?.trim();
+    if (!providerName) {
+      return undefined;
+    }
+    const providerOrder = this.fallbackChain?.getProviderOrder() ?? [];
+    const providerProfileName = providerOrder[0]?.trim() || providerName;
+    const providerLocality = getProviderLocality(providerName)
+      ?? getProviderLocalityFromName(providerName)
+      ?? 'local';
+    const providerTier = getProviderTier(providerName)
+      ?? (providerLocality === 'local' ? 'local' : 'managed_cloud');
+    return {
+      id: providerTier === 'frontier'
+        ? 'frontier_deep'
+        : providerTier === 'managed_cloud'
+          ? 'managed_cloud_tool'
+          : 'local_tool',
+      providerName: providerProfileName,
+      providerType: providerName,
+      providerLocality,
+      providerTier,
+      requestedTier: providerLocality === 'local' ? 'local' : 'external',
+      preferredAnswerPath: decision?.preferredAnswerPath ?? 'tool_loop',
+      expectedContextPressure: decision?.expectedContextPressure ?? 'medium',
+      contextBudget: this.contextBudget,
+      toolContextMode: 'standard',
+      maxAdditionalSections: 3,
+      maxRuntimeNotices: 6,
+      fallbackProviderOrder: providerOrder.filter((candidate) => candidate !== providerProfileName),
+      reason: 'Captured from the live tool-loop context for approval resume.',
+    };
   }
 
   private buildStoredToolLoopChatFn(input: {

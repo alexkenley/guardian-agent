@@ -8,6 +8,7 @@ import {
 import { createStatusCard, updateStatusCard } from '../components/status-card.js';
 import { renderGuidancePanel, renderInfoButton, activateContextHelp, enhanceSectionHelp } from '../components/context-help.js';
 import { onSSE, offSSE } from '../app.js';
+import { appendContinuedResponseToActiveChatHistory } from '../chat-history.js';
 import { normalizeRunTimelineContextAssembly, renderRunTimelineContextAssembly } from '../components/run-timeline-context.js';
 import { describeResponseSource } from '../response-source.js';
 
@@ -404,6 +405,17 @@ function createPendingApprovalsSection(approvalsPayload) {
           whatCanDo: 'Approve or deny blocked tool actions here without digging through the Tools tab first.',
           howLinks: 'System owns the active queue. Configuration > Tools still owns runtime routing, tool inventory, and recent tool jobs.',
         })}
+      </div>
+      <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+        <button
+          class="btn btn-secondary btn-sm"
+          type="button"
+          data-system-clear-pending="true"
+          title="Clear the current web chat pending-action state and deny any still-pending approvals tied to this web user/channel."
+          ${pendingApprovals.length === 0 ? 'disabled' : ''}
+        >
+          Clear Pending
+        </button>
       </div>
     </div>
     <table>
@@ -1236,6 +1248,20 @@ function formatRoutingTraceDetail(entry) {
 }
 
 function bindSystemEvents(container) {
+  container.querySelector('[data-system-clear-pending]')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    if (!(button instanceof HTMLButtonElement)) return;
+    button.disabled = true;
+    try {
+      await api.resetPendingAction('web-user', 'web', 'web-guardian-chat');
+      window.dispatchEvent(new CustomEvent('guardian:chat-pending-cleared'));
+      void renderSystemPreserveScroll(container);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+      button.disabled = false;
+    }
+  });
+
   container.querySelectorAll('.system-tool-approve').forEach((button) => {
     button.addEventListener('click', async () => {
       const approvalId = button.getAttribute('data-approval-id') || '';
@@ -1250,6 +1276,9 @@ function bindSystemEvents(container) {
           alert(result?.message || 'Failed to update approval.');
         } else {
           markApprovalUiResolved(approvalId, decision, result?.displayMessage || result?.message || '');
+          if (result?.continuedResponse && typeof result.continuedResponse.content === 'string') {
+            appendContinuedResponseToActiveChatHistory(result.continuedResponse);
+          }
         }
       } catch (err) {
         markApprovalUiError(approvalId, err instanceof Error ? err.message : String(err));

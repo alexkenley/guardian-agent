@@ -197,6 +197,79 @@ describe('createDashboardMessageDispatcher', () => {
     }));
   });
 
+  it('does not inject shared code-session context into external-path filesystem requests', async () => {
+    const runtime = {
+      dispatchMessage: vi.fn(async () => ({
+        content: 'Created.',
+        metadata: {
+          responseSource: {
+            locality: 'local',
+            providerName: 'ollama',
+            model: 'test-model',
+            durationMs: 11,
+          },
+        },
+      })),
+    };
+    const options = createOptions({
+      runtime,
+      codeSessionStore: {
+        resolveForRequest: vi.fn(() => ({
+          session: {
+            id: 'code-session-1',
+            resolvedRoot: 'S:\\Development\\GuardianAgent',
+            conversationUserId: 'code-session:1',
+            conversationChannel: 'code-session',
+          },
+          attachment: {
+            id: 'attachment-1',
+            codeSessionId: 'code-session-1',
+            userId: 'canonical:web-user',
+            channel: 'web',
+            surfaceId: 'code-panel',
+            mode: 'controller',
+            attachedAt: 1,
+            lastSeenAt: 1,
+            active: true,
+          },
+        })),
+      },
+    });
+    const dispatchDashboardMessage = createDashboardMessageDispatcher(options);
+
+    await dispatchDashboardMessage({
+      agentId: 'local-agent',
+      msg: {
+        content: 'Create the directory D:\\Temp\\guardian-phase1-test\\phase1-fresh-a.',
+        userId: 'web-user',
+        channel: 'web',
+        surfaceId: 'second-brain',
+        metadata: { existing: 'value' },
+      },
+      precomputedIntentGateway: createGatewayRecord({
+        route: 'filesystem_task',
+        operation: 'create',
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        expectedContextPressure: 'medium',
+        preferredAnswerPath: 'tool_loop',
+      }),
+    });
+
+    expect(options.orchestrator.dispatch).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: 'local-agent',
+      userId: 'canonical:web-user',
+      channel: 'web',
+    }), expect.any(Function));
+    const dispatchedMessage = runtime.dispatchMessage.mock.calls[0]?.[1];
+    expect(dispatchedMessage.metadata).toMatchObject({
+      existing: 'value',
+    });
+    expect(dispatchedMessage.metadata?.codeContext).toBeUndefined();
+  });
+
   it('falls back to the alternate tier when the primary dispatch fails', async () => {
     const runtime = {
       dispatchMessage: vi

@@ -948,6 +948,28 @@ export async function handleWebRuntimeRoutes(context: WebRuntimeRoutesContext): 
     }
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/memory/maintenance') {
+    if (!dashboard.onMemoryMaintenance) {
+      sendJSON(res, 404, { error: 'Not available' });
+      return true;
+    }
+    try {
+      const parsed = await readJsonBody<Record<string, unknown>>(req, context.maxBodyBytes);
+      const result = await dashboard.onMemoryMaintenance({
+        scope: trimOptionalString(parsed.scope) as 'global' | 'code_session',
+        codeSessionId: trimOptionalString(parsed.codeSessionId),
+        maintenanceType: trimOptionalString(parsed.maintenanceType) as 'consolidation' | 'idle_sweep' | undefined,
+        actor: trimOptionalString(parsed.actor),
+      });
+      sendJSON(res, result.success ? 200 : (result.statusCode ?? 400), result);
+      context.maybeEmitUIInvalidation(result, ['memory'], 'memory.maintenance', url.pathname);
+      return true;
+    } catch (err) {
+      sendBadRequestError(res, err);
+      return true;
+    }
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/setup/status') {
     if (!dashboard.onSetupStatus) {
       sendJSON(res, 404, { error: 'Not available' });

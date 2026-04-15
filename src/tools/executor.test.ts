@@ -4219,6 +4219,155 @@ describe('ToolExecutor', () => {
     expect(result.message || result.output?.message).toMatch(/already trusted for the active coding session workspace/i);
   });
 
+  it('treats add_path for an already-allowed path as a no-op before creating approval', async () => {
+    const globalRoot = createExecutorRoot();
+    const existingRoot = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: globalRoot,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [globalRoot, existingRoot],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      agentPolicyUpdates: {
+        allowedPaths: true,
+        allowedCommands: false,
+        allowedDomains: false,
+      },
+    });
+
+    const result = await executor.runTool({
+      toolName: 'update_tool_policy',
+      args: {
+        action: 'add_path',
+        value: existingRoot,
+      },
+      origin: 'web',
+      userId: 'web-user',
+      principalId: 'web-user',
+      channel: 'web',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('succeeded');
+    expect(result.approvalId).toBeUndefined();
+    expect(result.message || result.output?.message).toMatch(/already .*allowlist/i);
+    expect(executor.getPolicy().sandbox.allowedPaths).toEqual([globalRoot, existingRoot]);
+  });
+
+  it('treats add_path for a subdirectory of an already-allowed root as a no-op before creating approval', async () => {
+    const globalRoot = createExecutorRoot();
+    const nestedRoot = join(globalRoot, 'nested');
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: globalRoot,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [globalRoot],
+      allowedCommands: ['echo'],
+      allowedDomains: ['localhost'],
+      agentPolicyUpdates: {
+        allowedPaths: true,
+        allowedCommands: false,
+        allowedDomains: false,
+      },
+    });
+
+    const result = await executor.runTool({
+      toolName: 'update_tool_policy',
+      args: {
+        action: 'add_path',
+        value: nestedRoot,
+      },
+      origin: 'web',
+      userId: 'web-user',
+      principalId: 'web-user',
+      channel: 'web',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('succeeded');
+    expect(result.approvalId).toBeUndefined();
+    expect(result.message || result.output?.message).toMatch(/already .*allowlist/i);
+    expect(executor.getPolicy().sandbox.allowedPaths).toEqual([globalRoot]);
+  });
+
+  it('treats add_command for an already-allowed command prefix as a no-op before creating approval', async () => {
+    const globalRoot = createExecutorRoot();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: globalRoot,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [globalRoot],
+      allowedCommands: ['git'],
+      allowedDomains: ['localhost'],
+      agentPolicyUpdates: {
+        allowedPaths: false,
+        allowedCommands: true,
+        allowedDomains: false,
+      },
+    });
+
+    const result = await executor.runTool({
+      toolName: 'update_tool_policy',
+      args: {
+        action: 'add_command',
+        value: 'git status',
+      },
+      origin: 'web',
+      userId: 'web-user',
+      principalId: 'web-user',
+      channel: 'web',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('succeeded');
+    expect(result.approvalId).toBeUndefined();
+    expect(result.message || result.output?.message).toMatch(/already .*allowlist/i);
+    expect(executor.getPolicy().sandbox.allowedCommands).toEqual(['git']);
+  });
+
+  it('treats add_domain for an already-allowed subdomain as a no-op before creating approval', async () => {
+    const globalRoot = createExecutorRoot();
+    const onPolicyUpdate = vi.fn();
+    const executor = new ToolExecutor({
+      enabled: true,
+      workspaceRoot: globalRoot,
+      policyMode: 'approve_by_policy',
+      allowedPaths: [globalRoot],
+      allowedCommands: ['echo'],
+      allowedDomains: ['example.com'],
+      browserConfig: {
+        enabled: true,
+        allowedDomains: ['example.com'],
+      },
+      agentPolicyUpdates: {
+        allowedPaths: false,
+        allowedCommands: false,
+        allowedDomains: true,
+      },
+      onPolicyUpdate,
+    });
+
+    const result = await executor.runTool({
+      toolName: 'update_tool_policy',
+      args: {
+        action: 'add_domain',
+        value: 'api.example.com',
+      },
+      origin: 'web',
+      userId: 'web-user',
+      principalId: 'web-user',
+      channel: 'web',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('succeeded');
+    expect(result.approvalId).toBeUndefined();
+    expect(result.message || result.output?.message).toMatch(/already .*allowlist/i);
+    expect(executor.getPolicy().sandbox.allowedDomains).toEqual(['example.com']);
+    expect(onPolicyUpdate).not.toHaveBeenCalled();
+  });
+
   it('allows code-scoped git init with approval even when git is not globally allowlisted', async () => {
     const globalRoot = createExecutorRoot();
     const codeRoot = createExecutorRoot();

@@ -248,6 +248,16 @@ export interface DashboardMemoryLintFinding {
   title: string;
   detail: string;
   entryIds?: string[];
+  relatedEntries?: DashboardMemoryLintRelatedEntry[];
+}
+
+export interface DashboardMemoryLintRelatedEntry {
+  id: string;
+  title: string;
+  sourceClass: MemoryArtifactClass;
+  status: MemoryStatus;
+  reviewOnly: boolean;
+  editable: boolean;
 }
 
 export interface DashboardMemoryAuditEventView {
@@ -306,6 +316,13 @@ export interface DashboardMemoryMutationInput {
   summary?: string;
   tags?: string[];
   reason?: string;
+  actor?: string;
+}
+
+export interface DashboardMemoryMaintenanceInput {
+  scope: 'global' | 'code_session';
+  codeSessionId?: string;
+  maintenanceType?: 'consolidation' | 'idle_sweep';
   actor?: string;
 }
 
@@ -1452,6 +1469,7 @@ export interface DashboardCallbacks {
   }) => { success: boolean; message: string };
   onMemoryView?: (args?: DashboardMemoryFilterInput) => DashboardMemoryResponse;
   onMemoryCurate?: (input: DashboardMemoryMutationInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
+  onMemoryMaintenance?: (input: DashboardMemoryMaintenanceInput) => DashboardMutationResult | Promise<DashboardMutationResult>;
   onSecondBrainOverview?: () => DashboardSecondBrainOverview;
   onSecondBrainGenerateBrief?: (input: SecondBrainGenerateBriefInput) => DashboardSecondBrainBrief | Promise<DashboardSecondBrainBrief>;
   onSecondBrainCalendar?: (args?: SecondBrainEventFilter) => DashboardSecondBrainEvent[];

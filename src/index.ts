@@ -632,6 +632,7 @@ function buildDashboardCallbacks(
     existingEntryId?: string;
     runMaintenance?: boolean;
   }) => import('./runtime/memory-mutation-service.js').PersistMemoryEntryResult,
+  runMemoryMaintenanceForScope: (input: import('./runtime/memory-mutation-service.js').RunMemoryScopeMaintenanceInput) => import('./runtime/memory-mutation-service.js').MemoryScopeHygieneResult,
   chatAgents: Map<string, ChatAgentInstance>,
   skillRegistry: SkillRegistry | undefined,
   enabledManagedProviders: Set<string>,
@@ -774,6 +775,27 @@ function buildDashboardCallbacks(
       return !latest || entry.createdAt > latest ? entry.createdAt : latest;
     }, undefined),
   });
+  const buildMemoryLintRelatedEntries = (entries: StoredMemoryEntry[], entryIds: string[] | undefined) => {
+    if (!Array.isArray(entryIds) || entryIds.length === 0) {
+      return [];
+    }
+    const entryById = new Map(entries.map((entry) => [entry.id, entry] as const));
+    return entryIds
+      .map((entryId) => entryById.get(entryId))
+      .filter((entry): entry is StoredMemoryEntry => Boolean(entry))
+      .slice(0, 6)
+      .map((entry) => {
+        const sourceClass = classifyMemoryEntrySource(entry);
+        return {
+          id: entry.id,
+          title: inferMemoryEntryTitle(entry),
+          sourceClass,
+          status: entry.status ?? 'active',
+          reviewOnly: entry.status !== 'active',
+          editable: sourceClass === 'operator_curated' && entry.status === 'active',
+        };
+      });
+  };
   const matchesMemoryFilters = (
     entry: StoredMemoryEntry,
     filter: {
@@ -958,6 +980,14 @@ function buildDashboardCallbacks(
       title: string;
       detail: string;
       entryIds?: string[];
+      relatedEntries?: Array<{
+        id: string;
+        title: string;
+        sourceClass: import('./runtime/agent-memory-store.js').MemoryArtifactClass;
+        status: import('./runtime/agent-memory-store.js').MemoryStatus;
+        reviewOnly: boolean;
+        editable: boolean;
+      }>;
     }> = [];
     const activeEntries = entries.filter((entry) => entry.status === 'active');
     const duplicateGroups = new Map<string, StoredMemoryEntry[]>();
@@ -968,6 +998,7 @@ function buildDashboardCallbacks(
     }
     for (const group of duplicateGroups.values()) {
       if (group.length < 2) continue;
+      const entryIds = group.map((entry) => entry.id);
       findings.push({
         id: `${scopeId}:duplicate:${group[0]!.contentHash}`,
         scope,
@@ -976,7 +1007,8 @@ function buildDashboardCallbacks(
         kind: 'duplicate',
         title: 'Duplicate durable memory',
         detail: `${group.length} active entries share the same content hash. Review whether they should be consolidated.`,
-        entryIds: group.map((entry) => entry.id),
+        entryIds,
+        relatedEntries: buildMemoryLintRelatedEntries(entries, entryIds),
       });
     }
     for (const entry of activeEntries) {
@@ -998,6 +1030,7 @@ function buildDashboardCallbacks(
           title: 'Stale memory artifact',
           detail: `${inferMemoryEntryTitle(entry)} has not been refreshed in at least ${staleDays} days.`,
           entryIds: [entry.id],
+          relatedEntries: buildMemoryLintRelatedEntries(entries, [entry.id]),
         });
       }
       if (entry.content.length > 1200 || (!entry.summary && entry.content.length > 480)) {
@@ -1010,6 +1043,7 @@ function buildDashboardCallbacks(
           title: 'Oversized or low-signal entry',
           detail: `${inferMemoryEntryTitle(entry)} is large relative to its summary signal and should be compacted or summarized.`,
           entryIds: [entry.id],
+          relatedEntries: buildMemoryLintRelatedEntries(entries, [entry.id]),
         });
       }
       if (classifyMemoryEntrySource(entry) === 'linked_output'
@@ -1024,11 +1058,13 @@ function buildDashboardCallbacks(
           title: 'Linked output missing dereference metadata',
           detail: `${inferMemoryEntryTitle(entry)} is tagged as a linked output but lacks request/tool provenance.`,
           entryIds: [entry.id],
+          relatedEntries: buildMemoryLintRelatedEntries(entries, [entry.id]),
         });
       }
     }
     const reviewOnlyEntries = entries.filter((entry) => entry.status !== 'active');
     if (reviewOnlyEntries.length > 0) {
+      const entryIds = reviewOnlyEntries.map((entry) => entry.id);
       findings.push({
         id: `${scopeId}:review-queue`,
         scope,
@@ -1037,7 +1073,8 @@ function buildDashboardCallbacks(
         kind: 'review_queue',
         title: 'Review-only entries remain surfaced',
         detail: `${reviewOnlyEntries.length} entr${reviewOnlyEntries.length === 1 ? 'y is' : 'ies are'} inactive and visible for review/audit.`,
-        entryIds: reviewOnlyEntries.map((entry) => entry.id),
+        entryIds,
+        relatedEntries: buildMemoryLintRelatedEntries(entries, entryIds),
       });
     }
     return findings;
@@ -2387,6 +2424,75 @@ function buildDashboardCallbacks(
           message,
           statusCode: 400,
           errorCode: 'memory_curate_failed',
+        };
+      }
+    },
+
+    onMemoryMaintenance: async (input) => {
+      const actor = input.actor?.trim() || 'web-user';
+      const target = resolveMemoryScopeTarget({
+        scope: input.scope,
+        codeSessionId: input.codeSessionId,
+      });
+      if ('error' in target) {
+        return {
+          success: false,
+          message: target.error ?? 'Invalid memory scope.',
+          statusCode: 400,
+          errorCode: 'memory_scope_invalid',
+        };
+      }
+      if (!target.store.isEnabled()) {
+        return {
+          success: false,
+          message: 'Persistent memory is disabled for this scope.',
+          statusCode: 409,
+          errorCode: 'memory_disabled',
+        };
+      }
+      if (target.store.isReadOnly()) {
+        return {
+          success: false,
+          message: 'Persistent memory is read-only for this scope.',
+          statusCode: 409,
+          errorCode: 'memory_read_only',
+        };
+      }
+      try {
+        const auditAgentId = target.scope === 'global' ? target.scopeId : getPrincipalMemoryAgentId();
+        const result = runMemoryMaintenanceForScope({
+          target: {
+            scope: target.scope,
+            scopeId: target.scopeId,
+            store: target.store,
+            auditAgentId,
+          },
+          maintenanceType: input.maintenanceType,
+          actor,
+          detail: `User-requested memory cleanup for ${target.scope === 'global' ? 'global memory' : `code session ${target.scopeId}`}.`,
+        });
+        return {
+          success: true,
+          message: result.changed
+            ? `Memory cleanup archived ${result.archivedExactDuplicates + result.archivedNearDuplicates + result.archivedStaleSystemEntries} entr${result.archivedExactDuplicates + result.archivedNearDuplicates + result.archivedStaleSystemEntries === 1 ? 'y' : 'ies'} in ${target.scope === 'global' ? 'global memory' : `code session ${target.scopeId}`}.`
+            : `Memory cleanup reviewed ${result.reviewedEntries} entr${result.reviewedEntries === 1 ? 'y' : 'ies'} in ${target.scope === 'global' ? 'global memory' : `code session ${target.scopeId}`}; no archival changes were needed.`,
+          details: {
+            scope: target.scope,
+            scopeId: target.scopeId,
+            maintenanceType: input.maintenanceType ?? 'idle_sweep',
+            reviewedEntries: result.reviewedEntries,
+            archivedExactDuplicates: result.archivedExactDuplicates,
+            archivedNearDuplicates: result.archivedNearDuplicates,
+            archivedStaleSystemEntries: result.archivedStaleSystemEntries,
+          },
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          success: false,
+          message,
+          statusCode: 400,
+          errorCode: 'memory_maintenance_failed',
         };
       }
     },
@@ -6041,6 +6147,16 @@ async function main(): Promise<void> {
           action: 'created' as const,
           reason: 'new_entry' as const,
           entry: input.target.store.append(input.target.scopeId, input.entry),
+        }
+    ),
+    (input) => (
+      memoryMutationServiceRef.current?.runMaintenanceForScope(input)
+        ?? {
+          reviewedEntries: input.target.store.getEntries(input.target.scopeId, true).length,
+          archivedExactDuplicates: 0,
+          archivedNearDuplicates: 0,
+          archivedStaleSystemEntries: 0,
+          changed: false,
         }
     ),
     chatAgents,

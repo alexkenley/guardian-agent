@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { GuardianAgentConfig } from '../config/types.js';
 import type { AnalyticsService } from './analytics.js';
+import { shouldAttachCodeSessionForRequest } from './code-session-request-scope.js';
 import type { CodeSessionStore, ResolvedCodeSessionContext } from './code-sessions.js';
 import {
   readSelectedExecutionProfileMetadata,
@@ -132,6 +133,16 @@ export function createDashboardMessageDispatcher(args: {
           'CODE_SESSION_UNAVAILABLE',
         );
       }
+    }
+    if (!shouldAttachCodeSessionForRequest({
+      content: msg.content,
+      channel,
+      surfaceId,
+      requestedCodeContext,
+      resolvedCodeSession: dispatchCodeSession,
+      gatewayDecision: precomputedIntentGateway?.decision ?? null,
+    })) {
+      dispatchCodeSession = null;
     }
 
     const dispatchUserId = dispatchCodeSession?.session.conversationUserId ?? canonicalUserId;

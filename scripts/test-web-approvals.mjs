@@ -94,6 +94,52 @@ function buildRouteIntentDecision(latestUser) {
   };
 }
 
+function readAssistantToolCalls(message) {
+  if (Array.isArray(message?.toolCalls)) {
+    return message.toolCalls;
+  }
+  if (Array.isArray(message?.tool_calls)) {
+    return message.tool_calls.map((toolCall) => ({
+      id: toolCall?.id,
+      name: toolCall?.function?.name,
+      arguments: toolCall?.function?.arguments,
+    }));
+  }
+  return [];
+}
+
+function tryParseJson(value) {
+  if (typeof value !== 'string') return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function hasResolvedToolResult(messages, toolName) {
+  return messages.some((message, index) => {
+    if (message?.role !== 'tool') return false;
+    const content = String(message?.content ?? '');
+    if (content.includes(`<tool_result name="${toolName}"`)
+      && (content.includes('"success":true') || content.includes('"status":"succeeded"'))) {
+      return true;
+    }
+    const parsed = tryParseJson(content);
+    if (!(parsed?.success === true || parsed?.status === 'succeeded')) {
+      return false;
+    }
+    for (let previousIndex = index - 1; previousIndex >= 0; previousIndex -= 1) {
+      const previous = messages[previousIndex];
+      if (previous?.role !== 'assistant') continue;
+      if (readAssistantToolCalls(previous).some((toolCall) => String(toolCall?.name ?? '').trim() === toolName)) {
+        return true;
+      }
+    }
+    return false;
+  });
+}
+
 async function startFakeProvider(testDir, scenarioLog) {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
@@ -113,7 +159,21 @@ async function startFakeProvider(testDir, scenarioLog) {
         ? parsed.tools.map((tool) => String(tool?.function?.name ?? tool?.name ?? '')).filter(Boolean)
         : [];
       const latestUser = String([...messages].reverse().find((message) => message.role === 'user')?.content ?? '');
-      scenarioLog.push({ latestUser, tools });
+      scenarioLog.push({
+        latestUser,
+        tools,
+        resolvedUpdateToolPolicy: hasResolvedToolResult(messages, 'update_tool_policy'),
+        resolvedFsWrite: hasResolvedToolResult(messages, 'fs_write'),
+        recentMessages: messages.slice(-4).map((message) => ({
+          role: message?.role,
+          toolCallId: message?.toolCallId ?? message?.tool_call_id ?? null,
+          toolCalls: readAssistantToolCalls(message).map((toolCall) => ({
+            id: String(toolCall?.id ?? ''),
+            name: String(toolCall?.name ?? ''),
+          })),
+          content: String(message?.content ?? '').slice(0, 240),
+        })),
+      });
       const sendResponse = ({ model, content = '', finishReason = 'stop', toolCalls }) => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(
@@ -153,6 +213,33 @@ async function startFakeProvider(testDir, scenarioLog) {
         sendResponse({
           model: 'web-harness-model',
           content: JSON.stringify(decision),
+        });
+        return;
+      }
+
+      if (hasResolvedToolResult(messages, 'fs_write')) {
+        sendResponse({
+          model: 'web-harness-model',
+          content: `Done - created ${path.join(testDir, 'web-empty.txt')} as an empty file.`,
+        });
+        return;
+      }
+
+      if (hasResolvedToolResult(messages, 'update_tool_policy')) {
+        sendResponse({
+          model: 'web-harness-model',
+          finishReason: 'tool_calls',
+          toolCalls: [
+            {
+              id: 'web-tool-call-2',
+              name: 'fs_write',
+              arguments: JSON.stringify({
+                path: path.join(testDir, 'web-empty.txt'),
+                content: '',
+                append: false,
+              }),
+            },
+          ],
         });
         return;
       }

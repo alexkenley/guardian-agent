@@ -16,7 +16,15 @@ import {
 } from './approval-ui-state.js';
 import { buildApprovalContinuationSummaryPart, decideChatApproval } from './chat-approval.js';
 import { resolveChatDispatchAgentId } from './chat-dispatch-routing.js';
-import { resolveChatHistoryKey } from './chat-history.js';
+import {
+  CHAT_HISTORY_UPDATED_EVENT,
+  commitChatHistory,
+  deleteChatHistory,
+  getChatHistory,
+  listChatHistoryKeys,
+  resolveChatHistoryKey,
+  setActiveChatHistoryKey,
+} from './chat-history.js';
 import {
   getChatProviderAgentId,
   getChatProviderOptions,
@@ -33,13 +41,13 @@ import {
 import { createResponseSourceBadge } from './response-source.js';
 import { applyInputTooltips } from './tooltip.js';
 
-const chatHistoryByAgent = new Map();
 const ACTIVE_AGENT_KEY = 'guardianagent_active_agent';
 const CHAT_PROVIDER_SELECTION_KEY = 'guardianagent_chat_provider_selection';
 const CHAT_PROVIDER_SELECTION_METADATA_KEY = '__guardian_chat_provider_selection';
 const CHAT_ACTIVE_REQUEST_KEY = 'guardianagent_chat_active_request';
 const WEB_USER_KEY = 'guardianagent_web_user';
 const GUARDIAN_CHAT_SURFACE_ID = 'web-guardian-chat';
+const CHAT_PENDING_CLEARED_EVENT = 'guardian:chat-pending-cleared';
 const CODE_SESSIONS_CHANGED_EVENT = 'guardian:code-sessions-changed';
 const CODE_SESSION_FOCUS_CHANGED_EVENT = 'guardian:code-session-focus-changed';
 const PROVIDER_PROFILES_CHANGED_EVENT = 'guardian:providers-changed';
@@ -50,6 +58,7 @@ let refreshCodeSessionsPromise = null;
 let refreshChatPanelChrome = null;
 let activeChatIndicator = null;
 let activeRequestController = null;
+let externalPendingClearHandler = null;
 
 function persistActiveRequest(request) {
   if (!request || typeof request !== 'object') return;
@@ -288,11 +297,6 @@ export async function initChatPanel(container) {
   resetBtn.textContent = 'Reset Chat';
   resetBtn.style.cssText = 'font-size:0.7rem;padding:0.3rem 0.5rem;flex:0 0 auto;white-space:nowrap;';
 
-  const clearPendingBtn = document.createElement('button');
-  clearPendingBtn.className = 'btn btn-secondary';
-  clearPendingBtn.textContent = 'Clear Pending';
-  clearPendingBtn.style.cssText = 'font-size:0.7rem;padding:0.3rem 0.5rem;flex:0 0 auto;white-space:nowrap;';
-
   const stopBtn = document.createElement('button');
   stopBtn.className = 'btn btn-secondary';
   stopBtn.textContent = 'Stop';
@@ -300,7 +304,6 @@ export async function initChatPanel(container) {
   stopBtn.style.cssText = 'font-size:0.7rem;padding:0.3rem 0.5rem;flex:0 0 auto;white-space:nowrap;';
 
   primaryControls.appendChild(stopBtn);
-  primaryControls.appendChild(clearPendingBtn);
   primaryControls.appendChild(resetBtn);
 
   const refreshCodeSessions = async () => {
@@ -383,6 +386,13 @@ export async function initChatPanel(container) {
       void refreshProviderSelectorChrome();
     }
   });
+  window.addEventListener(CHAT_HISTORY_UPDATED_EVENT, (event) => {
+    const updatedHistoryKey = resolveChatHistoryKey(event?.detail?.historyKey);
+    const visibleHistoryKey = getHistoryKey() || activeAgentId;
+    if (!updatedHistoryKey || updatedHistoryKey !== visibleHistoryKey || !history) return;
+    renderHistory(history, visibleHistoryKey, approvalHandler);
+    refreshVisiblePendingAction?.();
+  });
 
   wrapper.appendChild(toolbar);
   refreshChatPanelChrome = () => {
@@ -396,6 +406,16 @@ export async function initChatPanel(container) {
   history.style.fontSize = '0.75rem';
 
   wrapper.appendChild(history);
+
+  if (externalPendingClearHandler) {
+    window.removeEventListener(CHAT_PENDING_CLEARED_EVENT, externalPendingClearHandler);
+  }
+  externalPendingClearHandler = () => {
+    clearPendingUiState();
+    renderHistory(history, getHistoryKey() || activeAgentId, approvalHandler);
+    refreshVisiblePendingAction?.();
+  };
+  window.addEventListener(CHAT_PENDING_CLEARED_EVENT, externalPendingClearHandler);
 
   // Input area
   const inputArea = document.createElement('div');
@@ -512,26 +532,11 @@ export async function initChatPanel(container) {
       } else {
         await api.resetConversation(apiAgentId, webUserId, 'web');
       }
-      chatHistoryByAgent.delete(resetId);
+      deleteChatHistory(resetId);
       renderHistory(history, resetId, approvalHandler);
       refreshVisiblePendingAction?.();
     } catch (err) {
       console.error('Reset failed', err);
-    }
-  });
-
-  clearPendingBtn.addEventListener('click', async () => {
-    clearPendingBtn.disabled = true;
-    try {
-      await api.resetPendingAction(webUserId, 'web', GUARDIAN_CHAT_SURFACE_ID);
-      clearPendingUiState();
-      renderHistory(history, getHistoryKey(), approvalHandler);
-      refreshVisiblePendingAction?.();
-    } catch (err) {
-      history.appendChild(createMessageEl('error', err?.message || 'Failed to clear pending state.'));
-      history.scrollTop = history.scrollHeight;
-    } finally {
-      clearPendingBtn.disabled = false;
     }
   });
 
@@ -754,10 +759,12 @@ export async function initChatPanel(container) {
    * response includes structured pending approval data.
    */
   const addAgentMessage = (content, pendingAction, responseSource, activitySummary = null, metadata = null) => {
+    const historyKey = getHistoryKey();
     const normalizedActivitySummary = mergeResponseActivitySummary(activitySummary, metadata);
-    const chatHistory = getHistory(getHistoryKey());
+    const chatHistory = getHistory(historyKey);
     const removedSynthetic = removeSyntheticPendingActionEntries(chatHistory);
     chatHistory.push({ role: 'agent', content, responseSource, pendingAction, activitySummary: normalizedActivitySummary });
+    commitChatHistory(historyKey, { emit: false });
     if (removedSynthetic) {
       renderHistory(history, getHistoryKey(), approvalHandler);
       return;
@@ -789,6 +796,7 @@ export async function initChatPanel(container) {
     const chatHistory = getHistory(historyKey);
     const pendingAction = await resolvePendingActionForDisplay();
     if (syncSyntheticPendingActionEntry(chatHistory, pendingAction)) {
+      commitChatHistory(historyKey, { emit: false });
       renderHistory(history, historyKey, approvalHandler);
     }
   };
@@ -814,6 +822,7 @@ export async function initChatPanel(container) {
 
     // Add user message
     chatHistory.push({ role: 'user', content: text });
+    commitChatHistory(historyKey, { emit: false });
     history.appendChild(createMessageEl('user', text));
 
     // Add thinking indicator
@@ -1043,10 +1052,7 @@ function resolveWebUserId() {
 }
 
 function getHistory(agentId) {
-  if (!chatHistoryByAgent.has(agentId)) {
-    chatHistoryByAgent.set(agentId, []);
-  }
-  return chatHistoryByAgent.get(agentId);
+  return getChatHistory(resolveChatHistoryKey(agentId));
 }
 
 function normalizePendingActionId(pendingAction) {
@@ -1142,14 +1148,17 @@ function clearPendingActionUiEntries(chatHistory) {
 }
 
 function clearPendingUiState() {
-  for (const chatHistory of chatHistoryByAgent.values()) {
+  for (const historyKey of listChatHistoryKeys()) {
+    const chatHistory = getHistory(historyKey);
     clearPendingActionUiEntries(chatHistory);
+    commitChatHistory(historyKey, { emit: false });
   }
 }
 
 function renderHistory(historyEl, agentId, onApproval) {
   historyEl.innerHTML = '';
   if (!agentId) return;
+  setActiveChatHistoryKey(agentId);
   const chatHistory = getHistory(agentId);
   for (const msg of chatHistory) {
     historyEl.appendChild(createMessageEl(msg.role, msg.content, {

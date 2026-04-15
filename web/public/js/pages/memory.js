@@ -137,6 +137,8 @@ const MEMORY_INPUT_TOOLTIPS = {
   '[data-memory-new-page]': 'Create a new operator-curated page in this memory scope.',
   '[data-memory-edit-page]': 'Open this curated page in the editor.',
   '[data-memory-archive-page]': 'Archive this curated page so it no longer stays active for normal retrieval.',
+  '[data-memory-run-cleanup]': 'Run bounded memory hygiene cleanup for this scope using the existing consolidation rules.',
+  '[data-memory-hide-inactive]': 'Stop surfacing review-only and archived entries in the current memory filter set.',
   '[data-memory-editor-form] [name="scopeId"]': 'Choose which durable memory scope will own this curated page.',
   '[data-memory-editor-form] [name="title"]': 'Stable page title shown in the wiki and used by retrieval ranking.',
   '[data-memory-editor-form] [name="summary"]': 'Short retrieval-friendly gist. Keep it concise and specific.',
@@ -515,17 +517,19 @@ function renderLintTab(panel, response) {
             ${renderSectionTitle(scope.title, buildScopeHelp(scope, 'lint'))}
             <div class="table-muted">${esc(`${scope.lintFindings.length} hygiene finding${scope.lintFindings.length === 1 ? '' : 's'}`)}</div>
           </div>
-          <div class="memory-filter-meta">
+          <div class="memory-toolbar-actions">
+            ${scope.editable && scope.lintFindings.length > 0 ? `<button class="btn btn-secondary btn-sm" type="button" data-memory-run-cleanup data-scope="${escAttr(scope.scope)}" data-scope-id="${escAttr(scope.scopeId)}">Run cleanup</button>` : ''}
             <span class="badge ${scope.lintFindings.length > 0 ? 'badge-warning' : 'badge-ok'}">${esc(scope.lintFindings.length > 0 ? 'Needs review' : 'Clean')}</span>
           </div>
         </div>
         ${scope.lintFindings.length === 0
           ? '<div class="loading">No current hygiene findings.</div>'
-          : `<div class="memory-lint-list">${scope.lintFindings.map((finding) => renderLintFinding(finding)).join('')}</div>`}
+          : `<div class="memory-lint-list">${scope.lintFindings.map((finding) => renderLintFinding(scope, finding)).join('')}</div>`}
       </section>
     `).join('')}
   `;
 
+  wireMemoryActions(panel, response);
   enhanceMemoryUi(panel);
 }
 
@@ -837,7 +841,10 @@ function renderEntryRow(scope, entry) {
   `;
 }
 
-function renderLintFinding(finding) {
+function renderLintFinding(scope, finding) {
+  const relatedEntries = Array.isArray(finding.relatedEntries) ? finding.relatedEntries : [];
+  const showHideInactive = finding.kind === 'review_queue' && state.filters.includeInactive;
+  const showCleanupAction = scope.editable && (finding.kind === 'duplicate' || finding.kind === 'stale');
   return `
     <article class="memory-lint-card">
       <div class="memory-lint-head">
@@ -846,8 +853,43 @@ function renderLintFinding(finding) {
       </div>
       <div class="table-muted">${esc(finding.kind.replace(/_/g, ' '))}</div>
       <p>${esc(finding.detail)}</p>
-      ${Array.isArray(finding.entryIds) && finding.entryIds.length > 0 ? `<div class="table-muted">${esc(`Entries: ${finding.entryIds.join(', ')}`)}</div>` : ''}
+      ${showHideInactive || showCleanupAction
+        ? `
+          <div class="memory-lint-actions">
+            ${showCleanupAction ? `<button class="btn btn-secondary btn-sm" type="button" data-memory-run-cleanup data-scope="${escAttr(scope.scope)}" data-scope-id="${escAttr(scope.scopeId)}">Run cleanup</button>` : ''}
+            ${showHideInactive ? '<button class="btn btn-secondary btn-sm" type="button" data-memory-hide-inactive="true">Hide review-only</button>' : ''}
+          </div>
+        `
+        : ''}
+      ${relatedEntries.length > 0
+        ? `
+          <div class="memory-lint-entry-list">
+            ${relatedEntries.map((entry) => renderLintRelatedEntry(scope, entry)).join('')}
+          </div>
+        `
+        : (Array.isArray(finding.entryIds) && finding.entryIds.length > 0 ? `<div class="table-muted">${esc(`Entries: ${finding.entryIds.join(', ')}`)}</div>` : '')}
     </article>
+  `;
+}
+
+function renderLintRelatedEntry(scope, entry) {
+  return `
+    <div class="memory-lint-entry">
+      <div class="memory-lint-entry-copy">
+        <strong>${esc(entry.title)}</strong>
+        <span>${esc(`${entry.sourceClass.replace(/_/g, ' ')} · ${entry.status}${entry.reviewOnly ? ' · review only' : ''}`)}</span>
+      </div>
+      <div class="memory-toolbar-actions">
+        ${entry.editable ? `<button class="btn btn-secondary btn-sm" type="button" data-memory-edit-page data-entry-id="${escAttr(entry.id)}" data-scope="${escAttr(scope.scope)}" data-scope-id="${escAttr(scope.scopeId)}">Edit</button>` : ''}
+        ${entry.editable ? `<button class="btn btn-secondary btn-sm" type="button" data-memory-archive-page data-entry-id="${escAttr(entry.id)}" data-scope="${escAttr(scope.scope)}" data-scope-id="${escAttr(scope.scopeId)}">Archive</button>` : ''}
+        ${entry.editable ? '' : renderMemoryActionNotice(
+          entry.reviewOnly ? 'Review only' : 'System-managed',
+          entry.reviewOnly
+            ? 'This entry is already inactive. Hide review-only entries if you do not want it surfaced in the current view.'
+            : 'This entry is system-managed. Use Run cleanup for bounded duplicate/stale cleanup, or inspect it from Entries if you need more detail.',
+        )}
+      </div>
+    </div>
   `;
 }
 
@@ -963,6 +1005,34 @@ function renderMemoryCollapsible(title, content, options = {}) {
 }
 
 function wireMemoryActions(panel, response) {
+  panel.querySelectorAll('[data-memory-run-cleanup]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      try {
+        const result = await api.memoryMaintenance({
+          scope: button.dataset.scope || 'global',
+          codeSessionId: button.dataset.scope === 'code_session' ? button.dataset.scopeId : undefined,
+          actor: 'web-user',
+        });
+        await renderMemory(currentContainer);
+        if (result?.message) {
+          window.alert(String(result.message));
+        }
+      } catch (error) {
+        window.alert(error instanceof Error ? error.message : String(error));
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
+
+  panel.querySelectorAll('[data-memory-hide-inactive]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      state.filters.includeInactive = false;
+      await renderMemory(currentContainer);
+    });
+  });
+
   panel.querySelectorAll('[data-memory-new-page]').forEach((button) => {
     button.addEventListener('click', () => {
       state.editor = {
@@ -1078,7 +1148,9 @@ function buildScopeHelp(scope, surface) {
     ? (scope.editable ? 'Create, edit, or archive operator-curated pages here.' : 'Review surfaced pages only; this scope is not currently editable.')
     : surface === 'entries'
       ? (scope.editable ? 'Use the row actions when you need to jump from raw records back into guarded curation.' : 'Inspect the underlying records and their state without modifying them here.')
-      : 'Use lint findings to decide whether pages should be merged, tightened, or archived.';
+      : (scope.editable
+        ? 'Use lint findings to run bounded cleanup, archive editable curated pages, or hide already-inactive review items.'
+        : 'Use lint findings to decide what should be cleaned up, then review the scope because it is not currently writable.');
   const linkCopy = scope.scope === 'global'
     ? 'Changes here affect the shared durable memory surface used outside individual coding sessions.'
     : 'Changes and findings here stay attached to this code-session memory scope.';

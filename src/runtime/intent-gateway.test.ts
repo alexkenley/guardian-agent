@@ -814,6 +814,29 @@ describe('IntentGateway', () => {
     expect(result.decision.entities.query).toBe('Harbor');
   });
 
+  it('does not repair explicit filesystem file creation requests into Second Brain note work', async () => {
+    const gateway = new IntentGateway();
+    const result = await gateway.classify(
+      {
+        content: 'Create an empty file called note-a.txt in D:\\Temp\\guardian-phase1-test\\phase1-fresh-a.',
+        channel: 'web',
+      },
+      async () => ({
+        content: JSON.stringify({
+          route: 'general_assistant',
+          confidence: 'medium',
+          operation: 'create',
+          summary: 'Creates something for the user.',
+        }),
+        model: 'test-model',
+        finishReason: 'stop',
+      } satisfies ChatResponse),
+    );
+
+    expect(result.decision.route).not.toBe('personal_assistant_task');
+    expect(result.decision.entities.personalItemType).not.toBe('note');
+  });
+
   it('repairs a misrouted person lookup into a direct Second Brain read with a search query', async () => {
     const gateway = new IntentGateway();
     const result = await gateway.classify(

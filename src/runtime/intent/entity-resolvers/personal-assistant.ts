@@ -1,4 +1,5 @@
 import { collapseIntentGatewayWhitespace, normalizeIntentGatewayRepairText } from '../text.js';
+import { extractPathHint } from '../../search-intent.js';
 import type {
   IntentGatewayEntities,
   IntentGatewayOperation,
@@ -66,11 +67,26 @@ export function buildSecondBrainContextRepairText(
   return normalizeIntentGatewayRepairText(contextualText);
 }
 
+function isExplicitFilesystemResourceRequest(normalized: string): boolean {
+  if (!normalized) return false;
+  if (extractPathHint(normalized)) {
+    return true;
+  }
+  const hasFilesystemNoun = /\b(?:file|files|folder|folders|directory|directories|path|paths)\b/.test(normalized);
+  const hasFilesystemVerb = /\b(?:create|add|make|write|save|store|put|read|open|list|show|find|search|delete|remove|move|rename|touch|mkdir)\b/.test(normalized);
+  const hasFileNameWithExtension = /\b(?:called|named)\s+["']?[^"'`\\/\s]+\.[A-Za-z0-9]{1,16}\b/.test(normalized)
+    || (hasFilesystemNoun && /\b[^"'`\\/\s]+\.[A-Za-z0-9]{1,16}\b/.test(normalized));
+  return (hasFilesystemNoun && hasFilesystemVerb) || hasFileNameWithExtension;
+}
+
 export function inferSecondBrainPersonalItemTypeFromText(
   normalized: string,
   operation: IntentGatewayOperation,
 ): IntentGatewayEntities['personalItemType'] | undefined {
   if (!normalized) return undefined;
+  if (isExplicitFilesystemResourceRequest(normalized)) {
+    return undefined;
+  }
   if (
     /\bin second brain\s*>\s*briefs\b/.test(normalized)
     || (/\b(?:generate|regenerate|prepare)\b/.test(normalized)
@@ -294,6 +310,9 @@ export function isExplicitSecondBrainEntityRequest(
 ): boolean {
   const normalized = normalizeIntentGatewayRepairText(content);
   if (!normalized) return false;
+  if (isExplicitFilesystemResourceRequest(normalized)) {
+    return false;
+  }
   const personalItemType = inferSecondBrainPersonalItemTypeFromText(normalized, operation);
   if (!personalItemType || personalItemType === 'routine') {
     return false;

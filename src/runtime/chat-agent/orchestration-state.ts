@@ -232,19 +232,22 @@ export class ChatAgentOrchestrationState {
   ): PendingActionRecord | null {
     const primaryScope = this.buildPendingActionScope(userId, channel, surfaceId);
     const pendingAction = this.pendingActionStore?.resolveActiveForSurface(primaryScope, nowMs) ?? null;
-    if (!this.pendingActionStore) {
+    if (!this.pendingActionStore || !this.tools?.listPendingApprovalIdsForUser) {
       return pendingAction;
     }
     const liveApprovalIds = this.tools?.listPendingApprovalIdsForUser?.(userId, channel, {
       includeUnscoped: channel === 'web',
     }) ?? [];
     const approvalSummaries = this.tools?.getApprovalSummaries?.(liveApprovalIds);
-    return reconcilePendingApprovalAction(this.pendingActionStore, pendingAction, {
+    const reconciled = reconcilePendingApprovalAction(this.pendingActionStore, pendingAction, {
       liveApprovalIds,
       liveApprovalSummaries: approvalSummaries,
       scope: primaryScope,
       nowMs,
     });
+    return reconciled && isPendingActionActive(reconciled.status)
+      ? reconciled
+      : null;
   }
 
   private createPendingActionReplacementInput(

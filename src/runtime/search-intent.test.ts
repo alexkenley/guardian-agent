@@ -34,6 +34,11 @@ describe('search-intent parser', () => {
     expect(path).toBe('C:\\Users\\kenle\\OneDrive\\Technical and GRC');
   });
 
+  it('does not misread URLs as windows drive paths', () => {
+    const text = 'Save this link in my library with url "https://example.com".';
+    expect(extractPathHint(text)).toBeNull();
+  });
+
   it('builds direct intent from path + query prompt', () => {
     const text = 'Search my OneDrive folder C:\\Users\\kenle\\OneDrive\\Technical and GRC for "five" and "Code GRC".';
     const intent = parseDirectFileSearchIntent(text, policy);

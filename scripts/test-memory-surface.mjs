@@ -301,6 +301,16 @@ async function main() {
     assert.ok(afterArchive.global.entries.some((entry) => entry.id === createdPage.entryId && entry.status === 'archived'));
     assert.ok(afterArchive.recentAudit.some((event) => event.type === 'memory_wiki.archived'));
 
+    const maintenance = await requestJson(baseUrl, token, 'POST', '/api/memory/maintenance', {
+      scope: 'global',
+      actor: 'web-user',
+    });
+    assert.equal(maintenance.success, true, `Expected memory maintenance to succeed: ${JSON.stringify(maintenance)}`);
+    const afterMaintenance = await requestJson(baseUrl, token, 'GET', '/api/memory?includeInactive=true&includeCodeSessions=true&limit=50');
+    assert.ok(afterMaintenance.recentAudit.some((event) => event.type === 'memory_hygiene.idle_sweep'));
+    assert.ok(afterMaintenance.recentAudit.some((event) => event.type === 'memory_hygiene.idle_sweep' && event.actor === 'web-user'));
+    assert.ok(afterMaintenance.recentJobs.some((job) => job.type === 'memory_hygiene.idle_sweep'));
+
     console.log('Memory surface harness passed.');
   } finally {
     guardian.kill('SIGTERM');

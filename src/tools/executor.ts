@@ -52,6 +52,7 @@ import type {
 import { MarketingStore } from './marketing-store.js';
 import { ToolApprovalStore } from './approvals.js';
 import { ToolRegistry } from './registry.js';
+import { canonicalizePolicyPathValue, normalizePathForHost } from './path-normalization.js';
 import { hashRedactedObject, redactSensitiveValue } from '../util/crypto-guardrails.js';
 import type {
   ToolApprovalRequest,
@@ -2015,6 +2016,81 @@ export class ToolExecutor {
     return isPathInside(resolvedValue, codeWorkspaceRoot);
   }
 
+  private getCanonicalPolicyPathValue(
+    value: string,
+    request?: Partial<ToolExecutionRequest>,
+  ): string {
+    return canonicalizePolicyPathValue(
+      value,
+      this.getCodeWorkspaceRoot(request) ?? this.options.workspaceRoot,
+    );
+  }
+
+  private isPathAlreadyAllowedForPolicy(
+    value: string,
+    request?: Partial<ToolExecutionRequest>,
+  ): boolean {
+    const canonicalValue = this.getCanonicalPolicyPathValue(value, request);
+    return this.getEffectiveAllowedPaths(request).some((candidate) => (
+      isPathInside(canonicalValue, this.getCanonicalPolicyPathValue(candidate, request))
+    ));
+  }
+
+  private isCommandAlreadyAllowedForPolicy(value: string): boolean {
+    const normalizedValue = value.trim();
+    if (!normalizedValue) return false;
+    return validateShellCommand(normalizedValue, this.policy.sandbox.allowedCommands).valid;
+  }
+
+  private isDomainAllowedByList(value: string, allowedDomains: string[]): boolean {
+    const normalizedValue = value.trim().toLowerCase();
+    if (!normalizedValue) return false;
+    return this.isHostAllowed(normalizedValue, allowedDomains);
+  }
+
+  private isDomainAlreadyAllowedForPolicy(value: string): boolean {
+    const normalizedValue = value.trim().toLowerCase();
+    if (!normalizedValue) return false;
+    if (!this.isDomainAllowedByList(normalizedValue, this.policy.sandbox.allowedDomains)) {
+      return false;
+    }
+    const browserAllowedDomains = this.getExplicitBrowserAllowedDomains();
+    return !browserAllowedDomains || this.isDomainAllowedByList(normalizedValue, browserAllowedDomains);
+  }
+
+  private isPolicyUpdateNoOp(
+    definition: ToolDefinition,
+    args: Record<string, unknown>,
+    request?: Partial<ToolExecutionRequest>,
+  ): boolean {
+    if (definition.name !== 'update_tool_policy') return false;
+
+    const action = asString(args.action, '').trim();
+    const value = asString(args.value, '').trim();
+    if (!action || !value) return false;
+
+    if (action === 'add_path' && this.isCodeWorkspacePolicyNoOp(definition, args, request)) {
+      return true;
+    }
+
+    switch (action) {
+      case 'add_path':
+        return this.isPathAlreadyAllowedForPolicy(value, request);
+      case 'add_command':
+        return this.isCommandAlreadyAllowedForPolicy(value);
+      case 'add_domain':
+        return this.isDomainAlreadyAllowedForPolicy(value);
+      case 'set_tool_policy_auto':
+        return this.policy.toolPolicies[value] === 'auto';
+      case 'set_tool_policy_manual':
+        return this.policy.toolPolicies[value] === 'manual';
+      case 'set_tool_policy_deny':
+        return this.policy.toolPolicies[value] === 'deny';
+      default:
+        return false;
+    }
+  }
+
   /** Auto-approve tools that belong to the coding workflow when operating inside the code session workspace. */
   private isCodeSessionWorkspaceTool(
     definition: ToolDefinition,
@@ -3680,7 +3756,7 @@ export class ToolExecutor {
       return gwsDecision;
     }
 
-    if (this.isCodeWorkspacePolicyNoOp(definition, args, request)) {
+    if (this.isPolicyUpdateNoOp(definition, args, request)) {
       return 'allow';
     }
 
@@ -5537,6 +5613,10 @@ export class ToolExecutor {
       updatePolicy: (update) => this.updatePolicy(update),
       persistPolicyUpdate: (policy, meta) => this.options.onPolicyUpdate?.(policy, meta),
       isCodeWorkspacePolicyNoOp: (action, value, request) => this.isCodeWorkspacePolicyNoOp({ name: 'update_tool_policy' } as ToolDefinition, { action, value }, request),
+      isPathAlreadyAllowedForPolicy: (value, request) => this.isPathAlreadyAllowedForPolicy(value, request),
+      isCommandAlreadyAllowedForPolicy: (value) => this.isCommandAlreadyAllowedForPolicy(value),
+      isDomainAllowedByList: (value, allowedDomains) => this.isDomainAllowedByList(value, allowedDomains),
+      canonicalizePolicyPathValue: (value, request) => this.getCanonicalPolicyPathValue(value, request),
       getEffectiveAllowedPaths: (request) => this.getEffectiveAllowedPaths(request),
       getExplicitBrowserAllowedDomains: () => this.getExplicitBrowserAllowedDomains(),
       setExplicitBrowserAllowedDomains: (domains) => {
@@ -6995,31 +7075,6 @@ function isPathInside(candidate: string, root: string): boolean {
   return normalizedCandidate.startsWith(
     normalizedRoot.endsWith(sep) ? normalizedRoot : `${normalizedRoot}${sep}`,
   );
-}
-
-function normalizePathForHost(inputPath: string): string {
-  const trimmed = inputPath.trim();
-  if (!trimmed) return trimmed;
-
-  // Linux/WSL runtime: accept Windows drive-letter paths (C:\...) from UI/chat.
-  if (sep === '/') {
-    const driveMatch = trimmed.match(/^([a-zA-Z]):[\\/](.*)$/);
-    if (driveMatch) {
-      const drive = driveMatch[1].toLowerCase();
-      const rest = driveMatch[2].replace(/\\/g, '/');
-      return `/mnt/${drive}/${rest}`;
-    }
-    return trimmed.replace(/\\/g, '/');
-  }
-
-  // Native Windows runtime: accept WSL /mnt/<drive>/... paths.
-  const mntMatch = trimmed.match(/^\/mnt\/([a-zA-Z])\/(.*)$/);
-  if (mntMatch) {
-    const drive = mntMatch[1].toUpperCase();
-    const rest = mntMatch[2].replace(/\//g, '\\');
-    return `${drive}:\\${rest}`;
-  }
-  return trimmed.replace(/\//g, '\\');
 }
 
 function asString(value: unknown, fallback = ''): string {

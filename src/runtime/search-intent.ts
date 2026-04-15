@@ -164,9 +164,9 @@ export function extractSearchQuery(text: string): string | null {
 
 export function extractPathHint(text: string): string | null {
   const patterns = [
-    /\b(?:in|inside|within|under|path)\s+([A-Za-z]:[\\/][^\n\r"'`]+?)(?=\s+\bfor\b\s+["']|["']|$)/i,
+    /\b(?:in|inside|within|under|path)\s+((?<![A-Za-z])[A-Za-z]:[\\/][^\n\r"'`]+?)(?=\s+\bfor\b\s+["']|["']|$)/i,
     /\b(?:in|inside|within|under|path)\s+(\/[^\n\r"'`]+?)(?=\s+\bfor\b\s+["']|["']|$)/i,
-    /([A-Za-z]:[\\/][^\n\r"'`]+?)(?=\s+\bfor\b\s+["']|["']|$)/,
+    /((?<![A-Za-z])[A-Za-z]:[\\/][^\n\r"'`]+?)(?=\s+\bfor\b\s+["']|["']|$)/,
     /(\/mnt\/[A-Za-z]\/[^\n\r"'`]+?)(?=\s+\bfor\b\s+["']|["']|$)/,
   ];
 
