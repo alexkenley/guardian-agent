@@ -1984,7 +1984,7 @@ describe('IntentGateway', () => {
       } satisfies ChatResponse),
     );
 
-    expect(result.decision.route).toBe('ui_control');
+    expect(result.decision.route).toBe('automation_control');
     expect(result.decision.operation).toBe('toggle');
     expect(result.decision.entities.enabled).toBe(false);
   });

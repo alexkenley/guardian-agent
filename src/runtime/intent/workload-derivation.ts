@@ -72,6 +72,17 @@ export function deriveWorkloadMetadata(
           simpleVsComplex: 'complex',
         };
       }
+      if (operation === 'run') {
+        return {
+          executionClass: 'repo_grounded',
+          preferredTier: 'local',
+          requiresRepoGrounding: true,
+          requiresToolSynthesis: true,
+          expectedContextPressure: 'high',
+          preferredAnswerPath: 'tool_loop',
+          simpleVsComplex: 'complex',
+        };
+      }
       if (operation === 'inspect') {
         return {
           executionClass: 'repo_grounded',
@@ -89,7 +100,7 @@ export function deriveWorkloadMetadata(
         requiresRepoGrounding: true,
         requiresToolSynthesis: true,
         expectedContextPressure: 'high',
-        preferredAnswerPath: 'tool_loop',
+        preferredAnswerPath: 'chat_synthesis',
         simpleVsComplex: 'complex',
       };
     case 'filesystem_task':

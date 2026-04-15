@@ -81,4 +81,32 @@ describe('clarification-resolver', () => {
     expect(route).toBe('general_assistant');
     expect(operation).toBe('inspect');
   });
+
+  it('prefers explicit automation authoring over stale routine continuity', () => {
+    const repairContext: IntentGatewayRepairContext = {
+      sourceContent: 'Create a deterministic scheduled automation named "Example Nav Check". Run it weekdays at 8:30 AM. Use built-in browser tools only to open https://example.com, extract the top navigation links, and notify me in web only when the labels change. Do not create an assistant automation.',
+      continuity: {
+        continuityKey: 'chat:owner',
+        linkedSurfaceCount: 1,
+        focusSummary: 'Updates a Second Brain routine.',
+        lastActionableRequest: 'Rename that new routine to Friday Harbor Review and run it weekdays at 6 pm.',
+      },
+    };
+
+    const route = repairIntentGatewayRoute(
+      'personal_assistant_task',
+      'update',
+      'follow_up',
+      repairContext,
+    );
+    const operation = repairIntentGatewayOperation(
+      'update',
+      route,
+      'follow_up',
+      repairContext,
+    );
+
+    expect(route).toBe('automation_authoring');
+    expect(operation).toBe('create');
+  });
 });

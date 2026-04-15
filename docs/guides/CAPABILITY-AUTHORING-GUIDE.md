@@ -184,6 +184,7 @@ Checklist:
 
 - choose the correct `risk`: `read_only`, `mutating`, or `external_post`
 - make sure Guardian capability checks and policy behavior are correct. If you introduce a new action type (like `external_post` or a custom integration), it MUST be mapped to an existing capability (like `network_access`) in `src/guardian/guardian.ts` (inside `CapabilityController`) and `src/index.ts` (`capMap`), otherwise it will be blocked by default-deny.
+- Update the default tool policies to map your new tool if necessary. For instance, `external_post` tools always require manual approval, but standard read/write operations may need to be declared in the core policy evaluator `src/policy/` or handled specifically in `src/tools/executor.ts`'s `evaluateToolPolicy`.
 - consider SSRF, secret/PII scanning, denied paths, allowlists, and tainted content reinjection
 
 ### Tests

@@ -1,9 +1,24 @@
 import type { IntentGatewayOperation } from '../types.js';
 import { collapseIntentGatewayWhitespace } from '../text.js';
 
+const AUTOMATION_AUTHORING_VERB_PATTERN = /\b(?:create|build|set up|setup|make|configure|schedule|automate|turn into|save)\b/i;
+const AUTOMATION_AUTHORING_NOUN_PATTERN = /\b(?:automation|automations|workflow|workflows|playbook|playbooks|pipeline|pipelines|scheduled automation|scheduled automations|scheduled task|scheduled tasks|assistant automation|assistant automations|assistant task|assistant tasks)\b/i;
+const AUTOMATION_AUTHORING_WORKFLOW_HINT_PATTERN = /\b(?:deterministic scheduled automation|deterministic workflow|step[- ]based workflow|fixed tool steps|do not create an assistant automation|don't create an assistant automation|do not create a scheduled assistant task|don't create a scheduled assistant task)\b/i;
 const AUTOMATION_CONTROL_VERB_PATTERN = /\b(?:disable|enable|run|inspect|show|read|delete|remove|rename|edit|update|change|modify|clone|list)\b/i;
 const AUTOMATION_OUTPUT_ANALYSIS_PATTERN = /\b(analy[sz]e|summari[sz]e|explain|review|compare|investigate|interpret|what did(?:\s+it)?\s+find)\b/i;
 const AUTOMATION_OUTPUT_CONTEXT_PATTERN = /\b(output|outputs|result|results|findings|history|timeline|step output|run output)\b/i;
+
+export function isExplicitAutomationAuthoringRequest(content: string | undefined): boolean {
+  const normalized = collapseIntentGatewayWhitespace(content ?? '');
+  if (!normalized) return false;
+  if (isExplicitAutomationOutputRequest(normalized)) return false;
+  if (isExplicitAutomationControlRequest(normalized)) return false;
+  if (AUTOMATION_AUTHORING_WORKFLOW_HINT_PATTERN.test(normalized) && AUTOMATION_AUTHORING_NOUN_PATTERN.test(normalized)) {
+    return true;
+  }
+  if (!AUTOMATION_AUTHORING_NOUN_PATTERN.test(normalized)) return false;
+  return AUTOMATION_AUTHORING_VERB_PATTERN.test(normalized);
+}
 
 export function isExplicitAutomationControlRequest(content: string | undefined): boolean {
   const normalized = collapseIntentGatewayWhitespace(content ?? '');

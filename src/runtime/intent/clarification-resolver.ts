@@ -1,5 +1,12 @@
 import { extractExplicitRemoteExecCommand } from './entity-resolvers/coding.js';
 import {
+  inferAutomationControlOperation,
+  inferAutomationOutputOperation,
+  isExplicitAutomationAuthoringRequest,
+  isExplicitAutomationControlRequest,
+  isExplicitAutomationOutputRequest,
+} from './entity-resolvers/automation.js';
+import {
   continuitySuggestsRoutine,
   inferSecondBrainOperation,
   isExplicitSecondBrainEntityRequest,
@@ -28,6 +35,15 @@ export function repairIntentGatewayRoute(
   }
   if (isExplicitProviderConfigRequest(rawSourceContent)) {
     return 'general_assistant';
+  }
+  if (isExplicitAutomationOutputRequest(rawSourceContent)) {
+    return 'automation_output_task';
+  }
+  if (isExplicitAutomationControlRequest(rawSourceContent)) {
+    return 'automation_control';
+  }
+  if (isExplicitAutomationAuthoringRequest(rawSourceContent)) {
+    return 'automation_authoring';
   }
   if (route === 'personal_assistant_task') {
     return route;
@@ -73,6 +89,15 @@ export function repairIntentGatewayOperation(
   }
   if (route === 'general_assistant' && isExplicitProviderConfigRequest(rawSourceContent)) {
     return inferProviderConfigOperation(rawSourceContent, operation);
+  }
+  if (route === 'automation_authoring' && isExplicitAutomationAuthoringRequest(rawSourceContent)) {
+    return 'create';
+  }
+  if (route === 'automation_control' && isExplicitAutomationControlRequest(rawSourceContent)) {
+    return inferAutomationControlOperation(rawSourceContent, operation);
+  }
+  if (route === 'automation_output_task' && isExplicitAutomationOutputRequest(rawSourceContent)) {
+    return inferAutomationOutputOperation(rawSourceContent, operation);
   }
   if (
     route === 'coding_task'

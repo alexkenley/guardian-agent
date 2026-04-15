@@ -260,6 +260,11 @@ function buildRoutedIntentRuleLines(decision: IntentGatewayDecision): string[] {
       'Prefer native repo tools first: fs_search, code_symbol_search, and fs_read for locating and reading code.',
       'Do not use shell_safe for grep, git grep, cat, sed, or similar repo inspection when the built-in repo tools can answer the question.',
     ];
+    if (decision.operation === 'run') {
+      lines.push('This is an explicit request to run repo commands (such as tests, builds, or scripts).');
+      lines.push('Do NOT guess commands in an ad hoc loop. You MUST formulate a single bounded execution plan using code_test, code_build, code_lint, or code_remote_exec.');
+      lines.push('If a test or build fails because of missing dependencies (e.g. "vitest: command not found"), do NOT immediately guess the next installation command. Stop, output a concrete diagnosis of the failure, and ask for permission before adjusting the plan or installing packages.');
+    }
     if (decision.entities.codingRemoteExecRequested === true) {
       lines.push('For explicit remote sandbox requests, use code_remote_exec for arbitrary commands or code_test/code_build/code_lint with remote-required isolation for structured verification.');
       if (typeof decision.entities.profileId === 'string' && decision.entities.profileId.trim()) {

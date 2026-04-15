@@ -222,6 +222,7 @@ async function startFakeProvider(workspaceRoot, scopedWorkspaceRoot, scenarioLog
         : [];
       const toolMessages = messages.filter((message) => message.role === 'tool');
       const latestUser = String([...messages].reverse().find((message) => message.role === 'user')?.content ?? '');
+      console.log('LATEST_USER:', JSON.stringify(latestUser), 'TOOLS:', JSON.stringify(tools));
       const systemPrompt = String(messages.find((message) => message.role === 'system')?.content ?? '');
       const latestGatewayRequest = latestUser.split('\n').map((line) => line.trim()).filter(Boolean).at(-1) ?? latestUser;
       const sendResponse = ({ model, content = '', finishReason = 'stop', toolCalls }) => {

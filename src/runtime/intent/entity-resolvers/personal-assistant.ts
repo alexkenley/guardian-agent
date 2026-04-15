@@ -1,5 +1,10 @@
 import { collapseIntentGatewayWhitespace, normalizeIntentGatewayRepairText } from '../text.js';
 import { extractPathHint } from '../../search-intent.js';
+import {
+  isExplicitAutomationAuthoringRequest,
+  isExplicitAutomationControlRequest,
+  isExplicitAutomationOutputRequest,
+} from './automation.js';
 import type {
   IntentGatewayEntities,
   IntentGatewayOperation,
@@ -87,6 +92,11 @@ export function inferSecondBrainPersonalItemTypeFromText(
   if (isExplicitFilesystemResourceRequest(normalized)) {
     return undefined;
   }
+  if (isExplicitAutomationAuthoringRequest(normalized)
+    || isExplicitAutomationControlRequest(normalized)
+    || isExplicitAutomationOutputRequest(normalized)) {
+    return undefined;
+  }
   if (
     /\bin second brain\s*>\s*briefs\b/.test(normalized)
     || (/\b(?:generate|regenerate|prepare)\b/.test(normalized)
@@ -138,6 +148,11 @@ export function inferRoutinePersonalItemType(
   }
   const normalized = normalizeIntentGatewayRepairText(repairContext?.sourceContent);
   if (!normalized) return undefined;
+  if (isExplicitAutomationAuthoringRequest(normalized)
+    || isExplicitAutomationControlRequest(normalized)
+    || isExplicitAutomationOutputRequest(normalized)) {
+    return undefined;
+  }
   if (isExplicitSecondBrainRoutineRequest(normalized, operation)
     || pendingActionSuggestsRoutine(repairContext)
     || continuitySuggestsRoutine(repairContext)) {

@@ -73,4 +73,19 @@ describe('resolveIntentGatewayEntities', () => {
       enabled: false,
     });
   });
+
+  it('does not infer Second Brain library entities from explicit automation authoring prompts', () => {
+    const result = resolveIntentGatewayEntities(
+      {},
+      {
+        sourceContent: 'Create a deterministic scheduled automation named "Example Nav Check". Run it weekdays at 8:30 AM. Use built-in browser tools only to open https://example.com, extract the top navigation links, and notify me in web only when the labels change. Do not create an assistant automation.',
+      },
+      'personal_assistant_task',
+      'update',
+      'classifier.primary',
+    );
+
+    expect(result.entities.personalItemType).toBeUndefined();
+    expect(result.entities.query).toBeUndefined();
+  });
 });
