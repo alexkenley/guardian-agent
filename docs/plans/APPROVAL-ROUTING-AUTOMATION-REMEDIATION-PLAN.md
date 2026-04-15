@@ -233,7 +233,7 @@ Exit criteria:
 1. Shared pending-action continuity for generic web approval flows (Fixed: restored `completePendingAction` clearing)
 2. Scheduled assistant automation prompt/name corruption (Fixed: stripped authoring commands from saved goal and ignored system prompts during edits)
 3. Telegram notification delivery failure (Fixed: mapped owner ID to allowed chat IDs to survive restarts)
-4. Scheduled assistant runtime approval semantics
+4. Scheduled assistant runtime approval semantics (Fixed: bounded scheduled runs now natively bypass redundant runtime tool approvals, correctly blocking and reporting `pending_approval` only if restricted capabilities are hit)
 5. Coding-task execution/routing discipline for repo command requests
 6. Filesystem tool sandbox policy sync for external paths (fixes ad-hoc script execution loop) (Fixed)
 

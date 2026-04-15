@@ -38,6 +38,7 @@ export interface DashboardDispatchInput {
     priority?: 'high' | 'normal' | 'low';
     requestType?: string;
     requestId?: string;
+    bypassApprovals?: boolean;
     abortSignal?: AbortSignal;
   };
   resolvedCodeSession?: ResolvedCodeSessionContext | null;
@@ -165,9 +166,15 @@ export function createDashboardMessageDispatcher(args: {
           },
         }
       : sanitizedIncomingMetadata;
-    const effectiveMetadata = precomputedIntentGateway
+    let effectiveMetadata = precomputedIntentGateway
       ? attachPreRoutedIntentGatewayMetadata(baseMetadata, precomputedIntentGateway)
       : baseMetadata;
+    if (options?.bypassApprovals) {
+      effectiveMetadata = {
+        ...(isRecord(effectiveMetadata) ? effectiveMetadata : {}),
+        bypassApprovals: true,
+      };
+    }
     const effectiveMetadataRecord = isRecord(effectiveMetadata) ? effectiveMetadata : undefined;
     const selectedExecutionProfile = readSelectedExecutionProfileMetadata(effectiveMetadataRecord);
     const selectedResponseSource = buildSelectedResponseSource(selectedExecutionProfile, args.configRef.current);

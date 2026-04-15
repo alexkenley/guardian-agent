@@ -225,6 +225,7 @@ import {
   ContinuityThreadStore,
   summarizeContinuityThreadForGateway,
 } from './runtime/continuity-threads.js';
+import { resolveTelegramDeliveryChatIds } from './runtime/telegram-delivery.js';
 import { IntentRoutingTraceLog } from './runtime/intent-routing-trace.js';
 import { ModelFallbackChain } from './llm/model-fallback.js';
 import { TRUST_PRESETS, type TrustPresetName } from './guardian/trust-presets.js';
@@ -4736,6 +4737,8 @@ async function main(): Promise<void> {
     auditLog: runtime.auditLog,
   });
 
+  let deliverMessageClosure: ToolExecutorOptions['deliverMessage'] = undefined;
+
   const toolExecutorOptions: ToolExecutorOptions = {
     enabled: config.assistant.tools.enabled,
     workspaceRoot: process.cwd(),
@@ -4745,6 +4748,12 @@ async function main(): Promise<void> {
     allowedCommands: config.assistant.tools.allowedCommands,
     allowedDomains: config.assistant.tools.allowedDomains,
     allowExternalPosting: config.assistant.tools.allowExternalPosting,
+    deliverMessage: async (channel, targetId, content) => {
+      if (deliverMessageClosure) {
+        return deliverMessageClosure(channel, targetId, content);
+      }
+      return { success: false, error: 'Channel delivery is not initialized.' };
+    },
     agentPolicyUpdates: config.assistant.tools.agentPolicyUpdates,
     listLlmProviders: async () => listConfiguredLlmProvidersForTools?.() ?? [],
     listModelsForLlmProvider: async (providerName) => {
@@ -4931,6 +4940,7 @@ async function main(): Promise<void> {
         read_sheets: ['read_sheets'],
         write_sheets: ['write_sheets'],
         mcp_tool: ['network_access'],
+        external_post: ['network_access'],
       };
       const capabilities = capMap[type] ?? [];
       const result = runtime.guardian.check({
@@ -6591,6 +6601,43 @@ async function main(): Promise<void> {
   codingBackendServiceRef.current?.subscribeProgress((event) => {
     runTimeline.ingestCodingBackendProgress(event);
   });
+
+  deliverMessageClosure = async (channel, targetId, content) => {
+    try {
+      if (channel === 'telegram') {
+        const tChannel = startedChannels.getTelegramChannel();
+        if (!tChannel) return { success: false, error: 'Telegram channel not available.' };
+        const chatIds = resolveTelegramDeliveryChatIds({
+          configuredChatIds: configRef.current.channels.telegram?.allowedChatIds ?? [],
+          preferredUserIds: targetId ? [targetId] : undefined,
+          primaryUserId: configRef.current.assistant.identity.primaryUserId,
+          telegramChannel: tChannel,
+        });
+        if (chatIds.length === 0) {
+          return { success: false, error: 'No Telegram chat ID configured or discovered for delivery.' };
+        }
+        for (const id of chatIds) {
+          await tChannel.send(String(id), content);
+        }
+        return { success: true };
+      } else if (channel === 'web') {
+        if (!activeWebChannel) return { success: false, error: 'Web channel not available.' };
+        await activeWebChannel.send(targetId, content);
+        return { success: true };
+      } else if (channel === 'cli') {
+        if (!cliChannel) return { success: false, error: 'CLI channel not available.' };
+        await cliChannel.send(targetId, content);
+        return { success: true };
+      }
+      return { success: false, error: `Channel '${channel}' not supported.` };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (channel === 'telegram' && msg.includes('chat not found')) {
+        return { success: false, error: 'Telegram API returned "chat not found". The user must start a conversation with the bot on Telegram first before it can send messages to them.' };
+      }
+      return { success: false, error: msg };
+    }
+  };
 
   wireScheduledAgentExecutor({
     scheduledTasks,

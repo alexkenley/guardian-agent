@@ -1311,7 +1311,7 @@ export interface DashboardCallbacks {
       metadata?: Record<string, unknown>;
     },
     routeDecision?: RouteDecision,
-    options?: { priority?: 'high' | 'normal' | 'low'; requestType?: string; requestId?: string },
+    options?: { priority?: 'high' | 'normal' | 'low'; requestType?: string; requestId?: string; bypassApprovals?: boolean },
     precomputedIntentGateway?: import('../runtime/intent-gateway.js').IntentGatewayRecord | null,
   ) => Promise<{ content: string; metadata?: Record<string, unknown> }>;
   onConfigUpdate?: (updates: ConfigUpdate) => Promise<DashboardMutationResult>;

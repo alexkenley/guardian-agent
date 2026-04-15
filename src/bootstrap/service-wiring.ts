@@ -106,10 +106,12 @@ export function wireScheduledAgentExecutor(args: {
               channel,
             },
             undefined,
-            { priority: 'normal', requestType: 'scheduled_task' },
+            { priority: 'normal', requestType: 'scheduled_task', bypassApprovals: true },
           );
         },
       );
+
+      const isBlocked = typeof response.metadata?.pendingAction === 'object' && response.metadata.pendingAction !== null;
 
       const deliveryText = `Scheduled assistant report: ${input.taskName}\n\n${response.content}`.trim();
       let deliveryMessage = 'Agent task completed.';
@@ -119,7 +121,10 @@ export function wireScheduledAgentExecutor(args: {
         channel,
       };
 
-      if (shouldDeliver) {
+      if (isBlocked) {
+        deliveryMessage = 'Agent task is blocked waiting for approval.';
+        deliveryMeta.error = 'Pending approval';
+      } else if (shouldDeliver) {
         deliveryMeta.attempted = true;
         try {
           if (channel === 'cli') {
@@ -153,8 +158,8 @@ export function wireScheduledAgentExecutor(args: {
       }
 
       return {
-        success: true,
-        status: 'succeeded',
+        success: !isBlocked,
+        status: isBlocked ? 'pending_approval' : 'succeeded',
         message: deliveryMessage,
         output: {
           content: response.content,

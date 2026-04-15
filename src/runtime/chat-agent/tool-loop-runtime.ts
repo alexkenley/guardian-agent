@@ -314,6 +314,7 @@ export async function resumeStoredToolLoopPendingAction(input: {
       ...(input.options?.ctx?.checkAction ? { agentContext: { checkAction: input.options.ctx.checkAction } } : {}),
       ...(resume.codeContext ? { codeContext: resume.codeContext } : {}),
       ...(resume.activeSkillIds.length > 0 ? { activeSkills: [...resume.activeSkillIds] } : {}),
+      ...(resume.originalMessage.metadata?.bypassApprovals ? { bypassApprovals: true } : {}),
       requestText: resume.requestText,
     };
 

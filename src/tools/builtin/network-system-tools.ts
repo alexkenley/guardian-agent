@@ -30,6 +30,7 @@ interface NetworkSystemToolRegistrarContext {
   deviceInventory?: DeviceInventoryService;
   networkBaseline?: NetworkBaselineService;
   networkTraffic?: NetworkTrafficService;
+  deliverMessage?: (channel: string, targetId: string, content: string) => Promise<{ success: boolean; error?: string }>;
 }
 
 type ConnectionProfile = AssistantNetworkConfig['connections'][number];
@@ -603,6 +604,49 @@ async function collectLocalConnections(
 
 export function registerBuiltinNetworkSystemTools(context: NetworkSystemToolRegistrarContext): void {
   const { requireString, asString, asNumber } = context;
+
+  context.registry.register(
+    {
+      name: 'system_channel_delivery',
+      description: 'Deliver a message to a specific communication channel (e.g. telegram, cli, web). You can optionally provide a targetId (e.g. chat id or user id). Use this to send cross-channel messages or tests.',
+      shortDescription: 'Deliver a message to a specific communication channel.',
+      risk: 'external_post',
+      category: 'system',
+      parameters: {
+        type: 'object',
+        properties: {
+          channel: { type: 'string', description: "Channel to send to: 'telegram', 'cli', or 'web'." },
+          targetId: { type: 'string', description: 'Optional target user ID or chat ID. Defaults to the primary user if omitted.' },
+          content: { type: 'string', description: 'Message content to deliver.' },
+        },
+        required: ['channel', 'content'],
+      },
+    },
+    async (args, request) => {
+      const channel = context.asString(args.channel).trim().toLowerCase();
+      const targetId = args.targetId ? context.asString(args.targetId).trim() : 'owner';
+      const content = context.asString(args.content).trim();
+
+      if (!['telegram', 'cli', 'web'].includes(channel)) {
+        return { success: false, error: "Channel must be 'telegram', 'cli', or 'web'." };
+      }
+      if (!content) {
+        return { success: false, error: 'content is required.' };
+      }
+
+      context.guardAction(request, 'external_post', { action: 'channel_delivery', channel, targetId });
+
+      if (!context.deliverMessage) {
+        return { success: false, error: 'Channel delivery is not available in this runtime.' };
+      }
+
+      const result = await context.deliverMessage(channel, targetId, content);
+      if (result.success) {
+        return { success: true, message: `Message successfully delivered to ${channel} channel (target: ${targetId}).` };
+      }
+      return result;
+    },
+  );
 
   context.registry.register(
     {

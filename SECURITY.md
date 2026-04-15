@@ -347,7 +347,7 @@ Capabilities are granted per-agent at registration and **frozen** (`Object.freez
 | `read_files` | File read operations |
 | `write_files` | File write/create operations |
 | `execute_commands` | Shell command execution |
-| `network_access` | HTTP requests to allowed domains |
+| `network_access` | HTTP requests to allowed domains and external post deliveries (like channel delivery and forum posting) |
 | `read_email` / `draft_email` / `send_email` | Email inbox, composition, and sending |
 | `read_calendar` / `write_calendar` | Calendar access and modification |
 | `read_drive` / `write_drive` | Google Drive access and modification |

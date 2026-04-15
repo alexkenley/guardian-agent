@@ -39,9 +39,10 @@ Never add regex, keyword matching, `includes()`, or other ad hoc request classif
 
 If the capability needs a new direct route:
 
-- update `IntentGatewayRoute` and the tool schema in [`src/runtime/intent-gateway.ts`](/mnt/s/Development/GuardianAgent/src/runtime/intent-gateway.ts)
-- update normalization in the gateway result handling
-- update `preferredCandidatesForDecision` in [`src/runtime/direct-intent-routing.ts`](/mnt/s/Development/GuardianAgent/src/runtime/direct-intent-routing.ts)
+- update `IntentGatewayRoute` and the tool schema in [`src/runtime/intent/types.ts`](/mnt/s/Development/GuardianAgent/src/runtime/intent/types.ts)
+- update `route-classifier.ts` and `normalization.ts` in the `src/runtime/intent/` directory
+- update workload hints in `src/runtime/intent/workload-derivation.ts`
+- update preferred capability selection in [`src/runtime/intent/capability-resolver.ts`](/mnt/s/Development/GuardianAgent/src/runtime/intent/capability-resolver.ts)
 - add the handler to the direct-candidate dispatch loop in [`src/index.ts`](/mnt/s/Development/GuardianAgent/src/index.ts)
 
 The only allowed pre-gateway interception is slash-command parsing in channel adapters and continuation/approval detection.
@@ -113,7 +114,7 @@ Use the smallest correct capability type.
 
 | Capability type | Use when | Primary files |
 |---|---|---|
-| Direct intent route | The request needs a first-class workflow or dispatch path before normal tool calling | `src/runtime/intent-gateway.ts`, `src/runtime/direct-intent-routing.ts`, `src/index.ts` |
+| Direct intent route | The request needs a first-class workflow or dispatch path before normal tool calling | `src/runtime/intent/types.ts`, `src/runtime/intent/capability-resolver.ts`, `src/index.ts` |
 | Built-in tool | The capability is an executable runtime action exposed to the model/tool loop | `src/tools/builtin/*.ts`, `src/tools/executor.ts`, `src/tools/types.ts` |
 | Skill | The capability is prompt-time guidance, workflow instructions, or reusable operator/model know-how | `skills/`, `src/skills/registry.ts`, `src/skills/resolver.ts`, `src/skills/prompt.ts` |
 | Native integration | Guardian owns auth, API calls, config, and runtime behavior directly | `src/runtime/`, provider-specific module trees like `src/google/` or `src/microsoft/`, control-plane files |
@@ -133,6 +134,7 @@ Required changes:
 - update the gateway tool schema enum and prompt
 - update decision normalization
 - update preferred candidate selection in `direct-intent-routing.ts`
+- add the route to workload derivation in `workload-derivation.ts`
 - add a candidate handler in [`src/index.ts`](/mnt/s/Development/GuardianAgent/src/index.ts)
 - add tests for both positive routing and non-routing confusion cases
 
@@ -181,7 +183,7 @@ Checklist:
 ### Security and policy
 
 - choose the correct `risk`: `read_only`, `mutating`, or `external_post`
-- make sure Guardian capability checks and policy behavior are correct
+- make sure Guardian capability checks and policy behavior are correct. If you introduce a new action type (like `external_post` or a custom integration), it MUST be mapped to an existing capability (like `network_access`) in `src/guardian/guardian.ts` (inside `CapabilityController`) and `src/index.ts` (`capMap`), otherwise it will be blocked by default-deny.
 - consider SSRF, secret/PII scanning, denied paths, allowlists, and tainted content reinjection
 
 ### Tests

@@ -91,6 +91,7 @@ export class CapabilityController implements AdmissionController {
       ['write_sheets', 'write_sheets'],
       ['git_operation', 'git_operations'],
       ['install_package', 'install_packages'],
+      ['external_post', 'network_access'],
     ]);
 
     // Actions that are allowed without specific capabilities (internal runtime operations)

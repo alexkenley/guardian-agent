@@ -4736,6 +4736,7 @@ type DirectIntentShadowCandidate =
       channel: message.channel,
       requestId: message.id,
       agentContext: { checkAction: ctx.checkAction },
+      ...(message.metadata?.bypassApprovals ? { bypassApprovals: true } : {}),
     };
 
     const listResult = await this.tools.executeModelTool(
@@ -6725,6 +6726,7 @@ type DirectIntentShadowCandidate =
       channel: message.channel,
       requestId: message.id,
       agentContext: { checkAction: ctx.checkAction },
+      ...(message.metadata?.bypassApprovals ? { bypassApprovals: true } : {}),
     };
 
     const raw = buildGmailRawMessage({
@@ -7343,6 +7345,7 @@ type DirectIntentShadowCandidate =
       channel: message.channel,
       requestId: message.id,
       agentContext: { checkAction: ctx.checkAction },
+      ...(message.metadata?.bypassApprovals ? { bypassApprovals: true } : {}),
     };
 
     const listParams: Record<string, unknown> = {
@@ -7594,6 +7597,7 @@ type DirectIntentShadowCandidate =
       channel: message.channel,
       requestId: message.id,
       agentContext: { checkAction: ctx.checkAction },
+      ...(message.metadata?.bypassApprovals ? { bypassApprovals: true } : {}),
     };
 
     const toolResult = await this.tools.executeModelTool(
@@ -7683,6 +7687,7 @@ type DirectIntentShadowCandidate =
       channel: message.channel,
       requestId: message.id,
       agentContext: { checkAction: ctx.checkAction },
+      ...(message.metadata?.bypassApprovals ? { bypassApprovals: true } : {}),
     };
 
     const listParams: Record<string, unknown> = {
@@ -7939,6 +7944,7 @@ type DirectIntentShadowCandidate =
       channel: message.channel,
       requestId: message.id,
       agentContext: { checkAction: ctx.checkAction },
+      ...(message.metadata?.bypassApprovals ? { bypassApprovals: true } : {}),
     };
 
     const listResult = await this.tools.executeModelTool(
@@ -8020,6 +8026,7 @@ type DirectIntentShadowCandidate =
       channel: message.channel,
       requestId: message.id,
       agentContext: { checkAction: ctx.checkAction },
+      ...(message.metadata?.bypassApprovals ? { bypassApprovals: true } : {}),
     };
 
     const listResult = await this.tools.executeModelTool(

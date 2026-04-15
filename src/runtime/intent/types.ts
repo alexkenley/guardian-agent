@@ -16,6 +16,7 @@ export type IntentGatewayRoute =
   | 'coding_session_control'
   | 'security_task'
   | 'general_assistant'
+  | 'channel_delivery'
   | 'complex_planning_task'
   | 'unknown';
 

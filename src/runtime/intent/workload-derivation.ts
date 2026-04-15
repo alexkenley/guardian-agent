@@ -29,6 +29,16 @@ export function deriveWorkloadMetadata(
   const codingRemoteExecRequested = parsed.codingRemoteExecRequested === true;
 
   switch (route) {
+    case 'channel_delivery':
+      return {
+        executionClass: 'tool_orchestration',
+        preferredTier: 'external',
+        requiresRepoGrounding: false,
+        requiresToolSynthesis: false,
+        expectedContextPressure: 'low',
+        preferredAnswerPath: 'tool_loop',
+        simpleVsComplex: 'simple',
+      };
     case 'complex_planning_task':
       return {
         executionClass: 'tool_orchestration',

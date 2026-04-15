@@ -430,6 +430,7 @@ export interface ToolExecutorOptions {
     requestedBy?: string;
   }) => Promise<AiSecurityScanResult>;
   allowExternalPosting?: boolean;
+  deliverMessage?: (channel: string, targetId: string, content: string) => Promise<{ success: boolean; error?: string }>;
   /** MCP client manager for external tool server integration. */
   mcpManager?: MCPClientManager;
   /** Web search configuration. Auto-selects best available provider (Brave > Perplexity > DuckDuckGo). */
@@ -5517,6 +5518,7 @@ export class ToolExecutor {
       deviceInventory: this.options.deviceInventory,
       networkBaseline: this.options.networkBaseline,
       networkTraffic: this.options.networkTraffic,
+      deliverMessage: this.options.deliverMessage ? (channel, targetId, content) => this.options.deliverMessage!(channel, targetId, content) : undefined,
     });
 
     registerBuiltinPerformanceTools({

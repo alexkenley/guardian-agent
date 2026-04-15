@@ -106,7 +106,7 @@ describe('service wiring helpers', () => {
       'default-agent',
       expect.objectContaining({ channel: 'web' }),
       undefined,
-      { priority: 'normal', requestType: 'scheduled_task' },
+      { priority: 'normal', requestType: 'scheduled_task', bypassApprovals: true },
     );
     expect(webChannel.send).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
