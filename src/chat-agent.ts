@@ -5215,6 +5215,7 @@ type DirectIntentShadowCandidate =
   private buildCodeSessionSystemContext(session: CodeSessionRecord): string {
     return buildCodeSessionSystemContextHelper({
       session,
+      remoteExecutionTargets: this.tools?.getRemoteExecutionTargets?.(),
       formatCodeWorkspaceTrustForPrompt: (workspaceTrust, workspaceTrustReview) => this.formatCodeWorkspaceTrustForPrompt(
         workspaceTrust,
         workspaceTrustReview,
